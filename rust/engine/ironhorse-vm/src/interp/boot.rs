@@ -1,6 +1,55 @@
 //! Machine initialization, intrinsic construction, and pristine realm templates.
 use super::*;
 
+// Constructor policies belong to the same declaration as GC and persistence
+// policies. Both initializers follow declaration order. These are expression
+// macros, so construction keeps its existing call and allocation boundaries.
+macro_rules! define_boot_initializers {
+    (($d:tt) $vis:vis struct $name:ident {
+        $(#[boot_new($new:expr)]
+          #[boot_template($template:expr)]
+          #[gc_root($root:ident)]
+          #[quiescent($boundary:ident)]
+          #[persist_refs($persist:ident)]
+          #[runtime_keys($runtime_keys:ident)]
+          #[gc_hook($phase:ident, $policy:ident)]
+          #[gc_chunk($chunk:ident)]
+          #[gc_slots($shape:ident, $row:ident)]
+          #[gc_weak($weak:ident)]
+          #[snapshot_table($($snapshot:tt)*)]
+          $(#[$attr:meta])* $field_vis:vis $field:ident: $ty:ty,)*
+    } boot_context {
+        fresh($new_classes:ident, $slots:ident, $chunks:ident, $global:ident, $static:ident);
+        template($state:ident, $classes:ident, $refs:ident, $arrays:ident, $indexed:ident, $collections:ident);
+    } external_tables { $($external:tt)* }) => {
+        macro_rules! boot_fresh {
+            ($d classes:expr, $d slots:expr, $d chunks:expr, $d global:expr, $d strings:expr) => {{
+                let $new_classes = $d classes;
+                let $slots = $d slots;
+                let $chunks = $d chunks;
+                let $global = $d global;
+                let $static = $d strings;
+                Interp { $($field: $new,)* }
+            }};
+        }
+        macro_rules! boot_template {
+            ($d state:expr, $d classes:expr, $d refs:expr, $d arrays:expr, $d indexed:expr, $d collections:expr) => {{
+                let $state = $d state;
+                let $classes = $d classes;
+                let $refs = $d refs;
+                let $arrays = $d arrays;
+                let $indexed = $d indexed;
+                let $collections = $d collections;
+                Interp { $($field: $template,)* }
+            }};
+        }
+    };
+}
+interp_state!(define_boot_initializers, $);
+
+// The child owns its test gate so rustc and recursive source locks agree.
+mod tests;
+
 pub(crate) struct BootTemplate {
     inner: Interp,
     link_charge: u64,
@@ -73,214 +122,7 @@ impl BootTemplate {
                 (owner, copy)
             })
             .collect();
-        // Exhaustive initializer: a new interpreter field forces a deliberate
-        // template decision rather than silently inheriting a fresh default.
-        Interp {
-            classes: classes.clone(),
-            snapshot_baseline_identity: std::rc::Rc::new(()),
-            stack: state.stack.clone(),
-            locals: state.locals.clone(),
-            id_map: state.id_map.clone(),
-            global_obj: state.global_obj,
-            global_props: state.global_props.clone(),
-            direct_eval_hoist: state.direct_eval_hoist,
-            eval_program_hoist: state.eval_program_hoist,
-            result: state.result,
-            strict: state.strict,
-            meter: state.meter.clone(),
-            cost: state.cost.clone(),
-            meter_host: None,
-            step_limit: state.step_limit,
-            slots: SlotArena::from_image(
-                (0..state.slots.capacity())
-                    .map(|i| state.slots.get(crate::value::SlotIndex(i)))
-                    .collect(),
-                state.slots.free_list().to_vec(),
-                state.slots.live_count(),
-            ),
-            chunks: ChunkArena::from_image(state.chunks.raw_vec()),
-            static_str: state.static_str,
-            n_dispatched: state.n_dispatched,
-            boot_slot_count: state.boot_slot_count,
-            native_depth: state.native_depth,
-            source_compiler: state.source_compiler.clone(),
-            code_segments: state.code_segments.copy_to(classes.1.clone()),
-            active_segment: state.active_segment,
-            top_level_code: state.top_level_code.clone(),
-            func_segments: state.func_segments.copy_to(classes.1.clone()),
-            eval_direct: state.eval_direct,
-            functions: state.functions.copy_to(classes.clone()),
-            bound_functions: state.bound_functions.copy_to(classes.clone()),
-            proxies: state.proxies.copy_to(classes.clone()),
-            array_iterator_proxy_get_context: state.array_iterator_proxy_get_context,
-            proxy_revokers: state.proxy_revokers.copy_to(classes.1.clone()),
-            call_stack: Vec::new(),
-            args: state.args.clone(),
-            this_val: state.this_val,
-            this_captures: state.this_captures.clone(),
-            env: state.env,
-            cur_func: state.cur_func,
-            cur_target: state.cur_target,
-            target_func: state.target_func,
-            pending_new_target: state.pending_new_target,
-            exception: state.exception,
-            frame_slots: state.frame_slots,
-            intrinsics: state.intrinsics.clone(),
-            intl_object: state.intl_object,
-            locale_proto: state.locale_proto,
-            collator_proto: state.collator_proto,
-            list_format_proto: state.list_format_proto,
-            plural_rules_proto: state.plural_rules_proto,
-            segmenter_proto: state.segmenter_proto,
-            segments_proto: state.segments_proto,
-            segment_iterator_proto: state.segment_iterator_proto,
-            segments_iterator_method: state.segments_iterator_method,
-            segment_iterator_identity: state.segment_iterator_identity,
-            date_time_format_proto: state.date_time_format_proto,
-            number_format_proto: state.number_format_proto,
-            locales: state.locales.copy_to(classes.clone()),
-            collators: state.collators.copy_to(classes.clone()),
-            list_formats: state.list_formats.copy_to(classes.1.clone()),
-            plural_rules: state.plural_rules.copy_to(classes.1.clone()),
-            number_formats: state.number_formats.copy_to(classes.1.clone()),
-            segmenters: state.segmenters.copy_to(classes.1.clone()),
-            segments: state.segments.copy_to(classes.1.clone()),
-            segment_iterators: state.segment_iterators.copy_to(classes.1.clone()),
-            date_time_formats: state.date_time_formats.copy_to(classes.1.clone()),
-            temporal_object: state.temporal_object,
-            temporal_instant_proto: state.temporal_instant_proto,
-            temporal_duration_proto: state.temporal_duration_proto,
-            temporal_plain_protos: state.temporal_plain_protos,
-            temporal_zoned_proto: state.temporal_zoned_proto,
-            temporal_now_object: state.temporal_now_object,
-            temporal_instants: state.temporal_instants.copy_to(classes.clone()),
-            temporal_durations: state.temporal_durations.copy_to(classes.clone()),
-            temporal_plains: state.temporal_plains.copy_to(classes.clone()),
-            temporal_zoneds: state.temporal_zoneds.copy_to(classes.clone()),
-            collator_compare_functions: state.collator_compare_functions.copy_to(classes.1.clone()),
-            number_format_bound_functions: state
-                .number_format_bound_functions
-                .copy_to(classes.1.clone()),
-            deleted_fn_meta: state.deleted_fn_meta.copy_to(classes.1.clone()),
-            object_proto: state.object_proto,
-            function_proto: state.function_proto,
-            function_has_instance_method: state.function_has_instance_method,
-            template_cache: state.template_cache,
-            ctor_prototype: state.ctor_prototype.copy_to(classes.1.clone()),
-            private_values: state.private_values.copy_to(classes.1.clone()),
-            private_accessors: state.private_accessors.copy_to(classes.1.clone()),
-            proto_methods: state.proto_methods.clone(),
-            proto_data: state.proto_data.clone(),
-            proto_accessors: state.proto_accessors.clone(),
-            well_known_symbols: state.well_known_symbols.clone(),
-            symbol_ids: state.symbol_ids.clone(),
-            default_keys: state.default_keys.clone(),
-            next_symbol_key_id: state.next_symbol_key_id,
-            installed_names_len: state.installed_names_len,
-            installing_intrinsics: state.installing_intrinsics,
-            id_space_exhausted: state.id_space_exhausted,
-            last_crank_completed: state.last_crank_completed,
-            symbol_names: state.symbol_names.copy_to(classes.1.clone()),
-            error_data: state.error_data.copy_to(classes.1.clone()),
-            wrapper_data: state.wrapper_data.copy_to(classes.clone()),
-            array_proto: state.array_proto,
-            arrays: ClassMap::from_rows(arrays, ExoticKind::ARRAYS, classes.clone()),
-            index_props: Tracked::new(
-                index_props,
-                classes.1.clone(),
-                SnapshotSection::IndexProperties.mask(),
-            ),
-            arguments_objects: state.arguments_objects.copy_to(classes.1.clone()),
-            disposable_stacks: state.disposable_stacks.copy_to(classes.clone()),
-            collections: ClassMap::from_rows(collections, ExoticKind::COLLECTIONS, classes.clone()),
-            side_refs,
-            map_proto: state.map_proto,
-            set_proto: state.set_proto,
-            weakmap_proto: state.weakmap_proto,
-            weakset_proto: state.weakset_proto,
-            array_buffers: state.array_buffers.copy_to(classes.clone()),
-            detached_buffers: state.detached_buffers.copy_to(classes.1.clone()),
-            shared_buffers: state.shared_buffers.copy_to(classes.1.clone()),
-            arraybuffer_proto: state.arraybuffer_proto,
-            byte_length_id: state.byte_length_id,
-            typed_arrays: state.typed_arrays.copy_to(classes.clone()),
-            byte_offset_id: state.byte_offset_id,
-            buffer_id: state.buffer_id,
-            data_views: state.data_views.copy_to(classes.clone()),
-            dataview_proto: state.dataview_proto,
-            size_id: state.size_id,
-            length_id: state.length_id,
-            name_id: state.name_id,
-            array_iterator_proto: state.array_iterator_proto,
-            iterator_proto: state.iterator_proto,
-            iterator_wrapper_proto: state.iterator_wrapper_proto,
-            map_iterator_proto: state.map_iterator_proto,
-            set_iterator_proto: state.set_iterator_proto,
-            regexp_string_iterator_proto: state.regexp_string_iterator_proto,
-            math_object: state.math_object,
-            string_proto: state.string_proto,
-            string_iterator_method: state.string_iterator_method,
-            number_proto: state.number_proto,
-            boolean_proto: state.boolean_proto,
-            date_proto: state.date_proto,
-            date_to_primitive_method: state.date_to_primitive_method,
-            dates: state.dates.copy_to(classes.1.clone()),
-            symbol_proto: state.symbol_proto,
-            symbol_to_primitive_method: state.symbol_to_primitive_method,
-            bigint_proto: state.bigint_proto,
-            symbol_registry: state.symbol_registry.copy_to(classes.1.clone()),
-            symbol_registry_keys: state.symbol_registry_keys.clone(),
-            symbol_key_ids: state.symbol_key_ids.copy_to(classes.1.clone()),
-            accessors: state.accessors.copy_to(classes.1.clone()),
-            proto_value_data: state.proto_value_data.clone(),
-            iterators: state.iterators.copy_to(classes.1.clone()),
-            value_id: state.value_id,
-            done_id: state.done_id,
-            promises: state.promises.copy_to(classes.1.clone()),
-            promise_proto: state.promise_proto,
-            generators: Tracked::new(
-                std::collections::HashMap::new(),
-                classes.1.clone(),
-                SnapshotSection::Generators.mask(),
-            ),
-            generator_proto: state.generator_proto,
-            generator_function_proto: state.generator_function_proto,
-            gen_run_stack: Vec::new(),
-            async_instances: Tracked::new(
-                std::collections::HashMap::new(),
-                classes.1.clone(),
-                SnapshotSection::Promises.mask() | SnapshotSection::AsyncInstances.mask(),
-            ),
-            async_function_proto: state.async_function_proto,
-            async_run_stack: Vec::new(),
-            async_generators: std::collections::HashMap::new(),
-            async_generator_proto: state.async_generator_proto,
-            async_generator_function_proto: state.async_generator_function_proto,
-            async_iterator_identity: state.async_iterator_identity,
-            iterator_identity: state.iterator_identity,
-            async_gen_run_stack: Vec::new(),
-            resume_status: state.resume_status,
-            promise_functions: state.promise_functions.copy_to(classes.clone()),
-            promise_guards: state.promise_guards.copy_to(classes.1.clone()),
-            promise_jobs: state.promise_jobs.clone(),
-            combinators: state.combinators.copy_to(classes.1.clone()),
-            from_async: state.from_async.clone(),
-            then_id: state.then_id,
-            constructor_id: state.constructor_id,
-            error_stack_accessor: state.error_stack_accessor,
-            prototype_key_id: state.prototype_key_id,
-            regexps: state.regexps.copy_to(classes.clone()),
-            regexp_proto: state.regexp_proto,
-            regexp_replace_method: state.regexp_replace_method,
-            regexp_match_method: state.regexp_match_method,
-            regexp_match_all_method: state.regexp_match_all_method,
-            regexp_search_method: state.regexp_search_method,
-            regexp_split_method: state.regexp_split_method,
-            last_index_id: state.last_index_id,
-            regexp_getter_ids: state.regexp_getter_ids,
-            regexp_result_ids: state.regexp_result_ids,
-            jumps: state.jumps.clone(),
-        }
+        boot_template!(state, classes, side_refs, arrays, index_props, collections)
     }
 }
 
@@ -327,339 +169,7 @@ impl Interp {
             bigint: chunks.alloc(&str_to_be16("bigint")),
         };
         let classes = ClassIndex::default();
-        let mut interp = Interp {
-            classes: classes.clone(),
-            snapshot_baseline_identity: std::rc::Rc::new(()),
-            stack: Vec::with_capacity(64),
-            locals: Vec::new(),
-            id_map: std::collections::HashMap::new(),
-            global_obj,
-            global_props: std::collections::HashMap::new(),
-            direct_eval_hoist: false,
-            eval_program_hoist: false,
-            result: Slot::undefined(),
-            strict: false,
-            meter: Meter::new(),
-            cost: crate::cost::CostRecorder::default(),
-            meter_host: None,
-            step_limit: u64::MAX,
-            slots,
-            chunks,
-            static_str,
-            n_dispatched: 0,
-            boot_slot_count: 0,
-            native_depth: 0,
-            source_compiler: None,
-            eval_direct: false,
-            code_segments: Tracked::new(
-                Vec::new(),
-                classes.1.clone(),
-                SnapshotSection::Functions.mask(),
-            ),
-            active_segment: None,
-            top_level_code: None,
-            func_segments: Tracked::new(
-                std::collections::HashMap::new(),
-                classes.1.clone(),
-                SnapshotSection::Functions.mask(),
-            ),
-            functions: ClassMap::new_refined(
-                ExoticKind::FUNCTIONS,
-                ExoticKind::NATIVE.union(ExoticKind::METHOD),
-                |info: &FuncInfo| {
-                    let native = if info.native.is_some() {
-                        ExoticKind::NATIVE
-                    } else {
-                        ExoticKind::default()
-                    };
-                    let method = if info.method.is_some() {
-                        ExoticKind::METHOD
-                    } else {
-                        ExoticKind::default()
-                    };
-                    native.union(method)
-                },
-                classes.clone(),
-            ),
-            bound_functions: ClassMap::new(ExoticKind::BOUND_FUNCTIONS, classes.clone()),
-            proxies: ClassMap::new(ExoticKind::PROXIES, classes.clone()),
-            array_iterator_proxy_get_context: None,
-            proxy_revokers: Tracked::new(
-                std::collections::HashMap::new(),
-                classes.1.clone(),
-                SnapshotSection::Proxies.mask(),
-            ),
-            call_stack: Vec::new(),
-            args: Vec::new(),
-            this_val: Slot::undefined(),
-            this_captures: Vec::new(),
-            env: Slot::undefined(),
-            cur_func: crate::value::SlotIndex::NULL,
-            cur_target: false,
-            target_func: crate::value::SlotIndex::NULL,
-            pending_new_target: None,
-            exception: Slot::undefined(),
-            frame_slots: 0,
-            intrinsics: std::collections::HashMap::new(),
-            intl_object: crate::value::SlotIndex::NULL,
-            locale_proto: crate::value::SlotIndex::NULL,
-            collator_proto: crate::value::SlotIndex::NULL,
-            list_format_proto: crate::value::SlotIndex::NULL,
-            plural_rules_proto: crate::value::SlotIndex::NULL,
-            segmenter_proto: crate::value::SlotIndex::NULL,
-            segments_proto: crate::value::SlotIndex::NULL,
-            segment_iterator_proto: crate::value::SlotIndex::NULL,
-            segments_iterator_method: crate::value::SlotIndex::NULL,
-            segment_iterator_identity: crate::value::SlotIndex::NULL,
-            date_time_format_proto: crate::value::SlotIndex::NULL,
-            number_format_proto: crate::value::SlotIndex::NULL,
-            locales: ClassMap::new(ExoticKind::LOCALES, classes.clone()),
-            collators: ClassMap::new(ExoticKind::COLLATORS, classes.clone()),
-            list_formats: Tracked::new(
-                std::collections::HashMap::new(),
-                classes.1.clone(),
-                SnapshotSection::Intl.mask(),
-            ),
-            plural_rules: Tracked::new(
-                std::collections::HashMap::new(),
-                classes.1.clone(),
-                SnapshotSection::Intl.mask(),
-            ),
-            number_formats: Tracked::new(
-                std::collections::HashMap::new(),
-                classes.1.clone(),
-                SnapshotSection::Intl.mask(),
-            ),
-            segmenters: Tracked::new(
-                std::collections::HashMap::new(),
-                classes.1.clone(),
-                SnapshotSection::Intl.mask(),
-            ),
-            segments: Tracked::new(
-                std::collections::HashMap::new(),
-                classes.1.clone(),
-                SnapshotSection::Intl.mask(),
-            ),
-            segment_iterators: Tracked::new(
-                std::collections::HashMap::new(),
-                classes.1.clone(),
-                SnapshotSection::Intl.mask(),
-            ),
-            date_time_formats: Tracked::new(
-                std::collections::HashMap::new(),
-                classes.1.clone(),
-                SnapshotSection::Intl.mask(),
-            ),
-            temporal_object: crate::value::SlotIndex::NULL,
-            temporal_instant_proto: crate::value::SlotIndex::NULL,
-            temporal_duration_proto: crate::value::SlotIndex::NULL,
-            temporal_plain_protos: [crate::value::SlotIndex::NULL; 6],
-            temporal_zoned_proto: crate::value::SlotIndex::NULL,
-            temporal_now_object: crate::value::SlotIndex::NULL,
-            temporal_instants: ClassMap::new(ExoticKind::TEMPORAL_INSTANTS, classes.clone()),
-            temporal_durations: ClassMap::new(ExoticKind::TEMPORAL_DURATIONS, classes.clone()),
-            temporal_plains: ClassMap::new(ExoticKind::TEMPORAL_PLAINS, classes.clone()),
-            temporal_zoneds: ClassMap::new(ExoticKind::TEMPORAL_ZONEDS, classes.clone()),
-            collator_compare_functions: Tracked::new(
-                std::collections::HashMap::new(),
-                classes.1.clone(),
-                SnapshotSection::IntlBoundFunctions.mask(),
-            ),
-            number_format_bound_functions: Tracked::new(
-                std::collections::HashMap::new(),
-                classes.1.clone(),
-                SnapshotSection::IntlBoundFunctions.mask(),
-            ),
-            deleted_fn_meta: Tracked::new(
-                std::collections::HashSet::new(),
-                classes.1.clone(),
-                SnapshotSection::Functions.mask(),
-            ),
-            object_proto: crate::value::SlotIndex::NULL,
-            function_proto: crate::value::SlotIndex::NULL,
-            function_has_instance_method: crate::value::SlotIndex::NULL,
-            template_cache: crate::value::SlotIndex::NULL,
-            ctor_prototype: Tracked::new(
-                std::collections::HashMap::new(),
-                classes.1.clone(),
-                SnapshotSection::Functions.mask(),
-            ),
-            private_values: Tracked::new(
-                std::collections::HashMap::new(),
-                classes.1.clone(),
-                SnapshotSection::PrivateElements.mask(),
-            ),
-            private_accessors: Tracked::new(
-                std::collections::HashMap::new(),
-                classes.1.clone(),
-                SnapshotSection::PrivateElements.mask(),
-            ),
-            proto_methods: Vec::new(),
-            proto_data: Vec::new(),
-            proto_accessors: Vec::new(),
-            well_known_symbols: Vec::new(),
-            symbol_ids: SymbolIds::default(),
-            default_keys: crate::default_keys::DEFAULT_KEYS.iter().copied().collect(),
-            next_symbol_key_id: u16::MAX,
-            installed_names_len: 0,
-            installing_intrinsics: false,
-            id_space_exhausted: false,
-            last_crank_completed: true,
-            symbol_names: Tracked::new(
-                Vec::new(),
-                classes.1.clone(),
-                SnapshotSection::Names.mask()
-                    | SnapshotSection::NameFloor.mask()
-                    | SnapshotSection::Accessors.mask(),
-            ),
-            error_data: Tracked::new(
-                std::collections::HashMap::new(),
-                classes.1.clone(),
-                SnapshotSection::Errors.mask() | SnapshotSection::ErrorFrames.mask(),
-            ),
-            wrapper_data: ClassMap::new(ExoticKind::WRAPPER_DATA, classes.clone()),
-            array_proto: crate::value::SlotIndex::NULL,
-            arrays: ClassMap::new(ExoticKind::ARRAYS, classes.clone()),
-            index_props: Tracked::new(
-                std::collections::HashMap::new(),
-                classes.1.clone(),
-                SnapshotSection::IndexProperties.mask(),
-            ),
-            arguments_objects: Tracked::new(
-                std::collections::HashSet::new(),
-                classes.1.clone(),
-                SnapshotSection::ArgumentsBrands.mask(),
-            ),
-            disposable_stacks: ClassMap::new(ExoticKind::DISPOSABLE_STACKS, classes.clone()),
-            collections: ClassMap::new(ExoticKind::COLLECTIONS, classes.clone()),
-            side_refs: SideRefCounts::new(),
-            map_proto: crate::value::SlotIndex::NULL,
-            set_proto: crate::value::SlotIndex::NULL,
-            weakmap_proto: crate::value::SlotIndex::NULL,
-            weakset_proto: crate::value::SlotIndex::NULL,
-            array_buffers: ClassMap::new(ExoticKind::ARRAY_BUFFERS, classes.clone()),
-            detached_buffers: Tracked::new(
-                std::collections::HashSet::new(),
-                classes.1.clone(),
-                SnapshotSection::Buffers.mask(),
-            ),
-            shared_buffers: Tracked::new(
-                std::collections::HashSet::new(),
-                classes.1.clone(),
-                SnapshotSection::Buffers.mask(),
-            ),
-            arraybuffer_proto: crate::value::SlotIndex::NULL,
-            byte_length_id: None,
-            typed_arrays: ClassMap::new(ExoticKind::TYPED_ARRAYS, classes.clone()),
-            byte_offset_id: None,
-            buffer_id: None,
-            data_views: ClassMap::new(ExoticKind::DATA_VIEWS, classes.clone()),
-            dataview_proto: crate::value::SlotIndex::NULL,
-            size_id: None,
-            length_id: None,
-            name_id: None,
-            array_iterator_proto: crate::value::SlotIndex::NULL,
-            iterator_proto: crate::value::SlotIndex::NULL,
-            iterator_wrapper_proto: crate::value::SlotIndex::NULL,
-            map_iterator_proto: crate::value::SlotIndex::NULL,
-            set_iterator_proto: crate::value::SlotIndex::NULL,
-            regexp_string_iterator_proto: crate::value::SlotIndex::NULL,
-            math_object: crate::value::SlotIndex::NULL,
-            string_proto: crate::value::SlotIndex::NULL,
-            string_iterator_method: crate::value::SlotIndex::NULL,
-            number_proto: crate::value::SlotIndex::NULL,
-            boolean_proto: crate::value::SlotIndex::NULL,
-            date_proto: crate::value::SlotIndex::NULL,
-            date_to_primitive_method: crate::value::SlotIndex::NULL,
-            dates: Tracked::new(
-                std::collections::HashMap::new(),
-                classes.1.clone(),
-                SnapshotSection::Dates.mask(),
-            ),
-            symbol_proto: crate::value::SlotIndex::NULL,
-            symbol_to_primitive_method: crate::value::SlotIndex::NULL,
-            bigint_proto: crate::value::SlotIndex::NULL,
-            symbol_registry: Tracked::new(
-                std::collections::HashMap::new(),
-                classes.1.clone(),
-                SnapshotSection::Registry.mask(),
-            ),
-            symbol_registry_keys: std::collections::HashMap::new(),
-            symbol_key_ids: Tracked::new(
-                std::collections::HashMap::new(),
-                classes.1.clone(),
-                SnapshotSection::Symbols.mask() | SnapshotSection::Accessors.mask(),
-            ),
-            accessors: Tracked::new(
-                std::collections::HashMap::new(),
-                classes.1.clone(),
-                SnapshotSection::Accessors.mask(),
-            ),
-            proto_value_data: Vec::new(),
-            iterators: Tracked::new(
-                std::collections::HashMap::new(),
-                classes.1.clone(),
-                SnapshotSection::Iterators.mask(),
-            ),
-            value_id: None,
-            done_id: None,
-            promises: Tracked::new(
-                std::collections::HashMap::new(),
-                classes.1.clone(),
-                SnapshotSection::Promises.mask() | SnapshotSection::AsyncInstances.mask(),
-            ),
-            promise_proto: crate::value::SlotIndex::NULL,
-            generators: Tracked::new(
-                std::collections::HashMap::new(),
-                classes.1.clone(),
-                SnapshotSection::Generators.mask(),
-            ),
-            generator_proto: crate::value::SlotIndex::NULL,
-            generator_function_proto: crate::value::SlotIndex::NULL,
-            gen_run_stack: Vec::new(),
-            async_instances: Tracked::new(
-                std::collections::HashMap::new(),
-                classes.1.clone(),
-                SnapshotSection::Promises.mask() | SnapshotSection::AsyncInstances.mask(),
-            ),
-            async_function_proto: crate::value::SlotIndex::NULL,
-            async_run_stack: Vec::new(),
-            async_generators: std::collections::HashMap::new(),
-            async_generator_proto: crate::value::SlotIndex::NULL,
-            async_generator_function_proto: crate::value::SlotIndex::NULL,
-            async_iterator_identity: crate::value::SlotIndex::NULL,
-            iterator_identity: crate::value::SlotIndex::NULL,
-            async_gen_run_stack: Vec::new(),
-            resume_status: ResumeStatus::NoStatus,
-            promise_functions: ClassMap::new(ExoticKind::PROMISE_FUNCTIONS, classes.clone()),
-            promise_guards: Tracked::new(
-                Vec::new(),
-                classes.1.clone(),
-                SnapshotSection::Promises.mask() | SnapshotSection::AsyncInstances.mask(),
-            ),
-            promise_jobs: std::collections::VecDeque::new(),
-            combinators: Tracked::new(
-                Vec::new(),
-                classes.1.clone(),
-                SnapshotSection::Promises.mask() | SnapshotSection::AsyncInstances.mask(),
-            ),
-            from_async: Vec::new(),
-            then_id: None,
-            constructor_id: None,
-            error_stack_accessor: None,
-            prototype_key_id: None,
-            regexps: ClassMap::new(ExoticKind::REGEXPS, classes.clone()),
-            regexp_proto: crate::value::SlotIndex::NULL,
-            regexp_replace_method: crate::value::SlotIndex::NULL,
-            regexp_match_method: crate::value::SlotIndex::NULL,
-            regexp_match_all_method: crate::value::SlotIndex::NULL,
-            regexp_search_method: crate::value::SlotIndex::NULL,
-            regexp_split_method: crate::value::SlotIndex::NULL,
-            last_index_id: None,
-            regexp_getter_ids: RegExpGetterIds::default(),
-            regexp_result_ids: RegExpResultIds::default(),
-            jumps: Vec::new(),
-        };
+        let mut interp = boot_fresh!(classes, slots, chunks, global_obj, static_str);
         interp.create_intrinsics();
         interp.boot_slot_count = interp.slots.capacity();
         interp

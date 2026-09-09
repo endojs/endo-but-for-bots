@@ -48,7 +48,9 @@ macro_rules! boundary_predicate {
 
 macro_rules! define_boundary {
     (() $vis:vis struct $name:ident {
-        $(#[gc_root($root:ident)]
+        $(#[boot_new($boot_new:expr)]
+          #[boot_template($boot_template:expr)]
+          #[gc_root($root:ident)]
           #[quiescent($boundary:ident)]
           #[persist_refs($persist:ident)]
           #[runtime_keys($runtime_keys:ident)]
@@ -58,7 +60,7 @@ macro_rules! define_boundary {
           #[gc_weak($weak:ident)]
           #[snapshot_table($($snapshot:tt)*)]
           $(#[$attr:meta])* $field_vis:vis $field:ident: $ty:ty,)*
-    } external_tables { $($external:tt)* }) => {
+    } boot_context { $($boot_context:tt)* } external_tables { $($external:tt)* }) => {
         impl Interp {
             pub(super) fn fields_are_quiescent(&self) -> bool {
                 true $(&& boundary_predicate!(boundary_run, self, $field, $boundary))*

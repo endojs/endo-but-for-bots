@@ -7,6 +7,8 @@ const SOURCE: &str = concat!(
     "\n",
     include_str!("../src/interp/boot.rs"),
     "\n",
+    include_str!("../src/interp/state.rs"),
+    "\n",
     include_str!("../src/interp/bigint.rs"),
     "\n",
     include_str!("../src/interp/temporal.rs"),

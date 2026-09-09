@@ -59,7 +59,9 @@ macro_rules! persist_holder {
 
 macro_rules! define_persist_holders {
     (() $vis:vis struct $name:ident {
-        $(#[gc_root($root:ident)]
+        $(#[boot_new($boot_new:expr)]
+          #[boot_template($boot_template:expr)]
+          #[gc_root($root:ident)]
           #[quiescent($boundary:ident)]
           #[persist_refs($persist:ident)]
           #[runtime_keys($runtime_keys:ident)]
@@ -69,7 +71,7 @@ macro_rules! define_persist_holders {
           #[gc_weak($weak:ident)]
           #[snapshot_table($($snapshot:tt)*)]
           $(#[$attr:meta])* $field_vis:vis $field:ident: $ty:ty,)*
-    } external_tables { $($external:tt)* }) => {
+    } boot_context { $($boot_context:tt)* } external_tables { $($external:tt)* }) => {
         impl Interp {
             pub(super) fn persisted_holders_contain(
                 &self, names: &impl Fn(&Slot) -> bool, index: &impl Fn(u32) -> bool,
@@ -111,7 +113,9 @@ macro_rules! runtime_key_iter {
 }
 macro_rules! define_runtime_key_scan {
     (() $vis:vis struct $name:ident {
-        $(#[gc_root($root:ident)]
+        $(#[boot_new($boot_new:expr)]
+          #[boot_template($boot_template:expr)]
+          #[gc_root($root:ident)]
           #[quiescent($boundary:ident)]
           #[persist_refs($persist:ident)]
           #[runtime_keys($runtime_keys:ident)]
@@ -121,7 +125,7 @@ macro_rules! define_runtime_key_scan {
           #[gc_weak($weak:ident)]
           #[snapshot_table($($snapshot:tt)*)]
           $(#[$attr:meta])* $field_vis:vis $field:ident: $ty:ty,)*
-    } external_tables { $($external:tt)* }) => {
+    } boot_context { $($boot_context:tt)* } external_tables { $($external:tt)* }) => {
         define_runtime_key_scan!(@scan []; $(($field, $runtime_keys))*);
     };
     (@scan [$($selected:tt)*]; ($field:ident, none) $($rest:tt)*) => {
