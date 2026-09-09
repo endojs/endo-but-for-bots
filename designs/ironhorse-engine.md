@@ -20,18 +20,19 @@ onto the same branch and pull request as this design.
 ## Status
 
 Current-state audit: 2026-09-09, base `96db92e23`.
+GC policy incorporates the W6 decision at `d38196799`.
 This ledger separates implemented surfaces from the roadmap's acceptance bars.
 Historical measurements are retained in
 [`rust/engine/CHANGELOG.md`](../rust/engine/CHANGELOG.md); they are evidence at
 named tips, not a fresh whole-tree conformance run.
 The [architecture guide](../rust/engine/ARCHITECTURE.md) describes the current
-crate graph and seams; [W6 decisions](ironhorse-w6-decisions.md) govern pending
-Realm extraction, engine-trait deferral, transcendental providers and GC policy.
+crate graph and seams; [W6 decisions](ironhorse-w6-decisions.md) record Realm
+extraction, engine-trait deferral, transcendental providers and consumer-owned GC policy.
 
 | Roadmap stage | Implementation | Acceptance and deviations |
 |---|---|---|
 | 1. Thin slice | Landed | Interpreter, meter and oracle harness exist. The early corpus passed historically; present release costs are pinned by oracle-free golden tests. Shared frozen intrinsics remain a stage-4 gap. |
-| 2. Object model and control flow | Partial | Broad opcode, object, closure and exception support exists. Exact GC exists but is not the production collection path; chunk reclamation and GC scheduling remain open. |
+| 2. Object model and control flow | Partial | Broad opcode, object, closure and exception support exists. Exact GC exists but is not the production collection path; chunk reclamation remains open. W6 decision 5 assigns GC scheduling to the engine consumer. |
 | 3. Built-ins | Partial | RegExp, promises, BigInt, collections, Intl and Temporal exist. Covered cases are not full built-ins conformance; provider-sensitive Math results are scoped per binary/platform. |
 | 4. Hardened JavaScript | Partial — bar not met | Object integrity operations exist. Shared Realm extraction, complete daemon SES boot and SES parity acceptance remain open; named skips are not passing acceptance. |
 | 5. Compiler port | Landed; full bar not reverified | Lexer, parser, scoper and coder are the default compiler. Historical byte-identity measurements cover named corpora; budgeted compilation and golden costs now share the runtime release identity. No fresh full-conformance oracle run is claimed here. |

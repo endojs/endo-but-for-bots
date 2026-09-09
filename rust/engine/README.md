@@ -58,7 +58,7 @@ entire stage where the verdict is open.
 | Stage | Bar | Verdict | Date / tip | Evidence and remaining gap |
 |---|---|---|---|---|
 | 1. Thin slice | Covered result agreement and deterministic meter | Landed; historical corpus acceptance | 2026-09-09 / `96db92e23` audit | `ironhorse-vm/tests/golden_computrons.rs`; historical corpus in CHANGELOG. Shared intrinsics are still incomplete. |
-| 2. Object/control flow | Covered language agreement, GC | Partial | 2026-09-09 / `96db92e23` audit | `ironhorse-vm/tests/gc_visitation_registry.rs`; production exact-GC/chunk reclamation and schedule remain open. |
+| 2. Object/control flow | Covered language agreement, GC | Partial | 2026-09-09 / `96db92e23` audit | `ironhorse-vm/tests/gc_visitation_registry.rs`; production exact-GC/chunk reclamation remains open; W6 decision 5 assigns scheduling to the consumer. |
 | 3. Built-ins | Built-ins result agreement | Partial | 2026-09-09 / `96db92e23` audit | Test262 expectations and runtime golden vectors cover subsets; full conformance is not established. |
 | 4. Hardened JavaScript | Daemon boot and SES suites pass | **BAR NOT MET** | 2026-09-09 / `96db92e23` audit | `ironhorse-vm/tests/ses_boot_intrinsics.rs` and `hardened_js_boundary.rs` cover prerequisites. Complete SES boot/parity and shared Realm remain open. |
 | 5. Compiler | Full-corpus byte identity and parse meter | Implemented; full bar not reverified | 2026-09-09 / `96db92e23` audit | Historical `compile-diff` measurements in CHANGELOG; compiler golden costs and parity tests are narrower than fresh full-corpus acceptance. |

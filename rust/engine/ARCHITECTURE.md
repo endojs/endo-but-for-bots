@@ -1,6 +1,7 @@
 # IronHorse architecture
 
 Current-state guide audited at `96db92e23` on 2026-09-09.
+GC policy incorporates the W6 decision at `d38196799`.
 This describes the implementation, with explicit limits where it differs from
 [the roadmap](../../designs/ironhorse-engine.md#status).
 [README acceptance status](README.md#acceptance-status) records which bars remain open.
@@ -154,8 +155,10 @@ The full collector exists, but production persistence currently uses paged colle
 rather than calling `Interp::collect_garbage` as its normal collection policy.
 Do not infer production weak-collection or chunk-compaction behavior from kernel tests.
 Allocation admission and heap exhaustion also do not imply allocation-pressure collection.
-[W6 decision 5](../../designs/ironhorse-w6-decisions.md#5-gc-schedule--open-and-it-blocks-the-most-code)
-records the unresolved choice of release policy versus embedder GC policy.
+[W6 decision 5](../../designs/ironhorse-w6-decisions.md#5-gc-schedule--decided-engine-consumer-policy)
+assigns scheduling to the engine consumer; production reclamation remains Phase 2B work.
+Consumers requiring replica-identical heaps must coordinate collection events and policy,
+including recovery and resume.
 
 ### Async and generator roots
 
