@@ -5981,9 +5981,11 @@ mod tests {
         // Owners not strictly ascending.
         let mut t = IntlTables::default();
         t.collators = vec![collator(5), collator(3)];
-        assert!(
-            decode_intl(&encode_intl(&t)).is_err(),
-            "non-ascending owners"
+        assert_eq!(
+            decode_intl(&encode_intl(&t)),
+            Err(SnapshotError::Corrupt(
+                "intl side table: owners not strictly ascending"
+            ))
         );
         // Segment boundaries outside their input.
         let mut t = IntlTables::default();
@@ -5995,9 +5997,11 @@ mod tests {
                 granularity: "word".into(),
             },
         )];
-        assert!(
-            decode_intl(&encode_intl(&t)).is_err(),
-            "segment end past units"
+        assert_eq!(
+            decode_intl(&encode_intl(&t)),
+            Err(SnapshotError::Corrupt(
+                "intl side table: segment boundaries do not tile their input"
+            ))
         );
         // Overlapping ranges (review): a start must equal the previous
         // END — the pre-review check compared previous STARTS, so
@@ -6011,9 +6015,11 @@ mod tests {
                 granularity: "word".into(),
             },
         )];
-        assert!(
-            decode_intl(&encode_intl(&t)).is_err(),
-            "overlapping segments"
+        assert_eq!(
+            decode_intl(&encode_intl(&t)),
+            Err(SnapshotError::Corrupt(
+                "intl side table: segment boundaries do not tile their input"
+            ))
         );
         // Boundaries that do not COVER the input (ICU always emits the
         // final boundary at the unit count).
@@ -6026,9 +6032,11 @@ mod tests {
                 granularity: "word".into(),
             },
         )];
-        assert!(
-            decode_intl(&encode_intl(&t)).is_err(),
-            "non-covering segments"
+        assert_eq!(
+            decode_intl(&encode_intl(&t)),
+            Err(SnapshotError::Corrupt(
+                "intl side table: segment boundaries do not cover their input"
+            ))
         );
         // Unicode-extension keys: the writer emits BTreeMap order, so
         // unordered or duplicated keys are non-canonical crafted bytes
@@ -6049,15 +6057,39 @@ mod tests {
             },
         )];
         let canonical = encode_intl(&t);
+        assert_eq!(decode_intl(&canonical).unwrap(), t);
+        let mut invalid = canonical.clone();
+        invalid[12] = 0xff; // count, owner, tag length, first tag byte
+        assert_eq!(
+            decode_intl(&invalid),
+            Err(SnapshotError::Corrupt("intl side table: string not UTF-8"))
+        );
+        invalid = canonical.clone();
+        invalid[20] = 2; // script option follows tag and language strings
+        assert_eq!(
+            decode_intl(&invalid),
+            Err(SnapshotError::Corrupt("intl side table: bad option tag"))
+        );
+
         let ca = canonical.windows(2).position(|w| w == b"ca").unwrap();
         let nu = canonical.windows(2).position(|w| w == b"nu").unwrap();
         let mut swapped = canonical.clone();
         swapped[ca..ca + 2].copy_from_slice(b"nu");
         swapped[nu..nu + 2].copy_from_slice(b"ca");
-        assert!(decode_intl(&swapped).is_err(), "unordered unicode keys");
+        assert_eq!(
+            decode_intl(&swapped),
+            Err(SnapshotError::Corrupt(
+                "intl side table: unicode keys not strictly ascending"
+            ))
+        );
         let mut duped = canonical.clone();
         duped[nu..nu + 2].copy_from_slice(b"ca");
-        assert!(decode_intl(&duped).is_err(), "duplicate unicode keys");
+        assert_eq!(
+            decode_intl(&duped),
+            Err(SnapshotError::Corrupt(
+                "intl side table: unicode keys not strictly ascending"
+            ))
+        );
         assert_eq!(
             decode_intl(&canonical).unwrap(),
             t,
@@ -6081,19 +6113,29 @@ mod tests {
             },
         )];
         let mut bytes = encode_intl(&t);
+        assert_eq!(decode_intl(&bytes).unwrap(), t);
         let needle = b"year";
         let at = bytes.windows(4).position(|w| w == needle).unwrap();
         bytes[at..at + 4].copy_from_slice(b"yerp");
-        assert!(decode_intl(&bytes).is_err(), "unknown component key");
+        assert_eq!(
+            decode_intl(&bytes),
+            Err(SnapshotError::Corrupt(
+                "intl side table: unknown date-time component key"
+            ))
+        );
         // A boolean byte outside 0/1.
         let mut t = IntlTables::default();
         t.collators = vec![collator(1)];
         let mut bytes = encode_intl(&t);
+        assert_eq!(decode_intl(&bytes).unwrap(), t);
         // The `numeric` byte follows the four leading strings; find the
         // first 0x00 after the "default" text and poke it to 7.
         let at = bytes.windows(7).position(|w| w == b"default").unwrap() + 7;
         bytes[at] = 7;
-        assert!(decode_intl(&bytes).is_err(), "boolean byte outside 0/1");
+        assert_eq!(
+            decode_intl(&bytes),
+            Err(SnapshotError::Corrupt("intl side table: bad boolean byte"))
+        );
         // The intact forms round-trip.
         let mut ok = IntlTables::default();
         ok.collators = vec![collator(1), collator(4)];
@@ -6173,9 +6215,11 @@ mod tests {
                 pos: 0,
             },
         )];
-        assert!(
-            check(&t).is_err(),
-            "iterator names no covering segments row"
+        assert_eq!(
+            check(&t),
+            Err(SnapshotError::Corrupt(
+                "intl side table: segment iterator names no covering segments row"
+            ))
         );
         // A cursor past the precomputed list.
         let mut t = IntlTables::default();
@@ -6187,7 +6231,12 @@ mod tests {
                 pos: 5,
             },
         )];
-        assert!(check(&t).is_err(), "cursor past the list");
+        assert_eq!(
+            check(&t),
+            Err(SnapshotError::Corrupt(
+                "intl side table: segment iterator names no covering segments row"
+            ))
+        );
         // The covered form passes (pos == len is the exhausted cursor).
         let mut t = IntlTables::default();
         t.segments = vec![segs(1)];
@@ -9083,5 +9132,65 @@ mod function_decoder_refusals {
         }
         invalid.deleted_meta[0].1 = 4;
         assert_eq!(check(&invalid), Ok(()));
+    }
+}
+
+#[cfg(test)]
+mod intl_bound_decoder_refusals {
+    use super::*;
+    use ironhorse_vm::IntlBoundFunctionRow;
+
+    #[test]
+    fn bound_function_tags_names_and_order() {
+        let first = IntlBoundFunctionRow {
+            kind: 0,
+            function: 2,
+            owner: 1,
+            name: "f".into(),
+            name_chunk: u32::MAX,
+            arity: 1,
+        };
+        let mut second = first.clone();
+        second.function = 3;
+        second.kind = 1;
+        assert_eq!(
+            decode_intl_bound_functions(&encode_intl_bound_functions(&[
+                first.clone(),
+                second.clone()
+            ]))
+            .unwrap(),
+            vec![first.clone(), second.clone()]
+        );
+        for function in [2, 1] {
+            second.function = function;
+            assert_eq!(
+                decode_intl_bound_functions(&encode_intl_bound_functions(&[
+                    first.clone(),
+                    second.clone()
+                ])),
+                Err(SnapshotError::Corrupt(
+                    "Intl bound-function state: functions not strictly ascending"
+                ))
+            );
+        }
+        for kind in [2, 255] {
+            let mut invalid = first.clone();
+            invalid.kind = kind;
+            assert_eq!(
+                decode_intl_bound_functions(&encode_intl_bound_functions(&[invalid])),
+                Err(SnapshotError::Corrupt(
+                    "Intl bound-function state: unknown kind"
+                ))
+            );
+        }
+        let mut bytes = encode_intl_bound_functions(&[first]);
+        assert!(decode_intl_bound_functions(&bytes).is_ok());
+        bytes[17] = 0xff; // count, kind, function, owner, name length
+        assert_eq!(
+            decode_intl_bound_functions(&bytes),
+            Err(SnapshotError::Corrupt(
+                "Intl bound-function state: name not UTF-8"
+            ))
+        );
     }
 }
