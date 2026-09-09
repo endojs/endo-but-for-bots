@@ -45,6 +45,14 @@
     hostJoinPath: 'joinPath',
     hostRealPath: 'realPath',
 
+    // powers/registry.rs
+    hostRegistryHasPackage: 'registryHasPackage',
+    hostRegistryListVersions: 'registryListVersions',
+    hostRegistryProvidePackageTree: 'registryProvidePackageTree',
+    hostRegistryListTree: 'registryListTree',
+    hostRegistryLookupTree: 'registryLookupTree',
+    hostRegistryReadBlob: 'registryReadBlob',
+
     // powers/sqlite.rs
     hostSqliteOpen: 'sqliteOpen',
     hostSqliteClose: 'sqliteClose',

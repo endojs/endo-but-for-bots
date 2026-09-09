@@ -10,6 +10,7 @@ pub mod debug;
 pub mod fs;
 pub mod modules;
 pub mod process;
+pub mod registry;
 pub mod sqlite;
 
 use cap_std::fs::Dir;
@@ -27,6 +28,8 @@ pub struct HostPowers {
     /// Module source registry: specifier → source text.
     /// Populated at setup time; queried by the importHook.
     pub module_sources: HashMap<String, String>,
+    /// Endor's package-registry mechanics, present only on the manager.
+    pub registry: Option<Box<dyn registry::RegistryHost>>,
 }
 
 impl HostPowers {
@@ -35,7 +38,12 @@ impl HostPowers {
         HostPowers {
             dirs: HashMap::new(),
             module_sources: HashMap::new(),
+            registry: None,
         }
+    }
+
+    pub fn set_registry(&mut self, registry: Box<dyn registry::RegistryHost>) {
+        self.registry = Some(registry);
     }
 
     /// Add a directory handle with the given token name.

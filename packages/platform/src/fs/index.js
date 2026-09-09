@@ -2,6 +2,8 @@
 
 export {
   readableBlobMethodGuards,
+  lookupTreeMethodGuards,
+  enumerableTreeMethodGuards,
   readableTreeMethodGuards,
   readableNameHubMethodGuards,
   directoryFileMethodGuards,
@@ -17,6 +19,8 @@ export {
   ReadableBlobRangeInterface,
   ReadableBlobRangeReadInterface,
   SnapshotBlobInterface,
+  LookupTreeInterface,
+  EnumerableTreeInterface,
   ReadableTreeInterface,
   SnapshotTreeInterface,
   TreeWriterInterface,

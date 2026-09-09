@@ -5,8 +5,9 @@
  * JS reference implementation of the `EndoRegistry` daemon capability.
  *
  * `EndoRegistry` brokers npm-style package resolution and tarball fetch
- * against the content-addressed store (CAS).  It is exposed on every host
- * as the `@registry` special name (mirroring `@node`).
+ * against the content-addressed store (CAS). It remains as the deprecated
+ * method-protocol implementation; `@registry` now exposes the directory-tree
+ * adapter from `registry-tree.js`.
  *
  * This module is the JS reference backend from
  * `designs/registry-capability.md` and implements the Go-like Minimum

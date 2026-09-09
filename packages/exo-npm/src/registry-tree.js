@@ -1,0 +1,655 @@
+// @ts-check
+
+/**
+ * Directory-tree presentation for package registries.
+ *
+ * The adapters in this module deliberately know nothing about HTTP, SQLite,
+ * tarballs, or a particular CAS. Those mechanics are injected as three narrow
+ * operations, which lets the Node daemon and the XS-hosted Endor adapter expose
+ * one capability shape and lets tests use the same shape over in-memory data.
+ *
+ * @import { EndoRegistry, EndoReadableTree, RegistryDirectory, RegistryHub, RegistryTreeOperations } from '../types.js'
+ */
+
+import { makeExo } from '@endo/exo';
+import { makeError, X } from '@endo/errors';
+
+import {
+  RegistryNotFoundError,
+  RegistryPathSyntaxError,
+  registryErrorName,
+} from './errors.js';
+import {
+  EndoRegistryInterface,
+  RegistryDirectoryInterface,
+  RegistryHubInterface,
+  RegistrySnapshotTreeInterface,
+} from './type-guards.js';
+
+/** @param {string | readonly string[]} path */
+const segmentsFromPath = path =>
+  typeof path === 'string' ? [path] : [...path];
+harden(segmentsFromPath);
+
+/**
+ * @param {unknown} node
+ * @param {readonly string[]} segments
+ */
+const lookupThrough = async (node, segments) => {
+  let current = node;
+  for (const segment of segments) {
+    // Direct same-vat dispatch is intentional. The resolver and the registry
+    // tree are colocated on both backends, so there is no E() in this module.
+    // eslint-disable-next-line no-await-in-loop
+    current = await /** @type {any} */ (current).lookup(segment);
+  }
+  return current;
+};
+harden(lookupThrough);
+
+// The Endor lane concatenates a package name straight into a fetch URL
+// (`rust/endo/src/fetch.rs` `format!("{}{}", registry, name)`) with no
+// percent-encoding, unlike the Node lane which escapes it. A guest holding
+// `@registry` can otherwise steer an authenticated request off the registry
+// origin with a name like `..`, `foo?x=1`, or `%2e%2e%2f...`. Validate every
+// name part against npm's charset at this single choke point — the leading
+// package name always flows through here — so both backends reject the same
+// spellings before the name reaches any host power.
+const npmNamePartPattern = /^[a-zA-Z0-9._-]+$/;
+/** @param {string} part */
+const assertNpmNamePart = part => {
+  const bare = part.startsWith('@') ? part.slice(1) : part;
+  if (
+    bare === '' ||
+    bare === '.' ||
+    bare === '..' ||
+    !npmNamePartPattern.test(bare)
+  ) {
+    throw RegistryPathSyntaxError(part);
+  }
+};
+harden(assertNpmNamePart);
+
+/** @param {string} segment */
+const scopedPackageSegments = segment => {
+  if (!segment.includes('/')) {
+    assertNpmNamePart(segment);
+    return [segment];
+  }
+  const match = /^(@[^/]+)\/([^/]+)$/.exec(segment);
+  if (match === null) throw RegistryPathSyntaxError(segment);
+  assertNpmNamePart(match[1]);
+  assertNpmNamePart(match[2]);
+  return [match[1], match[2]];
+};
+harden(scopedPackageSegments);
+
+/**
+ * A deterministic ascending comparison for exact semver spellings.
+ * @param {string} left
+ * @param {string} right
+ */
+export const comparePublishedVersions = (left, right) => {
+  const versionPattern =
+    /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+  const leftMatch = versionPattern.exec(left);
+  const rightMatch = versionPattern.exec(right);
+  // Total order across the mixed set: every parseable spelling sorts before
+  // every unparseable one, and unparseable spellings sort lexicographically
+  // among themselves. A per-pair lexicographic fallback would be intransitive
+  // (registry-supplied version keys could then determine `list()` order and
+  // the MVS selection), so unparseable versions are segregated instead.
+  if (leftMatch === null || rightMatch === null) {
+    if (leftMatch === null && rightMatch === null) {
+      return left < right ? -1 : left > right ? 1 : 0;
+    }
+    // A parseable version is strictly less than an unparseable one.
+    return leftMatch === null ? 1 : -1;
+  }
+  // Release components are registry-supplied digit runs of unbounded length, so
+  // they compare as BigInt. `Number()` subtraction loses precision past 2**53
+  // (distinct versions collapse to equal, letting registry key order pick the
+  // lower one) and overflows a several-hundred-digit component to `Infinity`,
+  // whose `Infinity - Infinity === NaN` leaves `sort` unordered.
+  for (let position = 1; position <= 3; position += 1) {
+    const leftComponent = BigInt(leftMatch[position]);
+    const rightComponent = BigInt(rightMatch[position]);
+    if (leftComponent !== rightComponent) {
+      return leftComponent < rightComponent ? -1 : 1;
+    }
+  }
+  const leftPrerelease = leftMatch[4]?.split('.');
+  const rightPrerelease = rightMatch[4]?.split('.');
+  if (leftPrerelease === undefined && rightPrerelease !== undefined) return 1;
+  if (leftPrerelease !== undefined && rightPrerelease === undefined) return -1;
+  if (leftPrerelease !== undefined && rightPrerelease !== undefined) {
+    const length = Math.max(leftPrerelease.length, rightPrerelease.length);
+    for (let position = 0; position < length; position += 1) {
+      const leftIdentifier = leftPrerelease[position];
+      const rightIdentifier = rightPrerelease[position];
+      if (leftIdentifier === undefined) return -1;
+      if (rightIdentifier === undefined) return 1;
+      if (leftIdentifier !== rightIdentifier) {
+        const leftIsNumber = /^\d+$/.test(leftIdentifier);
+        const rightIsNumber = /^\d+$/.test(rightIdentifier);
+        if (leftIsNumber && rightIsNumber) {
+          const leftValue = BigInt(leftIdentifier);
+          const rightValue = BigInt(rightIdentifier);
+          // Equal value with distinct spelling (`alpha.01` vs `alpha.1`) is
+          // *not* decided here — returning a sign both ways would break
+          // antisymmetry. Fall through to the raw-spelling tiebreak below.
+          if (leftValue !== rightValue) {
+            return leftValue < rightValue ? -1 : 1;
+          }
+        } else if (leftIsNumber) {
+          return -1;
+        } else if (rightIsNumber) {
+          return 1;
+        } else {
+          return leftIdentifier < rightIdentifier ? -1 : 1;
+        }
+      }
+    }
+  }
+  // Structurally equal: semver ignores build metadata for precedence
+  // (`1.0.0+a` vs `1.0.0+b`) and numeric prerelease identifiers can tie by
+  // value across spellings. A total order still demands that two *distinct*
+  // registry keys compare distinctly, or `sort` leaves their order at the mercy
+  // of the packument's insertion order and `greatestSatisfying`'s
+  // `candidates[length - 1]` selection turns nondeterministic. Tiebreak on the
+  // raw spelling so equal-by-precedence-but-distinct keys still order stably.
+  if (left === right) return 0;
+  return left < right ? -1 : 1;
+};
+harden(comparePublishedVersions);
+
+/**
+ * Attenuate an enumerable tree to lookup-only authority.
+ *
+ * The attenuation must survive every result the view hands back: a bare
+ * forwarding `lookup` would leak the underlying enumerable tree, because every
+ * registry node returns *itself* for an empty path (so `view.lookup([])` would
+ * be the un-attenuated root, with `list` intact). The empty path is therefore
+ * rejected, and any tree-shaped result is re-wrapped so `list` stays withheld
+ * one level down as well.
+ *
+ * @param {RegistryDirectory} tree
+ * @param {'live' | 'stable'} [temporal]
+ * @returns {RegistryHub}
+ */
+export const makeLookupTreeView = (tree, temporal = 'live') => {
+  /** @type {RegistryHub} */
+  const view = makeExo('LookupTreeView', RegistryHubInterface, {
+    help: method =>
+      method === undefined
+        ? 'Lookup-only view of an enumerable tree'
+        : `Lookup-only tree method ${method}`,
+    has: (...path) => tree.has(...path),
+    async lookup(path) {
+      const segments = segmentsFromPath(path);
+      // An empty path resolves to the tree itself; returning it would hand
+      // back the enumerable authority this view exists to withhold.
+      if (segments.length === 0) {
+        throw RegistryPathSyntaxError('(empty path)');
+      }
+      const result = await tree.lookup(segments);
+      // Re-attenuate every traversable node the view returns, not just directly
+      // enumerable ones: a non-enumerable hub carries no `list` itself yet still
+      // hands back enumerable children, so wrapping only `list`-bearing results
+      // would leave enumeration recoverable two hops down. Any node with a
+      // `lookup` is wrapped so `list` stays withheld at every depth.
+      if (
+        result !== null &&
+        typeof result === 'object' &&
+        typeof (/** @type {any} */ (result).lookup) === 'function'
+      ) {
+        return makeLookupTreeView(
+          /** @type {RegistryDirectory} */ (result),
+          temporal,
+        );
+      }
+      return result;
+    },
+    // Forward the wrapped node's own identity metadata rather than stamping a
+    // fixed `temporal`: the view exists to withhold *enumeration* (`list`), not
+    // to relabel consistency or to drop a leaf's `integrity`/`sha256` info. A
+    // holder must still be able to verify the package it just resolved. Only a
+    // node that carries no `getInfo` falls back to the caller-supplied default.
+    getInfo: () =>
+      typeof (/** @type {any} */ (tree).getInfo) === 'function'
+        ? tree.getInfo()
+        : harden({ temporal }),
+  });
+  return view;
+};
+harden(makeLookupTreeView);
+
+/**
+ * Make the non-enumerable npm package-name hub.
+ *
+ * @param {RegistryTreeOperations} operations
+ * @param {{ label?: string }} [options]
+ * @returns {RegistryHub}
+ */
+export const makeNpmRegistryTree = (operations, options = {}) => {
+  const { label = 'npm' } = options;
+  /** @type {Map<string, RegistryDirectory>} */
+  const packageDirectories = new Map();
+  /** @type {Map<string, WeakMap<EndoReadableTree, EndoReadableTree>>} */
+  const versionLeavesByPackageVersion = new Map();
+
+  /** @param {string} packageName */
+  const versionsFor = async packageName => {
+    const versions = await operations.listVersions(packageName);
+    // Treat both an absent metadata document and a zero-published-versions
+    // packument as not-found. The Endor lane's `has_package` is
+    // `!versions.is_empty()`, so an empty list must read as absent on both
+    // backends; otherwise `has('empty')` diverges (true on Node, false on
+    // Endor) and disagrees with `lookup('empty')`.
+    if (versions === undefined || versions.length === 0) {
+      throw RegistryNotFoundError(`/npm/${packageName}`);
+    }
+    return harden([...versions].sort(comparePublishedVersions));
+  };
+
+  /**
+   * @param {string} packageName
+   * @param {string} version
+   */
+  const makeVersionLeaf = async (packageName, version) => {
+    const key = `${packageName}@${version}`;
+    const available = await versionsFor(packageName);
+    if (!available.includes(version)) {
+      throw RegistryNotFoundError(`/npm/${packageName}/${version}`);
+    }
+
+    const { treeRef, integrity } = await operations.providePackageTree(
+      packageName,
+      version,
+    );
+    let versionLeaves = versionLeavesByPackageVersion.get(key);
+    if (versionLeaves === undefined) {
+      versionLeaves = new WeakMap();
+      versionLeavesByPackageVersion.set(key, versionLeaves);
+    }
+    const cached = versionLeaves.get(treeRef);
+    if (cached !== undefined) return cached;
+    const leaf = makeExo(
+      'RegistryPackageVersionTree',
+      RegistrySnapshotTreeInterface,
+      {
+        help: method =>
+          method === undefined
+            ? `Immutable package tree ${key}`
+            : `Package tree method ${method}`,
+        has: (...path) => treeRef.has(...path),
+        list: (...path) => treeRef.list(...path),
+        lookup: path => treeRef.lookup(path),
+        sha256: () => treeRef.sha256(),
+        async getInfo() {
+          const treeInfo =
+            typeof treeRef.getInfo === 'function'
+              ? await treeRef.getInfo()
+              : harden({});
+          return harden({
+            ...treeInfo,
+            temporal: 'immutable',
+            integrity,
+          });
+        },
+      },
+    );
+    versionLeaves.set(treeRef, leaf);
+    return leaf;
+  };
+
+  /** @param {string} packageName */
+  const packageDirectoryFor = async packageName => {
+    const cached = packageDirectories.get(packageName);
+    if (cached !== undefined) return cached;
+    await versionsFor(packageName);
+
+    /** @type {RegistryDirectory} */
+    const packageDirectory = makeExo(
+      'RegistryPackageVersions',
+      RegistryDirectoryInterface,
+      {
+        help: method =>
+          method === undefined
+            ? `Live published-version directory for ${packageName}`
+            : `Package-version directory method ${method}`,
+        async has(...path) {
+          try {
+            if (path.length === 0) return true;
+            const [version, ...deeper] = path;
+            // `has` is the cheap no-throw predicate; deciding existence of a
+            // `(package, version)` pair must not materialize the leaf (download
+            // a tarball, write the CAS). The metadata version list answers it.
+            const available = await versionsFor(packageName);
+            if (!available.includes(version)) return false;
+            if (deeper.length === 0) return true;
+            // A path *inside* a version tree must materialize the leaf to
+            // decide it. The Endor lane's tree `lookup` returns `undefined`
+            // (rather than throwing) for a missing in-tree entry, so a bare
+            // no-throw is not "present": the resolved node must actually
+            // exist. Otherwise `has(v, 'nope') === true` for absent paths.
+            const node = await lookupThrough(packageDirectory, path);
+            return node !== undefined;
+          } catch {
+            return false;
+          }
+        },
+        async list(...path) {
+          if (path.length === 0) return versionsFor(packageName);
+          const node = await lookupThrough(packageDirectory, path);
+          if (typeof (/** @type {any} */ (node).list) !== 'function') {
+            throw new TypeError(
+              `Registry node at ${path.join('/')} is not enumerable`,
+            );
+          }
+          return /** @type {any} */ (node).list();
+        },
+        async lookup(path) {
+          const segments = segmentsFromPath(path);
+          if (segments.length === 0) return packageDirectory;
+          const [version, ...remaining] = segments;
+          if (version.includes('/')) throw RegistryPathSyntaxError(version);
+          const leaf = await makeVersionLeaf(packageName, version);
+          return lookupThrough(leaf, remaining);
+        },
+        getInfo: () => harden({ temporal: /** @type {const} */ ('live') }),
+      },
+    );
+    packageDirectories.set(packageName, packageDirectory);
+    return packageDirectory;
+  };
+
+  // A bare scope names no listable resource of its own — its existence is only
+  // knowable once a package under it is fetched — so scope hubs are minted on
+  // demand rather than memoized. Memoizing them in an unbounded map would let a
+  // guest holding `@registry` exhaust daemon memory with `lookup('@junk-' + i)`
+  // over distinct bogus scopes without ever touching the network.
+  /** @param {string} scope */
+  const scopeHubFor = scope => {
+    /** @type {RegistryHub} */
+    const scopeHub = makeExo('RegistryNpmScope', RegistryHubInterface, {
+      help: method =>
+        method === undefined
+          ? `Non-enumerable npm scope ${scope}`
+          : `npm scope method ${method}`,
+      async has(...path) {
+        try {
+          if (path.length === 0) return true;
+          const [packagePart, ...remaining] = path;
+          // Validate the package part's charset exactly as `lookup` does: it
+          // reaches `listVersions` (and the Endor fetch URL) as
+          // `${scope}/${packagePart}`, so a guest-chosen `..`/`foo?x=1` must
+          // be rejected on the `has` entry path too, not only on `lookup`.
+          assertNpmNamePart(packagePart);
+          // Traverse with the child's own `has`, never `lookup`: the package
+          // directory's `has` decides version existence from metadata alone,
+          // whereas `lookup` would materialize a version leaf (tarball fetch +
+          // CAS write). `has` must exercise no more authority than the child's.
+          const directory = await packageDirectoryFor(
+            `${scope}/${packagePart}`,
+          );
+          return directory.has(...remaining);
+        } catch {
+          return false;
+        }
+      },
+      async lookup(path) {
+        const segments = segmentsFromPath(path);
+        if (segments.length === 0) return scopeHub;
+        const [packagePart, ...remaining] = segments;
+        // The package part of a scoped name reaches `listVersions` (and the
+        // Endor fetch URL) as `${scope}/${packagePart}`; validate its charset
+        // here as `scopedPackageSegments` does for the slash-joined spelling.
+        assertNpmNamePart(packagePart);
+        const directory = await packageDirectoryFor(`${scope}/${packagePart}`);
+        return lookupThrough(directory, remaining);
+      },
+      getInfo: () => harden({ temporal: /** @type {const} */ ('live') }),
+    });
+    return scopeHub;
+  };
+
+  /** @type {RegistryHub} */
+  const npmHub = makeExo('NpmRegistryHub', RegistryHubInterface, {
+    help: method =>
+      method === undefined
+        ? `Non-enumerable ${label} package-name hub`
+        : `npm registry method ${method}`,
+    async has(...path) {
+      try {
+        if (path.length === 0) return true;
+        // Normalize only the leading segment through `scopedPackageSegments`,
+        // exactly as `lookup` does. Trailing version and in-tree file segments
+        // are ordinary published names (spaces, `+build`, non-ASCII) that npm's
+        // package-name charset does not admit; running them through
+        // `scopedPackageSegments` here made `has` report absent for content
+        // `lookup` resolves, breaking the has=>lookup agreement invariant. Only
+        // an embedded slash is rejected past the head, since a slash is
+        // meaningful only in the leading package name.
+        const [head, ...tail] = path;
+        const normalized = [
+          ...scopedPackageSegments(head),
+          ...tail.map(segment => {
+            if (segment.includes('/')) throw RegistryPathSyntaxError(segment);
+            return segment;
+          }),
+        ];
+        // Resolve the package name (and any trailing version/path) without
+        // materializing a version leaf: `has` is the platform-wide no-throw
+        // predicate and must not download a tarball or write to the CAS the way
+        // its `lookup` sibling does.
+        let packageName;
+        let rest;
+        if (normalized[0].startsWith('@')) {
+          if (normalized.length === 1) {
+            // A bare scope names a lookup-only hub minted on demand, so it
+            // always "exists" — matching `lookup('@scope')`, which returns a
+            // scope hub rather than throwing. Routing this through
+            // `hasPackage('@scope')` (a package literally so named) would make
+            // `has` and `lookup` disagree, and disagree per-backend since only
+            // Endor supplies `hasPackage`.
+            return true;
+          }
+          // The split scoped spelling `has('@scope', part)` reaches
+          // `listVersions`/`hasPackage` (and the Endor fetch URL) as
+          // `${scope}/${part}`; validate `part`'s charset here, exactly as
+          // `scopeHubFor.lookup` does, so `has` cannot bypass the choke point
+          // `lookup` enforces (a slash-joined `@scope/part` head is already
+          // validated by `scopedPackageSegments`; re-validating is harmless).
+          assertNpmNamePart(normalized[1]);
+          packageName = `${normalized[0]}/${normalized[1]}`;
+          rest = normalized.slice(2);
+        } else {
+          packageName = normalized[0];
+          rest = normalized.slice(1);
+        }
+        if (rest.length === 0) {
+          // Bare package existence. Prefer the backend's cheap probe when it
+          // supplies one (Endor); otherwise fall back to the metadata version
+          // list, which throws — folded to false below — for an unknown name.
+          if (operations.hasPackage !== undefined) {
+            return Boolean(await operations.hasPackage(packageName));
+          }
+          await versionsFor(packageName);
+          return true;
+        }
+        const [version, ...deeper] = rest;
+        const available = await versionsFor(packageName);
+        if (!available.includes(version)) return false;
+        if (deeper.length === 0) return true;
+        // A path *inside* an already-confirmed version tree is the only case
+        // that must materialize the leaf; it is bounded to one known pair. The
+        // Endor lane's leaf `lookup` returns `undefined` for a missing in-tree
+        // entry rather than throwing, so a bare no-throw is not "present": the
+        // resolved node must actually exist.
+        const node = await lookupThrough(npmHub, normalized);
+        return node !== undefined;
+      } catch {
+        // `has` is the platform-wide no-throw predicate. In particular an
+        // offline unknown folds "cannot tell" into false.
+        return false;
+      }
+    },
+    async lookup(path) {
+      const original = segmentsFromPath(path);
+      if (original.length === 0) return npmHub;
+      // The leading segment is normalized through `scopedPackageSegments`
+      // regardless of path length, so `lookup(['@scope/package', '1.2.3'])`
+      // resolves the same node `has('@scope/package', '1.2.3')` normalizes —
+      // the has=>lookup contract must not disagree on the one slash-bearing
+      // spelling npm tolerates. Trailing segments still reject embedded
+      // slashes, which are only meaningful in the leading package name.
+      const [head, ...tail] = original;
+      const segments = [
+        ...scopedPackageSegments(head),
+        ...tail.map(segment => {
+          if (segment.includes('/')) throw RegistryPathSyntaxError(segment);
+          return segment;
+        }),
+      ];
+      const [first, ...remaining] = segments;
+      if (first.startsWith('@')) {
+        if (remaining.length === 0) return scopeHubFor(first);
+        return lookupThrough(scopeHubFor(first), remaining);
+      }
+      const directory = await packageDirectoryFor(first);
+      return lookupThrough(directory, remaining);
+    },
+    getInfo: () => harden({ temporal: /** @type {const} */ ('live') }),
+  });
+
+  return npmHub;
+};
+harden(makeNpmRegistryTree);
+
+/**
+ * Endor's XS adapter is intentionally the same narrow adapter with a distinct
+ * constructor name. Its operations are host powers backed by RegistryTable,
+ * fetch_package, and the CAS reader; they are not a second public protocol.
+ *
+ * @param {RegistryTreeOperations} hostPowers
+ */
+export const makeEndorNpmRegistryTree = hostPowers =>
+  makeNpmRegistryTree(hostPowers, { label: 'Endor npm' });
+harden(makeEndorNpmRegistryTree);
+
+/**
+ * Make the enumerable registry-family root.
+ *
+ * @param {Record<string, RegistryHub>} registries
+ * @returns {RegistryDirectory}
+ */
+export const makePackageRegistryTree = registries => {
+  const names = harden(Object.keys(registries).sort());
+  /** @type {RegistryDirectory} */
+  const root = makeExo('PackageRegistryRoot', RegistryDirectoryInterface, {
+    help: method =>
+      method === undefined
+        ? 'Stable directory of configured package registries'
+        : `Package-registry root method ${method}`,
+    async has(...path) {
+      try {
+        if (path.length === 0) return true;
+        const [registryName, ...rest] = path;
+        // Traverse with the named registry's own `has`, never `lookup`: this
+        // root is the capability installed at every host's `@registry`, and a
+        // `lookup`-based traversal would let `has('npm', name, version)`
+        // materialize a version leaf (tarball fetch + CAS write) — turning the
+        // documented free predicate into unbounded guest-driven egress.
+        if (typeof registryName !== 'string' || registryName.includes('/')) {
+          return false;
+        }
+        if (!Object.hasOwn(registries, registryName)) return false;
+        return registries[registryName].has(...rest);
+      } catch {
+        return false;
+      }
+    },
+    async list(...path) {
+      if (path.length === 0) return names;
+      const node = await lookupThrough(root, path);
+      if (typeof (/** @type {any} */ (node).list) !== 'function') {
+        throw new TypeError(
+          `Registry node at ${path.join('/')} is not enumerable`,
+        );
+      }
+      return /** @type {any} */ (node).list();
+    },
+    async lookup(path) {
+      const segments = segmentsFromPath(path);
+      if (segments.length === 0) return root;
+      const [registryName, ...remaining] = segments;
+      if (registryName.includes('/'))
+        throw RegistryPathSyntaxError(registryName);
+      // `registries` is a caller-supplied plain record; index it with an
+      // own-property check so an inherited key (`__proto__`, `constructor`,
+      // `toString`) cannot hand a prototype intrinsic back across the
+      // `@registry` capability boundary.
+      if (!Object.hasOwn(registries, registryName))
+        throw RegistryNotFoundError(`/${registryName}`);
+      const registry = registries[registryName];
+      return lookupThrough(registry, remaining);
+    },
+    getInfo: () => harden({ temporal: /** @type {const} */ ('stable') }),
+  });
+  return root;
+};
+harden(makePackageRegistryTree);
+
+/**
+ * @param {RegistryDirectory} registryRoot
+ * @param {string} name
+ * @param {string} version
+ */
+export const lookupPackageVersion = async (registryRoot, name, version) => {
+  const npm = await registryRoot.lookup('npm');
+  const packageDirectory = await /** @type {RegistryHub} */ (npm).lookup(name);
+  return /** @type {RegistryDirectory} */ (packageDirectory).lookup(version);
+};
+harden(lookupPackageVersion);
+
+/**
+ * Compatibility surface for callers that still use the old method protocol.
+ * It is never installed at `@registry`; callers must explicitly ask for it.
+ *
+ * @param {RegistryDirectory} registryRoot
+ * @param {{ resolve?: EndoRegistry['resolve'] }} [options]
+ * @returns {EndoRegistry}
+ */
+export const makeDeprecatedEndoRegistryAdapter = (
+  registryRoot,
+  { resolve } = {},
+) =>
+  makeExo('DeprecatedEndoRegistryAdapter', EndoRegistryInterface, {
+    async resolve(packageJson, resolveOptions = {}) {
+      if (resolve === undefined) {
+        throw makeError(
+          X`Deprecated EndoRegistry adapter was constructed without a resolver`,
+        );
+      }
+      return resolve(packageJson, resolveOptions);
+    },
+    async fetch(name, version) {
+      const tree = await lookupPackageVersion(registryRoot, name, version);
+      return /** @type {EndoReadableTree} */ (tree);
+    },
+    async lookup(name, version) {
+      try {
+        const tree = await lookupPackageVersion(registryRoot, name, version);
+        return /** @type {EndoReadableTree} */ (tree);
+      } catch (error) {
+        if (registryErrorName(error) === 'RegistryNotFoundError')
+          return undefined;
+        throw error;
+      }
+    },
+    list: async () => harden([]),
+    help: () =>
+      'Deprecated EndoRegistry method adapter over the package-registry tree',
+  });
+harden(makeDeprecatedEndoRegistryAdapter);

@@ -38,15 +38,40 @@ export const readableBlobMethodGuards = harden({
   json: M.call().returns(M.promise()),
 });
 
-// `readableTreeMethodGuards` is the shared read-surface for content-addressed
-// directories. `SnapshotTree` adds `sha256`; `Directory` adds the write
-// surface. Exported for the same reason as `readableBlobMethodGuards`
-// (designs/fs-interface-consolidation.md § C2 / C3).
+// Lookup is the least tree authority: it can test and traverse names, but it
+// cannot enumerate them. Registry package-name hubs use this surface so the
+// absence of `list` is enforced by the capability shape rather than a flag.
+export const lookupTreeMethodGuards = harden({
+  help: HelpMethod,
+  has: M.call().rest(NamePathShape).returns(M.promise()),
+  lookup: M.call(NameOrPathShape).returns(M.promise()),
+});
+
+// Enumeration extends lookup authority. This is exactly the historical
+// `readableTreeMethodGuards` surface, now given a name that distinguishes it
+// from `ReadableTreeInterface`, which additionally carries `listTree`.
+export const enumerableTreeMethodGuards = harden({
+  help: HelpMethod,
+  has: M.call().rest(NamePathShape).returns(M.promise()),
+  lookup: M.call(NameOrPathShape).returns(M.promise()),
+  list: M.call().rest(NamePathShape).returns(M.promise()),
+});
+
+// Compatibility export for existing implementations. This is exactly the
+// `enumerableTreeMethodGuards` surface above (help / has / lookup / list); it
+// is spelled as its own literal rather than a spread/`= enumerableTreeMethodGuards`
+// alias because the `build:types` declaration emit for this package cannot name
+// a re-exported guard record from a derived value (it downgrades the emitted
+// `.d.ts` to a type, breaking `@endo/exo-npm` / `@endo/daemon` consumers). Kept
+// in lockstep with `enumerableTreeMethodGuards` by hand until the guards drift
+// is closed structurally without that emit hazard. It lets directory, mount,
+// Git, and zip trees continue to implement the same superset while new
+// lookup-only caps use the narrower record above.
 export const readableTreeMethodGuards = harden({
   help: HelpMethod,
   has: M.call().rest(NamePathShape).returns(M.promise()),
-  list: M.call().rest(NamePathShape).returns(M.promise()),
   lookup: M.call(NameOrPathShape).returns(M.promise()),
+  list: M.call().rest(NamePathShape).returns(M.promise()),
 });
 
 // `readableNameHubMethodGuards` is the read surface of a *mutable* name hub /
@@ -195,6 +220,16 @@ export const SnapshotBlobInterface = M.interface('SnapshotBlob', {
 });
 harden(SnapshotBlobInterface);
 
+export const LookupTreeInterface = M.interface('LookupTree', {
+  ...lookupTreeMethodGuards,
+});
+harden(LookupTreeInterface);
+
+export const EnumerableTreeInterface = M.interface('EnumerableTree', {
+  ...enumerableTreeMethodGuards,
+});
+harden(EnumerableTreeInterface);
+
 // A tree implies recursion, so the recursive `listTree` lives on the plain
 // `ReadableTreeInterface` rather than a separate "recursive tree" variant.
 // This is the read surface the platform's own `LocalTree` implements. Because
@@ -203,13 +238,13 @@ harden(SnapshotBlobInterface);
 // tagged tree interfaces) are unaffected; adopting `listTree` there is a
 // documented follow-up in designs/platform-range-and-tree-reads.md.
 export const ReadableTreeInterface = M.interface('ReadableTree', {
-  ...readableTreeMethodGuards,
+  ...enumerableTreeMethodGuards,
   ...recursiveListMethodGuards,
 });
 harden(ReadableTreeInterface);
 
 export const SnapshotTreeInterface = M.interface('SnapshotTree', {
-  ...readableTreeMethodGuards,
+  ...enumerableTreeMethodGuards,
   ...getInfoMethodGuard,
   sha256: M.call().returns(M.string()),
 });

@@ -26,11 +26,55 @@ export interface EndoReadableTree {
   /** Lists names at the given path. */
   list(...path: string[]): Promise<string[]>;
   /** Resolves a single entry. */
-  lookup(path: string | string[]): Promise<unknown>;
+  lookup(path: string | readonly string[]): Promise<unknown>;
   /** Tests for an entry. */
   has(...path: string[]): Promise<boolean>;
   /** Documentation string. */
   help(text?: string): string;
+  /** Uniform content identity when supplied by the backing tree. */
+  getInfo?(): Promise<Record<string, unknown>> | Record<string, unknown>;
+}
+
+export type RegistryTemporal = 'stable' | 'live' | 'immutable';
+
+// A `type` alias, not an `interface`: `RegistryVersionTree` narrows the
+// inherited optional `getInfo?(): ... | Record<string, unknown>` from
+// `EndoReadableTree` down to this shape, and an object *type* gets the implicit
+// index signature that makes it assignable to `Record<string, unknown>`. An
+// interface would not, and `RegistryVersionTree extends EndoReadableTree` would
+// silently fail TS2430 (silent because `skipLibCheck` skips `.d.ts`).
+export type RegistryNodeInfo = {
+  temporal: RegistryTemporal;
+  integrity?: string;
+  algorithm?: string;
+  hash?: string;
+  size?: bigint;
+};
+
+export interface RegistryHub {
+  help(method?: string): string;
+  has(...path: string[]): Promise<boolean>;
+  lookup(path: string | readonly string[]): Promise<unknown>;
+  getInfo(): RegistryNodeInfo | Promise<RegistryNodeInfo>;
+}
+
+export interface RegistryDirectory extends RegistryHub {
+  list(...path: string[]): Promise<readonly string[]>;
+}
+
+export interface RegistryVersionTree extends EndoReadableTree {
+  getInfo(): RegistryNodeInfo | Promise<RegistryNodeInfo>;
+}
+
+/** Narrow mechanics boundary shared by the Node and Endor adapters. */
+export interface RegistryTreeOperations {
+  /** Optional fast no-throw membership power supplied by the Endor host. */
+  hasPackage?(name: string): boolean | Promise<boolean>;
+  listVersions(name: string): Promise<readonly string[] | undefined>;
+  providePackageTree(
+    name: string,
+    version: string,
+  ): Promise<{ treeRef: EndoReadableTree; integrity: string }>;
 }
 
 /**
@@ -51,6 +95,14 @@ export interface ResolveOptions {
    * `workspace:` specifier resolution per `designs/mvs-resolver.md`.
    */
   workspaceRoot?: string | EndoMount;
+  /** Direct workspace adapter for same-vat tree resolution. */
+  workspaceLookup?: (
+    name: string,
+  ) => Promise<
+    { packageJson: string | Uint8Array; treeRef: EndoReadableTree } | undefined
+  >;
+  /** Hash power for byte-identical resolution hashes. */
+  sha256?: (bytes: Uint8Array) => Promise<string>;
 }
 
 /**
@@ -284,4 +336,112 @@ export type RegistryErrorName =
   | 'RegistryTamperedError'
   | 'RegistryMissingPackageError'
   | 'RegistryNetworkError'
-  | 'RegistryOfflineError';
+  | 'RegistryOfflineError'
+  | 'RegistryNotFoundError'
+  | 'RegistryPathSyntaxError';
+
+// The registry directory-tree failures — not-found, path-syntax, and offline —
+// carry no own discriminant property at runtime. Their class is recorded
+// out-of-band by SES `tagError` and recovered through the `registryErrorName()`
+// function; an own property outside `{message, stack, cause, errors}` would make
+// the error non-passable (see `src/errors.js`), so neither `errorName` nor
+// `registryErrorName` is ever installed on the value. The family is therefore
+// the plain union of the three native error shapes the factories return;
+// interrogate membership with `registryErrorName(error)` /
+// `isPackageRegistryError(error)`, never by reading a property off the error.
+export type PackageRegistryError = RangeError | SyntaxError | Error;
+
+/** Construct a registry family root with a non-enumerable npm hub. */
+export function makePackageRegistryTree(
+  registries: Record<string, RegistryHub>,
+): RegistryDirectory;
+
+/** Construct the npm tree presentation over injected mechanics. */
+export function makeNpmRegistryTree(
+  operations: RegistryTreeOperations,
+  options?: { label?: string },
+): RegistryHub;
+
+/** Construct the XS-hosted Endor npm tree over narrow Rust host powers. */
+export function makeEndorNpmRegistryTree(
+  hostPowers: RegistryTreeOperations,
+): RegistryHub;
+
+/** Attenuate an enumerable tree so holders cannot enumerate it. */
+export function makeLookupTreeView(
+  tree: RegistryDirectory,
+  temporal?: 'live' | 'stable',
+): RegistryHub;
+
+/** Traverse the standard npm/name/version path. */
+export function lookupPackageVersion(
+  root: RegistryDirectory,
+  name: string,
+  version: string,
+): Promise<unknown>;
+
+/** Resolve an eager package graph through same-vat tree dispatch. */
+export function resolveRegistryTree(
+  entryPackageJson: string | Uint8Array | Record<string, unknown>,
+  registryRoot: RegistryDirectory,
+  options?: ResolveOptions,
+): Promise<RegistryResolution>;
+
+/** Explicit compatibility adapter for the superseded method protocol. */
+export function makeDeprecatedEndoRegistryAdapter(
+  registryRoot: RegistryDirectory,
+  options?: { resolve?: EndoRegistry['resolve'] },
+): EndoRegistry;
+
+export function RegistryNotFoundError(path: string): RangeError;
+export function RegistryTamperedError(
+  nameOrReason: string,
+  version?: string,
+  expectedIntegrity?: string,
+  actualHash?: string,
+): Error;
+export function RegistryPathSyntaxError(segment: string): SyntaxError;
+export function RegistryOfflineError(
+  nameOrReason: string,
+  version?: string,
+): Error;
+export function isPackageRegistryError(
+  error: unknown,
+): error is PackageRegistryError;
+export function registryErrorName(
+  error: unknown,
+): RegistryErrorName | undefined;
+export function isRegistryError(error: unknown): boolean;
+
+// This hand-written `.d.ts` is the package's sole `exports["."].types`, so it
+// *shadows* `index.js`: any runtime export it fails to declare is a TS2305 for
+// a cross-package consumer even though the import succeeds at runtime, and
+// `tsc` cannot catch the gap because no in-repo consumer imports these yet. The
+// remaining `index.js` value exports are therefore re-declared here by
+// `typeof import(...)` of their defining module, which stays exact by
+// construction and cannot drift from the implementation. New value exports
+// must be added here in the same shape.
+export const RegistryMissingPackageError: typeof import('./src/errors.js').RegistryMissingPackageError;
+export const RegistryNetworkError: typeof import('./src/errors.js').RegistryNetworkError;
+
+export const EndoRegistryInterface: typeof import('./src/type-guards.js').EndoRegistryInterface;
+export const RegistryDirectoryInterface: typeof import('./src/type-guards.js').RegistryDirectoryInterface;
+export const RegistryHubInterface: typeof import('./src/type-guards.js').RegistryHubInterface;
+export const RegistrySnapshotTreeInterface: typeof import('./src/type-guards.js').RegistrySnapshotTreeInterface;
+
+// `comparePublishedVersions` is intentionally NOT declared here: `index.js`
+// does not re-export it, so declaring it in this root-shadowing `.d.ts` would
+// let `import { comparePublishedVersions } from '@endo/exo-npm'` typecheck and
+// then fail at runtime. It is reachable through the `./registry-tree.js` subpath
+// export, whose own declarations cover it.
+
+export const makeNpmReferenceRegistry: typeof import('./src/reference-backend.js').makeNpmReferenceRegistry;
+export const makeMemoryPackageCacheTable: typeof import('./src/reference-backend.js').makeMemoryPackageCacheTable;
+
+export const makeMvsResolveHook: typeof import('./src/mvs-resolver.js').makeMvsResolveHook;
+export const satisfiesRange: typeof import('./src/mvs-resolver.js').satisfiesRange;
+export const parseRangeMajor: typeof import('./src/mvs-resolver.js').parseRangeMajor;
+
+export const mapSnapshot: typeof import('./src/snapshot-mapper.js').mapSnapshot;
+export const buildCompartmentMap: typeof import('./src/snapshot-mapper.js').buildCompartmentMap;
+export const makeMountReadPowers: typeof import('./src/snapshot-mapper.js').makeMountReadPowers;

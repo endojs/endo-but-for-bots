@@ -7,6 +7,16 @@
 | **Author** | endolinbot (prompted) |
 | **Status** | Not Started |
 
+> **Amended by [Package Registries as an Endo Directory Tree](npm-registry-as-directory-tree.md).**
+> The shipped `mapSnapshot` / `makeMountReadPowers` no longer take an
+> `EndoRegistry` method capability; they take a `registryRoot?: RegistryDirectory`
+> directory tree and read package version leaves through `has`/`lookup`/`list`.
+> Wherever this document types `registry: EndoRegistry` or
+> `E(registry).fetch(name, version)`, read `registryRoot: RegistryDirectory` and
+> segment-wise `lookup` through the tree instead. The directory-tree amendment is
+> specified in the companion design; this document remains for the mapper
+> algorithm (compartment-map layout, read-powers synthesis), which is unchanged.
+
 ## Summary
 
 A daemon-specific variation on `compartment-mapper.mapNodeModules`

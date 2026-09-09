@@ -17,6 +17,7 @@ import {
   satisfiesRange,
   parseRangeMajor,
 } from '../src/mvs-resolver.js';
+import { comparePublishedVersions } from '../src/registry-tree.js';
 import { registryErrorName } from '../src/errors.js';
 
 const utf8Encoder = new TextEncoder();
@@ -90,6 +91,28 @@ test('satisfiesRange handles common npm shapes', t => {
   // Hyphen.
   t.true(satisfiesRange('1.5.0', '1.0.0 - 2.0.0'));
   t.false(satisfiesRange('2.0.1', '1.0.0 - 2.0.0'));
+});
+
+test('satisfiesRange agrees with the comparePublishedVersions sort', t => {
+  // fast-checker: `greatestSatisfying` *filters* through `satisfiesRange`
+  // (formerly `Number`-based) and *sorts* through `comparePublishedVersions`
+  // (`BigInt`). Past 2**53 the two disagreed — the filter admitted a version the
+  // sort ordered the other way. Both now parse release components as `BigInt`,
+  // so a `>`/`<` range must agree with the comparator on the same pair,
+  // including the large-value counterexamples that reddened before the fix.
+  const pairs = [
+    ['9007199254740993.0.0', '9007199254740992.0.0'],
+    ['9007199254740992.0.0', '9007199254740993.0.0'],
+    [`1.0.${'9'.repeat(40)}`, `1.0.${'9'.repeat(39)}8`],
+    ['1.2.3', '1.2.4'],
+    ['2.0.0', '1.9.9'],
+    ['1.0.0', '1.0.0'],
+  ];
+  for (const [a, b] of pairs) {
+    const order = comparePublishedVersions(a, b);
+    t.is(satisfiesRange(a, `>${b}`), order > 0, `${a} > ${b}`);
+    t.is(satisfiesRange(a, `<${b}`), order < 0, `${a} < ${b}`);
+  }
 });
 
 test('parseRangeMajor classifies ranges into major slots', t => {
