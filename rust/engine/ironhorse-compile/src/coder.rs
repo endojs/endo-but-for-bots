@@ -219,7 +219,7 @@ struct SymEntry {
     /// used symbols are assigned an ID.
     usage: bool,
     /// The assigned `txID` (1-based), or 0 until [`SymbolTable::assign_ids`].
-    id: i32,
+    id: u16,
 }
 
 /// The parser/coder symbol table — a transliteration of `parser->symbolTable`
@@ -292,25 +292,27 @@ impl<'a> SymbolTable<'a> {
 
     /// `fxParserCode`'s ID walk: buckets in index order, most-recent-first
     /// within each bucket, numbering only `usage` symbols from 1.
-    fn assign_ids(&mut self) {
+    fn assign_ids(&mut self) -> Result<(), crate::parser::ParseError> {
         // Per-bucket index lists in prepend (reverse-insertion) order.
         let mut buckets: Vec<Vec<usize>> = vec![Vec::new(); SYMBOL_MODULO as usize];
         for i in 0..self.entries.len() {
             buckets[self.entries[i].bucket as usize].push(i);
         }
-        let mut id: i32 = 1;
+        // The count includes reserved ID zero, so at most 65,534 names fit.
+        let mut count: u16 = 1;
         for bucket in &buckets {
             for &i in bucket.iter().rev() {
                 if self.entries[i].usage {
-                    self.entries[i].id = id;
-                    id += 1;
+                    count = count.checked_add(1).ok_or_else(symbol_limit_error)?;
+                    self.entries[i].id = count - 1;
                 }
             }
         }
+        Ok(())
     }
 
     /// The id-by-index table for emission.
-    fn id_table(&self) -> Vec<i32> {
+    fn id_table(&self) -> Vec<u16> {
         self.entries.iter().map(|e| e.id).collect()
     }
 
@@ -331,18 +333,18 @@ impl<'a> SymbolTable<'a> {
     /// Even a symbol-free program yields a 2-byte `01 00` atom (`total`
     /// starts at `sizeof(txID)`), matching XS, which always allocates the
     /// count. Call after [`assign_ids`].
-    fn symbols_atom(&self) -> Vec<u8> {
+    fn symbols_atom(&self) -> Result<Vec<u8>, crate::parser::ParseError> {
         let mut buckets: Vec<Vec<usize>> = vec![Vec::new(); SYMBOL_MODULO as usize];
         for i in 0..self.entries.len() {
             buckets[self.entries[i].bucket as usize].push(i);
         }
-        let mut used: u16 = 0;
+        let mut count: u16 = 1;
         let mut body: Vec<u8> = Vec::new();
         for bucket in &buckets {
             for &i in bucket.iter().rev() {
                 let e = &self.entries[i];
                 if e.usage {
-                    used = used.wrapping_add(1);
+                    count = count.checked_add(1).ok_or_else(symbol_limit_error)?;
                     // The interned spelling verbatim, then the NUL XS's
                     // `symbol->length` includes.
                     body.extend_from_slice(&e.bytes);
@@ -350,12 +352,19 @@ impl<'a> SymbolTable<'a> {
                 }
             }
         }
-        // count = final `id` in `fxParserCode` = used + 1 (id starts at 1).
-        let count = used.wrapping_add(1);
+        // The checked count includes reserved ID zero.
         let mut atom = Vec::with_capacity(2 + body.len());
         atom.extend_from_slice(&count.to_le_bytes());
         atom.append(&mut body);
-        atom
+        Ok(atom)
+    }
+}
+
+fn symbol_limit_error() -> crate::parser::ParseError {
+    crate::parser::ParseError {
+        line: 0,
+        kind: crate::parser::ParseErrorKind::Syntax,
+        message: "too many symbols (maximum 65534)".to_string(),
     }
 }
 
@@ -1129,7 +1138,7 @@ fn compile_goal_metered(
     if let Some(error) = coder.error.take() {
         return Err(error);
     }
-    Ok(coder.serialize_atoms())
+    coder.serialize_atoms()
 }
 
 /// A compiled unit and its complete front-end cost (all raw deltas were already
@@ -5957,7 +5966,7 @@ impl Coder<'_, '_> {
     /// byte-identical to the oracle's whenever the operands are (the
     /// stage-5 id contract), letting the `Ironhorse` seam stop borrowing the
     /// oracle's atom.
-    fn serialize_atoms(&mut self) -> (Vec<u8>, Vec<u8>) {
+    fn serialize_atoms(&mut self) -> Result<(Vec<u8>, Vec<u8>), crate::parser::ParseError> {
         self.optimize();
         self.meter.work(self.codes.len().saturating_mul(3));
         self.meter.work(self.symbols.entries.len());
@@ -5986,18 +5995,18 @@ impl Coder<'_, '_> {
 
         // Assign symbol IDs from the now-complete usage marks (XS does the
         // bucket walk here, between sizing and emission).
-        self.symbols.assign_ids();
+        self.symbols.assign_ids()?;
         let sym_ids = self.symbols.id_table();
         // The SYMB atom is dumped from the same walk, so its strings are in
         // the ids' order (`fxParserCode` emits `symbolsBuffer` right here).
-        let symbols = self.symbols.symbols_atom();
+        let symbols = self.symbols.symbols_atom()?;
 
         // ---- pass 3: emit ---------------------------------------------
         let mut out: Vec<u8> = Vec::with_capacity(size.max(0) as usize);
         for c in &self.codes {
             emit_step(c, &mut out, &self.targets, &sym_ids);
         }
-        (out, symbols)
+        Ok((out, symbols))
     }
 }
 
@@ -6226,7 +6235,7 @@ fn size2_step(c: &mut Code, size: &mut i32, delta: &mut i32, targets: &mut [Targ
 }
 
 /// Pass 3: emit the opcode byte and its operand with the chosen width.
-fn emit_step(c: &Code, out: &mut Vec<u8>, targets: &[Target], sym_ids: &[i32]) {
+fn emit_step(c: &Code, out: &mut Vec<u8>, targets: &[Target], sym_ids: &[u16]) {
     if c.id != XS_NO_CODE {
         out.push(c.id as u8);
     }
@@ -6337,7 +6346,7 @@ fn emit_step(c: &Code, out: &mut Vec<u8>, targets: &[Target], sym_ids: &[i32]) {
         }
         _ => {
             if is_symbol_op(c.id) {
-                out.extend_from_slice(&(symbol_id(c, sym_ids) as u16).to_le_bytes());
+                out.extend_from_slice(&symbol_id(c, sym_ids).to_le_bytes());
             } else if is_index_1_fixed(c.id) {
                 out.push((index_value(c) + 1) as u8);
             } else if is_index_2_fixed(c.id) {
@@ -6368,7 +6377,7 @@ fn integer_value(c: &Code) -> i32 {
         _ => 0,
     }
 }
-fn symbol_id(c: &Code, sym_ids: &[i32]) -> i32 {
+fn symbol_id(c: &Code, sym_ids: &[u16]) -> u16 {
     match &c.payload {
         Payload::Symbol { sym } => sym_ids[*sym],
         _ => 0,
@@ -6731,4 +6740,37 @@ pub fn compile_atoms_goal_with_meter(
         return Err(crate::meter::limit_error());
     }
     result.map_err(|()| crate::meter::limit_error())?
+}
+
+#[cfg(test)]
+mod symbol_limits {
+    use super::*;
+
+    #[test]
+    fn unused_interns_do_not_consume_ids_and_maximum_used_id_is_exact() {
+        let mut table = SymbolTable::seeded(crate::ParseMeter::new());
+        for i in 0..65_536 {
+            table.intern(format!("unused{i}"));
+        }
+        for i in 0..65_534 {
+            table.use_symbol(format!("used{i}"));
+        }
+        table.assign_ids().unwrap();
+        let ids = table.id_table();
+        let used: std::collections::HashSet<_> = ids.into_iter().filter(|&id| id != 0).collect();
+        assert_eq!(used.len(), 65_534);
+        assert_eq!(used.iter().copied().max(), Some(65_534));
+        assert_eq!(&table.symbols_atom().unwrap()[..2], &u16::MAX.to_le_bytes());
+        table.use_symbol("used0");
+        table.assign_ids().unwrap();
+        table.use_symbol("overflow");
+        assert_eq!(
+            table.assign_ids().unwrap_err().message,
+            "too many symbols (maximum 65534)"
+        );
+        assert_eq!(
+            table.symbols_atom().unwrap_err().message,
+            "too many symbols (maximum 65534)"
+        );
+    }
 }
