@@ -4,6 +4,7 @@ import '@endo/init';
 import test from 'ava';
 import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
+import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import {
   HostedToolSetInterface,
   assertHostedBackendDescriptor,
@@ -19,6 +20,7 @@ import {
   makeCodexResourceProvisioner,
   normalizeCodexModelDescriptor,
 } from '../src/backend-factory.js';
+import { makeRenewingCodexBackend } from '../src/renewing-backend.js';
 
 const validPolicy = () =>
   harden({
@@ -109,6 +111,140 @@ const makeToolSet = () =>
       return 'Test hosted tool set.';
     },
   });
+
+test('renewal with the real factory reaps before provisioning and resumes acknowledged state', async t => {
+  t.timeout(5000);
+  const lifecycle = [];
+  const protocol = [];
+  let saved = {};
+  let generation = 0;
+  let turnCount = 0;
+  const factory = makeRenewingCodexBackend(
+    makeCodexBackendFactory({
+      imageDigest,
+      listModels: async () => [],
+      destroy: async () => undefined,
+      provision: async spec => {
+        generation += 1;
+        const number = generation;
+        lifecycle.push(`provision-${number}`);
+        const inbound = [];
+        const waiters = [];
+        let closed = false;
+        const push = value => {
+          inbound.push(value);
+          while (waiters.length) waiters.shift()();
+        };
+        const transport = {
+          messages: {
+            async *[Symbol.asyncIterator]() {
+              for (;;) {
+                if (inbound.length) yield inbound.shift();
+                else if (closed) return;
+                // eslint-disable-next-line no-await-in-loop
+                else await new Promise(resolve => waiters.push(resolve));
+              }
+            },
+          },
+          send: async message => {
+            if (!('id' in message) || !('method' in message)) return;
+            protocol.push(message);
+            let result;
+            if (message.method === 'initialize') {
+              result = {
+                codexHome: '/codex-home',
+                platformFamily: 'unix',
+                platformOs: 'linux',
+                userAgent: 'test',
+              };
+            } else if (message.method === 'account/read') {
+              result = {
+                account: { type: 'apiKey' },
+                requiresOpenaiAuth: true,
+              };
+            } else if (
+              ['thread/start', 'thread/resume'].includes(message.method)
+            ) {
+              result = { thread: { id: 'durable-thread' } };
+            } else if (message.method === 'thread/turns/list') {
+              result = {
+                data: turnCount ? [{ id: `turn-${turnCount}` }] : [],
+                nextCursor: null,
+              };
+            } else if (message.method === 'turn/start') {
+              turnCount += 1;
+              const id = `turn-${turnCount}`;
+              push({
+                id: message.id,
+                result: { turn: { id, status: 'inProgress' } },
+              });
+              push({
+                method: 'turn/started',
+                params: {
+                  threadId: 'durable-thread',
+                  turn: { id, status: 'inProgress' },
+                },
+              });
+              push({
+                method: 'turn/completed',
+                params: {
+                  threadId: 'durable-thread',
+                  turn: { id, status: 'completed' },
+                },
+              });
+              return;
+            } else {
+              throw Error(`Unexpected request ${message.method}`);
+            }
+            push({ id: message.id, result });
+          },
+          close: async () => {
+            lifecycle.push(`close-${number}`);
+            closed = true;
+            while (waiters.length) waiters.shift()();
+          },
+        };
+        return {
+          policy: validPolicy(),
+          auditWriter: harden({ append: async () => undefined }),
+          threadId: saved.threadId,
+          savedToolSetId: saved.toolSetId,
+          savedRecovery: saved.recovery,
+          saveThreadState: async value => {
+            saved = value;
+          },
+          start: async () => transport,
+          dispose: async () => {
+            lifecycle.push(`dispose-${number}`);
+          },
+        };
+      },
+    }),
+  );
+  const session = await E(factory).create(
+    harden({ sessionId: 'session-1' }),
+    makeToolSet(),
+  );
+  t.teardown(() => E(session.admin).terminate());
+  const drain = async reader => {
+    const events = [];
+    for await (const event of iterateReader(reader)) events.push(event);
+    return events;
+  };
+  const first = await drain(await E(session.run).send('first'));
+  t.deepEqual(first.at(-1), { type: 'end', checkpoint: 'turn-1' });
+  await E(session.run).acknowledge('turn-1');
+  const second = await drain(await E(session.run).send('second'));
+  t.deepEqual(second.at(-1), { type: 'end', checkpoint: 'turn-2' });
+  t.true(lifecycle.indexOf('close-2') < lifecycle.indexOf('dispose-2'));
+  t.true(lifecycle.indexOf('dispose-2') < lifecycle.indexOf('provision-3'));
+  t.is(protocol.filter(message => message.method === 'thread/start').length, 1);
+  t.is(
+    protocol.filter(message => message.method === 'thread/resume').length,
+    1,
+  );
+  t.false(protocol.some(message => message.method === 'thread/revert'));
+});
 
 test('sandbox contract rejects a tag and an unenforced resource limit', t => {
   t.throws(
