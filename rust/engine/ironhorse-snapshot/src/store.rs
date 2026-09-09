@@ -4683,6 +4683,92 @@ mod tests {
     }
 
     #[test]
+    fn error_frames_require_an_error_owner_in_both_formats() {
+        use crate::format::ERRD;
+        use crate::image::{encode_errors, write_machine_unchecked, ErrorImage};
+        use crate::store_sections::SmallSection;
+        use crate::{AtomReader, AtomWriter};
+        let mut image = ran_image();
+        image.errors = vec![ErrorImage {
+            owner: 1,
+            name: "Error".into(),
+            message: None,
+            frames: vec!["origin".into()],
+        }];
+        let bytes = write_machine_unchecked(&image);
+        assert_eq!(read_machine(&bytes, &sig()).unwrap(), image);
+        let reader = AtomReader::parse(&bytes).unwrap();
+        assert!(reader.find(ERRD).is_some());
+        let mut writer = AtomWriter::new();
+        for atom in reader.atoms() {
+            if atom.tag != ERRD {
+                writer.atom(atom.tag, atom.payload).unwrap();
+            }
+        }
+        assert_eq!(
+            read_machine(&writer.finish().unwrap(), &sig()),
+            Err(SnapshotError::Corrupt(
+                "error-frame side table: owner has no error row"
+            ))
+        );
+
+        let bytes = image_to_batch_unchecked(&image, 1, "").small;
+        let small = SmallState::decode(&bytes).unwrap();
+        assert_eq!(small.errors, image.errors);
+        let mut sections = small.encode_sections();
+        sections[SmallSection::Errors as usize] = encode_errors(&[]);
+        let mut bytes = Vec::new();
+        for section in sections {
+            bytes.extend_from_slice(&(section.len() as u32).to_be_bytes());
+            bytes.extend_from_slice(&section);
+        }
+        assert_eq!(
+            SmallState::decode(&bytes).unwrap_err(),
+            StoreError::Snapshot(SnapshotError::Corrupt(
+                "error-frame side table: owner has no error row"
+            ))
+        );
+    }
+
+    #[test]
+    fn symbol_counter_must_clear_names_in_both_formats() {
+        use crate::image::write_machine_unchecked;
+        let mut image = ran_image();
+        image.names = vec![SymbolName::from("name")];
+        image.name_floor = None;
+        image.symbols.next_id = 2;
+        assert_eq!(
+            read_machine(&write_machine_unchecked(&image), &sig()).unwrap(),
+            image
+        );
+        let mut store = MemoryStore::new();
+        store
+            .commit(&image_to_batch_unchecked(&image, 1, ""))
+            .unwrap();
+        validate_store(&store, &sig()).unwrap();
+        for next_id in [0, 1] {
+            let mut invalid = image.clone();
+            invalid.symbols.next_id = next_id;
+            assert_eq!(
+                read_machine(&write_machine_unchecked(&invalid), &sig()),
+                Err(SnapshotError::Corrupt(
+                    "symbol-key table: counter inside the name table"
+                ))
+            );
+            let mut store = MemoryStore::new();
+            store
+                .commit(&image_to_batch_unchecked(&invalid, 1, ""))
+                .unwrap();
+            assert_eq!(
+                validate_store(&store, &sig()).unwrap_err(),
+                StoreError::Snapshot(SnapshotError::Corrupt(
+                    "symbol-key table: counter inside the name table"
+                ))
+            );
+        }
+    }
+
+    #[test]
     fn paging_math_covers_partial_tails() {
         assert_eq!(slot_page_count(0), 0);
         assert_eq!(slot_page_count(1), 1);
