@@ -612,32 +612,24 @@ impl MachineImage {
     /// counter anyway. The stored ids are the evidence.
     pub fn stored_unregistered_key_id(&self) -> Option<u16> {
         let registered = self.symbols.id_set();
-        let free: std::collections::BTreeSet<u32> = self.slot_free.iter().copied().collect();
-        let live = self
-            .slots
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| !free.contains(&(*i as u32)))
-            .map(|(_, s)| s);
-        first_stored_unregistered_id(live.chain(self.stack.iter()), self.names.len(), &registered)
-            .or_else(|| {
-                first_stored_unregistered_id(
-                    self.arrays
-                        .iter()
-                        .flat_map(|a| a.items.iter().map(|(_, s)| s)),
+        let mut first = None;
+        self.visit_slots(&mut |slot| {
+            if first.is_none() {
+                first = first_stored_unregistered_id(
+                    std::iter::once(slot),
                     self.names.len(),
                     &registered,
-                )
-            })
-            .or_else(|| {
-                first_stored_unregistered_id(
-                    self.collections
-                        .iter()
-                        .flat_map(|c| c.entries.iter().flat_map(|(k, v)| [k, v])),
-                    self.names.len(),
-                    &registered,
-                )
-            })
+                );
+            }
+        });
+        first
+    }
+
+    /// Visit every stored Slot record, excluding opaque freed heap records.
+    /// The image and nested slot-bearing rows are classified by exhaustive
+    /// destructuring, so additions require an explicit visitation decision.
+    pub fn visit_slots(&self, f: &mut dyn FnMut(&Slot)) {
+        crate::stored_slots::visit_image_slots(self, f);
     }
 
     /// Attach a metering state to this image (design row 6). The snapshot
