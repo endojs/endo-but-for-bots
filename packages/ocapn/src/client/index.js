@@ -5,7 +5,7 @@
  * @import { OcapnPublicKey } from '../cryptography.js'
  * @import { OcapnCodec } from '../codec-interface.js'
  * @import { SturdyRef } from './sturdyrefs.js'
- * @import { Client, Connection, InternalSession, LocationId, Logger, NetLayer, NetlayerHandlers, NetworkSession, NonceLocator, OcapnNetwork, PendingSession, SelfIdentity, Session, SessionManager, SocketOperations, SwissNum } from './types.js'
+ * @import { Client, Connection, InternalSession, LocationId, Logger, MakeLocatorForSession, NetLayer, NetlayerHandlers, NetworkSession, NonceLocator, OcapnNetwork, PendingSession, SelfIdentity, Session, SessionManager, SocketOperations, SwissNum } from './types.js'
  */
 
 import harden from '@endo/harden';
@@ -185,6 +185,20 @@ const makeSessionManager = () => {
  * @param {OcapnCodec} options.codec
  * @param {AnyNetwork | NetworkFactory} options.network
  * @param {NonceLocator} [options.locator]
+ * @param {MakeLocatorForSession} [options.makeLocatorForSession] - Optional
+ *   per-session locator factory. When provided, each established
+ *   session builds its own `NonceLocator` for *incoming*
+ *   `bootstrap.fetch` calls by invoking this factory with the remote
+ *   designator (the peer's *claimed* designator — transport-authenticated
+ *   only when the netlayer supplies `verifyPeerLocation`, otherwise
+ *   self-asserted; durable per-peer accounting should prefer the
+ *   handshake-verified `peerPublicKey` the same context carries) and an
+ *   `abortSession` callback, instead of sharing the
+ *   single `locator`. This is the seam an
+ *   embedder uses to scope miss counters and rate limits to one
+ *   authenticated peer/connection: a session that abuses `fetch` can be
+ *   bounded or torn down without affecting any other peer's session.
+ *   Outgoing self-local `SturdyRef` resolution still uses `locator`.
  * @param {string} [options.debugLabel]
  * @param {boolean} [options.verbose]
  * @param {Map<string, any>} [options.giftTable]
@@ -202,6 +216,7 @@ export const makeOcapn = async ({
   codec,
   network: networkArg,
   locator = new Map(),
+  makeLocatorForSession = undefined,
   debugLabel = 'ocapn',
   verbose = false,
   giftTable = new Map(),
@@ -394,6 +409,7 @@ export const makeOcapn = async ({
       connection,
       networkSession.sessionId,
       peerLocation,
+      peerPublicKey,
     );
 
     const internalSession = makeSession({
@@ -592,8 +608,83 @@ export const makeOcapn = async ({
     return newSessionPromise;
   };
 
-  const prepareOcapn = (connection, sessionId, peerLocation) => {
-    return makeOcapnCore(
+  /**
+   * Build the OCapN core for one session. `peerPublicKey` is the session's
+   * handshake-verified public key; it is threaded into the per-session
+   * locator's context (`SessionLocatorContext.peerPublicKey`) so an
+   * embedder can key durable per-peer accounting on a stable, verified
+   * identity rather than the spoofable claimed `remoteDesignator`. Every
+   * caller — `provideSession`, `resumeSession`, and the default
+   * `op:start-session` handshake path in `handshake.js` — must forward it;
+   * omitting it leaves `context.peerPublicKey` undefined on that path.
+   *
+   * @param {Connection} connection
+   * @param {import('./types.js').SessionId} sessionId
+   * @param {OcapnLocation} peerLocation
+   * @param {OcapnPublicKey} peerPublicKey
+   */
+  const prepareOcapn = (connection, sessionId, peerLocation, peerPublicKey) => {
+    const endSession = () => {
+      const activeSession = sessionManager.getActiveSession(
+        locationToLocationId(peerLocation),
+      );
+      if (activeSession) {
+        sessionManager.endSession(activeSession);
+      }
+    };
+    // The abort callback handed to a per-session locator must actually
+    // sever the transport, not merely deregister the session: `endSession`
+    // alone leaves `connection.isDestroyed` false, so the pump keeps
+    // dispatching this peer's subsequent (possibly pipelined) frames and a
+    // miss-bounded locator's teardown would be inert. Route through the
+    // core's own `abort()` — the same full teardown a remote `op:abort`
+    // triggers — which unplugs the session first (so no further message is
+    // sent), then closes the connection (flipping `isDestroyed` so the
+    // pump stops feeding frames) and clears the bookkeeping. It closes via
+    // the transport's generic disconnect, naming nothing.
+    //
+    // The severance is deferred one turn as a best-effort courtesy so an
+    // already-computed reply on the crossing turn has a chance to flush
+    // before the connection closes. The security property does NOT depend
+    // on that ordering, and turn-counting here would be refactor- and
+    // engine-dependent: what the bound guarantees is that every
+    // presentation *below* it is a uniform miss and that the locator has
+    // already refused, synchronously, to serve anything further on this
+    // session. The severance at the crossing is observable to the peer —
+    // it reveals only that the peer exceeded the miss bound (which it made
+    // that many misses to reach), never anything about any identifier.
+    /** @type {ReturnType<typeof makeOcapnCore> | undefined} */
+    let core;
+    const abortSession = () => {
+      Promise.resolve()
+        .then(() => {
+          if (core) {
+            core.abort();
+          } else {
+            // Defensive fallback for the (unreached) case where the bound
+            // is somehow crossed before `core` is assigned this same turn.
+            sendAbortAndClose(connection);
+            endSession();
+          }
+        })
+        .catch(error => logger.info(`abortSession teardown failed`, error));
+    };
+    // When the embedder supplies a per-session locator factory, this
+    // session's *incoming* `bootstrap.fetch` calls resolve against a
+    // freshly-built locator scoped to this authenticated peer, so miss
+    // counters and rate limits cannot leak across peers or sessions.
+    // Absent the factory, every session shares the one injected
+    // locator (the historical behavior).
+    const sessionSturdyRefTracker = makeLocatorForSession
+      ? makeSturdyRefTracker(
+          makeLocatorForSession({
+            remoteDesignator: peerLocation.designator,
+            peerPublicKey,
+            abortSession,
+          }),
+        )
+      : sturdyRefTracker;
+    core = makeOcapnCore(
       logger,
       connection,
       sessionId,
@@ -601,17 +692,10 @@ export const makeOcapn = async ({
       provideInternalSession,
       sessionManager.getActiveSession,
       sessionManager.getPeerPublicKeyForSessionId,
-      () => {
-        const activeSession = sessionManager.getActiveSession(
-          locationToLocationId(peerLocation),
-        );
-        if (activeSession) {
-          sessionManager.endSession(activeSession);
-        }
-      },
+      endSession,
       grantTracker,
       giftTable,
-      sturdyRefTracker,
+      sessionSturdyRefTracker,
       codec,
       cryptography,
       debugLabel,
@@ -646,6 +730,7 @@ export const makeOcapn = async ({
           }
         : undefined,
     );
+    return core;
   };
 
   /**
@@ -796,6 +881,7 @@ export const makeOcapn = async ({
       connection,
       /** @type {import('./types.js').SessionId} */ (sessionId),
       peerLocation,
+      peerPublicKey,
     );
     const session = makeSession({
       id: /** @type {import('./types.js').SessionId} */ (sessionId),

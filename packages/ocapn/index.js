@@ -19,6 +19,8 @@
  *
  * @typedef {import('./src/client/types.js').SwissNum} SwissNum
  * @typedef {import('./src/codecs/components.js').OcapnLocation} OcapnLocation
+ * @typedef {import('./src/client/types.js').SessionLocatorContext} SessionLocatorContext
+ * @typedef {import('./src/client/types.js').MakeLocatorForSession} MakeLocatorForSession
  */
 
 export { makeOcapn } from './src/client/index.js';
