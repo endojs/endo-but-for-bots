@@ -75,7 +75,8 @@ pub trait GcHooks {
     /// `idx` was reclaimed; the machine drops entries keyed by it.
     fn swept(&mut self, idx: SlotIndex);
     /// Enumerate every chunk offset held outside the slot arena.
-    /// Called twice: before compaction (liveness) and after (rewrite).
+    /// Called before compaction for liveness, and again for rewriting only
+    /// when at least one chunk offset moves.
     fn external_chunk_refs(&mut self, visit: &mut dyn FnMut(&mut ChunkOffset));
     /// One EPHEMERON round: report slots that become reachable only
     /// because some already-marked state conditions them — a WeakMap
@@ -110,10 +111,9 @@ pub trait GcHooks {
 /// - `external_chunk_refs(visit)` enumerates every chunk offset the
 ///   machine holds **outside** the slot arena (a function's name
 ///   chunk, an ArrayBuffer's backing store, a string `Slot` stored in
-///   a side table or on the value stack). It is called twice: before
-///   compaction so those chunks count as live, and after so they are
-///   rewritten to their new offsets — exactly the treatment
-///   arena-resident string slots get.
+///   a side table or on the value stack). It is called before compaction
+///   so those chunks count as live, and again only when offsets move so
+///   they are rewritten — exactly the treatment arena-resident string slots get.
 pub fn collect_full(
     slots: &mut SlotArena,
     chunks: &mut ChunkArena,
@@ -181,29 +181,25 @@ pub fn collect_full(
     }
     hooks.external_chunk_refs(&mut |off: &mut ChunkOffset| live_offsets.push(*off));
     let remap = chunks.compact(&live_offsets);
-    for i in 0..slots.capacity() {
-        let idx = SlotIndex(i);
-        if slots.is_marked(idx) {
-            if let Some(off) = slots.get(idx).chunk_ref() {
-                if let Some(&new_off) = remap.get(&off) {
-                    // Identity remaps (compaction moved nothing here)
-                    // must not go through `get_mut`, whose conservative
-                    // dirty-marking would re-dirty every string-holding
-                    // slot page on every collection — the phase-7
-                    // "write only what moved" bound applies to slot
-                    // pages exactly as it does to chunk extents.
-                    if new_off != off {
+    // A no-movement collection needs no second arena scan or holder walk.
+    // The compactor emits entries only for offsets that actually changed.
+    if !remap.is_empty() {
+        for i in 0..slots.capacity() {
+            let idx = SlotIndex(i);
+            if slots.is_marked(idx) {
+                if let Some(off) = slots.get(idx).chunk_ref() {
+                    if let Some(&new_off) = remap.get(&off) {
                         slots.get_mut(idx).set_chunk_ref(new_off);
                     }
                 }
             }
         }
+        hooks.external_chunk_refs(&mut |off: &mut ChunkOffset| {
+            if let Some(&new_off) = remap.get(off) {
+                *off = new_off;
+            }
+        });
     }
-    hooks.external_chunk_refs(&mut |off: &mut ChunkOffset| {
-        if let Some(&new_off) = remap.get(off) {
-            *off = new_off;
-        }
-    });
 
     GcStats {
         slots_reclaimed,
@@ -282,6 +278,38 @@ mod tests {
 
     fn str_slot(off: ChunkOffset) -> Slot {
         Slot::of(Kind::String, Payload::String(off))
+    }
+
+    #[test]
+    fn external_chunk_holders_are_revisited_only_when_offsets_move() {
+        struct Hooks {
+            offset: ChunkOffset,
+            visits: usize,
+        }
+        impl GcHooks for Hooks {
+            fn extra_edges(&self, _: SlotIndex, _: &mut dyn FnMut(SlotIndex)) {}
+            fn swept(&mut self, _: SlotIndex) {}
+            fn external_chunk_refs(&mut self, visit: &mut dyn FnMut(&mut ChunkOffset)) {
+                self.visits += 1;
+                visit(&mut self.offset);
+            }
+        }
+        for moved in [false, true] {
+            let mut chunks = ChunkArena::new();
+            if moved {
+                chunks.alloc(b"dead");
+            }
+            let offset = chunks.alloc(b"live");
+            chunks.clear_dirty();
+            let mut hooks = Hooks { offset, visits: 0 };
+            collect_full(&mut SlotArena::new(), &mut chunks, &[], &mut hooks);
+            assert_eq!(hooks.visits, if moved { 2 } else { 1 });
+            assert_eq!(hooks.offset, ChunkOffset(4));
+            assert_eq!(&*chunks.payload(hooks.offset), b"live");
+            if !moved {
+                assert!(chunks.dirty_extents().is_empty());
+            }
+        }
     }
 
     #[test]
