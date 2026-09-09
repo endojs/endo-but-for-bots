@@ -130,31 +130,6 @@ fn halt_throw_is_constructed_only_where_the_jump_chain_was_unwound() {
         "only the harness's host_coerced verb may synthesize a throw"
     );
     assert!(host_coerced.contains(&synthetic[0]));
-
-    // A native catch must use Step::Threw's carried value, not read the
-    // mutable exception register. Only opcode reads and renderer save remain.
-    let allowed_reads = [
-        "let saved_exception = self.exception;",
-        "let ex = self.exception;",
-        "let v = self.exception;",
-        "let current = self.exception;",
-    ];
-    let accepted: Vec<_> = allowed_reads
-        .iter()
-        .flat_map(|pattern| {
-            token_positions(engine, pattern)
-                .into_iter()
-                .map(|at| at + 3)
-        })
-        .collect();
-    for at in token_positions(engine, "self.exception;") {
-        // Assignments TO the register are not reads.
-        assert!(
-            accepted.contains(&at),
-            "unexpected exception-register read at line {}",
-            source[..engine[at].start].matches('\n').count() + 1
-        );
-    }
 }
 
 #[test]
@@ -271,6 +246,35 @@ fn cross_file_violations(path: &str, source: &str) -> Vec<String> {
     let all = tokens(&source);
     let code = production_tokens(&all);
     let mut bad = Vec::new();
+    // Native catches use the carried throw value. Permit the renderer save
+    // and opcode reads only in their current owning module; all child modules
+    // are covered by this same recursive lock.
+    let accepted: Vec<_> = if path == "ironhorse-vm/src/interp.rs" {
+        [
+            "let saved_exception = self.exception;",
+            "let ex = self.exception;",
+            "let v = self.exception;",
+            "let current = self.exception;",
+        ]
+        .iter()
+        .flat_map(|pattern| token_positions(&code, pattern).into_iter().map(|at| at + 3))
+        .collect()
+    } else {
+        Vec::new()
+    };
+    for receiver in ["self", "machine"] {
+        for at in token_positions(&code, &format!("{receiver}.exception")) {
+            let suffix = &code[at + 3..];
+            let assignment = suffix.first().is_some_and(|token| token.text == "=")
+                && !suffix.get(1).is_some_and(|token| token.text == "=");
+            if !assignment && !accepted.contains(&at) {
+                bad.push(format!(
+                    "{path}: exception-register read at byte {}",
+                    code[at].start
+                ));
+            }
+        }
+    }
     for at in consumer_protocol_aliases(&code) {
         bad.push(format!("{path}: protocol alias at byte {}", code[at].start));
     }
@@ -417,4 +421,21 @@ fn external_test_modules_do_not_hide_following_production() {
         "fn bad() { Halt::synthetic_throw(\"bad\"); } #[cfg(test)] mod tests;"
     )
     .is_empty());
+}
+
+#[test]
+fn moved_async_catches_cannot_read_the_exception_register() {
+    let path = "ironhorse-vm/src/interp/suspend.rs";
+    let original = include_str!("../src/interp/suspend.rs");
+    assert!(cross_file_violations(path, original).is_empty());
+    let arm = "Step::Threw { value: reason, .. } => {";
+    assert_eq!(original.matches(arm).count(), 2);
+    for receiver in ["self", "machine"] {
+        let mutated = original.replace(arm, &format!("{arm} let reason = {receiver}.exception;"));
+        let bad = cross_file_violations(path, &mutated);
+        assert_eq!(bad.len(), 2, "both async catches must be checked: {bad:?}");
+        assert!(bad
+            .iter()
+            .all(|message| message.contains("exception-register read")));
+    }
 }
