@@ -1,8 +1,8 @@
 //! The **snapshot store seam** (design
-//! `designs/ironhorse-snapshot-store-seam.md`, phase 1): the paged
+//! `designs/ironhorse-snapshot-store-seam.md`): the paged
 //! logical image and the [`HeapStore`] trait that lets the whole-heap
-//! snapshot artifact be replaced by a keyed store, so a later phase can
-//! checkpoint dirty pages incrementally and reify large heaps lazily.
+//! snapshot artifact be replaced by a keyed store for incremental dirty-page
+//! checkpoints and lazy heap reification.
 //!
 //! The seam sits **below the atom grammar and above the arenas**: pages
 //! and extents reuse the existing canonical encodings (the
@@ -30,20 +30,20 @@
 //!
 //! # Fail-closed discipline
 //!
-//! A store is validated **exhaustively at open** ([`validate_store`]):
-//! the manifest gates (ironhorse magic, format + store schema version,
-//! host callback-table signature), the meter's cost-table version, the
-//! live/free/count accounting, and a full page/extent inventory (every
-//! row the geometry promises must exist with the exact expected
-//! length). Exhaustive open-time validation is what confines later
-//! faults to genuine I/O errors — a store that opened cannot produce a
-//! wrong answer, only a crashed crank. Every decoder clamps
-//! pre-reservations to what the payload can hold, the same
-//! malformed-count discipline as [`crate::image`]'s fuzz trophies.
+//! [`validate_store`] checks the manifest identity, versions, meter cost table,
+//! live/free accounting, small-state references, and the full row inventory
+//! and integrity metadata at open. Slot and chunk contents remain lazy: each
+//! later fault authenticates its row against the pinned leaves, and heap
+//! records receive semantic bounds checks in the VM's fault installer.
+//! Malformed contents or later I/O failures therefore produce a named crashed
+//! crank rather than unchecked heap data. Free-list segments and small state
+//! are read up front; lazy resume avoids eagerly loading slot and chunk rows.
+//! Every decoder clamps pre-reservations to what the payload can hold, as in
+//! the malformed-count regressions in [`crate::image`].
 //!
 //! Like the rest of the crate this module is `forbid(unsafe_code)` and
-//! dependency-free; the SQLite backend lives daemon-side behind this
-//! trait (design § Crate and dependency layout), and the in-crate
+//! keeps backend dependencies behind the store trait. SQLite lives daemon-side
+//! (design § Crate and dependency layout), and the in-crate
 //! reference stores are [`MemoryStore`] here and
 //! [`crate::store_file::FileStore`].
 
@@ -67,9 +67,8 @@ pub use ironhorse_vm::{CHUNK_EXTENT_BYTES, SLOTS_PER_PAGE};
 /// encodings both containers share). Bumped on any change to the page
 /// geometry, the manifest layout, the small-state layout, the
 /// addition of a persisted row class, or a change to the integrity
-/// root's or seal's inputs — the phase-6 near-miss (a new persisted
-/// row class with no bump) is exactly what the widened trigger list
-/// exists to prevent.
+/// root's or seal's inputs. A new persisted row class must not silently
+/// change the interpretation of an existing schema stamp.
 ///
 /// v5: page-edge summaries joined the integrity root (with a section
 /// geometry header and length-prefixed edge entries in both the root
@@ -107,13 +106,13 @@ pub const STORE_SCHEMA_MIN_SUPPORTED: u32 = 5;
 /// reader uses.
 #[derive(Debug, PartialEq, Eq)]
 pub enum StoreError {
-    /// The machine is not at a quiescent crank boundary (wave-6 W6-10):
+    /// The machine is not at a quiescent crank boundary:
     /// its last crank halted. Rewind or complete a crank before
     /// persisting.
     MachineNotQuiescent,
-    /// The heap holds live state in a SILENT-WRONG Pending side table
-    /// (wave-6 W6-9): a resumed machine would answer wrong values, so
-    /// persist refuses by name until the row's atom lands.
+    /// The heap holds unsupported live state identified by
+    /// `Interp::stored_unpersistable_row_at_checkpoint`. Persistence
+    /// refuses by row name rather than resume with missing state.
     PendingStateUnsupported { row: &'static str },
     /// The store has no committed epoch yet (a fresh store). Callers
     /// that require content (resume, export) fail on this; the first
@@ -142,8 +141,8 @@ pub enum StoreError {
     EpochMismatch { expected: u64, found: u64 },
     /// A commit whose `prev_seal` does not match the stored manifest's
     /// seal, or a session whose recorded seal no longer matches the
-    /// store — an equal-epoch fork, copy, or foreign store (the
-    /// adversarial-review finding a bare epoch counter cannot catch).
+    /// store — an equal-epoch fork, copy, or foreign store that a bare
+    /// epoch counter cannot distinguish.
     BaselineMismatch { expected: String, found: String },
     /// A first (full-write) checkpoint was aimed at a store that
     /// already holds an epoch. Adopting existing content is the resume
@@ -199,7 +198,7 @@ pub struct StoreManifest {
     pub slot_live: u32,
     /// Chunk-arena byte length. May shrink across a GC compaction.
     pub chunk_len: u64,
-    /// Total free-list entries (store seam phase 9): the free list
+    /// Total free-list entries: the free list
     /// lives in dirty-diffed segment rows, and this is their geometry
     /// the same way `slot_count` is the pages'.
     pub free_len: u32,
@@ -212,10 +211,9 @@ pub struct StoreManifest {
     /// counter, which is what makes it resume-invariant: a replica that
     /// suspends mid-window resumes with the same absolute count and so
     /// collects after exactly the same cranks as one that never
-    /// suspended. Review wave 5 measured the alternative — a
-    /// session-local `cranks_since_collect` that `open()` zeroed made an
-    /// ordinary suspend/resume fork the durable heap, with identical
-    /// per-crank results and computrons hiding it.
+    /// suspended. A session-local counter reset by `open()` would change
+    /// collection timing after resume and could change the durable heap
+    /// even when per-crank results and computrons still agree.
     ///
     /// Absolute rather than "since the last collection" so the schedule
     /// cannot drift: two replicas at the same crank total agree on
@@ -485,7 +483,7 @@ pub fn seal_commit(
     // signature, and creation parameters are store identity — two
     // stores with identical rows but different signatures must not
     // share a seal, or the pairing guard would pass a session against
-    // another host's store (the PR-review finding).
+    // another host's store.
     let mut sealed = manifest_core.clone();
     sealed.seal = String::new();
     h.update(&sealed.encode());
@@ -523,8 +521,8 @@ pub fn seal_commit(
 /// A page's outgoing edge summary: the sorted, deduplicated set of
 /// pages its records reference (self-edges excluded — a page trivially
 /// reaches itself). A pure function of the page's records, so stored
-/// summaries are recomputable from content — the phase-6 determinism
-/// lock.
+/// summaries are recomputable from content. `check_batch` requires each
+/// supplied summary to match its accompanying page records.
 pub fn derive_page_edges(page: u32, records: &[Slot]) -> Vec<u32> {
     let mut targets = std::collections::BTreeSet::new();
     for r in records {
@@ -599,8 +597,8 @@ pub const LEAF_EXT: u8 = b'X';
 pub const LEAF_FREE: u8 = b'F';
 pub const LEAF_SMALL: u8 = b'S';
 
-/// Free-list entries per stored segment (store seam phase 9): the
-/// free list leaves small state and becomes dirty-diffed segment rows,
+/// Free-list entries per stored segment: the free list is stored in
+/// dirty-diffed segment rows,
 /// so LIFO churn rewrites only the tail segment and per-commit
 /// small-state bytes are O(1) in heap size.
 pub const FREE_SEG_ENTRIES: u32 = 4096;
@@ -702,7 +700,7 @@ fn tree_empty_root(tag: u8) -> [u8; 32] {
 /// Build every interior level of a class tree from its leaves —
 /// `levels[0]` is the level ABOVE the leaves; the last level has one
 /// node, the class root. Empty or single-leaf input builds no
-/// levels (the class root is [`tree_empty_root`] or the leaf).
+/// levels (the class root is `tree_empty_root` or the leaf).
 pub fn build_class_tree(tag: u8, leaves: &[[u8; 32]]) -> Vec<Vec<[u8; 32]>> {
     let mut levels: Vec<Vec<[u8; 32]>> = Vec::new();
     let mut level_no = 0u32;
@@ -1200,9 +1198,8 @@ pub fn combine_root(
 
 /// The batch admission checks — the shared per-commit verification
 /// every backend runs BEFORE persisting anything, so all three refuse
-/// the same batches for the same reasons (the review's parity
-/// findings: free-segment grown-region and summary coupling were
-/// previously checked in some backends and not others):
+/// the same batches for the same reasons. The shared `commit_contract`
+/// tests exercise these gates across backends:
 ///
 /// 1. Grown-region presence: every row of a grown geometry region
 ///    (pages, extents, free segments alike) must travel in the batch
@@ -1224,9 +1221,8 @@ pub fn combine_root(
 /// NOT a complete gate on its own: a row whose index is past the
 /// batch's geometry has an expected length of 0 (the length functions
 /// return 0 past the end) and an empty edge summary derives correctly,
-/// so a zero-length out-of-range row passes every check here (review
-/// wave 4, P3c). It is refused downstream — by the maintenance stage on
-/// both paths, `MissingRow` either way, probe-confirmed — so this is a
+/// so a zero-length out-of-range row passes these checks. It is refused
+/// downstream by leaf maintenance on both paths, with `MissingRow` either way. This is a
 /// note for a future backend, not a live hole: a backend that treats
 /// `check_batch` as the whole admission gate and then writes rows by
 /// index must range-check them itself, or this function must grow the
@@ -1248,7 +1244,7 @@ pub fn check_batch(
     // manifest (and open-time validation re-checks it), but the two
     // baselines arrive through different arguments — assert the
     // coupling so a desynced caller fails closed HERE instead of
-    // skewing which rows the two checks require (wave-3 finding).
+    // skewing which rows the two checks require.
     if let Some((prev, _)) = prior {
         if prior_pages_len != slot_page_count(prev.slot_count) as usize
             || prior_exts_len != chunk_extent_count(prev.chunk_len) as usize
@@ -1282,7 +1278,7 @@ pub fn check_batch(
         }
     }
 
-    // Boundary rows (the second review pass's finding): the growth
+    // Boundary rows: the growth
     // checks above cover indexes the new geometry ADDS, but a total
     // (`slot_count`/`chunk_len`/`free_len`) that changes WITHIN an
     // existing row changes that row's geometry-derived length without
@@ -1542,7 +1538,7 @@ impl SmallState {
     /// the promise cluster in schema 23, and async activations in schema 24
     /// the same way). Since store schema v4 the free-list section is
     /// always EMPTY in stored small state — the list lives in
-    /// dirty-diffed segment rows (phase 9) — but the section slot
+    /// dirty-diffed segment rows — but the section slot
     /// stays so the layout is stable; the atom container path still
     /// carries the list via the image, not this encoding.
     pub fn encode_sections(&self) -> [Vec<u8>; 32] {
@@ -1606,11 +1602,11 @@ pub struct CheckpointBatch {
     /// `(extent index, raw bytes)` for each dirty chunk extent.
     pub chunk_extents: Vec<(u32, Vec<u8>)>,
     /// `(segment index, encoded entries)` for each dirty free-list
-    /// segment (store seam phase 9). Dirty-diffed at checkpoint via
+    /// segment. Dirty-diffed at checkpoint via
     /// the leaf tree, so LIFO churn carries only the tail segment.
     pub free_segs: Vec<(u32, Vec<u8>)>,
     /// `(page index, sorted outgoing page targets)` for each dirty
-    /// slot page — the **persisted page-edge summaries** (phase 6):
+    /// slot page — the **persisted page-edge summaries**:
     /// which pages this page's records reference. Derived purely from
     /// the page's records ([`derive_page_edges`]), sealed with the
     /// commit, and the substrate for reachability-as-indexed-queries
@@ -1707,20 +1703,20 @@ pub trait HeapStore {
     /// Row lengths WITHOUT row contents, index-ordered: `(slot page
     /// byte lengths, chunk extent byte lengths)`. The open-time
     /// inventory validates against this so a lazy resume does no
-    /// O(heap) content I/O (the PR-review finding); backends serve it
+    /// O(heap) slot/chunk content I/O; backends serve it
     /// from metadata (directory entries, `length(bytes)` aggregates).
     fn inventory(&self) -> Result<(Vec<usize>, Vec<usize>), StoreError>;
     /// The stored row-leaf hashes, index-ordered (pages, extents) —
     /// 32 bytes per row, so metadata-scale like [`Self::inventory`].
-    /// Maintained by `commit` via [`apply_batch_leaves`]; the open-time
+    /// Maintained at commit via [`apply_batch`] or [`RootLedger`]; the open-time
     /// validation recombines them against the manifest root, and the
     /// fault path verifies each row read against its leaf.
     fn leaf_hashes(&self) -> Result<(Vec<[u8; 32]>, Vec<[u8; 32]>), StoreError>;
-    /// The raw bytes of free-list segment `seg` (phase 9).
+    /// The raw bytes of free-list segment `seg`.
     fn read_free_seg(&self, seg: u32) -> Result<Vec<u8>, StoreError>;
-    /// The stored free-segment leaf hashes, index-ordered (phase 9).
+    /// The stored free-segment leaf hashes, index-ordered.
     fn free_leaf_hashes(&self) -> Result<Vec<[u8; 32]>, StoreError>;
-    /// The stored page-edge summaries, index-ordered (phase 6): one
+    /// The stored page-edge summaries, index-ordered: one
     /// sorted target list per slot page. Metadata-scale; maintained by
     /// `commit` from the batch's `page_edges`.
     fn page_edges(&self) -> Result<Vec<Vec<u32>>, StoreError>;
@@ -1745,7 +1741,7 @@ pub trait HeapStore {
     /// however small the answer). Backends with an indexed edge
     /// representation override it with a query whose transfer is
     /// proportional to the ANSWER — the SQLite backend serves it as a
-    /// recursive CTE over its normalized pairs (phase 10), with
+    /// recursive CTE over its normalized pairs, with
     /// dense/CTE parity locked by test. Roots appear in the result
     /// even when out of range (they are edgeless), on both paths.
     fn reachable_page_set(
@@ -1764,7 +1760,7 @@ pub trait HeapStore {
     /// and unbounded, so a handle that cached a v5 header at open can
     /// reach the ladder long after another handle upgraded the file —
     /// and splice a stale intermediate manifest onto a newer body,
-    /// bricking it (review wave 5). Reading durably instead, that handle
+    /// making it unreadable. Reading durably instead, that handle
     /// sees the current schema and correctly reports nothing to do.
     ///
     /// The default is [`Self::manifest`], which is exact for a backend
@@ -1866,31 +1862,12 @@ pub trait HeapStore {
     }
 }
 
-/// Upgrade a decodable OLDER store in place to the current schema.
-/// Returns true when a migration ran, false when the store was
-/// already current (or empty). Forward only — validation refuses
-/// anything newer than current. v5 → v6: verify the stored FLAT
-/// root (the v5 formula) over the stored leaves, recompute the v6
-/// class-tree root over the SAME leaves, and stamp the manifest with
-/// schema 6 and the new root. The SEAL is left exactly as stored:
-/// historical seals are opaque chain links, and the next commit
-/// chains from the stored seal precisely as it would have.
-///
-/// Restamping is authorized by the SAME callback-table signature the
-/// resume path checks: a store whose signature is incompatible with
-/// `expected_sig` is refused HERE, before any bytes change, so a
-/// mis-pointed daemon can never one-way restamp a foreign store out
-/// from under its rightful owner (review wave 4, F2). Migration
-/// therefore lives with the caller that knows the signature — the
-/// raw `open()` no longer runs it — and this is the reason it takes
-/// `expected_sig` rather than reading only the store.
 /// Peek the meter's cost-table version from a small-state PREFIX: the
 /// first six sections (stack, free list, keys, names, symbols, meter)
 /// have held the same positions since schema 5, every ladder step
 /// appends sections strictly AFTER them, and the peek never reads the
 /// schema-variable tail — so it decodes identically under every
-/// schema [`migrate_store`] supports. See the cost-table gate there
-/// (review finding 8).
+/// schema [`migrate_store`] supports. See the cost-table gate there.
 fn peek_cost_table_version(p: &[u8]) -> Result<String, StoreError> {
     let mut i = 0usize;
     let mut read_small_section = |name: &'static str| -> Result<&[u8], StoreError> {
@@ -1917,6 +1894,24 @@ fn peek_cost_table_version(p: &[u8]) -> Result<String, StoreError> {
     Ok(meter.cost_table_version)
 }
 
+/// Upgrade a decodable OLDER store in place to the current schema.
+/// Returns true when a migration ran, false when the store was
+/// already current (or empty). Forward only — validation refuses
+/// anything newer than current. v5 → v6: verify the stored FLAT
+/// root (the v5 formula) over the stored leaves, recompute the v6
+/// class-tree root over the SAME leaves, and stamp the manifest with
+/// schema 6 and the new root. The SEAL is left exactly as stored:
+/// historical seals are opaque chain links, and the next commit
+/// chains from the stored seal precisely as it would have.
+///
+/// Restamping is authorized by the SAME callback-table signature the
+/// resume path checks: a store whose signature is incompatible with
+/// `expected_sig` is refused HERE, before any bytes change, so a
+/// mis-pointed daemon can never one-way restamp a foreign store out
+/// from under its rightful owner. Migration therefore lives with the
+/// caller that knows the signature — the
+/// raw `open()` no longer runs it — and this is the reason it takes
+/// `expected_sig` rather than reading only the store.
 pub fn migrate_store(
     store: &mut dyn HeapStore,
     expected_sig: &Signature,
@@ -1947,7 +1942,7 @@ pub fn migrate_store(
             found: manifest.signature.clone(),
         }));
     }
-    // Cost-table gate BEFORE the first restamp too (review finding 8):
+    // Cost-table gate BEFORE the first restamp too:
     // a store whose meter ran under a different cost table can NEVER
     // resume on this engine — `validate_store` refuses it after any
     // migration — so restamping it forward first would wedge it: the
@@ -1973,16 +1968,15 @@ pub fn migrate_store(
     loop {
         // DURABLE, not the handle's cached view: another handle may have
         // upgraded the store since this one opened it, and stepping from
-        // a stale schema would splice an older manifest onto a newer body
-        // (review wave 5). A backend with no cache answers identically.
+        // a stale schema would splice an older manifest onto a newer body.
+        // A backend with no cache answers identically.
         let manifest = store.reread_manifest()?;
         let schema = manifest.store_schema;
         // Progress guard: every ladder step must ADVANCE the stored
         // schema, strictly. A backend whose migration write silently
         // no-ops (returns Ok without persisting) would otherwise spin
-        // here forever (review wave 4, F5) — and one that CYCLES,
-        // 5→6→5→6, evaded the equal-to-previous form this replaces
-        // while spinning just as hard (review wave 5). Strict advance
+        // here forever. Checking only equality with the previous schema
+        // would also allow cycles such as 5→6→5→6. Strict advance
         // over a bounded schema range also bounds the loop by
         // construction, so no separate step counter is needed.
         if prev_schema.is_some_and(|prev| schema <= prev) {
@@ -2093,7 +2087,7 @@ fn migrate_v5_to_v6(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     if old != manifest.root {
         // Convention (matching validate_store / apply_batch): `expected`
         // is the root recomputed from content, `found` the root the
-        // manifest claims (review wave 4, F4).
+        // manifest claims.
         return Err(StoreError::BaselineMismatch {
             expected: old,
             found: manifest.root.clone(),
@@ -2381,8 +2375,8 @@ pub fn check_succession(
     // The batch's own seal must actually hash this batch:
     // `CheckpointBatch` is a public type, so without recomputation a
     // forged constant seal could stitch divergent stores into one
-    // apparent lineage and defeat the equal-epoch fork guard (the
-    // PR-review finding). Every backend calls this before persisting.
+    // apparent lineage and defeat the equal-epoch fork guard.
+    // Every backend calls this before persisting.
     crate::store_sections::validate_batch(batch, stored.is_none())?;
     let recomputed = batch_seal(batch);
     if batch.manifest.seal != recomputed {
@@ -2416,8 +2410,8 @@ pub fn check_epoch(stored: Option<u64>, batch_epoch: u64) -> Result<(), StoreErr
 // --- image ↔ paged form ---
 
 /// Split a flat record array into `(page, bytes)` rows for every page —
-/// the full (epoch-1) batch shape. Later phases produce dirty subsets
-/// from the arena's dirty bitmap instead.
+/// the full (epoch-1) batch shape. `checkpoint_to_store` produces dirty
+/// subsets from the arena's dirty bitmap instead.
 pub fn encode_all_slot_pages(slots: &[Slot]) -> Vec<(u32, Vec<u8>)> {
     let count = slots.len() as u32;
     let pages = slot_page_count(count);
@@ -2588,8 +2582,8 @@ pub fn store_to_image(store: &dyn HeapStore) -> Result<MachineImage, StoreError>
     // formula, so a merely-old store fails the root check and gets
     // reported as `BaselineMismatch` — "this store is corrupt" — when
     // the truth is that it needs migrating. `root_hash` and
-    // `export_to_container` ride this path, so that misdiagnosis reached
-    // callers who had done nothing wrong (review wave 5).
+    // `export_to_container` ride this path, so they must preserve the
+    // distinction between migration and corruption too.
     if manifest.store_schema < STORE_SCHEMA_VERSION {
         return Err(StoreError::NeedsMigration {
             found: manifest.store_schema,
@@ -2609,18 +2603,14 @@ pub fn store_to_image(store: &dyn HeapStore) -> Result<MachineImage, StoreError>
             found: small.meter.cost_table_version.clone(),
         }));
     }
-    // The semantic bounds gate runs in TWO places: `validate_store`
-    // covers the stack/side-table/symbol references on BOTH resume
-    // paths (wave 5), and the HEAP rows are covered per path — the
-    // full-image gate at the end of this function for the eager path
-    // (wave-6 W6-14: leaf hashes prove bytes authentic-to-commit, not
-    // in-arena, so a consistently-resealed hostile store passed here
-    // and panicked at the first collection), and a per-page slot-ref
-    // bound at the lazy fault installer (the chunk-offset half of the
-    // lazy path is a recorded remainder — the slot-ref bound removes
-    // the collector-panic vector).
+    // `validate_store` checks small-state references on both resume paths.
+    // Eager heap records pass `check_machine_image_bounds` below; lazy heap
+    // records pass `SlotBacking::validate_records` in the VM at their first
+    // fault. Both gates check live slot references and chunk offsets against
+    // the declared arenas. Leaf hashes establish authenticity to the commit,
+    // which alone cannot establish that a crafted reference is in bounds.
 
-    // Row-content integrity (phase 5, completed by the review wave):
+    // Row-content integrity:
     // every row read below — INCLUDING the small state — is checked
     // against its stored leaf hash, and the whole leaf/summary set is
     // recombined against the sealed root first, so eager reification —
@@ -2784,17 +2774,17 @@ impl ValidatedStoreState {
 /// [`ValidatedStoreState`] so resume cannot mix those proven pieces
 /// with values read from another epoch.
 ///
-/// This is the open-time gate that makes later read faults pure I/O
-/// errors (design decision 7): after `validate_store` succeeds, every
-/// row a lazy fault can ask for has been proven present and
-/// well-sized.
+/// Slot and chunk rows are checked for presence and exact size without
+/// reading their contents. Their authenticity and heap-record bounds are
+/// checked when they are read, so a later fault may still refuse malformed
+/// or changed content as well as report an I/O error.
 pub fn validate_store(
     store: &dyn HeapStore,
     expected_sig: &Signature,
 ) -> Result<ValidatedStoreState, StoreError> {
     let manifest = store.manifest()?;
-    // Readability, not equality with the write stamp (review finding
-    // 1's flip side): an older READABLE format version opens — its
+    // Readability, not equality with the write stamp: an older
+    // READABLE format version opens — its
     // atoms are a subset with the same encodings, and the schema
     // ladder below migrates its sections — while a newer one was
     // already refused at manifest decode. The next checkpoint restamps
@@ -2849,8 +2839,7 @@ pub fn validate_store(
             "symbol-key table: counter inside the name table",
         )));
     }
-    // Quiescence, the store mirror of `read_machine`'s STAC gate
-    // (review finding 5): checkpoints only ever commit quiescent
+    // Quiescence, the store mirror of `read_machine`'s STAC gate: checkpoints only ever commit quiescent
     // machines, whose value stack is empty, so a populated stack
     // section can only be crafted.
     if !small.stack.is_empty() {
@@ -2906,7 +2895,7 @@ pub fn validate_store(
         }
     }
 
-    // Row-hash tree (phase 5) + page-edge summaries (v5): the stored
+    // Row-hash tree and page-edge summaries (since schema v5): the stored
     // leaves AND summaries must recombine to the manifest's sealed
     // root — metadata-scale (32 bytes per leaf, a few words per
     // summary). Row CONTENT is then verified against these leaves at
@@ -2950,13 +2939,12 @@ pub fn validate_store(
         });
     }
 
-    // Reassemble the free list from its segment rows (phase 9), each
+    // Reassemble the free list from its segment rows, each
     // verified against its leaf; the accounting checks above already
     // ran against this list. This is the one O(free-list) exception
     // to the metadata-only row discipline above: the machine needs
     // the list in memory at wake, so the read is inherent, not
-    // incidental (the review's honesty note on the "no O(heap) row
-    // I/O" claim).
+    // incidental. Metadata-only slot/chunk reads do not eliminate this cost.
     let mut free: Vec<u32> = Vec::with_capacity((manifest.free_len as usize).min(1 << 16));
     for seg in 0..n_frees {
         let bytes = store.read_free_seg(seg)?;
@@ -2986,8 +2974,7 @@ pub fn validate_store(
         )));
     }
     // Distinctness: a duplicated free index passes the sum check but
-    // aliases one record to two allocations after resume (the
-    // adversarial-review aliasing finding). With distinctness, the sum
+    // aliases one record to two allocations after resume. With distinctness, the sum
     // check makes the live/free partition exact.
     {
         let mut seen = std::collections::HashSet::with_capacity(free.len());
@@ -3002,13 +2989,12 @@ pub fn validate_store(
     // Semantic bounds gate for everything the small state carries —
     // stack, symbols, and the side tables — against the manifest's
     // geometry. It lives HERE, not in `store_to_image`, because
-    // `validate_store` is the one function BOTH resume paths run:
-    // gating the eager path alone left `resume_from_store_lazy` (the
-    // path `PersistentMachine` actually opens) accepting a crafted
-    // store that then panics the collector in release (review wave 5).
+    // `validate_store` is the function BOTH resume paths run. A gate
+    // confined to eager resume would leave lazy resume accepting hostile
+    // side-table references that the collector cannot safely traverse.
     // It runs AFTER the free-list reassembly above so the free set is
     // in hand: a side-table row owned by a free slot is refused, while
-    // freed heap records stay opaque (review findings 2+3). The heap
+    // freed heap records stay opaque. The heap
     // ROWS are not read at validation time by design — their records
     // are bounds-checked as they fault, with the same free-record
     // skip.
@@ -3060,7 +3046,7 @@ pub fn import_from_container(
     // The blob half of the id-space audit: nothing may ADOPT a
     // container whose heap stores a property id outside both key
     // tables — crafted or torn bytes, or a pre-unification blob that
-    // persisted a then-unresumable intern (review wave 5). The scan is
+    // persisted a then-unresumable intern. The scan is
     // O(heap) and this path already decoded the whole image.
     if image.stored_unregistered_key_id().is_some() {
         return Err(StoreError::Snapshot(SnapshotError::Corrupt(
@@ -3089,15 +3075,14 @@ pub fn root_hash(store: &dyn HeapStore) -> Result<String, StoreError> {
 // --- the in-memory reference store ---
 
 /// What one [`HeapStoreCommit::commit`] wrote, for the incremental-
-/// checkpoint acceptance tests (the phase-2 bar: commit cost is
-/// proportional to dirty rows, measured, not asserted from hope).
+/// checkpoint acceptance tests in `tests/store_checkpoint.rs` that
+/// check writes scale with the changed state.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct CommitStats {
     pub slot_pages_written: usize,
     pub chunk_extents_written: usize,
-    /// Free-list segment rows written — the phase-9 proportionality
-    /// axis (LIFO churn must rewrite only the tail segment), which
-    /// the review found asserted in prose and observed by nothing.
+    /// Free-list segment rows written, so tests can verify that LIFO
+    /// churn rewrites only the affected tail segments.
     pub free_segs_written: usize,
     pub small_sections_written: usize,
     pub small_bytes_written: usize,
@@ -3196,7 +3181,7 @@ impl HeapStore for MemoryStore {
     fn read_slot_page(&self, page: u32) -> Result<Vec<u8>, StoreError> {
         // Empty-store gate for point-read parity across backends: an
         // uncommitted store is `Empty`; `MissingRow` means a committed
-        // store lacks the row (the review's parity table).
+        // store lacks the row.
         if self.manifest.is_none() {
             return Err(StoreError::Empty);
         }
@@ -4826,7 +4811,7 @@ mod tests {
 
         // Same machine state, chunk arena "compacted" to empty. A real
         // compaction rewrites every stored chunk offset with the bytes
-        // it moves; mirror that coherence (the wave-6 W6-14 heap gate
+        // it moves; mirror that coherence (the image bounds gate
         // refuses an image whose slots point into chunks it lacks) by
         // degrading chunk-bearing slots to chunk-free values in place —
         // chain links, ids, and accounting untouched.
@@ -4874,8 +4859,8 @@ mod tests {
 
     /// The segment split at exactly the `FREE_SEG_ENTRIES` boundary
     /// (and one past it, and empty): counts, per-segment lengths, and
-    /// ORDER-exact reassembly — the LIFO reuse order is load-bearing
-    /// (review follow-up: the 4096/4097 edges had no direct lock).
+    /// ORDER-exact reassembly: the LIFO reuse order determines allocation
+    /// identity after resume.
     #[test]
     fn free_seg_boundaries_split_and_reassemble_exactly() {
         let b = FREE_SEG_ENTRIES;
@@ -4903,7 +4888,7 @@ mod tests {
 
     #[test]
     fn commit_refuses_a_geometry_change_that_omits_the_affected_tail_row() {
-        // The second review pass's finding: the grown-region check
+        // The grown-region check
         // covers indexes the new geometry ADDS, but a total that
         // changes WITHIN the existing tail row changes that row's
         // geometry-derived length without adding any index. A crafted
@@ -5175,7 +5160,7 @@ mod tests {
 
     #[test]
     fn commit_refuses_a_desynced_prior_leaf_baseline() {
-        // The wave-3 coupling assertion: the grown-region checks key
+        // The baseline-coupling assertion: the grown-region checks key
         // off the prior LEAF VECTORS' lengths while the boundary
         // checks key off the prior MANIFEST's geometry. The backends
         // keep the two equal by construction; `apply_batch` itself
