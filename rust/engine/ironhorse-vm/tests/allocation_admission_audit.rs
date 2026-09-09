@@ -4,6 +4,8 @@ const SOURCE: &str = concat!(
     include_str!("../src/interp.rs"),
     "\n",
     include_str!("../src/interp/bigint.rs"),
+    "\n",
+    include_str!("../src/interp/temporal.rs"),
 );
 
 fn method(name: &str) -> &str {

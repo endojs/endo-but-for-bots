@@ -39,6 +39,8 @@ const SRC: &str = concat!(
     include_str!("../src/interp/state.rs"),
     "\n",
     include_str!("../src/interp/roots.rs"),
+    "\n",
+    include_str!("../src/interp/temporal.rs"),
 );
 
 /// The body (including braces) of the function that starts at the
@@ -97,11 +99,11 @@ fn strip_comments(s: &str) -> String {
 }
 
 /// Parse every top-level `struct`/`enum` body in the source.
-fn type_defs() -> BTreeMap<&'static str, String> {
+fn type_defs(src: &str) -> BTreeMap<&str, String> {
     let mut out = BTreeMap::new();
     let mut i = 0;
-    while i < SRC.len() {
-        let rest = &SRC[i..];
+    while i < src.len() {
+        let rest = &src[i..];
         let hit = ["struct ", "enum "]
             .iter()
             .filter_map(|k| rest.find(k).map(|p| (p, *k)))
@@ -109,28 +111,31 @@ fn type_defs() -> BTreeMap<&'static str, String> {
         let Some((p, kw)) = hit else { break };
         let at = i + p;
         // Only definitions (line starts with optional pub + the keyword).
-        let line_start = SRC[..at].rfind('\n').map(|n| n + 1).unwrap_or(0);
-        let prefix = SRC[line_start..at].trim();
-        let is_def = prefix.is_empty() || prefix == "pub" || prefix == "pub(crate)";
+        let line_start = src[..at].rfind('\n').map(|n| n + 1).unwrap_or(0);
+        let prefix = src[line_start..at].trim();
+        let is_def = prefix.is_empty()
+            || prefix == "pub"
+            || prefix == "pub(crate)"
+            || prefix == "pub(super)";
         i = at + kw.len();
         if !is_def {
             continue;
         }
-        let name_end = SRC[i..]
+        let name_end = src[i..]
             .find(|c: char| !c.is_ascii_alphanumeric() && c != '_')
             .map(|n| i + n)
             .unwrap_or(i);
-        let name = &SRC[i..name_end];
+        let name = &src[i..name_end];
         if name.is_empty() {
             continue;
         }
-        let Some(brace_rel) = SRC[name_end..].find(['{', ';', '(']) else {
+        let Some(brace_rel) = src[name_end..].find(['{', ';', '(']) else {
             continue;
         };
-        if SRC.as_bytes()[name_end + brace_rel] != b'{' {
+        if src.as_bytes()[name_end + brace_rel] != b'{' {
             continue; // tuple struct / decl form — rare here, skip
         }
-        let body = fn_body(&SRC[at..name_end + brace_rel + 1]);
+        let body = body_in(src, &src[at..name_end + brace_rel + 1]);
         out.insert(name, strip_comments(body));
     }
     out
@@ -140,8 +145,8 @@ fn type_defs() -> BTreeMap<&'static str, String> {
 /// its body mentions `Slot`/`SlotIndex`/`ChunkOffset` (`SlotIndex`
 /// contains `Slot`, so one primitive check covers both) or another
 /// slot-bearing type.
-fn slot_bearing_types(defs: &BTreeMap<&'static str, String>) -> Vec<&'static str> {
-    let mut bearing: Vec<&'static str> = Vec::new();
+fn slot_bearing_types<'s>(defs: &BTreeMap<&'s str, String>) -> Vec<&'s str> {
+    let mut bearing: Vec<&'s str> = Vec::new();
     loop {
         let mut changed = false;
         for (name, body) in defs {
@@ -401,7 +406,7 @@ const REGISTRY: &[(&str, &[Req], &str)] = &[
 #[test]
 fn every_slot_bearing_field_is_classified_and_the_classification_holds() {
     assert_field_emission(SRC);
-    let defs = type_defs();
+    let defs = type_defs(SRC);
     let bearing_types = slot_bearing_types(&defs);
     let fields = interp_fields();
     assert!(
@@ -881,5 +886,42 @@ fn disconnected_root_walks_cannot_satisfy_the_registry() {
             std::panic::catch_unwind(|| root_source(&mutated)).is_err(),
             "disconnected roots accepted: {before}"
         );
+    }
+}
+
+#[test]
+fn moved_temporal_records_remain_in_the_slot_bearing_type_graph() {
+    let original = type_defs(SRC);
+    let original_bearing = slot_bearing_types(&original);
+    for (record, field) in [
+        ("TemporalInstantRecord", "temporal_instants"),
+        ("TemporalDurationRecord", "temporal_durations"),
+        ("TemporalPlainRecord", "temporal_plains"),
+        ("TemporalZonedRecord", "temporal_zoneds"),
+    ] {
+        assert!(
+            original.contains_key(record),
+            "moved record is invisible: {record}"
+        );
+        assert!(!original_bearing.contains(&record));
+        let declaration = format!("pub(super) struct {record} {{");
+        let changed = SRC.replace(&declaration, &format!("{declaration}\n    retained: Slot,"));
+        assert_ne!(changed, SRC);
+        let definitions = type_defs(&changed);
+        let bearing = slot_bearing_types(&definitions);
+        assert!(
+            bearing.contains(&record),
+            "new Slot member must invalidate {record}'s slot-free classification"
+        );
+        let fields = interp_fields();
+        let (_, ty) = fields.iter().find(|(name, _)| name == field).unwrap();
+        assert!(bearing.iter().any(|name| mentions(ty, name)));
+        assert!(REGISTRY
+            .iter()
+            .find(|(name, _, _)| *name == field)
+            .unwrap()
+            .1
+            .iter()
+            .any(|req| matches!(req, Req::ValueSlotFree)));
     }
 }
