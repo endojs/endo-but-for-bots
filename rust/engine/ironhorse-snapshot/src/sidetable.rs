@@ -99,6 +99,10 @@
 //!   *deterministic* slot indices. `restore_snapshot_state` reconstructs the
 //!   machine on a fresh [`ironhorse_vm::Interp::new`] whose boot lands them at the
 //!   same indices the snapshot arena's boot region uses, so they need no atom.
+//!   `static_str` is an always-live chunk prefix that cannot move under ordered
+//!   compaction; `proto_value_data` contains only numeric constants. Boot-native
+//!   function name chunks can move and their live owner/offset pairs travel in
+//!   `FUNC`; absence from that table removes collected native metadata.
 //! - `symbol_ids` and the name-keyed lookup-id caches
 //!   (`length_id`/`name_id`/`value_id`/`done_id`/`size_id`/`byte_length_id`/
 //!   `byte_offset_id`/`buffer_id`/`then_id`/`last_index_id`, plus the

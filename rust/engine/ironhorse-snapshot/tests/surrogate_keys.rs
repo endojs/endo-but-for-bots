@@ -95,14 +95,34 @@ fn legacy_utf8_names_migrate_without_changing_ids_or_epoch() {
         ironhorse_snapshot::store::STORE_SCHEMA_VERSION
     );
     assert_eq!(migrated.epoch, manifest.epoch);
-    // Migration stamps both schema 27 and schema 28. The final parent is
-    // the authenticated schema-27 seal, whose parent is the legacy seal.
+    // Migration stamps schemas27,28,29. Reconstruct the authenticated
+    // intermediate seals so the final parent must be the schema28 seal.
     let mut intermediate = migrated.clone();
     intermediate.store_schema = 27;
     intermediate.parent_seal = manifest.seal.clone();
     intermediate.root = compute_root(
         &intermediate,
         &leaf_hash(LEAF_SMALL, 0, &store.read_small_state().unwrap()),
+        &pages,
+        &extents,
+        &store.free_leaf_hashes().unwrap(),
+        &store.page_edges().unwrap(),
+    );
+    let intermediate_seal = seal_commit(
+        &intermediate.parent_seal,
+        &intermediate,
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+    );
+    intermediate.store_schema = 28;
+    intermediate.parent_seal = intermediate_seal;
+    intermediate.root = compute_root(
+        &intermediate,
+        &ironhorse_snapshot::store_sections::framed_root(&store.read_small_state().unwrap())
+            .unwrap(),
         &pages,
         &extents,
         &store.free_leaf_hashes().unwrap(),

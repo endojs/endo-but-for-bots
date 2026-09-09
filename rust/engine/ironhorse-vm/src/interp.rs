@@ -5689,6 +5689,11 @@ pub struct BoundFunctionRow {
 /// carrying any one without the function rows would restore a partial exotic.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FunctionStateSnapshot {
+    /// Boot-native name chunks move during GC even though their code and
+    /// identities are rebuilt. None denotes the legacy boot-offset contract.
+    /// Some carries the authoritative surviving subset; absent owners may
+    /// already have been collected and their slots reused by guest objects.
+    pub native_names: Option<Vec<(u32, u32)>>,
     pub segments: Vec<Vec<u8>>,
     pub functions: Vec<FunctionRow>,
     pub bound_functions: Vec<BoundFunctionRow>,
@@ -5698,7 +5703,8 @@ pub struct FunctionStateSnapshot {
 
 impl FunctionStateSnapshot {
     pub fn is_empty(&self) -> bool {
-        self.segments.is_empty()
+        self.native_names.is_none()
+            && self.segments.is_empty()
             && self.functions.is_empty()
             && self.bound_functions.is_empty()
             && self.ctor_prototypes.is_empty()
@@ -6220,6 +6226,8 @@ impl Interp {
         let mut chunks = ChunkArena::new();
         // Interned `typeof` result strings, stored in the UTF-16BE form all
         // string values use (`str_to_be16`).
+        // These eight chunks form an always-live arena prefix. Order-preserving
+        // compaction cannot relocate them, so restore may rederive their offsets.
         let static_str = StaticStrings {
             undefined: chunks.alloc(&str_to_be16("undefined")),
             object: chunks.alloc(&str_to_be16("object")),
@@ -11434,6 +11442,16 @@ impl Interp {
     /// travels in no table -- restore reinstates the reference without
     /// its `FuncInfo`.
     fn function_persists(&self, function: crate::value::SlotIndex) -> bool {
+        // This execution helper has no persisted reconstruction recipe. Its
+        // slot can be a recycled boot slot after GC, so index alone is not
+        // evidence that a native belongs to the boot image.
+        if self
+            .functions
+            .get(&function)
+            .is_some_and(|info| matches!(info.method, Some(NativeMethod::CopyObject)))
+        {
+            return false;
+        }
         if function.0 < self.boot_slot_count || self.proxy_revokers.contains_key(&function) {
             return true;
         }
@@ -12104,7 +12122,23 @@ impl Interp {
             .collect();
         deleted_meta.sort_unstable();
 
+        let mut native_names: Vec<_> = self
+            .functions
+            .iter()
+            .filter(|(owner, info)| {
+                owner.0 < self.boot_slot_count
+                    && self.function_persists(**owner)
+                    && (info.native.is_some() || info.method.is_some())
+                    && !self.proxy_revokers.contains_key(owner)
+                    && !self.promise_functions.contains_key(owner)
+                    && !self.collator_compare_functions.contains_key(owner)
+                    && !self.number_format_bound_functions.contains_key(owner)
+            })
+            .map(|(owner, info)| (owner.0, info.name_chunk.0))
+            .collect();
+        native_names.sort_unstable();
         FunctionStateSnapshot {
+            native_names: Some(native_names),
             segments,
             functions,
             bound_functions,
@@ -12113,8 +12147,68 @@ impl Interp {
         }
     }
 
+    fn native_names_are_valid(&self, rows: Option<&[(u32, u32)]>) -> bool {
+        let Some(rows) = rows else {
+            return true;
+        };
+        if rows.windows(2).any(|pair| pair[0].0 >= pair[1].0)
+            || rows.iter().any(|(owner, offset)| {
+                *owner >= self.boot_slot_count
+                    || !self
+                        .functions
+                        .get(&crate::value::SlotIndex(*owner))
+                        .is_some_and(|info| info.native.is_some() || info.method.is_some())
+                    || *offset == u32::MAX
+                    || (*offset as usize) < crate::value::CHUNK_HEADER
+                    || (*offset as usize) > self.chunks.byte_size()
+            })
+        {
+            return false;
+        }
+        true
+    }
+
+    /// Restore the authoritative surviving boot-native name table before
+    /// runtime function clusters, which may reuse collected boot slot indices.
+    /// The native implementation stays boot-derived; only chunk locations travel.
+    pub fn restore_native_names(&mut self, rows: Option<&[(u32, u32)]>) -> bool {
+        if !self.native_names_are_valid(rows) {
+            return false;
+        }
+        let Some(rows) = rows else {
+            return true;
+        };
+        let owners: std::collections::BTreeSet<_> = rows.iter().map(|(owner, _)| *owner).collect();
+        self.functions.retain(|owner, info| {
+            owner.0 >= self.boot_slot_count
+                || (info.native.is_none() && info.method.is_none())
+                || owners.contains(&owner.0)
+        });
+        for &(owner, offset) in rows {
+            self.functions
+                .update(&crate::value::SlotIndex(owner), |info| {
+                    info.name_chunk = crate::value::ChunkOffset(offset);
+                })
+                .unwrap();
+        }
+        true
+    }
+
     /// Restore a validated atomic guest-callability cluster.
     pub fn restore_function_state(&mut self, state: FunctionStateSnapshot) -> bool {
+        if !self.native_names_are_valid(state.native_names.as_deref()) {
+            return false;
+        }
+        // Validate against the metadata that will remain after native pruning.
+        let existing_function = |owner: crate::value::SlotIndex| {
+            self.functions.get(&owner).is_some_and(|info| {
+                owner.0 >= self.boot_slot_count
+                    || (info.native.is_none() && info.method.is_none())
+                    || state.native_names.as_ref().is_none_or(|rows| {
+                        rows.binary_search_by_key(&owner.0, |(id, _)| *id).is_ok()
+                    })
+            })
+        };
         let function_owners: std::collections::BTreeSet<u32> =
             state.functions.iter().map(|row| row.owner).collect();
         let bound_owners: std::collections::BTreeSet<u32> =
@@ -12122,7 +12216,7 @@ impl Interp {
 
         for row in &state.functions {
             let owner = crate::value::SlotIndex(row.owner);
-            if self.functions.contains_key(&owner) {
+            if existing_function(owner) {
                 return false;
             }
             match (row.segment, row.body_start) {
@@ -12144,9 +12238,7 @@ impl Interp {
         for row in &state.bound_functions {
             if !function_owners.contains(&row.owner)
                 || (!function_owners.contains(&row.target)
-                    && !self
-                        .functions
-                        .contains_key(&crate::value::SlotIndex(row.target)))
+                    && !existing_function(crate::value::SlotIndex(row.target)))
             {
                 return false;
             }
@@ -12159,6 +12251,9 @@ impl Interp {
             return false;
         }
 
+        if !self.restore_native_names(state.native_names.as_deref()) {
+            return false;
+        }
         *self.code_segments = state.segments.into_iter().map(std::rc::Rc::from).collect();
         self.func_segments.clear();
         for row in state.functions {
@@ -66282,6 +66377,11 @@ impl Interp {
                 if let Some(a) = self.arrays.remove(&idx) {
                     a.drop_refs(&mut self.side_refs);
                 }
+                // Ordinary indexed properties have the same owner lifetime
+                // as array entries; stale rows would leak into a reused slot.
+                if let Some(a) = self.index_props.remove(&idx) {
+                    a.drop_refs(&mut self.side_refs);
+                }
                 if let Some(c) = self.collections.remove(&idx) {
                     c.drop_refs(&mut self.side_refs);
                 }
@@ -67308,5 +67408,38 @@ impl Interp {
             identity: self.snapshot_baseline_identity.clone(),
             arena: self.slots.snapshot_dirt.clone(),
         }
+    }
+}
+
+#[cfg(test)]
+mod reused_boot_native_tests {
+    use super::{Interp, NativeMethod};
+    use crate::value::{Kind, Payload, Slot};
+
+    #[test]
+    fn copy_object_in_recycled_boot_slot_is_not_a_boot_native() {
+        let mut m = Interp::new();
+        m.collect_garbage();
+        let function = m.alloc_method(NativeMethod::CopyObject);
+        assert!(
+            function.0 < m.boot_slot_count,
+            "fixture must reuse a boot slot"
+        );
+        // This internal callable may remain on a suspended async operand stack
+        // while the spread source awaits. Retain it in a checked root here to
+        // isolate admission from the compiler's incidental allocation order.
+        m.stack
+            .push(Slot::of(Kind::Reference, Payload::Reference(function)));
+        assert!(!m.function_persists(function));
+        assert!(!m
+            .function_state_snapshot()
+            .native_names
+            .unwrap()
+            .iter()
+            .any(|&(owner, _)| owner == function.0));
+        assert_eq!(
+            m.stored_unpersistable_row(),
+            Some("a stored reference to a non-persisted native function")
+        );
     }
 }

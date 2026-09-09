@@ -96,7 +96,7 @@ fn republishing_cannot_advertise_free_markers_to_pre_17_readers() {
                 Version::decode(reader.find(VERS).unwrap().payload)
                     .unwrap()
                     .format_version,
-                17
+                18
             );
             assert_eq!(published, current);
         }

@@ -594,7 +594,7 @@ fn restore_side_tables(
     wrappers: Vec<crate::image::WrapperImage>,
     regexps: Vec<crate::image::RegExpImage>,
     dates: Vec<crate::image::DateImage>,
-    function_state: ironhorse_vm::FunctionStateSnapshot,
+    mut function_state: ironhorse_vm::FunctionStateSnapshot,
     proxy_state: ironhorse_vm::ProxyStateSnapshot,
     accessors: Vec<ironhorse_vm::AccessorRow>,
     intl_bound_functions: Vec<ironhorse_vm::IntlBoundFunctionRow>,
@@ -608,6 +608,14 @@ fn restore_side_tables(
     iterators: Vec<ironhorse_vm::IteratorRow>,
 ) -> Result<(), crate::format::SnapshotError> {
     use crate::format::SnapshotError;
+    // Remove collected boot-native metadata before installing runtime functions:
+    // their slots may have been reused, and their chunks may have moved.
+    let native_names = function_state.native_names.take();
+    if !interp.restore_native_names(native_names.as_deref()) {
+        return Err(SnapshotError::Corrupt(
+            "side-table restore: malformed native names",
+        ));
+    }
     let ok = interp.restore_bulk_side_tables(
         arrays
             .into_iter()
@@ -2242,6 +2250,12 @@ mod tests {
             PromiseRow, SegmentsData, Slot,
         };
         assert_eq!(restore_rows(|_| {}), Ok(()));
+        assert_eq!(
+            restore_rows(|rows| rows.function_state.native_names = Some(vec![(0, 4)])),
+            Err(SnapshotError::Corrupt(
+                "side-table restore: malformed native names"
+            ))
+        );
         assert_eq!(
             restore_rows(|rows| rows.intl.segments.push((
                 1,

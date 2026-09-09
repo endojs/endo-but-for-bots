@@ -1934,6 +1934,13 @@ pub(crate) fn encode_function_state(state: &ironhorse_vm::FunctionStateSnapshot)
         v.extend_from_slice(&owner.to_be_bytes());
         v.extend_from_slice(&id.to_be_bytes());
     }
+    if let Some(rows) = &state.native_names {
+        v.extend_from_slice(&(rows.len() as u32).to_be_bytes());
+        for &(owner, offset) in rows {
+            v.extend_from_slice(&owner.to_be_bytes());
+            v.extend_from_slice(&offset.to_be_bytes());
+        }
+    }
     v
 }
 
@@ -2058,8 +2065,27 @@ pub(crate) fn decode_function_state(
         }
         deleted_meta.push(row);
     }
+    // Older FUNC rows end at deleted_meta. The optional suffix persists
+    // relocated boot-native name chunks without reallocating during restore.
+    let native_names = if c.i == p.len() {
+        None
+    } else {
+        let count = c.u32()? as usize;
+        let mut rows = Vec::with_capacity(count.min(p.len() / 8));
+        for _ in 0..count {
+            let row = (c.u32()?, c.u32()?);
+            if rows.last().is_some_and(|prev: &(u32, u32)| row.0 <= prev.0) {
+                return Err(SnapshotError::Corrupt(
+                    "native names: owners not strictly ascending",
+                ));
+            }
+            rows.push(row);
+        }
+        Some(rows)
+    };
     c.done()?;
     Ok(ironhorse_vm::FunctionStateSnapshot {
+        native_names,
         segments,
         functions,
         bound_functions,
@@ -3803,6 +3829,7 @@ static EMPTY_INTL: IntlTables = IntlTables {
 #[cfg(test)]
 static EMPTY_FUNCTION_STATE: ironhorse_vm::FunctionStateSnapshot =
     ironhorse_vm::FunctionStateSnapshot {
+        native_names: None,
         segments: Vec::new(),
         functions: Vec::new(),
         bound_functions: Vec::new(),
@@ -4259,6 +4286,14 @@ fn check_stored_bounds(
         .iter()
         .map(|row| row.owner)
         .collect();
+    if let Some(rows) = &lang.function_state.native_names {
+        for &(owner, offset) in rows {
+            owned(owner)?;
+            if (offset as usize) < CHUNK_HEADER || (offset as usize) > chunk_len {
+                return Err(OOC);
+            }
+        }
+    }
     let mut referenced_segments = std::collections::BTreeSet::new();
     for row in &lang.function_state.functions {
         owned(row.owner)?;
@@ -4897,6 +4932,9 @@ pub fn write_machine_unchecked(image: &MachineImage) -> Vec<u8> {
 fn encode_machine(image: &MachineImage) -> Result<Vec<u8>, SnapshotError> {
     let mut w = AtomWriter::new();
     let mut version = image.version.clone();
+    if image.function_state.native_names.is_some() {
+        version.format_version = version.format_version.max(18);
+    }
     if version.format_version < 17 {
         // Decoded images can be re-published without passing through Interp.
         // Never advertise reusable blocks to a reader that cannot walk them.
@@ -5541,6 +5579,41 @@ pub fn read_validated_machine(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn native_name_suffix_preserves_legacy_and_rejects_malformed_rows() {
+        use ironhorse_vm::FunctionStateSnapshot;
+
+        let legacy = FunctionStateSnapshot::default();
+        let legacy_bytes = super::encode_function_state(&legacy);
+        assert_eq!(super::decode_function_state(&legacy_bytes).unwrap(), legacy);
+
+        let current = FunctionStateSnapshot {
+            native_names: Some(vec![(3, 4), (7, 20)]),
+            ..FunctionStateSnapshot::default()
+        };
+        let bytes = super::encode_function_state(&current);
+        assert_eq!(super::decode_function_state(&bytes).unwrap(), current);
+        for end in legacy_bytes.len() + 1..bytes.len() {
+            assert!(super::decode_function_state(&bytes[..end]).is_err());
+        }
+        let mut trailing = bytes.clone();
+        trailing.push(0);
+        assert!(super::decode_function_state(&trailing).is_err());
+
+        for rows in [vec![(3, 4), (3, 20)], vec![(7, 4), (3, 20)]] {
+            let invalid = FunctionStateSnapshot {
+                native_names: Some(rows),
+                ..FunctionStateSnapshot::default()
+            };
+            assert_eq!(
+                super::decode_function_state(&super::encode_function_state(&invalid)),
+                Err(super::SnapshotError::Corrupt(
+                    "native names: owners not strictly ascending"
+                ))
+            );
+        }
+    }
+
     use super::*;
     use ironhorse_vm::{ChunkOffset, Kind, Payload, SlotIndex};
 
@@ -9000,6 +9073,7 @@ mod function_decoder_refusals {
     #[test]
     fn function_cluster_ordering() {
         let valid = FunctionStateSnapshot {
+            native_names: None,
             segments: vec![],
             functions: vec![row(2), row(3)],
             bound_functions: vec![

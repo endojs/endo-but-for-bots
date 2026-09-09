@@ -214,7 +214,8 @@ pub const IRONHORSE_MAGIC: [u8; 4] = *b"IRON";
 // payload lengths and CREA's declared BLOC length.
 // Version 17 reserves a u32::MAX chunk length as a reusable-block marker,
 // followed by its total u32 span. Earlier readers cannot walk these BLOC bytes.
-pub const IRONHORSE_FORMAT_VERSION: u32 = 17;
+// Version 18 persists relocated boot-native name chunks in the FUNC suffix.
+pub const IRONHORSE_FORMAT_VERSION: u32 = 18;
 
 /// The oldest format version this reader still decodes. Version-1
 /// containers predate the version-2 stamp; every version-1 writer in
