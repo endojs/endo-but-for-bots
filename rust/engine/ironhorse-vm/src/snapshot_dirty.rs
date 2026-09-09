@@ -3,44 +3,23 @@ use std::cell::Cell;
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
 
-/// VM inputs to the snapshot layer. The store maps its persisted identities to
-/// these semantic groups; the VM does not depend on a storage implementation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(u8)]
-pub enum SnapshotSection {
-    Stack,
-    RetiredFreeList,
-    Keys,
-    Names,
-    Symbols,
-    Meter,
-    Arrays,
-    Collections,
-    Registry,
-    Errors,
-    Buffers,
-    TypedArrays,
-    DataViews,
-    Wrappers,
-    Regexps,
-    ArgumentsBrands,
-    Temporal,
-    Intl,
-    NameFloor,
-    Iterators,
-    Dates,
-    Functions,
-    Proxies,
-    Accessors,
-    IntlBoundFunctions,
-    PrivateElements,
-    DisposableStacks,
-    Generators,
-    ErrorFrames,
-    Promises,
-    AsyncInstances,
-    IndexProperties,
+macro_rules! define_snapshot_sections {
+    ($($name:ident = $id:literal,)*) => {
+        /// VM inputs to the snapshot layer. The store maps its persisted identities
+        /// to these semantic groups; the VM does not depend on storage machinery.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        #[repr(u8)]
+        pub enum SnapshotSection {
+            $($name = $id,)*
+        }
+        // Dirty masks have one bit per semantic section. Growing the roster
+        // requires widening the tracker before introducing another identity.
+        const _: () = {
+            $(assert!($id < u32::BITS);)*
+        };
+    };
 }
+crate::snapshot_sections!(define_snapshot_sections);
 impl SnapshotSection {
     pub(crate) const fn mask(self) -> u32 {
         1u32 << self as u8

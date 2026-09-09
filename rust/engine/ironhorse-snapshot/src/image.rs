@@ -3636,7 +3636,7 @@ fn regexp_string_iterator_malformed(
         || result == u32::MAX
         || index > 3
         || !enum_keys_empty
-        || str_bytes_len % 2 != 0
+        || !str_bytes_len.is_multiple_of(2)
 }
 
 pub(crate) fn decode_iterators(p: &[u8]) -> Result<Vec<IteratorRow>, SnapshotError> {
