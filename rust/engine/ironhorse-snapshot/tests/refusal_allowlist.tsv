@@ -15,21 +15,13 @@ manifest parent seal length	Existing corruption guard; dedicated exact-label reg
 migration did not advance the store schema	Existing corruption guard; dedicated exact-label regression fixture deferred.
 name migration length	Existing corruption guard; dedicated exact-label regression fixture deferred.
 non-canonical machine encoding	Existing corruption guard; dedicated exact-label regression fixture deferred.
-side-table restore: invalid persisted regexp state	Existing corruption guard; dedicated exact-label regression fixture deferred.
 side-table restore: malformed Intl bound-function state	Existing corruption guard; dedicated exact-label regression fixture deferred.
-side-table restore: malformed accessor state	Existing corruption guard; dedicated exact-label regression fixture deferred.
-side-table restore: malformed generator state	Existing corruption guard; dedicated exact-label regression fixture deferred.
 side-table restore: malformed intl record	Existing corruption guard; dedicated exact-label regression fixture deferred.
 side-table restore: malformed iterator cursor	Existing corruption guard; dedicated exact-label regression fixture deferred.
-side-table restore: malformed private elements	Existing corruption guard; dedicated exact-label regression fixture deferred.
 side-table restore: malformed promise capability	Existing corruption guard; dedicated exact-label regression fixture deferred.
 side-table restore: malformed promise cluster	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
-side-table restore: malformed proxy state	Existing corruption guard; dedicated exact-label regression fixture deferred.
 side-table restore: malformed retained function state	Existing corruption guard; dedicated exact-label regression fixture deferred.
 side-table restore: malformed temporal record	Existing corruption guard; dedicated exact-label regression fixture deferred.
-side-table restore: malformed typed-array family	Existing corruption guard; dedicated exact-label regression fixture deferred.
-side-table restore: unknown error name	Existing corruption guard; dedicated exact-label regression fixture deferred.
-side-table restore: unknown kind code	Existing corruption guard; dedicated exact-label regression fixture deferred.
 store file directory offset overflow	Existing corruption guard; dedicated exact-label regression fixture deferred.
 store file header truncated	Existing corruption guard; dedicated exact-label regression fixture deferred.
 store file manifest region truncated	Existing corruption guard; dedicated exact-label regression fixture deferred.

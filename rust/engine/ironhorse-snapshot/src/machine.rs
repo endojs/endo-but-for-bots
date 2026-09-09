@@ -2076,6 +2076,159 @@ mod tests {
         Signature::new("ironhorse-worker-v1")
     }
 
+    // Exercise the structured restore boundary directly: these corrupt rows
+    // are normally refused by decoding before VM adoption is attempted.
+    fn restore_rows(mutate: impl FnOnce(&mut SideTableImages)) -> Result<(), SnapshotError> {
+        let mut rows = SideTableImages {
+            arrays: vec![],
+            index_props: vec![],
+            collections: vec![],
+            registry: vec![],
+            errors: vec![],
+            buffers: vec![],
+            typed_arrays: vec![],
+            data_views: vec![],
+            wrappers: vec![],
+            regexps: vec![],
+            dates: vec![],
+            function_state: Default::default(),
+            proxy_state: Default::default(),
+            accessors: vec![],
+            intl_bound_functions: vec![],
+            private_elements: Default::default(),
+            disposable_stacks: vec![],
+            generators: vec![],
+            promise_cluster: Default::default(),
+            arguments_brands: vec![],
+            temporal: Default::default(),
+            intl: Default::default(),
+            iterators: vec![],
+        };
+        mutate(&mut rows);
+        restore_side_tables(
+            &mut Interp::new(),
+            rows.arrays,
+            rows.index_props,
+            rows.collections,
+            rows.registry,
+            rows.errors,
+            rows.buffers,
+            rows.typed_arrays,
+            rows.data_views,
+            rows.wrappers,
+            rows.regexps,
+            rows.dates,
+            rows.function_state,
+            rows.proxy_state,
+            rows.accessors,
+            rows.intl_bound_functions,
+            rows.private_elements,
+            rows.disposable_stacks,
+            rows.generators,
+            rows.promise_cluster,
+            rows.arguments_brands,
+            rows.temporal,
+            rows.intl,
+            rows.iterators,
+        )
+    }
+
+    #[test]
+    fn restore_boundary_reports_exact_side_table_failures() {
+        use crate::image::{CollectionImage, ErrorImage, RegExpImage, TypedArrayImage};
+        use ironhorse_vm::{AccessorRow, GeneratorRow, PrivateAccessorRow, ProxyRevokerRow, Slot};
+        assert_eq!(restore_rows(|_| {}), Ok(()));
+        assert_eq!(
+            restore_rows(|rows| rows.collections.push(CollectionImage {
+                owner: 1,
+                kind: 255,
+                table_length: 8,
+                entries: vec![],
+            })),
+            Err(SnapshotError::Corrupt(
+                "side-table restore: unknown kind code"
+            ))
+        );
+        assert_eq!(
+            restore_rows(|rows| rows.errors.push(ErrorImage {
+                owner: 1,
+                name: "NotAnError".into(),
+                message: None,
+                frames: vec![],
+            })),
+            Err(SnapshotError::Corrupt(
+                "side-table restore: unknown error name"
+            ))
+        );
+        assert_eq!(
+            restore_rows(|rows| rows.typed_arrays.push(TypedArrayImage {
+                owner: 1,
+                kind: 255,
+                buffer: 2,
+                offset: 0,
+                length: 0,
+            })),
+            Err(SnapshotError::Corrupt(
+                "side-table restore: malformed typed-array family"
+            ))
+        );
+        assert_eq!(
+            restore_rows(|rows| rows.regexps.push(RegExpImage {
+                owner: 1,
+                source: "[".into(),
+                flags: "".into(),
+                last_index_bits: 0,
+            })),
+            Err(SnapshotError::Corrupt(
+                "side-table restore: invalid persisted regexp state"
+            ))
+        );
+        assert_eq!(
+            restore_rows(|rows| rows.proxy_state.revokers.push(ProxyRevokerRow {
+                owner: 1,
+                proxy: 2,
+                name_chunk: u32::MAX
+            })),
+            Err(SnapshotError::Corrupt(
+                "side-table restore: malformed proxy state"
+            ))
+        );
+        assert_eq!(
+            restore_rows(|rows| rows.generators.push(GeneratorRow {
+                owner: 1,
+                state: 255,
+                frame: None,
+            })),
+            Err(SnapshotError::Corrupt(
+                "side-table restore: malformed generator state"
+            ))
+        );
+        assert_eq!(
+            restore_rows(|rows| rows.accessors.push(AccessorRow {
+                owner: 1,
+                id: 1,
+                get: Some(Slot::integer(1)),
+                set: None,
+            })),
+            Err(SnapshotError::Corrupt(
+                "side-table restore: malformed accessor state"
+            ))
+        );
+        assert_eq!(
+            restore_rows(
+                |rows| rows.private_elements.accessors.push(PrivateAccessorRow {
+                    receiver: 1,
+                    brand: 2,
+                    get: None,
+                    set: Some(Slot::integer(1)),
+                })
+            ),
+            Err(SnapshotError::Corrupt(
+                "side-table restore: malformed private elements"
+            ))
+        );
+    }
+
     #[test]
     fn checkpoint_refuses_a_legacy_ledger_then_rebuilds_without_losing_state() {
         use crate::store::{HeapStore, MemoryStore, RootLedger};
