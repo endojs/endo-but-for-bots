@@ -10,7 +10,6 @@ STAC record count	Existing corruption guard; dedicated exact-label regression fi
 accessor state: getter or setter is not callable	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 accessor state: id outside the property-key tables	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 async activation: invalid promise capability or anchor	Existing corruption guard; dedicated exact-label regression fixture deferred.
-async instances: owners not strictly ascending	Existing corruption guard; dedicated exact-label regression fixture deferred.
 async reaction: invalid payload	Existing corruption guard; dedicated exact-label regression fixture deferred.
 async reaction: missing or duplicate activation	Existing corruption guard; dedicated exact-label regression fixture deferred.
 batch parent seal mismatch	Existing corruption guard; dedicated exact-label regression fixture deferred.
@@ -41,18 +40,12 @@ file store page directory disagrees with geometry	File backend structural guard;
 file store page edges truncated	File backend structural guard; dedicated exact-label corruption fixture deferred.
 file store slot page row exceeds u32	File backend structural guard; dedicated exact-label corruption fixture deferred.
 file store small-state block	File backend structural guard; dedicated exact-label corruption fixture deferred.
-generator frame: bad boolean byte	Existing corruption guard; dedicated exact-label regression fixture deferred.
 generator frame: current function has no body	Existing corruption guard; dedicated exact-label regression fixture deferred.
 generator frame: current function has no function row	Existing corruption guard; dedicated exact-label regression fixture deferred.
 generator frame: current function has no segment	Existing corruption guard; dedicated exact-label regression fixture deferred.
-generator frame: id map not strictly ascending	Existing corruption guard; dedicated exact-label regression fixture deferred.
 generator frame: invalid resume cursor or scope map	Existing corruption guard; dedicated exact-label regression fixture deferred.
 generator frame: invalid saved handler	Existing corruption guard; dedicated exact-label regression fixture deferred.
 generator frame: malformed body bytecode	Existing corruption guard; dedicated exact-label regression fixture deferred.
-generators: bad frame tag	Existing corruption guard; dedicated exact-label regression fixture deferred.
-generators: invalid state	Existing corruption guard; dedicated exact-label regression fixture deferred.
-generators: owners not strictly ascending	Existing corruption guard; dedicated exact-label regression fixture deferred.
-generators: state and frame disagree	Existing corruption guard; dedicated exact-label regression fixture deferred.
 installed-names floor does not restore	Existing corruption guard; dedicated exact-label regression fixture deferred.
 manifest parent seal length	Existing corruption guard; dedicated exact-label regression fixture deferred.
 migration did not advance the store schema	Existing corruption guard; dedicated exact-label regression fixture deferred.
