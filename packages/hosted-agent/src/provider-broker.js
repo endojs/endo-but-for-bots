@@ -5,6 +5,8 @@ import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 
+import { makeSecretRotator } from './secret-rotator.js';
+
 /**
  * @typedef {{ method: string, path: string }} Route
  * @typedef {{ origin: string, routes: Route[], models: string[], expiresAt: number,
@@ -12,8 +14,7 @@ import { M } from '@endo/patterns';
  * maxTotalBytes: bigint, maxCostMicrounits: bigint,
  * maxCostMicrounitsPerRequest: bigint, credentialHeader?: 'bearer' | 'x-api-key',
  * anthropicVersion?: string, anthropicBeta?: string,
- * authMode?: 'api-key' | 'oauth', accountRef?: string,
- * refreshSkewMs?: number }} BrokerPolicy
+ * authMode?: 'api-key' | 'oauth', accountRef?: string }} BrokerPolicy
  * @typedef {{ version: 'BrokerOAuthStateV1', accessToken: string,
  * refreshToken?: string, expiresAt: number, accountId: string }} BrokerOAuthState
  * @typedef {{next(): Promise<{done: boolean, value: string}>, return(): void}} ProviderReader
@@ -37,6 +38,26 @@ import { M } from '@endo/patterns';
 export const isCredentialRejection = error =>
   error instanceof Error && error.message === 'Provider credential rejected';
 harden(isCredentialRejection);
+
+/**
+ * Whether a rotation was refused because the record moved under it, as opposed
+ * to failing outright.
+ *
+ * The distinction is load-bearing and cannot be re-derived by looking at the
+ * record afterwards: a conflict means another writer stored something newer and
+ * this exchange's result is safely discarded, while any other failure means
+ * nothing stored anything and a refresh token has been burned for nothing. The
+ * secret manager reports the two differently; collapsing them and inferring
+ * from a later read gets the second case wrong.
+ *
+ * The code is `@endo/daemon`'s, matched on rather than imported because this
+ * package deliberately does not depend on the daemon.
+ *
+ * @param {unknown} error
+ */
+export const isGenerationConflict = error =>
+  error instanceof Error && error.message.includes('GENERATION_CONFLICT');
+harden(isGenerationConflict);
 
 /**
  * Validate an OAuth state document read from the secret manager.
@@ -87,20 +108,34 @@ harden(assertBrokerOAuthState);
 /**
  * The refreshing OAuth credential behind one secret record.
  *
- * Deliberately not per lease. The refresh token lives in the record, not in a
- * session, so a single-flight guard that lived on a lease would let two
- * concurrent sessions over the same account each redeem the same refresh
- * token — and a provider that invalidates a refresh token on use reads the
- * second redemption as a replay and revokes the whole grant, killing the
- * credential the first session just stored. One of these is made per record
- * and handed to every lease over it, so the guard is where the token is.
+ * **Exactly one of these must exist per secret record.** The refresh token
+ * lives in the record, not in a session, so the single-flight guard below only
+ * excludes what shares this object: two of them over one record each redeem the
+ * same refresh token, and a provider that invalidates a refresh token on use
+ * reads the second redemption as a replay and revokes the whole grant. It is
+ * built here, by whoever composes the deployment, rather than inside a lease or
+ * a lease issuer, so that sharing it across every lease and every issuer over
+ * that record is a visible act rather than an accident of construction.
+ *
+ * Ownership cannot be enforced from inside this module — a second daemon over
+ * the same record is outside its reach — so the write is additionally pinned to
+ * the generation it read. That turns a lost race into a refused write rather
+ * than a silent overwrite, which is what makes the invariant recoverable when
+ * it is violated rather than merely stated.
+ *
+ * `rotate` is attenuated here rather than by the caller, so the narrow
+ * capability is produced where it is used and a full `SecretAdmin` handed in
+ * still cannot reach the exchange below with `revoke`, `delete` and
+ * `setDescription` intact.
  *
  * @param {object} powers
- * @param {{ readBase64(): Promise<string> }} powers.secret - SecretBlob read facet
+ * @param {{ readBase64WithGeneration(): Promise<{base64: string, generation: bigint}> }} powers.secret
+ * - SecretBlob read facet. The generation-carrying read is required: a
+ * rotation that cannot name the version it read cannot be made conditional.
  * @param {{ refresh(request: {refreshToken: string, accountId: string}): Promise<unknown> }} powers.refresh
  * - Token exchange on the broker's own outbound authority, never a lease's.
- * @param {{ replaceBase64(base64: string): Promise<unknown> }} powers.rotate
- * - Rotate-only secret capability: `replaceBase64` and nothing else.
+ * @param {{ replaceBase64(base64: string, options?: {ifGeneration?: bigint}): Promise<unknown> }} powers.rotate
+ * - A secret administration facet, attenuated here to replacement alone.
  * @param {string} powers.accountRef - The operator's selected account.
  * @param {() => number} powers.now - Trusted epoch-millisecond clock
  * @param {number} [powers.refreshSkewMs] - Refresh this long before expiry.
@@ -108,13 +143,14 @@ harden(assertBrokerOAuthState);
 export const makeBrokerOAuthCredential = ({
   secret,
   refresh,
-  rotate,
+  rotate: admin,
   accountRef,
   now,
   refreshSkewMs = 60_000,
 }) => {
-  (secret && refresh && rotate && typeof now === 'function') ||
+  (secret && refresh && admin && typeof now === 'function') ||
     Fail`Unprovisioned broker OAuth credential`;
+  const rotate = makeSecretRotator(admin);
   (typeof accountRef === 'string' &&
     accountRef.length > 0 &&
     accountRef.length <= 256) ||
@@ -125,17 +161,20 @@ export const makeBrokerOAuthCredential = ({
     Fail`Invalid broker refresh skew`;
 
   const read = async () => {
-    const encoded = await E(secret).readBase64();
-    typeof encoded === 'string' || Fail`Invalid credential`;
+    const versioned = await E(secret).readBase64WithGeneration();
+    (versioned &&
+      typeof versioned.base64 === 'string' &&
+      typeof versioned.generation === 'bigint') ||
+      Fail`Invalid credential`;
     let parsed;
     try {
-      parsed = JSON.parse(globalThis.atob(encoded));
+      parsed = JSON.parse(globalThis.atob(versioned.base64));
     } catch (_error) {
       Fail`Invalid credential`;
     }
     const state = assertBrokerOAuthState(parsed);
     state.accountId === accountRef || Fail`Broker account binding changed`;
-    return state;
+    return harden({ state, generation: versioned.generation });
   };
 
   /**
@@ -149,59 +188,109 @@ export const makeBrokerOAuthCredential = ({
     now() + refreshSkewMs >= state.expiresAt ||
     (rejected !== undefined && state.accessToken === rejected);
 
-  /** @type {Promise<{state: BrokerOAuthState, exchanged: boolean}> | undefined} */
+  /** @type {Promise<{state: BrokerOAuthState, outcome: 'unchanged' | 'refreshed' | 'adopted'}> | undefined} */
   let refreshing;
   /** @param {string} [rejected] */
   const exchange = rejected => {
-    if (!refreshing) {
-      refreshing = (async () => {
-        await null;
-        // Re-read inside the guard. A caller that lost the race to another
-        // lease, or to an operator's re-grant, is holding a refresh token that
-        // is already spent; exchanging it again is the replay this guard
-        // exists to prevent. Whatever is in the record now wins.
-        const state = await read();
-        if (!spent(state, rejected)) return harden({ state, exchanged: false });
-        const refreshToken =
-          state.refreshToken ?? Fail`Broker credential expired`;
-        const result = await E(refresh).refresh(
-          harden({ refreshToken, accountId: state.accountId }),
-        );
-        (result && typeof result === 'object' && !Array.isArray(result)) ||
-          Fail`Invalid broker OAuth state`;
-        // A response that omits the refresh token means "keep the one you
-        // have" (RFC 6749 section 6), which is how a non-rotating provider
-        // answers. Persisting the response verbatim would drop it and strand
-        // the record at its next expiry with nothing left to exchange.
-        const next = assertBrokerOAuthState(
-          harden({
-            .../** @type {any} */ (result),
-            refreshToken:
-              /** @type {any} */ (result).refreshToken ?? refreshToken,
-          }),
-        );
-        // A refreshed credential that names another account would move the
-        // session's billing and quota to one the lease was never bound to.
-        next.accountId === accountRef || Fail`Broker account binding changed`;
-        // The refreshed credential must not itself be spent. An `expires_in`
-        // duration mistaken for an instant, a badly skewed clock, or a token
-        // lifetime shorter than the operator's skew all produce a state the
-        // very next request would refresh again, indefinitely and silently.
-        !spent(next) || Fail`Broker refresh did not advance expiry`;
-        await E(rotate).replaceBase64(globalThis.btoa(JSON.stringify(next)));
-        return harden({ state: next, exchanged: true });
-      })().then(
-        next => {
-          refreshing = undefined;
-          return next;
-        },
-        error => {
-          refreshing = undefined;
-          throw error;
-        },
+    // Returned rather than read back out of `refreshing`, so the type is a
+    // definite promise: the flag is bookkeeping for the next caller, not the
+    // value this one is owed.
+    if (refreshing) return refreshing;
+    const started = (async () => {
+      await null;
+      // Re-read inside the guard. A caller that lost the race to another
+      // lease, or to an operator's re-grant, is holding a refresh token that
+      // is already spent; exchanging it again is the replay this guard
+      // exists to prevent. Whatever is in the record now wins.
+      const { state, generation } = await read();
+      if (!spent(state, rejected))
+        return harden({
+          state,
+          outcome: /** @type {const} */ ('unchanged'),
+        });
+      const refreshToken =
+        state.refreshToken ?? Fail`Broker credential expired`;
+      const result = await E(refresh).refresh(
+        harden({ refreshToken, accountId: state.accountId }),
       );
-    }
-    return refreshing;
+      (result && typeof result === 'object' && !Array.isArray(result)) ||
+        Fail`Invalid broker OAuth state`;
+      // A response that omits the refresh token means "keep the one you
+      // have" (RFC 6749 section 6), which is how a non-rotating provider
+      // answers. Persisting the response verbatim would drop it and strand
+      // the record at its next expiry with nothing left to exchange.
+      const next = assertBrokerOAuthState(
+        harden({
+          .../** @type {any} */ (result),
+          refreshToken:
+            /** @type {any} */ (result).refreshToken ?? refreshToken,
+        }),
+      );
+      // A refreshed credential that names another account would move the
+      // session's billing and quota to one the lease was never bound to.
+      next.accountId === accountRef || Fail`Broker account binding changed`;
+      // The refreshed credential must not itself be spent. An `expires_in`
+      // duration mistaken for an instant, a badly skewed clock, or a token
+      // lifetime shorter than the operator's skew all produce a state the
+      // very next request would refresh again, indefinitely and silently.
+      !spent(next) || Fail`Broker refresh did not advance expiry`;
+      // Pinned to the generation the exchanged credential was derived from.
+      // An operator who replaced the record while this exchange was in
+      // flight installed a grant this one knows nothing about, and
+      // overwriting it would discard the newer credential in favour of a
+      // stale one.
+      let conflicted = false;
+      const rotated = await E(rotate)
+        .replaceBase64(
+          globalThis.btoa(JSON.stringify(next)),
+          harden({ ifGeneration: generation }),
+        )
+        .then(
+          () => true,
+          error => {
+            conflicted = isGenerationConflict(error);
+            return false;
+          },
+        );
+      if (rotated)
+        return harden({
+          state: next,
+          outcome: /** @type {const} */ ('refreshed'),
+        });
+      // Nothing stored the credential just minted, so it must not be handed
+      // out. Only a conflict means another writer stored something newer;
+      // any other failure means the record still holds the very refresh
+      // token this exchange just spent. That case is detected, not repaired:
+      // against a provider that invalidates a refresh token on use, the
+      // stored grant is now dead and an operator has to re-grant it. Failing
+      // here is what keeps the broker from presenting the spent token again
+      // and turning a lost write into a revoked grant.
+      conflicted || Fail`Broker credential rotation failed`;
+      const current = await read();
+      // Adopting another writer's credential is only safe if it is usable:
+      // returning one that is already expiring, or that is the very token an
+      // upstream just refused, would spend the caller's one retry on a
+      // credential known to be dead.
+      (current.generation !== generation && !spent(current.state, rejected)) ||
+        Fail`Broker credential rotation failed`;
+      return harden({
+        state: current.state,
+        outcome: /** @type {const} */ ('adopted'),
+      });
+    })().then(
+      next => {
+        refreshing = undefined;
+        return next;
+      },
+      error => {
+        refreshing = undefined;
+        throw error;
+      },
+    );
+    // The body above cannot settle before this assignment: it opens with
+    // `await null`, so the handlers that clear the flag run in a later turn.
+    refreshing = started;
+    return started;
   };
 
   return harden({
@@ -218,8 +307,12 @@ export const makeBrokerOAuthCredential = ({
      * just refused, so a still-current-looking credential is replaced too.
      */
     current: async ({ rejected } = {}) => {
-      const state = await read();
-      if (!spent(state, rejected)) return harden({ state, exchanged: false });
+      const { state } = await read();
+      if (!spent(state, rejected))
+        return harden({
+          state,
+          outcome: /** @type {const} */ ('unchanged'),
+        });
       return exchange(rejected);
     },
   });
@@ -303,16 +396,25 @@ export const makeProviderBrokerLease = (
       accountRef.length > 0 &&
       accountRef.length <= 256) ||
     Fail`Invalid broker account binding`;
-  // Provisioning, not preference: an OAuth lease with no refreshing credential
-  // is an API-key lease with a shorter life, and would fail its first turn
-  // after expiry rather than at admission. Binding it here also makes its
+  // Provisioning, not preference: an OAuth lease with no usable refreshing
+  // credential is an API-key lease with a shorter life, and would fail its
+  // first turn rather than at admission. Binding it here also makes its
   // presence the mode: everything below asks whether there is an `oauth`
   // record rather than re-reading a mode string.
+  //
+  // The shape is checked, not just the presence, because the credential is now
+  // supplied rather than built here and an object that cannot refresh would
+  // otherwise be admitted and fail on the first request. Both properties are
+  // read synchronously, which requires the credential to be a local object: the
+  // single-flight guard it carries only excludes callers sharing that object,
+  // so a remote presence to it would not be the guard this mode needs anyway.
   if (authMode === 'oauth') {
     credentialHeader === 'bearer' || Fail`Unprovisioned broker OAuth mode`;
     // The lease's account is the operator's selection; a credential for some
     // other account is a different session's, not this one's.
-    (credential !== undefined && credential.accountRef === accountRef) ||
+    (credential !== undefined &&
+      typeof credential.current === 'function' &&
+      credential.accountRef === accountRef) ||
       Fail`Unprovisioned broker OAuth mode`;
   }
   const oauth =
@@ -451,16 +553,17 @@ export const makeProviderBrokerLease = (
       /^[\x21-\x7e]+$/.test(decoded) || Fail`Invalid credential`;
       return harden({ credential: decoded, screens: [decoded, encoded] });
     }
-    let resolved;
-    try {
-      resolved = await E(oauth).current(
-        harden(rejected === undefined ? {} : { rejected }),
-      );
-    } catch (error) {
-      record('refresh-failed');
-      throw error;
-    }
-    if (resolved.exchanged) record('refreshed');
+    const resolved = await E(oauth)
+      .current(harden(rejected === undefined ? {} : { rejected }))
+      .catch(error => {
+        record('refresh-failed');
+        throw error;
+      });
+    // A refresh that was minted and then discarded is not a refresh: the
+    // audit trail has to distinguish "this turn installed a new credential"
+    // from "this turn burned a refresh token and adopted someone else's".
+    if (resolved.outcome === 'refreshed') record('refreshed');
+    if (resolved.outcome === 'adopted') record('refresh-discarded');
     const { state } = resolved;
     return harden({
       credential: state.accessToken,

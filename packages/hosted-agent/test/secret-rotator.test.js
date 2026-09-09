@@ -89,3 +89,47 @@ test('something that could not be a facet is refused at construction', t => {
     ),
   );
 });
+
+test('the generation precondition reaches the administration facet', async t => {
+  const calls = [];
+  const admin = Far('SecretAdmin', {
+    async replaceBase64(base64, options) {
+      calls.push({ base64, ifGeneration: options?.ifGeneration });
+      return 'replaced';
+    },
+  });
+  const rotator = makeSecretRotator(admin);
+  await E(rotator).replaceBase64('cm90YXRlZA==', harden({ ifGeneration: 7n }));
+  t.deepEqual(calls, [{ base64: 'cm90YXRlZA==', ifGeneration: 7n }]);
+  // An unconditional write is still expressible, and forwards no pin.
+  await E(rotator).replaceBase64('cm90YXRlZA==');
+  t.is(calls[1].ifGeneration, undefined);
+});
+
+test('the rotator refuses a precondition the manager could not honour', async t => {
+  const calls = [];
+  const admin = Far('SecretAdmin', {
+    async replaceBase64(base64, options) {
+      calls.push({ base64, options });
+      return 'replaced';
+    },
+  });
+  const rotator = makeSecretRotator(admin);
+  // A number where a generation belongs, and a misspelled key, must not reach
+  // the manager: an unconstrained options record is how a conditional write
+  // silently degrades into an unconditional one.
+  for (const options of [
+    { ifGeneration: 7 },
+    { ifGeneraton: 7n },
+    { ifGeneration: 7n, extra: true },
+  ]) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(() =>
+      E(rotator).replaceBase64(
+        'cm90YXRlZA==',
+        /** @type {any} */ (harden(options)),
+      ),
+    );
+  }
+  t.deepEqual(calls, []);
+});

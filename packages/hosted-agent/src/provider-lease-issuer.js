@@ -6,12 +6,8 @@ import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { randomUUID } from 'node:crypto';
 
-import {
-  makeBrokerOAuthCredential,
-  makeProviderBrokerLease,
-} from './provider-broker.js';
+import { makeProviderBrokerLease } from './provider-broker.js';
 import { makeProviderFetchTransport } from './provider-transport.js';
-import { makeSecretRotator } from './secret-rotator.js';
 
 /** @import { BrokerPolicy } from './provider-broker.js' */
 
@@ -20,11 +16,14 @@ import { makeSecretRotator } from './secret-rotator.js';
  * facet over its private pipe. Secrets and outbound fetch stay in this process.
  * The runtime must be operator-owned, with an exclusively held lifecycle lock.
  *
- * `refresh` and `rotate` are the OAuth half, required together by
- * `authMode: 'oauth'` and unused by an API key. `refresh` is deliberately not
- * the inference transport: a token endpoint is neither the provider origin nor
- * one of the three inference paths the lease admits, so a refresh that could
- * travel through the lease would mean the lease admitted something else.
+ * `credential` is the OAuth half, required by `authMode: 'oauth'` and unused by
+ * an API key. It is supplied rather than built here because exactly one must
+ * exist per secret record: an issuer that made its own would give two issuers
+ * over one record separate refresh guards, and both would redeem the same
+ * refresh token. Its refresh authority is deliberately not the inference
+ * transport — a token endpoint is neither the provider origin nor one of the
+ * three inference paths the lease admits, so a refresh that could travel
+ * through the lease would mean the lease admitted something else.
  *
  * @param {object} options
  * @param {any} options.runtime Concrete provider listener runtime.
@@ -36,8 +35,9 @@ import { makeSecretRotator } from './secret-rotator.js';
  * @param {string} options.accountRef
  * @param {() => number} [options.now]
  * @param {(event: any) => void} [options.audit]
- * @param {any} [options.refresh] Token exchange on its own outbound authority.
- * @param {any} [options.rotate] Rotate-only secret capability.
+ * @param {any} [options.credential] The record's shared refreshing credential,
+ * from `makeBrokerOAuthCredential`. One per secret record, shared by every
+ * issuer and lease over it.
  */
 export const makeProviderBrokerLeaseIssuer = ({
   runtime,
@@ -49,8 +49,7 @@ export const makeProviderBrokerLeaseIssuer = ({
   accountRef,
   now = Date.now,
   audit,
-  refresh,
-  rotate,
+  credential,
 }) => {
   (Number.isInteger(leaseDurationMs) &&
     leaseDurationMs > 0 &&
@@ -69,25 +68,18 @@ export const makeProviderBrokerLeaseIssuer = ({
     policy.accountRef === accountRef ||
     Fail`Invalid provider lease issuer policy`;
   const authMode = policy.authMode ?? 'api-key';
-  // One credential per secret record, shared by every lease this issuer makes,
-  // because the refresh token is the record's and not a session's: a per-lease
-  // refresh guard would let two concurrent sessions redeem the same one.
-  // `rotate` is attenuated here rather than trusted to arrive attenuated, so a
-  // full `SecretAdmin` handed to the issuer still cannot reach the broker with
-  // its `revoke`, `delete` and `setDescription` intact.
-  const credential =
-    authMode === 'oauth'
-      ? makeBrokerOAuthCredential({
-          secret,
-          refresh,
-          rotate: rotate && makeSecretRotator(rotate),
-          accountRef,
-          now,
-          ...(policy.refreshSkewMs === undefined
-            ? {}
-            : { refreshSkewMs: policy.refreshSkewMs }),
-        })
-      : undefined;
+  // The credential arrives already built and already bound to an account, so
+  // this checks that it is one this issuer's leases can actually use: bound to
+  // the selected account, and able to refresh. Without the second half an
+  // object that cannot refresh is admitted here, reports `authMode: 'oauth'`
+  // in its attestation, and only fails on the first turn.
+  if (authMode === 'oauth') {
+    credential !== undefined || Fail`Invalid provider lease issuer policy`;
+    credential.accountRef === accountRef ||
+      Fail`Invalid provider lease issuer policy`;
+    typeof credential.current === 'function' ||
+      Fail`Unprovisioned broker OAuth mode`;
+  }
   // BrokerLeaseV1 carries the bounded request count as a number; its profile
   // explicitly caps it at 32 bits. Byte and cost counters retain bigint.
   const configuredPolicy = harden({
@@ -221,9 +213,11 @@ export const makeProviderBrokerLeaseIssuer = ({
               leaseId,
               imageDigest,
               accountRef,
-              // Proved by construction, not declared: the broker core refuses
-              // to exist in `oauth` mode without a refresh and a rotate
-              // capability, so a lease that reports one has both.
+              // What this reports is how the lease was configured, checked
+              // against a credential that was present and account-bound at
+              // admission. It is not evidence about the stored secret, which
+              // is first read on the first request, nor about how many other
+              // holders share that record.
               authMode,
               networkNamespaceId: current.networkNamespaceId,
               endpoint: current.endpoint,
