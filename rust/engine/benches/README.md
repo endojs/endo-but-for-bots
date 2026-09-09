@@ -1023,3 +1023,28 @@ Full engine CI passed 1,490 tests, SQLite passed 116, and strict VM library Clip
 and the math check passed; rustdoc retained 61 warnings.
 This accepts the incremental extraction, not full 1A performance against the
 original decomposition baseline.
+
+## Persistence conversion and admission extraction (1A)
+
+[results/1a-persist-module.json](results/1a-persist-module.json) records 73 methods
+moving from `3f74f5c34` to `interp/persist.rs`, reducing the parent from 33,939 to
+31,072 lines.
+The module contains VM image conversion, restore repair, persistence admission,
+and checkpoint state; live linking stays in the parent.
+Public signatures and DTO paths are preserved, and the existing roster-generated
+walks in `persistence.rs` remain the source of field enumeration.
+
+The initial comparison failed three controls: the 500-row front-garbage slide
+was 1.782x and the 1,000,000- and 4,000,000-byte placeholders were 1.974x and 1.847x.
+Those observations remain in the record.
+A fixed three-trial alternating audit retained all six runs and passed all 48
+aggregate comparisons at the unchanged 1.25x gate, ranging from 0.790x to 1.216x.
+The audit does not establish a cause for the initial failures.
+
+VM and snapshot source locks passed before and after the move; their normal and
+mutation readers now follow the moved methods without changing their assertions.
+Independent review verified all method bodies, comments, attributes, and coverage.
+Full engine CI passed 1,490 tests, SQLite passed 116, and strict VM library Clippy
+and the math check passed; rustdoc retained 61 warnings.
+This accepts the incremental extraction; full 1A performance acceptance remains
+outstanding.

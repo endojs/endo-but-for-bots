@@ -32,6 +32,8 @@ const SOURCE: &str = concat!(
     include_str!("../src/interp/natives/dispatch.rs"),
     "\n",
     include_str!("../src/interp/property.rs"),
+    "\n",
+    include_str!("../src/interp/persist.rs"),
 );
 
 fn method_in(source: &str, name: &str) -> String {
