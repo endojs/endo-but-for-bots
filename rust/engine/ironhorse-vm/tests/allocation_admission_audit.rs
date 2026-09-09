@@ -18,6 +18,8 @@ const SOURCE: &str = concat!(
     include_str!("../src/interp/gc.rs"),
     "\n",
     include_str!("../src/interp/suspend.rs"),
+    "\n",
+    include_str!("../src/interp/native_try.rs"),
 );
 
 fn method(name: &str) -> &str {

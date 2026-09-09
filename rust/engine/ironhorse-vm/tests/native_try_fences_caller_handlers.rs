@@ -135,3 +135,23 @@ fn a_natively_caught_throw_never_runs_the_thrown_objects_tostring() {
         assert_eq!(out.result, expected, "{source}");
     }
 }
+
+#[test]
+fn from_async_property_failures_reject_without_entering_the_caller_handler() {
+    for (source, expected) in [
+        (
+            "var log=[]; try { Array.fromAsync({get length(){throw 7;}}) \
+         .catch(e=>log.push(e)); } catch(e) { log.push('outer'); } log",
+            "7",
+        ),
+        (
+            "var log=[]; try { Array.fromAsync({length:1,get 0(){throw 8;}}) \
+         .catch(e=>log.push(e)); } catch(e) { log.push('outer'); } log",
+            "8",
+        ),
+    ] {
+        let out = run(source);
+        assert!(out.completed, "{:?}", out.halt);
+        assert_eq!(out.result, expected);
+    }
+}
