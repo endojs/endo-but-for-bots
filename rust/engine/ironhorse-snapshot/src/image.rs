@@ -456,7 +456,7 @@ pub struct MachineImage {
     pub intl: IntlTables,
     /// `ITER`: the built-in iterator cursors (ledger), owner-ascending.
     pub iterators: Vec<IteratorRow>,
-    /// `NFLR`: the installed-names floor (wave-6 W6-7), when it
+    /// `NFLR`: the installed-names floor, when it
     /// traveled. `None` — a pre-floor snapshot — restores to the
     /// conservative full-table default.
     pub name_floor: Option<u32>,
@@ -631,7 +631,7 @@ impl MachineImage {
     /// id-space unification) and not a `symbols` pair (the SYMB atom now
     /// carries every minted symbol-key id) — or `None` if every stored id
     /// resolves. The persist/adopt paths treat a hit as
-    /// [`crate::store::StoreError::Corrupt`]: an unregistered id maps to
+    /// [`SnapshotError::Corrupt`]: an unregistered id maps to
     /// nothing on resume, and honest minting cannot produce one, so it
     /// can only be torn or crafted bytes. Free slots are skipped — a
     /// stale record on the free list names nothing.
@@ -639,8 +639,8 @@ impl MachineImage {
     /// Asking the IMAGE rather than the live machine's mint counter is
     /// what makes the answer survive a round trip: the counter is small
     /// state a resume restores verbatim, but a counter says only that
-    /// minting HAPPENED, not that an id was stored (review wave 5's
-    /// false-positive lesson) — and a crafted image lies about its
+    /// minting HAPPENED, not that an id was stored — and a crafted image
+    /// can lie about its
     /// counter anyway. The stored ids are the evidence.
     pub fn stored_unregistered_key_id(&self) -> Option<u16> {
         let registered = self.symbols.id_set();
@@ -748,8 +748,7 @@ impl MachineImage {
         self
     }
 
-    /// Attach the installed-names floor (wave-6 W6-7; the `NFLR`
-    /// atom). The snapshot surface calls this with the live machine's
+    /// Attach the installed-names floor (the `NFLR` atom). The snapshot surface calls this with the live machine's
     /// floor so a resumed machine's partial install passes re-consider
     /// exactly the ids the live machine's would. CANONICALIZED: a floor
     /// AT the table length is the restore default, so it is stored (and
@@ -804,9 +803,8 @@ pub(crate) fn decode_strings(p: &[u8]) -> Result<Vec<String>, SnapshotError> {
         i += 4;
         // checked_add: `len` is attacker-sized (a full u32), so on a
         // 32-bit usize `i + len` can wrap past the gate and panic at
-        // the slice below instead of returning the structured error
-        // (wave-3 finding; the `i + 4` advances elsewhere cannot wrap
-        // because `i` never exceeds `p.len()`).
+        // the slice below instead of returning the structured error.
+        // The `i + 4` advances elsewhere follow a successful four-byte read.
         let end = i
             .checked_add(len)
             .ok_or(SnapshotError::Corrupt("string list entry body"))?;
@@ -856,9 +854,8 @@ pub(crate) fn decode_names(p: &[u8]) -> Result<Vec<SymbolName>, SnapshotError> {
         i += 4;
         // checked_add: `len` is attacker-sized (a full u32), so on a
         // 32-bit usize `i + len` can wrap past the gate and panic at
-        // the slice below instead of returning the structured error
-        // (wave-3 finding; the `i + 4` advances elsewhere cannot wrap
-        // because `i` never exceeds `p.len()`).
+        // the slice below instead of returning the structured error.
+        // The `i + 4` advances elsewhere follow a successful four-byte read.
         let end = i
             .checked_add(len)
             .ok_or(SnapshotError::Corrupt("string list entry body"))?;
@@ -945,9 +942,8 @@ fn decode_heap(p: &[u8]) -> Result<(Vec<Slot>, Vec<u32>, u32), SnapshotError> {
     // checked_mul, not `*`: on a 32-bit usize the product can wrap,
     // and a wrapped `want` would satisfy the truncation gate below
     // while `slot_count` stays attacker-sized — falsifying the bound
-    // the `seen` scratch depends on (review finding; latent until a
-    // 32-bit/wasm port, but the comment below claims the bound on
-    // every target, so make it true on every target).
+    // the `seen` scratch depends on. The scratch bound must hold on
+    // every target, including 32-bit hosts.
     let want = slot_count
         .checked_mul(SLOT_RECORD_BYTES)
         .ok_or(SnapshotError::Corrupt("HEAP record count"))?;
@@ -1022,7 +1018,7 @@ impl<'a> Cursor<'a> {
     }
     fn bytes(&mut self, len: usize) -> Result<&'a [u8], SnapshotError> {
         // checked_add: `len` is attacker-sized, so `i + len` can wrap
-        // on 32-bit targets (the wave-3 class the string decoder guards).
+        // on 32-bit targets, just as in `decode_strings`.
         let end = self
             .i
             .checked_add(len)
@@ -1155,8 +1151,7 @@ pub(crate) fn decode_arrays(p: &[u8]) -> Result<Vec<ArrayImage>, SnapshotError> 
             let index = c.u32()?;
             let value = c.slot()?;
             // Strictly-ascending ITEM indices, for the same reason the
-            // owner check below exists — one level deeper, which wave 4
-            // missed. `restore_bulk_side_tables` inserts items into a
+            // owner check below exists. `restore_bulk_side_tables` inserts items into a
             // `BTreeMap`, so a crafted duplicate or out-of-order pair is
             // silently DEDUPED and RE-SORTED by a resume: items
             // [(1,10),(1,11)] come back as one item, and [(3,30),(1,10)]
@@ -1165,9 +1160,9 @@ pub(crate) fn decode_arrays(p: &[u8]) -> Result<Vec<ArrayImage>, SnapshotError> 
             // import∘export identity the CAS key rests on.
             //
             // Note the plain `write_machine(read_machine(b))` round trip
-            // IS idempotent for these, which is exactly why the wave-4
-            // test missed it: the divergence only appears once the image
-            // has passed through a live `Interp` (review wave 5).
+            // IS idempotent for these: the divergence only appears once the
+            // image has passed through a live `Interp`. See
+            // `decode_rejects_non_ascending_array_item_indices`.
             if prev_index.is_some_and(|prev| index <= prev) {
                 return Err(SnapshotError::Corrupt(
                     "arrays side table: item indices not strictly ascending",
@@ -1181,7 +1176,7 @@ pub(crate) fn decode_arrays(p: &[u8]) -> Result<Vec<ArrayImage>, SnapshotError> 
         // a value that `arr.length` says is not there, and a resume
         // re-emitting the row would have to either drop the item or
         // silently grow the length, so import∘export stops being the
-        // identity the CAS key rests on (review wave 5).
+        // identity the CAS key rests on.
         //
         // What is deliberately NOT checked here is `length` itself. A
         // sparse array is ordinary JS state, so a row declaring a huge
@@ -1197,8 +1192,7 @@ pub(crate) fn decode_arrays(p: &[u8]) -> Result<Vec<ArrayImage>, SnapshotError> 
         // Bounding the LAST index bounds the row: the indices are already
         // strictly ascending, so `last < length` gives every index a
         // distinct value below `length`, hence `item_count <= length` with
-        // no separate count check. (A count check was written first and
-        // bite-checking found it unreachable behind these two.)
+        // no separate count check.
         if let Some(last) = prev_index {
             if last >= length {
                 return Err(SnapshotError::Corrupt(
@@ -1206,7 +1200,7 @@ pub(crate) fn decode_arrays(p: &[u8]) -> Result<Vec<ArrayImage>, SnapshotError> 
                 ));
             }
         }
-        // Strictly-ascending owners (wave-4 P2): the writer emits them
+        // Strictly-ascending owners: the writer emits them
         // owner-sorted and unique (one row per instance). Enforcing it
         // at decode rejects a crafted duplicate — whose restore would
         // displace the first row's `ArrayData` WITHOUT decrementing its
@@ -1276,7 +1270,7 @@ pub(crate) fn decode_collections(p: &[u8]) -> Result<Vec<CollectionImage>, Snaps
                 "collections side table: owners not strictly ascending",
             ));
         }
-        // The rehash geometry (review finding 9): `table_length`
+        // The rehash geometry: `table_length`
         // mirrors XS's power-of-two address array
         // (`fxResizeEntries` / the vm's `collection_table_resize`),
         // which the engine only ever doubles or halves between
@@ -1429,8 +1423,8 @@ pub(crate) fn decode_registry(p: &[u8]) -> Result<Vec<RegistryImage>, SnapshotEr
         // `Symbol.for('aaa') === Symbol.for('bbb')` TRUE and leave
         // `Symbol.keyFor` answering the wrong key. Both indices are in
         // bounds and the registry is a GC root, so nothing downstream
-        // catches it — it is a silent spec break, not a crash (review
-        // wave 5). Linear scan: one row per registered symbol, decoded
+        // catches it. See `decode_rejects_a_registry_whose_keys_share_a_descriptor`.
+        // Linear scan: one row per registered symbol, decoded
         // once at an untrusted boundary, where clarity beats a hash set.
         if out
             .iter()
@@ -3410,7 +3404,7 @@ pub(crate) fn decode_intl(p: &[u8]) -> Result<IntlTables, SnapshotError> {
         for _ in 0..un {
             let k = text(&mut c)?;
             let val = text(&mut c)?;
-            // Canonical bytes only (review): the writer iterates the
+            // Canonical bytes only: the writer iterates the
             // `BTreeMap` in strictly-ascending key order, so a
             // duplicated or unordered key can only be crafted — and
             // silently accepting it re-canonicalizes, breaking the
@@ -3552,11 +3546,9 @@ pub(crate) fn decode_intl(p: &[u8]) -> Result<IntlTables, SnapshotError> {
             // Boundaries TILE the input left to right: the engine's
             // `segment_units` emits `(previous boundary, boundary)`
             // pairs, so every start is exactly the previous END and
-            // every segment is non-empty. The pre-review check
-            // compared against the previous START, so overlapping
-            // ranges decoded silently (review); anything that does not
-            // tile is crafted bytes the consuming natives would index
-            // on.
+            // every segment is non-empty. Comparing previous STARTS instead
+            // would admit overlapping ranges. Anything that does not
+            // tile is crafted bytes the consuming natives would index on.
             if start != prev_end || end <= start || end > units.len() {
                 return Err(SnapshotError::Corrupt(
                     "intl side table: segment boundaries do not tile their input",
@@ -3882,34 +3874,6 @@ static EMPTY_PRIVATE_ELEMENTS: ironhorse_vm::PrivateElementSnapshot =
         accessors: Vec::new(),
     };
 
-/// Every slot index and chunk offset a decoded image can carry, checked
-/// against the geometry the image itself declares.
-///
-/// This is the SEMANTIC gate the byte-level decoders lack: a crafted
-/// index is rooted or walked by the collector and hits an unchecked
-/// `Vec` index — a RELEASE panic on the first `collect_garbage`. Wave 4
-/// closed only the three side tables; review wave 5 showed the class is
-/// wider, and that the narrow version missed containers with NO side
-/// table at all (a 238-byte container panicked at `value.rs`'s
-/// `marks[i]`). So the walk now covers, against `slot_count`:
-///
-/// - every `HEAP` slot's `next` link and `Reference` payload,
-/// - every `STAC` slot's ditto,
-/// - side-table owners, array item values, collection entry keys AND
-///   values, and registry descriptors;
-///
-/// and, against `chunk_len`, every `String`/`BigInt` chunk offset on any
-/// of those slots — invisible to `each_ref_slot`, and reachable at
-/// compaction from a side table even when the owner is DEAD, because
-/// `external_chunk_refs` walks the tables unconditionally.
-///
-/// `SlotIndex::NULL` is skipped, matching `SideRefCounts::page_of`: a
-/// null reference is an absence, not an out-of-arena index, and scoring
-/// it as one would refuse honest images.
-///
-/// `heap` is empty on the store path, where rows are not read at
-/// validation time; those records are bounds-checked as they fault
-/// ([`crate::machine`]'s page source).
 /// The chunk arena's per-payload header width (`value.rs`'s private
 /// `CHUNK_HEADER`). A payload offset always sits this far above its
 /// header, which is why `0` is not a valid offset.
@@ -4141,6 +4105,19 @@ pub(crate) fn check_image_slot_bounds(
     )
 }
 
+/// Check stored references against the declared slot and chunk geometry.
+/// The caller's roster-generated visitor covers live heap records, stack
+/// slots, and side-table Slot payloads; `check_rostered_bounds!` checks row
+/// owners and the remaining typed fields. See `stored_slots.rs` and
+/// `image_bounds_reject_out_of_arena_indices`.
+///
+/// Reference targets must be live and in range. Null references and chunk
+/// offsets represent absence and are skipped. Non-null chunk offsets must
+/// leave room for their allocation header; `Slot::each_ref_slot` alone
+/// cannot establish this because it does not visit chunk offsets.
+///
+/// Small-state validation supplies an empty heap on the lazy store path;
+/// the VM's fault installer checks heap records when their pages are read.
 #[allow(clippy::too_many_arguments)]
 #[deny(unused_variables)]
 fn check_stored_bounds(
@@ -4157,8 +4134,7 @@ fn check_stored_bounds(
     const OOC: SnapshotError = SnapshotError::Corrupt("chunk offset out of arena bounds");
     const FREE: SnapshotError = SnapshotError::Corrupt("side table names a free slot");
     // The free set, as a bitmap (entries already range-checked and
-    // deduplicated by both decode paths). It cuts BOTH ways (review
-    // findings 2+3): a freed heap record is OPAQUE — the sweep does not
+    // deduplicated by both decode paths). It cuts BOTH ways: a freed heap record is OPAQUE — the sweep does not
     // scrub it and chunk compaction remaps MARKED slots only, so an
     // honest post-GC snapshot legitimately holds freed records whose
     // stale chunk offsets sit outside the compacted arena, and nothing
@@ -4227,8 +4203,7 @@ pub(crate) fn decode_stack(p: &[u8]) -> Result<Vec<Slot>, SnapshotError> {
     // checked_mul for the same reason as `decode_heap`'s twin gate: on
     // a 32-bit usize the product can wrap to a small `want` that
     // satisfies the truncation gate below, silently short-decoding the
-    // stack (wave-3 finding — the decode_heap fix was not mirrored
-    // here; latent until a 32-bit/wasm port, closed on every target).
+    // stack. Both gates must reject overflow on every target.
     let want = count
         .checked_mul(SLOT_RECORD_BYTES)
         .ok_or(SnapshotError::Corrupt("STAC record count"))?;
@@ -4576,7 +4551,7 @@ mod tests {
     fn decode_rejects_non_ascending_side_table_owners() {
         // A crafted ARRY with two rows for the same owner: restore
         // would displace the first `ArrayData` without decrementing its
-        // side-ref counts (wave-4 P2). Decode must reject it.
+        // side-ref counts. Decode must reject it.
         let dup = vec![
             ArrayImage {
                 owner: 3,
@@ -5159,9 +5134,8 @@ mod tests {
                 "intl side table: segment boundaries do not tile their input"
             ))
         );
-        // Overlapping ranges (review): a start must equal the previous
-        // END — the pre-review check compared previous STARTS, so
-        // (0,2),(1,3) decoded silently.
+        // Overlapping ranges: a start must equal the previous END.
+        // Comparing previous STARTS would admit (0,2),(1,3).
         let mut t = IntlTables::default();
         t.segments = vec![(
             1,
@@ -5195,8 +5169,8 @@ mod tests {
             ))
         );
         // Unicode-extension keys: the writer emits BTreeMap order, so
-        // unordered or duplicated keys are non-canonical crafted bytes
-        // (review: silently re-canonicalizing broke byte identity).
+        // unordered or duplicated keys are non-canonical crafted bytes.
+        // Silently re-canonicalizing would break byte identity.
         let mut unicode = std::collections::BTreeMap::new();
         unicode.insert("ca".to_string(), "vx".to_string());
         unicode.insert("nu".to_string(), "wy".to_string());
@@ -5577,11 +5551,10 @@ mod tests {
 
     #[test]
     fn image_bounds_reject_out_of_arena_indices() {
-        // Wave 4 closed the three side tables; wave 5 showed the class is
-        // wider — a container with NO side table at all panicked the
-        // collector via an unchecked `marks[i]`. Each arm below is a
-        // shape a reviewer actually crafted and reached a release panic
-        // (or an abort) with. slot_count = 4, chunk_len = 64 throughout.
+        // Out-of-bounds references must be rejected even when the image
+        // has no side tables: the collector indexes its marks by the
+        // referenced slot. Exercise arena and side-table paths with
+        // slot_count = 4, chunk_len = 64 throughout.
         let ok = |heap: &[Slot], stack: &[Slot]| {
             check_image_slot_bounds(
                 heap,
@@ -5607,7 +5580,7 @@ mod tests {
         };
         let refd = |i: u32| Slot::of(Kind::Reference, Payload::Reference(SlotIndex(i)));
 
-        // --- the wave-5 additions: heap, next, stack, symbols, chunks ---
+        // --- heap, next, stack, symbols, chunks ---
         assert!(
             ok(&[refd(9)], &[]).is_err(),
             "heap Reference past the arena"
@@ -5630,7 +5603,7 @@ mod tests {
             "chunk offset below the header"
         );
 
-        // --- the wave-4 arms, still enforced ---
+        // --- side-table owners and values ---
         let bad_desc = [RegistryImage {
             key: b"k".to_vec(),
             descriptor: 9,
@@ -5738,9 +5711,8 @@ mod tests {
             &[],
         )
         .is_err());
-        // Collections were passed `&[]` in every wave-4 case, so that
-        // whole branch never executed (wave 5, llvm-cov). Exercise both
-        // the key and the value side.
+        // Non-empty collections must exercise both the key and the value
+        // checks; empty fixtures cannot detect a missing traversal.
         let bad_key = [CollectionImage {
             owner: 1,
             kind: 0,
@@ -5910,7 +5882,7 @@ mod tests {
             .is_ok(),
             "freed records are opaque: stale bytes must not refuse an honest post-GC image"
         );
-        // The SAME records live: refused (the wave-5 rule unchanged).
+        // The SAME records live: refused by the bounds gate.
         assert!(
             gate(
                 &[Slot::undefined(), stale_chunk, stale_ref, Slot::undefined()],
@@ -5918,7 +5890,7 @@ mod tests {
                 &[]
             )
             .is_err(),
-            "live records keep the wave-5 refusals"
+            "live records must reject stale chunk offsets and dangling references"
         );
         // A side-table row owned by a free slot: refused by name.
         let row = [ErrorImage {
@@ -5938,7 +5910,7 @@ mod tests {
         assert!(gate(&[Slot::undefined(); 4], &row, &[]).is_ok());
     }
 
-    /// Review wave 5: the declared `length` must cover the row's items.
+    /// The declared `length` must cover the row's items.
     ///
     /// Note what this does NOT do: it does not bound `length` itself. A
     /// sparse array is ordinary JS state (`a[0] = 7; a.length = 2e8`), so
@@ -6338,8 +6310,7 @@ mod tests {
         slots.free(scratch);
 
         // The stack is EMPTY: `read_machine` enforces quiescence (a
-        // populated STAC cannot come from an honest writer — review
-        // finding 5), and honest writers only ever persist between
+        // populated STAC cannot come from an honest writer), and honest writers only ever persist between
         // cranks. The heap graph above already exercises reference,
         // closure, and string payload round-trips.
         let stack: Vec<Slot> = Vec::new();
@@ -6788,7 +6759,7 @@ mod tests {
             slots: vec![Slot::integer(9)],
             slot_free: vec![],
             slot_live: 1,
-            // Empty by the quiescence gate (review finding 5).
+            // Empty by the quiescence gate.
             stack: vec![],
             keys: vec!["k1".to_string(), "k2".to_string(), "".to_string()],
             names: vec!["Object".into(), "length".into()],
@@ -6868,7 +6839,7 @@ mod tests {
         }
     }
 
-    // --- malformed-atom decoder trophies (stage-6 child 4) ---
+    // --- malformed-atom decoder regressions ---
     //
     // A container whose list-count field is enormous but whose payload is
     // short must fail closed **promptly** — the reader must not pre-reserve a
@@ -6880,7 +6851,7 @@ mod tests {
     // clamp in `decode_strings`/`decode_u32s`/`decode_heap` is what makes them
     // return in microseconds; before it, each hung on a 16–100 GB allocation.
     // (The daemon restore path must fail closed on a corrupt snapshot, never
-    // crash the worker — job spec item 2.)
+    // crash the worker.)
 
     use crate::atom::AtomWriter;
 
