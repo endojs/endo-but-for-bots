@@ -83,7 +83,7 @@ impl From<LexError> for ParseError {
             } else {
                 ParseErrorKind::Lex(e.clone())
             },
-            message: e.to_string(),
+            message: e.kind.to_string(),
         }
     }
 }

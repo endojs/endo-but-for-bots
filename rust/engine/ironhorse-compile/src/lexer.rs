@@ -959,16 +959,15 @@ impl<'a> Lexer<'a> {
             match self.ch {
                 EOF => return Err(self.err(LexErrorKind::UnterminatedString)),
                 10 => {
-                    self.line += 1;
                     if c == b'`' as u32 {
                         raw.push('\n');
                         self.advance();
                     } else {
                         return Err(self.err(LexErrorKind::LineTerminatorInString));
                     }
+                    self.line += 1;
                 }
                 13 => {
-                    self.line += 1;
                     if c == b'`' as u32 {
                         raw.push('\n');
                         self.advance();
@@ -978,6 +977,7 @@ impl<'a> Lexer<'a> {
                     } else {
                         return Err(self.err(LexErrorKind::LineTerminatorInString));
                     }
+                    self.line += 1;
                 }
                 0x2028 | 0x2029 => {
                     self.line += 1;
