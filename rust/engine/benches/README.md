@@ -1298,3 +1298,22 @@ It does show placeholder ratios of 1.523x and 1.417x at the two smallest sizes.
 Every observation and the earlier rejection remain recorded.
 The decomposition is retained as incremental code work, but these measurements do
 not clear the failed pinned gate or establish a cause for its remaining failures.
+
+## Buffer and view subsystem extraction reconsidered
+
+[results/1a-buffer-reconsidered.json](results/1a-buffer-reconsidered.json) records
+41 methods moved into `interp/natives/buffer.rs` on `dbd480aec`, covering ArrayBuffer,
+typed arrays, DataView, Atomics, and their element-conversion helpers.
+Thirty-three methods retain parent-scoped caller access; the other helpers stay
+private.
+Comments now describe the existing BigInt paths, little-endian storage, and
+unsupported/refused outcomes, including `isLockFree`'s false result.
+Executable method bodies are unchanged.
+
+Fresh validation passes 1,494 engine tests and 116 SQLite tests, plus 51 VM source
+locks, seven snapshot locks, strict VM library Clippy, docs, and the math control.
+All 48 controls pass the unchanged pinned-baseline gate, with a maximum of 1.230x.
+The five direct controls range from 0.998x to 1.028x, with identical results and
+raw charges.
+Before aggregate measurements reuse the preceding Array candidate; its failed gate
+and paired diagnostic remain recorded without revision.
