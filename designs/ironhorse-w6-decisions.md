@@ -3,6 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-09-09 |
+| **Updated** | 2026-09-09 |
 | **Author** | kumavis (prompted) |
 | **Status** | Active |
 | **Source** | Architecture review workstream W6 (`rust/engine/architecture-review/2026-09-06/ARCHITECTURE-REVIEW.md`) |
@@ -17,7 +18,7 @@ this document exists: W6's own framing is that these questions "are currently
 being answered by accident," and an answer that lives only in a chat log is
 still being answered by accident.
 
-Standing at `1b130df7`:
+Baseline: `1b130df7`; decision 5 updated for Phase 1G at `96db92e23`.
 
 | # | Decision | State | Findings |
 |---|---|---|---|
@@ -25,7 +26,7 @@ Standing at `1b130df7`:
 | 2 | Engine trait | **Deferred** 2026-09-08, with a stated trigger | F068, F157 |
 | 3 | Integrity model | **Decided and implemented** before `f109e8f4` | F058, F015, F057 |
 | 4 | Determinism scope | **Decided** 2026-09-08 — vendor `libm`; blocked on coverage | F080, F081 |
-| 5 | GC schedule | **Open** — the last one, and it blocks the most code | F091, F010, F076, F090 |
+| 5 | GC schedule | **Decided** 2026-09-09 — engine-consumer policy; reclamation remains Phase 2B | F091, F010, F076, F090 |
 
 ## 1. Realm — decided: extract it
 
@@ -279,36 +280,177 @@ and `ironhorse-meter/src/lib.rs` opens with "one canonical, platform-independent
 SHA-256 identity," which is true of the weights and reads as a claim about
 execution. Whichever way the implementation goes, those three have to agree.
 
-## 5. GC schedule — open, and it blocks the most code
+## 5. GC schedule — decided: engine-consumer policy
 
-Not in the review's W6 four; filed as F091, under determinism. It behaves like a
-W6 item: a policy question, answerable in a meeting, blocking implementation.
+**Decision (Phase 1G, 2026-09-09): GC scheduling is an engine-consumer concern
+(EMBEDDER policy).**
+Endor and Thixotrope may choose to collect after quiescing a message delivery.
+Other consumers may choose pressure-, idle-, or time-based cadences, or explicitly
+request collection.
+Those are legitimate consumer choices; the engine does not impose one release-fixed
+schedule on all of them.
 
-**Half of it landed.** `cranks` is no longer unauthenticated: it is bound into
-both the manifest root and the seal, and `validate_store` recomputes both at
-open, so a length-preserving flip at rest now fails closed twice over.
+This settles the ownership question in F091 and unblocks specification of Phase 2B.
+The engine provides collection mechanics, safe collection boundaries, and the
+information consumers need to schedule collection.
+The consumer decides when to request it and what scheduling guarantees its own
+application requires.
+Phase 1G changes no runtime code and does not touch `interp.rs`, which belongs
+exclusively to 1A during the freeze.
 
-**What remains is the policy question.** `collect_every` is an embedder-chosen
-field of `CadencePolicy` rather than a release constant stamped beside
-`COST_TABLE_VERSION`, and a manual `PersistentMachine::collect` lets an operator
-fork two honestly-configured replicas' heaps by action alone. The divergence is
-recorded in the sealed `collections` counter; nothing refuses it.
+### Current behavior and the determinism boundary
 
-**The question: is the GC schedule release policy or embedder policy?**
+At `96db92e23`, `CadencePolicy::collect_every` in
+`rust/endo/src/ironhorse_engine.rs` is embedder-selected (default `0`).
+`PersistentMachine::eval` computes `collect_due` from completed cranks and that
+cadence, while `PersistentMachine::collect` accepts an explicit caller request.
+Consumer-selected cadence and explicit collection are consistent with this decision;
+they are not defects to replace with a GC schedule stamped beside
+`COST_TABLE_VERSION`.
 
-It gates three high findings and the whole reclamation story — F010 and F076
-(nothing in any wired configuration reclaims the chunk arena;
-`Interp::collect_garbage` still has zero production callers, the single in-source
-call site being `#[cfg(test)]`-gated) and F090 (`WeakMap`/`WeakSet` are strong).
-Firing collection at an allocation threshold *is* setting consensus-visible
-policy, so the implementation cannot start until this is answered.
+Collection changes free-list order and subsequent allocation.
+Equal guest inputs and the same engine release alone therefore do not promise
+identical durable heaps under different consumer collection schedules.
+The sealed `collections` counter records events; it does not make independently
+chosen events agree.
+A consumer that requires replica-identical heaps must coordinate collection events
+and relevant policy as part of its own replicated execution contract, including
+recovery and resume.
+A consumer without that requirement may use local pressure, idle time or wall time.
+This decision does not impose a consensus protocol on all engine consumers.
 
-This is also the right moment to answer it, for a reason that was not true
-before: `rust/engine/benches/results/linux-reference-controls.json` now records
-what collection costs, and it shows the free and partial phases regressing with
-heap size (1.110x / 1.193x / 1.254x at 5,000 / 20,000 / 80,000 slots) while
-per-slot sweep cost is unchanged. Reclamation work can now be measured rather
-than guessed at.
+The already-landed half of F091 stays intact: `cranks` is bound into the manifest
+root and seal, both recomputed by `validate_store` at open.
+The recorded cadence is currently durable first-writer-wins state: open and succession
+checks refuse mismatches, `StoreSession` has no cadence setter, and migration
+currently does not rewrite it.
+These are existing persistence constraints, not evidence that the engine release
+owns scheduling.
+Schema-27/28 validation, legacy root verification, and the two manifest hashes
+remain carried costs.
+
+### Contract for Phase 2B
+
+1. **Separate scheduling from collection mechanics.**
+   Expose supported collection operations and their safe-point requirements so
+   consumers can choose their own cadence.
+   Quiescence after a message delivery is a useful consumer boundary; it is not a
+   mandatory schedule for every engine user.
+   Pressure accounting or notifications can inform the consumer without silently
+   choosing a consensus-visible collection event inside the engine.
+   Phase 2B must specify supported invocation boundaries and preserve all live roots;
+   an unsafe request must be refused or deferred to a documented safe point.
+   Idle/time/pressure triggers do not authorize collection racing guest execution.
+
+2. **Keep explicit collection available to consumers.**
+   Do not remove `PersistentMachine::collect` merely because callers can choose
+   different schedules, or require `collect_every` to equal a release constant.
+   The current crank cadence is one scheduling option, not the definition of GC
+   policy for every consumer.
+   Consumer adapters may impose narrower rules, including deterministic post-delivery
+   collection, when their application's guarantees require them.
+   Such rules belong to those adapters or their protocol, not a universal engine gate.
+
+3. **Preserve persistence integrity while allowing policy evolution.**
+   Existing store cadence checks cannot simply be bypassed or normalized on open.
+   If a consumer needs to change an existing store's cadence or persist a richer
+   scheduling policy, define an explicit validated transition or migration that
+   verifies the old integrity state and records the new state.
+   A consumer-owned policy can be authenticated without becoming release-owned.
+   Whether a consumer must persist its scheduling clock across container/store resume
+   depends on its contract; document what each path carries or resets.
+   No new GC release-identity field or migration is required solely to settle this
+   ownership decision.
+
+4. **Make collection outcomes and recovery usable by the consumer.**
+   Preserve heap integrity and the documented durability/rewind contract on failure.
+   Report whether a delivery committed and whether its requested collection completed
+   so recovery does not replay an already-committed delivery or double-count an event.
+   Today scheduled failures are latched by `failed_collections` after the crank has
+   become durable; consumer code must be able to act on that outcome.
+   The consumer chooses retry, continued execution, or stopping within the engine's
+   safe recovery contract.
+   A replicated consumer must coordinate that choice if it requires identical heaps;
+   a mandatory retry-before-execution rule is not imposed on unrelated consumers.
+
+5. **State the guarantees of each collector.**
+   Collector algorithms and snapshot formats still have release compatibility
+   obligations; consumer scheduling does not remove them.
+   In particular, `generational_collect` is documented as not resume-invariant:
+   its `gen_dirty` candidate set resets at resume.
+   Do not promise replica-identical heaps across resume for a consumer using that
+   collector until its candidate state is made deterministic across that boundary,
+   or that consumer's contract otherwise accounts for it.
+   Preserve the distinction between memory safety, guest-visible semantics, and
+   byte-identical persistence; collection-sensitive features need explicit semantics.
+
+### Acceptance evidence required of Phase 2B
+
+Use oracle-free tests in `ironhorse-vm/tests/` for allocation/reclamation behavior,
+with persistence and consumer-boundary tests in the snapshot and Endo suites.
+Run the applicable tests on Linux and macOS, including release mode.
+
+- Exercise explicit collection at supported safe points and refusal/defer behavior
+  at unsupported points; preserve roots and live state through collection.
+- Demonstrate independently chosen post-delivery, pressure, idle and timed requests
+  with controlled inputs or a fake clock, without depending on real elapsed time.
+  Verify that engine mechanics do not substitute an unsolicited global cadence.
+- For consumers promising replica-identical execution, pin independent expected
+  collection sequences and compare results, computrons and canonical heap state
+  under the same coordinated schedule across continuous execution and resume.
+  Compare roots/seals only when persistence histories are also identical.
+  Different schedules do not carry an unconditional heap-byte equality promise.
+- Fault-inject collection/checkpoint failures and verify documented heap integrity,
+  counters, delivery durability, and the consumer's chosen recovery behavior.
+- Preserve legacy root/seal and cadence-mismatch refusal tests; if policy transitions
+  are added, test their explicit compatibility and migration rules.
+
+F010, F076 and F090 remain implementation work: choosing consumer policy does not
+itself reclaim chunks or implement weak collections.
+Retain the measured collection baselines in
+`rust/engine/benches/results/linux-reference-controls.json` for evaluating 2B and
+informing consumers' scheduling choices.
+
+## 6. Phase 1G commissioned review — derived machinery before 2A
+
+**Commissioned 2026-09-09 against `96db92e2308f0a3712dd0faed7b8663f00c42d29`.**
+An independent subagent completed the initial bounded pass recorded in
+[the commissioned report](../rust/engine/reviews/2026-09-09-derived-machinery.md).
+It confirmed no new production defect in the inspected paths; its unreviewed
+mutation routes, SQLite coverage and aliasing boundary remain explicit follow-ups.
+The commission covers machinery added since the original architecture review,
+whose re-verifications do not substitute for a correctness review of these paths.
+Read the implementer records W3, W4 and PERFORMANCE-FIXES, and the reviewer-side
+PERFORMANCE-TRADEOFFS, under `rust/engine/architecture-review/2026-09-06/`.
+Locate current constructs by content, never by the historical review's line numbers.
+
+| Scope (paths relative to `rust/engine/`) | Review obligation |
+| --- | --- |
+| `ironhorse-vm/src/classification.rs` | Brand precedence and derived classification after insert/remove, slot reuse, GC and restore; compare with authoritative side tables. |
+| `ironhorse-vm/src/property_index.rs` | Owner/dependency invalidation through every mutation path, chain edits, slot reuse, collection/remapping and restore; cold/warm lookup equivalence. |
+| `ironhorse-vm/src/snapshot_dirty.rs` | Complete section inventory, mutation interception, acknowledgement only after durable success, rewind/restore and retained dirty state after failure. |
+| `ironhorse-vm/src/bulk.rs` | Bulk-operation semantic and charge equivalence, partial failure and bypasses of mutation/invalidation hooks. |
+| `ironhorse-vm/src/cost.rs`, `meter_consistency.rs`, `source_scan.rs` | Cost routing and reconciliation completeness, syntactic scanner blind spots, fail-closed behavior and independent expected values. |
+| `ironhorse-meter/` | Version/digest/release-pin integrity, arithmetic bounds, compiler/runtime shared accounting and compatibility refusals. |
+| `ironhorse-text/` | UTF-16 indexing, surrogate and boundary behavior, allocation/length bounds and agreement across callers. |
+| Schema-28 migration in `ironhorse-snapshot/`, including `store_sections.rs`, and backend consumers | Stable persisted section IDs, old-root verification before conversion, missing/duplicate/unknown sections, atomicity, canonical round trips and memory/file/SQLite agreement. |
+
+Trace callers and mutation sites as necessary, including reading `interp.rs`;
+editing that file remains forbidden during Phase 1.
+The retained owner prefilter, reverse-dependency indexes and duplicate section
+inventories are carried costs whose invariants must be reviewed, not deleted.
+
+**Deliverable:** a separate report with pinned revision, inspected coverage,
+severity/confidence, current content anchors, reproducible evidence or clearly
+labelled hypotheses, and oracle-free regression recommendations.
+Record uninspected paths and unexecuted tests explicitly; absence of a finding is
+not proof of invalidation completeness.
+Keep the historical architecture review unchanged.
+Before 2A relies on this machinery, triage the report and resolve or explicitly
+accept its relevant correctness blockers; re-review changed paths if its base
+has moved.
+This commission is not a claim that the machinery is certified or its findings
+are fixed by Phase 1G.
 
 ## Prompt
 
@@ -320,3 +462,16 @@ Written after the fourth revision of the architecture review, when two decisions
 answered in conversation — the Realm extraction and the `libm` provider feature —
 were found to exist nowhere in the repository and were consequently re-presented
 to the maintainer as open questions.
+
+### Phase 1G prompt
+
+> Answer whether the GC schedule is release policy or embedder policy (F091),
+> record the answer here, and commission a scoped review of the derived machinery
+> added since the architecture review, including the meter/text crates and
+> schema-28 migration, before Phase 2A builds on it.
+
+### GC ownership clarification
+
+> GC is an engine consumer concern.
+> Endor and Thixotrope may decide to run GC after quiescing a message delivery.
+> Others may want a pressure-, idle-, or time-based cadence.
