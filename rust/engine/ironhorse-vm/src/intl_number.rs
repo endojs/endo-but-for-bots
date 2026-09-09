@@ -519,38 +519,54 @@ fn apply_rounding_increment(
     // multiple of `increment`, then lay it back out.
     let mut scaled = dec.clone();
     scaled.scale_pow10(max_frac as i32);
-    // Round `scaled` to an integer, then to a multiple of `increment`.
-    let keep = scaled.exponent + 1;
-    let integer = if keep <= 0 {
-        round_to_significant(&scaled, 0, mode, negative)
+    // Long division keeps the unbounded magnitude in decimal digits. Only the
+    // remainder is numeric: it is below the ECMA-402 increment (at most 5000).
+    // Do not first round to an integer: that double-rounds values near a tie.
+    let integer_len = (scaled.exponent + 1).max(0) as usize;
+    let mut digits = Vec::with_capacity(integer_len.max(1));
+    let mut rem = 0u32;
+    let mut quotient_odd = false;
+    for i in 0..integer_len {
+        let digit = scaled.digits.get(i).copied().unwrap_or(0);
+        digits.push(digit);
+        let partial = rem * 10 + u32::from(digit);
+        quotient_odd = (partial / increment) % 2 == 1;
+        rem = partial % increment;
+    }
+    if digits.is_empty() {
+        digits.push(0);
+    }
+    let fractional_nonzero = scaled
+        .digits
+        .iter()
+        .enumerate()
+        .any(|(i, &d)| i as i32 > scaled.exponent && d != 0);
+    let first_fraction = if scaled.exponent < -1 {
+        0
     } else {
-        round_to_significant(&scaled, keep as usize, mode, negative)
+        scaled.digits.get(integer_len).copied().unwrap_or(0)
     };
-    // Turn `integer` into a u128 (values in these tests stay well within range).
-    let mut n: u128 = 0;
-    for &d in &integer.digits {
-        n = n * 10 + d as u128;
-    }
-    // Number of integer digits implied by exponent (there may be trailing
-    // zeros beyond the significant digits).
-    if !integer.digits.is_empty() {
-        let total_len = integer.exponent + 1;
-        let extra = total_len - integer.digits.len() as i32;
-        for _ in 0..extra.max(0) {
-            n *= 10;
+    let later_fraction = scaled
+        .digits
+        .iter()
+        .enumerate()
+        .any(|(i, &d)| i as i32 > scaled.exponent + 1 && d != 0);
+    use std::cmp::Ordering::*;
+    let twice = rem * 2;
+    let ord = if twice == increment && fractional_nonzero {
+        Greater
+    } else if twice + 1 == increment {
+        // An odd increment puts the half-way point at a fractional .5.
+        match first_fraction.cmp(&5) {
+            Equal if later_fraction => Greater,
+            other => other,
         }
-    }
-    // Round n to nearest multiple of increment (respecting the mode via the
-    // remainder). Because `dec` already carries the exact value we re-round.
-    let inc = increment as u128;
-    let q = n / inc;
-    let rem = n % inc;
-    let up = if rem == 0 {
+    } else {
+        twice.cmp(&increment)
+    };
+    let up = if rem == 0 && !fractional_nonzero {
         false
     } else {
-        let twice = rem * 2;
-        let ord = twice.cmp(&inc);
-        use std::cmp::Ordering::*;
         match mode {
             RoundingMode::Ceil => !negative,
             RoundingMode::Floor => negative,
@@ -560,12 +576,40 @@ fn apply_rounding_increment(
             RoundingMode::HalfFloor => matches!(ord, Greater) || (ord == Equal && negative),
             RoundingMode::HalfExpand => matches!(ord, Greater | Equal),
             RoundingMode::HalfTrunc => matches!(ord, Greater),
-            RoundingMode::HalfEven => matches!(ord, Greater) || (ord == Equal && (q % 2 == 1)),
+            RoundingMode::HalfEven => matches!(ord, Greater) || (ord == Equal && quotient_odd),
         }
     };
-    let result = (q + if up { 1 } else { 0 }) * inc;
-    // Lay `result` back out with `max_frac` fraction places.
-    let mut s = result.to_string();
+    // Adjust by a bounded remainder, carrying/borrowing in decimal. This also
+    // handles a carry beyond f64::MAX without any machine-integer overflow.
+    if up {
+        let mut carry = increment - rem;
+        for digit in digits.iter_mut().rev() {
+            let sum = u32::from(*digit) + carry;
+            *digit = (sum % 10) as u8;
+            carry = sum / 10;
+        }
+        while carry != 0 {
+            digits.insert(0, (carry % 10) as u8);
+            carry /= 10;
+        }
+    } else {
+        let mut borrow = rem;
+        for digit in digits.iter_mut().rev() {
+            let subtract = borrow % 10;
+            borrow /= 10;
+            if u32::from(*digit) < subtract {
+                *digit = (u32::from(*digit) + 10 - subtract) as u8;
+                borrow += 1;
+            } else {
+                *digit -= subtract as u8;
+            }
+        }
+        debug_assert_eq!(borrow, 0);
+    }
+    // Lay the rounded digits back out with `max_frac` fraction places.
+    let mut s: String = digits.iter().map(|&d| char::from(b'0' + d)).collect();
+    let first = s.find(|c| c != '0').unwrap_or(s.len() - 1);
+    s.drain(..first);
     while (s.len() as u32) <= max_frac {
         s.insert(0, '0');
     }
