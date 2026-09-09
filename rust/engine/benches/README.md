@@ -523,3 +523,25 @@ Every adjacent elapsed ratio remains visible, while adjacent meter checks, exact
 receipts, and the separate 1.25x cross-revision controls remain unchanged.
 The checker rejects incomplete or invalid samples and has synthetic linear,
 cache-transition, superlinear, and quadratic regression cases.
+
+## Interpreter decomposition: GC roster increment
+
+[results/1a-gc-roster.json](results/1a-gc-roster.json) retains the first GC module
+split's three candidate runs, including unsuccessful comparisons.
+The roster generates hook borrows and both collectors' pruning from one inventory;
+it also fixes full GC's omission of counted ordinary index-property rows.
+The source digest identifies the measured worktree, and the reference is `96db92e23`.
+This is an incremental measurement; the remaining 1A decomposition still needs its
+final comparison.
+
+An initial measurement-only run against the saved before run showed broad slowdowns,
+including unchanged controls.
+Its raw runner result did not enforce thresholds; the artifact separately records all
+nine ratios above the 1.25x floor.
+A fresh reference/candidate pair did not reproduce the large GC regression, but its
+slot-allocation control crossed the unchanged 1.25x floor at 1.300x.
+A subsequent candidate repeat passed all 48 controls against that fresh reference:
+slot allocation was 1.010x, dispatch 0.959x, and full-first, steady full, and partial
+collection at 80,000 slots were 1.020x, 1.016x, and 0.980x respectively.
+No inlining or other performance tuning was applied between these runs.
+These samples record the delta and host variability; they do not establish a speedup.
