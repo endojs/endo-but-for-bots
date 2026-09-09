@@ -9194,3 +9194,177 @@ mod intl_bound_decoder_refusals {
         );
     }
 }
+
+#[cfg(test)]
+mod generator_decoder_refusals {
+    use super::*;
+    use ironhorse_vm::{AsyncRow, GeneratorRow, SavedFrameRow, SavedJumpRow};
+
+    fn frame() -> SavedFrameRow {
+        SavedFrameRow {
+            locals: vec![],
+            id_map: vec![],
+            args: vec![],
+            this_val: Slot::undefined(),
+            env: Slot::undefined(),
+            cur_func: 1,
+            cur_target: false,
+            target_func: 1,
+            strict: false,
+            result: Slot::undefined(),
+            stack_slice: vec![],
+            jumps: vec![],
+            resume_pc: 0,
+        }
+    }
+
+    #[test]
+    fn generator_state_frame_and_owner_guards() {
+        let valid = GeneratorRow {
+            owner: 2,
+            state: 0,
+            frame: Some(frame()),
+        };
+        for state in [0, 1, 2] {
+            let row = GeneratorRow {
+                state,
+                frame: (state != 2).then(frame),
+                ..valid.clone()
+            };
+            assert_eq!(
+                decode_generators(&encode_generators(&[row.clone()])).unwrap(),
+                vec![row]
+            );
+        }
+        let mut second = valid.clone();
+        second.owner = 3;
+        assert!(decode_generators(&encode_generators(&[valid.clone(), second.clone()])).is_ok());
+        for owner in [2, 1] {
+            second.owner = owner;
+            assert_eq!(
+                decode_generators(&encode_generators(&[valid.clone(), second.clone()])),
+                Err(SnapshotError::Corrupt(
+                    "generators: owners not strictly ascending"
+                ))
+            );
+        }
+        for state in [3, 255] {
+            let mut invalid = valid.clone();
+            invalid.state = state;
+            assert_eq!(
+                decode_generators(&encode_generators(&[invalid])),
+                Err(SnapshotError::Corrupt("generators: invalid state"))
+            );
+        }
+        for state in [0, 1, 2] {
+            let invalid = GeneratorRow {
+                state,
+                frame: (state == 2).then(frame),
+                ..valid.clone()
+            };
+            assert_eq!(
+                decode_generators(&encode_generators(&[invalid])),
+                Err(SnapshotError::Corrupt(
+                    "generators: state and frame disagree"
+                ))
+            );
+        }
+        for tag in [2, 255] {
+            let mut bytes = encode_generators(&[valid.clone()]);
+            bytes[9] = tag; // count, owner, state, frame tag
+            assert_eq!(
+                decode_generators(&bytes),
+                Err(SnapshotError::Corrupt("generators: bad frame tag"))
+            );
+        }
+        // No local/id/argument rows: three counts precede this/env slots.
+        let current_target = 10 + 12 + 2 * SLOT_RECORD_BYTES + 4;
+        for offset in [current_target, current_target + 5] {
+            for tag in [2, 255] {
+                let mut bytes = encode_generators(&[valid.clone()]);
+                bytes[offset] = tag;
+                assert_eq!(
+                    decode_generators(&bytes),
+                    Err(SnapshotError::Corrupt("generator frame: bad boolean byte"))
+                );
+            }
+        }
+        let mut true_flags = valid;
+        let saved = true_flags.frame.as_mut().unwrap();
+        saved.cur_target = true;
+        saved.strict = true;
+        assert_eq!(
+            decode_generators(&encode_generators(&[true_flags.clone()])).unwrap(),
+            vec![true_flags]
+        );
+    }
+
+    #[test]
+    fn frame_and_jump_maps_require_unique_ascending_ids() {
+        let mut saved = frame();
+        saved.id_map = vec![(2, 0), (3, 1)];
+        saved.jumps.push(SavedJumpRow {
+            target_pc: 0,
+            stack_offset: 0,
+            locals_len: 0,
+            id_map: vec![(2, 0), (3, 1)],
+            call_depth_offset: 0,
+            env: Slot::undefined(),
+            flag: 0,
+        });
+        let valid = GeneratorRow {
+            owner: 1,
+            state: 0,
+            frame: Some(saved),
+        };
+        assert_eq!(
+            decode_generators(&encode_generators(&[valid.clone()])).unwrap(),
+            vec![valid.clone()]
+        );
+        for id in [2, 1] {
+            let mut invalid = valid.clone();
+            invalid.frame.as_mut().unwrap().id_map[1].0 = id;
+            assert_eq!(
+                decode_generators(&encode_generators(&[invalid])),
+                Err(SnapshotError::Corrupt(
+                    "generator frame: id map not strictly ascending"
+                ))
+            );
+            let mut invalid = valid.clone();
+            invalid.frame.as_mut().unwrap().jumps[0].id_map[1].0 = id;
+            assert_eq!(
+                decode_generators(&encode_generators(&[invalid])),
+                Err(SnapshotError::Corrupt(
+                    "generator frame: id map not strictly ascending"
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn async_owners_require_unique_ascending_order() {
+        let first = AsyncRow {
+            owner: 2,
+            result_promise: 1,
+            resolve: Slot::undefined(),
+            reject: Slot::undefined(),
+            frame: frame(),
+        };
+        let mut second = first.clone();
+        second.owner = 3;
+        assert_eq!(
+            decode_async_instances(&encode_async_instances(&[first.clone(), second.clone()]))
+                .unwrap(),
+            vec![first.clone(), second.clone()]
+        );
+        for owner in [2, 1] {
+            second.owner = owner;
+            assert_eq!(
+                decode_async_instances(&encode_async_instances(&[first.clone(), second.clone()])),
+                Err(SnapshotError::Corrupt(
+                    "async instances: owners not strictly ascending"
+                ))
+            );
+        }
+    }
+}
