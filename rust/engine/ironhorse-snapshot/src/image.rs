@@ -8742,3 +8742,278 @@ mod object_state_refusals {
         assert!(decode_disposable_stacks(&encode_disposable_stacks(&[disposed])).is_ok());
     }
 }
+
+#[cfg(test)]
+mod function_decoder_refusals {
+    use super::*;
+    use ironhorse_vm::{BoundFunctionRow, FunctionRow, FunctionStateSnapshot};
+
+    fn row(owner: u32) -> FunctionRow {
+        FunctionRow {
+            owner,
+            segment: None,
+            body_start: None,
+            body_len: 0,
+            closures: 0,
+            name: "f".into(),
+            arity: 0,
+            name_chunk: 0,
+            is_generator: false,
+            home: 0,
+            class_derived: None,
+        }
+    }
+
+    #[test]
+    fn function_cluster_ordering() {
+        let valid = FunctionStateSnapshot {
+            segments: vec![],
+            functions: vec![row(2), row(3)],
+            bound_functions: vec![
+                BoundFunctionRow {
+                    owner: 2,
+                    target: 3,
+                    this_arg: Slot::undefined(),
+                    args: vec![],
+                },
+                BoundFunctionRow {
+                    owner: 3,
+                    target: 2,
+                    this_arg: Slot::undefined(),
+                    args: vec![],
+                },
+            ],
+            ctor_prototypes: vec![(2, 4), (3, 4)],
+            deleted_meta: vec![(2, 3), (2, 4)],
+        };
+        assert_eq!(
+            decode_function_state(&encode_function_state(&valid)).unwrap(),
+            valid
+        );
+        for owner in [2, 1] {
+            let mut invalid = valid.clone();
+            invalid.functions[1].owner = owner;
+            assert_eq!(
+                decode_function_state(&encode_function_state(&invalid)),
+                Err(SnapshotError::Corrupt(
+                    "function state: owners not strictly ascending"
+                ))
+            );
+            invalid = valid.clone();
+            invalid.bound_functions[1].owner = owner;
+            assert_eq!(
+                decode_function_state(&encode_function_state(&invalid)),
+                Err(SnapshotError::Corrupt(
+                    "bound-function state: owners not strictly ascending"
+                ))
+            );
+            invalid = valid.clone();
+            invalid.ctor_prototypes[1].0 = owner;
+            assert_eq!(
+                decode_function_state(&encode_function_state(&invalid)),
+                Err(SnapshotError::Corrupt(
+                    "constructor-prototype state: rows not strictly ascending"
+                ))
+            );
+        }
+        for pair in [(2, 3), (2, 2), (1, 5)] {
+            let mut invalid = valid.clone();
+            invalid.deleted_meta[1] = pair;
+            assert_eq!(
+                decode_function_state(&encode_function_state(&invalid)),
+                Err(SnapshotError::Corrupt(
+                    "deleted-function metadata: rows not strictly ascending"
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn function_tags_and_name() {
+        let mut valid = FunctionStateSnapshot {
+            functions: vec![row(1)],
+            ..FunctionStateSnapshot::default()
+        };
+        let bytes = encode_function_state(&valid);
+        assert_eq!(decode_function_state(&bytes).unwrap(), valid);
+        for value in [2, 255] {
+            let mut invalid = bytes.clone();
+            invalid[12] = value; // segment count, function count, owner, body tag
+            assert_eq!(
+                decode_function_state(&invalid),
+                Err(SnapshotError::Corrupt("function state: bad body tag"))
+            );
+            invalid = bytes.clone();
+            invalid[30] = value; // generator flag after the one-byte name
+            assert_eq!(
+                decode_function_state(&invalid),
+                Err(SnapshotError::Corrupt("function state: bad boolean byte"))
+            );
+        }
+        for value in [3, 255] {
+            let mut invalid = bytes.clone();
+            invalid[35] = value;
+            assert_eq!(
+                decode_function_state(&invalid),
+                Err(SnapshotError::Corrupt("function state: bad class tag"))
+            );
+        }
+        let mut invalid = bytes;
+        invalid[21] = 0xff;
+        assert_eq!(
+            decode_function_state(&invalid),
+            Err(SnapshotError::Corrupt("function state: name not UTF-8"))
+        );
+        // Exercise every accepted enum tag as well as the no-body control.
+        valid.segments.push(vec![0]);
+        valid.functions[0].segment = Some(0);
+        valid.functions[0].body_start = Some(0);
+        valid.functions[0].body_len = 1;
+        valid.functions[0].is_generator = true;
+        for class in [None, Some(false), Some(true)] {
+            valid.functions[0].class_derived = class;
+            assert_eq!(
+                decode_function_state(&encode_function_state(&valid)).unwrap(),
+                valid
+            );
+        }
+    }
+
+    fn check(state: &FunctionStateSnapshot) -> Result<(), SnapshotError> {
+        let lang = LangRows {
+            function_state: state,
+            ..LangRows::EMPTY
+        };
+        check_image_slot_bounds(
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &lang,
+            &[],
+            4,
+            &SymbolKeyImage::default(),
+            8,
+            0,
+            &[],
+        )
+    }
+
+    #[test]
+    fn function_body_and_cross_table_semantics() {
+        use ironhorse_vm::Opcode;
+        let mut function = row(1);
+        function.segment = Some(0);
+        function.body_start = Some(0);
+        function.body_len = 1;
+        function.name_chunk = u32::MAX;
+        let valid = FunctionStateSnapshot {
+            functions: vec![function],
+            segments: vec![vec![Opcode::XS_CODE_UNDEFINED as u8]],
+            ..FunctionStateSnapshot::default()
+        };
+        assert_eq!(check(&valid), Ok(()));
+        let mut invalid = valid.clone();
+        invalid.functions[0].segment = Some(1);
+        assert_eq!(
+            check(&invalid),
+            Err(SnapshotError::Corrupt(
+                "function state: body names no segment"
+            ))
+        );
+        invalid = valid.clone();
+        invalid.functions[0].body_start = Some(u64::MAX);
+        assert_eq!(
+            check(&invalid),
+            Err(SnapshotError::Corrupt(
+                "function state: body range overflow"
+            ))
+        );
+        invalid = valid.clone();
+        invalid.functions[0].body_len = 2;
+        assert_eq!(
+            check(&invalid),
+            Err(SnapshotError::Corrupt(
+                "function state: body range outside segment"
+            ))
+        );
+        invalid = valid.clone();
+        invalid.segments[0] = vec![Opcode::XS_CODE_INTEGER_4 as u8];
+        assert_eq!(
+            check(&invalid),
+            Err(SnapshotError::Corrupt(
+                "function state: malformed body bytecode"
+            ))
+        );
+        invalid = valid.clone();
+        invalid.segments[0] = vec![Opcode::XS_CODE_INTEGER_1 as u8, 0];
+        assert_eq!(
+            check(&invalid),
+            Err(SnapshotError::Corrupt(
+                "function state: body instruction crosses its range"
+            ))
+        );
+        invalid.functions[0].body_len = 2;
+        assert_eq!(check(&invalid), Ok(()));
+        for pair in [(None, Some(0)), (Some(0), None), (None, None)] {
+            invalid = valid.clone();
+            invalid.functions[0].segment = pair.0;
+            invalid.functions[0].body_start = pair.1;
+            assert_eq!(
+                check(&invalid),
+                Err(SnapshotError::Corrupt(
+                    "function state: body and segment disagree"
+                ))
+            );
+        }
+        invalid = valid.clone();
+        invalid.segments.push(vec![Opcode::XS_CODE_UNDEFINED as u8]);
+        assert_eq!(
+            check(&invalid),
+            Err(SnapshotError::Corrupt(
+                "function state: segments not densely referenced"
+            ))
+        );
+        invalid = valid.clone();
+        invalid.bound_functions.push(BoundFunctionRow {
+            owner: 2,
+            target: 1,
+            this_arg: Slot::undefined(),
+            args: vec![],
+        });
+        assert_eq!(
+            check(&invalid),
+            Err(SnapshotError::Corrupt(
+                "bound-function state: owner has no function row"
+            ))
+        );
+        invalid = valid.clone();
+        invalid.ctor_prototypes.push((2, 3));
+        assert_eq!(
+            check(&invalid),
+            Err(SnapshotError::Corrupt(
+                "constructor-prototype state: owner has no function row"
+            ))
+        );
+        invalid.ctor_prototypes[0].0 = 1;
+        assert_eq!(check(&invalid), Ok(()));
+        for id in [0, 5] {
+            invalid = valid.clone();
+            invalid.deleted_meta.push((1, id));
+            assert_eq!(
+                check(&invalid),
+                Err(SnapshotError::Corrupt(
+                    "deleted-function metadata: id outside the name table"
+                ))
+            );
+        }
+        invalid.deleted_meta[0].1 = 4;
+        assert_eq!(check(&invalid), Ok(()));
+    }
+}
