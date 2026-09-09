@@ -1,14 +1,25 @@
 //! Native-owned guest boundaries: handler isolation and caught-throw cleanup.
 use super::{Halt, Interp, Slot, Step};
 
+/// Whether guest execution owns a native catch boundary or shares its caller's.
+#[derive(Clone, Copy)]
+pub(super) enum CallerHandlers {
+    Isolate,
+    Preserve,
+}
+
 impl Interp {
-    /// Isolate the caller's handlers for a native-owned guest operation.
+    /// Run guest code with an explicit caller-handler policy.
     /// A fenced guest cannot resume a caller handler; such an escaping transfer
     /// is an invariant failure. Restore the chain for success and host failure.
     pub(super) fn run_guest_under_native_try<T>(
         &mut self,
+        handlers: CallerHandlers,
         body: impl FnOnce(&mut Self) -> Result<T, Step>,
     ) -> Result<T, Step> {
+        if matches!(handlers, CallerHandlers::Preserve) {
+            return body(self);
+        }
         let fenced_jumps = std::mem::take(&mut self.jumps);
         let outcome = match body(self) {
             Err(Step::Unwound(_)) => Err(Step::Host(Halt::EngineInvariant(
@@ -31,7 +42,7 @@ impl Interp {
         &mut self,
         body: impl FnOnce(&mut Self) -> Result<T, Step>,
     ) -> Result<Result<T, Slot>, Step> {
-        self.run_guest_under_native_try(|machine| {
+        self.run_guest_under_native_try(CallerHandlers::Isolate, |machine| {
             let stack_base = machine.stack.len();
             let call_depth = machine.call_stack.len();
             match body(machine) {
@@ -60,7 +71,7 @@ impl Interp {
 
 #[cfg(test)]
 mod tests {
-    use super::{Halt, Interp, Slot, Step};
+    use super::{CallerHandlers, Halt, Interp, Slot, Step};
     use crate::interp::CatchJump;
 
     #[test]
@@ -76,7 +87,7 @@ mod tests {
             flag: 1,
             rebased: false,
         });
-        let outcome = vm.run_guest_under_native_try::<()>(|machine| {
+        let outcome = vm.run_guest_under_native_try::<()>(CallerHandlers::Isolate, |machine| {
             assert!(machine.jumps.is_empty());
             Err(Step::Unwound(17))
         });
@@ -88,5 +99,32 @@ mod tests {
         ));
         assert_eq!(vm.jumps.len(), 1);
         assert_eq!(vm.jumps[0].target_pc, 123);
+    }
+
+    #[test]
+    fn preserving_caller_handlers_allows_a_cross_frame_resume() {
+        let mut vm = Interp::new();
+        vm.jumps.push(CatchJump {
+            target_pc: 123,
+            stack_len: 0,
+            locals_len: 0,
+            id_map: Default::default(),
+            call_depth: 0,
+            env: Slot::undefined(),
+            flag: 1,
+            rebased: false,
+        });
+        let outcome = vm.run_guest_under_native_try::<()>(CallerHandlers::Preserve, |machine| {
+            let handler = machine
+                .jumps
+                .pop()
+                .expect("caller handler stays accessible");
+            Err(Step::Unwound(handler.target_pc))
+        });
+        assert!(matches!(outcome, Err(Step::Unwound(123))));
+        assert!(
+            vm.jumps.is_empty(),
+            "consumed handlers must not be restored"
+        );
     }
 }
