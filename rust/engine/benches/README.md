@@ -565,3 +565,14 @@ of this increment, but these samples neither prove equivalence nor establish tha
 all failures are host noise.
 The overall branch performance gate remains unresolved pending final decomposition
 measurement.
+
+## Interpreter decomposition: chunk visitation increment
+
+[results/1a-chunk-roster.json](results/1a-chunk-roster.json) records a fresh
+parent/candidate comparison for chunk-compaction policies generated from the field
+inventory.
+All 48 unchanged 1.25x thresholds passed against parent `cf31605bf`.
+Dispatch measured 0.980x, slot allocation 1.022x, and full-first, steady full, and
+partial collection at 80,000 slots measured 1.007x, 1.039x, and 0.989x respectively.
+This is one incremental comparison, not statistical equivalence or final acceptance
+of the whole branch's performance.
