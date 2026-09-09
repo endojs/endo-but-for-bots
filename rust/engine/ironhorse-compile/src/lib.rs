@@ -10,6 +10,12 @@
 //! token and the structured error surface ([`error`]) the fuzz target
 //! will lean on.
 //!
+//! The byte-identity reference is XS pin `23b4d6b0a65f` built on x86_64
+//! with signed plain C `char`. XS hashes symbol spellings through `char*`,
+//! so an unsigned-char build can assign different symbol IDs for non-ASCII
+//! names. Ironhorse always hashes CESU-8 bytes with signed-byte promotion,
+//! independently of host architecture; it does not adopt the host C ABI.
+//!
 //! Everything here is `#![forbid(unsafe_code)]`, like every engine crate
 //! except the audited `xs-oracle` FFI seam.
 

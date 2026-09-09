@@ -125,6 +125,18 @@ and tree boundary pinned exactly), the `recursion_bounds` module in
 
 ## Building the oracle: the `c/moddable` pin
 
+Compiler byte identity is defined against XS pin `23b4d6b0a65f` built on x86_64
+with signed plain C `char`.
+In that pin, `xsScript.c`'s `fxNewParserSymbol` hashes through `txString`, which
+`xsCommon.h` defines as `char*`.
+An unsigned-char build can therefore order non-ASCII symbols differently and
+produce different symbol operands and SYMB atoms.
+Ironhorse hashes CESU-8 bytes with explicit signed-byte promotion on every target;
+this is a deterministic output contract, not a host-dependent choice.
+The oracle-free `signed_cesu8_hash_is_a_host_independent_contract` test pins ASCII,
+non-ASCII, surrogate, and wrapping vectors.
+Oracle results on other architectures do not establish a portable C ABI contract.
+
 `xs-oracle` compiles the XS engine from the `c/moddable`
 submodule. The design's Ground Truth names the pin
 **`23b4d6b0a65f`** (moddable **8.3.1**, 2026-07-07 — bumped from the
