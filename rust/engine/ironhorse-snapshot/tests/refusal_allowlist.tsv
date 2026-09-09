@@ -10,14 +10,11 @@ STAC record count	Existing corruption guard; dedicated exact-label regression fi
 async activation: invalid promise capability or anchor	Existing corruption guard; dedicated exact-label regression fixture deferred.
 async reaction: missing or duplicate activation	Existing corruption guard; dedicated exact-label regression fixture deferred.
 batch parent seal mismatch	Existing corruption guard; dedicated exact-label regression fixture deferred.
-buffer chunk header out of bounds	Existing corruption guard; dedicated exact-label regression fixture deferred.
 checkpoint deferred slot page decode	Existing corruption guard; dedicated exact-label regression fixture deferred.
 checkpoint deferred slot page leaf mismatch	Existing corruption guard; dedicated exact-label regression fixture deferred.
-chunk offset out of arena bounds	Existing corruption guard; dedicated exact-label regression fixture deferred.
 collection cadence mismatch	Existing corruption guard; dedicated exact-label regression fixture deferred.
 container atoms out of canonical order or unknown	Existing corruption guard; dedicated exact-label regression fixture deferred.
 container missing an atom its version always writes	Existing corruption guard; dedicated exact-label regression fixture deferred.
-data-views side table: view geometry past its buffer	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 durable counter regression	Existing corruption guard; dedicated exact-label regression fixture deferred.
 error-frame side table: owner has no error row	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 file store chunk extent row exceeds u32	File backend structural guard; dedicated exact-label corruption fixture deferred.
@@ -89,4 +86,3 @@ store slot page record	Existing corruption guard; dedicated exact-label regressi
 store version stamp mismatch	Existing corruption guard; dedicated exact-label regression fixture deferred.
 symbol-key table does not restore	Existing corruption guard; dedicated exact-label regression fixture deferred.
 symbol-key table: counter inside the name table	Existing corruption guard; dedicated exact-label regression fixture deferred.
-typed-arrays side table: view geometry past its buffer	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
