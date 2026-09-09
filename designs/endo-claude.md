@@ -18,10 +18,15 @@ implementation free to use either the `claude` command-line interface (**the CLI
 path**) or the Claude Agent SDK. Read against that ask, this section reports where
 the work stands; you do not need to jump ahead to § *Prompt* first.
 This section does lean on four load-bearing terms it names before they are built
-up: **facet**, **harness**, **guest formula**, and **the one-guest MCP surface**.
-A reader meeting them for the first time should read § *Architecture* (and its
-§ *Relationship to `@endo/claude-sandbox`*) for their definitions; this status
-report uses them as shorthand for the system those sections describe.
+up, so each is glossed in one line here rather than by a forward pointer:
+a **facet** is the attenuated capability surface a guest's host grants (one guest's
+method set); the **harness** is the `@endo/claude` host code that spawns and
+supervises the `claude -p` child; a **guest formula id** (the body's term; 64 lowercase
+hex) names one guest; and **the one-guest MCP surface** is the stdio MCP server scoped
+to a single guest (landed on `llm` in PR #1206) that projects that guest's facet as
+MCP tools. § *Architecture* (and its § *Relationship to `@endo/claude-sandbox`*) builds
+each out in full; this status report uses them as shorthand for the system those
+sections describe.
 
 The CLI path remains the default implementation path.
 `@endo/claude` is an **unconfined host caplet** that launches a fresh
@@ -65,20 +70,29 @@ no composition with the local per-guest MCP bridge that has since landed on
 
 ### What PR #1015 actually builds
 
+**This table is a per-commit conformance snapshot pinned to #1015 head
+`7cbdfb6e1f5b`, not a design-level invariant. It is expected to go stale on the next
+push to #1015 and is re-derivable from that PR's diff; it is kept here only until
+#1015 rebases, after which it should move to the PR body or a review comment (a
+design states what must be true of the system; per-commit conformance of one PR
+belongs in that PR). The design-level residuals — the assumed-vs-observed evidence
+split, the acceptance condition, and the interface contract — are the durable parts
+and live in their own sections above and below.**
+
 | File | Built at `7cbdfb6e1f5b` | Delta from this design |
 | --- | --- | --- |
 | `.changeset/add-endo-claude.md` | Declares the new private `@endo/claude` package. | Describes the whole process as hermetically confined although the PR supplies only injected seams. Revise before un-draft. |
 | `.changeset/claude-sandbox-subscription-kind.md` | Declares the additive credential-kind change. | The kind exists, but no live evidence shows that its value is accepted by `apiKeyHelper` under `--bare`. |
 | `packages/claude-sandbox/src/claude-credentials-factory.js` | Admits `subscription` when minting credentials. | Complete for the declared kind extension. |
-| `packages/claude-sandbox/src/claude-credentials-module.js` | Admits `subscription` in the unconfined credential module. | Complete for the declared kind extension. |
+| `packages/claude-sandbox/src/claude-credentials-module.js` | Admits `subscription` in the credential module. | Complete for the declared kind extension. |
 | `packages/claude-sandbox/src/claude-client-module.js` | Explicitly refuses the settings-file-shaped kind on the environment-variable route. | Correct negative branch; it does not provide the positive `apiKeyHelper` route. |
-| `packages/claude-sandbox/test/claude-credentials-factory.test.js` | Covers minting and materialising the new kind. | Pure caplet coverage only. |
+| `packages/claude-sandbox/test/claude-credentials-factory.test.js` | Covers minting and materializing the new kind. | Pure caplet coverage only. |
 | `packages/claude-sandbox/test/claude-client-module.test.js` | Covers refusal by the environment-variable client. | Pure refusal coverage only. |
 | `packages/claude/package.json` | Adds the private package, one public entry, and an opt-in shim bin. | The bin duplicates a bridge that later landed in `claude-sandbox`; reconcile on rebase. |
 | `packages/claude/LICENSE` | Adds the standard package license. | No functional delta. |
 | `packages/claude/SECURITY.md` | Adds the standard security policy. | No functional delta. |
 | `packages/claude/README.md` | Documents the intended confinement contract and admits the main gaps. | Calls the package hermetic and must be narrowed to tool-surface isolation. |
-| `packages/claude/index.js` | Exports `make` and all internal construction helpers from the root entry. | The design specifies `make` as the public API. Decide whether the helper exports are intentionally public or keep them internal. |
+| `packages/claude/index.js` | Exports `make` and all internal construction helpers from the root entry. | § *Package shape* decides `make` is the sole public API, so the helper exports must be made internal on rebase; they are not intentionally public. |
 | `packages/claude/claude.types.d.ts` | Re-exports the internal declarations. | Matches the package layout. |
 | `packages/claude/src/claude.types.d.ts` | Declares the injected broker, file-preparer, launcher, pool, and result shapes. | Describes seams rather than implemented host effects. |
 | `packages/claude/src/argv.js` | Builds argv with `--bare`, `--strict-mcp-config`, `--setting-sources ""`, `--tools ""`, `--disable-slash-commands`, explicit MCP allows, and no prompt positional; pins 2.1.232. | Joins every allow into one argument and has no `ARG_MAX` preflight, contrary to this design, which now specifies space-separated multi-token allow entries and an `ARG_MAX` preflight (§ *Argv length is an operational ceiling*). Its assertion accepts unrelated extra argv tokens, so only the builder's closed construction, not the exported assertion alone, establishes prompt omission. |
@@ -89,7 +103,7 @@ no composition with the local per-guest MCP bridge that has since landed on
 | `packages/claude/src/results.js` | Builds the nine hardened result variants and normalizes thrown values. | No live stream parser or launcher maps real Claude output and failures into them. |
 | `packages/claude/src/tool-permissions.js` | Prunes names, pins a null-prototype catalog, derives literal `mcp__<server>__<tool>` names, and exposes a membership predicate. | No server in this PR calls `isDispatchable`; argument-level attenuation is also absent. The later `claude-sandbox` MCP bridge now provides the authoritative server boundary. |
 | `packages/claude/src/shim.js` | Implements an opt-in newline-delimited JSON-RPC relay. | It forwards calls without enforcing the pinned catalog itself and is not runnable with the PR's generated environment/config. Prefer the one-guest MCP surface contract below (§ *Interface to the one-guest MCP surface*) over repairing a second bridge. |
-| `packages/claude/src/harness.js` | Implements grant-time formula/catalog setup and a per-guest `infer` exo around injected effects. | `connectBroker`, `prepareSpawnFiles`, and `launch` have no production implementations; the acquired `issued` credential is never passed to the file preparer or materialised; `context` is ignored; child termination, bounds, per-call broker cancellation, server-side dispatch, broker cleanup, and real result parsing are delegated but not supplied. |
+| `packages/claude/src/harness.js` | Implements grant-time formula/catalog setup and a per-guest `infer` exo around injected effects. | `connectBroker`, `prepareSpawnFiles`, and `launch` have no production implementations; the acquired `issued` credential is never passed to the file preparer or materialized; `context` is ignored; child termination, bounds, per-call broker cancellation, server-side dispatch, broker cleanup, and real result parsing are delegated but not supplied. |
 | `packages/claude/test/argv.test.js` | Covers flag presence/value, version mismatch, prompt omission by construction, and comma-joined values. | No real CLI semantics; the comma-join expectation now conflicts with the revised argument-length design. |
 | `packages/claude/test/child-env.test.js` | Property-checks the constructed environment. | Does not start the shim or Claude. |
 | `packages/claude/test/credentials-pool.test.js` | Exercises occupancy, cooling, issue failure, idempotent release, and an `fc.commands` model. | Does not exercise a real credential helper or concurrent Claude process. |
@@ -121,12 +135,25 @@ This revision uses them consistently:
   Version 2.1.260 additionally documents `--permission-prompts none` and
   `--no-session-persistence`, which the next implementation should include after
   the same live acceptance run used to raise the pin.
+  Version 2.1.260 also documents two sibling flags this design should weigh but
+  does not yet adopt: **`--restricted`** (removes the command/code-running
+  built-ins and WebFetch unless `--tools` names them, ignores user/project/local
+  settings files, confines file tools to the working directories, and refuses
+  `bypassPermissions`) — a stronger, single-flag relative of the fail-closed
+  tool-baseline and settings-suppression this design assembles from `--tools ""`
+  and `--setting-sources ""`, worth measuring against them rather than assuming
+  equivalence — and **`--max-budget-usd`**, a fourth bounding axis (a spend cap)
+  beside DD8's three, relevant to the § *Open questions* quota residual. Note the
+  `--safe-mode` rejection rationale elsewhere in this design is unaffected: the
+  gap is these unconsidered siblings, not that argument.
 - **Still assumed, not observed:** `--setting-sources ""` suppresses all
   user/project/local settings at runtime; MCP tools remain callable while
   `--tools ""` denies built-ins; literal `--allowedTools` entries preauthorize
   those MCP calls under `--permission-prompts none`; `--bare` leaves no other
-  default tool-call path; a subscription token works through `apiKeyHelper`; and
-  managed settings cannot reintroduce authority.
+  default tool-call path; a subscription token works through `apiKeyHelper`;
+  `--max-turns` (accepted but undocumented in `claude --help` on 2.1.232/2.1.260)
+  actually bounds turns CLI-side; and managed settings cannot reintroduce
+  authority.
   The repository contains no durable live-spawn artifact that promotes any of
   these runtime claims to observed.
 
@@ -152,16 +179,22 @@ The caplet is accepted only when one live, version-pinned test demonstrates
    `mcp__endo__sentinel` call and its nonce result.
 4. Observe no built-in call, slash-command resolution, hook marker, discovered
    settings effect, second-server connection, project-memory effect, or session
-   transcript; separately record that the intended credential helper was the
-   credential source. Because "a Claude **subscription** becoming the inference
-   engine" is the package's single load-bearing value proposition (§ *What is the
-   Problem Being Solved?*) and § *Evidence status* lists "a subscription token
-   works through `apiKeyHelper`" as still-assumed, this step must also **assert the
-   credential the helper presented was subscription-tier, not a silently
-   substituted metered API key**, and **fail the acceptance run** if a metered key
-   or a dropped `--bare` was the only way a green run was reached (the failure mode
-   *Work required* item 6 warns against). This check is part of the gate, not
-   deferred to the separate work list.
+   transcript; separately **record the credential source** — that the run
+   presented the intended `apiKeyHelper` and captured its emitted value's shape,
+   and that `--bare` was carried, not silently dropped. Both of those are directly
+   observable (the constructed argv, the settings file, and the helper the run
+   invoked), so this part of the gate is satisfiable and **fails the acceptance
+   run** if a metered `ANTHROPIC_API_KEY` shadowed the helper or a dropped `--bare`
+   was the only way a green run was reached (the failure mode that § *Work
+   required*, item 6, warns against). What this step does **not** attempt is the deeper
+   **tier** determination — proving the presented credential was subscription-tier
+   rather than a metered key of the same wire shape — because "a subscription token
+   works through `apiKeyHelper`" names no observable in `stream-json` or the CLI
+   surface that distinguishes the two; that question stays the *Design Decision 5*
+   / § *Open questions* residual (resolvable only by an out-of-band account/usage
+   probe), not a pass/fail assertion the live run can make. Recording the source
+   and failing on a metered-key shadow or dropped `--bare` is the part of the gate;
+   the tier proof is explicitly deferred, so the gate is not left unsatisfiable.
 5. Repeat after omitting each core flag in turn and record the expected leak or
    refusal, so the test proves which flags are load-bearing rather than merely
    proving that the full invocation happened to work.
@@ -193,14 +226,31 @@ The caplet is accepted only when one live, version-pinned test demonstrates
    "membership-validated, post-prune" guarantee DD2 assigns to the boundary
    end-to-end against the real CLI/server pairing, rather than only against
    synthetic input in `tool-permissions.test.js`.
+8. **Exercise the concurrent invariants, not only the single-spawn ones.** Steps
+   1-7 are all single-spawn, single-guest, yet the package's value premise is N
+   subscriptions across M concurrent guests and its most breakable invariants are
+   concurrent. Run **two `infer` calls at once** — on one shared per-guest broker,
+   and again on two distinct guests — and assert: (a) each carries a **distinct
+   `sessionTag`**, so one call's `revoke(sessionTag)` in its `finally` does not
+   invalidate the other's still-live credential or in-flight `tools/call`
+   (§ *Pooling subscriptions*, the distinct-tag-or-mutual-revoke invariant); and
+   (b) no cross-guest credential or tool-surface leak — guest A's spawn never sees
+   guest B's facet, catalog, or credential. This closes the gap the entitlement
+   bullet below only *admits* ("the live test names no cross-guest leak or
+   concurrent-isolation assertion") rather than leaving it a disclaimer. The deeper
+   metering-invisible cross-user leak is still ratcheted at the source per that
+   bullet; this step adds the observable concurrent assertions the single-spawn
+   steps cannot make.
 
 This exact test is intentionally named here rather than run by this design job.
 Its positive assertion is load-bearing: a zero-tool process is not a successful
-confinement result. Step 6 asserts the tool-surface substitution the caplet does
-enforce is not the whole boundary: the co-located-daemon residual DD6 flags must
+confinement result. Step 6 exists because the tool-surface substitution the caplet
+does enforce is not the whole boundary: the co-located-daemon residual DD6 flags must
 be an explicit, refused-by-default attestation, not an untested deployment
 convention. Step 7 closes the symmetric gap on the *inbound* catalog: DD2's
-`prune` claim is proven against the facet's own names, not assumed.
+`prune` claim is proven against the facet's own names, not assumed. Step 8 adds the
+concurrent assertions the single-spawn steps cannot make (distinct `sessionTag`,
+no cross-guest leak).
 
 **Not covered by this test (named here, not only in § *Open questions*).** One
 load-bearing residual the document flags twice is **out of scope** for this
@@ -210,7 +260,7 @@ externally authored bytes can steer the model into a later *in-allow-list* call
 (§ *Argv order is a confinement boundary*, DD6 body). Neither the OS slice nor
 DD2's `attenuateArgs` closes it, so it is carried as an accepted residual in
 § *Open questions* rather than as a passing assertion here. A green run of steps
-1-7 must not be read as closing that boundary.
+1-8 must not be read as closing that boundary.
 
 ### Interface to the one-guest MCP surface (#1206)
 
@@ -226,20 +276,35 @@ the client-side allow-list subtraction the § *Architecture* forbids:
 
 ```js
 const {
-  serverName,   // validated name used in mcp__<server>__<tool>; the exact key
-                // written into the --mcp-config the client renders below
+  serverName,   // echoed back from the `serverName` input option below (default
+                // 'endo'): the validated name used in mcp__<server>__<tool> and
+                // the exact key written into the --mcp-config the client renders.
+                // Returned so a caller reading this record can trace the
+                // mcp__<server>__ key to the input it set, not a hidden default
   toolNames,    // the exact pinned catalog enforced by the server, post-prune
-  serverDescription, // the server's own description (command + argv, or socket
-                // path); @endo/claude renders the --mcp-config file from this, so
-                // the surface returns data, not a Claude-CLI-specific artifact
-  cancel,       // (sessionTag) -> void: one-shot per-call cancellation that
-                // refuses only that sessionTag's in-flight and future
-                // tools/call, leaving every other session on the shared server
-                // unaffected (the per-call scope § Pooling requires)
-  close,        // ends the guest-level listener and removes per-guest transport
-                // state (the per-spawn socket AND its directory); a call still
-                // in flight under some sessionTag is canceled first, not raced
+  serverConfig, // the server's own launch/connect config (command + argv, or
+                // socket path); @endo/claude renders the --mcp-config file from
+                // this, so the surface returns data, not a Claude-CLI-specific
+                // artifact. (Named `serverConfig`, matching buildMcpConfig, not
+                // `serverDescription`: it is launch config, not human-readable
+                // prose, which is what MCP's `description` denotes)
+  revoke,       // (sessionTag) -> boolean: durable per-spawn teardown that
+                // refuses that sessionTag's in-flight AND future tools/call,
+                // leaving every other session on the shared server unaffected
+                // (the per-spawn scope § Pooling requires). Shares the verb and
+                // the sessionTag of the credential pool's revoke(sessionTag)
+                // because it is the same intent — tear one spawn down — on the
+                // tools/call side. Returns whether a live session matched, so a
+                // stale or unknown sessionTag is NOT a silent no-op on a
+                // security-relevant teardown
+  close,        // () -> Promise<void>: ends the guest-level listener only. The
+                // per-spawn socket AND its 0700 directory are per-SPAWN state,
+                // released on every spawn exit path by the harness (DD7), NOT
+                // accumulated until this guest-level close; a call still in
+                // flight under some sessionTag is revoked first, not raced
 } = await makeGuestMcp(toolSet, {
+  serverName,   // input: the server name to pin into mcp__<server>__ (default
+                // 'endo'); echoed back in the returned `serverName` above
   prune,        // predicate applied to the one tools/list snapshot BEFORE it is
                 // pinned, so code-eval and unsafe names (DD2) never enter the
                 // pinned catalog — pruning at the boundary, not at the client
@@ -253,15 +318,15 @@ const {
 `toolSet` is already attenuated to one guest and exposes the one-guest surface's
 `describe()`/`execute(name, args)` contract.
 Every `tools/call` the server dispatches carries its spawn's `sessionTag` (the
-same one-per-spawn tag the pool mints), so `cancel(sessionTag)` and the
-child-kill scope to one call rather than the whole guest; `close` is the
-guest-level teardown, distinct from per-call cancellation.
+same one-per-spawn tag the pool mints), so `revoke(sessionTag)` and the
+child-kill scope to one spawn rather than the whole guest; `close` is the
+guest-level teardown, distinct from per-spawn revocation.
 The MCP side takes one snapshot, applies `prune` once before pinning, returns its
 `toolNames`, and refuses every `tools/call` outside that pinned snapshot or whose
 arguments `attenuateArgs` rejects.
 The Claude side derives only literal `mcp__${serverName}__${toolName}` allow
 entries from the returned names, renders the `--mcp-config` from
-`serverDescription`, and owns the fresh CLI process, credential, and deadline.
+`serverConfig`, and owns the fresh CLI process, credential, and deadline.
 Neither side independently re-reads or re-derives the catalog.
 
 Current `llm` contains the component pieces in
@@ -282,6 +347,22 @@ remain callable with every Claude built-in denied.
 
 ### Work required before #1015 can leave draft
 
+Two of the steps below are **premise-falsifying probes**: cheap one-spawn checks
+that, if they fail, void the acceptance boundary itself rather than merely reshaping
+the billing. They are sequenced **first** — ahead of the rebase and the whole
+server-side build — because none of the later work is worth doing if either premise
+is false.
+
+0. **Run the two premise-falsifying probes before any other work.**
+   (a) A single spawn of `claude -p --bare --tools "" --strict-mcp-config` with one
+   stdio MCP server and one literal `--allowedTools mcp__endo__<tool>` entry, any
+   credential: confirm the MCP tool **remains callable while `--tools ""` denies the
+   built-ins** (§ *Evidence status* lists this as still-assumed; if it is false the
+   acceptance boundary is void, not merely the billing shape). (b) The `apiKeyHelper`
+   probe of item 6: confirm a subscription credential can be presented through
+   `apiKeyHelper` under `--bare` at all. Both need none of items 1-5; a failure of
+   either is reported as a failed premise (§ *Status*, § *Open questions*) before the
+   build proceeds.
 1. Rebase #1015 onto current `llm`, resolve the `claude-sandbox` overlap from
    #1206, regenerate composite configs and the lockfile, and retain the existing
    net diff only where it is still needed.
@@ -292,7 +373,7 @@ remain callable with every Claude built-in denied.
    one-guest MCP surface interface above. Derive the CLI allow-list from the exact
    catalog the server enforces.
 4. Implement the production host effects now represented only by
-   `prepareSpawnFiles` and `launch`: credential materialisation/helper, direct
+   `prepareSpawnFiles` and `launch`: credential materialization/helper, direct
    process spawn, stdin and `stream-json`, deadline/output/turn limits,
    cancellation and process-group termination, cleanup, and result mapping.
 5. Reconcile argv with the selected current CLI: multi-token MCP allow entries,
@@ -523,7 +604,7 @@ load-bearing at runtime; the table records the responsibility assigned to each.
 | `--disallowedTools` | an explicit deny of the known built-in names (`Bash`, `Read`, `Write`, `Edit`, `Glob`, `Grep`, `WebFetch`, `WebSearch`, `Task`, `NotebookEdit`) | **Redundant belt over `--tools ""`, not the primary mechanism.** Denies each named built-in for defense in depth; **not** `"*"` (deny outranks allow, so a `"*"` deny also cancels the `mcp__<server>__<tool>` allow entries and grants *nothing*). Because this list is measured against one CLI version and cannot be exhaustive across future ones, it is **not** trusted as the baseline. `--tools ""` is, being deny-by-construction. There is no "deny-by-default permission mode" to lean on either (`--permission-mode` offers only `acceptEdits`, `auto`, `bypassPermissions`, `manual`, `dontAsk`, `plan`, none a deny-all). Pin the CLI version and re-derive this list on upgrade; a live negative-confinement test must confirm no built-in survives (see *Known Gaps and TODOs*). |
 | `--allowedTools <tools...>` | `mcp__<server>__<toolA>,mcp__<server>__<toolB>,...` | **Variadic.** The exact per-tool entries generated from the guest facet's method set, each validated (§ *Working around the `mcp__*` wildcard trap*). In headless `-p` mode a tool absent from this list has no interactive prompt to approve it, so this list is the positive half of the baseline. Because it is variadic, a positional after it is swallowed (§ *Argv order is a confinement boundary*). |
 | `--model <value>` | a value from a harness-pinned model list | Caller-supplied via `infer(prompt, {model, ...})`, so it is a **second** value that reaches argv (§ *Argv order is a confinement boundary*); validated by **membership in a pinned model set**, not a charset check, before rendering. A `model` outside the set fails closed. |
-| `--max-turns <n>` | a harness-fixed ceiling | Bounds the number of agent turns a launched inference may take. One of the three bounds on a launched inference (§ *Pooling subscriptions*, *A launched inference is bounded on three axes*), alongside a wall-clock deadline and an output-byte cap; the bridge independently counts dispatches so a CLI that ignores `--max-turns` is still bounded, each terminating into `{type: 'limit-exceeded', which}` (DD8). |
+| `--max-turns <n>` | a harness-fixed ceiling | Bounds the number of agent turns a launched inference may take. One of the three bounds on a launched inference (§ *Pooling subscriptions*, *A launched inference is bounded on three axes*), alongside a wall-clock deadline and an output-byte cap; the bridge independently counts dispatches so a CLI that ignores `--max-turns` is still bounded, each terminating into `{type: 'limit-exceeded', which}` (DD8). **Still assumed, not documented:** `--max-turns` is *accepted* but absent from `claude --help` on both 2.1.232 and 2.1.260 (verified 2026-09-08; `claude --max-turns 3 mcp list` runs, `claude --help \| grep -i turn` returns nothing), so it belongs in § *Evidence status*'s still-assumed partition, not among the documented flags. The load-bearing bound is therefore the bridge's own dispatch count; `--max-turns` is a redundant belt whose CLI-side effect the live acceptance run must confirm before it is relied upon. |
 | (never) `--resume` / `--continue` | omitted, always | Both restore the *full* prior transcript, including past tool calls and their results, with no documented filter, regardless of the new invocation's tool-permission flags. A tool-surface-confined call must never resume. |
 
 ### Argv length is an operational ceiling (`spawn E2BIG`)
@@ -541,17 +622,27 @@ so that value never rides argv at all; the credential-bearing config never touch
 argv surface § *Argv order is a confinement boundary* guards, regardless of facet
 size.
 
-That file path need not be an on-disk temp file. The config is read exactly once, at
-spawn, so the harness may back the path with an anonymous pipe or a `memfd` and pass the
-corresponding `/dev/fd/N` — the descriptor-backed, non-shell analogue of a shell's
-`<( … )` process substitution — delivering the config *as a path* with **no temp file to
-reap**. (`<( … )` itself is a shell construct, and this design spawns `claude` directly,
-never through a shell (§ *Argv order is a confinement boundary*), so the harness must
-mint the descriptor-backed path itself rather than lean on shell expansion.) For a
-long-running pool minting many confined inferences this is the preferable rendering: it
-drops a per-invocation cleanup obligation — the temp garbage an autonomous agent would
-otherwise have to remember to collect — while preserving the file-path contract that
-keeps the credential-bearing config off the argv surface.
+That file path need not be an on-disk temp file, but the descriptor-backed rendering
+rests on **two premises this design must tier as assumed, not assert.** First, that the
+config is **read exactly once, at spawn**: this is a runtime property of the CLI absent
+from § *Evidence status*'s observed list and asserted by no acceptance step. If Claude
+re-reads the `--mcp-config` on an MCP reconnect, a path backed by an **anonymous pipe**
+(non-seekable, drained on first read) returns EOF on the second read, the config parses
+as **zero servers**, and the sole server silently vanishes — exactly the vacuous
+"confinement passes by exposing nothing" failure this design names at the acceptance
+condition. Second, that `/proc` is mounted: a `/dev/fd/N` path resolves through `/proc`,
+which may be absent inside the hardened `@endo/claude-sandbox` slice DD6 recommends, so
+the mechanism can break precisely in the isolated deployment.
+Given both premises, the harness — if it renders descriptor-backed at all — must prefer a
+**`memfd`** (seekable, so a re-read returns the same bytes rather than EOF) over an
+anonymous pipe, and must state the `/proc` precondition; where either premise is
+unproven or `/proc` is unavailable, it keeps the on-disk per-spawn file of *Design
+Decision 7* (created `0600` in a `0700` directory, unlinked on every exit path). The
+descriptor-backed path is thus an **optimization** for a long-running pool — it drops the
+per-invocation cleanup obligation, the temp garbage an autonomous agent would otherwise
+have to remember to collect — **guarded on the read-once and `/proc` assumptions**, not a
+default the design leans on; either rendering preserves the file-path contract that keeps
+the credential-bearing config off the argv surface.
 
 `--allowedTools` has no documented file-path form, but it **is variadic** (comma-**or**-space
 separated; the same table row and § *Argv order is a confinement boundary*). The
@@ -1280,6 +1371,19 @@ working `apiKeyHelper` as sufficient. The agent fleet that authored this design
 pools two Max plans today, which is evidence the shape is used, not a ruling that it
 is entitled.
 
+**A third residual the pool's own invariants create: token burn.** The
+fresh-process-per-call invariant (§ *Fresh process per call*) is costed above in
+spawn *latency*, but the resource the pool actually rations is **subscription
+quota**, and the no-session-persistence invariant spends it: with no server-side
+session, every call re-sends its full context, and § *An optional threaded session*
+re-supplying prior guest-authored turns makes a thread's token burn grow
+**quadratically** in turns. So the same invariants that buy the confinement
+guarantee consume the scarce resource the pool exists to ration. Token burn is
+therefore a load-bearing residual beside entitlement, not a wall-clock footnote: the
+pool's selection policy (§ *Pooling subscriptions*) must ration against measured
+burn, and a threaded session must bound its turn count, or a single long thread can
+exhaust a subscription the pool assumed it was spreading across guests.
+
 ## Build sequencing against the MCP bridge
 
 **Transport question resolved 2026-09-08; server extension still to build.** PR
@@ -1292,7 +1396,7 @@ surface this design consumes (§ *Interface to the one-guest MCP surface*) exist
 landed: `makeGuestMcp` is specified here as an **extension** built over that
 lower-level seam, adding the `prune` predicate, per-call `attenuateArgs`, and
 per-call `sessionTag` cancellation that DD2 and the pooling section make
-load-bearing. Those are new server-side implementation work with security
+load-bearing. Those are new server-side implementation tasks with security
 consequences (an unpruned catalog or a missing `attenuateArgs` reopens the
 code-eval / cross-facet leak DD2 exists to close), not pure client wiring against
 existing infrastructure. So work-item 3 below is a server-side build, not a rebind.
@@ -1439,8 +1543,8 @@ returns an `inferenceProvider` exo (host-only and **non-passable**, DD8) whose
 **returns a `Promise<inferExo>`** — the per-guest `infer(prompt, {model, cancelled})`
 exo (DD8; the confused-deputy resolution of § *Open questions*).
 The package carries no MCP shim bin: the one-guest MCP surface owns the relay
-and returns its `serverName`, `toolNames`, `serverDescription` (from which
-`@endo/claude` renders the `--mcp-config`), per-call `cancel`, and `close`
+and returns its `serverName`, `toolNames`, `serverConfig` (from which
+`@endo/claude` renders the `--mcp-config`), per-spawn `revoke`, and `close`
 lifetime (§ *Interface to the one-guest MCP surface*).
 This keeps the package's public surface to the single `exports` entry.
 
@@ -1504,7 +1608,7 @@ remaining, independent axis of who triggers an inference.)
    (§ *The tool baseline is fail-closed*). It **also asserts the pinned CLI version**
    (`claude --version` equals the version whose flag semantics this design measured,
    2.1.232) and refuses otherwise: confinement here is a *measurement* of one
-   version's flag behaviour, so an upgraded `claude` on `PATH` — spawning happily
+   version's flag behavior, so an upgraded `claude` on `PATH` — spawning happily
    with silently changed semantics — must fail closed until the live confinement test
    (§ *Known Gaps and TODOs*) is re-run against the new version. (`--disallowedTools`,
    `--allowedTools`, `--mcp-config`, and `--settings` are also present but carry
@@ -1688,9 +1792,9 @@ remaining, independent axis of who triggers an inference.)
    unlinked on every exit path. The local stdio config names only the one-guest
    MCP relay and contains no daemon bearer. The settings file names the fixed
    `apiKeyHelper`. These modes protect against other local users; they do not
-   protect the reusable credential from the same unconfined Claude process that
-   invokes the helper. A harness-side egress proxy or per-guest credentials are a
-   separable hardening option, not a prerequisite for demonstrating the requested
+   protect the reusable credential from the same confined Claude process that
+   invokes the helper. A harness-side egress proxy or per-guest credentials are
+   separable hardening options, not prerequisites for demonstrating the requested
    tool-surface substitution. The package and documentation must state that
    boundary honestly.
 8. **`infer` is a guarded, hardened, passable exo (and its return taxonomy is
@@ -1828,7 +1932,7 @@ remaining, independent axis of who triggers an inference.)
       `@endo/claude-sandbox`: `minor` changeset (§ *Package shape*).
       Implemented and unit-tested in draft PR #1015; not yet landed.
 - [ ] Optional OS/credential hardening: attenuate the pooled subscription
-      credential so it is not held by the unconfined child as a re-usable secret.
+      credential so it is not held by the confined child as a re-usable secret.
       Build one of: a
       **harness-side egress proxy** the child authenticates to (the harness injects
       the real credential outbound, so a leaked child never holds a re-usable one),
@@ -1899,7 +2003,7 @@ remaining, independent axis of who triggers an inference.)
       or `mcp__endo__list`): every emitted argv element is one of the harness's own
       built tokens and no argv slot is populated from the prompt, and each variadic
       flag's value run is exactly the harness-supplied tokens terminated by a flag or
-      `--`. (State it as construction, not `argv element ≠ prompt` — the latter
+      `--`. (State it as construction, not `argv element != prompt` — the latter
       false-fires on the empty prompt and any token-valued prompt.)
     - the **five-flag spawn-refusal predicate** — DD1's central `forall`: over every
       strict subset of the required five flags plus arbitrary noise tokens,
@@ -1999,7 +2103,7 @@ is accepted, not written in this pass.
   § *Prompt*, and no derivative document (the `designs/README.md` roadmap table,
   its dependency graph) should restate the narrowing as settled without the same
   hedge. Recommend: confirm the narrowing (delivering and testing tool-surface
-  substitution first, OS slice as defense-in-depth) as the M3 scope.
+  substitution first, OS slice as defense in depth) as the M3 scope.
 - **Should the `options.isolation` attestation stay a caller-supplied claim, or be
   upgraded to a harness-verified capability?** As specified in DD6, `make` only
   checks the field is present and one of the recognized values; it cannot verify
