@@ -8339,3 +8339,169 @@ mod side_table_field_refusals {
         );
     }
 }
+
+#[cfg(test)]
+mod symbol_temporal_refusals {
+    use super::*;
+
+    #[test]
+    fn symbol_ids_and_descriptors_are_bijective() {
+        let valid = SymbolKeyImage {
+            next_id: 10,
+            pairs: vec![(11, 1), (12, 2)],
+        };
+        assert_eq!(
+            decode_symbol_keys(&encode_symbol_keys(&valid)).unwrap(),
+            valid
+        );
+        for pairs in [
+            vec![(10, 1)],
+            vec![(9, 1)],
+            vec![(11, 1), (11, 2)],
+            vec![(12, 1), (11, 2)],
+        ] {
+            assert_eq!(
+                decode_symbol_keys(&encode_symbol_keys(&SymbolKeyImage { next_id: 10, pairs })),
+                Err(SnapshotError::Corrupt(
+                    "symbol-key table: ids not strictly ascending above the counter"
+                ))
+            );
+        }
+        let mut invalid = valid;
+        invalid.pairs[1].1 = 1;
+        assert_eq!(
+            decode_symbol_keys(&encode_symbol_keys(&invalid)),
+            Err(SnapshotError::Corrupt(
+                "symbol-key table: two ids share a descriptor"
+            ))
+        );
+    }
+
+    #[test]
+    fn registry_keys_and_descriptors_are_bijective() {
+        let first = RegistryImage {
+            key: b"b".to_vec(),
+            descriptor: 1,
+        };
+        let mut second = RegistryImage {
+            key: b"c".to_vec(),
+            descriptor: 2,
+        };
+        assert!(decode_registry(&encode_registry(&[first.clone(), second.clone()])).is_ok());
+        for key in [b"b", b"a"] {
+            second.key = key.to_vec();
+            assert_eq!(
+                decode_registry(&encode_registry(&[first.clone(), second.clone()])),
+                Err(SnapshotError::Corrupt(
+                    "symbol registry: keys not strictly ascending"
+                ))
+            );
+        }
+        second.key = b"c".to_vec();
+        second.descriptor = 1;
+        assert_eq!(
+            decode_registry(&encode_registry(&[first, second])),
+            Err(SnapshotError::Corrupt(
+                "symbol registry: two keys share a descriptor"
+            ))
+        );
+    }
+
+    #[test]
+    fn arguments_brands_require_unique_ascending_owners() {
+        assert_eq!(
+            decode_arguments_brands(&encode_arguments_brands(&[1, 2])).unwrap(),
+            vec![1, 2]
+        );
+        for owners in [[1, 1], [2, 1]] {
+            assert_eq!(
+                decode_arguments_brands(&encode_arguments_brands(&owners)),
+                Err(SnapshotError::Corrupt(
+                    "arguments brand set: owners not strictly ascending"
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn temporal_tables_each_require_unique_ascending_owners() {
+        let valid = TemporalImage {
+            instants: vec![(2, 0), (3, 1)],
+            durations: vec![(2, [0; 10]), (3, [0; 10])],
+            plains: vec![
+                (2, 0, 2026, [1, 1, 0, 0, 0, 0, 0, 0]),
+                (3, 0, 2026, [1, 1, 0, 0, 0, 0, 0, 0]),
+            ],
+            zoneds: vec![(2, 0, "UTC".into(), 0), (3, 1, "UTC".into(), 0)],
+        };
+        assert_eq!(decode_temporal(&encode_temporal(&valid)).unwrap(), valid);
+        for owner in [2, 1] {
+            let mut invalid = valid.clone();
+            invalid.instants[1].0 = owner;
+            assert_eq!(
+                decode_temporal(&encode_temporal(&invalid)),
+                Err(SnapshotError::Corrupt(
+                    "temporal instants: owners not strictly ascending"
+                ))
+            );
+            invalid = valid.clone();
+            invalid.durations[1].0 = owner;
+            assert_eq!(
+                decode_temporal(&encode_temporal(&invalid)),
+                Err(SnapshotError::Corrupt(
+                    "temporal durations: owners not strictly ascending"
+                ))
+            );
+            invalid = valid.clone();
+            invalid.plains[1].0 = owner;
+            assert_eq!(
+                decode_temporal(&encode_temporal(&invalid)),
+                Err(SnapshotError::Corrupt(
+                    "temporal plains: owners not strictly ascending"
+                ))
+            );
+            invalid = valid.clone();
+            invalid.zoneds[1].0 = owner;
+            assert_eq!(
+                decode_temporal(&encode_temporal(&invalid)),
+                Err(SnapshotError::Corrupt(
+                    "temporal zoneds: owners not strictly ascending"
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn temporal_kind_and_zone_encoding() {
+        let mut plain = TemporalImage {
+            plains: vec![(1, 0, 2026, [1, 1, 0, 0, 0, 0, 0, 0])],
+            ..TemporalImage::default()
+        };
+        for kind in 0..=4 {
+            plain.plains[0].1 = kind;
+            assert!(decode_temporal(&encode_temporal(&plain)).is_ok());
+        }
+        for kind in [5, 255] {
+            plain.plains[0].1 = kind;
+            assert_eq!(
+                decode_temporal(&encode_temporal(&plain)),
+                Err(SnapshotError::Corrupt("temporal plains: unknown kind"))
+            );
+        }
+        let zoned = TemporalImage {
+            zoneds: vec![(1, 0, "UTC".into(), 0)],
+            ..TemporalImage::default()
+        };
+        let mut bytes = encode_temporal(&zoned);
+        assert_eq!(decode_temporal(&bytes).unwrap(), zoned);
+        // The sole zone string immediately precedes the eight-byte offset.
+        let zone_start = bytes.len() - 8 - 3;
+        bytes[zone_start] = 0xff;
+        assert_eq!(
+            decode_temporal(&bytes),
+            Err(SnapshotError::Corrupt(
+                "temporal zoneds: time zone not UTF-8"
+            ))
+        );
+    }
+}
