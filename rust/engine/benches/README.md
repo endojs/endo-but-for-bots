@@ -891,3 +891,31 @@ results and raw meter totals; these do not override the general-control failures
 No further trials were selected, and these observations establish no cause.
 This extraction is not accepted; full 1A decomposition and performance acceptance
 remain outstanding.
+
+## Property subsystem extraction (1A, F142)
+
+[results/1a-property-module.json](results/1a-property-module.json) records moving
+169 methods from `interp.rs` into `interp/property.rs`, compared with `880ce8195`.
+The module groups property keys, indexed storage, descriptors, accessors, proxy
+traps and invariants, own-key ordering, and object integrity operations.
+The three generic invocation/construction helpers stay in the parent.
+All 38,462 moved Rust tokens matched after allowing scoped visibility and formatting.
+Independent review also compared leading comments and attributes directly with
+committed source, correcting attachments stranded by the initial move.
+
+Both source aggregates include the new module, and the allocation audit explicitly
+scans it for raw reservations in addition to the historical parent interval and
+regexp module.
+A mutation test rejects both raw capacity spellings in moved property code.
+The corrected engine CI suite passed 1,478 tests, SQLite passed 116 tests, and
+strict VM Clippy and the platform Math-vector check passed.
+VM rustdoc built with 61 existing warnings.
+
+All 48 general-control ratios passed the unchanged 1.25x gate on the first
+comparison, ranging from 0.791x to 1.241x.
+The four property-specific controls measured 1.033x for ordinary access, 1.058x
+for indexed access, 1.007x for proxy forwarding, and 1.001x for descriptors.
+Their results and raw meter totals agree across revisions.
+Both reports and all ratios are retained; no repeat trials were selected.
+This incremental comparison does not replace outstanding full 1A performance
+acceptance against the original decomposition baseline.

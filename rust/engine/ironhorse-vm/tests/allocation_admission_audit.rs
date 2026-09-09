@@ -28,6 +28,8 @@ const SOURCE: &str = concat!(
     include_str!("../src/interp/native_try.rs"),
     "\n",
     include_str!("../src/interp/natives/regexp.rs"),
+    "\n",
+    include_str!("../src/interp/property.rs"),
 );
 
 fn method_in(source: &str, name: &str) -> String {
@@ -63,10 +65,10 @@ fn method_anchors_survive_visibility_and_nested_bodies() {
     }
 }
 
-fn check_builtin_capacities(source: &str, native_regexp: &str) {
+fn check_builtin_capacities(source: &str, moved_modules: &[&str]) {
     let start = source.find("    fn call_native(").unwrap();
     let end = source.find("    fn concat_add(").unwrap();
-    for builtins in [&source[start..end], native_regexp] {
+    for builtins in std::iter::once(&source[start..end]).chain(moved_modules.iter().copied()) {
         for (line, text) in builtins.lines().enumerate() {
             if text.contains("Vec::with_capacity") {
                 assert_eq!(
@@ -90,7 +92,13 @@ fn check_builtin_capacities(source: &str, native_regexp: &str) {
 
 #[test]
 fn native_builtins_do_not_reserve_raw_guest_capacities() {
-    check_builtin_capacities(SOURCE, include_str!("../src/interp/natives/regexp.rs"));
+    check_builtin_capacities(
+        SOURCE,
+        &[
+            include_str!("../src/interp/natives/regexp.rs"),
+            include_str!("../src/interp/property.rs"),
+        ],
+    );
 }
 
 #[test]
@@ -103,7 +111,25 @@ fn moved_regexp_methods_cannot_bypass_allocation_admission() {
         "let raw = vec![0; guest];",
     ] {
         let mutated = original.replacen(anchor, allocation, 1);
-        assert!(std::panic::catch_unwind(|| check_builtin_capacities(SOURCE, &mutated)).is_err());
+        assert!(
+            std::panic::catch_unwind(|| check_builtin_capacities(SOURCE, &[&mutated])).is_err()
+        );
+    }
+}
+
+#[test]
+fn moved_property_methods_cannot_bypass_allocation_admission() {
+    let original = include_str!("../src/interp/property.rs");
+    let anchor = "let name = name.into();";
+    assert!(original.contains(anchor));
+    for allocation in [
+        "let raw = Vec::with_capacity(guest);",
+        "let raw = vec![0; guest];",
+    ] {
+        let mutated = original.replacen(anchor, allocation, 1);
+        assert!(
+            std::panic::catch_unwind(|| check_builtin_capacities(SOURCE, &[&mutated])).is_err()
+        );
     }
 }
 
