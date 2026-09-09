@@ -291,6 +291,18 @@ fn ungated_image(interp: &Interp, signature: &Signature) -> MachineImage {
     .with_name_floor(interp.installed_names_floor())
 }
 
+// Generate an expression macro rather than an owned-source function: callers
+// have already moved core fields (stack/names) when transferring side tables.
+macro_rules! define_side_table_transfer {
+    (($d:tt); $($field:ident,)*) => {
+        macro_rules! side_tables_from {
+            ($d source:ident) => {
+                SideTableImages { $($field: $d source.$field,)* }
+            };
+        }
+    };
+}
+
 /// The machine's serialized side-table views (ledger rows `Arrays`/
 /// `Collections`/`SymbolRegistry`/`ErrorData`/`ArrayBuffers`/
 /// `TypedArrays`/`DataViews`/`Dates`), converted from the vm's tuple
@@ -305,6 +317,7 @@ macro_rules! define_live_side_tables {
         struct SideTableImages {
             $($($live_field: $ty,)?) *
         }
+        define_side_table_transfer!(($); $($($live_field,)?) *);
         fn side_tables_of_selected(
             interp: &Interp,
             dirty: ironhorse_vm::SnapshotDirty,
@@ -370,48 +383,29 @@ fn side_tables_of(interp: &Interp) -> SideTableImages {
 /// STRUCTURED refusal, never a debug-only assert: a release build must
 /// refuse the row set, not continue with silently missing exotic state
 /// (review finding 4).
-#[allow(clippy::too_many_arguments)]
 fn restore_side_tables(
     interp: &mut Interp,
-    arrays: Vec<crate::image::ArrayImage>,
-    index_props: Vec<crate::image::IndexPropsImage>,
-    collections: Vec<crate::image::CollectionImage>,
-    registry: Vec<crate::image::RegistryImage>,
-    errors: Vec<crate::image::ErrorImage>,
-    buffers: Vec<crate::image::BufferImage>,
-    typed_arrays: Vec<crate::image::TypedArrayImage>,
-    data_views: Vec<crate::image::DataViewImage>,
-    wrappers: Vec<crate::image::WrapperImage>,
-    regexps: Vec<crate::image::RegExpImage>,
-    dates: Vec<crate::image::DateImage>,
-    function_state: ironhorse_vm::FunctionStateSnapshot,
-    proxy_state: ironhorse_vm::ProxyStateSnapshot,
-    accessors: Vec<ironhorse_vm::AccessorRow>,
-    intl_bound_functions: Vec<ironhorse_vm::IntlBoundFunctionRow>,
-    private_elements: ironhorse_vm::PrivateElementSnapshot,
-    disposable_stacks: Vec<ironhorse_vm::DisposableStackRow>,
-    generators: Vec<ironhorse_vm::GeneratorRow>,
-    promise_cluster: ironhorse_vm::PromiseClusterSnapshot,
-    arguments_brands: Vec<u32>,
-    temporal: crate::image::TemporalImage,
-    intl: ironhorse_vm::IntlTables,
-    iterators: Vec<ironhorse_vm::IteratorRow>,
+    tables: SideTableImages,
 ) -> Result<(), crate::format::SnapshotError> {
     use crate::format::SnapshotError;
     let ok = interp.restore_bulk_side_tables(
-        arrays
+        tables
+            .arrays
             .into_iter()
             .map(|a| (a.owner, a.length, a.items))
             .collect(),
-        index_props
+        tables
+            .index_props
             .into_iter()
             .map(|r| (r.owner, r.high_water, r.items))
             .collect(),
-        collections
+        tables
+            .collections
             .into_iter()
             .map(|c| (c.owner, c.kind, c.table_length, c.entries))
             .collect(),
-        registry
+        tables
+            .registry
             .into_iter()
             .map(|r| (r.key, r.descriptor))
             .collect(),
@@ -425,7 +419,8 @@ fn restore_side_tables(
     // engine's closed error-name set, so this cannot fail on a
     // validated image either).
     let ok = interp.restore_error_data(
-        errors
+        tables
+            .errors
             .into_iter()
             .map(|e| (e.owner, e.name, e.message, e.frames))
             .collect(),
@@ -439,15 +434,18 @@ fn restore_side_tables(
     // all validated at decode/bounds; the vm re-validates against its
     // restored arenas, so `false` is a belt-and-braces corrupt signal).
     let ok = interp.restore_typed_array_family(
-        buffers
+        tables
+            .buffers
             .into_iter()
             .map(|b| (b.owner, b.data, b.length, b.flags))
             .collect(),
-        typed_arrays
+        tables
+            .typed_arrays
             .into_iter()
             .map(|t| (t.owner, t.kind, t.buffer, t.offset, t.length))
             .collect(),
-        data_views
+        tables
+            .data_views
             .into_iter()
             .map(|d| (d.owner, d.buffer, d.offset, d.size))
             .collect(),
@@ -462,9 +460,16 @@ fn restore_side_tables(
     // (source, flags) and carry either the standard current lastIndex heap
     // descriptor or the legacy numeric fallback; a plain record's kind was
     // validated at decode.
-    interp.restore_wrapper_data(wrappers.into_iter().map(|w| (w.owner, w.value)).collect());
+    interp.restore_wrapper_data(
+        tables
+            .wrappers
+            .into_iter()
+            .map(|w| (w.owner, w.value))
+            .collect(),
+    );
     let ok = interp.restore_regexps(
-        regexps
+        tables
+            .regexps
             .into_iter()
             .map(|r| (r.owner, r.source, r.flags, r.last_index_bits))
             .collect(),
@@ -474,8 +479,14 @@ fn restore_side_tables(
             "side-table restore: invalid persisted regexp state",
         ));
     }
-    interp.restore_dates(dates.into_iter().map(|d| (d.owner, d.value_bits)).collect());
-    if !interp.restore_proxy_state(proxy_state) {
+    interp.restore_dates(
+        tables
+            .dates
+            .into_iter()
+            .map(|d| (d.owner, d.value_bits))
+            .collect(),
+    );
+    if !interp.restore_proxy_state(tables.proxy_state) {
         return Err(SnapshotError::Corrupt(
             "side-table restore: malformed proxy state",
         ));
@@ -483,7 +494,7 @@ fn restore_side_tables(
     // The Intl record rows (schema 12): pure resolved-options data;
     // segment geometry and the iterator cross-reference were validated
     // at decode/bounds, and the vm re-validates them on the way in.
-    let ok = interp.restore_intl(intl);
+    let ok = interp.restore_intl(tables.intl);
     if !ok {
         return Err(SnapshotError::Corrupt(
             "side-table restore: malformed intl record",
@@ -501,7 +512,7 @@ fn restore_side_tables(
     // the two collision checks stay mutually exclusive: `IBFN` still
     // refuses a slot boot already minted, and `FUNC` still refuses one
     // an earlier verb installed.
-    if !interp.restore_intl_bound_functions(intl_bound_functions) {
+    if !interp.restore_intl_bound_functions(tables.intl_bound_functions) {
         return Err(SnapshotError::Corrupt(
             "side-table restore: malformed Intl bound-function state",
         ));
@@ -513,12 +524,12 @@ fn restore_side_tables(
     // retained-state adjudication must find already installed. The
     // collision checks stay two-sided: this verb refuses a slot boot
     // already minted, and `FUNC` refuses one an earlier verb installed.
-    if !interp.restore_promise_cluster(promise_cluster) {
+    if !interp.restore_promise_cluster(tables.promise_cluster) {
         return Err(SnapshotError::Corrupt(
             "side-table restore: malformed promise cluster",
         ));
     }
-    if !interp.restore_function_state(function_state) {
+    if !interp.restore_function_state(tables.function_state) {
         return Err(SnapshotError::Corrupt(
             "side-table restore: malformed retained function state",
         ));
@@ -528,39 +539,39 @@ fn restore_side_tables(
             "side-table restore: malformed promise capability",
         ));
     }
-    if !interp.restore_generators(generators) {
+    if !interp.restore_generators(tables.generators) {
         return Err(SnapshotError::Corrupt(
             "side-table restore: malformed generator state",
         ));
     }
-    interp.restore_arguments_brands(arguments_brands);
+    interp.restore_arguments_brands(tables.arguments_brands);
     let ok = interp.restore_temporal_records(
-        temporal.instants,
-        temporal.durations,
-        temporal.plains,
-        temporal.zoneds,
+        tables.temporal.instants,
+        tables.temporal.durations,
+        tables.temporal.plains,
+        tables.temporal.zoneds,
     );
     if !ok {
         return Err(SnapshotError::Corrupt(
             "side-table restore: malformed temporal record",
         ));
     }
-    if !interp.restore_accessors(accessors) {
+    if !interp.restore_accessors(tables.accessors) {
         return Err(SnapshotError::Corrupt(
             "side-table restore: malformed accessor state",
         ));
     }
-    if !interp.restore_private_elements(private_elements) {
+    if !interp.restore_private_elements(tables.private_elements) {
         return Err(SnapshotError::Corrupt(
             "side-table restore: malformed private elements",
         ));
     }
-    interp.restore_disposable_stacks(disposable_stacks);
+    interp.restore_disposable_stacks(tables.disposable_stacks);
     // The iterator cursors (schema 13): validated at decode/bounds
     // (kinds, cursor ranges, the covering-collection cross-check);
     // restored AFTER the collections so the covering rows are in hand
     // for the vm's own re-validation.
-    let ok = interp.restore_iterators(iterators);
+    let ok = interp.restore_iterators(tables.iterators);
     if !ok {
         return Err(SnapshotError::Corrupt(
             "side-table restore: malformed iterator cursor",
@@ -616,32 +627,7 @@ pub fn image_to_interp(
     // The side-table ledger rows (arrays, collections, registry):
     // restored through the counted accessors so the side-ref page
     // counts rebuild in lockstep.
-    restore_side_tables(
-        &mut interp,
-        image.arrays,
-        image.index_props,
-        image.collections,
-        image.registry,
-        image.errors,
-        image.buffers,
-        image.typed_arrays,
-        image.data_views,
-        image.wrappers,
-        image.regexps,
-        image.dates,
-        image.function_state,
-        image.proxy_state,
-        image.accessors,
-        image.intl_bound_functions,
-        image.private_elements,
-        image.disposable_stacks,
-        image.generators,
-        image.promise_cluster,
-        image.arguments_brands,
-        image.temporal,
-        image.intl,
-        image.iterators,
-    )?;
+    restore_side_tables(&mut interp, side_tables_from!(image))?;
     Ok(interp)
 }
 
@@ -1542,33 +1528,7 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
     // The ledger side tables ride the small state, so a LAZY resume
     // restores them eagerly like everything else small — only arena
     // rows fault on demand.
-    restore_side_tables(
-        &mut interp,
-        small.arrays,
-        small.index_props,
-        small.collections,
-        small.registry,
-        small.errors,
-        small.buffers,
-        small.typed_arrays,
-        small.data_views,
-        small.wrappers,
-        small.regexps,
-        small.dates,
-        small.function_state,
-        small.proxy_state,
-        small.accessors,
-        small.intl_bound_functions,
-        small.private_elements,
-        small.disposable_stacks,
-        small.generators,
-        small.promise_cluster,
-        small.arguments_brands,
-        small.temporal,
-        small.intl,
-        small.iterators,
-    )
-    .map_err(StoreError::Snapshot)?;
+    restore_side_tables(&mut interp, side_tables_from!(small)).map_err(StoreError::Snapshot)?;
     // Restore can normalize older payloads; preserve that dirt until committed.
     let snapshot_baseline = interp.snapshot_baseline();
     Ok(StoreSession {
