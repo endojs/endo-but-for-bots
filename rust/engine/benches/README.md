@@ -800,3 +800,25 @@ The artifact records the general-control commands, source hashes and measurement
 provenance as well.
 This is evidence for the incremental extraction; full 1A performance acceptance
 against the original decomposition baseline remains outstanding.
+
+## Rejected Intl native module extraction (1A, F142)
+
+[results/1a-intl-module.json](results/1a-intl-module.json) retains a rejected move
+of 28 Intl helpers from `interp.rs` into `interp/natives/intl.rs` at `1a42faa4f`.
+Its embedded `candidate_patch` reproduces the measured runtime and source-lock
+changes; those changes were reverted after measurement.
+All 9,144 Rust tokens matched after allowing scoped visibility and formatting.
+The engine CI suite passed 1,477 tests, SQLite passed 116 tests, and the carried
+source locks, strict VM Clippy and platform Math-vector check passed.
+
+The initial 48-control comparison failed the unchanged 1.25x gate:
+front sliding at 500 elements measured 1.535x, and placeholder allocation at
+1,000,000 and 4,000,000 elements measured 2.445x and 3.016x.
+A separate fixed three-trial audit alternated baseline/candidate order and
+retained all six runs.
+Its median comparisons also failed: front and tail sliding at 2,000 elements
+measured 1.263x and 1.261x.
+The artifact retains both comparisons without attributing a cause or selecting
+further trials to obtain a pass.
+This extraction is not accepted; full 1A decomposition and performance acceptance
+remain outstanding.
