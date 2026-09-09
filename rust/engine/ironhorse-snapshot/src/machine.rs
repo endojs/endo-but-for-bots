@@ -364,207 +364,50 @@ fn side_tables_of(interp: &Interp) -> SideTableImages {
 /// STRUCTURED refusal, never a debug-only assert: a release build must
 /// refuse the row set, not continue with silently missing exotic state
 /// (review finding 4).
-fn restore_side_tables(
-    interp: &mut Interp,
-    tables: SideTableImages,
-) -> Result<(), crate::format::SnapshotError> {
-    use crate::format::SnapshotError;
-    let ok = interp.restore_bulk_side_tables(
-        tables
-            .arrays
-            .into_iter()
-            .map(|a| (a.owner, a.length, a.items))
-            .collect(),
-        tables
-            .index_props
-            .into_iter()
-            .map(|r| (r.owner, r.high_water, r.items))
-            .collect(),
-        tables
-            .collections
-            .into_iter()
-            .map(|c| (c.owner, c.kind, c.table_length, c.entries))
-            .collect(),
-        tables
-            .registry
-            .into_iter()
-            .map(|r| (r.key, r.descriptor))
-            .collect(),
-    );
-    if !ok {
-        return Err(SnapshotError::Corrupt(
-            "side-table restore: unknown kind code",
-        ));
-    }
-    // The error-data rows (name validated at decode against the
-    // engine's closed error-name set, so this cannot fail on a
-    // validated image either).
-    let ok = interp.restore_error_data(
-        tables
-            .errors
-            .into_iter()
-            .map(|e| (e.owner, e.name, e.message, e.frames))
-            .collect(),
-    );
-    if !ok {
-        return Err(SnapshotError::Corrupt(
-            "side-table restore: unknown error name",
-        ));
-    }
-    // The typed-array family (kinds, flags, extents and view geometry
-    // all validated at decode/bounds; the vm re-validates against its
-    // restored arenas, so `false` is a belt-and-braces corrupt signal).
-    let ok = interp.restore_typed_array_family(
-        tables
-            .buffers
-            .into_iter()
-            .map(|b| (b.owner, b.data, b.length, b.flags))
-            .collect(),
-        tables
-            .typed_arrays
-            .into_iter()
-            .map(|t| (t.owner, t.kind, t.buffer, t.offset, t.length))
-            .collect(),
-        tables
-            .data_views
-            .into_iter()
-            .map(|d| (d.owner, d.buffer, d.offset, d.size))
-            .collect(),
-    );
-    if !ok {
-        return Err(SnapshotError::Corrupt(
-            "side-table restore: malformed typed-array family",
-        ));
-    }
-    // The data-only language rows (schema 11). Wrapper values were
-    // bounds-walked with the heap; a regexp must recompile from its persisted
-    // (source, flags) and carry either the standard current lastIndex heap
-    // descriptor or the legacy numeric fallback; a plain record's kind was
-    // validated at decode.
-    interp.restore_wrapper_data(
-        tables
-            .wrappers
-            .into_iter()
-            .map(|w| (w.owner, w.value))
-            .collect(),
-    );
-    let ok = interp.restore_regexps(
-        tables
-            .regexps
-            .into_iter()
-            .map(|r| (r.owner, r.source, r.flags, r.last_index_bits))
-            .collect(),
-    );
-    if !ok {
-        return Err(SnapshotError::Corrupt(
-            "side-table restore: invalid persisted regexp state",
-        ));
-    }
-    interp.restore_dates(
-        tables
-            .dates
-            .into_iter()
-            .map(|d| (d.owner, d.value_bits))
-            .collect(),
-    );
-    if !interp.restore_proxy_state(tables.proxy_state) {
-        return Err(SnapshotError::Corrupt(
-            "side-table restore: malformed proxy state",
-        ));
-    }
-    // The Intl record rows (schema 12): pure resolved-options data;
-    // segment geometry and the iterator cross-reference were validated
-    // at decode/bounds, and the vm re-validates them on the way in.
-    let ok = interp.restore_intl(tables.intl);
-    if !ok {
-        return Err(SnapshotError::Corrupt(
-            "side-table restore: malformed intl record",
-        ));
-    }
-    // The Intl bound natives (schema 18) install BEFORE the retained
-    // function state, not after: they are the one function-shaped
-    // population that `FUNC` does not own, and a guest `.bind()` over
-    // one (`nf.format.bind(null)`) emits a `FUNC` bound row whose
-    // target is an `IBFN` slot. Adjudicating retained function state
-    // first sees that target in neither `state.functions` nor the boot
-    // machine and refuses an HONEST snapshot — permanently, on every
-    // resume. `restore_intl_bound_functions` depends only on the Intl
-    // data rows above, so the earlier position is otherwise inert, and
-    // the two collision checks stay mutually exclusive: `IBFN` still
-    // refuses a slot boot already minted, and `FUNC` still refuses one
-    // an earlier verb installed.
-    if !interp.restore_intl_bound_functions(tables.intl_bound_functions) {
-        return Err(SnapshotError::Corrupt(
-            "side-table restore: malformed Intl bound-function state",
-        ));
-    }
-    // The promise cluster (schema 23) installs its resolving-function
-    // natives BEFORE the retained function state for the same reason
-    // `IBFN` does: a guest `.bind()` over a resolving function emits a
-    // `FUNC` bound row whose target is a `PRMS` slot, which the
-    // retained-state adjudication must find already installed. The
-    // collision checks stay two-sided: this verb refuses a slot boot
-    // already minted, and `FUNC` refuses one an earlier verb installed.
-    if !interp.restore_promise_cluster(tables.promise_cluster) {
-        return Err(SnapshotError::Corrupt(
-            "side-table restore: malformed promise cluster",
-        ));
-    }
-    if !interp.restore_function_state(tables.function_state) {
-        return Err(SnapshotError::Corrupt(
-            "side-table restore: malformed retained function state",
-        ));
-    }
-    if !interp.restored_promise_capabilities_are_valid() {
-        return Err(SnapshotError::Corrupt(
-            "side-table restore: malformed promise capability",
-        ));
-    }
-    if !interp.restore_generators(tables.generators) {
-        return Err(SnapshotError::Corrupt(
-            "side-table restore: malformed generator state",
-        ));
-    }
-    interp.restore_arguments_brands(tables.arguments_brands);
-    let ok = interp.restore_temporal_records(
-        tables.temporal.instants,
-        tables.temporal.durations,
-        tables.temporal.plains,
-        tables.temporal.zoneds,
-    );
-    if !ok {
-        return Err(SnapshotError::Corrupt(
-            "side-table restore: malformed temporal record",
-        ));
-    }
-    if !interp.restore_accessors(tables.accessors) {
-        return Err(SnapshotError::Corrupt(
-            "side-table restore: malformed accessor state",
-        ));
-    }
-    if !interp.restore_private_elements(tables.private_elements) {
-        return Err(SnapshotError::Corrupt(
-            "side-table restore: malformed private elements",
-        ));
-    }
-    interp.restore_disposable_stacks(tables.disposable_stacks);
-    // The iterator cursors (schema 13): validated at decode/bounds
-    // (kinds, cursor ranges, the covering-collection cross-check);
-    // restored AFTER the collections so the covering rows are in hand
-    // for the vm's own re-validation.
-    let ok = interp.restore_iterators(tables.iterators);
-    if !ok {
-        return Err(SnapshotError::Corrupt(
-            "side-table restore: malformed iterator cursor",
-        ));
-    }
-    // Semantic migrations run only after the persisted name floor, symbol-key
-    // map, and arguments brands have all been reinstated. They can therefore
-    // distinguish a never-installed implicit intrinsic from a guest deletion,
-    // and a legacy arguments layout from current guest customization.
-    interp.migrate_restored_layout();
-    Ok(())
+// Expand the roster's successor chain into straight-line restore calls.
+// The dollar token is passed explicitly because this defines a nested macro.
+macro_rules! define_restore_chain {
+    (($d:tt); $($section:ident => $next:ident [$($field:ident),+] ($interp:ident) $body:block)*) => {
+        #[deny(unused_variables)]
+        fn restore_side_tables(
+            interp: &mut Interp,
+            tables: SideTableImages,
+        ) -> Result<(), crate::format::SnapshotError> {
+            use crate::format::SnapshotError;
+            macro_rules! restore_step {
+                $(( $section, $d current_interp:ident, $d current_tables:ident) => {{
+                    $(let $field = $d current_tables.$field;)+
+                    {
+                        let $interp = &mut *$d current_interp;
+                        $body
+                    }
+                    restore_step!($next, $d current_interp, $d current_tables);
+                }};)*
+                (End, $d current_interp:ident, $d current_tables:ident) => {};
+            }
+            restore_step!(Arrays, interp, tables);
+            // Semantic migrations run only after the persisted name floor, symbol-key
+            // map, and arguments brands have all been reinstated. They can therefore
+            // distinguish a never-installed implicit intrinsic from a guest deletion,
+            // and a legacy arguments layout from current guest customization.
+            interp.migrate_restored_layout();
+            Ok(())
+        }
+    };
 }
+
+macro_rules! define_restore_steps {
+    ($($section:ident {
+        image_field: $field:ident,
+        live: [$($live:tt)*],
+        bounds: [$($bounds:tt)*],
+        restore: [$($next:ident, [$($consumed:ident),+], ($interp:ident) $body:block)?],
+        $($rest:tt)*
+    })*) => {
+        define_restore_chain!(($); $($($section => $next [$($consumed),+] ($interp) $body)?) *);
+    };
+}
+crate::snapshot_roster::snapshot_payloads!(define_restore_steps);
 
 /// Rebuild a live [`Interp`] from a [`ValidatedSnapshot`]: a fresh
 /// boot machine with the image's serializable state reinstated (the

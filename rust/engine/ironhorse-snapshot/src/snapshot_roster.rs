@@ -13,6 +13,7 @@ macro_rules! snapshot_payloads {
                 image_field: stack,
                 live: [],
                 bounds: [],
+                restore: [],
                 initialize: [stack = Default::default()],
                 legacy_label: "small state stack section",
                 decode_legacy(state, bytes): {
@@ -31,6 +32,7 @@ macro_rules! snapshot_payloads {
                 image_field: slot_free,
                 live: [],
                 bounds: [],
+                restore: [],
                 initialize: [slot_free = Default::default()],
                 legacy_label: "small state free-list section",
                 decode_legacy(state, bytes): {
@@ -49,6 +51,7 @@ macro_rules! snapshot_payloads {
                 image_field: keys,
                 live: [],
                 bounds: [],
+                restore: [],
                 initialize: [keys = Default::default()],
                 legacy_label: "small state keys section",
                 decode_legacy(state, bytes): {
@@ -67,6 +70,7 @@ macro_rules! snapshot_payloads {
                 image_field: names,
                 live: [],
                 bounds: [],
+                restore: [],
                 initialize: [names = Default::default()],
                 legacy_label: "small state names section",
                 decode_legacy(state, bytes): {
@@ -85,6 +89,7 @@ macro_rules! snapshot_payloads {
                 image_field: symbols,
                 live: [],
                 bounds: [],
+                restore: [],
                 initialize: [symbols = Default::default()],
                 legacy_label: "small state symbols section",
                 decode_legacy(state, bytes): {
@@ -103,6 +108,7 @@ macro_rules! snapshot_payloads {
                 image_field: meter,
                 live: [],
                 bounds: [],
+                restore: [],
                 // Private decode placeholder: every successful decode replaces it
                 // with the required METR payload before returning the state.
                 initialize: [meter = crate::image::MeterImage {
@@ -145,6 +151,31 @@ macro_rules! snapshot_payloads {
                     }
                 }],
                 bounds: [arrays: [crate::image::ArrayImage] = &[]],
+                restore: [Errors, [arrays, index_props, collections, registry], (interp) {
+                    let ok = interp.restore_bulk_side_tables(
+                        arrays
+                            .into_iter()
+                            .map(|a| (a.owner, a.length, a.items))
+                            .collect(),
+                        index_props
+                            .into_iter()
+                            .map(|r| (r.owner, r.high_water, r.items))
+                            .collect(),
+                        collections
+                            .into_iter()
+                            .map(|c| (c.owner, c.kind, c.table_length, c.entries))
+                            .collect(),
+                        registry
+                            .into_iter()
+                            .map(|r| (r.key, r.descriptor))
+                            .collect(),
+                    );
+                    if !ok {
+                        return Err(SnapshotError::Corrupt(
+                            "side-table restore: unknown kind code",
+                        ));
+                    }
+                }],
                 initialize: [arrays = Default::default()],
                 legacy_label: "small state arrays section",
                 decode_legacy(state, bytes): {
@@ -181,6 +212,7 @@ macro_rules! snapshot_payloads {
                     }
                 }],
                 bounds: [index_props: [crate::image::IndexPropsImage] = &[]],
+                restore: [],
                 initialize: [index_props = Default::default()],
                 legacy_label: "small state index-props section",
                 decode_legacy(state, bytes): {
@@ -222,6 +254,7 @@ macro_rules! snapshot_payloads {
                     }
                 }],
                 bounds: [collections: [crate::image::CollectionImage] = &[]],
+                restore: [],
                 initialize: [collections = Default::default()],
                 legacy_label: "small state collections section",
                 decode_legacy(state, bytes): {
@@ -254,6 +287,7 @@ macro_rules! snapshot_payloads {
                     }
                 }],
                 bounds: [registry: [crate::image::RegistryImage] = &[]],
+                restore: [],
                 initialize: [registry = Default::default()],
                 legacy_label: "small state registry section",
                 decode_legacy(state, bytes): {
@@ -293,6 +327,22 @@ macro_rules! snapshot_payloads {
                     }
                 }],
                 bounds: [errors: [crate::image::ErrorImage] = &[]],
+                restore: [Buffers, [errors], (interp) {
+                    // The error-data rows (name validated at decode against the
+                    // engine's closed error-name set, so this cannot fail on a
+                    // validated image either).
+                    let ok = interp.restore_error_data(
+                        errors
+                            .into_iter()
+                            .map(|e| (e.owner, e.name, e.message, e.frames))
+                            .collect(),
+                    );
+                    if !ok {
+                        return Err(SnapshotError::Corrupt(
+                            "side-table restore: unknown error name",
+                        ));
+                    }
+                }],
                 initialize: [errors = Default::default()],
                 legacy_label: "small state errors section",
                 decode_legacy(state, bytes): {
@@ -315,6 +365,7 @@ macro_rules! snapshot_payloads {
                 image_field: errors,
                 live: [],
                 bounds: [],
+                restore: [],
                 initialize: [],
                 legacy_label: "small state error-frames section",
                 decode_legacy(state, bytes): {
@@ -359,6 +410,30 @@ macro_rules! snapshot_payloads {
                     }
                 }],
                 bounds: [buffers: [crate::image::BufferImage] = &[]],
+                restore: [Wrappers, [buffers, typed_arrays, data_views], (interp) {
+                    // The typed-array family (kinds, flags, extents and view geometry
+                    // all validated at decode/bounds; the vm re-validates against its
+                    // restored arenas, so `false` is a belt-and-braces corrupt signal).
+                    let ok = interp.restore_typed_array_family(
+                        buffers
+                            .into_iter()
+                            .map(|b| (b.owner, b.data, b.length, b.flags))
+                            .collect(),
+                        typed_arrays
+                            .into_iter()
+                            .map(|t| (t.owner, t.kind, t.buffer, t.offset, t.length))
+                            .collect(),
+                        data_views
+                            .into_iter()
+                            .map(|d| (d.owner, d.buffer, d.offset, d.size))
+                            .collect(),
+                    );
+                    if !ok {
+                        return Err(SnapshotError::Corrupt(
+                            "side-table restore: malformed typed-array family",
+                        ));
+                    }
+                }],
                 initialize: [buffers = Default::default()],
                 legacy_label: "small state buffers section",
                 decode_legacy(state, bytes): {
@@ -399,6 +474,7 @@ macro_rules! snapshot_payloads {
                     }
                 }],
                 bounds: [typed_arrays: [crate::image::TypedArrayImage] = &[]],
+                restore: [],
                 initialize: [typed_arrays = Default::default()],
                 legacy_label: "small state typed-arrays section",
                 decode_legacy(state, bytes): {
@@ -438,6 +514,7 @@ macro_rules! snapshot_payloads {
                     }
                 }],
                 bounds: [data_views: [crate::image::DataViewImage] = &[]],
+                restore: [],
                 initialize: [data_views = Default::default()],
                 legacy_label: "small state data-views section",
                 decode_legacy(state, bytes): {
@@ -470,6 +547,19 @@ macro_rules! snapshot_payloads {
                     }
                 }],
                 bounds: [wrappers: [crate::image::WrapperImage] = &[]],
+                restore: [Regexps, [wrappers], (interp) {
+                    // The data-only language rows (schema 11). Wrapper values were
+                    // bounds-walked with the heap; a regexp must recompile from its persisted
+                    // (source, flags) and carry either the standard current lastIndex heap
+                    // descriptor or the legacy numeric fallback; a plain record's kind was
+                    // validated at decode.
+                    interp.restore_wrapper_data(
+                        wrappers
+                            .into_iter()
+                            .map(|w| (w.owner, w.value))
+                            .collect(),
+                    );
+                }],
                 initialize: [wrappers = Default::default()],
                 legacy_label: "small state wrappers section",
                 decode_legacy(state, bytes): {
@@ -509,6 +599,19 @@ macro_rules! snapshot_payloads {
                     }
                 }],
                 bounds: [regexps: [crate::image::RegExpImage] = &[]],
+                restore: [Dates, [regexps], (interp) {
+                    let ok = interp.restore_regexps(
+                        regexps
+                            .into_iter()
+                            .map(|r| (r.owner, r.source, r.flags, r.last_index_bits))
+                            .collect(),
+                    );
+                    if !ok {
+                        return Err(SnapshotError::Corrupt(
+                            "side-table restore: invalid persisted regexp state",
+                        ));
+                    }
+                }],
                 initialize: [regexps = Default::default()],
                 legacy_label: "small state regexps section",
                 decode_legacy(state, bytes): {
@@ -537,6 +640,9 @@ macro_rules! snapshot_payloads {
                     }
                 }],
                 bounds: [arguments_brands: [u32] = &[]],
+                restore: [Temporal, [arguments_brands], (interp) {
+                    interp.restore_arguments_brands(arguments_brands);
+                }],
                 initialize: [arguments_brands = Default::default()],
                 legacy_label: "small state arguments section",
                 decode_legacy(state, bytes): {
@@ -575,6 +681,19 @@ macro_rules! snapshot_payloads {
                     }
                 }],
                 bounds: [temporal: crate::image::TemporalImage = &crate::image::EMPTY_TEMPORAL],
+                restore: [Accessors, [temporal], (interp) {
+                    let ok = interp.restore_temporal_records(
+                        temporal.instants,
+                        temporal.durations,
+                        temporal.plains,
+                        temporal.zoneds,
+                    );
+                    if !ok {
+                        return Err(SnapshotError::Corrupt(
+                            "side-table restore: malformed temporal record",
+                        ));
+                    }
+                }],
                 initialize: [temporal = Default::default()],
                 legacy_label: "small state temporal section",
                 decode_legacy(state, bytes): {
@@ -603,6 +722,17 @@ macro_rules! snapshot_payloads {
                     }
                 }],
                 bounds: [intl: ironhorse_vm::IntlTables = &crate::image::EMPTY_INTL],
+                restore: [IntlBoundFunctions, [intl], (interp) {
+                    // The Intl record rows (schema 12): pure resolved-options data;
+                    // segment geometry and the iterator cross-reference were validated
+                    // at decode/bounds, and the vm re-validates them on the way in.
+                    let ok = interp.restore_intl(intl);
+                    if !ok {
+                        return Err(SnapshotError::Corrupt(
+                            "side-table restore: malformed intl record",
+                        ));
+                    }
+                }],
                 initialize: [intl = Default::default()],
                 legacy_label: "small state intl section",
                 decode_legacy(state, bytes): {
@@ -631,6 +761,18 @@ macro_rules! snapshot_payloads {
                     }
                 }],
                 bounds: [iterators: [ironhorse_vm::IteratorRow] = &[]],
+                restore: [End, [iterators], (interp) {
+                    // The iterator cursors (schema 13): validated at decode/bounds
+                    // (kinds, cursor ranges, the covering-collection cross-check);
+                    // restored AFTER the collections so the covering rows are in hand
+                    // for the vm's own re-validation.
+                    let ok = interp.restore_iterators(iterators);
+                    if !ok {
+                        return Err(SnapshotError::Corrupt(
+                            "side-table restore: malformed iterator cursor",
+                        ));
+                    }
+                }],
                 initialize: [iterators = Default::default()],
                 legacy_label: "small state iterators section",
                 decode_legacy(state, bytes): {
@@ -663,6 +805,14 @@ macro_rules! snapshot_payloads {
                     }
                 }],
                 bounds: [dates: [crate::image::DateImage] = &[]],
+                restore: [Proxies, [dates], (interp) {
+                    interp.restore_dates(
+                        dates
+                            .into_iter()
+                            .map(|d| (d.owner, d.value_bits))
+                            .collect(),
+                    );
+                }],
                 initialize: [dates = Default::default()],
                 legacy_label: "small state dates section",
                 decode_legacy(state, bytes): {
@@ -691,6 +841,18 @@ macro_rules! snapshot_payloads {
                     }
                 }],
                 bounds: [function_state: ironhorse_vm::FunctionStateSnapshot = &crate::image::EMPTY_FUNCTION_STATE],
+                restore: [Generators, [function_state], (interp) {
+                    if !interp.restore_function_state(function_state) {
+                        return Err(SnapshotError::Corrupt(
+                            "side-table restore: malformed retained function state",
+                        ));
+                    }
+                    if !interp.restored_promise_capabilities_are_valid() {
+                        return Err(SnapshotError::Corrupt(
+                            "side-table restore: malformed promise capability",
+                        ));
+                    }
+                }],
                 initialize: [function_state = Default::default()],
                 legacy_label: "small state function section",
                 decode_legacy(state, bytes): {
@@ -720,6 +882,13 @@ macro_rules! snapshot_payloads {
                     }
                 }],
                 bounds: [proxy_state: ironhorse_vm::ProxyStateSnapshot = &crate::image::EMPTY_PROXY_STATE],
+                restore: [Intl, [proxy_state], (interp) {
+                    if !interp.restore_proxy_state(proxy_state) {
+                        return Err(SnapshotError::Corrupt(
+                            "side-table restore: malformed proxy state",
+                        ));
+                    }
+                }],
                 initialize: [proxy_state = Default::default()],
                 legacy_label: "small state proxy section",
                 decode_legacy(state, bytes): {
@@ -748,6 +917,13 @@ macro_rules! snapshot_payloads {
                     }
                 }],
                 bounds: [accessors: [ironhorse_vm::AccessorRow] = &[]],
+                restore: [PrivateElements, [accessors], (interp) {
+                    if !interp.restore_accessors(accessors) {
+                        return Err(SnapshotError::Corrupt(
+                            "side-table restore: malformed accessor state",
+                        ));
+                    }
+                }],
                 initialize: [accessors = Default::default()],
                 legacy_label: "small state accessor section",
                 decode_legacy(state, bytes): {
@@ -776,6 +952,25 @@ macro_rules! snapshot_payloads {
                     }
                 }],
                 bounds: [intl_bound_functions: [ironhorse_vm::IntlBoundFunctionRow] = &[]],
+                restore: [Promises, [intl_bound_functions], (interp) {
+                    // The Intl bound natives (schema 18) install BEFORE the retained
+                    // function state, not after: they are the one function-shaped
+                    // population that `FUNC` does not own, and a guest `.bind()` over
+                    // one (`nf.format.bind(null)`) emits a `FUNC` bound row whose
+                    // target is an `IBFN` slot. Adjudicating retained function state
+                    // first sees that target in neither `state.functions` nor the boot
+                    // machine and refuses an HONEST snapshot — permanently, on every
+                    // resume. `restore_intl_bound_functions` depends only on the Intl
+                    // data rows above, so the earlier position is otherwise inert, and
+                    // the two collision checks stay mutually exclusive: `IBFN` still
+                    // refuses a slot boot already minted, and `FUNC` still refuses one
+                    // an earlier verb installed.
+                    if !interp.restore_intl_bound_functions(intl_bound_functions) {
+                        return Err(SnapshotError::Corrupt(
+                            "side-table restore: malformed Intl bound-function state",
+                        ));
+                    }
+                }],
                 initialize: [intl_bound_functions = Default::default()],
                 legacy_label: "small state Intl bound-function section",
                 decode_legacy(state, bytes): {
@@ -805,6 +1000,13 @@ macro_rules! snapshot_payloads {
                     }
                 }],
                 bounds: [private_elements: ironhorse_vm::PrivateElementSnapshot = &crate::image::EMPTY_PRIVATE_ELEMENTS],
+                restore: [DisposableStacks, [private_elements], (interp) {
+                    if !interp.restore_private_elements(private_elements) {
+                        return Err(SnapshotError::Corrupt(
+                            "side-table restore: malformed private elements",
+                        ));
+                    }
+                }],
                 initialize: [private_elements = Default::default()],
                 legacy_label: "small state private-element section",
                 decode_legacy(state, bytes): {
@@ -834,6 +1036,9 @@ macro_rules! snapshot_payloads {
                     }
                 }],
                 bounds: [disposable_stacks: [ironhorse_vm::DisposableStackRow] = &[]],
+                restore: [Iterators, [disposable_stacks], (interp) {
+                    interp.restore_disposable_stacks(disposable_stacks);
+                }],
                 initialize: [disposable_stacks = Default::default()],
                 legacy_label: "small state disposable-stack section",
                 decode_legacy(state, bytes): {
@@ -863,6 +1068,13 @@ macro_rules! snapshot_payloads {
                     }
                 }],
                 bounds: [generators: [ironhorse_vm::GeneratorRow] = &[]],
+                restore: [ArgumentsBrands, [generators], (interp) {
+                    if !interp.restore_generators(generators) {
+                        return Err(SnapshotError::Corrupt(
+                            "side-table restore: malformed generator state",
+                        ));
+                    }
+                }],
                 initialize: [generators = Default::default()],
                 legacy_label: "small state generator section",
                 decode_legacy(state, bytes): {
@@ -893,6 +1105,20 @@ macro_rules! snapshot_payloads {
                     }
                 }],
                 bounds: [promise_cluster: ironhorse_vm::PromiseClusterSnapshot = &crate::image::EMPTY_PROMISE_CLUSTER],
+                restore: [Functions, [promise_cluster], (interp) {
+                    // The promise cluster (schema 23) installs its resolving-function
+                    // natives BEFORE the retained function state for the same reason
+                    // `IBFN` does: a guest `.bind()` over a resolving function emits a
+                    // `FUNC` bound row whose target is a `PRMS` slot, which the
+                    // retained-state adjudication must find already installed. The
+                    // collision checks stay two-sided: this verb refuses a slot boot
+                    // already minted, and `FUNC` refuses one an earlier verb installed.
+                    if !interp.restore_promise_cluster(promise_cluster) {
+                        return Err(SnapshotError::Corrupt(
+                            "side-table restore: malformed promise cluster",
+                        ));
+                    }
+                }],
                 initialize: [promise_cluster = Default::default()],
                 legacy_label: "small state promise section",
                 decode_legacy(state, bytes): {
@@ -916,6 +1142,7 @@ macro_rules! snapshot_payloads {
                 image_field: promise_cluster,
                 live: [],
                 bounds: [],
+                restore: [],
                 initialize: [],
                 legacy_label: "small state async section",
                 decode_legacy(state, bytes): {
@@ -939,6 +1166,7 @@ macro_rules! snapshot_payloads {
                 image_field: name_floor,
                 live: [],
                 bounds: [],
+                restore: [],
                 initialize: [name_floor = Default::default()],
                 legacy_label: "small state name-floor section",
                 decode_legacy(state, bytes): {
@@ -1004,6 +1232,10 @@ use crate::SnapshotError;
 pub(crate) struct PayloadDesc {
     pub section: SmallSection,
     #[cfg(test)]
+    pub restore_fields: &'static [&'static str],
+    #[cfg(test)]
+    pub restore_next: Option<&'static str>,
+    #[cfg(test)]
     pub bounds_fields: &'static [&'static str],
     #[cfg(test)]
     pub live_fields: &'static [&'static str],
@@ -1017,6 +1249,7 @@ macro_rules! define_payloads {
         image_field: $field:ident,
         live: [$($live_field:ident: $ty:ty => ($interp:ident, $dirty:ident) $extract:block)?],
         bounds: [$($bounds_field:ident: $bounds_ty:ty = $bounds_empty:expr)?],
+        restore: [$($next:ident, [$($consumed:ident),+], ($restore_interp:ident) $restore:block)?],
         initialize: [$($init_field:ident = $init:expr)?],
         legacy_label: $legacy_label:literal,
         decode_legacy($decoded:ident, $input:ident): $decode:block,
@@ -1026,7 +1259,7 @@ macro_rules! define_payloads {
         canonicalize($bytes:ident): $canonicalize:block,
     })*) => {
         pub(crate) const PAYLOADS: &[PayloadDesc] = &[
-            $(PayloadDesc { section: SmallSection::$section, #[cfg(test)] image_field: stringify!($field), #[cfg(test)] live_fields: &[$(stringify!($live_field))?], #[cfg(test)] bounds_fields: &[$(stringify!($bounds_field))?], atom: $atom },)*
+            $(PayloadDesc { section: SmallSection::$section, #[cfg(test)] image_field: stringify!($field), #[cfg(test)] live_fields: &[$(stringify!($live_field))?], #[cfg(test)] bounds_fields: &[$(stringify!($bounds_field))?], #[cfg(test)] restore_fields: &[$($(stringify!($consumed)),+)?], #[cfg(test)] restore_next: match &[$(stringify!($next))?] as &[&str] { [next] => Some(*next), [] => None, _ => unreachable!() }, atom: $atom },)*
         ];
         // Uniform field cloning also covers the Copy name-floor field.
         #[allow(clippy::clone_on_copy)]
@@ -1298,6 +1531,228 @@ mod tests {
             }
         }
         assert_eq!(actual, expected);
+    }
+
+    fn restore_chain(rows: &[PayloadDesc]) -> Result<Vec<String>, &'static str> {
+        let mut steps = std::collections::BTreeMap::new();
+        let mut fields = BTreeSet::new();
+        let live: BTreeSet<_> = rows
+            .iter()
+            .flat_map(|row| row.live_fields.iter().copied())
+            .collect();
+        for row in rows {
+            if let Some(next) = row.restore_next {
+                if row.restore_fields.is_empty()
+                    || steps.insert(format!("{:?}", row.section), next).is_some()
+                {
+                    return Err("duplicate or empty restore step");
+                }
+                for field in row.restore_fields {
+                    if !fields.insert(*field) {
+                        return Err("duplicate restored field");
+                    }
+                }
+            } else if !row.restore_fields.is_empty() {
+                return Err("disconnected restored field");
+            }
+        }
+        if fields != live {
+            return Err("restore field coverage");
+        }
+        if steps.values().filter(|next| **next == "End").count() != 1 {
+            return Err("restore terminal count");
+        }
+        let mut order = Vec::new();
+        let mut next = "Arrays";
+        while next != "End" {
+            order.push(next.to_owned());
+            next = steps
+                .remove(next)
+                .ok_or("invalid or cyclic restore successor")?;
+        }
+        if !steps.is_empty() {
+            return Err("unreachable restore step");
+        }
+        Ok(order)
+    }
+
+    #[test]
+    fn restore_chain_preserves_dependencies_and_consumes_all_live_fields() {
+        assert_eq!(
+            restore_chain(PAYLOADS).unwrap(),
+            [
+                "Arrays",
+                "Errors",
+                "Buffers",
+                "Wrappers",
+                "Regexps",
+                "Dates",
+                "Proxies",
+                "Intl",
+                "IntlBoundFunctions",
+                "Promises",
+                "Functions",
+                "Generators",
+                "ArgumentsBrands",
+                "Temporal",
+                "Accessors",
+                "PrivateElements",
+                "DisposableStacks",
+                "Iterators",
+            ]
+        );
+    }
+
+    #[test]
+    fn restore_chain_rejects_missing_duplicate_and_disconnected_steps() {
+        let rows = || {
+            PAYLOADS
+                .iter()
+                .map(|row| PayloadDesc {
+                    section: row.section,
+                    bounds_fields: row.bounds_fields,
+                    live_fields: row.live_fields,
+                    image_field: row.image_field,
+                    atom: row.atom,
+                    restore_fields: row.restore_fields,
+                    restore_next: row.restore_next,
+                })
+                .collect::<Vec<_>>()
+        };
+        for (next, expected) in [
+            ("Arrays", "invalid or cyclic restore successor"),
+            ("Missing", "invalid or cyclic restore successor"),
+            ("Buffers", "unreachable restore step"),
+            ("End", "restore terminal count"),
+        ] {
+            let mut mutated = rows();
+            mutated
+                .iter_mut()
+                .find(|row| row.section == SmallSection::Arrays)
+                .unwrap()
+                .restore_next = Some(next);
+            assert_eq!(restore_chain(&mutated), Err(expected));
+        }
+        let mut missing = rows();
+        missing
+            .iter_mut()
+            .find(|row| row.section == SmallSection::Arrays)
+            .unwrap()
+            .restore_fields = &["arrays", "collections", "registry"];
+        assert_eq!(restore_chain(&missing), Err("restore field coverage"));
+        let mut duplicate = rows();
+        duplicate
+            .iter_mut()
+            .find(|row| row.section == SmallSection::Errors)
+            .unwrap()
+            .restore_fields = &["errors", "arrays"];
+        assert_eq!(restore_chain(&duplicate), Err("duplicate restored field"));
+    }
+
+    fn restore_emitter_connected(source: &str) -> bool {
+        let source = code_only(source);
+        let code = tokens(&source);
+        let body = &code[token_body(&code, "macro_rules! define_restore_chain")];
+        let text: Vec<_> = body.iter().map(|token| token.text).collect();
+        let contains_once = |needle: &[&str]| {
+            text.windows(needle.len())
+                .filter(|window| *window == needle)
+                .count()
+                == 1
+        };
+        contains_once(&[
+            "restore_step",
+            "!",
+            "(",
+            "Arrays",
+            ",",
+            "interp",
+            ",",
+            "tables",
+            ")",
+        ]) && contains_once(&[
+            "restore_step",
+            "!",
+            "(",
+            "$",
+            "next",
+            ",",
+            "$",
+            "d",
+            "current_interp",
+            ",",
+            "$",
+            "d",
+            "current_tables",
+            ")",
+        ]) && contains_once(&[
+            "let",
+            "$",
+            "field",
+            "=",
+            "$",
+            "d",
+            "current_tables",
+            ".",
+            "$",
+            "field",
+            ";",
+        ]) && contains_once(&["$", "body", "}"])
+            && {
+                let selector = &code[token_body(&code, "macro_rules! define_restore_steps")];
+                let selector: Vec<_> = selector.iter().map(|token| token.text).collect();
+                let all: Vec<_> = code.iter().map(|token| token.text).collect();
+                let once = |haystack: &[&str], needle: &str| {
+                    let needle = tokens(needle);
+                    let needle: Vec<_> = needle.iter().map(|token| token.text).collect();
+                    haystack
+                        .windows(needle.len())
+                        .filter(|window| *window == needle)
+                        .count()
+                        == 1
+                };
+                once(&selector, "define_restore_chain!(($); $($($section => $next [$($consumed),+] ($interp) $body)?) *);")
+                    && once(&all, "crate::snapshot_roster::snapshot_payloads!(define_restore_steps);")
+            }
+    }
+
+    #[test]
+    fn restore_emitter_carries_entry_successor_and_field_consumption() {
+        let source = include_str!("machine.rs");
+        assert!(restore_emitter_connected(source));
+        for (from, to) in [
+            (
+                "restore_step!(Arrays, interp, tables)",
+                "restore_step!(Errors, interp, tables)",
+            ),
+            (
+                "restore_step!($next, $d current_interp, $d current_tables)",
+                "restore_step!(End, $d current_interp, $d current_tables)",
+            ),
+            (
+                "let $field = $d current_tables.$field;",
+                "let $field = Default::default();",
+            ),
+            (
+                "$section => $next [$($consumed),+] ($interp) $body",
+                "$section => End [$($consumed),+] ($interp) $body",
+            ),
+            (
+                "$section => $next [$($consumed),+] ($interp) $body",
+                "$section => $next [arrays] ($interp) $body",
+            ),
+            (
+                "$section => $next [$($consumed),+] ($interp) $body",
+                "$section => $next [$($consumed),+] ($interp) {}",
+            ),
+            (
+                "snapshot_payloads!(define_restore_steps)",
+                "snapshot_payloads!(define_other_steps)",
+            ),
+        ] {
+            assert!(source.contains(from));
+            assert!(!restore_emitter_connected(&source.replace(from, to)));
+        }
     }
 
     #[test]
