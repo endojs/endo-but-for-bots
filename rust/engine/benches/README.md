@@ -727,3 +727,9 @@ failure at 1.002.
 Those ratios include the already-committed validation seam's benefit and do not
 isolate a validation-speed change caused by this extraction.
 Small timing deltas carry no statistical significance claim.
+
+The retained 1A measurements above predate the rebase onto `14278d1b2` and the
+format-18/schema-29 native-name persistence change.
+They remain historical observations of their recorded source hashes; they do
+not establish performance acceptance for the combined branch.
+The full 1A performance gate remains outstanding.

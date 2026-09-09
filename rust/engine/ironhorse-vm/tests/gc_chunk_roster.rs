@@ -1,11 +1,11 @@
 //! Generated bulk-table chunk walks preserve values and counted slot edges.
-use ironhorse_vm::{parse_symbols, Interp};
+use ironhorse_vm::{parse_symbols, Interp, CHUNK_EXTENT_BYTES};
 
 #[test]
 fn bulk_strings_relocate_without_changing_counted_object_edges() {
     let source = "var phase; var junk; var array; var index; var map; var target; \
         if (!phase) { \
-          junk = 'garbage'.repeat(4096); target = {}; \
+          junk = 'garbage'.repeat(1024); target = {}; \
           array = ['array'.repeat(100), target]; \
           index = {}; index[0] = 'index'.repeat(100); index[1] = target; \
           map = new Map(); map.set('key'.repeat(100), 'map'.repeat(100)); \
@@ -20,6 +20,17 @@ fn bulk_strings_relocate_without_changing_counted_object_edges() {
     let mut control = Interp::new();
     for vm in [&mut collected, &mut control] {
         vm.link_intrinsics(&parse_symbols(&names));
+        // Local compaction keeps crossing blocks anchored. Start the fixture
+        // on an extent boundary so its garbage and surviving bulk strings
+        // share one region, with more than a quarter of that region dead.
+        let per = CHUNK_EXTENT_BYTES as usize;
+        let mut padding = per - vm.chunks.byte_size() % per;
+        if padding < 4 {
+            padding += per;
+        }
+        vm.chunks.alloc(&vec![0; padding - 4]);
+        assert_eq!(vm.chunks.byte_size() % per, 0);
+
         let out = vm.run(&code);
         assert!(out.completed, "{:?}", out.halt);
     }

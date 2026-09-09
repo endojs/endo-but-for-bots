@@ -8,25 +8,37 @@ fn variant_docs(source: &str) -> BTreeMap<String, String> {
         .split_once("pub enum SideTable {")
         .expect("SideTable declaration")
         .1
-        .split_once("\n}")
+        .split_once('}')
         .expect("SideTable closing brace")
         .0;
-    let mut docs = BTreeMap::new();
-    let mut pending = String::new();
-    for line in body.lines().map(str::trim) {
-        if let Some(doc) = line.strip_prefix("///") {
-            pending.push_str(doc);
-            pending.push('\n');
-        } else if let Some(name) = line.strip_suffix(',') {
-            assert!(name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'));
-            assert!(docs
-                .insert(name.to_string(), std::mem::take(&mut pending))
-                .is_none());
-        } else {
-            assert!(line.is_empty(), "unrecognized variant syntax: {line}");
-        }
+    // Pin the actual documentation emitter, then inspect the same metadata
+    // it expands. A stale handwritten doc or a disconnected binding fails here.
+    assert_eq!(
+        body.split_whitespace().collect::<String>(),
+        "$(#[doc=$display]$variant=$id,)*",
+        "SideTable documentation must come from the roster"
+    );
+    macro_rules! collect_docs {
+        ($($variant:ident, $id:literal, $order:literal, $coverage:ident,
+            $primary:expr, $display:literal;)*) => {{
+            let rows = [$( (stringify!($variant).to_string(), $display.to_string()), )*];
+            let count = rows.len();
+            let docs: BTreeMap<_, _> = rows.into_iter().collect();
+            assert_eq!(docs.len(), count, "duplicate documentation entry");
+            docs
+        }};
     }
-    docs
+    ironhorse_vm::interp_tables!(collect_docs)
+}
+
+#[test]
+fn generated_variant_docs_require_the_roster_binding() {
+    let source = include_str!("../src/sidetable.rs");
+    for replacement in ["", "#[doc = \"uncallable\"]"] {
+        let changed = source.replace("#[doc = $display]", replacement);
+        assert_ne!(changed, source);
+        assert!(std::panic::catch_unwind(|| variant_docs(&changed)).is_err());
+    }
 }
 
 fn assert_carried_doc(name: &str, doc: &str) {
@@ -57,6 +69,11 @@ fn serialized_variants_do_not_claim_pending_or_uncallable() {
     for table in SideTable::ALL {
         let name = format!("{table:?}");
         let doc = docs.get(&name).expect("each variant has a doc block");
+        assert_eq!(
+            doc,
+            table.descriptor().field,
+            "{name} documentation binding"
+        );
         assert!(!doc.trim().is_empty(), "{name} needs documentation");
         if table.descriptor().coverage == Coverage::Serialized {
             assert_carried_doc(&name, doc);
