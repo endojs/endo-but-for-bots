@@ -6,6 +6,23 @@ import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { makeStreamingAgent } from '../agent.js';
 import { makeReplyChannel } from '../src/stream.js';
 
+const makeSendSignal = () => {
+  let count = 0;
+  const waiters = new Map();
+  return {
+    notify() {
+      count += 1;
+      waiters.get(count)?.();
+    },
+    /** @param {number} expected */
+    waitFor(expected) {
+      return count >= expected
+        ? Promise.resolve()
+        : new Promise(resolve => waiters.set(expected, resolve));
+    },
+  };
+};
+
 const makeFakePowers = () => {
   const store = new Map();
   const nameOf = petName =>
@@ -36,13 +53,16 @@ const makeFakePowers = () => {
   });
 };
 
-test('a hosted backend persists only a successfully completed turn', async t => {
+test('a hosted backend persists completed turns and scopes reused tool IDs', async t => {
+  t.timeout(5000);
+  const sent = makeSendSignal();
   const turns = [];
   const powers = makeFakePowers();
   const hostedClient = harden({
     async send() {
       const channel = makeBufferedReader();
       turns.push(channel);
+      sent.notify();
       return channel.reader;
     },
   });
@@ -59,10 +79,7 @@ test('a hosted backend persists only a successfully completed turn', async t => 
     return events;
   })();
   const turnP = agent.converse('build it', writer);
-  for (let tries = 0; turns.length === 0 && tries < 50; tries += 1) {
-    // eslint-disable-next-line no-await-in-loop
-    await null;
-  }
+  await sent.waitFor(1);
   turns[0].push({ type: 'text-delta', text: 'Built.' });
   turns[0].push({ type: 'tool-call', id: 'tool-1', name: 'shell', args: '{}' });
   turns[0].push({
@@ -89,10 +106,7 @@ test('a hosted backend persists only a successfully completed turn', async t => 
 
   const secondReply = makeReplyChannel();
   const secondTurn = agent.converse('again', secondReply.writer);
-  for (let tries = 0; turns.length < 2 && tries < 50; tries += 1) {
-    // eslint-disable-next-line no-await-in-loop
-    await null;
-  }
+  await sent.waitFor(2);
   turns[1].push({
     type: 'tool-call',
     id: 'tool-1',
@@ -129,7 +143,7 @@ test('a hosted backend persists only a successfully completed turn', async t => 
   });
 });
 
-test('failed hosted turns do not revive as history after restart', async t => {
+test('failed hosted turns revive before later successful history', async t => {
   const powers = makeFakePowers();
   const failedClient = harden({
     async send() {
@@ -173,6 +187,8 @@ test('failed hosted turns do not revive as history after restart', async t => {
       message.content,
     ]),
     [
+      ['user', 'orphan me'],
+      ['assistant', 'Turn failed: failed'],
       ['user', 'new turn'],
       ['assistant', 'Clean.'],
     ],
@@ -180,6 +196,8 @@ test('failed hosted turns do not revive as history after restart', async t => {
 });
 
 test('agent shutdown interrupts and awaits an active hosted turn', async t => {
+  t.timeout(5000);
+  const sent = makeSendSignal();
   const powers = makeFakePowers();
   let interrupted = 0;
   let terminalDelivered = false;
@@ -188,6 +206,7 @@ test('agent shutdown interrupts and awaits an active hosted turn', async t => {
     async send() {
       const channel = makeBufferedReader();
       turns.push(channel);
+      sent.notify();
       return channel.reader;
     },
     async interrupt() {
@@ -204,10 +223,7 @@ test('agent shutdown interrupts and awaits an active hosted turn', async t => {
   );
   const reply = makeReplyChannel();
   const turn = agent.converse('keep working', reply.writer);
-  for (let tries = 0; turns.length === 0 && tries < 50; tries += 1) {
-    // eslint-disable-next-line no-await-in-loop
-    await null;
-  }
+  await sent.waitFor(1);
   turns[0].push({ type: 'phase', phase: 'thinking' });
   await null;
   await null;
@@ -215,7 +231,14 @@ test('agent shutdown interrupts and awaits an active hosted turn', async t => {
   await turn;
   t.true(terminalDelivered);
   t.is(interrupted, 1);
-  t.deepEqual(await agent.getHistory(), []);
+  t.deepEqual(
+    (await agent.getHistory()).map(message => [message.role, message.content]),
+    [
+      ['user', 'keep working'],
+      ['assistant', 'Turn cancelled.'],
+    ],
+  );
+  t.is((await agent.getTurns())[0].state, 'cancelled');
   await t.throwsAsync(
     () => agent.converse('too late', makeReplyChannel().writer),
     { message: /shutting down/ },
@@ -223,12 +246,15 @@ test('agent shutdown interrupts and awaits an active hosted turn', async t => {
 });
 
 test('a rejected hosted interrupt quarantines the streaming agent', async t => {
+  t.timeout(5000);
+  const sent = makeSendSignal();
   const powers = makeFakePowers();
   const turns = [];
   const hostedClient = harden({
     async send() {
       const channel = makeBufferedReader();
       turns.push(channel);
+      sent.notify();
       return channel.reader;
     },
     async interrupt() {
@@ -242,10 +268,7 @@ test('a rejected hosted interrupt quarantines the streaming agent', async t => {
     'test prompt',
   );
   const active = agent.converse('mutate', makeReplyChannel().writer);
-  for (let tries = 0; turns.length === 0 && tries < 50; tries += 1) {
-    // eslint-disable-next-line no-await-in-loop
-    await null;
-  }
+  await sent.waitFor(1);
   turns[0].push({ type: 'phase', phase: 'thinking' });
   const activeFailure = t.throwsAsync(active, {
     message: /terminal barrier failed/,
@@ -293,7 +316,7 @@ test('shutdown cancels inbox startup delayed before iterator creation', async t 
   t.true(inbox.isClosed());
 });
 
-test('failed provider tool loops do not revive partial history', async t => {
+test('failed provider tool loops revive their known tool effects', async t => {
   const powers = makeFakePowers();
   let round = 0;
   const provider = harden({
@@ -334,7 +357,14 @@ test('failed provider tool loops do not revive partial history', async t => {
     { provider },
     'test prompt',
   );
-  t.deepEqual(await revived.getHistory(), []);
+  const history = await revived.getHistory();
+  t.is(history[0].content, 'partial');
+  t.is(history[1].role, 'tool');
+  t.is(history[1].name, 'list');
+  t.true(Array.isArray(JSON.parse(history[1].result)));
+  t.is(history[2].content, 'Turn failed: provider failed after tool execution');
+  t.true(history.every(message => message.meta.turnState === 'failed'));
+  t.is((await revived.getTurns())[0].tools[0].settled, true);
 });
 
 test('hosted provisioning receives the session delegation and account catalog', async t => {
@@ -347,11 +377,19 @@ test('hosted provisioning receives the session delegation and account catalog', 
     {
       provideHostedClient: async snapshot => {
         supplied = snapshot;
-        // A backend may invoke an endowed tool during provisioning. Every
-        // closure in that catalog must already have initialized session state.
-        const report = await snapshot.execute('accountStatus', harden({}));
-        t.regex(report, /0 input and 0 output tokens/);
-        return harden({});
+        await t.throwsAsync(snapshot.execute('accountStatus', harden({})), {
+          message: /outside an active Floot turn/,
+        });
+        return harden({
+          async send() {
+            const report = await snapshot.execute('accountStatus', harden({}));
+            t.regex(report, /0 input and 0 output tokens/);
+            const channel = makeBufferedReader();
+            channel.push({ type: 'text-delta', text: 'Checked' });
+            channel.push({ type: 'end' });
+            return channel.reader;
+          },
+        });
       },
     },
     'test prompt',
@@ -368,6 +406,7 @@ test('hosted provisioning receives the session delegation and account catalog', 
     },
   );
   t.teardown(() => agent.shutdown());
+  await agent.converse('check account', makeReplyChannel().writer);
   if (!supplied) throw Error('Hosted catalog was not supplied');
   for (const name of [
     'spawnSubagent',
