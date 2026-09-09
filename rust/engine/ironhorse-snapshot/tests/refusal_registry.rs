@@ -196,6 +196,88 @@ fn split_tests(tokens: &[Token]) -> (Vec<Token>, Vec<Token>) {
     }
     (production, tests)
 }
+// Expand only the audited roster label edge for the refusal inventory. The
+// normal scanner still checks every other producer, including the framing
+// closure's two Corrupt(name) forwarding sites.
+fn expand_roster_labels(tokens: &[Token]) -> Vec<Token> {
+    fn unique(tokens: &[Token], pattern: &str) -> usize {
+        let pattern = lex(pattern);
+        let positions: Vec<_> = tokens
+            .windows(pattern.len())
+            .enumerate()
+            .filter(|(_, window)| *window == pattern)
+            .map(|(at, _)| at)
+            .collect();
+        assert_eq!(
+            positions.len(),
+            1,
+            "roster wiring must occur once: {pattern:?}"
+        );
+        positions[0]
+    }
+    let marker = "macro_rules! snapshot_payloads";
+    let start = unique(tokens, marker) + lex(marker).len();
+    assert_eq!(tokens[start], Token::Punct('{'));
+    let end = end_group(tokens, start);
+    let body = &tokens[start + 1..end];
+    let mut labels = BTreeSet::new();
+    for at in 0..body.len() {
+        if word(&body[at], "legacy_label") {
+            assert_eq!(body[at + 1], Token::Punct(':'));
+            let Token::String(label) = &body[at + 2] else {
+                panic!("roster legacy labels must be literal");
+            };
+            assert_eq!(body[at + 3], Token::Punct(','));
+            assert!(labels.insert(label.clone()), "duplicate legacy label");
+        }
+    }
+    assert!(!labels.is_empty());
+    unique(tokens, "legacy_label: $legacy_label: literal");
+    unique(tokens, "snapshot_payloads!(define_payloads)");
+    let call = "read_small_section($legacy_label)";
+    let at = unique(tokens, call);
+    let mut expanded = tokens[..at].to_vec();
+    for label in labels {
+        expanded.extend([
+            Token::Word("read_small_section".into()),
+            Token::Punct('('),
+            Token::String(label),
+            Token::Punct(')'),
+            Token::Punct(';'),
+        ]);
+    }
+    expanded.extend_from_slice(&tokens[at + lex(call).len()..]);
+    expanded
+}
+
+#[test]
+fn roster_labels_reject_dynamic_or_disconnected_wiring() {
+    let (production, _) = split_tests(&lex(include_str!("../src/snapshot_roster.rs")));
+    let expanded = expand_roster_labels(&production);
+    let (names, _) = inventory(&expanded);
+    assert!(names.contains("small state stack section"));
+    assert!(names.contains("small state index-props section"));
+    for (from, to) in [
+        (
+            "legacy_label: \"small state stack section\"",
+            "legacy_label: dynamic",
+        ),
+        (
+            "read_small_section($legacy_label)",
+            "read_small_section(dynamic)",
+        ),
+        (
+            "snapshot_payloads!(define_payloads)",
+            "snapshot_payloads!(unconnected)",
+        ),
+    ] {
+        let source = include_str!("../src/snapshot_roster.rs");
+        assert!(source.contains(from));
+        let (changed, _) = split_tests(&lex(&source.replacen(from, to, 1)));
+        assert!(std::panic::catch_unwind(|| expand_roster_labels(&changed)).is_err());
+    }
+}
+
 fn inventory(tokens: &[Token]) -> (BTreeSet<String>, BTreeMap<String, usize>) {
     inventory_in(tokens, false)
 }
@@ -353,13 +435,19 @@ fn every_named_corruption_is_asserted_or_explicitly_allowlisted() {
     let mut coverage = BTreeSet::new();
     for path in files {
         let (production, tests) = split_tests(&lex(&std::fs::read_to_string(&path).unwrap()));
+        let production = if path.file_name().unwrap() == "snapshot_roster.rs" {
+            expand_roster_labels(&production)
+        } else {
+            production
+        };
         let (found, forwarded) = inventory_in(
             &production,
             path.file_name().unwrap() == "store_sections.rs",
         );
         let expected: &[(&str, &str, usize)] = match path.file_name().unwrap().to_str().unwrap() {
             "image.rs" => &[("Corrupt", "self.what", 7), ("Corrupt", "what", 2)],
-            "store.rs" => &[("Corrupt", "name", 4)],
+            "store.rs" => &[("Corrupt", "name", 2)],
+            "snapshot_roster.rs" => &[("Corrupt", "name", 2)],
             "store_sections.rs" => &[("Corrupt", "message", 1)],
             "store_file.rs" => &[("Corrupt", "what", 1), ("file_corrupt", "what", 4)],
             "format.rs" => &[("Corrupt", "&'static str", 1)],
