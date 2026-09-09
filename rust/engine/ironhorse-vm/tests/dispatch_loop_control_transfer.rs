@@ -4,7 +4,11 @@
 
 use ironhorse_vm::source_scan::{code_only, token_body, token_positions, tokens, Token};
 
-const SRC: &str = include_str!("../src/interp.rs");
+const SRC: &str = concat!(
+    include_str!("../src/interp.rs"),
+    "\n",
+    include_str!("../src/interp/dispatch.rs")
+);
 
 fn unwrapped_raises(code: &[Token<'_>]) -> Vec<usize> {
     code.iter()

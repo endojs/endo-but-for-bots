@@ -249,19 +249,19 @@ fn cross_file_violations(path: &str, source: &str) -> Vec<String> {
     // Native catches use the carried throw value. Permit the renderer save
     // and opcode reads only in their current owning module; all child modules
     // are covered by this same recursive lock.
-    let accepted: Vec<_> = if path == "ironhorse-vm/src/interp.rs" {
-        [
-            "let saved_exception = self.exception;",
+    let allowed_reads: &[&str] = match path {
+        "ironhorse-vm/src/interp.rs" => &["let saved_exception = self.exception;"],
+        "ironhorse-vm/src/interp/dispatch.rs" => &[
             "let ex = self.exception;",
             "let v = self.exception;",
             "let current = self.exception;",
-        ]
+        ],
+        _ => &[],
+    };
+    let accepted: Vec<_> = allowed_reads
         .iter()
         .flat_map(|pattern| token_positions(&code, pattern).into_iter().map(|at| at + 3))
-        .collect()
-    } else {
-        Vec::new()
-    };
+        .collect();
     for receiver in ["self", "machine"] {
         for at in token_positions(&code, &format!("{receiver}.exception")) {
             let suffix = &code[at + 3..];

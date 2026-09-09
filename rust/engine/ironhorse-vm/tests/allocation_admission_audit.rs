@@ -3,6 +3,8 @@
 const SOURCE: &str = concat!(
     include_str!("../src/interp.rs"),
     "\n",
+    include_str!("../src/interp/dispatch.rs"),
+    "\n",
     include_str!("../src/interp/boot.rs"),
     "\n",
     include_str!("../src/interp/bigint.rs"),
