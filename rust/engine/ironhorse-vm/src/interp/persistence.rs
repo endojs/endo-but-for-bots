@@ -62,6 +62,7 @@ macro_rules! define_persist_holders {
         $(#[gc_root($root:ident)]
           #[quiescent($boundary:ident)]
           #[persist_refs($persist:ident)]
+          #[runtime_keys($runtime_keys:ident)]
           #[gc_hook($phase:ident, $policy:ident)]
           #[gc_chunk($chunk:ident)]
           #[gc_slots($shape:ident, $row:ident)]
@@ -94,3 +95,57 @@ fn saved_frame_contains(f: &SavedFrame, names: &impl Fn(&Slot) -> bool) -> bool 
         || names(&f.result)
         || f.jumps.iter().any(|j| names(&j.env))
 }
+
+// This diagnostic deliberately has a narrower holder set than persist_refs.
+// Keep the historical live-entry and item-value projections unchanged.
+macro_rules! runtime_key_iter {
+    ($emit:ident, $vm:ident, $field:ident, slots) => {
+        $emit! { $vm.$field.iter() }
+    };
+    ($emit:ident, $vm:ident, $field:ident, indexed) => {
+        $emit! { $vm.$field.values().flat_map(|a| a.items().values()) }
+    };
+    ($emit:ident, $vm:ident, $field:ident, collections) => {
+        $emit! { $vm.$field.values().flat_map(|c| c.live_entries().flat_map(|(k, v)| [k, v])) }
+    };
+}
+macro_rules! define_runtime_key_scan {
+    (() $vis:vis struct $name:ident {
+        $(#[gc_root($root:ident)]
+          #[quiescent($boundary:ident)]
+          #[persist_refs($persist:ident)]
+          #[runtime_keys($runtime_keys:ident)]
+          #[gc_hook($phase:ident, $policy:ident)]
+          #[gc_chunk($chunk:ident)]
+          #[gc_slots($shape:ident, $row:ident)]
+          #[gc_weak($weak:ident)]
+          #[snapshot_table($($snapshot:tt)*)]
+          $(#[$attr:meta])* $field_vis:vis $field:ident: $ty:ty,)*
+    } external_tables { $($external:tt)* }) => {
+        define_runtime_key_scan!(@scan []; $(($field, $runtime_keys))*);
+    };
+    (@scan [$($selected:tt)*]; ($field:ident, none) $($rest:tt)*) => {
+        define_runtime_key_scan!(@scan [$($selected)*]; $($rest)*);
+    };
+    (@scan [$($selected:tt)*]; ($field:ident, $policy:ident) $($rest:tt)*) => {
+        define_runtime_key_scan!(@scan [$($selected)* ($field, $policy)]; $($rest)*);
+    };
+    (@scan [$(($field:ident, $policy:ident))*];) => {
+        impl Interp {
+            pub(super) fn runtime_key_tail_min(
+                &self, over: &impl Fn(&Slot) -> Option<u16>,
+            ) -> Option<u16> {
+                std::iter::empty()
+                    $(.chain(runtime_key_iter!(persist_run, self, $field, $policy)))*
+                    .filter_map(over)
+                    .min()
+            }
+        }
+        /// Executed key-holder projections for independent coverage checks.
+        #[doc(hidden)]
+        pub const RUNTIME_KEY_HOLDER_SOURCE: &[(&str, &str)] = &[
+            $((stringify!($field), runtime_key_iter!(persist_text, self, $field, $policy)),)*
+        ];
+    };
+}
+interp_state!(define_runtime_key_scan);

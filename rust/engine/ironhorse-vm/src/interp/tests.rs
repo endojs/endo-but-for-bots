@@ -2126,3 +2126,53 @@ fn utf16_string_atom_snapshot_round_trips_supplementary_and_lone_surrogate() {
         assert_eq!(&*dst.str_content(dst_off), payload.as_slice());
     }
 }
+
+#[test]
+fn runtime_key_scan_keeps_arena_precedence_and_tail_minimum() {
+    let mut vm = Interp::new();
+    // Isolate the diagnostic's holders; this fixture is never executed or swept.
+    vm.slots = SlotArena::new();
+    vm.stack.clear();
+    vm.arrays.retain_keys(|_| false);
+    vm.index_props.clear();
+    vm.collections.retain_keys(|_| false);
+    vm.wrapper_data.retain_keys(|_| false);
+    vm.next_symbol_key_id = u16::MAX - 1;
+    let floor = vm.first_runtime_intern_id();
+    let key = |offset| {
+        let mut slot = Slot::undefined();
+        slot.id = floor.checked_add(offset).unwrap();
+        slot
+    };
+    let owner = vm.slots.alloc(Slot::undefined());
+    let first = vm.slots.alloc(key(9));
+    let second = vm.slots.alloc(key(8));
+    vm.stack.push(key(6));
+    let mut array = ArrayData::default();
+    array.insert_item(0, key(7), &mut vm.side_refs);
+    array.insert_item(1, key(5), &mut vm.side_refs);
+    vm.arrays.insert(owner, array);
+    let mut indexed = ArrayData::default();
+    indexed.insert_item(0, key(4), &mut vm.side_refs);
+    vm.index_props.insert(owner, indexed);
+    let mut collection = CollectionData::new(CollKind::Map, 4);
+    collection.push_entry(key(2), key(1), &mut vm.side_refs);
+    vm.collections.insert(owner, collection);
+    // The key diagnostic has never walked every native-reference holder.
+    // Reusing persist_refs would incorrectly include this lower witness.
+    vm.wrapper_data.insert(owner, key(0));
+
+    assert_eq!(vm.stored_runtime_intern(), Some(floor + 9));
+    vm.slots.free(first);
+    assert_eq!(vm.stored_runtime_intern(), Some(floor + 8));
+    vm.slots.free(second);
+    assert_eq!(vm.stored_runtime_intern(), Some(floor + 1));
+    vm.collections.retain_keys(|_| false);
+    assert_eq!(vm.stored_runtime_intern(), Some(floor + 4));
+    vm.index_props.clear();
+    assert_eq!(vm.stored_runtime_intern(), Some(floor + 5));
+    vm.arrays.retain_keys(|_| false);
+    assert_eq!(vm.stored_runtime_intern(), Some(floor + 6));
+    vm.stack.clear();
+    assert_eq!(vm.stored_runtime_intern(), None);
+}

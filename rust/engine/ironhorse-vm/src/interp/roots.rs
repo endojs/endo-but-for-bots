@@ -166,6 +166,7 @@ macro_rules! define_root_walk {
         $(#[gc_root($root:ident)]
           #[quiescent($boundary:ident)]
           #[persist_refs($persist:ident)]
+          #[runtime_keys($runtime_keys:ident)]
           #[gc_hook($phase:ident, $policy:ident)]
           #[gc_chunk($chunk:ident)]
           #[gc_slots($shape:ident, $row:ident)]

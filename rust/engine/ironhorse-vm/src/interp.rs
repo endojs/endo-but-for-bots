@@ -7309,19 +7309,10 @@ impl Interp {
                 return Some(id);
             }
         }
-        // Deterministic witness (wave-6 W6-24): the MINIMUM offending
-        // id across the map-backed tails, not HashMap surfacing order.
-        self.stack_slots()
-            .iter()
-            .chain(self.arrays.values().flat_map(|a| a.items().values()))
-            .chain(self.index_props.values().flat_map(|a| a.items().values()))
-            .chain(
-                self.collections
-                    .values()
-                    .flat_map(|c| c.live_entries().flat_map(|(k, v)| [k, v])),
-            )
-            .filter_map(over)
-            .min()
+        // Map iteration order cannot determine the witness. The roster scan
+        // returns the minimum across the historical stack and table holders,
+        // independently locked by runtime_key_registry.rs.
+        self.runtime_key_tail_min(&over)
     }
 
     /// Quiescent snapshot of the `arrays` side table (side-table
