@@ -15,6 +15,7 @@ import { startAppServerTransport } from './app-server-transport.js';
 import { makeCodexBackendFactory } from './backend-factory.js';
 import { makeHostVolumeProvider } from './host-volume-provider.js';
 import { whenHostStops } from './host-lifecycle.js';
+import { makeRenewingCodexBackend } from './renewing-backend.js';
 import { makeAttestedCodexResourceProvisioner } from './sandbox-policy.js';
 import { makeCodexSubscriptionCredential } from './subscription-auth.js';
 
@@ -189,7 +190,7 @@ export const makeHostedCodexSubscription = async options => {
         console.error('Codex host cleanup remains pending');
       });
     }
-    return harden({ backend, dispose });
+    return harden({ backend: makeRenewingCodexBackend(backend), dispose });
   } catch (error) {
     await dispose();
     throw error;

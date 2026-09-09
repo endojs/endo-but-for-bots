@@ -75,7 +75,7 @@ The full Floot-driven Sol review subsequently completed 29 provider requests and
 saved a 2,924-word Markdown document. Two fresh clients read the same document
 digest and all 46 session history records, including 28 review tool records and
 the final assistant response. This is bounded workload acceptance, not a claim
-that long-lived lease renewal or full restart recovery is complete.
+that full restart recovery is complete.
 The earlier attempt exposed implicit 100,000-character request guards; the broker
 and transport now admit configured larger bodies within a finite wire envelope.
 
@@ -90,8 +90,20 @@ This remains a bounded experimental composition:
   The subscription composition opts into a ten-minute absolute request deadline
   on both listener and transport, additionally bounded by independent lease expiry.
   Other issuer users retain the two-minute default unless explicitly configured.
-  Credential renewal does not renew a lease; automatic long-lived reprovisioning
-  is not implemented.
+  Credential renewal is separate from resource-lease renewal.
+  Before each explicit new turn, the hosted composition automatically provisions
+  a fresh bounded lease and app-server generation using the same durable session,
+  workspace, thread state, and checkpoint.
+  The old client's pending-tool barrier and complete process/resource cleanup
+  must succeed before the successor is admitted; cleanup failure refuses the turn.
+  This permits long-lived conversations without sharing one lifetime request
+  budget, at the cost of container startup and thread-resume latency every turn.
+  Active turns are never interrupted to renew a lease, and a dispatched prompt is
+  never replayed automatically.
+  A single turn still has the one-hour/64-request ceiling: expiry or exhaustion
+  during that turn is an error, not permission to refill its budget indefinitely.
+  The next explicitly submitted turn starts a new generation and uses the usual
+  durable-checkpoint reconciliation; failed-turn side effects are not undone.
 - Broker application errors preserve the listener and return a generic HTTP error.
   A retrying CLI can still require cancellation after quota exhaustion.
 - Abandoned registry transactions remain fenced for explicit operator recovery.
