@@ -746,7 +746,18 @@ impl Parser<'_> {
             self.match_token(Token::Await)?;
         }
         self.match_token(Token::LeftParenthesis)?;
-        self.look_ahead_once()?;
+        // Only contextual declaration heads need lookahead. Scanning ahead
+        // of a leading slash would tokenize regexp contents as operators
+        // before primary_expression can select the regexp lexical goal.
+        if self.cur.token == Token::Await
+            || (self.cur.token == Token::Identifier
+                && matches!(
+                    self.cur.symbol.as_ref().and_then(SymbolName::as_str),
+                    Some("let" | "using")
+                ))
+        {
+            self.look_ahead_once()?;
+        }
         self.flags |= flags::FOR;
         if self.cur.token == Token::Semicolon {
             self.push_null();
@@ -782,15 +793,18 @@ impl Parser<'_> {
                 self.variable_statement(Token::Using, 0)?;
             }
         } else if self.cur.token == Token::Await {
-            self.look_ahead_twice()?;
-            let is_await_using = !self.ahead_crlf()
+            let maybe_await_using = !self.ahead_crlf()
                 && self.ahead_token() == Token::Identifier
                 && self
                     .ahead
                     .as_ref()
                     .and_then(|s| s.symbol.as_ref().and_then(SymbolName::as_str))
                     == Some("using")
-                && !self.ahead.as_ref().is_some_and(|s| s.escaped)
+                && !self.ahead.as_ref().is_some_and(|s| s.escaped);
+            if maybe_await_using {
+                self.look_ahead_twice()?;
+            }
+            let is_await_using = maybe_await_using
                 && !self.ahead2.as_ref().is_some_and(|s| s.crlf)
                 && matches!(
                     self.ahead2_token(),
