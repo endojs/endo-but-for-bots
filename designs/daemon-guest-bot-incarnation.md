@@ -21,10 +21,11 @@ acceptance must not depend on whether the bot starts successfully.
 
 This primitive is intended to support a Claude-backed guest, but its daemon
 surface does not embed Claude-specific credential, model, or minion.town policy.
-Those belong to the bot's caplet and its deployment. There are two exceptions,
-each called out where it arises. First, a single load-bearing quota assumption
-this design places on the composing minion.town design (see § Retention and
-quotas). Second, a single burden this design places on the consumer's
+Those belong to the bot's caplet and its deployment. There are two places where
+this design depends on its consumers, each called out where it arises. First, a
+single load-bearing quota assumption this design places on the composing
+minion.town design (see § Retention and quotas). Second, a single burden this
+design places on the consumer's
 credential handling: a Claude-backed bot must map a recognized shared-upstream
 provider outage onto the `needs-auth`-shaped seam rather than letting it reach
 the daemon as a crash (see § Failure, backoff, and credential expiry). In
@@ -54,7 +55,7 @@ arrival keep one bot incarnation alive. The daemon *manager* is the per-daemon
 component that owns the formula graph and the *provide* operation that turns a
 formula identifier into a live incarnation; `provide` is memoized per identifier
 (`controllerForId`), so repeated `provide` of one identifier returns one shared
-incarnation until that incarnation's context is cancelled, at which point the
+incarnation until that incarnation's context is canceled, at which point the
 next `provide` builds a fresh one. The *incarnation supervisor* introduced below
 is the in-memory, per-daemon component that decides when to bring a bot
 incarnation to life for a guest and keeps at most one alive per guest. These
@@ -88,25 +89,28 @@ The referenced capability has this daemon-facing interface:
 ```ts
 type BotBlockedReason = 'needs-auth' | 'admission-denied' | 'operator';
 
-type BotStop =
-  | { type: 'stopped' }
-  | { type: 'blocked'; reason: BotBlockedReason; retryWhen?: Promise<void> };
+type BotBlocked = {
+  type: 'blocked';
+  reason: BotBlockedReason;
+  retryWhen?: Promise<void>;
+};
+
+type BotStop = { type: 'stopped' } | BotBlocked;
 
 interface EndoBot {
-  help(): Promise<string>;
+  help(topic?: string): Promise<string>;
   start(
     guest: EndoGuest,
     options: { cancelled: Promise<never> },
-  ): Promise<
-    | { type: 'running'; stopped: Promise<BotStop> }
-    | { type: 'blocked'; reason: BotBlockedReason; retryWhen?: Promise<void> }
-  >;
+  ): Promise<{ type: 'running'; stopped: Promise<BotStop> } | BotBlocked>;
 }
 ```
 
-`help()` is the conventional capability-introspection method (per AGENTS.md, it
-returns a descriptive string); it lets an operator discover a bot capability the
-same way as every other daemon interface that carries it. `start` resolves with
+`help(topic?)` is the conventional capability-introspection method (per
+`AGENTS.md`, it returns a descriptive string and takes an optional topic, the
+dominant arity across the daemon's `help`-bearing guards); it lets an operator
+discover a bot capability the same way as every other daemon interface that
+carries it. `start` resolves with
 `running` only after the bot has subscribed to the guest's mailbox and is ready
 to service it. `stopped` settles when that incarnation
 exits. Unexpected rejection before readiness or from `stopped` is a crash. The
@@ -122,10 +126,20 @@ ordinary caplet, and `formulateCapletDependencies` gives every caplet its own
 `powers` edge (a fresh guest by default, or any caller-specified identifier,
 including the provisioning host's). The daemon does not constrain those powers,
 so containing the bot to exactly the guest's authority is an unenforced
-deployment obligation, not a daemon-level guarantee: a deployment that wants the
-bot's authority to be the guest and nothing more must formulate the bot with the
-guest as its `powers`. The daemon guarantees only that the guest facet is passed
-in and that the `guest -> bot` edge stays one-way.
+deployment obligation, not a daemon-level guarantee. This increment does not
+offer a way to make the bot's `powers` *be* its bound guest, and does not
+recommend attempting it: `powers` is a persisted formula edge
+(`formulateCapletDependencies` records `powers: powersId`), so binding the bot's
+`powers` to the guest would create exactly the `bot -> guest` dependency this
+section forbids and that provisioning rejects. It is unreachable under the
+provisioning order regardless, because a guest names its `bot`, so the bot is
+formulated first, before the guest identifier such a posture would need exists.
+Narrowing a bot's authority toward its guest is therefore left to a deployment's
+choice of a suitably scoped `powers` guest, and a first-class "the bot's
+authority is exactly this guest" containment is deferred together with the
+in-place rebinding it would require (see § First Increment and Deferred Work).
+The daemon guarantees only that the guest facet is passed in and that the
+`guest -> bot` edge stays one-way.
 
 **One incarnation per guest.** Each bot-bound guest binds its own bot formula
 identifier, and the daemon runs exactly one bot incarnation per guest. Because
@@ -151,10 +165,11 @@ incarnation, and their two supervisor entries (keyed by guest identifier) would
 each call `start` on that shared instance, handing one bot process two guests'
 authority and breaking the retention, worker-cost, and one-live-call invariants
 above. Distinctness is therefore a *checked* precondition, not an assumption
-about caller hygiene: `provideGuest(name, { bot })` whose resolved `bot`
-identifier is already recorded as another guest's `bot` edge in the formula graph
-is rejected with an error naming the conflicting guest, rather than silently
-sharing the incarnation. Because two guests each formulated with a *freshly
+about caller hygiene. If the resolved `bot` identifier of a
+`provideGuest(name, { bot })` call is already recorded as another guest's `bot`
+edge in the formula graph, the call is rejected with an error naming the
+conflicting guest, rather than silently sharing the incarnation. Because two
+guests each formulated with a *freshly
 minted* bot recipe get distinct `randomHex256` identifiers, they never collide;
 the only way to reach this rejection is to pass the *same existing* bot name or
 identifier to two different guests. That is exactly the collision the check
@@ -181,7 +196,7 @@ shared `normalizeHostOrGuestOptions` helper (`host.js`) that destructures only
 that shared helper (a guest-specific option type that recognizes and resolves
 `bot`, and a host path that rejects an unrecognized `bot` key), so the
 authority-boundary guarantee this paragraph states is actually enforced rather
-than assumed (see Affected Packages, `host.js`).
+than assumed (see § Affected Packages, `host.js`).
 
 An absent `bot` option preserves today's serialized guest formula exactly. The
 field is *omitted* from the record, not stored as `null` or `undefined`, so an
@@ -220,7 +235,8 @@ mismatch, per above). In-place bot rebinding, including any mailbox-transfer
 semantics, is deferred.
 
 Because the persisted `bot` value pins one formulated *instance* of a bot recipe
-by its minted identifier, not a stable "this guest's bot" role, this snapshot has
+by its minted identifier (a snapshot of that instance, not a stable "this guest's
+bot" role), that snapshot has
 a consequence worth stating plainly: an ordinary bot code upgrade (new module
 source, hence a new formulation with a new identifier) is a guest
 re-identification. It discards the guest's keypair and the retained conversation
@@ -229,8 +245,8 @@ migration above. For a long-lived Claude-backed guest, whose bot code is expecte
 to change routinely, that upgrade path is the dominant operational case rather
 than the edge case the deferral above frames it as. A middle alternative that
 separates guest identity from bot value (binding to a stable indirection the
-guest owns, resolved per incarnation) is weighed and rejected under Alternatives
-Considered; this increment accepts the re-identification cost.
+guest owns, resolved per incarnation) is weighed and rejected under
+§ Alternatives Considered; this increment accepts the re-identification cost.
 
 ### Incarnation supervisor
 
@@ -239,7 +255,7 @@ An entry has one of these in-memory states:
 
 | State | Meaning |
 |---|---|
-| `dormant` | No message in this daemon incarnation has demanded the bot. |
+| `dormant` | No live incarnation and no outstanding demand: either no message has yet demanded the bot in this daemon incarnation, or a prior incarnation cleanly idle-exited after servicing its mail. |
 | `starting` | Exactly one `provide(botId)` / `start(guest)` operation is in flight. |
 | `running` | `start` reported ready and its `stopped` promise is pending. |
 | `stopping` | A canceled incarnation's `stopped` promise has not yet settled. |
@@ -259,12 +275,12 @@ if no breaker is open at that point, so a new delivery cannot open a second
 consumer while the old one is still winding down, and a `stopBot`-initiated
 teardown that passes through `stopping` (below) settles into `blocked`/`operator`
 rather than reincarnating on the recorded demand. In `dormant` it starts an
-attempt. In `blocked`, ordinary mail does not reset the breaker.
+attempt. In `blocked` it records demand but does not reset the breaker.
 
 Each attempt is a *fresh incarnation*, and the supervisor is responsible for
 making it one. Because `provide(botId)` is memoized by identifier
-(`controllerForId`, see Background), a second `provide(botId)` returns the same,
-already-exited controller unless that incarnation's context has been cancelled
+(`controllerForId`, see § Background), a second `provide(botId)` returns the same,
+already-exited controller unless that incarnation's context has been canceled
 first. So before it re-provides for any retry (whether from `backoff`, from a
 `retryWhen` fulfillment, or from `retryBot`), the supervisor cancels the prior
 incarnation's context, dropping the memoized controller, so the next
@@ -291,7 +307,7 @@ next state:
   (see § Failure, backoff, and credential expiry).
 
 Teardown cancels the bot incarnation's *own* context, not merely the `cancelled`
-promise passed to `start`. Cancelling that context cancels the bot's controller
+promise passed to `start`. Canceling that context cancels the bot's controller
 and runs the worker's `gracefulCancel` grace period, which is what the daemon's
 existing force-reap timeout bounds. Rejecting only the `cancelled` promise would
 leave a bot that ignores it parked forever, so the supervisor must cancel the
@@ -362,7 +378,7 @@ makes crash replay safe, so the drain race needs no additional machinery.
 The daemon treats the bot's `running` self-report as authoritative. A bot that
 reports `running` but never actually drains its mailbox is a bot defect this
 increment does not detect, because the daemon has no read-side signal for
-consumption; the future mailbox-acknowledgment protocol noted under Restart
+consumption; the future mailbox-acknowledgment protocol noted under § Restart
 behavior would also close this gap. Scoping it out here keeps the daemon from
 inventing a liveness probe over opaque bot behavior.
 
@@ -383,9 +399,11 @@ Startup is lazy, not an eager incarnation of every bot-bound guest. After
 `seedFormulaGraphFromPersistence` has reconstructed reachability, the manager
 examines reachable `guest` formulas with `bot` fields. It schedules
 `ensureBot` only for a guest whose mailbox store contains at least one numeric
-message entry. The scan reads store indexes; it does not provide the guest, bot,
-or worker for empty mailboxes. Startup of the daemon itself does not await these
-attempts.
+message entry, with one exception applied below: a guest whose persisted
+`crash-loop` breaker is open is left `blocked` and is not scanned for a fresh
+attempt (see § Failure, backoff, and credential expiry). The scan reads store
+indexes; it does not provide the guest, bot, or worker for empty mailboxes.
+Startup of the daemon itself does not await these attempts.
 
 This gives pending mail the same wake semantics whether it was committed before
 or after the restart. A crash in the small interval after mailbox commit but
@@ -434,10 +452,10 @@ daemon restart, and what clears it. Rather than argue each in prose, the table
 gives one row per reason; the prose that follows only justifies the two cells
 that are non-obvious (why `crash-loop` persists and why `operator` does not).
 
-| reason | counts as failure? | persists across restart? | cleared by |
+| Reason | Counts as failure? | Persists across restart? | Cleared by |
 |---|---|---|---|
 | transient (`backoff`) | yes (crash-loop window) | no | a successful `start`, or backoff timer elapsing |
-| `crash-loop` | n/a (it *is* the rate breaker) | yes (single boolean per guest) | `retryBot`, or a bot rebinding |
+| `crash-loop` | N/A (it *is* the rate breaker) | yes (single boolean per guest) | `retryBot`, or a bot rebinding |
 | `needs-auth` | no | no (re-probed on restart) | `retryWhen` fulfilling, or `retryBot` |
 | `admission-denied` | no | no (re-probed on restart) | `retryWhen` fulfilling, or `retryBot` |
 | `operator` | no | no (scope decision, see below) | `retryBot` |
@@ -445,7 +463,7 @@ that are non-obvious (why `crash-loop` persists and why `operator` does not).
 Unlike the process-local backoff timer and typed-policy breakers, the open state
 of the `crash-loop` breaker is persisted, so that a routine daemon restart
 (deploy, reboot, upgrade rollout) does not silently hand a crash-looping bot the
-one-immediate-attempt described under § Restart behavior. It is stored as a single
+one immediate attempt described under § Restart behavior. It is stored as a single
 boolean per guest in the guest's own daemon-side store, alongside the mailbox
 indexes the restart scan already reads, and is written under that store's
 serialized job so its set is atomic with respect to `retryBot`'s clear. It is
@@ -509,14 +527,15 @@ cadence for expired credentials. If the daemon restarts while blocked, the
 pending-mail startup scan performs one fresh attempt; a still-expired credential
 returns to `needs-auth` without entering the crash-loop counter.
 
-The host gains three privileged methods, `getBotStatus`, `stopBot`, and
+The host gains three privileged methods: `getBotStatus`, `stopBot`, and
 `retryBot`.
 
 `getBotStatus` returns a discriminated union with one record shape per state, so
 each variant carries only the fields meaningful for it. The two states that carry
 a count report *different* counts under distinct names, because they answer
 different questions: `backoff` carries `consecutiveFailures`, the reset-on-success
-count that sets the current backoff delay, plus its next retry time; the
+count that sets the current backoff delay, plus its next retry time (`retryAt`,
+an ISO 8601 timestamp string, matching the daemon's other wire timestamps); the
 `crash-loop` breaker carries `windowFailures`, the count of failures inside the
 rolling fifteen-minute window that opened it. Naming both `failures` would let an
 operator read one number believing it was the other, so the surface never spells
@@ -562,7 +581,7 @@ This operator pause is process-local, like the other typed-policy breakers: it
 holds against ordinary mail within a daemon incarnation but, because only the
 `crash-loop` bit is persisted, does not survive a routine restart. A deploy,
 reboot, or upgrade rollout gives an `operator`-blocked guest with retained mail
-the same one-immediate-attempt the restart scan gives a backoff-blocked one, so
+the same one immediate attempt the restart scan gives a backoff-blocked one, so
 an explicit `stopBot` does not outlast a restart in this increment. This is *not*
 the re-probe rationale that justifies dropping the credential and
 `admission-denied` breakers across a restart: `operator` is not external state
@@ -620,7 +639,7 @@ The usual guest dependency is wired `thisDiesIfThatDies(dep)`, so the dependent
 dies when the dependency does; wiring `bot` that way would make a *crashed bot
 worker cancel its guest* (a caplet dies with its worker), destroying the mailbox
 and authority boundary this design exists to keep alive. So the `bot` edge is
-wired the other direction only: collecting or cancelling the guest cancels its
+wired the other direction only: collecting or canceling the guest cancels its
 live bot incarnation (one incarnation per guest, so exactly that guest's, per
 § Formula shape), but a bot incarnation crashing or being reaped never cancels
 the guest, it only returns the supervisor entry to `backoff` or `blocked`. The
@@ -656,8 +675,12 @@ The field is optional, so existing guest formulas load with no new behavior.
 Only guests created with the new `provideGuest` option are bot-bound. Existing
 named guests are not retrofitted, because their immutable formula identity and
 the desired bot authority are both security-sensitive. A deployment that wants
-to migrate them must explicitly provision replacement guests and decide how to
-move names and mailbox history.
+to migrate them must explicitly provision replacement guests and move names with
+the existing name-hub `move`/`copy` operations. Retained mailbox history,
+however, cannot be carried across the re-identification in this increment: no
+transfer, copy, or adopt operation for a mailbox exists on any daemon surface,
+so this is a stated limitation rather than an operator choice (an in-place bot
+rebind with mailbox-transfer semantics is deferred, per § Formula shape).
 
 The `EndoBot` protocol is additive. A raw worker, a caplet without `start`, a
 remote formula identifier, or a bot formula that depends on the guest is
@@ -683,6 +706,9 @@ It deliberately defers:
 
 - a `HostFormula.bot` binding and host-bootstrap ordering;
 - changing the bot on an existing guest or migrating its identity/mailbox;
+- a first-class "the bot's authority is exactly its bound guest" containment,
+  which the acyclic `guest -> bot` edge and the provisioning order make
+  unreachable in this increment (it needs the in-place rebinding deferred above);
 - a `followBotStatus()` subscription over the status union; this increment ships
   only the poll-based `getBotStatus` and the lifecycle diagnostic;
 - a durable unread/processed cursor and transactional exactly-once external
