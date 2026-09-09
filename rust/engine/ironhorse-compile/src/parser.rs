@@ -1,7 +1,7 @@
 //! The parser — a transliteration of the expression grammar in
 //! `c/moddable/xs/sources/xsSyntaxical.c` at the oracle pin. It drives
-//! the [`Lexer`](crate::lexer::Lexer) pull-style and builds XS's exact
-//! AST ([`crate::ast`]) on a node stack, statement-for-statement with
+//! the [`Lexer`] pull-style and builds XS's exact
+//! AST ([`crate::Item`] and [`crate::Node`]) on a node stack, statement-for-statement with
 //! XS so the scoper and coder built on top (later stage-5 children)
 //! see the tree shapes the byte-identity bar depends on.
 //!
@@ -90,7 +90,7 @@ impl From<LexError> for ParseError {
 
 type PResult<T> = Result<T, ParseError>;
 
-/// The parser's native-recursion budget, in the units [`Parser::nested`]
+/// The parser's native-recursion budget, in the units `Parser::nested`
 /// charges.
 ///
 /// XS's recursive-descent parser guards its C stack with

@@ -77,7 +77,7 @@ fn invalid_literal_retains_regexp_residual_once() {
         Err(ironhorse_regexp::CompileError::Syntax(_))
     ));
     assert!(expected.work_meter_raw > 0);
-    let mut lexer = ironhorse_compile::lexer::Lexer::new("/(/");
+    let mut lexer = ironhorse_compile::Lexer::new("/(/");
     lexer.next().unwrap();
     let before = lexer.meter().raw();
     let error = lexer.read_regexp(false).unwrap_err();

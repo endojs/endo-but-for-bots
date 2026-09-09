@@ -5,6 +5,13 @@
 //! [`meter::PARSE_METER_RELEASE`] aliases the shared runtime meter release.
 //! The private budget-stop unwind requires `panic=unwind`; unrelated panics propagate.
 //!
+//! The compilation pipeline is lexer → parser → scoper → coder.
+//! Its top-level re-exports are the supported entry points and data types.
+//! The parser, opcode definitions, and parse meter also remain available by
+//! module path for compiler tooling and conformance harnesses.
+//! Internal passes use the shared identifier tables directly from
+//! `ironhorse-regexp`; this crate does not expose that dependency's module.
+//!
 //! The byte-identity reference is XS pin `23b4d6b0a65f` built on x86_64
 //! with signed plain C `char`. XS hashes symbol spellings through `char*`,
 //! so an unsigned-char build can assign different symbol IDs for non-ASCII
@@ -23,23 +30,17 @@
 #[cfg(panic = "abort")]
 compile_error!("ironhorse-compile requires panic=unwind to contain budget refusal");
 
-pub mod ast;
-pub mod coder;
-pub mod error;
-pub mod lexer;
+pub(crate) mod ast;
+pub(crate) mod coder;
+pub(crate) mod error;
+pub(crate) mod lexer;
 pub mod meter;
 pub mod opcodes;
 pub mod parser;
-pub mod scoper;
-pub mod token;
-pub mod token_flags;
-/// Unicode `ID_Start` / `ID_Continue` classification. The single source
-/// of truth lives in the leaf `ironhorse-regexp` crate (the regexp
-/// group-name validator needs the same tables), re-exported here so the
-/// lexer's `crate::unicode` path is unchanged.
-pub use ironhorse_regexp::unicode;
-
-pub use ast::{Item, Node, TREE_DEPTH_LIMIT};
+pub(crate) mod scoper;
+pub(crate) mod token;
+pub(crate) mod token_flags;
+pub use ast::{Item, Node, Value, TREE_DEPTH_LIMIT};
 pub use coder::{
     compile, compile_atoms, compile_atoms_budgeted, compile_atoms_budgeted_with_limit,
     compile_atoms_goal, compile_atoms_goal_with_meter, compile_atoms_with,
@@ -54,7 +55,10 @@ pub use parser::{
     ParseError, ParseErrorKind, Parser, CASCADE_COST, OPERAND_COST, PARSER_STACK_BUDGET,
     STATEMENT_COST,
 };
-pub use scoper::{scope_module, scope_program, Goal, ScopeTree};
+pub use scoper::{
+    scope_module, scope_program, AccessRecord, Declare, DefineEntry, ExportSpec, Goal, ImportSpec,
+    MemberAccess, Scope, ScopeTree, Sym,
+};
 pub use token::Token;
 
 /// Parse `source` as a Script and return the whole-parse **parse-meter

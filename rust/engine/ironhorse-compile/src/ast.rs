@@ -20,6 +20,7 @@
 //! pointer-aliasing trick.
 
 use crate::token::Token;
+#[cfg(test)]
 use ironhorse_text::SymbolName;
 
 /// The parser-flag bits XS stamps onto nodes (`xsScript.h` `enum`). Only
@@ -62,10 +63,6 @@ pub mod flags {
     pub const AWAITING: u32 = 1 << 10;
     /// `mxBaseFlag`. (bit 11)
     pub const BASE: u32 = 1 << 11;
-    /// `mxNativeFlag`. (bit 12)
-    pub const NATIVE: u32 = 1 << 12;
-    /// `mxHostFlag`. (bit 13)
-    pub const HOST: u32 = 1 << 13;
     /// `mxDefaultFlag`. (bit 14)
     pub const DEFAULT: u32 = 1 << 14;
     /// `mxFieldFlag`. (bit 15)
@@ -109,7 +106,7 @@ pub mod flags {
     /// `mxParserFlags` = `mxCFlag | mxDebugFlag | mxProgramFlag` — the
     /// harness-context bits `fxFunctionExpression`/`fxGeneratorExpression`
     /// carry across into a nested function's fresh `parser->flags`.
-    pub const PARSER_FLAGS: u32 = (1 << 0) | (1 << 1) | (1 << 3);
+    pub const PARSER_FLAGS: u32 = C | (1 << 1) | PROGRAM;
 }
 
 /// A leaf value a node can carry in place of (or beside) children — the
@@ -128,8 +125,8 @@ pub enum Value {
     /// contain (`"\uD800"`), and the coder must emit XS's CESU-8 (an astral
     /// scalar is a 6-byte surrogate pair, a lone surrogate a 3-byte unit),
     /// which is a per-code-unit encoding — so the value is code units end
-    /// to end, encoded to CESU-8 only at the coder ([`str_to_units`] /
-    /// [`units_to_cesu8`]).
+    /// to end, encoded to CESU-8 only at the coder (`str_to_units` /
+    /// `units_to_cesu8`).
     Str(Vec<u16>),
     /// `txBigIntNode` — the scanned literal (digits + radix).
     BigInt(crate::lexer::BigIntLiteral),
@@ -176,7 +173,7 @@ pub struct Node {
     pub token: Token,
     /// 1-based source line, XS's `node->line`.
     pub line: u32,
-    /// The `node->flags` word (see [`flags`]).
+    /// The `node->flags` word (see `flags`).
     pub flags: u32,
     /// Child slots, in XS's field order (`children[0]` is the
     /// first-pushed / deepest-on-stack slot).
@@ -371,6 +368,7 @@ pub fn node_name(token: Token) -> &'static str {
 
 /// The flag bits worth surfacing in a fixture dump, and their short
 /// spellings. Order is deterministic (low bit first).
+#[cfg(test)]
 const DUMP_FLAGS: &[(u32, &str)] = &[
     (flags::STRICT, "strict"),
     (flags::SUPER, "super"),
@@ -400,12 +398,14 @@ const DUMP_FLAGS: &[(u32, &str)] = &[
 /// not part of the byte-identity bar); it exists to pin the tree *shape*
 /// — node kind, flags, child order — that the coder will later depend
 /// on. Deterministic and free of addresses so fixtures are stable.
+#[cfg(test)]
 pub fn dump(item: &Item) -> String {
     let mut out = String::new();
     dump_item(item, &mut out);
     out
 }
 
+#[cfg(test)]
 fn dump_item(item: &Item, out: &mut String) {
     match item {
         Item::Null => out.push_str("()"),
@@ -427,6 +427,7 @@ fn dump_item(item: &Item, out: &mut String) {
     }
 }
 
+#[cfg(test)]
 fn dump_node(node: &Node, out: &mut String) {
     out.push('(');
     out.push_str(node_name(node.token));
@@ -465,6 +466,7 @@ fn dump_node(node: &Node, out: &mut String) {
     out.push(')');
 }
 
+#[cfg(test)]
 fn dump_number(v: f64) -> String {
     if v.is_nan() {
         "NaN".to_string()
@@ -495,6 +497,7 @@ pub fn units_to_string(u: &[u16]) -> String {
     String::from_utf16_lossy(u)
 }
 
+#[cfg(test)]
 fn dump_string(units: &[u16]) -> String {
     let s = units_to_string(units);
     let mut out = String::with_capacity(s.len() + 2);
