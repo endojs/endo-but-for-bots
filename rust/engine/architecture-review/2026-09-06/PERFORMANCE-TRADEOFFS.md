@@ -75,6 +75,20 @@ would otherwise carry too far.
   avoidable maintenance work.
   The new full-range compiler check establishes a measured growth envelope, not a
   proof of asymptotic linearity.
+- **The compiler growth result is real, and the gate that certifies it was relaxed
+  in the same change.**
+  Both halves matter.
+  [`results/compiler-growth-envelope.json`](../../benches/results/compiler-growth-envelope.json)
+  records all nine Linux series passing at **2.01x to 2.31x geometric growth per
+  doubling**, against the five historical series at **3.85x to 4.26x**, which the same
+  envelope still rejects.
+  The quadratic behaviour F065 named is genuinely gone.
+  But the policy note in that artifact is explicit that it "relax[es] compiler adjacent
+  elapsed gate to geometric 2.5 per doubling envelope over complete fixed range" after
+  the adjacent-ratio ceiling kept failing, so a reader should not treat the pass as the
+  original gate being met.
+  The artifact is candid about this and pins no threshold to its own samples; the point
+  here is only that the two facts must be quoted together.
 
 ## What the engine now carries
 
@@ -101,15 +115,41 @@ high-water owner index, as retained host memory rather than a bit-packed vector
 (PERFORMANCE-FIXES.md § Integration audit).
 The arena ceilings W2 introduced bound the arenas, not this side-table memory.
 
-**A GC cost signal that lives only in a CI log.**
-The Linux GC-free control regressed from **4.266 to 5.348 ms at 80,000 slots**
-(1.254x, just over the 1.25x floor) with growth still approximately linear.
-It cannot be attributed to F119 alone from the aggregate measurements.
-That measurement is **not** in `benches/results/`: the retained artifacts record the
-same-host macOS pairs and the three-trial control audit, in which every median-of-trial
-comparison came in below 1.25x.
-This is the fragmentation qualification above, made concrete — the strongest remaining
-cost signal is the one the checked-in evidence does not hold.
+**A GC free-phase cost that grows with heap size.**
+The Linux control run is retained at
+[`results/linux-reference-controls.json`](../../benches/results/linux-reference-controls.json):
+48 metrics measured on `Linux-6.17.0-azure-x86_64`, rustc 1.91.1, comparing
+`b2b78ad0` against the branch base `51b99651`.
+One metric failed the 1.25x floor — `gc_80000_free_ms`, 4.266 to 5.348 ms, 1.254x —
+and the whole family is worth reading together, because the regression **scales with
+the heap** rather than sitting flat:
+
+| Metric | 5,000 slots | 20,000 | 80,000 |
+| --- | ---: | ---: | ---: |
+| `gc_*_free_ms` | 1.110x | 1.193x | **1.254x** |
+| `gc_*_partial_ms` | 1.095x | 1.170x | 1.239x |
+| `gc_*_generational_ms` | 1.056x | 1.073x | 1.131x |
+| `gc_*_full_steady_ms` | 1.026x | 1.015x | 1.041x |
+| `gc_*_sweep_ns_per_slot` | 0.933x | 0.983x | 1.042x |
+
+The last row is the diagnostic one: **per-slot sweep cost is essentially unchanged**
+(faster at two of three sizes), so the extra time is not in the sweep loop.
+It is in the free and partial phases, and it grows with the slot count — the shape you
+would expect from a per-slot side structure walked at collection time, such as the
+owner prefilter above, rather than from any single classification lookup.
+That is consistent with F119 contributing but does not isolate it, and the three
+neighbouring metrics that also cross or approach the floor (`gc_80000_partial_ms` at
+1.239x, `placeholder_120320_ms` at 1.249x) are the same story at smaller magnitude.
+
+Read it against what the same run shows getting **faster**: `dispatch_ms` 0.959x,
+`slots_ms` 0.935x, `chunks_ms` 0.945x, `placeholder_4000000_ms` 0.810x.
+The branch is a net win on the interpreter's hot paths and pays for it in collection.
+
+Until this file was committed the measurement existed only in a CI log, which was the
+fragmentation qualification above in its most concrete form: the strongest remaining
+cost signal was the one the checked-in evidence did not hold.
+Retaining it here is the fix, and the same discipline should apply to the next such
+run.
 
 ## Recommendation
 
