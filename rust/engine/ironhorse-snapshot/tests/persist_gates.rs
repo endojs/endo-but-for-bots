@@ -536,19 +536,9 @@ fn a_refault_after_a_growing_checkpoint_verifies_against_the_committed_arena() {
         .expect("checkpoint after the re-faults");
 }
 
-/// Enumerating HOLDERS cannot be complete: every carried row adds one.
-/// The round-2 gate inspected accessors, `bound_functions[..].target`,
-/// and disposal methods -- so a non-persisting runtime native reached
-/// the store through any other stored reference. The gate traverses
-/// the persisted state now instead of enumerating holders, so it is
-/// complete by construction rather than by memory.
-///
-/// Since the promise-cluster carry the resolver these fixtures mint
-/// PERSISTS, so every holder shape the traversal walks now ADMITS —
-/// and each must resume with the resolver still callable, which is
-/// what makes these the traversal's regression bed: a future runtime
-/// mint that escapes into any of these holders re-arms the refusal,
-/// and a `function_persists` regression fails the admissions below.
+/// Promise resolvers persist through each carried holder below. These fixtures
+/// exercise admission and restore, while the VM's native-holder tests exercise
+/// refusal with a runtime native that restore cannot reconstruct.
 #[test]
 fn a_resolver_reached_through_any_stored_reference_persists() {
     for (name, tail) in [

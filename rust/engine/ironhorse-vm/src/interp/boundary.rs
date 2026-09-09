@@ -49,6 +49,7 @@ macro_rules! boundary_predicate {
 macro_rules! define_boundary {
     (() $vis:vis struct $name:ident {
         $(#[quiescent($boundary:ident)]
+          #[persist_refs($persist:ident)]
           #[gc_hook($phase:ident, $policy:ident)]
           #[gc_chunk($chunk:ident)]
           #[gc_slots($shape:ident, $row:ident)]
