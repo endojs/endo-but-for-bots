@@ -1324,12 +1324,22 @@ impl SlotArena {
     }
 }
 
-/// The size of a chunk's length header, in bytes. Each block in the
-/// arena is laid out `[u32 length][payload...]`, mirroring XS's
+/// The size of an allocated chunk's length header, in bytes. Allocated blocks
+/// are laid out `[u32 length][payload...]`, mirroring XS's
 /// `txChunk` header discipline (a size field precedes each chunk) so
 /// the slide-compactor can walk and relocate blocks without external
-/// bookkeeping.
+/// bookkeeping. Format 17 also permits reusable blocks; see `FREE_CHUNK`.
 pub(crate) const CHUNK_HEADER: usize = 4;
+
+// An allocated payload cannot have this length: its header would exceed the
+// u32 chunk address space. Format 17 reserves it for a reusable block, followed
+// by a little-endian u32 TOTAL span (including both words), at least 8 bytes.
+const FREE_CHUNK: usize = u32::MAX as usize;
+const FREE_CHUNK_HEADER: usize = 8;
+
+// Best fit, then lowest address. Only encoded free blocks enter this derived
+// index, so rebuilding it after resume produces exactly the same choices.
+type FreeChunks = std::collections::BTreeMap<usize, std::collections::BTreeSet<usize>>;
 
 /// The chunk arena: variable-size data (strings as UTF-16 big-endian code
 /// units, ArrayBuffers, BigInt digits, bytecode). Each block carries a length
@@ -1419,6 +1429,37 @@ impl ChunkReader<'_> {
         self.copy_into(header, &mut bytes);
         u32::from_le_bytes(bytes) as usize
     }
+
+    /// Validate a whole chain block before using either its end or free tag.
+    fn block_at(&mut self, header: usize, total: usize) -> (usize, bool) {
+        let payload = header
+            .checked_add(CHUNK_HEADER)
+            .filter(|&end| end <= total)
+            .expect("chunk chain header out of range (corrupt heap)");
+        let length = self.length_at(header);
+        if length == FREE_CHUNK {
+            assert!(
+                total - header >= FREE_CHUNK_HEADER,
+                "free chunk header out of range (corrupt heap)"
+            );
+            let span = self.length_at(payload);
+            assert!(
+                span >= FREE_CHUNK_HEADER,
+                "free chunk span too short (corrupt heap)"
+            );
+            let end = header
+                .checked_add(span)
+                .filter(|&end| end <= total)
+                .expect("free chunk span out of range (corrupt heap)");
+            (end, true)
+        } else {
+            let end = payload
+                .checked_add(length)
+                .filter(|&end| end <= total)
+                .expect("chunk chain payload out of range (corrupt heap)");
+            (end, false)
+        }
+    }
 }
 
 /// A read guard over chunk bytes: a plain borrow on a resident arena,
@@ -1493,6 +1534,11 @@ pub struct ChunkArena {
     dirty: Vec<bool>,
     /// Per-extent twin of [`SlotArena`]'s `unbacked`; see its doc.
     unbacked: Vec<bool>,
+    /// Rebuilt from encoded free markers once on the first allocation or
+    /// capacity query after restore. Scanning headers uses bounded scratch and
+    /// preserves residency.
+    /// None is unknown, not empty; publish only a fully validated index.
+    free_chunks: RefCell<Option<FreeChunks>>,
 }
 
 impl Default for ChunkArena {
@@ -1508,6 +1554,7 @@ impl ChunkArena {
             bytes: ChunkBytes::Plain(Vec::new()),
             dirty: Vec::new(),
             unbacked: Vec::new(),
+            free_chunks: RefCell::new(Some(FreeChunks::new())),
         }
     }
 
@@ -1526,6 +1573,7 @@ impl ChunkArena {
             },
             dirty: vec![false; exts],
             unbacked: vec![false; exts],
+            free_chunks: RefCell::new(None),
         }
     }
 
@@ -1758,14 +1806,61 @@ impl ChunkArena {
 
     /// Whether a new payload fits, including its length header.
     pub fn can_allocate(&self, payload_bytes: usize) -> bool {
-        self.len()
-            .checked_add(CHUNK_HEADER)
-            .and_then(|end| end.checked_add(payload_bytes))
-            .is_some_and(|end| end <= self.ceiling)
-            && chunk_allocation_fits(self.len(), payload_bytes, ChunkOffset::NULL.0 as usize)
+        if !chunk_allocation_fits(0, payload_bytes, ChunkOffset::NULL.0 as usize)
+            || payload_bytes
+                .checked_add(CHUNK_HEADER)
+                .is_none_or(|n| n > self.ceiling)
+        {
+            return false;
+        }
+        self.free_chunk_for(payload_bytes, ChunkOffset::NULL.0 as usize)
+            .is_some()
+            || (self
+                .len()
+                .checked_add(CHUNK_HEADER)
+                .and_then(|end| end.checked_add(payload_bytes))
+                .is_some_and(|end| end <= self.ceiling)
+                && chunk_allocation_fits(self.len(), payload_bytes, ChunkOffset::NULL.0 as usize))
     }
 
-    /// Append bytes behind a length header, returning the offset of the
+    fn free_chunk_for(&self, payload: usize, address_ceiling: usize) -> Option<(usize, usize)> {
+        let size = payload.checked_add(CHUNK_HEADER)?;
+        if self.free_chunks.borrow().is_none() {
+            let mut reader = ChunkReader {
+                bytes: &self.bytes,
+                cached: None,
+            };
+            let mut free = FreeChunks::new();
+            let mut header = 0;
+            while header < self.len() {
+                let (end, reusable) = reader.block_at(header, self.len());
+                if reusable {
+                    free.entry(end - header).or_default().insert(header);
+                }
+                header = end;
+            }
+            *self.free_chunks.borrow_mut() = Some(free);
+        }
+        let free = self.free_chunks.borrow();
+        free.as_ref()
+            .unwrap()
+            .range(size..)
+            .find_map(|(&span, addresses)| {
+                // A 1–3 byte remainder cannot hold even an ordinary block header.
+                if span != size && span - size < CHUNK_HEADER {
+                    return None;
+                }
+                let &header = addresses.first()?;
+                (chunk_allocation_fits(header, payload, address_ceiling)
+                    && header
+                        .checked_add(size)
+                        .is_some_and(|end| end <= self.ceiling))
+                .then_some((header, span))
+            })
+    }
+
+    /// Reuse the smallest fitting encoded free block (lowest address breaks
+    /// ties), or append bytes behind a length header, returning the offset of the
     /// payload (not the header). Strings are stored as UTF-16 big-endian code
     /// units (revised 2026-07-06 from CESU-8; resolved question 4), so a byte-
     /// lexicographic compare of two string payloads equals their code-unit
@@ -1783,8 +1878,54 @@ impl ChunkArena {
     // Private seam for exercising the allocation boundary without a 4 GiB
     // arena. The public allocator always supplies the representation limit.
     fn alloc_with_address_ceiling(&mut self, data: &[u8], ceiling: usize) -> ChunkOffset {
-        let header = self.len();
         let ceiling = ceiling.min(ChunkOffset::NULL.0 as usize);
+        // Impossible at ANY address: refuse before consulting lazy storage.
+        assert!(
+            chunk_allocation_fits(0, data.len(), ceiling),
+            "chunk:address-space-exhausted"
+        );
+        if let Some((header, span)) = self.free_chunk_for(data.len(), ceiling) {
+            let size = CHUNK_HEADER + data.len();
+            let rest = span - size;
+            let marker_width = if rest >= FREE_CHUNK_HEADER {
+                FREE_CHUNK_HEADER
+            } else if rest >= CHUNK_HEADER {
+                CHUNK_HEADER
+            } else {
+                0
+            };
+            let changed_end = header + size + marker_width;
+            // Fault every byte before mutation: splitting may write a header in
+            // another extent, whose untouched bytes must survive checkpoint.
+            self.ensure_range_resident(header, changed_end);
+            let bytes = self.bytes_mut();
+            bytes[header..header + CHUNK_HEADER]
+                .copy_from_slice(&(data.len() as u32).to_le_bytes());
+            bytes[header + CHUNK_HEADER..header + size].copy_from_slice(data);
+            if rest >= FREE_CHUNK_HEADER {
+                bytes[header + size..header + size + CHUNK_HEADER]
+                    .copy_from_slice(&u32::MAX.to_le_bytes());
+                bytes[header + size + CHUNK_HEADER..header + size + FREE_CHUNK_HEADER]
+                    .copy_from_slice(&(rest as u32).to_le_bytes());
+            } else if rest >= CHUNK_HEADER {
+                // Tiny remnants have an ordinary dead-block header and are NOT
+                // indexed, either now or after restore. A later GC may merge them.
+                bytes[header + size..header + size + CHUNK_HEADER]
+                    .copy_from_slice(&((rest - CHUNK_HEADER) as u32).to_le_bytes());
+            }
+            let free = self.free_chunks.get_mut().as_mut().unwrap();
+            let addresses = free.get_mut(&span).unwrap();
+            addresses.remove(&header);
+            if addresses.is_empty() {
+                free.remove(&span);
+            }
+            if rest >= FREE_CHUNK_HEADER {
+                free.entry(rest).or_default().insert(header + size);
+            }
+            self.mark_dirty_range(header, changed_end);
+            return ChunkOffset((header + CHUNK_HEADER) as u32);
+        }
+        let header = self.len();
         assert!(
             chunk_allocation_fits(header, data.len(), ceiling),
             "chunk:address-space-exhausted"
@@ -1823,7 +1964,12 @@ impl ChunkArena {
             .checked_sub(CHUNK_HEADER)
             .expect("chunk offset below header (corrupt heap)");
         let hdr = self.view(h, h + CHUNK_HEADER);
-        u32::from_le_bytes([hdr[0], hdr[1], hdr[2], hdr[3]]) as usize
+        let length = u32::from_le_bytes([hdr[0], hdr[1], hdr[2], hdr[3]]) as usize;
+        assert_ne!(
+            length, FREE_CHUNK,
+            "chunk offset references a free block (corrupt heap)"
+        );
+        length
     }
 
     /// A shared view of `len` bytes of the block whose payload begins
@@ -1834,6 +1980,7 @@ impl ChunkArena {
     /// the lazy arm).
     #[inline]
     pub fn slice(&self, off: ChunkOffset, len: usize) -> ChunkSlice<'_> {
+        assert!(len <= self.len_of(off), "chunk slice exceeds allocation");
         let start = off.0 as usize;
         self.view(start, start + len)
     }
@@ -1858,7 +2005,9 @@ impl ChunkArena {
     /// The whole payload of the block at `off`, using its stored length.
     #[inline]
     pub fn payload(&self, off: ChunkOffset) -> ChunkSlice<'_> {
-        self.slice(off, self.len_of(off))
+        let len = self.len_of(off);
+        let start = off.0 as usize;
+        self.view(start, start + len)
     }
 
     /// A mutable view of `len` bytes of the block whose payload begins at
@@ -1927,6 +2076,10 @@ impl ChunkArena {
                     "chunk header out of range (corrupt heap)"
                 );
                 let len = reader.length_at(h);
+                assert_ne!(
+                    len, FREE_CHUNK,
+                    "chunk offset references a free block (corrupt heap)"
+                );
                 // checked_add, not `+`: on a 32-bit usize a corrupt
                 // u32 length can wrap the sum past the guard, and the
                 // later slice would then panic AFTER the byte space
@@ -1963,15 +2116,15 @@ impl ChunkArena {
                     "chunk offset is not a payload boundary (corrupt heap)"
                 );
             }
-            let len = reader.length_at(header);
-            let end = payload
-                .checked_add(len)
-                .filter(|&end| end <= total)
-                .expect("chunk chain payload out of range (corrupt heap)");
+            let (end, reusable) = reader.block_at(header, total);
             if seen
                 .get(matched)
                 .is_some_and(|old| old.0 as usize == payload)
             {
+                assert!(
+                    !reusable,
+                    "chunk offset references a free block (corrupt heap)"
+                );
                 let old = seen[matched];
                 let new_payload = u32::try_from(new_len + CHUNK_HEADER)
                     .expect("compacted chunk offset exceeds address space");
@@ -2058,6 +2211,7 @@ impl ChunkArena {
         };
         self.unbacked = unbacked;
         self.dirty = dirty;
+        *self.free_chunks.get_mut() = Some(FreeChunks::new());
         remap
     }
 
@@ -2104,6 +2258,7 @@ impl ChunkArena {
             bytes: ChunkBytes::Plain(bytes),
             dirty: vec![false; exts],
             unbacked: vec![false; exts],
+            free_chunks: RefCell::new(None),
         }
     }
 
@@ -2352,7 +2507,7 @@ mod dirty_tests {
         }
         let mut arena = ChunkArena::lazy_from_parts(7, Rc::new(MustNotRead));
         let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            arena.alloc_with_address_ceiling(b"", 11)
+            arena.alloc_with_address_ceiling(b"", 4)
         }))
         .unwrap_err();
         assert_eq!(
