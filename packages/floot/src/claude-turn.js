@@ -10,14 +10,25 @@
 // So unlike the API provider path (agent.js's tool-round loop), a Claude-CLI
 // turn is a single send: Floot's tool loop, tool discovery, and
 // conversation-context assembly are all bypassed, and the events streamed back
-// (text, tool_use, tool_result, result) are surfaced for display only.
+// (text, tool_use, tool_result, result) are translated for display and durable
+// observation. Observing a native tool is not authorization before execution.
 //
 // Abort: when the turn is cancelled (UI Stop / barge-in, via
 // `FlootTurn.cancel`), `signal` aborts; we close the CLI reader in response,
-// which kills the in-flight `claude -p` process in the sandbox.
+// which requests termination of the in-flight `claude -p` process. The legacy
+// interface does not confirm process exit, so cancellation remains unknown.
 
 import { E } from '@endo/eventual-send';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
+
+const partialTurns = new WeakMap();
+
+/** Recover observed text, usage and native tool records after a failed turn.
+ * @param {unknown} error
+ */
+export const claudeTurnPartialOf = error =>
+  error && typeof error === 'object' ? partialTurns.get(error) : undefined;
+harden(claudeTurnPartialOf);
 
 /**
  * Render a claude tool_result content payload as plain text. The CLI emits
@@ -205,7 +216,7 @@ harden(makeClaudeEventTranslator);
  * the turn; `{ type: 'abort', reason }` rejects it (the caller aborts the
  * writer). When `signal` fires first, the reader is closed — killing the
  * in-flight `claude -p` — and the turn resolves quietly with whatever text
- * had streamed (the caller checks `signal.aborted` and discards).
+ * had streamed (the caller checks `signal.aborted` to classify cancellation).
  *
  * @param {object} options
  * @param {any} options.client - ClaudeClient capability (may be remote).
@@ -213,9 +224,14 @@ harden(makeClaudeEventTranslator);
  * @param {object} options.writer - makeReplyChannel writer.
  * @param {AbortSignal} [options.signal]
  * @param {string} [options.model] - Optional model override for this turn.
+ * @param {(event: any) => Promise<void>} [options.recordToolEvent] Durable
+ *   observation of native tools, awaited before the corresponding UI event.
  * @returns {Promise<{
+ *   delivered: boolean,
+ *   outcomeUnknown: boolean,
  *   finalContent: string,
  *   usage: { inputTokens: number, outputTokens: number } | undefined,
+ *   toolCalls: Array<{ id: string, name: string, args: string, result: string | null }>,
  * }>}
  */
 export const runClaudeTurn = async ({
@@ -224,40 +240,188 @@ export const runClaudeTurn = async ({
   writer,
   signal,
   model,
+  recordToolEvent,
 }) => {
-  const translator = makeClaudeEventTranslator(writer);
-  const reader = await E(client).send(text, model ? { model } : {});
-  const iterator = iterateReader(/** @type {any} */ (reader));
+  const w = /** @type {any} */ (writer);
+  const actions = [];
+  const translator = makeClaudeEventTranslator({
+    setPhase: value => actions.push({ method: 'setPhase', value }),
+    delta: value => actions.push({ method: 'delta', value }),
+    toolCall: value => actions.push({ method: 'toolCall', value }),
+    toolResult: value => actions.push({ method: 'toolResult', value }),
+  });
+  const toolCalls = [];
+  const callsById = new Map();
+  let delivered = false;
+  let outcomeUnknown = false;
+  const partial = () => {
+    const { finalText, usage } = translator.finish();
+    return harden({
+      delivered,
+      outcomeUnknown,
+      finalContent: finalText,
+      usage,
+      toolCalls: toolCalls.map(call => ({ ...call })),
+    });
+  };
+  if (signal?.aborted) return partial();
+  /** @type {ReturnType<typeof iterateReader> | undefined} */
+  let iterator;
+  let terminal = false;
+  let stopping;
+  const stopProducer = () => {
+    if (!stopping) {
+      // Legacy interrupt and reader return request termination, but neither
+      // proves process exit. Preserve uncertainty even if both acknowledge.
+      outcomeUnknown = true;
+      stopping = (async () => {
+        const close = iterator ? iterator.return() : Promise.resolve();
+        const interrupt = E(client)
+          .interrupt()
+          .catch(error => {
+            if (!(
+              error instanceof Error &&
+              /no in-flight prompt to interrupt/.test(error.message)
+            ))
+              throw error;
+          });
+        try {
+          await Promise.all([close, interrupt]);
+        } catch {
+          throw Error(
+            'Hosted turn cancellation failed: legacy Claude producer stop was not confirmed',
+          );
+        }
+      })();
+    }
+    return stopping;
+  };
+  let resolveAbort = () => {};
+  let rejectAbort = reason => {};
+  const aborted = new Promise((resolve, reject) => {
+    resolveAbort = () => resolve(undefined);
+    rejectAbort = reject;
+  });
+  // The loop observes this rejection; keep it handled while persisting an
+  // observation or awaiting a producer response.
+  aborted.catch(() => {});
   const onAbort = () => {
-    // Close the CLI reader: the responder's close watcher fires its onClose,
-    // killing the in-flight `claude -p` process in the sandbox.
-    iterator.return().catch(() => {});
+    stopProducer().then(resolveAbort, rejectAbort);
   };
   if (signal) {
     if (signal.aborted) onAbort();
     else signal.addEventListener('abort', onAbort, { once: true });
   }
   try {
-    for await (const rawEvent of iterator) {
+    // A rejected remote send can mean that its response was lost after the
+    // producer started. Keep both startup and its cancellation inside the
+    // uncertain-outcome/stop lifecycle, not outside the protected block.
+    const readerP = E(client)
+      .send(text, model ? { model } : {})
+      .then(reader => {
+        const received = iterateReader(/** @type {any} */ (reader));
+        if (stopping) {
+          // Cancellation can win before send returns. Close a late reader too;
+          // the already-recorded unknown outcome remains fenced even if this
+          // eventual cleanup fails and cannot change the returned result.
+          received.return().catch(() => {});
+        }
+        return received;
+      });
+    const startup = await Promise.race([
+      readerP.then(received => ({ received })),
+      aborted.then(() => ({ aborted: true })),
+    ]);
+    if ('aborted' in startup) return partial();
+    const activeIterator = startup.received;
+    iterator = activeIterator;
+    for (;;) {
+      // eslint-disable-next-line no-await-in-loop
+      const next = await Promise.race([
+        activeIterator.next(),
+        aborted.then(() => ({ done: true, value: undefined })),
+      ]);
+      if (next.done) break;
       // stream-json events are opaque records on the wire; the translator is
       // the only place that knows their shape.
-      const event = /** @type {any} */ (rawEvent);
-      if (event?.type === 'end') break;
+      const event = /** @type {any} */ (next.value);
+      if (event?.type === 'end') {
+        terminal = true;
+        break;
+      }
       if (event?.type === 'abort') {
+        terminal = true;
         throw Error(`${event.reason || 'claude turn aborted'}`);
       }
+      delivered = true;
       translator.handle(event);
+      for (const { method, value } of actions.splice(0)) {
+        if (method === 'toolCall') {
+          if (!value.id || callsById.has(value.id)) {
+            throw Error(
+              'Claude native tool call has missing or duplicate identity',
+            );
+          }
+          const call = { ...value, result: null };
+          toolCalls.push(call);
+          callsById.set(call.id, call);
+          // Observation is not admission: Claude has already started this
+          // native tool. A recording failure closes the reader/producer.
+          // eslint-disable-next-line no-await-in-loop
+          await recordToolEvent?.({
+            type: 'observed-tool-call',
+            callId: call.id,
+            name: call.name,
+            args: call.args,
+          });
+        } else if (method === 'toolResult') {
+          const call = callsById.get(value.id);
+          if (!call || call.result !== null) {
+            throw Error(
+              'Claude native tool result has unknown or settled identity',
+            );
+          }
+          call.result = value.result;
+          // eslint-disable-next-line no-await-in-loop
+          await recordToolEvent?.({
+            type: 'observed-tool-result',
+            callId: call.id,
+            result: call.result,
+          });
+        }
+        w[method](value);
+      }
     }
+    if (stopping) await stopping;
+    if (!terminal && !signal?.aborted) {
+      throw Error(
+        'Claude reader ended without a terminal event; outcome unknown',
+      );
+    }
+    const { errorReason } = translator.finish();
+    if (errorReason !== undefined && !signal?.aborted) {
+      throw Error(`claude turn failed: ${errorReason}`);
+    }
+    if (!signal?.aborted && toolCalls.some(call => call.result === null)) {
+      throw Error(
+        'Claude turn ended with unsettled native tool calls; effects unknown',
+      );
+    }
+    return partial();
+  } catch (error) {
+    let failure = error;
+    if (!terminal || stopping) {
+      try {
+        await stopProducer();
+      } catch (stopError) {
+        failure = stopError;
+      }
+    }
+    if (failure && typeof failure === 'object')
+      partialTurns.set(failure, partial());
+    throw failure;
   } finally {
     if (signal) signal.removeEventListener('abort', onAbort);
   }
-  const { finalText, usage, errorReason } = translator.finish();
-  if (errorReason !== undefined && !signal?.aborted) {
-    // The CLI reported a failed turn. Raise it so the caller aborts the reply
-    // wire rather than persisting a partial turn as a successful answer — the
-    // same outcome the API path produces when a provider call throws.
-    throw Error(`claude turn failed: ${errorReason}`);
-  }
-  return harden({ finalContent: finalText, usage });
 };
 harden(runClaudeTurn);

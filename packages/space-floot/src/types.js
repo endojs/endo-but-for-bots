@@ -35,6 +35,7 @@ export {};
  *   status?: 'idle' | 'streaming' | 'error',
  *   messageCount?: number,
  *   loaded?: boolean,
+ *   lifecycle?: string,
  * }} FlootSessionMeta
  */
 
@@ -111,6 +112,8 @@ export {};
  *   status: string,
  *   input: string,
  *   settingsOpen: boolean,
+ *   recovery?: FlootRecovery,
+ *   unavailable?: boolean,
  *   usage: { inputTokens: number, outputTokens: number } | null,
  *   voice: FlootVoiceState,
  *   objects?: { controller?: string, stt?: string, tts?: string },
@@ -137,4 +140,15 @@ export {};
  * @property {(text: string) => void} replayMessage
  * @property {() => void} toggleSettings
  * @property {(text: string) => void} setInput
+ * @property {() => void} [refreshRecovery]
+ * @property {(turnId: string, note: string, confirmed: boolean) => void} [resolveTurn]
+ */
+
+/**
+ * @typedef {{ turnId: string, state: string, error?: string,
+ *   tools?: unknown[], activity?: unknown[], resolution?: string }} FlootJournalTurn
+ * @typedef {{ status: string, message: string, turns: FlootJournalTurn[],
+ *   canResolve: boolean, resolving: boolean, blocked?: boolean, current?: boolean,
+ *   capacity?: { usedEvents: string, eventLimit: string, remainingEvents: string,
+ *     nearCapacity: boolean, storage: string } | null }} FlootRecovery
  */

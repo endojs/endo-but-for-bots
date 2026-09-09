@@ -27,7 +27,9 @@ harden(UNSETTLED_TOOL_RESULT);
  * @property {boolean} delivered - whether the backend took the prompt at all:
  *   anything it emitted before a terminal means it did; a spawn refusal or a
  *   stop before dispatch arrives as a leading abort.
+ * @property {boolean} [outcomeUnknown] - transport failure may hide external effects.
  * @property {string} finalContent - the reply text that streamed.
+ * @property {{ inputTokens: number, outputTokens: number } | undefined} usage
  * @property {Array<{ id: string, name: string, args: string, result: string | null }>} toolCalls
  *   - the tool activity that streamed (`result` is null for a call the turn
  *   ended before settling).
@@ -41,14 +43,16 @@ harden(UNSETTLED_TOOL_RESULT);
  *
  * @param {string} reason
  * @param {HostedTurnPartial} partial
+ * @param {Error} [error]
  * @returns {Error}
  */
-const failTurn = (reason, partial) => {
-  const error = Error(reason);
+const failTurn = (reason, partial, error = Error(reason)) => {
   Object.defineProperty(error, 'hostedTurn', {
     value: harden({
       delivered: partial.delivered,
+      ...(partial.outcomeUnknown ? { outcomeUnknown: true } : {}),
       finalContent: partial.finalContent,
+      usage: partial.usage,
       toolCalls: partial.toolCalls.map(call => harden({ ...call })),
     }),
     enumerable: false,
@@ -71,7 +75,7 @@ export const hostedTurnPartialOf = error =>
 harden(hostedTurnPartialOf);
 
 /**
- * @param {{ client: any, text: string, writer: any, signal?: AbortSignal, model?: string, reasoningEffort?: string, systemPrompt?: string, acknowledgedCheckpoint?: string }} options
+ * @param {{ client: any, text: string, writer: any, signal?: AbortSignal, model?: string, reasoningEffort?: string, systemPrompt?: string, acknowledgedCheckpoint?: string, recordToolEvent?: (event: any) => Promise<void> }} options
  */
 export const runHostedTurn = async ({
   client,
@@ -82,7 +86,12 @@ export const runHostedTurn = async ({
   reasoningEffort,
   systemPrompt,
   acknowledgedCheckpoint,
+  recordToolEvent,
 }) => {
+  const recordObservedTool = async event => {
+    if (!recordToolEvent) return;
+    await recordToolEvent(event);
+  };
   if (signal?.aborted) {
     return harden({
       delivered: false,
@@ -134,6 +143,7 @@ export const runHostedTurn = async ({
   };
   if (signal) signal.addEventListener('abort', onAbort, { once: true });
   let delivered = false;
+  let terminal = false;
   let finalContent = '';
   let checkpoint;
   /** @type {{ inputTokens: number, outputTokens: number } | undefined} */
@@ -205,15 +215,31 @@ export const runHostedTurn = async ({
               args: `${event.args || ''}`,
               result: null,
             };
+            if (!call.id || callsById.has(call.id))
+              throw Error('Hosted tool call requires a unique nonempty ID');
             toolCalls.push(call);
             callsById.set(call.id, call);
+            await recordObservedTool({
+              type: 'observed-tool-call',
+              callId: call.id,
+              name: call.name,
+              args: call.args,
+            });
             writer.toolCall(call);
           }
           break;
         case 'tool-result': {
           const result = `${event.result || ''}`;
           const call = callsById.get(`${event.id || ''}`);
+          if (!call || call.result !== null)
+            throw Error('Hosted tool result has no unsettled matching call');
           if (call) call.result = result;
+          if (call)
+            await recordObservedTool({
+              type: 'observed-tool-result',
+              callId: call.id,
+              result,
+            });
           writer.toolResult({
             id: `${event.id || ''}`,
             name: `${event.name || 'tool'}`,
@@ -230,9 +256,11 @@ export const runHostedTurn = async ({
           usage.outputTokens += Number(event.outputTokens) || 0;
           break;
         case 'abort':
+          terminal = true;
           throw failTurn(`${event.reason || 'hosted turn aborted'}`, {
             delivered,
             finalContent,
+            usage,
             toolCalls,
           });
         case 'end':
@@ -240,20 +268,21 @@ export const runHostedTurn = async ({
             typeof event.checkpoint === 'string' && event.checkpoint !== ''
               ? event.checkpoint
               : undefined;
-          // A tool the backend started and never reported on would otherwise
-          // sit in the transcript looking permanently in progress: the live
-          // view keeps it pending and the persisted history records an empty
-          // result. Settle it explicitly, on both.
+          // Close the UI placeholder, but retain the missing result in the
+          // partial record. A terminal with unresolved tools is not success.
           for (const call of toolCalls) {
             if (call.result === null) {
-              call.result = UNREPORTED_TOOL_RESULT;
               writer.toolResult({
                 id: call.id,
                 name: call.name,
-                result: call.result,
+                result: UNREPORTED_TOOL_RESULT,
               });
             }
           }
+          if (toolCalls.some(call => call.result === null)) {
+            throw Error('hosted turn ended with unsettled tool calls');
+          }
+          terminal = true;
           return harden({
             delivered,
             finalContent,
@@ -265,18 +294,47 @@ export const runHostedTurn = async ({
         // Forward compatibility: unknown normalized event kinds are ignored.
       }
     }
+    if (!signal?.aborted) {
+      throw Error('hosted turn ended without a terminal event');
+    }
+  } catch (error) {
+    // EOF, broken readers, and failed durable recording are not producer stop
+    // barriers. Keep the turn occupied until interruption is confirmed.
+    if (!terminal && !cancellationP) {
+      try {
+        await E(client).interrupt();
+      } catch {
+        throw failTurn(
+          'Hosted turn cancellation failed: producer stop was not confirmed',
+          { delivered, finalContent, usage, toolCalls },
+        );
+      }
+    }
+    throw failTurn(error instanceof Error ? error.message : String(error), {
+      delivered,
+      ...(!terminal ? { outcomeUnknown: true } : {}),
+      finalContent,
+      usage,
+      toolCalls,
+    });
   } finally {
     if (signal) signal.removeEventListener('abort', onAbort);
     // Transport failures must not release the turn while interruption is pending.
     // A failed barrier takes precedence so the session can quarantine itself.
-    if (cancellationP) await cancellationP;
-  }
-  if (!signal?.aborted) {
-    throw failTurn('hosted turn ended without a terminal event', {
-      delivered,
-      finalContent,
-      toolCalls,
-    });
+    if (cancellationP) {
+      try {
+        await cancellationP;
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        // Unconfirmed producer stop deliberately overrides every turn outcome.
+        // eslint-disable-next-line no-unsafe-finally
+        throw failTurn(
+          reason,
+          { delivered, finalContent, usage, toolCalls },
+          new AggregateError([error], reason),
+        );
+      }
+    }
   }
   return harden({
     delivered,

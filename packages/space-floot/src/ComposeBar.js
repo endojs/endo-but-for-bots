@@ -95,6 +95,10 @@ export const ComposeBar = ({ state, controller }) => {
       h('textarea', {
         class: 'floot-input',
         rows: 1,
+        disabled:
+          state.unavailable ||
+          state.recovery?.resolving ||
+          state.recovery?.blocked,
         placeholder: 'Message Floot…',
         value: input || '',
         onInput: (/** @type {FlootSafeEvent} */ e) =>
@@ -108,6 +112,11 @@ export const ComposeBar = ({ state, controller }) => {
         {
           type: 'button',
           class: `floot-send${busy ? ' cancel' : ''}`,
+          disabled:
+            !busy &&
+            (state.unavailable ||
+              state.recovery?.resolving ||
+              state.recovery?.blocked),
           'aria-label': busy ? 'Stop' : 'Send',
           onClick: () => (busy ? controller.stop() : controller.send()),
         },

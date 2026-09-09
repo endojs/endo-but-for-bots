@@ -3,8 +3,10 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 import { Far } from '@endo/far';
 import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
+import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
 
 import { makeStreamingAgent } from '../agent.js';
+import { makeReplyChannel } from '../src/stream.js';
 
 const NODE = 'a'.repeat(64);
 const SELF = 'b'.repeat(64);
@@ -386,6 +388,213 @@ test('a partial message does not swallow its settled revision', async t => {
 
   mailbox.close();
   await agent.shutdown();
+});
+
+test('legacy recovery pauses queued mail until acknowledgement without dismissing it', async t => {
+  t.timeout(10_000);
+  const mailbox = makeLiveMailbox();
+  let turns = 0;
+  let resolution;
+  const migration = Far('Migration', {
+    status: () =>
+      harden({ required: true, ...(resolution ? { resolution } : {}) }),
+    resolve: note => {
+      resolution = note;
+    },
+  });
+  const provider = makeScriptedProvider([
+    () => {
+      turns += 1;
+      return harden({
+        message: { role: 'assistant', content: 'ack' },
+        usage: { inputTokens: 1, outputTokens: 1 },
+      });
+    },
+  ]);
+  const agent = await makeStreamingAgent(
+    mailbox.powers,
+    undefined,
+    { provider },
+    'test',
+    harden({ timers: inertTimers, journalMigration: migration }),
+  );
+  t.teardown(async () => {
+    mailbox.close();
+    await agent.shutdown();
+  });
+  agent.startInbox();
+  const message = mailbox.deliver({
+    from: locatorFor(HOST),
+    strings: ['queued work'],
+  });
+  await new Promise(resolve => setTimeout(resolve, 50));
+  t.is(turns, 0);
+  t.false(mailbox.dismissed.includes(message.number));
+  t.is(mailbox.sent.length, 0);
+  await agent.resolveTurn('legacy-import', 'Checked external effects');
+  t.true(await until(() => mailbox.dismissed.includes(message.number)));
+  t.is(turns, 1);
+});
+
+test('shutdown releases fenced mail without dismissing it or waiting for acknowledgment', async t => {
+  t.timeout(2000);
+  const mailbox = makeLiveMailbox();
+  let sends = 0;
+  const migration = Far('Migration', {
+    status: () => harden({ required: true }),
+    resolve: () => {
+      throw Error('No operator acknowledgment');
+    },
+  });
+  const provider = makeScriptedProvider([
+    () => {
+      sends += 1;
+      throw Error('Fenced mail must not run');
+    },
+  ]);
+  const agent = await makeStreamingAgent(
+    mailbox.powers,
+    undefined,
+    { provider },
+    'test',
+    { timers: inertTimers, journalMigration: migration },
+  );
+  t.teardown(async () => {
+    mailbox.close();
+    await agent.shutdown();
+  });
+  agent.startInbox();
+  const mail = mailbox.deliver({
+    from: locatorFor(HOST),
+    strings: ['leave pending'],
+  });
+  await new Promise(resolve => setTimeout(resolve, 50));
+  // Do not close the mailbox first: shutdown must release its own recovery wait.
+  await agent.shutdown();
+  t.is(sends, 0);
+  t.false(mailbox.dismissed.includes(mail.number));
+  t.is(mailbox.sent.length, 0);
+});
+
+test('mail preserves pre-dispatch refusal when an earlier UI turn establishes a fence', async t => {
+  t.timeout(5000);
+  const mailbox = makeLiveMailbox();
+  const first = makeBufferedReader();
+  let sends = 0;
+  const hostedClient = harden({
+    async interrupt() {
+      await null;
+    },
+    async send() {
+      sends += 1;
+      if (sends === 1) return first.reader;
+      const completed = makeBufferedReader();
+      completed.push({ type: 'text-delta', text: 'Mail completed once' });
+      completed.push({ type: 'end' });
+      return completed.reader;
+    },
+  });
+  const agent = await makeStreamingAgent(
+    mailbox.powers,
+    undefined,
+    { hostedClient },
+    'test',
+    { timers: inertTimers },
+  );
+  t.teardown(async () => {
+    first.push({ type: 'end' });
+    mailbox.close();
+    await agent.shutdown();
+  });
+  agent.startInbox();
+  const uiFailed = t.throwsAsync(
+    agent.converse('UI operation', makeReplyChannel().writer),
+    { message: /outcome unknown|unsettled tool/i },
+  );
+  t.true(await until(() => sends === 1));
+  const mail = mailbox.deliver({
+    from: locatorFor(HOST),
+    strings: ['queued mail'],
+  });
+  // The worker's preflight sees a pending (not unknown) UI turn, then queues
+  // behind it. Closing that turn below establishes the fence before dispatch.
+  await new Promise(resolve => setTimeout(resolve, 50));
+  first.push({ type: 'tool-call', id: 'native', name: 'shell', args: '{}' });
+  first.push({ type: 'end' });
+  await uiFailed;
+  await new Promise(resolve => setTimeout(resolve, 50));
+  t.is(sends, 1);
+  t.is(
+    mailbox.sent.length,
+    0,
+    'writer abort must not turn admission refusal into a mailed error',
+  );
+  t.false(mailbox.dismissed.includes(mail.number));
+  const [unknown] = await agent.getTurns();
+  t.is((await agent.getTurns()).length, 1, 'refused mail did not dispatch');
+  t.is(unknown.state, 'outcome-unknown');
+  await agent.resolveTurn(
+    unknown.turnId,
+    'Checked UI operation effects independently',
+  );
+  t.true(await until(() => mailbox.dismissed.includes(mail.number)));
+  t.is(sends, 2);
+  t.is((await agent.getTurns()).length, 2);
+});
+
+test('acknowledging an admitted mail turn with unknown effects never replays it', async t => {
+  t.timeout(5000);
+  const mailbox = makeLiveMailbox();
+  let sends = 0;
+  const hostedClient = harden({
+    async interrupt() {
+      await null;
+    },
+    async send() {
+      sends += 1;
+      const channel = makeBufferedReader();
+      channel.push({
+        type: 'tool-call',
+        id: 'native',
+        name: 'shell',
+        args: '{}',
+      });
+      channel.push({ type: 'end' });
+      return channel.reader;
+    },
+  });
+  const agent = await makeStreamingAgent(
+    mailbox.powers,
+    undefined,
+    { hostedClient },
+    'test',
+    { timers: inertTimers },
+  );
+  t.teardown(async () => {
+    mailbox.close();
+    await agent.shutdown();
+  });
+  agent.startInbox();
+  const mail = mailbox.deliver({
+    from: locatorFor(HOST),
+    strings: ['perform external effect'],
+  });
+  t.true(await until(() => mailbox.dismissed.includes(mail.number)));
+  const [unknown] = await agent.getTurns();
+  t.is(unknown.state, 'outcome-unknown');
+  t.is(sends, 1);
+  await agent.resolveTurn(
+    unknown.turnId,
+    'Checked external effect; do not replay',
+  );
+  mailbox.replay();
+  await new Promise(resolve => setTimeout(resolve, 50));
+  t.is(sends, 1, 'acknowledgment must not retry an admitted failed turn');
+  t.is((await agent.getTurns()).length, 1);
+  t.is(
+    mailbox.sent.filter(message => message.replyTo === mail.number).length,
+    1,
+  );
 });
 
 test('a backlog larger than any bound is answered, not declined', async t => {

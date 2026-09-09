@@ -4,11 +4,14 @@ import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import { passStyleOf } from '@endo/pass-style';
 import {
+  assertToolArguments,
   makeAdoptTool,
+  makeDescribeCapabilityTool,
   makeExecTool,
   makeListPetnamesTool,
   makeLookupTool,
   makeRemoveTool,
+  makeReadSourcesTool,
   makeReplyTool,
   makeSendTool,
   makeStoreTool,
@@ -238,6 +241,8 @@ export const makeFlootToolRegistry = (
   builtins.set('exec', makeExecTool(powers));
   builtins.set('list', makeListPetnamesTool(powers));
   builtins.set('lookup', makeLookupTool(powers));
+  builtins.set('describeCapability', makeDescribeCapabilityTool(powers));
+  builtins.set('readSources', makeReadSourcesTool(powers));
   builtins.set('store', makeStoreTool(powers));
   builtins.set('remove', makeRemoveTool(powers));
   builtins.set(
@@ -296,6 +301,9 @@ export const makeFlootToolRegistry = (
       makeAccountStatusTool({ oracle: accountOracle, getUsage, getModelId }),
     );
   }
+  // Only this registry's built-ins have a closed named-argument convention.
+  // User-stored tools and factory extras retain their own schema semantics.
+  const builtinTools = new Set(builtins.values());
   for (const [name, tool] of extraTools ?? []) {
     if (builtins.has(name)) {
       throw Error(`Floot tool "${name}" is already defined`);
@@ -308,7 +316,21 @@ export const makeFlootToolRegistry = (
       powers,
       builtins,
     );
-    const providerSchemas = schemas.map(projectToolSchema);
+    const builtinSchemas = new Map();
+    const providerSchemas = schemas.map(schema => {
+      const projected = projectToolSchema(schema);
+      const { function: fn } = projected;
+      if (!builtinTools.has(toolMap.get(fn.name))) return projected;
+      const closed = harden({
+        ...projected,
+        function: harden({
+          ...fn,
+          parameters: harden({ ...fn.parameters, additionalProperties: false }),
+        }),
+      });
+      builtinSchemas.set(fn.name, closed);
+      return closed;
+    });
     const dynamicTools = providerSchemas.map(toDynamicTool);
     const names = dynamicTools.map(tool => tool.name).sort();
     const storedIdentities = await Promise.all(
@@ -341,7 +363,11 @@ export const makeFlootToolRegistry = (
         }),
       ),
       names,
-      execute: (name, args) => executeTool(name, args, toolMap),
+      execute: async (name, args) => {
+        const schema = builtinSchemas.get(name);
+        if (schema) assertToolArguments(schema, args);
+        return executeTool(name, args, toolMap);
+      },
     });
   };
 

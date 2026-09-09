@@ -6,6 +6,7 @@ import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
 import {
   makeClaudeEventTranslator,
   runClaudeTurn,
+  claudeTurnPartialOf,
 } from '../src/claude-turn.js';
 
 // A writer that records every ReplyEvent call, in order.
@@ -27,7 +28,7 @@ const makeRecordingWriter = () => {
 
 // A fake ClaudeClient whose send() returns a buffered reader the test feeds.
 const makeFakeClient = () => {
-  const { push, reader, setOnClose } = makeBufferedReader();
+  const { push, reader, close, setOnClose } = makeBufferedReader();
   let killed = 0;
   setOnClose(() => {
     killed += 1;
@@ -37,13 +38,16 @@ const makeFakeClient = () => {
   /** @type {object[]} */
   const options = [];
   const client = harden({
+    async interrupt() {
+      close();
+    },
     async send(prompt, opts) {
       prompts.push(prompt);
       options.push(opts);
       return reader;
     },
   });
-  return { client, push, prompts, options, killed: () => killed };
+  return { client, push, close, prompts, options, killed: () => killed };
 };
 
 test('translator maps stream-json events onto the reply wire', async t => {
@@ -297,4 +301,267 @@ test('aborting the signal closes the reader and kills the turn', async t => {
   const { finalContent } = await turn;
   t.is(finalContent, 'partial');
   t.is(killed(), 1);
+});
+
+test('native tool observation is durable before display and carries paired results', async t => {
+  t.timeout(5000);
+  const { writer, log } = makeRecordingWriter();
+  const { client, push } = makeFakeClient();
+  const records = [];
+  let release = () => {};
+  let observed = () => {};
+  const gate = new Promise(resolve => {
+    release = () => resolve(undefined);
+  });
+  const started = new Promise(resolve => {
+    observed = () => resolve(undefined);
+  });
+  t.teardown(release);
+  const turn = runClaudeTurn({
+    client,
+    text: 'read',
+    writer,
+    recordToolEvent: async event => {
+      records.push(event);
+      observed();
+      await gate;
+    },
+  });
+  push({
+    type: 'assistant',
+    message: {
+      content: [
+        {
+          type: 'tool_use',
+          id: 'native-1',
+          name: 'Read',
+          input: { file: 'a' },
+        },
+      ],
+    },
+  });
+  await started;
+  t.deepEqual(log, []);
+  release();
+  push({
+    type: 'user',
+    message: {
+      content: [
+        { type: 'tool_result', tool_use_id: 'native-1', content: 'contents' },
+      ],
+    },
+  });
+  push({ type: 'end' });
+  const result = await turn;
+  t.deepEqual(records, [
+    {
+      type: 'observed-tool-call',
+      callId: 'native-1',
+      name: 'Read',
+      args: '{"file":"a"}',
+    },
+    { type: 'observed-tool-result', callId: 'native-1', result: 'contents' },
+  ]);
+  t.deepEqual(result.toolCalls, [
+    { id: 'native-1', name: 'Read', args: '{"file":"a"}', result: 'contents' },
+  ]);
+  t.deepEqual(
+    log.map(entry => entry.kind),
+    ['tool_call', 'tool_result'],
+  );
+});
+
+test('failed native tool recording stops the reader before displaying the event', async t => {
+  t.timeout(5000);
+  const { writer, log } = makeRecordingWriter();
+  const { client, push, killed } = makeFakeClient();
+  const turn = runClaudeTurn({
+    client,
+    text: 'read',
+    writer,
+    recordToolEvent: async () => {
+      throw Error('journal failed');
+    },
+  });
+  push({
+    type: 'assistant',
+    message: {
+      content: [{ type: 'tool_use', id: 'native-1', name: 'Read', input: {} }],
+    },
+  });
+  const error = await t.throwsAsync(turn, { message: /journal failed/ });
+  t.is(killed(), 1);
+  t.deepEqual(log, []);
+  t.is(claudeTurnPartialOf(error).toolCalls[0].result, null);
+});
+
+test('a terminal with unsettled native tools cannot report success and retains partial usage', async t => {
+  const { writer } = makeRecordingWriter();
+  const { client, push } = makeFakeClient();
+  const turn = runClaudeTurn({ client, text: 'read', writer });
+  push({
+    type: 'assistant',
+    message: {
+      content: [
+        { type: 'text', text: 'working' },
+        { type: 'tool_use', id: 'native-1', name: 'Read', input: {} },
+      ],
+    },
+  });
+  push({
+    type: 'result',
+    result: 'reported done',
+    usage: { input_tokens: 3, output_tokens: 4 },
+  });
+  push({ type: 'end' });
+  const error = await t.throwsAsync(turn, {
+    message: /unsettled native tool calls/,
+  });
+  t.like(claudeTurnPartialOf(error), {
+    delivered: true,
+    finalContent: 'reported done',
+    usage: { inputTokens: 3, outputTokens: 4 },
+  });
+  t.is(claudeTurnPartialOf(error).toolCalls[0].result, null);
+});
+
+test('an uncorrelated native result is rejected instead of claiming success', async t => {
+  const { writer } = makeRecordingWriter();
+  const { client, push } = makeFakeClient();
+  const turn = runClaudeTurn({ client, text: 'read', writer });
+  push({
+    type: 'user',
+    message: {
+      content: [
+        { type: 'tool_result', tool_use_id: 'missing', content: 'done' },
+      ],
+    },
+  });
+  await t.throwsAsync(turn, { message: /unknown or settled identity/ });
+});
+
+test('clean EOF after text is unknown rather than success', async t => {
+  t.timeout(5000);
+  const { writer, log } = makeRecordingWriter();
+  const { client, push, close } = makeFakeClient();
+  const turn = runClaudeTurn({ client, text: 'read', writer });
+  push({
+    type: 'assistant',
+    message: { content: [{ type: 'text', text: 'partial' }] },
+  });
+  while (!log.length) {
+    // eslint-disable-next-line no-await-in-loop
+    await delay(1);
+  }
+  close();
+  const error = await t.throwsAsync(turn, {
+    message: /without a terminal event/,
+  });
+  t.like(claudeTurnPartialOf(error), {
+    finalContent: 'partial',
+    outcomeUnknown: true,
+  });
+});
+
+test('failed cancellation is surfaced and retains uncertain partial outcome', async t => {
+  t.timeout(5000);
+  const { writer, log } = makeRecordingWriter();
+  const { client, push } = makeFakeClient();
+  const controller = new AbortController();
+  const broken = harden({
+    send: client.send,
+    async interrupt() {
+      throw Error('unreachable producer');
+    },
+  });
+  const turn = runClaudeTurn({
+    client: broken,
+    text: 'read',
+    writer,
+    signal: controller.signal,
+  });
+  push({
+    type: 'assistant',
+    message: { content: [{ type: 'text', text: 'partial' }] },
+  });
+  while (!log.length) {
+    // eslint-disable-next-line no-await-in-loop
+    await delay(1);
+  }
+  const rejected = t.throwsAsync(turn, {
+    message: /Hosted turn cancellation failed:/,
+  });
+  controller.abort();
+  const error = await rejected;
+  t.is(claudeTurnPartialOf(error).outcomeUnknown, true);
+});
+
+test('a rejected send is stopped and recorded as uncertain dispatch', async t => {
+  const { writer } = makeRecordingWriter();
+  let stops = 0;
+  const client = harden({
+    async send() {
+      throw Error('lost send response');
+    },
+    async interrupt() {
+      stops += 1;
+    },
+  });
+  const error = await t.throwsAsync(
+    runClaudeTurn({ client, text: 'do work', writer }),
+    { message: /lost send response/ },
+  );
+  t.is(stops, 1);
+  t.like(claudeTurnPartialOf(error), {
+    delivered: false,
+    outcomeUnknown: true,
+  });
+});
+
+test('canceling a pending send interrupts promptly and closes its late reader', async t => {
+  t.timeout(5000);
+  const { writer } = makeRecordingWriter();
+  const { reader, setOnClose } = makeBufferedReader();
+  let closed = 0;
+  setOnClose(() => {
+    closed += 1;
+  });
+  let release = () => {};
+  let started = () => {};
+  const pending = new Promise(resolve => {
+    release = () => resolve(reader);
+  });
+  const sending = new Promise(resolve => {
+    started = () => resolve(undefined);
+  });
+  t.teardown(release);
+  let stops = 0;
+  const client = harden({
+    async send() {
+      started();
+      return pending;
+    },
+    async interrupt() {
+      stops += 1;
+    },
+  });
+  const controller = new AbortController();
+  const turn = runClaudeTurn({
+    client,
+    text: 'do work',
+    writer,
+    signal: controller.signal,
+  });
+  await sending;
+  controller.abort();
+  const result = await turn;
+  t.is(stops, 1);
+  t.true(result.outcomeUnknown);
+  t.is(closed, 0);
+  release();
+  while (!closed) {
+    // eslint-disable-next-line no-await-in-loop
+    await delay(1);
+  }
+  t.is(closed, 1);
 });
