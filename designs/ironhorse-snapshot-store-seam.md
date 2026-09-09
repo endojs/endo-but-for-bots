@@ -33,6 +33,15 @@ The retained-array scaling instrument now passes, and mixed array/collection/nam
 counter tests verify skipped extraction and encoding with restored-image parity.
 These guarantees concern incremental section work; FileStore still rewrites its file.
 
+**Snapshot framing hardening (2026-09-09).**
+The previously recorded unchecked section ends in `SmallState::decode` and
+`peek_cost_table_version` now use checked addition and return named refusals for
+overflow or truncation.
+`AtomWriter` checks both individual atom sizes and the accumulated container size
+against the u32 wire limit before writing, with synthetic boundary tests.
+The blob writer still buffers its image and container; it hashes the same buffer
+it writes rather than offering bounded-memory streaming.
+
 Investigation of a seam in the Ironhorse engine's snapshot subsystem
 that lets the whole-heap snapshot artifact be replaced by a database
 (SQLite first), so that large heaps are **lazily reified** at resume
@@ -209,7 +218,8 @@ recombine measurable.
 summary-driven partial collector.**
 Partial collection never reclaims chunk space.
 Workers using only this collector must be recycled before reaching their chunk
-ceiling, or run explicit full collection under their replicated collection policy.
+ceiling, or run explicit full collection under their consumer's collection policy.
+Consumers requiring replica-identical heaps must coordinate those collections.
 Full collection now packs chain-aligned regions within an extent when at least
 one quarter of the region's bytes are dead, keeping crossing live blocks fixed.
 It encodes reusable interior holes and truncates trailing garbage; the reported
@@ -219,8 +229,9 @@ size-and-address index from those markers after resume.
 Unchanged extents retain their backing and residency; changed extents retain
 dirty and unbacked ownership until the appropriate checkpoint.
 The byte vector can retain its allocation after truncation for subsequent reuse.
-This changes relocation policy inside explicit full collection, without adding
-allocation-triggered GC or resolving W6's separate scheduling-policy question.
+This changes relocation policy inside explicit full collection without adding
+allocation-triggered GC.
+The GC schedule remains consumer-owned, as W6 decision 5 records.
 
 Every checkpoint writes per-page outgoing-edge summaries
 (`derive_page_edges` — a pure function of the page's records, NULL

@@ -1880,7 +1880,8 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
 /// subsequent allocation order).
 /// Sessions using only partial collection never reclaim chunk space. They
 /// must recycle the worker before its chunk ceiling is reached, or explicitly
-/// run the full collector under their replicated collection policy. Partial
+/// run the full collector under their consumer's collection policy. Consumers
+/// requiring replica-identical heaps must coordinate collection. Partial
 /// collection does not introduce allocation-triggered full GC.
 ///
 /// Contract: call at a checkpoint boundary while the session has no
