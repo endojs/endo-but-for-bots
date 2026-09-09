@@ -479,14 +479,9 @@ fn every_slot_bearing_field_is_classified_and_the_classification_holds() {
 
     // The checked requirements, against the real visitor bodies.
     let gc_roots = strip_comments(fn_body("pub fn gc_roots(&self)"));
-    let extra_edges = strip_comments(fn_body("fn extra_edges(&self, idx: SlotIndex"));
+    let (extra_edges, partial) = edge_sources(SRC);
     let ephemeron = strip_comments(fn_body("fn ephemeron_edges(&self, slots: &SlotArena"));
     let chunk_remap = chunk_source(SRC);
-    let partial = format!(
-        "{}\n{}",
-        strip_comments(fn_body("fn each_side_table_ref(&self")),
-        strip_comments(fn_body("fn each_side_table_ref_tail(&self"))
-    );
     let (full_sweep, partial_sweep) = sweep_sources(SRC);
 
     let value_type_of = |name: &str| -> &str { &fields.iter().find(|(n, _)| n == name).unwrap().1 };
@@ -641,4 +636,137 @@ fn chunk_checks_reject_disconnected_calls_and_missing_expansions() {
         let mutation = SRC.replace(target, "/* chunk walk removed */");
         assert!(std::panic::catch_unwind(|| chunk_source(&mutation)).is_err());
     }
+}
+
+/// Inspect generated table walks only after checking their live entry points.
+fn edge_sources(src: &str) -> (String, String) {
+    fn compact(src: &str) -> String {
+        ironhorse_vm::source_scan::code_only(src)
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect()
+    }
+    assert_eq!(
+        compact(body_in(src, "macro_rules! gc_run")),
+        "{($($code:tt)*)=>{{$($code)*}};}"
+    );
+    assert!(compact(src).contains("interp_state!(define_slot_walks);"));
+    let callback = compact(body_in(src, "fn extra_edges(&self, idx: SlotIndex"));
+    assert!(callback.contains("self.visit_owner_slots(idx,visit);"));
+    for (marker, mode) in [
+        ("fn visit_owner_slots(&self", "full"),
+        ("fn each_side_table_ref(&self", "all"),
+        ("fn each_side_table_ref_tail(&self", "tail"),
+    ] {
+        let walk = compact(body_in(src, marker));
+        assert!(walk.contains(&format!(
+            "$(gc_slot_table!(gc_run,{mode},self,$field,idx,visit,$shape,$row);)*"
+        )));
+    }
+    let slots = compact(body_in(src, "pub fn side_table_ref_slots(&self)"));
+    assert!(slots.contains("self.each_side_table_ref(&mut|r|out.push(r));"));
+    let pages = compact(body_in(src, "pub fn side_table_ref_page_bits(&self)"));
+    assert!(pages.contains("self.each_side_table_ref_tail(&mut|r|"));
+    assert!(pages.contains("self.side_refs.or_into_bits(&mutbits);"));
+    let full = expanded_row_edges(ironhorse_vm::interp::gc_tables::FULL_EDGE_SOURCE, true);
+    let partial = expanded_row_edges(ironhorse_vm::interp::gc_tables::PARTIAL_EDGE_SOURCE, false);
+    let tail = expanded_row_edges(ironhorse_vm::interp::gc_tables::TAIL_EDGE_SOURCE, false);
+    assert_tail_coverage(&partial, &tail);
+    (full, partial)
+}
+
+#[test]
+fn edge_checks_reject_disconnected_calls_and_missing_expansions() {
+    for target in [
+        "{{ $($code)* }}",
+        "interp_state!(define_slot_walks);",
+        "self.visit_owner_slots(idx, visit);",
+        "gc_slot_table!(gc_run, full, self, $field, idx, visit, $shape, $row)",
+        "gc_slot_table!(gc_run, all, self, $field, idx, visit, $shape, $row)",
+        "gc_slot_table!(gc_run, tail, self, $field, idx, visit, $shape, $row)",
+        "self.each_side_table_ref(&mut |r| out.push(r));",
+        "self.each_side_table_ref_tail(&mut |r|",
+        "self.side_refs.or_into_bits(&mut bits);",
+    ] {
+        assert!(SRC.contains(target), "missing mutation target: {target}");
+        let mutation = SRC.replace(target, "/* slot walk removed */");
+        assert!(std::panic::catch_unwind(|| edge_sources(&mutation)).is_err());
+    }
+}
+
+/// Include a row body's evidence only when the table walk actually calls that
+/// policy. Promise rows reach combinator/fromAsync state through those bodies.
+fn expanded_row_edges(tables: &[&str], full: bool) -> String {
+    let rows = ironhorse_vm::interp::gc_tables::ROW_EDGE_SOURCE;
+    assert_eq!(tables.len(), rows.len());
+    let mut source = tables.join("\n");
+    for ((field, policy, full_row, partial_row), table) in rows.iter().zip(tables) {
+        let row = if full { full_row } else { partial_row };
+        if !row.trim().is_empty() && !table.trim().is_empty() {
+            assert!(mentions(table, field), "{field}: table identity mismatch");
+            let compact: String = table.chars().filter(|c| !c.is_whitespace()).collect();
+            assert!(
+                compact.contains(&format!(
+                    "gc_slot_row!(gc_run,self,row,visit,{full},{policy});"
+                )),
+                "{field}: row policy is disconnected from the table walk"
+            );
+            source.push_str(row);
+        }
+    }
+    source
+}
+
+fn assert_tail_coverage(partial: &str, tail: &str) {
+    for (field, _) in ironhorse_vm::interp::INTERP_FIELDS {
+        if ["arrays", "index_props", "collections"].contains(field) {
+            assert!(
+                !mentions(tail, field),
+                "counted bulk table scanned in tail: {field}"
+            );
+        } else if mentions(partial, field) {
+            assert!(
+                mentions(tail, field),
+                "nonbulk table missing from tail: {field}"
+            );
+        }
+    }
+}
+
+#[test]
+fn tail_checks_reject_missing_nonbulk_fields_and_added_bulk_fields() {
+    let partial = expanded_row_edges(ironhorse_vm::interp::gc_tables::PARTIAL_EDGE_SOURCE, false);
+    let tail = expanded_row_edges(ironhorse_vm::interp::gc_tables::TAIL_EDGE_SOURCE, false);
+    assert_tail_coverage(&partial, &tail);
+    for field in [
+        "functions",
+        "promises",
+        "combinators",
+        "from_async",
+        "symbol_key_ids",
+    ] {
+        assert!(mentions(&tail, field));
+        let mutation = tail.replace(field, "removed_field");
+        assert!(std::panic::catch_unwind(|| assert_tail_coverage(&partial, &mutation)).is_err());
+    }
+    for field in ["arrays", "index_props", "collections"] {
+        let mutation = format!("{tail} self.{field};");
+        assert!(std::panic::catch_unwind(|| assert_tail_coverage(&partial, &mutation)).is_err());
+    }
+}
+
+#[test]
+fn row_checks_reject_a_disconnected_call_even_when_another_table_uses_the_policy() {
+    let mut tables: Vec<String> = ironhorse_vm::interp::gc_tables::PARTIAL_EDGE_SOURCE
+        .iter()
+        .map(|source| (*source).to_owned())
+        .collect();
+    let table = tables
+        .iter_mut()
+        .find(|table| mentions(table, "ctor_prototype"))
+        .unwrap();
+    assert!(table.contains("gc_slot_row"));
+    *table = table.replace("gc_slot_row", "removed_row_call");
+    let tables: Vec<&str> = tables.iter().map(String::as_str).collect();
+    assert!(std::panic::catch_unwind(|| expanded_row_edges(&tables, false)).is_err());
 }

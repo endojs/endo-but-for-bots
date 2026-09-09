@@ -369,6 +369,7 @@ macro_rules! define_chunk_walk {
     (() $vis:vis struct $name:ident {
         $(#[gc_hook($phase:ident, $policy:ident)]
           #[gc_chunk($chunk:ident)]
+          #[gc_slots($shape:ident, $row:ident)]
           $(#[$attr:meta])* $field_vis:vis $field:ident: $ty:ty,)*
     }) => {
         impl Hooks<'_> {
@@ -383,6 +384,312 @@ macro_rules! define_chunk_walk {
     };
 }
 interp_state!(define_chunk_walk);
+
+// Per-row slot policies are shared by precise full marking and conservative
+// partial-page enumeration. Only collection strength differs between the walks.
+macro_rules! gc_slot_row {
+    ($emit:ident, $vm:ident, $row:ident, $visit:ident, $full:expr, none) => {
+        $emit! {}
+    };
+    ($emit:ident, $vm:ident, $row:ident, $visit:ident, $full:expr, function) => {
+        $emit! {
+            $visit($row.closures);
+            // The `super` home object: for a method
+            // detached from a dead class, this is the prototype's
+            // only remaining edge.
+            $visit($row.home);
+
+        }
+    };
+    ($emit:ident, $vm:ident, $row:ident, $visit:ident, $full:expr, bound) => {
+        $emit! {
+            $visit($row.target);
+            $row.this_arg.each_ref_slot(&mut *$visit);
+            for s in &$row.args {
+                s.each_ref_slot(&mut *$visit);
+        }
+
+        }
+    };
+    ($emit:ident, $vm:ident, $row:ident, $visit:ident, $full:expr, owner) => {
+        $emit! {
+            $visit(*$row);
+
+        }
+    };
+    ($emit:ident, $vm:ident, $row:ident, $visit:ident, $full:expr, slot) => {
+        $emit! {
+            $row.each_ref_slot(&mut *$visit);
+
+        }
+    };
+    ($emit:ident, $vm:ident, $row:ident, $visit:ident, $full:expr, proxy) => {
+        $emit! {
+            $visit($row.target);
+            $visit($row.handler);
+
+        }
+    };
+    ($emit:ident, $vm:ident, $row:ident, $visit:ident, $full:expr, disposal) => {
+        $emit! {
+            for r in &$row.records {
+                r.resource.each_ref_slot(&mut *$visit);
+                r.method.each_ref_slot(&mut *$visit);
+        }
+
+        }
+    };
+    ($emit:ident, $vm:ident, $row:ident, $visit:ident, $full:expr, queued_frame) => {
+        $emit! {
+            if let Some(f) = &$row.frame {
+                saved_frame_slots(f, $visit);
+        }
+        for rq in $row.requests.iter().chain($row.active.as_ref()) {
+            rq.value.each_ref_slot(&mut *$visit);
+            rq.resolve.each_ref_slot(&mut *$visit);
+            rq.reject.each_ref_slot(&mut *$visit);
+        }
+
+        }
+    };
+    ($emit:ident, $vm:ident, $row:ident, $visit:ident, $full:expr, segments) => {
+        $emit! {
+            $visit($row.segments_inst);
+
+        }
+    };
+    ($emit:ident, $vm:ident, $row:ident, $visit:ident, $full:expr, number_format) => {
+        $emit! {
+            if let Some(bf) = $row.bound_format {
+                $visit(bf);
+        }
+
+        }
+    };
+    ($emit:ident, $vm:ident, $row:ident, $visit:ident, $full:expr, indexed) => {
+        $emit! {
+            for s in $row.items().values() {
+                s.each_ref_slot(&mut *$visit);
+        }
+
+        }
+    };
+    ($emit:ident, $vm:ident, $row:ident, $visit:ident, $full:expr, collection) => {
+        $emit! {
+            // Full tracing keeps weak entries only through ephemerons. The partial
+            // collector conservatively pins their pages through SideRefCounts.
+            if !$full || matches!($row.kind, CollKind::Map | CollKind::Set) {
+                for (k, v) in $row.live_entries() {
+                    k.each_ref_slot(&mut *$visit);
+                    v.each_ref_slot(&mut *$visit);
+                }
+        }
+
+        }
+    };
+    ($emit:ident, $vm:ident, $row:ident, $visit:ident, $full:expr, buffer) => {
+        $emit! {
+            $visit($row.buffer);
+
+        }
+    };
+    ($emit:ident, $vm:ident, $row:ident, $visit:ident, $full:expr, iterator) => {
+        $emit! {
+            $visit($row.iterable);
+            $visit($row.result);
+
+        }
+    };
+    ($emit:ident, $vm:ident, $row:ident, $visit:ident, $full:expr, promise) => {
+        $emit! {
+            $row.result.each_ref_slot(&mut *$visit);
+            for r in &$row.reactions {
+                r.on_fulfilled.each_ref_slot(&mut *$visit);
+                r.on_rejected.each_ref_slot(&mut *$visit);
+                r.resolve.each_ref_slot(&mut *$visit);
+                r.reject.each_ref_slot(&mut *$visit);
+                // A native reaction's real payload rides its
+                // KIND, not the four handler slots (which it
+                // leaves unused): an `AsyncAwait` reaction's
+                // only reference to the suspended async
+                // instance is here, and a `Combine` reaction
+                // will index the combinator's capability callbacks
+                // and accumulator Array at the drain.
+                match r.kind {
+                    ReactionKind::AsyncAwait(inst)
+                    | ReactionKind::AsyncGeneratorAwait(inst)
+                    | ReactionKind::AsyncGeneratorYield(inst)
+                    | ReactionKind::AsyncGeneratorReturn(inst) => $visit(inst),
+                    ReactionKind::Combine(ci, _) | ReactionKind::CombineDirect(ci, _) => {
+                        if let Some(c) = $vm.combinators.get(ci as usize) {
+                            c.resolve.each_ref_slot(&mut *$visit);
+                            c.reject.each_ref_slot(&mut *$visit);
+                            $visit(c.results);
+                        }
+                    }
+                    ReactionKind::FromAsyncNext(fa)
+                    | ReactionKind::FromAsyncElem(fa)
+                    | ReactionKind::FromAsyncMap(fa)
+                    | ReactionKind::FromAsyncClose(fa) => {
+                        if let Some(d) = $vm.from_async.get(fa as usize) {
+                            d.resolve.each_ref_slot(&mut *$visit);
+                            d.reject.each_ref_slot(&mut *$visit);
+                            $visit(d.target);
+                            d.mapfn.each_ref_slot(&mut *$visit);
+                            d.this_arg.each_ref_slot(&mut *$visit);
+                            d.iterator.each_ref_slot(&mut *$visit);
+                            d.next_method.each_ref_slot(&mut *$visit);
+                            d.array_like.each_ref_slot(&mut *$visit);
+                            d.close_error.each_ref_slot(&mut *$visit);
+                        }
+                    }
+                    ReactionKind::User
+                    | ReactionKind::FinallyReturn
+                    | ReactionKind::FinallyAwait(_) => {}
+                }
+        }
+
+        }
+    };
+    ($emit:ident, $vm:ident, $row:ident, $visit:ident, $full:expr, frame) => {
+        $emit! {
+            if let Some(f) = &$row.frame {
+                saved_frame_slots(f, $visit);
+        }
+
+        }
+    };
+    ($emit:ident, $vm:ident, $row:ident, $visit:ident, $full:expr, async_frame) => {
+        $emit! {
+            $visit($row.result_promise);
+            $row.resolve_fn.each_ref_slot(&mut *$visit);
+            $row.reject_fn.each_ref_slot(&mut *$visit);
+            if let Some(f) = &$row.frame {
+                saved_frame_slots(f, $visit);
+        }
+
+        }
+    };
+    ($emit:ident, $vm:ident, $row:ident, $visit:ident, $full:expr, promise_owner) => {
+        $emit! {
+            $visit($row.promise);
+
+        }
+    };
+    ($emit:ident, $vm:ident, $row:ident, $visit:ident, $full:expr, accessor) => {
+        $emit! {
+            if let Some(g) = &$row.get {
+                g.each_ref_slot(&mut *$visit);
+        }
+        if let Some(s) = &$row.set {
+            s.each_ref_slot(&mut *$visit);
+        }
+
+        }
+    };
+}
+
+macro_rules! gc_slot_table {
+    ($emit:ident, $mode:ident, $vm:ident, $field:ident, $idx:ident, $visit:ident, none, $row:ident) => {
+        $emit! {}
+    };
+    ($emit:ident, full, $vm:ident, $field:ident, $idx:ident, $visit:ident, keys, $row:ident) => {
+        $emit! {}
+    };
+    ($emit:ident, tail, $vm:ident, $field:ident, $idx:ident, $visit:ident, bulk, $row:ident) => {
+        $emit! {}
+    };
+    ($emit:ident, $mode:ident, $vm:ident, $field:ident, $idx:ident, $visit:ident, bulk, $row:ident) => {
+        gc_slot_table!($emit, $mode, $vm, $field, $idx, $visit, map, $row)
+    };
+    ($emit:ident, full, $vm:ident, $field:ident, $idx:ident, $visit:ident, map, $row:ident) => {
+        $emit! {
+            if let Some(row) = $vm.$field.get(&$idx) {
+                gc_slot_row!(gc_run, $vm, row, $visit, true, $row);
+            }
+        }
+    };
+    ($emit:ident, full, $vm:ident, $field:ident, $idx:ident, $visit:ident, owner_pairs, $row:ident) => {
+        $emit! {
+            // Pair-keyed tables have no per-owner index; preserve their filtered scan.
+            for ((owner, _), row) in $vm.$field.iter() {
+                if *owner == $idx { gc_slot_row!(gc_run, $vm, row, $visit, true, $row); }
+            }
+        }
+    };
+    ($emit:ident, full, $vm:ident, $field:ident, $idx:ident, $visit:ident, private_pairs, $row:ident) => {
+        $emit! {
+            for ((owner, cell), row) in $vm.$field.iter() {
+                if *owner == $idx {
+                    $visit(*cell);
+                    gc_slot_row!(gc_run, $vm, row, $visit, true, $row);
+                }
+            }
+        }
+    };
+    ($emit:ident, $mode:ident, $vm:ident, $field:ident, $idx:ident, $visit:ident, owner_pairs, $row:ident) => {
+        gc_slot_table!($emit, $mode, $vm, $field, $idx, $visit, map, $row)
+    };
+    ($emit:ident, $mode:ident, $vm:ident, $field:ident, $idx:ident, $visit:ident, map, $row:ident) => {
+        $emit! {
+            for row in $vm.$field.values() { gc_slot_row!(gc_run, $vm, row, $visit, false, $row); }
+        }
+    };
+    ($emit:ident, $mode:ident, $vm:ident, $field:ident, $idx:ident, $visit:ident, private_pairs, $row:ident) => {
+        $emit! {
+            for ((_, cell), row) in $vm.$field.iter() {
+                $visit(*cell);
+                gc_slot_row!(gc_run, $vm, row, $visit, false, $row);
+            }
+        }
+    };
+    ($emit:ident, $mode:ident, $vm:ident, $field:ident, $idx:ident, $visit:ident, keys, $row:ident) => {
+        $emit! { for key in $vm.$field.keys() { $visit(*key); } }
+    };
+}
+macro_rules! define_slot_walks {
+    (() $vis:vis struct $name:ident {
+        $(#[gc_hook($phase:ident, $policy:ident)]
+          #[gc_chunk($chunk:ident)]
+          #[gc_slots($shape:ident, $row:ident)]
+          $(#[$attr:meta])* $field_vis:vis $field:ident: $ty:ty,)*
+    }) => {
+        impl Hooks<'_> {
+            fn visit_owner_slots(&self, idx: SlotIndex, visit: &mut dyn FnMut(SlotIndex)) {
+                $(gc_slot_table!(gc_run, full, self, $field, idx, visit, $shape, $row);)*
+            }
+        }
+        impl Interp {
+            /// Enumerate all side-table value edges for integrity checks.
+            pub(super) fn each_side_table_ref(&self, visit: &mut dyn FnMut(SlotIndex)) {
+                $(gc_slot_table!(gc_run, all, self, $field, idx, visit, $shape, $row);)*
+            }
+            /// Enumerate the tail; the three bulk tables use standing page counts.
+            pub(super) fn each_side_table_ref_tail(&self, visit: &mut dyn FnMut(SlotIndex)) {
+                $(gc_slot_table!(gc_run, tail, self, $field, idx, visit, $shape, $row);)*
+            }
+        }
+        /// Row bodies paired with their generated table call sites.
+        pub const ROW_EDGE_SOURCE: &[(&str, &str, &str, &str)] = &[
+            $((stringify!($field), stringify!($row),
+                gc_slot_row!(gc_text, self, row, visit, true, $row),
+                gc_slot_row!(gc_text, self, row, visit, false, $row)),)*
+        ];
+        /// Expanded production full-marking table walks.
+        pub const FULL_EDGE_SOURCE: &[&str] = &[
+            $(gc_slot_table!(gc_text, full, self, $field, idx, visit, $shape, $row),)*
+        ];
+        /// Expanded production conservative table walks.
+        pub const PARTIAL_EDGE_SOURCE: &[&str] = &[
+            $(gc_slot_table!(gc_text, all, self, $field, idx, visit, $shape, $row),)*
+        ];
+        /// Expanded production tail walks, excluding counted bulk tables.
+        pub const TAIL_EDGE_SOURCE: &[&str] = &[
+            $(gc_slot_table!(gc_text, tail, self, $field, idx, visit, $shape, $row),)*
+        ];
+    };
+}
+interp_state!(define_slot_walks);
 
 fn saved_frame_slots(f: &SavedFrame, visit: &mut dyn FnMut(SlotIndex)) {
     for s in &f.locals {
@@ -434,207 +741,7 @@ fn saved_frame_chunks(f: &mut SavedFrame, visit: &mut dyn FnMut(&mut ChunkOffset
 
 impl crate::gc::GcHooks for Hooks<'_> {
     fn extra_edges(&self, idx: SlotIndex, visit: &mut dyn FnMut(SlotIndex)) {
-        if let Some(f) = self.functions.get(&idx) {
-            visit(f.closures);
-            // The `super` home object: for a method
-            // detached from a dead class, this is the prototype's
-            // only remaining edge.
-            visit(f.home);
-        }
-        if let Some(b) = self.bound_functions.get(&idx) {
-            visit(b.target);
-            b.this_arg.each_ref_slot(&mut *visit);
-            for s in &b.args {
-                s.each_ref_slot(&mut *visit);
-            }
-        }
-        if let Some(p) = self.ctor_prototype.get(&idx) {
-            visit(*p);
-        }
-        if let Some(s) = self.wrapper_data.get(&idx) {
-            s.each_ref_slot(&mut *visit);
-        }
-        // Internal slots can be the only owners of proxy targets, accessor
-        // closures, or resources. Trace them before sweeping their targets;
-        // gc_side_tables.rs pins survival across collection and slot reuse.
-        if let Some(p) = self.proxies.get(&idx) {
-            visit(p.target);
-            visit(p.handler);
-        }
-        if let Some(px) = self.proxy_revokers.get(&idx) {
-            visit(*px);
-        }
-        if let Some(d) = self.disposable_stacks.get(&idx) {
-            for r in &d.records {
-                r.resource.each_ref_slot(&mut *visit);
-                r.method.each_ref_slot(&mut *visit);
-            }
-        }
-        if let Some(g) = self.async_generators.get(&idx) {
-            if let Some(f) = &g.frame {
-                saved_frame_slots(f, visit);
-            }
-            for rq in g.requests.iter().chain(g.active.as_ref()) {
-                rq.value.each_ref_slot(&mut *visit);
-                rq.resolve.each_ref_slot(&mut *visit);
-                rq.reject.each_ref_slot(&mut *visit);
-            }
-        }
-        if let Some(si) = self.segment_iterators.get(&idx) {
-            visit(si.segments_inst);
-        }
-        if let Some(owner) = self.collator_compare_functions.get(&idx) {
-            visit(*owner);
-        }
-        if let Some(owner) = self.number_format_bound_functions.get(&idx) {
-            visit(*owner);
-        }
-        if let Some(nf) = self.number_formats.get(&idx) {
-            if let Some(bf) = nf.bound_format {
-                visit(bf);
-            }
-        }
-        // Tuple-keyed tables (owner, id/cell): a per-owner index
-        // does not exist, so these are filtered scans — O(table)
-        // per marked owner. Accessor/private tables are small in
-        // practice; a counted per-owner index is the named
-        // upgrade if that stops holding.
-        for ((owner, _id), a) in self.accessors.iter() {
-            if *owner == idx {
-                if let Some(g) = &a.get {
-                    g.each_ref_slot(&mut *visit);
-                }
-                if let Some(s) = &a.set {
-                    s.each_ref_slot(&mut *visit);
-                }
-            }
-        }
-        for ((recv, cell), v) in self.private_values.iter() {
-            if *recv == idx {
-                visit(*cell);
-                v.each_ref_slot(&mut *visit);
-            }
-        }
-        for ((recv, cell), a) in self.private_accessors.iter() {
-            if *recv == idx {
-                visit(*cell);
-                if let Some(g) = &a.get {
-                    g.each_ref_slot(&mut *visit);
-                }
-                if let Some(s) = &a.set {
-                    s.each_ref_slot(&mut *visit);
-                }
-            }
-        }
-        if let Some(a) = self.arrays.get(&idx) {
-            for s in a.items().values() {
-                s.each_ref_slot(&mut *visit);
-            }
-        }
-        // An ordinary object's index properties are strong edges
-        // exactly as an array's items are: `o[0] = {}` is the only
-        // reference to that object, and a collector that did not walk
-        // here would sweep it and hand its slot to the next
-        // allocation.
-        if let Some(a) = self.index_props.get(&idx) {
-            for s in a.items().values() {
-                s.each_ref_slot(&mut *visit);
-            }
-        }
-        if let Some(c) = self.collections.get(&idx) {
-            match c.kind {
-                CollKind::Map | CollKind::Set => {
-                    for (k, v) in c.live_entries() {
-                        k.each_ref_slot(&mut *visit);
-                        v.each_ref_slot(&mut *visit);
-                    }
-                }
-                // WEAK collections hold nothing strongly: a
-                // key lives only through outside references,
-                // and a WeakMap value only through the
-                // ephemeron pass (marked while its key is
-                // marked, `GcHooks::ephemeron_edges`);
-                // dead-keyed entries are pruned before the
-                // sweep. Locked by the gc_machine ephemeron
-                // tests (the old conservative-retention pin
-                // flipped when this landed).
-                CollKind::WeakMap | CollKind::WeakSet => {}
-            }
-        }
-        if let Some(t) = self.typed_arrays.get(&idx) {
-            visit(t.buffer);
-        }
-        if let Some(d) = self.data_views.get(&idx) {
-            visit(d.buffer);
-        }
-        if let Some(i) = self.iterators.get(&idx) {
-            visit(i.iterable);
-            visit(i.result);
-        }
-        if let Some(p) = self.promises.get(&idx) {
-            p.result.each_ref_slot(&mut *visit);
-            for r in &p.reactions {
-                r.on_fulfilled.each_ref_slot(&mut *visit);
-                r.on_rejected.each_ref_slot(&mut *visit);
-                r.resolve.each_ref_slot(&mut *visit);
-                r.reject.each_ref_slot(&mut *visit);
-                // A native reaction's real payload rides its
-                // KIND, not the four handler slots (which it
-                // leaves unused): an `AsyncAwait` reaction's
-                // only reference to the suspended async
-                // instance is here, and a `Combine` reaction
-                // will index the combinator's capability callbacks
-                // and accumulator Array at the drain.
-                match r.kind {
-                    ReactionKind::AsyncAwait(inst)
-                    | ReactionKind::AsyncGeneratorAwait(inst)
-                    | ReactionKind::AsyncGeneratorYield(inst)
-                    | ReactionKind::AsyncGeneratorReturn(inst) => visit(inst),
-                    ReactionKind::Combine(ci, _) | ReactionKind::CombineDirect(ci, _) => {
-                        if let Some(c) = self.combinators.get(ci as usize) {
-                            c.resolve.each_ref_slot(&mut *visit);
-                            c.reject.each_ref_slot(&mut *visit);
-                            visit(c.results);
-                        }
-                    }
-                    ReactionKind::FromAsyncNext(fa)
-                    | ReactionKind::FromAsyncElem(fa)
-                    | ReactionKind::FromAsyncMap(fa)
-                    | ReactionKind::FromAsyncClose(fa) => {
-                        if let Some(d) = self.from_async.get(fa as usize) {
-                            d.resolve.each_ref_slot(&mut *visit);
-                            d.reject.each_ref_slot(&mut *visit);
-                            visit(d.target);
-                            d.mapfn.each_ref_slot(&mut *visit);
-                            d.this_arg.each_ref_slot(&mut *visit);
-                            d.iterator.each_ref_slot(&mut *visit);
-                            d.next_method.each_ref_slot(&mut *visit);
-                            d.array_like.each_ref_slot(&mut *visit);
-                            d.close_error.each_ref_slot(&mut *visit);
-                        }
-                    }
-                    ReactionKind::User
-                    | ReactionKind::FinallyReturn
-                    | ReactionKind::FinallyAwait(_) => {}
-                }
-            }
-        }
-        if let Some(g) = self.generators.get(&idx) {
-            if let Some(f) = &g.frame {
-                saved_frame_slots(f, visit);
-            }
-        }
-        if let Some(a) = self.async_instances.get(&idx) {
-            visit(a.result_promise);
-            a.resolve_fn.each_ref_slot(&mut *visit);
-            a.reject_fn.each_ref_slot(&mut *visit);
-            if let Some(f) = &a.frame {
-                saved_frame_slots(f, visit);
-            }
-        }
-        if let Some(p) = self.promise_functions.get(&idx) {
-            visit(p.promise);
-        }
+        self.visit_owner_slots(idx, visit);
     }
 
     fn swept(&mut self, idx: SlotIndex) {
