@@ -7660,3 +7660,178 @@ mod meter_identity_tests {
         ));
     }
 }
+
+#[cfg(test)]
+mod scalar_framing_refusals {
+    use super::*;
+
+    #[test]
+    fn creation_and_meter_framing() {
+        let creation = CreationParams::default().encode();
+        assert!(CreationParams::decode(&creation).is_ok());
+        for length in 0..8 {
+            assert_eq!(
+                CreationParams::decode(&creation[..length]),
+                Err(SnapshotError::Corrupt("CREA payload too short"))
+            );
+        }
+        let mut trailing = creation;
+        trailing.push(0);
+        assert_eq!(
+            CreationParams::decode(&trailing),
+            Err(SnapshotError::Corrupt("CREA trailing bytes"))
+        );
+
+        let meter = MeterImage::current().encode();
+        assert!(MeterImage::decode(&meter).is_ok());
+        for length in 0..28 {
+            assert_eq!(
+                MeterImage::decode(&meter[..length]),
+                Err(SnapshotError::Corrupt("METR header"))
+            );
+        }
+        for length in 28..meter.len() {
+            assert_eq!(
+                MeterImage::decode(&meter[..length]),
+                Err(SnapshotError::Corrupt("METR version string"))
+            );
+        }
+        let mut invalid = meter.clone();
+        invalid[28] = 0xff;
+        assert_eq!(
+            MeterImage::decode(&invalid),
+            Err(SnapshotError::Corrupt("METR version not utf8"))
+        );
+        invalid = meter;
+        invalid[24..28].copy_from_slice(&u32::MAX.to_be_bytes());
+        assert_eq!(
+            MeterImage::decode(&invalid),
+            Err(SnapshotError::Corrupt("METR version string"))
+        );
+    }
+
+    #[test]
+    fn heap_and_stack_framing() {
+        let mut heap = vec![0; 12];
+        assert!(decode_heap(&heap).is_ok());
+        for length in 0..12 {
+            assert_eq!(
+                decode_heap(&heap[..length]),
+                Err(SnapshotError::Corrupt("HEAP header"))
+            );
+        }
+        heap.push(0);
+        assert_eq!(
+            decode_heap(&heap),
+            Err(SnapshotError::Corrupt("HEAP trailing bytes"))
+        );
+        heap = vec![0; 12 + SLOT_RECORD_BYTES];
+        heap[3] = 1; // one live Undefined slot, an honest control
+        heap[11] = 1;
+        assert!(decode_heap(&heap).is_ok());
+        heap[12] = 200; // no such Kind, with otherwise valid framing/accounting
+        assert_eq!(
+            decode_heap(&heap),
+            Err(SnapshotError::Corrupt("HEAP slot record"))
+        );
+
+        let mut stack = encode_stack(&[Slot::undefined()]);
+        assert!(decode_stack(&stack).is_ok());
+        for length in 0..4 {
+            assert_eq!(
+                decode_stack(&stack[..length]),
+                Err(SnapshotError::Corrupt("STAC header"))
+            );
+        }
+        stack[4] = 200;
+        assert_eq!(
+            decode_stack(&stack),
+            Err(SnapshotError::Corrupt("STAC slot record"))
+        );
+        stack[4] = 0;
+        stack.push(0);
+        assert_eq!(
+            decode_stack(&stack),
+            Err(SnapshotError::Corrupt("STAC trailing bytes"))
+        );
+    }
+
+    #[test]
+    fn string_name_and_integer_list_framing() {
+        let strings = encode_strings(&["abc".to_owned()]);
+        assert_eq!(decode_strings(&strings).unwrap(), vec!["abc"]);
+        assert_eq!(
+            decode_names(&strings).unwrap(),
+            vec![SymbolName::from("abc")]
+        );
+        for length in 0..4 {
+            assert_eq!(
+                decode_strings(&strings[..length]),
+                Err(SnapshotError::Corrupt("string list header"))
+            );
+            assert_eq!(
+                decode_names(&strings[..length]),
+                Err(SnapshotError::Corrupt("string list header"))
+            );
+        }
+        for length in 8..strings.len() {
+            assert_eq!(
+                decode_strings(&strings[..length]),
+                Err(SnapshotError::Corrupt("string list entry body"))
+            );
+            assert_eq!(
+                decode_names(&strings[..length]),
+                Err(SnapshotError::Corrupt("string list entry body"))
+            );
+        }
+        let mut invalid = strings.clone();
+        invalid[8] = 0xff;
+        assert_eq!(
+            decode_strings(&invalid),
+            Err(SnapshotError::Corrupt("string list entry not utf8"))
+        );
+        assert_eq!(
+            decode_names(&invalid),
+            Err(SnapshotError::Corrupt("name list entry not CESU-8"))
+        );
+        invalid = strings;
+        invalid.push(0);
+        assert_eq!(
+            decode_strings(&invalid),
+            Err(SnapshotError::Corrupt("string list trailing bytes"))
+        );
+        assert_eq!(
+            decode_names(&invalid),
+            Err(SnapshotError::Corrupt("name list trailing bytes"))
+        );
+        invalid[4..8].copy_from_slice(&u32::MAX.to_be_bytes());
+        assert_eq!(
+            decode_strings(&invalid),
+            Err(SnapshotError::Corrupt("string list entry body"))
+        );
+        assert_eq!(
+            decode_names(&invalid),
+            Err(SnapshotError::Corrupt("string list entry body"))
+        );
+
+        let mut integers = encode_u32s(&[42]);
+        assert_eq!(decode_u32s(&integers).unwrap(), vec![42]);
+        for length in 0..4 {
+            assert_eq!(
+                decode_u32s(&integers[..length]),
+                Err(SnapshotError::Corrupt("u32 list header"))
+            );
+        }
+        for length in 4..integers.len() {
+            assert_eq!(
+                decode_u32s(&integers[..length]),
+                Err(SnapshotError::Corrupt("u32 list entry"))
+            );
+        }
+        integers.push(0);
+        assert_eq!(
+            decode_u32s(&integers),
+            Err(SnapshotError::Corrupt("u32 list trailing bytes"))
+        );
+    }
+}

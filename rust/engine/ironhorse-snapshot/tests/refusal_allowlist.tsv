@@ -3,24 +3,13 @@
 # The registry removes an exception when a direct literal assertion is added.
 # New labels require a regression assertion or an individually reviewed entry.
 BLOC length differs from CREA	Existing corruption guard; dedicated exact-label regression fixture deferred.
-CREA payload too short	Existing corruption guard; dedicated exact-label regression fixture deferred.
-CREA trailing bytes	Existing corruption guard; dedicated exact-label regression fixture deferred.
-HEAP header	Existing corruption guard; dedicated exact-label regression fixture deferred.
 HEAP record count	Existing corruption guard; dedicated exact-label regression fixture deferred.
-HEAP slot record	Existing corruption guard; dedicated exact-label regression fixture deferred.
-HEAP trailing bytes	Existing corruption guard; dedicated exact-label regression fixture deferred.
 Intl bound-function state: functions not strictly ascending	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 Intl bound-function state: name not UTF-8	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 Intl bound-function state: owner has no Intl row	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 Intl bound-function state: unknown kind	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
-METR header	Existing corruption guard; dedicated exact-label regression fixture deferred.
-METR version not utf8	Existing corruption guard; dedicated exact-label regression fixture deferred.
-METR version string	Existing corruption guard; dedicated exact-label regression fixture deferred.
-STAC header	Existing corruption guard; dedicated exact-label regression fixture deferred.
 STAC not empty at a quiescent boundary	Existing corruption guard; dedicated exact-label regression fixture deferred.
 STAC record count	Existing corruption guard; dedicated exact-label regression fixture deferred.
-STAC slot record	Existing corruption guard; dedicated exact-label regression fixture deferred.
-STAC trailing bytes	Existing corruption guard; dedicated exact-label regression fixture deferred.
 accessor state: bad option tag	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 accessor state: getter or setter is not callable	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 accessor state: id outside the property-key tables	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
@@ -137,8 +126,6 @@ manifest parent seal length	Existing corruption guard; dedicated exact-label reg
 manifest parent seal not utf8	Existing corruption guard; dedicated exact-label regression fixture deferred.
 manifest parent seal truncated	Existing corruption guard; dedicated exact-label regression fixture deferred.
 migration did not advance the store schema	Existing corruption guard; dedicated exact-label regression fixture deferred.
-name list entry not CESU-8	Existing corruption guard; dedicated exact-label regression fixture deferred.
-name list trailing bytes	Existing corruption guard; dedicated exact-label regression fixture deferred.
 name migration body	Existing corruption guard; dedicated exact-label regression fixture deferred.
 name migration header	Existing corruption guard; dedicated exact-label regression fixture deferred.
 name migration length	Existing corruption guard; dedicated exact-label regression fixture deferred.
@@ -223,10 +210,6 @@ store manifest truncated	Existing corruption guard; dedicated exact-label regres
 store slot page fails its leaf hash	Existing corruption guard; dedicated exact-label regression fixture deferred.
 store slot page record	Existing corruption guard; dedicated exact-label regression fixture deferred.
 store version stamp mismatch	Existing corruption guard; dedicated exact-label regression fixture deferred.
-string list entry body	Existing corruption guard; dedicated exact-label regression fixture deferred.
-string list entry not utf8	Existing corruption guard; dedicated exact-label regression fixture deferred.
-string list header	Existing corruption guard; dedicated exact-label regression fixture deferred.
-string list trailing bytes	Existing corruption guard; dedicated exact-label regression fixture deferred.
 symbol registry: keys not strictly ascending	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 symbol registry: two keys share a descriptor	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 symbol-key table does not restore	Existing corruption guard; dedicated exact-label regression fixture deferred.
@@ -242,8 +225,5 @@ temporal zoneds: time zone not UTF-8	Existing corruption guard; dedicated exact-
 typed-arrays side table: owners not strictly ascending	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 typed-arrays side table: unknown element kind	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 typed-arrays side table: view geometry past its buffer	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
-u32 list entry	Existing corruption guard; dedicated exact-label regression fixture deferred.
-u32 list header	Existing corruption guard; dedicated exact-label regression fixture deferred.
-u32 list trailing bytes	Existing corruption guard; dedicated exact-label regression fixture deferred.
 unsupported store schema version	Existing corruption guard; dedicated exact-label regression fixture deferred.
 wrapper side table: owners not strictly ascending	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
