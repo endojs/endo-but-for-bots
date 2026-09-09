@@ -171,11 +171,7 @@ pub const INTL: FourCc = FourCc(*b"INTL");
 /// UNKNOWN tags is sound because the `VERS` range gate runs first: a
 /// container from a newer format (the one honest source of new tags)
 /// is already refused by version.
-pub const CANONICAL_ATOM_ORDER: &[FourCc] = &[
-    VERS, SIGN, CREA, BLOC, HEAP, STAC, KEYS, NAME, SYMB, METR, ARRY, IDXP, COLL, REGY, ERRD, ESTK,
-    ABUF, TARR, DVIW, WRAP, REGX, ARGB, TMPR, INTL, ITER, DATE, FUNC, PROX, ACCS, IBFN, PRIV, DISP,
-    GENR, PRMS, ASYN, NFLR,
-];
+pub const CANONICAL_ATOM_ORDER: &[FourCc] = &crate::snapshot_roster::canonical_atom_order();
 
 /// The Ironhorse discriminator embedded at the head of the `VERS` atom. An
 /// Ironhorse snapshot is never mistaken for an XS one and vice versa
