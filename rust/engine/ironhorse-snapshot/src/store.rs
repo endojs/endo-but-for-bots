@@ -48,10 +48,8 @@
 //! [`crate::store_file::FileStore`].
 
 use crate::format::{Signature, SnapshotError, Version};
-use crate::image::{decode_names, encode_names};
-use crate::image::{
-    decode_stack, decode_strings, decode_u32s, CreationParams, MachineImage, MeterImage,
-};
+use crate::image::encode_names;
+use crate::image::{decode_strings, CreationParams, MachineImage, MeterImage};
 use crate::slot_codec::{decode_slots, encode_slot, SLOT_RECORD_BYTES};
 use ironhorse_vm::SymbolName;
 use ironhorse_vm::{Slot, COST_TABLE_VERSION};
@@ -1611,284 +1609,7 @@ impl SmallState {
     }
 
     fn decode_legacy(p: &[u8]) -> Result<SmallState, StoreError> {
-        let mut i = 0usize;
-        let mut read_small_section = |name: &'static str| -> Result<&[u8], StoreError> {
-            if p.len() - i < 4 {
-                return Err(StoreError::Snapshot(SnapshotError::Corrupt(name)));
-            }
-            let len = u32::from_be_bytes([p[i], p[i + 1], p[i + 2], p[i + 3]]) as usize;
-            i += 4;
-            // The wire length can exhaust usize on 32-bit targets.
-            let end = match i.checked_add(len).filter(|&end| end <= p.len()) {
-                Some(end) => end,
-                None => return Err(StoreError::Snapshot(SnapshotError::Corrupt(name))),
-            };
-            let s = &p[i..end];
-            i = end;
-            Ok(s)
-        };
-        let stack = decode_stack(read_small_section("small state stack section")?)?;
-        let slot_free = decode_u32s(read_small_section("small state free-list section")?)?;
-        let keys = decode_strings(read_small_section("small state keys section")?)?;
-        let names = decode_names(read_small_section("small state names section")?)?;
-        let symbols =
-            crate::image::decode_symbol_keys(read_small_section("small state symbols section")?)
-                .map_err(StoreError::Snapshot)?;
-        let meter = MeterImage::decode(read_small_section("small state meter section")?)?;
-        // Schema-7 sections (the side-table ledger). An EMPTY section
-        // (zero length, distinct from an empty LIST's 4-byte count
-        // header) is accepted as the empty table: it is exactly what
-        // the 6→7 migration appends, and it keeps that append a pure
-        // suffix rather than a re-encode of bytes the old root signed.
-        let arrays_bytes = read_small_section("small state arrays section")?;
-        let arrays = if arrays_bytes.is_empty() {
-            Vec::new()
-        } else {
-            crate::image::decode_arrays(arrays_bytes)?
-        };
-        let collections_bytes = read_small_section("small state collections section")?;
-        let collections = if collections_bytes.is_empty() {
-            Vec::new()
-        } else {
-            crate::image::decode_collections(collections_bytes)?
-        };
-        let registry_bytes = read_small_section("small state registry section")?;
-        let registry = if registry_bytes.is_empty() {
-            Vec::new()
-        } else {
-            crate::image::decode_registry(registry_bytes)?
-        };
-        // Schema-9 section (the error-data row), same empty-section
-        // rule: the 8→9 migration appends exactly this.
-        let errors_bytes = read_small_section("small state errors section")?;
-        let mut errors = if errors_bytes.is_empty() {
-            Vec::new()
-        } else {
-            crate::image::decode_errors(errors_bytes)?
-        };
-        // Schema-10 sections (the typed-array family), same rule.
-        let buffers_bytes = read_small_section("small state buffers section")?;
-        let buffers = if buffers_bytes.is_empty() {
-            Vec::new()
-        } else {
-            crate::image::decode_buffers(buffers_bytes)?
-        };
-        let typed_arrays_bytes = read_small_section("small state typed-arrays section")?;
-        let typed_arrays = if typed_arrays_bytes.is_empty() {
-            Vec::new()
-        } else {
-            crate::image::decode_typed_arrays(typed_arrays_bytes)?
-        };
-        let data_views_bytes = read_small_section("small state data-views section")?;
-        let data_views = if data_views_bytes.is_empty() {
-            Vec::new()
-        } else {
-            crate::image::decode_data_views(data_views_bytes)?
-        };
-        // Schema-11 sections (the data-only language rows), same rule.
-        let wrappers_bytes = read_small_section("small state wrappers section")?;
-        let wrappers = if wrappers_bytes.is_empty() {
-            Vec::new()
-        } else {
-            crate::image::decode_wrappers(wrappers_bytes)?
-        };
-        let regexps_bytes = read_small_section("small state regexps section")?;
-        let regexps = if regexps_bytes.is_empty() {
-            Vec::new()
-        } else {
-            crate::image::decode_regexps(regexps_bytes)?
-        };
-        let arguments_bytes = read_small_section("small state arguments section")?;
-        let arguments_brands = if arguments_bytes.is_empty() {
-            Vec::new()
-        } else {
-            crate::image::decode_arguments_brands(arguments_bytes)?
-        };
-        let temporal_bytes = read_small_section("small state temporal section")?;
-        let temporal = if temporal_bytes.is_empty() {
-            crate::image::TemporalImage::default()
-        } else {
-            crate::image::decode_temporal(temporal_bytes)?
-        };
-        // Schema-12 sections (the Intl record tables and the
-        // installed-names floor), same rule.
-        let intl_bytes = read_small_section("small state intl section")?;
-        let intl = if intl_bytes.is_empty() {
-            ironhorse_vm::IntlTables::default()
-        } else {
-            crate::image::decode_intl(intl_bytes).map_err(StoreError::Snapshot)?
-        };
-        let floor_bytes = read_small_section("small state name-floor section")?;
-        let name_floor = match floor_bytes.len() {
-            0 => None,
-            4 => Some(u32::from_be_bytes([
-                floor_bytes[0],
-                floor_bytes[1],
-                floor_bytes[2],
-                floor_bytes[3],
-            ])),
-            _ => {
-                return Err(StoreError::Snapshot(SnapshotError::Corrupt(
-                    "small state name-floor section size",
-                )))
-            }
-        };
-        // A floor past the name table cannot come from an honest
-        // suspension (the store mirror of `read_machine`'s check).
-        if name_floor.is_some_and(|floor| floor as usize > names.len()) {
-            return Err(StoreError::Snapshot(SnapshotError::Corrupt(
-                "installed-names floor past the name table",
-            )));
-        }
-        // And an explicit floor AT the table length is non-canonical:
-        // writers emit the fully-installed state as an EMPTY section
-        // (the store mirror of `read_machine`'s NFLR gate — review).
-        if name_floor.is_some_and(|floor| floor as usize == names.len()) {
-            return Err(StoreError::Snapshot(SnapshotError::Corrupt(
-                "installed-names floor: non-canonical explicit full floor",
-            )));
-        }
-        // Schema-13 section (the iterator cursors), same rule.
-        let iterators_bytes = read_small_section("small state iterators section")?;
-        let iterators = if iterators_bytes.is_empty() {
-            Vec::new()
-        } else {
-            crate::image::decode_iterators(iterators_bytes).map_err(StoreError::Snapshot)?
-        };
-        // Schema-14 Date records, same empty-section migration rule.
-        let dates_bytes = read_small_section("small state dates section")?;
-        let dates = if dates_bytes.is_empty() {
-            Vec::new()
-        } else {
-            crate::image::decode_dates(dates_bytes).map_err(StoreError::Snapshot)?
-        };
-        // Schema-15 atomic retained function state.
-        let function_bytes = read_small_section("small state function section")?;
-        let function_state = if function_bytes.is_empty() {
-            ironhorse_vm::FunctionStateSnapshot::default()
-        } else {
-            crate::image::decode_function_state(function_bytes).map_err(StoreError::Snapshot)?
-        };
-        // Schema-16 proxy state.
-        let proxy_bytes = read_small_section("small state proxy section")?;
-        let proxy_state = if proxy_bytes.is_empty() {
-            ironhorse_vm::ProxyStateSnapshot::default()
-        } else {
-            crate::image::decode_proxy_state(proxy_bytes).map_err(StoreError::Snapshot)?
-        };
-        // Schema-17 guest accessors.
-        let accessor_bytes = read_small_section("small state accessor section")?;
-        let accessors = if accessor_bytes.is_empty() {
-            Vec::new()
-        } else {
-            crate::image::decode_accessors(accessor_bytes).map_err(StoreError::Snapshot)?
-        };
-        // Schema-18 Intl bound-function links.
-        let intl_bound_bytes = read_small_section("small state Intl bound-function section")?;
-        let intl_bound_functions = if intl_bound_bytes.is_empty() {
-            Vec::new()
-        } else {
-            crate::image::decode_intl_bound_functions(intl_bound_bytes)
-                .map_err(StoreError::Snapshot)?
-        };
-        // Schema-19 private elements.
-        let private_bytes = read_small_section("small state private-element section")?;
-        let private_elements = if private_bytes.is_empty() {
-            ironhorse_vm::PrivateElementSnapshot::default()
-        } else {
-            crate::image::decode_private_elements(private_bytes).map_err(StoreError::Snapshot)?
-        };
-        // Schema-20 disposable stacks.
-        let disposable_bytes = read_small_section("small state disposable-stack section")?;
-        let disposable_stacks = if disposable_bytes.is_empty() {
-            Vec::new()
-        } else {
-            crate::image::decode_disposable_stacks(disposable_bytes)
-                .map_err(StoreError::Snapshot)?
-        };
-        // Schema-21 synchronous generator activations.
-        let generator_bytes = read_small_section("small state generator section")?;
-        let generators = if generator_bytes.is_empty() {
-            Vec::new()
-        } else {
-            crate::image::decode_generators(generator_bytes).map_err(StoreError::Snapshot)?
-        };
-        // Schema-22 error CONSTRUCTION frames. Their own section for
-        // the same reason they get their own atom: appending one
-        // section is the migration this ladder already knows how to
-        // do, where widening the schema-9 error rows would have been a
-        // rewrite of a section in the middle.
-        let error_frames_bytes = read_small_section("small state error-frames section")?;
-        if !error_frames_bytes.is_empty() {
-            for (owner, frames) in crate::image::decode_error_frames(error_frames_bytes)
-                .map_err(StoreError::Snapshot)?
-            {
-                let Some(row) = errors.iter_mut().find(|e| e.owner == owner) else {
-                    return Err(StoreError::Snapshot(SnapshotError::Corrupt(
-                        "error-frame side table: owner has no error row",
-                    )));
-                };
-                row.frames = frames;
-            }
-        }
-        // Schema-23 promise cluster, same empty-section migration rule.
-        let promise_bytes = read_small_section("small state promise section")?;
-        let mut promise_cluster = if promise_bytes.is_empty() {
-            ironhorse_vm::PromiseClusterSnapshot::default()
-        } else {
-            crate::image::decode_promise_cluster(promise_bytes).map_err(StoreError::Snapshot)?
-        };
-        let async_bytes = read_small_section("small state async section")?;
-        promise_cluster.async_instances = if async_bytes.is_empty() {
-            Vec::new()
-        } else {
-            crate::image::decode_async_instances(async_bytes).map_err(StoreError::Snapshot)?
-        };
-        let index_props_bytes = read_small_section("small state index-props section")?;
-        let index_props = if index_props_bytes.is_empty() {
-            Vec::new()
-        } else {
-            crate::image::decode_index_props(index_props_bytes).map_err(StoreError::Snapshot)?
-        };
-        // Same exact-consumption rule as the manifest: every section and
-        // nothing after them, or the small state fails closed.
-        if i != p.len() {
-            return Err(StoreError::Snapshot(SnapshotError::Corrupt(
-                "small state trailing bytes",
-            )));
-        }
-        Ok(SmallState {
-            index_props,
-            stack,
-            slot_free,
-            keys,
-            names,
-            symbols,
-            meter,
-            arrays,
-            collections,
-            registry,
-            errors,
-            buffers,
-            typed_arrays,
-            data_views,
-            wrappers,
-            regexps,
-            dates,
-            function_state,
-            proxy_state,
-            accessors,
-            intl_bound_functions,
-            private_elements,
-            disposable_stacks,
-            generators,
-            promise_cluster,
-            arguments_brands,
-            temporal,
-            intl,
-            name_floor,
-            iterators,
-        })
+        crate::snapshot_roster::decode_legacy_payloads(p)
     }
 }
 
@@ -4860,6 +4581,99 @@ mod tests {
             assert_eq!(
                 name_migration_section_end(cursor, len),
                 Err(SnapshotError::Corrupt("name migration length"))
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_decoder_preserves_section_order_and_truncation_errors() {
+        let canonical = image_to_batch_unchecked(&ran_image(), 1, "").small;
+        // Historical framing order, independent of the roster and atom order.
+        let labels = [
+            "small state stack section",
+            "small state free-list section",
+            "small state keys section",
+            "small state names section",
+            "small state symbols section",
+            "small state meter section",
+            "small state arrays section",
+            "small state collections section",
+            "small state registry section",
+            "small state errors section",
+            "small state buffers section",
+            "small state typed-arrays section",
+            "small state data-views section",
+            "small state wrappers section",
+            "small state regexps section",
+            "small state arguments section",
+            "small state temporal section",
+            "small state intl section",
+            "small state name-floor section",
+            "small state iterators section",
+            "small state dates section",
+            "small state function section",
+            "small state proxy section",
+            "small state accessor section",
+            "small state Intl bound-function section",
+            "small state private-element section",
+            "small state disposable-stack section",
+            "small state generator section",
+            "small state error-frames section",
+            "small state promise section",
+            "small state async section",
+            "small state index-props section",
+        ];
+        let sections = crate::store_sections::split_small_state(&canonical).unwrap();
+        let mut offset = 0;
+        for (payload, label) in sections.iter().zip(labels) {
+            for cut in [offset, offset + 3] {
+                assert_eq!(
+                    SmallState::decode_legacy(&canonical[..cut]).unwrap_err(),
+                    StoreError::Snapshot(SnapshotError::Corrupt(label))
+                );
+            }
+            if !payload.is_empty() {
+                let cut = offset + 4 + payload.len() - 1;
+                assert_eq!(
+                    SmallState::decode_legacy(&canonical[..cut]).unwrap_err(),
+                    StoreError::Snapshot(SnapshotError::Corrupt(label))
+                );
+            }
+            offset += 4 + payload.len();
+        }
+        assert_eq!(offset, canonical.len());
+        let mut trailing = canonical;
+        trailing.push(0);
+        assert_eq!(
+            SmallState::decode_legacy(&trailing).unwrap_err(),
+            StoreError::Snapshot(SnapshotError::Corrupt("small state trailing bytes"))
+        );
+    }
+
+    #[test]
+    fn every_appended_table_accepts_legacy_empty_payload_only_at_migration_boundary() {
+        let canonical = image_to_batch_unchecked(&ran_image(), 1, "").small;
+        let sections = crate::store_sections::split_small_state(&canonical).unwrap();
+        // IDs 6 onward were appended as zero-width migration suffixes.
+        // ID 18 is the optional floor: empty is already its canonical form.
+        for id in (6..32).filter(|id| *id != 18) {
+            let mut legacy_sections = sections;
+            legacy_sections[id] = &[];
+            let legacy = crate::store_sections::frame_small_state(&legacy_sections).unwrap();
+            let decoded = SmallState::decode_legacy(&legacy).unwrap();
+            let normalized = decoded.encode();
+            assert_ne!(
+                normalized, legacy,
+                "section {id} requires canonical payload"
+            );
+            assert_eq!(
+                SmallState::decode(&legacy).unwrap_err(),
+                StoreError::Snapshot(SnapshotError::Corrupt("non-canonical small state"))
+            );
+            assert_eq!(
+                SmallState::decode(&normalized).unwrap(),
+                decoded,
+                "section {id}"
             );
         }
     }
