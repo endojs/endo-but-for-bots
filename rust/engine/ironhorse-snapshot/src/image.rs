@@ -4873,15 +4873,75 @@ fn encode_machine(image: &MachineImage) -> Result<Vec<u8>, SnapshotError> {
     w.finish()
 }
 
-/// Parse an `XS_M` atom container into a machine image, enforcing the
-/// ironhorse `VERS` discriminator and checking the host callback-table
-/// `SIGN` against `expected_sig` — a mismatch fails closed exactly as
-/// `fxReadSnapshot` does (a callback index would bind the wrong host
-/// function). Pass the machine's current signature.
-///
-/// This low-level API returns a mutable plain-data model for tooling and
-/// crafted-input tests. Machine adoption uses [`read_validated_machine`], whose
-/// private wrapper prevents mutation between this validation and restore.
+// Container decoding has its own absence and legacy policies. The roster's
+// successor chain preserves decoder error precedence independently of wire order.
+macro_rules! apply_container_decode {
+    (replace, $target:expr, $body:block) => {
+        $target = $body;
+    };
+    (extend, $target:expr, $body:block) => {
+        $body
+    };
+}
+macro_rules! define_container_decoder {
+    (($d:tt); [$($init_field:ident = $init:expr,)*];
+        $($section:ident => $next:ident, $mode:ident, $field:ident,
+            ($reader:ident, [$($version:ident)?], [$($small:ident)?]) $body:block)*
+    ) => {
+        fn decode_container_payloads(
+            reader: &AtomReader<'_>,
+            version: &Version,
+        ) -> Result<crate::store::SmallState, SnapshotError> {
+            let mut small = crate::store::SmallState {
+                $($init_field: $init,)*
+            };
+            macro_rules! decode_step {
+                $(($section) => {{
+                    apply_container_decode!($mode, small.$field, {
+                        let $reader = reader;
+                        $(let $version = version;)?
+                        $(let $small = &mut small;)?
+                        $body
+                    });
+                    decode_step!($next);
+                }};)*
+                (End) => {};
+            }
+            decode_step!(Stack);
+            Ok(small)
+        }
+        macro_rules! container_image_from {
+            ($d source:ident; $d ($d header:ident),*; free: $d free:ident) => {{
+                let mut image = MachineImage {
+                    $d ($d header,)*
+                    $($init_field: $d source.$init_field,)*
+                };
+                // The decoded heap owns free slots; the retired small-state
+                // free-list placeholder must never replace it.
+                image.slot_free = $d free;
+                image
+            }};
+        }
+    };
+}
+macro_rules! define_container_payloads {
+    ($($section:ident {
+        image_field: $field:ident,
+        live: [$($live:tt)*],
+        bounds: [$($bounds:tt)*],
+        restore: [$($restore:tt)*],
+        initialize: [$($init_field:ident = $init:expr)?],
+        legacy_label: $legacy_label:literal,
+        decode_legacy($decoded:ident, $input:ident): $decode:block,
+        decode_container: [$($next:ident, $mode:ident, ($reader:ident, [$($version:ident)?], [$($small:ident)?]) $body:block)?],
+        $($rest:tt)*
+    })*) => {
+        define_container_decoder!(($); [$($($init_field = $init,)?) *];
+            $($($section => $next, $mode, $field, ($reader, [$($version)?], [$($small)?]) $body)?) *);
+    };
+}
+crate::snapshot_roster::snapshot_payloads!(define_container_payloads);
+
 /// An optional side-table atom the writer emits only when its table is
 /// NON-EMPTY. A present-but-empty one can therefore only be crafted,
 /// and accepting it would re-canonicalize on the next write -- the same
@@ -4895,6 +4955,15 @@ fn present_and_non_empty<T>(rows: Vec<T>, what: &'static str) -> Result<Vec<T>, 
     Ok(rows)
 }
 
+/// Parse an `XS_M` atom container into a machine image, enforcing the
+/// ironhorse `VERS` discriminator and checking the host callback-table
+/// `SIGN` against `expected_sig` — a mismatch fails closed exactly as
+/// `fxReadSnapshot` does (a callback index would bind the wrong host
+/// function). Pass the machine's current signature.
+///
+/// This low-level API returns a mutable plain-data model for tooling and
+/// crafted-input tests. Machine adoption uses [`read_validated_machine`], whose
+/// private wrapper prevents mutation between this validation and restore.
 pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage, SnapshotError> {
     let r = AtomReader::parse(buf)?;
 
@@ -4946,353 +5015,9 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
     let heap = r.find(HEAP).ok_or(SnapshotError::MissingAtom(HEAP))?;
     let (slots, slot_free, slot_live) = decode_heap(heap.payload)?;
 
-    let stack = match r.find(STAC) {
-        Some(a) => decode_stack(a.payload)?,
-        None => Vec::new(),
-    };
-    // The write verbs persist only QUIESCENT machines, and quiescence
-    // includes an empty value stack — so a populated `STAC` cannot come
-    // from an honest writer, and adopting one would seed a machine that
-    // can neither run nor checkpoint safely (review finding 5: the
-    // reader must enforce what the writer enforces).
-    if !stack.is_empty() {
-        return Err(SnapshotError::Corrupt(
-            "STAC not empty at a quiescent boundary",
-        ));
-    }
-    let keys = match r.find(KEYS) {
-        Some(a) => decode_strings(a.payload)?,
-        None => Vec::new(),
-    };
-    let names = match r.find(NAME) {
-        Some(a) if version.format_version < 15 => decode_strings(a.payload)?
-            .into_iter()
-            .map(SymbolName::from)
-            .collect(),
-        Some(a) => decode_names(a.payload)?,
-        None => Vec::new(),
-    };
-    let symbols = match r.find(SYMB) {
-        Some(a) => decode_symbol_keys(a.payload)?,
-        None => SymbolKeyImage::default(),
-    };
-    // The symbol-key counter must clear the name table (its ids mint
-    // DOWNWARD from u16::MAX; a counter at or below the table would
-    // alias a symbol id onto a string key at restore — see
-    // `Interp::restore_symbol_key_table`). Checked here where names
-    // and symbols are both in hand; `validate_store` mirrors it for
-    // the store path.
-    if (symbols.next_id as usize) <= names.len() {
-        return Err(SnapshotError::Corrupt(
-            "symbol-key table: counter inside the name table",
-        ));
-    }
-
-    // METR (design row 6): decode the metering state and fail closed on a
-    // cost-table version this engine did not produce — the metering
-    // analogue of the SIGN check above. Name-only or absent records cannot
-    // establish the weights that produced a meter and are refused.
-    let meter = match r.find(METR) {
-        Some(a) => MeterImage::decode(a.payload)?,
-        None => return Err(SnapshotError::Corrupt("missing METR identity")),
-    };
-    if meter.cost_table_version != COST_TABLE_VERSION {
-        return Err(SnapshotError::CostTableMismatch {
-            expected: COST_TABLE_VERSION.to_string(),
-            found: meter.cost_table_version,
-        });
-    }
-
-    // Side-table ledger atoms: absent means empty (a pre-ledger or
-    // side-table-free container), exactly mirroring the writer's
-    // emit-only-when-non-empty rule.
-    let index_props = match r.find(crate::format::IDXP) {
-        Some(a) => present_and_non_empty(
-            decode_index_props(a.payload)?,
-            "IDXP atom present but empty; the writer omits it",
-        )?,
-        None => Vec::new(),
-    };
-    let arrays = match r.find(crate::format::ARRY) {
-        Some(a) => present_and_non_empty(
-            decode_arrays(a.payload)?,
-            "ARRY atom present but empty; the writer omits it",
-        )?,
-        None => Vec::new(),
-    };
-    let collections = match r.find(crate::format::COLL) {
-        Some(a) => present_and_non_empty(
-            decode_collections(a.payload)?,
-            "COLL atom present but empty; the writer omits it",
-        )?,
-        None => Vec::new(),
-    };
-    let registry = match r.find(crate::format::REGY) {
-        Some(a) => present_and_non_empty(
-            decode_registry(a.payload)?,
-            "REGY atom present but empty; the writer omits it",
-        )?,
-        None => Vec::new(),
-    };
-    let mut errors = match r.find(crate::format::ERRD) {
-        Some(a) => present_and_non_empty(
-            decode_errors(a.payload)?,
-            "ERRD atom present but empty; the writer omits it",
-        )?,
-        None => Vec::new(),
-    };
-    // Join the frames back onto their rows. An owner naming no `ERRD`
-    // row is crafted: the writer emits frames only for errors it also
-    // emitted — and emits the ATOM only when some row exists, so a
-    // present-but-empty one is the same non-canonical shape every
-    // optional atom refuses (a zero row COUNT; a zero-length frame
-    // LIST inside a row is refused by the decoder itself).
-    if let Some(a) = r.find(crate::format::ESTK) {
-        let rows = decode_error_frames(a.payload)?;
-        if rows.is_empty() {
-            return Err(SnapshotError::Corrupt(
-                "ESTK atom present but empty; the writer omits it",
-            ));
-        }
-        for (owner, frames) in rows {
-            let Some(row) = errors.iter_mut().find(|e| e.owner == owner) else {
-                return Err(SnapshotError::Corrupt(
-                    "error-frame side table: owner has no error row",
-                ));
-            };
-            row.frames = frames;
-        }
-    }
-    let buffers = match r.find(crate::format::ABUF) {
-        Some(a) => present_and_non_empty(
-            decode_buffers(a.payload)?,
-            "ABUF atom present but empty; the writer omits it",
-        )?,
-        None => Vec::new(),
-    };
-    let typed_arrays = match r.find(crate::format::TARR) {
-        Some(a) => present_and_non_empty(
-            decode_typed_arrays(a.payload)?,
-            "TARR atom present but empty; the writer omits it",
-        )?,
-        None => Vec::new(),
-    };
-    let data_views = match r.find(crate::format::DVIW) {
-        Some(a) => present_and_non_empty(
-            decode_data_views(a.payload)?,
-            "DVIW atom present but empty; the writer omits it",
-        )?,
-        None => Vec::new(),
-    };
-    let wrappers = match r.find(crate::format::WRAP) {
-        Some(a) => present_and_non_empty(
-            decode_wrappers(a.payload)?,
-            "WRAP atom present but empty; the writer omits it",
-        )?,
-        None => Vec::new(),
-    };
-    let regexps = match r.find(crate::format::REGX) {
-        Some(a) => present_and_non_empty(
-            decode_regexps(a.payload)?,
-            "REGX atom present but empty; the writer omits it",
-        )?,
-        None => Vec::new(),
-    };
-    let arguments_brands = match r.find(crate::format::ARGB) {
-        Some(a) => present_and_non_empty(
-            decode_arguments_brands(a.payload)?,
-            "ARGB atom present but empty; the writer omits it",
-        )?,
-        None => Vec::new(),
-    };
-    let temporal = match r.find(crate::format::TMPR) {
-        Some(a) => {
-            let t = decode_temporal(a.payload)?;
-            if t.is_empty() {
-                return Err(SnapshotError::Corrupt(
-                    "TMPR atom present but empty; the writer omits it",
-                ));
-            }
-            t
-        }
-        None => TemporalImage::default(),
-    };
-    let intl = match r.find(crate::format::INTL) {
-        Some(a) => {
-            let t = decode_intl(a.payload)?;
-            if t.is_empty() {
-                return Err(SnapshotError::Corrupt(
-                    "INTL atom present but empty; the writer omits it",
-                ));
-            }
-            t
-        }
-        None => IntlTables::default(),
-    };
-    let iterators = match r.find(crate::format::ITER) {
-        Some(a) => present_and_non_empty(
-            decode_iterators(a.payload)?,
-            "ITER atom present but empty; the writer omits it",
-        )?,
-        None => Vec::new(),
-    };
-    let dates = match r.find(crate::format::DATE) {
-        Some(a) => present_and_non_empty(
-            decode_dates(a.payload)?,
-            "DATE atom present but empty; the writer omits it",
-        )?,
-        None => Vec::new(),
-    };
-    let function_state = match r.find(crate::format::FUNC) {
-        Some(a) => {
-            let state = decode_function_state(a.payload)?;
-            if state.is_empty() {
-                return Err(SnapshotError::Corrupt(
-                    "FUNC atom present but empty; the writer omits it",
-                ));
-            }
-            state
-        }
-        None => ironhorse_vm::FunctionStateSnapshot::default(),
-    };
-    let proxy_state = match r.find(crate::format::PROX) {
-        Some(a) => {
-            let state = decode_proxy_state(a.payload)?;
-            if state.is_empty() {
-                return Err(SnapshotError::Corrupt(
-                    "PROX atom present but empty; the writer omits it",
-                ));
-            }
-            state
-        }
-        None => ironhorse_vm::ProxyStateSnapshot::default(),
-    };
-    let accessors = match r.find(crate::format::ACCS) {
-        Some(a) => present_and_non_empty(
-            decode_accessors(a.payload)?,
-            "ACCS atom present but empty; the writer omits it",
-        )?,
-        None => Vec::new(),
-    };
-    let intl_bound_functions = match r.find(crate::format::IBFN) {
-        Some(a) => present_and_non_empty(
-            decode_intl_bound_functions(a.payload)?,
-            "IBFN atom present but empty; the writer omits it",
-        )?,
-        None => Vec::new(),
-    };
-    let private_elements = match r.find(crate::format::PRIV) {
-        Some(a) => {
-            let state = decode_private_elements(a.payload)?;
-            if state.is_empty() {
-                return Err(SnapshotError::Corrupt(
-                    "PRIV atom present but empty; the writer omits it",
-                ));
-            }
-            state
-        }
-        None => ironhorse_vm::PrivateElementSnapshot::default(),
-    };
-    let disposable_stacks = match r.find(crate::format::DISP) {
-        Some(a) => present_and_non_empty(
-            decode_disposable_stacks(a.payload)?,
-            "DISP atom present but empty; the writer omits it",
-        )?,
-        None => Vec::new(),
-    };
-    let generators = match r.find(crate::format::GENR) {
-        Some(a) => present_and_non_empty(
-            decode_generators(a.payload)?,
-            "GENR atom present but empty; the writer omits it",
-        )?,
-        None => Vec::new(),
-    };
-    let mut promise_cluster = match r.find(crate::format::PRMS) {
-        Some(a) => {
-            let cluster = decode_promise_cluster(a.payload)?;
-            if cluster.is_empty() {
-                return Err(SnapshotError::Corrupt(
-                    "PRMS atom present but empty; the writer omits it",
-                ));
-            }
-            cluster
-        }
-        None => ironhorse_vm::PromiseClusterSnapshot::default(),
-    };
-    promise_cluster.async_instances = match r.find(crate::format::ASYN) {
-        Some(a) => present_and_non_empty(
-            decode_async_instances(a.payload)?,
-            "ASYN atom present but empty",
-        )?,
-        None => Vec::new(),
-    };
-    let name_floor = match r.find(crate::format::NFLR) {
-        Some(a) => {
-            if a.payload.len() != 4 {
-                return Err(SnapshotError::Corrupt("installed-names floor size"));
-            }
-            let floor =
-                u32::from_be_bytes([a.payload[0], a.payload[1], a.payload[2], a.payload[3]]);
-            // A floor past the name table cannot come from an honest
-            // suspension — installs only ever floor at a table length
-            // the machine actually had.
-            if floor as usize > names.len() {
-                return Err(SnapshotError::Corrupt(
-                    "installed-names floor past the name table",
-                ));
-            }
-            // A floor AT the table length is the fully-installed state
-            // every writer canonicalizes as an ABSENT atom
-            // (`with_name_floor`); an explicit one can only be crafted,
-            // and accepting it re-canonicalizes on the next write —
-            // breaking write(read(bytes)) == bytes (review).
-            if floor as usize == names.len() {
-                return Err(SnapshotError::Corrupt(
-                    "installed-names floor: non-canonical explicit full floor",
-                ));
-            }
-            Some(floor)
-        }
-        None => None,
-    };
-    let image = MachineImage {
-        index_props,
-        version,
-        signature,
-        creation,
-        chunks,
-        slots,
-        slot_free,
-        slot_live,
-        stack,
-        keys,
-        names,
-        symbols,
-        meter,
-        arrays,
-        collections,
-        registry,
-        errors,
-        buffers,
-        typed_arrays,
-        data_views,
-        wrappers,
-        regexps,
-        dates,
-        function_state,
-        proxy_state,
-        accessors,
-        intl_bound_functions,
-        private_elements,
-        disposable_stacks,
-        generators,
-        promise_cluster,
-        arguments_brands,
-        temporal,
-        intl,
-        iterators,
-        name_floor,
-    };
+    let small = decode_container_payloads(&r, &version)?;
+    let image = container_image_from!(small;
+        version, signature, creation, chunks, slots, slot_live; free: slot_free);
     check_machine_image_bounds(&image)?;
     check_buffer_chunk_lengths(&image.buffers, &image.chunks)?;
 
@@ -6886,6 +6611,98 @@ mod tests {
         assert_eq!(back, img);
         // Second write byte-equals the first.
         assert_eq!(write_machine_unchecked(&back), bytes);
+    }
+
+    fn container_roster_fixture(
+        version: u32,
+        edits: &[(crate::format::FourCc, Option<Vec<u8>>)],
+    ) -> Vec<u8> {
+        let mut image = MachineImage::from_arenas(
+            sig(),
+            &SlotArena::new(),
+            &ChunkArena::new(),
+            &[],
+            vec!["😀".into()],
+            vec![],
+            SymbolKeyImage::default(),
+        );
+        image.version.format_version = version;
+        // A real free-list payload must survive the small-state transfer.
+        image.slots = vec![Slot::undefined()];
+        image.slot_free = vec![0];
+        let bytes = write_machine_unchecked(&image);
+        let reader = AtomReader::parse(&bytes).unwrap();
+        let mut writer = AtomWriter::new();
+        for &tag in crate::format::CANONICAL_ATOM_ORDER {
+            let payload = match edits.iter().find(|(edited, _)| *edited == tag) {
+                Some((_, payload)) => payload.as_deref(),
+                None => reader.find(tag).map(|atom| atom.payload),
+            };
+            if let Some(payload) = payload {
+                writer.atom(tag, payload).unwrap();
+            }
+        }
+        writer.finish().unwrap()
+    }
+
+    #[test]
+    fn roster_container_decode_preserves_competing_refusal_precedence() {
+        use crate::format::{ABUF, ARRY, ESTK, IDXP};
+        let empty = Some(vec![0, 0, 0, 0]);
+        let cases = [
+            (
+                vec![(ARRY, empty.clone()), (IDXP, empty.clone())],
+                "IDXP atom present but empty; the writer omits it",
+            ),
+            (
+                vec![(METR, None), (IDXP, empty.clone())],
+                "missing METR identity",
+            ),
+            (
+                vec![
+                    (STAC, Some(encode_stack(&[Slot::integer(1)]))),
+                    (METR, None),
+                ],
+                "STAC not empty at a quiescent boundary",
+            ),
+            (
+                vec![
+                    (
+                        ESTK,
+                        Some(encode_error_frames(&[ErrorImage {
+                            owner: 0,
+                            name: "Error".into(),
+                            message: None,
+                            frames: vec!["frame".into()],
+                        }])),
+                    ),
+                    (ABUF, empty),
+                ],
+                "error-frame side table: owner has no error row",
+            ),
+        ];
+        for (edits, expected) in cases {
+            for version in [14, Version::current().format_version] {
+                let bytes = container_roster_fixture(version, &edits);
+                assert!(
+                    matches!(read_machine(&bytes, &sig()), Err(SnapshotError::Corrupt(actual)) if actual == expected),
+                    "version {version}: expected {expected}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn roster_container_decode_preserves_legacy_names_and_heap_free_slots() {
+        for version in [14, Version::current().format_version] {
+            let bytes = container_roster_fixture(version, &[]);
+            let image = read_machine(&bytes, &sig()).unwrap();
+            assert_eq!(image.version.format_version, version);
+            assert_eq!(image.names, vec![SymbolName::from("😀")]);
+            assert_eq!(image.slot_free, vec![0]);
+            assert_eq!(image.slot_live, 0);
+            assert_eq!(write_machine_unchecked(&image), bytes);
+        }
     }
 
     #[test]

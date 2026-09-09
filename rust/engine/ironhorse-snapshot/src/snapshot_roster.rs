@@ -19,6 +19,23 @@ macro_rules! snapshot_payloads {
                 decode_legacy(state, bytes): {
                     state.stack = crate::image::decode_stack(bytes)?;
                 },
+                decode_container: [Keys, replace, (r, [], []) {
+                    let stack = match r.find(STAC) {
+                        Some(a) => decode_stack(a.payload)?,
+                        None => Vec::new(),
+                    };
+                    // The write verbs persist only QUIESCENT machines, and quiescence
+                    // includes an empty value stack — so a populated `STAC` cannot come
+                    // from an honest writer, and adopting one would seed a machine that
+                    // can neither run nor checkpoint safely (review finding 5: the
+                    // reader must enforce what the writer enforces).
+                    if !stack.is_empty() {
+                        return Err(SnapshotError::Corrupt(
+                            "STAC not empty at a quiescent boundary",
+                        ));
+                    }
+                    stack
+                }],
                 atom: Some(crate::format::STAC),
                 present(_image): true,
                 encode(state): {
@@ -38,6 +55,7 @@ macro_rules! snapshot_payloads {
                 decode_legacy(state, bytes): {
                     state.slot_free = crate::image::decode_u32s(bytes)?;
                 },
+                decode_container: [],
                 atom: None,
                 present(_image): false,
                 encode(_state): {
@@ -57,6 +75,13 @@ macro_rules! snapshot_payloads {
                 decode_legacy(state, bytes): {
                     state.keys = crate::image::decode_strings(bytes)?;
                 },
+                decode_container: [Names, replace, (r, [], []) {
+                    let keys = match r.find(KEYS) {
+                        Some(a) => decode_strings(a.payload)?,
+                        None => Vec::new(),
+                    };
+                    keys
+                }],
                 atom: Some(crate::format::KEYS),
                 present(_image): true,
                 encode(state): {
@@ -76,6 +101,17 @@ macro_rules! snapshot_payloads {
                 decode_legacy(state, bytes): {
                     state.names = crate::image::decode_names(bytes)?;
                 },
+                decode_container: [Symbols, replace, (r, [version], []) {
+                    let names = match r.find(NAME) {
+                        Some(a) if version.format_version < 15 => decode_strings(a.payload)?
+                            .into_iter()
+                            .map(SymbolName::from)
+                            .collect(),
+                        Some(a) => decode_names(a.payload)?,
+                        None => Vec::new(),
+                    };
+                    names
+                }],
                 atom: Some(crate::format::NAME),
                 present(_image): true,
                 encode(state): {
@@ -95,6 +131,25 @@ macro_rules! snapshot_payloads {
                 decode_legacy(state, bytes): {
                     state.symbols = crate::image::decode_symbol_keys(bytes)?;
                 },
+                decode_container: [Meter, replace, (r, [], [small]) {
+                    let symbols = match r.find(SYMB) {
+                        Some(a) => decode_symbol_keys(a.payload)?,
+                        None => SymbolKeyImage::default(),
+                    };
+                    // The symbol-key counter must clear the name table (its ids mint
+                    // DOWNWARD from u16::MAX; a counter at or below the table would
+                    // alias a symbol id onto a string key at restore — see
+                    // `Interp::restore_symbol_key_table`). Checked here where names
+                    // and symbols are both in hand; `validate_store` mirrors it for
+                    // the store path.
+                    if (symbols.next_id as usize) <= small.names.len() {
+                        return Err(SnapshotError::Corrupt(
+                            "symbol-key table: counter inside the name table",
+                        ));
+                    }
+
+                    symbols
+                }],
                 atom: Some(crate::format::SYMB),
                 present(_image): true,
                 encode(state): {
@@ -122,6 +177,24 @@ macro_rules! snapshot_payloads {
                 decode_legacy(state, bytes): {
                     state.meter = crate::image::MeterImage::decode(bytes)?;
                 },
+                decode_container: [IndexProperties, replace, (r, [], []) {
+                    // METR (design row 6): decode the metering state and fail closed on a
+                    // cost-table version this engine did not produce — the metering
+                    // analogue of the SIGN check above. Name-only or absent records cannot
+                    // establish the weights that produced a meter and are refused.
+                    let meter = match r.find(METR) {
+                        Some(a) => MeterImage::decode(a.payload)?,
+                        None => return Err(SnapshotError::Corrupt("missing METR identity")),
+                    };
+                    if meter.cost_table_version != COST_TABLE_VERSION {
+                        return Err(SnapshotError::CostTableMismatch {
+                            expected: COST_TABLE_VERSION.to_string(),
+                            found: meter.cost_table_version,
+                        });
+                    }
+
+                    meter
+                }],
                 atom: Some(crate::format::METR),
                 present(_image): true,
                 encode(state): {
@@ -185,6 +258,16 @@ macro_rules! snapshot_payloads {
                         crate::image::decode_arrays(bytes)?
                     };
                 },
+                decode_container: [Collections, replace, (r, [], []) {
+                    let arrays = match r.find(crate::format::ARRY) {
+                        Some(a) => present_and_non_empty(
+                            decode_arrays(a.payload)?,
+                            "ARRY atom present but empty; the writer omits it",
+                        )?,
+                        None => Vec::new(),
+                    };
+                    arrays
+                }],
                 atom: Some(crate::format::ARRY),
                 present(image): !image.arrays.is_empty(),
                 encode(state): {
@@ -222,6 +305,19 @@ macro_rules! snapshot_payloads {
                         crate::image::decode_index_props(bytes)?
                     };
                 },
+                decode_container: [Arrays, replace, (r, [], []) {
+                    // Side-table ledger atoms: absent means empty (a pre-ledger or
+                    // side-table-free container), exactly mirroring the writer's
+                    // emit-only-when-non-empty rule.
+                    let index_props = match r.find(crate::format::IDXP) {
+                        Some(a) => present_and_non_empty(
+                            decode_index_props(a.payload)?,
+                            "IDXP atom present but empty; the writer omits it",
+                        )?,
+                        None => Vec::new(),
+                    };
+                    index_props
+                }],
                 atom: Some(crate::format::IDXP),
                 present(image): !image.index_props.is_empty(),
                 encode(state): {
@@ -264,6 +360,16 @@ macro_rules! snapshot_payloads {
                         crate::image::decode_collections(bytes)?
                     };
                 },
+                decode_container: [Registry, replace, (r, [], []) {
+                    let collections = match r.find(crate::format::COLL) {
+                        Some(a) => present_and_non_empty(
+                            decode_collections(a.payload)?,
+                            "COLL atom present but empty; the writer omits it",
+                        )?,
+                        None => Vec::new(),
+                    };
+                    collections
+                }],
                 atom: Some(crate::format::COLL),
                 present(image): !image.collections.is_empty(),
                 encode(state): {
@@ -297,6 +403,16 @@ macro_rules! snapshot_payloads {
                         crate::image::decode_registry(bytes)?
                     };
                 },
+                decode_container: [Errors, replace, (r, [], []) {
+                    let registry = match r.find(crate::format::REGY) {
+                        Some(a) => present_and_non_empty(
+                            decode_registry(a.payload)?,
+                            "REGY atom present but empty; the writer omits it",
+                        )?,
+                        None => Vec::new(),
+                    };
+                    registry
+                }],
                 atom: Some(crate::format::REGY),
                 present(image): !image.registry.is_empty(),
                 encode(state): {
@@ -352,6 +468,16 @@ macro_rules! snapshot_payloads {
                         crate::image::decode_errors(bytes)?
                     };
                 },
+                decode_container: [ErrorFrames, replace, (r, [], []) {
+                    let errors = match r.find(crate::format::ERRD) {
+                        Some(a) => present_and_non_empty(
+                            decode_errors(a.payload)?,
+                            "ERRD atom present but empty; the writer omits it",
+                        )?,
+                        None => Vec::new(),
+                    };
+                    errors
+                }],
                 atom: Some(crate::format::ERRD),
                 present(image): !image.errors.is_empty(),
                 encode(state): {
@@ -382,6 +508,30 @@ macro_rules! snapshot_payloads {
                         }
                     }
                 },
+                decode_container: [Buffers, extend, (r, [], [small]) {
+                    // Join the frames back onto their rows. An owner naming no `ERRD`
+                    // row is crafted: the writer emits frames only for errors it also
+                    // emitted — and emits the ATOM only when some row exists, so a
+                    // present-but-empty one is the same non-canonical shape every
+                    // optional atom refuses (a zero row COUNT; a zero-length frame
+                    // LIST inside a row is refused by the decoder itself).
+                    if let Some(a) = r.find(crate::format::ESTK) {
+                        let rows = decode_error_frames(a.payload)?;
+                        if rows.is_empty() {
+                            return Err(SnapshotError::Corrupt(
+                                "ESTK atom present but empty; the writer omits it",
+                            ));
+                        }
+                        for (owner, frames) in rows {
+                            let Some(row) = small.errors.iter_mut().find(|e| e.owner == owner) else {
+                                return Err(SnapshotError::Corrupt(
+                                    "error-frame side table: owner has no error row",
+                                ));
+                            };
+                            row.frames = frames;
+                        }
+                    }
+                }],
                 atom: Some(crate::format::ESTK),
                 present(image): image.errors.iter().any(|error| !error.frames.is_empty()),
                 encode(state): {
@@ -443,6 +593,16 @@ macro_rules! snapshot_payloads {
                         crate::image::decode_buffers(bytes)?
                     };
                 },
+                decode_container: [TypedArrays, replace, (r, [], []) {
+                    let buffers = match r.find(crate::format::ABUF) {
+                        Some(a) => present_and_non_empty(
+                            decode_buffers(a.payload)?,
+                            "ABUF atom present but empty; the writer omits it",
+                        )?,
+                        None => Vec::new(),
+                    };
+                    buffers
+                }],
                 atom: Some(crate::format::ABUF),
                 present(image): !image.buffers.is_empty(),
                 encode(state): {
@@ -484,6 +644,16 @@ macro_rules! snapshot_payloads {
                         crate::image::decode_typed_arrays(bytes)?
                     };
                 },
+                decode_container: [DataViews, replace, (r, [], []) {
+                    let typed_arrays = match r.find(crate::format::TARR) {
+                        Some(a) => present_and_non_empty(
+                            decode_typed_arrays(a.payload)?,
+                            "TARR atom present but empty; the writer omits it",
+                        )?,
+                        None => Vec::new(),
+                    };
+                    typed_arrays
+                }],
                 atom: Some(crate::format::TARR),
                 present(image): !image.typed_arrays.is_empty(),
                 encode(state): {
@@ -524,6 +694,16 @@ macro_rules! snapshot_payloads {
                         crate::image::decode_data_views(bytes)?
                     };
                 },
+                decode_container: [Wrappers, replace, (r, [], []) {
+                    let data_views = match r.find(crate::format::DVIW) {
+                        Some(a) => present_and_non_empty(
+                            decode_data_views(a.payload)?,
+                            "DVIW atom present but empty; the writer omits it",
+                        )?,
+                        None => Vec::new(),
+                    };
+                    data_views
+                }],
                 atom: Some(crate::format::DVIW),
                 present(image): !image.data_views.is_empty(),
                 encode(state): {
@@ -569,6 +749,16 @@ macro_rules! snapshot_payloads {
                         crate::image::decode_wrappers(bytes)?
                     };
                 },
+                decode_container: [Regexps, replace, (r, [], []) {
+                    let wrappers = match r.find(crate::format::WRAP) {
+                        Some(a) => present_and_non_empty(
+                            decode_wrappers(a.payload)?,
+                            "WRAP atom present but empty; the writer omits it",
+                        )?,
+                        None => Vec::new(),
+                    };
+                    wrappers
+                }],
                 atom: Some(crate::format::WRAP),
                 present(image): !image.wrappers.is_empty(),
                 encode(state): {
@@ -621,6 +811,16 @@ macro_rules! snapshot_payloads {
                         crate::image::decode_regexps(bytes)?
                     };
                 },
+                decode_container: [ArgumentsBrands, replace, (r, [], []) {
+                    let regexps = match r.find(crate::format::REGX) {
+                        Some(a) => present_and_non_empty(
+                            decode_regexps(a.payload)?,
+                            "REGX atom present but empty; the writer omits it",
+                        )?,
+                        None => Vec::new(),
+                    };
+                    regexps
+                }],
                 atom: Some(crate::format::REGX),
                 present(image): !image.regexps.is_empty(),
                 encode(state): {
@@ -652,6 +852,16 @@ macro_rules! snapshot_payloads {
                         crate::image::decode_arguments_brands(bytes)?
                     };
                 },
+                decode_container: [Temporal, replace, (r, [], []) {
+                    let arguments_brands = match r.find(crate::format::ARGB) {
+                        Some(a) => present_and_non_empty(
+                            decode_arguments_brands(a.payload)?,
+                            "ARGB atom present but empty; the writer omits it",
+                        )?,
+                        None => Vec::new(),
+                    };
+                    arguments_brands
+                }],
                 atom: Some(crate::format::ARGB),
                 present(image): !image.arguments_brands.is_empty(),
                 encode(state): {
@@ -703,6 +913,21 @@ macro_rules! snapshot_payloads {
                         crate::image::decode_temporal(bytes)?
                     };
                 },
+                decode_container: [Intl, replace, (r, [], []) {
+                    let temporal = match r.find(crate::format::TMPR) {
+                        Some(a) => {
+                            let t = decode_temporal(a.payload)?;
+                            if t.is_empty() {
+                                return Err(SnapshotError::Corrupt(
+                                    "TMPR atom present but empty; the writer omits it",
+                                ));
+                            }
+                            t
+                        }
+                        None => TemporalImage::default(),
+                    };
+                    temporal
+                }],
                 atom: Some(crate::format::TMPR),
                 present(image): !image.temporal.is_empty(),
                 encode(state): {
@@ -742,6 +967,21 @@ macro_rules! snapshot_payloads {
                         crate::image::decode_intl(bytes)?
                     };
                 },
+                decode_container: [Iterators, replace, (r, [], []) {
+                    let intl = match r.find(crate::format::INTL) {
+                        Some(a) => {
+                            let t = decode_intl(a.payload)?;
+                            if t.is_empty() {
+                                return Err(SnapshotError::Corrupt(
+                                    "INTL atom present but empty; the writer omits it",
+                                ));
+                            }
+                            t
+                        }
+                        None => IntlTables::default(),
+                    };
+                    intl
+                }],
                 atom: Some(crate::format::INTL),
                 present(image): !image.intl.is_empty(),
                 encode(state): {
@@ -782,6 +1022,16 @@ macro_rules! snapshot_payloads {
                         crate::image::decode_iterators(bytes)?
                     };
                 },
+                decode_container: [Dates, replace, (r, [], []) {
+                    let iterators = match r.find(crate::format::ITER) {
+                        Some(a) => present_and_non_empty(
+                            decode_iterators(a.payload)?,
+                            "ITER atom present but empty; the writer omits it",
+                        )?,
+                        None => Vec::new(),
+                    };
+                    iterators
+                }],
                 atom: Some(crate::format::ITER),
                 present(image): !image.iterators.is_empty(),
                 encode(state): {
@@ -822,6 +1072,16 @@ macro_rules! snapshot_payloads {
                         crate::image::decode_dates(bytes)?
                     };
                 },
+                decode_container: [Functions, replace, (r, [], []) {
+                    let dates = match r.find(crate::format::DATE) {
+                        Some(a) => present_and_non_empty(
+                            decode_dates(a.payload)?,
+                            "DATE atom present but empty; the writer omits it",
+                        )?,
+                        None => Vec::new(),
+                    };
+                    dates
+                }],
                 atom: Some(crate::format::DATE),
                 present(image): !image.dates.is_empty(),
                 encode(state): {
@@ -862,6 +1122,21 @@ macro_rules! snapshot_payloads {
                         crate::image::decode_function_state(bytes)?
                     };
                 },
+                decode_container: [Proxies, replace, (r, [], []) {
+                    let function_state = match r.find(crate::format::FUNC) {
+                        Some(a) => {
+                            let state = decode_function_state(a.payload)?;
+                            if state.is_empty() {
+                                return Err(SnapshotError::Corrupt(
+                                    "FUNC atom present but empty; the writer omits it",
+                                ));
+                            }
+                            state
+                        }
+                        None => ironhorse_vm::FunctionStateSnapshot::default(),
+                    };
+                    function_state
+                }],
                 atom: Some(crate::format::FUNC),
                 present(image): !image.function_state.is_empty(),
                 encode(state): {
@@ -898,6 +1173,21 @@ macro_rules! snapshot_payloads {
                         crate::image::decode_proxy_state(bytes)?
                     };
                 },
+                decode_container: [Accessors, replace, (r, [], []) {
+                    let proxy_state = match r.find(crate::format::PROX) {
+                        Some(a) => {
+                            let state = decode_proxy_state(a.payload)?;
+                            if state.is_empty() {
+                                return Err(SnapshotError::Corrupt(
+                                    "PROX atom present but empty; the writer omits it",
+                                ));
+                            }
+                            state
+                        }
+                        None => ironhorse_vm::ProxyStateSnapshot::default(),
+                    };
+                    proxy_state
+                }],
                 atom: Some(crate::format::PROX),
                 present(image): !image.proxy_state.is_empty(),
                 encode(state): {
@@ -933,6 +1223,16 @@ macro_rules! snapshot_payloads {
                         crate::image::decode_accessors(bytes)?
                     };
                 },
+                decode_container: [IntlBoundFunctions, replace, (r, [], []) {
+                    let accessors = match r.find(crate::format::ACCS) {
+                        Some(a) => present_and_non_empty(
+                            decode_accessors(a.payload)?,
+                            "ACCS atom present but empty; the writer omits it",
+                        )?,
+                        None => Vec::new(),
+                    };
+                    accessors
+                }],
                 atom: Some(crate::format::ACCS),
                 present(image): !image.accessors.is_empty(),
                 encode(state): {
@@ -980,6 +1280,16 @@ macro_rules! snapshot_payloads {
                         crate::image::decode_intl_bound_functions(bytes)?
                     };
                 },
+                decode_container: [PrivateElements, replace, (r, [], []) {
+                    let intl_bound_functions = match r.find(crate::format::IBFN) {
+                        Some(a) => present_and_non_empty(
+                            decode_intl_bound_functions(a.payload)?,
+                            "IBFN atom present but empty; the writer omits it",
+                        )?,
+                        None => Vec::new(),
+                    };
+                    intl_bound_functions
+                }],
                 atom: Some(crate::format::IBFN),
                 present(image): !image.intl_bound_functions.is_empty(),
                 encode(state): {
@@ -1016,6 +1326,21 @@ macro_rules! snapshot_payloads {
                         crate::image::decode_private_elements(bytes)?
                     };
                 },
+                decode_container: [DisposableStacks, replace, (r, [], []) {
+                    let private_elements = match r.find(crate::format::PRIV) {
+                        Some(a) => {
+                            let state = decode_private_elements(a.payload)?;
+                            if state.is_empty() {
+                                return Err(SnapshotError::Corrupt(
+                                    "PRIV atom present but empty; the writer omits it",
+                                ));
+                            }
+                            state
+                        }
+                        None => ironhorse_vm::PrivateElementSnapshot::default(),
+                    };
+                    private_elements
+                }],
                 atom: Some(crate::format::PRIV),
                 present(image): !image.private_elements.is_empty(),
                 encode(state): {
@@ -1048,6 +1373,16 @@ macro_rules! snapshot_payloads {
                         crate::image::decode_disposable_stacks(bytes)?
                     };
                 },
+                decode_container: [Generators, replace, (r, [], []) {
+                    let disposable_stacks = match r.find(crate::format::DISP) {
+                        Some(a) => present_and_non_empty(
+                            decode_disposable_stacks(a.payload)?,
+                            "DISP atom present but empty; the writer omits it",
+                        )?,
+                        None => Vec::new(),
+                    };
+                    disposable_stacks
+                }],
                 atom: Some(crate::format::DISP),
                 present(image): !image.disposable_stacks.is_empty(),
                 encode(state): {
@@ -1084,6 +1419,16 @@ macro_rules! snapshot_payloads {
                         crate::image::decode_generators(bytes)?
                     };
                 },
+                decode_container: [Promises, replace, (r, [], []) {
+                    let generators = match r.find(crate::format::GENR) {
+                        Some(a) => present_and_non_empty(
+                            decode_generators(a.payload)?,
+                            "GENR atom present but empty; the writer omits it",
+                        )?,
+                        None => Vec::new(),
+                    };
+                    generators
+                }],
                 atom: Some(crate::format::GENR),
                 present(image): !image.generators.is_empty(),
                 encode(state): {
@@ -1128,6 +1473,21 @@ macro_rules! snapshot_payloads {
                         crate::image::decode_promise_cluster(bytes)?
                     };
                 },
+                decode_container: [AsyncInstances, replace, (r, [], []) {
+                    let promise_cluster = match r.find(crate::format::PRMS) {
+                        Some(a) => {
+                            let cluster = decode_promise_cluster(a.payload)?;
+                            if cluster.is_empty() {
+                                return Err(SnapshotError::Corrupt(
+                                    "PRMS atom present but empty; the writer omits it",
+                                ));
+                            }
+                            cluster
+                        }
+                        None => ironhorse_vm::PromiseClusterSnapshot::default(),
+                    };
+                    promise_cluster
+                }],
                 atom: Some(crate::format::PRMS),
                 present(image): !image.promise_cluster.is_empty(),
                 encode(state): {
@@ -1152,6 +1512,15 @@ macro_rules! snapshot_payloads {
                         crate::image::decode_async_instances(bytes)?
                     };
                 },
+                decode_container: [NameFloor, extend, (r, [], [small]) {
+                    small.promise_cluster.async_instances = match r.find(crate::format::ASYN) {
+                        Some(a) => present_and_non_empty(
+                            decode_async_instances(a.payload)?,
+                            "ASYN atom present but empty",
+                        )?,
+                        None => Vec::new(),
+                    };
+                }],
                 atom: Some(crate::format::ASYN),
                 present(image): !image.promise_cluster.async_instances.is_empty(),
                 encode(state): {
@@ -1201,6 +1570,38 @@ macro_rules! snapshot_payloads {
                         )));
                     }
                 },
+                decode_container: [End, replace, (r, [], [small]) {
+                    let name_floor = match r.find(crate::format::NFLR) {
+                        Some(a) => {
+                            if a.payload.len() != 4 {
+                                return Err(SnapshotError::Corrupt("installed-names floor size"));
+                            }
+                            let floor =
+                                u32::from_be_bytes([a.payload[0], a.payload[1], a.payload[2], a.payload[3]]);
+                            // A floor past the name table cannot come from an honest
+                            // suspension — installs only ever floor at a table length
+                            // the machine actually had.
+                            if floor as usize > small.names.len() {
+                                return Err(SnapshotError::Corrupt(
+                                    "installed-names floor past the name table",
+                                ));
+                            }
+                            // A floor AT the table length is the fully-installed state
+                            // every writer canonicalizes as an ABSENT atom
+                            // (`with_name_floor`); an explicit one can only be crafted,
+                            // and accepting it re-canonicalizes on the next write —
+                            // breaking write(read(bytes)) == bytes (review).
+                            if floor as usize == small.names.len() {
+                                return Err(SnapshotError::Corrupt(
+                                    "installed-names floor: non-canonical explicit full floor",
+                                ));
+                            }
+                            Some(floor)
+                        }
+                        None => None,
+                    };
+                    name_floor
+                }],
                 atom: Some(crate::format::NFLR),
                 present(image): image.name_floor.is_some(),
                 encode(state): {
@@ -1229,8 +1630,13 @@ use crate::store::StoreError;
 use crate::store_sections::SmallSection;
 use crate::SnapshotError;
 
+#[cfg_attr(test, derive(Clone))]
 pub(crate) struct PayloadDesc {
     pub section: SmallSection,
+    #[cfg(test)]
+    pub container_next: Option<&'static str>,
+    #[cfg(test)]
+    pub container_mode: Option<&'static str>,
     #[cfg(test)]
     pub restore_fields: &'static [&'static str],
     #[cfg(test)]
@@ -1253,13 +1659,14 @@ macro_rules! define_payloads {
         initialize: [$($init_field:ident = $init:expr)?],
         legacy_label: $legacy_label:literal,
         decode_legacy($decoded:ident, $input:ident): $decode:block,
+        decode_container: [$($container_next:ident, $container_mode:ident, ($reader:ident, [$($version:ident)?], [$($small:ident)?]) $container:block)?],
         atom: $atom:expr,
         present($image:ident): $present:expr,
         encode($state:ident): $encode:block,
         canonicalize($bytes:ident): $canonicalize:block,
     })*) => {
         pub(crate) const PAYLOADS: &[PayloadDesc] = &[
-            $(PayloadDesc { section: SmallSection::$section, #[cfg(test)] image_field: stringify!($field), #[cfg(test)] live_fields: &[$(stringify!($live_field))?], #[cfg(test)] bounds_fields: &[$(stringify!($bounds_field))?], #[cfg(test)] restore_fields: &[$($(stringify!($consumed)),+)?], #[cfg(test)] restore_next: match &[$(stringify!($next))?] as &[&str] { [next] => Some(*next), [] => None, _ => unreachable!() }, atom: $atom },)*
+            $(PayloadDesc { section: SmallSection::$section, #[cfg(test)] image_field: stringify!($field), #[cfg(test)] live_fields: &[$(stringify!($live_field))?], #[cfg(test)] bounds_fields: &[$(stringify!($bounds_field))?], #[cfg(test)] restore_fields: &[$($(stringify!($consumed)),+)?], #[cfg(test)] restore_next: match &[$(stringify!($next))?] as &[&str] { [next] => Some(*next), [] => None, _ => unreachable!() }, #[cfg(test)] container_next: match &[$(stringify!($container_next))?] as &[&str] { [next] => Some(*next), [] => None, _ => unreachable!() }, #[cfg(test)] container_mode: match &[$(stringify!($container_mode))?] as &[&str] { [mode] => Some(*mode), [] => None, _ => unreachable!() }, atom: $atom },)*
         ];
         // Uniform field cloning also covers the Copy name-floor field.
         #[allow(clippy::clone_on_copy)]
@@ -1616,6 +2023,8 @@ mod tests {
                     atom: row.atom,
                     restore_fields: row.restore_fields,
                     restore_next: row.restore_next,
+                    container_next: row.container_next,
+                    container_mode: row.container_mode,
                 })
                 .collect::<Vec<_>>()
         };
@@ -1752,6 +2161,194 @@ mod tests {
         ] {
             assert!(source.contains(from));
             assert!(!restore_emitter_connected(&source.replace(from, to)));
+        }
+    }
+
+    fn container_chain(rows: &[PayloadDesc]) -> Result<Vec<String>, &'static str> {
+        let mut steps = std::collections::BTreeMap::new();
+        let mut replaced = BTreeSet::new();
+        let mut extended = BTreeSet::new();
+        let expected: BTreeSet<_> = rows
+            .iter()
+            .filter(|row| row.atom.is_some())
+            .map(|row| row.image_field)
+            .collect();
+        for row in rows {
+            if row.atom.is_some() != row.container_next.is_some() {
+                return Err("container atom coverage");
+            }
+            if let Some(next) = row.container_next {
+                if steps.insert(format!("{:?}", row.section), next).is_some() {
+                    return Err("duplicate container step");
+                }
+                match row.container_mode {
+                    Some("replace") if replaced.insert(row.image_field) => {}
+                    Some("extend")
+                        if extended.insert((format!("{:?}", row.section), row.image_field)) => {}
+                    _ => return Err("invalid container ownership"),
+                }
+            } else if row.container_mode.is_some() {
+                return Err("disconnected container mode");
+            }
+        }
+        if replaced != expected {
+            return Err("container field coverage");
+        }
+        if extended
+            != BTreeSet::from([
+                ("ErrorFrames".to_owned(), "errors"),
+                ("AsyncInstances".to_owned(), "promise_cluster"),
+            ])
+        {
+            return Err("container extension coverage");
+        }
+        if steps.values().filter(|next| **next == "End").count() != 1 {
+            return Err("container terminal count");
+        }
+        let mut order = Vec::new();
+        let mut next = "Stack";
+        while next != "End" {
+            order.push(next.to_owned());
+            next = steps
+                .remove(next)
+                .ok_or("invalid or cyclic container successor")?;
+        }
+        if !steps.is_empty() {
+            return Err("unreachable container step");
+        }
+        Ok(order)
+    }
+
+    #[test]
+    fn container_decoder_preserves_historical_order_and_field_ownership() {
+        assert_eq!(
+            container_chain(PAYLOADS).unwrap(),
+            [
+                "Stack",
+                "Keys",
+                "Names",
+                "Symbols",
+                "Meter",
+                "IndexProperties",
+                "Arrays",
+                "Collections",
+                "Registry",
+                "Errors",
+                "ErrorFrames",
+                "Buffers",
+                "TypedArrays",
+                "DataViews",
+                "Wrappers",
+                "Regexps",
+                "ArgumentsBrands",
+                "Temporal",
+                "Intl",
+                "Iterators",
+                "Dates",
+                "Functions",
+                "Proxies",
+                "Accessors",
+                "IntlBoundFunctions",
+                "PrivateElements",
+                "DisposableStacks",
+                "Generators",
+                "Promises",
+                "AsyncInstances",
+                "NameFloor",
+            ]
+        );
+        for (next, expected) in [
+            ("Stack", "invalid or cyclic container successor"),
+            ("Missing", "invalid or cyclic container successor"),
+            ("Names", "unreachable container step"),
+            ("End", "container terminal count"),
+        ] {
+            let mut rows = PAYLOADS.to_vec();
+            rows.iter_mut()
+                .find(|row| row.section == SmallSection::Stack)
+                .unwrap()
+                .container_next = Some(next);
+            assert_eq!(container_chain(&rows), Err(expected));
+        }
+        let mut rows = PAYLOADS.to_vec();
+        rows.iter_mut()
+            .find(|row| row.section == SmallSection::Arrays)
+            .unwrap()
+            .container_next = None;
+        assert_eq!(container_chain(&rows), Err("container atom coverage"));
+        let mut rows = PAYLOADS.to_vec();
+        rows.iter_mut()
+            .find(|row| row.section == SmallSection::ErrorFrames)
+            .unwrap()
+            .container_mode = Some("replace");
+        assert_eq!(container_chain(&rows), Err("invalid container ownership"));
+    }
+
+    fn container_emitter_connected(source: &str) -> bool {
+        let source = code_only(source);
+        let code = tokens(&source);
+        let once = |haystack: &[ironhorse_vm::source_scan::Token<'_>], needle: &str| {
+            let needle = tokens(needle);
+            haystack
+                .windows(needle.len())
+                .filter(|window| window.iter().zip(&needle).all(|(a, b)| a.text == b.text))
+                .count()
+                == 1
+        };
+        let decoder = &code[token_body(&code, "macro_rules! define_container_decoder")];
+        let selector = &code[token_body(&code, "macro_rules! define_container_payloads")];
+        let apply = &code[token_body(&code, "macro_rules! apply_container_decode")];
+        let read = &code[token_body(&code, "pub fn read_machine")];
+        once(decoder, "decode_step!(Stack);")
+            && once(decoder, "decode_step!($next);")
+            && once(decoder, "apply_container_decode!($mode, small.$field, { let $reader = reader; $(let $version = version;)? $(let $small = &mut small;)? $body });")
+            && once(decoder, "let mut small = crate::store::SmallState { $($init_field: $init,)* };")
+            && once(decoder, "$($init_field: $d source.$init_field,)*")
+            && once(decoder, "image.slot_free = $d free;")
+            && once(apply, "(replace, $target:expr, $body:block) => { $target = $body; };")
+            && once(apply, "(extend, $target:expr, $body:block) => { $body };")
+            && once(selector, "define_container_decoder!(($); [$($($init_field = $init,)?) *]; $($($section => $next, $mode, $field, ($reader, [$($version)?], [$($small)?]) $body)?) *);")
+            && once(&code, "crate::snapshot_roster::snapshot_payloads!(define_container_payloads);")
+            && once(read, "let small = decode_container_payloads(&r, &version)?;")
+            && once(read, "let image = container_image_from!(small; version, signature, creation, chunks, slots, slot_live; free: slot_free);")
+    }
+
+    #[test]
+    fn container_emitter_carries_decoding_and_final_field_transfer() {
+        let source = include_str!("image.rs");
+        assert!(container_emitter_connected(source));
+        for (from, to) in [
+            ("decode_step!(Stack)", "decode_step!(Keys)"),
+            ("decode_step!($next)", "decode_step!(End)"),
+            (
+                "$section => $next, $mode, $field",
+                "$section => End, $mode, $field",
+            ),
+            ("[$($small)?]) $body", "[$($small)?]) {}"),
+            ("small.$field, {", "small.arrays, {"),
+            ("$target = $body;", "let _ = $body;"),
+            (
+                "$init_field: $d source.$init_field",
+                "$init_field: Default::default()",
+            ),
+            (
+                "image.slot_free = $d free;",
+                "image.slot_free = Vec::new();",
+            ),
+            (
+                "snapshot_payloads!(define_container_payloads)",
+                "snapshot_payloads!(define_other_payloads)",
+            ),
+            (
+                "decode_container_payloads(&r, &version)?",
+                "decode_other_payloads(&r, &version)?",
+            ),
+        ] {
+            assert!(source.contains(from), "missing mutation target {from}");
+            assert!(
+                !container_emitter_connected(&source.replace(from, to)),
+                "missed mutation {from}"
+            );
         }
     }
 
