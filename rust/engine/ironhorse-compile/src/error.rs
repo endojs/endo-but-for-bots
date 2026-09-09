@@ -63,9 +63,14 @@ pub enum LexErrorKind {
 
 impl fmt::Display for LexError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "line {}: {}", self.line, self.kind)
+    }
+}
+
+impl fmt::Display for LexErrorKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         use LexErrorKind::*;
-        write!(f, "line {}: ", self.line)?;
-        match &self.kind {
+        match self {
             MeterLimit => write!(f, "compilation meter limit"),
             InvalidCharacter(c) => write!(f, "invalid character {}", c),
             InvalidEscape => write!(f, "invalid escape"),
