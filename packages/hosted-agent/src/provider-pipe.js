@@ -71,7 +71,14 @@ export const makeProviderPipe = ({
     'private-provider-pipe',
     send,
     bootstrap,
-    { onReject: () => close() },
+    {
+      onReject: (_reason, context) => {
+        // Application rejections are delivered to the caller, which can turn
+        // them into an HTTP error. They must not tear down the shared listener.
+        // Protocol failures, disconnects, and unknown contexts fail closed.
+        if (context?.kind !== 'promise') close();
+      },
+    },
   );
   const close = () => {
     if (stopped) return;

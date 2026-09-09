@@ -750,6 +750,11 @@ test('resource disposal retries only unfinished cleanup stages', async t => {
 });
 
 test('an unsettled tool call blocks teardown without destroying the session', async t => {
+  t.timeout(10_000);
+  /** @type {() => Promise<void>} */
+  let shutdown = async () => {
+    throw Error('shutdown not registered');
+  };
   let disposed = 0;
   /** @type {(value: string) => void} */
   let releaseTool = () => {};
@@ -847,6 +852,9 @@ test('an unsettled tool call blocks teardown without destroying the session', as
 
   const factory = makeCodexBackendFactory({
     imageDigest,
+    registerShutdown: stop => {
+      shutdown = stop;
+    },
     destroy: async () => undefined,
     listModels: async () => [],
     provision: async () => ({
@@ -886,6 +894,14 @@ test('an unsettled tool call blocks teardown without destroying the session', as
     /unsettled Endo tool call/,
   );
   t.is(disposed, 0, 'the session was left intact for a lifecycle retry');
+  await t.throwsAsync(() => shutdown(), { message: /shutdown pending/ });
+  t.is(disposed, 0, 'host shutdown also honors the pending tool barrier');
+  await t.throwsAsync(
+    () => E(factory).create({ sessionId: 'other' }, toolSet),
+    {
+      message: /shutting down/,
+    },
+  );
 
   releaseTool('done');
   for (let tries = 0; tries < 200; tries += 1) {
@@ -895,7 +911,7 @@ test('an unsettled tool call blocks teardown without destroying the session', as
     // eslint-disable-next-line no-await-in-loop
     await Promise.resolve();
   }
-  await session.admin.terminate();
+  await shutdown();
   t.is(disposed, 1, 'and the retry tears it down');
 });
 
