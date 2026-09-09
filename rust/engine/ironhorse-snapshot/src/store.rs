@@ -3149,6 +3149,14 @@ fn migrate_v24_to_v25(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     store.replace_manifest_and_small_for_migration(&manifest, &new_small)
 }
 
+// Separate the address arithmetic from slicing so its usize boundary can be
+// exercised without allocating an address-space-sized legacy snapshot.
+fn name_migration_section_end(cursor: usize, len: usize) -> Result<usize, SnapshotError> {
+    cursor
+        .checked_add(len)
+        .ok_or(SnapshotError::Corrupt("name migration length"))
+}
+
 fn migrate_v25_to_v26(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     let mut manifest = store.manifest()?;
     let small = store.read_small_state()?;
@@ -3178,9 +3186,7 @@ fn migrate_v25_to_v26(store: &mut dyn HeapStore) -> Result<(), StoreError> {
             .ok_or(SnapshotError::Corrupt("name migration header"))?;
         let len = u32::from_be_bytes(header.try_into().unwrap()) as usize;
         cursor += 4;
-        let end = cursor
-            .checked_add(len)
-            .ok_or(SnapshotError::Corrupt("name migration length"))?;
+        let end = name_migration_section_end(cursor, len)?;
         let section = small
             .get(cursor..end)
             .ok_or(SnapshotError::Corrupt("name migration body"))?;
@@ -5504,6 +5510,24 @@ mod tests {
                 store_to_image(&store),
                 Err(StoreError::BaselineMismatch { .. })
             ));
+        }
+    }
+
+    #[test]
+    fn name_migration_section_end_refuses_address_overflow() {
+        for (cursor, len, expected) in [
+            (0, 0, 0),
+            (4, 0, 4),
+            (4, usize::MAX - 4, usize::MAX),
+            (usize::MAX, 0, usize::MAX),
+        ] {
+            assert_eq!(name_migration_section_end(cursor, len), Ok(expected));
+        }
+        for (cursor, len) in [(4, usize::MAX - 3), (4, usize::MAX), (usize::MAX, 1)] {
+            assert_eq!(
+                name_migration_section_end(cursor, len),
+                Err(SnapshotError::Corrupt("name migration length"))
+            );
         }
     }
 
