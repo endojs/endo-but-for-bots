@@ -66,15 +66,6 @@ intl side table: segment iterator names no covering segments row	Side-table deco
 intl side table: string not UTF-8	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 intl side table: unicode keys not strictly ascending	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 intl side table: unknown date-time component key	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
-iterator cursors: bad done byte	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
-iterator cursors: collection cursor names no covering row	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
-iterator cursors: for-in cursor past its key list	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
-iterator cursors: for-in key id outside the name table	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
-iterator cursors: invalid RegExp String Iterator	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
-iterator cursors: malformed Iterator.from wrapper	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
-iterator cursors: owners not strictly ascending	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
-iterator cursors: string cursor outside its text	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
-iterator cursors: unknown kind	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 manifest parent seal length	Existing corruption guard; dedicated exact-label regression fixture deferred.
 migration did not advance the store schema	Existing corruption guard; dedicated exact-label regression fixture deferred.
 name migration body	Existing corruption guard; dedicated exact-label regression fixture deferred.

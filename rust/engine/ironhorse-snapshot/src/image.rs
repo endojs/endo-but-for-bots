@@ -6206,63 +6206,116 @@ mod tests {
 
     #[test]
     fn iterator_decode_refuses_crafted_rows() {
-        fn row(owner: u32) -> IteratorRow {
-            IteratorRow {
-                owner,
-                kind: 0,
-                iterable: 1,
-                index: 0,
-                done: false,
-                result: 2,
-                enum_keys: Vec::new(),
-                str_bytes: Vec::new(),
-            }
+        let row = |kind| IteratorRow {
+            owner: 2,
+            kind,
+            iterable: 1,
+            index: 0,
+            done: false,
+            result: 3,
+            enum_keys: vec![],
+            str_bytes: vec![],
+        };
+        for kind in 0..=9 {
+            assert_eq!(
+                decode_iterators(&encode_iterators(&[row(kind)])).unwrap(),
+                vec![row(kind)]
+            );
         }
-        // Owners not strictly ascending.
-        assert!(decode_iterators(&encode_iterators(&[row(5), row(3)])).is_err());
-        // Unknown kind.
-        let mut bad = row(1);
-        bad.kind = 10;
-        assert!(decode_iterators(&encode_iterators(&[bad])).is_err());
-        // A string cursor splitting a UTF-16 unit, and one past its text.
-        let mut odd = row(1);
-        odd.kind = 4;
-        odd.str_bytes = vec![0, 97, 0, 98];
-        odd.index = 1;
-        assert!(decode_iterators(&encode_iterators(&[odd.clone()])).is_err());
-        odd.index = 6;
-        assert!(decode_iterators(&encode_iterators(&[odd])).is_err());
-        // A RegExp String Iterator must carry a matcher, an arena anchor, an
-        // even-sized UTF-16 payload, and only its two mode bits in `index`.
-        let mut regexp = row(1);
-        regexp.kind = 9;
-        regexp.index = 4;
-        assert!(decode_iterators(&encode_iterators(&[regexp.clone()])).is_err());
-        regexp.index = 3;
-        regexp.str_bytes = vec![0];
-        assert!(decode_iterators(&encode_iterators(&[regexp])).is_err());
-        let mut regexp = row(1);
-        regexp.kind = 9;
-        regexp.iterable = u32::MAX;
-        assert!(decode_iterators(&encode_iterators(&[regexp])).is_err());
-        let mut regexp = row(1);
-        regexp.kind = 9;
-        regexp.enum_keys.push((1, 0));
-        assert!(decode_iterators(&encode_iterators(&[regexp])).is_err());
-        // A for-in cursor past its key list.
-        let mut over = row(1);
-        over.kind = 3;
-        over.enum_keys = vec![(0, 0)];
-        over.index = 2;
-        assert!(decode_iterators(&encode_iterators(&[over])).is_err());
-        // The intact forms round-trip.
-        let mut s = row(3);
-        s.kind = 4;
-        s.iterable = u32::MAX;
-        s.str_bytes = vec![0, 97, 0, 98];
-        s.index = 2;
-        let ok = vec![row(1), s];
-        assert_eq!(decode_iterators(&encode_iterators(&ok)).unwrap(), ok);
+        let first = row(0);
+        let mut second = first.clone();
+        second.owner = 3;
+        assert!(decode_iterators(&encode_iterators(&[first.clone(), second.clone()])).is_ok());
+        for owner in [2, 1] {
+            second.owner = owner;
+            assert_eq!(
+                decode_iterators(&encode_iterators(&[first.clone(), second.clone()])),
+                Err(SnapshotError::Corrupt(
+                    "iterator cursors: owners not strictly ascending"
+                ))
+            );
+        }
+        for kind in [10, 255] {
+            assert_eq!(
+                decode_iterators(&encode_iterators(&[row(kind)])),
+                Err(SnapshotError::Corrupt("iterator cursors: unknown kind"))
+            );
+        }
+        for value in [2, 255] {
+            let mut bytes = encode_iterators(&[row(0)]);
+            bytes[17] = value; // count, owner, kind, iterable, index, done
+            assert_eq!(
+                decode_iterators(&bytes),
+                Err(SnapshotError::Corrupt("iterator cursors: bad done byte"))
+            );
+        }
+        let mut string = row(4);
+        string.iterable = u32::MAX;
+        string.str_bytes = vec![0, 97, 0, 98];
+        for index in [0, 2, 4] {
+            string.index = index;
+            assert!(decode_iterators(&encode_iterators(&[string.clone()])).is_ok());
+        }
+        for index in [1, 6] {
+            string.index = index;
+            assert_eq!(
+                decode_iterators(&encode_iterators(&[string.clone()])),
+                Err(SnapshotError::Corrupt(
+                    "iterator cursors: string cursor outside its text"
+                ))
+            );
+        }
+        let mut forin = row(3);
+        forin.enum_keys = vec![(1, 0)];
+        forin.index = 1;
+        assert!(decode_iterators(&encode_iterators(&[forin.clone()])).is_ok());
+        forin.index = 2;
+        assert_eq!(
+            decode_iterators(&encode_iterators(&[forin])),
+            Err(SnapshotError::Corrupt(
+                "iterator cursors: for-in cursor past its key list"
+            ))
+        );
+        // Reset each independent malformed wrapper component from its valid row.
+        for field in 0..6 {
+            let mut invalid = row(8);
+            match field {
+                0 => invalid.iterable = u32::MAX,
+                1 => invalid.result = u32::MAX,
+                2 => invalid.index = 1,
+                3 => invalid.done = true,
+                4 => invalid.enum_keys.push((1, 0)),
+                _ => invalid.str_bytes.push(0),
+            }
+            assert_eq!(
+                decode_iterators(&encode_iterators(&[invalid])),
+                Err(SnapshotError::Corrupt(
+                    "iterator cursors: malformed Iterator.from wrapper"
+                ))
+            );
+        }
+        for mode in 0..=3 {
+            let mut valid = row(9);
+            valid.index = mode;
+            valid.str_bytes = vec![0, 97];
+            assert!(decode_iterators(&encode_iterators(&[valid])).is_ok());
+        }
+        for field in 0..5 {
+            let mut invalid = row(9);
+            match field {
+                0 => invalid.iterable = u32::MAX,
+                1 => invalid.result = u32::MAX,
+                2 => invalid.index = 4,
+                3 => invalid.enum_keys.push((1, 0)),
+                _ => invalid.str_bytes.push(0),
+            }
+            assert_eq!(
+                decode_iterators(&encode_iterators(&[invalid])),
+                Err(SnapshotError::Corrupt(
+                    "iterator cursors: invalid RegExp String Iterator"
+                ))
+            );
+        }
     }
 
     #[test]
@@ -6306,9 +6359,19 @@ mod tests {
             str_bytes: Vec::new(),
         };
         // A collection cursor naming an instance with NO covering row.
-        assert!(check(&[cursor(0, 0)], std::slice::from_ref(&coll), 0).is_err());
+        assert_eq!(
+            check(&[cursor(0, 0)], std::slice::from_ref(&coll), 0),
+            Err(SnapshotError::Corrupt(
+                "iterator cursors: collection cursor names no covering row"
+            ))
+        );
         // A cursor past the compacted live list.
-        assert!(check(&[cursor(1, 2)], std::slice::from_ref(&coll), 0).is_err());
+        assert_eq!(
+            check(&[cursor(1, 2)], std::slice::from_ref(&coll), 0),
+            Err(SnapshotError::Corrupt(
+                "iterator cursors: collection cursor names no covering row"
+            ))
+        );
         // The exhausted cursor (index == live count) passes.
         assert!(check(&[cursor(1, 1)], std::slice::from_ref(&coll), 0).is_ok());
         // A for-in key id outside the restored name table.
@@ -6322,7 +6385,12 @@ mod tests {
             enum_keys: vec![(7, 0)],
             str_bytes: Vec::new(),
         };
-        assert!(check(std::slice::from_ref(&forin), &[], 3).is_err());
+        assert_eq!(
+            check(std::slice::from_ref(&forin), &[], 3),
+            Err(SnapshotError::Corrupt(
+                "iterator cursors: for-in key id outside the name table"
+            ))
+        );
         assert!(check(std::slice::from_ref(&forin), &[], 7).is_ok());
         // An out-of-arena owner/result.
         let mut oob = cursor(1, 0);
