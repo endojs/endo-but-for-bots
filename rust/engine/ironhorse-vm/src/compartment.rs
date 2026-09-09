@@ -397,7 +397,8 @@ impl Compartment {
     /// This compartment's id-keyed endowments in the order they are
     /// seeded, or the named skip that refuses the whole evaluation.
     ///
-    /// Seed in ID ORDER (wave-6 W6-8): iterating the HashMap would seed
+    /// Seed in ID order, as checked by `tests/endowment_order.rs`:
+    /// iterating the HashMap would seed
     /// per-process SipHash order into the global object's property CHAIN
     /// (`create_global_property` prepends) and into slot allocation
     /// order — for-in enumeration, `Object.keys`, and snapshot bytes would
@@ -448,7 +449,7 @@ impl Compartment {
     /// Evaluate a program bytecode buffer in this compartment, seeding
     /// **this** compartment's own globals but with **no** intrinsic
     /// linking — for programs that reference only operators and the
-    /// compartment's own globals (the stage-1 seam). Programs that name
+    /// compartment's own globals. Programs that name
     /// intrinsics (`Boolean`, `Object`, …) must use
     /// [`Compartment::evaluate_with_symbols`]. Runs in a fresh `Interp`
     /// (see the module documentation's realm decision); a heap-backed

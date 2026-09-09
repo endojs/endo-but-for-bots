@@ -498,15 +498,15 @@ pub static CODE_SIZES: [i8; XS_CODE_COUNT] = [
     // entry longhand under `#ifdef mx32bitID` (`5` with 4-byte IDs, `3`
     // without) — `xsCommon.c` — and this is a 2-byte-ID build, so `3` is
     // the right value; the `5` that stood here was the 32-bit branch
-    // transcribed into a 16-bit build (review wave 4, G2-d).
+    // transcribed into a 16-bit build. The sentinel test below checks both.
     //
     // The `0` sentinel would be equally wrong, in the other direction:
     // `fxMapperMapIDs` (`xsAPI.c`) keys the symbol remap on `0 == offset`
     // and handles PROFILE inside the `0 < offset` branch, where it mints
     // a FRESH profile id via `fxGenerateProfileID` instead of mapping the
     // operand. PROFILE's operand is a profiling counter, not a
-    // symbol-table position, so it must stay out of `remap_ids` (review
-    // wave 5). Inert today either way — the coder never emits PROFILE.
+    // symbol-table position, so it must stay out of `remap_ids`.
+    // The coder never emits PROFILE.
     3, // XS_CODE_PROFILE
     1, // XS_CODE_YIELD_STAR
     2, // XS_CODE_USED_1
@@ -1059,12 +1059,10 @@ pub const ID_SIZE: usize = 2;
 ///
 /// Returns `None` on an unknown opcode byte, a truncated length
 /// prefix, or a TRUNCATED INSTRUCTION — one whose operands or declared
-/// payload run past the end of the stream (wave-6 W6-22: the sentinel
-/// arms used to size a truncated trailing payload "successfully", so
-/// the relink walk accepted bytes the dispatch loop refuses; bounding
-/// the whole instruction here makes every walker agree). Never
-/// panicking — the bytecode-decoder fuzz target (design § Fuzzability,
-/// target 2) relies on this.
+/// payload run past the end of the stream. Bounding the whole instruction
+/// makes the relink and dispatch walkers agree, as checked by
+/// `a_truncated_trailing_payload_refuses_to_walk`. This function never
+/// panics on malformed input; the bytecode-decoder fuzz target relies on it.
 pub fn instruction_len(code: &[u8], pc: usize) -> Option<usize> {
     let byte = *code.get(pc)?;
     let op = Opcode::from_u8(byte)?;
@@ -1149,8 +1147,7 @@ mod tests {
     /// `fxMapperMapIDs` handles it in the `0 < offset` branch and mints a
     /// fresh profile id rather than mapping the operand. Both directions
     /// are asserted below, so neither "PROFILE joins the sentinel set"
-    /// nor "a real symbol op leaves it" can land silently (review waves
-    /// 4 and 5).
+    /// nor "a real symbol op leaves it" can land silently.
     #[test]
     fn every_id_bearing_opcode_uses_the_computed_size_sentinel() {
         let id_bearing = [
@@ -1215,7 +1212,7 @@ mod tests {
         );
     }
 
-    /// Wave-6 W6-22: a TRUNCATED TRAILING payload must refuse to walk.
+    /// A truncated trailing payload must refuse to walk.
     /// A length-prefixed instruction declaring more payload bytes than
     /// the stream holds used to size "successfully" (the sentinel arms
     /// computed the length without checking the payload exists), so

@@ -84,7 +84,7 @@ struct SlotBacking {
     snapshot_free: Vec<bool>,
     /// The attach-time chunk-arena byte length, so a fault can bound a
     /// slot's String/BigInt chunk offset without seeing the chunk
-    /// arena itself (the wave-6 W6-14 lazy remainder, closed): a
+    /// arena itself: a
     /// consistently-resealed hostile row must die named AT THE FAULT,
     /// not anonymously in a later chunk read or the compactor.
     chunk_bound: u64,
@@ -124,7 +124,7 @@ impl SlotBacking {
             "page source returned {} records for page {page}, expected {expected} (corrupt or torn store row)",
             records.len(),
         );
-        // Wave-6 W6-14 (lazy half): leaf hashes prove the row's bytes
+        // Leaf hashes prove the row's bytes
         // are authentic-to-commit, not that its indices are in-arena —
         // a consistently-resealed hostile store faulted rows whose
         // references sent the collector out of range (an anonymous
@@ -259,8 +259,7 @@ impl ChunkOffset {
 }
 
 /// Slot kind byte. Values mirror the XS `XS_*_KIND` ordering for the
-/// kinds stage 1 uses; the full ~66-kind set arrives with the object
-/// model in stage 2.
+/// represented kinds; this enum does not claim every XS kind is supported.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Kind {
@@ -279,7 +278,7 @@ pub enum Kind {
     /// [`Kind::Property`]), or [`SlotIndex::NULL`] for a property-less
     /// object. The payload's `Reference` names the instance's prototype
     /// instance, or [`SlotIndex::NULL`] for a null prototype. This is the
-    /// allocation-faithful object heap the stage-2b design calls for:
+    /// allocation-faithful object heap:
     /// the global object and every object literal is a real arena
     /// instance whose properties are real arena slots.
     Instance = 6,
@@ -365,7 +364,7 @@ impl Kind {
     }
 }
 
-/// The 16-byte value payload (XS's value union arm subset for stage 1).
+/// The 16-byte value payload for the represented XS value-union arms.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Payload {
     None,
@@ -800,7 +799,7 @@ impl SlotArena {
         // is not the same as backed: a checkpoint into a non-pinned twin
         // store clears the dirty bits while leaving the pinned backing —
         // the one every fault reads — on the old bytes. Absent bit fails
-        // closed, as above (review wave 5).
+        // closed, as above.
         if self.unbacked.get(page as usize).copied().unwrap_or(true) {
             return false;
         }
@@ -811,8 +810,7 @@ impl SlotArena {
         // `[snapshot_count, capacity)` live in NO store row, so dropping
         // the box would lose them: the re-fault installs only
         // `snapshot_count`-bounded records and the tail reads back
-        // `undefined`. Pre-H1 the dense vec retained them; this restores
-        // that (review wave 4, H1-a).
+        // `undefined`. The eviction guard must retain those unbacked records.
         //
         // Only the boundary page can hold such records and still be
         // resident (pages wholly past the backed geometry are outside
@@ -1209,10 +1207,8 @@ impl SlotArena {
     /// still faults defensively for arbitrary callers.
     pub fn page_records(&self, page: u32) -> Vec<Slot> {
         // A page past the arena's geometry is a caller bug, not an empty
-        // page. Pre-H1 the dense slice indexing panicked on it; the
-        // sparse rewrite made it silently return `[]`, which a
-        // checkpoint would then write as a zero-length row (review wave
-        // 4, H1-b). Assert rather than let the geometry error travel.
+        // page. Returning `[]` would let a checkpoint write a zero-length
+        // row. Assert rather than let the geometry error travel.
         let start = (page as usize) * SLOTS_PER_PAGE as usize;
         assert!(
             start < self.capacity() as usize || self.capacity() == 0,
@@ -1303,9 +1299,9 @@ impl SlotArena {
     /// store answers the first (the twin has the bytes) but not the
     /// second (the pinned backing, which every fault reads, still holds
     /// the old ones). Clearing dirty alone therefore made a modified
-    /// page look evictable, and the re-fault silently reverted it
-    /// (review wave 5; the wave-4 guard covered the appended TAIL of
-    /// these same states and left the backed body).
+    /// page look evictable, and the re-fault silently reverted it.
+    /// Both appended records and modified backed records must remain resident
+    /// until their current content is present in the pinned backing.
     ///
     /// A page left unbacked stays that way until something rewrites it,
     /// which is correct rather than pessimistic: a later PINNED commit

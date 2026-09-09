@@ -1,6 +1,6 @@
 //! GC v1: exact, non-generational mark-and-sweep over the slot arena,
 //! plus extent-local compaction of the chunk arena (design § Value and heap
-//! model; roadmap stage 2, "GC v1").
+//! model).
 //!
 //! XS's collector (`fxCollect` in `xsMemory.c`) marks from the machine
 //! roots (stack, globals, keys, host roots), sweeps unmarked slots to
@@ -436,7 +436,7 @@ mod tests {
 
     #[test]
     fn traces_an_instance_property_chain() {
-        // The stage-2b object-heap shape: an instance whose `next` chains
+        // An object-heap instance whose `next` chains
         // Property slots, one holding a Reference to a second instance.
         // Everything reachable from the root instance survives; a
         // detached instance + property are swept.
