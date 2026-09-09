@@ -26,9 +26,8 @@ use super::{
 /// Every engine raise in the loop (`raise_js`, the `catchable_*` helpers)
 /// and every native re-entry that can raise must pass through here or
 /// [`dispatch_result!`]; `tests/dispatch_loop_control_transfer.rs` parses
-/// the source and fails on a hand-expanded arm, because the hand-expanded
-/// form is exactly what skipped the depth test (review F001) and what let
-/// an internal `Resume` escape to the host as a result (review F006).
+/// the source and rejects hand-expanded arms so they cannot bypass handler
+/// ownership checks or expose an internal unwind as a host result.
 macro_rules! dispatch_halt {
     ($halt:expr, $program_counter:ident, $machine:expr, $return_depth:expr, $code:expr) => {
         match $halt {
@@ -2046,7 +2045,7 @@ impl Interp {
                     } else if matches!(obj.kind, Kind::Null | Kind::Undefined) {
                         // `null.f = v`: `mxToInstance(mxStack + 1)` throws before
                         // the store (`fxToInstance`); the assignment is a
-                        // catchable `TypeError`, not a silent no-op (review F007).
+                        // catchable `TypeError`, not a silent no-op.
                         dispatch_halt!(
                             self.catchable_type_error_msg(cannot_coerce_to_object(obj.kind)),
                             pc,
@@ -2513,7 +2512,7 @@ impl Interp {
                         // `null.f` / `undefined.f`: `mxToInstance(mxStack)` throws
                         // before the lookup (`fxToInstance`). Reading a property
                         // of a nullish base is a catchable `TypeError`, never
-                        // `undefined` (review F007).
+                        // `undefined`.
                         _ if matches!(obj.kind, Kind::Null | Kind::Undefined) => dispatch_halt!(
                             self.catchable_type_error_msg(cannot_coerce_to_object(obj.kind)),
                             pc,

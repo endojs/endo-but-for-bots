@@ -502,7 +502,7 @@ impl Compartment {
     }
 
     /// [`Compartment::evaluate_with_symbols`] under an ARMED meter
-    /// (architecture review F014/F020): the same fresh interpreter, but
+    /// with the same fresh interpreter, but
     /// [`Interp::arm_meter`]ed with `interval` (computrons between host
     /// consultations) and `host` before anything runs, so the host's
     /// refusal halts the program with [`crate::Halt::MeterAbort`]. This is
