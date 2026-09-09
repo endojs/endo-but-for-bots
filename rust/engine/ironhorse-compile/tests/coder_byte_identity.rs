@@ -3032,3 +3032,39 @@ fn well_formed_property_keys_remain_byte_identical() {
         r#"var {"\uD835\uDC9C": x} = {};"#,
     ]);
 }
+
+#[test]
+fn logical_assignment_anonymous_names_match_the_pin() {
+    assert_identical(&[
+        "var x; x ||= function(){}; x.name",
+        "var x = true; x &&= () => 1; x.name",
+        "var x; x ??= class {}; x.name",
+        "var x; x ||= function*(){}; x.name",
+        "var x; x ||= async function(){}; x.name",
+        "var x; x ||= (function(){}); x.name",
+        "var x; x ||= function original(){}; x.name",
+        "var o = {}; o.x ||= function(){}; o.x.name",
+        "var o = {}; o['x'] ||= class {}; o.x.name",
+        "var x; x ||= (0, function(){}); x.name",
+    ]);
+}
+
+#[test]
+fn nested_parentheses_preserve_names_despite_the_pin() {
+    // ECMA-262 8.4.5 recursively forwards NamedEvaluation through parentheses.
+    // The pin's fxNodeCodeName unwraps only one Expressions node, losing NAME
+    // with two groups. Deliberately preserve the name, with exactly the bytes
+    // emitted by the pin for one group, rather than carrying that defect.
+    let single = "var x; x ||= (function(){}); x.name";
+    let nested = "var x; x ||= ((function(){})); x.name";
+    let oracle_single = xs_oracle::run(single).unwrap();
+    let oracle_nested = xs_oracle::run(nested).unwrap();
+    assert!(oracle_single.completed);
+    assert!(oracle_nested.completed);
+    assert_eq!(oracle_single.result, "x");
+    assert_eq!(oracle_nested.result, "");
+    let (code, symbols) = ironhorse_compile::compile_atoms_with(nested, false).unwrap();
+    assert_eq!(code, oracle_single.bytecode);
+    assert_eq!(symbols, oracle_single.symbols);
+    assert_ne!(code, oracle_nested.bytecode);
+}
