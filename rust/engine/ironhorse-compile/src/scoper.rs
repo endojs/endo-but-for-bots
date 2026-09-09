@@ -190,6 +190,8 @@ pub struct Scope {
     node_ptr: usize,
     /// The creating node's parse-time `flags` word (before hoist extras).
     node_base_flags: u32,
+    /// Annex B.3.4 permits var redeclaration of this simple catch parameter.
+    simple_catch_parameter: bool,
     /// The declare list, in XS's order (`firstDeclareNode`…). Removals in
     /// [`fx_scope_hoisted`] are applied here.
     pub declares: Vec<Declare>,
@@ -244,6 +246,7 @@ impl Scope {
             flags: node_base_flags & SCOPE_STRICT,
             node_ptr,
             node_base_flags,
+            simple_catch_parameter: false,
             declares: Vec::new(),
             defines: Vec::new(),
             next_id: 0,
@@ -1514,6 +1517,8 @@ impl Scoper<'_> {
         let has_param = matches!(child(node, 0), Some(Item::Node(_)));
         if has_param {
             let scope = self.scope_new(node, Token::Block);
+            self.scopes[scope].simple_catch_parameter =
+                matches!(child(node, 0), Some(Item::Node(param)) if param.token == Token::Let);
             if let Some(param) = child(node, 0) {
                 self.hoist_item(param)?;
             }
@@ -1643,7 +1648,8 @@ impl Scoper<'_> {
                 if matches!(
                     dtok,
                     Token::Const | Token::Let | Token::Using | Token::Define
-                ) {
+                ) && !(dtok == Token::Let && self.scopes[scope].simple_catch_parameter)
+                {
                     conflict = Some(id);
                     break;
                 }
