@@ -1087,3 +1087,22 @@ Source locks passed before and after the move.
 Full engine CI passed 1,490 tests, SQLite passed 116, and strict VM library Clippy
 and the math check passed; VM rustdoc retained 61 warnings.
 This extraction is rejected, and full 1A performance acceptance remains outstanding.
+
+## Full 1A branch comparison at e98acdec8
+
+[results/1a-current-full-goal.json](results/1a-current-full-goal.json) records a
+same-host comparison of the clean `e98acdec8` tree against the original
+`96db92e23` decomposition baseline.
+The runner rebuilt and remeasured the reference with the current common fixtures
+and toolchain; all 48 metric names and required provenance fields agree.
+
+Five controls exceed the unchanged 1.25x gate: front-garbage slides at 500, 2,000,
+and 8,000 rows (1.264x, 1.527x, and 1.304x), the 5,000-row GC enumeration
+(1.307x), and lazy wake-up (1.282x).
+The complete reference and candidate measurements and runner output are retained.
+No follow-up timing trials were run for this comparison.
+
+This measures the whole branch, including intervening base and persistence changes.
+It does not establish which change caused a difference.
+Incremental extraction results do not supersede this failed full-branch gate;
+full 1A performance acceptance remains outstanding.
