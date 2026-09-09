@@ -37,6 +37,8 @@ const SRC: &str = concat!(
     include_str!("../src/interp/gc_tables.rs"),
     "\n",
     include_str!("../src/interp/state.rs"),
+    "\n",
+    include_str!("../src/interp/roots.rs"),
 );
 
 /// The body (including braces) of the function that starts at the
@@ -478,7 +480,7 @@ fn every_slot_bearing_field_is_classified_and_the_classification_holds() {
     }
 
     // The checked requirements, against the real visitor bodies.
-    let gc_roots = strip_comments(fn_body("pub fn gc_roots(&self)"));
+    let gc_roots = root_source(SRC);
     let (extra_edges, partial) = edge_sources(SRC);
     let (ephemeron, weak_prune) = weak_sources(SRC);
     let chunk_remap = chunk_source(SRC);
@@ -813,5 +815,71 @@ fn weak_checks_reject_disconnected_callbacks_and_missing_expansions() {
         assert!(SRC.contains(target), "missing mutation target: {target}");
         let mutation = SRC.replace(target, "/* weak walk removed */");
         assert!(std::panic::catch_unwind(|| weak_sources(&mutation)).is_err());
+    }
+}
+
+fn root_source(src: &str) -> String {
+    let compact = |source: &str| {
+        ironhorse_vm::source_scan::code_only(source)
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect::<String>()
+    };
+    assert_eq!(
+        compact(body_in(src, "macro_rules! gc_run")),
+        "{($($code:tt)*)=>{{$($code)*}};}"
+    );
+    assert_eq!(
+        compact(body_in(src, "macro_rules! gc_text")),
+        "{($($code:tt)*)=>{stringify!($($code)*)};}"
+    );
+    assert_eq!(compact(body_in(src, "pub fn gc_roots(&self)")),
+        "{letmutroots=Vec::new();self.append_gc_roots(&mutroots);roots.sort_unstable_by_key(|r|r.0);roots.dedup();roots}");
+    assert_eq!(
+        compact(body_in(src, "fn append_gc_roots(&self,")),
+        "{$(gc_root!(gc_run,self,$field,roots,$root);)*}"
+    );
+    assert_eq!(
+        compact(body_in(src, "fn slot_roots(s: &Slot,")),
+        "{s.each_ref_slot(|e|roots.push(e));}"
+    );
+    let source = compact(src);
+    assert!(source.contains("interp_state!(define_root_walk);"));
+    assert!(source.contains("pubconstROOT_SOURCE:&[(&str,&str)]=&[$((stringify!($field),gc_root!(gc_text,self,$field,roots,$root)),)*];"));
+    let sources = ironhorse_vm::interp::roots::ROOT_SOURCE;
+    // Weak symbol-key descriptors must not silently become strong roots.
+    assert_eq!(
+        sources
+            .iter()
+            .find(|(field, _)| *field == "symbol_key_ids")
+            .unwrap()
+            .1,
+        ""
+    );
+    sources
+        .iter()
+        .map(|(_, body)| *body)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn disconnected_root_walks_cannot_satisfy_the_registry() {
+    root_source(SRC);
+    for (before, after) in [
+        ("self.append_gc_roots(&mut roots);", ""),
+        ("$(gc_root!(gc_run, self, $field, roots, $root);)*", ""),
+        ("gc_root!(gc_text, self, $field, roots, $root)", "\"\""),
+        ("interp_state!(define_root_walk);", ""),
+        ("roots.sort_unstable_by_key(|r| r.0);", ""),
+        ("roots.dedup();", ""),
+        ("s.each_ref_slot(|e| roots.push(e));", ""),
+    ] {
+        let mutated = SRC.replace(before, after);
+        assert_ne!(mutated, SRC, "mutation must match: {before}");
+        assert!(
+            std::panic::catch_unwind(|| root_source(&mutated)).is_err(),
+            "disconnected roots accepted: {before}"
+        );
     }
 }
