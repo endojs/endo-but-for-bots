@@ -17,7 +17,6 @@ manifest parent seal length	Existing corruption guard; dedicated exact-label reg
 migration did not advance the store schema	Existing corruption guard; dedicated exact-label regression fixture deferred.
 name migration length	Existing corruption guard; dedicated exact-label regression fixture deferred.
 non-canonical machine encoding	Existing corruption guard; dedicated exact-label regression fixture deferred.
-non-canonical small state	Existing corruption guard; dedicated exact-label regression fixture deferred.
 regexp side table: persisted source does not compile	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 side-table restore: invalid persisted regexp state	Existing corruption guard; dedicated exact-label regression fixture deferred.
 side-table restore: malformed Intl bound-function state	Existing corruption guard; dedicated exact-label regression fixture deferred.
@@ -34,8 +33,6 @@ side-table restore: malformed temporal record	Existing corruption guard; dedicat
 side-table restore: malformed typed-array family	Existing corruption guard; dedicated exact-label regression fixture deferred.
 side-table restore: unknown error name	Existing corruption guard; dedicated exact-label regression fixture deferred.
 side-table restore: unknown kind code	Existing corruption guard; dedicated exact-label regression fixture deferred.
-small state name-floor section size	Small-state framing guard; dedicated exact-label truncation fixture deferred.
-small state trailing bytes	Small-state framing guard; dedicated exact-label truncation fixture deferred.
 store file directory offset overflow	Existing corruption guard; dedicated exact-label regression fixture deferred.
 store file header truncated	Existing corruption guard; dedicated exact-label regression fixture deferred.
 store file manifest region truncated	Existing corruption guard; dedicated exact-label regression fixture deferred.
