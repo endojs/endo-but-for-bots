@@ -44,6 +44,9 @@
 #[macro_use]
 mod state;
 
+mod suspend;
+use suspend::Suspension;
+
 mod temporal;
 use temporal::{
     balance_zoned_diff, civil_from_days, days_from_civil, duration_from_nanoseconds,
@@ -5088,10 +5091,11 @@ enum GeneratorState {
     Completed,
 }
 
-/// A generator's suspended interpreter activation — the ironhorse analog of the
+/// A suspended activation shared by generators, async functions, and async
+/// generators — the ironhorse analog of the
 /// slot region XS's `YIELD`/`START_GENERATOR` copy into the instance's
 /// `XS_STACK_KIND` chunk. It captures exactly the frame state
-/// [`Interp::resume_generator`] must reinstall to continue the body: the
+/// the resume driver must reinstall to continue the body: the
 /// scope (`locals`/`id_map`), the call identity (`args`/`this_val`/
 /// `cur_func`/`cur_target`/`strict`/`result`), the generator's own value-stack
 /// temporaries (`stack_slice`, the slots above the frame base at the suspend
@@ -5123,8 +5127,8 @@ struct SavedFrame {
 
 /// A [`CatchJump`] as saved into a suspended frame: `stack_len` is
 /// RELATIVE to the run's frame base (the live chain records absolute
-/// positions), and `call_depth` is dropped — a run's own handlers all
-/// sit at the run's depth, which the resume re-derives.
+/// positions). Call-depth cuts are likewise offsets from the suspended
+/// driver's call-depth base; reinstallation adds the new driver's depth.
 
 #[derive(Clone)]
 struct SavedJump {
@@ -18959,42 +18963,15 @@ impl Interp {
                             (a.gen, a.stack_base, a.jumps_base, a.call_depth_base);
                         let resume_pc = pc + size as usize;
                         let yielded = self.pop();
-                        // Same hostile-bytecode refusal as the sync path
-                        // below: splitting past the stack end is a panic,
-                        // not a frame snapshot.
-                        if stack_base > self.stack.len() {
-                            return Step::Host(Halt::EngineInvariant("yield:stack-underflow"));
-                        }
-                        let stack_slice = self.stack.split_off(stack_base);
-                        let jumps = self
-                            .jumps
-                            .split_off(jumps_base)
-                            .into_iter()
-                            .map(|jump| SavedJump {
-                                target_pc: jump.target_pc,
-                                stack_offset: jump.stack_len.saturating_sub(stack_base),
-                                locals_len: jump.locals_len,
-                                id_map: jump.id_map,
-                                call_depth_offset: jump.call_depth.saturating_sub(call_depth_base),
-                                env: jump.env,
-                                flag: jump.flag,
-                            })
-                            .collect();
-                        self.meter.tick_raw(GENERATOR_YIELD_METERING);
-                        let frame = SavedFrame {
-                            locals: std::mem::take(&mut self.locals),
-                            id_map: std::mem::take(&mut self.id_map),
-                            args: std::mem::take(&mut self.args),
-                            this_val: self.this_val,
-                            env: self.env,
-                            cur_func: self.cur_func,
-                            cur_target: self.cur_target,
-                            target_func: self.target_func,
-                            strict: self.strict,
-                            result: self.result,
-                            stack_slice,
-                            jumps,
+                        let frame = match self.suspend_activation(
+                            stack_base,
+                            jumps_base,
+                            call_depth_base,
                             resume_pc,
+                            Suspension::Yield,
+                        ) {
+                            Ok(frame) => frame,
+                            Err(halt) => return Step::Host(halt),
                         };
                         if let Some(g) = self.async_generators.get_mut(&gen) {
                             g.frame = Some(frame);
@@ -19009,48 +18986,15 @@ impl Interp {
                         };
                     let resume_pc = pc + size as usize;
                     let yielded = self.pop();
-                    // Hostile bytecode can pop below the recorded run base
-                    // before suspending; splitting there is not a frame
-                    // snapshot, it is a panic (the fuzz lane's first CI
-                    // finding, on the `await` twin below). Fail closed like
-                    // the other malformed suspend shapes.
-                    if stack_base > self.stack.len() {
-                        return Step::Host(Halt::EngineInvariant("yield:stack-underflow"));
-                    }
-                    let stack_slice = self.stack.split_off(stack_base);
-                    let jumps = self
-                        .jumps
-                        .split_off(jumps_base)
-                        .into_iter()
-                        .map(|jump| SavedJump {
-                            target_pc: jump.target_pc,
-                            stack_offset: jump.stack_len.saturating_sub(stack_base),
-                            locals_len: jump.locals_len,
-                            id_map: jump.id_map,
-                            call_depth_offset: jump.call_depth.saturating_sub(call_depth_base),
-                            env: jump.env,
-                            flag: jump.flag,
-                        })
-                        .collect();
-                    // XS's `YIELD` copies the activation into the instance's
-                    // `XS_STACK_KIND` chunk (`fxNewChunk`/`fxRenewChunk`) — a
-                    // calibrated raw residual over the same bytecode both
-                    // engines dispatch.
-                    self.meter.tick_raw(GENERATOR_YIELD_METERING);
-                    let frame = SavedFrame {
-                        locals: std::mem::take(&mut self.locals),
-                        id_map: std::mem::take(&mut self.id_map),
-                        args: std::mem::take(&mut self.args),
-                        this_val: self.this_val,
-                        env: self.env,
-                        cur_func: self.cur_func,
-                        cur_target: self.cur_target,
-                        target_func: self.target_func,
-                        strict: self.strict,
-                        result: self.result,
-                        stack_slice,
-                        jumps,
+                    let frame = match self.suspend_activation(
+                        stack_base,
+                        jumps_base,
+                        call_depth_base,
                         resume_pc,
+                        Suspension::Yield,
+                    ) {
+                        Ok(frame) => frame,
+                        Err(halt) => return Step::Host(halt),
                     };
                     if let Some(g) = self.generators.get_mut(&gen) {
                         g.state = GeneratorState::SuspendedYield;
@@ -19182,41 +19126,15 @@ impl Interp {
                             (a.gen, a.stack_base, a.jumps_base, a.call_depth_base);
                         let resume_pc = pc + size as usize;
                         let awaited = self.pop();
-                        // Same hostile-bytecode refusal as the plain-async
-                        // path below.
-                        if stack_base > self.stack.len() {
-                            return Step::Host(Halt::EngineInvariant("await:stack-underflow"));
-                        }
-                        let stack_slice = self.stack.split_off(stack_base);
-                        let jumps = self
-                            .jumps
-                            .split_off(jumps_base)
-                            .into_iter()
-                            .map(|jump| SavedJump {
-                                target_pc: jump.target_pc,
-                                stack_offset: jump.stack_len.saturating_sub(stack_base),
-                                locals_len: jump.locals_len,
-                                id_map: jump.id_map,
-                                call_depth_offset: jump.call_depth.saturating_sub(call_depth_base),
-                                env: jump.env,
-                                flag: jump.flag,
-                            })
-                            .collect();
-                        self.meter.tick_raw(GENERATOR_YIELD_METERING);
-                        let frame = SavedFrame {
-                            locals: std::mem::take(&mut self.locals),
-                            id_map: std::mem::take(&mut self.id_map),
-                            args: std::mem::take(&mut self.args),
-                            this_val: self.this_val,
-                            env: self.env,
-                            cur_func: self.cur_func,
-                            cur_target: self.cur_target,
-                            target_func: self.target_func,
-                            strict: self.strict,
-                            result: self.result,
-                            stack_slice,
-                            jumps,
+                        let frame = match self.suspend_activation(
+                            stack_base,
+                            jumps_base,
+                            call_depth_base,
                             resume_pc,
+                            Suspension::Await,
+                        ) {
+                            Ok(frame) => frame,
+                            Err(halt) => return Step::Host(halt),
                         };
                         if let Some(g) = self.async_generators.get_mut(&gen) {
                             g.frame = Some(frame);
@@ -19233,44 +19151,15 @@ impl Interp {
                         };
                     let resume_pc = pc + size as usize;
                     let awaited = self.pop();
-                    // Same malformed-suspend guard as `YIELD` above: the
-                    // 7-byte fuzz reproducer entered an async run, popped
-                    // below its recorded base, then awaited — `split_off`
-                    // past the stack end panics where a named refusal is
-                    // owed.
-                    if stack_base > self.stack.len() {
-                        return Step::Host(Halt::EngineInvariant("await:stack-underflow"));
-                    }
-                    let stack_slice = self.stack.split_off(stack_base);
-                    let jumps = self
-                        .jumps
-                        .split_off(jumps_base)
-                        .into_iter()
-                        .map(|jump| SavedJump {
-                            target_pc: jump.target_pc,
-                            stack_offset: jump.stack_len.saturating_sub(stack_base),
-                            locals_len: jump.locals_len,
-                            id_map: jump.id_map,
-                            call_depth_offset: jump.call_depth.saturating_sub(call_depth_base),
-                            env: jump.env,
-                            flag: jump.flag,
-                        })
-                        .collect();
-                    self.meter.tick_raw(GENERATOR_YIELD_METERING);
-                    let frame = SavedFrame {
-                        locals: std::mem::take(&mut self.locals),
-                        id_map: std::mem::take(&mut self.id_map),
-                        args: std::mem::take(&mut self.args),
-                        this_val: self.this_val,
-                        env: self.env,
-                        cur_func: self.cur_func,
-                        cur_target: self.cur_target,
-                        target_func: self.target_func,
-                        strict: self.strict,
-                        result: self.result,
-                        stack_slice,
-                        jumps,
+                    let frame = match self.suspend_activation(
+                        stack_base,
+                        jumps_base,
+                        call_depth_base,
                         resume_pc,
+                        Suspension::Await,
+                    ) {
+                        Ok(frame) => frame,
+                        Err(halt) => return Step::Host(halt),
                     };
                     if let Some(a) = self.async_instances.get_mut(&inst) {
                         a.frame = Some(frame);
@@ -19723,21 +19612,7 @@ impl Interp {
         // the value stack holds nothing above the frame base (`begin` set up
         // `locals`, not temporaries), so `stack_slice` is empty; on the first
         // `.next` the body runs from `resume_pc`.
-        let frame = SavedFrame {
-            locals: self.locals.clone(),
-            id_map: self.id_map.clone(),
-            args: self.args.clone(),
-            this_val: self.this_val,
-            env: self.env,
-            cur_func: self.cur_func,
-            cur_target: self.cur_target,
-            target_func: self.target_func,
-            strict: self.strict,
-            result: self.result,
-            stack_slice: Vec::new(),
-            jumps: Vec::new(),
-            resume_pc,
-        };
+        let frame = self.fresh_activation(resume_pc);
         self.generators.insert(
             inst,
             GeneratorData {
@@ -19755,21 +19630,7 @@ impl Interp {
     ) -> crate::value::SlotIndex {
         self.meter.tick_raw(GENERATOR_START_METERING);
         let inst = self.slots.alloc(Slot::instance(proto));
-        let frame = SavedFrame {
-            locals: self.locals.clone(),
-            id_map: self.id_map.clone(),
-            args: self.args.clone(),
-            this_val: self.this_val,
-            env: self.env,
-            cur_func: self.cur_func,
-            cur_target: self.cur_target,
-            target_func: self.target_func,
-            strict: self.strict,
-            result: self.result,
-            stack_slice: Vec::new(),
-            jumps: Vec::new(),
-            resume_pc,
-        };
+        let frame = self.fresh_activation(resume_pc);
         self.async_generators.insert(
             inst,
             AsyncGeneratorData {
@@ -19846,21 +19707,7 @@ impl Interp {
         // the value stack holds nothing above the frame base at `START_ASYNC`
         // (`begin` set up `locals`, not temporaries), so `stack_slice` is empty;
         // `step_async` runs the body from `resume_pc`.
-        let frame = SavedFrame {
-            locals: self.locals.clone(),
-            id_map: self.id_map.clone(),
-            args: self.args.clone(),
-            this_val: self.this_val,
-            env: self.env,
-            cur_func: self.cur_func,
-            cur_target: self.cur_target,
-            target_func: self.target_func,
-            strict: self.strict,
-            result: self.result,
-            stack_slice: Vec::new(),
-            jumps: Vec::new(),
-            resume_pc,
-        };
+        let frame = self.fresh_activation(resume_pc);
         self.async_instances.insert(
             inst,
             AsyncData {
@@ -20492,17 +20339,8 @@ impl Interp {
         });
         let stack_base = self.stack.len();
         let jumps_base = self.jumps.len();
-        self.locals = saved.locals;
-        self.id_map = saved.id_map;
-        self.args = saved.args;
-        self.this_val = saved.this_val;
-        self.env = saved.env;
-        self.cur_func = saved.cur_func;
-        self.cur_target = saved.cur_target;
-        self.target_func = saved.target_func;
-        self.strict = saved.strict;
-        self.result = saved.result;
-        self.stack.extend(saved.stack_slice);
+        let return_depth = self.call_stack.len();
+        let resume_pc = self.reinstall_activation(saved, stack_base, return_depth);
         // On a yield-resume the sent value becomes the yield expression's value
         // (XS overwrites the saved yield slot with `the->scratch`); the first
         // `next`'s argument is discarded per spec.
@@ -20517,26 +20355,7 @@ impl Interp {
         if let Some(g) = self.generators.get_mut(&gen) {
             g.state = GeneratorState::Executing;
         }
-        let return_depth = self.call_stack.len();
-        // Rebase the suspended run's jump handlers onto the live
-        // chain: relative stack positions anchor at the fresh frame
-        // base, and depths at the fresh run depth (the suspend-in-try
-        // fix — these entries sit above `jumps_base`, so run
-        // completion or a throw truncates them exactly as if the run
-        // had never suspended).
-        self.jumps
-            .extend(saved.jumps.into_iter().map(|jump| CatchJump {
-                target_pc: jump.target_pc,
-                stack_len: stack_base + jump.stack_offset,
-                locals_len: jump.locals_len,
-                id_map: jump.id_map,
-                call_depth: return_depth + jump.call_depth_offset,
-                env: jump.env,
-                flag: jump.flag,
-                // Re-established on this resume: a throw reaching it pays
-                // [`RESUMED_HANDLER_THROW_METERING`].
-                rebased: true,
-            }));
+
         self.gen_run_stack.push(GenRunFrame {
             gen,
             stack_base,
@@ -20555,7 +20374,7 @@ impl Interp {
             Some(buf) => &buf[..],
             None => code,
         };
-        let outcome = self.dispatch_at(body_code, saved.resume_pc, return_depth);
+        let outcome = self.dispatch_at(body_code, resume_pc, return_depth);
         self.active_segment = saved_segment;
         self.gen_run_stack.pop();
         self.resume_status = ResumeStatus::NoStatus;
@@ -20849,17 +20668,8 @@ impl Interp {
         let fenced_jumps = std::mem::take(&mut self.jumps);
         let stack_base = self.stack.len();
         let jumps_base = self.jumps.len();
-        self.locals = saved.locals;
-        self.id_map = saved.id_map;
-        self.args = saved.args;
-        self.this_val = saved.this_val;
-        self.env = saved.env;
-        self.cur_func = saved.cur_func;
-        self.cur_target = saved.cur_target;
-        self.target_func = saved.target_func;
-        self.strict = saved.strict;
-        self.result = saved.result;
-        self.stack.extend(saved.stack_slice);
+        let return_depth = self.call_stack.len();
+        let resume_pc = self.reinstall_activation(saved, stack_base, return_depth);
         if !is_start {
             self.push(sent);
         }
@@ -20869,26 +20679,7 @@ impl Interp {
             status
         };
         self.async_generators.get_mut(&gen).unwrap().state = AsyncGeneratorState::Executing;
-        let return_depth = self.call_stack.len();
-        // Rebase the suspended run's jump handlers onto the live
-        // chain: relative stack positions anchor at the fresh frame
-        // base, and depths at the fresh run depth (the suspend-in-try
-        // fix — these entries sit above `jumps_base`, so run
-        // completion or a throw truncates them exactly as if the run
-        // had never suspended).
-        self.jumps
-            .extend(saved.jumps.into_iter().map(|jump| CatchJump {
-                target_pc: jump.target_pc,
-                stack_len: stack_base + jump.stack_offset,
-                locals_len: jump.locals_len,
-                id_map: jump.id_map,
-                call_depth: return_depth + jump.call_depth_offset,
-                env: jump.env,
-                flag: jump.flag,
-                // Re-established on this resume: a throw reaching it pays
-                // [`RESUMED_HANDLER_THROW_METERING`].
-                rebased: true,
-            }));
+
         self.async_gen_run_stack.push(AsyncGenRunFrame {
             gen,
             stack_base,
@@ -20907,7 +20698,7 @@ impl Interp {
             Some(buf) => &buf[..],
             None => code,
         };
-        let outcome = self.dispatch_at(body_code, saved.resume_pc, return_depth);
+        let outcome = self.dispatch_at(body_code, resume_pc, return_depth);
         self.active_segment = saved_segment;
         self.async_gen_run_stack.pop();
         self.resume_status = ResumeStatus::NoStatus;
@@ -21072,17 +20863,8 @@ impl Interp {
         let fenced_jumps = std::mem::take(&mut self.jumps);
         let stack_base = self.stack.len();
         let jumps_base = self.jumps.len();
-        self.locals = saved.locals;
-        self.id_map = saved.id_map;
-        self.args = saved.args;
-        self.this_val = saved.this_val;
-        self.env = saved.env;
-        self.cur_func = saved.cur_func;
-        self.cur_target = saved.cur_target;
-        self.target_func = saved.target_func;
-        self.strict = saved.strict;
-        self.result = saved.result;
-        self.stack.extend(saved.stack_slice);
+        let return_depth = self.call_stack.len();
+        let resume_pc = self.reinstall_activation(saved, stack_base, return_depth);
         // On a resume the sent value becomes the `await` expression's value (XS
         // writes `the->scratch` at the resume slot in `fxRunID`); the initial
         // synchronous start pushes nothing (the body runs from a clean frame).
@@ -21094,26 +20876,7 @@ impl Interp {
         } else {
             status
         };
-        let return_depth = self.call_stack.len();
-        // Rebase the suspended run's jump handlers onto the live
-        // chain: relative stack positions anchor at the fresh frame
-        // base, and depths at the fresh run depth (the suspend-in-try
-        // fix — these entries sit above `jumps_base`, so run
-        // completion or a throw truncates them exactly as if the run
-        // had never suspended).
-        self.jumps
-            .extend(saved.jumps.into_iter().map(|jump| CatchJump {
-                target_pc: jump.target_pc,
-                stack_len: stack_base + jump.stack_offset,
-                locals_len: jump.locals_len,
-                id_map: jump.id_map,
-                call_depth: return_depth + jump.call_depth_offset,
-                env: jump.env,
-                flag: jump.flag,
-                // Re-established on this resume: a throw reaching it pays
-                // [`RESUMED_HANDLER_THROW_METERING`].
-                rebased: true,
-            }));
+
         self.async_run_stack.push(AsyncRunFrame {
             inst,
             stack_base,
@@ -21132,7 +20895,7 @@ impl Interp {
             Some(buf) => &buf[..],
             None => code,
         };
-        let outcome = self.dispatch_at(body_code, saved.resume_pc, return_depth);
+        let outcome = self.dispatch_at(body_code, resume_pc, return_depth);
         self.active_segment = saved_segment;
         self.async_run_stack.pop();
         // Any `BRANCH_STATUS` will have consumed the status; reset defensively.
