@@ -6981,6 +6981,229 @@ mod tests {
     }
 
     #[test]
+    fn optional_empty_atoms_have_exact_refusals() {
+        let image = MachineImage::from_arenas(
+            sig(),
+            &SlotArena::new(),
+            &ChunkArena::new(),
+            &[],
+            vec!["name".into()],
+            Vec::new(),
+            SymbolKeyImage::default(),
+        );
+        let bytes = write_machine_unchecked(&image);
+        assert_eq!(read_machine(&bytes, &sig()).unwrap(), image);
+        let parsed = AtomReader::parse(&bytes).unwrap();
+        let append = |tag, payload: Vec<u8>| {
+            assert!(
+                parsed.find(tag).is_none(),
+                "fixture already contains {tag:?}"
+            );
+            let mut writer = AtomWriter::new();
+            for atom in parsed.atoms() {
+                writer.atom(atom.tag, atom.payload).unwrap();
+            }
+            writer.atom(tag, &payload).unwrap();
+            read_machine(&writer.finish().unwrap(), &sig())
+        };
+        assert_eq!(
+            append(crate::format::IDXP, encode_index_props(&image.index_props)),
+            Err(SnapshotError::Corrupt(
+                "IDXP atom present but empty; the writer omits it"
+            ))
+        );
+        assert_eq!(
+            append(crate::format::ARRY, encode_arrays(&image.arrays)),
+            Err(SnapshotError::Corrupt(
+                "ARRY atom present but empty; the writer omits it"
+            ))
+        );
+        assert_eq!(
+            append(crate::format::COLL, encode_collections(&image.collections)),
+            Err(SnapshotError::Corrupt(
+                "COLL atom present but empty; the writer omits it"
+            ))
+        );
+        assert_eq!(
+            append(crate::format::REGY, encode_registry(&image.registry)),
+            Err(SnapshotError::Corrupt(
+                "REGY atom present but empty; the writer omits it"
+            ))
+        );
+        assert_eq!(
+            append(crate::format::ERRD, encode_errors(&image.errors)),
+            Err(SnapshotError::Corrupt(
+                "ERRD atom present but empty; the writer omits it"
+            ))
+        );
+        assert_eq!(
+            append(crate::format::ESTK, encode_error_frames(&image.errors)),
+            Err(SnapshotError::Corrupt(
+                "ESTK atom present but empty; the writer omits it"
+            ))
+        );
+        assert_eq!(
+            append(crate::format::ABUF, encode_buffers(&image.buffers)),
+            Err(SnapshotError::Corrupt(
+                "ABUF atom present but empty; the writer omits it"
+            ))
+        );
+        assert_eq!(
+            append(
+                crate::format::TARR,
+                encode_typed_arrays(&image.typed_arrays)
+            ),
+            Err(SnapshotError::Corrupt(
+                "TARR atom present but empty; the writer omits it"
+            ))
+        );
+        assert_eq!(
+            append(crate::format::DVIW, encode_data_views(&image.data_views)),
+            Err(SnapshotError::Corrupt(
+                "DVIW atom present but empty; the writer omits it"
+            ))
+        );
+        assert_eq!(
+            append(crate::format::WRAP, encode_wrappers(&image.wrappers)),
+            Err(SnapshotError::Corrupt(
+                "WRAP atom present but empty; the writer omits it"
+            ))
+        );
+        assert_eq!(
+            append(crate::format::REGX, encode_regexps(&image.regexps)),
+            Err(SnapshotError::Corrupt(
+                "REGX atom present but empty; the writer omits it"
+            ))
+        );
+        assert_eq!(
+            append(
+                crate::format::ARGB,
+                encode_arguments_brands(&image.arguments_brands)
+            ),
+            Err(SnapshotError::Corrupt(
+                "ARGB atom present but empty; the writer omits it"
+            ))
+        );
+        assert_eq!(
+            append(crate::format::TMPR, encode_temporal(&image.temporal)),
+            Err(SnapshotError::Corrupt(
+                "TMPR atom present but empty; the writer omits it"
+            ))
+        );
+        assert_eq!(
+            append(crate::format::INTL, encode_intl(&image.intl)),
+            Err(SnapshotError::Corrupt(
+                "INTL atom present but empty; the writer omits it"
+            ))
+        );
+        assert_eq!(
+            append(crate::format::ITER, encode_iterators(&image.iterators)),
+            Err(SnapshotError::Corrupt(
+                "ITER atom present but empty; the writer omits it"
+            ))
+        );
+        assert_eq!(
+            append(crate::format::DATE, encode_dates(&image.dates)),
+            Err(SnapshotError::Corrupt(
+                "DATE atom present but empty; the writer omits it"
+            ))
+        );
+        assert_eq!(
+            append(
+                crate::format::FUNC,
+                encode_function_state(&image.function_state)
+            ),
+            Err(SnapshotError::Corrupt(
+                "FUNC atom present but empty; the writer omits it"
+            ))
+        );
+        assert_eq!(
+            append(crate::format::PROX, encode_proxy_state(&image.proxy_state)),
+            Err(SnapshotError::Corrupt(
+                "PROX atom present but empty; the writer omits it"
+            ))
+        );
+        assert_eq!(
+            append(crate::format::ACCS, encode_accessors(&image.accessors)),
+            Err(SnapshotError::Corrupt(
+                "ACCS atom present but empty; the writer omits it"
+            ))
+        );
+        assert_eq!(
+            append(
+                crate::format::IBFN,
+                encode_intl_bound_functions(&image.intl_bound_functions)
+            ),
+            Err(SnapshotError::Corrupt(
+                "IBFN atom present but empty; the writer omits it"
+            ))
+        );
+        assert_eq!(
+            append(
+                crate::format::PRIV,
+                encode_private_elements(&image.private_elements)
+            ),
+            Err(SnapshotError::Corrupt(
+                "PRIV atom present but empty; the writer omits it"
+            ))
+        );
+        assert_eq!(
+            append(
+                crate::format::DISP,
+                encode_disposable_stacks(&image.disposable_stacks)
+            ),
+            Err(SnapshotError::Corrupt(
+                "DISP atom present but empty; the writer omits it"
+            ))
+        );
+        assert_eq!(
+            append(crate::format::GENR, encode_generators(&image.generators)),
+            Err(SnapshotError::Corrupt(
+                "GENR atom present but empty; the writer omits it"
+            ))
+        );
+        assert_eq!(
+            append(
+                crate::format::PRMS,
+                encode_promise_cluster(&image.promise_cluster)
+            ),
+            Err(SnapshotError::Corrupt(
+                "PRMS atom present but empty; the writer omits it"
+            ))
+        );
+        assert_eq!(
+            append(
+                crate::format::ASYN,
+                encode_async_instances(&image.promise_cluster.async_instances)
+            ),
+            Err(SnapshotError::Corrupt("ASYN atom present but empty"))
+        );
+        assert_eq!(
+            append(crate::format::NFLR, vec![0; 3]),
+            Err(SnapshotError::Corrupt("installed-names floor size"))
+        );
+        assert_eq!(
+            append(crate::format::NFLR, 2u32.to_be_bytes().to_vec()),
+            Err(SnapshotError::Corrupt(
+                "installed-names floor past the name table"
+            ))
+        );
+        assert_eq!(
+            append(crate::format::NFLR, 1u32.to_be_bytes().to_vec()),
+            Err(SnapshotError::Corrupt(
+                "installed-names floor: non-canonical explicit full floor"
+            ))
+        );
+        // A partial installed-name floor is valid and survives unchanged.
+        assert_eq!(
+            append(crate::format::NFLR, 0u32.to_be_bytes().to_vec())
+                .unwrap()
+                .name_floor,
+            Some(0)
+        );
+    }
+
+    #[test]
     fn core_payloads_reject_slack_and_current_containers_are_canonical() {
         let image = MachineImage::from_arenas(
             sig(),
@@ -7252,7 +7475,7 @@ mod tests {
         // duplicate, and accounting violations — same gates as the
         // store path.
         let record = [0u8; SLOT_RECORD_BYTES]; // one Undefined record
-        let arm = |free: &[u32], live: u32, slot_count: u32, what: &'static str| {
+        let arm = |free: &[u32], live: u32, slot_count: u32| {
             let mut heap = Vec::new();
             heap.extend_from_slice(&slot_count.to_be_bytes());
             heap.extend_from_slice(&(free.len() as u32).to_be_bytes());
@@ -7267,18 +7490,23 @@ mod tests {
             w.atom(VERS, &Version::current().encode()).unwrap();
             w.atom(SIGN, &sig().encode()).unwrap();
             w.atom(HEAP, &heap).unwrap();
-            assert_eq!(
-                read_machine(&w.finish().unwrap(), &sig()),
-                Err(SnapshotError::Corrupt(what)),
-                "free={free:?} live={live} slot_count={slot_count}"
-            );
+            read_machine(&w.finish().unwrap(), &sig())
         };
         // Out of range.
-        arm(&[7], 0, 1, "HEAP free list entry");
+        assert_eq!(
+            arm(&[7], 0, 1),
+            Err(SnapshotError::Corrupt("HEAP free list entry"))
+        );
         // Duplicate.
-        arm(&[0, 0], 0, 2, "HEAP free list entry");
+        assert_eq!(
+            arm(&[0, 0], 0, 2),
+            Err(SnapshotError::Corrupt("HEAP free list entry"))
+        );
         // Accounting: free + live != slot_count.
-        arm(&[], 5, 1, "HEAP live/free accounting");
+        assert_eq!(
+            arm(&[], 5, 1),
+            Err(SnapshotError::Corrupt("HEAP live/free accounting"))
+        );
     }
 
     #[test]
