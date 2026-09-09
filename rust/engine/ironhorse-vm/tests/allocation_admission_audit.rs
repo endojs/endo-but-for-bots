@@ -1,6 +1,10 @@
 //! Source guard for W2: native builtin reservations must use admission helpers.
 //! The anchors exclude bootstrap/restore and the standalone representation math.
-const SOURCE: &str = include_str!("../src/interp.rs");
+const SOURCE: &str = concat!(
+    include_str!("../src/interp.rs"),
+    "\n",
+    include_str!("../src/interp/bigint.rs"),
+);
 
 fn method(name: &str) -> &str {
     let start = SOURCE
