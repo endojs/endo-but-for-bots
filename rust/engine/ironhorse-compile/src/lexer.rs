@@ -20,8 +20,8 @@
 use crate::error::{LexError, LexErrorKind};
 use crate::meter::ParseMeter;
 use crate::token::{classify_word, Token};
-use ironhorse_regexp::unicode::{is_identifier_first, is_identifier_next};
 use ironhorse_text::SymbolName;
+use ironhorse_unicode::{is_identifier_first, is_identifier_next};
 
 /// The end-of-input sentinel, XS's `(txU4)C_EOF`.
 const EOF: u32 = 0xFFFF_FFFF;

@@ -819,7 +819,7 @@ jobs:
         run: |
           flags=()
           if [ "$PROFILE" = release ]; then flags+=(--release); fi
-          cargo test --locked "${flags[@]}" -p ironhorse-meter -p ironhorse-vm -p ironhorse-snapshot -p ironhorse-compile -p ironhorse-regexp --features ironhorse-vm/store-integrity
+          cargo test --locked "${flags[@]}" -p ironhorse-meter -p ironhorse-unicode -p ironhorse-vm -p ironhorse-snapshot -p ironhorse-compile -p ironhorse-regexp --features ironhorse-vm/store-integrity
 
       - name: Export platform Math vector (oracle-free)
         working-directory: rust/engine

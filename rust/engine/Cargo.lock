@@ -216,6 +216,7 @@ dependencies = [
  "ironhorse-meter",
  "ironhorse-regexp",
  "ironhorse-text",
+ "ironhorse-unicode",
  "xs-oracle",
 ]
 
@@ -239,6 +240,7 @@ name = "ironhorse-regexp"
 version = "0.0.1"
 dependencies = [
  "ironhorse-meter",
+ "ironhorse-unicode",
  "xs-oracle",
 ]
 
@@ -253,6 +255,10 @@ dependencies = [
 
 [[package]]
 name = "ironhorse-text"
+version = "0.0.1"
+
+[[package]]
+name = "ironhorse-unicode"
 version = "0.0.1"
 
 [[package]]
