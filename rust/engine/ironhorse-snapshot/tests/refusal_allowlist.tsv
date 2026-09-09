@@ -65,9 +65,6 @@ small state trailing bytes	Small-state framing guard; dedicated exact-label trun
 store file directory offset overflow	Existing corruption guard; dedicated exact-label regression fixture deferred.
 store file header truncated	Existing corruption guard; dedicated exact-label regression fixture deferred.
 store file manifest region truncated	Existing corruption guard; dedicated exact-label regression fixture deferred.
-store free-list contains duplicate indices	Existing corruption guard; dedicated exact-label regression fixture deferred.
-store free-list index out of range	Existing corruption guard; dedicated exact-label regression fixture deferred.
 store leaf-hash inventory disagrees with geometry	Existing corruption guard; dedicated exact-label regression fixture deferred.
-store slot page record	Existing corruption guard; dedicated exact-label regression fixture deferred.
 symbol-key table does not restore	Existing corruption guard; dedicated exact-label regression fixture deferred.
 symbol-key table: counter inside the name table	Existing corruption guard; dedicated exact-label regression fixture deferred.
