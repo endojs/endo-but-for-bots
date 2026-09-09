@@ -119,3 +119,72 @@ fn an_eval_defined_function_is_still_called_across_segments() {
     assert!(out.completed, "halt: {:?}", out.halt);
     assert_eq!(out.result, "42");
 }
+
+#[test]
+fn a_handler_established_before_code_promotion_catches_across_eval() {
+    // CATCH runs before the function expression's CODE promotes the top-level
+    // buffer. The eval throw must cross both nested dispatches to land here.
+    let out = run("var trace = ''; try { \
+           var f = function () { \
+             try { eval(\"throw 'boom'\") } finally { trace += 'inner;'; } \
+           }; f(); \
+         } catch (e) { trace += 'caught:' + e; } \
+         finally { trace += ';outer'; } trace");
+    assert!(out.completed, "{:?}", out.halt);
+    assert_eq!(out.result, "inner;caught:boom;outer");
+}
+
+#[test]
+fn nested_eval_callback_unwinds_to_the_handler_in_its_own_buffer() {
+    let out = run("var trace = ''; \
+         var f = eval(\"(function () { \
+           try { [1].map(function () { eval(\\\"throw 'boom'\\\") }); } \
+           catch (e) { trace += 'callee:' + e; throw 'again'; } \
+           finally { trace += ';callee-finally'; } \
+         })\"); \
+         try { f(); } catch (e) { trace += ';caller:' + e; } trace");
+    assert!(out.completed, "{:?}", out.halt);
+    assert_eq!(out.result, "callee:boom;callee-finally;caller:again");
+}
+
+#[test]
+fn a_suspended_eval_handler_survives_code_segment_compaction() {
+    let source = "var phase, iterator, trace; \
+        if (!phase) { \
+          trace = ''; \
+          eval('(function discarded() {})'); \
+          iterator = eval(\"(function* () { \
+            try { yield 'ready'; [1].map(function () { throw 'boom'; }); } \
+            catch (e) { yield 'caught:' + e; } \
+            finally { trace += 'finally'; } \
+          })()\"); \
+          phase = 1; iterator.next().value; \
+        } else { \
+          var first = iterator.next(); var last = iterator.next(); \
+          first.value + '|' + last.done + '|' + trace; \
+        }";
+    let (code, symbols) = ironhorse_compile::compile_atoms(source).expect("compile");
+    let mut collected = Interp::new();
+    let mut control = Interp::new();
+    for vm in [&mut collected, &mut control] {
+        vm.link_intrinsics(&ironhorse_vm::parse_symbols(&symbols));
+        vm.set_source_compiler(std::rc::Rc::new(TestCompiler));
+        let out = vm.run(&code);
+        assert!(out.completed, "{:?}", out.halt);
+        assert_eq!(out.result, "ready");
+        assert!(vm.is_quiescent());
+    }
+    let before = collected.retained_code_segment_count();
+    collected.collect_garbage();
+    assert!(
+        collected.retained_code_segment_count() < before,
+        "the dead earlier segment must be removed to exercise remapping"
+    );
+    collected.collect_garbage();
+    let expected = control.run(&code);
+    let actual = collected.run(&code);
+    assert!(expected.completed, "{:?}", expected.halt);
+    assert!(actual.completed, "{:?}", actual.halt);
+    assert_eq!(expected.result, "caught:boom|true|finally");
+    assert_eq!(actual.result, expected.result);
+}
