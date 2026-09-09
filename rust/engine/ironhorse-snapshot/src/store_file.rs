@@ -1082,6 +1082,109 @@ mod tests {
     }
 
     #[test]
+    fn file_metadata_has_exact_refusals() {
+        let dir = tmp_dir("metadata-refusals");
+        let path = dir.join("heap.ihstore");
+        let mut manifest = image_to_batch_unchecked(&ran_image(), 1, "").manifest;
+        manifest.slot_count = 1;
+        manifest.chunk_len = 1;
+        manifest.free_len = 1;
+        // This fixture tests open-time framing, not authenticated row validity.
+        // Zero-length directory entries keep later truncations from first failing
+        // the independent directory-range guard.
+        let encode = |manifest: &StoreManifest| {
+            let encoded = manifest.encode();
+            let mut bytes = FILE_MAGIC.to_vec();
+            bytes.extend_from_slice(&(encoded.len() as u32).to_be_bytes());
+            bytes.extend_from_slice(&encoded);
+            bytes.extend_from_slice(&0u32.to_be_bytes()); // small state
+            bytes.extend_from_slice(&1u32.to_be_bytes()); // pages
+            bytes.extend_from_slice(&1u32.to_be_bytes()); // extents
+            bytes.extend_from_slice(&[0; 24]); // directories
+            bytes.extend_from_slice(&[0; 64]); // row leaves
+            bytes.extend_from_slice(&0u32.to_be_bytes()); // page edges
+            bytes.extend_from_slice(&1u32.to_be_bytes()); // free segments
+            bytes.extend_from_slice(&4u32.to_be_bytes()); // segment length
+            bytes.extend_from_slice(&0u32.to_be_bytes()); // free index
+            bytes.extend_from_slice(&[0; 32]); // free leaf
+            bytes
+        };
+        let bytes = encode(&manifest);
+        std::fs::write(&path, &bytes).unwrap();
+        FileStore::open(&path).unwrap();
+        let open = |contents: &[u8]| {
+            std::fs::write(&path, contents).unwrap();
+            FileStore::open(&path).unwrap_err()
+        };
+        let free_leaf = bytes.len() - 32;
+        let free_body = free_leaf - 4;
+        let free_length = free_body - 4;
+        let free_count = free_length - 4;
+        let edges = free_count - 4;
+        let leaves = edges - 64;
+        for end in leaves..edges {
+            assert_eq!(
+                open(&bytes[..end]),
+                StoreError::Snapshot(SnapshotError::Corrupt("file store leaf hashes truncated"))
+            );
+        }
+        let mut invalid = bytes.clone();
+        invalid[edges..edges + 4].copy_from_slice(&u32::MAX.to_be_bytes());
+        assert_eq!(
+            open(&invalid),
+            StoreError::Snapshot(SnapshotError::Corrupt("file store page edges truncated"))
+        );
+        for offset in [free_count, free_length] {
+            invalid = bytes.clone();
+            invalid[offset..offset + 4].copy_from_slice(&u32::MAX.to_be_bytes());
+            assert_eq!(
+                open(&invalid),
+                StoreError::Snapshot(SnapshotError::Corrupt("file store free segments truncated"))
+            );
+        }
+        for end in free_body..free_leaf {
+            assert_eq!(
+                open(&bytes[..end]),
+                StoreError::Snapshot(SnapshotError::Corrupt("file store free segments truncated"))
+            );
+        }
+        for end in free_leaf..bytes.len() {
+            assert_eq!(
+                open(&bytes[..end]),
+                StoreError::Snapshot(SnapshotError::Corrupt(
+                    "file store free leaf hashes truncated"
+                ))
+            );
+        }
+        let mut wrong = manifest.clone();
+        wrong.slot_count = 0;
+        assert_eq!(
+            open(&encode(&wrong)),
+            StoreError::Snapshot(SnapshotError::Corrupt(
+                "file store page directory disagrees with geometry"
+            ))
+        );
+        wrong = manifest.clone();
+        wrong.chunk_len = 0;
+        assert_eq!(
+            open(&encode(&wrong)),
+            StoreError::Snapshot(SnapshotError::Corrupt(
+                "file store extent directory disagrees with geometry"
+            ))
+        );
+        wrong = manifest.clone();
+        wrong.free_len = 0;
+        assert_eq!(
+            open(&encode(&wrong)),
+            StoreError::Snapshot(SnapshotError::Corrupt(
+                "file store free segments disagree with geometry"
+            ))
+        );
+        std::fs::write(&path, &bytes).unwrap();
+        FileStore::open(&path).unwrap();
+    }
+
+    #[test]
     fn foreign_magic_fails_closed() {
         let dir = tmp_dir("magic");
         let path = dir.join("heap.ihstore");
