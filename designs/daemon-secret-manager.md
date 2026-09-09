@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-09-03 |
-| **Updated** | 2026-09-03 |
+| **Updated** | 2026-09-09 |
 | **Author** | kumavis (prompted) |
 | **Status** | Implemented (local backend) |
 
@@ -134,7 +134,13 @@ type SecretSummary = {
 
 interface SecretAdmin {
   getSummary(): Promise<SecretSummary>;
-  replaceBase64(bytesBase64: string): Promise<void>;
+  // `ifGeneration` makes the replacement conditional on the record still being
+  // at that version; the result is the generation it committed, which is what
+  // a caller staging a second write pins that write to.
+  replaceBase64(
+    bytesBase64: string,
+    options?: { ifGeneration?: bigint },
+  ): Promise<bigint>;
   setDescription(description: string): Promise<void>;
   revoke(): Promise<void>;
   delete(): Promise<void>;

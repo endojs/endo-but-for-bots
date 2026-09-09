@@ -126,6 +126,13 @@ const makeRecord = ({
         rotations.push(base64);
         stored = base64;
         generation += 1n;
+        // The generation the write committed, as `SecretAdmin.replaceBase64`
+        // reports it. This fake increments by one exactly as the manager does,
+        // so no test here can tell a broker that uses this value from one that
+        // guesses `read + 1n`; the reason to use it is that the guess encodes
+        // the manager's increment in every caller that stages a write, not
+        // that this suite can catch it.
+        return generation;
       },
     }),
   };
@@ -133,17 +140,19 @@ const makeRecord = ({
   // mutable observation log.
   // One credential per record, as production builds it, so that two leases
   // over this record share the guard rather than each getting their own.
-  return {
-    ...facets,
-    credential: makeBrokerOAuthCredential({
+  // `recreate` builds another over the same stored bytes, which is what a
+  // broker restart or a re-provisioned owner amounts to: everything the old
+  // one held in memory is gone, and only the record remains.
+  const build = () =>
+    makeBrokerOAuthCredential({
       secret: facets.secret,
       refresh: facets.refresh,
       rotate: facets.rotate,
       accountRef,
       now,
       ...(refreshSkewMs === undefined ? {} : { refreshSkewMs }),
-    }),
-  };
+    });
+  return { ...facets, recreate: build, credential: build() };
 };
 
 /**
@@ -729,8 +738,16 @@ test('an expiring credential is refreshed and rotated before the turn is dispatc
   // The turn carries the refreshed token, and the rotated state is durable, so
   // the next request and every other lease over the same record see it too.
   t.is(lease.calls[0].headers.authorization, `Bearer ${accessToken}-1`);
-  t.is(lease.rotations.length, 1);
+  // Two writes, in order: the intent that says a refresh token is about to be
+  // presented, then the result that both stores the new tokens and clears the
+  // mark. Nothing is left saying an exchange is outstanding.
+  t.is(lease.rotations.length, 2);
+  t.like(JSON.parse(globalThis.atob(lease.rotations[0])), {
+    accessToken,
+    pendingRefresh: { startedAt: 0 },
+  });
   t.is(lease.stored().accessToken, `${accessToken}-1`);
+  t.is(lease.stored().pendingRefresh, undefined);
   // Refreshing is not an inference request and spends none of that quota.
   t.is((await E(lease.admin).getStatus()).requests, 1n);
   t.deepEqual(
@@ -757,10 +774,11 @@ test('concurrent turns share one refresh rather than racing the rotation', async
   const second = E(lease.endpoint).request(request);
   release();
   await Promise.all([first, second]);
-  // One exchange, one write-back: a provider that invalidates the old refresh
-  // token on use would have revoked the session had both turns exchanged it.
+  // One exchange, one intent and one write-back: a provider that invalidates
+  // the old refresh token on use would have revoked the session had both turns
+  // exchanged it.
   t.is(lease.exchanges.length, 1);
-  t.is(lease.rotations.length, 1);
+  t.is(lease.rotations.length, 2);
   t.deepEqual(
     lease.calls.map(call => call.headers.authorization),
     [`Bearer ${accessToken}-once`, `Bearer ${accessToken}-once`],
@@ -830,10 +848,13 @@ test('a refresh that moves the account or cannot happen fails closed', async t =
   await t.throwsAsync(() => E(moved.endpoint).request(request), {
     message: /Provider request failed/,
   });
-  // Nothing was dispatched and nothing was written back under the other
-  // account's credential.
+  // Nothing was dispatched and no credential under the other account was
+  // written back. The one write is the intent, which is deliberately still
+  // there: the refresh token really was presented, so the record must go on
+  // saying so.
   t.is(moved.calls.length, 0);
-  t.is(moved.rotations.length, 0);
+  t.is(moved.rotations.length, 1);
+  t.like(moved.stored(), { accessToken, pendingRefresh: { startedAt: 0 } });
   t.deepEqual(
     moved.audit.map(entry => entry.event),
     ['admitted', 'refresh-failed', 'failed'],
@@ -876,6 +897,12 @@ test('a malformed oauth state is refused rather than sent upstream', async t => 
     oauthState({ refreshToken: 'has space' }),
     oauthState(/** @type {any} */ ({ expiresAt: 'soon' })),
     oauthState({ accountId: '' }),
+    // An unreadable mark is the one field whose meaning is "refuse to
+    // exchange", so a shape this code cannot interpret fails the document
+    // rather than being dropped on the way to the check that reads it.
+    oauthState(/** @type {any} */ ({ pendingRefresh: true })),
+    oauthState(/** @type {any} */ ({ pendingRefresh: {} })),
+    oauthState(/** @type {any} */ ({ pendingRefresh: { startedAt: 'now' } })),
   ]) {
     const lease = setup({
       limits: oauthLimits,
@@ -962,7 +989,7 @@ test('two leases over one record never redeem the same refresh token', async t =
     ],
   );
   t.is(record.exchanges.length, 1);
-  t.is(record.rotations.length, 1);
+  t.is(record.rotations.length, 2);
   t.deepEqual(
     record.exchanges.map(entry => entry.refreshToken),
     [refreshToken],
@@ -1046,6 +1073,32 @@ test('a refresh that omits the refresh token keeps the stored one', async t => {
   t.is(lease.stored().refreshToken, refreshToken);
 });
 
+test('a refresh response cannot store a mark of its own', async t => {
+  // The mark is this broker's bookkeeping about its own dispatch. Persisting
+  // an echoed one would commit a credential that refuses its own next refresh,
+  // with nothing but an operator re-grant to clear it — an upstream field
+  // turned into a denial of service on the record.
+  const record = makeRecord({
+    state: oauthState({ expiresAt: 10_000 }),
+    exchange: async () =>
+      harden({
+        ...oauthState({ accessToken: 'rotated-access' }),
+        pendingRefresh: { startedAt: 5 },
+      }),
+  });
+  const lease = setup({ limits: oauthLimits, oauth: true, record });
+  await E(lease.endpoint).request(request);
+  t.is(record.stored().accessToken, 'rotated-access');
+  t.is(record.stored().pendingRefresh, undefined);
+  // And the document the commit stored is genuinely unlocked, not merely
+  // missing the field: refusing the credential it holds forces an exchange
+  // against that very document, which a stored mark would refuse.
+  const { outcome } = await E(record.credential).current(
+    harden({ rejected: 'rotated-access' }),
+  );
+  t.is(outcome, 'refreshed');
+});
+
 test('a refresh that does not advance expiry is refused', async t => {
   // Otherwise every subsequent request refreshes again, silently, forever.
   const lease = setup({
@@ -1058,10 +1111,12 @@ test('a refresh that does not advance expiry is refused', async t => {
     message: /Provider request failed/,
   });
   t.is(lease.calls.length, 0);
-  t.is(lease.rotations.length, 0);
-  // The bad state was refused rather than persisted, so the record still holds
-  // the original token.
+  // The one write is the intent; the bad state was refused rather than
+  // persisted, so the record still holds the original token — now marked,
+  // because that token has been presented.
+  t.is(lease.rotations.length, 1);
   t.is(lease.stored().refreshToken, refreshToken);
+  t.like(lease.stored().pendingRefresh, { startedAt: 0 });
   t.is(lease.exchanges.length, 1);
 
   // But the provider already consumed that token when it answered. A second
@@ -1096,10 +1151,20 @@ test('a validation failure after a successful exchange still fences the token', 
       message: /Provider request failed/,
     });
     t.is(record.exchanges.length, 1);
-    t.is(record.rotations.length, 0);
+    // Only the intent: nothing that failed validation was stored.
+    t.is(record.rotations.length, 1);
+    t.like(record.stored().pendingRefresh, { startedAt: 0 });
     // eslint-disable-next-line no-await-in-loop
     await t.throwsAsync(() => E(lease.endpoint).request(request), {
       message: /Provider request failed/,
+    });
+    t.is(record.exchanges.length, 1);
+    // And the refusal is in the record rather than in this process, so an
+    // owner rebuilt over the same bytes refuses too. The in-memory fence this
+    // replaced was cleared by exactly the restart a stuck refresh provokes.
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(() => E(record.recreate()).current(harden({})), {
+      message: /Broker credential consumed/,
     });
     t.is(record.exchanges.length, 1);
   }
@@ -1323,9 +1388,12 @@ test('an operator replacement during an exchange is not overwritten', async t =>
   // test would also pass if the replacement had simply landed before the
   // broker's first read, which is a different and much weaker scenario.
   t.is(record.exchanges.length, 1);
-  t.deepEqual(record.pins, [1n]);
+  // The intent pinned generation 1 and committed generation 2; the operator's
+  // replacement moved the record to 3, so the completion pinned to 2 was
+  // refused rather than overwriting it. Only the intent was ever written.
+  t.deepEqual(record.pins, [1n, 2n]);
   t.is(record.stored().accessToken, 'operator-regrant');
-  t.is(record.rotations.length, 0);
+  t.is(record.rotations.length, 1);
   t.is(lease.calls[0].headers.authorization, 'Bearer operator-regrant');
   t.deepEqual(
     lease.audit.map(entry => entry.event),
@@ -1333,9 +1401,180 @@ test('an operator replacement during an exchange is not overwritten', async t =>
   );
 });
 
-test('a rotation that fails outright never hands out the unstored credential', async t => {
+test('a replacement that is itself mid-exchange is not adopted', async t => {
+  // The adopt path exists because a conflicting write means someone stored
+  // something newer, and newer is usually better. Not when what they stored is
+  // another exchange's mark: adopting that would hand out a credential whose
+  // own refresh is unresolved, and clear nothing.
+  let release = () => {};
+  const held = new Promise(resolve => {
+    release = () => resolve(undefined);
+  });
+  let started = () => {};
+  const begun = new Promise(resolve => {
+    started = () => resolve(undefined);
+  });
+  const record = makeRecord({
+    state: oauthState({ expiresAt: 10_000 }),
+    exchange: async () => {
+      started();
+      await held;
+      return oauthState({ accessToken: 'from-stale-exchange' });
+    },
+  });
+  const pending = E(record.credential).current(harden({}));
+  await begun;
+  // An operator restoring a snapshot that was taken mid-refresh. Everything
+  // else about it is fine — the expiry is far off, the account matches — so
+  // the mark is the only thing that can refuse it.
+  record.replace(
+    harden({
+      ...oauthState({ accessToken: 'marked-restore' }),
+      pendingRefresh: { startedAt: 1 },
+    }),
+  );
+  release();
+  await t.throwsAsync(() => pending, {
+    message: /Broker credential rotation failed/,
+  });
+  t.is(record.stored().accessToken, 'marked-restore');
+  t.is(record.rotations.length, 1);
+});
+
+test('the undo for a request that never left needs no further read', async t => {
+  // It names the generation its own mark committed, so it is one write and no
+  // read. Recognising the mark by its bytes instead would need a read that can
+  // fail — and failing it leaves a live credential locked over a token nothing
+  // ever presented, which is the exact outcome this undo exists to avoid.
+  // Seeded with a document whose keys are in an order the validator's
+  // projection does not reproduce, so "restores the bytes that were there"
+  // and "restores a re-serialization of them" are distinguishable.
+  const seeded = globalThis.btoa(
+    JSON.stringify({
+      accountId: 'account-1',
+      expiresAt: 10_000,
+      refreshToken,
+      accessToken,
+      version: 'BrokerOAuthStateV1',
+    }),
+  );
+  const record = makeRecord({
+    rawStored: seeded,
+    exchange: async () => {
+      throw Error('Refresh not dispatched');
+    },
+  });
+  let reads = 0;
+  const blind = makeBrokerOAuthCredential({
+    // Serves the two reads an exchange makes and refuses anything after.
+    secret: Far('secret', {
+      async readBase64WithGeneration() {
+        reads += 1;
+        reads <= 2 || Fail`Secret operation failed: "STALE_READ"`;
+        return E(record.secret).readBase64WithGeneration();
+      },
+    }),
+    refresh: record.refresh,
+    rotate: record.rotate,
+    accountRef: 'account-1',
+    now: () => 0,
+  });
+  await t.throwsAsync(() => E(blind).current(harden({})), {
+    message: /Refresh not dispatched/,
+  });
+  t.is(record.exchanges.length, 1);
+  // Marked, then unmarked: two writes, and the record is back to the grant it
+  // held — byte for byte, not as this broker version would have re-serialized
+  // it. Restoring a re-serialization would silently rewrite an operator's
+  // document, and would drop any field a later schema adds that this one does
+  // not know to carry.
+  t.is(record.rotations.length, 2);
+  t.is(record.rotations[1], seeded);
+  t.is(record.stored().pendingRefresh, undefined);
+  t.is(record.stored().refreshToken, refreshToken);
+});
+
+test('a losing intent write does not undo the mark that beat it', async t => {
+  // The one-credential-per-record invariant violated on purpose, because that
+  // is the case the generation pin exists to bound. Two holders that read the
+  // same generation write the same mark — same state, same clock, so the same
+  // bytes — and only one write can land. The loser must leave the winner's
+  // mark alone: undoing it by recognising its own bytes in it would clear the
+  // fence of an exchange that is at that moment presenting the token, which is
+  // the replay the whole protocol exists to prevent.
+  let letLoserWrite = () => {};
+  const loserParked = new Promise(resolve => {
+    letLoserWrite = () => resolve(undefined);
+  });
+  let loserRead = () => {};
+  const loserHasRead = new Promise(resolve => {
+    loserRead = () => resolve(undefined);
+  });
+  let releaseWinner = () => {};
+  const winnerHeld = new Promise(resolve => {
+    releaseWinner = () => resolve(undefined);
+  });
+  let winnerDispatched = () => {};
+  const winnerAtProvider = new Promise(resolve => {
+    winnerDispatched = () => resolve(undefined);
+  });
+  const record = makeRecord({
+    state: oauthState({ expiresAt: 10_000 }),
+    exchange: async () => {
+      winnerDispatched();
+      await winnerHeld;
+      return oauthState({ accessToken: 'winner-access' });
+    },
+  });
+  let parked = true;
+  const loser = makeBrokerOAuthCredential({
+    secret: record.secret,
+    refresh: record.refresh,
+    rotate: Far('rotate', {
+      async replaceBase64(base64, options) {
+        await null;
+        if (parked) {
+          parked = false;
+          loserRead();
+          await loserParked;
+        }
+        return E(record.rotate).replaceBase64(base64, options);
+      },
+    }),
+    accountRef: 'account-1',
+    now: () => 0,
+  });
+
+  // The loser has read generation 1 and is about to write its mark.
+  const losing = E(loser).current(harden({}));
+  await loserHasRead;
+  // The winner reads the same generation 1, writes its mark, and is now at the
+  // token endpoint with the refresh token in flight.
+  const winning = E(record.credential).current(harden({}));
+  await winnerAtProvider;
+  // Only now does the loser's write reach the record, where it is refused.
+  letLoserWrite();
+  await t.throwsAsync(() => losing, { message: /GENERATION_CONFLICT/ });
+
+  // The winner's mark is still standing, so nothing else can exchange while
+  // its token is outstanding.
+  t.like(record.stored().pendingRefresh, { startedAt: 0 });
+  t.is(record.exchanges.length, 1);
+  releaseWinner();
+  // And the winner can still commit, because its pin is still the newest
+  // generation: the loser wrote nothing at all.
+  const { outcome } = await winning;
+  t.is(outcome, 'refreshed');
+  t.is(record.stored().accessToken, 'winner-access');
+  t.is(record.stored().pendingRefresh, undefined);
+});
+
+test('an intent that cannot be recorded means nothing is dispatched', async t => {
+  // Write-ahead is only worth anything if the write really precedes the
+  // dispatch. A broker that presented the token anyway when its mark failed
+  // would have the same lost-outcome window as before, with an extra write.
   const record = makeRecord({ state: oauthState({ expiresAt: 10_000 }) });
-  const stranded = makeBrokerOAuthCredential({
+  const unmarkable = makeBrokerOAuthCredential({
     secret: record.secret,
     refresh: record.refresh,
     rotate: Far('rotate', {
@@ -1346,27 +1585,67 @@ test('a rotation that fails outright never hands out the unstored credential', a
     accountRef: 'account-1',
     now: () => 0,
   });
-  // The generation did not move, so nothing else rotated: the stored
-  // credential is the one this exchange already spent, and there is nothing
-  // safe to return.
-  await t.throwsAsync(() => E(stranded).current(harden({})), {
-    message: /Broker credential rotation failed/,
+  await t.throwsAsync(() => E(unmarkable).current(harden({})), {
+    message: /secret backend unavailable/,
   });
+  t.is(record.exchanges.length, 0);
   t.is(record.rotations.length, 0);
-  t.is(record.stored().accessToken, accessToken);
+  // Nothing is fenced, because nothing was spent: the record is exactly as it
+  // was, and a healthy owner over it still works.
+  t.is(record.generation(), 1n);
+  t.is(record.stored().pendingRefresh, undefined);
+  await E(record.credential).current(harden({}));
   t.is(record.exchanges.length, 1);
+});
 
-  // The token that exchange consumed is still what the record holds. Failing
-  // the request that discovered the lost write is not enough: without a fence
-  // the next call re-reads the same record and presents the same spent token,
-  // which is the replay that revokes the grant.
-  await t.throwsAsync(() => E(stranded).current(harden({})), {
+test('an intent whose write is acknowledged late leaves the record fenced', async t => {
+  // The write landed and the answer did not come back, so the mark's own
+  // generation is unknown. The stored refresh token is certainly unspent —
+  // nothing was dispatched — and the mark is still left standing, because the
+  // only way to recognise it would be by its bytes, and those cannot
+  // distinguish this credential's mark from a second holder's. Fencing a live
+  // credential is the accepted cost of never guessing.
+  const record = makeRecord({ state: oauthState({ expiresAt: 10_000 }) });
+  let lose = true;
+  const lossy = makeBrokerOAuthCredential({
+    secret: record.secret,
+    refresh: record.refresh,
+    rotate: Far('rotate', {
+      async replaceBase64(base64, options) {
+        const generation = await E(record.rotate).replaceBase64(
+          base64,
+          options,
+        );
+        if (lose) {
+          lose = false;
+          throw Error('acknowledgement lost');
+        }
+        return generation;
+      },
+    }),
+    accountRef: 'account-1',
+    now: () => 0,
+  });
+  await t.throwsAsync(() => E(lossy).current(harden({})), {
+    message: /acknowledgement lost/,
+  });
+  t.is(record.exchanges.length, 0);
+  // One write: the mark, which landed and stayed.
+  t.is(record.rotations.length, 1);
+  t.like(record.stored().pendingRefresh, { startedAt: 0 });
+  // The token it fences was never presented, and the fence holds anyway — for
+  // this owner and for one rebuilt over the same record.
+  t.is(record.stored().refreshToken, refreshToken);
+  await t.throwsAsync(() => E(lossy).current(harden({})), {
     message: /Broker credential consumed/,
   });
-  t.is(record.exchanges.length, 1);
+  await t.throwsAsync(() => E(record.recreate()).current(harden({})), {
+    message: /Broker credential consumed/,
+  });
+  t.is(record.exchanges.length, 0);
 
-  // An operator installing a genuinely new grant lifts the fence, because the
-  // record no longer holds the token that was spent.
+  // An operator re-grant is what clears it, as it is for every other fenced
+  // record.
   record.replace(
     oauthState({
       accessToken: 'operator-regrant',
@@ -1374,13 +1653,130 @@ test('a rotation that fails outright never hands out the unstored credential', a
       expiresAt: 10_000,
     }),
   );
+  const { outcome } = await E(record.recreate()).current(harden({}));
+  t.is(outcome, 'refreshed');
+  t.is(record.exchanges.length, 1);
+});
+
+test('the undo for a request that never left cannot roll back a newer grant', async t => {
+  // The undo names the generation its own mark committed, so an operator whose
+  // re-grant landed while the token endpoint was unreachable is refused rather
+  // than rolled back. Dropping that pin would make this undo an unconditional
+  // write of a credential two versions stale.
+  const record = makeRecord({
+    state: oauthState({ expiresAt: 10_000 }),
+    exchange: async () => {
+      // The operator's grant arrives in the window between the mark and the
+      // undo: the request is on its way out and provably never leaves.
+      record.replace(
+        oauthState({
+          accessToken: 'operator-regrant',
+          refreshToken: 'operator-refresh',
+        }),
+      );
+      throw Error('Refresh not dispatched');
+    },
+  });
+  await t.throwsAsync(() => E(record.credential).current(harden({})), {
+    message: /Refresh not dispatched/,
+  });
+  // The mark pinned generation 1 and committed 2; the operator moved the
+  // record to 3, so the undo pinned to 2 was refused.
+  t.deepEqual(record.pins, [1n, 2n]);
+  t.is(record.stored().accessToken, 'operator-regrant');
+  t.is(record.stored().refreshToken, 'operator-refresh');
+});
+
+test('an undo that cannot land leaves the mark and the original failure', async t => {
+  // Best-effort means the record keeps the conservative state, and it also
+  // means the caller still learns why its refresh failed rather than why the
+  // undo did.
+  const record = makeRecord({
+    state: oauthState({ expiresAt: 10_000 }),
+    exchange: async () => {
+      throw Error('Refresh not dispatched');
+    },
+  });
+  const brittle = makeBrokerOAuthCredential({
+    secret: record.secret,
+    refresh: record.refresh,
+    rotate: Far('rotate', {
+      async replaceBase64(base64, options) {
+        // The mark lands; the undo that follows it does not.
+        if (record.rotations.length >= 1) throw Error('backend unavailable');
+        return E(record.rotate).replaceBase64(base64, options);
+      },
+    }),
+    accountRef: 'account-1',
+    now: () => 0,
+  });
+  await t.throwsAsync(() => E(brittle).current(harden({})), {
+    message: /Refresh not dispatched/,
+  });
+  t.is(record.rotations.length, 1);
+  t.like(record.stored().pendingRefresh, { startedAt: 0 });
+});
+
+test('a result that cannot be stored fences the record for every later owner', async t => {
+  const record = makeRecord({ state: oauthState({ expiresAt: 10_000 }) });
+  // Healthy for the intent, broken for the commit: the exact shape of a
+  // refresh whose result is lost after the provider has consumed the token.
+  const stranded = makeBrokerOAuthCredential({
+    secret: record.secret,
+    refresh: record.refresh,
+    rotate: Far('rotate', {
+      async replaceBase64(base64, options) {
+        if (record.rotations.length >= 1) {
+          throw Error('secret backend unavailable');
+        }
+        return E(record.rotate).replaceBase64(base64, options);
+      },
+    }),
+    accountRef: 'account-1',
+    now: () => 0,
+  });
   await t.throwsAsync(() => E(stranded).current(harden({})), {
     message: /Broker credential rotation failed/,
   });
+  t.is(record.exchanges.length, 1);
+  t.is(record.rotations.length, 1);
+  // The record still holds the token that exchange spent, and now says so.
+  t.is(record.stored().refreshToken, refreshToken);
+  t.like(record.stored().pendingRefresh, { startedAt: 0 });
+
+  // Failing the request that discovered the lost write is not enough: without
+  // the mark the next call re-reads the same record and presents the same
+  // spent token, which is the replay that revokes the grant.
+  await t.throwsAsync(() => E(stranded).current(harden({})), {
+    message: /Broker credential consumed/,
+  });
+  t.is(record.exchanges.length, 1);
+
+  // The refusal is in the record, so it survives the process. A fresh owner
+  // over the same bytes — a restarted broker, a re-provisioned session — has a
+  // working rotate capability and still must not exchange.
+  await t.throwsAsync(() => E(record.recreate()).current(harden({})), {
+    message: /Broker credential consumed/,
+  });
+  t.is(record.exchanges.length, 1);
+
+  // An operator installing a genuinely new grant lifts it, because the record
+  // no longer holds either the spent token or the mark.
+  record.replace(
+    oauthState({
+      accessToken: 'operator-regrant',
+      refreshToken: 'operator-refresh',
+      expiresAt: 10_000,
+    }),
+  );
+  const recovered = record.recreate();
+  const { state } = await E(recovered).current(harden({}));
   // It exchanged again, and against the new grant's token rather than the
   // spent one.
   t.is(record.exchanges.length, 2);
   t.is(record.exchanges[1].refreshToken, 'operator-refresh');
+  t.is(state.accessToken, `${accessToken}-2`);
+  t.is(record.stored().pendingRefresh, undefined);
 });
 
 test('a conditional write names the generation it read', async t => {
@@ -1388,10 +1784,98 @@ test('a conditional write names the generation it read', async t => {
   const lease = setup({ limits: oauthLimits, oauth: true, record });
   t.is(record.generation(), 1n);
   await E(lease.endpoint).request(request);
-  // The write named the generation the credential read, rather than being
-  // unconditional: asserting only that a write happened would pass with the
-  // precondition removed.
-  t.deepEqual(record.pins, [1n]);
-  t.is(record.rotations.length, 1);
-  t.is(record.generation(), 2n);
+  // Both writes named a generation rather than being unconditional: asserting
+  // only that a write happened would pass with the precondition removed. The
+  // intent pinned the generation it read, and the commit pinned the one the
+  // intent produced rather than re-reading to find out.
+  t.deepEqual(record.pins, [1n, 2n]);
+  t.is(record.rotations.length, 2);
+  t.is(record.generation(), 3n);
+});
+
+test('a rotator that does not report its generation is refused before dispatch', async t => {
+  // The commit pins to the generation the intent write committed. A rotator
+  // that will not say what it committed leaves only a guess to pin to, and
+  // guessing is how a commit ends up overwriting a grant it never read. Caught
+  // while the refresh token is still unspent rather than after — the check has
+  // to reject every non-generation, not merely the absent one, because a
+  // `number` would otherwise reach the rotator's own `M.bigint()` guard and be
+  // refused there, one step past the dispatch.
+  await null;
+  for (const committed of [undefined, 2, '2n', null]) {
+    const record = makeRecord({ state: oauthState({ expiresAt: 10_000 }) });
+    const mute = makeBrokerOAuthCredential({
+      secret: record.secret,
+      refresh: record.refresh,
+      rotate: Far('rotate', {
+        async replaceBase64(base64, options) {
+          await E(record.rotate).replaceBase64(base64, options);
+          return committed;
+        },
+      }),
+      accountRef: 'account-1',
+      now: () => 0,
+    });
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(() => E(mute).current(harden({})), {
+      message: /Broker refresh intent unusable/,
+    });
+    t.is(record.exchanges.length, 0);
+    // The mark stays: its generation is exactly what this rotator would not
+    // report, so there is nothing safe to undo it with. A misconfigured
+    // rotator therefore fences the record on its first refresh, loudly and at
+    // the cost of an operator re-grant, rather than quietly presenting a token
+    // it cannot record the outcome of.
+    t.like(record.stored().pendingRefresh, { startedAt: 0 });
+  }
+});
+
+test('a clock that is not a time never reaches the stored document', async t => {
+  // Reachable without a broken expiry: a refused access token makes the stored
+  // credential spent whatever the clock says. A non-finite `startedAt` would
+  // serialize to `null` and leave a document the validator cannot parse back,
+  // so the record would report as corrupt rather than as the broken clock it
+  // is — and nothing could exchange against it again.
+  const record = makeRecord({ now: () => NaN });
+  const broken = makeBrokerOAuthCredential({
+    secret: record.secret,
+    refresh: record.refresh,
+    rotate: record.rotate,
+    accountRef: 'account-1',
+    now: () => NaN,
+  });
+  await t.throwsAsync(
+    () => E(broken).current(harden({ rejected: accessToken })),
+    { message: /Invalid broker clock/ },
+  );
+  t.is(record.rotations.length, 0);
+  t.is(record.exchanges.length, 0);
+  // Still readable, so an operator fixing the clock recovers without a
+  // re-grant.
+  t.is(record.stored().accessToken, accessToken);
+});
+
+test('a mark fences exchanging, not using a credential that is still good', async t => {
+  // A mark says another exchange is unresolved, not that the access token is
+  // bad. Every concurrent turn on the record must keep running on the token it
+  // already has — hoisting the refusal to cover use as well would turn each
+  // refresh into an outage for every session sharing the record.
+  const record = makeRecord({
+    state: harden({
+      ...oauthState(),
+      pendingRefresh: { startedAt: 1 },
+    }),
+  });
+  const { state, outcome } = await E(record.credential).current(harden({}));
+  t.is(outcome, 'unchanged');
+  t.is(state.accessToken, accessToken);
+  t.is(record.exchanges.length, 0);
+  t.is(record.rotations.length, 0);
+  // It is genuinely the mark that is being tolerated: once the same credential
+  // is spent, the very same record refuses.
+  await t.throwsAsync(
+    () => E(record.credential).current(harden({ rejected: accessToken })),
+    { message: /Broker credential consumed/ },
+  );
+  t.is(record.exchanges.length, 0);
 });

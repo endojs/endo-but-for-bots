@@ -77,9 +77,13 @@ A future re-check should look for one specific thing — a documented way for a
 proxy or gateway to supply the subscription credential *itself*.
 
 The broker-side half of the contract below does not depend on that question and
-is now implemented: expiry tracking, single-flight refresh, rotation through a
-narrow write-back capability, one bounded refresh-and-retry on a rejected
-credential, and account binding.
+is now implemented: expiry tracking, single-flight refresh, a
+generation-checked write-ahead refresh intent recorded in the secret record
+itself, rotation through a narrow write-back capability, one bounded
+refresh-and-retry on a rejected credential, and account binding.
+The unit suite shows the intent surviving owner recreation; durability across an
+actual process restart is the secret manager's and is not exercised there, so
+broker crash stays on the live acceptance list below.
 See [`designs/hosted-agent-broker-oauth.md`](../../designs/hosted-agent-broker-oauth.md)
 for the sourced finding, the quoted vendor text, and what was built.
 

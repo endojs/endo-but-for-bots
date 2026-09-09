@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-09-08 |
-| **Updated** | 2026-09-08 |
+| **Updated** | 2026-09-09 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | In Progress |
 | **Source** | Requirements from `packages/codex-sandbox/SUBSCRIPTION-AUTH.md` |
@@ -15,8 +15,8 @@ Implemented in this pass:
 - `packages/hosted-agent/src/provider-broker.js` — `authMode: 'oauth'`, a
   `BrokerOAuthStateV1` credential document, and `makeBrokerOAuthCredential`:
   one refreshing credential per secret record, shared by every lease over it,
-  with proactive expiry refresh, a single-flight token exchange, rotation, and
-  account binding.
+  with proactive expiry refresh, a single-flight token exchange, a
+  generation-checked write-ahead refresh intent, rotation, and account binding.
   The lease adds one bounded refresh-and-retry on a rejected credential, and
   echo screening that covers both tokens in every form, accumulated across the
   retry.
@@ -25,8 +25,9 @@ Implemented in this pass:
   narrow capability is minted where it is used.
 - `packages/daemon/src/secret-manager.js` — `readBase64WithGeneration` returns
   the version the bytes came from, and `replaceBase64` takes an `ifGeneration`
-  precondition, so a holder deriving a new value from a secret can pin its
-  write to the version it read.
+  precondition and reports the generation it committed, so a holder deriving a
+  new value from a secret can pin its write to the version it read, and a
+  holder staging two writes can pin the second to what the first produced.
 - `packages/hosted-agent/src/provider-transport.js` — `anthropic-beta` added to
   the header allowlist, and a 401 classification so the broker can tell "the
   token is bad" from "the request is bad".
@@ -289,6 +290,10 @@ harden({
   refreshToken: '…',
   expiresAt: 1757376000000,
   accountId: 'account-1',
+  // Absent in the steady state. Present only while a refresh this record
+  // authorised has been dispatched and its outcome not recorded; see the
+  // write-ahead section below.
+  pendingRefresh: { startedAt: 1757375940000 },
 });
 ```
 
@@ -354,16 +359,22 @@ race takes what is now stored instead of replaying the token it was holding.
 Exclusive ownership cannot be *enforced* from inside the module — a second
 daemon over the same record is outside its reach — so it is stated as an
 invariant and backed by a mechanism that limits the damage when it is violated.
-Every rotation is pinned to the generation it read
+Every rotation is pinned to a generation
 (`SecretAdmin.replaceBase64(bytes, { ifGeneration })`), so a write that lost a
 race is refused instead of overwriting a grant it never saw.
+Which generation differs by write, and the write-ahead section below says why:
+the mark names the generation it read, while everything after it names the
+generation the mark committed.
 
 It is worth being exact about what that pin does and does not cover, because it
 is tempting to read it as a fix for the whole problem.
 It covers the *record*: two holders cannot clobber each other's state.
-It does **not** cover the *provider*: by the time a write is refused, both
-holders have already presented the same refresh token upstream, and that
-presentation is what a provider with replay detection treats as a breach.
+It does **not** by itself cover the *provider*: a pin refuses a write, and a
+write is refused only after the token has been presented, which is what a
+provider with replay detection treats as a breach.
+The write-ahead ordering below narrows that — two holders racing at the same
+generation now produce one dispatch rather than two — but holders that read
+different generations still serialize into two exchanges.
 Only one credential per record prevents that, and only the composer can
 guarantee it.
 The pin is what keeps a violated invariant from also corrupting the stored
@@ -386,12 +397,34 @@ Against a provider that invalidates a refresh token on use, that second
 presentation is the replay that revokes the whole grant — the failure being
 guarded against, arriving one turn later.
 
-So the loss is fenced rather than merely reported.
-The credential remembers the generation whose token it spent, refuses to
-exchange while the record still holds it, and lifts the fence when the record
-changes, which is exactly the operator re-grant the situation calls for.
+So the loss is fenced rather than merely reported, and the fence is in the
+record rather than in the process that lost it.
 
-The fence is set around the whole exchange, not around the write.
+The mechanism is a **generation-checked write-ahead refresh intent**.
+Before the refresh token is presented, the credential writes the stored
+document back with a `pendingRefresh` marker on it, conditional on the
+generation it read; that write reports the generation it committed, and the
+result is committed against *that* generation.
+So a record whose refresh outcome was never recorded says so, and the next
+holder — in this process or in one built after it — reads the mark and refuses
+to exchange rather than presenting a token that may already be spent.
+The mark refuses *exchanging*, not *using*: a still-valid access token keeps
+serving every concurrent turn on the record, or a refresh would be an outage for
+every session sharing it.
+It is removed in exactly two places, and the second is much narrower than the
+first: the write that stores the result, and an undo for the one failure that
+proves the token was never presented.
+
+Three properties do the work, and each is a place an earlier version was wrong.
+
+**The write really precedes the dispatch.**
+An intent that cannot be persisted means zero outbound exchanges — the token is
+never presented at all, so there is nothing to lose track of.
+That is the ordering inversion this design originally assumed away: the naive
+reading is that the mark records what happened, whereas it has to record what is
+*about* to.
+
+**The window it covers is the whole exchange, not the write.**
 A first version guarded only the write failure, which missed that the token is
 spent the moment the provider answers: every check between that answer and a
 committed write — the response shape, the account binding, the advanced expiry
@@ -400,9 +433,19 @@ The short-lifetime check is the sharpest example, because this document already
 anticipated a provider returning a lifetime shorter than the configured skew,
 and that entirely ordinary case left the token unfenced for the next request to
 replay.
-It is cleared in exactly one place: a committed write.
+Marking first covers all of it, including the case no check anticipates: the
+process not surviving the window.
 
-A rejected exchange is assumed to have consumed the token as well.
+**The completion stays conditional.**
+It is pinned to the generation the intent write committed, so an operator who
+installed a new grant while the exchange was in flight is refused rather than
+overwritten with a credential derived from the grant they replaced.
+This is why `SecretAdmin.replaceBase64` now reports the generation it committed:
+re-reading to learn it would reopen exactly the window the pin closes, and
+computing it as one more than what was pinned would hard-code the manager's
+increment into every caller that stages a write.
+
+A rejected exchange is assumed to have consumed the token.
 A lost response or a timeout may have reached the provider, and a broker that
 assumed otherwise would present the token again; only an authority that can
 actually distinguish a pre-dispatch failure is in a position to say so, and
@@ -412,23 +455,75 @@ fences a credential until an operator re-grants it — the right side to err on
 when the alternative is a revoked grant, and stated here so that cost is chosen
 rather than discovered.
 
-The fence is in memory and bounded by the process, and cannot be otherwise: the
-record is where a durable mark would go, and being unable to write the record
-is the condition being marked.
-A broker restarted while a record is fenced will attempt one more exchange and
-can still trip replay detection once.
-That is a real remaining hole, stated rather than papered over, because the
-alternative is a comment claiming a completeness the code does not have — which
-is how the first two versions of this same failure got written.
+There is one moment where a mark is known to be false and can be safely
+removed: the refresh authority reported that its request never left, so the
+stored refresh token is untouched and the mark is locking a live credential.
+The undo names the generation the mark's own write committed, so it can only
+replace the record while that mark is still the newest thing in it — an
+operator's later grant is refused rather than rolled back — and it restores the
+exact bytes the mark replaced rather than a re-serialization of them.
+It needs no read, which matters because a read that fails would leave that live
+credential locked for no reason at all.
 
-It is a hole with a known shape, though, and review has already proposed the
-fix: a **generation-checked write-ahead refresh intent**, persisted *before*
-contacting the provider, with the rule that an intent which cannot be persisted
-means the exchange does not happen. A restart then finds an unresolved intent
-and fails closed rather than replaying. That inverts the ordering this design
-assumed — it writes before the exchange rather than after — and it needs a
-place in the record for intent state, so it is a design change rather than a
-patch, and it is left as the named next step instead of being improvised here.
+There is a second moment that looks identical and is not, and the difference is
+the sharpest thing in this design.
+When the intent *write itself* fails with its outcome unknown — the secret
+manager reported a backend failure, or the acknowledgement was lost — nothing
+was dispatched either, so the token is equally unspent.
+But the mark's generation is unknown too, which leaves only its bytes to
+recognise it by, and bytes cannot establish authorship.
+Two holders over one record — the invariant this credential states and cannot
+enforce — write byte-identical marks: the state is the same and `startedAt` has
+millisecond resolution.
+A write that passes the secret manager's generation check and then fails at the
+backend reports no conflict and lands nothing, so the mark such a holder finds
+may be the one another holder wrote and is at that instant presenting the token
+against.
+Clearing it would turn a violated invariant from a failed turn into the replay
+the whole protocol exists to prevent — the opposite of what the generation pin
+is for.
+
+An earlier version of this change did exactly that, and then tried to rescue it
+by skipping the undo on a generation conflict.
+That is necessary and not sufficient, which is worth recording because it is the
+same shape of error as the two before it: a fix aimed at the case that was easy
+to imagine, leaving the case that was not.
+So where the mark's generation is unknown, nothing is undone and the record
+stays fenced.
+The cost is an operator re-grant for a token nothing ever presented, which is
+the direction every other trade here errs in.
+
+Both undos are best-effort in the sense that failing to land leaves the
+conservative state, which an operator holding the record's read capability can
+see as a `pendingRefresh` with the instant it was set, and which the secret
+manager's audit trail records as a refused or failed write.
+Nothing in the broker surfaces it: a marked record serves its still-valid access
+token silently until that token expires, and only then does every request fail
+at once.
+Reporting it is worth doing and is not done here.
+
+One property falls out of the ordering rather than being designed in.
+Because the mark must be written before the token is presented, and only one
+conditional write can land at a given generation, two holders that race now
+produce at most one dispatch: the loser is refused before it reaches the token
+endpoint.
+That is a strictly better outcome than the pin alone gave — it does not make the
+invariant unnecessary, since holders that read different generations still
+serialize into two exchanges, but the simultaneous case no longer reaches the
+provider twice.
+
+What remains is a deliberate asymmetry rather than a hole.
+Recovery from a genuinely lost provider response is fail-closed and needs a
+fresh grant; exactly-once recovery of a response nobody received is not
+something a client can have.
+The in-memory fence this replaced was strictly weaker: it was cleared by exactly
+the restart that a stuck refresh tends to provoke.
+What is demonstrated here is that a mark survives *owner recreation* — a fresh
+credential built over the same record refuses — which is what the unit suite can
+show.
+Durability across an actual process restart is the secret manager's property,
+inherited rather than established, and broker crash remains on the live
+acceptance list below.
 
 ### One retry, on one classification
 
@@ -539,10 +634,26 @@ session — which is the same bound every other row of this table carries.
       The unit suite covers refresh, expiry, account switching, refresh-token
       replay across two leases, quota accounting, and redaction; the rest need
       the live gate.
-- [ ] Replace the in-memory consumption fence with a generation-checked
+- [x] Replace the in-memory consumption fence with a generation-checked
       write-ahead refresh intent, persisted before the exchange, so a restart
       during an unresolved exchange fails closed instead of replaying. If the
       intent cannot be persisted, the exchange must not happen.
+- [ ] Surface a marked record. A `pendingRefresh` is visible only to a holder
+      of the record's read capability, so a broker whose last exchange was lost
+      serves its still-valid access token silently and then fails every request
+      at once when it expires. An audit event on the first request that reads a
+      marked record would make it visible when it happens.
+- [ ] Reconsider discarding a refreshed credential whose expiry did not
+      advance. Today the exchange has already spent the refresh token, the
+      result is refused, and the record is left marked — so a provider whose
+      token lifetime is shorter than `refreshSkewMs`, or a clock skew, costs an
+      operator re-grant for what is a configuration error. Committing the
+      credential and then failing the request would keep the recovery path at
+      the price of one exchange per turn; both directions are defensible and
+      the current one is chosen for stopping after a single exchange.
+- [ ] Consider retrying the undo for a request that provably never left. It is
+      attempted once and its failure swallowed, so a single transient write
+      failure fences a token nothing presented until an operator re-grants it.
 - [ ] Decide whether a persistently rejected credential deserves negative
       caching.
       Today each admitted turn costs one exchange and one secret write; the

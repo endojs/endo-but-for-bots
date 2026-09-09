@@ -116,12 +116,19 @@ through a rotate-only capability that carries no `revoke`, `delete`, or
 The guard excludes only the holders that share one credential object, which the
 composer must make one per secret record; that is an invariant it states, not a
 property the code enforces.
-What the code does enforce is the write: every rotation is pinned to the
-generation it read, so a refresh that races an operator's replacement is
-refused rather than overwriting it.
+What the code does enforce is the write: every rotation is pinned to a
+generation, so a refresh that races an operator's replacement is refused rather
+than overwriting it.
 That bounds the damage of a violated invariant to a failed turn rather than a
 corrupted grant — it does not stop two holders presenting the same refresh
 token upstream.
+A refresh is also write-ahead: the record is marked before the token is
+presented and the result is committed against the generation that mark
+produced, so an exchange whose outcome was never recorded leaves the record
+saying so and the next holder refuses rather than replaying.
+An intent that cannot be persisted means no exchange is dispatched at all.
+That refusal is fail-closed by design: recovering a provider response nobody
+received is not possible, so a lost exchange needs a fresh grant.
 `BrokerLeaseV1` now carries `authMode`, so an operator can pin the mode it
 accepts and refuse a lease issued in the other.
 The claim it carries is narrow: the broker core refuses to exist in `oauth` mode

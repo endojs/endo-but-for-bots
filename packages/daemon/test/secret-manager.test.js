@@ -684,6 +684,49 @@ test('a conditional replacement refuses a generation that moved', async t => {
   t.is(settled.generation, 3n);
 });
 
+test('a replacement reports the generation it committed', async t => {
+  // A holder staging a multi-step change — writing a marker, doing something
+  // irreversible, then recording the outcome — pins the second write to the
+  // version the first produced. Re-reading to learn it reopens the window the
+  // pin exists to close, so the write says what it committed.
+  const harness = makeHarness();
+  const directory = harness.makeDirectory(harness.makeManager());
+  const importer = await E(directory).lookup('create');
+  await E(importer).createBase64(
+    'oauth-state',
+    'Refreshing OAuth state',
+    encodeBase64(new TextEncoder().encode(canary)),
+  );
+  const catalog = await E(directory).lookup('catalog');
+  const [entry] = await E(catalog).list();
+  const [{ grantId }] = harness.bindings;
+  const blob = await E(directory).lookup(['use', grantId]);
+
+  const marked = await E(entry.admin).replaceBase64(
+    encodeBase64(new TextEncoder().encode('marked')),
+    harden({ ifGeneration: 1n }),
+  );
+  t.is(marked, 2n);
+  // It names the version the record actually reached, not merely a number.
+  const observed = await E(blob).readBase64WithGeneration();
+  t.is(observed.generation, marked);
+  // And pinning the next write to it is accepted, which is the whole point.
+  t.is(
+    await E(entry.admin).replaceBase64(
+      encodeBase64(new TextEncoder().encode('committed')),
+      harden({ ifGeneration: marked }),
+    ),
+    3n,
+  );
+  // An unconditional write reports its generation too.
+  t.is(
+    await E(entry.admin).replaceBase64(
+      encodeBase64(new TextEncoder().encode('unconditional')),
+    ),
+    4n,
+  );
+});
+
 test('concurrent conditional replacements cannot both win', async t => {
   // The comparison existing is not the claim; the claim is that it is atomic
   // with the commit. A comparison made outside the serialized mutation would
