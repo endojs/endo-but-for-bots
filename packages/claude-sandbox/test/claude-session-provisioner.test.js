@@ -14,22 +14,36 @@ const keyFor = names => names.join('/');
 const makeRecordingHost = () => {
   /** @type {Map<string, unknown>} */
   const names = new Map();
+  names.set('claude-sandbox', harden({ kind: 'directory' }));
   /** @type {string[][]} */
   const directories = [];
   /** @type {Array<{ path: string[], reason: string }>} */
   const cancelled = [];
   const hostAgent = harden({
     async has(...path) {
+      for (let length = 1; length < path.length; length += 1) {
+        if (!names.has(keyFor(path.slice(0, length)))) {
+          throw Error('Missing intermediate directory');
+        }
+      }
       return names.has(keyFor(path));
     },
-    async lookup(...path) {
-      return names.get(keyFor(path));
+    async lookup(...args) {
+      if (args.length !== 1) throw Error('lookup requires one name or path');
+      const [nameOrPath] = args;
+      return names.get(
+        keyFor(Array.isArray(nameOrPath) ? nameOrPath : [nameOrPath]),
+      );
     },
     async remove(...path) {
       names.delete(keyFor(path));
     },
     async makeDirectory(path) {
       directories.push([...path]);
+      // The daemon replaces a directory, including its reachable subtree.
+      for (const name of names.keys()) {
+        if (name.startsWith(`${keyFor(path)}/`)) names.delete(name);
+      }
       names.set(keyFor(path), harden({ kind: 'directory' }));
     },
     async cancel(path, reason) {
@@ -44,6 +58,22 @@ const baseConfig = harden({
   credentialsName: 'claude-creds',
   workspaceBaseDir: '/workspaces',
   rootfs: 'oci:test',
+});
+
+test('removes an unprovisioned session without creating the sessions directory', async t => {
+  const { hostAgent, directories } = makeRecordingHost();
+  const removedDirectories = [];
+  const provisioner = makeClaudeSessionProvisioner(hostAgent, baseConfig, {
+    async removeDirectory(directory) {
+      removedDirectories.push(directory);
+    },
+  });
+  await E(provisioner).remove('never-started');
+  t.deepEqual(directories, []);
+  t.deepEqual(removedDirectories, [
+    '/workspaces/never-started',
+    '/claude-configs/never-started',
+  ]);
 });
 
 test('provisions and removes one isolated client per Floot session', async t => {
@@ -146,6 +176,70 @@ const makeFakeProvisionSession =
       rootfsLabel: 'test',
     });
   };
+
+test('different first sessions share namespace initialization', async t => {
+  t.timeout(2000);
+  const { hostAgent, names, directories } = makeRecordingHost();
+  let release = () => {};
+  const held = new Promise(resolve => {
+    release = () => resolve(undefined);
+  });
+  let entered = () => {};
+  const creating = new Promise(resolve => {
+    entered = () => resolve(undefined);
+  });
+  const host = harden({
+    ...hostAgent,
+    async makeDirectory(path) {
+      entered();
+      await held;
+      return E(hostAgent).makeDirectory(path);
+    },
+  });
+  const provisioner = makeClaudeSessionProvisioner(host, baseConfig, {
+    async makeFilesystem(name) {
+      names.set(name, harden({}));
+    },
+    provisionSession: makeFakeProvisionSession(names),
+  });
+  const first = E(provisioner).provision('first');
+  const second = E(provisioner).provision('second');
+  await creating;
+  release();
+  await Promise.all([first, second]);
+  t.deepEqual(directories, [['claude-sandbox', 'sessions']]);
+  t.deepEqual(await E(provisioner).lookup('first'), {
+    client: 'claude-client-first',
+  });
+  t.deepEqual(await E(provisioner).lookup('second'), {
+    client: 'claude-client-second',
+  });
+});
+
+test('namespace initialization can retry after failure', async t => {
+  const { hostAgent, names } = makeRecordingHost();
+  let fail = true;
+  const host = harden({
+    ...hostAgent,
+    async makeDirectory(path) {
+      if (fail) {
+        fail = false;
+        throw Error('directory unavailable');
+      }
+      return E(hostAgent).makeDirectory(path);
+    },
+  });
+  const provisioner = makeClaudeSessionProvisioner(host, baseConfig, {
+    async makeFilesystem(name) {
+      names.set(name, harden({}));
+    },
+    provisionSession: makeFakeProvisionSession(names),
+  });
+  await t.throwsAsync(() => E(provisioner).provision('retry'), {
+    message: /directory unavailable/,
+  });
+  t.is(await E(provisioner).provision('retry'), 'claude-client-retry');
+});
 
 test('cancel stops a provisioned client without deleting it', async t => {
   const { hostAgent, names, cancelled } = makeRecordingHost();
