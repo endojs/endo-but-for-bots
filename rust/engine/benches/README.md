@@ -1001,3 +1001,25 @@ No additional timing trials were run.
 The candidate runtime, source-lock, and benchmark changes were reverted.
 The record preserves their complete patch, source hashes, reports, and validation
 results; this extraction is not accepted.
+
+## Native dispatch extraction (1A)
+
+[results/1a-native-dispatch.json](results/1a-native-dispatch.json) records the
+two central native dispatchers moving to `interp/natives/dispatch.rs` from
+`0db0d5ff9`, reducing the parent from 40,286 to 33,939 lines.
+Independent review verified unchanged method bodies, comments, and attributes,
+including the no-inline attribute; the heavy-frame wrappers and iterator-setter
+shortcut remain in the parent.
+A wrapper comment no longer describes the moved body as being below it.
+
+All 48 general comparisons passed the unchanged 1.25x gate, with ratios from
+0.529x to 1.160x.
+All eight existing property and regexp controls passed, with matching guest
+results and raw meter totals and ratios from 0.950x to 1.035x.
+These are measured comparisons, not a claim of an underlying speedup.
+Source-lock checks passed before and after the move (47 and 48 tests), including
+the new dispatch-module allocation mutation test.
+Full engine CI passed 1,490 tests, SQLite passed 116, and strict VM library Clippy
+and the math check passed; rustdoc retained 61 warnings.
+This accepts the incremental extraction, not full 1A performance against the
+original decomposition baseline.
