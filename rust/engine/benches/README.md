@@ -1182,3 +1182,22 @@ Peak build memory is unavailable because macOS denied the timing wrapper's syste
 query after a successful build; the completed binaries were reused.
 Both production workspace profiles remain unchanged.
 The JSON extraction and full-branch performance gate remain unaccepted.
+
+## Paired JSON layout and codegen matrix
+
+[results/1a-json-codegen-matrix.json](results/1a-json-codegen-matrix.json) compares
+default and one-CGU profiles with both the original and extracted JSON layouts.
+The eight runs follow a fixed mirrored order, with all builds completed first.
+The one-CGU cells reuse the exact binaries from the preceding diagnostic.
+
+The default extraction fails three controls, with a maximum of 1.422x.
+The one-CGU extraction fails GC enumeration at 1.304x; combining the profile and
+extraction against the default original fails that control at 1.309x.
+All direct JSON results and raw charges match across cells.
+The contemporaneous one-CGU original versus default original stays within 1.25x,
+so the earlier historical placeholder slowdown is not reproduced here.
+
+The same one-CGU binary pair passed the earlier diagnostic and fails here.
+These finite measurements do not establish a stable compiler-only cause or justify
+a production profile change; every sample and failed comparison remains recorded.
+No additional runs were selected, and the existing rejections remain in force.
