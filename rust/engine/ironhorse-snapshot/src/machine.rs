@@ -2356,6 +2356,76 @@ mod tests {
     }
 
     #[test]
+    fn checkpoint_refuses_corrupt_deferred_pages_before_committing() {
+        use crate::store::{HeapStore, HeapStoreCommit};
+        use crate::store_file::FileStore;
+        use ironhorse_vm::{Slot, SlotIndex, SLOTS_PER_PAGE};
+        let mut image = Interp::new().snapshot_image_for_testing(&sig()).unwrap();
+        let count = (image.slots.len() as u32).div_ceil(SLOTS_PER_PAGE) * SLOTS_PER_PAGE
+            + 2 * SLOTS_PER_PAGE;
+        image.slots.resize(count as usize, Slot::undefined());
+        image.slot_free.clear();
+        image.slot_live = count;
+        let page = count / SLOTS_PER_PAGE - 1;
+        for authenticated in [false, true] {
+            let dir = crate::test_dir::TempDir::new("deferred-checkpoint-refusal");
+            let path = dir.join("heap.ihstore");
+            let mut store = FileStore::open(&path).unwrap();
+            store.commit(&image_to_batch(&image, 1, "")).unwrap();
+            let shared = std::rc::Rc::new(std::cell::RefCell::new(store));
+            let mut session = resume_from_store_lazy(shared.clone(), &sig()).unwrap();
+            assert!(!session.machine().slots.is_fully_resident());
+            assert_eq!(
+                session.machine_mut().slots.alloc(Slot::undefined()),
+                SlotIndex(count)
+            );
+            let original = std::fs::read(&path).unwrap();
+            let read_len =
+                |at: usize| u32::from_be_bytes(original[at..at + 4].try_into().unwrap()) as usize;
+            let small_header = 12 + read_len(8);
+            let directory = small_header + 4 + read_len(small_header) + 8;
+            let entry = directory + page as usize * 12;
+            let offset =
+                u64::from_be_bytes(original[entry..entry + 8].try_into().unwrap()) as usize;
+            let mut corrupt = original.clone();
+            corrupt[offset] = 255; // invalid Kind in an otherwise complete page
+            std::fs::write(&path, &corrupt).unwrap();
+            if authenticated {
+                // Isolate the codec backstop by supplying the expected leaf
+                // for malformed bytes through the private test-visible pin.
+                // This is not a claim that valid admission can forge its pin.
+                let bytes = shared.borrow().read_slot_page(page).unwrap();
+                session.pin.as_ref().unwrap().leaves.borrow_mut().pages[page as usize] =
+                    leaf_hash(LEAF_PAGE, page, &bytes);
+            }
+            let result = checkpoint_to_store(&mut session, &sig(), &mut *shared.borrow_mut());
+            if authenticated {
+                assert_eq!(
+                    result,
+                    Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                        "checkpoint deferred slot page decode"
+                    )))
+                );
+            } else {
+                assert_eq!(
+                    result,
+                    Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                        "checkpoint deferred slot page leaf mismatch"
+                    )))
+                );
+            }
+            assert_eq!(shared.borrow().manifest().unwrap().epoch, 1);
+            assert_eq!(std::fs::read(&path).unwrap(), corrupt);
+            std::fs::write(&path, &original).unwrap();
+            let bytes = shared.borrow().read_slot_page(page).unwrap();
+            session.pin.as_ref().unwrap().leaves.borrow_mut().pages[page as usize] =
+                leaf_hash(LEAF_PAGE, page, &bytes);
+            checkpoint_to_store(&mut session, &sig(), &mut *shared.borrow_mut()).unwrap();
+            assert_eq!(shared.borrow().manifest().unwrap().epoch, 2);
+        }
+    }
+
+    #[test]
     fn checkpoint_refuses_a_legacy_ledger_then_rebuilds_without_losing_state() {
         use crate::store::{HeapStore, MemoryStore, RootLedger};
         let (code, symbols) = ironhorse_compile::compile_atoms("1").unwrap();
