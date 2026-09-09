@@ -13,18 +13,22 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  ironhorse-changes:
-    uses: $/.github/workflows/ironhorse-changes.yml
+  changes:
+    uses: $/.github/workflows/ci-changes.yml
 
   oracle-sanitizers:
     name: ironhorse-oracle-sanitizers
-    needs: ironhorse-changes
-    if: needs.ironhorse-changes.outputs.oracle == 'true'
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['oracle-sanitizers']) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # Pinned XS source is excluded only from UBSAN; our bridge keeps both
     # sanitizers, and ASAN continues to instrument the upstream interpreter.
     steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

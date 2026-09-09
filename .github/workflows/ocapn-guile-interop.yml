@@ -15,10 +15,6 @@ name: OCapN Guile interop
 
 on:
   pull_request:
-    paths:
-      - 'packages/ocapn/**'
-      - 'packages/goblin-chat/**'
-      - '.github/workflows/ocapn-guile-interop.yml'
   workflow_dispatch:
 
 permissions:
@@ -57,12 +53,21 @@ env:
   GUIX_TARBALL_SHA256: 'aa41025489c5061543e9c48873eaa829b900b2da75d40f9648913622f5f47817'
 
 jobs:
+  changes:
+    uses: $/.github/workflows/ci-changes.yml
+
   test-ocapn-guile-interop:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['guile-interop']) }}
     name: test-ocapn-guile-interop
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
     steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
       - name: Checkout Endo
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

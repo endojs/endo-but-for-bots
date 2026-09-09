@@ -1,0 +1,41 @@
+name: Detect CI changes
+
+on:
+  workflow_call:
+    outputs:
+      jobs:
+        description: Jobs affected by source, recursive dependencies, or harness inputs
+        value: ${{ jobs.changes.outputs.jobs }}
+      packages:
+        description: Changed JavaScript workspaces and their recursive dependents
+        value: ${{ jobs.changes.outputs.packages }}
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    name: Detect CI changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      jobs: ${{ steps.paths.outputs.jobs }}
+      packages: ${{ steps.paths.outputs.packages }}
+    steps:
+      - name: Checkout complete change range
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Use Python with TOML support
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Select affected jobs and workspaces
+        id: paths
+        run: python3 scripts/ci-changes.py
+      - name: Test change selection and task invocation
+        if: fromJSON(steps.paths.outputs.jobs)['filter-tests']
+        run: |
+          python3 scripts/test-ci-changes.py
+          python3 scripts/test-run-ci-task.py
