@@ -1357,3 +1357,24 @@ The unchanged pinned-baseline gate fails the smallest placeholder-allocation con
 at 1.339x; that failure remains open while the decomposition is retained incrementally.
 Before aggregate measurements reuse the preceding Promise candidate; before source
 locks were freshly rerun, and the older Intl experiment remains intact.
+
+## Collection and iterator subsystem extraction
+
+[results/1a-collection-reconsidered.json](results/1a-collection-reconsidered.json) records
+45 methods moved into `interp/natives/collection.rs` on `e219790ef`, covering
+collection construction, Set algebra, grouping, and iterator protocols.
+Nineteen methods retain parent-scoped caller access; method bodies are unchanged.
+The string iterator comment now describes its existing UTF-16BE surrogate handling.
+GC and allocation locks include the child, explicit capacity coverage, and mutation
+checks.
+
+Fresh validation passes 1,499 engine tests and 116 SQLite tests, plus 56 VM source
+locks, seven snapshot locks, strict VM library Clippy, docs, and the math control.
+Initial direct ratios range from 1.039x to 2.050x.
+One fixed before/after/after/before diagnostic using saved binaries produces ratios
+from 0.904x to 1.004x, with identical results and raw charges across every run.
+The unchanged pinned-baseline gate fails one checkpoint-slide control at 1.278x.
+All observations remain recorded, and that failure remains open while the extraction
+is retained incrementally.
+Before aggregate measurements and source locks reuse the preceding Calendar candidate;
+all recorded source hashes were checked for equality before the move.
