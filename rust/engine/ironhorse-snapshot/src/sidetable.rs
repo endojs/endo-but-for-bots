@@ -81,7 +81,7 @@
 //!
 //! The registry of ALL these classifications is now MECHANICAL:
 //! [`tests::ledger_classification_reconciles_with_the_interp_struct`]
-//! parses `Interp`'s field list from source and reconciles it two-way
+//! reads the field inventory emitted with `Interp` and reconciles it two-way
 //! against the classified groups, so a new field cannot land
 //! unclassified and a stale entry cannot linger. The quiescence
 //! predicate itself is reconciled the same way by
@@ -666,8 +666,8 @@ mod tests {
 
     /// Wave-6 pattern-3 antidote: the ledger's exhaustiveness was a
     /// hand convention ("enumerated against `Interp`'s actual fields")
-    /// that a thirty-field bulk merge overwhelmed. This test parses the
-    /// struct's field list FROM SOURCE and reconciles it, two-way,
+    /// that a thirty-field bulk merge overwhelmed. This test reads the field
+    /// list emitted with the struct and reconciles it, two-way,
     /// against the classification below: a new `Interp` field fails
     /// here until it is classified (a ledger row, a documented
     /// satellite or transient, a boot artifact, host wiring, or an
@@ -675,28 +675,15 @@ mod tests {
     #[test]
     fn ledger_classification_reconciles_with_the_interp_struct() {
         let src = include_str!("../../ironhorse-vm/src/interp.rs");
-        let start = src.find("pub struct Interp {").expect("struct Interp");
-        let body = &src[start..];
-        let end = body.find("\n}").expect("struct end");
-        let body = &body[..end];
-        let mut fields: Vec<&str> = Vec::new();
-        for line in body.lines() {
-            let l = line.strip_prefix("    ").unwrap_or("");
-            let l = l.strip_prefix("pub(crate) ").unwrap_or(l);
-            let l = l.strip_prefix("pub ").unwrap_or(l);
-            if let Some(colon) = l.find(':') {
-                let name = &l[..colon];
-                if !name.is_empty()
-                    && !name.contains(' ')
-                    && name
-                        .chars()
-                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
-                {
-                    fields.push(name);
-                }
-            }
-        }
-        assert!(fields.len() > 100, "parse sanity: found {}", fields.len());
+        let fields: Vec<&str> = ironhorse_vm::interp::INTERP_FIELDS
+            .iter()
+            .map(|(name, _)| *name)
+            .collect();
+        assert!(
+            fields.len() > 100,
+            "field inventory sanity: found {}",
+            fields.len()
+        );
 
         // The classification. Every entry is accounted for by exactly
         // the mechanism named for its group; moving a field between

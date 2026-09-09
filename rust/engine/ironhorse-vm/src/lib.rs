@@ -1,4 +1,6 @@
 #![forbid(unsafe_code)]
+// The field inventory expands through one selector step per interpreter field.
+#![recursion_limit = "512"]
 //! Safe index-arena JavaScript interpreter and runtime.
 //!
 //! [`Interp`] owns slots, chunks, activation state, built-ins, modules and side tables.

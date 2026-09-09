@@ -35,6 +35,8 @@ const SRC: &str = concat!(
     include_str!("../src/interp.rs"),
     "\n",
     include_str!("../src/interp/gc_tables.rs"),
+    "\n",
+    include_str!("../src/interp/state.rs"),
 );
 
 /// The body (including braces) of the function that starts at the
@@ -396,6 +398,7 @@ const REGISTRY: &[(&str, &[Req], &str)] = &[
 
 #[test]
 fn every_slot_bearing_field_is_classified_and_the_classification_holds() {
+    assert_field_emission(SRC);
     let defs = type_defs();
     let bearing_types = slot_bearing_types(&defs);
     let fields = interp_fields();
@@ -403,6 +406,24 @@ fn every_slot_bearing_field_is_classified_and_the_classification_holds() {
         fields.len() > 140,
         "parse sanity: found {} fields",
         fields.len()
+    );
+
+    let compact_type = |ty: &str| {
+        ty.chars()
+            .filter(|c| !c.is_whitespace())
+            .collect::<String>()
+    };
+    let declared: Vec<_> = fields
+        .iter()
+        .map(|(name, ty)| (name.as_str(), compact_type(ty)))
+        .collect();
+    let emitted: Vec<_> = ironhorse_vm::interp::INTERP_FIELDS
+        .iter()
+        .map(|(name, ty)| (*name, compact_type(ty)))
+        .collect();
+    assert_eq!(
+        declared, emitted,
+        "field emitter and declaration must agree"
     );
 
     let is_bearing = |ty: &str| {
@@ -560,5 +581,30 @@ fn generated_sweep_checks_reject_disconnected_calls_and_missing_expansions() {
             std::panic::catch_unwind(|| sweep_sources(&mutation)).is_err(),
             "source lock accepted removed sweep code: {code}"
         );
+    }
+}
+
+/// Keep the independently parsed declaration tied to the executable field
+/// expansion: neither deleting the struct callback nor dropping a repeated field
+/// from the emitter may leave a passing metadata-only test.
+fn assert_field_emission(src: &str) {
+    let code = ironhorse_vm::source_scan::code_only(src);
+    let compact: String = code.chars().filter(|c| !c.is_whitespace()).collect();
+    assert!(compact.contains("interp_state!(define_interp_state);"));
+    let emitter = body_in(src, "macro_rules! define_interp_state");
+    let emitter = ironhorse_vm::source_scan::code_only(emitter);
+    let emitter: String = emitter.chars().filter(|c| !c.is_whitespace()).collect();
+    assert!(emitter.contains("$visstruct$name{$($(#[$attr])*$field_vis$field:$ty,)*}"));
+}
+
+#[test]
+fn field_checks_reject_disconnected_or_incomplete_struct_emission() {
+    for target in [
+        "interp_state!(define_interp_state);",
+        "$($(#[$attr])* $field_vis $field: $ty,)*",
+    ] {
+        assert!(SRC.contains(target), "missing mutation target: {target}");
+        let mutation = SRC.replace(target, "/* field emission removed */");
+        assert!(std::panic::catch_unwind(|| assert_field_emission(&mutation)).is_err());
     }
 }
