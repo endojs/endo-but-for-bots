@@ -518,7 +518,7 @@ pub struct Interp {
         classes.clone(),
     ))]
     #[boot_template(state.functions.copy_to(classes.clone()))]
-    #[gc_root(none)]
+    #[gc_root(lazy_getters)]
     #[quiescent(retained)]
     #[persist_refs(none)]
     #[runtime_keys(none)]
@@ -901,7 +901,7 @@ pub struct Interp {
     segment_iterator_proto: crate::value::SlotIndex,
     #[boot_new(crate::value::SlotIndex::NULL)]
     #[boot_template(state.segments_iterator_method)]
-    #[gc_root(none)]
+    #[gc_root(index)]
     #[quiescent(retained)]
     #[persist_refs(none)]
     #[runtime_keys(none)]
@@ -921,7 +921,7 @@ pub struct Interp {
     segments_iterator_method: crate::value::SlotIndex,
     #[boot_new(crate::value::SlotIndex::NULL)]
     #[boot_template(state.segment_iterator_identity)]
-    #[gc_root(none)]
+    #[gc_root(index)]
     #[quiescent(retained)]
     #[persist_refs(none)]
     #[runtime_keys(none)]
@@ -2218,7 +2218,7 @@ pub struct Interp {
     string_proto: crate::value::SlotIndex,
     #[boot_new(crate::value::SlotIndex::NULL)]
     #[boot_template(state.string_iterator_method)]
-    #[gc_root(none)]
+    #[gc_root(index)]
     #[quiescent(retained)]
     #[persist_refs(none)]
     #[runtime_keys(none)]
@@ -2691,7 +2691,7 @@ pub struct Interp {
     async_generator_function_proto: crate::value::SlotIndex,
     #[boot_new(crate::value::SlotIndex::NULL)]
     #[boot_template(state.async_iterator_identity)]
-    #[gc_root(none)]
+    #[gc_root(index)]
     #[quiescent(retained)]
     #[persist_refs(none)]
     #[runtime_keys(none)]
@@ -2703,7 +2703,7 @@ pub struct Interp {
     async_iterator_identity: crate::value::SlotIndex,
     #[boot_new(crate::value::SlotIndex::NULL)]
     #[boot_template(state.iterator_identity)]
-    #[gc_root(none)]
+    #[gc_root(index)]
     #[quiescent(retained)]
     #[persist_refs(none)]
     #[runtime_keys(none)]
@@ -2875,7 +2875,7 @@ pub struct Interp {
     constructor_id: Option<u16>,
     #[boot_new(None)]
     #[boot_template(state.error_stack_accessor)]
-    #[gc_root(none)]
+    #[gc_root(error_accessor)]
     #[quiescent(retained)]
     #[persist_refs(none)]
     #[runtime_keys(none)]
