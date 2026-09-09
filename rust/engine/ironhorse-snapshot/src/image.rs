@@ -4372,6 +4372,20 @@ fn check_stored_bounds(
         }
     }
     let symbol_ids = symbols.id_set();
+    if first_stored_unregistered_id(
+        index_props
+            .iter()
+            .flat_map(|row| row.items.iter().map(|(_, value)| value)),
+        names_len,
+        &symbol_ids,
+    )
+    .is_some()
+    {
+        return Err(SnapshotError::Corrupt(
+            "stored property id outside the name and symbol-key tables",
+        ));
+    }
+
     for row in lang.accessors {
         owned(row.owner)?;
         if row.id == 0 || (row.id as usize > names_len && !symbol_ids.contains(&row.id)) {

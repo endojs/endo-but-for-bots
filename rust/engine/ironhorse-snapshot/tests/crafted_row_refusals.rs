@@ -4,6 +4,8 @@
 //! continue with silently missing exotic state), and not accepted into
 //! a machine that cannot safely run or checkpoint.
 
+use std::borrow::Borrow;
+
 use ironhorse_snapshot::format::SnapshotError;
 use ironhorse_snapshot::image::{read_machine, write_machine_unchecked};
 use ironhorse_snapshot::machine::{from_snapshot_bytes, MachineSnapshot};
@@ -34,38 +36,40 @@ fn quiescent_machine(src: &str) -> Interp {
 
 /// A read-only external store can expose bytes that the current commit gate
 /// would never admit. Keep adoption validation independent of writer admission.
-struct CraftedSmallStore<'a> {
-    backing: &'a MemoryStore,
-    batch: &'a ironhorse_snapshot::store::CheckpointBatch,
+struct CraftedSmallStore<B, C> {
+    backing: B,
+    batch: C,
 }
 
-impl HeapStore for CraftedSmallStore<'_> {
+impl<B: Borrow<MemoryStore>, C: Borrow<ironhorse_snapshot::store::CheckpointBatch>> HeapStore
+    for CraftedSmallStore<B, C>
+{
     fn manifest(&self) -> Result<ironhorse_snapshot::store::StoreManifest, StoreError> {
-        Ok(self.batch.manifest.clone())
+        Ok(self.batch.borrow().manifest.clone())
     }
     fn read_small_state(&self) -> Result<Vec<u8>, StoreError> {
-        Ok(self.batch.small.clone())
+        Ok(self.batch.borrow().small.clone())
     }
     fn read_slot_page(&self, page: u32) -> Result<Vec<u8>, StoreError> {
-        self.backing.read_slot_page(page)
+        self.backing.borrow().read_slot_page(page)
     }
     fn read_chunk_extent(&self, ext: u32) -> Result<Vec<u8>, StoreError> {
-        self.backing.read_chunk_extent(ext)
+        self.backing.borrow().read_chunk_extent(ext)
     }
     fn inventory(&self) -> Result<(Vec<usize>, Vec<usize>), StoreError> {
-        self.backing.inventory()
+        self.backing.borrow().inventory()
     }
     fn leaf_hashes(&self) -> Result<(Vec<[u8; 32]>, Vec<[u8; 32]>), StoreError> {
-        self.backing.leaf_hashes()
+        self.backing.borrow().leaf_hashes()
     }
     fn read_free_seg(&self, seg: u32) -> Result<Vec<u8>, StoreError> {
-        self.backing.read_free_seg(seg)
+        self.backing.borrow().read_free_seg(seg)
     }
     fn free_leaf_hashes(&self) -> Result<Vec<[u8; 32]>, StoreError> {
-        self.backing.free_leaf_hashes()
+        self.backing.borrow().free_leaf_hashes()
     }
     fn page_edges(&self) -> Result<Vec<Vec<u32>>, StoreError> {
-        self.backing.page_edges()
+        self.backing.borrow().page_edges()
     }
     fn commit_verified(
         &mut self,
@@ -1210,4 +1214,106 @@ fn a_present_but_empty_compound_atom_is_refused() {
         Err(SnapshotError::Corrupt("TMPR atom present but empty; the writer omits it")) => {}
         other => panic!("a present-but-empty TMPR must be refused: {other:?}"),
     }
+}
+
+fn indexed_row_refusal(case: &str, expected: &'static str) {
+    use ironhorse_snapshot::machine::{resume_from_store, resume_from_store_lazy};
+    use ironhorse_vm::{ChunkOffset, Kind, Payload, Slot, SlotIndex};
+    let mut machine = quiescent_machine("var indexed = {0: 7}; indexed[0]");
+    machine.collect_garbage();
+    let honest = read_machine(&machine.write_snapshot(&sig()).unwrap(), &sig()).unwrap();
+    assert_eq!(honest.index_props.len(), 1);
+    let mut image = honest.clone();
+    let free = *image
+        .slot_free
+        .first()
+        .expect("fixture has spare arena slots");
+    match case {
+        "owner bounds" => image.index_props[0].owner = image.slots.len() as u32,
+        "free owner" => image.index_props[0].owner = free,
+        "reference bounds" => {
+            image.index_props[0].items[0].1 = Slot::of(
+                Kind::Reference,
+                Payload::Reference(SlotIndex(image.slots.len() as u32)),
+            )
+        }
+        "free reference" => {
+            image.index_props[0].items[0].1 =
+                Slot::of(Kind::Reference, Payload::Reference(SlotIndex(free)))
+        }
+        "chunk bounds" => {
+            image.index_props[0].items[0].1 = Slot::of(
+                Kind::String,
+                Payload::String(ChunkOffset(image.chunks.len() as u32 + 4)),
+            )
+        }
+        "property id" => {
+            let bad = (1..u16::MAX)
+                .find(|id| {
+                    usize::from(*id) > image.names.len()
+                        && !image.symbols.pairs.iter().any(|(symbol, _)| symbol == id)
+                })
+                .unwrap();
+            image.index_props[0].items[0].1.id = bad;
+            assert_eq!(image.stored_unregistered_key_id(), Some(bad));
+        }
+        _ => unreachable!(),
+    }
+    let mut backing = MemoryStore::new();
+    backing
+        .commit(&image_to_batch_unchecked(&honest, 1, ""))
+        .unwrap();
+    let manifest = backing.manifest().unwrap();
+    let batch = image_to_batch_unchecked(&image, 2, &manifest.seal);
+    let mut failures = Vec::new();
+    if !matches!(from_snapshot_bytes(&write_machine_unchecked(&image), &sig()),
+        Err(SnapshotError::Corrupt(message)) if message == expected)
+    {
+        failures.push("container adoption");
+    }
+    let external = CraftedSmallStore { backing, batch };
+    if !matches!(validate_store(&external, &sig()),
+        Err(StoreError::Snapshot(SnapshotError::Corrupt(message))) if message == expected)
+    {
+        failures.push("store validation");
+    }
+    if !matches!(resume_from_store(&external, &sig()),
+        Err(StoreError::Snapshot(SnapshotError::Corrupt(message))) if message == expected)
+    {
+        failures.push("eager resume");
+    }
+    if !matches!(resume_from_store_lazy(std::rc::Rc::new(std::cell::RefCell::new(external)), &sig()),
+        Err(StoreError::Snapshot(SnapshotError::Corrupt(message))) if message == expected)
+    {
+        failures.push("lazy resume");
+    }
+    assert!(failures.is_empty(), "{case} missed by {failures:?}");
+}
+
+#[test]
+fn indexed_owner_must_be_in_bounds() {
+    indexed_row_refusal("owner bounds", "slot index out of arena bounds");
+}
+#[test]
+fn indexed_owner_must_be_live() {
+    indexed_row_refusal("free owner", "side table names a free slot");
+}
+#[test]
+fn indexed_reference_must_be_in_bounds() {
+    indexed_row_refusal("reference bounds", "slot index out of arena bounds");
+}
+#[test]
+fn indexed_reference_must_be_live() {
+    indexed_row_refusal("free reference", "slot index out of arena bounds");
+}
+#[test]
+fn indexed_chunk_reference_must_be_in_bounds() {
+    indexed_row_refusal("chunk bounds", "chunk offset out of arena bounds");
+}
+#[test]
+fn indexed_property_id_must_be_registered() {
+    indexed_row_refusal(
+        "property id",
+        "stored property id outside the name and symbol-key tables",
+    );
 }
