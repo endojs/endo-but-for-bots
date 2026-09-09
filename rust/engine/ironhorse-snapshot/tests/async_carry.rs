@@ -1,25 +1,31 @@
 //! Suspended async functions carry their activation and promise capability.
+#[path = "common/twin.rs"]
+mod carry;
+use carry::{compile, twin, Observation};
 use ironhorse_snapshot::machine::{
     begin_store_session, checkpoint_to_store, from_snapshot_bytes, resume_from_store,
     MachineSnapshot,
 };
 use ironhorse_snapshot::store::HeapStoreCommit;
-use ironhorse_snapshot::store::MemoryStore;
+use ironhorse_snapshot::store::{validate_store, MemoryStore};
 use ironhorse_snapshot::Signature;
-use ironhorse_vm::{parse_symbols, Interp};
+use ironhorse_vm::Interp;
 
-fn crank(m: &mut Interp, source: &str) -> (String, u64) {
-    let (b, s) = ironhorse_compile::compile_atoms(source).unwrap();
-    let names = parse_symbols(&s);
-    let b = if m.program_symbol_names().is_empty() {
-        m.link_intrinsics(&names);
-        b
-    } else {
-        m.relink_crank(&b, &names).unwrap()
-    };
-    let o = m.run(&b);
-    assert!(o.completed, "{:?}", o.halt);
-    (o.result, o.computrons)
+// Every observation in this family must complete, including the specialized
+// blob and intermediate-await paths that do not go through the shared twin.
+fn crank(machine: &mut Interp, source: &str) -> Observation {
+    let observation = carry::crank(machine, source);
+    assert!(observation.0, "{}", observation.1);
+    observation
+}
+
+fn boot(source: &str) -> Interp {
+    let (bytecode, names) = compile(source);
+    let mut machine = Interp::new();
+    machine.link_intrinsics(&names);
+    let outcome = machine.run(&bytecode);
+    assert!(outcome.completed, "{:?}", outcome.halt);
+    machine
 }
 
 #[test]
@@ -37,10 +43,8 @@ fn async_locals_catch_finally_and_multiple_awaits_survive_checkpoints() {
         'pending'
     "#;
     for reject in [false, true] {
-        let mut continuous = Interp::new();
-        crank(&mut continuous, source);
-        let mut m = Interp::new();
-        crank(&mut m, source);
+        let mut continuous = boot(source);
+        let m = boot(source);
         // Both image and incremental-store codecs carry the same state.
         let image = m.write_snapshot(&signature).unwrap();
         let m = from_snapshot_bytes(&image, &signature).unwrap();
@@ -55,11 +59,27 @@ fn async_locals_catch_finally_and_multiple_awaits_survive_checkpoints() {
         } else {
             "resolve(5);"
         };
+        let mut observations = vec![settlement];
+        if !reject {
+            observations.push("next(9);");
+        }
+        observations.push("result + ':' + trace");
+        let expected = twin(source, &observations, &mut MemoryStore::new());
+        assert!(expected.iter().all(|observation| observation.0));
+        assert_eq!(
+            expected.last().unwrap().2,
+            if reject {
+                "caught:no:finally"
+            } else {
+                "21:finally"
+            }
+        );
         assert_eq!(
             crank(&mut continuous, settlement),
             crank(session.machine_mut(), settlement)
         );
         checkpoint_to_store(&mut session, &signature, &mut store).unwrap();
+        validate_store(&store, &signature).expect("intermediate await checkpoint validates");
         drop(session);
         let mut session = resume_from_store(&store, &signature).unwrap();
         if !reject {
@@ -71,23 +91,25 @@ fn async_locals_catch_finally_and_multiple_awaits_survive_checkpoints() {
         let actual = crank(session.machine_mut(), "result + ':' + trace");
         assert_eq!(actual, crank(&mut continuous, "result + ':' + trace"));
         assert_eq!(
-            actual.0,
+            actual.2,
             if reject {
                 "caught:no:finally"
             } else {
                 "21:finally"
             }
         );
+        assert!(actual.0);
+        checkpoint_to_store(&mut session, &signature, &mut store).unwrap();
+        validate_store(&store, &signature).expect("settled async checkpoint validates");
     }
 }
 
 #[test]
 fn crafted_async_anchors_capabilities_and_resume_cursors_are_refused() {
     use ironhorse_snapshot::image::{read_machine, write_machine_unchecked};
-    use ironhorse_snapshot::store::{image_to_batch_unchecked, validate_store};
+    use ironhorse_snapshot::store::image_to_batch_unchecked;
     let signature = Signature::new("async-carry");
-    let mut m = Interp::new();
-    crank(&mut m, "var release; var gate = new Promise(r => { release = r; }); async function f() { return await gate; } var result = f();");
+    let m = boot("var release; var gate = new Promise(r => { release = r; }); async function f() { return await gate; } var result = f();");
     let bytes = m.write_snapshot(&signature).unwrap();
     let original = read_machine(&bytes, &signature).unwrap();
     for kind in 0..5 {
@@ -132,14 +154,13 @@ fn crafted_async_anchors_capabilities_and_resume_cursors_are_refused() {
 #[test]
 fn frozen_intrinsic_surfaces_and_deleted_symbols_survive_restore() {
     let signature = Signature::new("frozen-intrinsics");
-    let mut machine = Interp::new();
-    crank(&mut machine, "var symbol = Symbol.unscopables; Reflect.ownKeys(Array.prototype); delete Array.prototype[symbol]; Object.freeze(Array.prototype);");
+    let mut machine = boot("var symbol = Symbol.unscopables; Reflect.ownKeys(Array.prototype); delete Array.prototype[symbol]; Object.freeze(Array.prototype);");
     let bytes = machine.write_snapshot(&signature).unwrap();
     let mut resumed = from_snapshot_bytes(&bytes, &signature).unwrap();
     let probe = "Array.prototype[Symbol.unscopables]; Array.prototype['to' + 'Sorted']; Object.isFrozen(Array.prototype) && Array.prototype[symbol] === undefined";
     assert_eq!(crank(&mut machine, probe), crank(&mut resumed, probe));
     assert_eq!(
-        crank(&mut resumed, "Object.isFrozen(Array.prototype)").0,
+        crank(&mut resumed, "Object.isFrozen(Array.prototype)").2,
         "true"
     );
 }
@@ -162,10 +183,11 @@ fn closures_sharing_bytecode_resume_after_blob_and_store_checkpoints() {
             "result = ai.next(5).value + ':' + bi.next(5).value;",
         ),
     ] {
-        let mut continuous = Interp::new();
-        crank(&mut continuous, source);
-        let mut checkpointed = Interp::new();
-        crank(&mut checkpointed, source);
+        let mut continuous = boot(source);
+        let checkpointed = boot(source);
+        let expected = twin(source, &[observation, "result"], &mut MemoryStore::new());
+        assert!(expected.iter().all(|observation| observation.0));
+        assert_eq!(expected.last().unwrap().2, "6:7");
         let bytes = checkpointed.write_snapshot(&signature).unwrap();
         let mut blob = from_snapshot_bytes(&bytes, &signature).unwrap();
         let mut store = MemoryStore::new();
@@ -180,6 +202,6 @@ fn closures_sharing_bytecode_resume_after_blob_and_store_checkpoints() {
             assert_eq!(crank(&mut blob, source), expected);
             assert_eq!(crank(stored.machine_mut(), source), expected);
         }
-        assert_eq!(crank(&mut continuous, "result").0, "6:7");
+        assert_eq!(crank(&mut continuous, "result").2, "6:7");
     }
 }

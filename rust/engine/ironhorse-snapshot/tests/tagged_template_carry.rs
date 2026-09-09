@@ -5,32 +5,17 @@
 //! source-site template identity survives resume, while a later independently
 //! compiled crank with the same spelling receives a distinct site key.
 
+#[path = "common/twin.rs"]
+mod carry;
 mod common;
+use carry::{compile, crank, sig, twin};
 
 use common::TempDir;
 
-use ironhorse_snapshot::machine::{begin_store_session, checkpoint_to_store, resume_from_store};
+use ironhorse_snapshot::machine::{checkpoint_to_store, resume_from_store};
 use ironhorse_snapshot::store::{validate_store, HeapStore, MemoryStore};
 use ironhorse_snapshot::store_file::FileStore;
-use ironhorse_snapshot::Signature;
-use ironhorse_vm::{parse_symbols, Interp};
-
-fn sig() -> Signature {
-    Signature::new("ironhorse-worker-v1")
-}
-
-fn compile(source: &str) -> (Vec<u8>, Vec<ironhorse_vm::SymbolName>) {
-    let (bytecode, symbols) = ironhorse_compile::compile_atoms(source).expect("compiles");
-    (bytecode, parse_symbols(&symbols))
-}
-
-fn crank(machine: &mut Interp, source: &str) -> String {
-    let (bytecode, names) = compile(source);
-    let bytecode = machine.relink_crank(&bytecode, &names).expect("relink");
-    let outcome = machine.run(&bytecode);
-    assert!(outcome.completed, "crank halted: {:?}", outcome.halt);
-    outcome.result
-}
+use ironhorse_vm::Interp;
 
 fn scenario(store: &mut dyn HeapStore) {
     let first = "var saved; function tag(strings){saved=saved||strings;return strings} function run(v){return tag`head${v}tail`} run(1)===saved";
@@ -41,38 +26,24 @@ fn scenario(store: &mut dyn HeapStore) {
     let mut continuous = Interp::new();
     continuous.link_intrinsics(&names);
     assert_eq!(continuous.run(&bytecode).result, "true");
-    let expected_same = crank(&mut continuous, same_site);
-    let expected_fresh = crank(&mut continuous, fresh_site);
-
-    let mut persisted = Interp::new();
-    persisted.link_intrinsics(&names);
-    assert_eq!(persisted.run(&bytecode).result, "true");
-    let session = begin_store_session(persisted, &sig(), store)
-        .map_err(|(_, error)| error)
-        .expect("persist template registry");
-    drop(session);
-
-    let mut resumed = resume_from_store(store, &sig()).expect("resume template registry");
-    assert_eq!(
-        crank(resumed.machine_mut(), same_site),
-        expected_same,
-        "same source site survives resume"
-    );
-    assert_eq!(expected_same, "true:falsefalse:falsefalsefalse");
-    assert_eq!(
-        crank(resumed.machine_mut(), fresh_site),
-        expected_fresh,
-        "later crank keeps a distinct template site"
-    );
-    assert_eq!(expected_fresh, "true");
-    checkpoint_to_store(&mut resumed, &sig(), store).expect("checkpoint synthetic site key");
-    drop(resumed);
+    let expected = twin(first, &[same_site, fresh_site], store);
+    assert!(expected.iter().all(|observation| observation.0));
+    assert_eq!(expected[0].2, "true:falsefalse:falsefalsefalse");
+    assert_eq!(expected[1].2, "true");
+    for (source, expected) in [same_site, fresh_site].iter().zip(&expected) {
+        assert_eq!(crank(&mut continuous, source), *expected);
+    }
+    // The shared twin checkpoints after creating the synthetic fresh-site key.
+    // Resume that checkpoint again to cover the second persistence boundary.
     let mut resumed_again = resume_from_store(store, &sig()).expect("resume synthetic site key");
+    let actual = crank(resumed_again.machine_mut(), "other!==saved");
     assert_eq!(
-        crank(resumed_again.machine_mut(), "other!==saved"),
-        "true",
-        "fresh site identity and its internal key survive a second resume"
+        actual,
+        crank(&mut continuous, "other!==saved"),
+        "fresh site identity and metering survive a second resume"
     );
+    assert!(actual.0);
+    assert_eq!(actual.2, "true");
     checkpoint_to_store(&mut resumed_again, &sig(), store).expect("checkpoint after second resume");
     validate_store(store, &sig()).expect("store remains valid");
 }
