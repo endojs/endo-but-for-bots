@@ -9640,4 +9640,175 @@ mod promise_decoder_refusals {
         race.combinators[0].remaining = 0;
         assert!(decode(&race).is_ok());
     }
+
+    #[test]
+    fn capability_and_finally_homes() {
+        for tag in [u32::MAX, u32::MAX - 1, u32::MAX - 2] {
+            let baseline = PromiseClusterSnapshot {
+                functions: vec![PromiseFnRow {
+                    function: 2,
+                    promise: 1,
+                    reject: false,
+                    guard: tag,
+                    name_chunk: u32::MAX,
+                }],
+                ..PromiseClusterSnapshot::default()
+            };
+            assert_eq!(decode(&baseline).unwrap(), baseline);
+            for duplicate_home in [false, true] {
+                let mut bad = baseline.clone();
+                if duplicate_home {
+                    let mut second = bad.functions[0];
+                    second.function = 3;
+                    bad.functions.push(second);
+                } else {
+                    bad.functions[0].promise = 2;
+                }
+                if tag == u32::MAX {
+                    assert_eq!(
+                        decode(&bad),
+                        Err(SnapshotError::Corrupt(
+                            "promise cluster: malformed capability executor home"
+                        ))
+                    );
+                } else {
+                    assert_eq!(
+                        decode(&bad),
+                        Err(SnapshotError::Corrupt(
+                            "promise cluster: malformed finally function home"
+                        ))
+                    );
+                }
+            }
+            let mut polarity = baseline;
+            polarity.functions[0].reject = true;
+            if tag == u32::MAX {
+                assert_eq!(
+                    decode(&polarity),
+                    Err(SnapshotError::Corrupt(
+                        "promise cluster: malformed capability executor home"
+                    ))
+                );
+            } else {
+                assert!(decode(&polarity).is_ok());
+            }
+        }
+    }
+
+    #[test]
+    fn direct_combinator_requires_its_exact_resolving_pair() {
+        let mut baseline = combining();
+        let r = &mut baseline.promises[0].reactions[0];
+        r.kind = 12;
+        r.resolve = reference(2);
+        r.reject = reference(3);
+        assert_eq!(decode(&baseline).unwrap(), baseline);
+        for field in 0..7 {
+            let mut bad = baseline.clone();
+            let r = &mut bad.promises[0].reactions[0];
+            match field {
+                0 => r.on_fulfilled = reference(2),
+                1 => r.on_rejected = reference(3),
+                2 => r.resolve = Slot::undefined(),
+                3 => r.reject = Slot::undefined(),
+                4 => r.resolve = reference(3),
+                5 => r.reject = reference(2),
+                _ => r.resolve = reference(4),
+            }
+            assert_eq!(
+                decode(&bad),
+                Err(SnapshotError::Corrupt(
+                    "promise cluster: malformed direct combinator callback"
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn reaction_payloads_and_capabilities() {
+        for kind in [0, 1, 11] {
+            let mut baseline = valid();
+            let mut r = reaction();
+            r.kind = kind;
+            r.resolve = reference(2);
+            r.reject = reference(3);
+            if kind == 1 {
+                r.on_rejected = reference(3);
+            }
+            baseline.promises[0].reactions.push(r);
+            assert_eq!(decode(&baseline).unwrap(), baseline);
+            for reject in [false, true] {
+                let mut bad = baseline.clone();
+                let r = &mut bad.promises[0].reactions[0];
+                if reject {
+                    r.reject = Slot::undefined();
+                } else {
+                    r.resolve = Slot::undefined();
+                }
+                assert_eq!(
+                    decode(&bad),
+                    Err(SnapshotError::Corrupt(
+                        "promise cluster: reaction capability names no resolving function"
+                    ))
+                );
+            }
+            for field in 0..2 {
+                let mut bad = baseline.clone();
+                let r = &mut bad.promises[0].reactions[0];
+                if field == 0 {
+                    r.a = 2;
+                } else {
+                    r.b = 1;
+                }
+                assert_eq!(
+                    decode(&bad),
+                    Err(SnapshotError::Corrupt(
+                        "promise cluster: unused reaction payload not zero"
+                    ))
+                );
+            }
+            if kind == 11 {
+                let mut accepted = baseline.clone();
+                accepted.promises[0].reactions[0].a = 1;
+                assert!(decode(&accepted).is_ok());
+                let mut bad = baseline;
+                bad.promises[0].reactions[0].on_rejected = reference(3);
+                assert_eq!(
+                    decode(&bad),
+                    Err(SnapshotError::Corrupt(
+                        "promise cluster: unused reaction payload not zero"
+                    ))
+                );
+            } else if kind == 1 {
+                let mut bad = baseline;
+                bad.promises[0].reactions[0].on_rejected = Slot::undefined();
+                assert_eq!(
+                    decode(&bad),
+                    Err(SnapshotError::Corrupt(
+                        "promise cluster: unused reaction payload not zero"
+                    ))
+                );
+            }
+        }
+        let mut baseline = valid();
+        let mut r = reaction();
+        r.kind = 3;
+        baseline.promises[0].reactions.push(r);
+        assert_eq!(decode(&baseline).unwrap(), baseline);
+        for field in 0..5 {
+            let mut bad = baseline.clone();
+            let r = &mut bad.promises[0].reactions[0];
+            match field {
+                0 => r.b = 1,
+                1 => r.on_fulfilled = reference(2),
+                2 => r.on_rejected = reference(3),
+                3 => r.resolve = reference(2),
+                _ => r.reject = reference(3),
+            }
+            assert_eq!(
+                decode(&bad),
+                Err(SnapshotError::Corrupt("async reaction: invalid payload"))
+            );
+        }
+    }
 }
