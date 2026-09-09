@@ -44,18 +44,17 @@ use ironhorse_vm::Interp;
 pub enum MachineSnapshotError {
     Io(io::Error),
     Snapshot(SnapshotError),
-    /// The machine is not at a quiescent crank boundary (wave-6 W6-10):
+    /// The machine is not at a quiescent crank boundary:
     /// its last crank halted. A halt may leave pending microtasks /
     /// frames / an exception that no snapshot carries; even one that
     /// leaves every table empty (a top-level meter abort, the dispatch
     /// ceiling, a decode fault) leaves the boundary registers rooted,
-    /// which a resumed twin would not share (review F011). Rewind or
-    /// complete a crank before persisting.
+    /// which a resumed twin would not share. Rewind or
+    /// complete a crank before persisting; see `tests/persist_gates.rs`.
     NotQuiescent,
-    /// The heap holds live state in a SILENT-WRONG Pending side table
-    /// (wave-6 W6-9: proxies, accessors, typed arrays) - a resumed
-    /// machine would answer wrong values, so persist refuses by name
-    /// until the row's atom lands (error data graduated to `ERRD`).
+    /// The heap holds live state that `Interp::stored_unpersistable_row`
+    /// cannot carry. A resumed machine would answer wrong values,
+    /// so persistence refuses with the row's name.
     PendingStateUnsupported {
         row: &'static str,
     },
@@ -120,11 +119,10 @@ fn cas_temporary(dir: &Path) -> io::Result<(CasTemporary, File)> {
 /// The xsnap-shaped machine snapshot surface, implemented for the ironhorse
 /// [`Interp`] (the engine's machine). See the module docs.
 pub trait MachineSnapshot {
-    /// The persist preconditions (wave-6 W6-10/12): a quiescent crank
+    /// The persist preconditions: a quiescent crank
     /// boundary and no live state a resume cannot bring back. Required,
-    /// not defaulted: a permissive default was the one way an
-    /// implementor could hand out an image of a machine no gate had
-    /// seen (architecture review F047).
+    /// not defaulted: every implementor must explicitly establish
+    /// admission before handing out an image; see `tests/persist_gates.rs`.
     fn persist_gate(&self) -> Result<(), MachineSnapshotError>;
 
     /// Build the plain-data [`MachineImage`] of this machine under
@@ -220,7 +218,7 @@ impl MachineSnapshot for Interp {
         self.persist_gate()?;
         signature.check_boot()?;
         let image = ungated_image(self, signature);
-        // The id-space audit (what remains of the wave-4 P1 gate): with
+        // The id-space audit: with
         // string keys living in the NAME table and symbol keys traveling
         // in the SYMB table, a LIVE machine cannot store an id outside
         // both — ids only ever come from minting. Finding one would mean
@@ -239,7 +237,7 @@ impl MachineSnapshot for Interp {
 
 /// Build the plain-data image of `interp` WITHOUT consulting the persist
 /// gate: the body of [`MachineSnapshot::snapshot_image`], and its only
-/// caller. Private on purpose (architecture review F047): nothing in
+/// caller. Private on purpose: nothing in
 /// this crate hands out an image of a machine the gate has not seen.
 fn ungated_image(interp: &Interp, signature: &Signature) -> MachineImage {
     // The carried atoms (see the suspend-point contract): arenas +
@@ -363,8 +361,7 @@ fn side_tables_of(interp: &Interp) -> SideTableImages {
 /// so the restore cannot fail on validated input — but "cannot" is a
 /// claim about the decoders, not a proof, so a `false` return is a
 /// STRUCTURED refusal, never a debug-only assert: a release build must
-/// refuse the row set, not continue with silently missing exotic state
-/// (review finding 4).
+/// refuse the row set, not continue with silently missing exotic state.
 // Expand the roster's successor chain into straight-line restore calls.
 // The dollar token is passed explicitly because this defines a nested macro.
 macro_rules! define_restore_chain {
@@ -439,7 +436,7 @@ pub fn image_to_interp(
     let (slots, chunks) = image.to_arenas();
     let mut interp = Interp::new();
     interp.restore_snapshot_state(slots, chunks, image.stack, image.names, meter);
-    // The installed-names floor (wave-6 W6-7): adopt the live floor
+    // The installed-names floor: adopt the live floor
     // when it traveled, so names interned during the last install pass
     // stay lazily installable exactly as they were live. Bounds were
     // validated at decode.
@@ -509,7 +506,7 @@ pub fn resume_from_cas(
     Ok(from_snapshot_bytes(&bytes, expected_sig)?)
 }
 
-// --- the store-backed checkpoint surface (store seam design, phase 2)
+// --- the store-backed checkpoint surface
 //
 // The blob verbs above serialize the whole heap every time; these
 // verbs pair a machine with a `HeapStore` so that after one full
@@ -520,10 +517,8 @@ pub fn resume_from_cas(
 
 /// A machine's binding to one store: the session **owns the machine**,
 /// so a dirty set can only ever be committed by the session that
-/// watched it accumulate — the machine/session mispairing and the
-/// dirty-bit theft the adversarial review demonstrated (a second
-/// session over the same machine consuming bits another store still
-/// needed) are unrepresentable, not merely guarded. The session also
+/// watched it accumulate. A second session cannot consume the same
+/// machine's dirty bits while another store still needs them. The session also
 /// records the store's commit seal, and every checkpoint verifies the
 /// stored (epoch, seal) pair before committing: an equal-epoch fork,
 /// copy, or foreign store fails closed with
@@ -548,18 +543,18 @@ struct LazyPin {
     /// against. Seeded from `validate_store` at attach and REFRESHED
     /// by the session's own successful checkpoints (alongside the
     /// epoch/seal advance): a checkpoint rewrites dirty rows in the
-    /// store, and phase 8's eviction means a rewritten-then-clean row
+    /// store, and eviction means a rewritten-then-clean row
     /// CAN fault again — against the committed bytes, which only the
     /// refreshed leaves match. Frozen attach-time leaves would
-    /// misdiagnose that healthy re-fault as a corrupt store (the
-    /// review's eviction finding).
+    /// misdiagnose that healthy re-fault as a corrupt store. See
+    /// `tests/store_checkpoint.rs::evict_after_own_checkpoint_refaults_cleanly`.
     leaves: std::cell::RefCell<StoreLeaves>,
     /// Address of the pinned store's data (the `S` inside the
     /// `Rc<RefCell<S>>` the page source reads through). The session
     /// advances the pin after a commit only when the committed store
     /// IS the pinned store — a commit into a byte-identical twin store
     /// passes succession, but advancing the pin would wedge the next
-    /// fault (the PR-review finding). Compared by address rather than
+    /// fault. Compared by address rather than
     /// by re-reading the manifest because during a same-store commit
     /// the caller necessarily holds the `RefCell`'s mutable borrow to
     /// pass `&mut dyn HeapStore`, so any probe through the `RefCell`
@@ -588,7 +583,7 @@ pub struct StoreSession {
     /// empty (a generational pass right after resume frees nothing —
     /// retention-only, sound).
     gen_dirty: std::collections::BTreeSet<u32>,
-    /// The session's live copy of the store's root metadata (V6-c):
+    /// The session's live copy of the store's root metadata:
     /// seeded from verified state at begin/resume and advanced by
     /// each successful checkpoint, so the steady-state commit reads
     /// NO stored metadata and re-hashes only the dirty leaves' root
@@ -601,7 +596,7 @@ pub struct StoreSession {
     /// counter the cadence schedule is derived from (store schema 8).
     /// Seeded from the manifest at begin/resume and written back by
     /// every checkpoint, so it survives a suspend and the schedule
-    /// cannot fork across one (review wave 5).
+    /// cannot fork across one.
     ///
     /// The session does not advance this itself: it has no notion of a
     /// crank. The caller that does — `PersistentMachine` — sets it with
@@ -723,16 +718,16 @@ pub fn begin_store_session_with_cadence(
         Ok(m) => return Err((interp, StoreError::NotEmpty { epoch: m.epoch })),
         Err(e) => return Err((interp, e)),
     }
-    // The persist gate, on the data path (review F047): the ONLY way to
+    // The persist gate, on the data path: the ONLY way to
     // an image of this machine is the gated `snapshot_image`, whose
     // refusals are re-phrased as `StoreError`s so the machine travels
     // back beside them. Its predicates, in order: a QUIESCENT crank
-    // boundary (wave-6 W6-10 — a halted crank may leave pending
+    // boundary (a halted crank may leave pending
     // microtasks, a populated call stack, live handlers, a set
     // exception and a mid-frame value stack, and even a table-empty
     // halt leaves the boundary registers rooted, hence the lifecycle
-    // latch, review F011; the managed lifecycle rewinds halted cranks),
-    // the SILENT-WRONG Pending rows refused by name (wave-6 W6-9), and
+    // latch; the managed lifecycle rewinds halted cranks),
+    // unsupported live state refused by row name, and
     // the stored-key-id audit of the image itself.
     let image = match interp.snapshot_image(signature) {
         Ok(image) => image,
@@ -814,9 +809,7 @@ pub fn checkpoint_to_store(
     store: &mut dyn HeapStore,
 ) -> Result<u64, StoreError> {
     signature.check_boot()?;
-    // The wave-4 P1 intern gate stood here — an O(dirty) refusal of any
-    // stored runtime-interned property id, because the id→name map did
-    // not travel. The id-space unification retired it: string keys live
+    // Runtime-interned property ids remain resumable: string keys live
     // in the NAME table (persisted every checkpoint via the small
     // state) and symbol keys travel in the SYMB table, so a live
     // machine's stored ids are always resumable by construction, and
@@ -827,8 +820,8 @@ pub fn checkpoint_to_store(
     // checkpoint builds its batch from the DIRTY pages and the small
     // state, never from a full image, which is what keeps it O(dirty).
     // So the predicates run inline here, in the same order as the gated
-    // image (review F047) so a machine refuses by the same name on
-    // either verb: the quiescence gate first (wave-6 W6-10: a halted
+    // image so a machine refuses by the same name on
+    // either verb: the quiescence gate first (a halted
     // crank must be rewound, never checkpointed — see
     // begin_store_session), then the pending rows, walked over the
     // dirty pages only (the clean pages were admitted by the checkpoint
@@ -882,20 +875,19 @@ pub fn checkpoint_to_store(
     let epoch = session.epoch.checked_add(1).ok_or(StoreError::Snapshot(
         crate::format::SnapshotError::Corrupt("store epoch exhausted"),
     ))?;
-    // Root maintenance takes one of two paths (V6-c). FAST: the
+    // Root maintenance takes one of two paths. FAST: the
     // session holds a live [`RootLedger`] — verified at seed time and
     // advanced in lockstep with this session's own commits, which the
     // pairing guard above proves are the only ones — so this commit
-    // reads NO stored metadata and re-hashes only the dirty leaves'
+    // reuses the retained root metadata and re-hashes only the dirty leaves'
     // root paths, O(dirty · log n). The ledger is TAKEN here: any
     // error path FROM THIS POINT ON drops it and the next checkpoint
     // rebuilds via the slow path (the drop-on-failure discipline).
     //
-    // The guards ABOVE — runtime-interns, epoch, seal, epoch overflow,
-    // and a failed manifest read — return before the take, so a refusal
-    // there leaves the ledger in place (review wave 4, P3b: the prose
-    // said "any failed or refused commit drops it", which overstated
-    // it). That is correct rather than an oversight: those guards
+    // The guards ABOVE — quiescence, unsupported rows, epoch, seal,
+    // deferred backing validation, epoch overflow, and a failed manifest
+    // read — return before the take, so a refusal
+    // there leaves the ledger in place. Those guards
     // refuse before anything is written, so the ledger still describes
     // exactly the store state it was advanced against and stays
     // coherent. What must drop the ledger is a failure that could have
@@ -906,7 +898,7 @@ pub fn checkpoint_to_store(
     // building on it — a leaf edited at rest leaves the manifest
     // untouched, so the pairing guard above still passes, and without
     // this check the edit would be laundered into THIS commit's
-    // validly sealed root (the review's laundering finding). The fast
+    // validly sealed root. The fast
     // path is immune to that laundering by construction — it never
     // reads the edited bytes — and the edit stays detected by the
     // backend's own recombination, every fault's row/leaf check, and
@@ -954,7 +946,7 @@ pub fn checkpoint_to_store(
         .filter(|&p| p < page_count)
         .map(|page| {
             let records = interp.slots.page_records(page);
-            // The page-edge summary (phase 6) falls out of the records
+            // The page-edge summary falls out of the records
             // already in hand — a pure function of page content.
             page_edges.push((page, derive_page_edges(page, &records)));
             let mut bytes =
@@ -996,7 +988,7 @@ pub fn checkpoint_to_store(
                 .then_some(crate::store_sections::SectionUpdate { section, bytes })
         })
         .collect();
-    // Free-list segments (phase 9): diff against the prior segment
+    // Free-list segments: diff against the prior segment
     // leaves so only CHANGED segments travel — LIFO churn touches the
     // tail segment, making per-commit free bytes O(1) in heap size.
     // The ledger holds prior free leaves, either retained from the last
@@ -1040,8 +1032,8 @@ pub fn checkpoint_to_store(
     //
     // Taken BEFORE the dirty bits are cleared, because the arenas need
     // the answer to decide which pages are still safe to evict: clean is
-    // not the same as backed, and a twin commit makes them differ
-    // (review wave 5).
+    // not the same as backed, and a twin commit makes them differ. See
+    // `tests/store_checkpoint.rs::evict_after_a_twin_store_checkpoint_keeps_the_modified_body`.
     let landed_in_backing = {
         let committed: *const dyn HeapStore = &*store;
         session
@@ -1065,7 +1057,7 @@ pub fn checkpoint_to_store(
             pin.epoch.set(epoch);
             *pin.seal.borrow_mut() = seal;
             // The pinned store's rows just changed; the leaves every
-            // future fault verifies against must follow (phase 8: a
+            // future fault verifies against must follow (a
             // committed-then-clean row is evictable, so it CAN fault
             // again — and must verify against the bytes this commit
             // wrote, not the attach-time ones). Patched in place from
@@ -1116,7 +1108,7 @@ pub fn resume_from_store(
     expected_sig: &Signature,
 ) -> Result<StoreSession, StoreError> {
     let (manifest, _small, leaves) = validate_store(store, expected_sig)?.into_parts();
-    // Ledger seed material (V6-c): validation just proved these
+    // Ledger seed material: validation just proved these
     // leaves recombine to the stored root; the raw summaries and
     // small bytes complete the picture. Read before the torn-read
     // re-check below so the guard covers them too.
@@ -1128,8 +1120,8 @@ pub fn resume_from_store(
     // the adoption hole: a store whose bytes carry a property id
     // outside both key tables (crafted, torn, or written by a
     // pre-unification build that let one through) is refused here
-    // rather than laundered into this session's checkpoints (review
-    // wave 5). `resume_from_store_lazy` deliberately reads no heap rows
+    // rather than laundered into this session's checkpoints.
+    // `resume_from_store_lazy` deliberately reads no heap rows
     // at open — that is the whole point of lazy resume — so it cannot
     // ask this question, and does not pretend to; what protects it is
     // that every path that ADOPTS bytes audits (begin, import, eager
@@ -1142,9 +1134,8 @@ pub fn resume_from_store(
     }
     // Re-check the manifest after the row reads: the reads above are
     // not one atomic snapshot on every backend, so a concurrent commit
-    // could otherwise hand us a chimera of two epochs (the SQLite
-    // review's torn-read finding). Same-seal after the reads proves the
-    // rows all belonged to one epoch.
+    // could otherwise hand us a chimera of two epochs. Same-seal after
+    // the reads proves the rows all belonged to one epoch.
     let after = store.manifest()?;
     if after.epoch != manifest.epoch || after.seal != manifest.seal {
         return Err(StoreError::BaselineMismatch {
@@ -1182,8 +1173,8 @@ pub fn resume_from_store(
     })
 }
 
-/// The [`ironhorse_vm::PageSource`] adapter over a shared [`HeapStore`]
-/// (store seam design, phase 3). Reads go through the `RefCell` so the
+/// The [`ironhorse_vm::PageSource`] adapter over a shared [`HeapStore`].
+/// Reads go through the `RefCell` so the
 /// same store object also serves `commit` at checkpoint time (`&mut`
 /// via `borrow_mut`); faults happen only mid-crank and commits only
 /// between cranks, so the borrows never overlap.
@@ -1197,9 +1188,8 @@ struct StorePageSource<S: HeapStore> {
     /// The (epoch, seal, row leaves) the machine's session currently
     /// stands at. Every fault re-verifies the pin, so a store
     /// advanced by anyone else turns torn reads into a deterministic
-    /// named crashed crank instead of a chimera heap (the review's
-    /// two-lazy-machines finding), and checks its row against the
-    /// pinned leaves, so a length-preserving flip at rest dies as a
+    /// named crashed crank instead of a chimera heap, and checks its row
+    /// against the pinned leaves, so a length-preserving flip at rest dies as a
     /// named crashed crank, never a different machine. The session
     /// advances all three on its own commits — see
     /// [`LazyPin::leaves`] for why the leaves must advance too.
@@ -1265,16 +1255,16 @@ impl<S: HeapStore> ironhorse_vm::PageSource for StorePageSource<S> {
     }
 }
 
-/// Rebuild a machine from a store with **lazy reification** (store
-/// seam design, phase 3): the same exhaustive validation and the same
-/// small state up front, but the arenas are attached over a
+/// Rebuild a machine from a store with **lazy reification**: validate
+/// the manifest, small state, inventory, and leaf metadata up front.
+/// The arenas are attached over a
 /// [`ironhorse_vm::PageSource`] and fault slot pages / chunk extents
-/// in on first touch, so wake latency is proportional to the wake
-/// crank's working set, not the heap.
+/// in on first touch. Row reification follows the wake crank's working
+/// set; total wake-up work also includes the upfront metadata validation.
 ///
-/// Residency is grow-only; content is identical to an eager resume by
-/// construction (a fault installs exactly the bytes the store holds),
-/// which the metamorphic determinism suite locks. The store rides in
+/// Each fault verifies its row against the pinned store's leaf hashes;
+/// clean backed rows can be evicted and verified again on re-fault
+/// (`tests/store_checkpoint.rs`). The store rides in
 /// an `Rc<RefCell<…>>` so the returned machine's fault path and the
 /// caller's later [`checkpoint_to_store`] (`&mut *store.borrow_mut()`)
 /// share it.
@@ -1283,7 +1273,7 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
     expected_sig: &Signature,
 ) -> Result<StoreSession, StoreError> {
     let (manifest, small, leaves) = validate_store(&*store.borrow(), expected_sig)?.into_parts();
-    // Ledger seed material (V6-c), read before the torn-read re-check
+    // Ledger seed material, read before the torn-read re-check
     // below so the guard covers it too.
     let edges = store.borrow().page_edges()?;
     let small_bytes = store.borrow().read_small_state()?;
@@ -1344,7 +1334,7 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
         small.names.clone(),
         small.meter.to_state(),
     );
-    // The installed-names floor (wave-6 W6-7), exactly as the container
+    // The installed-names floor, exactly as the container
     // path adopts it; bounds were validated by `SmallState::decode`.
     if let Some(floor) = small.name_floor {
         if !interp.restore_installed_names_floor(floor) {
@@ -1380,7 +1370,7 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
     })
 }
 
-/// **Summary-driven partial collection** (store seam phase 6): free
+/// **Summary-driven partial collection**: free
 /// every page unreachable from the machine's GC roots and side-table
 /// references, deciding arena reachability ENTIRELY from the store's
 /// persisted page-edge summaries — zero row-content reads, no
@@ -1393,7 +1383,7 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
 /// record, a suspended frame) roots its page directly — the
 /// page-granular equivalent of the full collector's `extra_edges`
 /// hook. Without it, an object reachable only through a side table
-/// would be freed while live (the review's unsoundness finding).
+/// would be freed while live.
 ///
 /// Page-conservative by design, twice over: garbage co-resident with
 /// live data in a reachable page survives, and a side-table entry
@@ -1489,7 +1479,7 @@ pub fn partial_collect(
     Ok(freed)
 }
 
-/// **Summary-generational collection** (store seam phase 11): the
+/// **Summary-generational collection**: the
 /// steady-state variant of [`partial_collect`] whose work is bounded
 /// by the MUTATED region, not the live heap. Candidates are only the
 /// pages dirtied (or grown) since the last collection this session
@@ -1515,8 +1505,7 @@ pub fn partial_collect(
 /// continuous session keeps accumulating. Two replicas running the same
 /// program under the same `CadencePolicy` therefore free DIFFERENT pages
 /// if one suspends and resumes mid-window, and the free list is
-/// container-visible — so the replicas' bytes diverge (review wave 4,
-/// DET-5).
+/// container-visible — so the replicas' bytes diverge.
 ///
 /// This is latent today and must stay that way: `PersistentMachine`'s
 /// scheduled collection calls [`partial_collect`], whose candidate set is
@@ -1990,7 +1979,7 @@ mod tests {
         assert!(matches!(store.manifest(), Err(StoreError::Empty)));
     }
 
-    /// Wave-6 W6-14: a store whose hashes are CONSISTENT over hostile
+    /// A store whose hashes are CONSISTENT over hostile
     /// content (the tampered-at-rest / crafted-store class) must be
     /// refused at resume exactly as the container path refuses the same
     /// bytes - leaf hashes prove authentic-to-commit, not in-arena.
