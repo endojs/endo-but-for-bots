@@ -3934,6 +3934,7 @@ pub(crate) fn check_image_slot_bounds(
     heap: &[Slot],
     stack: &[Slot],
     arrays: &[ArrayImage],
+    index_props: &[IndexPropsImage],
     collections: &[CollectionImage],
     registry: &[RegistryImage],
     errors: &[ErrorImage],
@@ -4008,16 +4009,15 @@ pub(crate) fn check_image_slot_bounds(
     }
     for a in arrays {
         owned(a.owner)?;
-        for (_, v) in &a.items {
-            check(v)?;
-        }
+        crate::stored_slots::check_slots(a, &check)?;
+    }
+    for row in index_props {
+        owned(row.owner)?;
+        crate::stored_slots::check_slots(row, &check)?;
     }
     for coll in collections {
         owned(coll.owner)?;
-        for (k, v) in &coll.entries {
-            check(k)?;
-            check(v)?;
-        }
+        crate::stored_slots::check_slots(coll, &check)?;
     }
     for e in registry {
         owned(e.descriptor)?;
@@ -4077,12 +4077,15 @@ pub(crate) fn check_image_slot_bounds(
             ));
         }
     }
+    // Full Slot records share the registration visitor. Scalar owners,
+    // handles, callable kinds, and cross-table geometry are checked below.
+    crate::stored_slots::check_slots(lang, &check)?;
+
     // The language rows: weak owners bounded like every sibling's, and
     // a wrapper's boxed VALUE walks the same slot check as an array
     // item (its refs and chunk offset are real edges).
     for w in lang.wrappers {
         owned(w.owner)?;
-        check(&w.value)?;
     }
     for r in lang.regexps {
         owned(r.owner)?;
@@ -4182,10 +4185,6 @@ pub(crate) fn check_image_slot_bounds(
                 "bound-function state: owner has no function row",
             ));
         }
-        check(&row.this_arg)?;
-        for arg in &row.args {
-            check(arg)?;
-        }
     }
     for &(owner, prototype) in &lang.function_state.ctor_prototypes {
         owned(owner)?;
@@ -4249,7 +4248,6 @@ pub(crate) fn check_image_slot_bounds(
                     "accessor state: getter or setter is not callable",
                 ));
             }
-            check(&value)?;
         }
     }
     for row in lang.intl_bound_functions {
@@ -4289,7 +4287,6 @@ pub(crate) fn check_image_slot_bounds(
     for row in &lang.private_elements.values {
         owned(row.receiver)?;
         owned(row.brand)?;
-        check(&row.value)?;
     }
     for row in &lang.private_elements.accessors {
         owned(row.receiver)?;
@@ -4305,14 +4302,11 @@ pub(crate) fn check_image_slot_bounds(
                     "private accessors: getter or setter is not callable",
                 ));
             }
-            check(&value)?;
         }
     }
     for row in lang.disposable_stacks {
         owned(row.owner)?;
         for record in &row.records {
-            check(&record.resource)?;
-            check(&record.method)?;
             if record.method.kind != Kind::Reference {
                 return Err(SnapshotError::Corrupt(
                     "disposable stacks: disposal method is not callable",
@@ -4340,15 +4334,6 @@ pub(crate) fn check_image_slot_bounds(
         owned(frame.cur_func)?;
         if frame.target_func != u32::MAX {
             owned(frame.target_func)?;
-        }
-        for slot in frame
-            .locals
-            .iter()
-            .chain(&frame.args)
-            .chain(&frame.stack_slice)
-            .chain([&frame.this_val, &frame.env, &frame.result])
-        {
-            check(slot)?;
         }
         let function = lang
             .function_state
@@ -4443,7 +4428,6 @@ pub(crate) fn check_image_slot_bounds(
             ));
         }
         for jump in &frame.jumps {
-            check(&jump.env)?;
             // The handler's `id_map` is bounded by the handler's OWN
             // `locals_len` -- the length its resumed `catch` resolves
             // against -- not by the frame's current locals. A shorter
@@ -4488,13 +4472,6 @@ pub(crate) fn check_image_slot_bounds(
     // capability callbacks are bounded like every other carried Slot.
     for row in &lang.promise_cluster.promises {
         owned(row.owner)?;
-        check(&row.result)?;
-        for r in &row.reactions {
-            check(&r.on_fulfilled)?;
-            check(&r.on_rejected)?;
-            check(&r.resolve)?;
-            check(&r.reject)?;
-        }
     }
     let mut awaited = std::collections::BTreeSet::new();
     for reaction in lang
@@ -4519,8 +4496,7 @@ pub(crate) fn check_image_slot_bounds(
     for row in &lang.promise_cluster.async_instances {
         owned(row.owner)?;
         owned(row.result_promise)?;
-        check(&row.resolve)?;
-        check(&row.reject)?;
+
         let function = |slot: &Slot| match slot.value {
             Payload::Reference(owner) => lang
                 .promise_cluster
@@ -4579,8 +4555,6 @@ pub(crate) fn check_image_slot_bounds(
     }
     let mut results_lengths = Vec::with_capacity(lang.promise_cluster.combinators.len());
     for row in &lang.promise_cluster.combinators {
-        check(&row.resolve)?;
-        check(&row.reject)?;
         owned(row.results)?;
         let Ok(k) = arrays.binary_search_by_key(&row.results, |a| a.owner) else {
             return Err(SnapshotError::Corrupt(
@@ -5331,6 +5305,7 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         &slots,
         &stack,
         &arrays,
+        &index_props,
         &collections,
         &registry,
         &errors,
@@ -5601,6 +5576,7 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
             &oob,
             &[],
             &[],
@@ -5787,6 +5763,7 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
             &past,
             &[],
             &[],
@@ -5807,6 +5784,7 @@ mod tests {
             flags: 0,
         }];
         assert!(check_image_slot_bounds(
+            &[],
             &[],
             &[],
             &[],
@@ -5840,6 +5818,7 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
             &null,
             &[],
             &[],
@@ -5862,6 +5841,7 @@ mod tests {
             length: 1,
         }];
         assert!(check_image_slot_bounds(
+            &[],
             &[],
             &[],
             &[],
@@ -5905,6 +5885,7 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
             &buf,
             &wide,
             &[],
@@ -5925,6 +5906,7 @@ mod tests {
             size: 4,
         }];
         assert!(check_image_slot_bounds(
+            &[],
             &[],
             &[],
             &[],
@@ -5958,6 +5940,7 @@ mod tests {
             size: 4,
         }];
         assert!(check_image_slot_bounds(
+            &[],
             &[],
             &[],
             &[],
@@ -6156,6 +6139,7 @@ mod tests {
                 &[],
                 &[],
                 &[],
+                &[],
                 &lang,
                 &[],
                 0,
@@ -6289,6 +6273,7 @@ mod tests {
                 &[],
                 &[],
                 &[],
+                &[],
                 colls,
                 &[],
                 &[],
@@ -6363,6 +6348,7 @@ mod tests {
                 &[],
                 &[],
                 &[],
+                &[],
                 &LangRows::EMPTY,
                 &[],
                 0,
@@ -6407,6 +6393,7 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
             &bad_desc,
             &[],
             &[],
@@ -6427,6 +6414,7 @@ mod tests {
             pairs: vec![(u16::MAX, 4)],
         };
         assert!(check_image_slot_bounds(
+            &[],
             &[],
             &[],
             &[],
@@ -6460,6 +6448,7 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
             &LangRows::EMPTY,
             &[],
             0,
@@ -6478,6 +6467,7 @@ mod tests {
             &[],
             &[],
             &bad_ref,
+            &[],
             &[],
             &[],
             &[],
@@ -6506,6 +6496,7 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
             &bad_key,
             &[],
             &[],
@@ -6528,6 +6519,7 @@ mod tests {
             entries: vec![(Slot::undefined(), refd(9))],
         }];
         assert!(check_image_slot_bounds(
+            &[],
             &[],
             &[],
             &[],
@@ -6592,6 +6584,7 @@ mod tests {
                             &[],
                             &[],
                             &[],
+                            &[],
                             &LangRows::EMPTY,
                             &[],
                             0,
@@ -6623,6 +6616,7 @@ mod tests {
         let gate = |heap: &[Slot], errors: &[ErrorImage], free: &[u32]| {
             check_image_slot_bounds(
                 heap,
+                &[],
                 &[],
                 &[],
                 &[],

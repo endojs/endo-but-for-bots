@@ -12,7 +12,7 @@ use ironhorse_vm::{
 // A sealed, compile-time classification. There is deliberately no impl for
 // Slot: metadata fields (including nested rows) cannot silently acquire one.
 pub(crate) trait Metadata {}
-pub(crate) fn metadata<T: Metadata>(_: &T) {}
+pub(crate) fn metadata<T: Metadata + ?Sized>(_: &T) {}
 macro_rules! leaves {
     ($($ty:ty),* $(,)?) => { $(impl Metadata for $ty {})* };
 }
@@ -39,6 +39,7 @@ leaves!(
     ironhorse_vm::SlotIndex
 );
 impl<T: Metadata> Metadata for Vec<T> {}
+impl<T: Metadata> Metadata for [T] {}
 impl<T: Metadata> Metadata for Option<T> {}
 impl<T: Metadata, const N: usize> Metadata for [T; N] {}
 impl<K: Metadata, V: Metadata> Metadata for std::collections::BTreeMap<K, V> {}
@@ -232,7 +233,7 @@ metadata_row!(
 );
 metadata_row!(crate::format::Version, [format_version, slot_width, endian]);
 
-trait VisitSlots {
+pub(crate) trait VisitSlots {
     fn visit(&self, f: &mut dyn FnMut(&Slot));
 }
 impl VisitSlots for Slot {
@@ -240,6 +241,28 @@ impl VisitSlots for Slot {
         f(self);
     }
 }
+impl<T: VisitSlots> VisitSlots for [T] {
+    fn visit(&self, f: &mut dyn FnMut(&Slot)) {
+        for value in self {
+            value.visit(f);
+        }
+    }
+}
+
+/// Run a fallible slot check over the same enumeration used by key admission.
+pub(crate) fn check_slots<T: VisitSlots + ?Sized, E>(
+    value: &T,
+    check: &impl Fn(&Slot) -> Result<(), E>,
+) -> Result<(), E> {
+    let mut result = Ok(());
+    value.visit(&mut |slot| {
+        if result.is_ok() {
+            result = check(slot);
+        }
+    });
+    result
+}
+
 impl<T: VisitSlots> VisitSlots for Vec<T> {
     fn visit(&self, f: &mut dyn FnMut(&Slot)) {
         for value in self {
@@ -447,4 +470,39 @@ pub(crate) fn visit_image_slots(image: &MachineImage, f: &mut dyn FnMut(&Slot)) 
     disposable_stacks.visit(f);
     generators.visit(f);
     promise_cluster.visit(f);
+}
+
+impl VisitSlots for crate::image::LangRows<'_> {
+    fn visit(&self, f: &mut dyn FnMut(&Slot)) {
+        let Self {
+            wrappers,
+            regexps,
+            dates,
+            function_state,
+            proxy_state,
+            accessors,
+            intl_bound_functions,
+            private_elements,
+            disposable_stacks,
+            generators,
+            promise_cluster,
+            arguments_brands,
+            temporal,
+            intl,
+        } = self;
+        metadata(*regexps);
+        metadata(*dates);
+        metadata(*proxy_state);
+        metadata(*intl_bound_functions);
+        metadata(*arguments_brands);
+        metadata(*temporal);
+        metadata(*intl);
+        wrappers.visit(f);
+        function_state.visit(f);
+        accessors.visit(f);
+        private_elements.visit(f);
+        disposable_stacks.visit(f);
+        generators.visit(f);
+        promise_cluster.visit(f);
+    }
 }
