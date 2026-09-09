@@ -35,6 +35,8 @@ const SOURCE: &str = concat!(
     "\n",
     include_str!("../src/interp/property.rs"),
     "\n",
+    include_str!("../src/interp/link.rs"),
+    "\n",
     include_str!("../src/interp/persist.rs"),
 );
 
