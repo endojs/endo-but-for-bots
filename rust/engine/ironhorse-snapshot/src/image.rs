@@ -9368,3 +9368,276 @@ mod generator_decoder_refusals {
         }
     }
 }
+
+#[cfg(test)]
+mod promise_decoder_refusals {
+    use super::*;
+    use ironhorse_vm::value::SlotIndex;
+    use ironhorse_vm::{
+        CombinatorRow, PromiseClusterSnapshot, PromiseFnRow, PromiseReactionRow, PromiseRow,
+    };
+
+    fn reference(index: u32) -> Slot {
+        Slot::of(Kind::Reference, Payload::Reference(SlotIndex(index)))
+    }
+    fn valid() -> PromiseClusterSnapshot {
+        PromiseClusterSnapshot {
+            promises: vec![PromiseRow {
+                owner: 1,
+                state: 0,
+                result: Slot::undefined(),
+                ever_handled: false,
+                reactions: vec![],
+            }],
+            functions: vec![
+                PromiseFnRow {
+                    function: 2,
+                    promise: 1,
+                    reject: false,
+                    guard: 0,
+                    name_chunk: u32::MAX,
+                },
+                PromiseFnRow {
+                    function: 3,
+                    promise: 1,
+                    reject: true,
+                    guard: 0,
+                    name_chunk: u32::MAX,
+                },
+            ],
+            guards: vec![false],
+            combinators: vec![],
+            async_instances: vec![],
+        }
+    }
+    fn decode(state: &PromiseClusterSnapshot) -> Result<PromiseClusterSnapshot, SnapshotError> {
+        decode_promise_cluster(&encode_promise_cluster(state))
+    }
+    fn reaction() -> PromiseReactionRow {
+        PromiseReactionRow {
+            on_fulfilled: Slot::undefined(),
+            on_rejected: Slot::undefined(),
+            resolve: Slot::undefined(),
+            reject: Slot::undefined(),
+            kind: 2,
+            a: 0,
+            b: 0,
+        }
+    }
+    fn combining() -> PromiseClusterSnapshot {
+        let mut state = valid();
+        state.promises[0].reactions.push(reaction());
+        state.combinators.push(CombinatorRow {
+            kind: 0,
+            resolve: reference(2),
+            reject: reference(3),
+            remaining: 1,
+            results: 4,
+        });
+        state
+    }
+
+    #[test]
+    fn promise_states_order_and_guard_sharing() {
+        let baseline = valid();
+        assert_eq!(decode(&baseline).unwrap(), baseline);
+        for state in 0..=2 {
+            let mut good = baseline.clone();
+            good.promises[0].state = state;
+            assert!(decode(&good).is_ok());
+        }
+        for state in [3, 255] {
+            let mut bad = baseline.clone();
+            bad.promises[0].state = state;
+            assert_eq!(
+                decode(&bad),
+                Err(SnapshotError::Corrupt("promise cluster: invalid state"))
+            );
+        }
+        let mut pair = baseline.clone();
+        let mut second = pair.promises[0].clone();
+        second.owner = 4;
+        pair.promises.push(second);
+        assert!(decode(&pair).is_ok());
+        for owner in [1, 0] {
+            let mut bad = pair.clone();
+            bad.promises[1].owner = owner;
+            assert_eq!(
+                decode(&bad),
+                Err(SnapshotError::Corrupt(
+                    "promise cluster: owners not strictly ascending"
+                ))
+            );
+        }
+        for function in [2, 1] {
+            let mut bad = baseline.clone();
+            bad.functions[1].function = function;
+            assert_eq!(
+                decode(&bad),
+                Err(SnapshotError::Corrupt(
+                    "promise cluster: functions not strictly ascending"
+                ))
+            );
+        }
+        let mut bad = baseline.clone();
+        bad.functions[0].promise = 7;
+        assert_eq!(
+            decode(&bad),
+            Err(SnapshotError::Corrupt(
+                "promise cluster: resolving function names no promise row"
+            ))
+        );
+        bad = baseline.clone();
+        bad.functions[0].guard = 1;
+        assert_eq!(
+            decode(&bad),
+            Err(SnapshotError::Corrupt(
+                "promise cluster: guard index out of range"
+            ))
+        );
+        bad = baseline.clone();
+        bad.functions[1].reject = false;
+        assert_eq!(
+            decode(&bad),
+            Err(SnapshotError::Corrupt(
+                "promise cluster: guard not shared by one resolving pair"
+            ))
+        );
+        bad = pair;
+        bad.functions[1].promise = 4;
+        assert_eq!(
+            decode(&bad),
+            Err(SnapshotError::Corrupt(
+                "promise cluster: guard not shared by one resolving pair"
+            ))
+        );
+        bad = baseline.clone();
+        bad.guards.push(false);
+        assert_eq!(
+            decode(&bad),
+            Err(SnapshotError::Corrupt(
+                "promise cluster: guards not densely referenced"
+            ))
+        );
+        let mut singleton = baseline.clone();
+        singleton.functions.pop();
+        assert!(decode(&singleton).is_ok());
+        // Three boolean sites: promise handled, function reject, guard cell.
+        let bytes = encode_promise_cluster(&baseline);
+        let function_start = 4 + 4 + 1 + SLOT_RECORD_BYTES + 1 + 4 + 4;
+        let guard_start = function_start + 2 * 17 + 4;
+        for offset in [9 + SLOT_RECORD_BYTES, function_start + 8, guard_start] {
+            let mut bytes = bytes.clone();
+            bytes[offset] = 2;
+            assert_eq!(
+                decode_promise_cluster(&bytes),
+                Err(SnapshotError::Corrupt("promise cluster: bad boolean byte"))
+            );
+        }
+    }
+
+    #[test]
+    fn combinator_reaction_invariants() {
+        let baseline = combining();
+        assert_eq!(decode(&baseline).unwrap(), baseline);
+        for state in [1, 2] {
+            let mut bad = baseline.clone();
+            bad.promises[0].state = state;
+            assert_eq!(
+                decode(&bad),
+                Err(SnapshotError::Corrupt(
+                    "promise cluster: settled promise retains reactions"
+                ))
+            );
+        }
+        for kind in [4, 5, 6, 7, 8, 9, 10, 13, 255] {
+            let mut bad = baseline.clone();
+            bad.promises[0].reactions[0].kind = kind;
+            assert_eq!(
+                decode(&bad),
+                Err(SnapshotError::Corrupt(
+                    "promise cluster: reaction kind does not resume"
+                ))
+            );
+        }
+        for kind in [4, 255] {
+            let mut bad = baseline.clone();
+            bad.combinators[0].kind = kind;
+            assert_eq!(
+                decode(&bad),
+                Err(SnapshotError::Corrupt(
+                    "promise cluster: unknown combinator kind"
+                ))
+            );
+        }
+        let mut bad = baseline.clone();
+        bad.promises[0].reactions[0].a = 1;
+        assert_eq!(
+            decode(&bad),
+            Err(SnapshotError::Corrupt(
+                "promise cluster: combinator index out of range"
+            ))
+        );
+        bad = baseline.clone();
+        bad.promises[0].reactions.push(reaction());
+        assert_eq!(
+            decode(&bad),
+            Err(SnapshotError::Corrupt(
+                "promise cluster: duplicate element reaction"
+            ))
+        );
+        for field in 0..4 {
+            let mut bad = baseline.clone();
+            let r = &mut bad.promises[0].reactions[0];
+            match field {
+                0 => r.on_fulfilled = reference(2),
+                1 => r.on_rejected = reference(2),
+                2 => r.resolve = reference(2),
+                _ => r.reject = reference(3),
+            }
+            assert_eq!(
+                decode(&bad),
+                Err(SnapshotError::Corrupt(
+                    "promise cluster: combinator reaction carries capability slots"
+                ))
+            );
+        }
+        bad = baseline.clone();
+        bad.promises[0].reactions.clear();
+        assert_eq!(
+            decode(&bad),
+            Err(SnapshotError::Corrupt(
+                "promise cluster: combinators not densely referenced"
+            ))
+        );
+        for reject in [false, true] {
+            let mut bad = baseline.clone();
+            if reject {
+                bad.combinators[0].reject = Slot::undefined();
+            } else {
+                bad.combinators[0].resolve = Slot::undefined();
+            }
+            assert_eq!(
+                decode(&bad),
+                Err(SnapshotError::Corrupt(
+                    "promise cluster: combinator capability names no function"
+                ))
+            );
+        }
+        for kind in [0, 1, 3] {
+            let mut bad = baseline.clone();
+            bad.combinators[0].kind = kind;
+            bad.combinators[0].remaining = 0;
+            assert_eq!(
+                decode(&bad),
+                Err(SnapshotError::Corrupt(
+                    "promise cluster: remaining below its pending reactions"
+                ))
+            );
+        }
+        let mut race = baseline;
+        race.combinators[0].kind = 2;
+        race.combinators[0].remaining = 0;
+        assert!(decode(&race).is_ok());
+    }
+}
