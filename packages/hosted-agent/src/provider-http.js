@@ -8,6 +8,12 @@ import { createServer } from 'node:http';
 /** @import { IncomingMessage, ServerResponse } from 'node:http' */
 
 /**
+ * @typedef {object} ProviderHttpDiagnostic
+ * @property {'headers' | 'length' | 'upload' | 'endpoint' | 'response' | 'stream'} stage
+ * @property {{ method: boolean, path: boolean, host: boolean, origin: boolean, cookie: boolean, authorization: boolean, encoding: boolean, contentType: boolean }} [checks]
+ */
+
+/**
  * Credential-free HTTP adapter for a single inference capability. Run this
  * inside the operator's isolated broker namespace, with the endpoint supplied
  * over a private capability transport. Loopback binding alone is NOT process
@@ -25,6 +31,7 @@ import { createServer } from 'node:http';
  * @param {bigint} options.maxRequestBytes
  * @param {bigint} options.maxResponseBytes
  * @param {number} options.timeoutMs - Signed 32-bit host timer duration
+ * @param {(diagnostic: ProviderHttpDiagnostic) => void | Promise<void>} [options.onDiagnostic] Host-only fixed metadata; never request values.
  */
 export const makeProviderHttpListener = async ({
   endpoint,
@@ -33,6 +40,7 @@ export const makeProviderHttpListener = async ({
   maxRequestBytes,
   maxResponseBytes,
   timeoutMs,
+  onDiagnostic = () => {},
 }) => {
   (Number.isInteger(port) && port >= 0 && port <= 65_535) || Fail`Invalid port`;
   (Number.isInteger(maxConnections) &&
@@ -100,25 +108,31 @@ export const makeProviderHttpListener = async ({
     };
     pending.add(stop);
     response.once('close', stop);
+    /** @type {ProviderHttpDiagnostic['stage']} */
+    let stage = 'headers';
+    const checks = harden({
+      method: request.method === 'POST',
+      path: ['/v1/responses', '/v1/messages', '/v1/chat/completions'].includes(
+        request.url || '',
+      ),
+      host: request.headers.host === authority,
+      origin: request.headers.origin === undefined,
+      cookie: request.headers.cookie === undefined,
+      authorization: request.headers.authorization === undefined,
+      encoding: request.headers['content-encoding'] === undefined,
+      contentType: /^application\/json(?:;\s*charset=utf-8)?$/i.test(
+        request.headers['content-type'] || '',
+      ),
+    });
     try {
-      (request.method === 'POST' &&
-        ['/v1/responses', '/v1/messages', '/v1/chat/completions'].includes(
-          request.url || '',
-        ) &&
-        request.headers.host === authority &&
-        request.headers.origin === undefined &&
-        request.headers.cookie === undefined &&
-        request.headers.authorization === undefined &&
-        request.headers['content-encoding'] === undefined &&
-        /^application\/json(?:;\s*charset=utf-8)?$/i.test(
-          request.headers['content-type'] || '',
-        )) ||
-        Fail`Invalid inference request`;
+      Object.values(checks).every(Boolean) || Fail`Invalid inference request`;
+      stage = 'length';
       const length = request.headers['content-length'];
       length === undefined ||
         (/^\d+$/.test(length) && BigInt(length) <= maxRequestBytes) ||
         Fail`Request too large`;
       const decoder = new TextDecoder('utf-8', { fatal: true });
+      stage = 'upload';
       let bytes = 0n;
       const parts = [];
       for await (const chunk of request) {
@@ -128,6 +142,7 @@ export const makeProviderHttpListener = async ({
       }
       parts.push(decoder.decode());
       !stopped || Fail`HTTP consumer disconnected`;
+      stage = 'endpoint';
       const result = await E(endpoint).requestStream(
         harden({
           method: 'POST',
@@ -136,6 +151,7 @@ export const makeProviderHttpListener = async ({
         }),
       );
       reader = result.reader;
+      stage = 'response';
       if (stopped) {
         void E(reader)
           .return()
@@ -161,6 +177,7 @@ export const makeProviderHttpListener = async ({
         connection: 'close',
       });
       response.flushHeaders();
+      stage = 'stream';
       let responseBytes = 0n;
       for (;;) {
         // eslint-disable-next-line no-await-in-loop
@@ -193,6 +210,15 @@ export const makeProviderHttpListener = async ({
       }
       response.end();
     } catch (_error) {
+      try {
+        void Promise.resolve(
+          onDiagnostic(
+            harden({ stage, ...(stage === 'headers' ? { checks } : {}) }),
+          ),
+        ).catch(() => {});
+      } catch (_diagnosticError) {
+        // Host diagnostics must not change HTTP settlement or echo errors.
+      }
       if (!response.headersSent && !response.destroyed) {
         response.writeHead(502, {
           connection: 'close',

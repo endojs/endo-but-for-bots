@@ -18,6 +18,50 @@ const options = harden({
 });
 
 test.serial(
+  'HTTP admission diagnostics expose fixed checks but never request data',
+  async t => {
+    t.timeout(5000);
+    const diagnostics = [];
+    const listener = await makeProviderHttpListener({
+      ...options,
+      endpoint: Far('must not dispatch', {
+        requestStream() {
+          t.fail('must not dispatch');
+        },
+      }),
+      onDiagnostic: diagnostic => {
+        diagnostics.push(diagnostic);
+        throw Error('observer-canary-secret');
+      },
+    });
+    t.teardown(() => listener.dispose());
+    const response = await requestHttp(`${listener.url}/v1/responses`, {
+      method: 'POST',
+      headers: { ...headers, 'content-encoding': 'encoding-canary-secret' },
+      body: 'body-canary-secret',
+    });
+    t.is(response.statusCode, 502);
+    t.is(await readHttpText(response), 'Inference request failed');
+    t.deepEqual(diagnostics, [
+      {
+        stage: 'headers',
+        checks: {
+          method: true,
+          path: true,
+          host: true,
+          origin: true,
+          cookie: true,
+          authorization: true,
+          encoding: false,
+          contentType: true,
+        },
+      },
+    ]);
+    t.false(JSON.stringify(diagnostics).includes('canary'));
+  },
+);
+
+test.serial(
   'HTTP listener forwards incremental chunks and strips caller headers',
   async t => {
     t.timeout(5000);

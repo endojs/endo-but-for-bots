@@ -13,12 +13,13 @@ import {
 } from './backend-factory.js';
 import { makeBrokerAppServerArgv } from './broker-launch.js';
 import { makeCodexRuntimeVerifier } from './runtime-verifier.js';
+import { normalizeCodexVolumeLimits } from './volume-limits.js';
 
 const GiB = 1024n ** 3n;
 const MiB = 1024n ** 2n;
 // One policy anchor and one admitted operation have independent cgroups.
 // Reserve half the aggregate memory, PID, and CPU budget for each.
-const resources = harden({
+const standardResources = harden({
   memoryBytes: 2n * GiB,
   pids: 256,
   cpuCores: 2,
@@ -74,10 +75,20 @@ const assertExact = (actual, expected, label) => {
  *
  * @param {{sandbox: any, volumeProvider: any, runtimeVerifier?: any,
  * imageRef: string, imageDigest: string, providerOrigin: string,
- * accountRef: string, brokerAuthMode?: 'api-key' | 'oauth'}} powers
+ * accountRef: string, brokerAuthMode?: 'api-key' | 'oauth' | 'subscription',
+ * volumeLimits?: {workspaceBytes:bigint,stateBytes:bigint}}} powers
  */
 export const makeAttestedCodexSliceFactory = powers => {
   const { imageDigest, imageRef } = powers;
+  const volumeLimits = normalizeCodexVolumeLimits(powers.volumeLimits);
+  // Writable accounting includes both tmpfs copies and shm plus the two
+  // shared durable volumes. Attestation must report the actual sum, not the
+  // standard profile's larger ceiling when the operator reduces disk quotas.
+  const resources = harden({
+    ...standardResources,
+    writableBytes:
+      4n * GiB + volumeLimits.workspaceBytes + volumeLimits.stateBytes,
+  });
   const runtimeVerifier = powers.runtimeVerifier ?? makeCodexRuntimeVerifier();
   /^sha256:[0-9a-f]{64}$/.test(imageDigest) ||
     Fail`Image digest must be pinned`;
@@ -173,14 +184,14 @@ export const makeAttestedCodexSliceFactory = powers => {
         kind: 'volume',
         source: volumes.workspaceVolume,
         destination: '/workspace',
-        sizeBytes: 8n * GiB,
+        sizeBytes: volumeLimits.workspaceBytes,
       },
       {
         role: 'codex-state',
         kind: 'volume',
         source: volumes.stateVolume,
         destination: '/codex-home',
-        sizeBytes: 4n * GiB,
+        sizeBytes: volumeLimits.stateBytes,
       },
       { role: 'tmp', kind: 'tmpfs', destination: '/tmp', sizeBytes: GiB },
       {

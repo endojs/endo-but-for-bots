@@ -10,6 +10,14 @@ import { isCredentialRejection } from './provider-broker.js';
 /** @import { UpstreamRequest } from './provider-broker.js' */
 
 /**
+ * Host-only failure metadata. Never includes request data, headers, response
+ * bodies, URLs, or exception text. HTTP statuses are restricted to 100–599.
+ * @typedef {object} ProviderTransportDiagnostic
+ * @property {'request' | 'fetch' | 'response' | 'body' | 'timeout'} stage
+ * @property {number} [status]
+ */
+
+/**
  * Per-lease fetch transport. Fetch is an explicit trusted power, never ambient
  * network authority. Responses support bounded, incremental pulls with a deadline that remains
  * active until EOF or cancellation. The compatibility request method buffers.
@@ -23,12 +31,14 @@ import { isCredentialRejection } from './provider-broker.js';
  * @param {bigint} options.maxResponseBytes
  * @param {(callback: () => void, delay: number) => unknown} [options.setTimer]
  * @param {(timer: unknown) => void} [options.clearTimer]
+ * @param {(diagnostic: ProviderTransportDiagnostic) => void | Promise<void>} [options.onDiagnostic]
  */
 export const makeProviderFetchTransport = ({
   fetch,
   timeoutMs,
   maxRequestBytes,
   maxResponseBytes,
+  onDiagnostic = () => {},
   setTimer = (callback, delay) => globalThis.setTimeout(callback, delay),
   clearTimer = timer =>
     globalThis.clearTimeout(
@@ -48,6 +58,15 @@ export const makeProviderFetchTransport = ({
   let disposed = false;
   /** @type {Set<() => void>} */
   const pending = new Set();
+  // Match the broker's bounded admission envelope, not M.string's implicit
+  // 100,000-character default. The request's UTF-8 byte limit is still checked
+  // before fetch; 8MiB is the private provider pipe's maximum frame size.
+  const BodyShape = M.string({
+    stringLengthLimit: Math.max(
+      100_000,
+      Number(maxRequestBytes < 8_388_608n ? maxRequestBytes : 8_388_608n),
+    ),
+  });
   const transport = makeExo(
     'ProviderFetchTransport',
     M.interface('ProviderFetchTransport', {
@@ -56,7 +75,7 @@ export const makeProviderFetchTransport = ({
           url: M.string(),
           method: M.string(),
           headers: M.recordOf(M.string(), M.string()),
-          body: M.string(),
+          body: BodyShape,
           redirect: /** @type {const} */ ('error'),
           maxResponseBytes: M.bigint(),
         }),
@@ -67,7 +86,7 @@ export const makeProviderFetchTransport = ({
           url: M.string(),
           method: M.string(),
           headers: M.recordOf(M.string(), M.string()),
-          body: M.string(),
+          body: BodyShape,
           redirect: /** @type {const} */ ('error'),
           maxResponseBytes: M.bigint(),
         }),
@@ -102,6 +121,26 @@ export const makeProviderFetchTransport = ({
         let reader;
         let finished = false;
         let credentialRejected = false;
+        /** @type {ProviderTransportDiagnostic['stage']} */
+        let stage = 'request';
+        /** @type {number | undefined} */
+        let status;
+        let reported = false;
+        const reportFailure = () => {
+          if (reported) return;
+          reported = true;
+          try {
+            const diagnostic = harden({
+              stage,
+              ...(status === undefined ? {} : { status }),
+            });
+            // A host observer must not change request settlement or leak its
+            // own exception through the provider capability.
+            void Promise.resolve(onDiagnostic(diagnostic)).catch(() => {});
+          } catch (_error) {
+            // Diagnostics are best effort and silent by default.
+          }
+        };
         const cancelBody = () => {
           if (reader) {
             // Cancellation is best effort and cannot extend the request deadline.
@@ -133,7 +172,11 @@ export const makeProviderFetchTransport = ({
           finish();
         };
         pending.add(stop);
-        const timer = setTimer(stop, timeoutMs);
+        const timer = setTimer(() => {
+          stage = 'timeout';
+          reportFailure();
+          stop();
+        }, timeoutMs);
         try {
           const url = new URL(request.url);
           (url.protocol === 'https:' &&
@@ -153,17 +196,25 @@ export const makeProviderFetchTransport = ({
               ? request.maxResponseBytes
               : maxResponseBytes;
           for (const [name, value] of Object.entries(request.headers)) {
-            ([
-              'authorization',
-              'x-api-key',
-              'anthropic-version',
-              'anthropic-beta',
-              'content-type',
-            ].includes(name) &&
+            const subscriptionHeader =
+              request.url ===
+                'https://chatgpt.com/backend-api/codex/responses' &&
+              ((name === 'chatgpt-account-id' &&
+                /^[A-Za-z0-9_-]{1,256}$/.test(value)) ||
+                (name === 'originator' && value === 'codex_cli_rs'));
+            ((subscriptionHeader ||
+              [
+                'authorization',
+                'x-api-key',
+                'anthropic-version',
+                'anthropic-beta',
+                'content-type',
+              ].includes(name)) &&
               typeof value === 'string' &&
               /^[\x20-\x7e]*$/.test(value)) ||
               Fail`Invalid provider header`;
           }
+          stage = 'fetch';
           const fetching = Promise.resolve(
             fetch(url.href, {
               method: 'POST',
@@ -183,6 +234,14 @@ export const makeProviderFetchTransport = ({
             return response;
           });
           const response = await Promise.race([fetching, stopped]);
+          stage = 'response';
+          if (
+            Number.isInteger(response.status) &&
+            response.status >= 100 &&
+            response.status <= 599
+          ) {
+            status = response.status;
+          }
           // Only successful inference bodies are exposed; never redirects,
           // authentication challenges, response headers, or error payloads.
           reader = response.body?.getReader();
@@ -211,6 +270,7 @@ export const makeProviderFetchTransport = ({
             (/^\d+$/.test(length) && BigInt(length) <= limit) ||
             Fail`Provider response too large`;
           const decoder = new TextDecoder('utf-8', { fatal: true });
+          stage = 'body';
           let bytes = 0n;
           let reading = false;
           const stream = makeExo(
@@ -247,6 +307,7 @@ export const makeProviderFetchTransport = ({
                     value: decoder.decode(chunk.value, { stream: true }),
                   });
                 } catch (_error) {
+                  reportFailure();
                   stop();
                   return Fail`Provider transport failed`;
                 } finally {
@@ -259,6 +320,7 @@ export const makeProviderFetchTransport = ({
           );
           return harden({ status: response.status, reader: stream });
         } catch (_error) {
+          reportFailure();
           stop();
           // This exact wording is the contract `isCredentialRejection` reads.
           if (credentialRejected) return Fail`Provider credential rejected`;
