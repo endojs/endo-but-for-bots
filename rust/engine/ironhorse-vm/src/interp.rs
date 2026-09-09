@@ -65897,6 +65897,35 @@ impl Interp {
         roots.push(self.global_obj);
         roots.extend(self.global_props.values().copied());
         roots.extend(self.intrinsics.values().copied());
+        // Symbol-keyed methods and the Error stack accessor are installed
+        // lazily, outside proto_methods/proto_accessors. Their boot identities
+        // must survive even before any crank names the corresponding key.
+        roots.extend([
+            self.string_iterator_method,
+            self.async_iterator_identity,
+            self.iterator_identity,
+            self.segments_iterator_method,
+            self.segment_iterator_identity,
+        ]);
+        if let Some((holder, getter, setter)) = self.error_stack_accessor {
+            roots.extend([holder, getter, setter]);
+        }
+        // These lazy getters are found by native kind in the install pass,
+        // rather than through a dedicated slot field. Keep that lookup's
+        // candidates alive too; the functions table is otherwise weak-keyed.
+        roots.extend(self.functions.iter().filter_map(|(owner, info)| {
+            matches!(
+                info.method,
+                Some(
+                    NativeMethod::TypedArrayToStringTagGetter
+                        | NativeMethod::PromiseSpeciesGetter
+                        | NativeMethod::RegExpSpeciesGetter
+                        | NativeMethod::ArrayBufferSpeciesGetter
+                )
+            )
+            .then_some(*owner)
+        }));
+
         roots.extend([
             self.object_proto,
             self.function_proto,
@@ -67419,8 +67448,16 @@ mod reused_boot_native_tests {
     #[test]
     fn copy_object_in_recycled_boot_slot_is_not_a_boot_native() {
         let mut m = Interp::new();
+        // Seed a disposable boot-range object so this admission test does not
+        // depend on incorrectly collecting a lazily installed intrinsic.
+        let disposable = m.slots.alloc(Slot::instance(m.object_proto));
+        m.boot_slot_count = m.slots.capacity();
         m.collect_garbage();
         let function = m.alloc_method(NativeMethod::CopyObject);
+        assert_eq!(
+            function, disposable,
+            "fixture must recycle the seeded object"
+        );
         assert!(
             function.0 < m.boot_slot_count,
             "fixture must reuse a boot slot"
