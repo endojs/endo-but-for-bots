@@ -2316,8 +2316,8 @@ pub enum NativeMethod {
     /// `Object.assign(target, ...sources)` — copy each source's live own
     /// enumerable string and symbol properties through the object MOP.
     ObjectAssign,
-    /// `Object.fromEntries(iterable)` for the dense-Array iterable path. Entry
-    /// objects are read by keys `0` and `1` (not iterated themselves).
+    /// `Object.fromEntries(iterable)` consumes entry objects through the
+    /// iterator protocol. Each entry is read by keys `0` and `1`.
     ObjectFromEntries,
     /// `Object.keys(o)` — the own enumerable string-keyed property names, in
     /// property-creation order, as a fresh `Array` of interned key strings.
@@ -2325,23 +2325,15 @@ pub enum NativeMethod {
     /// `Object.create(proto[, properties])` for ordinary prototypes and the
     /// same descriptor machinery as `Object.defineProperties`.
     ObjectCreate,
-    /// `Object.getOwnPropertyDescriptor(o, k)` — the fully-populated data
-    /// descriptor object (`{value, writable, enumerable, configurable}`) for
-    /// `o`'s own property `k`, or `undefined` when absent.
+    /// `Object.getOwnPropertyDescriptor(o, k)` returns the own data or accessor
+    /// descriptor for `k`, or `undefined` when absent.
     ObjectGetOwnPropertyDescriptor,
     /// `Object.getOwnPropertyNames(o)` — all own string keys, including
     /// non-enumerable Error `message`/`cause` properties.
     ObjectGetOwnPropertyNames,
-    /// `Object.defineProperty(o, k, descriptor)` — define a **new** own data
-    /// property on an ordinary object from a full four-field data descriptor
-    /// (`{value, writable, enumerable, configurable}`), storing the
-    /// `writable`/`enumerable`/`configurable` booleans as XS's property flag
-    /// byte (`XS_DONT_SET_FLAG`/`XS_DONT_ENUM_FLAG`/`XS_DONT_DELETE_FLAG`) so
-    /// the attributes ripple through `Object.keys` (the enumerable filter) and
-    /// `getOwnPropertyDescriptor` (the flag → descriptor readback). Returns
-    /// the object. The verifyProperty machinery. A partial/accessor
-    /// descriptor, a redefine of an existing key, or an exotic receiver
-    /// self-names.
+    /// `Object.defineProperty(o, k, descriptor)` converts the descriptor and
+    /// defines the property through the modeled receiver's internal method.
+    /// A rejected definition throws; a successful definition returns the object.
     ObjectDefineProperty,
     /// `Object.defineProperties(o, descriptors)`; descriptors are snapshotted
     /// before any definition and then applied through the ordinary MOP seam.
@@ -2380,67 +2372,46 @@ pub enum NativeMethod {
     /// `Object.prototype.propertyIsEnumerable(k)` — whether `k` is an own
     /// enumerable property of the receiver.
     ObjectPropertyIsEnumerable,
-    /// `Reflect.getPrototypeOf(target)` (`fx_Reflect_getPrototypeOf` →
-    /// `mxBehaviorGetPrototype`): the target's `[[Prototype]]` — a reference to
-    /// the prototype instance, or `null` for a null-prototype object. A
-    /// non-object target self-names (XS throws a TypeError; the covered grammar
-    /// never passes a primitive here).
+    /// `Reflect.getPrototypeOf(target)` calls `[[GetPrototypeOf]]` after
+    /// requiring an object target.
     ReflectGetPrototypeOf,
-    /// `Reflect.setPrototypeOf(target, proto)` (`fx_Reflect_setPrototypeOf` →
-    /// `mxBehaviorSetPrototype`): install `proto` (an object or `null`) as the
-    /// target's `[[Prototype]]`, returning whether it succeeded — `false` only
-    /// when the target is non-extensible and `proto` differs from the current
-    /// prototype. Ordinary receivers only (an exotic side-table object skips).
+    /// `Reflect.setPrototypeOf(target, proto)` calls `[[SetPrototypeOf]]`
+    /// after validating the object target and object-or-null prototype.
+    /// Returns whether the internal method accepts the change.
     ReflectSetPrototypeOf,
     ReflectIsExtensible,
     ReflectPreventExtensions,
-    /// `Reflect.getOwnPropertyDescriptor(target, key)`
-    /// (`fx_Reflect_getOwnPropertyDescriptor`): identical result to
-    /// `Object.getOwnPropertyDescriptor` (the data-descriptor object or
-    /// `undefined`), but a non-object target self-names rather than coercing.
+    /// `Reflect.getOwnPropertyDescriptor(target, key)` returns an own data
+    /// or accessor descriptor, or `undefined`, through `[[GetOwnProperty]]`.
+    /// A non-object target throws TypeError.
     ReflectGetOwnPropertyDescriptor,
-    /// `Reflect.defineProperty(target, key, descriptor)`
-    /// (`fx_Reflect_defineProperty` → `mxBehaviorDefineOwnProperty`): the same
-    /// new-own-data-property define as `Object.defineProperty`, but returns a
-    /// **boolean** (`true` on success) instead of the object and never throws
-    /// on rejection. The covered shape is the four-field data descriptor on a
-    /// genuinely-new key of an ordinary receiver.
+    /// `Reflect.defineProperty(target, key, descriptor)` converts the
+    /// descriptor and calls `[[DefineOwnProperty]]`, returning its Boolean
+    /// acceptance result. Invalid arguments and abrupt completions still throw.
     ReflectDefineProperty,
-    /// `Reflect.ownKeys(target)` (`fx_Reflect_ownKeys` → `mxBehaviorOwnKeys`):
-    /// a fresh `Array` of **all** own string-keyed property names (enumerable
-    /// or not), in creation order. Ordinary receivers with string keys only;
-    /// an exotic object or an unclassifiable key self-names.
+    /// `Reflect.ownKeys(target)` returns the string and symbol keys produced
+    /// by the object target's `[[OwnPropertyKeys]]` internal method.
     ReflectOwnKeys,
-    /// `Reflect.has(target, key)` (`fx_Reflect_has` → `mxBehaviorHasProperty`):
-    /// the `key in target` chain walk as a boolean. Same soundness gate as the
-    /// `in` operator (a boot default-key name the program never referenced
-    /// self-names rather than risk a wrong `false`).
+    /// `Reflect.has(target, key)` calls `[[HasProperty]]` on the object target
+    /// with the converted property key.
     ReflectHas,
-    /// `Reflect.get(target, key[, receiver])` (`fx_Reflect_get` →
-    /// `mxBehaviorGetProperty`): the own-or-inherited data-property value (the
-    /// `receiver` argument is irrelevant to a data property, so it is ignored).
-    /// Same default-key soundness gate as `has`.
+    /// `Reflect.get(target, key[, receiver])` calls `[[Get]]` with the
+    /// explicit receiver, or the target when it is omitted.
     ReflectGet,
-    /// `Reflect.set(target, key, value[, receiver])` (`fx_Reflect_set` →
-    /// `mxBehaviorSetProperty`): an ordinary `[[Set]]` returning whether it was
-    /// accepted — `false` when the own data property is non-writable or a new
-    /// key lands on a non-extensible receiver, `true` otherwise (creating or
-    /// updating the own property).
+    /// `Reflect.set(target, key, value[, receiver])` calls `[[Set]]` with the
+    /// explicit receiver, or the target when omitted, and returns its Boolean
+    /// acceptance result.
     ReflectSet,
-    /// `Reflect.deleteProperty(target, key)` (`fx_Reflect_deleteProperty` →
-    /// `mxBehaviorDeleteProperty`): the ordinary own-property delete as a
-    /// boolean (`false` for a non-configurable own property, `true` otherwise
-    /// or when absent).
+    /// `Reflect.deleteProperty(target, key)` calls `[[Delete]]` on the
+    /// object target and returns its Boolean acceptance result.
     ReflectDeleteProperty,
-    /// `Reflect.apply(target, thisArgument, argumentsList)` — an honest named
-    /// skip this child: the argument-list spread re-enters the interpreter
-    /// frame machinery (the same re-entrant trampoline as
-    /// `Function.prototype.apply` with an actual array), whose metering is a
-    /// later increment.
+    /// `Reflect.apply(target, thisArgument, argumentsList)` expands the
+    /// array-like arguments list and invokes the callable target through the
+    /// shared abstract Call operation.
     ReflectApply,
-    /// `Reflect.construct(target, argumentsList[, newTarget])` — an honest
-    /// named skip this child: re-entrant construction with a spread argument
-    /// list, out of the covered trampoline scope.
+    /// `Reflect.construct(target, argumentsList[, newTarget])` checks the
+    /// constructors, expands the array-like arguments list, and delegates to
+    /// the shared construction operation.
     ReflectConstruct,
     /// `Proxy.revocable(target, handler)` (`xsProxy.c` `fx_Proxy_revocable`):
     /// returns `{ proxy, revoke }` where `revoke` is a
@@ -2462,11 +2433,9 @@ pub enum NativeMethod {
     /// its arguments. Handled specially in the `run` dispatch (it re-enters
     /// the interpreter frame machinery rather than computing a value).
     FunctionCall,
-    /// `Function.prototype.apply` — like `call`, but the arguments come from
-    /// an array. ironhorse models the no-array subset (`f.apply(thisArg)` /
-    /// `f.apply(thisArg, null|undefined)`), identical to `call` with no
-    /// arguments; an actual arguments array self-names (the Array read is
-    /// child-3 machinery).
+    /// `Function.prototype.apply` invokes the receiver function with the
+    /// given `this` and an array-like arguments list. A null or undefined list
+    /// supplies no arguments.
     FunctionApply,
     /// `Function.prototype.bind(thisArg, ...boundArgs)`
     /// (`fx_Function_prototype_bind`): create a **bound function** — a fresh
@@ -2500,9 +2469,8 @@ pub enum NativeMethod {
     /// `Symbol.prototype.toString()` (`fx_Symbol_prototype_toString` →
     /// `fxSymbolToString`): the descriptive string `Symbol(<description>)`.
     SymbolToString,
-    /// `Symbol.prototype.valueOf()` (`fx_Symbol_prototype_valueOf`): the
-    /// symbol primitive itself (unwrapping a Symbol wrapper object, though
-    /// ironhorse's covered grammar has only the primitive receiver).
+    /// `Symbol.prototype.valueOf()` returns the symbol primitive, unwrapping
+    /// a Symbol wrapper when necessary.
     SymbolValueOf,
     /// `Symbol.prototype[Symbol.toPrimitive](hint)`: the symbol primitive
     /// itself, unwrapping a Symbol wrapper object. The hint is ignored.
@@ -2537,59 +2505,56 @@ pub enum NativeMethod {
     /// `Symbol.keyFor(sym)` (`fx_Symbol_keyFor`): the registry key a
     /// registered symbol was interned under, or `undefined`.
     SymbolKeyFor,
-    /// `Array.prototype.push(...items)` — the **dense** fast path
-    /// (`fx_Array_prototype_push` with `fxCheckArray` succeeding): append the
-    /// arguments and return the new length. A sparse receiver (holes) takes
-    /// XS's generic slow path (different metering), so ironhorse self-names it an
-    /// honest skip.
+    /// `Array.prototype.push(...items)` appends the arguments and returns
+    /// the new length, using the generic property path when required.
     ArrayPush,
-    /// `Array.prototype.pop()` — the dense fast path
+    /// `Array.prototype.pop()`
     /// (`fx_Array_prototype_pop`): remove and return the last element (or
-    /// `undefined` on an empty array), shrinking the item chunk.
+    /// `undefined` on an empty array), updating the length.
     ArrayPop,
-    /// `Array.prototype.indexOf(value[, from])` — the dense fast path
+    /// `Array.prototype.indexOf(value[, from])`
     /// (`fx_Array_prototype_indexOf`): the first index at which `value` is
     /// found by strict equality, or `-1`.
     ArrayIndexOf,
-    /// `Array.prototype.join([sep])` — the dense fast path
+    /// `Array.prototype.join([sep])`
     /// (`fx_Array_prototype_join`): the elements stringified and joined by
     /// `sep` (default `","`), holes/`undefined`/`null` contributing empty.
     ArrayJoin,
-    /// `Array.prototype.includes(value[, from])` — dense fast path
+    /// `Array.prototype.includes(value[, from])`
     /// (`fx_Array_prototype_includes`): whether `value` is an element (by
     /// SameValueZero), scanning from `from`.
     ArrayIncludes,
-    /// `Array.prototype.lastIndexOf(value[, from])` — dense fast path: the last
+    /// `Array.prototype.lastIndexOf(value[, from])`: the last
     /// index at which `value` is found (strict equality) scanning backward, or
     /// `-1`.
     ArrayLastIndexOf,
-    /// `Array.prototype.fill(value[, start[, end]])` — dense fast path
+    /// `Array.prototype.fill(value[, start[, end]])`
     /// (`fx_Array_prototype_fill`): set `[start, end)` to `value`, returning
     /// the array.
     ArrayFill,
-    /// `Array.prototype.reverse()` — dense fast path
+    /// `Array.prototype.reverse()`
     /// (`fx_Array_prototype_reverse`): reverse the elements in place, returning
     /// the array.
     ArrayReverse,
-    /// `Array.prototype.slice([start[, end]])` — dense fast path
+    /// `Array.prototype.slice([start[, end]])`
     /// (`fx_Array_prototype_slice`): a new array with the elements of
     /// `[start, end)`.
     ArraySlice,
-    /// `Array.prototype.concat(...args)` — dense fast path
+    /// `Array.prototype.concat(...args)`
     /// (`fx_Array_prototype_concat`): a new array of the receiver's elements
     /// followed by each argument (spreading array arguments).
     ArrayConcat,
-    /// `Array.prototype.at(index)` — dense fast path (`fx_Array_prototype_at`):
+    /// `Array.prototype.at(index)` (`fx_Array_prototype_at`):
     /// the element at `index` (negative counts from the end), or `undefined`.
     ArrayAt,
-    /// `Array.prototype.shift()` — dense fast path (`fx_Array_prototype_shift`):
+    /// `Array.prototype.shift()` (`fx_Array_prototype_shift`):
     /// remove and return the first element, shifting the rest down.
     ArrayShift,
-    /// `Array.prototype.unshift(...items)` — dense fast path
+    /// `Array.prototype.unshift(...items)`
     /// (`fx_Array_prototype_unshift`): prepend the arguments, returning the new
     /// length.
     ArrayUnshift,
-    /// `Array.prototype.copyWithin(target[, start[, end]])` — dense fast path
+    /// `Array.prototype.copyWithin(target[, start[, end]])`
     /// (`fx_Array_prototype_copyWithin`): copy the block `[start, end)` to
     /// `target` in place, returning the array.
     ArrayCopyWithin,
@@ -2847,11 +2812,9 @@ pub enum NativeMethod {
     GlobalPetrify,
     /// `$262.detachArrayBuffer(buffer)`, the test262 host hook.
     Test262DetachArrayBuffer,
-    /// `JSON.stringify(value)` (`fx_JSON_stringify`): serialize `value` over
-    /// XS's traversal order. The stringifier's working buffer is C-malloc'd
-    /// (unmetered); only the final `fxNewChunk(offset)` meters. The
-    /// no-replacer / no-space subset is modeled; a replacer, a space argument,
-    /// a `toJSON` method, or a wrapper/BigInt value self-names an honest skip.
+    /// `JSON.stringify(value[, replacer[, space]])` serializes through
+    /// observable property reads, `toJSON`, replacer callbacks or property
+    /// lists, and wrapper unboxing. A remaining BigInt value throws TypeError.
     JsonStringify,
     /// `JSON.parse(text)` (`fx_JSON_parse`): parse `text` to a value.
     JsonParse,
@@ -2974,11 +2937,10 @@ pub enum NativeMethod {
     /// `ArrayBuffer.isView(arg)` (`fx_ArrayBuffer_isView`): `true` iff the
     /// argument is a TypedArray or DataView view, else `false`.
     ArrayBufferIsView,
-    /// An `Atomics.*` namespace method (`xsAtomics.c`). The payload selects the
-    /// operation (see [`AtomicOp`]). Single-agent: the read-modify-write is a
-    /// plain non-atomic sequence over the view's backing store (ironhorse runs
-    /// one agent). `wait`/`notify`/`waitAsync` and BigInt-element ops self-name
-    /// honest skips.
+    /// An `Atomics.*` operation selected by the payload (see [`AtomicOp`]).
+    /// Single-agent read-modify-write operations support integer and BigInt
+    /// views using ordinary backing-store byte operations. Wait, notify, and
+    /// waitAsync are refused.
     Atomic(u8),
     /// `DataView.prototype.get<Type>(byteOffset[, littleEndian])`
     /// (`fx_DataView_prototype_get`): read an element of the type indexed by
@@ -3000,10 +2962,9 @@ pub enum NativeMethod {
     /// `Promise.prototype.catch(onRejected)` (`fx_Promise_prototype_catch`):
     /// `then(undefined, onRejected)`.
     PromiseCatch,
-    /// `Promise.prototype.finally(onFinally)`
-    /// (`fx_Promise_prototype_finally`): a `then` whose handlers run
-    /// `onFinally` and pass the settlement through — a later increment
-    /// (self-names until then).
+    /// `Promise.prototype.finally(onFinally)` registers finally handlers,
+    /// awaits the callback result through the selected species constructor,
+    /// and restores the original settlement unless the callback throws or rejects.
     PromiseFinally,
     /// The anonymous length-1 `thenFinally` / `catchFinally` closures created
     /// by `Promise.prototype.finally` for an observable custom `then`. Their
@@ -3020,12 +2981,11 @@ pub enum NativeMethod {
     /// the suspended body with `v` as the yield expression's value, running
     /// to the next `yield` or completion; returns `{value, done}`.
     GeneratorNext,
-    /// `%GeneratorPrototype%.return(v)` (`fx_Generator_prototype_return`):
-    /// force completion with `v` (unwinding any `finally` is a named skip).
+    /// `%GeneratorPrototype%.return(v)` resumes with a return completion
+    /// through pending finally handlers.
     GeneratorReturn,
-    /// `%GeneratorPrototype%.throw(e)` (`fx_Generator_prototype_throw`):
-    /// resume by throwing `e` at the suspension point (a named skip until the
-    /// throw-into-suspended path is modeled).
+    /// `%GeneratorPrototype%.throw(e)` resumes by throwing `e` at the
+    /// suspension point.
     GeneratorThrow,
     AsyncGeneratorNext,
     AsyncGeneratorReturn,
@@ -3285,9 +3245,8 @@ pub const TYPED_ARRAY_TYPES: &[TypedArrayType] = &[
 /// in the [`Interp::typed_arrays`] side table. `kind` indexes
 /// [`TYPED_ARRAY_TYPES`]; `buffer` names the backing `ArrayBuffer`
 /// instance; `offset` is the `byteOffset`; `length` is the element count
-/// (XS's `size >> shift`). A BigInt-element view (`kind` 0/1) is bound and
-/// constructs, but its element read/write self-names until BigInt coercion
-/// lands.
+/// (XS's `size >> shift`). Kinds 0 and 1 are BigInt-element views; their
+/// element reads and writes use the BigInt conversion paths.
 #[derive(Copy, Clone, Debug)]
 struct TypedArrayData {
     kind: u8,
@@ -7452,16 +7411,11 @@ impl Interp {
         self.invoke_value(code, func, this, args)
     }
 
-    /// Synchronously invoke a user-function callback `func` with receiver
-    /// `this` and `args`, running its body to `END` and returning its
-    /// completion value — the re-entrant substrate the callback-taking
-    /// `Array.prototype` methods use (XS's `fxRunCount` per element). It sets
-    /// up the callee frame on the shared value stack, enters it, and runs a
-    /// nested [`Self::dispatch_at`] that stops when the callback's frame
-    /// returns to the current call depth; the caller's activation is restored
-    /// exactly as an ordinary return does. A non-user-function callback (a
-    /// native, or a non-callable) self-names an honest skip. Propagates a
-    /// callback throw / meter abort to the caller.
+    /// Invoke a known function callback with receiver `this` and `args`.
+    /// Native methods and native callables use their frame-dispatch seams;
+    /// bound functions return through the shared Call operation. Bytecode
+    /// callbacks run nested dispatch until their frame returns, restoring the
+    /// caller's activation. Propagate callback throws and meter aborts.
     fn run_user_callback(
         &mut self,
         code: &[u8],
@@ -7469,8 +7423,8 @@ impl Interp {
         this: Slot,
         args: &[Slot],
     ) -> Result<Slot, Step> {
-        // Resolve the callee. Only a user (bytecode) function is driven here;
-        // a native callback or a non-callable is out of the modeled subset.
+        // Resolve the callee to a known function row before selecting its
+        // bytecode, native, method, or bound-function path.
         let f = match func.value {
             Payload::Reference(f) if self.functions.contains_key(&f) => f,
             _ => {
@@ -7490,8 +7444,7 @@ impl Interp {
             if let Some(m) = self.method_of(f) {
                 // A **native-method** callback (`a.map(nf.format)` — the
                 // NumberFormat bound-format function; or any prototype method
-                // passed by reference). `run_callback` drives only bytecode
-                // bodies, so dispatch the native method through the same seam
+                // passed by reference). Dispatch it through the same seam
                 // `invoke_getter` uses: build the [THIS, FUNCTION, RESULT, FRAME]
                 // frame + args and call `call_native_method`. A bound native
                 // (`nf.format`) recovers its owning instance from its side table,
@@ -9210,275 +9163,6 @@ impl Interp {
         Ok(String::from_utf8_lossy(&self.to_string_bytes_metered(primitive)).into_owned())
     }
 
-    /// Dispatch a native prototype **method** call (`obj.toString()`,
-    /// `obj.hasOwnProperty(k)`, `wrapper.valueOf()`, …). The value stack holds
-    /// the call frame `[THIS, FUNCTION, RESULT, FRAME]` from `base`; `THIS` is
-    /// the receiver. Computes the result from the receiver (no re-entry into
-    /// user code), meters the method's steps, collapses the region to the
-    /// result, and pushes it. A method whose receiver shape ironhorse cannot model
-    /// self-names (an honest skip).
-    /// disposeAsync rejects its promise for receiver validation errors;
-    /// the remaining resource-management methods throw synchronously.
-    fn explicit_resource_error(
-        &mut self,
-        code: &[u8],
-        method: NativeMethod,
-        name: &'static str,
-        message: String,
-    ) -> Result<Slot, Step> {
-        let error = self.internal_error(name, message);
-        if method == NativeMethod::AsyncDisposableStackDisposeAsync {
-            let promise = self.new_promise_instance();
-            self.settle_promise(code, promise, error, true)?;
-            Ok(Slot::of(Kind::Reference, Payload::Reference(promise)))
-        } else {
-            Err(self.raise_js(error))
-        }
-    }
-
-    fn explicit_resource_method(
-        &mut self,
-        method: NativeMethod,
-        this: Slot,
-        base: usize,
-        _argc: usize,
-        code: &[u8],
-    ) -> Result<Slot, Step> {
-        let is_async = matches!(
-            method,
-            NativeMethod::AsyncDisposableStackUse
-                | NativeMethod::AsyncDisposableStackAdopt
-                | NativeMethod::AsyncDisposableStackDefer
-                | NativeMethod::AsyncDisposableStackMove
-                | NativeMethod::AsyncDisposableStackDisposeAsync
-        );
-        let brand = if is_async {
-            "AsyncDisposableStack"
-        } else {
-            "DisposableStack"
-        };
-        let inst = match (this.kind, this.value) {
-            (Kind::Reference, Payload::Reference(inst))
-                if self
-                    .disposable_stacks
-                    .get(&inst)
-                    .is_some_and(|data| data.asynchronous == is_async) =>
-            {
-                inst
-            }
-            _ => {
-                return self.explicit_resource_error(
-                    code,
-                    method,
-                    "TypeError",
-                    format!("this: not a {brand} instance"),
-                )
-            }
-        };
-        let disposing = matches!(
-            method,
-            NativeMethod::DisposableStackDispose | NativeMethod::AsyncDisposableStackDisposeAsync
-        );
-        if !disposing && self.disposable_stacks[&inst].disposed {
-            return self.explicit_resource_error(
-                code,
-                method,
-                "ReferenceError",
-                format!("this: disposed {brand} instance"),
-            );
-        }
-        let arg = |n: usize| {
-            self.stack
-                .get(base + 4 + n)
-                .copied()
-                .unwrap_or_else(Slot::undefined)
-        };
-        if matches!(
-            method,
-            NativeMethod::DisposableStackUse | NativeMethod::AsyncDisposableStackUse
-        ) {
-            let resource = arg(0);
-            if matches!(resource.kind, Kind::Null | Kind::Undefined) {
-                return Ok(resource);
-            }
-            let resource_object = self.array_to_object(resource)?;
-            let Payload::Reference(resource_inst) = resource_object.value else {
-                unreachable!("ToObject result")
-            };
-            let symbol_name = if is_async { "asyncDispose" } else { "dispose" };
-            let mut disposer = match self.well_known_symbol_property_id(symbol_name) {
-                Some(id) => self.mop_get(code, resource_inst, id, resource)?,
-                None => Slot::undefined(),
-            };
-            // The pinned XS falls back on every non-callable async method.
-            if is_async && !self.is_callable_value(disposer) {
-                disposer = match self.well_known_symbol_property_id("dispose") {
-                    Some(id) => self.mop_get(code, resource_inst, id, resource)?,
-                    None => Slot::undefined(),
-                };
-            }
-            if !self.is_callable_value(disposer) {
-                return Err(self.catchable_type_error_msg(
-                    if is_async {
-                        "dispose: no a function"
-                    } else {
-                        "dispose: not a function"
-                    }
-                    .into(),
-                ));
-            }
-            // Measured add-record residue (see the constant).
-            self.meter.tick_raw(DISPOSABLE_STACK_ADD_METERING);
-            let data = self
-                .disposable_stacks
-                .get_mut(&inst)
-                .expect("brand checked");
-            data.records.push(DisposalRecord {
-                resource,
-                method: disposer,
-                pass_resource: false,
-            });
-            return Ok(resource);
-        }
-        if matches!(
-            method,
-            NativeMethod::DisposableStackAdopt | NativeMethod::AsyncDisposableStackAdopt
-        ) {
-            let resource = arg(0);
-            let disposer = arg(1);
-            if !self.is_callable_value(disposer) {
-                return Err(self.catchable_type_error_msg(
-                    if is_async {
-                        "dispose: no a function"
-                    } else {
-                        "dispose: not a function"
-                    }
-                    .into(),
-                ));
-            }
-            self.meter.tick_raw(DISPOSABLE_STACK_ADD_METERING);
-            let data = self
-                .disposable_stacks
-                .get_mut(&inst)
-                .expect("brand checked");
-            data.records.push(DisposalRecord {
-                resource,
-                method: disposer,
-                pass_resource: true,
-            });
-            return Ok(resource);
-        }
-        if matches!(
-            method,
-            NativeMethod::DisposableStackDefer | NativeMethod::AsyncDisposableStackDefer
-        ) {
-            let disposer = arg(0);
-            if !self.is_callable_value(disposer) {
-                return Err(self.catchable_type_error_msg(
-                    if is_async {
-                        "dispose: no a function"
-                    } else {
-                        "dispose: not a function"
-                    }
-                    .into(),
-                ));
-            }
-            self.meter.tick_raw(DISPOSABLE_STACK_ADD_METERING);
-            let data = self
-                .disposable_stacks
-                .get_mut(&inst)
-                .expect("brand checked");
-            data.records.push(DisposalRecord {
-                resource: Slot::undefined(),
-                method: disposer,
-                pass_resource: false,
-            });
-            return Ok(Slot::undefined());
-        }
-        if matches!(
-            method,
-            NativeMethod::DisposableStackMove | NativeMethod::AsyncDisposableStackMove
-        ) {
-            self.meter.tick_raw(DISPOSABLE_STACK_ADD_METERING);
-            let data = self
-                .disposable_stacks
-                .get_mut(&inst)
-                .expect("brand checked");
-            data.disposed = true;
-            let records = std::mem::take(&mut data.records);
-            let proto = match self.slots.get(inst).value {
-                Payload::Reference(proto) => proto,
-                _ => self.object_proto,
-            };
-            let moved = self.slots.alloc(Slot::instance(proto));
-            self.disposable_stacks.insert(
-                moved,
-                DisposableStackData {
-                    disposed: false,
-                    asynchronous: is_async,
-                    records,
-                },
-            );
-            return Ok(Slot::of(Kind::Reference, Payload::Reference(moved)));
-        }
-
-        let data = self
-            .disposable_stacks
-            .get_mut(&inst)
-            .expect("brand checked");
-        if data.disposed {
-            if is_async {
-                let promise = self.new_promise_instance();
-                self.settle_promise(code, promise, Slot::undefined(), false)?;
-                return Ok(Slot::of(Kind::Reference, Payload::Reference(promise)));
-            }
-            return Ok(Slot::undefined());
-        }
-        data.disposed = true;
-        let mut records = std::mem::take(&mut data.records);
-        let mut pending_error: Option<Slot> = None;
-        while let Some(record) = records.pop() {
-            let args = if record.pass_resource {
-                vec![record.resource]
-            } else {
-                Vec::new()
-            };
-            let this_arg = if record.pass_resource {
-                Slot::undefined()
-            } else {
-                record.resource
-            };
-            // A `use` record (this-bound @@dispose; `defer` records
-            // carry an undefined resource, `adopt` passes it as the
-            // argument) meters one extra dispatch unit at disposal.
-            if !record.pass_resource && record.resource.kind != Kind::Undefined {
-                self.meter.tick_raw(DISPOSE_USE_RECORD_METERING);
-            }
-            if let Err(error) =
-                self.run_callback_catching_throw(code, record.method, this_arg, &args)?
-            {
-                pending_error = Some(match pending_error {
-                    Some(suppressed) => self.build_suppressed_error(error, suppressed, None),
-                    None => error,
-                });
-            }
-        }
-        if is_async {
-            let promise = self.new_promise_instance();
-            self.settle_promise(
-                code,
-                promise,
-                pending_error.unwrap_or_else(Slot::undefined),
-                pending_error.is_some(),
-            )?;
-            Ok(Slot::of(Kind::Reference, Payload::Reference(promise)))
-        } else if let Some(error) = pending_error {
-            Err(self.raise_js(error))
-        } else {
-            Ok(Slot::undefined())
-        }
-    }
-
     fn call_native_method(
         &mut self,
         m: NativeMethod,
@@ -9515,232 +9199,6 @@ impl Interp {
                 vm.call_native_method_inner(m, base, argc, code)
             }
         })
-    }
-
-    /// Dispatch a `Reflect.*` reflective built-in (`xsProxy.c` `fx_Reflect_*`
-    /// → the `mxBehavior*` object-behavior primitives). Every property operation
-    /// routes through the complete internal-method MOP, so arrays, String
-    /// wrappers, TypedArrays, and proxies retain their exotic semantics. The
-    /// result is oracle-certified; the metering is the advisory native-frame
-    /// residual (accuracy-over-parity: the `Reflect` corpus is result-gated).
-    fn call_reflect(
-        &mut self,
-        m: NativeMethod,
-        base: usize,
-        argc: usize,
-        code: &[u8],
-    ) -> Result<Slot, Step> {
-        let _ = argc;
-        let arg0 = self
-            .stack
-            .get(base + 4)
-            .copied()
-            .unwrap_or_else(Slot::undefined);
-        let arg1 = self
-            .stack
-            .get(base + 5)
-            .copied()
-            .unwrap_or_else(Slot::undefined);
-        let arg2 = self
-            .stack
-            .get(base + 6)
-            .copied()
-            .unwrap_or_else(Slot::undefined);
-        let arg3 = self
-            .stack
-            .get(base + 7)
-            .copied()
-            .unwrap_or_else(Slot::undefined);
-        match m {
-            // `Reflect.getPrototypeOf(target)`: the target's `[[Prototype]]` —
-            // a reference to the prototype instance, or `null`. Sound for any
-            // object receiver (the prototype is the instance slot's payload).
-            NativeMethod::ReflectGetPrototypeOf => {
-                let inst = match arg0.value {
-                    Payload::Reference(o) if arg0.kind == Kind::Reference => o,
-                    _ => return Err(self.catchable_type_error_msg("target: not an object".into())),
-                };
-                self.meter.tick_raw(REFLECT_FRAME_METERING);
-                self.mop_get_prototype(code, inst)
-            }
-            // `Reflect.setPrototypeOf(target, proto)`: invoke the target's
-            // `[[SetPrototypeOf]]` with an object or `null`, returning success.
-            NativeMethod::ReflectSetPrototypeOf => {
-                let inst = match arg0.value {
-                    Payload::Reference(o) if arg0.kind == Kind::Reference => o,
-                    _ => return Err(self.catchable_type_error_msg("target: not an object".into())),
-                };
-                if !matches!(arg1.kind, Kind::Null | Kind::Reference) {
-                    return Err(self.catchable_type_error_msg("invalid prototype".into()));
-                }
-                self.meter.tick_raw(REFLECT_FRAME_METERING);
-                Ok(Slot::boolean(self.mop_set_prototype(code, inst, arg1)?))
-            }
-            NativeMethod::ReflectIsExtensible => {
-                let object = match arg0.value {
-                    Payload::Reference(object) if arg0.kind == Kind::Reference => object,
-                    _ => return Err(self.catchable_type_error_msg("target: not an object".into())),
-                };
-                Ok(Slot::boolean(self.mop_is_extensible(code, object)?))
-            }
-            NativeMethod::ReflectPreventExtensions => {
-                let object = match arg0.value {
-                    Payload::Reference(object) if arg0.kind == Kind::Reference => object,
-                    _ => return Err(self.catchable_type_error_msg("target: not an object".into())),
-                };
-                Ok(Slot::boolean(self.mop_prevent_extensions(code, object)?))
-            }
-            // `Reflect.getOwnPropertyDescriptor(target, key)`: identical result
-            // to `Object.getOwnPropertyDescriptor` — the data-descriptor object
-            // or `undefined`. A non-object target self-names (no coercion).
-            NativeMethod::ReflectGetOwnPropertyDescriptor => {
-                let inst = match arg0.value {
-                    Payload::Reference(o) if arg0.kind == Kind::Reference => o,
-                    _ => return Err(self.catchable_type_error_msg("target: not an object".into())),
-                };
-                let key = self.to_read_key(code, arg1)?;
-                match self.mop_get_own_property_read(code, inst, key)? {
-                    Some(descriptor) => {
-                        self.meter.tick_raw(GOPD_PRESENT_RESIDUAL_METERING);
-                        Ok(self.descriptor_object(descriptor))
-                    }
-                    None => {
-                        self.meter.tick_raw(GOPD_ABSENT_RESIDUAL_METERING);
-                        Ok(Slot::undefined())
-                    }
-                }
-            }
-            // `Reflect.defineProperty(target, key, descriptor)`: convert the
-            // key before the descriptor, then invoke `[[DefineOwnProperty]]`.
-            // Rejection is returned as `false`, not promoted to a throw.
-            NativeMethod::ReflectDefineProperty => {
-                let inst = match arg0.value {
-                    Payload::Reference(o) if arg0.kind == Kind::Reference => o,
-                    _ => return Err(self.catchable_type_error_msg("target: not an object".into())),
-                };
-                let id = self.to_property_id(code, arg1)?;
-                let descriptor_object = match arg2.value {
-                    Payload::Reference(d) if arg2.kind == Kind::Reference => d,
-                    _ => return Err(self.catchable_type_error_msg("invalid descriptor".into())),
-                };
-                let descriptor = self.descriptor_from_object(code, descriptor_object)?;
-                self.meter.tick_raw(DEFINE_PROPERTY_NEW_RESIDUAL_METERING);
-                Ok(Slot::boolean(
-                    self.mop_define_own_property(code, inst, id, descriptor)?,
-                ))
-            }
-            // `Reflect.ownKeys(target)`: a fresh Array containing the target's
-            // complete `[[OwnPropertyKeys]]` result, including exotic indices,
-            // non-enumerable strings, symbols, and proxy trap results.
-            NativeMethod::ReflectOwnKeys => {
-                let inst = match arg0.value {
-                    Payload::Reference(o) if arg0.kind == Kind::Reference => o,
-                    _ => return Err(self.catchable_type_error_msg("target: not an object".into())),
-                };
-                let keys = self.mop_own_keys(code, inst)?;
-                let n = keys.len() as u32;
-                self.meter.tick_raw(OBJECT_KEYS_FRAME_METERING);
-                self.charge_and_check(self.array_chunk_size_metering(n))?;
-                for _ in 0..n {
-                    self.meter.tick_slot_alloc();
-                }
-                Ok(self.array_from_slots(&keys))
-            }
-            // `Reflect.has(target, key)`: the `key in target` chain walk as a
-            // boolean (same soundness gate as `XS_CODE_IN`).
-            NativeMethod::ReflectHas => {
-                let inst = match arg0.value {
-                    Payload::Reference(o) if arg0.kind == Kind::Reference => o,
-                    _ => return Err(self.catchable_type_error_msg("target: not an object".into())),
-                };
-                let key = self.to_read_key(code, arg1)?;
-                self.meter.tick_raw(REFLECT_FRAME_METERING);
-                Ok(Slot::boolean(
-                    self.mop_has_read_with_recursions(code, inst, key)?.0,
-                ))
-            }
-            // `Reflect.get(target, key[, receiver])`: dispatch the target's
-            // full `[[Get]]`, including exotic objects and accessors that use
-            // the explicit receiver.
-            NativeMethod::ReflectGet => {
-                let inst = match arg0.value {
-                    Payload::Reference(o) if arg0.kind == Kind::Reference => o,
-                    _ => return Err(self.catchable_type_error_msg("target: not an object".into())),
-                };
-                let key = self.to_read_key(code, arg1)?;
-                let receiver = if argc >= 3 { arg2 } else { arg0 };
-                self.meter.tick_raw(REFLECT_FRAME_METERING);
-                self.mop_get_read(code, inst, key, receiver)
-            }
-            // `Reflect.set(target, key, value[, receiver])`: the target's
-            // complete `[[Set]]`, returning whether it was accepted.
-            NativeMethod::ReflectSet => {
-                let inst = match arg0.value {
-                    Payload::Reference(o) if arg0.kind == Kind::Reference => o,
-                    _ => return Err(self.catchable_type_error_msg("target: not an object".into())),
-                };
-                let id = self.to_property_id(code, arg1)?;
-                let receiver = if argc >= 4 { arg3 } else { arg0 };
-                self.meter.tick_raw(REFLECT_FRAME_METERING);
-                Ok(Slot::boolean(self.mop_set(code, inst, id, arg2, receiver)?))
-            }
-            // `Reflect.deleteProperty(target, key)`: the target's `[[Delete]]`
-            // result (`false` for a non-configurable own property).
-            NativeMethod::ReflectDeleteProperty => {
-                let inst = match arg0.value {
-                    Payload::Reference(o) if arg0.kind == Kind::Reference => o,
-                    _ => return Err(self.catchable_type_error_msg("target: not an object".into())),
-                };
-                let key = self.to_read_key(code, arg1)?;
-                self.meter.tick_raw(REFLECT_FRAME_METERING);
-                Ok(Slot::boolean(self.mop_delete_read(code, inst, key)?))
-            }
-            // `Reflect.apply` / `Reflect.construct`: re-entrant (spread argument
-            // list into the interpreter frame machinery); an honest named skip
-            // this child.
-            // `Reflect.apply(target, thisArgument, argumentsList)` (ECMA-262
-            // 28.1.1): `Call(target, thisArgument, CreateListFromArrayLike(...))`.
-            NativeMethod::ReflectApply => {
-                if !self.is_callable_value(arg0) {
-                    return Err(self.catchable_type_error_msg("target: not a function".into()));
-                }
-                if arg2.kind != Kind::Reference {
-                    return Err(
-                        self.catchable_type_error_msg("argumentsList: not an object".into())
-                    );
-                }
-                let args = self.arraylike_to_vec(code, arg2)?;
-                self.meter.tick_raw(REFLECT_FRAME_METERING);
-                self.invoke_value(code, arg0, arg1, &args)
-            }
-            // `Reflect.construct(target, argumentsList[, newTarget])` (ECMA-262
-            // 28.1.2): `Construct(target, args, newTarget)`.
-            NativeMethod::ReflectConstruct => {
-                // ECMA-262 28.1.2: both the target and the (defaulted) newTarget
-                // must be **constructors**, not merely callable — a native
-                // prototype method (the `format` getter, its bound function)
-                // has no `[[Construct]]`, so `Reflect.construct(fn, [], getter)`
-                // throws, and the harness `isConstructor(getter)` is `false`.
-                if !self.is_constructor_value(arg0) {
-                    return Err(self.catchable_type_error_msg("target: not a constructor".into()));
-                }
-                let new_target = if argc >= 3 { arg2 } else { arg0 };
-                if !self.is_constructor_value(new_target) {
-                    return Err(
-                        self.catchable_type_error_msg("newTarget: not a constructor".into())
-                    );
-                }
-                if arg1.kind != Kind::Reference {
-                    return Err(
-                        self.catchable_type_error_msg("argumentsList: not an object".into())
-                    );
-                }
-                let args = self.arraylike_to_vec(code, arg1)?;
-                self.meter.tick_raw(REFLECT_FRAME_METERING);
-                self.construct_value(code, arg0, &args, new_target)
-            }
-            _ => Err(Step::Host(Halt::EngineInvariant("Reflect:unexpected"))),
-        }
     }
 
     /// `CreateListFromArrayLike(value)` (ECMA-262 7.3.18) with the default
@@ -9909,481 +9367,6 @@ impl Interp {
         Err(Step::Host(Halt::StepLimit(self.n_dispatched)))
     }
 
-    /// Dispatch a `Math.*` static (`xsMath.c`). Reads the positional
-    /// arguments off the call frame (`stack[base + 4 + i]`), coerces each to a
-    /// number (`fxToNumber`, including observable object-to-primitive
-    /// conversion, complete string-number parsing, and catchable Symbol/BigInt
-    /// errors), and
-    /// meters the single native host frame ([`MATH_FRAME_METERING`]). No
-    /// `mxMeterSome` and no chunk — the pin's bodies carry neither. A NaN
-    /// result is the canonical `f64::NAN`.
-    ///
-    /// Provider-sensitive operations currently use platform `f64` math.
-    /// Cross-platform bit identity is not established by same-host oracle
-    /// agreement: a last-bit difference can affect guest branches and receipts.
-    /// `math_determinism.rs` checks known answers and exports platform vectors.
-    /// The decision to vendor libm and its required coverage are recorded in
-    /// `designs/ironhorse-w6-decisions.md`, section 4.
-    fn call_math(
-        &mut self,
-        id: MathId,
-        base: usize,
-        argc: usize,
-        code: &[u8],
-    ) -> Result<Slot, Step> {
-        use MathId::*;
-        self.meter.tick_raw(MATH_FRAME_METERING);
-        let r = match id {
-            Abs => self.math_unary(code, base, argc, f64::abs)?,
-            Acos => self.math_unary(code, base, argc, f64::acos)?,
-            Acosh => self.math_unary(code, base, argc, f64::acosh)?,
-            Asin => self.math_unary(code, base, argc, f64::asin)?,
-            Asinh => self.math_unary(code, base, argc, f64::asinh)?,
-            Atan => self.math_unary(code, base, argc, f64::atan)?,
-            Atanh => self.math_unary(code, base, argc, f64::atanh)?,
-            Cbrt => self.math_unary(code, base, argc, f64::cbrt)?,
-            Ceil => self.math_unary(code, base, argc, f64::ceil)?,
-            Cos => self.math_unary(code, base, argc, f64::cos)?,
-            Cosh => self.math_unary(code, base, argc, f64::cosh)?,
-            Exp => self.math_unary(code, base, argc, f64::exp)?,
-            Expm1 => self.math_unary(code, base, argc, f64::exp_m1)?,
-            Floor => self.math_unary(code, base, argc, f64::floor)?,
-            Log => self.math_unary(code, base, argc, f64::ln)?,
-            Log1p => self.math_unary(code, base, argc, f64::ln_1p)?,
-            Log10 => self.math_unary(code, base, argc, f64::log10)?,
-            // The pin computes `log2` as `c_log(x) / c_log(2)` only under
-            // `mxNoFunctionLength`-style configs it does not enable here; the
-            // default build calls `c_log2`, so ironhorse uses `f64::log2`.
-            Log2 => self.math_unary(code, base, argc, f64::log2)?,
-            Sin => self.math_unary(code, base, argc, f64::sin)?,
-            Sinh => self.math_unary(code, base, argc, f64::sinh)?,
-            Sqrt => self.math_unary(code, base, argc, f64::sqrt)?,
-            Tan => self.math_unary(code, base, argc, f64::tan)?,
-            Tanh => self.math_unary(code, base, argc, f64::tanh)?,
-            Atan2 => match (self.math_arg(base, argc, 0), self.math_arg(base, argc, 1)) {
-                (Some(y), Some(x)) => {
-                    let y = self.to_number_f64(code, y)?;
-                    let x = self.to_number_f64(code, x)?;
-                    Slot::number(y.atan2(x))
-                }
-                _ => Slot::number(f64::NAN),
-            },
-            // `fx_Math_pow` → `fx_pow`: `(±1) ** ±Infinity` is NaN (the pin's
-            // explicit special-case), otherwise `c_pow`.
-            Pow => match (self.math_arg(base, argc, 0), self.math_arg(base, argc, 1)) {
-                (Some(x), Some(y)) => {
-                    let x = self.to_number_f64(code, x)?;
-                    let y = self.to_number_f64(code, y)?;
-                    let v = if !y.is_finite() && x.abs() == 1.0 {
-                        f64::NAN
-                    } else {
-                        x.powf(y)
-                    };
-                    Slot::number(v)
-                }
-                _ => Slot::number(f64::NAN),
-            },
-            // `fx_Math_hypot`: no arg → 0; XS special-cases the 2-argument
-            // `c_hypot`, else sums the squares and takes the sqrt.
-            Hypot => {
-                let mut vals = self.reserve_scratch(argc)?;
-                for i in 0..argc {
-                    let value = self.math_arg(base, argc, i).unwrap();
-                    vals.push(self.to_number_f64(code, value)?);
-                }
-                let v = match vals.len() {
-                    0 => 0.0,
-                    2 => vals[0].hypot(vals[1]),
-                    _ => vals.iter().map(|x| x * x).sum::<f64>().sqrt(),
-                };
-                Slot::number(v)
-            }
-            // `fx_Math_sign`: NaN→NaN, <0→-1, >0→1, else the argument (±0),
-            // then `fx_Math_toInteger` folds an exact integer to integer kind.
-            Sign => match self.math_arg(base, argc, 0) {
-                None => Slot::number(f64::NAN),
-                Some(s) => {
-                    let a = self.to_number_f64(code, s)?;
-                    let r = if a.is_nan() {
-                        f64::NAN
-                    } else if a < 0.0 {
-                        -1.0
-                    } else if a > 0.0 {
-                        1.0
-                    } else {
-                        a
-                    };
-                    math_to_integer(r)
-                }
-            },
-            // `fx_Math_round`: an integer argument passes through; otherwise
-            // XS rounds half-up (`floor(x + 0.5)`) inside the ±(2^52-1) normal
-            // window, with the ±0 corners, then folds to integer kind.
-            Round => match self.math_arg(base, argc, 0) {
-                None => Slot::number(f64::NAN),
-                Some(s) if s.kind == Kind::Integer => s,
-                Some(s) => {
-                    let mut a = self.to_number_f64(code, s)?;
-                    if a.is_normal() && (-4503599627370495.0 < a) && (a < 4503599627370495.0) {
-                        if a < -0.5 || 0.5 <= a {
-                            a = (a + 0.5).floor();
-                        } else if a < 0.0 {
-                            a = -0.0;
-                        } else if a > 0.0 {
-                            a = 0.0;
-                        }
-                    }
-                    math_to_integer(a)
-                }
-            },
-            // `fx_Math_trunc`: `c_trunc`, then fold to integer kind.
-            Trunc => match self.math_arg(base, argc, 0) {
-                None => Slot::number(f64::NAN),
-                Some(s) => math_to_integer(self.to_number_f64(code, s)?.trunc()),
-            },
-            // `fx_Math_fround`: an integer passes through; otherwise round to
-            // the nearest `f32` and widen back.
-            Fround => match self.math_arg(base, argc, 0) {
-                None => Slot::number(f64::NAN),
-                Some(s) if s.kind == Kind::Integer => s,
-                Some(s) => Slot::number(self.to_number_f64(code, s)? as f32 as f64),
-            },
-            // `fx_Math_clz32`: count leading zeros of ToUint32(arg); 32 for 0.
-            Clz32 => {
-                let x = match self.math_arg(base, argc, 0) {
-                    None => 0u32,
-                    Some(s) => to_int32(self.to_number_f64(code, s)?) as u32,
-                };
-                Slot::integer(x.leading_zeros() as i32)
-            }
-            // `fx_Math_imul`: (ToInt32(a) * ToInt32(b)) as a 32-bit product.
-            Imul => {
-                let a = match self.math_arg(base, argc, 0) {
-                    Some(value) => to_int32(self.to_number_f64(code, value)?),
-                    None => 0,
-                };
-                let b = match self.math_arg(base, argc, 1) {
-                    Some(value) => to_int32(self.to_number_f64(code, value)?),
-                    None => 0,
-                };
-                Slot::integer(a.wrapping_mul(b))
-            }
-            Max => self.math_extremum(code, argc, base, true)?,
-            Min => self.math_extremum(code, argc, base, false)?,
-        };
-        Ok(r)
-    }
-
-    /// Copy one positional Math argument out of the native call frame.
-    fn math_arg(&self, base: usize, argc: usize, index: usize) -> Option<Slot> {
-        (index < argc).then(|| {
-            self.stack
-                .get(base + 4 + index)
-                .copied()
-                .unwrap_or_else(Slot::undefined)
-        })
-    }
-
-    /// A one-argument Math operation, including the no-argument NaN case and
-    /// the shared observable ToNumber conversion.
-    fn math_unary(
-        &mut self,
-        code: &[u8],
-        base: usize,
-        argc: usize,
-        operation: fn(f64) -> f64,
-    ) -> Result<Slot, Step> {
-        match self.math_arg(base, argc, 0) {
-            None => Ok(Slot::number(f64::NAN)),
-            Some(value) => Ok(Slot::number(operation(self.to_number_f64(code, value)?))),
-        }
-    }
-
-    /// `fx_Math_max`/`fx_Math_min`: the running extremum over the arguments,
-    /// preserving XS's integer-kind fast path (an all-integer argument list
-    /// stays integer) and its ±0 tie-break (`max(+0,-0)===+0`,
-    /// `min(+0,-0)===-0`), with a NaN argument poisoning the result (after
-    /// still coercing the remaining arguments, so a later abrupt completion
-    /// takes precedence). `max` seeds `-Infinity`, `min` seeds `+Infinity`.
-    fn math_extremum(
-        &mut self,
-        code: &[u8],
-        argc: usize,
-        base: usize,
-        is_max: bool,
-    ) -> Result<Slot, Step> {
-        if argc == 0 {
-            return Ok(Slot::number(if is_max {
-                f64::NEG_INFINITY
-            } else {
-                f64::INFINITY
-            }));
-        }
-        // Integer fast path while every argument seen so far is an integer.
-        let first = self.math_arg(base, argc, 0).unwrap();
-        let mut int_acc: Option<i32> = if first.kind == Kind::Integer {
-            match first.value {
-                Payload::Integer(v) => Some(v),
-                _ => None,
-            }
-        } else {
-            None
-        };
-        let mut acc: f64 = if is_max {
-            f64::NEG_INFINITY
-        } else {
-            f64::INFINITY
-        };
-        let start = if int_acc.is_some() { 1 } else { 0 };
-        let mut saw_nan = false;
-        for i in start..argc {
-            let s = self.math_arg(base, argc, i).unwrap();
-            if let Some(iv) = int_acc {
-                if s.kind == Kind::Integer {
-                    if let Payload::Integer(v) = s.value {
-                        int_acc = Some(if is_max { iv.max(v) } else { iv.min(v) });
-                        continue;
-                    }
-                }
-                // Leaving the integer path: seed the float accumulator.
-                acc = iv as f64;
-                int_acc = None;
-            }
-            let n = self.to_number_f64(code, s)?;
-            if n.is_nan() {
-                // Math.max/min still ToNumber-coerce every later argument, so
-                // a subsequent abrupt completion must outrank the NaN result.
-                saw_nan = true;
-                continue;
-            }
-            if is_max {
-                if acc < n {
-                    acc = n;
-                } else if acc == 0.0 && n == 0.0 && acc.is_sign_negative() && n.is_sign_positive() {
-                    acc = 0.0;
-                }
-            } else if acc > n {
-                acc = n;
-            } else if acc == 0.0 && n == 0.0 && acc.is_sign_positive() && n.is_sign_negative() {
-                acc = -0.0;
-            }
-        }
-        Ok(if saw_nan {
-            Slot::number(f64::NAN)
-        } else {
-            match int_acc {
-                Some(v) => Slot::integer(v),
-                None => Slot::number(acc),
-            }
-        })
-    }
-
-    /// XS `fxToInteger` uses distinct diagnostics and wraps to signed 32 bits.
-    fn number_radix_integer(&mut self, code: &[u8], value: Slot) -> Result<i32, Step> {
-        let value = self.to_primitive(code, value, false)?;
-        if value.kind == Kind::Symbol {
-            return Err(self.catchable_type_error_msg("cannot coerce symbol to integer".into()));
-        }
-        if value.kind == Kind::BigInt {
-            return Err(self.catchable_type_error_msg("cannot coerce to integer".into()));
-        }
-        Ok(to_int32(self.to_number_f64(code, value)?))
-    }
-
-    /// Dispatch a `Number` static / `Number.prototype.toString` / numeric
-    /// global (`parseInt`/`parseFloat`/`isNaN`/`isFinite`). The `xsNumber.c`
-    /// bodies carry no `mxMeterSome`; `toString` allocates its result chunk,
-    /// the rest return a number/boolean (no chunk). A NaN result is the
-    /// canonical `f64::NAN`.
-    fn call_number(
-        &mut self,
-        m: NativeMethod,
-        this: Slot,
-        base: usize,
-        argc: usize,
-        code: &[u8],
-    ) -> Result<Slot, Step> {
-        let arg0 = if argc > 0 {
-            Some(
-                self.stack
-                    .get(base + 4)
-                    .copied()
-                    .unwrap_or_else(Slot::undefined),
-            )
-        } else {
-            None
-        };
-        use NativeMethod::*;
-        // The kind-inspecting predicates (no coercion).
-        let predicate = |s: Option<Slot>, kind: NativeMethod| -> bool {
-            let s = match s {
-                Some(s) => s,
-                None => return false,
-            };
-            match s.kind {
-                Kind::Integer => !matches!(kind, NumberIsNaN),
-                Kind::Number => {
-                    let n = to_number(&s);
-                    match kind {
-                        NumberIsNaN => n.is_nan(),
-                        NumberIsFinite => n.is_finite(),
-                        NumberIsInteger => n.is_finite() && n.trunc() == n,
-                        NumberIsSafeInteger => {
-                            n.is_finite()
-                                && n.trunc() == n
-                                && (-9007199254740991.0..=9007199254740991.0).contains(&n)
-                        }
-                        _ => false,
-                    }
-                }
-                _ => false,
-            }
-        };
-        self.meter.tick_raw(NUMBER_FRAME_METERING);
-        let result = match m {
-            NumberIsFinite | NumberIsInteger | NumberIsNaN | NumberIsSafeInteger => {
-                Slot::boolean(predicate(arg0, m))
-            }
-            NumberToLocaleString => {
-                let prim = match this.value {
-                    Payload::Integer(_) | Payload::Number(_) => this,
-                    Payload::Reference(r) => match self.wrapper_data.get(&r).copied() {
-                        Some(s) if matches!(s.value, Payload::Integer(_) | Payload::Number(_)) => s,
-                        _ => return Err(self.catchable_type_error_msg("this: not a number".into())),
-                    },
-                    _ => return Err(self.catchable_type_error_msg("this: not a number".into())),
-                };
-                let locale = arg0.unwrap_or_else(Slot::undefined);
-                let options = if argc > 1 {
-                    self.stack
-                        .get(base + 5)
-                        .copied()
-                        .unwrap_or_else(Slot::undefined)
-                } else {
-                    Slot::undefined()
-                };
-                let data = self.build_number_format(code, locale, options)?;
-                let resolved = self.nf_resolved(&data);
-                let rendered = crate::intl_number::format_to_string(&resolved, to_number(&prim));
-                self.intl_string(&rendered)
-            }
-            // Number.prototype.toString([radix]) — radix 10 renders through the
-            // metered `fxNumberToString`; a radix in [2,36] runs the digit
-            // conversion. The non-decimal path covers the finite integral
-            // domain plus the three non-finite/zero spellings; a fractional
-            // finite value keeps an honest named skip until its shortest-round-
-            // trip digit generation is modeled.
-            NumberToString => {
-                let prim = match this.value {
-                    Payload::Integer(_) | Payload::Number(_) => this,
-                    Payload::Reference(r) => match self.wrapper_data.get(&r).copied() {
-                        Some(s) if matches!(s.value, Payload::Integer(_) | Payload::Number(_)) => s,
-                        _ => return Err(self.catchable_type_error_msg("this: not a number".into())),
-                    },
-                    _ => return Err(self.catchable_type_error_msg("this: not a number".into())),
-                };
-                let radix = match arg0 {
-                    Some(s) if s.kind != Kind::Undefined => {
-                        let r = self.number_radix_integer(code, s)? as f64;
-                        if !(2.0..=36.0).contains(&r) {
-                            return Err(self.catchable_range_error_msg("invalid radix".into()));
-                        }
-                        r as u32
-                    }
-                    _ => 10,
-                };
-                if radix == 10 {
-                    // `fx_Number_prototype_toString` routes radix-10 through
-                    // `fxToString`/`fxNumberToString`, which carries the same
-                    // fixed 33280-raw host residual as the `mxMeterSome`-path
-                    // built-ins (measured against the pin) beyond the metered
-                    // `fxNumberToString` step + result chunk.
-                    self.meter.tick_raw(STRING_METERSOME_FRAME_METERING);
-                    let bytes = self.to_string_bytes_metered(prim);
-                    let off = self.alloc_str_text(&bytes);
-                    Slot::of(Kind::String, Payload::String(off))
-                } else {
-                    let n = to_number(&prim);
-                    let bytes = match number_to_radix_string(n, radix) {
-                        Some(bytes) => bytes,
-                        None => {
-                            return Err(Step::Host(Halt::NotImplemented(
-                                "Number.toString:fractional-non-decimal-radix",
-                            )));
-                        }
-                    };
-                    self.meter.tick_builtin();
-                    let off = self.alloc_str_text_metered(&bytes)?;
-                    Slot::of(Kind::String, Payload::String(off))
-                }
-            }
-            // parseInt(string[,radix]) — ToString followed by the integer
-            // prefix parse.
-            GlobalParseInt => {
-                let units = self.to_string_units(code, arg0.unwrap_or_else(Slot::undefined))?;
-                let bytes = String::from_utf16_lossy(&units).into_bytes();
-                let radix_arg = self.stack.get(base + 5).copied();
-                let radix = match radix_arg {
-                    Some(s) if argc > 1 && s.kind != Kind::Undefined => {
-                        let r = self.number_radix_integer(code, s)? as f64;
-                        if r != 0.0 && !(2.0..=36.0).contains(&r) {
-                            return Ok(Slot::number(f64::NAN));
-                        }
-                        r as i32
-                    }
-                    _ => 0,
-                };
-                parse_int(&bytes, radix)
-            }
-            // parseFloat(string) — ToString followed by the float prefix parse
-            // (`fxStringToNumber`, whole = 0).
-            GlobalParseFloat => {
-                let units = self.to_string_units(code, arg0.unwrap_or_else(Slot::undefined))?;
-                let bytes = String::from_utf16_lossy(&units).into_bytes();
-                Slot::number(string_to_number(&bytes, false))
-            }
-            // isNaN(x)/isFinite(x) — ToNumber then the fpclassify test. A
-            // string routes through the whole-string parse; objects use the
-            // shared re-entrant ToPrimitive/ToNumber machinery.
-            GlobalIsNaN | GlobalIsFinite => {
-                let n = match arg0 {
-                    None => f64::NAN,
-                    Some(s) => self.to_number_f64(code, s)?,
-                };
-                Slot::boolean(if m == GlobalIsNaN {
-                    n.is_nan()
-                } else {
-                    n.is_finite()
-                })
-            }
-            _ => return Err(Step::Host(Halt::NotImplemented("number:unmodeled"))),
-        };
-        Ok(result)
-    }
-
-    /// The UTF-16 code units of a string receiver, for a primitive string or a
-    /// boxed `String` wrapper. Returns `None` for other receivers;
-    /// `string_this_units` rejects nullish receivers and performs observable
-    /// ToString conversion for the others.
-    fn string_receiver_units(&self, this: Slot) -> Option<Vec<u16>> {
-        self.string_receiver_offset(this)
-            .map(|off| self.str_units(off))
-    }
-
-    /// Retain an immutable string's arena address rather than materializing it.
-    /// Primitive and boxed-string receivers follow the same branding path as
-    /// `string_receiver_units`; other receivers still use its ToString path.
-    fn string_receiver_offset(&self, this: Slot) -> Option<crate::value::ChunkOffset> {
-        match this.value {
-            Payload::String(off) => Some(off),
-            Payload::Reference(r) => match self.wrapper_data.get(&r).map(|s| s.value) {
-                Some(Payload::String(off)) => Some(off),
-                _ => None,
-            },
-            _ => None,
-        }
-    }
-
     /// Allocate a fresh String slot from **UTF-8 text** `bytes`, decoding them
     /// to UTF-16 code units and storing them as UTF-16BE. Metered by code-unit
     /// length (`n_units + 1`, the re-based O(n) string-op weight; for ASCII
@@ -10446,21 +9429,6 @@ impl Interp {
         Ok(self.to_string_slot_metered(primitive))
     }
 
-    /// `RequireObjectCoercible(this)` followed by `ToString(this)` for the
-    /// generic String prototype algorithms.
-    fn string_this_units(&mut self, code: &[u8], this: Slot) -> Result<Vec<u16>, Step> {
-        if this.kind == Kind::Undefined {
-            return Err(self.catchable_type_error_msg("this: undefined".into()));
-        }
-        if this.kind == Kind::Null {
-            return Err(self.catchable_type_error_msg("this: null".into()));
-        }
-        if let Some(units) = self.string_receiver_units(this) {
-            return Ok(units);
-        }
-        self.to_string_units(code, this)
-    }
-
     /// Raise an XS RangeError diagnostic through the guest jump chain.
     fn catchable_range_error_msg(&mut self, message: String) -> Step {
         let error = self.internal_error("RangeError", message);
@@ -10470,754 +9438,6 @@ impl Interp {
     fn catchable_range_error(&mut self) -> Step {
         let error = self.build_error("RangeError", 0, 0);
         self.raise_js(error)
-    }
-
-    /// String constructor statics. Both consume numeric arguments through
-    /// the shared `ToNumber` path, preserving the observable left-to-right
-    /// coercion order.
-    fn call_string_static(
-        &mut self,
-        m: NativeMethod,
-        base: usize,
-        argc: usize,
-        code: &[u8],
-    ) -> Result<Slot, Step> {
-        if self
-            .stack
-            .get(base)
-            .is_some_and(|this| this.kind == Kind::Uninitialized)
-        {
-            return Err(self.catchable_type_error_msg("new: not a constructor".into()));
-        }
-        let mut out = self.reserve_scratch(argc.saturating_mul(2))?;
-        for i in 0..argc {
-            let value = self
-                .stack
-                .get(base + 4 + i)
-                .copied()
-                .unwrap_or_else(Slot::undefined);
-            let n = self.to_number_f64(code, value)?;
-            match m {
-                NativeMethod::StringFromCharCode => {
-                    let integer = if !n.is_finite() || n == 0.0 {
-                        0i64
-                    } else {
-                        n.trunc() as i64
-                    };
-                    out.push(integer.rem_euclid(0x1_0000) as u16);
-                }
-                NativeMethod::StringFromCodePoint => {
-                    if !n.is_finite() || n.fract() != 0.0 || !(0.0..=0x10_FFFF as f64).contains(&n)
-                    {
-                        let number = if n.is_nan() {
-                            "nan".into()
-                        } else {
-                            format!("{n:.6}")
-                        };
-                        // xsAPI.c fxThrowMessage uses a 128-byte C buffer.
-                        // This diagnostic is ASCII, so byte truncation is exact.
-                        let mut message = format!("invalid code point {number}");
-                        message.truncate(127);
-                        return Err(self.catchable_range_error_msg(message));
-                    }
-                    let cp = n as u32;
-                    if cp <= 0xFFFF {
-                        out.push(cp as u16);
-                    } else {
-                        let x = cp - 0x10000;
-                        out.push(0xD800 + (x >> 10) as u16);
-                        out.push(0xDC00 + (x & 0x3FF) as u16);
-                    }
-                }
-                _ => unreachable!(),
-            }
-        }
-        Ok(self.new_string_units(&out))
-    }
-
-    /// `String.raw(template, ...substitutions)`: convert `template` and its
-    /// live `raw` property to objects, obtain the array-like length through
-    /// `ToLength`, then interleave each observable literal segment with the
-    /// corresponding substitution. All string conversion remains in UTF-16
-    /// units so lone surrogates survive unchanged.
-    fn call_string_raw(&mut self, base: usize, argc: usize, code: &[u8]) -> Result<Slot, Step> {
-        if self
-            .stack
-            .get(base)
-            .is_some_and(|this| this.kind == Kind::Uninitialized)
-        {
-            return Err(self.catchable_type_error_msg("new: not a constructor".into()));
-        }
-        let template = self
-            .stack
-            .get(base + 4)
-            .copied()
-            .unwrap_or_else(Slot::undefined);
-        let cooked = self.array_to_object(template)?;
-        let Payload::Reference(cooked_inst) = cooked.value else {
-            unreachable!("ToObject returns an object")
-        };
-        let raw_id = self.intern_key("raw");
-        let raw = self.mop_get(code, cooked_inst, raw_id, cooked)?;
-        let raw = self.array_to_object(raw)?;
-        let Payload::Reference(raw_inst) = raw.value else {
-            unreachable!("ToObject returns an object")
-        };
-        let length = self.arraylike_length(code, raw_inst, raw)?;
-        let literal_segments = self.to_length_value(code, length)?;
-        if literal_segments == 0 {
-            return Ok(self.new_string_units(&[]));
-        }
-        const STRING_RAW_SEGMENT_CAP: u64 = 1 << 24;
-        if literal_segments > STRING_RAW_SEGMENT_CAP {
-            return Err(Step::Host(Halt::Refused("String.raw:oversized-template")));
-        }
-
-        let substitutions = argc.saturating_sub(1) as u64;
-        let mut out = Vec::new();
-        for index in 0..literal_segments {
-            let id = self.array_generic_index_id(index);
-            let segment = self.mop_get(code, raw_inst, id, raw)?;
-            let units = self.to_string_units(code, segment)?;
-            self.extend_reserved_units(&mut out, &units)?;
-            if index + 1 == literal_segments {
-                break;
-            }
-            if index < substitutions {
-                let substitution = self
-                    .stack
-                    .get(base + 5 + index as usize)
-                    .copied()
-                    .unwrap_or_else(Slot::undefined);
-                let units = self.to_string_units(code, substitution)?;
-                self.extend_reserved_units(&mut out, &units)?;
-            }
-        }
-        Ok(self.new_reserved_string_units(&out))
-    }
-
-    /// `ToIntegerOrInfinity` followed by the relative-index adjustment used by
-    /// `String.prototype.slice`. `undefined` selects `default`; negative finite
-    /// values count from the end, and infinities clamp to the corresponding
-    /// boundary.
-    fn string_arg_to_index(
-        &mut self,
-        code: &[u8],
-        arg: Option<Slot>,
-        default: i64,
-        len: i64,
-    ) -> Result<i64, Step> {
-        let Some(value) = arg.filter(|value| value.kind != Kind::Undefined) else {
-            return Ok(default);
-        };
-        let integer = self.array_to_integer_or_infinity(code, value)?;
-        if integer == f64::NEG_INFINITY {
-            return Ok(0);
-        }
-        if integer < 0.0 {
-            return Ok((len as f64 + integer).max(0.0) as i64);
-        }
-        Ok(integer.min(len as f64) as i64)
-    }
-
-    /// `ToIntegerOrInfinity` followed by the absolute-position clamp used by
-    /// String indexing/search methods and `substring`.
-    fn string_arg_to_position(
-        &mut self,
-        code: &[u8],
-        arg: Option<Slot>,
-        default: i64,
-        len: i64,
-    ) -> Result<i64, Step> {
-        let Some(value) = arg.filter(|value| value.kind != Kind::Undefined) else {
-            return Ok(default);
-        };
-        let integer = self.array_to_integer_or_infinity(code, value)?;
-        Ok(integer.clamp(0.0, len as f64) as i64)
-    }
-
-    /// Dispatch a `String.prototype` method (`xsString.c`) over the primitive
-    /// receiver's UTF-16 code units (the stored form — indexing is direct, no
-    /// boundary walk). Numeric arguments pass through the shared
-    /// `ToIntegerOrInfinity` machinery, including observable `ToPrimitive`
-    /// calls and catchable BigInt/Symbol errors. Meters exactly the pin's
-    /// `mxMeterSome` + `fxNewChunk` (re-based to code-unit length), plus the
-    /// (zero) native frame.
-    /// Index-addressed String methods never decode the whole primitive/wrapper
-    /// receiver. Reacquire the arena slice for each read, so guest coercions may
-    /// allocate without a live ChunkSlice borrow across that re-entry.
-    fn call_string_indexed(
-        &mut self,
-        m: NativeMethod,
-        this: Slot,
-        base: usize,
-        argc: usize,
-        code: &[u8],
-    ) -> Result<Slot, Step> {
-        if this.kind == Kind::Undefined {
-            return Err(self.catchable_type_error_msg("this: undefined".into()));
-        }
-        if this.kind == Kind::Null {
-            return Err(self.catchable_type_error_msg("this: null".into()));
-        }
-        let branded = self.string_receiver_offset(this);
-        let primitive = if branded.is_none() && this.kind == Kind::Reference {
-            self.to_primitive(code, this, true)?
-        } else {
-            this
-        };
-        let offset = branded.or(match primitive.value {
-            Payload::String(off) => Some(off),
-            _ => None,
-        });
-        let fallback = if offset.is_none() {
-            // Non-string primitives need formatting; a string returned by a
-            // generic receiver's ToPrimitive retains its offset above too.
-            self.to_string_units(code, primitive)?
-        } else {
-            Vec::new()
-        };
-        let length = offset.map_or(fallback.len(), |off| self.str_len(off));
-        let ulen = length as i64;
-        let clamp = |unit: i64| -> usize { unit.clamp(0, ulen) as usize };
-        let unit_at = |machine: &Self, index: usize| -> u16 {
-            match offset {
-                Some(off) => machine
-                    .str_unit_at(off, index as u32)
-                    .expect("in-range string index"),
-                None => fallback[index],
-            }
-        };
-        let args: Vec<Slot> = (0..argc)
-            .map(|i| {
-                self.stack
-                    .get(base + 4 + i)
-                    .copied()
-                    .unwrap_or_else(Slot::undefined)
-            })
-            .collect();
-        let argn = |i: usize| -> Option<Slot> { args.get(i).copied() };
-        self.meter.tick_raw(STRING_METHOD_FRAME_METERING);
-        use NativeMethod::*;
-        let result = match m {
-            // charCodeAt(pos): the UTF-16 code unit at `pos`, else NaN. No
-            // chunk, no mxMeterSome.
-            StringCharCodeAt => {
-                let pos = match argn(0) {
-                    Some(s) if s.kind != Kind::Undefined => {
-                        let n = self.array_to_integer_or_infinity(code, s)?;
-                        if n < 0.0 {
-                            return Ok(Slot::number(f64::NAN));
-                        }
-                        n as i64
-                    }
-                    _ => 0,
-                };
-                if pos < ulen {
-                    Slot::integer(unit_at(self, pos as usize) as i32)
-                } else {
-                    Slot::number(f64::NAN)
-                }
-            }
-            // codePointAt(pos): the code point at `pos` (combining a surrogate
-            // pair into an astral scalar), else undefined.
-            StringCodePointAt => {
-                let pos = match argn(0) {
-                    Some(s) if s.kind != Kind::Undefined => {
-                        self.array_to_integer_or_infinity(code, s)? as i64
-                    }
-                    _ => 0,
-                };
-                if pos >= 0 && pos < ulen {
-                    let hi = unit_at(self, pos as usize) as u32;
-                    let cp = if (0xD800..=0xDBFF).contains(&hi) && pos + 1 < ulen {
-                        let lo = unit_at(self, (pos + 1) as usize) as u32;
-                        if (0xDC00..=0xDFFF).contains(&lo) {
-                            0x10000 + ((hi - 0xD800) << 10) + (lo - 0xDC00)
-                        } else {
-                            hi
-                        }
-                    } else {
-                        hi
-                    };
-                    Slot::integer(cp as i32)
-                } else {
-                    Slot::undefined()
-                }
-            }
-            // charAt(pos): the one-unit string at `pos`, else "". A negative
-            // `pos` fails to the empty string (XS's `goto fail`).
-            StringCharAt => {
-                let pos = match argn(0) {
-                    Some(s) if s.kind != Kind::Undefined => {
-                        self.array_to_integer_or_infinity(code, s)? as i64
-                    }
-                    _ => 0,
-                };
-                if pos < 0 || pos >= ulen {
-                    self.new_string_units(&[])
-                } else {
-                    self.new_string_units(&[unit_at(self, pos as usize)])
-                }
-            }
-            // at(index): the one-unit string at `index` (negative from the
-            // end), else undefined.
-            StringAt => {
-                let idx = match argn(0) {
-                    Some(s) => self.array_to_integer_or_infinity(code, s)? as i64,
-                    None => 0,
-                };
-                let idx = if idx < 0 { idx + ulen } else { idx };
-                if idx < 0 || idx >= ulen {
-                    Slot::undefined()
-                } else {
-                    self.new_string_units(&[unit_at(self, idx as usize)])
-                }
-            }
-            // startsWith / endsWith: reject `IsRegExp(searchString)`, then
-            // `ToString(searchString)`, then mxMeterSome(searchUnitLen) and a
-            // byte compare (no per-byte meter).
-            StringStartsWith | StringEndsWith => {
-                let search = argn(0).unwrap_or_else(Slot::undefined);
-                if self.string_is_regexp(code, search)? {
-                    return Err(self.catchable_type_error_msg("future editions".into()));
-                }
-                let sub = self.to_string_units(code, search)?;
-                let sub_units = sub.len() as u64;
-                let is_start = m == StringStartsWith;
-                // The position argument (code unit), clamped to [0, ulen].
-                let pos = if is_start {
-                    self.string_arg_to_position(code, argn(1), 0, ulen)?
-                } else {
-                    self.string_arg_to_position(code, argn(1), ulen, ulen)?
-                };
-                self.charge_and_check(STRING_METERSOME_FRAME_METERING)?;
-                self.charge_builtin_work(sub_units)?;
-                let at = clamp(pos);
-                let matches = if is_start {
-                    length >= at + sub.len()
-                        && sub
-                            .iter()
-                            .enumerate()
-                            .all(|(i, &unit)| unit_at(self, at + i) == unit)
-                } else {
-                    at >= sub.len()
-                        && sub
-                            .iter()
-                            .enumerate()
-                            .all(|(i, &unit)| unit_at(self, at - sub.len() + i) == unit)
-                };
-                Slot::boolean(matches)
-            }
-            // includes(search[,from]): whether `search` occurs. Charges the
-            // fixed search-argument residual; its `includes_aux` scan does NOT
-            // meter the per-byte compares (measured against the pin — a
-            // distinct host-frame shape from `indexOf`), so the search runs
-            // unmetered.
-            StringIncludes => {
-                let search = argn(0).unwrap_or_else(Slot::undefined);
-                if self.string_is_regexp(code, search)? {
-                    return Err(self.catchable_type_error_msg("future editions".into()));
-                }
-                let sub = self.to_string_units(code, search)?;
-                let from = self.string_arg_to_position(code, argn(1), 0, ulen)?;
-                self.meter.tick_raw(STRING_METERSOME_FRAME_METERING);
-                let bfrom = clamp(from).min(length);
-                let found = sub.is_empty()
-                    || (sub.len() <= length - bfrom
-                        && (bfrom..=length - sub.len()).any(|at| {
-                            sub.iter()
-                                .enumerate()
-                                .all(|(i, &unit)| unit_at(self, at + i) == unit)
-                        }));
-                Slot::boolean(found)
-            }
-            // indexOf / lastIndexOf: search in UTF-16 code units, after the
-            // observable ToString(searchString) and ToIntegerOrInfinity(position)
-            // coercions. XS's inner UTF-8 scan meters only the matching prefix
-            // at each candidate (one raw tick per CESU-8 leading byte because
-            // of the pinned macro-precedence quirk), including a full match;
-            // `string_search_match_meter` translates that charge to the VM's
-            // UTF-16 storage without losing astral/lone-surrogate behavior.
-            StringIndexOf | StringLastIndexOf => {
-                let search = self.to_string_units(code, argn(0).unwrap_or_else(Slot::undefined))?;
-                let last = m == StringLastIndexOf;
-                let position =
-                    if last && (argc < 2 || argn(1).is_some_and(|v| v.kind == Kind::Undefined)) {
-                        f64::INFINITY
-                    } else if argc < 2 {
-                        0.0
-                    } else if last {
-                        // `lastIndexOf` maps *any* NaN position to +INFINITY, not
-                        // only a missing or `undefined` one, so it cannot share
-                        // `ToIntegerOrInfinity`'s NaN-to-zero rule.
-                        self.string_last_index_of_position(
-                            code,
-                            argn(1).unwrap_or_else(Slot::undefined),
-                        )?
-                    } else {
-                        self.array_to_integer_or_infinity(
-                            code,
-                            argn(1).unwrap_or_else(Slot::undefined),
-                        )?
-                    };
-                let start = if position == f64::INFINITY {
-                    length
-                } else if position == f64::NEG_INFINITY || position <= 0.0 {
-                    0
-                } else if position >= length as f64 {
-                    length
-                } else {
-                    position as usize
-                };
-                self.meter.tick_raw(STRING_INDEX_FRAME_METERING);
-
-                if search.is_empty() {
-                    Self::array_index_number(start as u64)
-                } else if search.len() > length {
-                    Slot::integer(-1)
-                } else if last {
-                    let mut candidate = start.min(length - search.len());
-                    loop {
-                        let mut matched = 0usize;
-                        while matched < search.len()
-                            && unit_at(self, candidate + matched) == search[matched]
-                        {
-                            self.charge_and_check(1)?;
-                            matched += 1;
-                        }
-                        if matched == search.len() {
-                            break Self::array_index_number(candidate as u64);
-                        }
-                        if candidate == 0 {
-                            break Slot::integer(-1);
-                        }
-                        candidate -= 1;
-                    }
-                } else if start + search.len() > length {
-                    Slot::integer(-1)
-                } else {
-                    let limit = length - search.len();
-                    let mut candidate = start;
-                    loop {
-                        let mut matched = 0usize;
-                        while matched < search.len()
-                            && unit_at(self, candidate + matched) == search[matched]
-                        {
-                            self.charge_and_check(1)?;
-                            matched += 1;
-                        }
-                        if matched == search.len() {
-                            break Self::array_index_number(candidate as u64);
-                        }
-                        if candidate == limit {
-                            break Slot::integer(-1);
-                        }
-                        candidate += 1;
-                    }
-                }
-            }
-            _ => unreachable!("only indexed String methods enter this helper"),
-        };
-        Ok(result)
-    }
-
-    fn call_string(
-        &mut self,
-        m: NativeMethod,
-        this: Slot,
-        base: usize,
-        argc: usize,
-        code: &[u8],
-    ) -> Result<Slot, Step> {
-        if matches!(
-            m,
-            NativeMethod::StringCharCodeAt
-                | NativeMethod::StringCodePointAt
-                | NativeMethod::StringCharAt
-                | NativeMethod::StringAt
-                | NativeMethod::StringStartsWith
-                | NativeMethod::StringEndsWith
-                | NativeMethod::StringIncludes
-                | NativeMethod::StringIndexOf
-                | NativeMethod::StringLastIndexOf
-        ) {
-            return self.call_string_indexed(m, this, base, argc, code);
-        }
-        let content = self.string_this_units(code, this)?;
-        let ulen = content.len() as i64; // UTF-16 code-unit length
-                                         // Clamp a (possibly negative / out-of-range) code-unit position to a
-                                         // valid slice index into `content` (units). Replaces the CESU-8
-                                         // byte-offset lookup — with UTF-16 storage the unit index *is* the
-                                         // slice index.
-        let clamp = |unit: i64| -> usize {
-            if unit <= 0 {
-                0
-            } else if unit >= ulen {
-                content.len()
-            } else {
-                unit as usize
-            }
-        };
-        let args: Vec<Slot> = (0..argc)
-            .map(|i| {
-                self.stack
-                    .get(base + 4 + i)
-                    .copied()
-                    .unwrap_or_else(Slot::undefined)
-            })
-            .collect();
-        let argn = |i: usize| -> Option<Slot> { args.get(i).copied() };
-        self.meter.tick_raw(STRING_METHOD_FRAME_METERING);
-        use NativeMethod::*;
-        let result = match m {
-            // slice([start[,end]]): the substring `[start,end)` with negative
-            // offsets counted from the end.
-            StringSlice => {
-                let start = self.string_arg_to_index(code, argn(0), 0, ulen)?;
-                let end = self.string_arg_to_index(code, argn(1), ulen, ulen)?;
-                if start < end {
-                    self.new_string_units(&content[clamp(start)..clamp(end)])
-                } else {
-                    self.new_string_units(&[])
-                }
-            }
-            // substring([start[,end]]): clamp both to `[0,len]`, swap if
-            // start>end.
-            StringSubstring => {
-                let mut start = self.string_arg_to_position(code, argn(0), 0, ulen)?;
-                let mut stop = self.string_arg_to_position(code, argn(1), ulen, ulen)?;
-                if start > stop {
-                    std::mem::swap(&mut start, &mut stop);
-                }
-                if start < stop {
-                    self.new_string_units(&content[clamp(start)..clamp(stop)])
-                } else {
-                    self.new_string_units(&[])
-                }
-            }
-            // concat(...args): the receiver followed by each stringified
-            // argument; mxMeterSome(argc) + the result chunk. Argument
-            // `ToString` conversions run left-to-right and may re-enter guest
-            // code or throw.
-            StringConcat => {
-                self.charge_and_check(STRING_METERSOME_FRAME_METERING)?;
-                self.charge_builtin_work(argc as u64)?;
-                let mut out = Vec::new();
-                self.extend_reserved_units(&mut out, &content)?;
-                for i in 0..argc {
-                    let a = argn(i).unwrap();
-                    let units = self.to_string_units(code, a)?;
-                    self.extend_reserved_units(&mut out, &units)?;
-                }
-                self.new_reserved_string_units(&out)
-            }
-            // repeat(count): the receiver repeated `count` times; a negative or
-            // over-large count is a RangeError. mxMeterSome(count) + chunk.
-            StringRepeat => {
-                let count = match argn(0) {
-                    Some(s) if s.kind != Kind::Undefined => {
-                        let n = self.array_to_integer_or_infinity(code, s)?;
-                        if n < 0.0 {
-                            return Err(self.catchable_range_error_msg("count < 0".into()));
-                        }
-                        if n > 0x7FFF_FFFF as f64 {
-                            return Err(self.catchable_range_error_msg("count too big".into()));
-                        }
-                        n as i64
-                    }
-                    _ => 0,
-                };
-                self.meter.tick_raw(STRING_METERSOME_FRAME_METERING);
-                self.charge_and_check(count as u64 * crate::meter::BUILTIN_METERING)?;
-                // XS meters `count` above but guards its copy loop with
-                // `if (length)`. Repeating the empty string therefore returns
-                // immediately even for the maximum accepted count instead of
-                // spending billions of no-op iterations.
-                if content.is_empty() {
-                    return Ok(self.new_string_units(&[]));
-                }
-                let size = self.reserve_units(content.len() as u64 * count as u64)?;
-                let mut out = Self::reserved_vec(size)?;
-                for _ in 0..count {
-                    out.extend_from_slice(&content);
-                }
-                self.new_reserved_string_units(&out)
-            }
-            // toLowerCase / toUpperCase: Unicode Default Case Conversion over
-            // scalar values, preserving lone UTF-16 surrogates unchanged.
-            // Rust's whole-string conversion supplies the locale-insensitive
-            // SpecialCasing mappings, including contextual final sigma and
-            // one-to-many results. Meter against the input code units, then
-            // charge the actual result chunk through `new_string_units`.
-            StringToLowerCase | StringToUpperCase => {
-                let up = m == StringToUpperCase;
-                self.charge_and_check(STRING_METERSOME_FRAME_METERING)?;
-                self.charge_builtin_work(ulen as u64)?;
-                let out = unicode_case_convert_utf16(self, &content, up)?;
-                self.new_reserved_string_units(&out)
-            }
-            StringToLocaleLowerCase | StringToLocaleUpperCase => {
-                let locale =
-                    self.intl_resolve_locale(code, argn(0).unwrap_or_else(Slot::undefined))?;
-                let up = m == StringToLocaleUpperCase;
-                self.charge_and_check(STRING_METERSOME_FRAME_METERING)?;
-                self.charge_builtin_work(ulen as u64)?;
-                let out = unicode_locale_case_convert_utf16(self, &content, up, &locale)?;
-                self.new_reserved_string_units(&out)
-            }
-            StringLocaleCompare => {
-                let right = self.to_string_units(code, argn(0).unwrap_or_else(Slot::undefined))?;
-                let locale =
-                    self.intl_resolve_locale(code, argn(1).unwrap_or_else(Slot::undefined))?;
-                let mut data = CollatorData {
-                    locale,
-                    usage: "sort".to_string(),
-                    sensitivity: "variant".to_string(),
-                    collation: "default".to_string(),
-                    numeric: false,
-                    case_first: "false".to_string(),
-                    ignore_punctuation: false,
-                };
-                if let Some(options) =
-                    self.intl_get_options_object(argn(2).unwrap_or_else(Slot::undefined))?
-                {
-                    self.apply_collator_options(code, options, &mut data)?;
-                }
-                let left = String::from_utf16_lossy(&content);
-                let right = String::from_utf16_lossy(&right);
-                Slot::integer(collator_compare(&data, &left, &right))
-            }
-            // normalize: default to NFC, otherwise coerce `form` after the
-            // receiver and accept only the four exact normalization names.
-            // ICU4X performs the Unicode algorithm over valid scalar runs;
-            // the helper retains JavaScript's unpaired UTF-16 surrogates.
-            StringNormalize => {
-                let form_units = match argn(0) {
-                    None
-                    | Some(Slot {
-                        kind: Kind::Undefined,
-                        ..
-                    }) => vec![0x4E, 0x46, 0x43],
-                    Some(value) => self.to_string_units(code, value)?,
-                };
-                let form = match form_units.as_slice() {
-                    [0x4E, 0x46, 0x43] => UnicodeNormalizationForm::Nfc,
-                    [0x4E, 0x46, 0x44] => UnicodeNormalizationForm::Nfd,
-                    [0x4E, 0x46, 0x4B, 0x43] => UnicodeNormalizationForm::Nfkc,
-                    [0x4E, 0x46, 0x4B, 0x44] => UnicodeNormalizationForm::Nfkd,
-                    _ => return Err(self.catchable_range_error_msg("invalid form".into())),
-                };
-                self.charge_and_check(STRING_METERSOME_FRAME_METERING)?;
-                self.charge_builtin_work(ulen as u64)?;
-                let out = unicode_normalize_utf16(self, &content, form)?;
-                self.new_reserved_string_units(&out)
-            }
-            // trim / trimStart / trimEnd: strip the ECMAScript WhiteSpace and
-            // LineTerminator code points. The pin
-            // meters mxMeterSome(leading byte count) and/or mxMeterSome(kept
-            // length), then allocates the result chunk.
-            StringTrim | StringTrimStart | StringTrimEnd => {
-                let trim_start = m != StringTrimEnd;
-                let trim_end = m != StringTrimStart;
-                self.meter.tick_raw(STRING_METERSOME_FRAME_METERING);
-                let mut lo = 0usize;
-                if trim_start {
-                    while lo < content.len() && is_ecma_whitespace(content[lo] as u32) {
-                        self.charge_builtin_work(1)?;
-                        lo += 1;
-                    }
-                }
-                let mut hi = content.len();
-                if trim_end {
-                    while hi > lo && is_ecma_whitespace(content[hi - 1] as u32) {
-                        self.charge_builtin_work(1)?;
-                        hi -= 1;
-                    }
-                    self.charge_builtin_work((hi - lo) as u64)?;
-                }
-                self.new_string_units(&content[lo..hi])
-            }
-            StringPadStart | StringPadEnd => {
-                let target = self.to_length_value(code, argn(0).unwrap_or_else(Slot::undefined))?;
-                if target <= content.len() as u64 {
-                    self.new_string_units(&content)
-                } else {
-                    let fill = match argn(1) {
-                        None
-                        | Some(Slot {
-                            kind: Kind::Undefined,
-                            ..
-                        }) => vec![0x20],
-                        Some(v) => self.to_string_units(code, v)?,
-                    };
-                    if fill.is_empty() {
-                        self.new_string_units(&content)
-                    } else {
-                        // Allocation is an implementation limit, not a guest
-                        // RangeError. XS also aborts at its chunk-size limit.
-                        // Coerce the filler first: an empty filler needs no
-                        // allocation, even when the requested length is huge.
-                        const STRING_PAD_UNIT_CAP: u64 = 1 << 24;
-                        if target > STRING_PAD_UNIT_CAP {
-                            return Err(Step::Host(Halt::Refused(
-                                "String.prototype.pad:result-too-large",
-                            )));
-                        }
-                        let target = self.reserve_units(target)?;
-                        let needed = target - content.len();
-                        let mut out = Self::reserved_vec(target)?;
-                        if m == StringPadEnd {
-                            out.extend_from_slice(&content);
-                        }
-                        let mut filled = 0;
-                        while filled < needed {
-                            let take = (needed - filled).min(fill.len());
-                            out.extend_from_slice(&fill[..take]);
-                            filled += take;
-                        }
-                        if m == StringPadStart {
-                            out.extend_from_slice(&content);
-                        }
-                        self.new_reserved_string_units(&out)
-                    }
-                }
-            }
-            StringIsWellFormed | StringToWellFormed => {
-                let mut well_formed = true;
-                let mut out = self.reserve_scratch(content.len())?;
-                let mut i = 0usize;
-                while i < content.len() {
-                    let u = content[i];
-                    if (0xD800..=0xDBFF).contains(&u) {
-                        if i + 1 < content.len() && (0xDC00..=0xDFFF).contains(&content[i + 1]) {
-                            out.push(u);
-                            out.push(content[i + 1]);
-                            i += 2;
-                            continue;
-                        }
-                        well_formed = false;
-                        out.push(0xFFFD);
-                    } else if (0xDC00..=0xDFFF).contains(&u) {
-                        well_formed = false;
-                        out.push(0xFFFD);
-                    } else {
-                        out.push(u);
-                    }
-                    i += 1;
-                }
-                if m == StringIsWellFormed {
-                    Slot::boolean(well_formed)
-                } else if well_formed {
-                    self.new_string_units(&content)
-                } else {
-                    self.new_string_units(&out)
-                }
-            }
-            StringIterator => self.make_string_iterator(units_to_be16(&content)),
-            _ => return Err(Step::Host(Halt::NotImplemented("string-method:unmodeled"))),
-        };
-        Ok(result)
     }
 
     /// `? ToPropertyKey(key)` reduced to the canonical property-key VALUE (a
@@ -11458,32 +9678,6 @@ impl Interp {
         false
     }
 
-    /// `ToIntegerOrInfinity(? ToNumber(v))` (ECMA-262 7.1.5): `NaN` → 0,
-    /// infinities pass through, else truncate toward zero.
-    /// `String.prototype.lastIndexOf`'s position coercion (ECMA-262 22.1.3.9
-    /// steps 4-6): `ToNumber(position)`, and then **any** NaN becomes
-    /// `+INFINITY` -- the whole string is searched -- where
-    /// [`Self::array_to_integer_or_infinity`] maps NaN to 0.
-    ///
-    /// Step 5 only *asserts* that an `undefined` position is NaN; it is not the
-    /// sole way to get there. `"abcabc".lastIndexOf("a", NaN)`,
-    /// `..., "zzz")` and `..., {})` are all NaN and all answer 3, and sharing
-    /// the array rule started them at 0 instead. `indexOf` genuinely wants
-    /// NaN to 0, so only this branch is affected.
-    ///
-    /// The coercion is observable, so this repeats the body rather than
-    /// calling `ToNumber` a second time to inspect it.
-    fn string_last_index_of_position(&mut self, code: &[u8], v: Slot) -> Result<f64, Step> {
-        let n = self.to_number_f64(code, v)?;
-        if n.is_nan() {
-            Ok(f64::INFINITY)
-        } else if n.is_infinite() {
-            Ok(n)
-        } else {
-            Ok(n.trunc())
-        }
-    }
-
     /// Strict equality (`===`) with chunk-aware string comparison: two heap
     /// strings are equal iff their UTF-16BE content matches (the free
     /// [`strict_equals`] compares only primitive/reference kinds and treats
@@ -11558,69 +9752,6 @@ impl Interp {
                 };
                 self.mop_define_own_property(code, robj, id, desc)
             }
-        }
-    }
-
-    /// `ToBigInt(value)` reduced to the low 64 bits a BigInt64/BigUint64 store
-    /// keeps (two's complement). Runs `ToPrimitive(number)` on an object first,
-    /// then: a BigInt takes its low limbs; a Boolean is `1n`/`0n`; a String
-    /// parses as a `StringIntegerLiteral` (a non-integer body throws
-    /// `SyntaxError`); a Number/Symbol/`undefined`/`null` throws `TypeError`.
-    fn to_bigint_low64(&mut self, code: &[u8], value: Slot) -> Result<u64, Step> {
-        let primitive = self.to_primitive(code, value, false)?;
-        match primitive.kind {
-            Kind::BigInt => Ok(self
-                .slot_to_bigint_u64(primitive)
-                .expect("a BigInt primitive reduces to its low 64 bits")),
-            Kind::Boolean => Ok(matches!(primitive.value, Payload::Boolean(true)) as u64),
-            Kind::String => {
-                let text = match primitive.value {
-                    Payload::String(off) => self.str_text(off),
-                    _ => return Err(Step::Host(Halt::EngineInvariant("to-bigint:string"))),
-                };
-                // `StringToBigInt`: an integer body (decimal or `0x`/`0o`/`0b`,
-                // empty ⇒ `0n`) reduced to the low 64 bits; a non-integer body
-                // (a fraction, exponent, `n` suffix, or junk) is a SyntaxError.
-                match parse_bigint_string_u64(&text) {
-                    Some(u) => Ok(u),
-                    None => Err(self.catchable_syntax_error_with_message(
-                        "cannot coerce string to bigint".into(),
-                    )),
-                }
-            }
-            // A Number, a Symbol, undefined, and null are each a TypeError.
-            _ => Err(self.catchable_type_error_msg(
-                match primitive.kind {
-                    Kind::Integer | Kind::Number => "cannot coerce number to bigint",
-                    Kind::Symbol => "cannot coerce symbol to bigint",
-                    _ => "cannot coerce to bigint",
-                }
-                .into(),
-            )),
-        }
-    }
-
-    /// `ToBigInt(value)` reduced to its low 64 bits (the value modulo 2^64,
-    /// two's complement — what a BigInt64/BigUint64 store keeps). A BigInt
-    /// takes its two low limbs (negated for a negative value); a Boolean is
-    /// `1n`/`0n`. Returns `None` for a type that needs general coercion (a
-    /// Number `TypeError`, a String parse, an object `ToPrimitive`), so the
-    /// caller self-names a skip.
-    fn slot_to_bigint_u64(&self, value: Slot) -> Option<u64> {
-        match value.value {
-            Payload::BigInt(off) => {
-                let (neg, mag) = self.read_bigint(off);
-                let mut u: u64 = 0;
-                if let Some(&l0) = mag.first() {
-                    u |= l0 as u64;
-                }
-                if let Some(&l1) = mag.get(1) {
-                    u |= (l1 as u64) << 32;
-                }
-                Some(if neg { u.wrapping_neg() } else { u })
-            }
-            Payload::Boolean(b) => Some(b as u64),
-            _ => None,
         }
     }
 
@@ -13595,96 +11726,6 @@ impl Interp {
         }
     }
 
-    /// Read a BigInt chunk into `(negative, little-endian u32 limbs)`.
-    fn read_bigint(&self, off: crate::value::ChunkOffset) -> (bool, Vec<u32>) {
-        let bytes = self.chunks.payload(off);
-        let neg = bytes.first().copied().unwrap_or(0) == 1;
-        let mut mag = Vec::with_capacity(bytes.len() / 4);
-        let mut i = 1;
-        while i + 4 <= bytes.len() {
-            mag.push(u32::from_le_bytes([
-                bytes[i],
-                bytes[i + 1],
-                bytes[i + 2],
-                bytes[i + 3],
-            ]));
-            i += 4;
-        }
-        if mag.is_empty() {
-            mag.push(0);
-        }
-        (neg, bi_trim(mag))
-    }
-
-    /// Convert a BigInt magnitude to the nearest IEEE-754 binary64 value,
-    /// using round-to-nearest, ties-to-even. Reading only the leading 53 bits
-    /// and the discarded round/sticky bits avoids an intermediate `f64`
-    /// accumulation (and therefore avoids double rounding for wide values).
-    fn bigint_to_f64(&self, off: crate::value::ChunkOffset) -> f64 {
-        let (negative, magnitude) = self.read_bigint(off);
-        if bi_is_zero(&magnitude) {
-            return 0.0;
-        }
-
-        let top = *magnitude.last().expect("a BigInt has at least one limb");
-        let bit_length = (magnitude.len() - 1) * 32 + (32 - top.leading_zeros() as usize);
-        let mut exponent = bit_length - 1;
-        let discarded = bit_length.saturating_sub(53);
-
-        let bit = |position: usize| -> bool {
-            magnitude
-                .get(position / 32)
-                .is_some_and(|limb| limb & (1u32 << (position % 32)) != 0)
-        };
-        let mut significand = 0u64;
-        for position in (discarded..bit_length).rev() {
-            significand = (significand << 1) | u64::from(bit(position));
-        }
-        if bit_length < 53 {
-            significand <<= 53 - bit_length;
-        }
-
-        if discarded > 0 {
-            let round = bit(discarded - 1);
-            let sticky = (0..discarded - 1).any(bit);
-            if round && (sticky || significand & 1 != 0) {
-                significand += 1;
-                if significand == 1u64 << 53 {
-                    significand >>= 1;
-                    exponent += 1;
-                }
-            }
-        }
-
-        if exponent > 1023 {
-            return if negative {
-                f64::NEG_INFINITY
-            } else {
-                f64::INFINITY
-            };
-        }
-        let sign = u64::from(negative) << 63;
-        let biased = (exponent as u64 + 1023) << 52;
-        let fraction = significand - (1u64 << 52);
-        f64::from_bits(sign | biased | fraction)
-    }
-
-    /// The BigInt primitive carried by a primitive or boxed receiver.
-    fn bigint_this_value(&mut self, this: Slot) -> Result<Slot, Step> {
-        if this.kind == Kind::BigInt {
-            return Ok(this);
-        }
-        match this.value {
-            Payload::Reference(owner) => self
-                .wrapper_data
-                .get(&owner)
-                .copied()
-                .filter(|value| value.kind == Kind::BigInt)
-                .ok_or_else(|| self.catchable_type_error_msg("this: not a bigint".into())),
-            _ => Err(self.catchable_type_error_msg("this: not a bigint".into())),
-        }
-    }
-
     /// The Symbol primitive carried by a primitive or boxed receiver.
     fn symbol_this_value(&mut self, this: Slot) -> Result<Slot, Step> {
         if this.kind == Kind::Symbol {
@@ -13698,478 +11739,6 @@ impl Interp {
                 .filter(|value| value.kind == Kind::Symbol)
                 .ok_or_else(|| self.catchable_type_error_msg("this: not a symbol".into())),
             _ => Err(self.catchable_type_error_msg("this: not a symbol".into())),
-        }
-    }
-
-    /// `ToIndex(bits)` for `BigInt.asIntN` / `BigInt.asUintN`.
-    fn to_bigint_width(&mut self, code: &[u8], value: Slot) -> Result<u64, Step> {
-        let n = self.to_number_f64(code, value)?;
-        let integer = if n.is_nan() { 0.0 } else { n.trunc() };
-        if integer < 0.0 {
-            return Err(self.catchable_range_error_msg("index < 0".into()));
-        }
-        if !integer.is_finite() || integer > 9_007_199_254_740_991.0 {
-            return Err(self.catchable_range_error_msg("invalid index".into()));
-        }
-        Ok(integer as u64)
-    }
-
-    /// The general `ToBigInt` operation used by the width-limiting statics.
-    /// Unlike the public `BigInt()` constructor, this rejects Number values.
-    fn to_bigint_value(&mut self, code: &[u8], value: Slot) -> Result<Slot, Step> {
-        let primitive = self.to_primitive(code, value, false)?;
-        match primitive.kind {
-            Kind::BigInt => Ok(primitive),
-            Kind::Boolean => Ok(self.make_bigint(
-                false,
-                vec![u32::from(matches!(primitive.value, Payload::Boolean(true)))],
-            )),
-            Kind::String => {
-                let text = match primitive.value {
-                    Payload::String(off) => self.str_text(off),
-                    _ => return Err(self.catchable_syntax_error()),
-                };
-                let (negative, magnitude) = parse_bigint_string(&text).ok_or_else(|| {
-                    self.catchable_syntax_error_with_message(
-                        "cannot coerce string to bigint".into(),
-                    )
-                })?;
-                Ok(self.make_bigint(negative, magnitude))
-            }
-            _ => Err(self.catchable_type_error_msg(
-                match primitive.kind {
-                    Kind::Integer | Kind::Number => "cannot coerce number to bigint",
-                    Kind::Symbol => "cannot coerce symbol to bigint",
-                    _ => "cannot coerce to bigint",
-                }
-                .into(),
-            )),
-        }
-    }
-
-    /// Reduce `value` modulo `2**bits`, interpreting the retained high bit as
-    /// a sign bit for `asIntN`. Widths that would require an adversarially
-    /// large positive result are named unsupported; widths wider than an
-    /// already-representable value return that value without allocation.
-    fn bigint_as_n(&mut self, value: Slot, bits: u64, signed: bool) -> Result<Slot, Step> {
-        const MAX_BIGINT_WIDTH_BITS: u64 = 64 * 1024;
-
-        let Payload::BigInt(off) = value.value else {
-            return Err(self.catchable_type_error());
-        };
-        let (negative, magnitude) = self.read_bigint(off);
-        if bits == 0 || bi_is_zero(&magnitude) {
-            return Ok(self.make_bigint(false, vec![0]));
-        }
-        let top = *magnitude
-            .last()
-            .expect("a non-zero BigInt has a leading limb");
-        let magnitude_bits =
-            (magnitude.len() as u64 - 1) * 32 + u64::from(32 - top.leading_zeros());
-
-        if !negative && ((!signed && magnitude_bits <= bits) || (signed && magnitude_bits < bits)) {
-            return Ok(value);
-        }
-        if negative && signed {
-            let minimum_at_width = magnitude_bits == bits
-                && magnitude
-                    .iter()
-                    .take(magnitude.len() - 1)
-                    .all(|&limb| limb == 0)
-                && top.is_power_of_two();
-            if magnitude_bits < bits || minimum_at_width {
-                return Ok(value);
-            }
-        }
-        if bits > MAX_BIGINT_WIDTH_BITS {
-            return Err(Step::Host(Halt::Refused("BigInt.asN:result-too-large")));
-        }
-
-        let limb_count = bits.div_ceil(32) as usize;
-        let mut unsigned = vec![0u32; limb_count];
-        let copied = limb_count.min(magnitude.len());
-        unsigned[..copied].copy_from_slice(&magnitude[..copied]);
-        if negative {
-            for limb in &mut unsigned {
-                *limb = !*limb;
-            }
-            bi_add_one_in_place(&mut unsigned);
-        }
-        bi_mask_width(&mut unsigned, bits);
-
-        if signed {
-            let sign_index = (bits - 1) as usize;
-            let sign_set = unsigned[sign_index / 32] & (1u32 << (sign_index % 32)) != 0;
-            if sign_set {
-                for limb in &mut unsigned {
-                    *limb = !*limb;
-                }
-                bi_add_one_in_place(&mut unsigned);
-                bi_mask_width(&mut unsigned, bits);
-                return Ok(self.make_bigint(true, unsigned));
-            }
-        }
-        Ok(self.make_bigint(false, unsigned))
-    }
-
-    /// BigInt exponentiation (`base ** exponent`) using exponentiation by
-    /// squaring. Negative exponents are a RangeError. The constant-result
-    /// bases `0`, `1`, and `-1` accept arbitrarily wide positive exponents;
-    /// other bases are bounded by projected result bits so adversarial source
-    /// cannot turn one opcode into an unbounded host allocation.
-    fn bigint_pow(&mut self, base: Slot, exponent: Slot) -> Result<Slot, Step> {
-        // `bi_mul_mag` is the straightforward quadratic limb multiply. Keep
-        // the largest admitted result small enough that one guest opcode
-        // cannot monopolize the host before the next meter check.
-        const MAX_BIGINT_POW_BITS: usize = 64 * 1024;
-
-        let (Payload::BigInt(base_off), Payload::BigInt(exponent_off)) =
-            (base.value, exponent.value)
-        else {
-            return Err(self.catchable_type_error_msg(if base.kind == Kind::BigInt {
-                "cannot coerce right operand to bigint".into()
-            } else {
-                "cannot coerce left operand to bigint".into()
-            }));
-        };
-        let (base_negative, base_magnitude) = self.read_bigint(base_off);
-        let (exponent_negative, exponent_magnitude) = self.read_bigint(exponent_off);
-        if exponent_negative {
-            return Err(self.catchable_range_error_msg("negative exponent".into()));
-        }
-        if bi_is_zero(&exponent_magnitude) {
-            return Ok(self.make_bigint(false, vec![1]));
-        }
-        if bi_is_zero(&base_magnitude) {
-            return Ok(self.make_bigint(false, vec![0]));
-        }
-        if base_magnitude == [1] {
-            let odd = exponent_magnitude[0] & 1 != 0;
-            return Ok(self.make_bigint(base_negative && odd, vec![1]));
-        }
-
-        let exponent = if exponent_magnitude.len() == 1 {
-            exponent_magnitude[0]
-        } else {
-            return Err(Step::Host(Halt::Refused("exponentiation:result-too-large")));
-        };
-        let top = *base_magnitude
-            .last()
-            .expect("a non-zero BigInt has a leading limb");
-        let base_bits = (base_magnitude.len() - 1) * 32 + (32 - top.leading_zeros() as usize);
-        let projected_bits = base_bits
-            .checked_mul(exponent as usize)
-            .ok_or(Step::Host(Halt::Refused("exponentiation:result-too-large")))?;
-        if projected_bits > MAX_BIGINT_POW_BITS {
-            return Err(Step::Host(Halt::Refused("exponentiation:result-too-large")));
-        }
-
-        let mut power = base_magnitude;
-        let mut result = vec![1u32];
-        let mut remaining = exponent;
-        while remaining != 0 {
-            if remaining & 1 != 0 {
-                result = bi_mul_mag(&result, &power);
-            }
-            remaining >>= 1;
-            if remaining != 0 {
-                power = bi_mul_mag(&power, &power);
-            }
-        }
-        let negative = base_negative && exponent & 1 != 0;
-        // The allocation meter is charged at the retained result size. Exact
-        // XS repeated-squaring work metering remains advisory in dual-run
-        // coverage; the semantic result and allocation bound are enforced.
-        Ok(self.make_bigint(negative, result))
-    }
-
-    /// Build a BigInt value from `(negative, limbs)`, allocating the digit
-    /// chunk `[sign: u8][LE u32 limbs]` (trimmed; a `-0` normalizes to `+0`)
-    /// and charging the allocation at the value's own size
-    /// (`fxNewChunk(size * 4)`). Used where XS allocates exactly `bigint.size`
-    /// limbs — a literal (`fxNewBigInt`) and a negation (`fxBigInt_neg` →
-    /// `fxBigInt_alloc(a->size)`). An arithmetic result instead allocates its
-    /// (pre-trim) working size and meters the chunk itself
-    /// ([`Self::store_bigint`]).
-    fn make_bigint(&mut self, neg: bool, mag: Vec<u32>) -> Slot {
-        let mag = bi_trim(mag);
-        self.meter.tick_chunk_new((mag.len() * 4) as u64);
-        self.store_bigint(neg, mag)
-    }
-
-    /// Build a BigInt value without metering the chunk allocation (the caller
-    /// meters it — at XS's allocation size, which for an arithmetic result is
-    /// the pre-trim working size rather than the trimmed `bigint.size`).
-    fn store_bigint(&mut self, neg: bool, mag: Vec<u32>) -> Slot {
-        let mag = bi_trim(mag);
-        let neg = if bi_is_zero(&mag) { false } else { neg };
-        let mut bytes = Vec::with_capacity(1 + mag.len() * 4);
-        bytes.push(neg as u8);
-        for limb in &mag {
-            bytes.extend_from_slice(&limb.to_le_bytes());
-        }
-        let off = self.chunks.alloc(&bytes);
-        Slot::of(Kind::BigInt, Payload::BigInt(off))
-    }
-
-    /// Loose `==`/`!=` between a BigInt (`big`) and a Number/Integer (`num`),
-    /// XS's `fxBigIntCompare` number path: a finite Number is coerced to a
-    /// BigInt (`fxNumberToBigInt`, its `fxNewChunk(size*4)` the only metered
-    /// residual) then compared by mathematical value, so a non-integral Number
-    /// is never equal; a non-finite Number (`NaN`/`±Infinity`) is never equal
-    /// and allocates no chunk. Returns the equality boolean.
-    fn bigint_num_loose_eq(&mut self, big: Slot, num: Slot) -> bool {
-        let n = match num.value {
-            Payload::Integer(v) => v as f64,
-            Payload::Number(v) => v,
-            _ => return false,
-        };
-        if !n.is_finite() {
-            return false;
-        }
-        let (nneg, nmag) = number_to_bigint(n);
-        // fxNumberToBigInt allocates `size` limbs regardless of the fraction.
-        self.meter.tick_chunk_new((nmag.len() * 4) as u64);
-        if n.trunc() != n {
-            return false; // a fractional Number is never == a BigInt
-        }
-        let off = match big.value {
-            Payload::BigInt(o) => o,
-            _ => return false,
-        };
-        let (bneg, bmag) = self.read_bigint(off);
-        bneg == nneg && bmag == nmag
-    }
-
-    /// BigInt `+`/`-`/`*` (`fxBigInt_add`/`_sub`/`_mul`). Meters, in XS's order:
-    /// the result digit chunk at XS's **allocation** size (`fxBigInt_alloc`,
-    /// pre-trim) — a magnitude add allocates `max(a,b)+1` limbs, a magnitude
-    /// subtract `max(a,b)`, a multiply `a.size+b.size`; then the digit step
-    /// `mxBigInt_meter(result_size)` = `(result_size - 1) * XS_BIGINT_METERING`
-    /// over the trimmed result size (XS trims `rr->size` in `uadd`/`usub`/
-    /// `umul`); then the calibrated frame residual. Division and remainder use
-    /// limb long division, truncate the quotient toward zero, and give the
-    /// remainder the dividend's sign. Their retained-result allocation is
-    /// metered here; exact XS long-division work calibration remains advisory.
-    fn bigint_arith(
-        &mut self,
-        op: ArithOp,
-        a_off: crate::value::ChunkOffset,
-        b_off: crate::value::ChunkOffset,
-    ) -> Result<Slot, Step> {
-        let (na, ma) = self.read_bigint(a_off);
-        let (nb, mb) = self.read_bigint(b_off);
-        let (neg, mag) = match op {
-            ArithOp::Add => bi_add(na, &ma, nb, &mb),
-            ArithOp::Sub => bi_add(na, &ma, !nb, &mb),
-            ArithOp::Mul => bi_mul(na, &ma, nb, &mb),
-            ArithOp::Div | ArithOp::Mod => {
-                if bi_is_zero(&mb) {
-                    return Err(self.catchable_range_error_msg("zero divider".into()));
-                }
-                let (quotient, remainder) = bi_div_rem_mag(&ma, &mb);
-                if op == ArithOp::Div {
-                    (na != nb && !bi_is_zero(&quotient), quotient)
-                } else {
-                    (na && !bi_is_zero(&remainder), remainder)
-                }
-            }
-        };
-        // XS's per-op allocation size (`fxBigInt_alloc` limb count), which is
-        // what `fxNewChunk` meters — distinct from the trimmed `bigint.size`.
-        let max = ma.len().max(mb.len()) as u64;
-        let alloc_limbs = match op {
-            // `a + b`: magnitudes add when the signs agree (`uadd`, max+1), else
-            // subtract (`usub`, max). `a - b`: the reverse.
-            ArithOp::Add => {
-                if na == nb {
-                    max + 1
-                } else {
-                    max
-                }
-            }
-            ArithOp::Sub => {
-                if na != nb {
-                    max + 1
-                } else {
-                    max
-                }
-            }
-            ArithOp::Mul => (ma.len() + mb.len()) as u64,
-            ArithOp::Div | ArithOp::Mod => mag.len() as u64,
-        };
-        self.meter.tick_chunk_new(alloc_limbs * 4);
-        let size = mag.len() as u64; // trimmed to XS's post-op `rr->size`
-        self.meter
-            .tick_raw((size - 1) * crate::meter::BIGINT_METERING);
-        self.meter.tick_raw(BIGINT_ARITH_FRAME_METERING);
-        Ok(self.store_bigint(neg, mag))
-    }
-
-    /// BigInt `++`/`--` (`fxBigInt_inc`/`fxBigInt_dec`), which delegate to
-    /// addition/subtraction with XS's static `gxBigIntOne`. The constant does
-    /// not allocate; only the arithmetic result and digit work are charged.
-    fn bigint_update(&mut self, value: crate::value::ChunkOffset, increment: bool) -> Slot {
-        let (negative, magnitude) = self.read_bigint(value);
-        let one = [1u32];
-        let (result_negative, result_magnitude) = if increment {
-            bi_add(negative, &magnitude, false, &one)
-        } else {
-            bi_add(negative, &magnitude, true, &one)
-        };
-        let max = magnitude.len().max(one.len()) as u64;
-        let allocation_limbs = if increment {
-            if negative {
-                max
-            } else {
-                max + 1
-            }
-        } else if negative {
-            max + 1
-        } else {
-            max
-        };
-        self.meter.tick_chunk_new(allocation_limbs * 4);
-        self.meter
-            .tick_raw((result_magnitude.len() as u64 - 1) * crate::meter::BIGINT_METERING);
-        self.meter.tick_raw(BIGINT_ARITH_FRAME_METERING);
-        self.store_bigint(result_negative, result_magnitude)
-    }
-
-    /// If `a`/`b` involve a BigInt, dispatch the op: both BigInt → BigInt
-    /// arithmetic; a BigInt mixed with any non-BigInt → catchable TypeError.
-    /// Returns `Ok(None)` when neither is a BigInt.
-    fn try_bigint_binop(&mut self, op: ArithOp, a: Slot, b: Slot) -> Result<Option<Slot>, Step> {
-        if a.kind != Kind::BigInt && b.kind != Kind::BigInt {
-            return Ok(None);
-        }
-        match (a.value, b.value) {
-            (Payload::BigInt(x), Payload::BigInt(y)) => Ok(Some(self.bigint_arith(op, x, y)?)),
-            _ => Err(self.catchable_type_error_msg(if a.kind == Kind::BigInt {
-                "cannot coerce right operand to bigint".into()
-            } else {
-                "cannot coerce left operand to bigint".into()
-            })),
-        }
-    }
-
-    /// Compare an exact BigInt with an IEEE-754 Number without converting the
-    /// BigInt to f64. `None` represents the abstract relational comparison's
-    /// undefined result for NaN.
-    fn compare_bigint_number(
-        &self,
-        bigint: crate::value::ChunkOffset,
-        number: f64,
-    ) -> Option<std::cmp::Ordering> {
-        use std::cmp::Ordering;
-        if number.is_nan() {
-            return None;
-        }
-        if number == f64::INFINITY {
-            return Some(Ordering::Less);
-        }
-        if number == f64::NEG_INFINITY {
-            return Some(Ordering::Greater);
-        }
-
-        let (bigint_negative, bigint_magnitude) = self.read_bigint(bigint);
-        let truncated = number.trunc();
-        let (number_negative, number_magnitude) = number_to_bigint(truncated);
-        let ordering = bi_cmp(
-            bigint_negative,
-            &bigint_magnitude,
-            number_negative,
-            &number_magnitude,
-        );
-        if ordering != Ordering::Equal || number == truncated {
-            return Some(ordering);
-        }
-        // The BigInt equals trunc(number). A positive fractional Number lies
-        // just above it; a negative fractional Number lies just below it.
-        Some(if number.is_sign_positive() {
-            Ordering::Less
-        } else {
-            Ordering::Greater
-        })
-    }
-
-    /// BigInt `&`/`|`/`^` over the spec's infinite two's-complement values.
-    /// One extra high limb preserves sign extension while the operation runs;
-    /// the result is converted back to canonical sign+magnitude form.
-    fn bigint_bitwise(
-        &mut self,
-        op: BitOp,
-        a: crate::value::ChunkOffset,
-        b: crate::value::ChunkOffset,
-    ) -> Slot {
-        let (a_negative, a_magnitude) = self.read_bigint(a);
-        let (b_negative, b_magnitude) = self.read_bigint(b);
-        let width = a_magnitude.len().max(b_magnitude.len()) + 1;
-        let a_twos = bi_to_twos_complement(a_negative, &a_magnitude, width);
-        let b_twos = bi_to_twos_complement(b_negative, &b_magnitude, width);
-        let result = a_twos
-            .into_iter()
-            .zip(b_twos)
-            .map(|(a_limb, b_limb)| match op {
-                BitOp::And => a_limb & b_limb,
-                BitOp::Or => a_limb | b_limb,
-                BitOp::Xor => a_limb ^ b_limb,
-                _ => unreachable!("only the three logical BigInt ops call this helper"),
-            })
-            .collect();
-        let (negative, magnitude) = bi_from_twos_complement(result);
-        self.make_bigint(negative, magnitude)
-    }
-
-    /// BigInt signed shifts. A negative BigInt count reverses direction. Right
-    /// shift is arithmetic (floor division by a power of two); a shift beyond
-    /// the value's bit length therefore saturates to `0n` or `-1n`. Left shifts
-    /// are bounded to keep one guest opcode from forcing an unbounded host
-    /// allocation.
-    fn bigint_shift(
-        &mut self,
-        op: BitOp,
-        value: crate::value::ChunkOffset,
-        count: crate::value::ChunkOffset,
-    ) -> Result<Slot, Step> {
-        const MAX_BIGINT_SHIFT_RESULT_BITS: usize = 64 * 1024;
-
-        let (negative, magnitude) = self.read_bigint(value);
-        let (count_negative, count_magnitude) = self.read_bigint(count);
-        if bi_is_zero(&magnitude) {
-            return Ok(self.make_bigint(false, vec![0]));
-        }
-        let shifts_left = (op == BitOp::Shl) != count_negative;
-        let value_bits = bi_bit_length(&magnitude);
-        if shifts_left {
-            let max_shift = MAX_BIGINT_SHIFT_RESULT_BITS.saturating_sub(value_bits);
-            let shift = bi_usize_up_to(&count_magnitude, max_shift)
-                .ok_or(Step::Host(Halt::Refused("bigint-shift:result-too-large")))?;
-            return Ok(self.make_bigint(negative, bi_shl_bits(&magnitude, shift)));
-        }
-
-        let Some(shift) = bi_usize_up_to(&count_magnitude, value_bits) else {
-            return Ok(if negative {
-                self.make_bigint(true, vec![1])
-            } else {
-                self.make_bigint(false, vec![0])
-            });
-        };
-        let (mut shifted, discarded) = bi_shr_mag(&magnitude, shift);
-        if negative && discarded {
-            shifted = bi_add_mag(&shifted, &[1]);
-        }
-        Ok(self.make_bigint(negative, shifted))
-    }
-
-    /// BigInt bitwise complement: `~x === -x - 1n`, expressed directly over
-    /// sign+magnitude limbs to avoid constructing an intermediate BigInt.
-    fn bigint_bit_not(&mut self, value: crate::value::ChunkOffset) -> Slot {
-        let (negative, magnitude) = self.read_bigint(value);
-        if negative {
-            self.make_bigint(false, bi_sub_mag(&magnitude, &[1]))
-        } else {
-            self.make_bigint(true, bi_add_mag(&magnitude, &[1]))
         }
     }
 }
@@ -14190,7 +11759,7 @@ fn value_global(name: &str) -> Option<Slot> {
 /// Decode a numeric element of type `kind` (an index into
 /// [`TYPED_ARRAY_TYPES`]) from its little-endian bytes `b` (length == the
 /// element size) to a number/integer completion. `None` for a BigInt
-/// element (kind 0/1), whose BigInt decode is a later increment. The
+/// element (kind 0/1), which uses the dedicated BigInt decoding paths. The
 /// `Uint32` result is an integer completion when it fits int32, else a
 /// number (XS's `fxUint32Getter`).
 fn decode_element_le(kind: u8, b: &[u8]) -> Option<Slot> {

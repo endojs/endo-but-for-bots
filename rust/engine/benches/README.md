@@ -1378,3 +1378,32 @@ All observations remain recorded, and that failure remains open while the extrac
 is retained incrementally.
 Before aggregate measurements and source locks reuse the preceding Calendar candidate;
 all recorded source hashes were checked for equality before the move.
+
+## Final scalar builtin extraction and documentation audit
+
+[results/1a-scalar-reconsidered.json](results/1a-scalar-reconsidered.json) records
+38 methods moved on `740766508`: ten String, six Number/Math, nineteen BigInt, one
+Reflect, and two explicit-resource methods.
+Executable bodies are unchanged.
+Stale support claims in native identities, callback dispatch, typed-array, Reflect,
+and resource-management documentation now describe the implemented behavior.
+The final source review found the F142 subsystem decomposition complete; F054's
+later behavioral seams remain outside this scope.
+
+GC and allocation inventories include all five modules.
+The initial capacity check accidentally included BigInt representation routines
+that lay outside its former parent interval.
+The corrected check selects the two previously covered coercions, retains the whole
+module in other source audits, and mutation-tests both allocation spellings in each
+actual method after verifying a clean pass.
+The failed attempt and its independently reviewed correction are retained.
+
+Fresh validation passes 1,504 engine tests and 116 SQLite tests, plus 61 VM source
+locks, seven snapshot locks, strict VM library Clippy, docs, and the math control.
+All 48 controls pass the unchanged pinned-baseline gate.
+Initial direct ratios range from 1.202x to 2.267x.
+One fixed before/after/after/before diagnostic using saved binaries produces ratios
+from 1.006x to 1.118x; results and raw charges match across every run.
+Before aggregate measurements and source locks reuse the preceding Collection
+candidate after source-hash equality checks.
+Earlier failures and rejected experiments remain unchanged.
