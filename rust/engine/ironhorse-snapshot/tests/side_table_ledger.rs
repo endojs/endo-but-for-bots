@@ -13,7 +13,10 @@
 //! anchors every property/intrinsic name it shares, per the
 //! bucket-ordered symbol-table contract the design records.
 
+#[path = "common/twin.rs"]
+mod carry;
 mod common;
+use carry::{compile, sig, twin};
 
 use common::TempDir;
 use ironhorse_snapshot::store::HeapStoreCommit;
@@ -22,64 +25,20 @@ use ironhorse_snapshot::machine::{
     begin_store_session, checkpoint_to_store, from_snapshot_bytes, resume_from_store,
     MachineSnapshot,
 };
-use ironhorse_snapshot::store::{validate_store, HeapStore, MemoryStore, StoreError};
+use ironhorse_snapshot::store::{validate_store, MemoryStore, StoreError};
 use ironhorse_snapshot::store_file::FileStore;
-use ironhorse_snapshot::{read_machine, write_machine_unchecked, Signature};
-use ironhorse_vm::{parse_symbols, Interp};
-
-fn sig() -> Signature {
-    Signature::new("ironhorse-worker-v1")
-}
-
-fn compile(source: &str) -> (Vec<u8>, Vec<ironhorse_vm::SymbolName>) {
-    let (bytecode, symbols) = ironhorse_compile::compile_atoms(source).expect("compiles");
-    (bytecode, parse_symbols(&symbols))
-}
-
-/// Run both cranks uninterrupted, then run them across a
-/// checkpoint/resume split on `store`, and return the two crank-2
-/// completion values (uninterrupted, resumed).
-fn twin(cranks: [&str; 2], store: &mut dyn HeapStore) -> (String, String) {
-    let compiled: Vec<(Vec<u8>, Vec<ironhorse_vm::SymbolName>)> =
-        cranks.iter().map(|s| compile(s)).collect();
-
-    let mut cont = Interp::new();
-    cont.link_intrinsics(&compiled[0].1);
-    assert!(cont.run(&compiled[0].0).completed, "crank 1 (continuous)");
-    let uninterrupted = cont.run(&compiled[1].0);
-    assert!(uninterrupted.completed, "crank 2 (continuous)");
-
-    let mut m = Interp::new();
-    m.link_intrinsics(&compiled[0].1);
-    assert!(m.run(&compiled[0].0).completed, "crank 1 (store)");
-    let session = begin_store_session(m, &sig(), store)
-        .map_err(|(_, e)| e)
-        .expect("begin");
-    drop(session);
-    let mut session = resume_from_store(store, &sig()).expect("resume");
-    let resumed = session.machine_mut().run(&compiled[1].0);
-    assert!(resumed.completed, "crank 2 (resumed): {:?}", resumed.halt);
-    // The resumed machine must also checkpoint cleanly — its restored
-    // side tables re-serialize into the next commit.
-    checkpoint_to_store(&mut session, &sig(), store).expect("checkpoint after resume");
-    validate_store(store, &sig()).expect("post-crank store validates");
-
-    (uninterrupted.result, resumed.result)
-}
+use ironhorse_snapshot::{read_machine, write_machine_unchecked};
+use ironhorse_vm::Interp;
 
 fn assert_twin(name: &str, cranks: [&str; 2], expect: &str) {
     let mut mem = MemoryStore::new();
-    let (uninterrupted, resumed) = twin(cranks, &mut mem);
-    assert_eq!(
-        uninterrupted, expect,
-        "uninterrupted answer is the real one"
-    );
-    assert_eq!(resumed, expect, "resumed equals uninterrupted (memory)");
-
+    let seen = twin(cranks[0], &[cranks[1]], &mut mem);
+    assert!(seen[0].0, "observation completes: {}", seen[0].1);
+    assert_eq!(seen[0].2, expect, "continuous answer is the real one");
     let dir = TempDir::new(name);
     let mut file = FileStore::open(dir.join("heap.ihstore")).unwrap();
-    let (_, resumed) = twin(cranks, &mut file);
-    assert_eq!(resumed, expect, "resumed equals uninterrupted (file)");
+    let seen = twin(cranks[0], &[cranks[1]], &mut file);
+    assert_eq!(seen[0].2, expect);
 }
 
 #[test]

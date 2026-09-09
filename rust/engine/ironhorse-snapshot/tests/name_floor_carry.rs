@@ -9,72 +9,15 @@
 //! pass, and names the guest interned itself), and must resurrect
 //! nothing the guest deleted.
 
+#[path = "common/twin.rs"]
+mod carry;
 mod common;
+use carry::twin;
 
 use common::TempDir;
 
-use ironhorse_snapshot::machine::{begin_store_session, checkpoint_to_store, resume_from_store};
-use ironhorse_snapshot::store::{validate_store, HeapStore, MemoryStore};
+use ironhorse_snapshot::store::MemoryStore;
 use ironhorse_snapshot::store_file::FileStore;
-use ironhorse_snapshot::Signature;
-use ironhorse_vm::{parse_symbols, Interp};
-
-fn sig() -> Signature {
-    Signature::new("ironhorse-worker-v1")
-}
-
-fn compile(source: &str) -> (Vec<u8>, Vec<ironhorse_vm::SymbolName>) {
-    let (bytecode, symbols) = ironhorse_compile::compile_atoms(source).expect("compiles");
-    (bytecode, parse_symbols(&symbols))
-}
-
-/// Relink and run one crank, returning `(completed, halt debug, result,
-/// computrons)`. The COMPUTRON count is part of the observation: a
-/// resumed machine that answers correctly while charging differently
-/// has still diverged, and consensus is on the count as much as the
-/// value. Every twin below therefore compares metering too.
-fn crank(m: &mut Interp, src: &str) -> (bool, String, String, u64) {
-    let (b, n) = compile(src);
-    let b = m.relink_crank(&b, &n).expect("relink");
-    let o = m.run(&b);
-    (o.completed, format!("{:?}", o.halt), o.result, o.computrons)
-}
-
-/// Run crank 1 and the observation cranks uninterrupted, and the same
-/// cranks across a checkpoint/resume split on `store`; assert the
-/// observations agree pairwise and return the continuous ones.
-fn twin(
-    crank1: &str,
-    observations: &[&str],
-    store: &mut dyn HeapStore,
-) -> Vec<(bool, String, String, u64)> {
-    let (b1, n1) = compile(crank1);
-
-    let mut cont = Interp::new();
-    cont.link_intrinsics(&n1);
-    assert!(cont.run(&b1).completed, "crank 1 (continuous)");
-    let continuous: Vec<_> = observations.iter().map(|s| crank(&mut cont, s)).collect();
-
-    let mut m = Interp::new();
-    m.link_intrinsics(&n1);
-    assert!(m.run(&b1).completed, "crank 1 (store)");
-    let session = begin_store_session(m, &sig(), store)
-        .map_err(|(_, e)| e)
-        .expect("begin");
-    drop(session);
-    let mut session = resume_from_store(store, &sig()).expect("resume");
-    let resumed: Vec<_> = observations
-        .iter()
-        .map(|s| crank(session.machine_mut(), s))
-        .collect();
-    assert_eq!(
-        continuous, resumed,
-        "resumed observes exactly as uninterrupted"
-    );
-    checkpoint_to_store(&mut session, &sig(), store).expect("checkpoint after resume");
-    validate_store(store, &sig()).expect("post-crank store validates");
-    continuous
-}
 
 fn assert_twin(name: &str, crank1: &str, observations: &[&str], expect: &[&str]) {
     let mut mem = MemoryStore::new();

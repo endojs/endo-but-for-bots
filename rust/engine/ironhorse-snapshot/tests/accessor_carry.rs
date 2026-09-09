@@ -1,76 +1,21 @@
 //! Guest accessor getter/setter mappings persist in `ACCS`
 //! (store schema v17). Exact boot seeds remain restore-derived.
 
+#[path = "common/twin.rs"]
+mod carry;
 mod common;
+use carry::{compile, crank, sig, twin};
 
 use common::TempDir;
 
 use ironhorse_snapshot::image::{read_machine, write_machine_unchecked};
 use ironhorse_snapshot::machine::{
-    begin_store_session, from_snapshot_bytes, resume_from_store, resume_from_store_lazy,
-    MachineSnapshot,
+    begin_store_session, from_snapshot_bytes, resume_from_store_lazy, MachineSnapshot,
 };
-use ironhorse_snapshot::store::{HeapStore, MemoryStore};
+use ironhorse_snapshot::store::MemoryStore;
 use ironhorse_snapshot::store_file::FileStore;
-use ironhorse_snapshot::{Signature, SnapshotError};
-use ironhorse_vm::{parse_symbols, Interp};
-
-fn sig() -> Signature {
-    Signature::new("ironhorse-worker-v1")
-}
-
-fn compile(source: &str) -> (Vec<u8>, Vec<ironhorse_vm::SymbolName>) {
-    let (bytecode, symbols) = ironhorse_compile::compile_atoms(source).expect("compiles");
-    (bytecode, parse_symbols(&symbols))
-}
-
-/// Relink and run one crank, returning `(completed, halt debug, result,
-/// computrons)`. The COMPUTRON count is part of the observation: a
-/// resumed machine that answers correctly while charging differently
-/// has still diverged, and consensus is on the count as much as the
-/// value. Every twin below therefore compares metering too.
-fn crank(machine: &mut Interp, source: &str) -> (bool, String, String, u64) {
-    let (bytecode, names) = compile(source);
-    let bytecode = machine.relink_crank(&bytecode, &names).expect("relink");
-    let outcome = machine.run(&bytecode);
-    (
-        outcome.completed,
-        format!("{:?}", outcome.halt),
-        outcome.result,
-        outcome.computrons,
-    )
-}
-
-fn twin(
-    first: &str,
-    observations: &[&str],
-    store: &mut dyn HeapStore,
-) -> Vec<(bool, String, String, u64)> {
-    let (bytecode, names) = compile(first);
-    let mut continuous = Interp::new();
-    continuous.link_intrinsics(&names);
-    assert!(continuous.run(&bytecode).completed);
-    let expected: Vec<_> = observations
-        .iter()
-        .map(|source| crank(&mut continuous, source))
-        .collect();
-
-    let mut suspended = Interp::new();
-    suspended.link_intrinsics(&names);
-    assert!(suspended.run(&bytecode).completed);
-    drop(
-        begin_store_session(suspended, &sig(), store)
-            .map_err(|(_, error)| error)
-            .expect("begin"),
-    );
-    let mut resumed = resume_from_store(store, &sig()).expect("resume");
-    let actual: Vec<_> = observations
-        .iter()
-        .map(|source| crank(resumed.machine_mut(), source))
-        .collect();
-    assert_eq!(actual, expected, "resumed accessors match continuous");
-    expected
-}
+use ironhorse_snapshot::SnapshotError;
+use ironhorse_vm::Interp;
 
 const FIRST: &str = "var o = 0; var hidden = 40; var t = 0; o = {}; \
      Object.defineProperty(o, 'x', { \
