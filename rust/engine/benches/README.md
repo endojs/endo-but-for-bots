@@ -1336,3 +1336,24 @@ raw charges.
 Before aggregate measurements reuse the preceding Buffer candidate; before source
 locks were freshly rerun.
 The earlier rejected experiment remains intact.
+
+## Calendar and locale subsystem extraction
+
+[results/1a-calendar-reconsidered.json](results/1a-calendar-reconsidered.json) records
+28 Intl, 23 Temporal, and one Date method moved into their respective native modules
+on `376dd356f`.
+Executable bodies are unchanged, and the `StringListFromIterable` comment now sits
+on the function it describes.
+GC and allocation locks include all three modules, with explicit capacity coverage
+and mutation checks.
+
+Fresh validation passes 1,498 engine tests and 116 SQLite tests, plus 55 VM source
+locks, seven snapshot locks, strict VM library Clippy, docs, and the math control.
+The initial four direct controls increase by 18–46%.
+One fixed before/after/after/before comparison using saved binaries produces ratios
+from 1.003x to 1.063x; every run retains identical results and raw charges.
+All observations are retained.
+The unchanged pinned-baseline gate fails the smallest placeholder-allocation control
+at 1.339x; that failure remains open while the decomposition is retained incrementally.
+Before aggregate measurements reuse the preceding Promise candidate; before source
+locks were freshly rerun, and the older Intl experiment remains intact.
