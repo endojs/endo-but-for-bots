@@ -4,6 +4,7 @@
 //   [-E NINEP_SUDO=1]
 //   [-E CLAUDE_SANDBOX_IMAGE=oci.example/claude:latest]
 //   [-E CLAUDE_SANDBOX_MOUNT_DIR=/var/lib/endo/claude-mounts]
+//   [-E ENDO_CLAUDE_SANDBOX_OWNER_ID=operator-chosen-stable-id]
 //
 // HOST-side provisioning for the Claude sandbox stack. Run this on the
 // machine that runs the containers (Linux + podman). Idempotent. Mints,
@@ -21,7 +22,10 @@
 // The credentials factory belongs on the PEER machine (the credential
 // holder) — see setup-peer.js. For single-machine dev, run both.
 
+import { createHash } from 'node:crypto';
+
 import { E } from '@endo/eventual-send';
+import { Fail } from '@endo/errors';
 
 import { main as provisionSandboxFactory } from './factory.js';
 import { toCurrentSpecifier } from './src/current-specifier.js';
@@ -52,9 +56,24 @@ export const main = async hostAgent => {
   //    `provideHostPath` / `provideScratchMount` surface the factory needs
   //    to bridge granted Mount caps into the kernel's bind-mount surface.
   if (!(await E(hostAgent).has(SANDBOX_DIR, 'sandbox-factory'))) {
+    // Podman crash reconciliation must only touch this host's Claude slices.
+    // Persist the identity with the factory so every incarnation uses the
+    // same exact owner label, independently of release paths and process IDs.
+    let ownerId = env.ENDO_CLAUDE_SANDBOX_OWNER_ID;
+    if (!ownerId) {
+      // Peer identity is daemon-wide: separate hosts in the same daemon must
+      // not sweep each other's containers. Hash the stable host formula ID
+      // into a label-safe value without exposing that ID in Podman metadata.
+      const hostId = await E(hostAgent).identify('@agent');
+      if (typeof hostId !== 'string' || hostId.length === 0) {
+        throw Fail`Cannot identify Claude sandbox host`;
+      }
+      ownerId = `claude-${createHash('sha256').update(hostId).digest('hex')}`;
+    }
     await E(hostAgent).makeUnconfined('@main', sandboxSpecifier, {
       powersName: '@agent',
       resultName: [SANDBOX_DIR, 'sandbox-factory'],
+      env: harden({ ENDO_SANDBOX_OWNER_ID: ownerId }),
     });
     console.log(`Minted ${SANDBOX_DIR}/sandbox-factory`);
   }
