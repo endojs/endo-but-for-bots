@@ -51,6 +51,8 @@ pub use compartment::{
     Compartment, CompartmentId, CompartmentOptions, CompartmentSkip, Intrinsics, Machine,
 };
 pub use gc::{GcStats, Heap};
+#[doc(hidden)]
+pub use interp::SIDE_TABLES;
 pub use interp::{
     dtf_component_key_static, error_name_static, AccessorRow, ArraySnapshot, AsyncRow,
     BoundFunctionRow, CollatorData, CollectionSnapshot, CombinatorRow, CompiledSource,
@@ -70,6 +72,8 @@ pub use module::{
     ModuleSource, ModuleValue, Namespace,
 };
 pub use opcode::{instruction_len, Opcode};
+#[doc(hidden)]
+pub use side_tables::TableDesc;
 pub use symbols::{parse_symbols, parse_symbols_checked, SymbolName};
 pub use value::{
     ChunkArena, ChunkOffset, ChunkSlice, Kind, PageSource, Payload, Slot, SlotArena, SlotIndex,
