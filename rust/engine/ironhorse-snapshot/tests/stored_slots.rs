@@ -68,6 +68,7 @@ fn disposable_stack_row(next: &mut u16) -> DisposableStackRow {
 
 fn saved_jump_row(next: &mut u16) -> SavedJumpRow {
     SavedJumpRow {
+        segment: None,
         target_pc: Default::default(),
         stack_offset: Default::default(),
         locals_len: Default::default(),

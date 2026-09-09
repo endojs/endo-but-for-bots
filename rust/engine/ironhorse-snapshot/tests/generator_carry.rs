@@ -359,6 +359,7 @@ fn generator_pcs_outside_the_owning_body_are_refused() {
         .jumps
         .push(ironhorse_vm::SavedJumpRow {
             target_pc: starts[1],
+            segment: None,
             stack_offset: 0,
             locals_len: frame.locals.len() as u64,
             id_map: Vec::new(),

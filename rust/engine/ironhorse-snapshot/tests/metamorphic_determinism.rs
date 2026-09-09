@@ -336,7 +336,8 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Combined W3 format/boot identity, W2 meter release 4, and compiler policy 5.
         // Format 17 permits reusable chunk markers; only VERS changes here.
         // Format18 adds the boot-native name table to FUNC.
-        "626a77f9c50959bafefd470603be1c46bb4b7453b5840529728e947a761b926d",
+        // Format19: saved-handler segment identity. Guest result and meter pins stay fixed.
+        "72a76e10f58408fe021ee1a59a5612ed12c4d01335310321a18ea8e48e5329e3",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -548,7 +549,8 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // container bytes and raw execution charges above remain unchanged.
         // Format 17 travels in every epoch's manifest and changes the chain.
         // Store29 and FUNC native-name rows change the authenticated state.
-        "23438200aae288c2499bb88d33400dcb6715286ce0d92c98902ad43aa376d0e6",
+        // Schema30 and format19 authenticate the saved-handler layout.
+        "44ae806c9d7045e915e810dac088e34a81f3d882720690fe93675c81690e0c4c",
         "epoch-3 seal chain"
     );
 }

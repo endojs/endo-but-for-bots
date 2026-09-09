@@ -2233,13 +2233,19 @@ fn catch_landing_rejects_an_equal_pc_in_another_dispatch_buffer() {
 #[test]
 fn segment_compaction_remaps_handlers_in_every_suspension_family() {
     let mut vm = Interp::new();
-    for source in [
+    for (index, source) in [
         "var discarded = function () {}; discarded = null; 0",
         "var gate = new Promise(function () {}); \
          var gen = (function* () { try { yield 1; } catch (e) {} })(); gen.next(); \
          var pending = (async function () { try { await gate; } catch (e) {} })(); \
          var agen = (async function* () { try { await gate; } catch (e) {} })(); agen.next(); 0",
-    ] {
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        if index == 1 {
+            GC_AT_STEP.with(|step| step.set(Some(vm.n_dispatched)));
+        }
         let (code, names) = ironhorse_compile::compile_atoms(source).unwrap();
         let code = vm
             .relink_crank(&code, &crate::parse_symbols(&names))
@@ -2275,6 +2281,24 @@ fn segment_compaction_remaps_handlers_in_every_suspension_family() {
     };
     assert_eq!(vm.retained_code_segment_count(), 2);
     check(&vm, 1);
+    assert_eq!(GC_AT_STEP.with(|step| step.get()), None);
+    // Mid-crank GC removed the earlier function without renumbering buffers.
+    // Export must use FUNC's dense mapping even before physical compaction.
+    assert_eq!(vm.function_state_snapshot().segments.len(), 1);
+    let generators = vm.generators_snapshot();
+    assert!(generators[0]
+        .frame
+        .as_ref()
+        .unwrap()
+        .jumps
+        .iter()
+        .all(|jump| jump.segment == Some(0)));
+    let promises = vm.promise_cluster_snapshot();
+    assert!(promises.async_instances[0]
+        .frame
+        .jumps
+        .iter()
+        .all(|jump| jump.segment == Some(0)));
     vm.collect_garbage();
     assert_eq!(vm.retained_code_segment_count(), 1);
     check(&vm, 0);
