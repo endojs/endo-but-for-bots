@@ -3923,6 +3923,38 @@ pub(crate) fn check_buffer_chunk_lengths(
     Ok(())
 }
 
+// Derive saved-frame instruction boundaries, retaining the secondary refusals.
+// The caller must first validate body bounds and instruction completeness with
+// the ordinary function-state gate; this helper is not a standalone validator.
+fn generator_body_starts(
+    body_start: Option<u64>,
+    body_len: u64,
+    code: &[u8],
+) -> Result<(u64, u64, std::collections::BTreeSet<u64>), SnapshotError> {
+    let Some(body_start) = body_start else {
+        return Err(SnapshotError::Corrupt(
+            "generator frame: current function has no body",
+        ));
+    };
+    let Some(body_end) = body_start.checked_add(body_len) else {
+        return Err(SnapshotError::Corrupt(
+            "generator frame: current function has no body",
+        ));
+    };
+    let mut set = std::collections::BTreeSet::new();
+    let mut pc = body_start as usize;
+    while pc < body_end as usize {
+        let Some(len) = ironhorse_vm::instruction_len(code, pc) else {
+            return Err(SnapshotError::Corrupt(
+                "generator frame: malformed body bytecode",
+            ));
+        };
+        set.insert(pc as u64);
+        pc = pc.saturating_add(len);
+    }
+    Ok((body_start, body_end, set))
+}
+
 /// `SYMB` joined this walk when the symbol-key table became live
 /// state (it was deliberately excluded while nothing consumed the
 /// section on restore — review wave 5): each pair's descriptor is a
@@ -4365,27 +4397,8 @@ pub(crate) fn check_image_slot_bounds(
         let starts = match body_starts.entry(frame.cur_func) {
             std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
             std::collections::hash_map::Entry::Vacant(e) => {
-                let Some(body_start) = function.body_start else {
-                    return Err(SnapshotError::Corrupt(
-                        "generator frame: current function has no body",
-                    ));
-                };
-                let Some(body_end) = body_start.checked_add(function.body_len) else {
-                    return Err(SnapshotError::Corrupt(
-                        "generator frame: current function has no body",
-                    ));
-                };
-                let mut set = std::collections::BTreeSet::new();
-                let mut pc = body_start as usize;
-                while pc < body_end as usize {
-                    let Some(len) = ironhorse_vm::instruction_len(code, pc) else {
-                        return Err(SnapshotError::Corrupt(
-                            "generator frame: malformed body bytecode",
-                        ));
-                    };
-                    set.insert(pc as u64);
-                    pc = pc.saturating_add(len);
-                }
+                let (body_start, body_end, mut set) =
+                    generator_body_starts(function.body_start, function.body_len, code)?;
                 // A NESTED function's bytecode lives INSIDE its
                 // enclosing body's range -- a generator declaring
                 // `var h = function () {...}` owns a body that
@@ -9251,6 +9264,40 @@ mod generator_decoder_refusals {
             0,
             &[],
         )
+    }
+
+    #[test]
+    fn instruction_boundary_derivation_retains_its_backstops() {
+        use ironhorse_vm::Opcode;
+        let code = [
+            Opcode::XS_CODE_INTEGER_1 as u8,
+            0,
+            Opcode::XS_CODE_UNDEFINED as u8,
+        ];
+        assert_eq!(
+            generator_body_starts(Some(0), 3, &code),
+            Ok((0, 3, [0, 2].into_iter().collect()))
+        );
+        assert_eq!(
+            generator_body_starts(Some(2), 1, &code),
+            Ok((2, 3, [2].into_iter().collect()))
+        );
+        // Exercise the production helper directly: the earlier function-state
+        // validation normally rejects these before saved-frame derivation.
+        for (start, len) in [(None, 0), (Some(u64::MAX), 1)] {
+            assert_eq!(
+                generator_body_starts(start, len, &code),
+                Err(SnapshotError::Corrupt(
+                    "generator frame: current function has no body"
+                ))
+            );
+        }
+        assert_eq!(
+            generator_body_starts(Some(0), 1, &[Opcode::XS_CODE_INTEGER_4 as u8]),
+            Err(SnapshotError::Corrupt(
+                "generator frame: malformed body bytecode"
+            ))
+        );
     }
 
     #[test]
