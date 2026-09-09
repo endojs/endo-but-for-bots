@@ -158,6 +158,8 @@ impl Interp {
         let mut chunks = ChunkArena::new();
         // Interned `typeof` result strings, stored in the UTF-16BE form all
         // string values use (`str_to_be16`).
+        // These eight chunks form an always-live arena prefix. Order-preserving
+        // compaction cannot relocate them, so restore may rederive their offsets.
         let static_str = StaticStrings {
             undefined: chunks.alloc(&str_to_be16("undefined")),
             object: chunks.alloc(&str_to_be16("object")),

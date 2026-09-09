@@ -1404,6 +1404,14 @@ macro_rules! snapshot_payloads {
                         .iter()
                         .map(|row| row.owner)
                         .collect();
+                    if let Some(rows) = &function_state.native_names {
+                        for &(owner, offset) in rows {
+                            owned(owner)?;
+                            if (offset as usize) < CHUNK_HEADER || (offset as usize) > chunk_len {
+                                return Err(GATE_OOC);
+                            }
+                        }
+                    }
                     let mut referenced_segments = std::collections::BTreeSet::new();
                     for row in &function_state.functions {
                         owned(row.owner)?;

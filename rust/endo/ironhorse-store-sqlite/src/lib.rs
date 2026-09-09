@@ -1496,12 +1496,35 @@ mod tests {
         assert_eq!(store.read_small_state().unwrap(), small);
         assert_eq!(&store_to_image(&store).unwrap(), image.image());
         let new = store.manifest().unwrap();
-        assert_eq!(new.store_schema, 28);
-        assert_ne!(new.root, old.root);
         assert_eq!(
-            (new.epoch, new.cranks, new.parent_seal),
-            (old.epoch, old.cranks, old.seal)
+            new.store_schema,
+            ironhorse_snapshot::store::STORE_SCHEMA_VERSION
         );
+        assert_ne!(new.root, old.root);
+        assert_eq!((new.epoch, new.cranks), (old.epoch, old.cranks));
+        // Migration passes through schema28's section tree before schema29
+        // stamps native-name support. Preserve and verify both seal links.
+        let mut intermediate = new.clone();
+        intermediate.store_schema = 28;
+        intermediate.parent_seal = old.seal.clone();
+        intermediate.root = compute_root(
+            &intermediate,
+            &ironhorse_snapshot::store_sections::framed_root(&small).unwrap(),
+            &pages,
+            &exts,
+            &store.free_leaf_hashes().unwrap(),
+            &store.page_edges().unwrap(),
+        );
+        let intermediate_seal = ironhorse_snapshot::store::seal_commit(
+            &intermediate.parent_seal,
+            &intermediate,
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+        );
+        assert_eq!(new.parent_seal, intermediate_seal);
         assert_eq!(
             store
                 .conn

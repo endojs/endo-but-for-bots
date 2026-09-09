@@ -176,11 +176,12 @@ fn regenerate_persistence_identities() {
     .unwrap();
 }
 
-// The format-17 marker is the only byte change in this corpus, which does not
-// collect into free blocks. Retain the previous vectors as independent proof.
+// Retain the format16 vectors as independent proof: omit both the later
+// format stamp and the format18 boot-native name table from these comparisons.
 fn assert_format_16_bytes(machine: &Interp, sig: &Signature, expected: &str) {
     let mut image = machine.snapshot_image(sig).unwrap().into_image();
     image.version.format_version = 16;
+    image.function_state.native_names = None;
     assert_eq!(
         hex_sha256(&ironhorse_snapshot::image::write_machine_unchecked(&image)),
         expected
@@ -193,6 +194,7 @@ fn assert_previous_bytes(machine: &Interp, sig: &Signature, expected: &str) {
     let mut image = machine.snapshot_image(sig).unwrap().into_image();
     image.meter.cost_table_version = "ironhorse-meter-4".into();
     image.version.format_version = 16;
+    image.function_state.native_names = None;
     assert_eq!(
         hex_sha256(&ironhorse_snapshot::image::write_machine_unchecked(&image)),
         expected

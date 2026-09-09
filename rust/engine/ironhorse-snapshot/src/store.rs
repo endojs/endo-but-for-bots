@@ -92,7 +92,8 @@ pub use ironhorse_vm::{CHUNK_EXTENT_BYTES, SLOTS_PER_PAGE};
 /// current seal at open, and admits one canonical encoding of small state.
 /// v28 binds the 32 small-state payloads independently under a fixed section tree.
 /// Migration from v27 preserves payload bytes and export framing.
-pub const STORE_SCHEMA_VERSION: u32 = 28;
+/// v29: FUNC persists surviving boot-native name chunk locations.
+pub const STORE_SCHEMA_VERSION: u32 = 29;
 /// The oldest schema [`migrate_store`] can upgrade in place. Decode
 /// accepts the whole supported range; validation refuses an
 /// un-migrated older store with [`StoreError::NeedsMigration`], and
@@ -1997,6 +1998,7 @@ pub fn migrate_store(
             (25, _) => migrate_v25_to_v26(store)?,
             (26, _) => migrate_v26_to_v27(store)?,
             (27, _) => migrate_v27_to_v28(store)?,
+            (28, _) => migrate_v28_to_v29(store)?,
             (_, Some(&(target, extra_len))) => {
                 migrate_append_small_section(store, target, extra_len)?;
             }
@@ -2270,6 +2272,46 @@ fn migrate_v27_to_v28(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     }
     manifest.parent_seal = manifest.seal.clone();
     manifest.store_schema = 28;
+    manifest.root = compute_root(
+        &manifest,
+        &crate::store_sections::framed_root(&small)?,
+        &pages,
+        &exts,
+        &frees,
+        &edges,
+    );
+    manifest.seal = seal_commit(&manifest.parent_seal, &manifest, &[], &[], &[], &[], &[]);
+    store.replace_manifest_and_small_for_migration(&manifest, &small)
+}
+
+// Legacy FUNC has no native-name suffix: its native-name locations follow
+// the old boot-derived contract. Preserve these payloads verbatim; the next
+// checkpoint records explicit locations. A legacy image already broken by
+// moving those locations cannot be repaired from metadata it never recorded.
+fn migrate_v28_to_v29(store: &mut dyn HeapStore) -> Result<(), StoreError> {
+    let mut manifest = store.manifest()?;
+    verify_current_seal(&manifest)?;
+    let small = store.read_small_state()?;
+    SmallState::decode(&small)?;
+    let (pages, exts) = store.leaf_hashes()?;
+    let frees = store.free_leaf_hashes()?;
+    let edges = store.page_edges()?;
+    let old = compute_root(
+        &manifest,
+        &crate::store_sections::framed_root(&small)?,
+        &pages,
+        &exts,
+        &frees,
+        &edges,
+    );
+    if old != manifest.root {
+        return Err(StoreError::BaselineMismatch {
+            expected: old,
+            found: manifest.root,
+        });
+    }
+    manifest.parent_seal = manifest.seal.clone();
+    manifest.store_schema = 29;
     manifest.root = compute_root(
         &manifest,
         &crate::store_sections::framed_root(&small)?,
@@ -4043,6 +4085,7 @@ mod tests {
         let raw = 0xfff0_0000_0000_0001u64;
         let mut image = ran_image();
         image.version.format_version = 15;
+        image.function_state.native_names = None;
         let slot_index = image.slots.len();
         image.slots.push(Slot::number(f64::NAN));
         image.slot_live += 1;
