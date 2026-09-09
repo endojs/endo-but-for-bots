@@ -1234,3 +1234,24 @@ The saved lazy-wake binaries have identical hashes, so their local timing delta
 comes from repeated execution of the same executable.
 These results support retaining the incremental optimization, but do not clear the
 failed whole-branch pinned gate or establish a cause for its remaining failures.
+
+## JSON extraction reconsidered
+
+[results/1a-json-reconsidered.json](results/1a-json-reconsidered.json) records the
+JSON module move on `858ed1593`, preserving the earlier rejection record above.
+The 27 methods and three private helper types match the earlier candidate exactly;
+only `call_json` needs parent-scoped visibility.
+GC and allocation source locks include the child module, including the explicit
+capacity scan and mutation checks.
+Fresh validation passes 1,492 engine tests and 116 SQLite tests, plus source locks,
+strict VM library Clippy, documentation builds, and the math control.
+
+All 48 controls pass the unchanged pinned-baseline gate, with a maximum of 1.112x.
+Archive preparation overlapped its final portion, which qualifies timing isolation.
+The initial direct parse control was 1.418x slower, with matching results and charges.
+A bounded, fixed before/after/after/before check after all builds and archive work
+finished measures the four direct controls from 0.991x to 1.003x.
+The complete results and raw charges agree across both revisions and every run.
+The initial slowdown remains recorded; the paired check does not reproduce it.
+The extraction is retained on this fresh evidence, without revising the historical
+review or the prior experiment's measurements.
