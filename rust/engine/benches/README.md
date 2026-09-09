@@ -649,3 +649,13 @@ must not be described as timings of the compaction algorithm itself.
 Validation for the measured code passed 1,243 engine tests and 116 SQLite tests,
 including the source locks, plus clippy, formatting, and documentation builds
 with no new warning headings.
+
+Focused historical runs are retained under `diagnostics`, including each
+revision's medians and printed per-round checkpoint observations.
+They do not establish a clean commit boundary: in one `59b0cdb08` process the
+8k front rounds shift from roughly 6.7–6.8 ms to 5.3 ms without changing the
+binary, and the tail median is 5.261 ms against 5.195 ms at `7c3aea6b7`.
+This variation prevents attributing the full-run failures to a particular
+helper move from these samples alone.
+It does not erase the two failed acceptance runs or replace the full benchmark
+gate with the focused diagnostic.
