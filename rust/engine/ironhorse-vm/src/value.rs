@@ -628,7 +628,46 @@ impl Default for SlotArena {
     }
 }
 
+/// Invalid slot-arena image metadata, rejected before an arena is built.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SlotArenaImageError {
+    TooManySlots,
+    FreeIndexOutOfRange,
+    DuplicateFreeIndex,
+    LiveFreeAccounting,
+}
+
+impl std::fmt::Display for SlotArenaImageError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "invalid slot arena image: {self:?}")
+    }
+}
+
+impl std::error::Error for SlotArenaImageError {}
+
 impl SlotArena {
+    fn image_free_marks(
+        slot_count: usize,
+        free: &[u32],
+        live: u32,
+    ) -> Result<Vec<bool>, SlotArenaImageError> {
+        let count = u32::try_from(slot_count).map_err(|_| SlotArenaImageError::TooManySlots)?;
+        let mut marks = vec![false; slot_count];
+        for &index in free {
+            let mark = marks
+                .get_mut(index as usize)
+                .ok_or(SlotArenaImageError::FreeIndexOutOfRange)?;
+            if *mark {
+                return Err(SlotArenaImageError::DuplicateFreeIndex);
+            }
+            *mark = true;
+        }
+        if free.len() as u64 + u64::from(live) != u64::from(count) {
+            return Err(SlotArenaImageError::LiveFreeAccounting);
+        }
+        Ok(marks)
+    }
+
     pub fn new() -> SlotArena {
         SlotArena {
             ceiling: DEFAULT_SLOT_CEILING,
@@ -659,12 +698,21 @@ impl SlotArena {
         source: Rc<dyn PageSource>,
         chunk_bound: u64,
     ) -> SlotArena {
+        Self::try_lazy_from_parts(slot_count, free, live, source, chunk_bound)
+            .expect("valid lazy slot arena image")
+    }
+
+    /// Fallible lazy restoration. Validates metadata before reading any page.
+    pub fn try_lazy_from_parts(
+        slot_count: u32,
+        free: Vec<u32>,
+        live: u32,
+        source: Rc<dyn PageSource>,
+        chunk_bound: u64,
+    ) -> Result<SlotArena, SlotArenaImageError> {
+        let free_marks = Self::image_free_marks(slot_count as usize, &free, live)?;
         let pages = slot_count.div_ceil(SLOTS_PER_PAGE) as usize;
-        let mut free_marks = vec![false; slot_count as usize];
-        for &i in &free {
-            free_marks[i as usize] = true;
-        }
-        SlotArena {
+        Ok(SlotArena {
             ceiling: DEFAULT_SLOT_CEILING,
             snapshot_dirt: Rc::default(),
             property_index: RefCell::default(),
@@ -686,7 +734,7 @@ impl SlotArena {
                 pages: RefCell::new((0..pages).map(|_| None).collect()),
                 count: Cell::new(slot_count),
             }),
-        }
+        })
     }
 
     /// Fault page `page` in if a backing is attached and the page is
@@ -957,12 +1005,17 @@ impl SlotArena {
 
     /// Return a slot to the free list.
     pub fn free(&mut self, index: SlotIndex) {
+        assert!(
+            !index.is_null() && index.0 < self.capacity(),
+            "invalid slot index in free"
+        );
+        assert!(!self.is_free(index.0), "double free of slot");
+        let live = self.live.checked_sub(1).expect("slot live count underflow");
         self.snapshot_dirt.liveness();
-        debug_assert!(!index.is_null());
         self.property_index.get_mut().free(index);
         self.free.push(index.0);
         self.free_marks[index.0 as usize] = true;
-        self.live -= 1;
+        self.live = live;
     }
 
     /// Read a record by value (`Slot` is `Copy`; after inlining only
@@ -971,6 +1024,7 @@ impl SlotArena {
     /// always-false branch.
     #[inline]
     pub fn get(&self, index: SlotIndex) -> Slot {
+        debug_assert!(!self.is_free(index.0), "access to free slot");
         if let Some(b) = &self.lazy {
             self.ensure_page_resident(index.0 / SLOTS_PER_PAGE);
             return b.get(index.0 as usize);
@@ -979,6 +1033,7 @@ impl SlotArena {
     }
     #[inline]
     pub fn get_mut(&mut self, index: SlotIndex) -> &mut Slot {
+        debug_assert!(!self.is_free(index.0), "access to free slot");
         self.snapshot_dirt.content();
         self.property_index.get_mut().will_mutate(index);
         // Fault before handing out `&mut`: a partial overwrite of a
@@ -1043,6 +1098,7 @@ impl SlotArena {
         if index.is_null() {
             return false;
         }
+        debug_assert!(!self.is_free(index.0), "mark of free slot");
         let i = index.0 as usize;
         if self.marks[i] {
             false
@@ -1183,14 +1239,21 @@ impl SlotArena {
     /// starts clean: a just-restored arena is byte-identical to its store,
     /// so the next incremental checkpoint owes nothing.
     pub fn from_image(slots: Vec<Slot>, free: Vec<u32>, live: u32) -> SlotArena {
+        Self::try_from_image(slots, free, live).expect("valid slot arena image")
+    }
+
+    /// Fallible restoration for callers supplying untrusted image metadata.
+    /// Rejects out-of-range and duplicate free entries and inconsistent counts.
+    pub fn try_from_image(
+        slots: Vec<Slot>,
+        free: Vec<u32>,
+        live: u32,
+    ) -> Result<SlotArena, SlotArenaImageError> {
+        let free_marks = Self::image_free_marks(slots.len(), &free, live)?;
         let marks = vec![false; slots.len()];
         let dirty = vec![false; slots.len().div_ceil(SLOTS_PER_PAGE as usize)];
         let unbacked = vec![false; dirty.len()];
-        let mut free_marks = vec![false; slots.len()];
-        for &i in &free {
-            free_marks[i as usize] = true;
-        }
-        SlotArena {
+        Ok(SlotArena {
             ceiling: DEFAULT_SLOT_CEILING,
             snapshot_dirt: Rc::default(),
             property_index: RefCell::default(),
@@ -1202,7 +1265,7 @@ impl SlotArena {
             dirty,
             unbacked,
             lazy: None,
-        }
+        })
     }
 
     // --- incremental-checkpoint dirty tracking (store seam design) ---
@@ -1768,7 +1831,9 @@ impl ChunkArena {
     /// offset order, and return the old→new payload-offset remap the
     /// caller applies to every live `ChunkOffset` (design § Value and
     /// heap model: "offsets are rewritten exactly where XS rewrites
-    /// pointers"). Duplicate/unknown offsets in `live` are ignored.
+    /// pointers"). Duplicate and null offsets in `live` are ignored.
+    /// Every other offset must name an actual payload boundary; invalid
+    /// offsets or malformed block chains panic before any bytes are moved.
     pub fn compact(
         &mut self,
         live: &[ChunkOffset],
@@ -1822,6 +1887,40 @@ impl ChunkArena {
                 assert!(end <= total, "chunk payload out of range (corrupt heap)");
             }
         }
+
+        // Lengths preceding arbitrary in-range bytes can look plausible.
+        // Reconcile the sorted live offsets against the actual block chain,
+        // including dead blocks, before taking storage or rewriting offsets.
+        // A streaming merge needs no second set of all payload boundaries.
+        let total = self.len();
+        let mut header = 0usize;
+        let mut matched = 0usize;
+        while header < total {
+            let payload = header
+                .checked_add(CHUNK_HEADER)
+                .filter(|&end| end <= total)
+                .expect("chunk chain header out of range (corrupt heap)");
+            if let Some(old) = seen.get(matched) {
+                assert!(
+                    old.0 as usize >= payload,
+                    "chunk offset is not a payload boundary (corrupt heap)"
+                );
+                if old.0 as usize == payload {
+                    matched += 1;
+                }
+            }
+            let bytes = self.view(header, payload);
+            let len = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
+            header = payload
+                .checked_add(len)
+                .filter(|&end| end <= total)
+                .expect("chunk chain payload out of range (corrupt heap)");
+        }
+        assert_eq!(
+            matched,
+            seen.len(),
+            "chunk offset is not a payload boundary (corrupt heap)"
+        );
 
         let old_bytes = std::mem::take(self.bytes_mut());
         // In-range by the validation pass above; the arithmetic cannot
