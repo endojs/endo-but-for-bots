@@ -1138,3 +1138,25 @@ This exposes the policy's different write costs for the two layouts.
 The ordered pair does not isolate code layout or run-to-run variation and does not
 attribute the original-baseline timing regression.
 Neither diagnostic patch was applied to production, and no further trials were run.
+
+## Rejected JSON native extraction
+
+[results/1a-json-module.json](results/1a-json-module.json) retains the complete
+candidate patch, source hashes, validation, and serial measurements from `d3cb59ec2`.
+The candidate moved 27 methods and three transient types into `interp/natives/json.rs`,
+reducing the parent from 31,066 to 29,649 lines.
+Both source inventories and the explicit allocation-capacity scan followed the move;
+a mutation test exercised both raw capacity spellings in the child.
+
+All four direct JSON controls passed, with identical results and raw charges.
+The runner's fresh same-host reference comparison failed six of 48 controls at the
+unchanged 1.25x gate, with a maximum of 1.340x.
+The earlier standalone baseline is retained as context; gate ratios use the runner's
+remeasured reference, not that earlier report.
+No follow-up trials were run, and these measurements do not establish their cause.
+All six candidate runtime/test files were restored or removed.
+
+Full engine CI passed 1,491 tests, SQLite passed 116, and strict VM Clippy and the
+math check passed; VM rustdoc retained 61 warnings.
+The candidate and measurement fixture underwent independent adversarial review.
+The extraction is rejected; full 1A performance acceptance remains outstanding.
