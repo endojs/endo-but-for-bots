@@ -38,13 +38,25 @@ def compare(left, right):
     return lines
 
 
+def matches_baseline(actual, expected):
+    """An approved difference pins both output words, not just a ULP allowance."""
+    for line in expected[1:]:
+        fields = line.split("\t")
+        if len(fields) != 5 or fields[0] in {"abs", "ceil", "floor", "sqrt"}:
+            raise ValueError("invalid difference pin or exact-control exception")
+        if fields[4] != "1":
+            raise ValueError("the measured platform baseline permits only one-ULP differences")
+    return actual == expected
+
+
 def main():
-    if len(sys.argv) != 4:
-        raise ValueError("usage: compare-math-vectors.py LEFT RIGHT REPORT")
+    if len(sys.argv) not in (4, 5):
+        raise ValueError("usage: compare-math-vectors.py LEFT RIGHT REPORT [EXPECTED_DIFFERENCES]")
     lines = compare(read(sys.argv[1]), read(sys.argv[2]))
     Path(sys.argv[3]).write_text("\n".join(lines) + "\n")
     print(f"{len(lines) - 1} bit differences; report: {sys.argv[3]}")
-    return int(len(lines) != 1)
+    expected = Path(sys.argv[4]).read_text().splitlines() if len(sys.argv) == 5 else [lines[0]]
+    return int(not matches_baseline(lines, expected))
 
 
 if __name__ == "__main__":

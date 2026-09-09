@@ -5,7 +5,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
-ironhorse-vm = { path = "../engine/ironhorse-vm" }
+ironhorse-vm = { path = "../engine/ironhorse-vm", features = ["consensus"] }
 ironhorse-compile = { path = "../engine/ironhorse-compile" }
 ironhorse-snapshot = { path = "../engine/ironhorse-snapshot" }
 ironhorse-store-sqlite = { path = "../endo/ironhorse-store-sqlite" }

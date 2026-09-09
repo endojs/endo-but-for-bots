@@ -20,6 +20,9 @@
 //! `gxCodeSizes`) at the `c/moddable` pin, so opcode byte values,
 //! instruction sizes, and mnemonics match the oracle exactly.
 
+#[cfg(all(feature = "consensus", feature = "cost-calibration"))]
+compile_error!("consensus and cost-calibration are mutually exclusive");
+
 mod bulk;
 mod classification;
 mod snapshot_dirty;
