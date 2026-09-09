@@ -9,9 +9,8 @@
 //!
 //!   * **Zero panics.** Every program yields a `Result`, never a panic — the
 //!     invariant the parser fuzz target (a later child) depends on.
-//!   * **Accept/reject agreement.** Every program the oracle *parses* (did
-//!     not reject with a `SyntaxError`) the ironhorse parser must parse too.
-//!     Mismatches are named, not hidden.
+//!   * **Accept/reject agreement.** The parser and oracle must agree in both
+//!     directions. Mismatches are named, not hidden.
 //!
 //! Byte-identity of the emitted tree is out of scope here — that is the
 //! coder child's bar. This test certifies only that the parse surface is
@@ -58,9 +57,8 @@ fn corpus_parse_smoke() {
     let mut agree_accept = 0usize;
     let mut agree_reject = 0usize;
     let mut oracle_unavailable = 0usize;
-    // The consequential disagreement: the oracle parsed it but we did not.
+    // Both disagreement directions are semantic divergences.
     let mut ironhorse_rejected_oracle_accepted: Vec<(String, String)> = Vec::new();
-    // The benign direction (we accept, oracle rejects) — recorded, not fatal.
     let mut ironhorse_accepted_oracle_rejected: Vec<(String, String)> = Vec::new();
 
     for (id, program) in &programs {
@@ -111,6 +109,11 @@ fn corpus_parse_smoke() {
         eprintln!("  ! ironhorse rejected an oracle-accepted program [{id}]: {l}");
     }
 
+    assert!(
+        ironhorse_accepted_oracle_rejected.is_empty(),
+        "{} corpus program(s) the oracle rejects were accepted by the ironhorse parser (see above)",
+        ironhorse_accepted_oracle_rejected.len()
+    );
     assert!(
         ironhorse_rejected_oracle_accepted.is_empty(),
         "{} corpus program(s) the oracle parses were rejected by the ironhorse parser (see above)",
