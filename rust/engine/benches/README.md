@@ -10,14 +10,16 @@ python3 rust/engine/benches/run.py --check-baseline --output /tmp/benchmark-repo
 
 Each workload emits its median and its ratio against `baseline.json`.
 The file records the source revision, Rust compiler, and host of the measured baseline.
+`--check-baseline` automatically remeasures that revision on the current host before
+checking the candidate, so the committed host's absolute medians cannot decide a check.
 The regression floor is 1.25x the baseline time for each measurement.
 It is an early-warning floor, separate from the stage-8 geometric-mean envelope of 2x XS.
 A missing, extra, duplicate, zero, or nonfinite measurement is an error.
 Fixture failures remain errors, even if the benchmark printed measurements first.
 
 Absolute timings from different machines are not comparable.
-For nightly CI, remeasure the pinned source revision on the same runner using the
-candidate's benchmark fixtures, then compare the candidate against that reference:
+The explicit `--reference-baseline` spelling remains supported for nightly CI and
+for reference measurements without a threshold check:
 
 ```sh
 python3 rust/engine/benches/run.py --reference-baseline --check-baseline
@@ -28,6 +30,11 @@ The reference checkout is temporary, uses a separate build directory, and is rem
 when the command finishes.
 The checked-in medians record the pinned baseline measurement; CI reports also
 record the reference host and revision used for that run.
+Reports identify same-host comparisons separately from historical context.
+Both measured sides record a SHA-256 digest of the fixture sources and toolchain pin,
+plus the compiler and relevant build environment; a check refuses mismatched provenance.
+The archived reference uses its own build directory even if `CARGO_TARGET_DIR` is set.
+The pinned revision, 48-metric roster, 1.25x floor, and growth policies are unchanged.
 Baseline updates are explicit, reviewable operations, never part of a check:
 
 ```sh
