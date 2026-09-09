@@ -694,6 +694,7 @@ jobs:
 
       - name: Verify shared IronHorse dependency resolutions
         run: |
+          python3 rust/engine/scripts/test-math-vectors.py
           python3 rust/engine/scripts/test-lockfile-agreement.py
           python3 rust/engine/scripts/check-lockfile-agreement.py
 
@@ -791,6 +792,24 @@ jobs:
           if [ "$PROFILE" = release ]; then flags+=(--release); fi
           cargo test --locked "${flags[@]}" -p ironhorse-meter -p ironhorse-vm -p ironhorse-snapshot -p ironhorse-compile -p ironhorse-regexp --features ironhorse-vm/store-integrity
 
+      - name: Export platform Math vector (oracle-free)
+        working-directory: rust/engine
+        env:
+          RUST_MIN_STACK: '33554432'
+          PROFILE: ${{ matrix.profile }}
+          IRONHORSE_MATH_VECTOR: ${{ github.workspace }}/math-vector.tsv
+        run: |
+          flags=()
+          if [ "$PROFILE" = release ]; then flags+=(--release); fi
+          cargo test --locked "${flags[@]}" -p ironhorse-vm --test math_determinism platform_math_vector
+
+      - name: Retain platform Math bits
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: math-${{ matrix.check }}
+          path: math-vector.tsv
+          if-no-files-found: error
+
       - name: Test SQLite heap-store backend (root workspace)
         env:
           PROFILE: ${{ matrix.profile }}
@@ -798,6 +817,33 @@ jobs:
           flags=()
           if [ "$PROFILE" = release ]; then flags+=(--release); fi
           cargo test --locked "${flags[@]}" -p ironhorse-store-sqlite --features ironhorse-vm/store-integrity
+
+  compare-ironhorse-math:
+    name: compare-ironhorse-math
+    needs: [ironhorse-changes, test-ironhorse]
+    if: needs.ironhorse-changes.outputs.engine == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: math-test-ironhorse*
+          path: math-vectors
+      - name: Compare Linux and macOS bits, and debug and release bits
+        run: |
+          status=0
+          python3 rust/engine/scripts/compare-math-vectors.py math-vectors/math-test-ironhorse/math-vector.tsv math-vectors/math-test-ironhorse-macos/math-vector.tsv math-platform-differences.tsv || status=1
+          python3 rust/engine/scripts/compare-math-vectors.py math-vectors/math-test-ironhorse/math-vector.tsv math-vectors/math-test-ironhorse-release/math-vector.tsv math-profile-differences.tsv || status=1
+          exit "$status"
+      - name: Retain comparison evidence even on divergence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: math-differences
+          path: math-*-differences.tsv
+          if-no-files-found: error
 
   # Oracle tests additionally depend on the pinned XS and bridge inputs.
   test-ironhorse-oracle:
