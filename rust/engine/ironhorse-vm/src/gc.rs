@@ -1,5 +1,5 @@
 //! GC v1: exact, non-generational mark-and-sweep over the slot arena,
-//! plus slide-compaction of the chunk arena (design § Value and heap
+//! plus extent-local compaction of the chunk arena (design § Value and heap
 //! model; roadmap stage 2, "GC v1").
 //!
 //! XS's collector (`fxCollect` in `xsMemory.c`) marks from the machine
@@ -8,7 +8,7 @@
 //! shape, re-expressed over index arenas so it is `forbid(unsafe_code)`
 //! safe: the mark phase is a worklist trace over [`SlotArena`] edges,
 //! the sweep returns unmarked records to the free list, and the chunk
-//! compaction slides live blocks and rewrites the `ChunkOffset`s the
+//! compaction slides live blocks within eligible regions and rewrites the `ChunkOffset`s the
 //! surviving string slots hold — exactly where XS rewrites pointers.
 //!
 //! Because the heap is index-based, a stale index reaching a
@@ -39,7 +39,8 @@ pub struct GcStats {
     pub slots_live: u32,
     /// Chunk-arena bytes before compaction.
     pub chunk_bytes_before: usize,
-    /// Chunk-arena bytes after compaction.
+    /// Logical chunk-arena length after compaction. Interior reusable holes
+    /// still occupy addresses, so this measures tail truncation only.
     pub chunk_bytes_after: usize,
 }
 
@@ -52,7 +53,7 @@ impl Heap {
     }
 
     /// Collect: mark everything reachable from `roots`, sweep the rest,
-    /// then slide-compact the chunk arena and rewrite the surviving
+    /// then compact the chunk arena extent-locally and rewrite the surviving
     /// string slots' offsets.
     pub fn collect(&mut self, roots: &[SlotIndex]) -> GcStats {
         struct NoHooks;
@@ -168,8 +169,8 @@ pub fn collect_full(
     let slots_reclaimed = slots.sweep_each(&mut |idx| hooks.swept(idx));
 
     // --- compact chunks: gather the offsets the surviving string
-    // slots AND the machine's external holders reference, slide them
-    // down, and rewrite every holder. ---
+    // slots AND the machine's external holders reference, reclaim within
+    // extents, and rewrite the holders of blocks that actually moved. ---
     let mut live_offsets: Vec<ChunkOffset> = Vec::new();
     for i in 0..slots.capacity() {
         let idx = SlotIndex(i);
@@ -180,7 +181,7 @@ pub fn collect_full(
         }
     }
     hooks.external_chunk_refs(&mut |off: &mut ChunkOffset| live_offsets.push(*off));
-    let remap = chunks.compact(&live_offsets);
+    let remap = chunks.compact_local(&live_offsets);
     // A no-movement collection needs no second arena scan or holder walk.
     // The compactor emits entries only for offsets that actually changed.
     if !remap.is_empty() {
