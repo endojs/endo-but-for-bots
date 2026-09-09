@@ -57,6 +57,12 @@ impl Default for XsOracleResultRaw {
 }
 
 extern "C" {
+    fn xs_oracle_run_timed(
+        source: *const c_char,
+        source_len: u32,
+        out: *mut XsOracleResultRaw,
+        timing: *mut OracleTiming,
+    ) -> c_int;
     fn xs_oracle_is_resource_abort(status: i32) -> c_int;
     fn xs_oracle_run(source: *const c_char, source_len: u32, out: *mut XsOracleResultRaw) -> c_int;
     fn xs_oracle_compile_module(
@@ -304,8 +310,34 @@ pub fn run(source: &str) -> Option<OracleOutcome> {
     Some(outcome)
 }
 
-/// Convert (and free) one shim result slot into an owned outcome —
-/// the same copy-out [`run`] performs inline.
+/// Benchmark-only monotonic timings for a successful XS program.
+/// Compilation includes parse and code generation. Execution includes script
+/// preparation, execution, promise jobs, and completion rendering; machine
+/// creation, bytecode capture, and teardown are outside both intervals.
+/// A zero interval indicates an unavailable clock or an incomplete phase.
+#[repr(C)]
+#[derive(Debug, Default)]
+pub struct OracleTiming {
+    pub compile_ns: u64,
+    pub execute_ns: u64,
+}
+
+/// Run with phase timings without changing the ordinary oracle's clock behavior.
+/// Failed executions are returned as outcomes, never interpreted as fast samples.
+pub fn run_timed(source: &str) -> Option<(OracleOutcome, OracleTiming)> {
+    let len = u32::try_from(source.len()).ok()?;
+    let mut raw = XsOracleResultRaw::default();
+    let mut timing = OracleTiming::default();
+    // Safety: source remains valid for len bytes throughout this synchronous
+    // call; both output objects match their C layouts and are exclusively owned.
+    let rc = unsafe { xs_oracle_run_timed(source.as_ptr().cast(), len, &mut raw, &mut timing) };
+    if rc != 0 {
+        return None;
+    }
+    Some((outcome_from_raw(&mut raw), timing))
+}
+
+/// Convert and free one shim result slot, as [`run`] does inline.
 fn outcome_from_raw(raw: &mut XsOracleResultRaw) -> OracleOutcome {
     let bytecode = if raw.code.is_null() || raw.code_size == 0 {
         Vec::new()

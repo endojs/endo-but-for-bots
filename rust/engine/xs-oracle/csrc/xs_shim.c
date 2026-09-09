@@ -28,6 +28,7 @@
 #include "xsAll.h"
 #include "xsScript.h"
 #include <pthread.h>
+#include <time.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -300,13 +301,36 @@ static void xs_oracle_delete_machine(txMachine *the)
  * negative on a machine-level failure.  A thrown JS exception or a
  * syntax error is a normal outcome reported through out->ok == 0.
  */
-int xs_oracle_run(const char *source, txU4 sourceLen, EndorOracleResult *out)
+typedef struct {
+	txU8 compile_ns;
+	txU8 execute_ns;
+} EndorOracleTiming;
+
+static txU8 endor_monotonic_ns(void)
+{
+	struct timespec now;
+	if (clock_gettime(CLOCK_MONOTONIC, &now) != 0)
+		return 0;
+	return (txU8)now.tv_sec * 1000000000ULL + (txU8)now.tv_nsec;
+}
+
+static txU8 endor_elapsed_ns(txU8 started)
+{
+	txU8 ended = endor_monotonic_ns();
+	return started && ended >= started ? ended - started : 0;
+}
+
+static int xs_oracle_run_impl(const char *source, txU4 sourceLen,
+	EndorOracleResult *out, EndorOracleTiming *timing)
 {
 	txMachine *the;
+	txU8 started = 0;
 	/* A machine abort skips fxRunScript's ordinary exception cleanup.
 	 * Keep its allocation reachable across the outer mxCatch longjmp. */
 	txScript *volatile script = C_NULL;
 	memset(out, 0, sizeof(*out));
+	if (timing)
+		memset(timing, 0, sizeof(*timing));
 
 	the = xs_oracle_create_machine("xs-oracle");
 	if (!the)
@@ -382,8 +406,13 @@ int xs_oracle_run(const char *source, txU4 sourceLen, EndorOracleResult *out)
 			stream.size = (txSize)sourceLen;
 
 			/* Compile (parse+code). Parse metering is discarded below. */
+			if (timing)
+				started = endor_monotonic_ns();
 			script = fxParseScript(the, &stream, fxStringCGetter,
 				mxProgramFlag | mxEvalFlag);
+
+			if (timing)
+				timing->compile_ns = endor_elapsed_ns(started);
 
 			/* Capture the emitted bytecode before running. */
 			out->code_size = (txU4)script->codeSize;
@@ -405,6 +434,8 @@ int xs_oracle_run(const char *source, txU4 sourceLen, EndorOracleResult *out)
 
 			/* Measure the run only. */
 			the->meterIndex = 0;
+			if (timing)
+				started = endor_monotonic_ns();
 			fxRunScript(the, script, mxRealmGlobal(realm), C_NULL,
 				mxRealmClosures(realm)->value.reference, C_NULL, module);
 			script = C_NULL; /* fxRunScript freed it; jobs may abort too. */
@@ -442,6 +473,8 @@ int xs_oracle_run(const char *source, txU4 sourceLen, EndorOracleResult *out)
 			}
 			mxPop();
 			out->ok = 1;
+			if (timing)
+				timing->execute_ns = endor_elapsed_ns(started);
 		}
 		mxCatch(the) {
 			out->ok = 0;
@@ -470,6 +503,17 @@ int xs_oracle_run(const char *source, txU4 sourceLen, EndorOracleResult *out)
 	fxEndHost(the);
 	xs_oracle_delete_machine(the);
 	return 0;
+}
+
+int xs_oracle_run(const char *source, txU4 sourceLen, EndorOracleResult *out)
+{
+	return xs_oracle_run_impl(source, sourceLen, out, C_NULL);
+}
+
+int xs_oracle_run_timed(const char *source, txU4 sourceLen,
+	EndorOracleResult *out, EndorOracleTiming *timing)
+{
+	return xs_oracle_run_impl(source, sourceLen, out, timing);
 }
 
 void xs_oracle_free(EndorOracleResult *out)
