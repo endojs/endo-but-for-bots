@@ -4426,6 +4426,35 @@ mod tests {
     use crate::machine::MachineSnapshot;
     use ironhorse_vm::Interp;
 
+    #[test]
+    fn name_floor_section_has_exact_width() {
+        use crate::store_sections::SmallSection;
+        let bytes = image_to_batch_unchecked(&ran_image(), 1, "").small;
+        let mut small = SmallState::decode(&bytes).unwrap();
+        small.names = vec![SymbolName::from("name")];
+        let encode = |floor: Vec<u8>| {
+            let mut sections = small.encode_sections();
+            sections[SmallSection::NameFloor as usize] = floor;
+            let mut out = Vec::new();
+            for section in sections {
+                out.extend_from_slice(&(section.len() as u32).to_be_bytes());
+                out.extend_from_slice(&section);
+            }
+            out
+        };
+        for floor in [vec![], vec![0; 4]] {
+            assert!(SmallState::decode(&encode(floor)).is_ok());
+        }
+        for length in [1, 2, 3, 5, 8] {
+            assert_eq!(
+                SmallState::decode(&encode(vec![0; length])).unwrap_err(),
+                StoreError::Snapshot(SnapshotError::Corrupt(
+                    "small state name-floor section size"
+                ))
+            );
+        }
+    }
+
     /// Exercise the actual decoder and migration prefix reader with short
     /// headers, truncated payloads, and a wire length that overflows usize
     /// after the header on 32-bit targets. The intact image is a control.
@@ -4920,10 +4949,10 @@ mod tests {
         // malformed, not ignorable.
         let mut trailing = bytes.clone();
         trailing.push(0);
-        match SmallState::decode(&trailing) {
-            Err(StoreError::Snapshot(SnapshotError::Corrupt("small state trailing bytes"))) => {}
-            other => panic!("expected trailing-byte refusal, got {other:?}"),
-        }
+        assert_eq!(
+            SmallState::decode(&trailing).unwrap_err(),
+            StoreError::Snapshot(SnapshotError::Corrupt("small state trailing bytes"))
+        );
     }
 
     #[test]
@@ -5483,7 +5512,10 @@ mod tests {
         let mut legacy = canonical.clone();
         legacy.drain(offset + 4..offset + 8);
         legacy[offset..offset + 4].copy_from_slice(&0u32.to_be_bytes());
-        assert!(SmallState::decode(&legacy).is_err());
+        assert_eq!(
+            SmallState::decode(&legacy).unwrap_err(),
+            StoreError::Snapshot(SnapshotError::Corrupt("non-canonical small state"))
+        );
         assert_eq!(
             SmallState::decode_legacy(&legacy).unwrap().encode(),
             canonical
