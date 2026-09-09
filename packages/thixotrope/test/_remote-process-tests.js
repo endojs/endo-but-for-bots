@@ -19,9 +19,17 @@ import {
   makeProcessTestEngine,
 } from './_remote-process-fixture.js';
 
+import { makeNodePowers } from '../src/platform/node-powers.js';
+
+const nodePowers = makeNodePowers();
+
 /** @import {ExecutionContext, TestFn} from 'ava' */
 
-/** @param {ExecutionContext} t @param {string} path @param {'replay' | 'ironhorse'} kind */
+/**
+ * @param {ExecutionContext} t @param {string} path @param {'replay' | 'ironhorse'} kind
+ * @param path
+ * @param kind
+ */
 const launch = async (t, path, kind) => {
   const child = fork(
     fileURLToPath(new URL('./_remote-process-daemon.mjs', import.meta.url)),
@@ -67,7 +75,10 @@ const launch = async (t, path, kind) => {
   return { child, exited, receive, ready };
 };
 
-/** @param {TestFn} test @param {'replay' | 'ironhorse'} kind */
+/**
+ * @param {TestFn} test @param {'replay' | 'ironhorse'} kind
+ * @param kind
+ */
 export const registerRemoteProcessTests = (test, kind) => {
   for (const phase of ['before-dispatch', 'after-dispatch']) {
     test.serial(
@@ -79,7 +90,7 @@ export const registerRemoteProcessTests = (test, kind) => {
         const receiverPath = join(path, 'receiver');
         const senderPath = join(path, 'sender');
         const first = await launch(t, receiverPath, kind);
-        const senderStore = makeFsStore(senderPath);
+        const senderStore = makeFsStore(nodePowers, senderPath);
         /** @type {{token: string, n: bigint} | undefined} */
         let sent;
         /** @type {() => void} */
@@ -88,12 +99,12 @@ export const registerRemoteProcessTests = (test, kind) => {
           resolveAccepted = () => resolve(undefined);
         });
         let armed = false;
-        const sender = await makeThixotropeDaemon({
+        const sender = await makeThixotropeDaemon(nodePowers, {
           store: senderStore,
           engine: makeProcessTestEngine(kind, senderPath),
           codec: syrupCodec,
           makeNetlayer: ({ handlers, logger, resumption }) =>
-            makeDurableNetLayer({
+            makeDurableNetLayer(nodePowers, {
               handlers,
               logger,
               resumption: harden({
@@ -128,7 +139,7 @@ export const registerRemoteProcessTests = (test, kind) => {
         const client = await makeTestOcapn({
           codec: syrupCodec,
           network: (handlers, logger) =>
-            makeDurableNetLayer({
+            makeDurableNetLayer(nodePowers, {
               handlers,
               logger,
               makeBaseNetlayer: powers =>
@@ -175,7 +186,7 @@ export const registerRemoteProcessTests = (test, kind) => {
           ),
           'sender has durably discarded the invocation payload',
         );
-        const receiverStore = makeFsStore(receiverPath);
+        const receiverStore = makeFsStore(nodePowers, receiverPath);
         const receiverMeta = receiverStore
           .provideSessionStore(sent.token)
           .getMeta();

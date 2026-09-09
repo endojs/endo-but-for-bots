@@ -1,12 +1,18 @@
 // @ts-check
+import { join } from 'node:path';
 import { E, Far } from '@endo/far';
 import test from '@endo/ses-ava/test.js';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { request } from 'node:http';
 import { createServer } from 'node:net';
 import { setImmediate } from 'node:timers/promises';
+import { makeFileSyncStringAtom } from '../src/file-sync-string-atom.js';
 
 import { makeHttpServices } from '../src/http-services.js';
+
+import { makeNodePowers } from '../src/platform/node-powers.js';
+
+const nodePowers = makeNodePowers();
 
 /** @import { ExecutionContext } from 'ava' */
 const deferred = () => {
@@ -64,7 +70,10 @@ const setup = async t => {
   let opened = 0;
   const allOpened = deferred();
   const options = {
-    statePath,
+    storage: makeFileSyncStringAtom(
+      nodePowers,
+      join(statePath, 'http-services.json'),
+    ),
     /**
      * @param {any} handler
      * @param {string} secret
@@ -93,7 +102,7 @@ const setup = async t => {
       };
     },
   };
-  const manager = makeHttpServices(options);
+  const manager = makeHttpServices(nodePowers, options);
   t.teardown(() => manager.shutdown());
   const port = await freePort();
   const description = manager.allocate(port);
@@ -148,7 +157,7 @@ test.serial(
     t.is(fixture.clients(), 0);
     await manager.shutdown();
     t.is(manager.list()[0].desired, 'open');
-    const restored = makeHttpServices(options);
+    const restored = makeHttpServices(nodePowers, options);
     t.teardown(() => restored.shutdown());
     const restoredListener = restored.resource(description);
     t.is((await E(restoredListener).status()).status, 'inactive');
@@ -196,7 +205,7 @@ test.serial(
     const { manager, listener, options, publications, description } =
       await setup(t);
     await manager.shutdown();
-    const interrupted = makeHttpServices({
+    const interrupted = makeHttpServices(nodePowers, {
       ...options,
       publish: (handler, secret) => {
         options.publish(handler, secret);
@@ -211,7 +220,7 @@ test.serial(
     });
     t.is(publications.size, 1);
     await interrupted.shutdown();
-    const restored = makeHttpServices(options);
+    const restored = makeHttpServices(nodePowers, options);
     t.teardown(() => restored.shutdown());
     await restored.start();
     t.is(restored.list()[0].desired, 'closed');
@@ -239,7 +248,7 @@ test.serial(
     t.regex(result.error ?? '', /EADDRINUSE/);
     await new Promise(resolve => blocker.close(() => resolve(undefined)));
     await manager.shutdown();
-    const restored = makeHttpServices(options);
+    const restored = makeHttpServices(nodePowers, options);
     t.teardown(() => restored.shutdown());
     await restored.start();
     t.deepEqual(await call(port).answer, { status: 200, body: 'recovered' });
@@ -348,7 +357,7 @@ test.serial(
     const disconnected = deferred();
     const entered = deferred();
     const pending = deferred();
-    const live = makeHttpServices({
+    const live = makeHttpServices(nodePowers, {
       ...options,
       openClient: async () => {
         const client = await options.openClient();
@@ -394,7 +403,7 @@ test.serial(
     const entered = deferred();
     let closed = 0;
     let lookedUp = 0;
-    const live = makeHttpServices({
+    const live = makeHttpServices(nodePowers, {
       ...options,
       openClient: async () => {
         entered.resolve(undefined);
@@ -499,3 +508,35 @@ test.serial(
     t.is(effects, 3);
   },
 );
+
+test('HTTP recipes use an injected string atom without filesystem powers', async t => {
+  /** @type {string | undefined} */
+  let saved;
+  const storage = {
+    read: () => saved,
+    write: value => {
+      saved = value;
+    },
+  };
+  const powers = {
+    http: nodePowers.http,
+    timers: nodePowers.timers,
+    randomBytes: nodePowers.randomBytes,
+  };
+  const options = {
+    storage,
+    publish: () => t.fail('allocation must not publish'),
+    unpublish: () => t.fail('allocation must not unpublish'),
+    openClient: async () => {
+      throw Error('allocation must not open a client');
+    },
+  };
+  const original = makeHttpServices(powers, options);
+  t.teardown(() => original.shutdown());
+  const description = original.allocate(12_345);
+  t.is(typeof saved, 'string');
+  const restored = makeHttpServices(powers, options);
+  t.teardown(() => restored.shutdown());
+  t.deepEqual(restored.list(), original.list());
+  t.is((await E(restored.resource(description)).status()).status, 'inactive');
+});

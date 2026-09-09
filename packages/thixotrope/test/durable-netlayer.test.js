@@ -17,6 +17,10 @@ import { makeFsStore } from '../src/store-fs.js';
 import { makeTestOcapn } from './_util.js';
 import { parkWorkers } from './_park-workers.js';
 
+import { makeNodePowers } from '../src/platform/node-powers.js';
+
+const nodePowers = makeNodePowers();
+
 const COUNTER_SOURCE = `
 (() => {
   let count = 0;
@@ -67,12 +71,12 @@ const makeDroppableTcp = () => {
 const makeDurableDaemon = async t => {
   const statePath = await mkdtemp(join(tmpdir(), 'thixotrope-durable-net-'));
   t.teardown(() => rm(statePath, { recursive: true, force: true }));
-  const daemon = await makeThixotropeDaemon({
-    store: makeFsStore(statePath),
-    engine: makePeerJournalReplayEngine(),
+  const daemon = await makeThixotropeDaemon(nodePowers, {
+    store: makeFsStore(nodePowers, statePath),
+    engine: makePeerJournalReplayEngine(nodePowers),
     codec: syrupCodec,
     makeNetlayer: ({ handlers, logger }) =>
-      makeDurableNetLayer({
+      makeDurableNetLayer(nodePowers, {
         handlers,
         logger,
         makeBaseNetlayer: powers => makeTcpNetLayer(powers),
@@ -90,7 +94,7 @@ const makeDurableClient = async (label, baseFactory) => {
     codec: syrupCodec,
     debugLabel: label,
     network: (handlers, logger) =>
-      makeDurableNetLayer({
+      makeDurableNetLayer(nodePowers, {
         handlers,
         logger,
         makeBaseNetlayer: baseFactory,

@@ -27,6 +27,10 @@ import { makeThixotropeDaemon } from '../src/daemon.js';
 import { makeFsStore } from '../src/store-fs.js';
 import { makeXsEngine } from '../src/xs-engine.js';
 
+import { makeNodePowers } from '../src/platform/node-powers.js';
+
+const nodePowers = makeNodePowers();
+
 const repoRoot = fileURLToPath(new URL('../../..', import.meta.url));
 const workerBinary =
   process.env.THIXOTROPE_XS_WORKER ??
@@ -72,8 +76,8 @@ const resources = {
  * @param {any} engine
  */
 const makeDaemon = (statePath, engine) =>
-  makeThixotropeDaemon({
-    store: makeFsStore(statePath),
+  makeThixotropeDaemon(nodePowers, {
+    store: makeFsStore(nodePowers, statePath),
     engine,
     codec: syrupCodec,
     resources,
@@ -84,7 +88,7 @@ const makeDaemon = (statePath, engine) =>
 testXs('XS worker sessions survive a daemon restart', async t => {
   const statePath = await mkdtemp(join(tmpdir(), 'thixotrope-wsr-xs-test-'));
   t.teardown(() => rm(statePath, { recursive: true, force: true }));
-  const engine = makeXsEngine({
+  const engine = makeXsEngine(nodePowers, {
     workerBinary,
     bootPath,
     bundlePath,

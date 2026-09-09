@@ -9,6 +9,10 @@ import { makePipeNetwork } from '../src/pipe-network.js';
 import { makeWorkerPeer } from '../src/worker-peer.js';
 import { makeTestOcapn } from './_util.js';
 
+import { makeNodePowers } from '../src/platform/node-powers.js';
+
+const nodePowers = makeNodePowers();
+
 // Wire swissnums are (immutable) bytes, as `enlivenSturdyRef` encodes.
 const SHELL_SWISSNUM = frozenBytes(new TextEncoder().encode('shell'));
 
@@ -57,7 +61,7 @@ test('a worker peer speaks OCapN p2p to the host over a pipe', async t => {
   const workerId = 'a'.repeat(32);
   const duct = makeDuct();
 
-  const worker = await makeWorkerPeer({
+  const worker = await makeWorkerPeer(nodePowers, {
     workerId,
     send: duct.workerSend,
     debugLabel: 'worker-peer',

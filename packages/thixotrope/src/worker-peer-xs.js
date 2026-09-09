@@ -22,6 +22,7 @@
  */
 import '@endo/eventual-send/shim.js';
 import { decodeBase64, encodeBase64 } from '@endo/base64';
+import harden from '@endo/harden';
 
 import { makeWorkerPeer } from './worker-peer.js';
 
@@ -37,19 +38,17 @@ if (typeof send !== 'function') {
 const trace = /** @type {(text: string) => void} */ (
   /** @type {any} */ (globalThis).thixotropeTrace
 );
-if (typeof trace === 'function' && typeof globalThis.console === 'undefined') {
-  const traceAll =
-    tag =>
-    (...args) =>
-      trace(`${tag}: ${args.map(String).join(' ')}`);
-  /** @type {any} */ (globalThis).console = {
-    log: traceAll('log'),
-    info: traceAll('info'),
-    warn: traceAll('warn'),
-    error: traceAll('error'),
-    debug: traceAll('debug'),
-  };
-}
+// The bootstrap alone obtains engine-provided entropy and diagnostics.
+const cryptoPower = globalThis.crypto;
+const powers = harden({
+  randomBytes: (/** @type {number} */ length) =>
+    cryptoPower.getRandomValues(new Uint8Array(length)),
+  console: {
+    error: (...args) => {
+      if (typeof trace === 'function') trace(args.map(String).join(' '));
+    },
+  },
+});
 
 /** @type {{ deliver: (bytes: Uint8Array) => void } | undefined} */
 let peer;
@@ -63,7 +62,7 @@ const dispatch = json => {
     if (peer !== undefined) {
       throw Error('thixotrope worker peer: duplicate init');
     }
-    makeWorkerPeer({
+    makeWorkerPeer(powers, {
       workerId: message.workerId,
       debugLabel: message.debugLabel,
       send: frame => send(JSON.stringify({ t: 'f', b64: encodeBase64(frame) })),

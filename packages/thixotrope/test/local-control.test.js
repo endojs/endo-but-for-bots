@@ -9,6 +9,10 @@ import { join } from 'node:path';
 import { connectLocalControl, makeLocalControl } from '../src/local-control.js';
 import { serveThixotrope } from '../src/supervisor.js';
 
+import { makeNodePowers } from '../src/platform/node-powers.js';
+
+const nodePowers = makeNodePowers();
+
 /** @import { ExecutionContext } from 'ava' */
 
 /** @param {ExecutionContext} t */
@@ -20,6 +24,7 @@ const fixture = async t => {
     sockets.add(socket);
     socket.once('close', () => sockets.delete(socket));
     void makeLocalControl(
+      nodePowers,
       socket,
       'worker',
       Far('Admin', { echo: value => value }),
@@ -46,10 +51,10 @@ test.serial(
     t.log('starting local-control server');
     const path = await fixture(t);
     t.log('connecting first client');
-    const first = await connectLocalControl(path);
+    const first = await connectLocalControl(nodePowers, path);
     t.teardown(first.close);
     t.log('connecting second client');
-    const second = await connectLocalControl(path);
+    const second = await connectLocalControl(nodePowers, path);
     t.teardown(second.close);
     const payload = 'hello'.repeat(100_000);
     t.log('echoing 500 KB through first client');
@@ -71,7 +76,7 @@ test.serial('malformed local frame closes only that connection', async t => {
   await once(bad, 'connect');
   bad.write(new Uint8Array([255, 255, 255, 255]));
   await closed;
-  const client = await connectLocalControl(path);
+  const client = await connectLocalControl(nodePowers, path);
   t.teardown(client.close);
   t.is(await client.call('echo', 'still available'), 'still available');
 });
@@ -80,9 +85,12 @@ test.serial('connecting without a supervisor rejects promptly', async t => {
   t.timeout(10_000);
   const path = await mkdtemp('/tmp/thix-missing-');
   t.teardown(() => rm(path, { recursive: true, force: true }));
-  await t.throwsAsync(() => connectLocalControl(join(path, 'missing.sock')), {
-    message: /Supervisor disconnected/,
-  });
+  await t.throwsAsync(
+    () => connectLocalControl(nodePowers, join(path, 'missing.sock')),
+    {
+      message: /Supervisor disconnected/,
+    },
+  );
 });
 
 test.serial(
@@ -91,7 +99,7 @@ test.serial(
     const path = await mkdtemp('/tmp/thix-permissions-');
     t.teardown(() => rm(path, { recursive: true, force: true }));
     await chmod(path, 0o755);
-    await t.throwsAsync(() => serveThixotrope(path), {
+    await t.throwsAsync(() => serveThixotrope(nodePowers, path), {
       message: /private directory/,
     });
   },

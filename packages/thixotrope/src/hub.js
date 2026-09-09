@@ -174,8 +174,8 @@ export const makeOcapnHub = ({
   store = makeMemoryHubStore(),
   cryptography = undefined,
   handoffs = undefined,
-  // eslint-disable-next-line no-console
-  logError = (...args) => console.error('ocapn hub:', ...args),
+
+  logError = () => {},
 }) => {
   /**
    * One reference row, namespaced by its origin session's epoch. A row
@@ -717,13 +717,11 @@ export const makeOcapnHub = ({
       return;
     }
     if (row.backing === 'answer') {
-      // eslint-disable-next-line no-use-before-define
       sendMessage(row.origin, {
         type: 'op:gc-answers',
         answerPositions: [BigInt(row.position)],
       });
     } else if (row.mentionsIn > 0) {
-      // eslint-disable-next-line no-use-before-define
       sendMessage(row.origin, {
         type: 'op:gc-exports',
         exportPositions: [BigInt(row.position)],
@@ -859,7 +857,7 @@ export const makeOcapnHub = ({
         dirty = true;
         if (outSession.attached && outSession.identity !== undefined) {
           // Already connected to this exporter: withdraw right away.
-          // eslint-disable-next-line no-use-before-define
+
           queueMicrotaskFlush(outKey);
         } else {
           handoffs.connect(outSession.dialLocation, outKey);
@@ -910,12 +908,10 @@ export const makeOcapnHub = ({
       },
       /** @param {any} value */
       provideLocalObjectPosition: value => {
-        // eslint-disable-next-line no-use-before-define
         return provideFacingPosition(sessionKey, value);
       },
       /** @param {any} value */
       provideLocalPromisePosition: value => {
-        // eslint-disable-next-line no-use-before-define
         return provideFacingPosition(sessionKey, value);
       },
     };

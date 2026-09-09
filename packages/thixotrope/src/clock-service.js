@@ -1,35 +1,35 @@
 // @ts-check
+/** @import { NodePowers } from './platform/node-powers.js' */
 import { E, Far } from '@endo/far';
 import { Fail } from '@endo/errors';
 import harden from '@endo/harden';
-import { randomFillSync } from 'node:crypto';
-import { join } from 'node:path';
 
 import { makeAlarmScheduler } from './alarm-scheduler.js';
 import { makeDurableClock } from './durable-clock.js';
-import { makeServiceState } from './service-state.js';
+/** @import { SyncStringAtom } from './sync-string-atom.js' */
 
 /** @import { makeThixotropeDaemon } from './daemon.js' */
 /** @typedef {{version: 1, allocationId: string, workerId?: string, secret: string}} ClockConfig */
-const randomId = () =>
-  Array.from(randomFillSync(new Uint8Array(16)), byte =>
-    byte.toString(16).padStart(2, '0'),
-  ).join('');
-
 /**
  * Owns one private clock vat and its reconstructible host timer index.
  * Construct only under the daemon's engine lease. Reifying its scheduler is
  * inert; neither restoration nor start allocates an unused clock vat.
  * The public clock is the only capability returned to application grant code.
+ * @param {Pick<NodePowers, 'timers' | 'randomBytes' | 'now'>} powers
  * @param {object} options
- * @param {string} options.statePath
+ * @param {SyncStringAtom} options.storage
  * @param {() => Awaited<ReturnType<typeof makeThixotropeDaemon>>} options.getDaemon
  * @param {() => bigint} [options.now]
  */
-export const makeClockService = ({ statePath, getDaemon, now }) => {
-  const storage = makeServiceState(join(statePath, 'clock.json'));
+export const makeClockService = (powers, { storage, getDaemon, now }) => {
+  const randomId = () =>
+    Array.from(powers.randomBytes(16), byte =>
+      byte.toString(16).padStart(2, '0'),
+    ).join('');
   /** @type {ClockConfig | undefined} */
-  let config = storage.read();
+  let config;
+  const saved = storage.read();
+  if (saved !== undefined) config = JSON.parse(saved);
   if (
     config !== undefined &&
     (config === null ||
@@ -67,7 +67,7 @@ export const makeClockService = ({ statePath, getDaemon, now }) => {
 
   const provideScheduler = () => {
     if (!config) throw Fail`Clock has not been allocated`;
-    scheduler ??= makeAlarmScheduler({
+    scheduler ??= makeAlarmScheduler(powers, {
       secret: config.secret,
       openClient: () => getDaemon().openEphemeralClient(),
       ...(now === undefined ? {} : { now }),
@@ -94,7 +94,7 @@ export const makeClockService = ({ statePath, getDaemon, now }) => {
         });
         // Persist an unguessable allocation intent before giving any vat the
         // scheduler. A public debug label is not proof of system ownership.
-        storage.write(intent);
+        storage.write(JSON.stringify(intent));
         config = intent;
       }
       const label = `durable-clock:${config.allocationId}`;
@@ -110,7 +110,7 @@ export const makeClockService = ({ statePath, getDaemon, now }) => {
         const selected = harden({ ...config, workerId });
         // Selection commits before initialization; recovery adopts only the
         // private allocation's vat and preserves its existing clockKit.
-        storage.write(selected);
+        storage.write(JSON.stringify(selected));
         config = selected;
       }
       const selected = config;

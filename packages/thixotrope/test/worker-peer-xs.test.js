@@ -29,6 +29,10 @@ import { makePipeNetwork } from '../src/pipe-network.js';
 import { makeXsEngine } from '../src/xs-engine.js';
 import { makeTestOcapn } from './_util.js';
 
+import { makeNodePowers } from '../src/platform/node-powers.js';
+
+const nodePowers = makeNodePowers();
+
 const repoRoot = fileURLToPath(new URL('../../..', import.meta.url));
 const workerBinary =
   process.env.THIXOTROPE_XS_WORKER ??
@@ -85,7 +89,7 @@ const decodeBase64 = text => {
 testXs('an XS worker peer survives snapshot restore mid-session', async t => {
   const statePath = await mkdtemp(join(tmpdir(), 'thixotrope-peer-xs-test-'));
   t.teardown(() => rm(statePath, { recursive: true, force: true }));
-  const engine = makeXsEngine({
+  const engine = makeXsEngine(nodePowers, {
     workerBinary,
     bootPath,
     bundlePath,

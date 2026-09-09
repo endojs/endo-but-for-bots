@@ -1,15 +1,17 @@
 // @ts-check
+/** @import { NodePowers } from './platform/node-powers.js' */
 import harden from '@endo/harden';
-import { readFile, readdir } from 'node:fs/promises';
-import { join } from 'node:path';
 
 /**
  * Read-only recovery information, even when the executable is incompatible or
  * a guest is quarantined. Atomic metadata files are read independently; this
  * is an inspection report, not a transactional backup of a running daemon.
+ * @param {NodePowers} powers
  * @param {string} statePath
  */
-export const inspectIronhorseStore = async statePath => {
+export const inspectIronhorseStore = async (powers, statePath) => {
+  const { readFile, readdir } = powers.fsPromises;
+  const { join } = powers.path;
   /** @param {string} path */
   const read = async path => {
     try {

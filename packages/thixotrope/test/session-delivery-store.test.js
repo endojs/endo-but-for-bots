@@ -13,6 +13,10 @@ import { makeThixotropeDaemon } from '../src/daemon.js';
 import { makePeerJournalReplayEngine } from '../src/peer-replay-engine.js';
 import { makeFsStore } from '../src/store-fs.js';
 
+import { makeNodePowers } from '../src/platform/node-powers.js';
+
+const nodePowers = makeNodePowers();
+
 /** @import { ExecutionContext } from 'ava' */
 
 /**
@@ -31,8 +35,8 @@ const setup = async (t, existingPath = undefined, observeSave = () => {}) => {
   let capturedHandlers;
   /** @type {any} */
   let layer;
-  const store = makeFsStore(path);
-  const daemon = await makeThixotropeDaemon({
+  const store = makeFsStore(nodePowers, path);
+  const daemon = await makeThixotropeDaemon(nodePowers, {
     store: harden({
       ...store,
       provideSessionStore: sessionToken => {
@@ -46,7 +50,7 @@ const setup = async (t, existingPath = undefined, observeSave = () => {}) => {
         });
       },
     }),
-    engine: makePeerJournalReplayEngine(),
+    engine: makePeerJournalReplayEngine(nodePowers),
     codec: syrupCodec,
     makeNetlayer: ({ resumption, handlers }) => {
       power = resumption;
@@ -76,7 +80,9 @@ test.serial(
     const { power, path } = await setup(t);
     power.onHello(token);
     power.recordInbound(token, 1n, new Uint8Array([17]));
-    const disk = makeFsStore(path).provideSessionStore(token).getMeta();
+    const disk = makeFsStore(nodePowers, path)
+      .provideSessionStore(token)
+      .getMeta();
     t.is(disk.recvSeq, '1');
     t.is(disk.processedSeq, '0');
     t.deepEqual(power.loadForResume(token).inbox, [
@@ -103,7 +109,9 @@ test.serial(
     t.throws(() => power.recordAck(token, 2n), { message: /exceeds issued/ });
     t.is(power.loadForResume(token).frames.length, 1);
     power.recordAck(token, 1n);
-    const disk = makeFsStore(path).provideSessionStore(token).getMeta();
+    const disk = makeFsStore(nodePowers, path)
+      .provideSessionStore(token)
+      .getMeta();
     t.is(disk.sendSeq, '1');
     t.is(disk.ackSeq, '1');
     t.is(disk.hubDelivery, '9');
@@ -113,7 +121,10 @@ test.serial(
     power.onEnd(token);
     t.true(power.loadForResume(token).retired);
     t.throws(() => power.onHello(token), { message: /already been used/ });
-    t.true(makeFsStore(path).provideSessionStore(token).getMeta().retired);
+    t.true(
+      makeFsStore(nodePowers, path).provideSessionStore(token).getMeta()
+        .retired,
+    );
   },
 );
 
@@ -160,7 +171,9 @@ test.serial(
     t.throws(() => first.handlers.handleMessageData(connection, message, 1n), {
       message: /injected before response acceptance/,
     });
-    const before = makeFsStore(first.path).provideSessionStore(token).getMeta();
+    const before = makeFsStore(nodePowers, first.path)
+      .provideSessionStore(token)
+      .getMeta();
     t.truthy(before.identity);
     t.truthy(before.handshakeResponse);
     t.is(before.sendSeq, '0');
@@ -185,7 +198,9 @@ test.serial(
     t.deepEqual(writes[0], decodeBase64(before.handshakeResponse));
     second.handlers.handleMessageData(restored, message, 1n);
     second.power.recordProcessed(token, 1n);
-    const after = makeFsStore(first.path).provideSessionStore(token).getMeta();
+    const after = makeFsStore(nodePowers, first.path)
+      .provideSessionStore(token)
+      .getMeta();
     t.deepEqual(after.identity, before.identity);
     t.is(after.processedSeq, '1');
     t.deepEqual(after.inbox, []);
@@ -211,7 +226,10 @@ test.serial(
       hints: /** @type {const} */ (false),
     };
     first.power.onHello(token, location);
-    const sessionStore = makeFsStore(first.path).provideSessionStore(token);
+    const sessionStore = makeFsStore(
+      nodePowers,
+      first.path,
+    ).provideSessionStore(token);
     const request = writeOcapnHandshakeMessage(
       {
         type: 'op:start-session',

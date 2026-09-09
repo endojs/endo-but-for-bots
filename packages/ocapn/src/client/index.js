@@ -182,6 +182,7 @@ const makeSessionManager = () => {
  * networks (Noise) typically don't.
  *
  * @param {object} options
+ * @param {(length: number) => Uint8Array} [options.randomBytes] Explicit entropy source for keys and gifts.
  * @param {OcapnCodec} options.codec
  * @param {AnyNetwork | NetworkFactory} options.network
  * @param {NonceLocator} [options.locator]
@@ -200,6 +201,7 @@ const makeSessionManager = () => {
  */
 export const makeOcapn = async ({
   codec,
+  randomBytes,
   network: networkArg,
   locator = new Map(),
   debugLabel = 'ocapn',
@@ -221,7 +223,7 @@ export const makeOcapn = async ({
       'makeOcapn: `network` is required (pass an `OcapnNoiseNetwork` from `@endo/ocapn-noise`, or a legacy `NetLayer`)',
     );
   }
-  const cryptography = makeCryptography(codec);
+  const cryptography = makeCryptography(codec, randomBytes);
 
   /**
    * @param {OcapnLocation} myLocation

@@ -46,8 +46,8 @@ import { Far } from '@endo/far';
 export const makeWorkerSessionRecords = ({
   store,
   resources = {},
-  // eslint-disable-next-line no-console
-  reportError = error => console.error('thixotrope worker sessions:', error),
+
+  reportError = () => {},
 }) => {
   /** @type {WeakMap<object, string>} connection -> workerId */
   const workerIdForConnection = new WeakMap();
@@ -57,9 +57,13 @@ export const makeWorkerSessionRecords = ({
   const resourceInstances = new Map();
   /** @type {Map<string, any>} workerId -> ResumedSession controls */
   const resumedByWorkerId = new Map();
-  // Durable slot descriptions cannot keep the protocol's weak imports alive.
-  // An unreachable, forever-pending host promise may otherwise collect its
-  // resolver and release the hub route needed to reject it after a restart.
+  // This is an explicit host restart-abort obligation, not a correction to GC.
+  // A guest's result promise does not retain the producer's host promise or
+  // its reaction closures. If the host drops an unresolved promise, its reaction
+  // and guest resolver presence can all collect legitimately. Durable slot
+  // descriptions alone do not retain that presence or its hub route.
+  // Keep the resolver route until settlement so restart can still reject the
+  // abandoned answer. This does not retain or revive the host computation.
   /** @type {Map<string, object>} */
   const pendingResolverReferences = new Map();
   /** True while re-seating exports, whose re-fired hooks are echoes. */

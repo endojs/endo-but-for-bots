@@ -8,7 +8,10 @@ import { inspectVatReachability } from '../src/vat-reachability.js';
 const workers = harden(
   ['a', 'b', 'c'].map(workerId => ({ workerId, awake: false })),
 );
-/** @param {string} origin @param {string[]} holders */
+/**
+ * @param {string} origin @param {string[]} holders
+ * @param holders
+ */
 const ref = (origin, holders) => ({
   origin,
   backing: 'export',

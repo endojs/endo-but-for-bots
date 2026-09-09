@@ -1,33 +1,11 @@
 // @ts-check
-/* global setTimeout, clearTimeout */
+/** @import { NodePowers } from './platform/node-powers.js' */
 import harden from '@endo/harden';
-import { spawn } from 'node:child_process';
-import {
-  copyFile,
-  mkdir,
-  mkdtemp,
-  open,
-  realpath,
-  rename,
-  rm,
-} from 'node:fs/promises';
-import { dirname, join, resolve as resolvePath } from 'node:path';
-import { createInterface } from 'node:readline';
 import { acquireIronhorseRuntime, hashFile } from './ironhorse-runtime.js';
 
 import { WorkerHaltError } from './worker-engine.js';
 
 /** @import { WorkerEngine } from './worker-engine.js' */
-
-/** @param {string} path */
-const syncFile = async path => {
-  const file = await open(path, 'r');
-  try {
-    await file.sync();
-  } finally {
-    await file.close();
-  }
-};
 
 /**
  * Ironhorse with incremental SQLite checkpoints and immutable sleep images.
@@ -36,6 +14,7 @@ const syncFile = async path => {
  * incarnation's newer checkpoint. This keeps the existing journal/sequence
  * protocol valid without a distributed transaction between heap and hub.
  *
+ * @param {NodePowers} powers
  * @param {object} options
  * @param {string} options.workerBinary
  * @param {Array<string>} options.bootPaths trusted bootstrap files
@@ -44,13 +23,32 @@ const syncFile = async path => {
  * @param {number} [options.requestTimeoutMs] watchdog for compiler/host faults
  * @returns {WorkerEngine}
  */
-export const makeIronhorseEngine = ({
-  workerBinary,
-  bootPaths,
-  storePath,
-  crankBudget = 10_000_000,
-  requestTimeoutMs = 60_000,
-}) => {
+export const makeIronhorseEngine = (
+  powers,
+  {
+    workerBinary,
+    bootPaths,
+    storePath,
+    crankBudget = 10_000_000,
+    requestTimeoutMs = 60_000,
+  },
+) => {
+  const { spawn } = powers.childProcess;
+  const { copyFile, mkdir, mkdtemp, open, realpath, rename, rm } =
+    powers.fsPromises;
+  const { dirname, join, resolve: resolvePath } = powers.path;
+  const { createInterface } = powers.readline;
+  const { setTimeout, clearTimeout } = powers.timers;
+  /** @param {string} path */
+  const syncFile = async path => {
+    const file = await open(path, 'r');
+    try {
+      await file.sync();
+    } finally {
+      await file.close();
+    }
+  };
+
   if (
     !Number.isSafeInteger(crankBudget) ||
     crankBudget <= 0 ||
@@ -106,7 +104,7 @@ export const makeIronhorseEngine = ({
         ) {
           throw Error('Ironhorse heaps directory must not be a symlink');
         }
-        runtime = await acquireIronhorseRuntime({
+        runtime = await acquireIronhorseRuntime(powers, {
           statePath,
           workerBinary,
           bootPaths,
@@ -147,7 +145,7 @@ export const makeIronhorseEngine = ({
       try {
         if (snapshot != null) {
           const source = imagePath(snapshot);
-          if ((await hashFile(source)) !== snapshot) {
+          if ((await hashFile(powers, source)) !== snapshot) {
             throw Error('Ironhorse snapshot digest mismatch');
           }
           await copyFile(source, heap);
@@ -212,21 +210,23 @@ export const makeIronhorseEngine = ({
             stdio: ['pipe', 'pipe', 'inherit'],
           },
         );
-        const process = child;
+        const workerProcess = child;
         exited = new Promise(resolve => {
-          process.once('exit', (code, signal) => {
+          workerProcess.once('exit', (code, signal) => {
             if (pending)
               fail(Error(`Ironhorse worker exited (${code ?? signal})`));
             resolve(code);
           });
-          process.once('error', error => {
+          workerProcess.once('error', error => {
             fail(error);
             resolve(null);
           });
         });
-        process.stdin?.on('error', fail);
+        workerProcess.stdin?.on('error', fail);
         const lines = createInterface({
-          input: /** @type {import('node:stream').Readable} */ (process.stdout),
+          input: /** @type {import('node:stream').Readable} */ (
+            workerProcess.stdout
+          ),
         });
         lines.on('line', line => {
           try {
@@ -301,7 +301,7 @@ export const makeIronhorseEngine = ({
         },
         snapshot: async () => {
           await close(); // SQLite folds the WAL before the file is copied.
-          const ref = await hashFile(heap);
+          const ref = await hashFile(powers, heap);
           const temporary = join(directory, 'snapshot.sqlite');
           await copyFile(heap, temporary);
           await syncFile(temporary);

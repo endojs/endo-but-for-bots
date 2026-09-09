@@ -1,8 +1,7 @@
 // @ts-check
+/** @import { NodePowers } from './platform/node-powers.js' */
 import { Far } from '@endo/far';
 import harden from '@endo/harden';
-import { createInterface } from 'node:readline';
-import process from 'node:process';
 
 /** @import { connectLocalControl } from './local-control.js' */
 
@@ -29,9 +28,14 @@ harden(renderInventory);
 /**
  * The TUI owns a dedicated connection. Every exit path closes it; the server
  * then explicitly removes the guest subscription before dropping its bridge.
+ * @param {NodePowers} powers
  * @param {Awaited<ReturnType<typeof connectLocalControl>>} client
  */
-export const showInventory = async client => {
+export const showInventory = async (powers, client) => {
+  const {
+    process,
+    readline: { createInterface },
+  } = powers;
   const terminal = createInterface({
     input: process.stdin,
     output: process.stdout,

@@ -30,6 +30,10 @@ import { makePeerSnapshottingReplayEngine } from '../src/peer-replay-engine.js';
 import { makeFsStore } from '../src/store-fs.js';
 import { parkWorkers } from './_park-workers.js';
 
+import { makeNodePowers } from '../src/platform/node-powers.js';
+
+const nodePowers = makeNodePowers();
+
 const COUNTER_SOURCE = `
 (() => {
   let count = 0;
@@ -67,9 +71,9 @@ const resources = {
 
 /** @param {string} statePath */
 const makeDaemon = statePath =>
-  makeThixotropeDaemon({
-    store: makeFsStore(statePath),
-    engine: makePeerSnapshottingReplayEngine(),
+  makeThixotropeDaemon(nodePowers, {
+    store: makeFsStore(nodePowers, statePath),
+    engine: makePeerSnapshottingReplayEngine(nodePowers),
     codec: syrupCodec,
     resources,
     makeNetlayer: ({ handlers, logger }) =>
@@ -79,7 +83,7 @@ const makeDaemon = statePath =>
 test('worker sessions survive a daemon restart', async t => {
   const statePath = await mkdtemp(join(tmpdir(), 'thixotrope-wsr-'));
   t.teardown(() => rm(statePath, { recursive: true, force: true }));
-  const store = makeFsStore(statePath);
+  const store = makeFsStore(nodePowers, statePath);
 
   /** @type {string} */
   let idA;

@@ -3,8 +3,12 @@ import { syrupCodec } from '@endo/ocapn/syrup';
 import test from '@endo/ses-ava/test.js';
 
 import { makeThixotropeDaemon } from '../src/daemon.js';
-import { makeMemoryStore } from '../src/store-fs.js';
+import { makeMemoryStore } from '../src/store-memory.js';
 import { WorkerHaltError } from '../src/worker-engine.js';
+
+import { makeNodePowers } from '../src/platform/node-powers.js';
+
+const nodePowers = makeNodePowers();
 
 /** @import { WorkerEngine } from '../src/worker-engine.js' */
 
@@ -54,7 +58,7 @@ test.serial(
         };
       },
     };
-    const daemon = await makeThixotropeDaemon({
+    const daemon = await makeThixotropeDaemon(nodePowers, {
       store,
       codec: syrupCodec,
       engine,
@@ -76,7 +80,7 @@ test.serial(
     t.is(store.provideWorkerStore(fatal).journalLength(), 1);
     await daemon.shutdown();
     started.length = 0;
-    const restored = await makeThixotropeDaemon({
+    const restored = await makeThixotropeDaemon(nodePowers, {
       store,
       codec: syrupCodec,
       engine,
@@ -116,7 +120,7 @@ test.serial(
     };
     await t.throwsAsync(
       () =>
-        makeThixotropeDaemon({
+        makeThixotropeDaemon(nodePowers, {
           store,
           codec: syrupCodec,
           engine,
@@ -169,7 +173,7 @@ test.serial(
     };
     await t.throwsAsync(
       () =>
-        makeThixotropeDaemon({
+        makeThixotropeDaemon(nodePowers, {
           store,
           codec: syrupCodec,
           engine,
