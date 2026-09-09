@@ -29,7 +29,7 @@
 use crate::ast::str_to_units;
 use ironhorse_text::SymbolName;
 
-use crate::ast::{flags, Item, Node, Value};
+use crate::ast::{flags, Item, Value};
 use crate::parser::{ParseError, ParseErrorKind, Parser, STATEMENT_COST};
 use crate::token::{classify_word, Token};
 use crate::token_flags::{
@@ -67,7 +67,7 @@ impl Parser<'_> {
                 message: "duplicate __proto__ property".into(),
             });
         }
-        Ok(program)
+        self.finish_tree(program)
     }
 
     /// Parse a whole **Module** (`fxModule`), returning the `Module` node.
@@ -84,7 +84,7 @@ impl Parser<'_> {
                 message: "duplicate __proto__ property".into(),
             });
         }
-        Ok(module)
+        self.finish_tree(module)
     }
 
     // ================= program / module / body =================
@@ -1876,7 +1876,7 @@ impl Parser<'_> {
     fn synthesize_default_constructor(&mut self, heritage_flag: bool, line: u32) {
         let strict = self.flags & flags::INHERITED;
         let empty_params = || {
-            Item::Node(Box::new(Node::new(
+            Item::Node(Box::new(self.new_node(
                 Token::ParamsBinding,
                 line,
                 strict,
@@ -1889,21 +1889,21 @@ impl Parser<'_> {
         let (params, body, fflags);
         if heritage_flag {
             // params: (...args)
-            let arg = Item::Node(Box::new(Node::new(
+            let arg = Item::Node(Box::new(self.new_node(
                 Token::Arg,
                 line,
                 strict,
                 vec![Item::Symbol(str_to_units("args")), Item::Null],
                 Value::None,
             )));
-            let rest = Item::Node(Box::new(Node::new(
+            let rest = Item::Node(Box::new(self.new_node(
                 Token::RestBinding,
                 line,
                 strict,
                 vec![arg],
                 Value::None,
             )));
-            params = Item::Node(Box::new(Node::new(
+            params = Item::Node(Box::new(self.new_node(
                 Token::ParamsBinding,
                 line,
                 strict,
@@ -1911,21 +1911,21 @@ impl Parser<'_> {
                 Value::None,
             )));
             // body: super(...args)
-            let access = Item::Node(Box::new(Node::new(
+            let access = Item::Node(Box::new(self.new_node(
                 Token::Access,
                 line,
                 strict,
                 vec![Item::Symbol(str_to_units("args"))],
                 Value::None,
             )));
-            let spread = Item::Node(Box::new(Node::new(
+            let spread = Item::Node(Box::new(self.new_node(
                 Token::Spread,
                 line,
                 strict,
                 vec![access],
                 Value::None,
             )));
-            let mut sup_params = Node::new(
+            let mut sup_params = self.new_node(
                 Token::Params,
                 line,
                 strict,
@@ -1933,21 +1933,21 @@ impl Parser<'_> {
                 Value::None,
             );
             sup_params.flags |= flags::SPREAD;
-            let sup = Item::Node(Box::new(Node::new(
+            let sup = Item::Node(Box::new(self.new_node(
                 Token::Super,
                 line,
                 strict,
                 vec![Item::Node(Box::new(sup_params))],
                 Value::None,
             )));
-            let stmt = Item::Node(Box::new(Node::new(
+            let stmt = Item::Node(Box::new(self.new_node(
                 Token::Statement,
                 line,
                 strict,
                 vec![sup],
                 Value::None,
             )));
-            body = Item::Node(Box::new(Node::new(
+            body = Item::Node(Box::new(self.new_node(
                 Token::Body,
                 line,
                 strict,
@@ -1957,21 +1957,21 @@ impl Parser<'_> {
             fflags = flags::STRICT | flags::DERIVED | flags::METHOD | flags::TARGET | flags::SUPER;
         } else {
             params = empty_params();
-            let undef = Item::Node(Box::new(Node::new(
+            let undef = Item::Node(Box::new(self.new_node(
                 Token::Undefined,
                 line,
                 strict,
                 Vec::new(),
                 Value::None,
             )));
-            let stmt = Item::Node(Box::new(Node::new(
+            let stmt = Item::Node(Box::new(self.new_node(
                 Token::Statement,
                 line,
                 strict,
                 vec![undef],
                 Value::None,
             )));
-            body = Item::Node(Box::new(Node::new(
+            body = Item::Node(Box::new(self.new_node(
                 Token::Body,
                 line,
                 strict,
@@ -1980,7 +1980,7 @@ impl Parser<'_> {
             )));
             fflags = flags::STRICT | flags::BASE | flags::METHOD | flags::TARGET;
         }
-        let func = Item::Node(Box::new(Node::new(
+        let func = Item::Node(Box::new(self.new_node(
             Token::Function,
             line,
             fflags,
@@ -2201,7 +2201,7 @@ impl Parser<'_> {
         match node.token {
             Token::Const | Token::Let | Token::Var => {
                 if let Some(Item::Symbol(s)) = node.children.first() {
-                    let spec = Item::Node(Box::new(Node::new(
+                    let spec = Item::Node(Box::new(self.new_node(
                         Token::Specifier,
                         node.line,
                         self.flags & flags::INHERITED,

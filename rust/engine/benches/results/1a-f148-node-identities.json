@@ -1,0 +1,1538 @@
+{
+  "baseline_commit": "97b352c1e",
+  "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+  "rustc": "rustc 1.91.1 (ed61e7d7e 2025-11-07)",
+  "candidate": "F148 parser IDs and paged NodeTable in the commit containing this artifact",
+  "settings": {
+    "CARGO_INCREMENTAL": "0",
+    "RUST_MIN_STACK": "33554432",
+    "profile": "release",
+    "process_order": "serial; sparse audit alternates baseline/candidate order across three fixed trials"
+  },
+  "notes": [
+    "Compiler growth uses the unchanged performance_bench fixtures and thresholds. Each row is the median of three measured rounds following a warmup.",
+    "Sparse fixtures use node_identity_bench: zero statements before/after a field-bearing class. Each isolated process reports the median of five measured rounds following a warmup; peak RSS includes the whole test process, excluding compilation.",
+    "The initial flat-vector candidate was rejected for sparse table memory growth. Its observations are retained, together with the initial paged observation and the fixed three-trial audit.",
+    "The initial paged observation had two small early-class timing regressions; it is retained without attributing their cause. The alternating audit is a separate observation, not a replacement.",
+    "Sandboxed time -l exited 1 because sysctl kern.clockrate was denied although tests passed; these timing observations are retained separately with no RSS. Measurements with resource-counter access all exited zero.",
+    "This is F148 compiler evidence only. It does not establish full 1A performance acceptance or close the retained general-control regressions."
+  ],
+  "commands": [
+    "git archive 97b352c1e rust/engine | tar -x -C <baseline>",
+    "CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo test --manifest-path <tree>/rust/engine/Cargo.toml -p ironhorse-compile --release --test performance_bench -- --ignored --nocapture --test-threads=1",
+    "Copy the unchanged node_identity_bench.rs fixture to baseline, then build its release test binary on both trees with cargo test --test node_identity_bench --no-run.",
+    "For each shape early_class/late_class and n=4000/16000/64000: IH_NODE_BENCH_SHAPE=<shape> IH_NODE_BENCH_N=<n> RUST_MIN_STACK=33554432 /usr/bin/time -l <release-test-binary> --ignored --nocapture --test-threads=1. Repeat all pairs for three trials, reversing process order on trial two."
+  ],
+  "growth": {
+    "before": {
+      "rows": [
+        {
+          "shape": "branches",
+          "n": 4000,
+          "bytes": 128000,
+          "seconds": 0.016059959,
+          "computrons": 84001
+        },
+        {
+          "shape": "branches",
+          "n": 8000,
+          "bytes": 256000,
+          "seconds": 0.028316958,
+          "computrons": 168001
+        },
+        {
+          "shape": "branches",
+          "n": 16000,
+          "bytes": 512000,
+          "seconds": 0.058126917,
+          "computrons": 336001
+        },
+        {
+          "shape": "branches",
+          "n": 32000,
+          "bytes": 1024000,
+          "seconds": 0.122860416,
+          "computrons": 672001
+        },
+        {
+          "shape": "populated_blocks",
+          "n": 2000,
+          "bytes": 50000,
+          "seconds": 0.005083542,
+          "computrons": 30501
+        },
+        {
+          "shape": "populated_blocks",
+          "n": 4000,
+          "bytes": 100000,
+          "seconds": 0.010159792,
+          "computrons": 61001
+        },
+        {
+          "shape": "populated_blocks",
+          "n": 8000,
+          "bytes": 200000,
+          "seconds": 0.020722542,
+          "computrons": 122001
+        },
+        {
+          "shape": "eval_declarations",
+          "n": 2000,
+          "bytes": 33780,
+          "seconds": 0.003137292,
+          "computrons": 18446
+        },
+        {
+          "shape": "eval_declarations",
+          "n": 4000,
+          "bytes": 69780,
+          "seconds": 0.006364125,
+          "computrons": 37446
+        },
+        {
+          "shape": "eval_declarations",
+          "n": 8000,
+          "bytes": 141780,
+          "seconds": 0.012903625,
+          "computrons": 75446
+        },
+        {
+          "shape": "script_declarations",
+          "n": 2000,
+          "bytes": 33780,
+          "seconds": 0.003212875,
+          "computrons": 18446
+        },
+        {
+          "shape": "script_declarations",
+          "n": 4000,
+          "bytes": 69780,
+          "seconds": 0.006325166,
+          "computrons": 37446
+        },
+        {
+          "shape": "script_declarations",
+          "n": 8000,
+          "bytes": 141780,
+          "seconds": 0.012642875,
+          "computrons": 75446
+        },
+        {
+          "shape": "strict_eval_declarations",
+          "n": 2000,
+          "bytes": 33780,
+          "seconds": 0.002990708,
+          "computrons": 18446
+        },
+        {
+          "shape": "strict_eval_declarations",
+          "n": 4000,
+          "bytes": 69780,
+          "seconds": 0.00599925,
+          "computrons": 37446
+        },
+        {
+          "shape": "strict_eval_declarations",
+          "n": 8000,
+          "bytes": 141780,
+          "seconds": 0.012170542,
+          "computrons": 75446
+        },
+        {
+          "shape": "function_declarations",
+          "n": 2000,
+          "bytes": 33797,
+          "seconds": 0.002951917,
+          "computrons": 18457
+        },
+        {
+          "shape": "function_declarations",
+          "n": 4000,
+          "bytes": 69797,
+          "seconds": 0.006014625,
+          "computrons": 37457
+        },
+        {
+          "shape": "function_declarations",
+          "n": 8000,
+          "bytes": 141797,
+          "seconds": 0.012092417,
+          "computrons": 75457
+        }
+      ],
+      "gate_passed": true,
+      "raw_log": "   Compiling ironhorse-meter v0.0.1 (/tmp/1a-f148-before/rust/engine/ironhorse-meter)\n   Compiling ironhorse-unicode v0.0.1 (/tmp/1a-f148-before/rust/engine/ironhorse-unicode)\n   Compiling ironhorse-text v0.0.1 (/tmp/1a-f148-before/rust/engine/ironhorse-text)\n   Compiling ironhorse-regexp v0.0.1 (/tmp/1a-f148-before/rust/engine/ironhorse-regexp)\n   Compiling ironhorse-compile v0.0.1 (/tmp/1a-f148-before/rust/engine/ironhorse-compile)\n    Finished `release` profile [optimized] target(s) in 2.58s\n     Running tests/performance_bench.rs (/tmp/1a-f148-before/rust/engine/target/release/deps/performance_bench-515b94766bcb44a9)\n\nrunning 1 test\ntest compiler_growth ... \nCOMPILER_METRIC branches n=4000 bytes=128000 seconds=0.016059959 computrons=84001\n\nCOMPILER_METRIC branches n=8000 bytes=256000 seconds=0.028316958 computrons=168001\nCOMPILER_RATIO branches n=8000 time=1.763 meter=2.000\n\nCOMPILER_METRIC branches n=16000 bytes=512000 seconds=0.058126917 computrons=336001\nCOMPILER_RATIO branches n=16000 time=2.053 meter=2.000\n\nCOMPILER_METRIC branches n=32000 bytes=1024000 seconds=0.122860416 computrons=672001\nCOMPILER_RATIO branches n=32000 time=2.114 meter=2.000\nCOMPILER_FULL_RANGE branches time=7.650108 limit=15.625000\n\nCOMPILER_METRIC populated_blocks n=2000 bytes=50000 seconds=0.005083542 computrons=30501\n\nCOMPILER_METRIC populated_blocks n=4000 bytes=100000 seconds=0.010159792 computrons=61001\nCOMPILER_RATIO populated_blocks n=4000 time=1.999 meter=2.000\n\nCOMPILER_METRIC populated_blocks n=8000 bytes=200000 seconds=0.020722542 computrons=122001\nCOMPILER_RATIO populated_blocks n=8000 time=2.040 meter=2.000\nCOMPILER_FULL_RANGE populated_blocks time=4.076398 limit=6.250000\n\nCOMPILER_METRIC eval_declarations n=2000 bytes=33780 seconds=0.003137292 computrons=18446\n\nCOMPILER_METRIC eval_declarations n=4000 bytes=69780 seconds=0.006364125 computrons=37446\nCOMPILER_RATIO eval_declarations n=4000 time=2.029 meter=2.030\n\nCOMPILER_METRIC eval_declarations n=8000 bytes=141780 seconds=0.012903625 computrons=75446\nCOMPILER_RATIO eval_declarations n=8000 time=2.028 meter=2.015\nCOMPILER_FULL_RANGE eval_declarations time=4.112982 limit=6.250000\n\nCOMPILER_METRIC script_declarations n=2000 bytes=33780 seconds=0.003212875 computrons=18446\n\nCOMPILER_METRIC script_declarations n=4000 bytes=69780 seconds=0.006325166 computrons=37446\nCOMPILER_RATIO script_declarations n=4000 time=1.969 meter=2.030\n\nCOMPILER_METRIC script_declarations n=8000 bytes=141780 seconds=0.012642875 computrons=75446\nCOMPILER_RATIO script_declarations n=8000 time=1.999 meter=2.015\nCOMPILER_FULL_RANGE script_declarations time=3.935066 limit=6.250000\n\nCOMPILER_METRIC strict_eval_declarations n=2000 bytes=33780 seconds=0.002990708 computrons=18446\n\nCOMPILER_METRIC strict_eval_declarations n=4000 bytes=69780 seconds=0.005999250 computrons=37446\nCOMPILER_RATIO strict_eval_declarations n=4000 time=2.006 meter=2.030\n\nCOMPILER_METRIC strict_eval_declarations n=8000 bytes=141780 seconds=0.012170542 computrons=75446\nCOMPILER_RATIO strict_eval_declarations n=8000 time=2.029 meter=2.015\nCOMPILER_FULL_RANGE strict_eval_declarations time=4.069452 limit=6.250000\n\nCOMPILER_METRIC function_declarations n=2000 bytes=33797 seconds=0.002951917 computrons=18457\n\nCOMPILER_METRIC function_declarations n=4000 bytes=69797 seconds=0.006014625 computrons=37457\nCOMPILER_RATIO function_declarations n=4000 time=2.038 meter=2.029\n\nCOMPILER_METRIC function_declarations n=8000 bytes=141797 seconds=0.012092417 computrons=75457\nCOMPILER_RATIO function_declarations n=8000 time=2.011 meter=2.014\nCOMPILER_FULL_RANGE function_declarations time=4.096462 limit=6.250000\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.61s\n\n"
+    },
+    "flat_candidate": {
+      "rows": [
+        {
+          "shape": "branches",
+          "n": 4000,
+          "bytes": 128000,
+          "seconds": 0.0151875,
+          "computrons": 84001
+        },
+        {
+          "shape": "branches",
+          "n": 8000,
+          "bytes": 256000,
+          "seconds": 0.02630225,
+          "computrons": 168001
+        },
+        {
+          "shape": "branches",
+          "n": 16000,
+          "bytes": 512000,
+          "seconds": 0.053785042,
+          "computrons": 336001
+        },
+        {
+          "shape": "branches",
+          "n": 32000,
+          "bytes": 1024000,
+          "seconds": 0.108204291,
+          "computrons": 672001
+        },
+        {
+          "shape": "populated_blocks",
+          "n": 2000,
+          "bytes": 50000,
+          "seconds": 0.004776334,
+          "computrons": 30501
+        },
+        {
+          "shape": "populated_blocks",
+          "n": 4000,
+          "bytes": 100000,
+          "seconds": 0.009520416,
+          "computrons": 61001
+        },
+        {
+          "shape": "populated_blocks",
+          "n": 8000,
+          "bytes": 200000,
+          "seconds": 0.0189825,
+          "computrons": 122001
+        },
+        {
+          "shape": "eval_declarations",
+          "n": 2000,
+          "bytes": 33780,
+          "seconds": 0.003138417,
+          "computrons": 18446
+        },
+        {
+          "shape": "eval_declarations",
+          "n": 4000,
+          "bytes": 69780,
+          "seconds": 0.006230458,
+          "computrons": 37446
+        },
+        {
+          "shape": "eval_declarations",
+          "n": 8000,
+          "bytes": 141780,
+          "seconds": 0.012613125,
+          "computrons": 75446
+        },
+        {
+          "shape": "script_declarations",
+          "n": 2000,
+          "bytes": 33780,
+          "seconds": 0.003140958,
+          "computrons": 18446
+        },
+        {
+          "shape": "script_declarations",
+          "n": 4000,
+          "bytes": 69780,
+          "seconds": 0.006254875,
+          "computrons": 37446
+        },
+        {
+          "shape": "script_declarations",
+          "n": 8000,
+          "bytes": 141780,
+          "seconds": 0.012567917,
+          "computrons": 75446
+        },
+        {
+          "shape": "strict_eval_declarations",
+          "n": 2000,
+          "bytes": 33780,
+          "seconds": 0.003106584,
+          "computrons": 18446
+        },
+        {
+          "shape": "strict_eval_declarations",
+          "n": 4000,
+          "bytes": 69780,
+          "seconds": 0.005955625,
+          "computrons": 37446
+        },
+        {
+          "shape": "strict_eval_declarations",
+          "n": 8000,
+          "bytes": 141780,
+          "seconds": 0.011920292,
+          "computrons": 75446
+        },
+        {
+          "shape": "function_declarations",
+          "n": 2000,
+          "bytes": 33797,
+          "seconds": 0.002930708,
+          "computrons": 18457
+        },
+        {
+          "shape": "function_declarations",
+          "n": 4000,
+          "bytes": 69797,
+          "seconds": 0.005885292,
+          "computrons": 37457
+        },
+        {
+          "shape": "function_declarations",
+          "n": 8000,
+          "bytes": 141797,
+          "seconds": 0.011899167,
+          "computrons": 75457
+        }
+      ],
+      "gate_passed": true,
+      "raw_log": "   Compiling ironhorse-compile v0.0.1 (/Users/xyz/Development/endo/rust/engine/ironhorse-compile)\n    Finished `release` profile [optimized] target(s) in 2.12s\n     Running tests/performance_bench.rs (rust/engine/target/release/deps/performance_bench-515b94766bcb44a9)\n\nrunning 1 test\ntest compiler_growth ... \nCOMPILER_METRIC branches n=4000 bytes=128000 seconds=0.015187500 computrons=84001\n\nCOMPILER_METRIC branches n=8000 bytes=256000 seconds=0.026302250 computrons=168001\nCOMPILER_RATIO branches n=8000 time=1.732 meter=2.000\n\nCOMPILER_METRIC branches n=16000 bytes=512000 seconds=0.053785042 computrons=336001\nCOMPILER_RATIO branches n=16000 time=2.045 meter=2.000\n\nCOMPILER_METRIC branches n=32000 bytes=1024000 seconds=0.108204291 computrons=672001\nCOMPILER_RATIO branches n=32000 time=2.012 meter=2.000\nCOMPILER_FULL_RANGE branches time=7.124562 limit=15.625000\n\nCOMPILER_METRIC populated_blocks n=2000 bytes=50000 seconds=0.004776334 computrons=30501\n\nCOMPILER_METRIC populated_blocks n=4000 bytes=100000 seconds=0.009520416 computrons=61001\nCOMPILER_RATIO populated_blocks n=4000 time=1.993 meter=2.000\n\nCOMPILER_METRIC populated_blocks n=8000 bytes=200000 seconds=0.018982500 computrons=122001\nCOMPILER_RATIO populated_blocks n=8000 time=1.994 meter=2.000\nCOMPILER_FULL_RANGE populated_blocks time=3.974282 limit=6.250000\n\nCOMPILER_METRIC eval_declarations n=2000 bytes=33780 seconds=0.003138417 computrons=18446\n\nCOMPILER_METRIC eval_declarations n=4000 bytes=69780 seconds=0.006230458 computrons=37446\nCOMPILER_RATIO eval_declarations n=4000 time=1.985 meter=2.030\n\nCOMPILER_METRIC eval_declarations n=8000 bytes=141780 seconds=0.012613125 computrons=75446\nCOMPILER_RATIO eval_declarations n=8000 time=2.024 meter=2.015\nCOMPILER_FULL_RANGE eval_declarations time=4.018945 limit=6.250000\n\nCOMPILER_METRIC script_declarations n=2000 bytes=33780 seconds=0.003140958 computrons=18446\n\nCOMPILER_METRIC script_declarations n=4000 bytes=69780 seconds=0.006254875 computrons=37446\nCOMPILER_RATIO script_declarations n=4000 time=1.991 meter=2.030\n\nCOMPILER_METRIC script_declarations n=8000 bytes=141780 seconds=0.012567917 computrons=75446\nCOMPILER_RATIO script_declarations n=8000 time=2.009 meter=2.015\nCOMPILER_FULL_RANGE script_declarations time=4.001301 limit=6.250000\n\nCOMPILER_METRIC strict_eval_declarations n=2000 bytes=33780 seconds=0.003106584 computrons=18446\n\nCOMPILER_METRIC strict_eval_declarations n=4000 bytes=69780 seconds=0.005955625 computrons=37446\nCOMPILER_RATIO strict_eval_declarations n=4000 time=1.917 meter=2.030\n\nCOMPILER_METRIC strict_eval_declarations n=8000 bytes=141780 seconds=0.011920292 computrons=75446\nCOMPILER_RATIO strict_eval_declarations n=8000 time=2.002 meter=2.015\nCOMPILER_FULL_RANGE strict_eval_declarations time=3.837106 limit=6.250000\n\nCOMPILER_METRIC function_declarations n=2000 bytes=33797 seconds=0.002930708 computrons=18457\n\nCOMPILER_METRIC function_declarations n=4000 bytes=69797 seconds=0.005885292 computrons=37457\nCOMPILER_RATIO function_declarations n=4000 time=2.008 meter=2.029\n\nCOMPILER_METRIC function_declarations n=8000 bytes=141797 seconds=0.011899167 computrons=75457\nCOMPILER_RATIO function_declarations n=8000 time=2.022 meter=2.014\nCOMPILER_FULL_RANGE function_declarations time=4.060168 limit=6.250000\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.51s\n\n"
+    },
+    "paged_candidate": {
+      "rows": [
+        {
+          "shape": "branches",
+          "n": 4000,
+          "bytes": 128000,
+          "seconds": 0.015112916,
+          "computrons": 84001
+        },
+        {
+          "shape": "branches",
+          "n": 8000,
+          "bytes": 256000,
+          "seconds": 0.026253333,
+          "computrons": 168001
+        },
+        {
+          "shape": "branches",
+          "n": 16000,
+          "bytes": 512000,
+          "seconds": 0.053448958,
+          "computrons": 336001
+        },
+        {
+          "shape": "branches",
+          "n": 32000,
+          "bytes": 1024000,
+          "seconds": 0.108052916,
+          "computrons": 672001
+        },
+        {
+          "shape": "populated_blocks",
+          "n": 2000,
+          "bytes": 50000,
+          "seconds": 0.004782625,
+          "computrons": 30501
+        },
+        {
+          "shape": "populated_blocks",
+          "n": 4000,
+          "bytes": 100000,
+          "seconds": 0.009430708,
+          "computrons": 61001
+        },
+        {
+          "shape": "populated_blocks",
+          "n": 8000,
+          "bytes": 200000,
+          "seconds": 0.0189735,
+          "computrons": 122001
+        },
+        {
+          "shape": "eval_declarations",
+          "n": 2000,
+          "bytes": 33780,
+          "seconds": 0.003057625,
+          "computrons": 18446
+        },
+        {
+          "shape": "eval_declarations",
+          "n": 4000,
+          "bytes": 69780,
+          "seconds": 0.006243292,
+          "computrons": 37446
+        },
+        {
+          "shape": "eval_declarations",
+          "n": 8000,
+          "bytes": 141780,
+          "seconds": 0.012395,
+          "computrons": 75446
+        },
+        {
+          "shape": "script_declarations",
+          "n": 2000,
+          "bytes": 33780,
+          "seconds": 0.003033416,
+          "computrons": 18446
+        },
+        {
+          "shape": "script_declarations",
+          "n": 4000,
+          "bytes": 69780,
+          "seconds": 0.00620825,
+          "computrons": 37446
+        },
+        {
+          "shape": "script_declarations",
+          "n": 8000,
+          "bytes": 141780,
+          "seconds": 0.012384291,
+          "computrons": 75446
+        },
+        {
+          "shape": "strict_eval_declarations",
+          "n": 2000,
+          "bytes": 33780,
+          "seconds": 0.002909792,
+          "computrons": 18446
+        },
+        {
+          "shape": "strict_eval_declarations",
+          "n": 4000,
+          "bytes": 69780,
+          "seconds": 0.005881708,
+          "computrons": 37446
+        },
+        {
+          "shape": "strict_eval_declarations",
+          "n": 8000,
+          "bytes": 141780,
+          "seconds": 0.011787334,
+          "computrons": 75446
+        },
+        {
+          "shape": "function_declarations",
+          "n": 2000,
+          "bytes": 33797,
+          "seconds": 0.002882833,
+          "computrons": 18457
+        },
+        {
+          "shape": "function_declarations",
+          "n": 4000,
+          "bytes": 69797,
+          "seconds": 0.005776833,
+          "computrons": 37457
+        },
+        {
+          "shape": "function_declarations",
+          "n": 8000,
+          "bytes": 141797,
+          "seconds": 0.011701666,
+          "computrons": 75457
+        }
+      ],
+      "gate_passed": true,
+      "raw_log": "   Compiling ironhorse-compile v0.0.1 (/Users/xyz/Development/endo/rust/engine/ironhorse-compile)\n    Finished `release` profile [optimized] target(s) in 2.15s\n     Running tests/performance_bench.rs (rust/engine/target/release/deps/performance_bench-515b94766bcb44a9)\n\nrunning 1 test\ntest compiler_growth ... \nCOMPILER_METRIC branches n=4000 bytes=128000 seconds=0.015112916 computrons=84001\n\nCOMPILER_METRIC branches n=8000 bytes=256000 seconds=0.026253333 computrons=168001\nCOMPILER_RATIO branches n=8000 time=1.737 meter=2.000\n\nCOMPILER_METRIC branches n=16000 bytes=512000 seconds=0.053448958 computrons=336001\nCOMPILER_RATIO branches n=16000 time=2.036 meter=2.000\n\nCOMPILER_METRIC branches n=32000 bytes=1024000 seconds=0.108052916 computrons=672001\nCOMPILER_RATIO branches n=32000 time=2.022 meter=2.000\nCOMPILER_FULL_RANGE branches time=7.149707 limit=15.625000\n\nCOMPILER_METRIC populated_blocks n=2000 bytes=50000 seconds=0.004782625 computrons=30501\n\nCOMPILER_METRIC populated_blocks n=4000 bytes=100000 seconds=0.009430708 computrons=61001\nCOMPILER_RATIO populated_blocks n=4000 time=1.972 meter=2.000\n\nCOMPILER_METRIC populated_blocks n=8000 bytes=200000 seconds=0.018973500 computrons=122001\nCOMPILER_RATIO populated_blocks n=8000 time=2.012 meter=2.000\nCOMPILER_FULL_RANGE populated_blocks time=3.967173 limit=6.250000\n\nCOMPILER_METRIC eval_declarations n=2000 bytes=33780 seconds=0.003057625 computrons=18446\n\nCOMPILER_METRIC eval_declarations n=4000 bytes=69780 seconds=0.006243292 computrons=37446\nCOMPILER_RATIO eval_declarations n=4000 time=2.042 meter=2.030\n\nCOMPILER_METRIC eval_declarations n=8000 bytes=141780 seconds=0.012395000 computrons=75446\nCOMPILER_RATIO eval_declarations n=8000 time=1.985 meter=2.015\nCOMPILER_FULL_RANGE eval_declarations time=4.053800 limit=6.250000\n\nCOMPILER_METRIC script_declarations n=2000 bytes=33780 seconds=0.003033416 computrons=18446\n\nCOMPILER_METRIC script_declarations n=4000 bytes=69780 seconds=0.006208250 computrons=37446\nCOMPILER_RATIO script_declarations n=4000 time=2.047 meter=2.030\n\nCOMPILER_METRIC script_declarations n=8000 bytes=141780 seconds=0.012384291 computrons=75446\nCOMPILER_RATIO script_declarations n=8000 time=1.995 meter=2.015\nCOMPILER_FULL_RANGE script_declarations time=4.082622 limit=6.250000\n\nCOMPILER_METRIC strict_eval_declarations n=2000 bytes=33780 seconds=0.002909792 computrons=18446\n\nCOMPILER_METRIC strict_eval_declarations n=4000 bytes=69780 seconds=0.005881708 computrons=37446\nCOMPILER_RATIO strict_eval_declarations n=4000 time=2.021 meter=2.030\n\nCOMPILER_METRIC strict_eval_declarations n=8000 bytes=141780 seconds=0.011787334 computrons=75446\nCOMPILER_RATIO strict_eval_declarations n=8000 time=2.004 meter=2.015\nCOMPILER_FULL_RANGE strict_eval_declarations time=4.050920 limit=6.250000\n\nCOMPILER_METRIC function_declarations n=2000 bytes=33797 seconds=0.002882833 computrons=18457\n\nCOMPILER_METRIC function_declarations n=4000 bytes=69797 seconds=0.005776833 computrons=37457\nCOMPILER_RATIO function_declarations n=4000 time=2.004 meter=2.029\n\nCOMPILER_METRIC function_declarations n=8000 bytes=141797 seconds=0.011701666 computrons=75457\nCOMPILER_RATIO function_declarations n=8000 time=2.026 meter=2.014\nCOMPILER_FULL_RANGE function_declarations time=4.059086 limit=6.250000\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.50s\n\n"
+    },
+    "ratios": [
+      {
+        "shape": "branches",
+        "n": 4000,
+        "elapsed_ratio": 0.9410307959067643
+      },
+      {
+        "shape": "branches",
+        "n": 8000,
+        "elapsed_ratio": 0.9271240576053402
+      },
+      {
+        "shape": "branches",
+        "n": 16000,
+        "elapsed_ratio": 0.919521639174498
+      },
+      {
+        "shape": "branches",
+        "n": 32000,
+        "elapsed_ratio": 0.879477048164968
+      },
+      {
+        "shape": "populated_blocks",
+        "n": 2000,
+        "elapsed_ratio": 0.9408056429945894
+      },
+      {
+        "shape": "populated_blocks",
+        "n": 4000,
+        "elapsed_ratio": 0.9282382946422524
+      },
+      {
+        "shape": "populated_blocks",
+        "n": 8000,
+        "elapsed_ratio": 0.9155971308925325
+      },
+      {
+        "shape": "eval_declarations",
+        "n": 2000,
+        "elapsed_ratio": 0.9746064440287994
+      },
+      {
+        "shape": "eval_declarations",
+        "n": 4000,
+        "elapsed_ratio": 0.9810134150413451
+      },
+      {
+        "shape": "eval_declarations",
+        "n": 8000,
+        "elapsed_ratio": 0.9605827819701828
+      },
+      {
+        "shape": "script_declarations",
+        "n": 2000,
+        "elapsed_ratio": 0.9441437964439949
+      },
+      {
+        "shape": "script_declarations",
+        "n": 4000,
+        "elapsed_ratio": 0.9815157420374422
+      },
+      {
+        "shape": "script_declarations",
+        "n": 8000,
+        "elapsed_ratio": 0.979547057136925
+      },
+      {
+        "shape": "strict_eval_declarations",
+        "n": 2000,
+        "elapsed_ratio": 0.9729441991662175
+      },
+      {
+        "shape": "strict_eval_declarations",
+        "n": 4000,
+        "elapsed_ratio": 0.9804072175688627
+      },
+      {
+        "shape": "strict_eval_declarations",
+        "n": 8000,
+        "elapsed_ratio": 0.968513481158029
+      },
+      {
+        "shape": "function_declarations",
+        "n": 2000,
+        "elapsed_ratio": 0.9765969029617025
+      },
+      {
+        "shape": "function_declarations",
+        "n": 4000,
+        "elapsed_ratio": 0.9604643681027496
+      },
+      {
+        "shape": "function_declarations",
+        "n": 8000,
+        "elapsed_ratio": 0.9676862781030459
+      }
+    ]
+  },
+  "sparse": {
+    "sandboxed": [
+      {
+        "revision": "before",
+        "shape": "early_class",
+        "n": "4000",
+        "status": 1,
+        "seconds": "0.001898667",
+        "code": "12290",
+        "symbols": "44",
+        "digest": "7b765a1c452bf9f6",
+        "raw": "1329262592"
+      },
+      {
+        "revision": "before",
+        "shape": "early_class",
+        "n": "16000",
+        "status": 1,
+        "seconds": "0.004756417",
+        "code": "48290",
+        "symbols": "44",
+        "digest": "532a22b72962c996",
+        "raw": "5261422592"
+      },
+      {
+        "revision": "before",
+        "shape": "early_class",
+        "n": "64000",
+        "status": 1,
+        "seconds": "0.013682750",
+        "code": "192290",
+        "symbols": "44",
+        "digest": "405ce7958fde8e16",
+        "raw": "20990062592"
+      },
+      {
+        "revision": "before",
+        "shape": "late_class",
+        "n": "4000",
+        "status": 1,
+        "seconds": "0.000905375",
+        "code": "12290",
+        "symbols": "44",
+        "digest": "7e14828f4707bbb6",
+        "raw": "1329262592"
+      },
+      {
+        "revision": "before",
+        "shape": "late_class",
+        "n": "16000",
+        "status": 1,
+        "seconds": "0.003285584",
+        "code": "48290",
+        "symbols": "44",
+        "digest": "4bca061489cfdd96",
+        "raw": "5261422592"
+      },
+      {
+        "revision": "before",
+        "shape": "late_class",
+        "n": "64000",
+        "status": 1,
+        "seconds": "0.013679167",
+        "code": "192290",
+        "symbols": "44",
+        "digest": "1a21c6c9a31f3a16",
+        "raw": "20990062592"
+      },
+      {
+        "revision": "after",
+        "shape": "early_class",
+        "n": "4000",
+        "status": 1,
+        "seconds": "0.001884959",
+        "code": "12290",
+        "symbols": "44",
+        "digest": "7b765a1c452bf9f6",
+        "raw": "1329262592"
+      },
+      {
+        "revision": "after",
+        "shape": "early_class",
+        "n": "16000",
+        "status": 1,
+        "seconds": "0.004773417",
+        "code": "48290",
+        "symbols": "44",
+        "digest": "532a22b72962c996",
+        "raw": "5261422592"
+      },
+      {
+        "revision": "after",
+        "shape": "early_class",
+        "n": "64000",
+        "status": 1,
+        "seconds": "0.014122291",
+        "code": "192290",
+        "symbols": "44",
+        "digest": "405ce7958fde8e16",
+        "raw": "20990062592"
+      },
+      {
+        "revision": "after",
+        "shape": "late_class",
+        "n": "4000",
+        "status": 1,
+        "seconds": "0.000889417",
+        "code": "12290",
+        "symbols": "44",
+        "digest": "7e14828f4707bbb6",
+        "raw": "1329262592"
+      },
+      {
+        "revision": "after",
+        "shape": "late_class",
+        "n": "16000",
+        "status": 1,
+        "seconds": "0.003422542",
+        "code": "48290",
+        "symbols": "44",
+        "digest": "4bca061489cfdd96",
+        "raw": "5261422592"
+      },
+      {
+        "revision": "after",
+        "shape": "late_class",
+        "n": "64000",
+        "status": 1,
+        "seconds": "0.014622459",
+        "code": "192290",
+        "symbols": "44",
+        "digest": "1a21c6c9a31f3a16",
+        "raw": "20990062592"
+      }
+    ],
+    "flat_candidate": [
+      {
+        "revision": "before",
+        "shape": "early_class",
+        "n": "4000",
+        "status": 0,
+        "seconds": "0.000918875",
+        "code": "12290",
+        "symbols": "44",
+        "digest": "7b765a1c452bf9f6",
+        "raw": "1329262592",
+        "peak_rss_bytes": 5013504
+      },
+      {
+        "revision": "before",
+        "shape": "early_class",
+        "n": "16000",
+        "status": 0,
+        "seconds": "0.003314000",
+        "code": "48290",
+        "symbols": "44",
+        "digest": "532a22b72962c996",
+        "raw": "5261422592",
+        "peak_rss_bytes": 9846784
+      },
+      {
+        "revision": "before",
+        "shape": "early_class",
+        "n": "64000",
+        "status": 0,
+        "seconds": "0.013587292",
+        "code": "192290",
+        "symbols": "44",
+        "digest": "405ce7958fde8e16",
+        "raw": "20990062592",
+        "peak_rss_bytes": 54820864
+      },
+      {
+        "revision": "before",
+        "shape": "late_class",
+        "n": "4000",
+        "status": 0,
+        "seconds": "0.000889042",
+        "code": "12290",
+        "symbols": "44",
+        "digest": "7e14828f4707bbb6",
+        "raw": "1329262592",
+        "peak_rss_bytes": 5029888
+      },
+      {
+        "revision": "before",
+        "shape": "late_class",
+        "n": "16000",
+        "status": 0,
+        "seconds": "0.003498667",
+        "code": "48290",
+        "symbols": "44",
+        "digest": "4bca061489cfdd96",
+        "raw": "5261422592",
+        "peak_rss_bytes": 9846784
+      },
+      {
+        "revision": "before",
+        "shape": "late_class",
+        "n": "64000",
+        "status": 0,
+        "seconds": "0.013750750",
+        "code": "192290",
+        "symbols": "44",
+        "digest": "1a21c6c9a31f3a16",
+        "raw": "20990062592",
+        "peak_rss_bytes": 56868864
+      },
+      {
+        "revision": "after",
+        "shape": "early_class",
+        "n": "4000",
+        "status": 0,
+        "seconds": "0.000862833",
+        "code": "12290",
+        "symbols": "44",
+        "digest": "7b765a1c452bf9f6",
+        "raw": "1329262592",
+        "peak_rss_bytes": 5177344
+      },
+      {
+        "revision": "after",
+        "shape": "early_class",
+        "n": "16000",
+        "status": 0,
+        "seconds": "0.003296667",
+        "code": "48290",
+        "symbols": "44",
+        "digest": "532a22b72962c996",
+        "raw": "5261422592",
+        "peak_rss_bytes": 10567680
+      },
+      {
+        "revision": "after",
+        "shape": "early_class",
+        "n": "64000",
+        "status": 0,
+        "seconds": "0.013615791",
+        "code": "192290",
+        "symbols": "44",
+        "digest": "405ce7958fde8e16",
+        "raw": "20990062592",
+        "peak_rss_bytes": 57868288
+      },
+      {
+        "revision": "after",
+        "shape": "late_class",
+        "n": "4000",
+        "status": 0,
+        "seconds": "0.000893167",
+        "code": "12290",
+        "symbols": "44",
+        "digest": "7e14828f4707bbb6",
+        "raw": "1329262592",
+        "peak_rss_bytes": 6504448
+      },
+      {
+        "revision": "after",
+        "shape": "late_class",
+        "n": "16000",
+        "status": 0,
+        "seconds": "0.003480291",
+        "code": "48290",
+        "symbols": "44",
+        "digest": "4bca061489cfdd96",
+        "raw": "5261422592",
+        "peak_rss_bytes": 18169856
+      },
+      {
+        "revision": "after",
+        "shape": "late_class",
+        "n": "64000",
+        "status": 0,
+        "seconds": "0.014607917",
+        "code": "192290",
+        "symbols": "44",
+        "digest": "1a21c6c9a31f3a16",
+        "raw": "20990062592",
+        "peak_rss_bytes": 75628544
+      }
+    ],
+    "paged_initial": [
+      {
+        "revision": "before",
+        "shape": "early_class",
+        "n": "4000",
+        "status": 0,
+        "seconds": "0.000934834",
+        "code": "12290",
+        "symbols": "44",
+        "digest": "7b765a1c452bf9f6",
+        "raw": "1329262592",
+        "peak_rss_bytes": 4997120
+      },
+      {
+        "revision": "before",
+        "shape": "early_class",
+        "n": "16000",
+        "status": 0,
+        "seconds": "0.003345042",
+        "code": "48290",
+        "symbols": "44",
+        "digest": "532a22b72962c996",
+        "raw": "5261422592",
+        "peak_rss_bytes": 9781248
+      },
+      {
+        "revision": "before",
+        "shape": "early_class",
+        "n": "64000",
+        "status": 0,
+        "seconds": "0.013411750",
+        "code": "192290",
+        "symbols": "44",
+        "digest": "405ce7958fde8e16",
+        "raw": "20990062592",
+        "peak_rss_bytes": 54837248
+      },
+      {
+        "revision": "before",
+        "shape": "late_class",
+        "n": "4000",
+        "status": 0,
+        "seconds": "0.000895708",
+        "code": "12290",
+        "symbols": "44",
+        "digest": "7e14828f4707bbb6",
+        "raw": "1329262592",
+        "peak_rss_bytes": 5029888
+      },
+      {
+        "revision": "before",
+        "shape": "late_class",
+        "n": "16000",
+        "status": 0,
+        "seconds": "0.003452125",
+        "code": "48290",
+        "symbols": "44",
+        "digest": "4bca061489cfdd96",
+        "raw": "5261422592",
+        "peak_rss_bytes": 9814016
+      },
+      {
+        "revision": "before",
+        "shape": "late_class",
+        "n": "64000",
+        "status": 0,
+        "seconds": "0.013671709",
+        "code": "192290",
+        "symbols": "44",
+        "digest": "1a21c6c9a31f3a16",
+        "raw": "20990062592",
+        "peak_rss_bytes": 56885248
+      },
+      {
+        "revision": "after",
+        "shape": "early_class",
+        "n": "4000",
+        "status": 0,
+        "seconds": "0.002121167",
+        "code": "12290",
+        "symbols": "44",
+        "digest": "7b765a1c452bf9f6",
+        "raw": "1329262592",
+        "peak_rss_bytes": 5931008
+      },
+      {
+        "revision": "after",
+        "shape": "early_class",
+        "n": "16000",
+        "status": 0,
+        "seconds": "0.004749125",
+        "code": "48290",
+        "symbols": "44",
+        "digest": "532a22b72962c996",
+        "raw": "5261422592",
+        "peak_rss_bytes": 9830400
+      },
+      {
+        "revision": "after",
+        "shape": "early_class",
+        "n": "64000",
+        "status": 0,
+        "seconds": "0.013750084",
+        "code": "192290",
+        "symbols": "44",
+        "digest": "405ce7958fde8e16",
+        "raw": "20990062592",
+        "peak_rss_bytes": 54870016
+      },
+      {
+        "revision": "after",
+        "shape": "late_class",
+        "n": "4000",
+        "status": 0,
+        "seconds": "0.000881375",
+        "code": "12290",
+        "symbols": "44",
+        "digest": "7e14828f4707bbb6",
+        "raw": "1329262592",
+        "peak_rss_bytes": 5079040
+      },
+      {
+        "revision": "after",
+        "shape": "late_class",
+        "n": "16000",
+        "status": 0,
+        "seconds": "0.003293916",
+        "code": "48290",
+        "symbols": "44",
+        "digest": "4bca061489cfdd96",
+        "raw": "5261422592",
+        "peak_rss_bytes": 9977856
+      },
+      {
+        "revision": "after",
+        "shape": "late_class",
+        "n": "64000",
+        "status": 0,
+        "seconds": "0.013431041",
+        "code": "192290",
+        "symbols": "44",
+        "digest": "1a21c6c9a31f3a16",
+        "raw": "20990062592",
+        "peak_rss_bytes": 57131008
+      }
+    ],
+    "alternating_audit": [
+      {
+        "trial": 0,
+        "revision": "before",
+        "status": 0,
+        "shape": "early_class",
+        "n": "4000",
+        "seconds": "0.000894458",
+        "code": "12290",
+        "symbols": "44",
+        "digest": "7b765a1c452bf9f6",
+        "raw": "1329262592",
+        "peak_rss_bytes": 5013504
+      },
+      {
+        "trial": 0,
+        "revision": "after",
+        "status": 0,
+        "shape": "early_class",
+        "n": "4000",
+        "seconds": "0.000885833",
+        "code": "12290",
+        "symbols": "44",
+        "digest": "7b765a1c452bf9f6",
+        "raw": "1329262592",
+        "peak_rss_bytes": 5013504
+      },
+      {
+        "trial": 0,
+        "revision": "before",
+        "status": 0,
+        "shape": "early_class",
+        "n": "16000",
+        "seconds": "0.003520292",
+        "code": "48290",
+        "symbols": "44",
+        "digest": "532a22b72962c996",
+        "raw": "5261422592",
+        "peak_rss_bytes": 9781248
+      },
+      {
+        "trial": 0,
+        "revision": "after",
+        "status": 0,
+        "shape": "early_class",
+        "n": "16000",
+        "seconds": "0.003564667",
+        "code": "48290",
+        "symbols": "44",
+        "digest": "532a22b72962c996",
+        "raw": "5261422592",
+        "peak_rss_bytes": 9814016
+      },
+      {
+        "trial": 0,
+        "revision": "before",
+        "status": 0,
+        "shape": "early_class",
+        "n": "64000",
+        "seconds": "0.014153417",
+        "code": "192290",
+        "symbols": "44",
+        "digest": "405ce7958fde8e16",
+        "raw": "20990062592",
+        "peak_rss_bytes": 54820864
+      },
+      {
+        "trial": 0,
+        "revision": "after",
+        "status": 0,
+        "shape": "early_class",
+        "n": "64000",
+        "seconds": "0.014202833",
+        "code": "192290",
+        "symbols": "44",
+        "digest": "405ce7958fde8e16",
+        "raw": "20990062592",
+        "peak_rss_bytes": 54853632
+      },
+      {
+        "trial": 0,
+        "revision": "before",
+        "status": 0,
+        "shape": "late_class",
+        "n": "4000",
+        "seconds": "0.000856583",
+        "code": "12290",
+        "symbols": "44",
+        "digest": "7e14828f4707bbb6",
+        "raw": "1329262592",
+        "peak_rss_bytes": 5013504
+      },
+      {
+        "trial": 0,
+        "revision": "after",
+        "status": 0,
+        "shape": "late_class",
+        "n": "4000",
+        "seconds": "0.000892333",
+        "code": "12290",
+        "symbols": "44",
+        "digest": "7e14828f4707bbb6",
+        "raw": "1329262592",
+        "peak_rss_bytes": 5079040
+      },
+      {
+        "trial": 0,
+        "revision": "before",
+        "status": 0,
+        "shape": "late_class",
+        "n": "16000",
+        "seconds": "0.003510042",
+        "code": "48290",
+        "symbols": "44",
+        "digest": "4bca061489cfdd96",
+        "raw": "5261422592",
+        "peak_rss_bytes": 9814016
+      },
+      {
+        "trial": 0,
+        "revision": "after",
+        "status": 0,
+        "shape": "late_class",
+        "n": "16000",
+        "seconds": "0.003504541",
+        "code": "48290",
+        "symbols": "44",
+        "digest": "4bca061489cfdd96",
+        "raw": "5261422592",
+        "peak_rss_bytes": 9912320
+      },
+      {
+        "trial": 0,
+        "revision": "before",
+        "status": 0,
+        "shape": "late_class",
+        "n": "64000",
+        "seconds": "0.014478875",
+        "code": "192290",
+        "symbols": "44",
+        "digest": "1a21c6c9a31f3a16",
+        "raw": "20990062592",
+        "peak_rss_bytes": 56885248
+      },
+      {
+        "trial": 0,
+        "revision": "after",
+        "status": 0,
+        "shape": "late_class",
+        "n": "64000",
+        "seconds": "0.014192833",
+        "code": "192290",
+        "symbols": "44",
+        "digest": "1a21c6c9a31f3a16",
+        "raw": "20990062592",
+        "peak_rss_bytes": 57180160
+      },
+      {
+        "trial": 1,
+        "revision": "after",
+        "status": 0,
+        "shape": "early_class",
+        "n": "4000",
+        "seconds": "0.000921333",
+        "code": "12290",
+        "symbols": "44",
+        "digest": "7b765a1c452bf9f6",
+        "raw": "1329262592",
+        "peak_rss_bytes": 5062656
+      },
+      {
+        "trial": 1,
+        "revision": "before",
+        "status": 0,
+        "shape": "early_class",
+        "n": "4000",
+        "seconds": "0.000863292",
+        "code": "12290",
+        "symbols": "44",
+        "digest": "7b765a1c452bf9f6",
+        "raw": "1329262592",
+        "peak_rss_bytes": 5013504
+      },
+      {
+        "trial": 1,
+        "revision": "after",
+        "status": 0,
+        "shape": "early_class",
+        "n": "16000",
+        "seconds": "0.003532084",
+        "code": "48290",
+        "symbols": "44",
+        "digest": "532a22b72962c996",
+        "raw": "5261422592",
+        "peak_rss_bytes": 9895936
+      },
+      {
+        "trial": 1,
+        "revision": "before",
+        "status": 0,
+        "shape": "early_class",
+        "n": "16000",
+        "seconds": "0.003507125",
+        "code": "48290",
+        "symbols": "44",
+        "digest": "532a22b72962c996",
+        "raw": "5261422592",
+        "peak_rss_bytes": 9846784
+      },
+      {
+        "trial": 1,
+        "revision": "after",
+        "status": 0,
+        "shape": "early_class",
+        "n": "64000",
+        "seconds": "0.014292833",
+        "code": "192290",
+        "symbols": "44",
+        "digest": "405ce7958fde8e16",
+        "raw": "20990062592",
+        "peak_rss_bytes": 54853632
+      },
+      {
+        "trial": 1,
+        "revision": "before",
+        "status": 0,
+        "shape": "early_class",
+        "n": "64000",
+        "seconds": "0.014218542",
+        "code": "192290",
+        "symbols": "44",
+        "digest": "405ce7958fde8e16",
+        "raw": "20990062592",
+        "peak_rss_bytes": 54837248
+      },
+      {
+        "trial": 1,
+        "revision": "after",
+        "status": 0,
+        "shape": "late_class",
+        "n": "4000",
+        "seconds": "0.000881375",
+        "code": "12290",
+        "symbols": "44",
+        "digest": "7e14828f4707bbb6",
+        "raw": "1329262592",
+        "peak_rss_bytes": 5062656
+      },
+      {
+        "trial": 1,
+        "revision": "before",
+        "status": 0,
+        "shape": "late_class",
+        "n": "4000",
+        "seconds": "0.000899334",
+        "code": "12290",
+        "symbols": "44",
+        "digest": "7e14828f4707bbb6",
+        "raw": "1329262592",
+        "peak_rss_bytes": 5013504
+      },
+      {
+        "trial": 1,
+        "revision": "after",
+        "status": 0,
+        "shape": "late_class",
+        "n": "16000",
+        "seconds": "0.003547417",
+        "code": "48290",
+        "symbols": "44",
+        "digest": "4bca061489cfdd96",
+        "raw": "5261422592",
+        "peak_rss_bytes": 9863168
+      },
+      {
+        "trial": 1,
+        "revision": "before",
+        "status": 0,
+        "shape": "late_class",
+        "n": "16000",
+        "seconds": "0.003492792",
+        "code": "48290",
+        "symbols": "44",
+        "digest": "4bca061489cfdd96",
+        "raw": "5261422592",
+        "peak_rss_bytes": 9846784
+      },
+      {
+        "trial": 1,
+        "revision": "after",
+        "status": 0,
+        "shape": "late_class",
+        "n": "64000",
+        "seconds": "0.014244875",
+        "code": "192290",
+        "symbols": "44",
+        "digest": "1a21c6c9a31f3a16",
+        "raw": "20990062592",
+        "peak_rss_bytes": 57147392
+      },
+      {
+        "trial": 1,
+        "revision": "before",
+        "status": 0,
+        "shape": "late_class",
+        "n": "64000",
+        "seconds": "0.014294167",
+        "code": "192290",
+        "symbols": "44",
+        "digest": "1a21c6c9a31f3a16",
+        "raw": "20990062592",
+        "peak_rss_bytes": 56901632
+      },
+      {
+        "trial": 2,
+        "revision": "before",
+        "status": 0,
+        "shape": "early_class",
+        "n": "4000",
+        "seconds": "0.000915333",
+        "code": "12290",
+        "symbols": "44",
+        "digest": "7b765a1c452bf9f6",
+        "raw": "1329262592",
+        "peak_rss_bytes": 5013504
+      },
+      {
+        "trial": 2,
+        "revision": "after",
+        "status": 0,
+        "shape": "early_class",
+        "n": "4000",
+        "seconds": "0.000905458",
+        "code": "12290",
+        "symbols": "44",
+        "digest": "7b765a1c452bf9f6",
+        "raw": "1329262592",
+        "peak_rss_bytes": 5079040
+      },
+      {
+        "trial": 2,
+        "revision": "before",
+        "status": 0,
+        "shape": "early_class",
+        "n": "16000",
+        "seconds": "0.003516875",
+        "code": "48290",
+        "symbols": "44",
+        "digest": "532a22b72962c996",
+        "raw": "5261422592",
+        "peak_rss_bytes": 9863168
+      },
+      {
+        "trial": 2,
+        "revision": "after",
+        "status": 0,
+        "shape": "early_class",
+        "n": "16000",
+        "seconds": "0.003575000",
+        "code": "48290",
+        "symbols": "44",
+        "digest": "532a22b72962c996",
+        "raw": "5261422592",
+        "peak_rss_bytes": 9879552
+      },
+      {
+        "trial": 2,
+        "revision": "before",
+        "status": 0,
+        "shape": "early_class",
+        "n": "64000",
+        "seconds": "0.014288834",
+        "code": "192290",
+        "symbols": "44",
+        "digest": "405ce7958fde8e16",
+        "raw": "20990062592",
+        "peak_rss_bytes": 54804480
+      },
+      {
+        "trial": 2,
+        "revision": "after",
+        "status": 0,
+        "shape": "early_class",
+        "n": "64000",
+        "seconds": "0.014333292",
+        "code": "192290",
+        "symbols": "44",
+        "digest": "405ce7958fde8e16",
+        "raw": "20990062592",
+        "peak_rss_bytes": 54870016
+      },
+      {
+        "trial": 2,
+        "revision": "before",
+        "status": 0,
+        "shape": "late_class",
+        "n": "4000",
+        "seconds": "0.000888917",
+        "code": "12290",
+        "symbols": "44",
+        "digest": "7e14828f4707bbb6",
+        "raw": "1329262592",
+        "peak_rss_bytes": 5029888
+      },
+      {
+        "trial": 2,
+        "revision": "after",
+        "status": 0,
+        "shape": "late_class",
+        "n": "4000",
+        "seconds": "0.000913917",
+        "code": "12290",
+        "symbols": "44",
+        "digest": "7e14828f4707bbb6",
+        "raw": "1329262592",
+        "peak_rss_bytes": 5079040
+      },
+      {
+        "trial": 2,
+        "revision": "before",
+        "status": 0,
+        "shape": "late_class",
+        "n": "16000",
+        "seconds": "0.003550916",
+        "code": "48290",
+        "symbols": "44",
+        "digest": "4bca061489cfdd96",
+        "raw": "5261422592",
+        "peak_rss_bytes": 9781248
+      },
+      {
+        "trial": 2,
+        "revision": "after",
+        "status": 0,
+        "shape": "late_class",
+        "n": "16000",
+        "seconds": "0.003504750",
+        "code": "48290",
+        "symbols": "44",
+        "digest": "4bca061489cfdd96",
+        "raw": "5261422592",
+        "peak_rss_bytes": 9863168
+      },
+      {
+        "trial": 2,
+        "revision": "before",
+        "status": 0,
+        "shape": "late_class",
+        "n": "64000",
+        "seconds": "0.014037917",
+        "code": "192290",
+        "symbols": "44",
+        "digest": "1a21c6c9a31f3a16",
+        "raw": "20990062592",
+        "peak_rss_bytes": 56885248
+      },
+      {
+        "trial": 2,
+        "revision": "after",
+        "status": 0,
+        "shape": "late_class",
+        "n": "64000",
+        "seconds": "0.014427666",
+        "code": "192290",
+        "symbols": "44",
+        "digest": "1a21c6c9a31f3a16",
+        "raw": "20990062592",
+        "peak_rss_bytes": 57163776
+      }
+    ],
+    "audit_summary": [
+      {
+        "shape": "early_class",
+        "n": 4000,
+        "medians": {
+          "before": {
+            "seconds": 0.000894458,
+            "peak_rss_bytes": 5013504
+          },
+          "after": {
+            "seconds": 0.000905458,
+            "peak_rss_bytes": 5062656
+          }
+        },
+        "elapsed_ratio": 1.0122979502670892,
+        "rss_ratio": 1.0098039215686274
+      },
+      {
+        "shape": "early_class",
+        "n": 16000,
+        "medians": {
+          "before": {
+            "seconds": 0.003516875,
+            "peak_rss_bytes": 9846784
+          },
+          "after": {
+            "seconds": 0.003564667,
+            "peak_rss_bytes": 9879552
+          }
+        },
+        "elapsed_ratio": 1.0135893371245779,
+        "rss_ratio": 1.0033277870216306
+      },
+      {
+        "shape": "early_class",
+        "n": 64000,
+        "medians": {
+          "before": {
+            "seconds": 0.014218542,
+            "peak_rss_bytes": 54820864
+          },
+          "after": {
+            "seconds": 0.014292833,
+            "peak_rss_bytes": 54853632
+          }
+        },
+        "elapsed_ratio": 1.0052249379718399,
+        "rss_ratio": 1.0005977286312013
+      },
+      {
+        "shape": "late_class",
+        "n": 4000,
+        "medians": {
+          "before": {
+            "seconds": 0.000888917,
+            "peak_rss_bytes": 5013504
+          },
+          "after": {
+            "seconds": 0.000892333,
+            "peak_rss_bytes": 5079040
+          }
+        },
+        "elapsed_ratio": 1.0038428784689684,
+        "rss_ratio": 1.0130718954248366
+      },
+      {
+        "shape": "late_class",
+        "n": 16000,
+        "medians": {
+          "before": {
+            "seconds": 0.003510042,
+            "peak_rss_bytes": 9814016
+          },
+          "after": {
+            "seconds": 0.00350475,
+            "peak_rss_bytes": 9863168
+          }
+        },
+        "elapsed_ratio": 0.9984923257328545,
+        "rss_ratio": 1.005008347245409
+      },
+      {
+        "shape": "late_class",
+        "n": 64000,
+        "medians": {
+          "before": {
+            "seconds": 0.014294167,
+            "peak_rss_bytes": 56885248
+          },
+          "after": {
+            "seconds": 0.014244875,
+            "peak_rss_bytes": 57163776
+          }
+        },
+        "elapsed_ratio": 0.996551600383569,
+        "rss_ratio": 1.0048963133640554
+      }
+    ]
+  }
+}

@@ -28,7 +28,7 @@
 //! identifier. The ironhorse AST ([`crate::ast`]) is an immutable value tree,
 //! so instead this module keeps a scope **arena** ([`Scope`]) and keys the
 //! per-node associations it needs (a node's scope, a node's hoist-time
-//! extra flags) by the node's stable address. The observable result — the
+//! extra flags) by the parser-assigned node ID. The observable result — the
 //! scope tree, declare lists, counts, closure flags, `scopeCount`, and
 //! access resolutions — is the same.
 //!
@@ -39,6 +39,8 @@
 //! synthesized `constructorInit` / `instanceInit` bodies.
 
 #![allow(clippy::needless_range_loop)]
+
+use crate::node_table::NodeTable;
 
 use crate::ast::{flags, node_name, Item, Node};
 use crate::parser::{ParseError, Parser};
@@ -185,9 +187,9 @@ pub struct Scope {
     /// `scope->flags`: `mxStrictFlag` (seeded from the node) plus
     /// `mxEvalFlag` if poisoned.
     pub flags: u32,
-    /// The creating node's address, so `self->node->flags` can be read
+    /// The creating node's ID, so `self->node->flags` can be read
     /// *live* (its `mxEvalFlag`/`mxArgumentsFlag` are set after creation).
-    node_ptr: usize,
+    node_id: u32,
     /// The creating node's parse-time `flags` word (before hoist extras).
     node_base_flags: u32,
     /// Annex B.3.4 permits var redeclaration of this simple catch parameter.
@@ -239,12 +241,12 @@ impl Scope {
         self.node_base_flags & flags::EVAL != 0
     }
 
-    fn new(parent: Option<usize>, token: Token, node_ptr: usize, node_base_flags: u32) -> Scope {
+    fn new(parent: Option<usize>, token: Token, node_id: u32, node_base_flags: u32) -> Scope {
         Scope {
             parent,
             token,
             flags: node_base_flags & SCOPE_STRICT,
-            node_ptr,
+            node_id,
             node_base_flags,
             simple_catch_parameter: false,
             declares: Vec::new(),
@@ -291,44 +293,37 @@ pub struct ScopeTree {
     /// `scopeCount` per function/program/module scope, keyed by scope
     /// index (the coder's frame slot count).
     pub scope_counts: HashMap<usize, i32>,
-    /// A scope-creating node's address → its scope(s): `.0` primary
+    /// A scope-creating node's ID → its scope(s): `.0` primary
     /// (`self->scope`), `.1` secondary (`statementScope`/`symbolScope`).
-    /// The coder walks the *same* parsed tree the scoper walked, so a
-    /// node's address keys back to the scope XS hung off it in place
-    /// (`self->scope`, `xsScope.c`). Keyed with `node_key`.
-    pub node_scopes: HashMap<usize, (usize, Option<usize>)>,
+    /// IDs survive moves and clones of the parsed tree. Keyed with `node_id`.
+    pub node_scopes: NodeTable<(usize, Option<usize>)>,
     /// Per-node access resolution (see `Scoper::resolutions`): an
-    /// `Access` / declaration / `Define` node address → the `(scope,
+    /// `Access` / declaration / `Define` node ID → the `(scope,
     /// declare id)` its symbol binds to, or `None` for the symbol path.
-    /// Keyed with `node_key`.
-    pub resolutions: HashMap<usize, Option<(usize, u32)>>,
-    /// A class node address → its synthesized `instanceInit` closure
+    /// Keyed with `node_id`.
+    pub resolutions: NodeTable<Option<(usize, u32)>>,
+    /// A class node ID → its synthesized `instanceInit` closure
     /// declare `(scope, id)` when the class has instance data fields.
-    /// Keyed with `node_key`.
-    pub class_instance_init: HashMap<usize, (usize, u32)>,
-    /// A `super(...)` node address → the capturing alias `(scope, id)` for
+    /// Keyed with `node_id`.
+    pub class_instance_init: NodeTable<(usize, u32)>,
+    /// A `super(...)` node ID → the capturing alias `(scope, id)` for
     /// the enclosing derived class's `instanceInit` closure. Keyed with
-    /// `node_key`.
-    pub super_instance_init: HashMap<usize, (usize, u32)>,
-    /// A class member node address (`PropertyAt` computed field /
+    /// `node_id`.
+    pub super_instance_init: NodeTable<(usize, u32)>,
+    /// A class member node ID (`PropertyAt` computed field /
     /// `PrivateProperty`) → the class-scope closure declares XS's
     /// `fxClassNodeHoist` creates for it (`atAccess` / `symbolAccess` /
     /// `valueAccess`). The coder reads these to emit the member-loop
     /// `CONST_CLOSURE` and the field function's `GET_CLOSURE` / `NEW_PRIVATE`.
-    /// Keyed with `node_key`.
-    pub class_member_access: HashMap<usize, MemberAccess>,
-    /// A class node address → the synthesized **instance** field-init
-    /// function scope (XS's `instanceInit` function node scope) when the
-    /// class's instance data fields are all plain (literal-keyed) data
-    /// fields. The field initializers are bound inside this Function scope
-    /// so a value that captures an outer binding promotes it to a closure
-    /// (`fxClassNodeHoist`/`fxFunctionNodeBind`), and the coder reads the
-    /// scope's use-closure aliases to `RESERVE`/`RETRIEVE`/`STORE` and to
-    /// resolve each captured value access as a `GET_CLOSURE`. Absent when
-    /// the class has a computed-key or private instance field (that path
-    /// keeps the member-closure-only field function). Keyed with `node_key`.
-    pub class_field_init_inst: HashMap<usize, usize>,
-    /// A class **member** node address (`PropertyAt` / `PrivateProperty`) →
+    /// Keyed with `node_id`.
+    pub class_member_access: NodeTable<MemberAccess>,
+    /// A class node ID → the synthesized **instance** field-init function
+    /// scope, present whenever the class has instance data fields or private
+    /// methods/accessors. Field values bind in this scope; computed keys and
+    /// private method values bind in the class scope and are captured as aliases.
+    /// Keyed with `node_id`.
+    pub class_field_init_inst: NodeTable<usize>,
+    /// A class **member** node ID (`PropertyAt` / `PrivateProperty`) →
     /// the **field-init function scope** use-closure alias declares its
     /// `atAccess` / `symbolAccess` / `valueAccess` resolve to (XS's
     /// `fxFieldNodeBind` looking each access up from inside the `instanceInit`
@@ -337,21 +332,21 @@ pub struct ScopeTree {
     /// reads these to emit the field body's `GET_CLOSURE` / `NEW_PRIVATE`
     /// with the function-frame retrieve slot (not the class-scope index). A
     /// get/set accessor pair shares one brand slot (the `symbolAccess`
-    /// use-closure dedups by symbol). Keyed with `node_key`.
-    pub class_member_fi: HashMap<usize, MemberAccess>,
-    /// A class node address → its synthesized **static** field-init function
+    /// use-closure dedups by symbol). Keyed with `node_id`.
+    pub class_member_fi: NodeTable<MemberAccess>,
+    /// A class node ID → its synthesized **static** field-init function
     /// scope (XS's `constructorInit` function node scope), when the class has
     /// static fields / `static { … }` blocks. Analogous to
     /// [`ScopeTree::class_field_init_inst`]; the coder reads it to drive the
     /// static field function's `RESERVE`/`RETRIEVE`/`STORE`. Keyed with
-    /// `node_key`.
-    pub class_field_init_static: HashMap<usize, usize>,
+    /// `node_id`.
+    pub class_field_init_static: NodeTable<usize>,
 }
 
 /// The class-scope closure declares XS synthesizes for one computed-key /
 /// private member (`atAccess`, `symbolAccess`, `valueAccess`). Each id
 /// indexes the owning class's body scope.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MemberAccess {
     /// `PropertyAt.atAccess` — the computed key's `const` closure.
     pub at: Option<u32>,
@@ -362,13 +357,14 @@ pub struct MemberAccess {
     pub value: Option<u32>,
 }
 
-/// The stable identity the scoper/coder use to associate a scope (and,
-/// later, an access resolution) with a node: the node's address in the
-/// parsed tree. Faithful to XS hanging `txScope*`/`access->declaration`
-/// off the node in place — valid only while that tree is alive, which it
-/// is for the whole compile.
-pub fn node_key(n: &Node) -> usize {
-    n as *const Node as usize
+/// The parser-assigned identity used throughout hoisting, binding and coding.
+pub fn node_id(n: &Node) -> u32 {
+    assert_ne!(
+        n.id,
+        u32::MAX,
+        "compiler invariant: unassigned node identity"
+    );
+    n.id
 }
 
 // ============================ entry points ============================
@@ -495,7 +491,7 @@ fn run_goal_with_access_log(
     }
     let root_scope = *s
         .node_scope
-        .get(&node_ptr(root_node))
+        .get(&node_id(root_node))
         .ok_or_else(|| err(root_node.line, "no root scope"))?;
     Ok(ScopeTree {
         goal: s.goal,
@@ -519,7 +515,7 @@ fn run_goal_with_access_log(
 use crate::ast::TREE_DEPTH_LIMIT;
 
 /// Ambient hoister/binder state threaded through the passes, plus the
-/// arena and the by-address side tables the immutable AST needs.
+/// arena and the by-ID side tables the immutable AST needs.
 #[derive(Default)]
 struct DeclareIndex {
     names: HashMap<Sym, u32>,
@@ -544,17 +540,17 @@ struct Scoper<'a> {
     function_scope: Option<usize>,
     /// `hoister->bodyScope`.
     body_scope: Option<usize>,
-    /// `hoister->environmentNode` (a node address).
-    environment_node: Option<usize>,
+    /// `hoister->environmentNode` (a node ID).
+    environment_node: Option<u32>,
     /// `binder->classNode` — the class node whose members are binding.
     /// (Reserved for the deferred class-scoping pass.)
     #[allow(dead_code)]
-    class_node: Option<usize>,
-    /// node address → its scope(s): `.0` primary (`self->scope`), `.1`
+    class_node: Option<u32>,
+    /// node ID → its scope(s): `.0` primary (`self->scope`), `.1`
     /// secondary (`statementScope` / `symbolScope`).
-    node_scope: HashMap<usize, (usize, Option<usize>)>,
+    node_scope: NodeTable<(usize, Option<usize>)>,
     /// Hoist-time extra flags OR-ed onto a node (`self->node->flags |=`).
-    node_extra: HashMap<usize, u32>,
+    node_extra: NodeTable<u32>,
     /// The binder frame counters.
     scope_level: i32,
     scope_maximum: i32,
@@ -562,56 +558,52 @@ struct Scoper<'a> {
     accesses: Vec<AccessRecord>,
     // Default scoping still records diagnostics; only the compiler opts out.
     omit_access_log: bool,
-    /// Per-node access resolution, keyed by the node's address: an
+    /// Per-node access resolution, keyed by the node's ID: an
     /// `Access` / declaration / `Define` node → the `(scope, declare id)`
     /// its symbol binds to (XS's `access->declaration`), or `None` for a
     /// global / sloppy-eval-var / `with` access. The coder reads this to
     /// choose a slot op (`GET_LOCAL`/`LET_LOCAL`/…) over the symbol path.
-    resolutions: HashMap<usize, Option<(usize, u32)>>,
+    resolutions: NodeTable<Option<(usize, u32)>>,
     /// `hoister->firstExportLink` — the exported names seen so far, for
     /// duplicate-export detection.
     export_links: Vec<Sym>,
     /// Next anonymous-symbol id. (Reserved for class computed-key slots.)
     anon: u32,
-    /// A class node address → its synthesized `instanceInit` closure
+    /// A class node ID → its synthesized `instanceInit` closure
     /// declare `(scope, id)`, when the class has instance data fields
     /// (`self->instanceInitAccess->declaration`). The coder reads it to
     /// store the field function (`CONST_CLOSURE`) and the base constructor
     /// reads its capturing alias to call it after entry.
-    class_instance_init: HashMap<usize, (usize, u32)>,
-    /// A `super(...)` node address → the capturing alias `(scope, id)` for
+    class_instance_init: NodeTable<(usize, u32)>,
+    /// A `super(...)` node ID → the capturing alias `(scope, id)` for
     /// the enclosing derived class's `instanceInit` closure (XS's
     /// `superNode->instanceInitAccess->declaration`). The coder reads it to
     /// call the field initializer after `super(...)` installs `this`.
-    super_instance_init: HashMap<usize, (usize, u32)>,
-    /// A class member node address → its synthesized class-scope closure
+    super_instance_init: NodeTable<(usize, u32)>,
+    /// A class member node ID → its synthesized class-scope closure
     /// declares (`atAccess` / `symbolAccess` / `valueAccess`).
-    class_member_access: HashMap<usize, MemberAccess>,
-    /// A class node address → its synthesized instance field-init function
+    class_member_access: NodeTable<MemberAccess>,
+    /// A class node ID → its synthesized instance field-init function
     /// scope (see [`ScopeTree::class_field_init_inst`]).
-    class_field_init_inst: HashMap<usize, usize>,
-    /// A class member node address → its field-init-function-scope member
+    class_field_init_inst: NodeTable<usize>,
+    /// A class member node ID → its field-init-function-scope member
     /// access aliases (see [`ScopeTree::class_member_fi`]).
-    class_member_fi: HashMap<usize, MemberAccess>,
-    /// A class node address → the instance field-init function scope created
+    class_member_fi: NodeTable<MemberAccess>,
+    /// A class node ID → the instance field-init function scope created
     /// at **hoist** time (XS's `instanceInit` function node scope). The
     /// instance field VALUES are hoisted inside it so their nested
     /// function/class scopes chain through it (a value's inner function that
     /// reads an outer binding — or a private brand — captures via the field
     /// function, not the class scope). The bind pass re-enters this scope to
     /// bind the values and create the member-access use-closure aliases.
-    class_field_init_hoist: HashMap<usize, usize>,
-    /// A class node address → the **static** field-init function scope (XS's
+    class_field_init_hoist: NodeTable<usize>,
+    /// A class node ID → the **static** field-init function scope (XS's
     /// `constructorInit`) created at hoist time, holding the static field
     /// values and `static { … }` block bodies.
-    class_field_init_static_hoist: HashMap<usize, usize>,
-    /// A class node address → its bind-time static field-init function scope
+    class_field_init_static_hoist: NodeTable<usize>,
+    /// A class node ID → its bind-time static field-init function scope
     /// (see [`ScopeTree::class_field_init_static`]).
-    class_field_init_static: HashMap<usize, usize>,
-}
-
-fn node_ptr(n: &Node) -> usize {
-    n as *const Node as usize
+    class_field_init_static: NodeTable<usize>,
 }
 
 fn err(line: u32, msg: &str) -> ParseError {
@@ -734,14 +726,15 @@ fn child_list<'a>(n: &'a Node, i: usize) -> Option<&'a [Item]> {
 
 impl Scoper<'_> {
     fn node_flags(&self, n: &Node) -> u32 {
-        n.flags | self.node_extra.get(&node_ptr(n)).copied().unwrap_or(0)
+        n.flags | self.node_extra.get(&node_id(n)).copied().unwrap_or(0)
     }
-    fn add_extra(&mut self, ptr: usize, bits: u32) {
-        *self.node_extra.entry(ptr).or_insert(0) |= bits;
+    fn add_extra(&mut self, ptr: u32, bits: u32) {
+        let extra = self.node_extra.get(&ptr).copied().unwrap_or(0) | bits;
+        self.node_extra.insert(ptr, extra);
     }
     fn scope_node_flags(&self, si: usize) -> u32 {
         let sc = &self.scopes[si];
-        sc.node_base_flags | self.node_extra.get(&sc.node_ptr).copied().unwrap_or(0)
+        sc.node_base_flags | self.node_extra.get(&sc.node_id).copied().unwrap_or(0)
     }
 
     // ===================== scope helpers (xsScope.c top) =====================
@@ -749,7 +742,7 @@ impl Scoper<'_> {
     /// `fxScopeNew`.
     fn scope_new(&mut self, node: &Node, token: Token) -> usize {
         let parent = self.scope;
-        let sc = Scope::new(parent, token, node_ptr(node), self.node_flags(node));
+        let sc = Scope::new(parent, token, node_id(node), self.node_flags(node));
         let id = self.scopes.len();
         self.scopes.push(sc);
         self.declare_indexes.push(None);
@@ -973,7 +966,7 @@ impl Scoper<'_> {
         // The node's direct-`eval` extra is now populated (a body-level
         // `eval` call was hoisted before this). Record it so the coder can
         // tell a genuine direct `eval` from a `with`-poisoned scope.
-        let ptr = self.scopes[si].node_ptr;
+        let ptr = self.scopes[si].node_id;
         if self.node_extra.get(&ptr).copied().unwrap_or(0) & SCOPE_EVAL != 0 {
             self.scopes[si].direct_eval = true;
         }
@@ -1255,7 +1248,7 @@ impl Scoper<'_> {
                     }
                     _ => continue,
                 }
-                self.class_member_access.insert(node_ptr(m), access);
+                self.class_member_access.insert(node_id(m), access);
             }
         }
         // A class with instance data fields synthesizes an `instanceInit`
@@ -1268,9 +1261,9 @@ impl Scoper<'_> {
             let mut d = self.new_declare(si, Token::Const, Some(sym), node.line);
             d.flags |= dflags::CLOSURE;
             let id = self.scope_add_declare(si, d);
-            self.class_instance_init.insert(node_ptr(node), (si, id));
+            self.class_instance_init.insert(node_id(node), (si, id));
         }
-        self.class_node = Some(node_ptr(node));
+        self.class_node = Some(node_id(node));
         if let Some(constructor) = child(node, 5) {
             self.hoist_item(constructor)?;
         }
@@ -1344,19 +1337,18 @@ impl Scoper<'_> {
         // `constructorInit` before `instanceInit`.
         if class_has_constructor_init_member(node) {
             let ci = self.hoist_field_init_scope(&static_ci_values, true)?;
-            self.class_field_init_static_hoist
-                .insert(node_ptr(node), ci);
+            self.class_field_init_static_hoist.insert(node_id(node), ci);
         }
         if engage {
             let fi = self.hoist_field_init_scope(&inst_data_values, false)?;
-            self.class_field_init_hoist.insert(node_ptr(node), fi);
+            self.class_field_init_hoist.insert(node_id(node), fi);
         }
         self.class_node = former;
         self.fx_scope_hoisted(si);
         if let Some(ss) = symbol_scope {
             self.fx_scope_hoisted(ss);
         }
-        self.node_scope.insert(node_ptr(node), (si, symbol_scope));
+        self.node_scope.insert(node_id(node), (si, symbol_scope));
         Ok(())
     }
 
@@ -1390,8 +1382,8 @@ impl Scoper<'_> {
         let si = self.scope_new(node, token);
         self.function_scope = Some(si);
         self.body_scope = Some(si);
-        self.node_scope.insert(node_ptr(node), (si, None));
-        self.environment_node = Some(node_ptr(node));
+        self.node_scope.insert(node_id(node), (si, None));
+        self.environment_node = Some(node_id(node));
         if let Some(body) = child(node, 0) {
             self.hoist_item(body)?;
         }
@@ -1405,8 +1397,8 @@ impl Scoper<'_> {
         let si = self.scope_new(node, Token::Module);
         self.function_scope = Some(si);
         self.body_scope = Some(si);
-        self.node_scope.insert(node_ptr(node), (si, None));
-        self.environment_node = Some(node_ptr(node));
+        self.node_scope.insert(node_id(node), (si, None));
+        self.environment_node = Some(node_id(node));
         if let Some(body) = child(node, 0) {
             self.hoist_item(body)?;
         }
@@ -1417,7 +1409,7 @@ impl Scoper<'_> {
 
     fn hoist_block(&mut self, node: &Node) -> Result<(), ParseError> {
         let si = self.scope_new(node, Token::Block);
-        self.node_scope.insert(node_ptr(node), (si, None));
+        self.node_scope.insert(node_id(node), (si, None));
         if let Some(stmt) = child(node, 0) {
             self.hoist_item(stmt)?;
         }
@@ -1428,9 +1420,9 @@ impl Scoper<'_> {
     fn hoist_body(&mut self, node: &Node) -> Result<(), ParseError> {
         let si = self.scope_new(node, Token::Block);
         self.body_scope = Some(si);
-        self.node_scope.insert(node_ptr(node), (si, None));
+        self.node_scope.insert(node_id(node), (si, None));
         let env = self.environment_node;
-        self.environment_node = Some(node_ptr(node));
+        self.environment_node = Some(node_id(node));
         if let Some(stmt) = child(node, 0) {
             self.hoist_item(stmt)?;
         }
@@ -1445,7 +1437,7 @@ impl Scoper<'_> {
         let si = self.scope_new(node, Token::Function);
         self.function_scope = Some(si);
         self.body_scope = None;
-        self.node_scope.insert(node_ptr(node), (si, None));
+        self.node_scope.insert(node_id(node), (si, None));
         // named function expression: a CONST self-binding define.
         if let Some(sym) = child_sym(node, 0) {
             let s = Sym::Named(sym);
@@ -1492,7 +1484,7 @@ impl Scoper<'_> {
                     if sym == "eval" {
                         self.scope_eval(self.scope);
                         if let Some(fs) = self.function_scope {
-                            let fptr = self.scopes[fs].node_ptr;
+                            let fptr = self.scopes[fs].node_id;
                             self.add_extra(fptr, flags::ARGUMENTS | SCOPE_EVAL);
                         }
                         if let Some(env) = self.environment_node {
@@ -1529,7 +1521,7 @@ impl Scoper<'_> {
             self.fx_scope_hoisted(statement_scope);
             self.fx_scope_hoisted(scope);
             self.node_scope
-                .insert(node_ptr(node), (scope, Some(statement_scope)));
+                .insert(node_id(node), (scope, Some(statement_scope)));
             // duplicate: a statementScope declare that also names a
             // parameter is a redeclaration error.
             let names: Vec<(Option<Sym>, u32)> = self.scopes[statement_scope]
@@ -1551,7 +1543,7 @@ impl Scoper<'_> {
             }
             self.fx_scope_hoisted(statement_scope);
             self.node_scope
-                .insert(node_ptr(node), (statement_scope, None));
+                .insert(node_id(node), (statement_scope, None));
         }
         Ok(())
     }
@@ -1754,7 +1746,7 @@ impl Scoper<'_> {
         let si = self.scope_new(node, Token::Function);
         self.function_scope = Some(si);
         self.body_scope = None;
-        self.node_scope.insert(node_ptr(node), (si, None));
+        self.node_scope.insert(node_id(node), (si, None));
         if let Some(params) = child(node, 1) {
             self.hoist_item(params)?;
         }
@@ -1797,7 +1789,7 @@ impl Scoper<'_> {
 
     fn hoist_for(&mut self, node: &Node) -> Result<(), ParseError> {
         let si = self.scope_new(node, Token::Block);
-        self.node_scope.insert(node_ptr(node), (si, None));
+        self.node_scope.insert(node_id(node), (si, None));
         for i in 0..4 {
             if let Some(c) = child(node, i) {
                 self.hoist_item(c)?;
@@ -1809,7 +1801,7 @@ impl Scoper<'_> {
 
     fn hoist_for_in_of(&mut self, node: &Node) -> Result<(), ParseError> {
         let si = self.scope_new(node, Token::Block);
-        self.node_scope.insert(node_ptr(node), (si, None));
+        self.node_scope.insert(node_id(node), (si, None));
         for i in 0..3 {
             if let Some(c) = child(node, i) {
                 self.hoist_item(c)?;
@@ -1825,7 +1817,7 @@ impl Scoper<'_> {
             self.hoist_item(expr)?;
         }
         let si = self.scope_new(node, Token::Block);
-        self.node_scope.insert(node_ptr(node), (si, None));
+        self.node_scope.insert(node_id(node), (si, None));
         if let Some(items) = child(node, 1) {
             self.hoist_item(items)?;
         }
@@ -1839,7 +1831,7 @@ impl Scoper<'_> {
             self.hoist_item(expr)?;
         }
         let si = self.scope_new(node, Token::With);
-        self.node_scope.insert(node_ptr(node), (si, None));
+        self.node_scope.insert(node_id(node), (si, None));
         self.scope_eval(self.scopes[si].parent);
         if let Some(stmt) = child(node, 1) {
             self.hoist_item(stmt)?;
@@ -2125,7 +2117,7 @@ impl Scoper<'_> {
             self.bind_item(heritage)?;
         }
         self.fx_scope_binding(si);
-        self.class_node = Some(node_ptr(node));
+        self.class_node = Some(node_id(node));
         if let Some(constructor) = child(node, 5) {
             self.bind_item(constructor)?;
         }
@@ -2212,7 +2204,7 @@ impl Scoper<'_> {
         if !static_methods.is_empty() || !static_data.is_empty() {
             let ci = *self
                 .class_field_init_static_hoist
-                .get(&node_ptr(node))
+                .get(&node_id(node))
                 .expect("static field function scope hoisted");
             let ordered: Vec<&Node> = static_methods
                 .iter()
@@ -2220,12 +2212,12 @@ impl Scoper<'_> {
                 .copied()
                 .collect();
             self.bind_field_init_scope(ci, si, &ordered)?;
-            self.class_field_init_static.insert(node_ptr(node), ci);
+            self.class_field_init_static.insert(node_id(node), ci);
         }
         if engage {
             let fi = *self
                 .class_field_init_hoist
-                .get(&node_ptr(node))
+                .get(&node_id(node))
                 .expect("instance field function scope hoisted");
             let ordered: Vec<&Node> = inst_methods
                 .iter()
@@ -2233,7 +2225,7 @@ impl Scoper<'_> {
                 .copied()
                 .collect();
             self.bind_field_init_scope(fi, si, &ordered)?;
-            self.class_field_init_inst.insert(node_ptr(node), fi);
+            self.class_field_init_inst.insert(node_id(node), fi);
         }
         self.class_node = former;
         self.fx_scope_bound(si);
@@ -2274,7 +2266,7 @@ impl Scoper<'_> {
             }
             let access = self
                 .class_member_access
-                .get(&node_ptr(m))
+                .get(&node_id(m))
                 .copied()
                 .unwrap_or_default();
             let is_accessor = m.flags & (flags::METHOD | flags::GETTER | flags::SETTER) != 0;
@@ -2297,7 +2289,7 @@ impl Scoper<'_> {
                 }
                 _ => {}
             }
-            self.class_member_fi.insert(node_ptr(m), fi_slot);
+            self.class_member_fi.insert(node_id(m), fi_slot);
             // A private method has no value in the field function (its function
             // bound at the class scope); every other field's value binds here.
             let private_method = m.token == Token::PrivateProperty && is_accessor;
@@ -2334,10 +2326,7 @@ impl Scoper<'_> {
     }
 
     fn scope_of(&self, node: &Node) -> (usize, Option<usize>) {
-        *self
-            .node_scope
-            .get(&node_ptr(node))
-            .expect("scope for node")
+        *self.node_scope.get(&node_id(node)).expect("scope for node")
     }
 
     fn bind_program(&mut self, node: &Node) -> Result<(), ParseError> {
@@ -2422,7 +2411,7 @@ impl Scoper<'_> {
             let resolved =
                 self.scope_lookup(scope, &Sym::Named(sym.clone()), node.line, false, false);
             self.record_access(&sym, node.line, resolved);
-            self.resolutions.insert(node_ptr(node), resolved);
+            self.resolutions.insert(node_id(node), resolved);
         }
         Ok(())
     }
@@ -2466,7 +2455,7 @@ impl Scoper<'_> {
             if resolved.is_none() {
                 return Err(err(node.line, "invalid private identifier"));
             }
-            self.resolutions.insert(node_ptr(node), resolved);
+            self.resolutions.insert(node_id(node), resolved);
         }
         if let Some(reference) = child(node, 1) {
             self.bind_item(reference)?;
@@ -2487,7 +2476,7 @@ impl Scoper<'_> {
                 self.declare_mut(rscope, rid).bound = true;
             }
             self.record_access(&sym, node.line, resolved);
-            self.resolutions.insert(node_ptr(node), resolved);
+            self.resolutions.insert(node_id(node), resolved);
         }
         Ok(())
     }
@@ -2501,7 +2490,7 @@ impl Scoper<'_> {
                 self.declare_mut(rscope, rid).bound = true;
             }
             self.record_access(&sym, node.line, resolved);
-            self.resolutions.insert(node_ptr(node), resolved);
+            self.resolutions.insert(node_id(node), resolved);
         }
         if let Some(init) = child(node, 1) {
             self.bind_item(init)?;
@@ -2690,7 +2679,7 @@ impl Scoper<'_> {
                     if value.token == Token::Function || value.token == Token::Generator {
                         let bits = p.flags & (flags::METHOD | flags::GETTER | flags::SETTER);
                         if bits != 0 {
-                            self.add_extra(node_ptr(value), bits);
+                            self.add_extra(node_id(value), bits);
                         }
                     }
                 }
@@ -2829,7 +2818,7 @@ impl Scoper<'_> {
                     let scope = self.scope.unwrap();
                     if let Some(resolved) = self.scope_lookup(scope, &sym, node.line, false, false)
                     {
-                        self.super_instance_init.insert(node_ptr(node), resolved);
+                        self.super_instance_init.insert(node_id(node), resolved);
                     }
                 }
             }
@@ -3029,7 +3018,8 @@ mod lazy_declare_index_tests {
     #[test]
     fn empty_lookup_and_reindex_stay_lazy_then_track_stable_declaration_ids() {
         let mut scoper = Scoper::default();
-        let node = Node::leaf(Token::Block, 1);
+        let mut node = Node::leaf(Token::Block, 1);
+        node.id = 0;
         let scope = scoper.scope_new(&node, Token::Block);
         let name = Sym::Named("x".into());
         assert!(scoper.declare_indexes[scope].is_none());
@@ -3095,10 +3085,7 @@ mod compiler_access_log_tests {
                 (&public.class_member_access, &private.class_member_access),
                 (&public.class_member_fi, &private.class_member_fi),
             ] {
-                assert_eq!(logged.len(), unlogged.len());
-                for (key, value) in logged {
-                    assert_eq!(format!("{value:?}"), format!("{:?}", unlogged[key]));
-                }
+                assert_eq!(logged, unlogged);
             }
             // The public convenience entry points retain their diagnostic contract.
             assert!(!run(&root).unwrap().accesses.is_empty());

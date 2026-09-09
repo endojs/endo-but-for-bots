@@ -172,6 +172,9 @@ fn duplicate_proto_setter_line(item: &Item) -> Option<u32> {
 /// The parser: the token window (`states[0]`/`states[1]`), the mode-flag
 /// word (`parser->flags`), and the node-build stack (`parser->root`).
 pub struct Parser<'a> {
+    // Interior mutability also serves off-stack cover-grammar constructors.
+    // None records exhaustion; no tree with exhausted identities is published.
+    next_node_id: std::cell::Cell<Option<u32>>,
     lexer: Lexer<'a>,
     /// `parser->states[0]` — the current token.
     cur: Lexeme,
@@ -223,6 +226,7 @@ impl<'a> Parser<'a> {
         lexer.skip_shebang();
         let cur = lexer.next()?;
         Ok(Parser {
+            next_node_id: std::cell::Cell::new(Some(0)),
             lexer,
             cur,
             ahead: None,
@@ -234,13 +238,38 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// Allocate identities at every construction site, including nodes built
+    /// off the stack. IDs need not be contiguous after cover-grammar rewrites.
+    fn new_node(
+        &self,
+        token: Token,
+        line: u32,
+        flags: u32,
+        children: Vec<Item>,
+        value: Value,
+    ) -> Node {
+        let id = self.next_node_id.get().unwrap_or(u32::MAX);
+        self.next_node_id.set(id.checked_add(1));
+        let mut node = Node::new(token, line, flags, children, value);
+        node.id = id;
+        node
+    }
+
+    fn finish_tree(&self, root: Item) -> PResult<Item> {
+        if self.next_node_id.get().is_none() {
+            return Err(self.error("too many AST nodes"));
+        }
+        Ok(root)
+    }
+
     /// Parse a single expression (an `AssignmentExpression` — XS's
     /// `fxAssignmentExpression`), the entry point the fixture tests use.
     /// Returns the sole tree item; errors if input remains.
     pub fn parse_assignment_expression(&mut self) -> PResult<Item> {
         self.assignment_expression()?;
         self.expect_eof()?;
-        Ok(self.pop())
+        let root = self.pop();
+        self.finish_tree(root)
     }
 
     /// Parse a full comma expression (`fxCommaExpression`) to end of
@@ -248,7 +277,8 @@ impl<'a> Parser<'a> {
     pub fn parse_comma_expression(&mut self) -> PResult<Item> {
         self.comma_expression()?;
         self.expect_eof()?;
-        Ok(self.pop())
+        let root = self.pop();
+        self.finish_tree(root)
     }
 
     /// The parse meter (ironhorse's own frozen cost table), for telemetry
@@ -392,7 +422,7 @@ impl<'a> Parser<'a> {
     }
 
     fn push_integer(&mut self, value: i32, line: u32) {
-        self.push(Item::Node(Box::new(Node::new(
+        self.push(Item::Node(Box::new(self.new_node(
             Token::Integer,
             line,
             0,
@@ -402,7 +432,7 @@ impl<'a> Parser<'a> {
     }
 
     fn push_number(&mut self, value: f64, line: u32) {
-        self.push(Item::Node(Box::new(Node::new(
+        self.push(Item::Node(Box::new(self.new_node(
             Token::Number,
             line,
             0,
@@ -424,7 +454,7 @@ impl<'a> Parser<'a> {
         if legacy {
             flags |= flags::STRING_LEGACY;
         }
-        self.push(Item::Node(Box::new(Node::new(
+        self.push(Item::Node(Box::new(self.new_node(
             Token::String,
             line,
             flags,
@@ -443,7 +473,7 @@ impl<'a> Parser<'a> {
         if error {
             flags |= flags::STRING_ERROR;
         }
-        self.push(Item::Node(Box::new(Node::new(
+        self.push(Item::Node(Box::new(self.new_node(
             Token::String,
             line,
             flags,
@@ -480,7 +510,7 @@ impl<'a> Parser<'a> {
     }
 
     fn push_raw(&mut self, value: Vec<u16>, line: u32) {
-        self.push(Item::Node(Box::new(Node::new(
+        self.push(Item::Node(Box::new(self.new_node(
             Token::String,
             line,
             0,
@@ -490,7 +520,7 @@ impl<'a> Parser<'a> {
     }
 
     fn push_bigint(&mut self, value: crate::lexer::BigIntLiteral, line: u32) {
-        self.push(Item::Node(Box::new(Node::new(
+        self.push(Item::Node(Box::new(self.new_node(
             Token::Bigint,
             line,
             0,
@@ -509,7 +539,7 @@ impl<'a> Parser<'a> {
         }
         let start = self.stack.len() - count;
         let children: Vec<Item> = self.stack.split_off(start);
-        let node = Node::new(
+        let node = self.new_node(
             token,
             line,
             self.flags & flags::INHERITED,
@@ -566,7 +596,7 @@ impl<'a> Parser<'a> {
     /// exactly as `fxPushNodeStruct` would (used by the off-stack
     /// cover-grammar binding conversions).
     fn new_inherited_node(&self, token: Token, line: u32, children: Vec<Item>) -> Item {
-        Item::Node(Box::new(Node::new(
+        Item::Node(Box::new(self.new_node(
             token,
             line,
             self.flags & flags::INHERITED,
@@ -581,7 +611,7 @@ impl<'a> Parser<'a> {
     fn push_define(&mut self, symbol: impl Into<SymbolName>, line: u32) {
         let symbol = symbol.into();
         let init = self.pop();
-        self.push(Item::Node(Box::new(Node::new(
+        self.push(Item::Node(Box::new(self.new_node(
             Token::Define,
             line,
             0,
@@ -2213,3 +2243,6 @@ mod stmt;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod node_identity_tests;
