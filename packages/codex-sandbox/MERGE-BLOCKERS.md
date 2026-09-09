@@ -109,6 +109,15 @@ The broker's own credential lifecycle no longer waits on that question: it
 tracks expiry, refreshes under a single-flight guard, rotates the stored state
 through a rotate-only capability that carries no `revoke`, `delete`, or
 `setDescription`, and retries a rejected credential exactly once.
+The guard excludes only the holders that share one credential object, which the
+composer must make one per secret record; that is an invariant it states, not a
+property the code enforces.
+What the code does enforce is the write: every rotation is pinned to the
+generation it read, so a refresh that races an operator's replacement is
+refused rather than overwriting it.
+That bounds the damage of a violated invariant to a failed turn rather than a
+corrupted grant — it does not stop two holders presenting the same refresh
+token upstream.
 `BrokerLeaseV1` now carries `authMode`, so an operator can pin the mode it
 accepts and refuse a lease issued in the other.
 The claim it carries is narrow: the broker core refuses to exist in `oauth` mode

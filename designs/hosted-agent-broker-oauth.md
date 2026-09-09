@@ -21,7 +21,12 @@ Implemented in this pass:
   echo screening that covers both tokens in every form, accumulated across the
   retry.
 - `packages/hosted-agent/src/secret-rotator.js` — the rotate-only attenuation
-  of a secret administration facet.
+  of a secret administration facet, applied by the credential itself so the
+  narrow capability is minted where it is used.
+- `packages/daemon/src/secret-manager.js` — `readBase64WithGeneration` returns
+  the version the bytes came from, and `replaceBase64` takes an `ifGeneration`
+  precondition, so a holder deriving a new value from a secret can pin its
+  write to the version it read.
 - `packages/hosted-agent/src/provider-transport.js` — `anthropic-beta` added to
   the header allowlist, and a 401 classification so the broker can tell "the
   token is bad" from "the request is bad".
@@ -277,17 +282,42 @@ refresh token on use reads a second redemption as a replay and revokes the whole
 grant, killing the credential the first exchange just stored.
 
 That is why `makeBrokerOAuthCredential` is built once per secret record and
-handed to every lease over it, rather than being assembled inside each lease.
-The refresh token belongs to the record; a guard on the lease would leave two
-concurrent sessions on one account each redeeming it.
+handed to every lease over it, rather than being assembled inside a lease or a
+lease issuer.
+The refresh token belongs to the record; a guard anywhere narrower leaves two
+holders on one account each redeeming it.
+An earlier revision of this design placed the guard on the lease, and a later
+one on the lease issuer; both were caught by review, the second in a trial
+against a live secret manager.
+The lesson is worth stating plainly, because the mistake was made twice: the
+guard has to sit exactly where the thing it protects sits, and an issuer is not
+a record any more than a lease is.
 The guard also re-reads the record before exchanging, so a caller that lost the
-race — to another lease, or to an operator's re-grant — takes what is now stored
-instead of replaying the token it was holding.
+race takes what is now stored instead of replaying the token it was holding.
 
-What remains is a genuine last-writer-wins window against an operator re-grant
-that lands mid-exchange.
-Closing it needs a compare-and-swap the secret manager does not currently
-offer; the re-read narrows it to the duration of one token round trip.
+Exclusive ownership cannot be *enforced* from inside the module — a second
+daemon over the same record is outside its reach — so it is stated as an
+invariant and backed by a mechanism that limits the damage when it is violated.
+Every rotation is pinned to the generation it read
+(`SecretAdmin.replaceBase64(bytes, { ifGeneration })`), so a write that lost a
+race is refused instead of overwriting a grant it never saw.
+
+It is worth being exact about what that pin does and does not cover, because it
+is tempting to read it as a fix for the whole problem.
+It covers the *record*: two holders cannot clobber each other's state.
+It does **not** cover the *provider*: by the time a write is refused, both
+holders have already presented the same refresh token upstream, and that
+presentation is what a provider with replay detection treats as a breach.
+Only one credential per record prevents that, and only the composer can
+guarantee it.
+The pin is what keeps a violated invariant from also corrupting the stored
+grant; it is not what keeps the invariant.
+On a refused write the exchange result is discarded rather than returned: if
+the generation moved, another holder rotated and theirs is what every reader
+will see; if it did not, the write itself failed and the stored credential is
+the one this exchange already spent, so there is nothing safe to hand out.
+That is what makes the invariant recoverable when it is broken rather than
+merely asserted.
 
 ### One retry, on one classification
 
@@ -398,10 +428,6 @@ session — which is the same bound every other row of this table carries.
       The unit suite covers refresh, expiry, account switching, refresh-token
       replay across two leases, quota accounting, and redaction; the rest need
       the live gate.
-- [ ] Give the rotation a compare-and-swap, so an operator re-grant that lands
-      during a token exchange is not overwritten by it.
-      The re-read inside the single-flight guard narrows that window to one
-      round trip but cannot close it without support in the secret manager.
 - [ ] Decide whether a persistently rejected credential deserves negative
       caching.
       Today each admitted turn costs one exchange and one secret write; the
