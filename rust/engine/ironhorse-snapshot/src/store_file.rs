@@ -1185,6 +1185,74 @@ mod tests {
     }
 
     #[test]
+    fn migration_splices_refuse_truncation_and_offset_overflow() {
+        let dir = tmp_dir("migration-splice-refusals");
+        let path = dir.join("heap.ihstore");
+        let mut store = FileStore::open(&path).unwrap();
+        store
+            .commit(&image_to_batch_unchecked(&ran_image(), 1, ""))
+            .unwrap();
+        let manifest = store.manifest().unwrap();
+        let small = store.read_small_state().unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        store.replace_manifest_for_migration(&manifest).unwrap();
+        store
+            .replace_manifest_and_small_for_migration(&manifest, &small)
+            .unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        let manifest_end = 12 + manifest.encode().len();
+        for cut in [0, 8, 11] {
+            std::fs::write(&path, &bytes[..cut]).unwrap();
+            assert_eq!(
+                store.replace_manifest_for_migration(&manifest),
+                Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                    "store file header truncated"
+                )))
+            );
+            assert_eq!(
+                store.replace_manifest_and_small_for_migration(&manifest, &small),
+                Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                    "store file header truncated"
+                )))
+            );
+            assert_eq!(std::fs::read(&path).unwrap(), bytes[..cut]);
+        }
+        for cut in [12, manifest_end - 1] {
+            std::fs::write(&path, &bytes[..cut]).unwrap();
+            assert_eq!(
+                store.replace_manifest_for_migration(&manifest),
+                Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                    "store file manifest region truncated"
+                )))
+            );
+            assert_eq!(std::fs::read(&path).unwrap(), bytes[..cut]);
+        }
+        let directory = manifest_end + 4 + small.len() + 8;
+        assert!(u32::from_be_bytes(bytes[directory - 8..directory - 4].try_into().unwrap()) > 0);
+        for grow in [false, true] {
+            let mut invalid = bytes.clone();
+            let offset = if grow { u64::MAX } else { 0 };
+            invalid[directory..directory + 8].copy_from_slice(&offset.to_be_bytes());
+            let mut changed = small.clone();
+            if grow {
+                changed.push(0);
+            } else {
+                changed.pop().unwrap();
+            }
+            std::fs::write(&path, &invalid).unwrap();
+            assert_eq!(
+                store.replace_manifest_and_small_for_migration(&manifest, &changed),
+                Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                    "store file directory offset overflow"
+                )))
+            );
+            assert_eq!(std::fs::read(&path).unwrap(), invalid);
+        }
+        std::fs::write(&path, &bytes).unwrap();
+        validate_store(&FileStore::open(&path).unwrap(), &sig()).unwrap();
+    }
+
+    #[test]
     fn foreign_magic_fails_closed() {
         let dir = tmp_dir("magic");
         let path = dir.join("heap.ihstore");
