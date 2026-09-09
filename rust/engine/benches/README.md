@@ -659,3 +659,42 @@ This variation prevents attributing the full-run failures to a particular
 helper move from these samples alone.
 It does not erase the two failed acceptance runs or replace the full benchmark
 gate with the focused diagnostic.
+
+## Regexp validation without program materialization (1A, F152)
+
+[results/1a-regexp-validation.json](results/1a-regexp-validation.json) compares
+`0721fea94` with the validation-seam working tree on macOS arm64 and Rust 1.91.1.
+The standalone [driver](regexp_validation.rs) checks identical compiled programs,
+metadata, errors, and raw totals for nine fixtures before timing either revision.
+This fixture comparison covers 379,112 bytes of formatted results.
+Separate oracle-free tests cover callback refusal, budget boundaries, named-group
+reparsing, resource limits, and the absence of code/program materialization.
+Validation retains the compiler's logical charges and storage admission policy.
+
+Successful validation fixtures take 0.651–0.957 times the old compilation time
+in the final observation.
+Compilation controls range from 0.953 to 1.039 times their prior time; the
+syntax-failure validation fixture is 0.995 times its prior time.
+These are observed ratios, without a statistical significance claim for small deltas.
+The [initial observation](results/1a-regexp-validation-initial.json) is retained,
+including its 1.018 syntax-failure validation ratio.
+The final run adds exact meter-source equality and checks candidate input hashes
+before and after measurement; both runs used the same runtime source contents.
+
+The [measurement script](measure_regexp_validation.py) builds both libraries with
+optimization level 3 and overflow checks, then rotates the three execution modes
+across eleven samples with five warmups per process.
+It targets 30 ms per sample but caps repetitions at 10,000, so cheap fixtures
+can have shorter samples.
+Every sample and the actual iteration counts are retained in the artifacts.
+Run it without concurrent builds or tests:
+
+```sh
+python3 rust/engine/benches/measure_regexp_validation.py \
+  --baseline 0721fea94 \
+  --output /tmp/regexp-validation.json
+```
+
+This measurement is scoped to F152 validation and does not replace the full 1A
+performance gate or resolve the retained helper-extraction benchmark failures.
+The Unicode identifier dependency still needs its separate leaf-crate move.

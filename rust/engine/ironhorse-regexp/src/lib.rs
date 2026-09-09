@@ -4,17 +4,19 @@
 //! question 6 (the matcher is ported as an engine-internal module; the
 //! JavaScript `RegExp` surface is child 9's integration).
 //!
-//! It delivers the two halves of the pin's engine:
+//! It provides compilation, validation, and matching:
 //!
-//! - [`compile`] — the `fxCompileRegExp` pipeline: recursive-descent
+//! - [`compile()`] — the `fxCompileRegExp` pipeline: recursive-descent
 //!   parse into a term tree, a `measure` pass assigning each term its
 //!   byte offset, and a `code` pass emitting the integer step stream.
 //!   The compile meter (`XS_PARSE_REGEXP_METERING`) is carried through so
-//!   child 9 can calibrate end-to-end.
+//!   the JavaScript surface can retain compilation charges.
+//! - [`validate`] — the same grammar, resource limits, and logical work
+//!   charges, without allocating a code buffer or constructing a program.
 //! - [`match_regexp`] — the `fxMatchRegExp` backtracking VM over that
 //!   step stream, metering `XS_REGEXP_METERING` per dispatched step.
 //!
-//! Both are `#![forbid(unsafe_code)]`: the arena/`Vec` model removes the
+//! The crate is `#![forbid(unsafe_code)]`: the arena/`Vec` model removes the
 //! raw pointers XS uses, so the compiler and matcher are compiler-checked
 //! memory-safe. Only `xs-oracle` (the dev/CI differential harness)
 //! links C.
@@ -54,8 +56,8 @@ pub mod matcher;
 pub mod unicode;
 
 pub use compile::{
-    compile, compile_checked, CompileError, CompileOutcome, Program, COMPILE_CHECK_STRIDE,
-    MAX_NESTING_DEPTH,
+    compile, compile_checked, validate, validate_checked, CompileError, CompileOutcome, Program,
+    ValidationOutcome, COMPILE_CHECK_STRIDE, MAX_NESTING_DEPTH,
 };
 pub use flags::{
     XS_REGEXP_D, XS_REGEXP_G, XS_REGEXP_I, XS_REGEXP_M, XS_REGEXP_N, XS_REGEXP_S, XS_REGEXP_U,

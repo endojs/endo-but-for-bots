@@ -1258,7 +1258,7 @@ impl<'a> Lexer<'a> {
             charged = raw;
             admitted
         };
-        let outcome = ironhorse_regexp::compile_checked(&body, &flags, u64::MAX, Some(&mut check));
+        let outcome = ironhorse_regexp::validate_checked(&body, &flags, u64::MAX, Some(&mut check));
         if !self.meter.charge_raw(outcome.work_meter_raw - charged) {
             return Err(self.err(LexErrorKind::RegExpBudgetExceeded));
         }
