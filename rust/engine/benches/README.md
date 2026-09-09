@@ -1067,3 +1067,23 @@ Source locks, 1,490 engine tests, 116 SQLite tests, strict VM library Clippy, an
 the math check passed; rustdoc retained 61 warnings.
 The runtime, source-lock, and benchmark candidate changes were reverted.
 This extraction is rejected.
+
+## Rejected native-identity extraction (1A)
+
+[results/1a-native-ids.json](results/1a-native-ids.json) preserves a candidate
+that moved `MathId`, `NativeMethod`, `Native`, and `impl Native` into
+`interp/natives/ids.rs`, starting from `ddbf4960e`.
+It reduced the parent from 31,073 to 29,817 lines while preserving public import
+paths, variants, derives, intrinsic order, and method bodies under independent review.
+The GC type-graph and allocation inventories followed the moved definitions.
+
+Five sliding-checkpoint controls failed the unchanged 1.25x gate, ranging from
+1.259x to 1.302x.
+The initial before/after reports and complete candidate patch remain in the artifact.
+No additional timing trials were run; the observations do not establish their cause.
+All runtime and source-lock candidate changes were reverted.
+
+Source locks passed before and after the move.
+Full engine CI passed 1,490 tests, SQLite passed 116, and strict VM library Clippy
+and the math check passed; VM rustdoc retained 61 warnings.
+This extraction is rejected, and full 1A performance acceptance remains outstanding.
