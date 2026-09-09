@@ -123,8 +123,6 @@ iterator cursors: owners not strictly ascending	Side-table decoding guard; dedic
 iterator cursors: string cursor outside its text	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 iterator cursors: unknown kind	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 manifest parent seal length	Existing corruption guard; dedicated exact-label regression fixture deferred.
-manifest parent seal not utf8	Existing corruption guard; dedicated exact-label regression fixture deferred.
-manifest parent seal truncated	Existing corruption guard; dedicated exact-label regression fixture deferred.
 migration did not advance the store schema	Existing corruption guard; dedicated exact-label regression fixture deferred.
 name migration body	Existing corruption guard; dedicated exact-label regression fixture deferred.
 name migration header	Existing corruption guard; dedicated exact-label regression fixture deferred.
@@ -199,14 +197,7 @@ store free-list index out of range	Existing corruption guard; dedicated exact-la
 store leaf-hash inventory disagrees with geometry	Existing corruption guard; dedicated exact-label regression fixture deferred.
 store live/free/count accounting mismatch	Existing corruption guard; dedicated exact-label regression fixture deferred.
 store manifest epoch 0	Existing corruption guard; dedicated exact-label regression fixture deferred.
-store manifest root not utf8	Existing corruption guard; dedicated exact-label regression fixture deferred.
-store manifest root truncated	Existing corruption guard; dedicated exact-label regression fixture deferred.
 store manifest seal mismatch	Existing corruption guard; dedicated exact-label regression fixture deferred.
-store manifest seal not utf8	Existing corruption guard; dedicated exact-label regression fixture deferred.
-store manifest seal truncated	Existing corruption guard; dedicated exact-label regression fixture deferred.
-store manifest signature truncated	Existing corruption guard; dedicated exact-label regression fixture deferred.
-store manifest trailing bytes	Existing corruption guard; dedicated exact-label regression fixture deferred.
-store manifest truncated	Existing corruption guard; dedicated exact-label regression fixture deferred.
 store slot page fails its leaf hash	Existing corruption guard; dedicated exact-label regression fixture deferred.
 store slot page record	Existing corruption guard; dedicated exact-label regression fixture deferred.
 store version stamp mismatch	Existing corruption guard; dedicated exact-label regression fixture deferred.
@@ -225,5 +216,4 @@ temporal zoneds: time zone not UTF-8	Existing corruption guard; dedicated exact-
 typed-arrays side table: owners not strictly ascending	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 typed-arrays side table: unknown element kind	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 typed-arrays side table: view geometry past its buffer	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
-unsupported store schema version	Existing corruption guard; dedicated exact-label regression fixture deferred.
 wrapper side table: owners not strictly ascending	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
