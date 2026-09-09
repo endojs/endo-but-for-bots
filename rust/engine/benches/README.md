@@ -1160,3 +1160,25 @@ Full engine CI passed 1,491 tests, SQLite passed 116, and strict VM Clippy and t
 math check passed; VM rustdoc retained 61 warnings.
 The candidate and measurement fixture underwent independent adversarial review.
 The extraction is rejected; full 1A performance acceptance remains outstanding.
+
+## JSON codegen-unit diagnostic
+
+[results/1a-json-codegen-unit-diagnostic.json](results/1a-json-codegen-unit-diagnostic.json)
+records the rejected JSON move in two scratch archives with the same VM-only
+`codegen-units = 1` release override.
+The compiler invocations confirm the flag, and all builds finished before the
+saved binaries ran in the fixed before/after/after/before order.
+
+All 48 aggregate extraction ratios pass 1.25x, ranging from 0.781x to 1.028x.
+The four direct JSON controls range from 0.993x to 1.005x with identical results
+and raw charges, including parity with the previous default-profile experiment.
+This supports sensitivity to code-generation configuration, not a unique cause.
+
+The unsplit one-CGU baseline is also slower on four controls than the earlier
+default-profile reference, including the largest placeholder case at 1.739x.
+That historical contrast is not a newly paired control, but prevents treating a
+higher baseline as a demonstrated fix.
+Peak build memory is unavailable because macOS denied the timing wrapper's system
+query after a successful build; the completed binaries were reused.
+Both production workspace profiles remain unchanged.
+The JSON extraction and full-branch performance gate remain unaccepted.
