@@ -9585,6 +9585,139 @@ mod promise_decoder_refusals {
         state
     }
 
+    fn check_bounds(
+        state: &PromiseClusterSnapshot,
+        arrays: &[ArrayImage],
+        heap: &[Slot],
+    ) -> Result<(), SnapshotError> {
+        let lang = LangRows {
+            promise_cluster: state,
+            ..LangRows::EMPTY
+        };
+        check_image_slot_bounds(
+            heap,
+            &[],
+            arrays,
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &lang,
+            &[],
+            4,
+            &SymbolKeyImage::default(),
+            8,
+            CHUNK_HEADER,
+            &[],
+        )
+    }
+
+    #[test]
+    fn combinator_results_require_covering_array_rows() {
+        let mut state = combining();
+        for function in &mut state.functions {
+            function.name_chunk = CHUNK_HEADER as u32;
+        }
+        let arrays = [ArrayImage {
+            owner: 4,
+            length: 2,
+            items: vec![],
+        }];
+        assert_eq!(check_bounds(&state, &arrays, &[]), Ok(()));
+        assert_eq!(
+            check_bounds(&state, &[], &[]),
+            Err(SnapshotError::Corrupt(
+                "promise cluster: combinator's results Array has no row"
+            ))
+        );
+        for kind in [0, 1, 2, 3] {
+            for remaining in [3, u32::MAX] {
+                let mut invalid = state.clone();
+                invalid.combinators[0].kind = kind;
+                invalid.combinators[0].remaining = remaining;
+                assert_eq!(
+                    check_bounds(&invalid, &arrays, &[]),
+                    Err(SnapshotError::Corrupt(
+                        "promise cluster: remaining outside its element count"
+                    ))
+                );
+            }
+        }
+        let mut race = state.clone();
+        race.combinators[0].kind = 2;
+        for remaining in [0, 1] {
+            race.combinators[0].remaining = remaining;
+            assert_eq!(
+                check_bounds(&race, &arrays, &[]),
+                Err(SnapshotError::Corrupt(
+                    "promise cluster: remaining outside its element count"
+                ))
+            );
+        }
+        race.combinators[0].remaining = 2;
+        assert_eq!(check_bounds(&race, &arrays, &[]), Ok(()));
+        for kind in [2, 12] {
+            for index in [0, 1] {
+                let mut valid = state.clone();
+                valid.promises[0].reactions[0].kind = kind;
+                valid.promises[0].reactions[0].b = index;
+                assert_eq!(check_bounds(&valid, &arrays, &[]), Ok(()));
+            }
+            for index in [2, u32::MAX] {
+                let mut invalid = state.clone();
+                invalid.promises[0].reactions[0].kind = kind;
+                invalid.promises[0].reactions[0].b = index;
+                assert_eq!(
+                    check_bounds(&invalid, &arrays, &[]),
+                    Err(SnapshotError::Corrupt(
+                        "promise cluster: element index outside the results Array"
+                    ))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn capability_capture_fields_must_initialize_together() {
+        let state = PromiseClusterSnapshot {
+            functions: vec![PromiseFnRow {
+                function: 1,
+                promise: 2,
+                reject: false,
+                guard: u32::MAX,
+                name_chunk: CHUNK_HEADER as u32,
+            }],
+            ..PromiseClusterSnapshot::default()
+        };
+        let mut heap = vec![Slot::undefined(); 8];
+        heap[2].next = SlotIndex(3);
+        heap[3].next = SlotIndex(4);
+        for initialized in [false, true] {
+            for index in [3, 4] {
+                heap[index].kind = if initialized {
+                    Kind::Undefined
+                } else {
+                    Kind::Uninitialized
+                };
+            }
+            assert_eq!(check_bounds(&state, &[], &heap), Ok(()));
+        }
+        for initialized in [3, 4] {
+            heap[3].kind = Kind::Uninitialized;
+            heap[4].kind = Kind::Uninitialized;
+            heap[initialized].kind = Kind::Undefined;
+            assert_eq!(
+                check_bounds(&state, &[], &heap),
+                Err(SnapshotError::Corrupt(
+                    "promise cluster: mixed capability executor state"
+                ))
+            );
+        }
+    }
+
     #[test]
     fn promise_states_order_and_guard_sharing() {
         let baseline = valid();
