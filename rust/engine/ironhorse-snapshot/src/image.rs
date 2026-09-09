@@ -4784,8 +4784,9 @@ pub(crate) fn decode_stack(p: &[u8]) -> Result<Vec<Slot>, SnapshotError> {
 /// written in the canonical order `VERS SIGN CREA BLOC HEAP STAC KEYS NAME
 /// SYMB METR` (the order `xsSnapshot.c` emits, with the ironhorse-specific
 /// `METR` meter atom last), so two writes of the same image are
-/// byte-identical.
-pub fn write_machine(image: &GatedImage) -> Vec<u8> {
+/// byte-identical. Returns a framing error if an atom or the complete
+/// envelope exceeds the u32 wire size.
+pub fn write_machine(image: &GatedImage) -> Result<Vec<u8>, SnapshotError> {
     encode_machine(image.image())
 }
 
@@ -4794,10 +4795,10 @@ pub fn write_machine(image: &GatedImage) -> Vec<u8> {
 /// [`write_machine`] with a [`GatedImage`].
 #[cfg(any(test, feature = "unchecked-tooling"))]
 pub fn write_machine_unchecked(image: &MachineImage) -> Vec<u8> {
-    encode_machine(image)
+    encode_machine(image).expect("tooling image fits the atom container")
 }
 
-fn encode_machine(image: &MachineImage) -> Vec<u8> {
+fn encode_machine(image: &MachineImage) -> Result<Vec<u8>, SnapshotError> {
     let mut w = AtomWriter::new();
     let mut version = image.version.clone();
     // Preserve the wire format when rewriting a legacy scalar-only image.
@@ -4817,16 +4818,16 @@ fn encode_machine(image: &MachineImage) -> Vec<u8> {
         version.format_version = version.format_version.max(15);
         encode_names(&image.names)
     };
-    w.atom(VERS, &version.encode());
-    w.atom(SIGN, &image.signature.encode());
-    w.atom(CREA, &image.creation.encode());
-    w.atom(BLOC, &image.chunks);
-    w.atom(HEAP, &encode_heap(image));
-    w.atom(STAC, &encode_stack(&image.stack));
-    w.atom(KEYS, &encode_strings(&image.keys));
-    w.atom(NAME, &names);
-    w.atom(SYMB, &encode_symbol_keys(&image.symbols));
-    w.atom(METR, &image.meter.encode());
+    w.atom(VERS, &version.encode())?;
+    w.atom(SIGN, &image.signature.encode())?;
+    w.atom(CREA, &image.creation.encode())?;
+    w.atom(BLOC, &image.chunks)?;
+    w.atom(HEAP, &encode_heap(image))?;
+    w.atom(STAC, &encode_stack(&image.stack))?;
+    w.atom(KEYS, &encode_strings(&image.keys))?;
+    w.atom(NAME, &names)?;
+    w.atom(SYMB, &encode_symbol_keys(&image.symbols))?;
+    w.atom(METR, &image.meter.encode())?;
     // Side-table ledger atoms, emitted ONLY when non-empty: a machine
     // with no side-table state keeps its exact pre-ledger container
     // bytes, so the CAS/blob identity of every existing container —
@@ -4834,102 +4835,102 @@ fn encode_machine(image: &MachineImage) -> Vec<u8> {
     // Presence is content-determined, so the canonical-bytes property
     // (same image → same bytes) holds either way.
     if !image.arrays.is_empty() {
-        w.atom(crate::format::ARRY, &encode_arrays(&image.arrays));
+        w.atom(crate::format::ARRY, &encode_arrays(&image.arrays))?;
     }
     // After `ARRY`, matching `CANONICAL_ATOM_ORDER`: the container reader
     // walks that list with a cursor and refuses anything out of order.
     if !image.index_props.is_empty() {
-        w.atom(crate::format::IDXP, &encode_index_props(&image.index_props));
+        w.atom(crate::format::IDXP, &encode_index_props(&image.index_props))?;
     }
     if !image.collections.is_empty() {
-        w.atom(crate::format::COLL, &encode_collections(&image.collections));
+        w.atom(crate::format::COLL, &encode_collections(&image.collections))?;
     }
     if !image.registry.is_empty() {
-        w.atom(crate::format::REGY, &encode_registry(&image.registry));
+        w.atom(crate::format::REGY, &encode_registry(&image.registry))?;
     }
     if !image.errors.is_empty() {
-        w.atom(crate::format::ERRD, &encode_errors(&image.errors));
+        w.atom(crate::format::ERRD, &encode_errors(&image.errors))?;
         // Emitted only when some error actually captured frames, so a
         // machine whose errors have none writes byte-identically to
         // before this atom existed.
         if image.errors.iter().any(|e| !e.frames.is_empty()) {
-            w.atom(crate::format::ESTK, &encode_error_frames(&image.errors));
+            w.atom(crate::format::ESTK, &encode_error_frames(&image.errors))?;
         }
     }
     if !image.buffers.is_empty() {
-        w.atom(crate::format::ABUF, &encode_buffers(&image.buffers));
+        w.atom(crate::format::ABUF, &encode_buffers(&image.buffers))?;
     }
     if !image.typed_arrays.is_empty() {
         w.atom(
             crate::format::TARR,
             &encode_typed_arrays(&image.typed_arrays),
-        );
+        )?;
     }
     if !image.data_views.is_empty() {
-        w.atom(crate::format::DVIW, &encode_data_views(&image.data_views));
+        w.atom(crate::format::DVIW, &encode_data_views(&image.data_views))?;
     }
     if !image.wrappers.is_empty() {
-        w.atom(crate::format::WRAP, &encode_wrappers(&image.wrappers));
+        w.atom(crate::format::WRAP, &encode_wrappers(&image.wrappers))?;
     }
     if !image.regexps.is_empty() {
-        w.atom(crate::format::REGX, &encode_regexps(&image.regexps));
+        w.atom(crate::format::REGX, &encode_regexps(&image.regexps))?;
     }
     if !image.arguments_brands.is_empty() {
         w.atom(
             crate::format::ARGB,
             &encode_arguments_brands(&image.arguments_brands),
-        );
+        )?;
     }
     if !image.temporal.is_empty() {
-        w.atom(crate::format::TMPR, &encode_temporal(&image.temporal));
+        w.atom(crate::format::TMPR, &encode_temporal(&image.temporal))?;
     }
     if !image.intl.is_empty() {
-        w.atom(crate::format::INTL, &encode_intl(&image.intl));
+        w.atom(crate::format::INTL, &encode_intl(&image.intl))?;
     }
     if !image.iterators.is_empty() {
-        w.atom(crate::format::ITER, &encode_iterators(&image.iterators));
+        w.atom(crate::format::ITER, &encode_iterators(&image.iterators))?;
     }
     if !image.dates.is_empty() {
-        w.atom(crate::format::DATE, &encode_dates(&image.dates));
+        w.atom(crate::format::DATE, &encode_dates(&image.dates))?;
     }
     if !image.function_state.is_empty() {
         w.atom(
             crate::format::FUNC,
             &encode_function_state(&image.function_state),
-        );
+        )?;
     }
     if !image.proxy_state.is_empty() {
-        w.atom(crate::format::PROX, &encode_proxy_state(&image.proxy_state));
+        w.atom(crate::format::PROX, &encode_proxy_state(&image.proxy_state))?;
     }
     if !image.accessors.is_empty() {
-        w.atom(crate::format::ACCS, &encode_accessors(&image.accessors));
+        w.atom(crate::format::ACCS, &encode_accessors(&image.accessors))?;
     }
     if !image.intl_bound_functions.is_empty() {
         w.atom(
             crate::format::IBFN,
             &encode_intl_bound_functions(&image.intl_bound_functions),
-        );
+        )?;
     }
     if !image.private_elements.is_empty() {
         w.atom(
             crate::format::PRIV,
             &encode_private_elements(&image.private_elements),
-        );
+        )?;
     }
     if !image.disposable_stacks.is_empty() {
         w.atom(
             crate::format::DISP,
             &encode_disposable_stacks(&image.disposable_stacks),
-        );
+        )?;
     }
     if !image.generators.is_empty() {
-        w.atom(crate::format::GENR, &encode_generators(&image.generators));
+        w.atom(crate::format::GENR, &encode_generators(&image.generators))?;
     }
     if !image.promise_cluster.is_empty() {
         w.atom(
             crate::format::PRMS,
             &encode_promise_cluster(&image.promise_cluster),
-        );
+        )?;
     }
     // The installed-names floor: `Some` only when it differs from the
     // name-table length (`with_name_floor` canonicalizes), so machines
@@ -4939,10 +4940,10 @@ fn encode_machine(image: &MachineImage) -> Vec<u8> {
         w.atom(
             crate::format::ASYN,
             &encode_async_instances(&image.promise_cluster.async_instances),
-        );
+        )?;
     }
     if let Some(floor) = image.name_floor {
-        w.atom(crate::format::NFLR, &floor.to_be_bytes());
+        w.atom(crate::format::NFLR, &floor.to_be_bytes())?;
     }
     w.finish()
 }
@@ -5430,7 +5431,7 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
     // Version 16 makes canonical bytes part of admission, including
     // required core atoms and canonical slot encodings. Older formats
     // retain their documented import normalization path.
-    if image.version.format_version >= 16 && encode_machine(&image) != buf {
+    if image.version.format_version >= 16 && encode_machine(&image)? != buf {
         return Err(SnapshotError::Corrupt("non-canonical machine encoding"));
     }
     Ok(image)
@@ -7003,10 +7004,10 @@ mod tests {
                 if atom.tag == tag {
                     payload.push(0);
                 }
-                writer.atom(atom.tag, &payload);
+                writer.atom(atom.tag, &payload).unwrap();
             }
             assert!(
-                read_machine(&writer.finish(), &sig()).is_err(),
+                read_machine(&writer.finish().unwrap(), &sig()).is_err(),
                 "slack in {tag:?}"
             );
         }
@@ -7021,11 +7022,11 @@ mod tests {
                 let mut writer = AtomWriter::new();
                 for atom in parsed.atoms() {
                     if atom.tag != tag {
-                        writer.atom(atom.tag, atom.payload);
+                        writer.atom(atom.tag, atom.payload).unwrap();
                     }
                 }
                 assert!(
-                    read_machine(&writer.finish(), &sig()).is_err(),
+                    read_machine(&writer.finish().unwrap(), &sig()).is_err(),
                     "missing {tag:?}"
                 );
             }
@@ -7096,9 +7097,9 @@ mod tests {
         // A hand-built container with VERS+SIGN but no HEAP.
         use crate::atom::AtomWriter;
         let mut w = AtomWriter::new();
-        w.atom(VERS, &Version::current().encode());
-        w.atom(SIGN, &sig().encode());
-        let bytes = w.finish();
+        w.atom(VERS, &Version::current().encode()).unwrap();
+        w.atom(SIGN, &sig().encode()).unwrap();
+        let bytes = w.finish().unwrap();
         assert_eq!(
             read_machine(&bytes, &sig()),
             Err(SnapshotError::MissingAtom(HEAP))
@@ -7154,10 +7155,10 @@ mod tests {
     /// appended after it is reached by the decoder.
     fn valid_prefix() -> AtomWriter {
         let mut w = AtomWriter::new();
-        w.atom(VERS, &Version::current().encode());
-        w.atom(SIGN, &sig().encode());
+        w.atom(VERS, &Version::current().encode()).unwrap();
+        w.atom(SIGN, &sig().encode()).unwrap();
         // Empty HEAP payload: slot_count=0, free_count=0, live=0.
-        w.atom(HEAP, &[0u8; 12]);
+        w.atom(HEAP, &[0u8; 12]).unwrap();
         w
     }
 
@@ -7170,16 +7171,16 @@ mod tests {
     fn malformed_string_count_does_not_over_allocate() {
         // KEYS claims u32::MAX strings but carries none.
         let mut w = valid_prefix();
-        w.atom(KEYS, &huge_count_payload());
-        let bytes = w.finish();
+        w.atom(KEYS, &huge_count_payload()).unwrap();
+        let bytes = w.finish().unwrap();
         assert_eq!(
             read_machine(&bytes, &sig()),
             Err(SnapshotError::Corrupt("string list entry header"))
         );
         // NAME is decoded by the same path — lock it too.
         let mut w = valid_prefix();
-        w.atom(NAME, &huge_count_payload());
-        let bytes = w.finish();
+        w.atom(NAME, &huge_count_payload()).unwrap();
+        let bytes = w.finish().unwrap();
         assert_eq!(
             read_machine(&bytes, &sig()),
             Err(SnapshotError::Corrupt("string list entry header"))
@@ -7217,8 +7218,8 @@ mod tests {
         let mut payload = vec![0u8, 1];
         payload.extend_from_slice(&u32::MAX.to_be_bytes());
         let mut w = valid_prefix();
-        w.atom(SYMB, &payload);
-        let bytes = w.finish();
+        w.atom(SYMB, &payload).unwrap();
+        let bytes = w.finish().unwrap();
         assert_eq!(
             read_machine(&bytes, &sig()),
             Err(SnapshotError::Corrupt("symbol-key table"))
@@ -7233,10 +7234,10 @@ mod tests {
         heap.extend_from_slice(&u32::MAX.to_be_bytes()); // free_count = u32::MAX
         heap.extend_from_slice(&0u32.to_be_bytes()); // live = 0
         let mut w = AtomWriter::new();
-        w.atom(VERS, &Version::current().encode());
-        w.atom(SIGN, &sig().encode());
-        w.atom(HEAP, &heap);
-        let bytes = w.finish();
+        w.atom(VERS, &Version::current().encode()).unwrap();
+        w.atom(SIGN, &sig().encode()).unwrap();
+        w.atom(HEAP, &heap).unwrap();
+        let bytes = w.finish().unwrap();
         assert_eq!(
             read_machine(&bytes, &sig()),
             Err(SnapshotError::Corrupt("HEAP free list"))
@@ -7263,11 +7264,11 @@ mod tests {
                 heap.extend_from_slice(&record);
             }
             let mut w = AtomWriter::new();
-            w.atom(VERS, &Version::current().encode());
-            w.atom(SIGN, &sig().encode());
-            w.atom(HEAP, &heap);
+            w.atom(VERS, &Version::current().encode()).unwrap();
+            w.atom(SIGN, &sig().encode()).unwrap();
+            w.atom(HEAP, &heap).unwrap();
             assert_eq!(
-                read_machine(&w.finish(), &sig()),
+                read_machine(&w.finish().unwrap(), &sig()),
                 Err(SnapshotError::Corrupt(what)),
                 "free={free:?} live={live} slot_count={slot_count}"
             );
@@ -7290,10 +7291,10 @@ mod tests {
         heap.extend_from_slice(&0u32.to_be_bytes()); // free_count = 0
         heap.extend_from_slice(&0u32.to_be_bytes()); // live = 0
         let mut w = AtomWriter::new();
-        w.atom(VERS, &Version::current().encode());
-        w.atom(SIGN, &sig().encode());
-        w.atom(HEAP, &heap);
-        let bytes = w.finish();
+        w.atom(VERS, &Version::current().encode()).unwrap();
+        w.atom(SIGN, &sig().encode()).unwrap();
+        w.atom(HEAP, &heap).unwrap();
+        let bytes = w.finish().unwrap();
         assert_eq!(
             read_machine(&bytes, &sig()),
             Err(SnapshotError::Corrupt("HEAP records truncated"))
@@ -7306,8 +7307,8 @@ mod tests {
         let mut stac = Vec::new();
         stac.extend_from_slice(&u32::MAX.to_be_bytes()); // count = u32::MAX
         let mut w = valid_prefix();
-        w.atom(STAC, &stac);
-        let bytes = w.finish();
+        w.atom(STAC, &stac).unwrap();
+        let bytes = w.finish().unwrap();
         assert_eq!(
             read_machine(&bytes, &sig()),
             Err(SnapshotError::Corrupt("STAC records truncated"))

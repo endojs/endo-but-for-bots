@@ -154,11 +154,14 @@ pub trait MachineSnapshot {
     /// (`Snapshot(Corrupt(..))`) — so the blob verbs carry exactly the
     /// preconditions `begin_store_session` does.
     fn write_snapshot(&self, signature: &Signature) -> Result<Vec<u8>, MachineSnapshotError> {
-        Ok(write_machine(&self.snapshot_image(signature)?))
+        Ok(write_machine(&self.snapshot_image(signature)?)?)
     }
 
-    /// Materialize the encoded snapshot, hash that buffer, and write it to `file`.
-    /// Return the hex digest after the file is flushed and synced,
+    /// Materialize the encoded snapshot, then hash and write that buffer in chunks
+    /// to `file`.
+    /// The image, atom body, and finished container can coexist during encoding
+    /// (roughly three heap images at peak). Return the hex digest after the file
+    /// is flushed and synced,
     /// so the caller may safely rename it into the CAS (the
     /// [`Self::suspend_to_cas`] contract).
     fn write_snapshot_to_file(

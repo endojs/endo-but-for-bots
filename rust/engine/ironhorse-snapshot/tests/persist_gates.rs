@@ -1188,12 +1188,12 @@ fn a_container_without_meter_identity_is_refused() {
         if atom.tag == METR {
             removed += 1;
         } else {
-            writer.atom(atom.tag, atom.payload);
+            writer.atom(atom.tag, atom.payload).unwrap();
         }
     }
     assert_eq!(removed, 1);
     assert!(matches!(
-        from_snapshot_bytes(&writer.finish(), &sig()),
+        from_snapshot_bytes(&writer.finish().unwrap(), &sig()),
         Err(SnapshotError::Corrupt("missing METR identity"))
     ));
 }

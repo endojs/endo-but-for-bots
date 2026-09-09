@@ -213,11 +213,11 @@ fn first_relink_preserves_tagged_template_cache_ids_across_cranks() {
 fn normal_writers_accept_live_and_decoded_proofs() {
     let machine = ran("var x = 1; x");
     let proof = machine.snapshot_image(&signature()).unwrap();
-    let bytes = ironhorse_snapshot::write_machine(&proof);
+    let bytes = ironhorse_snapshot::write_machine(&proof).unwrap();
     let decoded = ironhorse_snapshot::read_validated_machine(&bytes, &signature())
         .unwrap()
         .into_gated();
-    assert_eq!(ironhorse_snapshot::write_machine(&decoded), bytes);
+    assert_eq!(ironhorse_snapshot::write_machine(&decoded).unwrap(), bytes);
     let mut store = MemoryStore::new();
     store
         .commit(&ironhorse_snapshot::image_to_batch(&proof, 1, ""))

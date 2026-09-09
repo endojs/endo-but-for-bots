@@ -4123,9 +4123,9 @@ pub fn validate_store(
 /// content identity (design decision 6) and full interchange with the
 /// blob path.
 pub fn export_to_container(store: &dyn HeapStore) -> Result<Vec<u8>, StoreError> {
-    Ok(crate::image::write_machine(&crate::image::GatedImage::new(
-        store_to_image(store)?,
-    )?))
+    Ok(crate::image::write_machine(
+        &crate::image::GatedImage::new(store_to_image(store)?)?,
+    )?)
 }
 
 /// Seed a store from canonical container bytes (a full epoch-1 write),
