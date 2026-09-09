@@ -62,6 +62,8 @@ const SRC: &str = concat!(
     "\n",
     include_str!("../src/interp/natives/regexp.rs"),
     "\n",
+    include_str!("../src/interp/natives/array.rs"),
+    "\n",
     include_str!("../src/interp/natives/dispatch.rs"),
     "\n",
     include_str!("../src/interp/natives/json.rs"),
