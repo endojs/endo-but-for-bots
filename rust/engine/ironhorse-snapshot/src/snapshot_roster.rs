@@ -11,6 +11,7 @@ macro_rules! snapshot_payloads {
         $consumer! {
             Stack {
                 image_field: stack,
+                live: [],
                 initialize: [stack = Default::default()],
                 legacy_label: "small state stack section",
                 decode_legacy(state, bytes): {
@@ -27,6 +28,7 @@ macro_rules! snapshot_payloads {
             }
             RetiredFreeList {
                 image_field: slot_free,
+                live: [],
                 initialize: [slot_free = Default::default()],
                 legacy_label: "small state free-list section",
                 decode_legacy(state, bytes): {
@@ -43,6 +45,7 @@ macro_rules! snapshot_payloads {
             }
             Keys {
                 image_field: keys,
+                live: [],
                 initialize: [keys = Default::default()],
                 legacy_label: "small state keys section",
                 decode_legacy(state, bytes): {
@@ -59,6 +62,7 @@ macro_rules! snapshot_payloads {
             }
             Names {
                 image_field: names,
+                live: [],
                 initialize: [names = Default::default()],
                 legacy_label: "small state names section",
                 decode_legacy(state, bytes): {
@@ -75,6 +79,7 @@ macro_rules! snapshot_payloads {
             }
             Symbols {
                 image_field: symbols,
+                live: [],
                 initialize: [symbols = Default::default()],
                 legacy_label: "small state symbols section",
                 decode_legacy(state, bytes): {
@@ -91,6 +96,7 @@ macro_rules! snapshot_payloads {
             }
             Meter {
                 image_field: meter,
+                live: [],
                 // Private decode placeholder: every successful decode replaces it
                 // with the required METR payload before returning the state.
                 initialize: [meter = crate::image::MeterImage {
@@ -115,6 +121,23 @@ macro_rules! snapshot_payloads {
             }
             Arrays {
                 image_field: arrays,
+                live: [arrays: Vec<crate::image::ArrayImage> => (interp, dirty) {
+                    if dirty.contains(ironhorse_vm::SnapshotSection::Arrays) {
+                        #[cfg(test)]
+                        crate::machine::extraction_counts::record(ironhorse_vm::SnapshotSection::Arrays);
+                        interp
+                            .arrays_snapshot()
+                            .into_iter()
+                            .map(|(owner, length, items)| crate::image::ArrayImage {
+                                owner,
+                                length,
+                                items,
+                            })
+                            .collect()
+                    } else {
+                        Default::default()
+                    }
+                }],
                 initialize: [arrays = Default::default()],
                 legacy_label: "small state arrays section",
                 decode_legacy(state, bytes): {
@@ -135,6 +158,21 @@ macro_rules! snapshot_payloads {
             }
             IndexProperties {
                 image_field: index_props,
+                live: [index_props: Vec<crate::image::IndexPropsImage> => (interp, dirty) {
+                    if dirty.contains(ironhorse_vm::SnapshotSection::IndexProperties) {
+                        interp
+                            .index_props_snapshot()
+                            .into_iter()
+                            .map(|(owner, high_water, items)| crate::image::IndexPropsImage {
+                                owner,
+                                high_water,
+                                items,
+                            })
+                            .collect()
+                    } else {
+                        Default::default()
+                    }
+                }],
                 initialize: [index_props = Default::default()],
                 legacy_label: "small state index-props section",
                 decode_legacy(state, bytes): {
@@ -155,6 +193,26 @@ macro_rules! snapshot_payloads {
             }
             Collections {
                 image_field: collections,
+                live: [collections: Vec<crate::image::CollectionImage> => (interp, dirty) {
+                    if dirty.contains(ironhorse_vm::SnapshotSection::Collections) {
+                        #[cfg(test)]
+                        crate::machine::extraction_counts::record(ironhorse_vm::SnapshotSection::Collections);
+                        interp
+                            .collections_snapshot()
+                            .into_iter()
+                            .map(
+                                |(owner, kind, table_length, entries)| crate::image::CollectionImage {
+                                    owner,
+                                    kind,
+                                    table_length,
+                                    entries,
+                                },
+                            )
+                            .collect()
+                    } else {
+                        Default::default()
+                    }
+                }],
                 initialize: [collections = Default::default()],
                 legacy_label: "small state collections section",
                 decode_legacy(state, bytes): {
@@ -175,6 +233,17 @@ macro_rules! snapshot_payloads {
             }
             Registry {
                 image_field: registry,
+                live: [registry: Vec<crate::image::RegistryImage> => (interp, dirty) {
+                    if dirty.contains(ironhorse_vm::SnapshotSection::Registry) {
+                        interp
+                            .symbol_registry_snapshot()
+                            .into_iter()
+                            .map(|(key, descriptor)| crate::image::RegistryImage { key, descriptor })
+                            .collect()
+                    } else {
+                        Default::default()
+                    }
+                }],
                 initialize: [registry = Default::default()],
                 legacy_label: "small state registry section",
                 decode_legacy(state, bytes): {
@@ -195,6 +264,24 @@ macro_rules! snapshot_payloads {
             }
             Errors {
                 image_field: errors,
+                live: [errors: Vec<crate::image::ErrorImage> => (interp, dirty) {
+                    if dirty.contains(ironhorse_vm::SnapshotSection::Errors)
+                        || dirty.contains(ironhorse_vm::SnapshotSection::ErrorFrames)
+                    {
+                        interp
+                            .errors_snapshot()
+                            .into_iter()
+                            .map(|(owner, name, message, frames)| crate::image::ErrorImage {
+                                owner,
+                                name: name.to_string(),
+                                message,
+                                frames,
+                            })
+                            .collect()
+                    } else {
+                        Default::default()
+                    }
+                }],
                 initialize: [errors = Default::default()],
                 legacy_label: "small state errors section",
                 decode_legacy(state, bytes): {
@@ -215,6 +302,7 @@ macro_rules! snapshot_payloads {
             }
             ErrorFrames {
                 image_field: errors,
+                live: [],
                 initialize: [],
                 legacy_label: "small state error-frames section",
                 decode_legacy(state, bytes): {
@@ -242,6 +330,22 @@ macro_rules! snapshot_payloads {
             }
             Buffers {
                 image_field: buffers,
+                live: [buffers: Vec<crate::image::BufferImage> => (interp, dirty) {
+                    if dirty.contains(ironhorse_vm::SnapshotSection::Buffers) {
+                        interp
+                            .array_buffers_snapshot()
+                            .into_iter()
+                            .map(|(owner, data, length, flags)| crate::image::BufferImage {
+                                owner,
+                                data,
+                                length,
+                                flags,
+                            })
+                            .collect()
+                    } else {
+                        Default::default()
+                    }
+                }],
                 initialize: [buffers = Default::default()],
                 legacy_label: "small state buffers section",
                 decode_legacy(state, bytes): {
@@ -262,6 +366,25 @@ macro_rules! snapshot_payloads {
             }
             TypedArrays {
                 image_field: typed_arrays,
+                live: [typed_arrays: Vec<crate::image::TypedArrayImage> => (interp, dirty) {
+                    if dirty.contains(ironhorse_vm::SnapshotSection::TypedArrays) {
+                        interp
+                            .typed_arrays_snapshot()
+                            .into_iter()
+                            .map(
+                                |(owner, kind, buffer, offset, length)| crate::image::TypedArrayImage {
+                                    owner,
+                                    kind,
+                                    buffer,
+                                    offset,
+                                    length,
+                                },
+                            )
+                            .collect()
+                    } else {
+                        Default::default()
+                    }
+                }],
                 initialize: [typed_arrays = Default::default()],
                 legacy_label: "small state typed-arrays section",
                 decode_legacy(state, bytes): {
@@ -282,6 +405,24 @@ macro_rules! snapshot_payloads {
             }
             DataViews {
                 image_field: data_views,
+                live: [data_views: Vec<crate::image::DataViewImage> => (interp, dirty) {
+                    if dirty.contains(ironhorse_vm::SnapshotSection::DataViews) {
+                        interp
+                            .data_views_snapshot()
+                            .into_iter()
+                            .map(
+                                |(owner, buffer, offset, size)| crate::image::DataViewImage {
+                                    owner,
+                                    buffer,
+                                    offset,
+                                    size,
+                                },
+                            )
+                            .collect()
+                    } else {
+                        Default::default()
+                    }
+                }],
                 initialize: [data_views = Default::default()],
                 legacy_label: "small state data-views section",
                 decode_legacy(state, bytes): {
@@ -302,6 +443,17 @@ macro_rules! snapshot_payloads {
             }
             Wrappers {
                 image_field: wrappers,
+                live: [wrappers: Vec<crate::image::WrapperImage> => (interp, dirty) {
+                    if dirty.contains(ironhorse_vm::SnapshotSection::Wrappers) {
+                        interp
+                            .wrappers_snapshot()
+                            .into_iter()
+                            .map(|(owner, value)| crate::image::WrapperImage { owner, value })
+                            .collect()
+                    } else {
+                        Default::default()
+                    }
+                }],
                 initialize: [wrappers = Default::default()],
                 legacy_label: "small state wrappers section",
                 decode_legacy(state, bytes): {
@@ -322,6 +474,24 @@ macro_rules! snapshot_payloads {
             }
             Regexps {
                 image_field: regexps,
+                live: [regexps: Vec<crate::image::RegExpImage> => (interp, dirty) {
+                    if dirty.contains(ironhorse_vm::SnapshotSection::Regexps) {
+                        interp
+                            .regexps_snapshot()
+                            .into_iter()
+                            .map(
+                                |(owner, source, flags, last_index_bits)| crate::image::RegExpImage {
+                                    owner,
+                                    source,
+                                    flags,
+                                    last_index_bits,
+                                },
+                            )
+                            .collect()
+                    } else {
+                        Default::default()
+                    }
+                }],
                 initialize: [regexps = Default::default()],
                 legacy_label: "small state regexps section",
                 decode_legacy(state, bytes): {
@@ -342,6 +512,13 @@ macro_rules! snapshot_payloads {
             }
             ArgumentsBrands {
                 image_field: arguments_brands,
+                live: [arguments_brands: Vec<u32> => (interp, dirty) {
+                    if dirty.contains(ironhorse_vm::SnapshotSection::ArgumentsBrands) {
+                        interp.arguments_brands_snapshot()
+                    } else {
+                        Default::default()
+                    }
+                }],
                 initialize: [arguments_brands = Default::default()],
                 legacy_label: "small state arguments section",
                 decode_legacy(state, bytes): {
@@ -363,6 +540,22 @@ macro_rules! snapshot_payloads {
             }
             Temporal {
                 image_field: temporal,
+                live: [temporal: crate::image::TemporalImage => (interp, dirty) {
+                    {
+                        let (instants, durations, plains, zoneds) =
+                            if dirty.contains(ironhorse_vm::SnapshotSection::Temporal) {
+                                interp.temporal_snapshot()
+                            } else {
+                                Default::default()
+                            };
+                        crate::image::TemporalImage {
+                            instants,
+                            durations,
+                            plains,
+                            zoneds,
+                        }
+                    }
+                }],
                 initialize: [temporal = Default::default()],
                 legacy_label: "small state temporal section",
                 decode_legacy(state, bytes): {
@@ -383,6 +576,13 @@ macro_rules! snapshot_payloads {
             }
             Intl {
                 image_field: intl,
+                live: [intl: ironhorse_vm::IntlTables => (interp, dirty) {
+                    if dirty.contains(ironhorse_vm::SnapshotSection::Intl) {
+                        interp.intl_snapshot()
+                    } else {
+                        Default::default()
+                    }
+                }],
                 initialize: [intl = Default::default()],
                 legacy_label: "small state intl section",
                 decode_legacy(state, bytes): {
@@ -403,6 +603,13 @@ macro_rules! snapshot_payloads {
             }
             Iterators {
                 image_field: iterators,
+                live: [iterators: Vec<ironhorse_vm::IteratorRow> => (interp, dirty) {
+                    if dirty.contains(ironhorse_vm::SnapshotSection::Iterators) {
+                        interp.iterators_snapshot()
+                    } else {
+                        Default::default()
+                    }
+                }],
                 initialize: [iterators = Default::default()],
                 legacy_label: "small state iterators section",
                 decode_legacy(state, bytes): {
@@ -423,6 +630,17 @@ macro_rules! snapshot_payloads {
             }
             Dates {
                 image_field: dates,
+                live: [dates: Vec<crate::image::DateImage> => (interp, dirty) {
+                    if dirty.contains(ironhorse_vm::SnapshotSection::Dates) {
+                        interp
+                            .dates_snapshot()
+                            .into_iter()
+                            .map(|(owner, value_bits)| crate::image::DateImage { owner, value_bits })
+                            .collect()
+                    } else {
+                        Default::default()
+                    }
+                }],
                 initialize: [dates = Default::default()],
                 legacy_label: "small state dates section",
                 decode_legacy(state, bytes): {
@@ -443,6 +661,13 @@ macro_rules! snapshot_payloads {
             }
             Functions {
                 image_field: function_state,
+                live: [function_state: ironhorse_vm::FunctionStateSnapshot => (interp, dirty) {
+                    if dirty.contains(ironhorse_vm::SnapshotSection::Functions) {
+                        interp.function_state_snapshot()
+                    } else {
+                        Default::default()
+                    }
+                }],
                 initialize: [function_state = Default::default()],
                 legacy_label: "small state function section",
                 decode_legacy(state, bytes): {
@@ -464,6 +689,13 @@ macro_rules! snapshot_payloads {
             }
             Proxies {
                 image_field: proxy_state,
+                live: [proxy_state: ironhorse_vm::ProxyStateSnapshot => (interp, dirty) {
+                    if dirty.contains(ironhorse_vm::SnapshotSection::Proxies) {
+                        interp.proxy_state_snapshot()
+                    } else {
+                        Default::default()
+                    }
+                }],
                 initialize: [proxy_state = Default::default()],
                 legacy_label: "small state proxy section",
                 decode_legacy(state, bytes): {
@@ -484,6 +716,13 @@ macro_rules! snapshot_payloads {
             }
             Accessors {
                 image_field: accessors,
+                live: [accessors: Vec<ironhorse_vm::AccessorRow> => (interp, dirty) {
+                    if dirty.contains(ironhorse_vm::SnapshotSection::Accessors) {
+                        interp.accessors_snapshot()
+                    } else {
+                        Default::default()
+                    }
+                }],
                 initialize: [accessors = Default::default()],
                 legacy_label: "small state accessor section",
                 decode_legacy(state, bytes): {
@@ -504,6 +743,13 @@ macro_rules! snapshot_payloads {
             }
             IntlBoundFunctions {
                 image_field: intl_bound_functions,
+                live: [intl_bound_functions: Vec<ironhorse_vm::IntlBoundFunctionRow> => (interp, dirty) {
+                    if dirty.contains(ironhorse_vm::SnapshotSection::IntlBoundFunctions) {
+                        interp.intl_bound_functions_snapshot()
+                    } else {
+                        Default::default()
+                    }
+                }],
                 initialize: [intl_bound_functions = Default::default()],
                 legacy_label: "small state Intl bound-function section",
                 decode_legacy(state, bytes): {
@@ -525,6 +771,13 @@ macro_rules! snapshot_payloads {
             }
             PrivateElements {
                 image_field: private_elements,
+                live: [private_elements: ironhorse_vm::PrivateElementSnapshot => (interp, dirty) {
+                    if dirty.contains(ironhorse_vm::SnapshotSection::PrivateElements) {
+                        interp.private_elements_snapshot()
+                    } else {
+                        Default::default()
+                    }
+                }],
                 initialize: [private_elements = Default::default()],
                 legacy_label: "small state private-element section",
                 decode_legacy(state, bytes): {
@@ -546,6 +799,13 @@ macro_rules! snapshot_payloads {
             }
             DisposableStacks {
                 image_field: disposable_stacks,
+                live: [disposable_stacks: Vec<ironhorse_vm::DisposableStackRow> => (interp, dirty) {
+                    if dirty.contains(ironhorse_vm::SnapshotSection::DisposableStacks) {
+                        interp.disposable_stacks_snapshot()
+                    } else {
+                        Default::default()
+                    }
+                }],
                 initialize: [disposable_stacks = Default::default()],
                 legacy_label: "small state disposable-stack section",
                 decode_legacy(state, bytes): {
@@ -567,6 +827,13 @@ macro_rules! snapshot_payloads {
             }
             Generators {
                 image_field: generators,
+                live: [generators: Vec<ironhorse_vm::GeneratorRow> => (interp, dirty) {
+                    if dirty.contains(ironhorse_vm::SnapshotSection::Generators) {
+                        interp.generators_snapshot()
+                    } else {
+                        Default::default()
+                    }
+                }],
                 initialize: [generators = Default::default()],
                 legacy_label: "small state generator section",
                 decode_legacy(state, bytes): {
@@ -587,6 +854,15 @@ macro_rules! snapshot_payloads {
             }
             Promises {
                 image_field: promise_cluster,
+                live: [promise_cluster: ironhorse_vm::PromiseClusterSnapshot => (interp, dirty) {
+                    if dirty.contains(ironhorse_vm::SnapshotSection::Promises)
+                        || dirty.contains(ironhorse_vm::SnapshotSection::AsyncInstances)
+                    {
+                        interp.promise_cluster_snapshot()
+                    } else {
+                        Default::default()
+                    }
+                }],
                 initialize: [promise_cluster = Default::default()],
                 legacy_label: "small state promise section",
                 decode_legacy(state, bytes): {
@@ -608,6 +884,7 @@ macro_rules! snapshot_payloads {
             }
             AsyncInstances {
                 image_field: promise_cluster,
+                live: [],
                 initialize: [],
                 legacy_label: "small state async section",
                 decode_legacy(state, bytes): {
@@ -629,6 +906,7 @@ macro_rules! snapshot_payloads {
             }
             NameFloor {
                 image_field: name_floor,
+                live: [],
                 initialize: [name_floor = Default::default()],
                 legacy_label: "small state name-floor section",
                 decode_legacy(state, bytes): {
@@ -694,6 +972,8 @@ use crate::SnapshotError;
 pub(crate) struct PayloadDesc {
     pub section: SmallSection,
     #[cfg(test)]
+    pub live_fields: &'static [&'static str],
+    #[cfg(test)]
     pub image_field: &'static str,
     pub atom: Option<FourCc>,
 }
@@ -701,6 +981,7 @@ pub(crate) struct PayloadDesc {
 macro_rules! define_payloads {
     ($($section:ident {
         image_field: $field:ident,
+        live: [$($live_field:ident: $ty:ty => ($interp:ident, $dirty:ident) $extract:block)?],
         initialize: [$($init_field:ident = $init:expr)?],
         legacy_label: $legacy_label:literal,
         decode_legacy($decoded:ident, $input:ident): $decode:block,
@@ -710,7 +991,7 @@ macro_rules! define_payloads {
         canonicalize($bytes:ident): $canonicalize:block,
     })*) => {
         pub(crate) const PAYLOADS: &[PayloadDesc] = &[
-            $(PayloadDesc { section: SmallSection::$section, #[cfg(test)] image_field: stringify!($field), atom: $atom },)*
+            $(PayloadDesc { section: SmallSection::$section, #[cfg(test)] image_field: stringify!($field), #[cfg(test)] live_fields: &[$(stringify!($live_field))?], atom: $atom },)*
         ];
         // Uniform field cloning also covers the Copy name-floor field.
         #[allow(clippy::clone_on_copy)]
@@ -943,6 +1224,41 @@ mod tests {
             .copied()
             .collect();
         assert_eq!(shared, ["errors", "promise_cluster"]);
+    }
+
+    #[test]
+    fn live_extraction_covers_every_side_table_image_field() {
+        let mut expected = image_fields(include_str!("image.rs"));
+        // Core machine/arena state has its own extraction path. Every other
+        // image field must participate in the live side-table extraction.
+        for field in [
+            "version",
+            "signature",
+            "creation",
+            "chunks",
+            "slots",
+            "slot_free",
+            "slot_live",
+            "stack",
+            "keys",
+            "names",
+            "symbols",
+            "meter",
+            "name_floor",
+        ] {
+            assert!(expected.remove(field));
+        }
+        let mut actual = BTreeSet::new();
+        for row in PAYLOADS {
+            for field in row.live_fields {
+                assert_eq!(*field, row.image_field);
+                assert!(
+                    actual.insert((*field).to_owned()),
+                    "duplicate live extraction"
+                );
+            }
+        }
+        assert_eq!(actual, expected);
     }
 
     #[test]
