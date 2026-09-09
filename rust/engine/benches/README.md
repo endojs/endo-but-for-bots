@@ -733,3 +733,40 @@ format-18/schema-29 native-name persistence change.
 They remain historical observations of their recorded source hashes; they do
 not establish performance acceptance for the combined branch.
 The full 1A performance gate remains outstanding.
+
+## Stable compiler node identities (1A, F148)
+
+[results/1a-f148-node-identities.json](results/1a-f148-node-identities.json)
+compares the parser-assigned node IDs and paged vector tables with `97b352c1e`,
+after the rebase and format-19/schema-30 handler persistence work.
+The unchanged compiler growth test passes on both revisions.
+Its 19 elapsed-time ratios are 0.879–0.982, with identical computron receipts.
+These are local observations, not a claim about every compiler workload.
+
+The initial flat-vector implementation substantially increased memory for a class
+following a large ordinary program: the 16,000-statement control rose from
+9,846,784 to 18,169,856 bytes of peak RSS.
+That observation is retained alongside the replacement's measurements.
+The final tables allocate one optional page pointer per 64 node IDs and allocate
+64 value slots only for occupied pages.
+This preserves direct ID indexing without allocating every preceding class-table
+entry when only a late class needs those tables.
+
+The initial paged observation retained two small early-class timing regressions.
+A separate fixed three-trial audit alternates baseline/candidate process order,
+with no discarded trials or adjusted thresholds.
+Across its six shapes/sizes, median elapsed ratios are 0.997–1.014 and peak-RSS
+ratios are 1.001–1.013; output lengths, hashes and raw receipts match.
+The artifact includes all 36 audit runs and the earlier observations, including the
+sandboxed runs where the tests passed but the resource recorder could not read
+macOS kernel counters.
+Each timing is a median of five measured rounds after one warmup, and each RSS
+measurement covers an isolated test process rather than a Cargo build.
+
+Reproduce the ordinary controls with the unchanged `performance_bench` test.
+For sparse controls, build `node_identity_bench` in release mode on both revisions,
+then run its binary under `/usr/bin/time -l` with `IH_NODE_BENCH_SHAPE` set to
+`early_class` or `late_class` and `IH_NODE_BENCH_N` set to 4000, 16000 or 64000.
+The artifact records the exact commands and process ordering.
+These compiler measurements do not replace the outstanding full 1A performance
+comparison or close the retained general-control regressions.

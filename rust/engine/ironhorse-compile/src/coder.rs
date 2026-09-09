@@ -45,7 +45,7 @@
 
 use crate::ast::{Item, Node, Value};
 use crate::opcodes::*;
-use crate::scoper::{node_key, ScopeTree};
+use crate::scoper::{node_id, ScopeTree};
 use crate::token::Token;
 use ironhorse_text::SymbolName;
 use std::collections::HashMap;
@@ -444,8 +444,8 @@ pub struct Coder<'a, 'm> {
     /// `Define` nodes already coded (XS's `mxDefineNodeCodedFlag`): a
     /// function declaration is hoisted and emitted by `fxScopeCodeDefineNodes`
     /// at the top of its scope, so its second reach — the in-list statement
-    /// — is a no-op. Keyed by node address.
-    defined: std::collections::HashSet<usize>,
+    /// — is a no-op. Keyed by parser-assigned node ID.
+    defined: std::collections::HashSet<u32>,
     /// The name inferred for the next anonymous function/class value from
     /// its binding/assignment target (XS sets `node->symbol` before the
     /// value is coded, so the name lands in the `CONSTRUCTOR_FUNCTION` /
@@ -572,9 +572,9 @@ impl<'a, 'm> Coder<'a, 'm> {
     fn resolution_of(&self, node: &Node) -> Option<(usize, u32)> {
         self.tree
             .resolutions
-            .get(&node_key(node))
+            .get(&node_id(node))
             .copied()
-            .flatten()
+            .expect("compiler invariant: missing node resolution")
     }
 
     /// A resolved declaration's `flags` word (for the closure test).
@@ -776,8 +776,8 @@ impl<'a, 'm> Coder<'a, 'm> {
     fn scope_of(&self, node: &Node) -> usize {
         self.tree
             .node_scopes
-            .get(&node_key(node))
-            .expect("scope for node")
+            .get(&node_id(node))
+            .expect("compiler invariant: missing node scope")
             .0
     }
 
@@ -788,10 +788,10 @@ impl<'a, 'm> Coder<'a, 'm> {
     fn scope_secondary(&self, node: &Node) -> usize {
         self.tree
             .node_scopes
-            .get(&node_key(node))
-            .expect("scope for node")
+            .get(&node_id(node))
+            .expect("compiler invariant: missing node scope")
             .1
-            .expect("secondary scope for node")
+            .expect("compiler invariant: missing secondary node scope")
     }
 
     fn declare_count(&self, scope: usize) -> i32 {
@@ -1456,7 +1456,11 @@ impl Coder<'_, '_> {
         let scope = self.scope_of(node);
         let strict = self.tree.scopes[scope].flags & crate::ast::flags::STRICT != 0;
         let is_eval = self.tree.scopes[scope].flags & crate::scoper::SCOPE_EVAL != 0;
-        let scope_count = *self.tree.scope_counts.get(&scope).unwrap_or(&0);
+        let scope_count = *self
+            .tree
+            .scope_counts
+            .get(&scope)
+            .expect("compiler invariant: missing scope count");
         let declares = self.declares_of(scope);
         let hoists_declarations = declares
             .iter()
@@ -1545,7 +1549,11 @@ impl Coder<'_, '_> {
         let scope = self.scope_of(node);
         let awaiting = node.flags & f::AWAITING != 0;
         let strict = node.flags & f::STRICT != 0;
-        let scope_count = *self.tree.scope_counts.get(&scope).unwrap_or(&0);
+        let scope_count = *self
+            .tree
+            .scope_counts
+            .get(&scope)
+            .expect("compiler invariant: missing scope count");
 
         let mut target = self.create_target();
         self.program_flag = false;
@@ -1946,8 +1954,7 @@ impl Coder<'_, '_> {
             bt = self.targets[t].next_target;
         }
 
-        // Dispatch the wrapped statement by reference — the scoper keys
-        // scopes by node address, so a clone would miss its registration.
+        // Dispatch the wrapped statement by reference without copying its tree.
         let statement = &cur.children[1];
         // `self->symbol` after the collapse is the innermost label's.
         let inner_has_symbol = labels[0].is_some();
@@ -2865,7 +2872,7 @@ impl Coder<'_, '_> {
     /// `mxDefineNodeCodedFlag`): it is hoisted to the top of its scope by
     /// [`Coder::code_define_nodes`], so the in-list statement is a no-op.
     fn code_define(&mut self, node: &Node) {
-        if !self.defined.insert(node_key(node)) {
+        if !self.defined.insert(node_id(node)) {
             return;
         }
         self.code_declare_reference(node);
@@ -2959,7 +2966,7 @@ impl Coder<'_, '_> {
         // A derived class with instance fields calls its `instanceInit` field
         // initializer here, once `super(...)` has installed `this`
         // (`fxSuperNodeCode`): `this`, the captured closure, a zero-arg run.
-        if let Some(&(ascope, aid)) = self.tree.super_instance_init.get(&node_key(node)) {
+        if let Some(&(ascope, aid)) = self.tree.super_instance_init.get(&node_id(node)) {
             let idx = self.declare_index(ascope, aid);
             self.add_byte(1, XS_CODE_GET_THIS);
             self.add_index(1, XS_CODE_GET_CLOSURE_1, idx);
@@ -2982,10 +2989,10 @@ impl Coder<'_, '_> {
 
         let name = Self::symbol_opt(&node.children[0]);
         let class_scope = self.scope_of(node);
-        let symbol_scope = self.tree.node_scopes.get(&node_key(node)).and_then(|s| s.1);
+        let symbol_scope = self.tree.node_scopes.get(&node_id(node)).and_then(|s| s.1);
         // The synthesized `instanceInit` closure declare, present when the
         // class has instance data fields (see `class_has_instance_field`).
-        let instance_init = self.tree.class_instance_init.get(&node_key(node)).copied();
+        let instance_init = self.tree.class_instance_init.get(&node_id(node)).copied();
 
         let prototype = self.use_temporary();
         let constructor = self.use_temporary();
@@ -3092,7 +3099,7 @@ impl Coder<'_, '_> {
                 }
                 // A field / private member: emit its class-scope closure
                 // binding(s), then collect it for the init function.
-                let access = self.tree.class_member_access.get(&node_key(p)).copied();
+                let access = self.tree.class_member_access.get(&node_id(p)).copied();
                 match p.token {
                     Token::PropertyAt => {
                         // Computed-key field: `at`, `AT`, store the key into
@@ -3164,9 +3171,10 @@ impl Coder<'_, '_> {
             let fi = self
                 .tree
                 .class_field_init_inst
-                .get(&node_key(node))
-                .copied();
-            self.code_field_init_function(&instance_fields, class_scope, fi);
+                .get(&node_id(node))
+                .copied()
+                .expect("compiler invariant: missing instance field scope");
+            self.code_field_init_function(&instance_fields, fi);
             self.add_index(1, XS_CODE_GET_LOCAL_1, prototype);
             self.add_byte(-1, XS_CODE_SET_HOME);
             let idx = self.declare_index(iscope, iid);
@@ -3180,10 +3188,11 @@ impl Coder<'_, '_> {
             let ci = self
                 .tree
                 .class_field_init_static
-                .get(&node_key(node))
-                .copied();
+                .get(&node_id(node))
+                .copied()
+                .expect("compiler invariant: missing static field scope");
             self.add_index(1, XS_CODE_GET_LOCAL_1, constructor);
-            self.code_field_init_function(&static_fields, class_scope, ci);
+            self.code_field_init_function(&static_fields, ci);
             self.add_index(1, XS_CODE_GET_LOCAL_1, constructor);
             self.add_byte(-1, XS_CODE_SET_HOME);
             self.add_byte(1, XS_CODE_CALL);
@@ -3209,13 +3218,7 @@ impl Coder<'_, '_> {
     /// XS's field function is a real `mxFieldFlag` function with a scope, so
     /// it `RESERVE`s the alias slots, `RETRIEVE`s the closures at entry, and
     /// `STORE`s them from the enclosing class frame after creation.
-    fn code_field_init_function(
-        &mut self,
-        fields: &[&Node],
-        class_scope: usize,
-        fi: Option<usize>,
-    ) {
-        use crate::ast::flags as f;
+    fn code_field_init_function(&mut self, fields: &[&Node], fi: usize) {
         let saved_return = self.return_target;
         let saved_scope_level = self.scope_level;
         let saved_program = self.program_flag;
@@ -3224,88 +3227,7 @@ impl Coder<'_, '_> {
         let saved_env = self.environment_level;
         let saved_eval = self.eval_flag;
 
-        // Capture plan: class-scope declare ids in alias order (first
-        // reference wins — a private method reads `valueAccess` before
-        // `symbolAccess`), plus each field's 1-based alias slots.
-        let mut caps: Vec<u32> = Vec::new();
         let mut plans: Vec<FieldPlan> = Vec::with_capacity(fields.len());
-        // XS's `fxScopeLookup` resolves every `symbolAccess` for one private
-        // name to the *first* class-scope declare of that name (a symbol-
-        // pointer match), so a `get #x`/`set #x` accessor pair captures ONE
-        // shared brand slot — not two — in the field-init function's frame
-        // (`fxScopeGetDeclareNode(functionScope, symbol)` dedups the
-        // use-closure). Dedup the brand cap by private name here; each
-        // member's `valueAccess` stays a distinct per-member cap.
-        let mut brand_slot: std::collections::HashMap<SymbolName, i32> =
-            std::collections::HashMap::new();
-        // The **member-closure** (static / `fi`-less) path builds the capture
-        // plan by hand — class-scope declare ids in alias order and each
-        // field's 0-based alias slot. The **field-function-scope** (`fi`) path
-        // instead reads the scope's recorded member-access use-closure aliases
-        // and resolves them to frame slots *after* `RETRIEVE` assigns indices
-        // (see below), so its plans are built there.
-        if fi.is_none() {
-            for field in fields {
-                let access = self.tree.class_member_access.get(&node_key(field)).copied();
-                let is_method = field.flags & (f::METHOD | f::GETTER | f::SETTER) != 0;
-                let mut plan = FieldPlan::default();
-                // Alias slots are 0-based (the `index + 1` serialization family
-                // adds the one): the slot is the frame position *before* the
-                // push.
-                match field.token {
-                    Token::PropertyAt => {
-                        plan.at = Some(caps.len() as i32);
-                        caps.push(access.and_then(|a| a.at).expect("computed field atAccess"));
-                    }
-                    Token::PrivateProperty => {
-                        let a = access.expect("private member access");
-                        if is_method {
-                            plan.value = Some(caps.len() as i32);
-                            caps.push(a.value.expect("valueAccess"));
-                        }
-                        let sym_id = a.symbol.expect("symbolAccess");
-                        // The private name of this brand declare (a `Named` sym).
-                        let name = self.tree.scopes[class_scope]
-                            .declares
-                            .iter()
-                            .find(|d| d.id == sym_id)
-                            .and_then(|d| match &d.symbol {
-                                Some(crate::scoper::Sym::Named(n)) => Some(n.clone()),
-                                _ => None,
-                            });
-                        let slot = match name {
-                            Some(n) => *brand_slot.entry(n).or_insert_with(|| {
-                                let s = caps.len() as i32;
-                                caps.push(sym_id);
-                                s
-                            }),
-                            None => {
-                                let s = caps.len() as i32;
-                                caps.push(sym_id);
-                                s
-                            }
-                        };
-                        plan.symbol = Some(slot);
-                    }
-                    Token::Body => {
-                        // A `static { … }` block with its own lexical
-                        // declarations needs those slots reserved in this
-                        // function's frame — the remaining class-tail fold.
-                        // (XS RESERVEs them in the constructorInit function via
-                        // its `scopeMaximum`; the inline-synthesized field-init
-                        // function here has no such precomputed count yet.)
-                        let bscope = self.tree.node_scopes.get(&node_key(field)).map(|s| s.0);
-                        assert!(
-                            bscope.map(|s| self.declare_count(s)).unwrap_or(0) == 0,
-                            "static block with lexical declarations deferred"
-                        );
-                    }
-                    _ => {}
-                }
-                plans.push(plan);
-            }
-        }
-        let k = caps.len() as i32;
 
         let target = self.create_target();
         self.program_flag = false;
@@ -3321,57 +3243,58 @@ impl Coder<'_, '_> {
         // computed-key / private-brand / private-value member closures AND
         // outer bindings a field value captures — drive the frame
         // `RESERVE`/`RETRIEVE` (`scopeCount == scopeMaximum` = closures + peak
-        // value-temporary depth) and the closure-slot access indices. The
-        // static member-closure path reserves `k` member-closure slots.
-        if let Some(fi) = fi {
-            // A field-init function scope holds only member-access / value
-            // use-closure aliases; a real (non-alias) declare means a
-            // `static { … }` block hoisted a lexical declaration into it (its
-            // own frame reservation + block coding is the remaining class-tail
-            // fold). Keep it a loud, named fold rather than a mis-emit.
-            if self.tree.scopes[fi]
-                .declares
-                .iter()
-                .any(|d| d.flags & crate::scoper::dflags::USE_CLOSURE == 0)
-            {
-                panic!("static block with lexical declarations deferred");
-            }
-            let reserve = *self.tree.scope_counts.get(&fi).unwrap_or(&0);
-            if reserve != 0 {
-                self.add_index(0, XS_CODE_RESERVE_1, reserve);
-            }
-            self.scope_code_retrieve(fi);
-            // Each field's member accesses now have assigned frame slots; read
-            // them back as the field body's `GET_CLOSURE` / `NEW_PRIVATE`
-            // operands (a get/set pair shares one brand slot via the scoper's
-            // use-closure dedup).
-            for field in fields {
-                let slots = self
+        // value-temporary depth) and the closure-slot access indices.
+        // A field-init function scope holds only member-access / value
+        // use-closure aliases; a real (non-alias) declare means a
+        // `static { … }` block hoisted a lexical declaration into it (its
+        // own frame reservation + block coding is the remaining class-tail
+        // fold). Keep it a loud, named fold rather than a mis-emit.
+        if self.tree.scopes[fi]
+            .declares
+            .iter()
+            .any(|d| d.flags & crate::scoper::dflags::USE_CLOSURE == 0)
+        {
+            panic!("static block with lexical declarations deferred");
+        }
+        let reserve = *self
+            .tree
+            .scope_counts
+            .get(&fi)
+            .expect("compiler invariant: missing scope count");
+        if reserve != 0 {
+            self.add_index(0, XS_CODE_RESERVE_1, reserve);
+        }
+        self.scope_code_retrieve(fi);
+        // Each field's member accesses now have assigned frame slots; read
+        // them back as the field body's `GET_CLOSURE` / `NEW_PRIVATE`
+        // operands (a get/set pair shares one brand slot via the scoper's
+        // use-closure dedup).
+        for field in fields {
+            // Static blocks bind their body directly, with no member alias.
+            let slots = if field.token == Token::Body {
+                crate::scoper::MemberAccess::default()
+            } else {
+                *self
                     .tree
                     .class_member_fi
-                    .get(&node_key(field))
-                    .copied()
-                    .unwrap_or_default();
-                let plan = FieldPlan {
-                    at: slots.at.map(|id| self.declare_index(fi, id)),
-                    symbol: slots.symbol.map(|id| self.declare_index(fi, id)),
-                    value: slots.value.map(|id| self.declare_index(fi, id)),
-                };
-                plans.push(plan);
-            }
-            // `fxScopeCodingParams` (xsCode.c: fxFunctionNodeCode calls it
-            // right after `fxScopeCodeRetrieve`): a field-init function whose
-            // initializer contains a direct `eval` is reached by the scope's
-            // `mxEvalFlag` (set on `fi` during the hoist-time poison walk, now
-            // that sibling 1 creates the field-init scope at hoist), so it
-            // publishes its (empty) parameter set into a `with` environment —
-            // the strict-mode `undefined; with; pop` eval prelude. A field-init
-            // scope declares only closure aliases, so this is the sole effect.
-            self.scope_coding_params(fi);
-        } else if k != 0 {
-            self.add_index(0, XS_CODE_RESERVE_1, k);
-            self.add_index(0, XS_CODE_RETRIEVE_1, k);
+                    .get(&node_id(field))
+                    .expect("compiler invariant: missing field member aliases")
+            };
+            let plan = FieldPlan {
+                at: slots.at.map(|id| self.declare_index(fi, id)),
+                symbol: slots.symbol.map(|id| self.declare_index(fi, id)),
+                value: slots.value.map(|id| self.declare_index(fi, id)),
+            };
+            plans.push(plan);
         }
+        // `fxScopeCodingParams` (xsCode.c: fxFunctionNodeCode calls it
+        // right after `fxScopeCodeRetrieve`): a field-init function whose
+        // initializer contains a direct `eval` has `mxEvalFlag` set on `fi`
+        // by the hoist-time poison walk, so it
+        // publishes its (empty) parameter set into a `with` environment —
+        // the strict-mode `undefined; with; pop` eval prelude. A field-init
+        // scope declares only closure aliases, so this is the sole effect.
+        self.scope_coding_params(fi);
         self.return_target = Some(self.create_target());
         for (field, plan) in fields.iter().zip(plans.iter()) {
             self.code_field(field, plan);
@@ -3385,30 +3308,14 @@ impl Coder<'_, '_> {
         // running in the enclosing class frame (`fxScopeCodeStore`). At eval
         // scope the environment is a `FUNCTION_ENVIRONMENT`; otherwise a
         // captured field function needs a plain `ENVIRONMENT`.
-        if let Some(fi) = fi {
-            let has_captures = self.tree.scopes[fi].closure_count != 0;
-            if saved_eval {
-                self.add_byte(1, XS_CODE_FUNCTION_ENVIRONMENT);
-                self.scope_code_store(fi);
-                self.add_byte(-1, XS_CODE_POP);
-            } else if has_captures {
-                self.add_byte(1, XS_CODE_ENVIRONMENT);
-                self.scope_code_store(fi);
-                self.add_byte(-1, XS_CODE_POP);
-            }
-        } else if saved_eval {
+        let has_captures = self.tree.scopes[fi].closure_count != 0;
+        if saved_eval {
             self.add_byte(1, XS_CODE_FUNCTION_ENVIRONMENT);
-            for &cap in &caps {
-                let idx = self.declare_index(class_scope, cap);
-                self.add_index(0, XS_CODE_STORE_1, idx);
-            }
+            self.scope_code_store(fi);
             self.add_byte(-1, XS_CODE_POP);
-        } else if k != 0 {
+        } else if has_captures {
             self.add_byte(1, XS_CODE_ENVIRONMENT);
-            for &cap in &caps {
-                let idx = self.declare_index(class_scope, cap);
-                self.add_index(0, XS_CODE_STORE_1, idx);
-            }
+            self.scope_code_store(fi);
             self.add_byte(-1, XS_CODE_POP);
         }
 
@@ -3517,7 +3424,11 @@ impl Coder<'_, '_> {
         // fusion handle them), so no body-shape guard is needed.
         let is_arrow = flags & f::ARROW != 0;
         let is_strict = flags & f::STRICT != 0;
-        let scope_count = *self.tree.scope_counts.get(&scope).unwrap_or(&0);
+        let scope_count = *self
+            .tree
+            .scope_counts
+            .get(&scope)
+            .expect("compiler invariant: missing scope count");
         let scope_eval = self.tree.scopes[scope].flags & crate::scoper::SCOPE_EVAL != 0;
 
         // A direct `eval` inside a **parameter default** poisons the
@@ -5617,8 +5528,7 @@ impl Coder<'_, '_> {
             self.add_byte(1, XS_CODE_UNDEFINED);
             self.add_byte(-1, XS_CODE_SET_RESULT);
         }
-        // Reference the case nodes in place (the scoper keys scopes by
-        // node address, so cloning would miss registrations).
+        // Reference the case nodes in place without copying their trees.
         let cases: Vec<&Node> = match &node.children[1] {
             Item::List(items) => items.iter().map(node_of).collect(),
             _ => Vec::new(),
@@ -6921,3 +6831,6 @@ mod symbol_limits {
         );
     }
 }
+
+#[cfg(test)]
+mod node_identity_tests;

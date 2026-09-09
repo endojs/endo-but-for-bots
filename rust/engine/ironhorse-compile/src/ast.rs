@@ -169,6 +169,11 @@ pub const TREE_DEPTH_LIMIT: u32 = 2048;
 /// `flags`) plus its child slots and any leaf payload.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Node {
+    /// Identity within one parsed tree, preserved by cloning. The parser assigns
+    /// monotonically increasing IDs, including to synthesized nodes. Standalone
+    /// nodes made by `Node::new` are unassigned (`u32::MAX`); callers assembling
+    /// trees by hand must assign distinct IDs before scoping them.
+    pub id: u32,
     /// The node kind — `description->token` in XS.
     pub token: Token,
     /// 1-based source line, XS's `node->line`.
@@ -192,6 +197,7 @@ impl Node {
     pub fn new(token: Token, line: u32, flags: u32, children: Vec<Item>, value: Value) -> Node {
         let depth = 1 + children.iter().map(item_depth).max().unwrap_or(0);
         Node {
+            id: u32::MAX,
             token,
             line,
             flags,
