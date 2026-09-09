@@ -868,3 +868,26 @@ when validation started, so overlap cannot be ruled out.
 The replacement serial baseline completed before runtime edits.
 No further trials were selected, and these observations establish no cause.
 This extraction is not accepted; full 1A work and performance acceptance remain outstanding.
+
+## Rejected BigInt runtime module extraction (1A, F142)
+
+[results/1a-bigint-module.json](results/1a-bigint-module.json) retains a rejected
+move of 17 BigInt methods and the VM-dependent radix formatter into
+`interp/natives/bigint.rs`, compared with `edbb73656`.
+The embedded `candidate_patch` reproduces all six measured source files,
+including the source-lock inputs and ignored BigInt benchmark.
+All candidate runtime and test changes were reverted after measurement.
+The 4,106 moved Rust tokens matched after allowing scoped visibility and formatting.
+The engine CI suite passed 1,477 tests, SQLite passed 116 tests, and both sets of
+46 source-lock tests, strict VM Clippy, and the platform Math-vector check passed.
+
+The initial 48-control comparison failed the unchanged 1.25x gate:
+placeholder allocation at 4,000,000 elements measured 1.793x.
+A fixed three-trial audit alternated baseline/candidate order and retained all six runs.
+Its median comparisons also failed: front sliding at 2,000 elements measured
+1.303x, and front/tail sliding at 8,000 elements measured 1.317x/1.286x.
+The four BigInt-specific controls ranged from 0.983x to 1.028x with identical
+results and raw meter totals; these do not override the general-control failures.
+No further trials were selected, and these observations establish no cause.
+This extraction is not accepted; full 1A decomposition and performance acceptance
+remain outstanding.
