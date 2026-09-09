@@ -357,11 +357,20 @@ Ironhorse heap is already in that form.
 
 ### Interpreter and dispatch
 
-A `match` over a `#[repr(u8)]` opcode enum, compiled by LLVM to a
-jump table; interpreter state (stack top, frame, scope, code
-cursor) lives in a small register struct threaded through the
-loop, mirroring `mxSaveState`/`mxRestoreState` at allocation and
-call boundaries. No JIT, ever (requirement 4): no code generation,
+A `match` over a `#[repr(u8)]` opcode enum is compiled by LLVM to a jump table.
+The current implementation keeps the program counter local to `dispatch_at_inner`
+and the stack, frame registers, and scope state on `Interp`, alongside its arenas
+and side tables.
+The declaration in
+[`interp/state.rs`](../rust/engine/ironhorse-vm/src/interp/state.rs) generates those
+fields and their GC hook inventory.
+Call boundaries save caller state in `CallerState`; suspended activations carry a
+`SavedFrame`.
+Any future register-localization optimization must be evaluated against the
+[`dispatch_bench` controls](../rust/engine/benches/README.md), rather than assuming
+that a separate small register struct already provides that benefit.
+
+No JIT, ever (requirement 4): no code generation,
 no execution-count-dependent behavior, no fast paths whose cost
 differs from the metered count. Tail-call threaded dispatch (the
 unstable `become` feature) is a possible later optimization behind

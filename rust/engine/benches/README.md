@@ -545,3 +545,23 @@ slot allocation was 1.010x, dispatch 0.959x, and full-first, steady full, and pa
 collection at 80,000 slots were 1.020x, 1.016x, and 0.980x respectively.
 No inlining or other performance tuning was applied between these runs.
 These samples record the delta and host variability; they do not establish a speedup.
+
+## Interpreter decomposition: field inventory increment
+
+[results/1a-state-roster.json](results/1a-state-roster.json) retains four runs for
+the shared field declaration and GC hook inventory, with every failed threshold.
+Against freshly measured original `96db92e23`, several checkpoint controls exceeded
+1.25x and repeated, while dispatch and the largest full/partial GC cases were near
+parity.
+A fresh parent `98946c1bd` comparison measured checkpoint controls at 0.987–1.063x,
+but the largest partial-GC case spiked to 1.946x.
+Its repeat measured that case at 1.002x; the smallest front-slide control failed at
+1.275x and dispatch measured 1.120x.
+No performance edits were made between runs.
+
+No run passed every unchanged 1.25x threshold.
+The parent comparison does not reproduce the broad checkpoint slowdown as an effect
+of this increment, but these samples neither prove equivalence nor establish that
+all failures are host noise.
+The overall branch performance gate remains unresolved pending final decomposition
+measurement.

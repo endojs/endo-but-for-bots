@@ -9,76 +9,7 @@ use crate::value::{ChunkOffset, SlotIndex};
 
 macro_rules! gc_tables {
     ($consumer:ident $(, $arg:ident)*) => {
-        $consumer! {
-            ($($arg),*)
-            early {
-                functions: ClassMap<FuncInfo> => keys,
-                bound_functions: ClassMap<BoundData> => map,
-                ctor_prototype: std::collections::HashMap<SlotIndex, SlotIndex> => map,
-                wrapper_data: ClassMap<Slot> => map,
-                arrays: ClassMap<ArrayData> => counted,
-                index_props: std::collections::HashMap<SlotIndex, ArrayData> => counted,
-                collections: ClassMap<CollectionData> => counted,
-                symbol_key_ids: std::collections::HashMap<SlotIndex, u16> => map,
-                array_buffers: ClassMap<ArrayBufferData> => map,
-                typed_arrays: ClassMap<TypedArrayData> => map,
-                data_views: ClassMap<DataViewData> => map,
-                iterators: std::collections::HashMap<SlotIndex, IterState> => map,
-                promises: std::collections::HashMap<SlotIndex, PromiseData> => map,
-                generators: std::collections::HashMap<SlotIndex, GeneratorData> => map,
-                async_instances: std::collections::HashMap<SlotIndex, AsyncData> => map,
-                promise_functions: ClassMap<PromiseFnData> => map,
-                async_generators: std::collections::HashMap<SlotIndex, AsyncGeneratorData> => map,
-                disposable_stacks: ClassMap<DisposableStackData> => map,
-                accessors: std::collections::HashMap<(SlotIndex, u16), AccessorData> => owner_pair,
-                private_values: std::collections::HashMap<(SlotIndex, SlotIndex), Slot> => both_pair,
-                private_accessors: std::collections::HashMap<(SlotIndex, SlotIndex), AccessorData> => both_pair,
-            }
-            late {
-                error_data: std::collections::HashMap<crate::value::SlotIndex, ErrorInfo> => map,
-                regexps: ClassMap<RegExpData> => map,
-                func_segments: std::collections::HashMap<crate::value::SlotIndex, usize> => map,
-                proxies: ClassMap<ProxyData> => map,
-                proxy_revokers: std::collections::HashMap<SlotIndex, SlotIndex> => map,
-                segment_iterators: std::collections::HashMap<SlotIndex, SegmentIteratorData> => map,
-                collator_compare_functions: std::collections::HashMap<SlotIndex, SlotIndex> => map,
-                number_format_bound_functions: std::collections::HashMap<SlotIndex, SlotIndex> => map,
-                temporal_instants: ClassMap<TemporalInstantRecord> => map,
-                temporal_durations: ClassMap<TemporalDurationRecord> => map,
-                temporal_plains: ClassMap<TemporalPlainRecord> => map,
-                temporal_zoneds: ClassMap<TemporalZonedRecord> => map,
-                dates: std::collections::HashMap<crate::value::SlotIndex, f64> => map,
-                detached_buffers: std::collections::HashSet<crate::value::SlotIndex> => set,
-                shared_buffers: std::collections::HashSet<crate::value::SlotIndex> => set,
-                arguments_objects: std::collections::HashSet<crate::value::SlotIndex> => set,
-                deleted_fn_meta: std::collections::HashSet<(crate::value::SlotIndex, u16)> => pair_set,
-                locales: ClassMap<LocaleData> => map,
-                collators: ClassMap<CollatorData> => map,
-                list_formats: std::collections::HashMap<crate::value::SlotIndex, ListFormatData> => map,
-                plural_rules: std::collections::HashMap<crate::value::SlotIndex, PluralRulesData> => map,
-                number_formats: std::collections::HashMap<SlotIndex, NumberFormatData> => map,
-                segmenters: std::collections::HashMap<crate::value::SlotIndex, SegmenterData> => map,
-                segments: std::collections::HashMap<crate::value::SlotIndex, SegmentsData> => map,
-                date_time_formats: std::collections::HashMap<crate::value::SlotIndex, DateTimeFormatData> => map,
-                symbol_registry_keys: std::collections::HashMap<crate::value::SlotIndex, Vec<u8>> => map,
-            }
-            held {
-                stack: mutable Vec<Slot>,
-                locals: mutable Vec<Slot>,
-                args: mutable Vec<Slot>,
-                this_val: mutable Slot,
-                exception: mutable Slot,
-                result: mutable Slot,
-                call_stack: mutable Vec<CallerState>,
-                well_known_symbols: mutable Vec<(&'static str, Slot)>,
-                proto_value_data: mutable Vec<(SlotIndex, &'static str, Slot)>,
-                promise_jobs: mutable std::collections::VecDeque<PromiseJob>,
-                side_refs: mutable SideRefCounts,
-                combinators: shared [CombinatorState],
-                from_async: mutable Vec<FromAsyncData>,
-                static_str: mutable StaticStrings,
-            }
-        }
+        interp_state! { select_gc_tables, $consumer $(, $arg)* }
     };
 }
 
