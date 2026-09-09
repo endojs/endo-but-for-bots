@@ -982,3 +982,22 @@ A passing same-source control does not establish the cause of earlier Array
 failures or rule out environmental effects.
 The Array extraction remains rejected, and no prior timing record or acceptance
 threshold changed.
+
+## Rejected buffer native extraction (1A)
+
+[results/1a-buffer-module.json](results/1a-buffer-module.json) retains the
+39-method buffer, typed-array, DataView, and Atomics extraction and its measurements.
+The candidate reduced the parent from 40,286 to 38,299 lines.
+Independent review verified the moved methods, comments, attributes, and source-lock
+coverage; 1,479 engine tests and 116 SQLite tests passed.
+Strict VM library Clippy and the math check passed; rustdoc retained 61 warnings.
+
+All five targeted execution controls passed, with matching guest results and raw
+meter totals and timing ratios from 0.949x to 1.090x.
+Four of the 48 general comparisons exceeded the unchanged 1.25x gate:
+the 500-row front-garbage slide was 1.302x, and the 120,320-, 1,000,000-, and
+4,000,000-byte placeholder controls were 1.676x, 1.719x, and 2.403x.
+No additional timing trials were run.
+The candidate runtime, source-lock, and benchmark changes were reverted.
+The record preserves their complete patch, source hashes, reports, and validation
+results; this extraction is not accepted.
