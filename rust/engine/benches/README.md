@@ -961,3 +961,24 @@ This comparison covers one function, not its callees, linked data, heap state,
 or processor behavior, and does not establish a cause for the timing failures.
 No additional timing trials were run and no acceptance decision changed.
 The rejected Array patch and all failed observations remain in the earlier record.
+
+## Same-source archive/workspace control (1A)
+
+[results/1a-archive-control.json](results/1a-archive-control.json) records a fixed
+three-trial comparison of the archived `6735e6ca8` baseline and the current
+workspace, whose subsequent commits changed only evidence files.
+The input inventory verifies 2,630 identical baseline-tracked engine files,
+including the runner, benchmark support, and non-Rust assets.
+Only the benchmark README differs among files tracked at the baseline commit.
+Generated artifacts and later evidence files are outside that inventory.
+
+All six runs are retained in archive/workspace, workspace/archive,
+archive/workspace order.
+All 48 aggregate median ratios passed 1.25x, ranging from 0.935x to 1.176x.
+The four benchmark executable hashes differ across build contexts; the record
+includes their paths/hashes and a post-run tool/environment snapshot.
+This does not establish complete build-context identity or explain that difference.
+A passing same-source control does not establish the cause of earlier Array
+failures or rule out environmental effects.
+The Array extraction remains rejected, and no prior timing record or acceptance
+threshold changed.
