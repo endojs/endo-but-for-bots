@@ -168,16 +168,21 @@ test.serial(
 test.serial(
   'controlled namespace mismatch refuses admission and retries failed removal',
   async t => {
-    t.timeout(5000);
+    // Startup permits two 10s handshakes, then cleanup can spend 1s per
+    // stop attempt and 5s waiting for the child. Keep a finite test deadline
+    // that lets those runtime deadlines finish on a busy CI worker.
+    t.timeout(30_000);
     const f = await fixture(t);
     const runtime = await makePodmanProviderListenerRuntime(f.options);
     t.teardown(runtime.dispose);
     f.wrongNamespace();
     f.failRemoval();
-    await t.throwsAsync(
+    const error = await t.throwsAsync(
       () => runtime.start({ endpoint: Far('inference', {}), limits }),
       { instanceOf: AggregateError },
     );
+    t.regex(error.errors[0].message, /isolation is not proved/);
+    t.regex(error.errors[1].message, /removal failed/);
     f.allowRemoval();
     await runtime.retryCleanup();
     t.is(f.removals.length, 1);
