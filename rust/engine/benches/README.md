@@ -1106,3 +1106,16 @@ This measures the whole branch, including intervening base and persistence chang
 It does not establish which change caused a difference.
 Incremental extraction results do not supersede this failed full-branch gate;
 full 1A performance acceptance remains outstanding.
+
+The subsequent [geometry analysis](results/1a-full-goal-compaction-geometry.json)
+extracts all 72 compaction rows from that retained run, without new timing trials.
+Each shape is stable across its six rounds.
+For front garbage, the reference retains 1, 3, and 9 extents; the candidate retains
+2, 5, and 17, while writing fewer slot pages.
+Commit `45717727e` changed GC from whole-arena sliding to extent-local compaction,
+which retains reusable interior holes and keeps crossing live blocks fixed.
+Collection occurs before the fixture starts its checkpoint timer.
+The timed checkpoints therefore receive different heap geometry despite identical
+fixture source; row counts alone do not measure encoded bytes or total work.
+This identifies a comparison difference, not the cause or size of the regression.
+The failed gate and the extent-local policy's retained machinery remain in force.
