@@ -1027,7 +1027,7 @@ mod tests {
 
     fn checked_quiescence_source() -> String {
         check_quiescence_wiring(
-            include_str!("../../ironhorse-vm/src/interp.rs"),
+            include_str!("../../ironhorse-vm/src/interp/persist.rs"),
             include_str!("../../ironhorse-vm/src/interp/boundary.rs"),
         );
         ironhorse_vm::interp::boundary::QUIESCENCE_SOURCE
@@ -1039,7 +1039,7 @@ mod tests {
 
     #[test]
     fn quiescence_source_lock_rejects_disconnected_emitters() {
-        let interp = include_str!("../../ironhorse-vm/src/interp.rs");
+        let interp = include_str!("../../ironhorse-vm/src/interp/persist.rs");
         let boundary = include_str!("../../ironhorse-vm/src/interp/boundary.rs");
         check_quiescence_wiring(interp, boundary);
         for (before, after) in [

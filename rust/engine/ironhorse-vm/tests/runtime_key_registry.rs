@@ -34,7 +34,7 @@ fn check_wiring(interp: &str, persistence: &str) {
 #[test]
 fn runtime_key_holder_set_and_projections_are_preserved() {
     check_wiring(
-        include_str!("../src/interp.rs"),
+        include_str!("../src/interp/persist.rs"),
         include_str!("../src/interp/persistence.rs"),
     );
     let actual: Vec<_> = RUNTIME_KEY_HOLDER_SOURCE
@@ -62,7 +62,7 @@ fn runtime_key_holder_set_and_projections_are_preserved() {
 
 #[test]
 fn disconnected_key_scans_are_rejected() {
-    let interp = include_str!("../src/interp.rs");
+    let interp = include_str!("../src/interp/persist.rs");
     let persistence = include_str!("../src/interp/persistence.rs");
     check_wiring(interp, persistence);
     for (before, after) in [

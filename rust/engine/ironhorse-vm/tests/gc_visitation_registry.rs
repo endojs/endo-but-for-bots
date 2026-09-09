@@ -65,6 +65,8 @@ const SRC: &str = concat!(
     include_str!("../src/interp/natives/dispatch.rs"),
     "\n",
     include_str!("../src/interp/property.rs"),
+    "\n",
+    include_str!("../src/interp/persist.rs"),
 );
 
 /// The body (including braces) of the function that starts at the

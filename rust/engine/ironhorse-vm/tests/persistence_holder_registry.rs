@@ -29,7 +29,7 @@ fn check_wiring(interp: &str, persistence: &str) {
 #[test]
 fn every_persisted_holder_keeps_its_native_reference_checks() {
     check_wiring(
-        include_str!("../src/interp.rs"),
+        include_str!("../src/interp/persist.rs"),
         include_str!("../src/interp/persistence.rs"),
     );
     // Kept independent of field annotations. This is the historical holder
@@ -71,7 +71,7 @@ fn every_persisted_holder_keeps_its_native_reference_checks() {
 
 #[test]
 fn disconnected_holder_emitters_are_rejected() {
-    let interp = include_str!("../src/interp.rs");
+    let interp = include_str!("../src/interp/persist.rs");
     let persistence = include_str!("../src/interp/persistence.rs");
     check_wiring(interp, persistence);
     for (before, after) in [
