@@ -96,12 +96,16 @@ The old `codex-auth-seeder`, shared `CODEX_HOME`,
 `CLAUDE_CODE_OAUTH_TOKEN` environment injection, and credential materialization
 from PR #994 must not land underneath this feature.
 
-Subscription mode is now disabled for a recorded reason rather than for want of
-an implementation.
-Neither vendor documents a configuration in which a proxy or gateway supplies
-the subscription credential: Codex's proxy mode authenticates with the CLI's own
-`auth.json`, and a Claude Code gateway credential displaces the claude.ai login
-rather than carrying it.
+Subscription mode is disabled for a recorded reason rather than for want of an
+implementation, and as of 2026-09-09 that reason differs by provider.
+Codex *does* document a path — `chatgptAuthTokens`, an app-server login mode
+for host apps that own the user's ChatGPT auth lifecycle, with the host
+answering `account/chatgptAuthTokens/refresh`.
+It is unproven here rather than unavailable: what is missing is a live session
+establishing individual-plan acceptance and token persistence, plus a
+broker-side handler for a method this branch currently answers with `-32601`.
+For Claude Code no vendor exposes the broker role to a third party for an
+individual subscription, so that mode stays closed.
 The finding, with quoted sources, is in
 [SUBSCRIPTION-AUTH.md](./SUBSCRIPTION-AUTH.md) § "Finding" and
 [`designs/hosted-agent-broker-oauth.md`](../../designs/hosted-agent-broker-oauth.md).
