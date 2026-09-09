@@ -44,6 +44,8 @@
 #[macro_use]
 mod state;
 
+mod native_try;
+
 mod suspend;
 use suspend::Suspension;
 
@@ -20169,49 +20171,6 @@ impl Interp {
         }
     }
 
-    /// Run guest code under a native `mxTry`. XS's promise executor call
-    /// (`fx_Promise`), `fxOnThenable`, the reaction jobs and the disposer
-    /// loop each run the guest inside their own `mxTry`/`mxCatch`, whose
-    /// `setjmp` sits BETWEEN the guest and any `try` live around the native
-    /// call: a throw the guest does not catch lands in the native catch and
-    /// never reaches the caller's handler. Model that by FENCING the
-    /// caller's handler chain for the duration of `body` — the chain the
-    /// guest can unwind into holds only the handlers it establishes itself
-    /// — and handing an escaped throw back as `Ok(Err(thrown))`. Without
-    /// the fence, `try { new Promise(function(){ throw 1 }) } catch (e) {}`
-    /// ran the catch (XS: the promise rejects, the catch does not run) and
-    /// left the promise pending forever (review F023).
-    ///
-    /// A real host halt (meter abort, unsupported, …) propagates. A
-    /// `Step::Unwound` cannot escape a fenced body: every handler the guest
-    /// can reach was established inside `body`, at or above the depth of the
-    /// nested dispatch that consumes it.
-    fn native_try<T>(
-        &mut self,
-        body: impl FnOnce(&mut Self) -> Result<T, Step>,
-    ) -> Result<Result<T, Slot>, Step> {
-        let fenced_jumps = std::mem::take(&mut self.jumps);
-        let stack_base = self.stack.len();
-        let call_depth = self.call_stack.len();
-        let outcome = match body(self) {
-            Ok(value) => Ok(Ok(value)),
-            Err(Step::Threw { value, .. }) => {
-                self.unwind_native_try(stack_base, call_depth, 0);
-                Ok(Err(value))
-            }
-            Err(Step::Unwound(_)) => Err(Step::Host(Halt::EngineInvariant(
-                "native-try:resume-escaped-fence",
-            ))),
-            Err(halt) => Err(halt),
-        };
-        debug_assert!(
-            !matches!(outcome, Ok(_)) || self.jumps.is_empty(),
-            "guest code left handlers behind a native try"
-        );
-        self.jumps = fenced_jumps;
-        outcome
-    }
-
     /// Run a callback behind a native `mxTry` boundary ([`Self::native_try`]).
     /// Promise executors, thenable jobs and disposers catch a guest throw in
     /// native code: the callback activation is abandoned, the thrown value is
@@ -27393,9 +27352,8 @@ impl Interp {
     // ------------------------------------------------------------------
 
     fn array_from(&mut self, code: &[u8], base: usize, argc: usize) -> Result<Slot, Step> {
-        let saved_jumps = std::mem::take(&mut self.jumps);
-        let outcome = self.array_from_inner(code, base, argc);
-        self.jumps = saved_jumps;
+        let outcome =
+            self.run_guest_under_native_try(|machine| machine.array_from_inner(code, base, argc));
         match outcome {
             Ok(Ok(value)) => Ok(value),
             Ok(Err(error)) => Err(self.raise_js(error)),
@@ -27410,9 +27368,8 @@ impl Interp {
     // ------------------------------------------------------------------
 
     fn array_of(&mut self, code: &[u8], base: usize, argc: usize) -> Result<Slot, Step> {
-        let saved_jumps = std::mem::take(&mut self.jumps);
-        let outcome = self.array_of_inner(code, base, argc);
-        self.jumps = saved_jumps;
+        let outcome =
+            self.run_guest_under_native_try(|machine| machine.array_of_inner(code, base, argc));
         match outcome {
             Ok(Ok(value)) => Ok(value),
             Ok(Err(error)) => Err(self.raise_js(error)),
@@ -27927,50 +27884,6 @@ impl Interp {
     // `schedule_native_await` and the observable async behavior is exact.
     // ------------------------------------------------------------------
 
-    /// Abandon what a native `mxTry` boundary caught a throw out of: pop the
-    /// callee activations opened since `call_depth`, cut the value stack and
-    /// the jump chain back to the recorded depths, clear the `mxException`
-    /// register (the catch consumed it), and reverse the host-escape metering
-    /// the escape speculatively paid — XS never left the machine. The thrown
-    /// value itself travels in the `Halt::Throw` the boundary matched, never
-    /// through the register, so a boundary cannot observe a stale one.
-    fn unwind_native_try(&mut self, stack_base: usize, call_depth: usize, jump_depth: usize) {
-        while self.call_stack.len() > call_depth {
-            let _ = self.leave_call();
-        }
-        self.stack.truncate(stack_base);
-        self.jumps.truncate(jump_depth);
-        self.exception = Slot::undefined();
-        self.unmeter_host_escape();
-    }
-
-    /// Convert a re-entrant result into a catchable outcome: `Ok(Ok(v))` on
-    /// success, `Ok(Err(thrown))` on a JS throw (to reject/close with), and a
-    /// propagated `Err(halt)` for a real host halt (Unsupported/MeterAbort/…).
-    ///
-    /// This classifies AFTER the guest ran, so it is only correct under a
-    /// fence already in place: the fromAsync entry (`array_from_async`) and
-    /// the promise combinators take the caller's handler chain before their
-    /// inner steps, and every later step runs at the microtask drain with no
-    /// guest handler live. A site with a live caller handler must use
-    /// [`Self::native_try`], which fences first.
-    fn from_async_try<T>(
-        &mut self,
-        r: Result<T, Step>,
-        sb: usize,
-        cd: usize,
-        jd: usize,
-    ) -> Result<Result<T, Slot>, Step> {
-        match r {
-            Ok(v) => Ok(Ok(v)),
-            Err(Step::Threw { value, .. }) => {
-                self.unwind_native_try(sb, cd, jd);
-                Ok(Err(value))
-            }
-            Err(h) => Err(h),
-        }
-    }
-
     /// Compatibility alias for the shared `Call(F, thisArg, args)` dispatcher.
     /// Kept at the iterator/Promise sites so their abstract-operation naming
     /// remains readable; all callable shapes are dispatched by
@@ -28203,9 +28116,9 @@ impl Interp {
         // jumps stack across the prologue (the callbacks it invokes push and pop
         // their own handlers above this boundary). Every later step already runs
         // at the microtask drain with a clean stack.
-        let saved_jumps = std::mem::take(&mut self.jumps);
-        let r = self.from_async_start(code, id, this_c, items, argc != 0);
-        self.jumps = saved_jumps;
+        let r = self.run_guest_under_native_try(|machine| {
+            machine.from_async_start(code, id, this_c, items, argc != 0)
+        });
         r?;
         Ok(Slot::of(Kind::Reference, Payload::Reference(promise)))
     }
@@ -28253,18 +28166,14 @@ impl Interp {
             return self.from_async_reject(id, e);
         }
 
-        let sb = self.stack.len();
-        let cd = self.call_stack.len();
-        let jd = self.jumps.len();
-
         // 3.c: GetMethod(items, @@asyncIterator). Only objects carry it
         // (primitives, including strings, have none).
         let mut method_async = Slot::undefined();
         if let Payload::Reference(inst) = items.value {
             if items.kind == Kind::Reference {
                 if let Some(aid) = self.well_known_symbol_property_id("asyncIterator") {
-                    let g = self.mop_get(code, inst, aid, items);
-                    method_async = match self.from_async_try(g, sb, cd, jd)? {
+                    let g = self.native_try(|machine| machine.mop_get(code, inst, aid, items));
+                    method_async = match g? {
                         Ok(m) => m,
                         Err(e) => return self.from_async_reject(id, e),
                     };
@@ -28291,8 +28200,8 @@ impl Interp {
             } else if let Payload::Reference(inst) = items.value {
                 if items.kind == Kind::Reference {
                     if let Some(iid) = self.well_known_symbol_property_id("iterator") {
-                        let g = self.mop_get(code, inst, iid, items);
-                        method_sync = match self.from_async_try(g, sb, cd, jd)? {
+                        let g = self.native_try(|machine| machine.mop_get(code, inst, iid, items));
+                        method_sync = match g? {
                             Ok(m) => m,
                             Err(e) => return self.from_async_reject(id, e),
                         };
@@ -28370,8 +28279,9 @@ impl Interp {
             };
             let next_id = self.intern_key("next");
             let next_method = {
-                let g = self.mop_get(code, iter_inst, next_id, iterator);
-                match self.from_async_try(g, sb, cd, jd)? {
+                let g =
+                    self.native_try(|machine| machine.mop_get(code, iter_inst, next_id, iterator));
+                match g? {
                     Ok(m) => m,
                     Err(e) => return self.from_async_reject(id, e),
                 }
@@ -28402,13 +28312,14 @@ impl Interp {
         let len: u64 = if let Payload::Reference(inst) = array_like.value {
             if array_like.kind == Kind::Reference {
                 let length_id = self.intern_key("length");
-                let g = self.mop_get(code, inst, length_id, array_like);
-                let raw = match self.from_async_try(g, sb, cd, jd)? {
+                let g =
+                    self.native_try(|machine| machine.mop_get(code, inst, length_id, array_like));
+                let raw = match g? {
                     Ok(v) => v,
                     Err(e) => return self.from_async_reject(id, e),
                 };
-                let coerced = self.to_length_value(code, raw);
-                match self.from_async_try(coerced, sb, cd, jd)? {
+                let coerced = self.native_try(|machine| machine.to_length_value(code, raw));
+                match coerced? {
                     Ok(n) => n,
                     Err(e) => return self.from_async_reject(id, e),
                 }
@@ -28445,15 +28356,12 @@ impl Interp {
         len_arg: Option<Slot>,
     ) -> Result<Result<crate::value::SlotIndex, Slot>, Step> {
         if self.from_async_is_constructor(c) {
-            let sb = self.stack.len();
-            let cd = self.call_stack.len();
-            let jd = self.jumps.len();
             let args: Vec<Slot> = match len_arg {
                 Some(l) => vec![l],
                 None => Vec::new(),
             };
-            let r = self.construct_value(code, c, &args, c);
-            let obj = match self.from_async_try(r, sb, cd, jd)? {
+            let r = self.native_try(|machine| machine.construct_value(code, c, &args, c));
+            let obj = match r? {
                 Ok(o) => o,
                 Err(e) => return Ok(Err(e)),
             };
@@ -28503,9 +28411,6 @@ impl Interp {
         if self.from_async[id].settled {
             return Ok(());
         }
-        let sb = self.stack.len();
-        let cd = self.call_stack.len();
-        let jd = self.jumps.len();
         let iterator = self.from_async[id].iterator;
         if iterator.kind != Kind::Undefined {
             let next_method = self.from_async[id].next_method;
@@ -28533,8 +28438,8 @@ impl Interp {
             };
             let done_id = self.intern_key("done");
             let done = {
-                let g = self.mop_get(code, step_inst, done_id, step);
-                match self.from_async_try(g, sb, cd, jd)? {
+                let g = self.native_try(|machine| machine.mop_get(code, step_inst, done_id, step));
+                match g? {
                     Ok(v) => v,
                     Err(e) => return self.from_async_reject(id, e),
                 }
@@ -28544,8 +28449,8 @@ impl Interp {
             }
             let value_id = self.intern_key("value");
             let value = {
-                let g = self.mop_get(code, step_inst, value_id, step);
-                match self.from_async_try(g, sb, cd, jd)? {
+                let g = self.native_try(|machine| machine.mop_get(code, step_inst, value_id, step));
+                match g? {
                     Ok(v) => v,
                     Err(e) => return self.from_async_reject(id, e),
                 }
@@ -28570,8 +28475,9 @@ impl Interp {
             // one name per element and poisoned the machine.
             let key = self.array_index_read_key(k);
             let kvalue = {
-                let g = self.mop_get_read(code, inst, key, array_like);
-                match self.from_async_try(g, sb, cd, jd)? {
+                let g =
+                    self.native_try(|machine| machine.mop_get_read(code, inst, key, array_like));
+                match g? {
                     Ok(v) => v,
                     Err(e) => return self.from_async_reject(id, e),
                 }
@@ -28595,9 +28501,6 @@ impl Interp {
             // `? Await(nextResult)` rejected: propagate (no iterator close).
             return self.from_async_reject(id, value);
         }
-        let sb = self.stack.len();
-        let cd = self.call_stack.len();
-        let jd = self.jumps.len();
         // nextResult must be an Object (IteratorComplete/IteratorValue).
         let step_inst = match value.value {
             Payload::Reference(r) if value.kind == Kind::Reference => r,
@@ -28608,8 +28511,8 @@ impl Interp {
         };
         let done_id = self.intern_key("done");
         let done = {
-            let g = self.mop_get(code, step_inst, done_id, value);
-            match self.from_async_try(g, sb, cd, jd)? {
+            let g = self.native_try(|machine| machine.mop_get(code, step_inst, done_id, value));
+            match g? {
                 Ok(v) => v,
                 Err(e) => return self.from_async_reject(id, e),
             }
@@ -28619,8 +28522,8 @@ impl Interp {
         }
         let value_id = self.intern_key("value");
         let next_value = {
-            let g = self.mop_get(code, step_inst, value_id, value);
-            match self.from_async_try(g, sb, cd, jd)? {
+            let g = self.native_try(|machine| machine.mop_get(code, step_inst, value_id, value));
+            match g? {
                 Ok(v) => v,
                 Err(e) => return self.from_async_reject(id, e),
             }
@@ -28691,9 +28594,6 @@ impl Interp {
         id: usize,
         v: Slot,
     ) -> Result<(), Step> {
-        let sb = self.stack.len();
-        let cd = self.call_stack.len();
-        let jd = self.jumps.len();
         let k = self.from_async[id].k;
         let target = self.from_async[id].target;
         if self.from_async[id].target_is_array {
@@ -28707,8 +28607,10 @@ impl Interp {
                 configurable: Some(true),
                 ..OrdinaryDescriptor::default()
             };
-            let r = self.mop_define_own_property_read(code, target, key, desc);
-            let ok = match self.from_async_try(r, sb, cd, jd)? {
+            let r = self.native_try(|machine| {
+                machine.mop_define_own_property_read(code, target, key, desc)
+            });
+            let ok = match r? {
                 Ok(b) => b,
                 Err(e) => return self.from_async_close_and_reject(code, id, e),
             };
@@ -28724,9 +28626,6 @@ impl Interp {
     /// Set `A.length` and resolve the result promise with `A` (iterator done /
     /// array-like exhausted).
     fn from_async_finish(&mut self, code: &[u8], id: usize) -> Result<(), Step> {
-        let sb = self.stack.len();
-        let cd = self.call_stack.len();
-        let jd = self.jumps.len();
         let target = self.from_async[id].target;
         let len_val = if self.from_async[id].iterator.kind != Kind::Undefined {
             Slot::number(self.from_async[id].k as f64)
@@ -28738,8 +28637,10 @@ impl Interp {
         } else {
             let length_id = self.intern_key("length");
             let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
-            let r = self.mop_set(code, target, length_id, len_val, target_slot);
-            let ok = match self.from_async_try(r, sb, cd, jd)? {
+            let r = self.native_try(|machine| {
+                machine.mop_set(code, target, length_id, len_val, target_slot)
+            });
+            let ok = match r? {
                 Ok(b) => b,
                 Err(e) => return self.from_async_reject(id, e),
             };
@@ -28770,13 +28671,10 @@ impl Interp {
             Payload::Reference(r) => r,
             _ => return self.from_async_reject(id, err),
         };
-        let sb = self.stack.len();
-        let cd = self.call_stack.len();
-        let jd = self.jumps.len();
         let return_id = self.intern_key("return");
         let ret = {
-            let g = self.mop_get(code, inst, return_id, iterator);
-            match self.from_async_try(g, sb, cd, jd)? {
+            let g = self.native_try(|machine| machine.mop_get(code, inst, return_id, iterator));
+            match g? {
                 Ok(v) => v,
                 // GetMethod threw while closing: the completion is already a
                 // throw, so return the original error.
@@ -29211,10 +29109,9 @@ impl Interp {
         // hide the caller's jump targets so a getter/callback throw escapes to
         // the native boundary as a value instead of synchronously resuming the
         // caller's surrounding `try` statement.
-        let saved_jumps = std::mem::take(&mut self.jumps);
-        let outcome = self.promise_combinator_inner(code, kind, iterable, constructor, capability);
-        self.jumps = saved_jumps;
-        outcome
+        self.run_guest_under_native_try(|machine| {
+            machine.promise_combinator_inner(code, kind, iterable, constructor, capability)
+        })
     }
 
     fn promise_combinator_inner(
@@ -38043,9 +37940,8 @@ impl Interp {
     /// abrupt iterator step propagates directly; there is no later per-element
     /// operation requiring IteratorClose.
     fn iterable_to_list(&mut self, code: &[u8], items: Slot) -> Result<Vec<Slot>, Step> {
-        let saved_jumps = std::mem::take(&mut self.jumps);
-        let outcome = self.iterable_to_list_inner(code, items);
-        self.jumps = saved_jumps;
+        let outcome =
+            self.run_guest_under_native_try(|machine| machine.iterable_to_list_inner(code, items));
         match outcome {
             Ok(Ok(values)) => Ok(values),
             Ok(Err(error)) => Err(self.raise_js(error)),
@@ -38526,9 +38422,9 @@ impl Interp {
         iterable: Slot,
         adder: Option<Slot>,
     ) -> Result<(), Step> {
-        let saved_jumps = std::mem::take(&mut self.jumps);
-        let outcome = self.populate_collection_from_iterable_inner(code, inst, iterable, adder);
-        self.jumps = saved_jumps;
+        let outcome = self.run_guest_under_native_try(|machine| {
+            machine.populate_collection_from_iterable_inner(code, inst, iterable, adder)
+        });
         match outcome {
             Ok(Ok(())) => Ok(()),
             Ok(Err(error)) => Err(self.raise_js(error)),
@@ -41665,9 +41561,9 @@ impl Interp {
         base: usize,
         argc: usize,
     ) -> Result<Slot, Step> {
-        let saved_jumps = std::mem::take(&mut self.jumps);
-        let outcome = self.iterator_terminal_helper_inner(code, op, this, base, argc);
-        self.jumps = saved_jumps;
+        let outcome = self.run_guest_under_native_try(|machine| {
+            machine.iterator_terminal_helper_inner(code, op, this, base, argc)
+        });
         match outcome {
             Ok(Ok(value)) => Ok(value),
             Ok(Err(error)) => Err(self.raise_js(error)),
@@ -53148,9 +53044,9 @@ impl Interp {
     /// obtained, every abrupt entry-processing completion closes the iterator;
     /// failures while advancing the iterator itself do not.
     fn object_from_entries(&mut self, code: &[u8], iterable: Slot) -> Result<Slot, Step> {
-        let saved_jumps = std::mem::take(&mut self.jumps);
-        let outcome = self.object_from_entries_inner(code, iterable);
-        self.jumps = saved_jumps;
+        let outcome = self.run_guest_under_native_try(|machine| {
+            machine.object_from_entries_inner(code, iterable)
+        });
         match outcome {
             Ok(Ok(value)) => Ok(value),
             Ok(Err(error)) => Err(self.raise_js(error)),
