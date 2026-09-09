@@ -494,6 +494,7 @@ const readJsonFile = async path => {
  * @param {unknown} _context
  * @param {{
  *   env?: Record<string, string | undefined>,
+ *   timing?: { now: () => number, sleep: (ms: number) => Promise<void> },
  *   systemPaths?: {
  *     osRelease?: string,
  *     currentSystem?: string,
@@ -510,6 +511,8 @@ const readJsonFile = async path => {
  */
 export const make = async (_powers, _context, options = {}) => {
   await null;
+  // Trusted host timing powers; all phases share one clock and deadline.
+  const { now: clockNow = Date.now, sleep = delay } = options.timing ?? {};
   const env = (options && options.env) || {};
   /** @param {string} key */
   const readEnv = key =>
@@ -928,7 +931,7 @@ export const make = async (_powers, _context, options = {}) => {
       // re-parsing the same bytes is deterministic.
       if (attempt < DECISIVE_READ_ATTEMPTS - 1) {
         // eslint-disable-next-line no-await-in-loop
-        await delay(pollMs);
+        await sleep(pollMs);
       }
     }
     throw new Error(
@@ -1149,13 +1152,13 @@ export const make = async (_powers, _context, options = {}) => {
           ) {
             throw lockError;
           }
-          if (Date.now() > deadline) {
+          if (clockNow() > deadline) {
             throw new Error(`Timed out waiting for lock ${q(lockPath)}.`, {
               cause: lockError,
             });
           }
           // eslint-disable-next-line no-await-in-loop
-          await delay(Math.min(pollMs, 250));
+          await sleep(Math.min(pollMs, 250));
         }
       }
       try {
@@ -1169,7 +1172,7 @@ export const make = async (_powers, _context, options = {}) => {
     await mkdir(dirname(lockPath), { recursive: true });
     const timeoutSeconds = Math.max(
       1,
-      Math.ceil((deadline - Date.now()) / 1000),
+      Math.ceil((deadline - clockNow()) / 1000),
     );
     const child = spawn(
       systemPaths.flock,
@@ -1527,13 +1530,13 @@ export const make = async (_powers, _context, options = {}) => {
           );
         }
       }
-      if (Date.now() > deadline) {
+      if (clockNow() > deadline) {
         throw new Error(
           `Request ${id} saw no outcome within the watch limit; giving up.`,
         );
       }
       // eslint-disable-next-line no-await-in-loop
-      await delay(pollMs);
+      await sleep(pollMs);
     }
   };
 
@@ -1613,7 +1616,7 @@ export const make = async (_powers, _context, options = {}) => {
    */
   const driveOperation = async (action, message, id) => {
     await null;
-    const deadline = Date.now() + watchLimitMs;
+    const deadline = clockNow() + watchLimitMs;
     let idlessPolls = 0;
     for (;;) {
       // The entire empty-slot check and publication is one cross-process
@@ -1825,13 +1828,13 @@ export const make = async (_powers, _context, options = {}) => {
       } else {
         idlessPolls = 0;
       }
-      if (Date.now() > deadline) {
+      if (clockNow() > deadline) {
         throw new Error(
           `Request ${id} waited out the watch limit behind another; giving up.`,
         );
       }
       // eslint-disable-next-line no-await-in-loop
-      await delay(pollMs);
+      await sleep(pollMs);
     }
   };
 
@@ -1885,7 +1888,7 @@ export const make = async (_powers, _context, options = {}) => {
           message: String(status.message || 'prebuild failed'),
         });
       }
-      if (Date.now() > deadline) {
+      if (clockNow() > deadline) {
         return harden({
           ok: false,
           phase: 'timeout',
@@ -1894,7 +1897,7 @@ export const make = async (_powers, _context, options = {}) => {
         });
       }
       // eslint-disable-next-line no-await-in-loop
-      await delay(pollMs);
+      await sleep(pollMs);
     }
   };
 
@@ -1947,7 +1950,7 @@ export const make = async (_powers, _context, options = {}) => {
    */
   const drivePrebuild = async (rev, key) => {
     await null;
-    const deadline = Date.now() + watchLimitMs;
+    const deadline = clockNow() + watchLimitMs;
     const nonce = key !== undefined ? String(key) : mintId('prebuild');
     if (await releaseBuilt(rev)) {
       return harden({ ok: true, phase: 'ok', rev, reused: true });
@@ -2016,7 +2019,7 @@ export const make = async (_powers, _context, options = {}) => {
       if (typeof decision === 'object' && decision.kind === 'watch') {
         return awaitPrebuild(rev, decision.nonce, deadline);
       }
-      if (Date.now() > deadline) {
+      if (clockNow() > deadline) {
         return harden({
           ok: false,
           phase: 'timeout',
@@ -2025,7 +2028,7 @@ export const make = async (_powers, _context, options = {}) => {
         });
       }
       // eslint-disable-next-line no-await-in-loop
-      await delay(pollMs);
+      await sleep(pollMs);
     }
   };
 
@@ -2055,7 +2058,7 @@ export const make = async (_powers, _context, options = {}) => {
       requireConfigured();
       return withKernelLock(
         configLockPath,
-        Date.now() + watchLimitMs,
+        clockNow() + watchLimitMs,
         async () => {
           await null;
           const root = subdir
@@ -2077,7 +2080,7 @@ export const make = async (_powers, _context, options = {}) => {
       requireConfigured();
       return withKernelLock(
         configLockPath,
-        Date.now() + watchLimitMs,
+        clockNow() + watchLimitMs,
         async () => {
           const target = await resolveConfigPath(path);
           return readConfigText(target);
@@ -2100,7 +2103,7 @@ export const make = async (_powers, _context, options = {}) => {
       }
       return withKernelLock(
         configLockPath,
-        Date.now() + watchLimitMs,
+        clockNow() + watchLimitMs,
         async () => {
           const target = await resolveConfigPath(path);
           await mkdir(dirname(target), { recursive: true });
@@ -2123,7 +2126,7 @@ export const make = async (_powers, _context, options = {}) => {
       requireConfigured();
       return withKernelLock(
         configLockPath,
-        Date.now() + watchLimitMs,
+        clockNow() + watchLimitMs,
         async () => {
           const text = await readConfigFileOrAbsent(ENDO_REV_FILE);
           // No pin file: the host still tracks services.endo.defaultBranch.
@@ -2159,7 +2162,7 @@ export const make = async (_powers, _context, options = {}) => {
       }
       return withKernelLock(
         configLockPath,
-        Date.now() + watchLimitMs,
+        clockNow() + watchLimitMs,
         async () => {
           await null;
           if (trimmed === '') {
@@ -2210,7 +2213,7 @@ export const make = async (_powers, _context, options = {}) => {
       requireConfigured();
       return withKernelLock(
         configLockPath,
-        Date.now() + watchLimitMs,
+        clockNow() + watchLimitMs,
         async () => {
           await null;
           /** @type {Array<{ path: string, text: string | null, createdDirectories: string[] }>} */
@@ -2353,7 +2356,7 @@ export const make = async (_powers, _context, options = {}) => {
       requireConfigured();
       return withKernelLock(
         configLockPath,
-        Date.now() + watchLimitMs,
+        clockNow() + watchLimitMs,
         async () => {
           await null;
           const paths = [];
@@ -2511,7 +2514,7 @@ export const make = async (_powers, _context, options = {}) => {
       }
       const endoRev = await withKernelLock(
         configLockPath,
-        Date.now() + watchLimitMs,
+        clockNow() + watchLimitMs,
         () => readConfigFileOrAbsent(ENDO_REV_FILE),
       );
       const runningRev = endoRev === null ? '' : endoRev.trim();
