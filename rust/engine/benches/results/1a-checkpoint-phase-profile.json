@@ -498,5 +498,502 @@
   "instrumentation_patch": "diff --git a/rust/engine/ironhorse-snapshot/src/machine.rs b/rust/engine/ironhorse-snapshot/src/machine.rs\nindex e1d711adf..2c1b28822 100644\n--- a/rust/engine/ironhorse-snapshot/src/machine.rs\n+++ b/rust/engine/ironhorse-snapshot/src/machine.rs\n@@ -808,6 +808,7 @@ pub fn checkpoint_to_store(\n     signature: &Signature,\n     store: &mut dyn HeapStore,\n ) -> Result<u64, StoreError> {\n+    let diagnostic_start = std::time::Instant::now();\n     signature.check_boot()?;\n     // Runtime-interned property ids remain resumable: string keys live\n     // in the NAME table (persisted every checkpoint via the small\n@@ -923,6 +924,7 @@ pub fn checkpoint_to_store(\n             ledger\n         }\n     };\n+    let diagnostic_guards = diagnostic_start.elapsed().as_nanos();\n     let interp = &mut session.interp;\n     let mut manifest = manifest_of(interp, signature, epoch, session.cranks);\n     manifest.parent_seal = session.seal.clone();\n@@ -969,6 +971,7 @@ pub fn checkpoint_to_store(\n         .map(|e| (e, interp.chunks.extent_bytes(e)))\n         .collect();\n \n+    let diagnostic_rows = diagnostic_start.elapsed().as_nanos();\n     // Select before extraction and encoding; hash only dirty candidates.\n     let prior_sections =\n         ledger\n@@ -1002,6 +1005,7 @@ pub fn checkpoint_to_store(\n                 != Some(leaf_hash(crate::store::LEAF_FREE, *i, bytes))\n         })\n         .collect();\n+    let diagnostic_small_free = diagnostic_start.elapsed().as_nanos();\n     let mut batch = CheckpointBatch {\n         prev_seal: session.seal.clone(),\n         manifest,\n@@ -1015,7 +1019,9 @@ pub fn checkpoint_to_store(\n     batch.manifest.root = ledger.apply_checkpoint(&batch)?;\n     crate::store::reseal_batch(&mut batch);\n     let seal = batch.manifest.seal.clone();\n+    let diagnostic_ledger = diagnostic_start.elapsed().as_nanos();\n     store.commit(&batch)?;\n+    let diagnostic_commit = diagnostic_start.elapsed().as_nanos();\n     // Failed writes drop the advanced ledger; the next attempt validates the\n     // persisted inventory and reoffers every difference against that baseline.\n     session.root_ledger = Some(ledger);\n@@ -1094,6 +1100,8 @@ pub fn checkpoint_to_store(\n             session.interp.chunks.advance_backing();\n         }\n     }\n+    let diagnostic_ack = diagnostic_start.elapsed().as_nanos();\n+    eprintln!(\"CHECKPOINT_PHASE_NS guards={} rows={} small_free={} ledger={} commit={} ack={} extent_bytes={} slot_bytes={}\", diagnostic_guards, diagnostic_rows-diagnostic_guards, diagnostic_small_free-diagnostic_rows, diagnostic_ledger-diagnostic_small_free, diagnostic_commit-diagnostic_ledger, diagnostic_ack-diagnostic_commit, batch.chunk_extents.iter().map(|(_, b)| b.len()).sum::<usize>(), batch.slot_pages.iter().map(|(_, b)| b.len()).sum::<usize>());\n     Ok(epoch)\n }\n \n",
   "runner_stdout": "   Compiling proc-macro2 v1.0.106\n   Compiling unicode-ident v1.0.24\n   Compiling quote v1.0.45\n   Compiling stable_deref_trait v1.2.1\n   Compiling writeable v0.6.3\n   Compiling litemap v0.8.2\n   Compiling icu_locale_data v2.2.0\n   Compiling utf8_iter v1.0.4\n   Compiling libm v0.2.16\n   Compiling icu_segmenter_data v2.2.0\n   Compiling icu_normalizer_data v2.2.0\n   Compiling ironhorse-unicode v0.0.1 (/tmp/1a-checkpoint-phase-profile/rust/engine/ironhorse-unicode)\n   Compiling ironhorse-meter v0.0.1 (/tmp/1a-checkpoint-phase-profile/rust/engine/ironhorse-meter)\n   Compiling write16 v1.0.0\n   Compiling ironhorse-text v0.0.1 (/tmp/1a-checkpoint-phase-profile/rust/engine/ironhorse-text)\n   Compiling utf16_iter v1.0.5\n   Compiling smallvec v1.15.1\n   Compiling ironhorse-regexp v0.0.1 (/tmp/1a-checkpoint-phase-profile/rust/engine/ironhorse-regexp)\n   Compiling ironhorse-compile v0.0.1 (/tmp/1a-checkpoint-phase-profile/rust/engine/ironhorse-compile)\n   Compiling core_maths v0.1.1\n   Compiling syn v2.0.117\n   Compiling synstructure v0.13.2\n   Compiling zerovec-derive v0.11.3\n   Compiling displaydoc v0.2.5\n   Compiling zerofrom-derive v0.1.7\n   Compiling yoke-derive v0.8.2\n   Compiling zerotrie v0.2.4\n   Compiling zerofrom v0.1.8\n   Compiling yoke v0.8.3\n   Compiling zerovec v0.11.6\n   Compiling tinystr v0.8.3\n   Compiling potential_utf v0.1.5\n   Compiling icu_collections v2.2.0\n   Compiling icu_locale_core v2.2.0\n   Compiling icu_provider v2.2.0\n   Compiling icu_locale v2.2.0\n   Compiling icu_normalizer v2.2.0\n   Compiling icu_segmenter v2.2.0\n   Compiling ironhorse-vm v0.0.1 (/tmp/1a-checkpoint-phase-profile/rust/engine/ironhorse-vm)\n   Compiling ironhorse-snapshot v0.0.1 (/tmp/1a-checkpoint-phase-profile/rust/engine/ironhorse-snapshot)\n    Finished `release` profile [optimized] target(s) in 30.88s\n     Running tests/gc_bench.rs (/tmp/1a-checkpoint-phase-profile/rust/engine/target/release/deps/gc_bench-8e4cb99bd2d8159a)\n\nrunning 1 test\ntest compaction_slide_checkpoint_cost ... CHECKPOINT_PHASE_NS guards=12666 rows=7125 small_free=328834 ledger=530958 commit=576375 ack=583 extent_bytes=65536 slot_bytes=2420\nchunks n=  500 front-garbage (slide): extents    2\u2192   2 | extent rows written    1 | slot pages written    1 | checkpoint   1.542 ms\nCHECKPOINT_PHASE_NS guards=10667 rows=4875 small_free=266291 ledger=445084 commit=488250 ack=416 extent_bytes=65536 slot_bytes=2420\nchunks n=  500 front-garbage (slide): extents    2\u2192   2 | extent rows written    1 | slot pages written    1 | checkpoint   1.273 ms\nCHECKPOINT_PHASE_NS guards=8959 rows=4083 small_free=234667 ledger=397583 commit=433292 ack=250 extent_bytes=65536 slot_bytes=2420\nchunks n=  500 front-garbage (slide): extents    2\u2192   2 | extent rows written    1 | slot pages written    1 | checkpoint   1.131 ms\nCHECKPOINT_PHASE_NS guards=7750 rows=3625 small_free=216209 ledger=367500 commit=405833 ack=208 extent_bytes=65536 slot_bytes=2420\nchunks n=  500 front-garbage (slide): extents    2\u2192   2 | extent rows written    1 | slot pages written    1 | checkpoint   1.047 ms\nCHECKPOINT_PHASE_NS guards=7750 rows=3375 small_free=201000 ledger=343291 commit=375125 ack=167 extent_bytes=65536 slot_bytes=2420\nchunks n=  500 front-garbage (slide): extents    2\u2192   2 | extent rows written    1 | slot pages written    1 | checkpoint   0.973 ms\nCHECKPOINT_PHASE_NS guards=7666 rows=3459 small_free=253208 ledger=459292 commit=518958 ack=208 extent_bytes=65536 slot_bytes=2420\nchunks n=  500 front-garbage (slide): extents    2\u2192   2 | extent rows written    1 | slot pages written    1 | checkpoint   1.284 ms\n\nBENCH_METRIC slide_500_front_ms 1.131125000\nCHECKPOINT_PHASE_NS guards=7334 rows=2791 small_free=260000 ledger=331292 commit=361958 ack=209 extent_bytes=45960 slot_bytes=2420\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    1 | checkpoint   1.006 ms\nCHECKPOINT_PHASE_NS guards=6834 rows=2541 small_free=225417 ledger=312542 commit=343375 ack=166 extent_bytes=45960 slot_bytes=2420\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    1 | checkpoint   0.930 ms\nCHECKPOINT_PHASE_NS guards=6875 rows=2541 small_free=225292 ledger=303833 commit=332959 ack=125 extent_bytes=45960 slot_bytes=2420\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    1 | checkpoint   0.897 ms\nCHECKPOINT_PHASE_NS guards=6791 rows=2334 small_free=216500 ledger=301916 commit=327959 ack=125 extent_bytes=45960 slot_bytes=2420\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    1 | checkpoint   0.883 ms\nCHECKPOINT_PHASE_NS guards=6583 rows=2292 small_free=234125 ledger=286917 commit=317250 ack=125 extent_bytes=45960 slot_bytes=2420\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    1 | checkpoint   0.874 ms\nCHECKPOINT_PHASE_NS guards=6166 rows=2209 small_free=201875 ledger=282291 commit=306459 ack=166 extent_bytes=45960 slot_bytes=2420\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    1 | checkpoint   0.822 ms\n\nBENCH_METRIC slide_500_tail_ms 0.883167000\nchunks n=  500 SLIDE COST: 0 extent rows are pure movement rewrite\n\nCHECKPOINT_PHASE_NS guards=5958 rows=4667 small_free=342750 ledger=998917 commit=1047250 ack=166 extent_bytes=196608 slot_bytes=2420\nchunks n= 2000 front-garbage (slide): extents    5\u2192   5 | extent rows written    3 | slot pages written    1 | checkpoint   2.432 ms\nCHECKPOINT_PHASE_NS guards=5750 rows=5208 small_free=347167 ledger=1001750 commit=1067708 ack=167 extent_bytes=196608 slot_bytes=2420\nchunks n= 2000 front-garbage (slide): extents    5\u2192   5 | extent rows written    3 | slot pages written    1 | checkpoint   2.456 ms\nCHECKPOINT_PHASE_NS guards=5291 rows=4167 small_free=317417 ledger=920125 commit=968416 ack=125 extent_bytes=196608 slot_bytes=2420\nchunks n= 2000 front-garbage (slide): extents    5\u2192   5 | extent rows written    3 | slot pages written    1 | checkpoint   2.237 ms\nCHECKPOINT_PHASE_NS guards=5333 rows=4000 small_free=305667 ledger=894291 commit=943584 ack=125 extent_bytes=196608 slot_bytes=2420\nchunks n= 2000 front-garbage (slide): extents    5\u2192   5 | extent rows written    3 | slot pages written    1 | checkpoint   2.173 ms\nCHECKPOINT_PHASE_NS guards=5250 rows=3959 small_free=305875 ledger=895750 commit=957666 ack=84 extent_bytes=196608 slot_bytes=2420\nchunks n= 2000 front-garbage (slide): extents    5\u2192   5 | extent rows written    3 | slot pages written    1 | checkpoint   2.189 ms\nCHECKPOINT_PHASE_NS guards=5583 rows=3958 small_free=307292 ledger=893375 commit=953167 ack=125 extent_bytes=196608 slot_bytes=2420\nchunks n= 2000 front-garbage (slide): extents    5\u2192   5 | extent rows written    3 | slot pages written    1 | checkpoint   2.185 ms\n\nBENCH_METRIC slide_2000_front_ms 2.188667000\nCHECKPOINT_PHASE_NS guards=5291 rows=2250 small_free=305667 ledger=250542 commit=292791 ack=167 extent_bytes=16892 slot_bytes=0\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    1 | slot pages written    0 | checkpoint   0.886 ms\nCHECKPOINT_PHASE_NS guards=5167 rows=500 small_free=305958 ledger=247250 commit=291500 ack=83 extent_bytes=16892 slot_bytes=0\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    1 | slot pages written    0 | checkpoint   0.873 ms\nCHECKPOINT_PHASE_NS guards=5333 rows=500 small_free=306000 ledger=250875 commit=292000 ack=125 extent_bytes=16892 slot_bytes=0\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    1 | slot pages written    0 | checkpoint   0.878 ms\nCHECKPOINT_PHASE_NS guards=5125 rows=417 small_free=305541 ledger=250625 commit=291625 ack=84 extent_bytes=16892 slot_bytes=0\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    1 | slot pages written    0 | checkpoint   0.876 ms\nCHECKPOINT_PHASE_NS guards=5459 rows=416 small_free=305417 ledger=247583 commit=291667 ack=125 extent_bytes=16892 slot_bytes=0\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    1 | slot pages written    0 | checkpoint   0.870 ms\nCHECKPOINT_PHASE_NS guards=5166 rows=417 small_free=309042 ledger=246791 commit=291834 ack=83 extent_bytes=16892 slot_bytes=0\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    1 | slot pages written    0 | checkpoint   0.876 ms\n\nBENCH_METRIC slide_2000_tail_ms 0.876042000\nchunks n= 2000 SLIDE COST: 2 extent rows are pure movement rewrite\n\nCHECKPOINT_PHASE_NS guards=5458 rows=9500 small_free=843333 ledger=2767959 commit=2920250 ack=208 extent_bytes=589824 slot_bytes=2420\nchunks n= 8000 front-garbage (slide): extents   17\u2192  17 | extent rows written    9 | slot pages written    1 | checkpoint   6.568 ms\nCHECKPOINT_PHASE_NS guards=5417 rows=9500 small_free=825083 ledger=2768167 commit=2948958 ack=167 extent_bytes=589824 slot_bytes=2420\nchunks n= 8000 front-garbage (slide): extents   17\u2192  17 | extent rows written    9 | slot pages written    1 | checkpoint   6.581 ms\nCHECKPOINT_PHASE_NS guards=5209 rows=9250 small_free=827208 ledger=2771292 commit=2912541 ack=167 extent_bytes=589824 slot_bytes=2420\nchunks n= 8000 front-garbage (slide): extents   17\u2192  17 | extent rows written    9 | slot pages written    1 | checkpoint   6.546 ms\nCHECKPOINT_PHASE_NS guards=7375 rows=11500 small_free=833750 ledger=2768750 commit=2924333 ack=209 extent_bytes=589824 slot_bytes=2420\nchunks n= 8000 front-garbage (slide): extents   17\u2192  17 | extent rows written    9 | slot pages written    1 | checkpoint   6.571 ms\nCHECKPOINT_PHASE_NS guards=6083 rows=9417 small_free=825667 ledger=2769750 commit=2939875 ack=166 extent_bytes=589824 slot_bytes=2420\nchunks n= 8000 front-garbage (slide): extents   17\u2192  17 | extent rows written    9 | slot pages written    1 | checkpoint   6.572 ms\nCHECKPOINT_PHASE_NS guards=5208 rows=9125 small_free=848542 ledger=2825792 commit=2996875 ack=250 extent_bytes=589824 slot_bytes=2420\nchunks n= 8000 front-garbage (slide): extents   17\u2192  17 | extent rows written    9 | slot pages written    1 | checkpoint   6.718 ms\n\nBENCH_METRIC slide_8000_front_ms 6.571709000\nCHECKPOINT_PHASE_NS guards=5333 rows=3125 small_free=831458 ledger=835000 commit=978584 ack=166 extent_bytes=31676 slot_bytes=0\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    1 | slot pages written    0 | checkpoint   2.678 ms\nCHECKPOINT_PHASE_NS guards=5292 rows=708 small_free=828584 ledger=842375 commit=982250 ack=166 extent_bytes=31676 slot_bytes=0\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    1 | slot pages written    0 | checkpoint   2.687 ms\nCHECKPOINT_PHASE_NS guards=5166 rows=667 small_free=825667 ledger=834916 commit=980542 ack=125 extent_bytes=31676 slot_bytes=0\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    1 | slot pages written    0 | checkpoint   2.668 ms\nCHECKPOINT_PHASE_NS guards=5292 rows=666 small_free=829292 ledger=836792 commit=978000 ack=166 extent_bytes=31676 slot_bytes=0\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    1 | slot pages written    0 | checkpoint   2.674 ms\nCHECKPOINT_PHASE_NS guards=5291 rows=709 small_free=830000 ledger=841125 commit=981208 ack=125 extent_bytes=31676 slot_bytes=0\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    1 | slot pages written    0 | checkpoint   2.679 ms\nCHECKPOINT_PHASE_NS guards=5500 rows=667 small_free=843791 ledger=842292 commit=1185167 ack=166 extent_bytes=31676 slot_bytes=0\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    1 | slot pages written    0 | checkpoint   2.906 ms\n\nBENCH_METRIC slide_8000_tail_ms 2.678833000\nchunks n= 8000 SLIDE COST: 8 extent rows are pure movement rewrite\n\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.64s\n\n",
   "source_sha256": "a541de058ad5cdc5f99341bcff808e23a43856163ac2d5b40f878082626d2adc",
-  "instrumented_sha256": "c9ea7b87100ff6055f03829d0bd16c0a1e96704da008d70e5e12b1d84bd52be1"
+  "instrumented_sha256": "c9ea7b87100ff6055f03829d0bd16c0a1e96704da008d70e5e12b1d84bd52be1",
+  "whole_arena_counterfactual": {
+    "scope": "Scratch-only counterfactual, run once after the extent-local diagnostic; no production change or acceptance decision.",
+    "command": "CARGO_INCREMENTAL=0 RUST_MIN_STACK=33554432 cargo test --locked --release --manifest-path /tmp/1a-checkpoint-phase-profile/rust/engine/Cargo.toml -p ironhorse-snapshot --test gc_bench compaction_slide_checkpoint_cost -- --ignored --nocapture --test-threads=1",
+    "exit_status": 0,
+    "additional_patch": "diff --git a/rust/engine/ironhorse-vm/src/gc.rs b/rust/engine/ironhorse-vm/src/gc.rs\nindex 0018b3241..7d42826b9 100644\n--- a/rust/engine/ironhorse-vm/src/gc.rs\n+++ b/rust/engine/ironhorse-vm/src/gc.rs\n@@ -180,7 +180,7 @@ pub fn collect_full(\n         }\n     }\n     hooks.external_chunk_refs(&mut |off: &mut ChunkOffset| live_offsets.push(*off));\n-    let remap = chunks.compact_local(&live_offsets);\n+    let remap = chunks.compact(&live_offsets);\n     // A no-movement collection needs no second arena scan or holder walk.\n     // The compactor emits entries only for offsets that actually changed.\n     if !remap.is_empty() {\n",
+    "samples": [
+      {
+        "guards": 11417,
+        "rows": 8458,
+        "small_free": 315209,
+        "ledger": 411250,
+        "commit": 476333,
+        "ack": 625,
+        "extent_bytes": 45960,
+        "slot_bytes": 2420
+      },
+      {
+        "guards": 10541,
+        "rows": 4417,
+        "small_free": 263208,
+        "ledger": 350167,
+        "commit": 393542,
+        "ack": 375,
+        "extent_bytes": 45960,
+        "slot_bytes": 2420
+      },
+      {
+        "guards": 9000,
+        "rows": 3916,
+        "small_free": 236834,
+        "ledger": 314958,
+        "commit": 361292,
+        "ack": 250,
+        "extent_bytes": 45960,
+        "slot_bytes": 2420
+      },
+      {
+        "guards": 8208,
+        "rows": 3375,
+        "small_free": 225792,
+        "ledger": 299000,
+        "commit": 334541,
+        "ack": 209,
+        "extent_bytes": 45960,
+        "slot_bytes": 2420
+      },
+      {
+        "guards": 8292,
+        "rows": 3167,
+        "small_free": 217041,
+        "ledger": 290834,
+        "commit": 315375,
+        "ack": 166,
+        "extent_bytes": 45960,
+        "slot_bytes": 2420
+      },
+      {
+        "guards": 7667,
+        "rows": 3125,
+        "small_free": 201666,
+        "ledger": 277542,
+        "commit": 301083,
+        "ack": 209,
+        "extent_bytes": 45960,
+        "slot_bytes": 2420
+      },
+      {
+        "guards": 7500,
+        "rows": 2875,
+        "small_free": 189416,
+        "ledger": 251625,
+        "commit": 282542,
+        "ack": 167,
+        "extent_bytes": 45960,
+        "slot_bytes": 2420
+      },
+      {
+        "guards": 7000,
+        "rows": 2625,
+        "small_free": 179583,
+        "ledger": 242000,
+        "commit": 274708,
+        "ack": 167,
+        "extent_bytes": 45960,
+        "slot_bytes": 2420
+      },
+      {
+        "guards": 7125,
+        "rows": 2542,
+        "small_free": 180083,
+        "ledger": 242459,
+        "commit": 269916,
+        "ack": 167,
+        "extent_bytes": 45960,
+        "slot_bytes": 2420
+      },
+      {
+        "guards": 6625,
+        "rows": 2584,
+        "small_free": 172250,
+        "ledger": 231458,
+        "commit": 255625,
+        "ack": 125,
+        "extent_bytes": 45960,
+        "slot_bytes": 2420
+      },
+      {
+        "guards": 7041,
+        "rows": 2584,
+        "small_free": 172041,
+        "ledger": 231250,
+        "commit": 252417,
+        "ack": 125,
+        "extent_bytes": 45960,
+        "slot_bytes": 2420
+      },
+      {
+        "guards": 6292,
+        "rows": 2541,
+        "small_free": 165167,
+        "ledger": 220208,
+        "commit": 247084,
+        "ack": 125,
+        "extent_bytes": 45960,
+        "slot_bytes": 2420
+      },
+      {
+        "guards": 6041,
+        "rows": 4500,
+        "small_free": 277375,
+        "ledger": 629000,
+        "commit": 702792,
+        "ack": 167,
+        "extent_bytes": 147960,
+        "slot_bytes": 2420
+      },
+      {
+        "guards": 5917,
+        "rows": 3792,
+        "small_free": 263333,
+        "ledger": 609167,
+        "commit": 680833,
+        "ack": 125,
+        "extent_bytes": 147960,
+        "slot_bytes": 2420
+      },
+      {
+        "guards": 5667,
+        "rows": 3666,
+        "small_free": 251875,
+        "ledger": 589000,
+        "commit": 647709,
+        "ack": 125,
+        "extent_bytes": 147960,
+        "slot_bytes": 2420
+      },
+      {
+        "guards": 5541,
+        "rows": 3500,
+        "small_free": 245959,
+        "ledger": 569166,
+        "commit": 626625,
+        "ack": 125,
+        "extent_bytes": 147960,
+        "slot_bytes": 2420
+      },
+      {
+        "guards": 5542,
+        "rows": 3750,
+        "small_free": 259041,
+        "ledger": 593167,
+        "commit": 649292,
+        "ack": 125,
+        "extent_bytes": 147960,
+        "slot_bytes": 2420
+      },
+      {
+        "guards": 5583,
+        "rows": 3708,
+        "small_free": 257125,
+        "ledger": 596084,
+        "commit": 646375,
+        "ack": 125,
+        "extent_bytes": 147960,
+        "slot_bytes": 2420
+      },
+      {
+        "guards": 5250,
+        "rows": 3500,
+        "small_free": 239958,
+        "ledger": 584667,
+        "commit": 671250,
+        "ack": 166,
+        "extent_bytes": 147960,
+        "slot_bytes": 2420
+      },
+      {
+        "guards": 5917,
+        "rows": 3833,
+        "small_free": 258292,
+        "ledger": 593166,
+        "commit": 652750,
+        "ack": 125,
+        "extent_bytes": 147960,
+        "slot_bytes": 2420
+      },
+      {
+        "guards": 5792,
+        "rows": 3708,
+        "small_free": 257708,
+        "ledger": 592917,
+        "commit": 653792,
+        "ack": 125,
+        "extent_bytes": 147960,
+        "slot_bytes": 2420
+      },
+      {
+        "guards": 5750,
+        "rows": 3834,
+        "small_free": 257166,
+        "ledger": 606250,
+        "commit": 647542,
+        "ack": 125,
+        "extent_bytes": 147960,
+        "slot_bytes": 2420
+      },
+      {
+        "guards": 5833,
+        "rows": 3750,
+        "small_free": 257625,
+        "ledger": 599792,
+        "commit": 664792,
+        "ack": 125,
+        "extent_bytes": 147960,
+        "slot_bytes": 2420
+      },
+      {
+        "guards": 6083,
+        "rows": 3833,
+        "small_free": 257750,
+        "ledger": 595167,
+        "commit": 649000,
+        "ack": 125,
+        "extent_bytes": 147960,
+        "slot_bytes": 2420
+      },
+      {
+        "guards": 5375,
+        "rows": 9500,
+        "small_free": 684750,
+        "ledger": 2196542,
+        "commit": 2353917,
+        "ack": 125,
+        "extent_bytes": 555960,
+        "slot_bytes": 2420
+      },
+      {
+        "guards": 5916,
+        "rows": 9459,
+        "small_free": 687458,
+        "ledger": 2171792,
+        "commit": 2344208,
+        "ack": 167,
+        "extent_bytes": 555960,
+        "slot_bytes": 2420
+      },
+      {
+        "guards": 5833,
+        "rows": 9292,
+        "small_free": 689625,
+        "ledger": 2170750,
+        "commit": 2339666,
+        "ack": 125,
+        "extent_bytes": 555960,
+        "slot_bytes": 2420
+      },
+      {
+        "guards": 5625,
+        "rows": 9166,
+        "small_free": 686667,
+        "ledger": 2186958,
+        "commit": 2337542,
+        "ack": 167,
+        "extent_bytes": 555960,
+        "slot_bytes": 2420
+      },
+      {
+        "guards": 5625,
+        "rows": 9291,
+        "small_free": 695542,
+        "ledger": 2174250,
+        "commit": 2341000,
+        "ack": 125,
+        "extent_bytes": 555960,
+        "slot_bytes": 2420
+      },
+      {
+        "guards": 5791,
+        "rows": 9125,
+        "small_free": 686875,
+        "ledger": 2175625,
+        "commit": 2330959,
+        "ack": 125,
+        "extent_bytes": 555960,
+        "slot_bytes": 2420
+      },
+      {
+        "guards": 5708,
+        "rows": 9250,
+        "small_free": 686500,
+        "ledger": 2176292,
+        "commit": 2337958,
+        "ack": 125,
+        "extent_bytes": 555960,
+        "slot_bytes": 2420
+      },
+      {
+        "guards": 5584,
+        "rows": 9250,
+        "small_free": 687291,
+        "ledger": 2169125,
+        "commit": 2342250,
+        "ack": 125,
+        "extent_bytes": 555960,
+        "slot_bytes": 2420
+      },
+      {
+        "guards": 5750,
+        "rows": 9209,
+        "small_free": 694500,
+        "ledger": 2172083,
+        "commit": 2336000,
+        "ack": 125,
+        "extent_bytes": 555960,
+        "slot_bytes": 2420
+      },
+      {
+        "guards": 5916,
+        "rows": 9250,
+        "small_free": 686875,
+        "ledger": 2170125,
+        "commit": 2331667,
+        "ack": 125,
+        "extent_bytes": 555960,
+        "slot_bytes": 2420
+      },
+      {
+        "guards": 5667,
+        "rows": 9250,
+        "small_free": 686917,
+        "ledger": 2198625,
+        "commit": 2356000,
+        "ack": 125,
+        "extent_bytes": 555960,
+        "slot_bytes": 2420
+      },
+      {
+        "guards": 5791,
+        "rows": 9209,
+        "small_free": 690125,
+        "ledger": 2168583,
+        "commit": 2329458,
+        "ack": 125,
+        "extent_bytes": 555960,
+        "slot_bytes": 2420
+      }
+    ],
+    "summaries": [
+      {
+        "n": 500,
+        "garbage_position": "front",
+        "median_ns": {
+          "guards": 8292,
+          "rows": 3375,
+          "small_free": 225792,
+          "ledger": 299000,
+          "commit": 334541,
+          "ack": 209
+        },
+        "bytes_each_round": {
+          "extent_bytes": [
+            45960
+          ],
+          "slot_bytes": [
+            2420
+          ]
+        }
+      },
+      {
+        "n": 500,
+        "garbage_position": "tail",
+        "median_ns": {
+          "guards": 7000,
+          "rows": 2584,
+          "small_free": 172250,
+          "ledger": 231458,
+          "commit": 255625,
+          "ack": 125
+        },
+        "bytes_each_round": {
+          "extent_bytes": [
+            45960
+          ],
+          "slot_bytes": [
+            2420
+          ]
+        }
+      },
+      {
+        "n": 2000,
+        "garbage_position": "front",
+        "median_ns": {
+          "guards": 5583,
+          "rows": 3708,
+          "small_free": 257125,
+          "ledger": 593167,
+          "commit": 647709,
+          "ack": 125
+        },
+        "bytes_each_round": {
+          "extent_bytes": [
+            147960
+          ],
+          "slot_bytes": [
+            2420
+          ]
+        }
+      },
+      {
+        "n": 2000,
+        "garbage_position": "tail",
+        "median_ns": {
+          "guards": 5833,
+          "rows": 3833,
+          "small_free": 257708,
+          "ledger": 595167,
+          "commit": 652750,
+          "ack": 125
+        },
+        "bytes_each_round": {
+          "extent_bytes": [
+            147960
+          ],
+          "slot_bytes": [
+            2420
+          ]
+        }
+      },
+      {
+        "n": 8000,
+        "garbage_position": "front",
+        "median_ns": {
+          "guards": 5791,
+          "rows": 9291,
+          "small_free": 687458,
+          "ledger": 2174250,
+          "commit": 2339666,
+          "ack": 125
+        },
+        "bytes_each_round": {
+          "extent_bytes": [
+            555960
+          ],
+          "slot_bytes": [
+            2420
+          ]
+        }
+      },
+      {
+        "n": 8000,
+        "garbage_position": "tail",
+        "median_ns": {
+          "guards": 5750,
+          "rows": 9250,
+          "small_free": 687291,
+          "ledger": 2170125,
+          "commit": 2336000,
+          "ack": 125
+        },
+        "bytes_each_round": {
+          "extent_bytes": [
+            555960
+          ],
+          "slot_bytes": [
+            2420
+          ]
+        }
+      }
+    ],
+    "runner_stdout": "   Compiling ironhorse-vm v0.0.1 (/tmp/1a-checkpoint-phase-profile/rust/engine/ironhorse-vm)\n   Compiling ironhorse-snapshot v0.0.1 (/tmp/1a-checkpoint-phase-profile/rust/engine/ironhorse-snapshot)\n    Finished `release` profile [optimized] target(s) in 24.44s\n     Running tests/gc_bench.rs (/tmp/1a-checkpoint-phase-profile/rust/engine/target/release/deps/gc_bench-8e4cb99bd2d8159a)\n\nrunning 1 test\ntest compaction_slide_checkpoint_cost ... CHECKPOINT_PHASE_NS guards=11417 rows=8458 small_free=315209 ledger=411250 commit=476333 ack=625 extent_bytes=45960 slot_bytes=2420\nchunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    1 | checkpoint   1.308 ms\nCHECKPOINT_PHASE_NS guards=10541 rows=4417 small_free=263208 ledger=350167 commit=393542 ack=375 extent_bytes=45960 slot_bytes=2420\nchunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    1 | checkpoint   1.079 ms\nCHECKPOINT_PHASE_NS guards=9000 rows=3916 small_free=236834 ledger=314958 commit=361292 ack=250 extent_bytes=45960 slot_bytes=2420\nchunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    1 | checkpoint   0.978 ms\nCHECKPOINT_PHASE_NS guards=8208 rows=3375 small_free=225792 ledger=299000 commit=334541 ack=209 extent_bytes=45960 slot_bytes=2420\nchunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    1 | checkpoint   0.916 ms\nCHECKPOINT_PHASE_NS guards=8292 rows=3167 small_free=217041 ledger=290834 commit=315375 ack=166 extent_bytes=45960 slot_bytes=2420\nchunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    1 | checkpoint   0.876 ms\nCHECKPOINT_PHASE_NS guards=7667 rows=3125 small_free=201666 ledger=277542 commit=301083 ack=209 extent_bytes=45960 slot_bytes=2420\nchunks n=  500 front-garbage (slide): extents    2\u2192   1 | extent rows written    1 | slot pages written    1 | checkpoint   0.832 ms\n\nBENCH_METRIC slide_500_front_ms 0.916291000\nCHECKPOINT_PHASE_NS guards=7500 rows=2875 small_free=189416 ledger=251625 commit=282542 ack=167 extent_bytes=45960 slot_bytes=2420\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    1 | checkpoint   0.772 ms\nCHECKPOINT_PHASE_NS guards=7000 rows=2625 small_free=179583 ledger=242000 commit=274708 ack=167 extent_bytes=45960 slot_bytes=2420\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    1 | checkpoint   0.743 ms\nCHECKPOINT_PHASE_NS guards=7125 rows=2542 small_free=180083 ledger=242459 commit=269916 ack=167 extent_bytes=45960 slot_bytes=2420\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    1 | checkpoint   0.738 ms\nCHECKPOINT_PHASE_NS guards=6625 rows=2584 small_free=172250 ledger=231458 commit=255625 ack=125 extent_bytes=45960 slot_bytes=2420\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    1 | checkpoint   0.703 ms\nCHECKPOINT_PHASE_NS guards=7041 rows=2584 small_free=172041 ledger=231250 commit=252417 ack=125 extent_bytes=45960 slot_bytes=2420\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    1 | checkpoint   0.699 ms\nCHECKPOINT_PHASE_NS guards=6292 rows=2541 small_free=165167 ledger=220208 commit=247084 ack=125 extent_bytes=45960 slot_bytes=2420\nchunks n=  500 tail-garbage  (no-op): extents    2\u2192   1 | extent rows written    1 | slot pages written    1 | checkpoint   0.678 ms\n\nBENCH_METRIC slide_500_tail_ms 0.703375000\nchunks n=  500 SLIDE COST: 0 extent rows are pure movement rewrite\n\nCHECKPOINT_PHASE_NS guards=6041 rows=4500 small_free=277375 ledger=629000 commit=702792 ack=167 extent_bytes=147960 slot_bytes=2420\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    1 | checkpoint   1.652 ms\nCHECKPOINT_PHASE_NS guards=5917 rows=3792 small_free=263333 ledger=609167 commit=680833 ack=125 extent_bytes=147960 slot_bytes=2420\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    1 | checkpoint   1.596 ms\nCHECKPOINT_PHASE_NS guards=5667 rows=3666 small_free=251875 ledger=589000 commit=647709 ack=125 extent_bytes=147960 slot_bytes=2420\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    1 | checkpoint   1.518 ms\nCHECKPOINT_PHASE_NS guards=5541 rows=3500 small_free=245959 ledger=569166 commit=626625 ack=125 extent_bytes=147960 slot_bytes=2420\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    1 | checkpoint   1.475 ms\nCHECKPOINT_PHASE_NS guards=5542 rows=3750 small_free=259041 ledger=593167 commit=649292 ack=125 extent_bytes=147960 slot_bytes=2420\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    1 | checkpoint   1.532 ms\nCHECKPOINT_PHASE_NS guards=5583 rows=3708 small_free=257125 ledger=596084 commit=646375 ack=125 extent_bytes=147960 slot_bytes=2420\nchunks n= 2000 front-garbage (slide): extents    5\u2192   3 | extent rows written    3 | slot pages written    1 | checkpoint   1.530 ms\n\nBENCH_METRIC slide_2000_front_ms 1.529625000\nCHECKPOINT_PHASE_NS guards=5250 rows=3500 small_free=239958 ledger=584667 commit=671250 ack=166 extent_bytes=147960 slot_bytes=2420\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    1 | checkpoint   1.527 ms\nCHECKPOINT_PHASE_NS guards=5917 rows=3833 small_free=258292 ledger=593166 commit=652750 ack=125 extent_bytes=147960 slot_bytes=2420\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    1 | checkpoint   1.536 ms\nCHECKPOINT_PHASE_NS guards=5792 rows=3708 small_free=257708 ledger=592917 commit=653792 ack=125 extent_bytes=147960 slot_bytes=2420\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    1 | checkpoint   1.535 ms\nCHECKPOINT_PHASE_NS guards=5750 rows=3834 small_free=257166 ledger=606250 commit=647542 ack=125 extent_bytes=147960 slot_bytes=2420\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    1 | checkpoint   1.544 ms\nCHECKPOINT_PHASE_NS guards=5833 rows=3750 small_free=257625 ledger=599792 commit=664792 ack=125 extent_bytes=147960 slot_bytes=2420\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    1 | checkpoint   1.552 ms\nCHECKPOINT_PHASE_NS guards=6083 rows=3833 small_free=257750 ledger=595167 commit=649000 ack=125 extent_bytes=147960 slot_bytes=2420\nchunks n= 2000 tail-garbage  (no-op): extents    5\u2192   3 | extent rows written    3 | slot pages written    1 | checkpoint   1.533 ms\n\nBENCH_METRIC slide_2000_tail_ms 1.536000000\nchunks n= 2000 SLIDE COST: 0 extent rows are pure movement rewrite\n\nCHECKPOINT_PHASE_NS guards=5375 rows=9500 small_free=684750 ledger=2196542 commit=2353917 ack=125 extent_bytes=555960 slot_bytes=2420\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    1 | checkpoint   5.276 ms\nCHECKPOINT_PHASE_NS guards=5916 rows=9459 small_free=687458 ledger=2171792 commit=2344208 ack=167 extent_bytes=555960 slot_bytes=2420\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    1 | checkpoint   5.244 ms\nCHECKPOINT_PHASE_NS guards=5833 rows=9292 small_free=689625 ledger=2170750 commit=2339666 ack=125 extent_bytes=555960 slot_bytes=2420\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    1 | checkpoint   5.238 ms\nCHECKPOINT_PHASE_NS guards=5625 rows=9166 small_free=686667 ledger=2186958 commit=2337542 ack=167 extent_bytes=555960 slot_bytes=2420\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    1 | checkpoint   5.251 ms\nCHECKPOINT_PHASE_NS guards=5625 rows=9291 small_free=695542 ledger=2174250 commit=2341000 ack=125 extent_bytes=555960 slot_bytes=2420\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    1 | checkpoint   5.252 ms\nCHECKPOINT_PHASE_NS guards=5791 rows=9125 small_free=686875 ledger=2175625 commit=2330959 ack=125 extent_bytes=555960 slot_bytes=2420\nchunks n= 8000 front-garbage (slide): extents   17\u2192   9 | extent rows written    9 | slot pages written    1 | checkpoint   5.233 ms\n\nBENCH_METRIC slide_8000_front_ms 5.244250000\nCHECKPOINT_PHASE_NS guards=5708 rows=9250 small_free=686500 ledger=2176292 commit=2337958 ack=125 extent_bytes=555960 slot_bytes=2420\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    1 | checkpoint   5.240 ms\nCHECKPOINT_PHASE_NS guards=5584 rows=9250 small_free=687291 ledger=2169125 commit=2342250 ack=125 extent_bytes=555960 slot_bytes=2420\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    1 | checkpoint   5.235 ms\nCHECKPOINT_PHASE_NS guards=5750 rows=9209 small_free=694500 ledger=2172083 commit=2336000 ack=125 extent_bytes=555960 slot_bytes=2420\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    1 | checkpoint   5.242 ms\nCHECKPOINT_PHASE_NS guards=5916 rows=9250 small_free=686875 ledger=2170125 commit=2331667 ack=125 extent_bytes=555960 slot_bytes=2420\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    1 | checkpoint   5.228 ms\nCHECKPOINT_PHASE_NS guards=5667 rows=9250 small_free=686917 ledger=2198625 commit=2356000 ack=125 extent_bytes=555960 slot_bytes=2420\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    1 | checkpoint   5.277 ms\nCHECKPOINT_PHASE_NS guards=5791 rows=9209 small_free=690125 ledger=2168583 commit=2329458 ack=125 extent_bytes=555960 slot_bytes=2420\nchunks n= 8000 tail-garbage  (no-op): extents   17\u2192   9 | extent rows written    9 | slot pages written    1 | checkpoint   5.227 ms\n\nBENCH_METRIC slide_8000_tail_ms 5.234792000\nchunks n= 8000 SLIDE COST: 0 extent rows are pure movement rewrite\n\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.59s\n\n",
+    "notes": [
+      "Retains the identical checkpoint instrumentation; changes only the full collector call from compact_local to compact.",
+      "This changes pre-timer heap geometry and generated code. A single ordered pair does not isolate code layout, thermal state or run-to-run variation and is not an acceptance comparison.",
+      "Whole-arena sliding reduces front-garbage dirty chunk bytes but substantially increases tail-garbage writes for the larger fixtures. Preserve the extent-local policy and reusable-hole machinery.",
+      "This does not establish how much of the original-baseline regression is attributable to compaction. No additional trials were run."
+    ]
+  }
 }
