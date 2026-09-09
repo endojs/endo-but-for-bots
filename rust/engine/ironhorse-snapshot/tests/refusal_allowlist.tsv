@@ -2,11 +2,8 @@
 # These are coverage debt, not permission to accept the corrupt input.
 # The registry removes an exception when a direct literal assertion is added.
 # New labels require a regression assertion or an individually reviewed entry.
-HEAP record count	Existing corruption guard; dedicated exact-label regression fixture deferred.
-STAC record count	Existing corruption guard; dedicated exact-label regression fixture deferred.
 file store chunk extent row exceeds u32	File backend structural guard; dedicated exact-label corruption fixture deferred.
 file store slot page row exceeds u32	File backend structural guard; dedicated exact-label corruption fixture deferred.
 generator frame: current function has no body	Existing corruption guard; dedicated exact-label regression fixture deferred.
 generator frame: malformed body bytecode	Existing corruption guard; dedicated exact-label regression fixture deferred.
-manifest parent seal length	Existing corruption guard; dedicated exact-label regression fixture deferred.
 name migration length	Existing corruption guard; dedicated exact-label regression fixture deferred.
