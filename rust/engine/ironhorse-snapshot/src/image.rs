@@ -9218,6 +9218,154 @@ mod generator_decoder_refusals {
         }
     }
 
+    fn check(
+        functions: &ironhorse_vm::FunctionStateSnapshot,
+        saved: &SavedFrameRow,
+    ) -> Result<(), SnapshotError> {
+        let generators = [GeneratorRow {
+            owner: 2,
+            state: 1,
+            frame: Some(saved.clone()),
+        }];
+        let lang = LangRows {
+            function_state: functions,
+            generators: &generators,
+            ..LangRows::EMPTY
+        };
+        check_image_slot_bounds(
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &lang,
+            &[],
+            4,
+            &SymbolKeyImage::default(),
+            8,
+            0,
+            &[],
+        )
+    }
+
+    #[test]
+    fn saved_frame_requires_function_and_exact_resume_scope() {
+        use ironhorse_vm::{FunctionRow, FunctionStateSnapshot, Opcode};
+        let functions = FunctionStateSnapshot {
+            segments: vec![vec![
+                Opcode::XS_CODE_INTEGER_1 as u8,
+                0,
+                Opcode::XS_CODE_UNDEFINED as u8,
+            ]],
+            functions: vec![FunctionRow {
+                owner: 1,
+                segment: Some(0),
+                body_start: Some(0),
+                body_len: 3,
+                closures: 0,
+                name: "g".into(),
+                arity: 0,
+                name_chunk: u32::MAX,
+                is_generator: true,
+                home: 0,
+                class_derived: None,
+            }],
+            ..FunctionStateSnapshot::default()
+        };
+        let mut saved = frame();
+        saved.locals = vec![Slot::undefined()];
+        saved.id_map = vec![(4, 0)];
+        saved.stack_slice = vec![Slot::undefined()];
+        saved.jumps = vec![SavedJumpRow {
+            target_pc: 2,
+            stack_offset: 1,
+            locals_len: 1,
+            id_map: vec![(4, 0)],
+            call_depth_offset: 0,
+            env: Slot::undefined(),
+            flag: 1,
+        }];
+        for resume_pc in [0, 2] {
+            saved.resume_pc = resume_pc;
+            assert_eq!(check(&functions, &saved), Ok(()));
+        }
+        let mut invalid = saved.clone();
+        invalid.cur_func = 3;
+        assert_eq!(
+            check(&functions, &invalid),
+            Err(SnapshotError::Corrupt(
+                "generator frame: current function has no function row"
+            ))
+        );
+        let mut bound = functions.clone();
+        bound.segments.clear();
+        bound.functions[0].segment = None;
+        bound.functions[0].body_start = None;
+        bound.functions[0].body_len = 0;
+        bound.bound_functions.push(ironhorse_vm::BoundFunctionRow {
+            owner: 1,
+            target: 3,
+            this_arg: Slot::undefined(),
+            args: vec![],
+        });
+        assert_eq!(
+            check(&bound, &saved),
+            Err(SnapshotError::Corrupt(
+                "generator frame: current function has no segment"
+            ))
+        );
+        for resume_pc in [1, 3, u64::MAX] {
+            invalid = saved.clone();
+            invalid.resume_pc = resume_pc;
+            assert_eq!(
+                check(&functions, &invalid),
+                Err(SnapshotError::Corrupt(
+                    "generator frame: invalid resume cursor or scope map"
+                ))
+            );
+        }
+        for pair in [(0, 0), (5, 0), (4, 1), (4, u64::MAX)] {
+            invalid = saved.clone();
+            invalid.id_map = vec![pair];
+            assert_eq!(
+                check(&functions, &invalid),
+                Err(SnapshotError::Corrupt(
+                    "generator frame: invalid resume cursor or scope map"
+                ))
+            );
+        }
+        for case in 0..10 {
+            invalid = saved.clone();
+            let jump = &mut invalid.jumps[0];
+            match case {
+                0 => jump.flag = 0,
+                1 => jump.call_depth_offset = 1,
+                2 => jump.call_depth_offset = u64::MAX,
+                3 => jump.target_pc = 1,
+                4 => jump.target_pc = 3,
+                5 => jump.stack_offset = 2,
+                6 => jump.locals_len = 2,
+                7 => jump.id_map = vec![(0, 0)],
+                8 => jump.id_map = vec![(5, 0)],
+                9 => jump.locals_len = 0, // map valid for frame, invalid for handler
+                _ => unreachable!(),
+            }
+            assert_eq!(
+                check(&functions, &invalid),
+                Err(SnapshotError::Corrupt(
+                    "generator frame: invalid saved handler"
+                )),
+                "case {case}"
+            );
+        }
+        assert_eq!(check(&functions, &saved), Ok(()));
+    }
+
     #[test]
     fn generator_state_frame_and_owner_guards() {
         let valid = GeneratorRow {
