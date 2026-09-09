@@ -111,6 +111,12 @@ fn io_err(e: std::io::Error) -> StoreError {
     StoreError::Io(e.to_string())
 }
 
+// Keep wire-size conversion separate from row allocation so its full usize
+// domain can be checked without constructing an oversized buffer.
+fn row_len(len: usize, what: &'static str) -> Result<u32, StoreError> {
+    u32::try_from(len).map_err(|_| file_corrupt(what))
+}
+
 fn file_corrupt(what: &'static str) -> StoreError {
     StoreError::Snapshot(SnapshotError::Corrupt(what))
 }
@@ -644,9 +650,6 @@ impl HeapStore for FileStore {
             Prior(DirEntry),
         }
 
-        let row_len = |len: usize, what: &'static str| -> Result<u32, StoreError> {
-            u32::try_from(len).map_err(|_| file_corrupt(what))
-        };
         let mut sources: Vec<Source> = Vec::with_capacity((n_pages + n_exts) as usize);
         let mut lengths: Vec<u32> = Vec::with_capacity((n_pages + n_exts) as usize);
         for page in 0..n_pages {
@@ -861,6 +864,37 @@ mod tests {
 
     fn tmp_dir(name: &str) -> crate::test_dir::TempDir {
         crate::test_dir::TempDir::new(&format!("ironhorse-file-store-{name}"))
+    }
+
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn row_lengths_refuse_values_outside_the_wire_domain() {
+        // This tests the writer's production arithmetic, independently of
+        // the earlier geometry gate and without multi-gigabyte allocation.
+        for length in [0, 1, u32::MAX as usize] {
+            assert_eq!(
+                row_len(length, "file store slot page row exceeds u32"),
+                Ok(length as u32)
+            );
+            assert_eq!(
+                row_len(length, "file store chunk extent row exceeds u32"),
+                Ok(length as u32)
+            );
+        }
+        for length in [u32::MAX as usize + 1, usize::MAX] {
+            assert_eq!(
+                row_len(length, "file store slot page row exceeds u32"),
+                Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                    "file store slot page row exceeds u32"
+                )))
+            );
+            assert_eq!(
+                row_len(length, "file store chunk extent row exceeds u32"),
+                Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                    "file store chunk extent row exceeds u32"
+                )))
+            );
+        }
     }
 
     #[test]
