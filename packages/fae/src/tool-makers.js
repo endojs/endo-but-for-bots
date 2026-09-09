@@ -16,6 +16,14 @@ import {
 import { makeNodeSearchPowers } from '@endo/platform/fs/node/search';
 import safeRegex from 'safe-regex2';
 
+import { assertToolArguments } from './tool-arguments.js';
+
+export {
+  makeDescribeCapabilityTool,
+  makeReadSourcesTool,
+} from './source-tools.js';
+export { assertToolArguments } from './tool-arguments.js';
+
 /** @import { GrepMatch } from '@endo/platform/fs/search.types.js' */
 
 /**
@@ -766,9 +774,10 @@ export const makeListPetnamesTool = host => {
     function: {
       name: 'list',
       description:
-        'List petnames in the Endo directory. Returns an array of stored capability names.',
+        'List petnames in your Endo directory. Takes no arguments. These are capability names, not filesystem paths. Use readSources for files or describeCapability for callable methods.',
       parameters: {
         type: 'object',
+        additionalProperties: false,
         properties: {},
         required: [],
       },
@@ -779,8 +788,8 @@ export const makeListPetnamesTool = host => {
     schema() {
       return toolSchema;
     },
-    // eslint-disable-next-line no-underscore-dangle
-    async execute(_args) {
+    async execute(args) {
+      assertToolArguments(toolSchema, args);
       const names = await E(host).list();
       return JSON.stringify(names, null, 2);
     },
@@ -802,9 +811,10 @@ export const makeLookupTool = host => {
     function: {
       name: 'lookup',
       description:
-        'Look up a stored value by petname. Returns the value stored under that name.',
+        'Look up a stored value by petname. This does not invoke methods; method and args are not accepted. Use describeCapability for signatures and examples, then exec (endo_exec on Codex) with E(ref).method(...).',
       parameters: {
         type: 'object',
+        additionalProperties: false,
         properties: {
           petName: {
             type: 'string',
@@ -821,6 +831,7 @@ export const makeLookupTool = host => {
       return toolSchema;
     },
     async execute(args) {
+      assertToolArguments(toolSchema, args);
       const { petName } = /** @type {{ petName: string }} */ (args);
       if (!petName) {
         throw new Error('petName is required');
@@ -1500,6 +1511,7 @@ export const makeExecTool = powers => {
           },
         },
         required: ['code'],
+        additionalProperties: false,
       },
     },
   });
@@ -1509,6 +1521,7 @@ export const makeExecTool = powers => {
       return toolSchema;
     },
     async execute(args) {
+      assertToolArguments(toolSchema, args);
       const { code } = /** @type {{ code: string }} */ (args);
       if (!code) {
         throw new Error('code is required');
