@@ -958,7 +958,7 @@ pub fn commit_contract<S: HeapStore>(mut store: S, mut reopen: impl FnMut(S) -> 
     store = reopen(store);
     assert_eq!(store.manifest().unwrap(), genesis.manifest);
     let before = export_to_container(&store).unwrap();
-    assert_eq!(before, crate::image::write_machine(&proof));
+    assert_eq!(before, crate::image::write_machine(&proof).unwrap());
 
     // Grow through a page boundary so the missing-row case is mandatory,
     // even when the backend would otherwise retain every old row.
@@ -990,7 +990,7 @@ pub fn commit_contract<S: HeapStore>(mut store: S, mut reopen: impl FnMut(S) -> 
     assert_eq!(store.manifest().unwrap(), successor.manifest);
     assert_eq!(
         export_to_container(&store).unwrap(),
-        crate::image::write_machine(&grown)
+        crate::image::write_machine(&grown).unwrap()
     );
     store
 }

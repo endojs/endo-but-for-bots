@@ -10,7 +10,7 @@
 //! The container is a serializer over the index arenas, not a relocator:
 //! this module only frames bytes; [`crate::image`] fills the atoms.
 
-use crate::format::FourCc;
+use crate::format::{FourCc, SnapshotError};
 
 /// The fixed atom header size: a `u32` big-endian size followed by the
 /// 4-byte FourCC tag. `size` is measured from the first byte of the
@@ -18,7 +18,7 @@ use crate::format::FourCc;
 /// total atom size, header included).
 pub const ATOM_HEADER: usize = 8;
 
-/// A streaming writer for the atom container. Atoms are appended in
+/// A buffered writer for the atom container. Atoms are appended in
 /// order; [`AtomWriter::finish`] wraps them in the outer `XS_M` envelope
 /// whose size covers the header plus every contained atom — exactly the
 /// nesting `xsSnapshot.c` produces (`XS_M` is itself an atom whose
@@ -35,28 +35,52 @@ impl AtomWriter {
     }
 
     /// Append one atom: `[u32 total-size BE][tag][payload]`.
-    pub fn atom(&mut self, tag: FourCc, payload: &[u8]) {
-        let total = ATOM_HEADER + payload.len();
-        self.body.extend_from_slice(&(total as u32).to_be_bytes());
+    /// Refuses lengths that cannot fit the wire format, including the outer
+    /// envelope, before changing the accumulated body.
+    pub fn atom(&mut self, tag: FourCc, payload: &[u8]) -> Result<(), SnapshotError> {
+        let total = appended_atom_size(self.body.len(), payload.len())?;
+        self.body.extend_from_slice(&total.to_be_bytes());
         self.body.extend_from_slice(&tag.0);
         self.body.extend_from_slice(payload);
+        Ok(())
     }
 
     /// Close the container: wrap the accumulated atoms in the outer
     /// [`crate::format::XS_M`] envelope and return the finished bytes.
-    pub fn finish(self) -> Vec<u8> {
-        let total = ATOM_HEADER + self.body.len();
-        let mut out = Vec::with_capacity(total);
-        out.extend_from_slice(&(total as u32).to_be_bytes());
+    pub fn finish(self) -> Result<Vec<u8>, SnapshotError> {
+        let total = atom_size(self.body.len())?;
+        let mut out = Vec::with_capacity(total as usize);
+        out.extend_from_slice(&total.to_be_bytes());
         out.extend_from_slice(&crate::format::XS_M.0);
         out.extend_from_slice(&self.body);
-        out
+        Ok(out)
     }
+}
+
+/// Check the wire-domain bound without requiring a multi-gigabyte allocation.
+fn atom_size(payload_len: usize) -> Result<u32, SnapshotError> {
+    payload_len
+        .checked_add(ATOM_HEADER)
+        .and_then(|total| u32::try_from(total).ok())
+        .ok_or(SnapshotError::Atom(AtomError::TooLarge))
+}
+
+/// Include both headers when admitting a new inner atom. Checking the
+/// cumulative envelope prevents individually valid atoms from overflowing it.
+fn appended_atom_size(body_len: usize, payload_len: usize) -> Result<u32, SnapshotError> {
+    let total = atom_size(payload_len)?;
+    let body_len = body_len
+        .checked_add(total as usize)
+        .ok_or(SnapshotError::Atom(AtomError::TooLarge))?;
+    atom_size(body_len)?;
+    Ok(total)
 }
 
 /// A malformed atom container.
 #[derive(Debug, PartialEq, Eq)]
 pub enum AtomError {
+    /// A writer payload or complete envelope exceeds the u32 wire size.
+    TooLarge,
     /// The buffer is shorter than an atom header, or an atom's declared
     /// size runs past the end of its container.
     Truncated,
@@ -167,7 +191,7 @@ mod tests {
 
     #[test]
     fn empty_container_round_trips() {
-        let bytes = AtomWriter::new().finish();
+        let bytes = AtomWriter::new().finish().unwrap();
         let r = AtomReader::parse(&bytes).unwrap();
         assert!(r.atoms().is_empty());
     }
@@ -177,9 +201,9 @@ mod tests {
         let a = FourCc(*b"AAAA");
         let b = FourCc(*b"BBBB");
         let mut w = AtomWriter::new();
-        w.atom(a, b"hello");
-        w.atom(b, &[1, 2, 3, 4, 5]);
-        let bytes = w.finish();
+        w.atom(a, b"hello").unwrap();
+        w.atom(b, &[1, 2, 3, 4, 5]).unwrap();
+        let bytes = w.finish().unwrap();
 
         let r = AtomReader::parse(&bytes).unwrap();
         assert_eq!(r.atoms().len(), 2);
@@ -193,8 +217,8 @@ mod tests {
     fn empty_payload_atom() {
         let t = FourCc(*b"MTPT");
         let mut w = AtomWriter::new();
-        w.atom(t, &[]);
-        let bytes = w.finish();
+        w.atom(t, &[]).unwrap();
+        let bytes = w.finish().unwrap();
         let r = AtomReader::parse(&bytes).unwrap();
         assert_eq!(r.find(t).unwrap().payload, b"");
     }
@@ -231,6 +255,42 @@ mod tests {
         buf.extend_from_slice(&4u32.to_be_bytes());
         buf.extend_from_slice(&XS_M_TAG);
         assert_eq!(AtomReader::parse(&buf).err(), Some(AtomError::BadLength));
+    }
+
+    #[test]
+    fn atom_size_checks_header_and_wire_bound_without_allocating() {
+        assert_eq!(atom_size(0), Ok(8));
+        assert_eq!(atom_size(u32::MAX as usize - ATOM_HEADER), Ok(u32::MAX));
+        assert_eq!(
+            atom_size(u32::MAX as usize - ATOM_HEADER + 1),
+            Err(SnapshotError::Atom(AtomError::TooLarge))
+        );
+        assert_eq!(
+            atom_size(usize::MAX),
+            Err(SnapshotError::Atom(AtomError::TooLarge))
+        );
+    }
+
+    #[test]
+    fn cumulative_size_includes_both_headers() {
+        let max = u32::MAX as usize;
+        assert_eq!(appended_atom_size(max - 2 * ATOM_HEADER, 0), Ok(8));
+        assert_eq!(
+            appended_atom_size(max - 2 * ATOM_HEADER + 1, 0),
+            Err(SnapshotError::Atom(AtomError::TooLarge))
+        );
+        assert_eq!(
+            appended_atom_size(0, max - 2 * ATOM_HEADER),
+            Ok(u32::MAX - ATOM_HEADER as u32)
+        );
+        assert_eq!(
+            appended_atom_size(0, max - 2 * ATOM_HEADER + 1),
+            Err(SnapshotError::Atom(AtomError::TooLarge))
+        );
+        assert_eq!(
+            appended_atom_size(usize::MAX, 0),
+            Err(SnapshotError::Atom(AtomError::TooLarge))
+        );
     }
 
     const XS_M_TAG: [u8; 4] = *b"XS_M";

@@ -55,14 +55,14 @@ fn legacy_utf8_names_migrate_without_changing_ids_or_epoch() {
         if atom.tag == VERS {
             let mut version = Version::current();
             version.format_version = 14;
-            writer.atom(VERS, &version.encode());
+            writer.atom(VERS, &version.encode()).unwrap();
         } else if atom.tag == NAME {
-            writer.atom(NAME, &old_names);
+            writer.atom(NAME, &old_names).unwrap();
         } else {
-            writer.atom(atom.tag, atom.payload);
+            writer.atom(atom.tag, atom.payload).unwrap();
         }
     }
-    let mut legacy = from_snapshot_bytes(&writer.finish(), &signature).unwrap();
+    let mut legacy = from_snapshot_bytes(&writer.finish().unwrap(), &signature).unwrap();
     assert_eq!(legacy.program_symbol_names(), names);
     assert_eq!(crank(&mut legacy, r#"o["😀"]+o["\0"]"#).0, "5");
 
@@ -146,9 +146,11 @@ fn current_name_sections_reject_noncanonical_bytes() {
     for bad in [&[0, 0, 0, 0, 42][..], &[0, 0, 0, 1, 0, 0, 0, 1, 0]] {
         let mut writer = AtomWriter::new();
         for atom in AtomReader::parse(&current).unwrap().atoms() {
-            writer.atom(atom.tag, if atom.tag == NAME { bad } else { atom.payload });
+            writer
+                .atom(atom.tag, if atom.tag == NAME { bad } else { atom.payload })
+                .unwrap();
         }
-        assert!(from_snapshot_bytes(&writer.finish(), &signature).is_err());
+        assert!(from_snapshot_bytes(&writer.finish().unwrap(), &signature).is_err());
         assert!(SmallState::decode(&replace_name_section(
             &store.read_small_state().unwrap(),
             bad
