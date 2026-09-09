@@ -29,6 +29,8 @@ const SOURCE: &str = concat!(
     "\n",
     include_str!("../src/interp/natives/regexp.rs"),
     "\n",
+    include_str!("../src/interp/natives/array.rs"),
+    "\n",
     include_str!("../src/interp/natives/dispatch.rs"),
     "\n",
     include_str!("../src/interp/natives/json.rs"),
@@ -104,6 +106,7 @@ fn native_builtins_do_not_reserve_raw_guest_capacities() {
         SOURCE,
         &[
             include_str!("../src/interp/natives/regexp.rs"),
+            include_str!("../src/interp/natives/array.rs"),
             include_str!("../src/interp/natives/dispatch.rs"),
             include_str!("../src/interp/natives/json.rs"),
             include_str!("../src/interp/property.rs"),
@@ -115,6 +118,22 @@ fn native_builtins_do_not_reserve_raw_guest_capacities() {
 fn moved_regexp_methods_cannot_bypass_allocation_admission() {
     let original = include_str!("../src/interp/natives/regexp.rs");
     let anchor = "self.charge_and_check(0)?;";
+    assert!(original.contains(anchor));
+    for allocation in [
+        "let raw = Vec::with_capacity(guest);",
+        "let raw = vec![0; guest];",
+    ] {
+        let mutated = original.replacen(anchor, allocation, 1);
+        assert!(
+            std::panic::catch_unwind(|| check_builtin_capacities(SOURCE, &[&mutated])).is_err()
+        );
+    }
+}
+
+#[test]
+fn moved_array_methods_cannot_bypass_allocation_admission() {
+    let original = include_str!("../src/interp/natives/array.rs");
+    let anchor = "self.meter.tick_builtin();";
     assert!(original.contains(anchor));
     for allocation in [
         "let raw = Vec::with_capacity(guest);",

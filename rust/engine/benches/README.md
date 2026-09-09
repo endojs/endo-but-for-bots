@@ -1273,3 +1273,28 @@ The before aggregate measurements and source-lock results come from the immediat
 preceding JSON candidate with the same runtime source and lock inputs as this base.
 The old rejection and its measurements remain intact; this fresh evidence supports
 retaining the extraction.
+
+## Array subsystem extraction reconsidered
+
+[results/1a-array-reconsidered.json](results/1a-array-reconsidered.json) records
+89 methods moved into `interp/natives/array.rs` on `8c88bf1e2`.
+Construction, async construction, iteration, and array algorithms now share that
+implementation home; 57 methods retain parent-scoped caller access and the remaining
+helpers stay private.
+Two stale or misattached documentation blocks were removed.
+GC and allocation source locks include the child, with explicit capacity coverage
+and a mutation check.
+
+Fresh validation passes 1,493 engine tests and 116 SQLite tests, plus source locks,
+strict VM library Clippy, documentation builds, and the math control.
+The five direct controls range from 0.984x to 1.026x, with identical results and
+raw charges.
+The unchanged pinned-baseline gate fails five controls: four checkpoint-slide cases
+and the smallest placeholder-allocation case, with a maximum ratio of 1.478x.
+
+A fixed before/after/after/before diagnostic using saved binaries does not reproduce
+the slide slowdowns; all six local slide ratios range from 0.805x to 0.878x.
+It does show placeholder ratios of 1.523x and 1.417x at the two smallest sizes.
+Every observation and the earlier rejection remain recorded.
+The decomposition is retained as incremental code work, but these measurements do
+not clear the failed pinned gate or establish a cause for its remaining failures.
