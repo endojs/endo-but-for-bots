@@ -3,18 +3,17 @@
 //! entries for swept objects, rewrites externally held chunk offsets,
 //! and a collected machine keeps executing and checkpointing exactly.
 
+#[path = "common/compile.rs"]
+mod guest_compile;
+use guest_compile::compile;
+
 use ironhorse_snapshot::machine::{begin_store_session, resume_from_store, MachineSnapshot};
 use ironhorse_snapshot::store::MemoryStore;
 use ironhorse_snapshot::Signature;
-use ironhorse_vm::{parse_symbols, Interp, RunOutcome};
+use ironhorse_vm::{Interp, RunOutcome};
 
 fn sig() -> Signature {
     Signature::new("ironhorse-worker-v1")
-}
-
-fn compile(source: &str) -> (Vec<u8>, Vec<ironhorse_vm::SymbolName>) {
-    let (bytecode, symbols) = ironhorse_compile::compile_atoms(source).expect("fixture compiles");
-    (bytecode, parse_symbols(&symbols))
 }
 
 /// Relink and run a later crank on `m`. A crank's symbol atom is its own,

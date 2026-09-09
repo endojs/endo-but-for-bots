@@ -8,17 +8,16 @@ use ironhorse_snapshot::machine::{
 };
 use ironhorse_snapshot::store::{validate_store, HeapStore, MemoryStore, StoreError};
 use ironhorse_snapshot::Signature;
-use ironhorse_vm::{parse_symbols, Halt, Interp, SymbolName};
+use ironhorse_vm::{Halt, Interp};
+
+#[path = "compile.rs"]
+mod guest_compile;
+pub use guest_compile::compile;
 
 pub type Observation = (bool, String, String, u64);
 
 pub fn sig() -> Signature {
     Signature::new("ironhorse-worker-v1")
-}
-
-pub fn compile(source: &str) -> (Vec<u8>, Vec<SymbolName>) {
-    let (bytecode, symbols) = ironhorse_compile::compile_atoms(source).expect("compiles");
-    (bytecode, parse_symbols(&symbols))
 }
 
 /// Compare host-observable throws by rendering, never by an arena slot index.

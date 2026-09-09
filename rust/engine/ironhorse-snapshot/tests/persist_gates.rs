@@ -24,6 +24,10 @@
 //!   machine to its image runs the whole persist predicate set, the
 //!   stored-key-id audit included.
 
+#[path = "common/compile.rs"]
+mod guest_compile;
+use guest_compile::compile;
+
 use ironhorse_snapshot::machine::MachineSnapshotError;
 use ironhorse_snapshot::machine::{
     begin_store_session, checkpoint_to_store, from_snapshot_bytes, resume_from_store,
@@ -35,11 +39,6 @@ use ironhorse_vm::Interp;
 
 fn sig() -> Signature {
     Signature::new("ironhorse-worker-v1")
-}
-
-fn compile(src: &str) -> (Vec<u8>, Vec<ironhorse_vm::SymbolName>) {
-    let (b, s) = ironhorse_compile::compile_atoms(src).expect("compiles");
-    (b, ironhorse_vm::parse_symbols(&s))
 }
 
 /// A machine whose last crank halted on an uncaught top-level throw:
