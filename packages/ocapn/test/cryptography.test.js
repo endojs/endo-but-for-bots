@@ -2,7 +2,7 @@
 
 import test from '@endo/ses-ava/test.js';
 
-import { frozenBytes } from '@endo/immutable-arraybuffer';
+import { frozenBytes, thawedBytes } from '@endo/immutable-arraybuffer';
 import { encodeUtf8 } from '@endo/utf8/encode.js';
 import { makeCryptography, makeSessionId } from '../src/cryptography.js';
 import { syrupCodec } from '../src/syrup/index.js';
@@ -116,4 +116,39 @@ test('makeOcapnKeyPair', t => {
   const key = makeOcapnKeyPair();
   t.is(key.publicKey.bytes.byteLength, 32);
   t.is(key.publicKey.id.byteLength, 32);
+});
+
+test('explicit entropy controls key generation and gift identifiers', t => {
+  /** @type {number[]} */
+  const lengths = [];
+  const cryptography = makeCryptography(syrupCodec, length => {
+    lengths.push(length);
+    return new Uint8Array(length).fill(lengths.length);
+  });
+  const first = cryptography.makeOcapnKeyPair();
+  const second = cryptography.makeOcapnKeyPairWithPrivateBytes();
+  const gift = cryptography.randomGiftId();
+  t.deepEqual(lengths, [32, 32, 16]);
+  t.deepEqual(second.privateKeyBytes, new Uint8Array(32).fill(2));
+  t.deepEqual(Array.from(thawedBytes(gift)), Array(16).fill(3));
+  const expectedFirst = cryptography.makeOcapnKeyPairFromPrivateKey(
+    new Uint8Array(32).fill(1),
+  );
+  t.deepEqual(
+    Array.from(thawedBytes(first.publicKey.id)),
+    Array.from(thawedBytes(expectedFirst.publicKey.id)),
+  );
+});
+
+test('denied injected entropy never falls back to ambient randomness', t => {
+  const cryptography = makeCryptography(syrupCodec, () => {
+    throw Error('Entropy unavailable');
+  });
+  for (const generate of [
+    cryptography.makeOcapnKeyPair,
+    cryptography.makeOcapnKeyPairWithPrivateBytes,
+    cryptography.randomGiftId,
+  ]) {
+    t.throws(generate, { message: 'Entropy unavailable' });
+  }
 });

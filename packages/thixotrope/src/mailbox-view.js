@@ -1,11 +1,18 @@
 // @ts-check
+/** @import { NodePowers } from './platform/node-powers.js' */
 import harden from '@endo/harden';
-import process from 'node:process';
-import { createInterface } from 'node:readline';
 
 /** @import { connectLocalControl } from './local-control.js' */
-/** @param {Awaited<ReturnType<typeof connectLocalControl>>} client */
-export const showMailbox = async client => {
+/**
+ * @param {NodePowers} powers
+ * @param {Awaited<ReturnType<typeof connectLocalControl>>} client
+ */
+export const showMailbox = async (powers, client) => {
+  const {
+    console,
+    process,
+    readline: { createInterface },
+  } = powers;
   const terminal = createInterface({
     input: process.stdin,
     output: process.stdout,
@@ -38,17 +45,15 @@ export const showMailbox = async client => {
       if (command === 'q') break;
       try {
         if (command === 'take') {
-          // eslint-disable-next-line no-await-in-loop
           await client.call('takeOffer', id, key);
         } else if (command === 'discard') {
-          // eslint-disable-next-line no-await-in-loop
           await client.call('discardOffer', id);
         } else if (command !== 'r') {
           console.log('Unknown command');
           // eslint-disable-next-line no-continue
           continue;
         }
-        // eslint-disable-next-line no-await-in-loop
+
         await refresh();
       } catch (error) {
         console.error(/** @type {Error} */ (error).message);

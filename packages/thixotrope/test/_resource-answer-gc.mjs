@@ -2,13 +2,15 @@
 const { gc, WeakRef: HostWeakRef } = globalThis;
 if (!gc) throw Error('This fixture requires --expose-gc');
 await import('@endo/init');
+const { makeNodePowers } = await import('../src/platform/node-powers.js');
+const nodePowers = makeNodePowers();
 const { E, Far } = await import('@endo/far');
 const { syrupCodec } = await import('@endo/ocapn/syrup');
 const { setImmediate } = await import('node:timers/promises');
 const { makeThixotropeDaemon } = await import('../src/daemon.js');
 const { makePeerJournalReplayEngine } =
   await import('../src/peer-replay-engine.js');
-const { makeMemoryStore } = await import('../src/store-fs.js');
+const { makeMemoryStore } = await import('../src/store-memory.js');
 const { makeWorkerSessionRecords } =
   await import('../src/worker-session-records.js');
 
@@ -53,7 +55,7 @@ const gateEntered = new Promise(resolve => {
 });
 const options = {
   store,
-  engine: makePeerJournalReplayEngine(),
+  engine: makePeerJournalReplayEngine(nodePowers),
   codec: syrupCodec,
   resources: {
     gate: () =>
@@ -74,7 +76,7 @@ const options = {
     shutdown() {},
   }),
 };
-let daemon = await makeThixotropeDaemon(options);
+let daemon = await makeThixotropeDaemon(nodePowers, options);
 try {
   const worker = await daemon.createWorker();
   const waiter = await worker.evaluate(
@@ -96,7 +98,7 @@ try {
   if (!(pending[0].slice(2) in exports))
     throw Error('GC released the pending host answer route');
   await daemon.crash();
-  daemon = await makeThixotropeDaemon(options);
+  daemon = await makeThixotropeDaemon(nodePowers, options);
   const restored = await daemon.lookup(secret);
   const failure = await E(restored).failure();
   if (!/pending answer aborted/.test(failure))

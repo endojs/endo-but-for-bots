@@ -1,5 +1,5 @@
 // @ts-check
-/* global setTimeout, clearTimeout */
+/** @import { NodePowers } from './platform/node-powers.js' */
 import harden from '@endo/harden';
 import { decodeBase64, encodeBase64 } from '@endo/base64';
 import { Fail, q } from '@endo/errors';
@@ -45,6 +45,7 @@ import { WorkerHaltError } from './worker-engine.js';
  * naturally drains the deliveries queued before it, and deliveries
  * queued after it reopen the worker from the snapshot it just took.
  *
+ * @param {Pick<NodePowers, 'timers' | 'console'>} powers
  * @param {object} options
  * @param {string} options.workerId
  * @param {WorkerStore} options.store
@@ -63,15 +64,19 @@ import { WorkerHaltError } from './worker-engine.js';
  * @param {string} [options.debugLabel]
  * @param {() => void} [options.onFatal] retire the failed logical session
  */
-export const makeDurableWorkerTransport = ({
-  workerId,
-  store,
-  engine,
-  onFrame,
-  idleSleepMs = undefined,
-  debugLabel = undefined,
-  onFatal = () => {},
-}) => {
+export const makeDurableWorkerTransport = (
+  powers,
+  {
+    workerId,
+    store,
+    engine,
+    onFrame,
+    idleSleepMs = undefined,
+    debugLabel = undefined,
+    onFatal = () => {},
+  },
+) => {
+  const { setTimeout, clearTimeout } = powers.timers;
   typeof onFrame === 'function' ||
     Fail`durable worker transport requires an onFrame callback`;
   const debugName = `${debugLabel ?? 'worker'}(${workerId.slice(0, 8)})`;
@@ -136,9 +141,9 @@ export const makeDurableWorkerTransport = ({
       ) {
         return;
       }
-      // eslint-disable-next-line no-use-before-define
+
       sleepInternal().catch(error =>
-        console.error(
+        powers.console.error(
           `thixotrope worker transport ${debugName}: idle sleep failed`,
           error,
         ),
@@ -295,7 +300,7 @@ export const makeDurableWorkerTransport = ({
         deliveredUpTo = index + 1;
         if (hubSequence !== undefined) deliveredHubSequence = hubSequence;
       }).catch(error => {
-        console.error(
+        powers.console.error(
           `thixotrope worker transport ${debugName}: delivery failed`,
           error,
         );

@@ -1,3 +1,6 @@
+import { makeNodePowers } from '../src/platform/node-powers.js';
+
+const nodePowers = makeNodePowers();
 import '@endo/init';
 import assert from 'node:assert/strict';
 import { readFile, writeFile, mkdir, open, rename } from 'node:fs/promises';
@@ -38,11 +41,13 @@ if (command === 'help') {
 assert.ok(commands.includes(command), `Unknown ${demo} command: ${command}`);
 const statePath = resolve(stateArgument);
 if (command === 'inspect') {
-  console.log(JSON.stringify(await inspectIronhorseStore(statePath), null, 2));
+  console.log(
+    JSON.stringify(await inspectIronhorseStore(nodePowers, statePath), null, 2),
+  );
   process.exit(0);
 }
 const packagePath = fileURLToPath(new URL('../', import.meta.url));
-const engine = makeIronhorseEngine({
+const engine = makeIronhorseEngine(nodePowers, {
   workerBinary:
     process.env.THIXOTROPE_IRONHORSE_WORKER ??
     resolve(packagePath, '../../target/release/thixotrope-ironhorse-worker'),
@@ -52,8 +57,8 @@ const engine = makeIronhorseEngine({
   storePath: join(statePath, 'heaps'),
 });
 const start = () =>
-  makeThixotropeDaemon({
-    store: makeFsStore(statePath),
+  makeThixotropeDaemon(nodePowers, {
+    store: makeFsStore(nodePowers, statePath),
     engine,
     codec: syrupCodec,
     makeNetlayer: ({ handlers, logger }) =>
