@@ -16,6 +16,27 @@ macro_rules! gc_root {
     ($emit:ident, $vm:ident, $field:ident, $roots:ident, index) => {
         $emit! { $roots.push($vm.$field); }
     };
+    // Lazy installation cannot keep these identities alive through a property
+    // edge until a crank first names that property.
+    ($emit:ident, $vm:ident, $field:ident, $roots:ident, error_accessor) => {
+        $emit! { if let Some((holder, getter, setter)) = $vm.$field {
+            $roots.extend([holder, getter, setter]);
+        } }
+    };
+    ($emit:ident, $vm:ident, $field:ident, $roots:ident, lazy_getters) => {
+        $emit! { $roots.extend($vm.$field.iter().filter_map(|(owner, info)| {
+            matches!(
+                info.method,
+                Some(
+                    NativeMethod::TypedArrayToStringTagGetter
+                        | NativeMethod::PromiseSpeciesGetter
+                        | NativeMethod::RegExpSpeciesGetter
+                        | NativeMethod::ArrayBufferSpeciesGetter
+                )
+            )
+            .then_some(*owner)
+        })); }
+    };
     ($emit:ident, $vm:ident, $field:ident, $roots:ident, optional) => {
         $emit! { $roots.extend($vm.$field); }
     };

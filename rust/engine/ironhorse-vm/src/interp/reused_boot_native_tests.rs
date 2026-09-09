@@ -6,8 +6,16 @@ use crate::value::{Kind, Payload, Slot};
 #[test]
 fn copy_object_in_recycled_boot_slot_is_not_a_boot_native() {
     let mut m = Interp::new();
+    // Seed a disposable boot-range object so this admission test does not
+    // depend on incorrectly collecting a lazily installed intrinsic.
+    let disposable = m.slots.alloc(Slot::instance(m.object_proto));
+    m.boot_slot_count = m.slots.capacity();
     m.collect_garbage();
     let function = m.alloc_method(NativeMethod::CopyObject);
+    assert_eq!(
+        function, disposable,
+        "fixture must recycle the seeded object"
+    );
     assert!(
         function.0 < m.boot_slot_count,
         "fixture must reuse a boot slot"
