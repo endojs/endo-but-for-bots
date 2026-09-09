@@ -843,3 +843,28 @@ all 219 snapshot library tests and strict Clippy passed again.
 The artifact includes the validation commands and compile-policy probe results.
 This incremental comparison does not replace the outstanding full 1A performance
 acceptance against the original decomposition baseline.
+
+## Rejected Promise native module extraction (1A, F142)
+
+[results/1a-promise-module.json](results/1a-promise-module.json) retains a rejected
+move of 36 Promise helpers into `interp/natives/promise.rs` at `3aba01059`.
+The embedded `candidate_patch` reproduces the runtime, source locks, and ignored
+Promise benchmark; all those changes were reverted after measurement.
+All 10,500 moved Rust tokens matched after allowing scoped visibility and formatting.
+The engine CI suite passed 1,478 tests, SQLite passed 116 tests, and the source
+locks, strict VM Clippy and platform Math-vector check passed.
+The new ignored benchmark was compiled and run separately from that CI suite.
+
+The initial 48-control comparison failed seven metrics at the unchanged 1.25x gate:
+front/tail sliding at 500 elements measured 1.868x/1.408x, front/tail sliding at
+2,000 elements measured 1.310x/1.357x, front sliding at 8,000 elements measured
+1.309x, and placeholder allocation at 1,000,000/4,000,000 measured 1.873x/2.470x.
+A fixed three-trial audit alternated baseline/candidate order and retained all six runs.
+Its median comparisons ranged from 0.928x to 1.284x, failing tail sliding at 8,000.
+Four Promise-specific controls ranged from 0.969x to 1.049x with identical results
+and raw meter totals; they do not override the general-control failure.
+An earlier baseline is retained but excluded because its process was still live
+when validation started, so overlap cannot be ruled out.
+The replacement serial baseline completed before runtime edits.
+No further trials were selected, and these observations establish no cause.
+This extraction is not accepted; full 1A work and performance acceptance remain outstanding.
