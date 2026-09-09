@@ -2628,9 +2628,7 @@ impl Coder<'_, '_> {
 
     /// `fxNodeCodeName` — whether coding `value` in a naming position (a
     /// binding/assignment/property whose target supplies a name) would
-    /// infer a name for an anonymous function/class. Name inference is a
-    /// deferred slice, so callers assert a `false` here rather than emit a
-    /// wrongly-anonymous function.
+    /// infer a name for an anonymous function/class.
     fn infers_name(item: &Item) -> bool {
         let node = match item {
             Item::Node(n) => n,
@@ -5283,11 +5281,11 @@ impl Coder<'_, '_> {
     }
 
     /// `fxCompoundExpressionNodeCodeName` — name an anonymous function /
-    /// class assigned to a plain identifier. Its trigger nodes (function /
-    /// class values) are not in the ported surface, so it is a no-op here.
+    /// class assigned to a plain identifier. Property references do not infer
+    /// names under logical assignment.
     fn code_compound_name(&mut self, node: &Node) {
         if let Item::Node(r) = &node.children[0] {
-            if r.token == Token::Access && node_code_name(&node.children[1]) {
+            if r.token == Token::Access && Self::infers_name(&node.children[1]) {
                 let name = Self::symbol_of(&r.children[0]);
                 self.add_symbol(0, XS_CODE_NAME, &name);
             }
@@ -6545,14 +6543,6 @@ fn unary_code(token: Token) -> i32 {
         Token::Typeof => XS_CODE_TYPEOF,
         _ => unreachable!("not a unary op: {:?}", token),
     }
-}
-
-/// `fxNodeCodeName` — whether an assigned value is an anonymous
-/// function / generator / class that should receive an inferred `.name`.
-/// The trigger node kinds are not in the ported surface, so this is
-/// always `false` for now (a named edge for the function/class slice).
-fn node_code_name(_value: &Item) -> bool {
-    false
 }
 
 /// The arithmetic opcode a compound assignment folds with
