@@ -33,8 +33,8 @@ macro_rules! snapshot_payloads {
                     // The write verbs persist only QUIESCENT machines, and quiescence
                     // includes an empty value stack — so a populated `STAC` cannot come
                     // from an honest writer, and adopting one would seed a machine that
-                    // can neither run nor checkpoint safely (review finding 5: the
-                    // reader must enforce what the writer enforces).
+                    // can neither run nor checkpoint safely. The reader must enforce
+                    // the same boundary as the writer; see `tests/persist_gates.rs`.
                     if !stack.is_empty() {
                         return Err(SnapshotError::Corrupt(
                             "STAC not empty at a quiescent boundary",
@@ -2435,7 +2435,7 @@ macro_rules! snapshot_payloads {
                     }
                     // And an explicit floor AT the table length is non-canonical:
                     // writers emit the fully-installed state as an EMPTY section
-                    // (the store mirror of `read_machine`'s NFLR gate — review).
+                    // (the store mirror of `read_machine`'s NFLR gate).
                     if state
                         .name_floor
                         .is_some_and(|floor| floor as usize == state.names.len())
@@ -2465,7 +2465,7 @@ macro_rules! snapshot_payloads {
                             // every writer canonicalizes as an ABSENT atom
                             // (`with_name_floor`); an explicit one can only be crafted,
                             // and accepting it re-canonicalizes on the next write —
-                            // breaking write(read(bytes)) == bytes (review).
+                            // breaking write(read(bytes)) == bytes.
                             if floor as usize == small.names.len() {
                                 return Err(SnapshotError::Corrupt(
                                     "installed-names floor: non-canonical explicit full floor",

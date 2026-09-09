@@ -84,12 +84,12 @@
 //!   empty there, yet the boundary registers were never cleared.
 //!
 //! The registry of ALL these classifications is now MECHANICAL:
-//! [`tests::ledger_classification_reconciles_with_the_interp_struct`]
+//! `tests::ledger_classification_reconciles_with_the_interp_struct`
 //! reads the field inventory emitted with `Interp` and reconciles it two-way
 //! against the classified groups, so a new field cannot land
 //! unclassified and a stale entry cannot linger. The quiescence
 //! predicate itself is reconciled the same way by
-//! [`tests::empty_at_boundary_rows_match_the_quiescence_predicate`]: every
+//! `tests::empty_at_boundary_rows_match_the_quiescence_predicate`: every
 //! `EmptyAtBoundary` row must be required empty, and every field the
 //! predicate names — emptiness and lifecycle conjuncts alike — must be
 //! classified, so a conjunct cannot be dropped silently.
@@ -185,7 +185,7 @@ pub enum Coverage {
     /// EVERY persist verb — store and blob alike — gates on quiescence
     /// (the contract-violation locks in `persist_gates.rs` enforce the gates
     /// behaviorally, and
-    /// [`tests::empty_at_boundary_rows_match_the_quiescence_predicate`]
+    /// `tests::empty_at_boundary_rows_match_the_quiescence_predicate`
     /// ties this classification to the predicate's actual field list
     /// mechanically). Distinct from an excluded transient: these ARE
     /// reachable machine state mid-crank — a halted crank holds them —

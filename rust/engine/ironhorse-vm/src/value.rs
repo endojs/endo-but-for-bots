@@ -114,8 +114,7 @@ impl SlotBacking {
     fn validate_records(&self, page: u32, records: &[Slot]) {
         let start = page as usize * SLOTS_PER_PAGE as usize;
         // Exact length, both directions: a short row would silently
-        // leave placeholder records marked resident (the review's
-        // silent-corruption finding); a long row would overrun.
+        // leave placeholder records marked resident; a long row would overrun.
         let expected = (self.snapshot_count as usize)
             .min(start + SLOTS_PER_PAGE as usize)
             .saturating_sub(start);
@@ -141,9 +140,8 @@ impl SlotBacking {
             // holds freed records whose stale references and chunk
             // offsets sit outside the current arenas. Nothing reads
             // them before `alloc` overwrites (and re-faults) the page,
-            // so validating them here refuses honest stores (review
-            // finding 2 — the lazy half; the eager gate skips the same
-            // records).
+            // so validating them here refuses honest stores. The eager
+            // gate in snapshot's `check_stored_bounds` skips the same records.
             if self.snapshot_free[start + k] {
                 continue;
             }
@@ -865,8 +863,8 @@ impl SlotArena {
     }
 
     /// Advance the lazy backing to the CURRENT geometry — called by
-    /// the store session after ITS OWN successful checkpoint (phase 8
-    /// review fix). Records appended since attach are committed rows
+    /// the store session after ITS OWN successful checkpoint.
+    /// Records appended since attach are committed rows
     /// now, so their pages become store-backed (evictable and
     /// re-faultable, marked resident: they live in memory), and the
     /// tail page's expected fault length tracks the committed row
@@ -1819,8 +1817,7 @@ impl ChunkArena {
     /// two chunks at once. Pre-faults BOTH before taking the two
     /// guards: on a lazy heap, constructing the second guard over a
     /// non-resident extent would `borrow_mut` under the first guard's
-    /// live `Ref` and panic (the adversarial review's critical
-    /// finding). New two-chunk comparisons go through here, never
+    /// live `Ref` and panic. New two-chunk comparisons go through here, never
     /// through two bare [`Self::payload`] calls.
     pub fn compare_payloads(&self, a: ChunkOffset, b: ChunkOffset) -> std::cmp::Ordering {
         self.ensure_payload_resident(a);
@@ -1834,9 +1831,8 @@ impl ChunkArena {
     /// MUST pre-fault every operand through this before taking the
     /// first guard: constructing a second guard whose extents are
     /// non-resident would otherwise `borrow_mut` under the first
-    /// guard's live `Ref` — the adversarial-review critical finding
-    /// (a lazily resumed machine crashing on `a === b` across
-    /// extents while every other run mode succeeds).
+    /// guard's live `Ref`, crashing a lazily resumed machine on
+    /// `a === b` across extents. [`Self::compare_payloads`] enforces this order.
     pub fn ensure_payload_resident(&self, off: ChunkOffset) {
         if matches!(self.bytes, ChunkBytes::Plain(_)) || off.is_null() {
             return;
