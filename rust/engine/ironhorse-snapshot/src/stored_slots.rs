@@ -2,6 +2,7 @@
 //! exhaustively: adding a field requires an explicit visit/metadata decision.
 //! Owners, handles, code bytes and scalar metadata are not Slot records.
 use crate::image::{ArrayImage, CollectionImage, IndexPropsImage, MachineImage, WrapperImage};
+use crate::store::SmallState;
 use ironhorse_vm::{
     AccessorRow, AsyncRow, BoundFunctionRow, CombinatorRow, DisposableStackRow, DisposalRecordRow,
     FunctionStateSnapshot, GeneratorRow, PrivateAccessorRow, PrivateElementSnapshot,
@@ -250,12 +251,12 @@ impl<T: VisitSlots> VisitSlots for [T] {
 }
 
 /// Run a fallible slot check over the same enumeration used by key admission.
-pub(crate) fn check_slots<T: VisitSlots + ?Sized, E>(
-    value: &T,
+pub(crate) fn check_slots<E>(
+    visit: impl FnOnce(&mut dyn FnMut(&Slot)),
     check: &impl Fn(&Slot) -> Result<(), E>,
 ) -> Result<(), E> {
     let mut result = Ok(());
-    value.visit(&mut |slot| {
+    visit(&mut |slot| {
         if result.is_ok() {
             result = check(slot);
         }
@@ -303,6 +304,42 @@ macro_rules! row {
 row!(ArrayImage {
     slots: [items],
     metadata: [owner, length]
+});
+row!(SmallState {
+    slots: [
+        stack,
+        arrays,
+        index_props,
+        collections,
+        wrappers,
+        function_state,
+        accessors,
+        private_elements,
+        disposable_stacks,
+        generators,
+        promise_cluster
+    ],
+    metadata: [
+        slot_free,
+        keys,
+        names,
+        symbols,
+        meter,
+        registry,
+        errors,
+        buffers,
+        typed_arrays,
+        data_views,
+        regexps,
+        dates,
+        proxy_state,
+        intl_bound_functions,
+        arguments_brands,
+        temporal,
+        intl,
+        name_floor,
+        iterators
+    ]
 });
 row!(IndexPropsImage {
     slots: [items],

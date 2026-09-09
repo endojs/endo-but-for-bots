@@ -3715,44 +3715,7 @@ pub fn store_to_image(store: &dyn HeapStore) -> Result<MachineImage, StoreError>
         );
     }
 
-    crate::image::check_image_slot_bounds(
-        &slots,
-        &small.stack,
-        &small.arrays,
-        &small.index_props,
-        &small.collections,
-        &small.registry,
-        &small.errors,
-        &small.buffers,
-        &small.typed_arrays,
-        &small.data_views,
-        &crate::image::LangRows {
-            wrappers: &small.wrappers,
-            regexps: &small.regexps,
-            dates: &small.dates,
-            function_state: &small.function_state,
-            proxy_state: &small.proxy_state,
-            accessors: &small.accessors,
-            intl_bound_functions: &small.intl_bound_functions,
-            private_elements: &small.private_elements,
-            disposable_stacks: &small.disposable_stacks,
-            generators: &small.generators,
-            promise_cluster: &small.promise_cluster,
-            arguments_brands: &small.arguments_brands,
-            temporal: &small.temporal,
-            intl: &small.intl,
-        },
-        &small.iterators,
-        small.names.len(),
-        &small.symbols,
-        slots.len() as u32,
-        chunks.len(),
-        &slot_free,
-    )
-    .map_err(StoreError::Snapshot)?;
-
-    crate::image::check_buffer_chunk_lengths(&small.buffers, &chunks)?;
-    Ok(MachineImage {
+    let image = MachineImage {
         index_props: small.index_props.clone(),
         version: manifest.version,
         signature: manifest.signature,
@@ -3789,7 +3752,10 @@ pub fn store_to_image(store: &dyn HeapStore) -> Result<MachineImage, StoreError>
         intl: small.intl,
         name_floor: small.name_floor,
         iterators: small.iterators,
-    })
+    };
+    crate::image::check_machine_image_bounds(&image)?;
+    crate::image::check_buffer_chunk_lengths(&image.buffers, &image.chunks)?;
+    Ok(image)
 }
 
 impl StoreManifest {
@@ -4073,39 +4039,10 @@ pub fn validate_store(
     // ROWS are not read at validation time by design — their records
     // are bounds-checked as they fault, with the same free-record
     // skip.
-    crate::image::check_image_slot_bounds(
-        &[],
-        &small.stack,
-        &small.arrays,
-        &small.index_props,
-        &small.collections,
-        &small.registry,
-        &small.errors,
-        &small.buffers,
-        &small.typed_arrays,
-        &small.data_views,
-        &crate::image::LangRows {
-            wrappers: &small.wrappers,
-            regexps: &small.regexps,
-            dates: &small.dates,
-            function_state: &small.function_state,
-            proxy_state: &small.proxy_state,
-            accessors: &small.accessors,
-            intl_bound_functions: &small.intl_bound_functions,
-            private_elements: &small.private_elements,
-            disposable_stacks: &small.disposable_stacks,
-            generators: &small.generators,
-            promise_cluster: &small.promise_cluster,
-            arguments_brands: &small.arguments_brands,
-            temporal: &small.temporal,
-            intl: &small.intl,
-        },
-        &small.iterators,
-        small.names.len(),
-        &small.symbols,
+    crate::image::check_small_state_bounds(
+        &small,
         manifest.slot_count,
         manifest.chunk_len as usize,
-        &small.slot_free,
     )
     .map_err(StoreError::Snapshot)?;
 
