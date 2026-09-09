@@ -108,7 +108,7 @@ fn legacy_utf8_names_migrate_without_changing_ids_or_epoch() {
         &store.free_leaf_hashes().unwrap(),
         &store.page_edges().unwrap(),
     );
-    let intermediate_seal = seal_commit(
+    let mut intermediate_seal = seal_commit(
         &intermediate.parent_seal,
         &intermediate,
         &[],
@@ -117,26 +117,28 @@ fn legacy_utf8_names_migrate_without_changing_ids_or_epoch() {
         &[],
         &[],
     );
-    intermediate.store_schema = 28;
-    intermediate.parent_seal = intermediate_seal;
-    intermediate.root = compute_root(
-        &intermediate,
-        &ironhorse_snapshot::store_sections::framed_root(&store.read_small_state().unwrap())
-            .unwrap(),
-        &pages,
-        &extents,
-        &store.free_leaf_hashes().unwrap(),
-        &store.page_edges().unwrap(),
-    );
-    let intermediate_seal = seal_commit(
-        &intermediate.parent_seal,
-        &intermediate,
-        &[],
-        &[],
-        &[],
-        &[],
-        &[],
-    );
+    for schema in [28, 29] {
+        intermediate.store_schema = schema;
+        intermediate.parent_seal = intermediate_seal;
+        intermediate.root = compute_root(
+            &intermediate,
+            &ironhorse_snapshot::store_sections::framed_root(&store.read_small_state().unwrap())
+                .unwrap(),
+            &pages,
+            &extents,
+            &store.free_leaf_hashes().unwrap(),
+            &store.page_edges().unwrap(),
+        );
+        intermediate_seal = seal_commit(
+            &intermediate.parent_seal,
+            &intermediate,
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+        );
+    }
     assert_eq!(migrated.parent_seal, intermediate_seal);
     assert_ne!(migrated.seal, manifest.seal);
     assert!(!migrate_store(&mut store, &signature).unwrap());

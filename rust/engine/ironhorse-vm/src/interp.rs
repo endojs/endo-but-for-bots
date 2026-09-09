@@ -4835,6 +4835,9 @@ pub struct DisposableStackRow {
 #[derive(Clone, Debug, PartialEq)]
 pub struct SavedJumpRow {
     pub target_pc: u64,
+    /// Canonical code-segment index. Legacy rows without this field resolve
+    /// through the enclosing saved frame's current function.
+    pub segment: Option<u32>,
     pub stack_offset: u64,
     pub locals_len: u64,
     pub id_map: Vec<(u16, u64)>,
@@ -8168,6 +8171,30 @@ impl Interp {
         }
     }
 
+    /// The shared canonical mapping for function rows and saved-handler rows.
+    /// Exporters can be called independently, so each derives the same ordering
+    /// from the authoritative surviving guest functions.
+    fn snapshot_code_segment_remap(&self) -> std::collections::BTreeMap<usize, u32> {
+        let referenced: std::collections::BTreeSet<usize> = self
+            .functions
+            .iter()
+            .filter(|(_, info)| {
+                info.native.is_none() && info.method.is_none() && info.body_start.is_some()
+            })
+            .map(|(owner, _)| {
+                *self
+                    .func_segments
+                    .get(owner)
+                    .expect("every guest bytecode function owns a code segment")
+            })
+            .collect();
+        referenced
+            .into_iter()
+            .enumerate()
+            .map(|(new, old)| (old, new as u32))
+            .collect()
+    }
+
     /// Snapshot the atomic guest-callability cluster.
     pub fn function_state_snapshot(&self) -> FunctionStateSnapshot {
         let mut owners = std::collections::BTreeSet::new();
@@ -8177,28 +8204,9 @@ impl Interp {
             }
         }
 
-        let referenced_segments: std::collections::BTreeSet<usize> = owners
-            .iter()
-            .filter_map(|owner| {
-                let owner = crate::value::SlotIndex(*owner);
-                self.functions
-                    .get(&owner)
-                    .and_then(|info| info.body_start)
-                    .map(|_| {
-                        *self
-                            .func_segments
-                            .get(&owner)
-                            .expect("every guest bytecode function owns a code segment")
-                    })
-            })
-            .collect();
-        let segment_remap: std::collections::BTreeMap<usize, u32> = referenced_segments
-            .iter()
-            .enumerate()
-            .map(|(new, old)| (*old, new as u32))
-            .collect();
-        let segments = referenced_segments
-            .iter()
+        let segment_remap = self.snapshot_code_segment_remap();
+        let segments = segment_remap
+            .keys()
             .map(|old| self.code_segments[*old].to_vec())
             .collect();
 
@@ -8705,7 +8713,11 @@ impl Interp {
         }
     }
 
-    fn saved_frame_snapshot(frame: &SavedFrame) -> SavedFrameRow {
+    fn saved_frame_snapshot(
+        &self,
+        frame: &SavedFrame,
+        segment_remap: &std::collections::BTreeMap<usize, u32>,
+    ) -> SavedFrameRow {
         let sorted_map = |map: &std::collections::HashMap<u16, usize>| {
             let mut rows: Vec<(u16, u64)> =
                 map.iter().map(|(id, index)| (*id, *index as u64)).collect();
@@ -8729,6 +8741,10 @@ impl Interp {
                 .iter()
                 .map(|jump| SavedJumpRow {
                     target_pc: jump.target_pc as u64,
+                    segment: jump
+                        .segment
+                        .or_else(|| self.func_segments.get(&frame.cur_func).copied())
+                        .map(|segment| segment_remap[&segment]),
                     stack_offset: jump.stack_offset as u64,
                     locals_len: jump.locals_len as u64,
                     id_map: sorted_map(&jump.id_map),
@@ -8765,9 +8781,8 @@ impl Interp {
                 .map(|jump| {
                     Some(SavedJump {
                         target_pc: usize::try_from(jump.target_pc).ok()?,
-                        // Legacy rows identify the buffer through cur_func.
-                        // FUNC may be restored after the promise cluster.
-                        segment: None,
+                        // Legacy rows still resolve through cur_func at resume.
+                        segment: jump.segment.map(|segment| segment as usize),
                         stack_offset: usize::try_from(jump.stack_offset).ok()?,
                         locals_len: usize::try_from(jump.locals_len).ok()?,
                         id_map: map(jump.id_map)?,
@@ -8782,6 +8797,15 @@ impl Interp {
     }
 
     pub fn generators_snapshot(&self) -> Vec<GeneratorRow> {
+        let segment_remap = if self.generators.values().any(|data| {
+            data.frame
+                .as_ref()
+                .is_some_and(|frame| !frame.jumps.is_empty())
+        }) {
+            self.snapshot_code_segment_remap()
+        } else {
+            Default::default()
+        };
         let mut rows: Vec<GeneratorRow> = self
             .generators
             .iter()
@@ -8793,7 +8817,10 @@ impl Interp {
                     GeneratorState::Completed => 2,
                     GeneratorState::Executing => 3,
                 },
-                frame: data.frame.as_ref().map(Self::saved_frame_snapshot),
+                frame: data
+                    .frame
+                    .as_ref()
+                    .map(|frame| self.saved_frame_snapshot(frame, &segment_remap)),
             })
             .collect();
         rows.sort_unstable_by_key(|row| row.owner);
@@ -8880,6 +8907,17 @@ impl Interp {
             .map(|(new, &old)| (old, new as u32))
             .collect();
 
+        let segment_remap = if self.async_instances.values().any(|data| {
+            !data.done
+                && data
+                    .frame
+                    .as_ref()
+                    .is_some_and(|frame| !frame.jumps.is_empty())
+        }) {
+            self.snapshot_code_segment_remap()
+        } else {
+            Default::default()
+        };
         let mut async_instances: Vec<_> = self
             .async_instances
             .iter()
@@ -8887,7 +8925,7 @@ impl Interp {
             .filter_map(|(owner, data)| {
                 data.frame.as_ref().map(|frame| AsyncRow {
                     owner: owner.0,
-                    frame: Self::saved_frame_snapshot(frame),
+                    frame: self.saved_frame_snapshot(frame, &segment_remap),
                     result_promise: data.result_promise.0,
                     resolve: data.resolve_fn,
                     reject: data.reject_fn,

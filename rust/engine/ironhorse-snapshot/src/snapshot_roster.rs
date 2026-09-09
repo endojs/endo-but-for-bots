@@ -2075,7 +2075,8 @@ macro_rules! snapshot_payloads {
                             // zero. Measured across five shapes -- a bare yield, a
                             // yield inside try/finally, a nested try, a yield after a
                             // call returns, and `yield*` delegation -- all emit 0.
-                            if jump.flag != 1
+                            if jump.segment.is_some_and(|segment| Some(segment) != function.segment)
+                                || jump.flag != 1
                                 || jump.call_depth_offset != 0
                                 || !starts.contains(&jump.target_pc)
                                 || jump.stack_offset > frame.stack_slice.len() as u64

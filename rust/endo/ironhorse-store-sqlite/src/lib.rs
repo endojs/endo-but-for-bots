@@ -1502,29 +1502,31 @@ mod tests {
         );
         assert_ne!(new.root, old.root);
         assert_eq!((new.epoch, new.cranks), (old.epoch, old.cranks));
-        // Migration passes through schema28's section tree before schema29
-        // stamps native-name support. Preserve and verify both seal links.
-        let mut intermediate = new.clone();
-        intermediate.store_schema = 28;
-        intermediate.parent_seal = old.seal.clone();
-        intermediate.root = compute_root(
-            &intermediate,
-            &ironhorse_snapshot::store_sections::framed_root(&small).unwrap(),
-            &pages,
-            &exts,
-            &store.free_leaf_hashes().unwrap(),
-            &store.page_edges().unwrap(),
-        );
-        let intermediate_seal = ironhorse_snapshot::store::seal_commit(
-            &intermediate.parent_seal,
-            &intermediate,
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-        );
-        assert_eq!(new.parent_seal, intermediate_seal);
+        // Verify every metadata-only seal link after the section-tree migration.
+        let mut parent_seal = old.seal.clone();
+        for schema in [28, 29] {
+            let mut intermediate = new.clone();
+            intermediate.store_schema = schema;
+            intermediate.parent_seal = parent_seal;
+            intermediate.root = compute_root(
+                &intermediate,
+                &ironhorse_snapshot::store_sections::framed_root(&small).unwrap(),
+                &pages,
+                &exts,
+                &store.free_leaf_hashes().unwrap(),
+                &store.page_edges().unwrap(),
+            );
+            parent_seal = ironhorse_snapshot::store::seal_commit(
+                &intermediate.parent_seal,
+                &intermediate,
+                &[],
+                &[],
+                &[],
+                &[],
+                &[],
+            );
+        }
+        assert_eq!(new.parent_seal, parent_seal);
         assert_eq!(
             store
                 .conn

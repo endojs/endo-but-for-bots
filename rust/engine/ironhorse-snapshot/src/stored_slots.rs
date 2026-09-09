@@ -403,6 +403,7 @@ row!(SavedJumpRow {
     slots: [env],
     metadata: [
         target_pc,
+        segment,
         stack_offset,
         locals_len,
         id_map,

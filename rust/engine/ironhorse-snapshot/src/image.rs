@@ -2427,7 +2427,12 @@ fn encode_frame_id_map(v: &mut Vec<u8>, rows: &[(u16, u64)]) {
         v.extend_from_slice(&index.to_be_bytes());
     }
 }
-fn encode_saved_frame(v: &mut Vec<u8>, row: &ironhorse_vm::SavedFrameRow) {
+// GENR and ASYN use a u32::MAX count prefix for the extended saved-frame
+// layout. It cannot be a legacy count: each row takes at least six bytes and
+// both container atoms and framed store sections have u32 payload lengths.
+// Within an extended row, u32::MAX denotes legacy implicit segment identity;
+// a serialized segment table cannot contain enough entries to use that index.
+fn encode_saved_frame(v: &mut Vec<u8>, row: &ironhorse_vm::SavedFrameRow, explicit_segments: bool) {
     encode_frame_slots(v, &row.locals);
     encode_frame_id_map(v, &row.id_map);
     encode_frame_slots(v, &row.args);
@@ -2442,6 +2447,9 @@ fn encode_saved_frame(v: &mut Vec<u8>, row: &ironhorse_vm::SavedFrameRow) {
     v.extend_from_slice(&(row.jumps.len() as u32).to_be_bytes());
     for jump in &row.jumps {
         v.extend_from_slice(&jump.target_pc.to_be_bytes());
+        if explicit_segments {
+            v.extend_from_slice(&jump.segment.unwrap_or(u32::MAX).to_be_bytes());
+        }
         v.extend_from_slice(&jump.stack_offset.to_be_bytes());
         v.extend_from_slice(&jump.locals_len.to_be_bytes());
         encode_frame_id_map(v, &jump.id_map);
@@ -2453,7 +2461,14 @@ fn encode_saved_frame(v: &mut Vec<u8>, row: &ironhorse_vm::SavedFrameRow) {
 }
 
 pub(crate) fn encode_generators(rows: &[ironhorse_vm::GeneratorRow]) -> Vec<u8> {
+    let explicit_segments = rows
+        .iter()
+        .filter_map(|row| row.frame.as_ref())
+        .any(|frame| frame.jumps.iter().any(|jump| jump.segment.is_some()));
     let mut v = Vec::new();
+    if explicit_segments {
+        v.extend_from_slice(&u32::MAX.to_be_bytes());
+    }
     v.extend_from_slice(&(rows.len() as u32).to_be_bytes());
     for row in rows {
         v.extend_from_slice(&row.owner.to_be_bytes());
@@ -2462,7 +2477,7 @@ pub(crate) fn encode_generators(rows: &[ironhorse_vm::GeneratorRow]) -> Vec<u8> 
             None => v.push(0),
             Some(saved) => {
                 v.push(1);
-                encode_saved_frame(&mut v, saved);
+                encode_saved_frame(&mut v, saved, explicit_segments);
             }
         }
     }
@@ -2504,6 +2519,7 @@ fn decode_frame_id_map(c: &mut Cursor<'_>, p: &[u8]) -> Result<Vec<(u16, u64)>, 
 fn decode_saved_frame(
     c: &mut Cursor<'_>,
     p: &[u8],
+    explicit_segments: bool,
 ) -> Result<ironhorse_vm::SavedFrameRow, SnapshotError> {
     let locals = decode_frame_slots(c, p)?;
     let frame_id_map = decode_frame_id_map(c, p)?;
@@ -2521,6 +2537,12 @@ fn decode_saved_frame(
     for _ in 0..jump_count {
         jumps.push(ironhorse_vm::SavedJumpRow {
             target_pc: u64_value(c)?,
+            segment: if explicit_segments {
+                let segment = c.u32()?;
+                (segment != u32::MAX).then_some(segment)
+            } else {
+                None
+            },
             stack_offset: u64_value(c)?,
             locals_len: u64_value(c)?,
             id_map: decode_frame_id_map(c, p)?,
@@ -2550,7 +2572,9 @@ pub(crate) fn decode_generators(
     p: &[u8],
 ) -> Result<Vec<ironhorse_vm::GeneratorRow>, SnapshotError> {
     let mut c = Cursor::new(p, "generators");
-    let count = c.u32()? as usize;
+    let prefix = c.u32()?;
+    let explicit_segments = prefix == u32::MAX;
+    let count = if explicit_segments { c.u32()? } else { prefix } as usize;
     let mut rows = Vec::with_capacity(count.min(p.len() / 6));
     for _ in 0..count {
         let owner = c.u32()?;
@@ -2568,7 +2592,7 @@ pub(crate) fn decode_generators(
         }
         let saved = match c.u8()? {
             0 => None,
-            1 => Some(decode_saved_frame(&mut c, p)?),
+            1 => Some(decode_saved_frame(&mut c, p, explicit_segments)?),
             _ => return Err(SnapshotError::Corrupt("generators: bad frame tag")),
         };
         if (state == 2) != saved.is_none() {
@@ -2583,19 +2607,35 @@ pub(crate) fn decode_generators(
         });
     }
     c.done()?;
+    if explicit_segments
+        && !rows
+            .iter()
+            .filter_map(|row| row.frame.as_ref())
+            .any(|frame| frame.jumps.iter().any(|jump| jump.segment.is_some()))
+    {
+        return Err(SnapshotError::Corrupt(
+            "generator frame: redundant segment prefix",
+        ));
+    }
     Ok(rows)
 }
 
 /// Async activations (`ASYN`), sharing the generator saved-frame encoding.
 pub(crate) fn encode_async_instances(rows: &[ironhorse_vm::AsyncRow]) -> Vec<u8> {
+    let explicit_segments = rows
+        .iter()
+        .any(|row| row.frame.jumps.iter().any(|jump| jump.segment.is_some()));
     let mut v = Vec::new();
+    if explicit_segments {
+        v.extend_from_slice(&u32::MAX.to_be_bytes());
+    }
     v.extend_from_slice(&(rows.len() as u32).to_be_bytes());
     for row in rows {
         v.extend_from_slice(&row.owner.to_be_bytes());
         v.extend_from_slice(&row.result_promise.to_be_bytes());
         crate::slot_codec::encode_slot(&row.resolve, &mut v);
         crate::slot_codec::encode_slot(&row.reject, &mut v);
-        encode_saved_frame(&mut v, &row.frame);
+        encode_saved_frame(&mut v, &row.frame, explicit_segments);
     }
     v
 }
@@ -2604,7 +2644,9 @@ pub(crate) fn decode_async_instances(
     p: &[u8],
 ) -> Result<Vec<ironhorse_vm::AsyncRow>, SnapshotError> {
     let mut c = Cursor::new(p, "async instances");
-    let count = c.u32()? as usize;
+    let prefix = c.u32()?;
+    let explicit_segments = prefix == u32::MAX;
+    let count = if explicit_segments { c.u32()? } else { prefix } as usize;
     let mut rows: Vec<ironhorse_vm::AsyncRow> = Vec::with_capacity(count.min(p.len() / 8));
     for _ in 0..count {
         let owner = c.u32()?;
@@ -2618,10 +2660,19 @@ pub(crate) fn decode_async_instances(
             result_promise: c.u32()?,
             resolve: c.slot()?,
             reject: c.slot()?,
-            frame: decode_saved_frame(&mut c, p)?,
+            frame: decode_saved_frame(&mut c, p, explicit_segments)?,
         });
     }
     c.done()?;
+    if explicit_segments
+        && !rows
+            .iter()
+            .any(|row| row.frame.jumps.iter().any(|jump| jump.segment.is_some()))
+    {
+        return Err(SnapshotError::Corrupt(
+            "generator frame: redundant segment prefix",
+        ));
+    }
     Ok(rows)
 }
 
@@ -4211,6 +4262,21 @@ pub fn write_machine_unchecked(image: &MachineImage) -> Vec<u8> {
 fn encode_machine(image: &MachineImage) -> Result<Vec<u8>, SnapshotError> {
     let mut w = AtomWriter::new();
     let mut version = image.version.clone();
+    if image
+        .generators
+        .iter()
+        .filter_map(|row| row.frame.as_ref())
+        .chain(
+            image
+                .promise_cluster
+                .async_instances
+                .iter()
+                .map(|row| &row.frame),
+        )
+        .any(|frame| frame.jumps.iter().any(|jump| jump.segment.is_some()))
+    {
+        version.format_version = version.format_version.max(19);
+    }
     if image.function_state.native_names.is_some() {
         version.format_version = version.format_version.max(18);
     }
@@ -8455,6 +8521,99 @@ mod generator_decoder_refusals {
         }
     }
 
+    #[test]
+    fn saved_handler_segment_codec_preserves_legacy_and_explicit_rows() {
+        let mut saved = frame();
+        saved.jumps.push(SavedJumpRow {
+            target_pc: 0,
+            segment: None,
+            stack_offset: 0,
+            locals_len: 0,
+            id_map: vec![],
+            call_depth_offset: 0,
+            env: Slot::undefined(),
+            flag: 1,
+        });
+        for explicit in [false, true] {
+            if explicit {
+                let mut jump = saved.jumps[0].clone();
+                jump.segment = Some(7);
+                saved.jumps.push(jump);
+            }
+            let mut legacy_frame = saved.clone();
+            for jump in &mut legacy_frame.jumps {
+                jump.segment = None;
+            }
+            let generators = vec![
+                GeneratorRow {
+                    owner: 1,
+                    state: 1,
+                    frame: Some(legacy_frame.clone()),
+                },
+                GeneratorRow {
+                    owner: 2,
+                    state: 1,
+                    frame: Some(saved.clone()),
+                },
+            ];
+            let bytes = encode_generators(&generators);
+            assert_eq!(bytes.starts_with(&u32::MAX.to_be_bytes()), explicit);
+            assert_eq!(decode_generators(&bytes).unwrap(), generators);
+            assert_eq!(
+                encode_generators(&decode_generators(&bytes).unwrap()),
+                bytes
+            );
+            for end in 0..bytes.len() {
+                assert!(
+                    decode_generators(&bytes[..end]).is_err(),
+                    "GENR truncated at {end}"
+                );
+            }
+            let instances = vec![
+                AsyncRow {
+                    owner: 1,
+                    result_promise: 3,
+                    resolve: Slot::undefined(),
+                    reject: Slot::undefined(),
+                    frame: legacy_frame,
+                },
+                AsyncRow {
+                    owner: 2,
+                    result_promise: 3,
+                    resolve: Slot::undefined(),
+                    reject: Slot::undefined(),
+                    frame: saved.clone(),
+                },
+            ];
+            let bytes = encode_async_instances(&instances);
+            assert_eq!(bytes.starts_with(&u32::MAX.to_be_bytes()), explicit);
+            assert_eq!(decode_async_instances(&bytes).unwrap(), instances);
+            assert_eq!(
+                encode_async_instances(&decode_async_instances(&bytes).unwrap()),
+                bytes
+            );
+            for end in 0..bytes.len() {
+                assert!(
+                    decode_async_instances(&bytes[..end]).is_err(),
+                    "ASYN truncated at {end}"
+                );
+            }
+        }
+        let redundant = [u32::MAX.to_be_bytes(), 0u32.to_be_bytes()].concat();
+        assert_eq!(
+            decode_generators(&redundant),
+            Err(SnapshotError::Corrupt(
+                "generator frame: redundant segment prefix"
+            ))
+        );
+        assert_eq!(
+            decode_async_instances(&redundant),
+            Err(SnapshotError::Corrupt(
+                "generator frame: redundant segment prefix"
+            ))
+        );
+    }
+
     fn check(
         functions: &ironhorse_vm::FunctionStateSnapshot,
         saved: &SavedFrameRow,
@@ -8556,6 +8715,7 @@ mod generator_decoder_refusals {
         saved.stack_slice = vec![Slot::undefined()];
         saved.jumps = vec![SavedJumpRow {
             target_pc: 2,
+            segment: None,
             stack_offset: 1,
             locals_len: 1,
             id_map: vec![(4, 0)],
@@ -8567,6 +8727,24 @@ mod generator_decoder_refusals {
             saved.resume_pc = resume_pc;
             assert_eq!(check(&functions, &saved), Ok(()));
         }
+        let mut two_segments = functions.clone();
+        two_segments.segments.push(functions.segments[0].clone());
+        let mut sibling = functions.functions[0].clone();
+        sibling.owner = 3;
+        sibling.segment = Some(1);
+        two_segments.functions.push(sibling);
+        let mut explicit = saved.clone();
+        explicit.jumps[0].segment = Some(0);
+        assert_eq!(check(&two_segments, &explicit), Ok(()));
+        // Both buffers and the pc are valid. The identity must still belong
+        // to this activation, rather than merely falling within table bounds.
+        explicit.jumps[0].segment = Some(1);
+        assert_eq!(
+            check(&two_segments, &explicit),
+            Err(SnapshotError::Corrupt(
+                "generator frame: invalid saved handler"
+            ))
+        );
         let mut invalid = saved.clone();
         invalid.cur_func = 3;
         assert_eq!(
@@ -8726,6 +8904,7 @@ mod generator_decoder_refusals {
         saved.id_map = vec![(2, 0), (3, 1)];
         saved.jumps.push(SavedJumpRow {
             target_pc: 0,
+            segment: None,
             stack_offset: 0,
             locals_len: 0,
             id_map: vec![(2, 0), (3, 1)],

@@ -66,18 +66,21 @@ fn republishing_cannot_advertise_free_markers_to_pre_17_readers() {
     let (machine, _) = with_free_block();
     let current = machine.write_snapshot(&signature).unwrap();
     let reader = AtomReader::parse(&current).unwrap();
-    for old in [15, 16] {
+    let restamp = |format_version| {
         let mut writer = AtomWriter::new();
         for atom in reader.atoms() {
             if atom.tag == VERS {
                 let mut version = Version::decode(atom.payload).unwrap();
-                version.format_version = old;
+                version.format_version = format_version;
                 writer.atom(VERS, &version.encode()).unwrap();
             } else {
                 writer.atom(atom.tag, atom.payload).unwrap();
             }
         }
-        let forged = writer.finish().unwrap();
+        writer.finish().unwrap()
+    };
+    for old in [15, 16] {
+        let forged = restamp(old);
         // Old allocators cannot produce this fixture. Format16's exact-byte
         // rule refuses it; older permissive readers can admit its dead bytes,
         // but a normal writer must upgrade the stamp before republishing it.
@@ -98,7 +101,9 @@ fn republishing_cannot_advertise_free_markers_to_pre_17_readers() {
                     .format_version,
                 18
             );
-            assert_eq!(published, current);
+            // This fixture needs native-name format18, but no format19
+            // saved handlers. Every byte except the version remains exact.
+            assert_eq!(published, restamp(18));
         }
     }
 }

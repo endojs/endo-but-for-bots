@@ -93,7 +93,8 @@ pub use ironhorse_vm::{CHUNK_EXTENT_BYTES, SLOTS_PER_PAGE};
 /// v28 binds the 32 small-state payloads independently under a fixed section tree.
 /// Migration from v27 preserves payload bytes and export framing.
 /// v29: FUNC persists surviving boot-native name chunk locations.
-pub const STORE_SCHEMA_VERSION: u32 = 29;
+/// v30: GENR and ASYN may carry explicit saved-handler code segments.
+pub const STORE_SCHEMA_VERSION: u32 = 30;
 /// The oldest schema [`migrate_store`] can upgrade in place. Decode
 /// accepts the whole supported range; validation refuses an
 /// un-migrated older store with [`StoreError::NeedsMigration`], and
@@ -1998,7 +1999,7 @@ pub fn migrate_store(
             (25, _) => migrate_v25_to_v26(store)?,
             (26, _) => migrate_v26_to_v27(store)?,
             (27, _) => migrate_v27_to_v28(store)?,
-            (28, _) => migrate_v28_to_v29(store)?,
+            (28 | 29, _) => migrate_framed_schema_identity(store, schema + 1)?,
             (_, Some(&(target, extra_len))) => {
                 migrate_append_small_section(store, target, extra_len)?;
             }
@@ -2284,11 +2285,17 @@ fn migrate_v27_to_v28(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     store.replace_manifest_and_small_for_migration(&manifest, &small)
 }
 
+// Schema 28→29 and 29→30 preserve old section payloads.
+// Legacy saved handlers infer their segment from cur_func until the next
+// checkpoint writes explicit IDs.
 // Legacy FUNC has no native-name suffix: its native-name locations follow
 // the old boot-derived contract. Preserve these payloads verbatim; the next
 // checkpoint records explicit locations. A legacy image already broken by
 // moving those locations cannot be repaired from metadata it never recorded.
-fn migrate_v28_to_v29(store: &mut dyn HeapStore) -> Result<(), StoreError> {
+fn migrate_framed_schema_identity(
+    store: &mut dyn HeapStore,
+    target_schema: u32,
+) -> Result<(), StoreError> {
     let mut manifest = store.manifest()?;
     verify_current_seal(&manifest)?;
     let small = store.read_small_state()?;
@@ -2311,7 +2318,7 @@ fn migrate_v28_to_v29(store: &mut dyn HeapStore) -> Result<(), StoreError> {
         });
     }
     manifest.parent_seal = manifest.seal.clone();
-    manifest.store_schema = 29;
+    manifest.store_schema = target_schema;
     manifest.root = compute_root(
         &manifest,
         &crate::store_sections::framed_root(&small)?,
