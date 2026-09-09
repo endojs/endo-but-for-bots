@@ -251,9 +251,11 @@ impl<'a> SymbolTable<'a> {
         t
     }
 
-    /// `fxNewParserSymbol`'s hash: `sum = (sum << 1) + ch` over the bytes
-    /// (C promotes `char`, signed on the pin's platform, to `int`), masked
-    /// to 31 bits.
+    /// `fxNewParserSymbol`'s hash over CESU-8 bytes, masked to 31 bits.
+    /// Preserve signed-byte promotion on every Rust target: the byte-identity
+    /// reference is XS pin 23b4d6b0a65f on x86_64 with signed plain C `char`.
+    /// XS uses `txString` (`char*`); unsigned-char builds can order symbols
+    /// differently. Host C signedness must never change Ironhorse's output.
     fn hash(s: &[u8]) -> u32 {
         let mut sum: u32 = 0;
         for &b in s {
@@ -6645,6 +6647,26 @@ fn binary_code(token: Token) -> i32 {
         Token::Instanceof => XS_CODE_INSTANCEOF,
         Token::In => XS_CODE_IN,
         _ => unreachable!("not a binary op: {:?}", token),
+    }
+}
+
+#[cfg(test)]
+mod symbol_hash_tests {
+    use super::SymbolTable;
+
+    #[test]
+    fn signed_cesu8_hash_is_a_host_independent_contract() {
+        for (bytes, expected) in [
+            (&b""[..], 0),
+            (&b"abc"[..], 0x2ab),
+            (&[0xc3, 0xa9][..], 0x7fff_ff2f),       // é
+            (&[0xed, 0xa0, 0x80][..], 0x7fff_fe74), // lone high surrogate
+            (&[0xed, 0xa0, 0xbd, 0xed, 0xb8, 0x80][..], 0x7fff_f42c), // 😀 in CESU-8
+        ] {
+            assert_eq!(SymbolTable::hash(bytes), expected, "{bytes:x?}");
+        }
+        // Exercise wrapping before the final 31-bit mask, not just promotion.
+        assert_eq!(SymbolTable::hash(&[0xff; 40]), 1);
     }
 }
 
