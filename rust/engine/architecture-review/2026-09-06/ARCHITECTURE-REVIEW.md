@@ -11941,6 +11941,21 @@ a sprint, and each one is currently being answered by accident:
   or state the per-binary-per-platform scope in the design and README where
   consumers read it; and canonicalize NaN on ingress either way (F080, F081).
 
+> **Status of these four (2026-09-09).** The four bullets above are kept as
+> written against `97d8de25` and are **not** a current list of open questions.
+> Their answers are recorded in
+> [`designs/ironhorse-w6-decisions.md`](../../../../designs/ironhorse-w6-decisions.md),
+> which is the decision of record: Realm decided (extract it); engine trait
+> deferred with a stated trigger; **integrity model decided and implemented
+> before this review's first revision** — F015, F057 and F058 have read fixed at
+> every revision since `f109e8f4`, though by a different mechanism than the one
+> proposed here, and F056/F061's 47 bypassing call sites are its residue;
+> determinism scope decided (vendor `libm` behind a feature) but not implemented
+> and gated on transcendental coverage that does not yet exist.
+> That document also carries a fifth question of the same kind, filed here as
+> F091: whether the GC schedule is release policy or embedder policy, which
+> gates F010, F076 and F090.
+
 Finally, the documentation restructure, which is cheap and makes the rest
 reviewable: a `## Status` section in `designs/ironhorse-engine.md` with one row per
 roadmap stage; a roughly 300-line `rust/engine/ARCHITECTURE.md` naming the real
