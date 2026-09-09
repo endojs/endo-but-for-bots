@@ -3,4 +3,5 @@ mod array;
 mod buffer;
 mod dispatch;
 mod json;
+mod promise;
 mod regexp;

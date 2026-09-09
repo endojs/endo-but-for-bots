@@ -1317,3 +1317,22 @@ The five direct controls range from 0.998x to 1.028x, with identical results and
 raw charges.
 Before aggregate measurements reuse the preceding Array candidate; its failed gate
 and paired diagnostic remain recorded without revision.
+
+## Promise lifecycle extraction reconsidered
+
+[results/1a-promise-reconsidered.json](results/1a-promise-reconsidered.json) records
+36 methods moved into `interp/natives/promise.rs` on `034d922e3`, covering promise
+capabilities, settlement, thenable adoption, reactions, and combinators.
+Fourteen methods retain parent-scoped caller access; the other helpers stay private.
+Settlement documentation now describes the intrinsic `.then` fast path and
+asynchronous adoption accurately.
+Executable method bodies are unchanged.
+
+Fresh validation passes 1,495 engine tests and 116 SQLite tests, plus 52 VM source
+locks, seven snapshot locks, strict VM library Clippy, docs, and the math control.
+All 48 controls pass the unchanged pinned-baseline gate.
+The four direct controls range from 0.998x to 1.028x, with identical results and
+raw charges.
+Before aggregate measurements reuse the preceding Buffer candidate; before source
+locks were freshly rerun.
+The earlier rejected experiment remains intact.
