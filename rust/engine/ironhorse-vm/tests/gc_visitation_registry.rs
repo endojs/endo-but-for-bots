@@ -45,6 +45,8 @@ const SRC: &str = concat!(
     include_str!("../src/interp/date.rs"),
     "\n",
     include_str!("../src/interp/locale.rs"),
+    "\n",
+    include_str!("../src/interp/text.rs"),
 );
 
 /// The body (including braces) of the function that starts at the
