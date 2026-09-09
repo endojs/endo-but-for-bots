@@ -108,6 +108,7 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
     let mut previous = session.machine().snapshot_image(&sig).unwrap().into_image();
     previous.meter.cost_table_version = "ironhorse-meter-4".into();
     previous.version.format_version = 16;
+    previous.function_state.native_names = None;
     assert_eq!(
         hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&previous)),
         "c602c4b2c29683162482eb324f0ab96732108a8ce16020e76d1f08c358a6cbcd"
@@ -334,7 +335,8 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // SIGN now binds the mechanically derived boot fingerprint.
         // Combined W3 format/boot identity, W2 meter release 4, and compiler policy 5.
         // Format 17 permits reusable chunk markers; only VERS changes here.
-        "5bdc7bc07be14bd44c258cc743fdc2d57162197d4bcb07efac12ad240a59b5bf",
+        // Format18 adds the boot-native name table to FUNC.
+        "626a77f9c50959bafefd470603be1c46bb4b7453b5840529728e947a761b926d",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -545,7 +547,8 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Schema 28 replaces only the small-state leaf with a section tree;
         // container bytes and raw execution charges above remain unchanged.
         // Format 17 travels in every epoch's manifest and changes the chain.
-        "75a60ed18ab2d9d5311f6c8fd293c82edeed9d31a9c503f537b7dbb44259648d",
+        // Store29 and FUNC native-name rows change the authenticated state.
+        "23438200aae288c2499bb88d33400dcb6715286ce0d92c98902ad43aa376d0e6",
         "epoch-3 seal chain"
     );
 }

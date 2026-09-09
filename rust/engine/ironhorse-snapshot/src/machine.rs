@@ -372,9 +372,17 @@ macro_rules! define_restore_chain {
         #[deny(unused_variables)]
         fn restore_side_tables(
             interp: &mut Interp,
-            tables: SideTableImages,
+            mut tables: SideTableImages,
         ) -> Result<(), crate::format::SnapshotError> {
             use crate::format::SnapshotError;
+            // Prune collected boot-native metadata before runtime function
+            // clusters can reuse those slots, and restore relocated names.
+            let native_names = tables.function_state.native_names.take();
+            if !interp.restore_native_names(native_names.as_deref()) {
+                return Err(SnapshotError::Corrupt(
+                    "side-table restore: malformed native names",
+                ));
+            }
             macro_rules! restore_step {
                 $(( $section, $d current_interp:ident, $d current_tables:ident) => {{
                     $(let $field = $d current_tables.$field;)+
@@ -1736,6 +1744,12 @@ mod tests {
             PromiseRow, SegmentsData, Slot,
         };
         assert_eq!(restore_rows(|_| {}), Ok(()));
+        assert_eq!(
+            restore_rows(|rows| rows.function_state.native_names = Some(vec![(0, 4)])),
+            Err(SnapshotError::Corrupt(
+                "side-table restore: malformed native names"
+            ))
+        );
         assert_eq!(
             restore_rows(|rows| rows.intl.segments.push((
                 1,

@@ -355,7 +355,13 @@ row!(WrapperImage {
 });
 row!(FunctionStateSnapshot {
     slots: [bound_functions],
-    metadata: [segments, functions, ctor_prototypes, deleted_meta]
+    metadata: [
+        native_names,
+        segments,
+        functions,
+        ctor_prototypes,
+        deleted_meta
+    ]
 });
 row!(BoundFunctionRow {
     slots: [this_arg, args],

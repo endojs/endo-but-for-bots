@@ -370,13 +370,21 @@ fn small_state_stays_small_with_a_large_free_list() {
     let manifest = store.manifest().unwrap();
     assert!(manifest.free_len > 3000, "free list is genuinely large");
     let small_len = store.read_small_state().unwrap().len();
+    // Boot-native names add a fixed per-runtime table, independent of garbage.
+    let native_name_bytes = 4 + 8 * session
+        .machine()
+        .function_state_snapshot()
+        .native_names
+        .as_ref()
+        .unwrap()
+        .len();
     assert!(
         // The Promise/RegExp/ArrayBuffer species getters, matchAll iterator
         // natives, ArrayBuffer slice metadata, and the eagerly linked Error
         // name/message keys add only fixed boot state. Keep a tight constant
         // ceiling while allowing those constant-sized rows and the 32-byte
         // cost-table digest in METR.
-        small_len < 672,
+        small_len < 672 + native_name_bytes,
         "small state is O(1) in heap size, got {small_len} bytes for \
          {} free entries",
         manifest.free_len
@@ -833,4 +841,44 @@ fn generational_collect_is_a_noop_with_no_new_dirt() {
         again, 0,
         "no dirt since the last collect, nothing to examine"
     );
+}
+
+#[test]
+fn relocated_native_names_survive_repeated_collection_and_restore() {
+    use ironhorse_snapshot::machine::checkpoint_to_store;
+    let mut m = Interp::new();
+    let boot_names = m.function_state_snapshot().native_names.unwrap();
+    let setup = compile("var saved = Proxy.revocable; Object.defineProperty(saved, 'name', { value: 'renamed' }); delete Math.max.name; (() => { for (let i = 0; i < 2000; i++) { const garbage = 'discard-this-long-transient-string-' + i; } })(); 0");
+    m.link_intrinsics(&setup.1);
+    assert!(m.run(&setup.0).completed);
+    m.collect_garbage();
+    let names = m.function_state_snapshot().native_names.unwrap();
+    assert!(
+        names.iter().any(|&(owner, offset)| boot_names
+            .iter()
+            .any(|&(old_owner, old_offset)| owner == old_owner && offset != old_offset)),
+        "fixture must relocate a boot-native name"
+    );
+    let mut store = MemoryStore::new();
+    let mut session = begin_store_session(m, &sig(), &mut store)
+        .map_err(|(_, e)| e)
+        .expect("begin");
+    let read = compile("var saved; JSON.stringify([saved.name, Math.max.name, typeof undefined, typeof null, typeof true, typeof 1, typeof 's', typeof saved, typeof Symbol(), typeof 1n])");
+    for _ in 0..3 {
+        let mut resumed = resume_from_store(&store, &sig()).expect("resume");
+        let expected = run_crank(session.machine_mut(), &read);
+        let actual = run_crank(resumed.machine_mut(), &read);
+        assert!(expected.completed && actual.completed);
+        assert_eq!(actual.result, "[\"renamed\",\"\",\"undefined\",\"object\",\"boolean\",\"number\",\"string\",\"function\",\"symbol\",\"bigint\"]");
+        assert_eq!(actual.result, expected.result);
+        session.machine_mut().collect_garbage();
+        resumed.machine_mut().collect_garbage();
+        assert_eq!(
+            session.machine().write_snapshot(&sig()).unwrap(),
+            resumed.machine().write_snapshot(&sig()).unwrap(),
+            "restore preserves exact post-GC heap"
+        );
+        session = resumed;
+        checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoint");
+    }
 }
