@@ -239,6 +239,10 @@ fn every_stored_slot_is_visited_once_and_checked_for_registration() {
 #[test]
 fn newly_covered_holders_refuse_unregistered_ids_at_container_boundary() {
     use ironhorse_snapshot::image::{read_validated_machine, write_machine_unchecked};
+    use ironhorse_snapshot::store::{
+        image_to_batch_unchecked, store_to_image, validate_store, HeapStoreCommit, MemoryStore,
+        StoreError,
+    };
     use ironhorse_snapshot::{MachineSnapshot, SnapshotError};
     use ironhorse_vm::Interp;
     let signature = Signature::new("stored-slot-boundary");
@@ -252,6 +256,12 @@ fn newly_covered_holders_refuse_unregistered_ids_at_container_boundary() {
     assert!(machine.run(&code).completed);
     let image = machine.snapshot_image_for_testing(&signature).unwrap();
     assert!(read_validated_machine(&write_machine_unchecked(&image), &signature).is_ok());
+    let mut honest_store = MemoryStore::new();
+    honest_store
+        .commit(&image_to_batch_unchecked(&image, 1, ""))
+        .unwrap();
+    assert!(store_to_image(&honest_store).is_ok());
+    assert!(validate_store(&honest_store, &signature).is_ok());
     let registered = image.symbols.id_set();
     let missing = (1..u16::MAX)
         .find(|id| usize::from(*id) > image.names.len() && !registered.contains(id))
@@ -264,6 +274,37 @@ fn newly_covered_holders_refuse_unregistered_ids_at_container_boundary() {
     ];
     for (index, holder) in holders.into_iter().enumerate() {
         let mut forged = image.clone();
+        // An invalid reference in the same position must also reach the
+        // shared bounds visitor, independently of key registration.
+        holder(&mut forged).next = ironhorse_vm::SlotIndex(forged.slots.len() as u32);
+        let result = read_validated_machine(&write_machine_unchecked(&forged), &signature);
+        assert!(
+            matches!(
+                result,
+                Err(SnapshotError::Corrupt("slot index out of arena bounds"))
+            ),
+            "holder {index}: {:?}",
+            result.err()
+        );
+        // The paged eager and lazy-admission paths must enforce the same
+        // small-state references even without a container decode.
+        let mut store = MemoryStore::new();
+        store
+            .commit(&image_to_batch_unchecked(&forged, 1, ""))
+            .unwrap();
+        assert!(matches!(
+            store_to_image(&store),
+            Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                "slot index out of arena bounds"
+            )))
+        ));
+        assert!(matches!(
+            validate_store(&store, &signature),
+            Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                "slot index out of arena bounds"
+            )))
+        ));
+        forged = image.clone();
         holder(&mut forged).id = missing;
         assert_eq!(forged.stored_unregistered_key_id(), Some(missing));
         assert_eq!(
