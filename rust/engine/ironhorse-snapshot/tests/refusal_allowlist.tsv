@@ -3,7 +3,6 @@
 # The registry removes an exception when a direct literal assertion is added.
 # New labels require a regression assertion or an individually reviewed entry.
 HEAP record count	Existing corruption guard; dedicated exact-label regression fixture deferred.
-Intl bound-function state: owner has no Intl row	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 STAC record count	Existing corruption guard; dedicated exact-label regression fixture deferred.
 checkpoint deferred slot page decode	Existing corruption guard; dedicated exact-label regression fixture deferred.
 checkpoint deferred slot page leaf mismatch	Existing corruption guard; dedicated exact-label regression fixture deferred.
@@ -17,7 +16,6 @@ manifest parent seal length	Existing corruption guard; dedicated exact-label reg
 migration did not advance the store schema	Existing corruption guard; dedicated exact-label regression fixture deferred.
 name migration length	Existing corruption guard; dedicated exact-label regression fixture deferred.
 non-canonical machine encoding	Existing corruption guard; dedicated exact-label regression fixture deferred.
-regexp side table: persisted source does not compile	Side-table decoding guard; dedicated exact-label malformed-row fixture deferred.
 side-table restore: invalid persisted regexp state	Existing corruption guard; dedicated exact-label regression fixture deferred.
 side-table restore: malformed Intl bound-function state	Existing corruption guard; dedicated exact-label regression fixture deferred.
 side-table restore: malformed accessor state	Existing corruption guard; dedicated exact-label regression fixture deferred.
@@ -36,6 +34,5 @@ side-table restore: unknown kind code	Existing corruption guard; dedicated exact
 store file directory offset overflow	Existing corruption guard; dedicated exact-label regression fixture deferred.
 store file header truncated	Existing corruption guard; dedicated exact-label regression fixture deferred.
 store file manifest region truncated	Existing corruption guard; dedicated exact-label regression fixture deferred.
-store leaf-hash inventory disagrees with geometry	Existing corruption guard; dedicated exact-label regression fixture deferred.
 symbol-key table does not restore	Existing corruption guard; dedicated exact-label regression fixture deferred.
 symbol-key table: counter inside the name table	Existing corruption guard; dedicated exact-label regression fixture deferred.
