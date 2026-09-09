@@ -13,6 +13,7 @@ macro_rules! snapshot_payloads {
                 image_field: stack,
                 live: [],
                 bounds: [],
+                gate: [],
                 restore: [],
                 initialize: [stack = Default::default()],
                 legacy_label: "small state stack section",
@@ -49,6 +50,7 @@ macro_rules! snapshot_payloads {
                 image_field: slot_free,
                 live: [],
                 bounds: [],
+                gate: [],
                 restore: [],
                 initialize: [slot_free = Default::default()],
                 legacy_label: "small state free-list section",
@@ -69,6 +71,7 @@ macro_rules! snapshot_payloads {
                 image_field: keys,
                 live: [],
                 bounds: [],
+                gate: [],
                 restore: [],
                 initialize: [keys = Default::default()],
                 legacy_label: "small state keys section",
@@ -95,6 +98,7 @@ macro_rules! snapshot_payloads {
                 image_field: names,
                 live: [],
                 bounds: [],
+                gate: [],
                 restore: [],
                 initialize: [names = Default::default()],
                 legacy_label: "small state names section",
@@ -125,6 +129,7 @@ macro_rules! snapshot_payloads {
                 image_field: symbols,
                 live: [],
                 bounds: [],
+                gate: [],
                 restore: [],
                 initialize: [symbols = Default::default()],
                 legacy_label: "small state symbols section",
@@ -163,6 +168,7 @@ macro_rules! snapshot_payloads {
                 image_field: meter,
                 live: [],
                 bounds: [],
+                gate: [],
                 restore: [],
                 // Private decode placeholder: every successful decode replaces it
                 // with the required METR payload before returning the state.
@@ -224,6 +230,11 @@ macro_rules! snapshot_payloads {
                     }
                 }],
                 bounds: [arrays: [crate::image::ArrayImage] = &[]],
+                gate: [IndexProperties, [arrays], ([], [owned], [], [], [], [], [], [], [], []) {
+                    for a in arrays {
+                        owned(a.owner)?;
+                    }
+                }],
                 restore: [Errors, [arrays, index_props, collections, registry], (interp) {
                     let ok = interp.restore_bulk_side_tables(
                         arrays
@@ -295,6 +306,11 @@ macro_rules! snapshot_payloads {
                     }
                 }],
                 bounds: [index_props: [crate::image::IndexPropsImage] = &[]],
+                gate: [Collections, [index_props], ([], [owned], [], [], [], [], [], [], [], []) {
+                    for row in index_props {
+                        owned(row.owner)?;
+                    }
+                }],
                 restore: [],
                 initialize: [index_props = Default::default()],
                 legacy_label: "small state index-props section",
@@ -350,6 +366,11 @@ macro_rules! snapshot_payloads {
                     }
                 }],
                 bounds: [collections: [crate::image::CollectionImage] = &[]],
+                gate: [Registry, [collections], ([], [owned], [], [], [], [], [], [], [], []) {
+                    for coll in collections {
+                        owned(coll.owner)?;
+                    }
+                }],
                 restore: [],
                 initialize: [collections = Default::default()],
                 legacy_label: "small state collections section",
@@ -393,6 +414,11 @@ macro_rules! snapshot_payloads {
                     }
                 }],
                 bounds: [registry: [crate::image::RegistryImage] = &[]],
+                gate: [Errors, [registry], ([], [owned], [], [], [], [], [], [], [], []) {
+                    for e in registry {
+                        owned(e.descriptor)?;
+                    }
+                }],
                 restore: [],
                 initialize: [registry = Default::default()],
                 legacy_label: "small state registry section",
@@ -443,6 +469,11 @@ macro_rules! snapshot_payloads {
                     }
                 }],
                 bounds: [errors: [crate::image::ErrorImage] = &[]],
+                gate: [Buffers, [errors], ([], [owned], [], [], [], [], [], [], [], []) {
+                    for e in errors {
+                        owned(e.owner)?;
+                    }
+                }],
                 restore: [Buffers, [errors], (interp) {
                     // The error-data rows (name validated at decode against the
                     // engine's closed error-name set, so this cannot fail on a
@@ -491,6 +522,7 @@ macro_rules! snapshot_payloads {
                 image_field: errors,
                 live: [],
                 bounds: [],
+                gate: [],
                 restore: [],
                 initialize: [],
                 legacy_label: "small state error-frames section",
@@ -560,6 +592,60 @@ macro_rules! snapshot_payloads {
                     }
                 }],
                 bounds: [buffers: [crate::image::BufferImage] = &[]],
+                gate: [Wrappers, [buffers, typed_arrays, data_views], ([], [owned], [], [], [], [chunk_len], [], [], [GATE_OOC], []) {
+                    // The typed-array family carries CROSS-table geometry, checked here
+                    // where all three tables are in hand (the SYMB-vs-NAME precedent):
+                    // every buffer's backing extent lies inside the chunk arena, and
+                    // every live view names a buffer ROW whose length covers the view.
+                    // Detached buffers retain the former view geometry, whose observable
+                    // accessors project zero lengths. A view that merely named an in-bounds
+                    // SLOT with no buffer row would restore without a backing allocation.
+                    let buffer_shape = |slot: u32| -> Option<(u32, bool)> {
+                        buffers
+                            .binary_search_by_key(&slot, |b| b.owner)
+                            .ok()
+                            .map(|i| (buffers[i].length, buffers[i].flags & 1 != 0))
+                    };
+                    for b in buffers {
+                        owned(b.owner)?;
+                        if b.data == u32::MAX
+                            || (b.data as usize) < CHUNK_HEADER
+                            || b.data as u64 + b.length as u64 > chunk_len as u64
+                        {
+                            return Err(GATE_OOC);
+                        }
+                    }
+                    for t in typed_arrays {
+                        owned(t.owner)?;
+                        owned(t.buffer)?;
+                        let shift = ironhorse_vm::TYPED_ARRAY_TYPES
+                            .get(t.kind as usize)
+                            .map(|ty| ty.shift)
+                            .ok_or(SnapshotError::Corrupt(
+                                "typed-arrays side table: unknown element kind",
+                            ))?;
+                        let covered = buffer_shape(t.buffer).is_some_and(|(len, detached)| {
+                            detached || t.offset as u64 + ((t.length as u64) << shift) <= len as u64
+                        });
+                        if !covered {
+                            return Err(SnapshotError::Corrupt(
+                                "typed-arrays side table: view geometry past its buffer",
+                            ));
+                        }
+                    }
+                    for d in data_views {
+                        owned(d.owner)?;
+                        owned(d.buffer)?;
+                        let covered = buffer_shape(d.buffer).is_some_and(|(len, detached)| {
+                            detached || d.offset as u64 + d.size as u64 <= len as u64
+                        });
+                        if !covered {
+                            return Err(SnapshotError::Corrupt(
+                                "data-views side table: view geometry past its buffer",
+                            ));
+                        }
+                    }
+                }],
                 restore: [Wrappers, [buffers, typed_arrays, data_views], (interp) {
                     // The typed-array family (kinds, flags, extents and view geometry
                     // all validated at decode/bounds; the vm re-validates against its
@@ -634,6 +720,7 @@ macro_rules! snapshot_payloads {
                     }
                 }],
                 bounds: [typed_arrays: [crate::image::TypedArrayImage] = &[]],
+                gate: [],
                 restore: [],
                 initialize: [typed_arrays = Default::default()],
                 legacy_label: "small state typed-arrays section",
@@ -684,6 +771,7 @@ macro_rules! snapshot_payloads {
                     }
                 }],
                 bounds: [data_views: [crate::image::DataViewImage] = &[]],
+                gate: [],
                 restore: [],
                 initialize: [data_views = Default::default()],
                 legacy_label: "small state data-views section",
@@ -727,6 +815,13 @@ macro_rules! snapshot_payloads {
                     }
                 }],
                 bounds: [wrappers: [crate::image::WrapperImage] = &[]],
+                gate: [Regexps, [wrappers], ([], [owned], [], [], [], [], [], [], [], []) {
+                    // The language rows: weak owners bounded like every sibling's, and
+                    // scalar handles, callable kinds, and cross-table geometry checked here.
+                    for w in wrappers {
+                        owned(w.owner)?;
+                    }
+                }],
                 restore: [Regexps, [wrappers], (interp) {
                     // The data-only language rows (schema 11). Wrapper values were
                     // bounds-walked with the heap; a regexp must recompile from its persisted
@@ -789,6 +884,16 @@ macro_rules! snapshot_payloads {
                     }
                 }],
                 bounds: [regexps: [crate::image::RegExpImage] = &[]],
+                gate: [Dates, [regexps], ([], [owned], [], [], [], [], [], [], [], []) {
+                    for r in regexps {
+                        owned(r.owner)?;
+                        if !ironhorse_vm::regexp_source_compiles(&r.source, &r.flags) {
+                            return Err(SnapshotError::Corrupt(
+                                "regexp side table: persisted source does not compile",
+                            ));
+                        }
+                    }
+                }],
                 restore: [Dates, [regexps], (interp) {
                     let ok = interp.restore_regexps(
                         regexps
@@ -840,6 +945,11 @@ macro_rules! snapshot_payloads {
                     }
                 }],
                 bounds: [arguments_brands: [u32] = &[]],
+                gate: [Temporal, [arguments_brands], ([], [owned], [], [], [], [], [], [], [], []) {
+                    for &o in arguments_brands {
+                        owned(o)?;
+                    }
+                }],
                 restore: [Temporal, [arguments_brands], (interp) {
                     interp.restore_arguments_brands(arguments_brands);
                 }],
@@ -891,6 +1001,20 @@ macro_rules! snapshot_payloads {
                     }
                 }],
                 bounds: [temporal: crate::image::TemporalImage = &crate::image::EMPTY_TEMPORAL],
+                gate: [Intl, [temporal], ([], [owned], [], [], [], [], [], [], [], []) {
+                    for &(o, _) in &temporal.instants {
+                        owned(o)?;
+                    }
+                    for &(o, _) in &temporal.durations {
+                        owned(o)?;
+                    }
+                    for &(o, _, _, _) in &temporal.plains {
+                        owned(o)?;
+                    }
+                    for (o, _, _, _) in &temporal.zoneds {
+                        owned(*o)?;
+                    }
+                }],
                 restore: [Accessors, [temporal], (interp) {
                     let ok = interp.restore_temporal_records(
                         temporal.instants,
@@ -947,6 +1071,40 @@ macro_rules! snapshot_payloads {
                     }
                 }],
                 bounds: [intl: ironhorse_vm::IntlTables = &crate::image::EMPTY_INTL],
+                gate: [Iterators, [intl], ([], [owned], [], [], [slot_count], [], [], [], [], []) {
+                    // The Intl rows: weak owners bounded like every sibling's, and a
+                    // segment ITERATOR must name an owner with a segments ROW whose
+                    // list covers its cursor — the view-names-a-buffer-row discipline.
+                    for o in intl
+                        .locales
+                        .iter()
+                        .map(|(o, _)| *o)
+                        .chain(intl.collators.iter().map(|(o, _)| *o))
+                        .chain(intl.list_formats.iter().map(|(o, _)| *o))
+                        .chain(intl.plural_rules.iter().map(|(o, _)| *o))
+                        .chain(intl.number_formats.iter().map(|(o, _)| *o))
+                        .chain(intl.segmenters.iter().map(|(o, _)| *o))
+                        .chain(intl.segments.iter().map(|(o, _)| *o))
+                        .chain(intl.segment_iterators.iter().map(|(o, _)| *o))
+                        .chain(intl.date_time_formats.iter().map(|(o, _)| *o))
+                    {
+                        owned(o)?;
+                    }
+                    for (_, it) in &intl.segment_iterators {
+                        let row = intl
+                            .segments
+                            .binary_search_by_key(&it.segments_inst.0, |(o, _)| *o);
+                        let covered = match row {
+                            Ok(k) => it.pos <= intl.segments[k].1.segments.len(),
+                            Err(_) => false,
+                        };
+                        if it.segments_inst.0 >= slot_count || !covered {
+                            return Err(SnapshotError::Corrupt(
+                                "intl side table: segment iterator names no covering segments row",
+                            ));
+                        }
+                    }
+                }],
                 restore: [IntlBoundFunctions, [intl], (interp) {
                     // The Intl record rows (schema 12): pure resolved-options data;
                     // segment geometry and the iterator cross-reference were validated
@@ -1001,6 +1159,71 @@ macro_rules! snapshot_payloads {
                     }
                 }],
                 bounds: [iterators: [ironhorse_vm::IteratorRow] = &[]],
+                gate: [End, [iterators], ([tables], [owned], [], [names_len], [], [], [], [], [], []) {
+                    // The iterator cursors: weak owner and result slots bounded; a
+                    // collection cursor must name a COVERING collections row (its
+                    // `next()` indexes the table unconditionally) with the carried
+                    // ordinal inside the compacted live list; a RegExp String Iterator must
+                    // carry valid mode bits and UTF-16; a for-in cursor's key ids must live in
+                    // the restored name table.
+                    for r in iterators {
+                        owned(r.owner)?;
+                        owned(r.result)?;
+                        if r.iterable != u32::MAX {
+                            owned(r.iterable)?;
+                        }
+                        if (5..=7).contains(&r.kind) {
+                            let row = tables
+                                .collections
+                                .binary_search_by_key(&r.iterable, |c| c.owner);
+                            let covered = match row {
+                                Ok(k) => r.index as usize <= tables.collections[k].entries.len(),
+                                Err(_) => false,
+                            };
+                            if !covered {
+                                return Err(SnapshotError::Corrupt(
+                                    "iterator cursors: collection cursor names no covering row",
+                                ));
+                            }
+                        }
+                        if r.kind == 8
+                            && iterator_from_wrapper_malformed(
+                                r.iterable,
+                                r.result,
+                                r.index,
+                                r.done,
+                                r.enum_keys.is_empty(),
+                                r.str_bytes.is_empty(),
+                            )
+                        {
+                            return Err(SnapshotError::Corrupt(
+                                "iterator cursors: malformed Iterator.from wrapper",
+                            ));
+                        }
+                        if r.kind == 9
+                            && regexp_string_iterator_malformed(
+                                r.iterable,
+                                r.result,
+                                r.index,
+                                r.enum_keys.is_empty(),
+                                r.str_bytes.len(),
+                            )
+                        {
+                            return Err(SnapshotError::Corrupt(
+                                "iterator cursors: invalid RegExp String Iterator",
+                            ));
+                        }
+                        if r.kind == 3
+                            && r.enum_keys
+                                .iter()
+                                .any(|&(id, _)| id != 0 && id as usize > names_len)
+                        {
+                            return Err(SnapshotError::Corrupt(
+                                "iterator cursors: for-in key id outside the name table",
+                            ));
+                        }
+                    }
+                }],
                 restore: [End, [iterators], (interp) {
                     // The iterator cursors (schema 13): validated at decode/bounds
                     // (kinds, cursor ranges, the covering-collection cross-check);
@@ -1055,6 +1278,11 @@ macro_rules! snapshot_payloads {
                     }
                 }],
                 bounds: [dates: [crate::image::DateImage] = &[]],
+                gate: [Functions, [dates], ([], [owned], [], [], [], [], [], [], [], []) {
+                    for d in dates {
+                        owned(d.owner)?;
+                    }
+                }],
                 restore: [Proxies, [dates], (interp) {
                     interp.restore_dates(
                         dates
@@ -1101,6 +1329,111 @@ macro_rules! snapshot_payloads {
                     }
                 }],
                 bounds: [function_state: ironhorse_vm::FunctionStateSnapshot = &crate::image::EMPTY_FUNCTION_STATE],
+                gate: [Proxies, [function_state], ([], [owned], [], [names_len], [], [chunk_len], [], [], [GATE_OOC], []) {
+                    let function_owners: std::collections::BTreeSet<u32> = function_state
+                        .functions
+                        .iter()
+                        .map(|row| row.owner)
+                        .collect();
+                    let bound_owners: std::collections::BTreeSet<u32> = function_state
+                        .bound_functions
+                        .iter()
+                        .map(|row| row.owner)
+                        .collect();
+                    let mut referenced_segments = std::collections::BTreeSet::new();
+                    for row in &function_state.functions {
+                        owned(row.owner)?;
+                        if row.closures != u32::MAX {
+                            owned(row.closures)?;
+                        }
+                        if row.home != u32::MAX {
+                            owned(row.home)?;
+                        }
+                        if row.name_chunk != u32::MAX {
+                            let offset = row.name_chunk as usize;
+                            if offset < CHUNK_HEADER || offset > chunk_len {
+                                return Err(GATE_OOC);
+                            }
+                        }
+                        match (row.segment, row.body_start) {
+                            (Some(segment), Some(start)) => {
+                                let Some(code) = function_state.segments.get(segment as usize) else {
+                                    return Err(SnapshotError::Corrupt(
+                                        "function state: body names no segment",
+                                    ));
+                                };
+                                let Some(end) = start.checked_add(row.body_len) else {
+                                    return Err(SnapshotError::Corrupt(
+                                        "function state: body range overflow",
+                                    ));
+                                };
+                                if end > code.len() as u64 {
+                                    return Err(SnapshotError::Corrupt(
+                                        "function state: body range outside segment",
+                                    ));
+                                }
+                                let mut pc = start as usize;
+                                let end = end as usize;
+                                while pc < end {
+                                    let Some(len) = ironhorse_vm::instruction_len(code, pc) else {
+                                        return Err(SnapshotError::Corrupt(
+                                            "function state: malformed body bytecode",
+                                        ));
+                                    };
+                                    pc = pc.saturating_add(len);
+                                }
+                                if pc != end {
+                                    return Err(SnapshotError::Corrupt(
+                                        "function state: body instruction crosses its range",
+                                    ));
+                                }
+                                referenced_segments.insert(segment);
+                            }
+                            (None, None) if bound_owners.contains(&row.owner) => {}
+                            _ => {
+                                return Err(SnapshotError::Corrupt(
+                                    "function state: body and segment disagree",
+                                ))
+                            }
+                        }
+                    }
+                    if referenced_segments.len() != function_state.segments.len()
+                        || referenced_segments
+                            .iter()
+                            .copied()
+                            .ne(0..function_state.segments.len() as u32)
+                    {
+                        return Err(SnapshotError::Corrupt(
+                            "function state: segments not densely referenced",
+                        ));
+                    }
+                    for row in &function_state.bound_functions {
+                        owned(row.owner)?;
+                        owned(row.target)?;
+                        if !function_owners.contains(&row.owner) {
+                            return Err(SnapshotError::Corrupt(
+                                "bound-function state: owner has no function row",
+                            ));
+                        }
+                    }
+                    for &(owner, prototype) in &function_state.ctor_prototypes {
+                        owned(owner)?;
+                        owned(prototype)?;
+                        if !function_owners.contains(&owner) {
+                            return Err(SnapshotError::Corrupt(
+                                "constructor-prototype state: owner has no function row",
+                            ));
+                        }
+                    }
+                    for &(owner, id) in &function_state.deleted_meta {
+                        owned(owner)?;
+                        if id == 0 || id as usize > names_len {
+                            return Err(SnapshotError::Corrupt(
+                                "deleted-function metadata: id outside the name table",
+                            ));
+                        }
+                    }
+                }],
                 restore: [Generators, [function_state], (interp) {
                     if !interp.restore_function_state(function_state) {
                         return Err(SnapshotError::Corrupt(
@@ -1157,6 +1490,38 @@ macro_rules! snapshot_payloads {
                     }
                 }],
                 bounds: [proxy_state: ironhorse_vm::ProxyStateSnapshot = &crate::image::EMPTY_PROXY_STATE],
+                gate: [Accessors, [proxy_state], ([], [owned], [], [], [], [chunk_len], [], [], [GATE_OOC], []) {
+                    let proxy_owners: std::collections::BTreeSet<u32> = proxy_state
+                        .proxies
+                        .iter()
+                        .map(|row| row.owner)
+                        .collect();
+                    for row in &proxy_state.proxies {
+                        owned(row.owner)?;
+                        if row.revoked {
+                            if row.target != u32::MAX || row.handler != u32::MAX {
+                                return Err(SnapshotError::Corrupt(
+                                    "proxy state: revoked proxy retains target or handler",
+                                ));
+                            }
+                        } else {
+                            owned(row.target)?;
+                            owned(row.handler)?;
+                        }
+                    }
+                    for row in &proxy_state.revokers {
+                        owned(row.owner)?;
+                        if !proxy_owners.contains(&row.proxy) {
+                            return Err(SnapshotError::Corrupt("proxy revoker names no proxy row"));
+                        }
+                        if row.name_chunk != u32::MAX {
+                            let offset = row.name_chunk as usize;
+                            if offset < CHUNK_HEADER || offset > chunk_len {
+                                return Err(GATE_OOC);
+                            }
+                        }
+                    }
+                }],
                 restore: [Intl, [proxy_state], (interp) {
                     if !interp.restore_proxy_state(proxy_state) {
                         return Err(SnapshotError::Corrupt(
@@ -1207,6 +1572,39 @@ macro_rules! snapshot_payloads {
                     }
                 }],
                 bounds: [accessors: [ironhorse_vm::AccessorRow] = &[]],
+                gate: [IntlBoundFunctions, [accessors], ([tables], [owned], [], [names_len], [], [], [symbols], [], [], []) {
+                    let symbol_ids = symbols.id_set();
+                    if first_stored_unregistered_id(
+                        tables
+                            .index_props
+                            .iter()
+                            .flat_map(|row| row.items.iter().map(|(_, value)| value)),
+                        names_len,
+                        &symbol_ids,
+                    )
+                    .is_some()
+                    {
+                        return Err(SnapshotError::Corrupt(
+                            "stored property id outside the name and symbol-key tables",
+                        ));
+                    }
+
+                    for row in accessors {
+                        owned(row.owner)?;
+                        if row.id == 0 || (row.id as usize > names_len && !symbol_ids.contains(&row.id)) {
+                            return Err(SnapshotError::Corrupt(
+                                "accessor state: id outside the property-key tables",
+                            ));
+                        }
+                        for value in [row.get, row.set].into_iter().flatten() {
+                            if value.kind != Kind::Reference {
+                                return Err(SnapshotError::Corrupt(
+                                    "accessor state: getter or setter is not callable",
+                                ));
+                            }
+                        }
+                    }
+                }],
                 restore: [PrivateElements, [accessors], (interp) {
                     if !interp.restore_accessors(accessors) {
                         return Err(SnapshotError::Corrupt(
@@ -1252,6 +1650,36 @@ macro_rules! snapshot_payloads {
                     }
                 }],
                 bounds: [intl_bound_functions: [ironhorse_vm::IntlBoundFunctionRow] = &[]],
+                gate: [PrivateElements, [intl_bound_functions], ([tables], [owned], [], [], [], [chunk_len], [], [], [GATE_OOC], []) {
+                    for row in intl_bound_functions {
+                        owned(row.function)?;
+                        owned(row.owner)?;
+                        if row.name_chunk != u32::MAX {
+                            let offset = row.name_chunk as usize;
+                            if offset < CHUNK_HEADER || offset > chunk_len {
+                                return Err(GATE_OOC);
+                            }
+                        }
+                        let owner_exists = match row.kind {
+                            0 => tables
+                                .intl
+                                .collators
+                                .binary_search_by_key(&row.owner, |(owner, _)| *owner)
+                                .is_ok(),
+                            1 => tables
+                                .intl
+                                .number_formats
+                                .binary_search_by_key(&row.owner, |(owner, _)| *owner)
+                                .is_ok(),
+                            _ => false,
+                        };
+                        if !owner_exists {
+                            return Err(SnapshotError::Corrupt(
+                                "Intl bound-function state: owner has no Intl row",
+                            ));
+                        }
+                    }
+                }],
                 restore: [Promises, [intl_bound_functions], (interp) {
                     // The Intl bound natives (schema 18) install BEFORE the retained
                     // function state, not after: they are the one function-shaped
@@ -1310,6 +1738,33 @@ macro_rules! snapshot_payloads {
                     }
                 }],
                 bounds: [private_elements: ironhorse_vm::PrivateElementSnapshot = &crate::image::EMPTY_PRIVATE_ELEMENTS],
+                gate: [DisposableStacks, [private_elements], ([], [owned], [], [], [], [], [], [], [], []) {
+                    let private_value_keys: std::collections::BTreeSet<(u32, u32)> = private_elements
+                        .values
+                        .iter()
+                        .map(|row| (row.receiver, row.brand))
+                        .collect();
+                    for row in &private_elements.values {
+                        owned(row.receiver)?;
+                        owned(row.brand)?;
+                    }
+                    for row in &private_elements.accessors {
+                        owned(row.receiver)?;
+                        owned(row.brand)?;
+                        if private_value_keys.contains(&(row.receiver, row.brand)) {
+                            return Err(SnapshotError::Corrupt(
+                                "private elements: key has both value and accessor rows",
+                            ));
+                        }
+                        for value in [row.get, row.set].into_iter().flatten() {
+                            if value.kind != Kind::Reference {
+                                return Err(SnapshotError::Corrupt(
+                                    "private accessors: getter or setter is not callable",
+                                ));
+                            }
+                        }
+                    }
+                }],
                 restore: [DisposableStacks, [private_elements], (interp) {
                     if !interp.restore_private_elements(private_elements) {
                         return Err(SnapshotError::Corrupt(
@@ -1361,6 +1816,18 @@ macro_rules! snapshot_payloads {
                     }
                 }],
                 bounds: [disposable_stacks: [ironhorse_vm::DisposableStackRow] = &[]],
+                gate: [Generators, [disposable_stacks], ([], [owned], [], [], [], [], [], [], [], []) {
+                    for row in disposable_stacks {
+                        owned(row.owner)?;
+                        for record in &row.records {
+                            if record.method.kind != Kind::Reference {
+                                return Err(SnapshotError::Corrupt(
+                                    "disposable stacks: disposal method is not callable",
+                                ));
+                            }
+                        }
+                    }
+                }],
                 restore: [Iterators, [disposable_stacks], (interp) {
                     interp.restore_disposable_stacks(disposable_stacks);
                 }],
@@ -1403,6 +1870,145 @@ macro_rules! snapshot_payloads {
                     }
                 }],
                 bounds: [generators: [ironhorse_vm::GeneratorRow] = &[]],
+                gate: [Promises, [generators], ([tables], [owned], [], [names_len], [], [], [], [], [], []) {
+                    let mut body_starts: std::collections::HashMap<u32, std::collections::BTreeSet<u64>> =
+                        std::collections::HashMap::new();
+                    for (owner, frame) in generators
+                        .iter()
+                        .map(|row| (row.owner, row.frame.as_ref()))
+                        .chain(
+                            tables
+                                .promise_cluster
+                                .async_instances
+                                .iter()
+                                .map(|row| (row.owner, Some(&row.frame))),
+                        )
+                    {
+                        owned(owner)?;
+                        let Some(frame) = frame else {
+                            continue;
+                        };
+                        owned(frame.cur_func)?;
+                        if frame.target_func != u32::MAX {
+                            owned(frame.target_func)?;
+                        }
+                        let function = tables
+                            .function_state
+                            .functions
+                            .binary_search_by_key(&frame.cur_func, |function| function.owner)
+                            .ok()
+                            .and_then(|index| tables.function_state.functions.get(index))
+                            .ok_or(SnapshotError::Corrupt(
+                                "generator frame: current function has no function row",
+                            ))?;
+                        let code = function
+                            .segment
+                            .and_then(|segment| tables.function_state.segments.get(segment as usize))
+                            .ok_or(SnapshotError::Corrupt(
+                                "generator frame: current function has no segment",
+                            ))?;
+                        // A segment holds every function its crank compiled, so a
+                        // segment-wide bound is far too loose for a resume cursor: it
+                        // admits the segment end, a byte inside an instruction's
+                        // operand or payload, and a perfectly valid instruction start
+                        // belonging to a DIFFERENT body. Each of those enters dispatch
+                        // at a pc the generator never suspended at. The cursor and
+                        // every saved-handler target must instead be an instruction
+                        // START within `cur_func`'s OWN `[body_start, body_end)` --
+                        // the same walk the function-state gate above already proved
+                        // sizes cleanly to its end. Memoized per function because a
+                        // crafted image may name one large body from arbitrarily many
+                        // generator rows.
+                        let starts = match body_starts.entry(frame.cur_func) {
+                            std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
+                            std::collections::hash_map::Entry::Vacant(e) => {
+                                let (body_start, body_end, mut set) =
+                                    generator_body_starts(function.body_start, function.body_len, code)?;
+                                // A NESTED function's bytecode lives INSIDE its
+                                // enclosing body's range -- a generator declaring
+                                // `var h = function () {...}` owns a body that
+                                // physically contains h's -- so the walk above collects
+                                // h's instruction starts too, and a cursor pointing at
+                                // one would enter h's code with the GENERATOR's frame.
+                                // That is the same "a pc in another function body"
+                                // class the sibling-body arm closes, one level down, so
+                                // subtract every contained body.
+                                for other in &tables.function_state.functions {
+                                    if other.owner == frame.cur_func || other.segment != function.segment {
+                                        continue;
+                                    }
+                                    let (Some(start), Some(end)) = (
+                                        other.body_start,
+                                        other.body_start.and_then(|s| s.checked_add(other.body_len)),
+                                    ) else {
+                                        continue;
+                                    };
+                                    // Distinct closures of the same function share this exact
+                                    // body range. They are peers, not nested functions, and
+                                    // must not erase each other's valid resume cursors.
+                                    if start >= body_start
+                                        && end <= body_end
+                                        && (start != body_start || end != body_end)
+                                    {
+                                        set.retain(|&pc| pc < start || pc >= end);
+                                    }
+                                }
+                                e.insert(set)
+                            }
+                        };
+                        if !starts.contains(&frame.resume_pc)
+                            || frame.id_map.iter().any(|&(id, index)| {
+                                id == 0 || id as usize > names_len || index >= frame.locals.len() as u64
+                            })
+                        {
+                            return Err(SnapshotError::Corrupt(
+                                "generator frame: invalid resume cursor or scope map",
+                            ));
+                        }
+                        for jump in &frame.jumps {
+                            // The handler's `id_map` is bounded by the handler's OWN
+                            // `locals_len` -- the length its resumed `catch` resolves
+                            // against -- not by the frame's current locals. A shorter
+                            // `locals_len` with an index in between passed the frame's
+                            // bound and then misresolved a name on the way out.
+                            // `call_depth_offset` is the fifth attacker-controlled number
+                            // on this row and the only one the gate used to skip, while
+                            // restore computes `return_depth + jump.call_depth_offset`
+                            // unchecked -- an arithmetic panic on a crafted value under
+                            // the dev profile, and a handler scoped to an impossible
+                            // call depth otherwise.
+                            //
+                            // The structural bound is exact, not a chosen constant: a
+                            // generator suspends at a `yield` in its OWN body, so every
+                            // call it made has returned and every saved handler belongs
+                            // to that same activation. The offset is therefore always
+                            // zero. Measured across five shapes -- a bare yield, a
+                            // yield inside try/finally, a nested try, a yield after a
+                            // call returns, and `yield*` delegation -- all emit 0.
+                            if jump.flag != 1
+                                || jump.call_depth_offset != 0
+                                || !starts.contains(&jump.target_pc)
+                                || jump.stack_offset > frame.stack_slice.len() as u64
+                                || jump.locals_len > frame.locals.len() as u64
+                                || jump.id_map.iter().any(|&(id, index)| {
+                                    id == 0 || id as usize > names_len || index >= jump.locals_len
+                                })
+                            {
+                                return Err(SnapshotError::Corrupt(
+                                    "generator frame: invalid saved handler",
+                                ));
+                            }
+                        }
+                    }
+                    // The promise cluster: owners, settlement results, and reaction
+                    // slots bounded like every sibling's; a resolving function's name
+                    // chunk ranged like a function row's — with NO null exemption,
+                    // because `make_resolving_functions` always interns a real empty
+                    // chunk and reading a NULL one faults. A combinator's results
+                    // Array must name an `ARRY` row (the element drain writes through
+                    // the dense store), the view-names-a-buffer-row discipline. Its
+                    // capability callbacks are bounded like every other carried Slot.
+                }],
                 restore: [ArgumentsBrands, [generators], (interp) {
                     if !interp.restore_generators(generators) {
                         return Err(SnapshotError::Corrupt(
@@ -1450,6 +2056,137 @@ macro_rules! snapshot_payloads {
                     }
                 }],
                 bounds: [promise_cluster: ironhorse_vm::PromiseClusterSnapshot = &crate::image::EMPTY_PROMISE_CLUSTER],
+                gate: [ArgumentsBrands, [promise_cluster], ([tables], [owned], [], [], [], [chunk_len], [], [], [GATE_OOC], [heap]) {
+                    for row in &promise_cluster.promises {
+                        owned(row.owner)?;
+                    }
+                    let mut awaited = std::collections::BTreeSet::new();
+                    for reaction in promise_cluster
+                        .promises
+                        .iter()
+                        .flat_map(|p| &p.reactions)
+                    {
+                        if reaction.kind == 3
+                            && (!awaited.insert(reaction.a)
+                                || promise_cluster
+                                    .async_instances
+                                    .binary_search_by_key(&reaction.a, |a| a.owner)
+                                    .is_err())
+                        {
+                            return Err(SnapshotError::Corrupt(
+                                "async reaction: missing or duplicate activation",
+                            ));
+                        }
+                    }
+                    for row in &promise_cluster.async_instances {
+                        owned(row.owner)?;
+                        owned(row.result_promise)?;
+
+                        let function = |slot: &Slot| match slot.value {
+                            Payload::Reference(owner) => promise_cluster
+                                .functions
+                                .binary_search_by_key(&owner.0, |f| f.function)
+                                .ok()
+                                .map(|i| &promise_cluster.functions[i]),
+                            _ => None,
+                        };
+                        let pair = matches!((function(&row.resolve), function(&row.reject)), (Some(a), Some(b))
+                            if a.promise == row.result_promise && b.promise == row.result_promise
+                                && !a.reject && b.reject && a.guard == b.guard
+                                && (a.guard as usize) < promise_cluster.guards.len()
+                                && !promise_cluster.guards[a.guard as usize]);
+                        if !pair
+                            || !awaited.contains(&row.owner)
+                            || promise_cluster
+                                .promises
+                                .binary_search_by_key(&row.result_promise, |p| p.owner)
+                                .is_err()
+                            || row.resolve.kind != Kind::Reference
+                            || row.reject.kind != Kind::Reference
+                        {
+                            return Err(SnapshotError::Corrupt(
+                                "async activation: invalid promise capability or anchor",
+                            ));
+                        }
+                    }
+                    for row in &promise_cluster.functions {
+                        owned(row.function)?;
+                        owned(row.promise)?;
+                        if row.guard == u32::MAX {
+                            // The private capability record has two capture fields. Before
+                            // its first call both are Uninitialized; afterward neither is.
+                            // Enforce this when container heap records are present. Lazy store
+                            // metadata validation passes an empty heap; VM adoption validates
+                            // the pair there, together with field-name/record ownership.
+                            if let Some(first) = heap
+                                .get(row.promise as usize)
+                                .and_then(|home| heap.get(home.next.0 as usize))
+                            {
+                                if let Some(second) = heap.get(first.next.0 as usize) {
+                                    if (first.kind == Kind::Uninitialized) != (second.kind == Kind::Uninitialized) {
+                                        return Err(SnapshotError::Corrupt(
+                                            "promise cluster: mixed capability executor state",
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                        let offset = row.name_chunk as usize;
+                        if offset < CHUNK_HEADER || offset > chunk_len {
+                            return Err(GATE_OOC);
+                        }
+                    }
+                    let mut results_lengths = Vec::with_capacity(promise_cluster.combinators.len());
+                    for row in &promise_cluster.combinators {
+                        owned(row.results)?;
+                        let Ok(k) = tables
+                            .arrays
+                            .binary_search_by_key(&row.results, |a| a.owner)
+                        else {
+                            return Err(SnapshotError::Corrupt(
+                                "promise cluster: combinator's results Array has no row",
+                            ));
+                        };
+                        let len = tables.arrays[k].length;
+                        // `remaining` starts at the ELEMENT COUNT — which is exactly
+                        // the results Array's preset length — and only ever
+                        // decrements, so a value above it can only be crafted (it
+                        // would leave the combinator pending after every surviving
+                        // reaction drains). A `race` never decrements at all, so its
+                        // remaining still EQUALS the count.
+                        if row.remaining > len || (row.kind == 2 && row.remaining != len) {
+                            return Err(SnapshotError::Corrupt(
+                                "promise cluster: remaining outside its element count",
+                            ));
+                        }
+                        results_lengths.push(len);
+                    }
+                    // A combinator reaction's element index writes the results Array at
+                    // the drain (`array_set_dense` grows `length` to cover it) — and on
+                    // the `any` path the AggregateError builder then iterates
+                    // `0..length`. The combinator presets `length` to its ELEMENT COUNT
+                    // at creation and every honest element index sits below it, so an
+                    // index at or past the row's carried length can only be crafted:
+                    // unchecked, it resumes a machine whose accumulator no execution
+                    // produces (and a huge one turns the aggregate walk into a
+                    // billions-long loop). This is a cross-ATOM check, so it lives here
+                    // beside the results-names-a-row gate, not in the atom decoder.
+                    for r in promise_cluster
+                        .promises
+                        .iter()
+                        .flat_map(|row| row.reactions.iter())
+                    {
+                        if (r.kind == 2 || r.kind == 12)
+                            && results_lengths
+                                .get(r.a as usize)
+                                .is_none_or(|len| r.b >= *len)
+                        {
+                            return Err(SnapshotError::Corrupt(
+                                "promise cluster: element index outside the results Array",
+                            ));
+                        }
+                    }
+                }],
                 restore: [Functions, [promise_cluster], (interp) {
                     // The promise cluster (schema 23) installs its resolving-function
                     // natives BEFORE the retained function state for the same reason
@@ -1502,6 +2239,7 @@ macro_rules! snapshot_payloads {
                 image_field: promise_cluster,
                 live: [],
                 bounds: [],
+                gate: [],
                 restore: [],
                 initialize: [],
                 legacy_label: "small state async section",
@@ -1535,6 +2273,7 @@ macro_rules! snapshot_payloads {
                 image_field: name_floor,
                 live: [],
                 bounds: [],
+                gate: [],
                 restore: [],
                 initialize: [name_floor = Default::default()],
                 legacy_label: "small state name-floor section",
@@ -1634,6 +2373,10 @@ use crate::SnapshotError;
 pub(crate) struct PayloadDesc {
     pub section: SmallSection,
     #[cfg(test)]
+    pub gate_next: Option<&'static str>,
+    #[cfg(test)]
+    pub gate_fields: &'static [&'static str],
+    #[cfg(test)]
     pub container_next: Option<&'static str>,
     #[cfg(test)]
     pub container_mode: Option<&'static str>,
@@ -1655,6 +2398,7 @@ macro_rules! define_payloads {
         image_field: $field:ident,
         live: [$($live_field:ident: $ty:ty => ($interp:ident, $dirty:ident) $extract:block)?],
         bounds: [$($bounds_field:ident: $bounds_ty:ty = $bounds_empty:expr)?],
+        gate: [$($gate_next:ident, [$($gated_field:ident),+], ([$($gate_tables:ident)?], [$($gate_owned:ident)?], [$($gate_check:ident)?], [$($gate_names:ident)?], [$($gate_slots:ident)?], [$($gate_chunks:ident)?], [$($gate_symbols:ident)?], [$($gate_oob:ident)?], [$($gate_ooc:ident)?], [$($gate_heap:ident)?]) $gate:block)?],
         restore: [$($next:ident, [$($consumed:ident),+], ($restore_interp:ident) $restore:block)?],
         initialize: [$($init_field:ident = $init:expr)?],
         legacy_label: $legacy_label:literal,
@@ -1666,7 +2410,7 @@ macro_rules! define_payloads {
         canonicalize($bytes:ident): $canonicalize:block,
     })*) => {
         pub(crate) const PAYLOADS: &[PayloadDesc] = &[
-            $(PayloadDesc { section: SmallSection::$section, #[cfg(test)] image_field: stringify!($field), #[cfg(test)] live_fields: &[$(stringify!($live_field))?], #[cfg(test)] bounds_fields: &[$(stringify!($bounds_field))?], #[cfg(test)] restore_fields: &[$($(stringify!($consumed)),+)?], #[cfg(test)] restore_next: match &[$(stringify!($next))?] as &[&str] { [next] => Some(*next), [] => None, _ => unreachable!() }, #[cfg(test)] container_next: match &[$(stringify!($container_next))?] as &[&str] { [next] => Some(*next), [] => None, _ => unreachable!() }, #[cfg(test)] container_mode: match &[$(stringify!($container_mode))?] as &[&str] { [mode] => Some(*mode), [] => None, _ => unreachable!() }, atom: $atom },)*
+            $(PayloadDesc { section: SmallSection::$section, #[cfg(test)] image_field: stringify!($field), #[cfg(test)] live_fields: &[$(stringify!($live_field))?], #[cfg(test)] bounds_fields: &[$(stringify!($bounds_field))?], #[cfg(test)] restore_fields: &[$($(stringify!($consumed)),+)?], #[cfg(test)] restore_next: match &[$(stringify!($next))?] as &[&str] { [next] => Some(*next), [] => None, _ => unreachable!() }, #[cfg(test)] container_next: match &[$(stringify!($container_next))?] as &[&str] { [next] => Some(*next), [] => None, _ => unreachable!() }, #[cfg(test)] container_mode: match &[$(stringify!($container_mode))?] as &[&str] { [mode] => Some(*mode), [] => None, _ => unreachable!() }, #[cfg(test)] gate_fields: &[$($(stringify!($gated_field)),+)?], #[cfg(test)] gate_next: match &[$(stringify!($gate_next))?] as &[&str] { [next] => Some(*next), [] => None, _ => unreachable!() }, atom: $atom },)*
         ];
         // Uniform field cloning also covers the Copy name-floor field.
         #[allow(clippy::clone_on_copy)]
@@ -2025,6 +2769,8 @@ mod tests {
                     restore_next: row.restore_next,
                     container_next: row.container_next,
                     container_mode: row.container_mode,
+                    gate_next: row.gate_next,
+                    gate_fields: row.gate_fields,
                 })
                 .collect::<Vec<_>>()
         };
@@ -2347,6 +3093,166 @@ mod tests {
             assert!(source.contains(from), "missing mutation target {from}");
             assert!(
                 !container_emitter_connected(&source.replace(from, to)),
+                "missed mutation {from}"
+            );
+        }
+    }
+
+    fn gate_chain(rows: &[PayloadDesc]) -> Result<Vec<String>, &'static str> {
+        let mut steps = std::collections::BTreeMap::new();
+        let mut gated = BTreeSet::new();
+        let live: BTreeSet<_> = rows
+            .iter()
+            .flat_map(|row| row.live_fields.iter().copied())
+            .collect();
+        for row in rows {
+            if let Some(next) = row.gate_next {
+                if row.gate_fields.is_empty()
+                    || steps.insert(format!("{:?}", row.section), next).is_some()
+                {
+                    return Err("duplicate or empty gate step");
+                }
+                for field in row.gate_fields {
+                    if !gated.insert(*field) {
+                        return Err("duplicate gated field");
+                    }
+                }
+            } else if !row.gate_fields.is_empty() {
+                return Err("disconnected gated field");
+            }
+        }
+        if gated != live {
+            return Err("gate field coverage");
+        }
+        if steps.values().filter(|next| **next == "End").count() != 1 {
+            return Err("gate terminal count");
+        }
+        let mut order = Vec::new();
+        let mut next = "Arrays";
+        while next != "End" {
+            order.push(next.to_owned());
+            next = steps
+                .remove(next)
+                .ok_or("invalid or cyclic gate successor")?;
+        }
+        if !steps.is_empty() {
+            return Err("unreachable gate step");
+        }
+        Ok(order)
+    }
+
+    #[test]
+    fn gate_chain_preserves_validation_order_and_all_live_fields() {
+        assert_eq!(
+            gate_chain(PAYLOADS).unwrap(),
+            [
+                "Arrays",
+                "IndexProperties",
+                "Collections",
+                "Registry",
+                "Errors",
+                "Buffers",
+                "Wrappers",
+                "Regexps",
+                "Dates",
+                "Functions",
+                "Proxies",
+                "Accessors",
+                "IntlBoundFunctions",
+                "PrivateElements",
+                "DisposableStacks",
+                "Generators",
+                "Promises",
+                "ArgumentsBrands",
+                "Temporal",
+                "Intl",
+                "Iterators",
+            ]
+        );
+        for (next, expected) in [
+            ("Arrays", "invalid or cyclic gate successor"),
+            ("Missing", "invalid or cyclic gate successor"),
+            ("Collections", "unreachable gate step"),
+            ("End", "gate terminal count"),
+        ] {
+            let mut rows = PAYLOADS.to_vec();
+            rows.iter_mut()
+                .find(|row| row.section == SmallSection::Arrays)
+                .unwrap()
+                .gate_next = Some(next);
+            assert_eq!(gate_chain(&rows), Err(expected));
+        }
+        let mut rows = PAYLOADS.to_vec();
+        rows.iter_mut()
+            .find(|row| row.section == SmallSection::Buffers)
+            .unwrap()
+            .gate_fields = &["buffers", "typed_arrays"];
+        assert_eq!(gate_chain(&rows), Err("gate field coverage"));
+        let mut rows = PAYLOADS.to_vec();
+        rows.iter_mut()
+            .find(|row| row.section == SmallSection::Errors)
+            .unwrap()
+            .gate_fields = &["errors", "arrays"];
+        assert_eq!(gate_chain(&rows), Err("duplicate gated field"));
+    }
+
+    fn gate_emitter_connected(source: &str) -> bool {
+        let source = code_only(source);
+        let code = tokens(&source);
+        let once = |haystack: &[ironhorse_vm::source_scan::Token<'_>], needle: &str| {
+            let needle = tokens(needle);
+            haystack
+                .windows(needle.len())
+                .filter(|window| window.iter().zip(&needle).all(|(a, b)| a.text == b.text))
+                .count()
+                == 1
+        };
+        let emitter = &code[token_body(&code, "macro_rules! define_gate_chain")];
+        let selector = &code[token_body(&code, "macro_rules! define_gate_steps")];
+        let gate = &code[token_body(&code, "fn check_stored_bounds")];
+        once(gate, "crate::stored_slots::check_slots(visit, &check)?; check_rostered_bounds!(Arrays, tables, owned, check, names_len, slot_count, chunk_len, symbols, OOB, OOC, heap);")
+            && once(emitter, "check_rostered_bounds!($next, $d input_tables, $d input_owned, $d input_check, $d input_names, $d input_slots, $d input_chunks, $d input_symbols, $d input_oob, $d input_ooc, $d input_heap);")
+            && once(emitter, "$(let $field = $d input_tables.$field;)+")
+            && once(emitter, "$(let $tables = $d input_tables;)? $(let $owned = &$d input_owned;)? $(let $check = &$d input_check;)? $(let $names = $d input_names;)? $(let $slots = $d input_slots;)? $(let $chunks = $d input_chunks;)? $(let $symbols = $d input_symbols;)? $(const $oob: SnapshotError = $d input_oob;)? $(const $ooc: SnapshotError = $d input_ooc;)? $(let $heap = $d input_heap;)? $body")
+            && once(selector, "define_gate_chain!(($); $($($section => $next, [$($gated),+], ([$($tables)?], [$($owned)?], [$($check)?], [$($names)?], [$($slots)?], [$($chunks)?], [$($symbols)?], [$($oob)?], [$($ooc)?], [$($heap)?]) $body)?) *);")
+            && once(&code, "crate::snapshot_roster::snapshot_payloads!(define_gate_steps);")
+            && once(&code, "#[deny(unused_variables)] fn check_stored_bounds")
+    }
+
+    #[test]
+    fn gate_emitter_carries_context_validation_and_successors() {
+        let source = include_str!("image.rs");
+        assert!(gate_emitter_connected(source));
+        for (from, to) in [
+            ("crate::stored_slots::check_slots(visit, &check)?;", ""),
+            (
+                "Arrays, tables, owned, check, names_len",
+                "IndexProperties, tables, owned, check, names_len",
+            ),
+            (
+                "check_rostered_bounds!($next,",
+                "check_rostered_bounds!(End,",
+            ),
+            (
+                "$section => $next, [$($gated),+]",
+                "$section => End, [$($gated),+]",
+            ),
+            ("[$($heap)?]) $body", "[$($heap)?]) {}"),
+            ("let $field = $d input_tables.$field;", "let $field = &[];"),
+            ("let $owned = &$d input_owned;", "let $owned = |_| Ok(());"),
+            (
+                "let $chunks = $d input_chunks;",
+                "let $chunks = usize::MAX;",
+            ),
+            (
+                "snapshot_payloads!(define_gate_steps)",
+                "snapshot_payloads!(define_other_steps)",
+            ),
+            ("#[deny(unused_variables)]", "#[allow(unused_variables)]"),
+        ] {
+            assert!(source.contains(from), "missing mutation target {from}");
+            assert!(
+                !gate_emitter_connected(&source.replace(from, to)),
                 "missed mutation {from}"
             );
         }

@@ -3904,6 +3904,59 @@ pub(crate) fn check_buffer_chunk_lengths(
     Ok(())
 }
 
+// Expand validation in historical order, without rebuilding shared indices.
+// Context slots are tables, owner/slot checks, name/slot/chunk bounds, symbols,
+// the existing out-of-bounds constants, and the heap. Only needed bindings
+// are introduced.
+macro_rules! define_gate_chain {
+    (($d:tt); $($section:ident => $next:ident, [$($field:ident),+],
+        ([$($tables:ident)?], [$($owned:ident)?], [$($check:ident)?],
+         [$($names:ident)?], [$($slots:ident)?], [$($chunks:ident)?],
+         [$($symbols:ident)?], [$($oob:ident)?], [$($ooc:ident)?], [$($heap:ident)?]) $body:block)*) => {
+        macro_rules! check_rostered_bounds {
+            $(($section, $d input_tables:ident, $d input_owned:ident, $d input_check:ident,
+                $d input_names:ident, $d input_slots:ident, $d input_chunks:ident,
+                $d input_symbols:ident, $d input_oob:ident, $d input_ooc:ident, $d input_heap:ident) => {{
+                $(let $field = $d input_tables.$field;)+
+                $(let $tables = $d input_tables;)?
+                $(let $owned = &$d input_owned;)?
+                $(let $check = &$d input_check;)?
+                $(let $names = $d input_names;)?
+                $(let $slots = $d input_slots;)?
+                $(let $chunks = $d input_chunks;)?
+                $(let $symbols = $d input_symbols;)?
+                $(const $oob: SnapshotError = $d input_oob;)?
+                $(const $ooc: SnapshotError = $d input_ooc;)?
+                $(let $heap = $d input_heap;)?
+                $body
+                check_rostered_bounds!($next, $d input_tables, $d input_owned, $d input_check,
+                    $d input_names, $d input_slots, $d input_chunks, $d input_symbols,
+                    $d input_oob, $d input_ooc, $d input_heap);
+            }};)*
+            (End, $d input_tables:ident, $d input_owned:ident, $d input_check:ident,
+                $d input_names:ident, $d input_slots:ident, $d input_chunks:ident,
+                $d input_symbols:ident, $d input_oob:ident, $d input_ooc:ident, $d input_heap:ident) => {};
+        }
+    };
+}
+macro_rules! define_gate_steps {
+    ($($section:ident {
+        image_field: $field:ident,
+        live: [$($live:tt)*],
+        bounds: [$($bounds:tt)*],
+        gate: [$($next:ident, [$($gated:ident),+],
+            ([$($tables:ident)?], [$($owned:ident)?], [$($check:ident)?],
+             [$($names:ident)?], [$($slots:ident)?], [$($chunks:ident)?],
+             [$($symbols:ident)?], [$($oob:ident)?], [$($ooc:ident)?], [$($heap:ident)?]) $body:block)?],
+        $($rest:tt)*
+    })*) => {
+        define_gate_chain!(($); $($($section => $next, [$($gated),+],
+            ([$($tables)?], [$($owned)?], [$($check)?], [$($names)?], [$($slots)?],
+             [$($chunks)?], [$($symbols)?], [$($oob)?], [$($ooc)?], [$($heap)?]) $body)?) *);
+    };
+}
+crate::snapshot_roster::snapshot_payloads!(define_gate_steps);
+
 // Derive saved-frame instruction boundaries, retaining the secondary refusals.
 // The caller must first validate body bounds and instruction completeness with
 // the ordinary function-state gate; this helper is not a standalone validator.
@@ -3975,6 +4028,7 @@ pub(crate) fn check_small_state_bounds(
 // state above; this roster cannot omit a newly added production Slot holder.
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)]
+#[deny(unused_variables)]
 pub(crate) fn check_image_slot_bounds(
     heap: &[Slot],
     stack: &[Slot],
@@ -4007,6 +4061,7 @@ pub(crate) fn check_image_slot_bounds(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[deny(unused_variables)]
 fn check_stored_bounds(
     heap: &[Slot],
     visit: impl FnOnce(&mut dyn FnMut(&Slot)),
@@ -4067,705 +4122,9 @@ fn check_stored_bounds(
         Ok(())
     };
     crate::stored_slots::check_slots(visit, &check)?;
-    for a in tables.arrays {
-        owned(a.owner)?;
-    }
-    for row in tables.index_props {
-        owned(row.owner)?;
-    }
-    for coll in tables.collections {
-        owned(coll.owner)?;
-    }
-    for e in tables.registry {
-        owned(e.descriptor)?;
-    }
-    for e in tables.errors {
-        owned(e.owner)?;
-    }
-    // The typed-array family carries CROSS-table geometry, checked here
-    // where all three tables are in hand (the SYMB-vs-NAME precedent):
-    // every buffer's backing extent lies inside the chunk arena, and
-    // every live view names a buffer ROW whose length covers the view.
-    // Detached buffers retain the former view geometry, whose observable
-    // accessors project zero lengths. A view that merely named an in-bounds
-    // SLOT with no buffer row would restore without a backing allocation.
-    let buffer_shape = |slot: u32| -> Option<(u32, bool)> {
-        tables
-            .buffers
-            .binary_search_by_key(&slot, |b| b.owner)
-            .ok()
-            .map(|i| (tables.buffers[i].length, tables.buffers[i].flags & 1 != 0))
-    };
-    for b in tables.buffers {
-        owned(b.owner)?;
-        if b.data == u32::MAX
-            || (b.data as usize) < CHUNK_HEADER
-            || b.data as u64 + b.length as u64 > chunk_len as u64
-        {
-            return Err(OOC);
-        }
-    }
-    for t in tables.typed_arrays {
-        owned(t.owner)?;
-        owned(t.buffer)?;
-        let shift = ironhorse_vm::TYPED_ARRAY_TYPES
-            .get(t.kind as usize)
-            .map(|ty| ty.shift)
-            .ok_or(SnapshotError::Corrupt(
-                "typed-arrays side table: unknown element kind",
-            ))?;
-        let covered = buffer_shape(t.buffer).is_some_and(|(len, detached)| {
-            detached || t.offset as u64 + ((t.length as u64) << shift) <= len as u64
-        });
-        if !covered {
-            return Err(SnapshotError::Corrupt(
-                "typed-arrays side table: view geometry past its buffer",
-            ));
-        }
-    }
-    for d in tables.data_views {
-        owned(d.owner)?;
-        owned(d.buffer)?;
-        let covered = buffer_shape(d.buffer).is_some_and(|(len, detached)| {
-            detached || d.offset as u64 + d.size as u64 <= len as u64
-        });
-        if !covered {
-            return Err(SnapshotError::Corrupt(
-                "data-views side table: view geometry past its buffer",
-            ));
-        }
-    }
-    // The language rows: weak owners bounded like every sibling's, and
-    // scalar handles, callable kinds, and cross-table geometry checked here.
-    for w in tables.wrappers {
-        owned(w.owner)?;
-    }
-    for r in tables.regexps {
-        owned(r.owner)?;
-        if !ironhorse_vm::regexp_source_compiles(&r.source, &r.flags) {
-            return Err(SnapshotError::Corrupt(
-                "regexp side table: persisted source does not compile",
-            ));
-        }
-    }
-    for d in tables.dates {
-        owned(d.owner)?;
-    }
-    let function_owners: std::collections::BTreeSet<u32> = tables
-        .function_state
-        .functions
-        .iter()
-        .map(|row| row.owner)
-        .collect();
-    let bound_owners: std::collections::BTreeSet<u32> = tables
-        .function_state
-        .bound_functions
-        .iter()
-        .map(|row| row.owner)
-        .collect();
-    let mut referenced_segments = std::collections::BTreeSet::new();
-    for row in &tables.function_state.functions {
-        owned(row.owner)?;
-        if row.closures != u32::MAX {
-            owned(row.closures)?;
-        }
-        if row.home != u32::MAX {
-            owned(row.home)?;
-        }
-        if row.name_chunk != u32::MAX {
-            let offset = row.name_chunk as usize;
-            if offset < CHUNK_HEADER || offset > chunk_len {
-                return Err(OOC);
-            }
-        }
-        match (row.segment, row.body_start) {
-            (Some(segment), Some(start)) => {
-                let Some(code) = tables.function_state.segments.get(segment as usize) else {
-                    return Err(SnapshotError::Corrupt(
-                        "function state: body names no segment",
-                    ));
-                };
-                let Some(end) = start.checked_add(row.body_len) else {
-                    return Err(SnapshotError::Corrupt(
-                        "function state: body range overflow",
-                    ));
-                };
-                if end > code.len() as u64 {
-                    return Err(SnapshotError::Corrupt(
-                        "function state: body range outside segment",
-                    ));
-                }
-                let mut pc = start as usize;
-                let end = end as usize;
-                while pc < end {
-                    let Some(len) = ironhorse_vm::instruction_len(code, pc) else {
-                        return Err(SnapshotError::Corrupt(
-                            "function state: malformed body bytecode",
-                        ));
-                    };
-                    pc = pc.saturating_add(len);
-                }
-                if pc != end {
-                    return Err(SnapshotError::Corrupt(
-                        "function state: body instruction crosses its range",
-                    ));
-                }
-                referenced_segments.insert(segment);
-            }
-            (None, None) if bound_owners.contains(&row.owner) => {}
-            _ => {
-                return Err(SnapshotError::Corrupt(
-                    "function state: body and segment disagree",
-                ))
-            }
-        }
-    }
-    if referenced_segments.len() != tables.function_state.segments.len()
-        || referenced_segments
-            .iter()
-            .copied()
-            .ne(0..tables.function_state.segments.len() as u32)
-    {
-        return Err(SnapshotError::Corrupt(
-            "function state: segments not densely referenced",
-        ));
-    }
-    for row in &tables.function_state.bound_functions {
-        owned(row.owner)?;
-        owned(row.target)?;
-        if !function_owners.contains(&row.owner) {
-            return Err(SnapshotError::Corrupt(
-                "bound-function state: owner has no function row",
-            ));
-        }
-    }
-    for &(owner, prototype) in &tables.function_state.ctor_prototypes {
-        owned(owner)?;
-        owned(prototype)?;
-        if !function_owners.contains(&owner) {
-            return Err(SnapshotError::Corrupt(
-                "constructor-prototype state: owner has no function row",
-            ));
-        }
-    }
-    for &(owner, id) in &tables.function_state.deleted_meta {
-        owned(owner)?;
-        if id == 0 || id as usize > names_len {
-            return Err(SnapshotError::Corrupt(
-                "deleted-function metadata: id outside the name table",
-            ));
-        }
-    }
-    let proxy_owners: std::collections::BTreeSet<u32> = tables
-        .proxy_state
-        .proxies
-        .iter()
-        .map(|row| row.owner)
-        .collect();
-    for row in &tables.proxy_state.proxies {
-        owned(row.owner)?;
-        if row.revoked {
-            if row.target != u32::MAX || row.handler != u32::MAX {
-                return Err(SnapshotError::Corrupt(
-                    "proxy state: revoked proxy retains target or handler",
-                ));
-            }
-        } else {
-            owned(row.target)?;
-            owned(row.handler)?;
-        }
-    }
-    for row in &tables.proxy_state.revokers {
-        owned(row.owner)?;
-        if !proxy_owners.contains(&row.proxy) {
-            return Err(SnapshotError::Corrupt("proxy revoker names no proxy row"));
-        }
-        if row.name_chunk != u32::MAX {
-            let offset = row.name_chunk as usize;
-            if offset < CHUNK_HEADER || offset > chunk_len {
-                return Err(OOC);
-            }
-        }
-    }
-    let symbol_ids = symbols.id_set();
-    if first_stored_unregistered_id(
-        tables
-            .index_props
-            .iter()
-            .flat_map(|row| row.items.iter().map(|(_, value)| value)),
-        names_len,
-        &symbol_ids,
-    )
-    .is_some()
-    {
-        return Err(SnapshotError::Corrupt(
-            "stored property id outside the name and symbol-key tables",
-        ));
-    }
-
-    for row in tables.accessors {
-        owned(row.owner)?;
-        if row.id == 0 || (row.id as usize > names_len && !symbol_ids.contains(&row.id)) {
-            return Err(SnapshotError::Corrupt(
-                "accessor state: id outside the property-key tables",
-            ));
-        }
-        for value in [row.get, row.set].into_iter().flatten() {
-            if value.kind != Kind::Reference {
-                return Err(SnapshotError::Corrupt(
-                    "accessor state: getter or setter is not callable",
-                ));
-            }
-        }
-    }
-    for row in tables.intl_bound_functions {
-        owned(row.function)?;
-        owned(row.owner)?;
-        if row.name_chunk != u32::MAX {
-            let offset = row.name_chunk as usize;
-            if offset < CHUNK_HEADER || offset > chunk_len {
-                return Err(OOC);
-            }
-        }
-        let owner_exists = match row.kind {
-            0 => tables
-                .intl
-                .collators
-                .binary_search_by_key(&row.owner, |(owner, _)| *owner)
-                .is_ok(),
-            1 => tables
-                .intl
-                .number_formats
-                .binary_search_by_key(&row.owner, |(owner, _)| *owner)
-                .is_ok(),
-            _ => false,
-        };
-        if !owner_exists {
-            return Err(SnapshotError::Corrupt(
-                "Intl bound-function state: owner has no Intl row",
-            ));
-        }
-    }
-    let private_value_keys: std::collections::BTreeSet<(u32, u32)> = tables
-        .private_elements
-        .values
-        .iter()
-        .map(|row| (row.receiver, row.brand))
-        .collect();
-    for row in &tables.private_elements.values {
-        owned(row.receiver)?;
-        owned(row.brand)?;
-    }
-    for row in &tables.private_elements.accessors {
-        owned(row.receiver)?;
-        owned(row.brand)?;
-        if private_value_keys.contains(&(row.receiver, row.brand)) {
-            return Err(SnapshotError::Corrupt(
-                "private elements: key has both value and accessor rows",
-            ));
-        }
-        for value in [row.get, row.set].into_iter().flatten() {
-            if value.kind != Kind::Reference {
-                return Err(SnapshotError::Corrupt(
-                    "private accessors: getter or setter is not callable",
-                ));
-            }
-        }
-    }
-    for row in tables.disposable_stacks {
-        owned(row.owner)?;
-        for record in &row.records {
-            if record.method.kind != Kind::Reference {
-                return Err(SnapshotError::Corrupt(
-                    "disposable stacks: disposal method is not callable",
-                ));
-            }
-        }
-    }
-    let mut body_starts: std::collections::HashMap<u32, std::collections::BTreeSet<u64>> =
-        std::collections::HashMap::new();
-    for (owner, frame) in tables
-        .generators
-        .iter()
-        .map(|row| (row.owner, row.frame.as_ref()))
-        .chain(
-            tables
-                .promise_cluster
-                .async_instances
-                .iter()
-                .map(|row| (row.owner, Some(&row.frame))),
-        )
-    {
-        owned(owner)?;
-        let Some(frame) = frame else {
-            continue;
-        };
-        owned(frame.cur_func)?;
-        if frame.target_func != u32::MAX {
-            owned(frame.target_func)?;
-        }
-        let function = tables
-            .function_state
-            .functions
-            .binary_search_by_key(&frame.cur_func, |function| function.owner)
-            .ok()
-            .and_then(|index| tables.function_state.functions.get(index))
-            .ok_or(SnapshotError::Corrupt(
-                "generator frame: current function has no function row",
-            ))?;
-        let code = function
-            .segment
-            .and_then(|segment| tables.function_state.segments.get(segment as usize))
-            .ok_or(SnapshotError::Corrupt(
-                "generator frame: current function has no segment",
-            ))?;
-        // A segment holds every function its crank compiled, so a
-        // segment-wide bound is far too loose for a resume cursor: it
-        // admits the segment end, a byte inside an instruction's
-        // operand or payload, and a perfectly valid instruction start
-        // belonging to a DIFFERENT body. Each of those enters dispatch
-        // at a pc the generator never suspended at. The cursor and
-        // every saved-handler target must instead be an instruction
-        // START within `cur_func`'s OWN `[body_start, body_end)` --
-        // the same walk the function-state gate above already proved
-        // sizes cleanly to its end. Memoized per function because a
-        // crafted image may name one large body from arbitrarily many
-        // generator rows.
-        let starts = match body_starts.entry(frame.cur_func) {
-            std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
-            std::collections::hash_map::Entry::Vacant(e) => {
-                let (body_start, body_end, mut set) =
-                    generator_body_starts(function.body_start, function.body_len, code)?;
-                // A NESTED function's bytecode lives INSIDE its
-                // enclosing body's range -- a generator declaring
-                // `var h = function () {...}` owns a body that
-                // physically contains h's -- so the walk above collects
-                // h's instruction starts too, and a cursor pointing at
-                // one would enter h's code with the GENERATOR's frame.
-                // That is the same "a pc in another function body"
-                // class the sibling-body arm closes, one level down, so
-                // subtract every contained body.
-                for other in &tables.function_state.functions {
-                    if other.owner == frame.cur_func || other.segment != function.segment {
-                        continue;
-                    }
-                    let (Some(start), Some(end)) = (
-                        other.body_start,
-                        other.body_start.and_then(|s| s.checked_add(other.body_len)),
-                    ) else {
-                        continue;
-                    };
-                    // Distinct closures of the same function share this exact
-                    // body range. They are peers, not nested functions, and
-                    // must not erase each other's valid resume cursors.
-                    if start >= body_start
-                        && end <= body_end
-                        && (start != body_start || end != body_end)
-                    {
-                        set.retain(|&pc| pc < start || pc >= end);
-                    }
-                }
-                e.insert(set)
-            }
-        };
-        if !starts.contains(&frame.resume_pc)
-            || frame.id_map.iter().any(|&(id, index)| {
-                id == 0 || id as usize > names_len || index >= frame.locals.len() as u64
-            })
-        {
-            return Err(SnapshotError::Corrupt(
-                "generator frame: invalid resume cursor or scope map",
-            ));
-        }
-        for jump in &frame.jumps {
-            // The handler's `id_map` is bounded by the handler's OWN
-            // `locals_len` -- the length its resumed `catch` resolves
-            // against -- not by the frame's current locals. A shorter
-            // `locals_len` with an index in between passed the frame's
-            // bound and then misresolved a name on the way out.
-            // `call_depth_offset` is the fifth attacker-controlled number
-            // on this row and the only one the gate used to skip, while
-            // restore computes `return_depth + jump.call_depth_offset`
-            // unchecked -- an arithmetic panic on a crafted value under
-            // the dev profile, and a handler scoped to an impossible
-            // call depth otherwise.
-            //
-            // The structural bound is exact, not a chosen constant: a
-            // generator suspends at a `yield` in its OWN body, so every
-            // call it made has returned and every saved handler belongs
-            // to that same activation. The offset is therefore always
-            // zero. Measured across five shapes -- a bare yield, a
-            // yield inside try/finally, a nested try, a yield after a
-            // call returns, and `yield*` delegation -- all emit 0.
-            if jump.flag != 1
-                || jump.call_depth_offset != 0
-                || !starts.contains(&jump.target_pc)
-                || jump.stack_offset > frame.stack_slice.len() as u64
-                || jump.locals_len > frame.locals.len() as u64
-                || jump.id_map.iter().any(|&(id, index)| {
-                    id == 0 || id as usize > names_len || index >= jump.locals_len
-                })
-            {
-                return Err(SnapshotError::Corrupt(
-                    "generator frame: invalid saved handler",
-                ));
-            }
-        }
-    }
-    // The promise cluster: owners, settlement results, and reaction
-    // slots bounded like every sibling's; a resolving function's name
-    // chunk ranged like a function row's — with NO null exemption,
-    // because `make_resolving_functions` always interns a real empty
-    // chunk and reading a NULL one faults. A combinator's results
-    // Array must name an `ARRY` row (the element drain writes through
-    // the dense store), the view-names-a-buffer-row discipline. Its
-    // capability callbacks are bounded like every other carried Slot.
-    for row in &tables.promise_cluster.promises {
-        owned(row.owner)?;
-    }
-    let mut awaited = std::collections::BTreeSet::new();
-    for reaction in tables
-        .promise_cluster
-        .promises
-        .iter()
-        .flat_map(|p| &p.reactions)
-    {
-        if reaction.kind == 3
-            && (!awaited.insert(reaction.a)
-                || tables
-                    .promise_cluster
-                    .async_instances
-                    .binary_search_by_key(&reaction.a, |a| a.owner)
-                    .is_err())
-        {
-            return Err(SnapshotError::Corrupt(
-                "async reaction: missing or duplicate activation",
-            ));
-        }
-    }
-    for row in &tables.promise_cluster.async_instances {
-        owned(row.owner)?;
-        owned(row.result_promise)?;
-
-        let function = |slot: &Slot| match slot.value {
-            Payload::Reference(owner) => tables
-                .promise_cluster
-                .functions
-                .binary_search_by_key(&owner.0, |f| f.function)
-                .ok()
-                .map(|i| &tables.promise_cluster.functions[i]),
-            _ => None,
-        };
-        let pair = matches!((function(&row.resolve), function(&row.reject)), (Some(a), Some(b))
-            if a.promise == row.result_promise && b.promise == row.result_promise
-                && !a.reject && b.reject && a.guard == b.guard
-                && (a.guard as usize) < tables.promise_cluster.guards.len()
-                && !tables.promise_cluster.guards[a.guard as usize]);
-        if !pair
-            || !awaited.contains(&row.owner)
-            || tables
-                .promise_cluster
-                .promises
-                .binary_search_by_key(&row.result_promise, |p| p.owner)
-                .is_err()
-            || row.resolve.kind != Kind::Reference
-            || row.reject.kind != Kind::Reference
-        {
-            return Err(SnapshotError::Corrupt(
-                "async activation: invalid promise capability or anchor",
-            ));
-        }
-    }
-    for row in &tables.promise_cluster.functions {
-        owned(row.function)?;
-        owned(row.promise)?;
-        if row.guard == u32::MAX {
-            // The private capability record has two capture fields. Before
-            // its first call both are Uninitialized; afterward neither is.
-            // Enforce this when container heap records are present. Lazy store
-            // metadata validation passes an empty heap; VM adoption validates
-            // the pair there, together with field-name/record ownership.
-            if let Some(first) = heap
-                .get(row.promise as usize)
-                .and_then(|home| heap.get(home.next.0 as usize))
-            {
-                if let Some(second) = heap.get(first.next.0 as usize) {
-                    if (first.kind == Kind::Uninitialized) != (second.kind == Kind::Uninitialized) {
-                        return Err(SnapshotError::Corrupt(
-                            "promise cluster: mixed capability executor state",
-                        ));
-                    }
-                }
-            }
-        }
-        let offset = row.name_chunk as usize;
-        if offset < CHUNK_HEADER || offset > chunk_len {
-            return Err(OOC);
-        }
-    }
-    let mut results_lengths = Vec::with_capacity(tables.promise_cluster.combinators.len());
-    for row in &tables.promise_cluster.combinators {
-        owned(row.results)?;
-        let Ok(k) = tables
-            .arrays
-            .binary_search_by_key(&row.results, |a| a.owner)
-        else {
-            return Err(SnapshotError::Corrupt(
-                "promise cluster: combinator's results Array has no row",
-            ));
-        };
-        let len = tables.arrays[k].length;
-        // `remaining` starts at the ELEMENT COUNT — which is exactly
-        // the results Array's preset length — and only ever
-        // decrements, so a value above it can only be crafted (it
-        // would leave the combinator pending after every surviving
-        // reaction drains). A `race` never decrements at all, so its
-        // remaining still EQUALS the count.
-        if row.remaining > len || (row.kind == 2 && row.remaining != len) {
-            return Err(SnapshotError::Corrupt(
-                "promise cluster: remaining outside its element count",
-            ));
-        }
-        results_lengths.push(len);
-    }
-    // A combinator reaction's element index writes the results Array at
-    // the drain (`array_set_dense` grows `length` to cover it) — and on
-    // the `any` path the AggregateError builder then iterates
-    // `0..length`. The combinator presets `length` to its ELEMENT COUNT
-    // at creation and every honest element index sits below it, so an
-    // index at or past the row's carried length can only be crafted:
-    // unchecked, it resumes a machine whose accumulator no execution
-    // produces (and a huge one turns the aggregate walk into a
-    // billions-long loop). This is a cross-ATOM check, so it lives here
-    // beside the results-names-a-row gate, not in the atom decoder.
-    for r in tables
-        .promise_cluster
-        .promises
-        .iter()
-        .flat_map(|row| row.reactions.iter())
-    {
-        if (r.kind == 2 || r.kind == 12)
-            && results_lengths
-                .get(r.a as usize)
-                .is_none_or(|len| r.b >= *len)
-        {
-            return Err(SnapshotError::Corrupt(
-                "promise cluster: element index outside the results Array",
-            ));
-        }
-    }
-    for &o in tables.arguments_brands {
-        owned(o)?;
-    }
-    for &(o, _) in &tables.temporal.instants {
-        owned(o)?;
-    }
-    for &(o, _) in &tables.temporal.durations {
-        owned(o)?;
-    }
-    for &(o, _, _, _) in &tables.temporal.plains {
-        owned(o)?;
-    }
-    for (o, _, _, _) in &tables.temporal.zoneds {
-        owned(*o)?;
-    }
-    // The Intl rows: weak owners bounded like every sibling's, and a
-    // segment ITERATOR must name an owner with a segments ROW whose
-    // list covers its cursor — the view-names-a-buffer-row discipline.
-    for o in tables
-        .intl
-        .locales
-        .iter()
-        .map(|(o, _)| *o)
-        .chain(tables.intl.collators.iter().map(|(o, _)| *o))
-        .chain(tables.intl.list_formats.iter().map(|(o, _)| *o))
-        .chain(tables.intl.plural_rules.iter().map(|(o, _)| *o))
-        .chain(tables.intl.number_formats.iter().map(|(o, _)| *o))
-        .chain(tables.intl.segmenters.iter().map(|(o, _)| *o))
-        .chain(tables.intl.segments.iter().map(|(o, _)| *o))
-        .chain(tables.intl.segment_iterators.iter().map(|(o, _)| *o))
-        .chain(tables.intl.date_time_formats.iter().map(|(o, _)| *o))
-    {
-        owned(o)?;
-    }
-    for (_, it) in &tables.intl.segment_iterators {
-        let row = tables
-            .intl
-            .segments
-            .binary_search_by_key(&it.segments_inst.0, |(o, _)| *o);
-        let covered = match row {
-            Ok(k) => it.pos <= tables.intl.segments[k].1.segments.len(),
-            Err(_) => false,
-        };
-        if it.segments_inst.0 >= slot_count || !covered {
-            return Err(SnapshotError::Corrupt(
-                "intl side table: segment iterator names no covering segments row",
-            ));
-        }
-    }
-    // The iterator cursors: weak owner and result slots bounded; a
-    // collection cursor must name a COVERING collections row (its
-    // `next()` indexes the table unconditionally) with the carried
-    // ordinal inside the compacted live list; a RegExp String Iterator must
-    // carry valid mode bits and UTF-16; a for-in cursor's key ids must live in
-    // the restored name table.
-    for r in tables.iterators {
-        owned(r.owner)?;
-        owned(r.result)?;
-        if r.iterable != u32::MAX {
-            owned(r.iterable)?;
-        }
-        if (5..=7).contains(&r.kind) {
-            let row = tables
-                .collections
-                .binary_search_by_key(&r.iterable, |c| c.owner);
-            let covered = match row {
-                Ok(k) => r.index as usize <= tables.collections[k].entries.len(),
-                Err(_) => false,
-            };
-            if !covered {
-                return Err(SnapshotError::Corrupt(
-                    "iterator cursors: collection cursor names no covering row",
-                ));
-            }
-        }
-        if r.kind == 8
-            && iterator_from_wrapper_malformed(
-                r.iterable,
-                r.result,
-                r.index,
-                r.done,
-                r.enum_keys.is_empty(),
-                r.str_bytes.is_empty(),
-            )
-        {
-            return Err(SnapshotError::Corrupt(
-                "iterator cursors: malformed Iterator.from wrapper",
-            ));
-        }
-        if r.kind == 9
-            && regexp_string_iterator_malformed(
-                r.iterable,
-                r.result,
-                r.index,
-                r.enum_keys.is_empty(),
-                r.str_bytes.len(),
-            )
-        {
-            return Err(SnapshotError::Corrupt(
-                "iterator cursors: invalid RegExp String Iterator",
-            ));
-        }
-        if r.kind == 3
-            && r.enum_keys
-                .iter()
-                .any(|&(id, _)| id != 0 && id as usize > names_len)
-        {
-            return Err(SnapshotError::Corrupt(
-                "iterator cursors: for-in key id outside the name table",
-            ));
-        }
-    }
+    check_rostered_bounds!(
+        Arrays, tables, owned, check, names_len, slot_count, chunk_len, symbols, OOB, OOC, heap
+    );
     for &(_, desc) in &symbols.pairs {
         owned(desc)?;
     }
@@ -4929,6 +4288,7 @@ macro_rules! define_container_payloads {
         image_field: $field:ident,
         live: [$($live:tt)*],
         bounds: [$($bounds:tt)*],
+        gate: [$($gate:tt)*],
         restore: [$($restore:tt)*],
         initialize: [$($init_field:ident = $init:expr)?],
         legacy_label: $legacy_label:literal,

@@ -401,6 +401,7 @@ macro_rules! define_restore_steps {
         image_field: $field:ident,
         live: [$($live:tt)*],
         bounds: [$($bounds:tt)*],
+        gate: [$($gate:tt)*],
         restore: [$($next:ident, [$($consumed:ident),+], ($interp:ident) $body:block)?],
         $($rest:tt)*
     })*) => {
