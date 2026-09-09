@@ -212,7 +212,9 @@ pub const IRONHORSE_MAGIC: [u8; 4] = *b"IRON";
 /// newer.
 // Version 16 requires canonical container bytes, including exact core
 // payload lengths and CREA's declared BLOC length.
-pub const IRONHORSE_FORMAT_VERSION: u32 = 16;
+// Version 17 reserves a u32::MAX chunk length as a reusable-block marker,
+// followed by its total u32 span. Earlier readers cannot walk these BLOC bytes.
+pub const IRONHORSE_FORMAT_VERSION: u32 = 17;
 
 /// The oldest format version this reader still decodes. Version-1
 /// containers predate the version-2 stamp; every version-1 writer in

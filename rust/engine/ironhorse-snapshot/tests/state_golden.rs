@@ -36,12 +36,19 @@ fn carried_state_has_frozen_bytes_seals_costs_and_continuations() {
     let corpus = include_str!("fixtures/state_golden.tsv");
     assert!(corpus.starts_with("# ironhorse-meter-5 "));
     let prior_corpus = include_str!("fixtures/state_golden_meter_4.tsv");
+    let format_16_corpus = include_str!("fixtures/state_golden_format_16.tsv");
     let sig = Signature::new("w4-determinism-corpus");
     let mut labels = BTreeSet::new();
     for line in corpus.lines().skip(1) {
         let f: Vec<_> = line.split('\t').collect();
         assert_eq!(f.len(), 10);
         let label = f[0];
+        let format_16: Vec<_> = format_16_corpus
+            .lines()
+            .skip(1)
+            .map(|line| line.split('\t').collect::<Vec<_>>())
+            .find(|row| row[0] == label)
+            .unwrap();
         let prior: Vec<_> = prior_corpus
             .lines()
             .skip(1)
@@ -57,6 +64,7 @@ fn carried_state_has_frozen_bytes_seals_costs_and_continuations() {
         for repeat in 0..2 {
             let machine = fresh(f[1]);
             assert_previous_bytes(&machine, &sig, prior[5]);
+            assert_format_16_bytes(&machine, &sig, format_16[5]);
             let bytes = machine.write_snapshot(&sig).unwrap();
             assert_eq!(
                 hex_sha256(&bytes),
@@ -109,6 +117,7 @@ fn carried_state_has_frozen_bytes_seals_costs_and_continuations() {
                     "{label}/{path}: final raw cost"
                 );
                 assert_previous_bytes(&machine, &sig, prior[9]);
+                assert_format_16_bytes(&machine, &sig, format_16[9]);
                 assert_eq!(
                     hex_sha256(&machine.write_snapshot(&sig).unwrap()),
                     f[9],
@@ -167,12 +176,23 @@ fn regenerate_persistence_identities() {
     .unwrap();
 }
 
-// All execution-only state bytes remain identical after restoring just the old
-// version marker. Its digest is unchanged because this release moves charging
-// sites, while retaining the shared weights.
+// The format-17 marker is the only byte change in this corpus, which does not
+// collect into free blocks. Retain the previous vectors as independent proof.
+fn assert_format_16_bytes(machine: &Interp, sig: &Signature, expected: &str) {
+    let mut image = machine.snapshot_image(sig).unwrap().into_image();
+    image.version.format_version = 16;
+    assert_eq!(
+        hex_sha256(&ironhorse_snapshot::image::write_machine_unchecked(&image)),
+        expected
+    );
+}
+
+// Execution-only state bytes remain identical to the meter-4, format-16 vectors
+// after restoring those two markers. The metering digest is unchanged.
 fn assert_previous_bytes(machine: &Interp, sig: &Signature, expected: &str) {
     let mut image = machine.snapshot_image(sig).unwrap().into_image();
     image.meter.cost_table_version = "ironhorse-meter-4".into();
+    image.version.format_version = 16;
     assert_eq!(
         hex_sha256(&ironhorse_snapshot::image::write_machine_unchecked(&image)),
         expected

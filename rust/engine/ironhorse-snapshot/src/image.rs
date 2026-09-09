@@ -4780,6 +4780,31 @@ pub fn write_machine_unchecked(image: &MachineImage) -> Vec<u8> {
 fn encode_machine(image: &MachineImage) -> Result<Vec<u8>, SnapshotError> {
     let mut w = AtomWriter::new();
     let mut version = image.version.clone();
+    if version.format_version < 17 {
+        // Decoded images can be re-published without passing through Interp.
+        // Never advertise reusable blocks to a reader that cannot walk them.
+        // This only detects the format requirement; malformed block lengths
+        // retain the existing deferred-validation policy.
+        let mut cursor = 0usize;
+        while let Some(header) = image
+            .chunks
+            .get(cursor..)
+            .and_then(|tail| tail.get(..CHUNK_HEADER))
+        {
+            let length = u32::from_le_bytes(header.try_into().unwrap());
+            if length == u32::MAX {
+                version.format_version = 17;
+                break;
+            }
+            let Some(end) = cursor
+                .checked_add(CHUNK_HEADER)
+                .and_then(|start| start.checked_add(length as usize))
+            else {
+                break;
+            };
+            cursor = end;
+        }
+    }
     // Preserve the wire format when rewriting a legacy scalar-only image.
     // An image containing new non-scalar names must advertise format 15.
     let legacy_names = (version.format_version < 15)
