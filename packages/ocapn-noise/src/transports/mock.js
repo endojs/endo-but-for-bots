@@ -73,13 +73,14 @@ const makeBufferedPipe = () => {
 
 /**
  * Create a matched pair of in-process transports for tests. Calling
- * `transportA.connect({ to: '<designator>' })` delivers an inbound byte
+ * `transportA.connect('mock:<designator>')` delivers an inbound byte
  * stream to whatever handler `transportB.listen(...)` registered under
  * that designator, and vice versa.
  *
  * Each connection is two `@endo/stream` pipes, one per direction.
- * The `to` hint names which listener on the opposing side to route
- * to; the default is `'default'`.
+ * The dial hint is a self-describing `mock:<designator>` URL whose
+ * opaque path names which listener on the opposing side to route to;
+ * the default is `'default'`.
  */
 export const makeMockTransportPair = () => {
   /** @type {Map<string, (stream: ByteStream) => void>} */
@@ -111,8 +112,12 @@ export const makeMockTransportPair = () => {
     /** @type {OcapnNoiseTransport} */
     const transport = harden({
       scheme: 'mock',
-      connect: async hints => {
-        const designator = hints.to ?? 'default';
+      connect: async hint => {
+        // Dial hint is a self-describing `mock:<designator>` URL; the
+        // opaque path is the designator naming the peer listener.
+        const designator = hint
+          ? new URL(hint).pathname || 'default'
+          : 'default';
         const accept = peerListeners.get(designator);
         if (!accept) {
           throw Error(
@@ -131,7 +136,7 @@ export const makeMockTransportPair = () => {
         myListeners.set(designator, handler);
         /** @type {TransportListener} */
         const listener = harden({
-          hints: { to: designator },
+          hints: [`mock:${designator}`],
           close: () => {
             myListeners.delete(designator);
           },

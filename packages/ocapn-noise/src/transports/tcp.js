@@ -12,6 +12,7 @@ import { makeNodeReader } from '@endo/stream-node/reader.js';
 import { makeNodeWriter } from '@endo/stream-node/writer.js';
 import { makeGracefulReader } from '@endo/stream-node/graceful-reader.js';
 import { makeNetstringReader, makeNetstringWriter } from '@endo/netstring';
+import { bracketHost, computeAdvertisedHosts } from './advertised-hosts.js';
 
 const { isNaN } = Number;
 
@@ -58,12 +59,21 @@ const MAX_FRAME_LENGTH = 65_551;
  * @param {number} [options.port] - Listen port. `0` = OS-assigned.
  * @param {string} [options.host] - Listen host. Default `'127.0.0.1'`.
  * @param {'netstring' | 'none'} [options.framing] - Default `'netstring'`.
+ * @param {string[]} [options.hosts] - Explicit override for the hosts to
+ *   advertise (IPv6-first), bypassing interface enumeration. A deliberate
+ *   caller choice, honored as given (loopback included).
+ * @param {() => (string[] | Promise<string[]>)} [options.discoverHosts] -
+ *   Pluggable public-IP discovery seam. Its results are folded into the
+ *   advertised hint list (after interface enumeration, loopback dropped).
+ *   This transport ships only the seam; wire STUN or a reflector here.
  * @returns {OcapnNoiseTransport}
  */
 export const makeTcpTransport = ({
   port = 0,
   host = '127.0.0.1',
   framing = 'netstring',
+  hosts,
+  discoverHosts,
 } = {}) => {
   if (framing !== 'netstring' && framing !== 'none') {
     throw Error(
@@ -110,15 +120,35 @@ export const makeTcpTransport = ({
   /** @type {OcapnNoiseTransport} */
   const transport = harden({
     scheme: 'tcp',
-    connect: async hints => {
-      const hintHost = hints.host ?? '127.0.0.1';
-      const portStr = hints.port;
-      if (portStr === undefined) {
-        throw Error(`tcp transport: missing 'port' hint`);
+    connect: async hint => {
+      // A single self-describing `tcp://host:port` dial URL — one entry
+      // from the peer's priority-ordered hint list, already matched to
+      // this transport's `tcp` scheme by the network.
+      if (hint === undefined) {
+        throw Error(`tcp transport: missing dial hint`);
+      }
+      let parsed;
+      try {
+        parsed = new URL(hint);
+      } catch {
+        throw Error(`tcp transport: invalid dial hint ${hint}`);
+      }
+      if (parsed.protocol !== 'tcp:') {
+        throw Error(`tcp transport: dial hint must be a tcp: URL, got ${hint}`);
+      }
+      // For the non-special `tcp:` scheme WHATWG URL keeps IPv6 literals
+      // bracketed (e.g. `[::1]`); strip them for `net.createConnection`.
+      let hintHost = parsed.hostname || '127.0.0.1';
+      if (hintHost.startsWith('[') && hintHost.endsWith(']')) {
+        hintHost = hintHost.slice(1, -1);
+      }
+      const portStr = parsed.port;
+      if (portStr === '') {
+        throw Error(`tcp transport: dial hint missing port ${hint}`);
       }
       const portNum = Number.parseInt(portStr, 10);
       if (isNaN(portNum)) {
-        throw Error(`tcp transport: invalid 'port' hint ${portStr}`);
+        throw Error(`tcp transport: invalid port in dial hint ${hint}`);
       }
       const socket = net.createConnection({ host: hintHost, port: portNum });
       await new Promise((resolve, reject) => {
@@ -141,12 +171,24 @@ export const makeTcpTransport = ({
       if (!addr || typeof addr === 'string') {
         throw Error(`tcp transport: unexpected address ${addr}`);
       }
+      // Advertise a priority-ordered list of dial URLs — one per routable
+      // link-layer address (IPv6 first), plus any pluggably-discovered
+      // public address. A wildcard bind that resolves to nothing routable
+      // advertises an empty list rather than an undialable loopback URL.
+      // IPv6 literals are bracketed so each advertised URL round-trips
+      // back through `new URL()` on the connecting peer.
+      const advHosts = await computeAdvertisedHosts({
+        bindHost: host,
+        boundAddress: addr.address,
+        hosts,
+        discoverHosts,
+      });
+      const hints = advHosts.map(
+        advHost => `tcp://${bracketHost(advHost)}:${addr.port}`,
+      );
       /** @type {TransportListener} */
       const listener = harden({
-        hints: {
-          host: addr.address,
-          port: addr.port.toString(),
-        },
+        hints,
         close: () => {
           srv.close();
         },

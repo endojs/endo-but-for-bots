@@ -277,7 +277,35 @@ export const make = async (powers, context) => {
   // (bound host and port) a peer needs in order to dial us.
   const localLocation = network.locationFor(keyId);
   const localHints = localLocation.hints || {};
-  const boundPort = String(localHints['tcp:port'] || port);
+  // The tcp transport advertises a **priority-ordered list** of dial
+  // URLs — one per link-layer address — carried in the OCapN location's
+  // `hints` as a positional dictionary (decimal-index keys → dial-URL
+  // strings; see `buildLocationFor` in `@endo/ocapn-noise`). Read the
+  // first `tcp:`-scheme URL out of that ordered list and parse the bound
+  // host and port back out of it; fall back to the configured values if
+  // no tcp hint is present. For the non-special `tcp:` scheme WHATWG URL
+  // keeps IPv6 literals bracketed, so strip the brackets `formatHostPort`
+  // re-adds.
+  let hintHost = host;
+  let boundPort = String(port);
+  const orderedHints = Object.entries(localHints)
+    .filter(([, value]) => typeof value === 'string')
+    .sort(([a], [b]) => Number(a) - Number(b))
+    .map(([, value]) => /** @type {string} */ (value));
+  const tcpUrlHint = orderedHints.find(url => {
+    try {
+      return new URL(url).protocol === 'tcp:';
+    } catch {
+      return false;
+    }
+  });
+  if (tcpUrlHint) {
+    const tcpUrl = new URL(tcpUrlHint);
+    hintHost = tcpUrl.hostname.replace(/^\[|\]$/gu, '');
+    if (tcpUrl.port !== '') {
+      boundPort = tcpUrl.port;
+    }
+  }
 
   // Persist the resolved listen address so an OS-assigned ephemeral
   // port stays stable across daemon restarts; otherwise every restart
@@ -296,10 +324,8 @@ export const make = async (powers, context) => {
   // hints live inside the OCapN location; the `host:port` authority is
   // informational — it keeps the address a well-formed URL so the
   // daemon's `new URL(address)` and `.protocol` checks in `makePeer`
-  // continue to work.
-  // Strip any IPv6 brackets the transport hint may carry, for the same
-  // reason as the listen host above: `formatHostPort` expects a bare host.
-  const hintHost = (localHints['tcp:host'] || host).replace(/^\[|\]$/g, '');
+  // continue to work. `hintHost`/`boundPort` were parsed from the
+  // transport's first `tcp:` dial hint above.
   const encodedNode = encodeURIComponent(String(localNodeId));
   const encodedLocation = encodeURIComponent(JSON.stringify(localLocation));
   const address = `${protocol}://${formatHostPort(hintHost, boundPort)}/?node=${encodedNode}&loc=${encodedLocation}`;

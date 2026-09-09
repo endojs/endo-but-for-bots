@@ -92,10 +92,13 @@ test('tcp transport with framing:none delivers raw socket bytes', async t => {
   });
 
   // Connect a raw Node socket (not through the transport) so we
-  // control bytes on the wire exactly.
+  // control bytes on the wire exactly. The listener advertises a
+  // priority-ordered list of `tcp://host:port` dial URLs; a specific
+  // (non-wildcard) bind yields a single loopback entry.
+  const listenUrl = new URL(listener.hints[0]);
   const sock = rawNet.createConnection({
-    host: listener.hints.host,
-    port: Number.parseInt(listener.hints.port, 10),
+    host: listenUrl.hostname,
+    port: Number.parseInt(listenUrl.port, 10),
   });
   await new Promise((resolve, reject) => {
     sock.once('connect', resolve);
@@ -111,6 +114,73 @@ test('tcp transport with framing:none delivers raw socket bytes', async t => {
   }
 
   sock.destroy();
+});
+
+test('tcp transport: a specific (non-wildcard) bind advertises that single host', async t => {
+  const transport = makeTcpTransport({ host: '127.0.0.1', port: 0 });
+  t.teardown(() => transport.shutdown());
+  const { listen } = transport;
+  if (!listen) throw Error('tcp transport must expose listen');
+  const listener = await listen(() => {});
+  t.teardown(() => listener.close());
+  t.is(listener.hints.length, 1, 'a deliberate specific bind is advertised');
+  const url = new URL(listener.hints[0]);
+  t.is(url.protocol, 'tcp:');
+  t.is(url.hostname, '127.0.0.1', 'the chosen host is honored as-is');
+  t.not(url.port, '');
+});
+
+test('tcp transport: a wildcard bind advertises routable hosts IPv6-first, never loopback', async t => {
+  // The `hosts` override makes the assertion deterministic regardless
+  // of the CI host's interfaces; it exercises the same ordering and
+  // loopback-omission the wildcard interface-enumeration path uses.
+  const transport = makeTcpTransport({
+    host: '0.0.0.0',
+    port: 0,
+    hosts: ['198.51.100.9', '2001:db8::2'],
+  });
+  t.teardown(() => transport.shutdown());
+  const { listen } = transport;
+  if (!listen) throw Error('tcp transport must expose listen');
+  const listener = await listen(() => {});
+  t.teardown(() => listener.close());
+  t.is(listener.hints.length, 2);
+  t.is(
+    new URL(listener.hints[0]).hostname,
+    '[2001:db8::2]',
+    'IPv6 literal is bracketed and sorts first',
+  );
+  t.is(new URL(listener.hints[1]).hostname, '198.51.100.9');
+  for (const hint of listener.hints) {
+    t.not(new URL(hint).hostname, '127.0.0.1', 'never advertises loopback');
+  }
+});
+
+test('tcp transport: a wildcard bind with no routable hosts omits the hint', async t => {
+  const transport = makeTcpTransport({ host: '::', port: 0, hosts: [] });
+  t.teardown(() => transport.shutdown());
+  const { listen } = transport;
+  if (!listen) throw Error('tcp transport must expose listen');
+  const listener = await listen(() => {});
+  t.teardown(() => listener.close());
+  t.deepEqual(listener.hints, [], 'omits rather than advertising loopback');
+});
+
+test('tcp transport: discoverHosts results are folded into the advertised list', async t => {
+  const transport = makeTcpTransport({
+    host: '0.0.0.0',
+    port: 0,
+    hosts: ['198.51.100.9'],
+    discoverHosts: () => ['203.0.113.4'],
+  });
+  t.teardown(() => transport.shutdown());
+  const { listen } = transport;
+  if (!listen) throw Error('tcp transport must expose listen');
+  const listener = await listen(() => {});
+  t.teardown(() => listener.close());
+  const hosts = listener.hints.map(h => new URL(h).hostname);
+  t.true(hosts.includes('198.51.100.9'), 'base host present');
+  t.true(hosts.includes('203.0.113.4'), 'discovered host folded in');
 });
 
 // `makeTcpTransport` validates options synchronously, so this case

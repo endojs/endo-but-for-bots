@@ -37,11 +37,17 @@ export interface ByteStream {
  */
 export interface TransportListener {
   /**
-   * Transport-specific connection hints the peer should include in
-   * their locator to reach this listener (keys without the transport's
-   * scheme prefix; the caller adds it).
+   * A **priority-ordered list** of self-describing dial-URL strings a
+   * peer can use to reach this listener — most-preferred first. Each
+   * hint is a complete URL whose scheme selects the transport (e.g.
+   * `tcp://[2001:db8::1]:3469`, `tcp://192.0.2.7:3469`,
+   * `ws://example.com:443/ocapn-cbor-np`). A transport may advertise
+   * **several** hints (one per link-layer address — IPv6 before IPv4 —
+   * plus any pluggably-discovered public address). An **empty** array
+   * means "advertise nothing": the transport preferred to omit a hint
+   * rather than advertise an undialable address such as loopback.
    */
-  hints: Record<string, string>;
+  hints: string[];
   close(): void;
 }
 
@@ -51,13 +57,19 @@ export interface TransportListener {
  * or the Noise protocol.
  */
 export interface OcapnNoiseTransport {
-  /** e.g. `'mock'`, `'tcp'`, `'ws'`. Used as a prefix on hint keys. */
+  /**
+   * e.g. `'mock'`, `'tcp'`, `'ws'`. Matched against a dial URL's
+   * scheme to select this transport for an outgoing connection.
+   */
   scheme: string;
   /**
-   * Open an outgoing byte stream to a peer using transport-specific
-   * hints. Keys are passed without the scheme prefix.
+   * Open an outgoing byte stream to a peer, given a **single**
+   * self-describing dial-URL hint (one entry from a peer's ordered
+   * `TransportListener.hints` list, already matched to this
+   * transport's `scheme`). The transport parses the URL for its own
+   * host/port/path.
    */
-  connect(hints: Record<string, string>): Promise<ByteStream>;
+  connect(hint: string): Promise<ByteStream>;
   /**
    * Start listening for inbound streams. Optional; a transport that
    * supports only outgoing connections omits `listen`.
