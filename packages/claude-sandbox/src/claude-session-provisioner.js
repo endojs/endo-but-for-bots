@@ -113,10 +113,23 @@ export const makeClaudeSessionProvisioner = (
 
   // The sessions directory is created on first use so a fresh host needs no
   // setup step beyond minting the caplet that owns it.
-  const ensureSessionsDirectory = async () => {
-    if (!(await E(hostAgent).has(...sessionsPath))) {
-      await E(hostAgent).makeDirectory([...sessionsPath]);
+  // Different session IDs share this namespace. makeDirectory replaces an
+  // existing directory, so concurrent initializers must not both create it.
+  /** @type {Promise<void> | undefined} */
+  let sessionsDirectoryInFlight;
+  const ensureSessionsDirectory = () => {
+    if (!sessionsDirectoryInFlight) {
+      sessionsDirectoryInFlight = (async () => {
+        await null;
+        if (!(await E(hostAgent).has(...sessionsPath))) {
+          await E(hostAgent).makeDirectory([...sessionsPath]);
+        }
+      })().finally(() => {
+        // Retry failed initialization and recheck externally removed names.
+        sessionsDirectoryInFlight = undefined;
+      });
     }
+    return sessionsDirectoryInFlight;
   };
 
   /**
@@ -136,8 +149,8 @@ export const makeClaudeSessionProvisioner = (
       configFilesystemName,
       configDir,
     } = namesFor(sessionId);
-    if (await E(hostAgent).has(...clientPath)) return clientName;
     await ensureSessionsDirectory();
+    if (await E(hostAgent).has(...clientPath)) return clientName;
 
     // A prior interrupted attempt may have left only the temporary pet names.
     if (await E(hostAgent).has(filesystemName)) {
@@ -207,8 +220,9 @@ export const makeClaudeSessionProvisioner = (
       async lookup(sessionId) {
         const { clientPath } = namesFor(sessionId);
         await inFlight.get(sessionId)?.catch(() => {});
+        if (!(await E(hostAgent).has(...sessionsPath))) return undefined;
         if (!(await E(hostAgent).has(...clientPath))) return undefined;
-        return E(hostAgent).lookup(...clientPath);
+        return E(hostAgent).lookup(clientPath);
       },
       /**
        * Stop the session's live incarnation without deleting it: the daemon
@@ -221,6 +235,7 @@ export const makeClaudeSessionProvisioner = (
       async cancel(sessionId) {
         const { clientPath } = namesFor(sessionId);
         await inFlight.get(sessionId)?.catch(() => {});
+        if (!(await E(hostAgent).has(...sessionsPath))) return;
         if (await E(hostAgent).has(...clientPath)) {
           await E(hostAgent).cancel(
             [...clientPath],
@@ -237,7 +252,10 @@ export const makeClaudeSessionProvisioner = (
           configDir,
         } = namesFor(sessionId);
         await inFlight.get(sessionId)?.catch(() => {});
-        if (await E(hostAgent).has(...clientPath)) {
+        if (
+          (await E(hostAgent).has(...sessionsPath)) &&
+          (await E(hostAgent).has(...clientPath))
+        ) {
           await E(hostAgent).remove(...clientPath);
         }
         if (await E(hostAgent).has(filesystemName)) {
