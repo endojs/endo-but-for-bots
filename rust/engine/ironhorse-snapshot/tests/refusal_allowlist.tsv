@@ -10,8 +10,6 @@ file store chunk extent row exceeds u32	File backend structural guard; dedicated
 file store slot page row exceeds u32	File backend structural guard; dedicated exact-label corruption fixture deferred.
 generator frame: current function has no body	Existing corruption guard; dedicated exact-label regression fixture deferred.
 generator frame: malformed body bytecode	Existing corruption guard; dedicated exact-label regression fixture deferred.
-installed-names floor does not restore	Existing corruption guard; dedicated exact-label regression fixture deferred.
 manifest parent seal length	Existing corruption guard; dedicated exact-label regression fixture deferred.
 name migration length	Existing corruption guard; dedicated exact-label regression fixture deferred.
 non-canonical machine encoding	Existing corruption guard; dedicated exact-label regression fixture deferred.
-symbol-key table does not restore	Existing corruption guard; dedicated exact-label regression fixture deferred.
