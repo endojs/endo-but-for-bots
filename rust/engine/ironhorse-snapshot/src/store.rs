@@ -1480,75 +1480,42 @@ pub fn apply_batch_with_small_root(
     Ok(root)
 }
 
-/// The whole-on-every-commit remainder of the machine state: the value
-/// stack, the slot free list, the key/name/symbol tables, the meter,
-/// and (store schema 7, the side-table ledger) the bulk side tables
-/// and `Symbol.for` registry. Each section reuses its atom payload
-/// encoding verbatim.
-#[derive(Clone, Debug, PartialEq)]
-pub struct SmallState {
-    pub stack: Vec<Slot>,
-    pub slot_free: Vec<u32>,
-    pub keys: Vec<String>,
-    pub names: Vec<SymbolName>,
-    /// The symbol-key id table (see [`crate::image::SymbolKeyImage`]).
-    pub symbols: crate::image::SymbolKeyImage,
-    pub meter: MeterImage,
-    /// The arrays side table (schema 7; the `ARRY` atom's encoding).
-    /// Whole-on-every-commit like the stack — O(side tables) bytes per
-    /// checkpoint; dirty-diffed side-table ROWS are the named upgrade
-    /// if attached machines carry bulk state wide enough to measure.
-    pub arrays: Vec<crate::image::ArrayImage>,
-    /// An ordinary object's index-property store (the `IDXP` encoding),
-    /// appended as a suffix section so older signed prefixes are untouched.
-    pub index_props: Vec<crate::image::IndexPropsImage>,
-    /// The collections side table (schema 7; the `COLL` encoding).
-    pub collections: Vec<crate::image::CollectionImage>,
-    /// The `Symbol.for` registry (schema 7; the `REGY` encoding).
-    pub registry: Vec<crate::image::RegistryImage>,
-    /// The error-data side table (schema 9; the `ERRD` encoding).
-    pub errors: Vec<crate::image::ErrorImage>,
-    /// The array-buffers side table (schema 10; the `ABUF` encoding).
-    pub buffers: Vec<crate::image::BufferImage>,
-    /// The typed-arrays side table (schema 10; the `TARR` encoding).
-    pub typed_arrays: Vec<crate::image::TypedArrayImage>,
-    /// The data-views side table (schema 10; the `DVIW` encoding).
-    pub data_views: Vec<crate::image::DataViewImage>,
-    /// The primitive-wrapper side table (schema 11; the `WRAP` encoding).
-    pub wrappers: Vec<crate::image::WrapperImage>,
-    /// The regexp side table (schema 11; the `REGX` encoding).
-    pub regexps: Vec<crate::image::RegExpImage>,
-    /// Date `[[DateValue]]` records (schema 14; the `DATE` encoding).
-    pub dates: Vec<crate::image::DateImage>,
-    /// Atomic retained guest-callability state (schema 15; `FUNC`).
-    pub function_state: ironhorse_vm::FunctionStateSnapshot,
-    /// Proxy internal slots and revoker links (schema 16; `PROX`).
-    pub proxy_state: ironhorse_vm::ProxyStateSnapshot,
-    /// Guest accessor getter/setter mappings (schema 17; `ACCS`).
-    pub accessors: Vec<ironhorse_vm::AccessorRow>,
-    /// Runtime Intl bound-function links (schema 18; `IBFN`).
-    pub intl_bound_functions: Vec<ironhorse_vm::IntlBoundFunctionRow>,
-    /// Private values and accessors (schema 19; `PRIV`).
-    pub private_elements: ironhorse_vm::PrivateElementSnapshot,
-    /// Explicit resource-management stacks (schema 20; `DISP`).
-    pub disposable_stacks: Vec<ironhorse_vm::DisposableStackRow>,
-    /// Synchronous generator saved activations (schema 21; `GENR`).
-    pub generators: Vec<ironhorse_vm::GeneratorRow>,
-    /// The promise cluster (schema 23; `PRMS`).
-    pub promise_cluster: ironhorse_vm::PromiseClusterSnapshot,
-    /// The arguments-exotic brand owners (schema 11; the `ARGB` encoding).
-    pub arguments_brands: Vec<u32>,
-    /// The Temporal record tables (schema 11; the `TMPR` encoding).
-    pub temporal: crate::image::TemporalImage,
-    /// The Intl record tables (schema 12; the `INTL` encoding).
-    pub intl: ironhorse_vm::IntlTables,
-    /// The installed-names floor (schema 12; the `NFLR` semantics:
-    /// `None` — an empty section — restores the conservative
-    /// full-table default).
-    pub name_floor: Option<u32>,
-    /// The built-in iterator cursors (schema 13; the `ITER` encoding).
-    pub iterators: Vec<ironhorse_vm::IteratorRow>,
+// Accumulate declarations in their historical order, which also determines
+// derived Debug output. Codec ordering remains an independent roster policy.
+macro_rules! define_small_state_chain {
+    (($d:tt); $($section:ident => $next:ident, $(#[$attr:meta])* $field:ident: $ty:ty;)*) => {
+        macro_rules! small_state_fields {
+            $(($section; [$d ($d declared:tt)*]) => {
+                small_state_fields!($next; [$d ($d declared)* $(#[$attr])* pub $field: $ty,]);
+            };)*
+            (End; [$d ($d declared:tt)*]) => {
+                /// The whole-on-every-commit remainder of the machine state: the value
+                /// stack, the slot free list, the key/name/symbol tables, the meter,
+                /// and (store schema 7, the side-table ledger) the bulk side tables
+                /// and `Symbol.for` registry. Each section reuses its atom payload
+                /// encoding verbatim.
+                #[derive(Clone, Debug, PartialEq)]
+                pub struct SmallState { $d ($d declared)* }
+            };
+        }
+        small_state_fields!(Stack; []);
+    };
 }
+macro_rules! define_small_state {
+    ($($section:ident {
+        image_field: $field:ident,
+        builder: $builder:ident,
+        live: [$($live:tt)*],
+        bounds: [$($bounds:tt)*],
+        gate: [$($gate:tt)*],
+        restore: [$($restore:tt)*],
+        initialize: [$($next:ident; $(#[$attr:meta])* $init_field:ident: $ty:ty = $init:expr)?],
+        $($rest:tt)*
+    })*) => {
+        define_small_state_chain!(($); $($($section => $next, $(#[$attr])* $init_field: $ty;)?) *);
+    };
+}
+crate::snapshot_roster::snapshot_payloads!(define_small_state);
 
 impl SmallState {
     /// Encode the 32 payloads separately, without framing, in
