@@ -3600,7 +3600,7 @@ pub(crate) fn encode_iterators(rows: &[IteratorRow]) -> Vec<u8> {
 /// 8): it wraps a live iterable, retains a result slot, and carries none of the
 /// index/done/key/text state the other cursor kinds use.
 ///
-/// Shared by [`decode_iterators`] and [`check_image_slot_bounds`] so the
+/// Shared by [`decode_iterators`] and [`check_machine_image_bounds`] so the
 /// encoding has exactly one definition and a change to it cannot land in one
 /// gate while missing the other.
 fn iterator_from_wrapper_malformed(
@@ -3955,16 +3955,149 @@ fn generator_body_starts(
     Ok((body_start, body_end, set))
 }
 
-/// `SYMB` joined this walk when the symbol-key table became live
-/// state (it was deliberately excluded while nothing consumed the
-/// section on restore — review wave 5): each pair's descriptor is a
-/// slot index the restored machine will use as a property-key
-/// identity, so an out-of-arena descriptor is refused with the same
-/// closed fist as every other crafted index.
+/// Check all stored Slot records through the exhaustive image visitor, then
+/// validate scalar owners, handles and cross-table geometry.
+pub(crate) fn check_machine_image_bounds(image: &MachineImage) -> Result<(), SnapshotError> {
+    check_stored_bounds(
+        &image.slots,
+        |f| image.visit_slots(f),
+        &image.arrays,
+        &image.index_props,
+        &image.collections,
+        &image.registry,
+        &image.errors,
+        &image.buffers,
+        &image.typed_arrays,
+        &image.data_views,
+        &LangRows {
+            wrappers: &image.wrappers,
+            regexps: &image.regexps,
+            dates: &image.dates,
+            function_state: &image.function_state,
+            proxy_state: &image.proxy_state,
+            accessors: &image.accessors,
+            intl_bound_functions: &image.intl_bound_functions,
+            private_elements: &image.private_elements,
+            disposable_stacks: &image.disposable_stacks,
+            generators: &image.generators,
+            promise_cluster: &image.promise_cluster,
+            arguments_brands: &image.arguments_brands,
+            temporal: &image.temporal,
+            intl: &image.intl,
+        },
+        &image.iterators,
+        image.names.len(),
+        &image.symbols,
+        image.slots.len() as u32,
+        image.chunks.len(),
+        &image.slot_free,
+    )
+}
+
+/// The lazy store gate visits the complete SmallState type without fetching
+/// heap pages. Stored heap records are checked separately when they fault.
+pub(crate) fn check_small_state_bounds(
+    small: &crate::store::SmallState,
+    slot_count: u32,
+    chunk_len: usize,
+) -> Result<(), SnapshotError> {
+    use crate::stored_slots::VisitSlots;
+    check_stored_bounds(
+        &[],
+        |f| small.visit(f),
+        &small.arrays,
+        &small.index_props,
+        &small.collections,
+        &small.registry,
+        &small.errors,
+        &small.buffers,
+        &small.typed_arrays,
+        &small.data_views,
+        &LangRows {
+            wrappers: &small.wrappers,
+            regexps: &small.regexps,
+            dates: &small.dates,
+            function_state: &small.function_state,
+            proxy_state: &small.proxy_state,
+            accessors: &small.accessors,
+            intl_bound_functions: &small.intl_bound_functions,
+            private_elements: &small.private_elements,
+            disposable_stacks: &small.disposable_stacks,
+            generators: &small.generators,
+            promise_cluster: &small.promise_cluster,
+            arguments_brands: &small.arguments_brands,
+            temporal: &small.temporal,
+            intl: &small.intl,
+        },
+        &small.iterators,
+        small.names.len(),
+        &small.symbols,
+        slot_count,
+        chunk_len,
+        &small.slot_free,
+    )
+}
+
+// Legacy-shaped test fixture adapter. Production callers pass an entire stored
+// state above; this roster cannot omit a newly added production Slot holder.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn check_image_slot_bounds(
     heap: &[Slot],
     stack: &[Slot],
+    arrays: &[ArrayImage],
+    index_props: &[IndexPropsImage],
+    collections: &[CollectionImage],
+    registry: &[RegistryImage],
+    errors: &[ErrorImage],
+    buffers: &[BufferImage],
+    typed_arrays: &[TypedArrayImage],
+    data_views: &[DataViewImage],
+    lang: &LangRows<'_>,
+    iterators: &[IteratorRow],
+    names_len: usize,
+    symbols: &SymbolKeyImage,
+    slot_count: u32,
+    chunk_len: usize,
+    free: &[u32],
+) -> Result<(), SnapshotError> {
+    use crate::stored_slots::VisitSlots;
+    check_stored_bounds(
+        heap,
+        |f| {
+            for (index, slot) in heap.iter().enumerate() {
+                if !free.contains(&(index as u32)) {
+                    f(slot);
+                }
+            }
+            stack.visit(f);
+            arrays.visit(f);
+            index_props.visit(f);
+            collections.visit(f);
+            lang.visit(f);
+        },
+        arrays,
+        index_props,
+        collections,
+        registry,
+        errors,
+        buffers,
+        typed_arrays,
+        data_views,
+        lang,
+        iterators,
+        names_len,
+        symbols,
+        slot_count,
+        chunk_len,
+        free,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn check_stored_bounds(
+    heap: &[Slot],
+    visit: impl FnOnce(&mut dyn FnMut(&Slot)),
     arrays: &[ArrayImage],
     index_props: &[IndexPropsImage],
     collections: &[CollectionImage],
@@ -4030,26 +4163,15 @@ pub(crate) fn check_image_slot_bounds(
         }
         Ok(())
     };
-    for (i, s) in heap.iter().enumerate() {
-        if is_free(i as u32) {
-            continue; // opaque: dead bytes, preserved for index identity only
-        }
-        check(s)?;
-    }
-    for s in stack {
-        check(s)?;
-    }
+    crate::stored_slots::check_slots(visit, &check)?;
     for a in arrays {
         owned(a.owner)?;
-        crate::stored_slots::check_slots(a, &check)?;
     }
     for row in index_props {
         owned(row.owner)?;
-        crate::stored_slots::check_slots(row, &check)?;
     }
     for coll in collections {
         owned(coll.owner)?;
-        crate::stored_slots::check_slots(coll, &check)?;
     }
     for e in registry {
         owned(e.descriptor)?;
@@ -4109,13 +4231,8 @@ pub(crate) fn check_image_slot_bounds(
             ));
         }
     }
-    // Full Slot records share the registration visitor. Scalar owners,
-    // handles, callable kinds, and cross-table geometry are checked below.
-    crate::stored_slots::check_slots(lang, &check)?;
-
     // The language rows: weak owners bounded like every sibling's, and
-    // a wrapper's boxed VALUE walks the same slot check as an array
-    // item (its refs and chunk offset are real edges).
+    // scalar handles, callable kinds, and cross-table geometry checked here.
     for w in lang.wrappers {
         owned(w.owner)?;
     }
@@ -5334,67 +5451,6 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         }
         None => None,
     };
-    // Semantic bounds gate (wave-4 P1, widened in wave 5): every slot
-    // index and chunk offset the container carries — heap, stack,
-    // symbols and side tables alike — must fall inside the decoded
-    // arenas, or the collector would index them out of range in
-    // release.
-    check_image_slot_bounds(
-        &slots,
-        &stack,
-        &arrays,
-        &index_props,
-        &collections,
-        &registry,
-        &errors,
-        &buffers,
-        &typed_arrays,
-        &data_views,
-        &LangRows {
-            wrappers: &wrappers,
-            regexps: &regexps,
-            dates: &dates,
-            function_state: &function_state,
-            proxy_state: &proxy_state,
-            accessors: &accessors,
-            intl_bound_functions: &intl_bound_functions,
-            private_elements: &private_elements,
-            disposable_stacks: &disposable_stacks,
-            generators: &generators,
-            promise_cluster: &promise_cluster,
-            arguments_brands: &arguments_brands,
-            temporal: &temporal,
-            intl: &intl,
-        },
-        &iterators,
-        names.len(),
-        &symbols,
-        slots.len() as u32,
-        chunks.len(),
-        &slot_free,
-    )?;
-
-    check_buffer_chunk_lengths(&buffers, &chunks)?;
-
-    // Since version 15, a container must carry every
-    // atom the current writer unconditionally emits — omitting one
-    // (the reader would supply a default and the next write would put
-    // it back) is one more second-encoding shape. Versions before 15 in
-    // the read range keep their recorded leniencies (e.g. the
-    // pre-row-6 absent `METR`); their writers no longer run, so the
-    // canonical-bytes property is claimed of current containers.
-    // Checked LAST so a malformed atom refuses by its own decoder's
-    // name first — this gate is about honest-looking omissions.
-    if version.format_version >= 15 {
-        for tag in [VERS, SIGN, CREA, BLOC, HEAP, STAC, KEYS, NAME, SYMB, METR] {
-            if r.find(tag).is_none() {
-                return Err(SnapshotError::Corrupt(
-                    "container missing an atom its version always writes",
-                ));
-            }
-        }
-    }
-
     let image = MachineImage {
         index_props,
         version,
@@ -5433,6 +5489,28 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         iterators,
         name_floor,
     };
+    check_machine_image_bounds(&image)?;
+    check_buffer_chunk_lengths(&image.buffers, &image.chunks)?;
+
+    // Since version 15, a container must carry every
+    // atom the current writer unconditionally emits — omitting one
+    // (the reader would supply a default and the next write would put
+    // it back) is one more second-encoding shape. Versions before 15 in
+    // the read range keep their recorded leniencies (e.g. the
+    // pre-row-6 absent `METR`); their writers no longer run, so the
+    // canonical-bytes property is claimed of current containers.
+    // Checked LAST so a malformed atom refuses by its own decoder's
+    // name first — this gate is about honest-looking omissions.
+    if image.version.format_version >= 15 {
+        for tag in [VERS, SIGN, CREA, BLOC, HEAP, STAC, KEYS, NAME, SYMB, METR] {
+            if r.find(tag).is_none() {
+                return Err(SnapshotError::Corrupt(
+                    "container missing an atom its version always writes",
+                ));
+            }
+        }
+    }
+
     // Version 16 makes canonical bytes part of admission, including
     // required core atoms and canonical slot encodings. Older formats
     // retain their documented import normalization path.
