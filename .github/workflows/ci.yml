@@ -7,15 +7,6 @@ on:
   push:
     branches: [master, llm]
   pull_request:
-    # `paths-ignore` causes this workflow not to run at all when every
-    # changed path matches one of these patterns. The sister workflow
-    # `ci-docs.yml` mirrors this list under `paths` (the inverse) so
-    # that doc-only PRs still produce checks named `test` and `lint`,
-    # satisfying any future branch-protection rule that names those
-    # checks as required. Keep the two lists in sync.
-    paths-ignore:
-      - '**/*.md'
-      - 'docs/**'
 
 # Minimal permissions for workflows and jobs. `actions/cache` and
 # `setup-node`'s `cache: yarn` use the runner's built-in cache service,
@@ -44,7 +35,14 @@ concurrency:
 # Steps between "begin" and "end" should be the same in every job.
 
 jobs:
+  changes:
+    uses: $/.github/workflows/ci-changes.yml
+
   lint:
+    env:
+      CI_PACKAGES: ${{ needs.changes.outputs.packages }}
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['lint']) }}
     name: lint
 
     # begin macro
@@ -52,6 +50,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -89,6 +91,7 @@ jobs:
         run: yarn build:types:check
 
       - name: Check package uniformity
+        if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['package-uniformity']) }}
         run: yarn test:package-uniformity && node scripts/check-package-uniformity.mjs
 
       # Keep declaration generation below: only overlap checks that do not
@@ -105,15 +108,17 @@ jobs:
             run: corepack yarn tsc -p tsconfig.json --noEmit
 
           - name: Check workspace TypeScript programs
-            run: corepack yarn lint:workspaces:types
+            run: python3 scripts/run-ci-task.py lint:types
 
       - name: Build composite TypeScript declarations
         run: corepack yarn build:types
 
       - name: Test opt-in TypeScript contracts
-        run: corepack yarn test:types
+        run: python3 scripts/run-ci-task.py test:types
 
   familiar-bundle:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['familiar-bundle']) }}
     name: familiar-bundle
 
     # The Familiar Electron shell bundles a handful of CLI / daemon /
@@ -134,6 +139,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -155,6 +164,10 @@ jobs:
         run: yarn workspace @endo/familiar step:bundle
 
   test:
+    env:
+      CI_PACKAGES: ${{ needs.changes.outputs.packages }}
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['test']) }}
     name: test
 
     # begin macro
@@ -170,12 +183,13 @@ jobs:
         # 4.
 
     steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # Fetch full history so turbo can compute the affected set against
-          # `origin/llm` for the `--filter='...[origin/llm]'` invocation below.
-          fetch-depth: 0
           persist-credentials: false
 
       # without this, setup-node errors on mismatched yarn versions
@@ -205,23 +219,20 @@ jobs:
 
       # end macro
 
-      # Use turbo's `--filter='...[origin/llm]'` to test only the packages
-      # affected by this PR and their dependents (the leading `...` selects the
-      # changed set plus everything that depends on it), rather than the full
-      # matrix. The base `origin/llm` is the repo's default branch on this fork.
-      # The `test` task `dependsOn` `build` and `^build`, so turbo builds only
-      # the affected closure on demand; a separate full `yarn build` step would
-      # rebuild all ~83 packages and is therefore omitted.
+      # The detector selects changed workspaces and recursive dependents.
+      # Turbo builds their prerequisites and runs only these exact names.
       - name: Run yarn test (affected set)
         working-directory: ${{ env.WORKDIR }}
-        run: yarn turbo run test --filter='...[origin/llm]'
+        run: python3 scripts/run-ci-task.py test
 
       - name: Restore working directory
-        if: ${{ steps.move-wd.outcome == 'success' }}
+        if: ${{ always() && steps.move-wd.outcome == 'success' }}
         working-directory: ${{ runner.temp }}
         run: mv -fv "$WORKDIR" "$ORIGINAL_WORKDIR"
 
   sandbox-drivers:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['sandbox-drivers']) }}
     name: sandbox-drivers
 
     # begin macro
@@ -229,6 +240,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -268,6 +283,8 @@ jobs:
         run: yarn workspace @endo/sandbox run test:drivers
 
   test-async-hooks:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['test-async-hooks']) }}
     name: test-async-hooks
 
     runs-on: ${{ matrix.platform }}
@@ -294,6 +311,10 @@ jobs:
     # begin macro
 
     steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -321,6 +342,10 @@ jobs:
         run: yarn test
 
   cover:
+    env:
+      CI_PACKAGES: ${{ needs.changes.outputs.packages }}
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['cover']) }}
     name: cover
 
     # begin macro
@@ -333,12 +358,13 @@ jobs:
         platform: [ubuntu-latest]
 
     steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # Fetch full history so turbo can compute the affected set against
-          # `origin/llm` for the `--filter='...[origin/llm]'` invocation below.
-          fetch-depth: 0
           persist-credentials: false
 
       # without this, setup-node errors on mismatched yarn versions
@@ -355,52 +381,12 @@ jobs:
 
       # end macro
 
-      # As with the `test` job, scope coverage to the affected packages and
-      # their dependents. The `test:c8` turbo task `dependsOn` `build` and
-      # `^build`, so turbo builds only the affected closure on demand; a
-      # separate full `yarn build` step is therefore omitted.
       - name: Run yarn test:c8 (affected set)
-        run: yarn turbo run test:c8 --filter='...[origin/llm]'
-
-  test262:
-    name: test262
-
-    # begin macro
-
-    runs-on: ${{ matrix.platform }}
-    strategy:
-      fail-fast: false
-      matrix:
-        node-version: [22.x, 24.x]
-        platform: [ubuntu-latest]
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      # without this, setup-node errors on mismatched yarn versions
-      - run: corepack enable
-
-      - name: Use Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: ${{ matrix.node-version }}
-          cache: yarn
-
-      - name: Install dependencies
-        run: yarn install --immutable
-
-      # end macro
-
-      - name: Run yarn build
-        run: yarn build
-
-      - name: Run yarn test262
-        run: exit 0 # TODO remove test262 from required tests for CI
+        run: python3 scripts/run-ci-task.py test:c8
 
   test-hermes:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['test-hermes']) }}
     name: test-hermes
 
     # begin macro
@@ -408,6 +394,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -431,14 +421,20 @@ jobs:
         run: yarn build
 
       - name: Run SES/Hermes smoke test
-        run: yarn test:hermes
+        run: yarn workspace ses test:hermes
 
   check-action-pins:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['check-action-pins']) }}
     name: check-action-pins
 
     runs-on: ubuntu-latest
 
     steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -456,19 +452,12 @@ jobs:
       - name: Install dependencies
         run: yarn install --immutable
 
-      - name: Detect workflow changes
-        id: paths
-        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
-        with:
-          filters: |
-            workflows:
-              - '.github/workflows/**'
-
       - name: Verify action pins
-        if: ${{ github.event_name != 'pull_request' || steps.paths.outputs.workflows == 'true' }}
         run: node scripts/update-action-pins.mjs --check-pins
 
   viable-release:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['viable-release']) }}
     name: viable-release
 
     # begin macro
@@ -481,6 +470,10 @@ jobs:
         platform: [ubuntu-latest]
 
     steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -519,6 +512,8 @@ jobs:
         run: yarn smoketest:publish
 
   test-xs:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['test-xs']) }}
     name: test-xs
 
     # begin macro
@@ -528,8 +523,13 @@ jobs:
     # may include release tags and hashes
     env:
       MODDABLE_VERSION: 9.0.0
+      CI_PACKAGES: ${{ needs.changes.outputs.packages }}
 
     steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -612,14 +612,20 @@ jobs:
         working-directory: endo
         run: |
           PATH=$PATH:$GITHUB_WORKSPACE/bin
-          yarn test:xs
+          python3 scripts/run-ci-task.py test:xs
 
   build-xsnap:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['build-xsnap']) }}
     name: build-xsnap
 
     runs-on: ubuntu-latest
 
     steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -674,19 +680,20 @@ jobs:
         # green pass with no error (wave-3 finding).
         run: cargo test --locked -p endo --features ironhorse-engine --test ironhorse_store_worker
 
-  ironhorse-changes:
-    uses: $/.github/workflows/ironhorse-changes.yml
-
   # Skip entire jobs, including the runner matrix, on unrelated PRs/pushes.
   format-ironhorse:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['format-ironhorse']) }}
     name: format-ironhorse
-    needs: ironhorse-changes
-    if: needs.ironhorse-changes.outputs.engine == 'true'
 
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
     steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -715,10 +722,16 @@ jobs:
         run: cargo +1.88.0 fmt --manifest-path Cargo.toml --package ironhorse-store-sqlite -- --check
 
   test-thixotrope-ironhorse:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['test-thixotrope-ironhorse']) }}
     name: test-thixotrope-ironhorse
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -750,9 +763,9 @@ jobs:
 
   # Oracle-free suites share the same source/build-input change gate.
   test-ironhorse:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['test-ironhorse']) }}
     name: ${{ matrix.check }}
-    needs: ironhorse-changes
-    if: needs.ironhorse-changes.outputs.engine == 'true'
 
     strategy:
       fail-fast: false
@@ -772,6 +785,10 @@ jobs:
     timeout-minutes: 30
 
     steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -826,12 +843,16 @@ jobs:
           cargo test --locked "${flags[@]}" -p ironhorse-store-sqlite --features ironhorse-vm/store-integrity
 
   test-ironhorse-calibration:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['test-ironhorse-calibration']) }}
     name: test-ironhorse-calibration
-    needs: ironhorse-changes
-    if: needs.ironhorse-changes.outputs.engine == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -853,11 +874,15 @@ jobs:
           grep -F 'consensus and cost-calibration are mutually exclusive' feature-conflict.log
 
   compare-ironhorse-math:
+    needs: [changes, test-ironhorse]
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['compare-ironhorse-math']) }}
     name: compare-ironhorse-math
-    needs: [ironhorse-changes, test-ironhorse]
-    if: needs.ironhorse-changes.outputs.engine == 'true'
     runs-on: ubuntu-latest
     steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -881,14 +906,18 @@ jobs:
 
   # Oracle tests additionally depend on the pinned XS and bridge inputs.
   test-ironhorse-oracle:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['test-ironhorse-oracle']) }}
     name: test-ironhorse-oracle
-    needs: ironhorse-changes
-    if: needs.ironhorse-changes.outputs.oracle == 'true'
 
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
     steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -963,11 +992,17 @@ jobs:
           --repeat 3 --expectations ironhorse-262/expectations/ironhorse.txt
           ../../packages/test262-runner/test262/test/ironhorse
   test-ocapn-python:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['test-ocapn-python']) }}
     name: test-ocapn-python
 
     runs-on: ubuntu-latest
 
     steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
       - name: Checkout Endo
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -1043,11 +1078,17 @@ jobs:
           fi
 
   build-wasm:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['build-wasm']) }}
     name: build-wasm
 
     runs-on: ubuntu-latest
 
     steps:
+      - name: Require successful change detection
+        if: needs.changes.result != 'success'
+        run: exit 1
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

@@ -24,6 +24,11 @@
     "test:types": {
       "cache": false,
       "outputs": []
+    },
+    "test:xs": {
+      "cache": false,
+      "dependsOn": ["build", "^build"],
+      "outputs": []
     }
   }
 }
