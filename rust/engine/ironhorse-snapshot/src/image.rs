@@ -538,61 +538,49 @@ impl ValidatedSnapshot {
     }
 }
 
-impl MachineImage {
-    /// Build an image straight from a pair of arenas plus the stack and
-    /// symbol tables — the arena-(de)serialization surface. The caller
-    /// supplies the machine signature (its callback-table version).
-    pub fn from_arenas(
-        signature: Signature,
-        slots: &SlotArena,
-        chunks: &ChunkArena,
-        stack: &[Slot],
-        names: Vec<SymbolName>,
-        keys: Vec<String>,
-        symbols: SymbolKeyImage,
-    ) -> MachineImage {
-        MachineImage {
-            version: Version::current(),
-            signature,
-            creation: CreationParams {
-                initial_slot_count: slots.capacity(),
-                initial_chunk_bytes: chunks.byte_size() as u32,
-            },
-            chunks: chunks.raw_vec(),
-            slots: slots.records(),
-            slot_free: slots.free_list().to_vec(),
-            slot_live: slots.live_count(),
-            stack: stack.to_vec(),
-            keys,
-            names,
-            symbols,
-            meter: MeterImage::current(),
-            arrays: Vec::new(),
-            index_props: Vec::new(),
-            collections: Vec::new(),
-            registry: Vec::new(),
-            errors: Vec::new(),
-            buffers: Vec::new(),
-            typed_arrays: Vec::new(),
-            data_views: Vec::new(),
-            wrappers: Vec::new(),
-            regexps: Vec::new(),
-            dates: Vec::new(),
-            function_state: ironhorse_vm::FunctionStateSnapshot::default(),
-            proxy_state: ironhorse_vm::ProxyStateSnapshot::default(),
-            accessors: Vec::new(),
-            intl_bound_functions: Vec::new(),
-            private_elements: ironhorse_vm::PrivateElementSnapshot::default(),
-            disposable_stacks: Vec::new(),
-            generators: Vec::new(),
-            promise_cluster: ironhorse_vm::PromiseClusterSnapshot::default(),
-            arguments_brands: Vec::new(),
-            temporal: TemporalImage::default(),
-            intl: IntlTables::default(),
-            iterators: Vec::new(),
-            name_floor: None,
+macro_rules! define_image_constructor {
+    ($($section:ident {
+        image_field: $field:ident,
+        live: [$($live_field:ident: $ty:ty => ($interp:ident, $dirty:ident) $extract:block)?],
+        $($rest:tt)*
+    })*) => {
+        /// Build an image straight from a pair of arenas plus the stack and
+        /// symbol tables — the arena-(de)serialization surface. The caller
+        /// supplies the machine signature (its callback-table version).
+        pub fn from_arenas(
+            signature: Signature,
+            slots: &SlotArena,
+            chunks: &ChunkArena,
+            stack: &[Slot],
+            names: Vec<SymbolName>,
+            keys: Vec<String>,
+            symbols: SymbolKeyImage,
+        ) -> MachineImage {
+            MachineImage {
+                version: Version::current(),
+                signature,
+                creation: CreationParams {
+                    initial_slot_count: slots.capacity(),
+                    initial_chunk_bytes: chunks.byte_size() as u32,
+                },
+                chunks: chunks.raw_vec(),
+                slots: slots.records(),
+                slot_free: slots.free_list().to_vec(),
+                slot_live: slots.live_count(),
+                stack: stack.to_vec(),
+                keys,
+                names,
+                symbols,
+                meter: MeterImage::current(),
+                $($($live_field: Default::default(),)?) *
+                name_floor: None,
+            }
         }
-    }
+    };
+}
+
+impl MachineImage {
+    crate::snapshot_roster::snapshot_payloads!(define_image_constructor);
 
     /// The first stored property id that is registered in NEITHER table —
     /// not a `names` position (string keys live IN the table since the
