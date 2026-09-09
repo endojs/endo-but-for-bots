@@ -9812,3 +9812,209 @@ mod promise_decoder_refusals {
         }
     }
 }
+
+#[cfg(test)]
+mod object_semantic_refusals {
+    use super::*;
+    use ironhorse_vm::value::SlotIndex;
+    use ironhorse_vm::{
+        AccessorRow, DisposableStackRow, DisposalRecordRow, PrivateAccessorRow,
+        PrivateElementSnapshot, PrivateValueRow, ProxyRevokerRow, ProxyRow, ProxyStateSnapshot,
+    };
+
+    fn reference() -> Slot {
+        Slot::of(Kind::Reference, Payload::Reference(SlotIndex(7)))
+    }
+    fn check(lang: &LangRows<'_>) -> Result<(), SnapshotError> {
+        check_image_slot_bounds(
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            lang,
+            &[],
+            4,
+            &SymbolKeyImage::default(),
+            8,
+            0,
+            &[],
+        )
+    }
+
+    #[test]
+    fn revoked_proxy_and_revoker_targets() {
+        let mut state = ProxyStateSnapshot {
+            proxies: vec![ProxyRow {
+                owner: 1,
+                target: u32::MAX,
+                handler: u32::MAX,
+                revoked: true,
+            }],
+            revokers: vec![ProxyRevokerRow {
+                owner: 2,
+                proxy: 1,
+                name_chunk: u32::MAX,
+            }],
+        };
+        let check_state = |state: &ProxyStateSnapshot| {
+            check(&LangRows {
+                proxy_state: state,
+                ..LangRows::EMPTY
+            })
+        };
+        assert_eq!(check_state(&state), Ok(()));
+        for handler in [false, true] {
+            let mut invalid = state.clone();
+            if handler {
+                invalid.proxies[0].handler = 3;
+            } else {
+                invalid.proxies[0].target = 3;
+            }
+            assert_eq!(
+                check_state(&invalid),
+                Err(SnapshotError::Corrupt(
+                    "proxy state: revoked proxy retains target or handler"
+                ))
+            );
+        }
+        state.revokers[0].proxy = 3;
+        assert_eq!(
+            check_state(&state),
+            Err(SnapshotError::Corrupt("proxy revoker names no proxy row"))
+        );
+        state.revokers[0].proxy = 1;
+        state.proxies[0].revoked = false;
+        state.proxies[0].target = 3;
+        state.proxies[0].handler = 4;
+        assert_eq!(check_state(&state), Ok(()));
+    }
+
+    #[test]
+    fn accessor_keys_and_callback_shapes() {
+        let valid = AccessorRow {
+            owner: 1,
+            id: 4,
+            get: Some(reference()),
+            set: Some(reference()),
+        };
+        let check_row = |row: &AccessorRow| {
+            check(&LangRows {
+                accessors: std::slice::from_ref(row),
+                ..LangRows::EMPTY
+            })
+        };
+        assert_eq!(check_row(&valid), Ok(()));
+        for id in [0, 5] {
+            let mut invalid = valid.clone();
+            invalid.id = id;
+            assert_eq!(
+                check_row(&invalid),
+                Err(SnapshotError::Corrupt(
+                    "accessor state: id outside the property-key tables"
+                ))
+            );
+        }
+        for setter in [false, true] {
+            let mut invalid = valid.clone();
+            if setter {
+                invalid.set = Some(Slot::integer(1));
+            } else {
+                invalid.get = Some(Slot::integer(1));
+            }
+            assert_eq!(
+                check_row(&invalid),
+                Err(SnapshotError::Corrupt(
+                    "accessor state: getter or setter is not callable"
+                ))
+            );
+        }
+        let mut absent = valid;
+        absent.get = None;
+        absent.set = None;
+        assert_eq!(check_row(&absent), Ok(()));
+    }
+
+    #[test]
+    fn private_key_collisions_and_callback_shapes() {
+        let valid = PrivateElementSnapshot {
+            values: vec![PrivateValueRow {
+                receiver: 1,
+                brand: 2,
+                value: Slot::integer(3),
+            }],
+            accessors: vec![PrivateAccessorRow {
+                receiver: 1,
+                brand: 3,
+                get: Some(reference()),
+                set: Some(reference()),
+            }],
+        };
+        let check_state = |state: &PrivateElementSnapshot| {
+            check(&LangRows {
+                private_elements: state,
+                ..LangRows::EMPTY
+            })
+        };
+        assert_eq!(check_state(&valid), Ok(()));
+        let mut invalid = valid.clone();
+        invalid.accessors[0].brand = 2;
+        assert_eq!(
+            check_state(&invalid),
+            Err(SnapshotError::Corrupt(
+                "private elements: key has both value and accessor rows"
+            ))
+        );
+        for setter in [false, true] {
+            let mut invalid = valid.clone();
+            if setter {
+                invalid.accessors[0].set = Some(Slot::integer(1));
+            } else {
+                invalid.accessors[0].get = Some(Slot::integer(1));
+            }
+            assert_eq!(
+                check_state(&invalid),
+                Err(SnapshotError::Corrupt(
+                    "private accessors: getter or setter is not callable"
+                ))
+            );
+        }
+        let mut absent = valid;
+        absent.accessors[0].get = None;
+        absent.accessors[0].set = None;
+        assert_eq!(check_state(&absent), Ok(()));
+    }
+
+    #[test]
+    fn disposal_methods_require_callback_references() {
+        let mut row = DisposableStackRow {
+            owner: 1,
+            disposed: false,
+            asynchronous: false,
+            records: vec![DisposalRecordRow {
+                resource: Slot::integer(1),
+                method: reference(),
+                pass_resource: false,
+            }],
+        };
+        let check_row = |row: &DisposableStackRow| {
+            check(&LangRows {
+                disposable_stacks: std::slice::from_ref(row),
+                ..LangRows::EMPTY
+            })
+        };
+        assert_eq!(check_row(&row), Ok(()));
+        row.records[0].method = Slot::integer(1);
+        assert_eq!(
+            check_row(&row),
+            Err(SnapshotError::Corrupt(
+                "disposable stacks: disposal method is not callable"
+            ))
+        );
+    }
+}
