@@ -1119,3 +1119,13 @@ The timed checkpoints therefore receive different heap geometry despite identica
 fixture source; row counts alone do not measure encoded bytes or total work.
 This identifies a comparison difference, not the cause or size of the regression.
 The failed gate and the extent-local policy's retained machinery remain in force.
+
+[Checkpoint phase diagnostics](results/1a-checkpoint-phase-profile.json) retain a
+single instrumented run of `47ea1856b`, including the patch and complete output.
+For 8,000 front-garbage rows, component medians were 2.770 ms for the session ledger
+and reseal, 2.940 ms for the store commit, and 0.009 ms for manifest construction,
+page-edge summaries, and dirty slot/chunk encoding and copying.
+These localize current checkpoint cost; they do not compare revisions or explain
+the regression, and instrumentation perturbs the executable.
+The backend's independent admission and authentication remain required.
+The diagnostic's outer fixture timings include logging and are not acceptance data.
