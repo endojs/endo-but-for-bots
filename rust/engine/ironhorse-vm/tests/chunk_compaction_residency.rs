@@ -42,7 +42,7 @@ fn no_op_compaction_reads_only_the_header_extent_of_a_large_live_block() {
         reads: Cell::new(0),
     });
     let mut chunks = ChunkArena::lazy_from_parts(plain.byte_size(), source.clone());
-    assert_eq!(chunks.compact(&[live])[&live], live);
+    assert!(chunks.compact(&[live]).is_empty());
     assert_eq!(source.reads.get(), 1);
     assert_eq!(chunks.resident_extent_count(), 0);
     assert!(chunks.dirty_extents().is_empty());
@@ -84,9 +84,7 @@ fn append_and_repeat_compaction_before_advancing_backing() {
 fn already_compact_and_tail_only_collections_keep_cold_extents_cold() {
     let (mut chunks, source, offsets) = fixture();
     let remap = chunks.compact(&offsets);
-    for offset in &offsets {
-        assert_eq!(remap[offset], *offset);
-    }
+    assert!(remap.is_empty());
     assert_eq!(chunks.resident_extent_count(), 0);
     assert!(chunks.dirty_extents().is_empty());
     assert!(
@@ -114,6 +112,8 @@ fn moved_extents_remain_unbacked_until_their_own_checkpoint() {
     let (mut chunks, source, offsets) = fixture();
     let live = [offsets[0], offsets[2], offsets[3]];
     let remap = chunks.compact(&live);
+    assert_eq!(remap.len(), 2);
+    assert!(!remap.contains_key(&offsets[0]));
     assert_eq!(chunks.resident_extent_count(), 2);
     assert_eq!(chunks.dirty_extents(), vec![1, 2]);
     assert!(!chunks.evict_extent(1));
@@ -122,7 +122,7 @@ fn moved_extents_remain_unbacked_until_their_own_checkpoint() {
     assert!(!chunks.evict_extent(2));
     for (offset, value) in [(offsets[0], 1), (offsets[2], 3), (offsets[3], 4)] {
         assert_eq!(
-            &*chunks.payload(remap[&offset]),
+            &*chunks.payload(remap.get(&offset).copied().unwrap_or(offset)),
             &vec![value; CHUNK_EXTENT_BYTES as usize - 4]
         );
     }
@@ -270,7 +270,8 @@ fn repeated_cross_extent_compactions_match_packed_model_and_checkpoint_twins() {
         for (offset, payload) in &mut records {
             packed_len += 4;
             let next = ChunkOffset(packed_len as u32);
-            assert_eq!(remap[offset], next);
+            assert_eq!(remap.get(offset).copied().unwrap_or(*offset), next);
+            assert_eq!(remap.contains_key(offset), *offset != next);
             assert_eq!(&*lazy.payload(next), payload);
             packed_len += payload.len();
             *offset = next;

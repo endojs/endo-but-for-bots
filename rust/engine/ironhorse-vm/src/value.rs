@@ -1881,8 +1881,9 @@ impl ChunkArena {
 
     /// Slide-compact: keep only the blocks whose payload offsets are in
     /// `live`, packing them to the front of the arena in ascending
-    /// offset order, and return the old→new payload-offset remap the
-    /// caller applies to every live `ChunkOffset` (design § Value and
+    /// offset order, and return the old→new payload-offset remap for blocks
+    /// that moved. An absent entry means the offset is unchanged. The
+    /// caller applies these entries to every live `ChunkOffset` (design § Value and
     /// heap model: "offsets are rewritten exactly where XS rewrites
     /// pointers"). Duplicate and null offsets in `live` are ignored.
     /// Every other offset must name an actual payload boundary; invalid
@@ -1950,7 +1951,7 @@ impl ChunkArena {
         // the output without requiring either arena to be fully resident.
         let mut runs = Vec::with_capacity(seen.len());
         let mut new_len = 0usize;
-        let mut remap = HashMap::with_capacity(seen.len());
+        let mut remap = HashMap::new();
         while header < total {
             let payload = header
                 .checked_add(CHUNK_HEADER)
@@ -1974,7 +1975,9 @@ impl ChunkArena {
                 let old = seen[matched];
                 let new_payload = u32::try_from(new_len + CHUNK_HEADER)
                     .expect("compacted chunk offset exceeds address space");
-                remap.insert(old, ChunkOffset(new_payload));
+                if old.0 != new_payload {
+                    remap.insert(old, ChunkOffset(new_payload));
+                }
                 runs.push((new_len, header, end - header));
                 new_len += end - header;
                 matched += 1;

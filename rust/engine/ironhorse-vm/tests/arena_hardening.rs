@@ -177,7 +177,7 @@ fn compact_refuses_interior_offsets_before_changing_bytes() {
     }
     // Valid duplicates and NULL still work after the failed collection.
     let remap = chunks.compact(&[tail, live, live, ChunkOffset::NULL]);
-    assert_eq!(remap.len(), 2);
-    assert_eq!(&*chunks.payload(remap[&live]), &[0; 16]);
-    assert_eq!(&*chunks.payload(remap[&tail]), b"tail");
+    assert!(remap.is_empty());
+    assert_eq!(&*chunks.payload(live), &[0; 16]);
+    assert_eq!(&*chunks.payload(tail), b"tail");
 }
