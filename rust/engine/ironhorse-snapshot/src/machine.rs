@@ -296,279 +296,69 @@ fn ungated_image(interp: &Interp, signature: &Signature) -> MachineImage {
 /// `TypedArrays`/`DataViews`/`Dates`), converted from the vm's tuple
 /// snapshots into the image structs, in the vm's canonical
 /// (ascending) order.
-struct SideTableImages {
-    arrays: Vec<crate::image::ArrayImage>,
-    index_props: Vec<crate::image::IndexPropsImage>,
-    collections: Vec<crate::image::CollectionImage>,
-    registry: Vec<crate::image::RegistryImage>,
-    errors: Vec<crate::image::ErrorImage>,
-    buffers: Vec<crate::image::BufferImage>,
-    typed_arrays: Vec<crate::image::TypedArrayImage>,
-    data_views: Vec<crate::image::DataViewImage>,
-    wrappers: Vec<crate::image::WrapperImage>,
-    regexps: Vec<crate::image::RegExpImage>,
-    dates: Vec<crate::image::DateImage>,
-    function_state: ironhorse_vm::FunctionStateSnapshot,
-    proxy_state: ironhorse_vm::ProxyStateSnapshot,
-    accessors: Vec<ironhorse_vm::AccessorRow>,
-    intl_bound_functions: Vec<ironhorse_vm::IntlBoundFunctionRow>,
-    private_elements: ironhorse_vm::PrivateElementSnapshot,
-    disposable_stacks: Vec<ironhorse_vm::DisposableStackRow>,
-    generators: Vec<ironhorse_vm::GeneratorRow>,
-    promise_cluster: ironhorse_vm::PromiseClusterSnapshot,
-    arguments_brands: Vec<u32>,
-    temporal: crate::image::TemporalImage,
-    intl: ironhorse_vm::IntlTables,
-    iterators: Vec<ironhorse_vm::IteratorRow>,
+macro_rules! define_live_side_tables {
+    ($($section:ident {
+        image_field: $field:ident,
+        live: [$($live_field:ident: $ty:ty => ($interp:ident, $dirty:ident) $extract:block)?],
+        $($rest:tt)*
+    })*) => {
+        struct SideTableImages {
+            $($($live_field: $ty,)?) *
+        }
+        fn side_tables_of_selected(
+            interp: &Interp,
+            dirty: ironhorse_vm::SnapshotDirty,
+        ) -> SideTableImages {
+            SideTableImages {
+                $($($live_field: {
+                    let $interp = interp;
+                    let $dirty = dirty;
+                    $extract
+                },)?) *
+            }
+        }
+        /// The machine's small state, mirroring [`MachineSnapshot::snapshot_image`]
+        /// exactly (the KEYS section is retired — string keys travel inside the
+        /// NAME table since the id-space unification; the ledger rows — arrays,
+        /// collections, registry since schema 7 and errors since schema 9 —
+        /// travel alongside, and the symbol-key table travels in the symbols
+        /// section).
+        fn small_state_of(interp: &Interp, dirty: ironhorse_vm::SnapshotDirty) -> SmallState {
+            let tables = side_tables_of_selected(interp, dirty);
+            let (next_id, pairs) = if dirty.contains(ironhorse_vm::SnapshotSection::Symbols) {
+                interp.symbol_key_table()
+            } else {
+                Default::default()
+            };
+            SmallState {
+                $($($live_field: tables.$live_field,)?) *
+                stack: interp.stack_slots().to_vec(),
+                slot_free: Vec::new(),
+                keys: Vec::new(),
+                names: if dirty.contains(ironhorse_vm::SnapshotSection::Names) {
+                    #[cfg(test)]
+                    extraction_counts::record(ironhorse_vm::SnapshotSection::Names);
+                    interp.program_symbol_names().to_vec()
+                } else {
+                    Vec::new()
+                },
+                symbols: crate::image::SymbolKeyImage { next_id, pairs },
+                meter: MeterImage::of(interp.meter_state()),
+                // Canonicalized like `with_name_floor`: a floor at the table
+                // length is the restore default and travels as `None`.
+                name_floor: {
+                    let floor = interp.installed_names_floor();
+                    (floor as usize != interp.program_symbol_names().len()).then_some(floor)
+                },
+            }
+        }
+
+    };
 }
+crate::snapshot_roster::snapshot_payloads!(define_live_side_tables);
 
 fn side_tables_of(interp: &Interp) -> SideTableImages {
     side_tables_of_selected(interp, ironhorse_vm::SnapshotDirty::all())
-}
-
-fn side_tables_of_selected(interp: &Interp, dirty: ironhorse_vm::SnapshotDirty) -> SideTableImages {
-    use ironhorse_vm::SnapshotSection as S;
-    let arrays = if dirty.contains(S::Arrays) {
-        #[cfg(test)]
-        extraction_counts::record(S::Arrays);
-        interp
-            .arrays_snapshot()
-            .into_iter()
-            .map(|(owner, length, items)| crate::image::ArrayImage {
-                owner,
-                length,
-                items,
-            })
-            .collect()
-    } else {
-        Default::default()
-    };
-    let index_props = if dirty.contains(S::IndexProperties) {
-        interp
-            .index_props_snapshot()
-            .into_iter()
-            .map(|(owner, high_water, items)| crate::image::IndexPropsImage {
-                owner,
-                high_water,
-                items,
-            })
-            .collect()
-    } else {
-        Default::default()
-    };
-    let collections = if dirty.contains(S::Collections) {
-        #[cfg(test)]
-        extraction_counts::record(S::Collections);
-        interp
-            .collections_snapshot()
-            .into_iter()
-            .map(
-                |(owner, kind, table_length, entries)| crate::image::CollectionImage {
-                    owner,
-                    kind,
-                    table_length,
-                    entries,
-                },
-            )
-            .collect()
-    } else {
-        Default::default()
-    };
-    let registry = if dirty.contains(S::Registry) {
-        interp
-            .symbol_registry_snapshot()
-            .into_iter()
-            .map(|(key, descriptor)| crate::image::RegistryImage { key, descriptor })
-            .collect()
-    } else {
-        Default::default()
-    };
-    let errors = if dirty.contains(S::Errors) || dirty.contains(S::ErrorFrames) {
-        interp
-            .errors_snapshot()
-            .into_iter()
-            .map(|(owner, name, message, frames)| crate::image::ErrorImage {
-                owner,
-                name: name.to_string(),
-                message,
-                frames,
-            })
-            .collect()
-    } else {
-        Default::default()
-    };
-    let buffers = if dirty.contains(S::Buffers) {
-        interp
-            .array_buffers_snapshot()
-            .into_iter()
-            .map(|(owner, data, length, flags)| crate::image::BufferImage {
-                owner,
-                data,
-                length,
-                flags,
-            })
-            .collect()
-    } else {
-        Default::default()
-    };
-    let typed_arrays = if dirty.contains(S::TypedArrays) {
-        interp
-            .typed_arrays_snapshot()
-            .into_iter()
-            .map(
-                |(owner, kind, buffer, offset, length)| crate::image::TypedArrayImage {
-                    owner,
-                    kind,
-                    buffer,
-                    offset,
-                    length,
-                },
-            )
-            .collect()
-    } else {
-        Default::default()
-    };
-    let data_views = if dirty.contains(S::DataViews) {
-        interp
-            .data_views_snapshot()
-            .into_iter()
-            .map(
-                |(owner, buffer, offset, size)| crate::image::DataViewImage {
-                    owner,
-                    buffer,
-                    offset,
-                    size,
-                },
-            )
-            .collect()
-    } else {
-        Default::default()
-    };
-    let wrappers = if dirty.contains(S::Wrappers) {
-        interp
-            .wrappers_snapshot()
-            .into_iter()
-            .map(|(owner, value)| crate::image::WrapperImage { owner, value })
-            .collect()
-    } else {
-        Default::default()
-    };
-    let regexps = if dirty.contains(S::Regexps) {
-        interp
-            .regexps_snapshot()
-            .into_iter()
-            .map(
-                |(owner, source, flags, last_index_bits)| crate::image::RegExpImage {
-                    owner,
-                    source,
-                    flags,
-                    last_index_bits,
-                },
-            )
-            .collect()
-    } else {
-        Default::default()
-    };
-    let arguments_brands = if dirty.contains(S::ArgumentsBrands) {
-        interp.arguments_brands_snapshot()
-    } else {
-        Default::default()
-    };
-    let (instants, durations, plains, zoneds) = if dirty.contains(S::Temporal) {
-        interp.temporal_snapshot()
-    } else {
-        Default::default()
-    };
-    let temporal = crate::image::TemporalImage {
-        instants,
-        durations,
-        plains,
-        zoneds,
-    };
-    let intl = if dirty.contains(S::Intl) {
-        interp.intl_snapshot()
-    } else {
-        Default::default()
-    };
-    let iterators = if dirty.contains(S::Iterators) {
-        interp.iterators_snapshot()
-    } else {
-        Default::default()
-    };
-    let dates = if dirty.contains(S::Dates) {
-        interp
-            .dates_snapshot()
-            .into_iter()
-            .map(|(owner, value_bits)| crate::image::DateImage { owner, value_bits })
-            .collect()
-    } else {
-        Default::default()
-    };
-    let function_state = if dirty.contains(S::Functions) {
-        interp.function_state_snapshot()
-    } else {
-        Default::default()
-    };
-    let proxy_state = if dirty.contains(S::Proxies) {
-        interp.proxy_state_snapshot()
-    } else {
-        Default::default()
-    };
-    let accessors = if dirty.contains(S::Accessors) {
-        interp.accessors_snapshot()
-    } else {
-        Default::default()
-    };
-    let intl_bound_functions = if dirty.contains(S::IntlBoundFunctions) {
-        interp.intl_bound_functions_snapshot()
-    } else {
-        Default::default()
-    };
-    let private_elements = if dirty.contains(S::PrivateElements) {
-        interp.private_elements_snapshot()
-    } else {
-        Default::default()
-    };
-    let disposable_stacks = if dirty.contains(S::DisposableStacks) {
-        interp.disposable_stacks_snapshot()
-    } else {
-        Default::default()
-    };
-    let generators = if dirty.contains(S::Generators) {
-        interp.generators_snapshot()
-    } else {
-        Default::default()
-    };
-    let promise_cluster = if dirty.contains(S::Promises) || dirty.contains(S::AsyncInstances) {
-        interp.promise_cluster_snapshot()
-    } else {
-        Default::default()
-    };
-    SideTableImages {
-        arrays,
-        index_props,
-        collections,
-        registry,
-        errors,
-        buffers,
-        typed_arrays,
-        data_views,
-        wrappers,
-        regexps,
-        arguments_brands,
-        temporal,
-        intl,
-        iterators,
-        dates,
-        function_state,
-        proxy_state,
-        accessors,
-        intl_bound_functions,
-        private_elements,
-        disposable_stacks,
-        generators,
-        promise_cluster,
-    }
 }
 
 /// Reinstate the ledger side tables on a restored machine from their
@@ -1085,64 +875,6 @@ fn manifest_of(interp: &Interp, signature: &Signature, epoch: u64, cranks: u64) 
         parent_seal: String::new(),
         root: String::new(),
         seal: String::new(),
-    }
-}
-
-/// The machine's small state, mirroring [`MachineSnapshot::snapshot_image`]
-/// exactly (the KEYS section is retired — string keys travel inside the
-/// NAME table since the id-space unification; the ledger rows — arrays,
-/// collections, registry since schema 7 and errors since schema 9 —
-/// travel alongside, and the symbol-key table travels in the symbols
-/// section).
-fn small_state_of(interp: &Interp, dirty: ironhorse_vm::SnapshotDirty) -> SmallState {
-    let tables = side_tables_of_selected(interp, dirty);
-    let (next_id, pairs) = if dirty.contains(ironhorse_vm::SnapshotSection::Symbols) {
-        interp.symbol_key_table()
-    } else {
-        Default::default()
-    };
-    SmallState {
-        stack: interp.stack_slots().to_vec(),
-        slot_free: Vec::new(),
-        keys: Vec::new(),
-        names: if dirty.contains(ironhorse_vm::SnapshotSection::Names) {
-            #[cfg(test)]
-            extraction_counts::record(ironhorse_vm::SnapshotSection::Names);
-            interp.program_symbol_names().to_vec()
-        } else {
-            Vec::new()
-        },
-        symbols: crate::image::SymbolKeyImage { next_id, pairs },
-        meter: MeterImage::of(interp.meter_state()),
-        arrays: tables.arrays,
-        index_props: tables.index_props,
-        collections: tables.collections,
-        registry: tables.registry,
-        errors: tables.errors,
-        buffers: tables.buffers,
-        typed_arrays: tables.typed_arrays,
-        data_views: tables.data_views,
-        wrappers: tables.wrappers,
-        regexps: tables.regexps,
-        dates: tables.dates,
-        function_state: tables.function_state,
-        proxy_state: tables.proxy_state,
-        accessors: tables.accessors,
-        intl_bound_functions: tables.intl_bound_functions,
-        private_elements: tables.private_elements,
-        disposable_stacks: tables.disposable_stacks,
-        generators: tables.generators,
-        promise_cluster: tables.promise_cluster,
-        arguments_brands: tables.arguments_brands,
-        temporal: tables.temporal,
-        intl: tables.intl,
-        iterators: tables.iterators,
-        // Canonicalized like `with_name_floor`: a floor at the table
-        // length is the restore default and travels as `None`.
-        name_floor: {
-            let floor = interp.installed_names_floor();
-            (floor as usize != interp.program_symbol_names().len()).then_some(floor)
-        },
     }
 }
 
