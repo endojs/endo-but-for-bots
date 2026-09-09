@@ -286,22 +286,30 @@ test.serial(
     /** @type {Uint8Array} */
     let original = new Uint8Array();
     await t.throwsAsync(
-      () =>
-        f.restart(false, async () => {
+      async () => {
+        await f.restart(false, async () => {
           const ref = f.store.provideWorkerStore(f.ownerId).getMeta()
             .snapshot?.ref;
           t.is(typeof ref, 'string');
           imagePath = join(f.statePath, 'heaps', 'snapshots', `${ref}.sqlite`);
           original = await readFile(imagePath);
           await appendFile(imagePath, 'corrupt');
-        }),
+        });
+        // Startup wakes workers with a journal suffix. A fully checkpointed
+        // owner stays asleep, so explicitly request its image in that case.
+        await f.daemon.getWorker(f.ownerId).wake();
+      },
       { message: /digest mismatch/ },
     );
+    // Stop any healthy workers that startup resumed. A failed image load
+    // must not leave an untracked incarnation behind after daemon cleanup.
+    await f.daemon.crash();
     t.deepEqual(await readdir(join(f.statePath, 'heaps', 'incarnations')), []);
-    // Startup refuses an unusable recovery image and releases ownership.
+    // Loading refuses an unusable recovery image and cleanup releases ownership.
     // Restoring the immutable image permits a fresh startup to recover work.
     await writeFile(imagePath, original);
     await f.restart(true);
+    t.is(await f.daemon.getWorker(f.ownerId).evaluate('40 + 2'), 42);
     t.is(await f.daemon.getWorker(f.guestId).evaluate('6 * 7'), 42);
   },
 );
