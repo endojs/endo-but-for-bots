@@ -127,9 +127,47 @@ journal snapshot exists.
 The conversation tree commits a hosted logical turn as one node after the
 backend terminal succeeds.
 Failed and cancelled turns are not presented as successful history.
-Provider-backed turns use the same rule: intermediate assistant/tool messages
-remain in memory and the complete logical turn plus cumulative usage is added
-to the tree once, only after a final answer is available.
+Provider-backed turns use the same completed-node rule, but a separate append-only
+turn journal records dispatch, Endo tool intent **before execution**, tool outcomes,
+and terminal disposition for every backend.
+Native runtime tool events are recorded as observed activity: their arrival is
+not proof of a write-ahead barrier inside the native runtime.
+Uncorrelated observations and Endo execution records are retained separately and
+labeled as potentially describing the same operation, not proof of duplicate effects.
+`getTurns()` exposes those two kinds of evidence separately, with completed,
+failed, cancelled, pending, or outcome-unknown state.
+`getHistory()` merges the journal and conversation tree chronologically, including
+failed-turn tool evidence and explicit error/status messages.
+An input-only mail node never suppresses the journal's later tool evidence.
+Provider context includes known effects from failed turns; hosted prompts carry
+bounded recovery evidence after incomplete turns, since transcript rollback does
+not undo external effects.
+Truncated recovery evidence is explicitly marked and instructs the model to
+verify outcomes rather than repeat uncertain operations.
+
+A lost result, unfinished recovered dispatch, or unconfirmed backend stop fences
+new dispatches.
+An abnormal stream or lost send response also leaves an unknown outcome even if
+interruption succeeds, since the missing events may conceal external effects.
+The legacy Claude client cannot confirm process exit: cancellation is therefore
+unknown rather than permission for automatic continuation.
+After independently checking external effects, an operator may call
+`resolveTurn(turnId, note)` on an idle session to acknowledge the uncertainty.
+This preserves the original outcome and adds a resolution; it never replays work.
+A storage-write failure poisons the current incarnation until revival can read
+the durable prefix.
+The journal is cooperative, single-writer session state in the guest petstore,
+not a tamper-resistant audit log against a guest endowed with store/remove/exec.
+It bounds replay to 10,000 events and each serialized event to 131,072 UTF-16 code
+units; exhaustion fails closed and requires an operator-managed new session or
+archival, not automatic deletion of evidence.
+Arbitrary tool output exceeding that bound is rejected, not silently truncated.
+Partial answer text and reported usage are retained on ordinary failure/cancel;
+individual text deltas are not write-ahead durable, so a process crash may lose
+the last streamed text while preserving already stored tool records.
+Session cumulative usage remains the completed-turn total; per-turn records also
+retain partial usage when the backend reports it.
+
 Opaque hosted backends must reconcile their own history before accepting the
 next turn.
 Before dispatch, Codex durably records the previous backend turn ID.
