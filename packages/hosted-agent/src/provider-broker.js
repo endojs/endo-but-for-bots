@@ -190,6 +190,27 @@ export const makeBrokerOAuthCredential = ({
 
   /** @type {Promise<{state: BrokerOAuthState, outcome: 'unchanged' | 'refreshed' | 'adopted'}> | undefined} */
   let refreshing;
+  /**
+   * The generation whose refresh token this credential spent without storing
+   * the result.
+   *
+   * Failing the request that discovered the lost write is not enough: the
+   * single-flight flag is cleared when that request settles, so the next one
+   * re-reads the same record and presents the same already-consumed token.
+   * Against a provider that invalidates a refresh token on use, that second
+   * presentation is the replay that revokes the whole grant — so the loss has
+   * to outlive the request, not just fail it.
+   *
+   * The record itself cannot carry this mark, because being unable to write
+   * the record is the very condition being marked. It is therefore in memory
+   * and bounded by the process: a broker restarted while a record is fenced
+   * will attempt one more exchange and can still trip replay detection once.
+   * Closing that would need a durable store this credential does not have, and
+   * saying so is more useful than implying the fence is complete.
+   *
+   * @type {bigint | undefined}
+   */
+  let consumedGeneration;
   /** @param {string} [rejected] */
   const exchange = rejected => {
     // Returned rather than read back out of `refreshing`, so the type is a
@@ -203,11 +224,18 @@ export const makeBrokerOAuthCredential = ({
       // is already spent; exchanging it again is the replay this guard
       // exists to prevent. Whatever is in the record now wins.
       const { state, generation } = await read();
+      // A record that moved on holds a different grant, so whatever was spent
+      // against the old one no longer describes what is stored.
+      if (consumedGeneration !== undefined && consumedGeneration !== generation)
+        consumedGeneration = undefined;
       if (!spent(state, rejected))
         return harden({
           state,
           outcome: /** @type {const} */ ('unchanged'),
         });
+      // Refusing to exchange is the point of the fence: the stored refresh
+      // token is known to be spent, and only a new grant can clear it.
+      consumedGeneration === undefined || Fail`Broker credential consumed`;
       const refreshToken =
         state.refreshToken ?? Fail`Broker credential expired`;
       const result = await E(refresh).refresh(
@@ -258,14 +286,16 @@ export const makeBrokerOAuthCredential = ({
           outcome: /** @type {const} */ ('refreshed'),
         });
       // Nothing stored the credential just minted, so it must not be handed
-      // out. Only a conflict means another writer stored something newer;
-      // any other failure means the record still holds the very refresh
-      // token this exchange just spent. That case is detected, not repaired:
-      // against a provider that invalidates a refresh token on use, the
-      // stored grant is now dead and an operator has to re-grant it. Failing
-      // here is what keeps the broker from presenting the spent token again
-      // and turning a lost write into a revoked grant.
-      conflicted || Fail`Broker credential rotation failed`;
+      // out. Only a conflict means another writer stored something newer; any
+      // other failure means the record still holds the very refresh token this
+      // exchange just spent. Fencing that generation is what keeps the *next*
+      // request from presenting it again — failing this one would only postpone
+      // the replay by a turn. The fence lifts when the record changes, which is
+      // the operator re-grant this situation requires.
+      if (!conflicted) {
+        consumedGeneration = generation;
+        Fail`Broker credential rotation failed`;
+      }
       const current = await read();
       // Adopting another writer's credential is only safe if it is usable:
       // returning one that is already expiring, or that is the very token an
