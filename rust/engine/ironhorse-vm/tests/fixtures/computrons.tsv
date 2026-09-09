@@ -50,3 +50,4 @@ bind-apply	function f(x,y){return x+y} f.bind(null,2).apply(null,[3])	return	5	5
 with	var x=1;with({x:3}){x+1}	return	4	2460744	37
 intl	new Intl.NumberFormat("en-US").format(123)	return	123	1197384	18
 temporal	Temporal.PlainDate.from("2026-09-08").year	return	2026	1066296	16
+transcendental-branch	var r=0; if(Math.sin(0.7)===0.644217687237691){for(var i=0;i<10;i++){r+=i}}else{r=-1} r	return	45	16566600	252

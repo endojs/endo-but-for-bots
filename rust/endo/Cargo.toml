@@ -7,7 +7,7 @@ edition = "2021"
 [dependencies.ironhorse-vm]
 path = '../engine/ironhorse-vm'
 optional = true
-features = ['store-integrity']
+features = ['store-integrity', 'consensus']
 
 [dependencies.ironhorse-compile]
 path = '../engine/ironhorse-compile'

@@ -694,6 +694,8 @@ jobs:
 
       - name: Verify shared IronHorse dependency resolutions
         run: |
+          rustc --edition 2021 --test rust/engine/ironhorse-fuzz/src/comparison.rs -o /tmp/ironhorse-comparison-test
+          /tmp/ironhorse-comparison-test
           python3 rust/engine/scripts/test-math-vectors.py
           python3 rust/engine/scripts/test-lockfile-agreement.py
           python3 rust/engine/scripts/check-lockfile-agreement.py
@@ -823,6 +825,33 @@ jobs:
           if [ "$PROFILE" = release ]; then flags+=(--release); fi
           cargo test --locked "${flags[@]}" -p ironhorse-store-sqlite --features ironhorse-vm/store-integrity
 
+  test-ironhorse-calibration:
+    name: test-ironhorse-calibration
+    needs: ironhorse-changes
+    if: needs.ironhorse-changes.outputs.engine == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Test instrumentation and frozen computrons
+        working-directory: rust/engine
+        env:
+          RUST_MIN_STACK: '33554432'
+        run: |
+          cargo test --locked -p ironhorse-vm --features cost-calibration --lib
+          cargo test --locked -p ironhorse-vm --features cost-calibration --test golden_computrons
+          cargo test --locked -p ironhorse-vm --features consensus --test golden_computrons
+      - name: Reject calibration in consensus builds
+        working-directory: rust/engine
+        run: |
+          if cargo check --locked -p ironhorse-vm --features consensus,cost-calibration > feature-conflict.log 2>&1; then
+            cat feature-conflict.log
+            exit 1
+          fi
+          grep -F 'consensus and cost-calibration are mutually exclusive' feature-conflict.log
+
   compare-ironhorse-math:
     name: compare-ironhorse-math
     needs: [ironhorse-changes, test-ironhorse]
@@ -839,7 +868,7 @@ jobs:
       - name: Compare Linux and macOS bits, and debug and release bits
         run: |
           status=0
-          python3 rust/engine/scripts/compare-math-vectors.py math-vectors/math-test-ironhorse/math-vector.tsv math-vectors/math-test-ironhorse-macos/math-vector.tsv math-platform-differences.tsv || status=1
+          python3 rust/engine/scripts/compare-math-vectors.py math-vectors/math-test-ironhorse/math-vector.tsv math-vectors/math-test-ironhorse-macos/math-vector.tsv math-platform-differences.tsv rust/engine/ironhorse-vm/tests/fixtures/math-platform-differences.tsv || status=1
           python3 rust/engine/scripts/compare-math-vectors.py math-vectors/math-test-ironhorse/math-vector.tsv math-vectors/math-test-ironhorse-release/math-vector.tsv math-profile-differences.tsv || status=1
           exit "$status"
       - name: Retain comparison evidence even on divergence

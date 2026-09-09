@@ -37,11 +37,13 @@ ironhorse-compile = { path = "../ironhorse-compile" }
 # Off by default. The determinism firewall (design
 # `designs/ironhorse-meter-opcode-cost-instrumentation.md` § firewall):
 # no default/release/snapshot/consensus build enables this; only the
-# dev-only calibration binary and the calibration CI job turn it on. With
+# test-ironhorse-calibration CI job and local instrumentation runs turn it on. With
 # the feature off the `CostRecorder` is a zero-sized no-op and the metered
 # hot loop is instruction-identical to the pre-instrumentation build.
 default = []
 cost-calibration = []
+# Shipping workers opt in; instrumentation cannot unify into this configuration.
+consensus = []
 # Validate counted bulk roots against a full walk before partial collection,
 # including release builds. The worker enables this integrity boundary.
 store-integrity = []
