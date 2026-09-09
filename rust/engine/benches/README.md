@@ -919,3 +919,29 @@ Their results and raw meter totals agree across revisions.
 Both reports and all ratios are retained; no repeat trials were selected.
 This incremental comparison does not replace outstanding full 1A performance
 acceptance against the original decomposition baseline.
+
+## Rejected Array native module extraction (1A, F142)
+
+[results/1a-array-module.json](results/1a-array-module.json) retains a rejected
+move of 89 Array methods into `interp/natives/array.rs`, compared with `6735e6ca8`.
+The embedded `candidate_patch` reproduces all six measured source files,
+including source-lock inputs and the ignored Array benchmark.
+All candidate runtime and test changes were reverted after measurement.
+All 28,690 moved Rust tokens matched after allowing scoped visibility and formatting;
+review independently verified leading comments and attributes against committed source.
+The engine CI suite passed 1,479 tests, SQLite passed 116 tests, and all 48
+post-move source-lock checks, strict VM Clippy, and the platform Math-vector check passed.
+
+The initial 48-control comparison failed nine metrics at the unchanged 1.25x gate.
+Front/tail sliding at 500 elements measured 2.004x/1.445x, at 2,000 elements
+1.315x/1.349x, and at 8,000 elements 1.321x/1.293x.
+GC enumeration at 20,000 elements measured 1.257x; placeholder allocation at
+1,000,000 and 4,000,000 elements measured 2.341x and 3.210x.
+A fixed three-trial audit alternated baseline/candidate order and retained all six runs.
+Its median comparisons failed all six sliding controls: 1.274x/1.271x at 500,
+1.311x/1.276x at 2,000, and 1.308x/1.303x at 8,000 elements.
+The five Array-specific controls ranged from 1.005x to 1.064x with identical
+post-drain results and raw meter totals; these do not override the general failures.
+No further trials were selected, and these observations establish no cause.
+This extraction is not accepted; full 1A decomposition and performance acceptance
+remain outstanding.
