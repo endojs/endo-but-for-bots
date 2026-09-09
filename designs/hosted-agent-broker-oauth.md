@@ -72,58 +72,92 @@ The one documented way to put a subscription behind a proxy is therefore to
 leave the subscription credential in the client — the posture this contract
 exists to forbid.
 
-### Codex with a ChatGPT subscription: blocked
+### Codex with a ChatGPT subscription: available, and this finding first got it wrong
 
-Codex does document an LLM-proxy configuration, and it does work with a ChatGPT
-sign-in.
-A custom provider takes a `base_url`, and among its authentication methods:
+**Correction (2026-09-09).** The first version of this document concluded that
+Codex offered no such configuration.
+That was wrong, and the way it was wrong is worth keeping: the search looked
+only at the configuration-file surface — `requires_openai_auth`, `env_key`,
+the credential helper — and concluded from their exclusivity that no path
+existed.
+It never examined the app-server auth protocol, even though
+`SUBSCRIPTION-AUTH.md` names a method from it by name, and this repository's
+own client test already answers that method.
 
-> **OpenAI authentication**: Set `requires_openai_auth = true` to use OpenAI
-> authentication. You can then sign in with ChatGPT or an API key. This is
-> useful when you access OpenAI models through an LLM proxy server. When
-> `requires_openai_auth = true`, Codex ignores `env_key`.
+Codex documents a mode whose entire purpose is a host application owning the
+ChatGPT auth lifecycle:
+
+> ChatGPT external tokens (`chatgptAuthTokens`) - experimental and intended for
+> host apps that already own the user's ChatGPT auth lifecycle.
 >
-> — [Codex authentication](https://learn.chatgpt.com/docs/auth), § Alternative
-> model providers
+> — [Codex app-server](https://learn.chatgpt.com/docs/app-server),
+> § Authentication modes
 
-The blocker is which side holds the credential in that mode.
-"OpenAI authentication" means the CLI authenticates the proxied request with
-its own sign-in, and that sign-in lives where the CLI runs:
-
-> Codex caches login details locally in a plaintext file at `~/.codex/auth.json`
-> or in your OS-specific credential store.
+> Use this experimental mode only when a host application owns the user's
+> ChatGPT auth lifecycle and supplies tokens directly.
 >
-> — [Codex authentication](https://learn.chatgpt.com/docs/auth)
+> — [Codex app-server](https://learn.chatgpt.com/docs/app-server),
+> § 3c) Log in with externally managed ChatGPT tokens (`chatgptAuthTokens`)
 
-So a broker can sit *in front of* subscription traffic, but only by being handed
-the reusable access and refresh tokens it was meant to replace.
-That fails both the token-free slice and this repository's explicit "with no
-`auth.json`".
+That is the broker, described by the vendor.
+The host supplies an access token; it holds the refresh token itself; and when
+the server sees a 401 it asks the host for a new one over
+`account/chatgptAuthTokens/refresh` rather than performing a login.
+The gate is `capabilities.experimentalApi = true` at `initialize`.
 
-The configurations that would leave the slice credential-free are the ones that
-are not ChatGPT-subscription mode.
-`env_key` supplies a provider API key from the environment, and the same
-sentence above says `requires_openai_auth` makes Codex ignore it — precedence,
-not a subscription.
-The command-backed credential helper is documented as exclusive with the rest
-("Do not combine with `env_key`, `experimental_bearer_token`, or
-`requires_openai_auth`"), so a broker-scoped bearer fetched by a helper puts
-Codex in a plain bearer mode and the broker would have to *substitute* a ChatGPT
-credential upstream.
-No vendor document describes or sanctions that.
+The repository had already closed this door from the wrong side.
+`packages/codex-sandbox/test/codex-client.test.js` pins the client to answer
+`account/chatgptAuthTokens/refresh` with JSON-RPC `-32601`, and
+`SUBSCRIPTION-AUTH.md` lists that method among app-server requests not exposed
+to the model-facing client.
+Both are right about the *model-facing* client, which must never hold or renew
+a credential.
+Neither is a reason for the *broker* not to answer it — and the broker
+answering it is the documented subscription path.
 
-Two adjacent documented shapes do not change the answer.
-A ChatGPT Enterprise workspace can mint an access token for non-interactive use
-(`printenv CODEX_ACCESS_TOKEN | codex login --with-access-token`), which is a
-login the CLI performs and therefore a credential in the slice, and it is an
-Enterprise feature rather than an individual subscription.
-Workload identity federation avoids storing an OpenAI credential, but it is the
-process environment that authenticates — "when the process selects workload
-identity, Codex rejects `codex login` and `codex logout` because the process
-environment controls authentication" — so the credential material still lands
-with the CLI, and it is again a managed-workspace path, not a subscription.
+What remains genuinely unsettled is narrower than "no path exists", and only
+the wire can settle it: whether `chatgptAuthTokens` accepts an individual
+Plus/Pro grant rather than a workspace one, whether app-server persists a
+host-supplied token or holds it in memory, and whether the experimental gate is
+acceptable to depend on.
+The slice does hold a short-lived access token in this shape, so "no reusable
+credential in the slice" is satisfied only in the sense that it cannot be
+renewed from inside; `SUBSCRIPTION-AUTH.md`'s literal "no `auth.json`" needs
+the persistence question answered before it can be claimed.
 
-### Claude Code with a Claude.ai subscription: blocked
+Two adjacent shapes were also mischaracterised here, and the corrections matter
+because both are closer to the goal than the original text allowed.
+
+Workload identity federation does **not** land credential material with the
+CLI:
+
+> Codex exchanges the upstream token and keeps the OpenAI access token in
+> memory. It does not write either credential to `auth.json`, the system
+> keyring, or `config.toml`.
+>
+> — [Codex workload identity federation](https://learn.chatgpt.com/docs/enterprise/workload-identity)
+
+with a token that "never lasts longer than one hour" and a refresh run by a
+trusted host process outside Codex's control — the documented
+short-lived-credential pattern, with a broker in all but name. It is a
+managed-workspace path rather than an individual subscription, which is why it
+does not settle the question, but the earlier claim about it was simply false.
+
+**An earlier revision of this document attributed to that page a sentence that
+does not appear on it**, about Codex rejecting `codex login` under workload
+identity. It was not a quotation of anything. It has been removed, and the
+quotations above were re-checked against the pages they cite. A fabricated
+citation in a document whose whole purpose is to record what the vendor
+actually supports is the worst failure this document can contain.
+
+Finally, `codex login --with-access-token` is not the only access-token form:
+the same page documents `CODEX_ACCESS_TOKEN` for callers that "prefer not to
+persist credentials on the machine", and `cli_auth_credentials_store =
+"ephemeral"` keeps credentials in memory for the current process only — a
+stronger guarantee than the `codexHomeAuthFile: 'absent'` probe, and one that
+also covers the keyring case that probe explicitly does not.
+
+### Claude Code with a Claude.ai subscription: still blocked for a third-party broker
 
 Anthropic documents the same fork and closes it from both ends.
 
@@ -192,20 +226,42 @@ be rejected.
 
 ### What that leaves
 
-There is no vendor-supported configuration, for either provider, in which the
-broker holds an individual subscription credential and the slice holds none.
-Under `SUBSCRIPTION-AUTH.md` both subscription modes therefore stay unavailable,
-and this document is the record of why rather than a silent `Fail` in a
-constructor.
+The original claim here — that neither vendor supports it — was wrong for Codex
+and overstated for Claude. What survives is narrower and provider-specific.
 
-The gap is narrow and specific, which is worth stating because it is what a
-future re-check should look for.
-For Codex: a custom-provider mode that combines a `base_url` with a credential
-the proxy holds and still bills the ChatGPT plan.
-For Claude Code: a documented gateway credential that does not displace the
-claude.ai login, or documented support for a gateway presenting a subscription
-credential such as a `setup-token` upstream.
-Either one turns this from a finding into an implementation.
+**Codex has a documented path**, `chatgptAuthTokens`, and the remaining
+questions are empirical rather than documentary: individual-plan acceptance,
+token persistence, and whether an experimental gate is acceptable to depend on.
+This is the one to pursue, and the work is a broker-side handler for
+`account/chatgptAuthTokens/refresh` — a method this repository currently
+answers with `-32601`.
+
+**Claude Code has no path for a third-party broker.** That is not the same as
+"no vendor supports it": Anthropic operates precisely this architecture on
+individual Pro and Max plans, in Claude Code on the web and in self-hosted
+environments, where the session authenticates with a short-lived,
+Anthropic-issued OAuth token that a runner refreshes and pushes to the session.
+The accurate statement is that no vendor exposes the broker role *to a third
+party* for an individual subscription, and that stays true.
+The nearest documented shape is a Claude apps gateway upstream with
+`auth.oauth_token`; what blocks it is that documentation is silent on whether a
+`setup-token` value is acceptable there, plus one positive obstacle — the OAuth
+capability that subscription auth requires is documented as attached by the
+client only on claude.ai-login sessions, so a gateway would have to synthesise
+it.
+
+Under `SUBSCRIPTION-AUTH.md`'s gate, Claude-subscription mode therefore stays
+unavailable, and Codex-subscription mode moves from "refused" to "unproven":
+the configuration exists, and what is missing is a live session, not a
+vendor's permission.
+
+The lesson about method is worth as much as the finding.
+The first pass searched one surface — the configuration file — and generalised
+its result to the whole product.
+The path it missed was in the app-server protocol, named in this repository's
+own requirements document, exercised by its own tests.
+A conclusion of the form "no configuration exists" is a claim about every
+surface, and is only as good as the least-examined one.
 
 ## What was built anyway, and why it is not speculative
 

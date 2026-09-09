@@ -6,7 +6,33 @@ Subscription authentication is a separate requirement.
 Hosted subscription mode remains disabled until the relevant stock CLI is
 proven to work through this boundary using a vendor-supported configuration.
 
-## Finding: both subscription modes remain unavailable (2026-09-08)
+## Finding: Codex has a documented path; Claude does not (revised 2026-09-09)
+
+**The 2026-09-08 finding below was wrong for Codex and is retained, corrected,
+because how it was wrong matters.**
+It searched the configuration-file surface only, and generalised "no
+configuration here" into "no configuration anywhere".
+Codex documents `chatgptAuthTokens`, an app-server login mode "intended for
+host apps that already own the user's ChatGPT auth lifecycle", in which the
+host supplies an access token, keeps the refresh token, and answers
+`account/chatgptAuthTokens/refresh` when the server sees a 401.
+That is this broker, described by the vendor — and this document already named
+that method, while `test/codex-client.test.js` already answers it with `-32601`.
+Refusing it for the *model-facing* client is right; nothing about that is a
+reason for the *broker* not to answer it.
+
+What is unresolved for Codex is now empirical, not documentary: whether an
+individual Plus/Pro grant is accepted, whether app-server persists a
+host-supplied token, and whether an experimental capability gate is acceptable
+to depend on. Those need a live session, not more reading.
+
+For Claude Code the original conclusion holds, in a narrower form: no vendor
+exposes the broker role *to a third party* for an individual subscription.
+Anthropic itself runs this architecture on Pro and Max plans in its own hosted
+and self-hosted environments, so it is not that the shape is unsupported —
+only that the role is not offered outward.
+
+## Superseded finding: both subscription modes remain unavailable (2026-09-08)
 
 The gate above was answered against current vendor documentation, and the
 answer is no for both providers.
@@ -15,7 +41,9 @@ documents it as carrying the *client's* credential: the one supported way to
 put a subscription behind a proxy is to leave the subscription credential in
 the client, which is the posture this contract exists to forbid.
 
-- **Codex.** A custom provider takes a `base_url`, and setting
+- **Codex.** *(Superseded: this examined only the configuration file. See the
+  revised finding above.)*
+  A custom provider takes a `base_url`, and setting
   `requires_openai_auth = true` is documented as "useful when you access OpenAI
   models through an LLM proxy server" with a ChatGPT sign-in.
   But in that mode the CLI authenticates with its own login, which is cached
