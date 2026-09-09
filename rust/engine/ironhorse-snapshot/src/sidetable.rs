@@ -587,7 +587,7 @@ mod tests {
     /// arena), and a renamed/removed field fails the reverse direction.
     #[test]
     fn ledger_classification_reconciles_with_the_interp_struct() {
-        let src = include_str!("../../ironhorse-vm/src/interp.rs");
+        let src = include_str!("../../ironhorse-vm/src/interp/boot.rs");
         let fields: Vec<&str> = ironhorse_vm::interp::INTERP_FIELDS
             .iter()
             .map(|(name, _)| *name)
