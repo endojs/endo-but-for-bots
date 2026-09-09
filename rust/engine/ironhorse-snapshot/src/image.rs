@@ -9681,6 +9681,129 @@ mod promise_decoder_refusals {
     }
 
     #[test]
+    fn async_activation_requires_one_anchor_and_a_live_capability_pair() {
+        use ironhorse_vm::{AsyncRow, FunctionRow, FunctionStateSnapshot, Opcode, SavedFrameRow};
+        let functions = FunctionStateSnapshot {
+            segments: vec![vec![Opcode::XS_CODE_UNDEFINED as u8]],
+            functions: vec![FunctionRow {
+                owner: 5,
+                segment: Some(0),
+                body_start: Some(0),
+                body_len: 1,
+                closures: 0,
+                name: "async".into(),
+                arity: 0,
+                name_chunk: u32::MAX,
+                is_generator: false,
+                home: 0,
+                class_derived: None,
+            }],
+            ..FunctionStateSnapshot::default()
+        };
+        let mut state = valid();
+        for function in &mut state.functions {
+            function.name_chunk = CHUNK_HEADER as u32;
+        }
+        state.promises[0].reactions.push(PromiseReactionRow {
+            kind: 3,
+            a: 4,
+            ..reaction()
+        });
+        state.async_instances.push(AsyncRow {
+            owner: 4,
+            result_promise: 1,
+            resolve: reference(2),
+            reject: reference(3),
+            frame: SavedFrameRow {
+                locals: vec![],
+                id_map: vec![],
+                args: vec![],
+                this_val: Slot::undefined(),
+                env: Slot::undefined(),
+                cur_func: 5,
+                cur_target: false,
+                target_func: u32::MAX,
+                strict: false,
+                result: Slot::undefined(),
+                stack_slice: vec![],
+                jumps: vec![],
+                resume_pc: 0,
+            },
+        });
+        let check = |state: &PromiseClusterSnapshot| {
+            let lang = LangRows {
+                promise_cluster: state,
+                function_state: &functions,
+                ..LangRows::EMPTY
+            };
+            check_image_slot_bounds(
+                &[],
+                &[],
+                &[],
+                &[],
+                &[],
+                &[],
+                &[],
+                &[],
+                &[],
+                &[],
+                &lang,
+                &[],
+                4,
+                &SymbolKeyImage::default(),
+                8,
+                CHUNK_HEADER,
+                &[],
+            )
+        };
+        assert_eq!(check(&state), Ok(()));
+        let mut invalid = state.clone();
+        invalid.async_instances.clear();
+        assert_eq!(
+            check(&invalid),
+            Err(SnapshotError::Corrupt(
+                "async reaction: missing or duplicate activation"
+            ))
+        );
+        invalid = state.clone();
+        invalid.promises[0]
+            .reactions
+            .push(state.promises[0].reactions[0]);
+        assert_eq!(
+            check(&invalid),
+            Err(SnapshotError::Corrupt(
+                "async reaction: missing or duplicate activation"
+            ))
+        );
+        for case in 0..12 {
+            invalid = state.clone();
+            match case {
+                0 => invalid.promises[0].reactions.clear(),
+                1 => invalid.async_instances[0].resolve = Slot::undefined(),
+                2 => invalid.async_instances[0].reject = Slot::undefined(),
+                3 => invalid.async_instances[0].resolve = reference(6),
+                4 => invalid.functions[0].promise = 6,
+                5 => invalid.functions[1].promise = 6,
+                6 => invalid.functions[0].reject = true,
+                7 => invalid.functions[1].reject = false,
+                8 => invalid.functions[1].guard = 1,
+                9 => invalid.guards.clear(),
+                10 => invalid.guards[0] = true,
+                11 => invalid.promises[0].owner = 6, // anchor exists, result promise does not
+                _ => unreachable!(),
+            }
+            assert_eq!(
+                check(&invalid),
+                Err(SnapshotError::Corrupt(
+                    "async activation: invalid promise capability or anchor"
+                )),
+                "case {case}"
+            );
+        }
+        assert_eq!(check(&state), Ok(()));
+    }
+
+    #[test]
     fn capability_capture_fields_must_initialize_together() {
         let state = PromiseClusterSnapshot {
             functions: vec![PromiseFnRow {
