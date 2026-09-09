@@ -2230,6 +2230,108 @@ mod tests {
     }
 
     #[test]
+    fn restore_boundary_reports_remaining_language_failures() {
+        use ironhorse_vm::value::SlotIndex;
+        use ironhorse_vm::{
+            BoundFunctionRow, IntlBoundFunctionRow, IteratorRow, Kind, Payload, PromiseReactionRow,
+            PromiseRow, SegmentsData, Slot,
+        };
+        assert_eq!(restore_rows(|_| {}), Ok(()));
+        assert_eq!(
+            restore_rows(|rows| rows.intl.segments.push((
+                1,
+                SegmentsData {
+                    units: vec![],
+                    segments: vec![(0, 1, false)],
+                    granularity: "grapheme".into(),
+                }
+            ))),
+            Err(SnapshotError::Corrupt(
+                "side-table restore: malformed intl record"
+            ))
+        );
+        assert_eq!(
+            restore_rows(|rows| rows.intl_bound_functions.push(IntlBoundFunctionRow {
+                kind: 255,
+                function: u32::MAX,
+                owner: 1,
+                name: "bad".into(),
+                name_chunk: u32::MAX,
+                arity: 0,
+            })),
+            Err(SnapshotError::Corrupt(
+                "side-table restore: malformed Intl bound-function state"
+            ))
+        );
+        assert_eq!(
+            restore_rows(
+                |rows| rows.function_state.bound_functions.push(BoundFunctionRow {
+                    owner: 1,
+                    target: 2,
+                    this_arg: Slot::undefined(),
+                    args: vec![],
+                })
+            ),
+            Err(SnapshotError::Corrupt(
+                "side-table restore: malformed retained function state"
+            ))
+        );
+        assert_eq!(
+            restore_rows(|rows| rows.promise_cluster.promises.push(PromiseRow {
+                owner: 1,
+                state: 255,
+                result: Slot::undefined(),
+                ever_handled: false,
+                reactions: vec![],
+            })),
+            Err(SnapshotError::Corrupt(
+                "side-table restore: malformed promise cluster"
+            ))
+        );
+        assert_eq!(
+            restore_rows(|rows| rows.promise_cluster.promises.push(PromiseRow {
+                owner: 1,
+                state: 0,
+                result: Slot::undefined(),
+                ever_handled: false,
+                reactions: vec![PromiseReactionRow {
+                    kind: 0,
+                    a: 0,
+                    b: 0,
+                    on_fulfilled: Slot::undefined(),
+                    on_rejected: Slot::undefined(),
+                    resolve: Slot::of(Kind::Reference, Payload::Reference(SlotIndex::NULL)),
+                    reject: Slot::of(Kind::Reference, Payload::Reference(SlotIndex::NULL)),
+                }],
+            })),
+            Err(SnapshotError::Corrupt(
+                "side-table restore: malformed promise capability"
+            ))
+        );
+        assert_eq!(
+            restore_rows(|rows| rows.temporal.plains.push((1, 255, 2026, [0; 8]))),
+            Err(SnapshotError::Corrupt(
+                "side-table restore: malformed temporal record"
+            ))
+        );
+        assert_eq!(
+            restore_rows(|rows| rows.iterators.push(IteratorRow {
+                owner: 1,
+                kind: 255,
+                iterable: 2,
+                index: 0,
+                done: false,
+                result: 3,
+                enum_keys: vec![],
+                str_bytes: vec![],
+            })),
+            Err(SnapshotError::Corrupt(
+                "side-table restore: malformed iterator cursor"
+            ))
+        );
+    }
+
+    #[test]
     fn checkpoint_refuses_a_legacy_ledger_then_rebuilds_without_losing_state() {
         use crate::store::{HeapStore, MemoryStore, RootLedger};
         let (code, symbols) = ironhorse_compile::compile_atoms("1").unwrap();
