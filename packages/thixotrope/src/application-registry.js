@@ -13,7 +13,12 @@ export const makeApplicationRegistry = (controller, inventory) => {
   return Far('Applications', {
     help: () =>
       'install(name, bundle, digest, grants), get(name), list(), remove(name). Installation captures its module and powers once.',
-    /** @param {string} name @param {string} bundle @param {string} digest @param {Array<[string, string]>} grants */
+    /**
+     * @param {string} name @param {string} bundle @param {string} digest @param {Array<[string, string]>} grants
+     * @param bundle
+     * @param digest
+     * @param grants
+     */
     install: (name, bundle, digest, grants) => {
       if (
         typeof name !== 'string' ||

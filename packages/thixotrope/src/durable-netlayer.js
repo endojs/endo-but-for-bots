@@ -1,5 +1,5 @@
 // @ts-check
-/* global setTimeout, clearTimeout, crypto */
+/** @import { NodePowers } from './platform/node-powers.js' */
 import { Fail } from '@endo/errors';
 import harden from '@endo/harden';
 
@@ -56,7 +56,7 @@ import harden from '@endo/harden';
  * @property {bigint} hubDelivery
  * @property {Frame[]} outbox
  * @property {Frame[]} inbox
- * @property {ReturnType<typeof setTimeout> | undefined} timer
+ * @property {ReturnType<NodePowers['timers']['setTimeout']> | undefined} timer
  * @property {number} delay
  */
 
@@ -69,7 +69,10 @@ const sequence = value => {
     Fail`Invalid delivery sequence`;
   return BigInt(/** @type {string} */ (value));
 };
-/** @param {Record<string, unknown>} header @param {Uint8Array} [payload] */
+/**
+ * @param {Record<string, unknown>} header @param {Uint8Array} [payload]
+ * @param payload
+ */
 const encode = (header, payload = new Uint8Array()) => {
   const head = encoder.encode(`${JSON.stringify({ v: version, ...header })}\n`);
   const bytes = new Uint8Array(head.length + payload.length);
@@ -77,13 +80,8 @@ const encode = (header, payload = new Uint8Array()) => {
   bytes.set(payload, head.length);
   return bytes;
 };
-const makeToken = () => {
-  const bytes = new Uint8Array(16);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
-};
-
 /**
+ * @param {Pick<NodePowers, 'randomBytes' | 'timers'>} powers
  * @param {object} options
  * @param {any} options.handlers
  * @param {any} options.logger
@@ -92,14 +90,25 @@ const makeToken = () => {
  * @param {number} [options.reconnectDelayMs]
  * @param {number} [options.maxReconnectDelayMs]
  */
-export const makeDurableNetLayer = async ({
-  handlers,
-  logger,
-  makeBaseNetlayer,
-  resumption,
-  reconnectDelayMs = 50,
-  maxReconnectDelayMs = 1000,
-}) => {
+export const makeDurableNetLayer = async (
+  powers,
+  {
+    handlers,
+    logger,
+    makeBaseNetlayer,
+    resumption,
+    reconnectDelayMs = 50,
+    maxReconnectDelayMs = 1000,
+  },
+) => {
+  const { setTimeout, clearTimeout } = powers.timers;
+  const makeToken = () => {
+    const bytes = powers.randomBytes(16);
+    return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join(
+      '',
+    );
+  };
+
   /** @type {Map<string, LogicalConnection>} */
   const sessions = new Map();
   /** @type {Map<any, LogicalConnection>} */
@@ -117,7 +126,11 @@ export const makeDurableNetLayer = async ({
   /** @type {any} */
   let netlayer;
 
-  /** @param {LogicalConnection} logical @param {Record<string, unknown>} header @param {Uint8Array} [payload] */
+  /**
+   * @param {LogicalConnection} logical @param {Record<string, unknown>} header @param {Uint8Array} [payload]
+   * @param header
+   * @param payload
+   */
   const writeWire = (logical, header, payload) => {
     if (!logical.transport || logical.transport.isDestroyed) return;
     try {
@@ -146,7 +159,10 @@ export const makeDurableNetLayer = async ({
     }
   };
 
-  /** @param {LogicalConnection} logical @param {unknown} scope */
+  /**
+   * @param {LogicalConnection} logical @param {unknown} scope
+   * @param scope
+   */
   const acceptPeerProfile = (logical, scope) => {
     if (scope !== 'restart' && scope !== 'process')
       throw Fail`Invalid acceptance durability`;
@@ -157,7 +173,10 @@ export const makeDurableNetLayer = async ({
     logical.peerDurability = scope;
   };
 
-  /** @param {LogicalConnection} logical @param {bigint} n */
+  /**
+   * @param {LogicalConnection} logical @param {bigint} n
+   * @param n
+   */
   const acknowledge = (logical, n) => {
     n <= logical.sendSeq || Fail`Acknowledgement exceeds issued sequence`;
     // Reordered old receipts do not regress the durable acceptance watermark.
@@ -167,7 +186,10 @@ export const makeDurableNetLayer = async ({
     logical.outbox = logical.outbox.filter(entry => entry.n > n);
   };
 
-  /** @param {LogicalConnection} logical @param {bigint} n */
+  /**
+   * @param {LogicalConnection} logical @param {bigint} n
+   * @param n
+   */
   const openFlow = (logical, n) => {
     n >= logical.ackSeq || Fail`Peer lost previously accepted deliveries`;
     acknowledge(logical, n);
@@ -192,7 +214,7 @@ export const makeDurableNetLayer = async ({
     logical.delay = Math.min(delay * 2, maxReconnectDelayMs);
     logical.timer = setTimeout(() => {
       logical.timer = undefined;
-      // eslint-disable-next-line no-use-before-define
+
       dial(logical);
     }, delay);
     if (typeof logical.timer === 'object') logical.timer.unref?.();
@@ -224,7 +246,10 @@ export const makeDurableNetLayer = async ({
     }
   };
 
-  /** @param {LogicalConnection} logical @param {boolean} [confirmed] */
+  /**
+   * @param {LogicalConnection} logical @param {boolean} [confirmed]
+   * @param confirmed
+   */
   const retire = (logical, confirmed = false) => {
     const wasDestroyed = logical.destroyed;
     if (!wasDestroyed && logical.durable) resumption?.onEnd(logical.token);
@@ -249,7 +274,12 @@ export const makeDurableNetLayer = async ({
     schedule(logical);
   };
 
-  /** @param {string} token @param {boolean} isOriginator @param {any} location @param {SessionRecord} [record] */
+  /**
+   * @param {string} token @param {boolean} isOriginator @param {any} location @param {SessionRecord} [record]
+   * @param isOriginator
+   * @param location
+   * @param record
+   */
   const makeLogical = (token, isOriginator, location, record) => {
     /** @type {LogicalConnection} */
     const logical = {
@@ -276,7 +306,10 @@ export const makeDurableNetLayer = async ({
       delay: reconnectDelayMs,
     };
     const ops = harden({
-      /** @param {Uint8Array} bytes @param {string} [hubSequence] */
+      /**
+       * @param {Uint8Array} bytes @param {string} [hubSequence]
+       * @param hubSequence
+       */
       write: (bytes, hubSequence) => {
         if (stopped || logical.destroyed) return false;
         if (
@@ -331,7 +364,11 @@ export const makeDurableNetLayer = async ({
   };
 
   const subHandlers = harden({
-    /** @param {any} layer @param {boolean} isOutgoing @param {any} socket */
+    /**
+     * @param {any} layer @param {boolean} isOutgoing @param {any} socket
+     * @param isOutgoing
+     * @param socket
+     */
     makeConnection: (layer, isOutgoing, socket) => {
       let destroyed = false;
       return harden({
@@ -349,7 +386,10 @@ export const makeDurableNetLayer = async ({
         },
       });
     },
-    /** @param {any} physical @param {Uint8Array} bytes */
+    /**
+     * @param {any} physical @param {Uint8Array} bytes
+     * @param bytes
+     */
     handleMessageData: (physical, bytes) => {
       if (stopped || physical.isDestroyed) return;
       try {

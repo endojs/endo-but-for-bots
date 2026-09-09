@@ -6,17 +6,21 @@ import test from '@endo/ses-ava/test.js';
 
 import { makeThixotropeDaemon } from '../src/daemon.js';
 import { makePeerJournalReplayEngine } from '../src/peer-replay-engine.js';
-import { makeMemoryStore } from '../src/store-fs.js';
+import { makeMemoryStore } from '../src/store-memory.js';
 import { parkWorkers } from './_park-workers.js';
+
+import { makeNodePowers } from '../src/platform/node-powers.js';
+
+const nodePowers = makeNodePowers();
 
 test.serial(
   'disposable daemon clients release unanswered calls and vat roots',
   async t => {
     t.timeout(10_000);
     const store = makeMemoryStore();
-    const daemon = await makeThixotropeDaemon({
+    const daemon = await makeThixotropeDaemon(nodePowers, {
       store,
-      engine: makePeerJournalReplayEngine(),
+      engine: makePeerJournalReplayEngine(nodePowers),
       codec: syrupCodec,
       makeNetlayer: () => ({
         location: {
@@ -72,7 +76,7 @@ test.serial(
   async t => {
     t.timeout(10_000);
     const store = makeMemoryStore();
-    const engine = makePeerJournalReplayEngine();
+    const engine = makePeerJournalReplayEngine(nodePowers);
     const makeNetlayer = () => ({
       location: {
         type: 'ocapn-peer',
@@ -83,7 +87,7 @@ test.serial(
       },
       shutdown() {},
     });
-    const first = await makeThixotropeDaemon({
+    const first = await makeThixotropeDaemon(nodePowers, {
       store,
       engine,
       codec: syrupCodec,
@@ -104,7 +108,7 @@ test.serial(
     const events = [];
     await t.throwsAsync(
       () =>
-        makeThixotropeDaemon({
+        makeThixotropeDaemon(nodePowers, {
           store: harden({
             ...store,
             setHubState: state => {
@@ -134,7 +138,7 @@ test.serial(
       { message: /injected transient cleanup write failure/ },
     );
     t.deepEqual(events, ['stop transport', 'release']);
-    const recovered = await makeThixotropeDaemon({
+    const recovered = await makeThixotropeDaemon(nodePowers, {
       store,
       engine,
       codec: syrupCodec,
@@ -153,8 +157,8 @@ test.serial('shutdown drains a client still being constructed', async t => {
   t.timeout(10_000);
   const store = makeMemoryStore();
   let released = false;
-  const engine = makePeerJournalReplayEngine();
-  const daemon = await makeThixotropeDaemon({
+  const engine = makePeerJournalReplayEngine(nodePowers);
+  const daemon = await makeThixotropeDaemon(nodePowers, {
     store: harden({
       ...store,
       setHubState: state => {

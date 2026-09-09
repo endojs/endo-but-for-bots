@@ -17,6 +17,10 @@ import { makePeerJournalReplayEngine } from '../src/peer-replay-engine.js';
 import { makeFsStore } from '../src/store-fs.js';
 import { makeTestOcapn } from './_util.js';
 
+import { makeNodePowers } from '../src/platform/node-powers.js';
+
+const nodePowers = makeNodePowers();
+
 const COUNTER_SOURCE = `
 (() => {
   let count = 0;
@@ -34,15 +38,16 @@ const COUNTER_SOURCE = `
  * @param {string} statePath
  * @param {number} port 0 to pick a port; a restarted daemon must pin
  *   its predecessor's port so the peer's reconnect finds it
+ * @param resources
  */
 const makeDaemon = (statePath, port, resources = {}) =>
-  makeThixotropeDaemon({
-    store: makeFsStore(statePath),
-    engine: makePeerJournalReplayEngine(),
+  makeThixotropeDaemon(nodePowers, {
+    store: makeFsStore(nodePowers, statePath),
+    engine: makePeerJournalReplayEngine(nodePowers),
     codec: syrupCodec,
     resources,
     makeNetlayer: ({ handlers, logger, resumption }) =>
-      makeDurableNetLayer({
+      makeDurableNetLayer(nodePowers, {
         handlers,
         logger,
         resumption,
@@ -61,7 +66,7 @@ const makeDurableClient = label =>
     codec: syrupCodec,
     debugLabel: label,
     network: (handlers, logger) =>
-      makeDurableNetLayer({
+      makeDurableNetLayer(nodePowers, {
         handlers,
         logger,
         makeBaseNetlayer: powers =>
@@ -123,7 +128,7 @@ test.serial('a resumed session continues without a handshake', async t => {
   );
   t.is(await E(remoteCounter).incr(), 1);
 
-  const store = makeFsStore(statePath);
+  const store = makeFsStore(nodePowers, statePath);
   const [token] = store.listSessionTokens();
   const metaPath = join(statePath, 'sessions', token, 'meta.json');
   const before = JSON.parse(readFileSync(metaPath, 'utf8'));
@@ -426,7 +431,7 @@ test.serial(
       'the originating call reached the exporter',
     );
     t.is(await E(remoteHolder).observed(), 'pending');
-    const store = makeFsStore(holderPath);
+    const store = makeFsStore(nodePowers, holderPath);
     const outgoing = store
       .listSessionTokens()
       .filter(token => store.provideSessionStore(token).getMeta().isOriginator);
@@ -442,9 +447,10 @@ test.serial(
     const exporter2 = await makeDaemon(exporterPath, exporterPort);
     t.teardown(() => exporter2.shutdown());
     t.true(await E(remoteCounter).settle('settled while holder was offline'));
-    const exporterSession = makeFsStore(exporterPath).provideSessionStore(
-      outgoing[0],
-    );
+    const exporterSession = makeFsStore(
+      nodePowers,
+      exporterPath,
+    ).provideSessionStore(outgoing[0]);
     t.truthy(
       exporterSession.getMeta().frames[0],
       'the exporter retains settlement delivery while the listener node is offline',
@@ -521,7 +527,7 @@ for (const importFirst of [true, false]) {
       }
       t.is(await E(imported).incr(), 3);
       t.is(await E(remoteReceiver).incr(), 4);
-      const store = makeFsStore(holderPath);
+      const store = makeFsStore(nodePowers, holderPath);
       const outgoing = store
         .listSessionTokens()
         .filter(

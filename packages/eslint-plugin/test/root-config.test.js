@@ -62,4 +62,56 @@ describe('root flat config', () => {
       1,
     );
   });
+  it('rejects ambient platform authority in Thixotrope core', async () => {
+    const eslint = new ESLint({ cwd: repoDir });
+    const cases = [
+      ["import { readFile } from 'node:fs/promises';", 'no-restricted-imports'],
+      ["import { readFile } from 'fs/promises';", 'no-restricted-imports'],
+      ["export * from 'node:fs';", 'no-restricted-imports'],
+      [
+        "export { makeNodePowers } from './platform/node-powers.js';",
+        'no-restricted-imports',
+      ],
+      ["import('./platform/node-powers.js');", 'no-restricted-syntax'],
+      ["import('node:fs');", 'no-restricted-syntax'],
+      ['process.cwd();', 'no-restricted-globals'],
+      [
+        'globalThis.crypto.getRandomValues(new Uint8Array(1));',
+        'no-restricted-globals',
+      ],
+      ['setTimeout(() => {}, 1);', 'no-restricted-globals'],
+      ['Date.now();', 'no-restricted-globals'],
+      ['Math.random();', 'no-restricted-properties'],
+      ['const { random } = Math; random();', 'no-restricted-properties'],
+      ['Math["random"]();', 'no-restricted-properties'],
+      ['const math = Math; math.random();', 'no-restricted-syntax'],
+      ['Math[key]();', 'no-restricted-syntax'],
+    ];
+    for (const [source, ruleId] of cases) {
+      // Each probe verifies the effective root configuration, not a copied rule.
+      // eslint-disable-next-line no-await-in-loop
+      const [result] = await eslint.lintText(`// @ts-check\n${source}\n`, {
+        filePath: 'packages/thixotrope/src/mailbox.js',
+      });
+      assert.ok(
+        result.messages.some(message => message.ruleId === ruleId),
+        source,
+      );
+    }
+    const [allowed] = await eslint.lintText(
+      '// @ts-check\nconst read = powers => powers.fs.readFileSync("state");\n',
+      { filePath: 'packages/thixotrope/src/mailbox.js' },
+    );
+    assert.ok(
+      !allowed.messages.some(
+        message =>
+          message.ruleId !== null &&
+          [
+            'no-restricted-imports',
+            'no-restricted-globals',
+            'no-restricted-syntax',
+          ].includes(message.ruleId),
+      ),
+    );
+  });
 });

@@ -1,4 +1,5 @@
 // @ts-check
+/** @import { NodePowers } from './platform/node-powers.js' */
 import { E } from '@endo/far';
 import harden from '@endo/harden';
 import { makeOcapn } from '@endo/ocapn';
@@ -10,9 +11,13 @@ import { derivePipeResumption } from './pipe-network.js';
  * A disposable host observer. Accepted guest calls remain durable, but its
  * pending answers and imported references end with this client. Session keys
  * must be unique and must never be reused, including across host restarts.
+ * @param {Pick<NodePowers, 'randomBytes'>} powers
  * @param {{codec: any, hub: any, sessionKey: string}} options
  */
-export const makeEphemeralHubClient = async ({ codec, hub, sessionKey }) => {
+export const makeEphemeralHubClient = async (
+  powers,
+  { codec, hub, sessionKey },
+) => {
   const resumption = derivePipeResumption({
     codec,
     workerId: sessionKey,
@@ -43,6 +48,8 @@ export const makeEphemeralHubClient = async ({ codec, hub, sessionKey }) => {
     },
   });
   const client = await makeOcapn({
+    randomBytes: length => powers.randomBytes(length),
+    logger: harden({ log: () => {}, error: () => {}, info: () => {} }),
     codec,
     debugLabel: sessionKey,
     network: (/** @type {any} */ nextHandlers) => {

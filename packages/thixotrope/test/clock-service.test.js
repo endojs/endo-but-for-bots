@@ -5,8 +5,13 @@ import test from '@endo/ses-ava/test.js';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setImmediate } from 'node:timers/promises';
+import { makeFileSyncStringAtom } from '../src/file-sync-string-atom.js';
 
 import { makeClockService } from '../src/clock-service.js';
+
+import { makeNodePowers } from '../src/platform/node-powers.js';
+
+const nodePowers = makeNodePowers();
 
 /** @import {ExecutionContext} from 'ava' */
 const deferred = () => {
@@ -117,8 +122,11 @@ const setup = async (t, pause) => {
     },
   };
   const restore = () => {
-    service = makeClockService({
-      statePath,
+    service = makeClockService(nodePowers, {
+      storage: makeFileSyncStringAtom(
+        nodePowers,
+        join(statePath, 'clock.json'),
+      ),
       getDaemon: () => {
         if (!daemonAvailable) throw Error('Daemon not assigned');
         return /** @type {any} */ (daemon);

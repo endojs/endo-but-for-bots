@@ -1,10 +1,10 @@
 // @ts-check
+/** @import { NodePowers } from './platform/node-powers.js' */
 import { E } from '@endo/eventual-send';
 import harden from '@endo/harden';
 import { frozenBytes } from '@endo/immutable-arraybuffer';
 import { makeOcapn } from '@endo/ocapn';
 import { syrupCodec } from '@endo/ocapn/syrup';
-import { createConnection } from 'node:net';
 
 import { makePipeNetwork } from './pipe-network.js';
 
@@ -17,11 +17,17 @@ const secret = frozenBytes(new TextEncoder().encode('admin'));
 /**
  * An OCapN session over a private Unix socket. Each socket has fresh client
  * tables; the fixed pipe identities authorize nothing beyond socket access.
+ * @param {NodePowers} powers
  * @param {Socket} socket
  * @param {'host' | 'worker'} role
  * @param {object} [admin]
  */
-export const makeLocalControl = async (socket, role, admin = undefined) => {
+export const makeLocalControl = async (
+  powers,
+  socket,
+  role,
+  admin = undefined,
+) => {
   let finish;
   const closed = new Promise(resolve => {
     finish = resolve;
@@ -81,6 +87,8 @@ export const makeLocalControl = async (socket, role, admin = undefined) => {
     finish();
   });
   client = await makeOcapn({
+    randomBytes: length => powers.randomBytes(length),
+    logger: harden({ log: () => {}, error: () => {}, info: () => {} }),
     codec: syrupCodec,
     network: pipe.network,
     locator: new Map(admin === undefined ? [] : [['admin', admin]]),
@@ -104,10 +112,14 @@ export const makeLocalControl = async (socket, role, admin = undefined) => {
 };
 harden(makeLocalControl);
 
-/** @param {string} socketPath */
-export const connectLocalControl = async socketPath => {
+/**
+ * @param {NodePowers} powers @param {string} socketPath
+ * @param socketPath
+ */
+export const connectLocalControl = async (powers, socketPath) => {
+  const { createConnection } = powers.net;
   const socket = createConnection(socketPath);
-  const control = await makeLocalControl(socket, 'host');
+  const control = await makeLocalControl(powers, socket, 'host');
   const disconnected = control.closed.then(() => {
     throw Error(
       'Supervisor disconnected; evaluation outcome may be unknown. No retry was sent.',

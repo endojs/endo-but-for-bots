@@ -12,8 +12,15 @@ import { makePeerJournalReplayEngine } from '../src/peer-replay-engine.js';
 import { serveThixotrope } from '../src/supervisor.js';
 import { makeFsStore } from '../src/store-fs.js';
 
+import { makeNodePowers } from '../src/platform/node-powers.js';
+
+const nodePowers = makeNodePowers();
+
 /** @import { TestFn } from 'ava' */
-/** @param {TestFn} test @param {'replay' | 'ironhorse'} kind */
+/**
+ * @param {TestFn} test @param {'replay' | 'ironhorse'} kind
+ * @param kind
+ */
 export const registerMailboxIntegration = (test, kind) => {
   // Separate live exchange from restart recovery so each native workflow
   // stays within the same bounded test timeout on slower CI hosts.
@@ -28,19 +35,23 @@ export const registerMailboxIntegration = (test, kind) => {
         const start = async who => {
           const path = join(root, who);
           const supervisor = await serveThixotrope(
+            nodePowers,
             path,
             kind === 'ironhorse'
               ? {}
               : {
                   engine: harden({
-                    ...makePeerJournalReplayEngine(),
+                    ...makePeerJournalReplayEngine(nodePowers),
                     acquireStore: async () => async () => {},
                   }),
                   idleSleepMs: 0,
                 },
           );
           t.teardown(() => supervisor.close());
-          const client = await connectLocalControl(join(path, 'control.sock'));
+          const client = await connectLocalControl(
+            nodePowers,
+            join(path, 'control.sock'),
+          );
           t.teardown(() => client.close());
           return { supervisor, client };
         };
@@ -57,7 +68,7 @@ export const registerMailboxIntegration = (test, kind) => {
         let alice = await start('alice');
         let bob = await start('bob');
         const invitation = await alice.client.call('invite', 'bob');
-        const bobStore = makeFsStore(join(root, 'bob'));
+        const bobStore = makeFsStore(nodePowers, join(root, 'bob'));
         const beforeSessions = bobStore.listSessionTokens();
         const invalid = {
           ...JSON.parse(invitation),
@@ -192,6 +203,10 @@ export const registerMailboxIntegration = (test, kind) => {
             "E(inventory.get('shared')).read()",
           ),
           '2n',
+        );
+        await alice.client.call(
+          'evaluate',
+          "(() => { const contacts = inventory.get('contacts'); const identity = contacts.get('bob'); contacts.delete('bob'); contacts.set('renamed bob', identity); return true; })()",
         );
         t.true(await alice.client.call('revokeInvitation', invitation));
         t.is(
