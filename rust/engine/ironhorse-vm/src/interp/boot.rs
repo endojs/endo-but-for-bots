@@ -1590,30 +1590,11 @@ impl Interp {
         // F143). The conformance harness installs it explicitly through
         // [`Self::install_test262_host`] before linking.
 
-        // Every native function instance (constructor and
-        // alloc_method product alike) chains to %Function.prototype%
-        // the way a user function does, so a DETACHED native resolves
-        // `.call`/`.apply`/`.bind` through the same prototype walk
-        // (the deferred pass's .call-on-native fix — alloc_method
-        // used to leave the prototype NULL on the theory that native
-        // instances are "only ever dispatched, never re-inspected",
-        // which detachment falsified). alloc_method can run before
-        // %Function.prototype% exists, so the chain lands here once,
-        // at the end of the boot; only NULL prototypes are touched.
-        //
-        // BOOT ONLY, and therefore a version fork across restore: a heap
-        // checkpointed by a build that PREDATES this fixup keeps its
-        // NULL-proto natives forever, because restore replays stored
-        // records rather than re-booting and migration restamps schema
-        // and root, never content. Such a machine resumes cleanly
-        // (VERS/SIGN/cost-table all agree — none of them fingerprints
-        // intrinsic SHAPE) and then throws on `nativeF.call(...)` where
-        // a fresh boot succeeds (review wave 4, DET-6). Accepted for the
-        // same reason the whole migration item is: no pre-delta
-        // production heaps exist. If one ever must be resumed, the fix
-        // is a restore-time re-run of this fixup — the writes are
-        // idempotent by construction (only NULL prototypes are touched),
-        // so it is safe to call on any heap.
+        // Native function instances must inherit call/apply/bind through
+        // Function.prototype just as guest functions do. alloc_method can run
+        // before that prototype exists, so boot fixes null prototypes here.
+        // Only null prototypes are touched; later guest changes are preserved.
+        // This boot pass does not rewrite stored heap records during restore.
         if let Some(fp) = self
             .intrinsics
             .get("Function")
@@ -2466,7 +2447,7 @@ impl Interp {
             ("toWellFormed", 0, StringToWellFormed),
             // The RegExp-consuming String methods (`xsString.c`
             // `fx_String_prototype_match`/`search`/`replace`/`split`), driving
-            // child 8's matcher over a string-or-RegExp argument.
+            // `ironhorse_regexp` over a string-or-RegExp argument.
             ("match", 1, StringMatch),
             ("matchAll", 1, StringMatchAll),
             ("search", 1, StringSearch),

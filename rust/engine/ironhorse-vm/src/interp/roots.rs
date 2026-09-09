@@ -120,7 +120,7 @@ macro_rules! gc_root {
                         }
                         // A `fromAsync` reaction indexes the [`FromAsyncData`]
                         // side table (compacted at sweep to the entries such
-                        // reactions still name — W6-19); the queued reaction
+                        // reactions still name); the queued reaction
                         // is the only edge to that record at the drain, so
                         // root its reference-bearing slots here (mirrors
                         // `Combine`).

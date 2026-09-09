@@ -210,7 +210,7 @@ pub use ironhorse_meter::THROW_HOST_ESCAPE_METERING;
 /// throw — the re-establishment the resumed frame's handler needs, which
 /// a never-suspended `CATCH` already paid for in its own dispatch.
 ///
-/// Traced to source (review wave 5), so the value is derived, not fitted.
+/// The charge follows the computed-goto control flow in the pinned XS source.
 /// In `xsRun.c`, a longjmp into an IN-LOOP `CATCH` lands on
 /// `mxFirstCode(); mxBreak;` and meters ONCE (the `mxBreak`). A longjmp
 /// into a PROLOGUE-RESTORED jump instead `goto`s `XS_CODE_JUMP` and falls
@@ -220,19 +220,15 @@ pub use ironhorse_meter::THROW_HOST_ESCAPE_METERING;
 /// `XS_CODE_METERING`, and it lands per THROW because `fxJump` always
 /// longjmps to `the->firstJump`.
 ///
-/// NOTE this is a property of the COMPUTED-GOTO dispatch build (`xsRun.c`
-/// gates it on `__GNUC__ && __OPTIMIZE__`). In a plain-`switch` build both
-/// paths meter once and this surcharge would be WRONG. The oracle is
-/// built with gcc at `-O2`, mirroring xsnap, so the pin is correct — but a
-/// port to a non-computed-goto XS must revisit this constant.
+/// This derivation uses XS's computed-goto build (`__GNUC__ && __OPTIMIZE__`).
+/// A plain-switch XS build charges the two paths equally. Ironhorse retains
+/// its frozen charge independently of the oracle build; changing it requires
+/// a deliberate cost-table revision rather than recalibration to another host.
 ///
-/// Also measured against the oracle (review wave 4, DET-3, which is what
-/// surfaced it: the suspend-in-try arms asserted completion only, so a
-/// one-dispatch gap on exactly this path completed with the right value
-/// and passed). The attribution is per-THROW-through-a-rebased-handler,
-/// not per rebased handler nor per suspend: with two `try`s live across
-/// the suspend, one throw is one dispatch and two throws are two, while a
-/// `try` established AFTER the resume is bit-exact with no adjustment.
+/// The charge applies per throw through a restored handler, not per handler
+/// or suspension. With two handlers live across a suspension, one throw adds
+/// one dispatch charge and two throws add two; a handler established after
+/// resume needs no adjustment.
 /// Identical in the generator (`yield`) and async (`await`) resume paths.
 pub use ironhorse_meter::RESUMED_HANDLER_THROW_METERING;
 
@@ -251,13 +247,10 @@ pub use ironhorse_meter::RESUMED_HANDLER_THROW_METERING;
 /// overflows.
 pub const STACK_SLOT_COUNT: usize = 4096;
 
-/// Live-slot ceiling for a BOUNDED run (wave-6 CI fuzz trophy
-/// `oom-60435549…`): the unmetered decoder harness bounds dispatch
-/// COUNT but not memory, so a program minting a retained side-table
-/// entry per dispatch (a self-feeding `START_ASYNC` loop) OOMs before
-/// the step ceiling. One million live slots is far past any legitimate
-/// ≤21-byte fuzz input yet holds a bounded run well under the harness's
-/// 2 GiB cap. Never consulted in production (`step_limit == u64::MAX`).
+/// Additional live-slot stop for `run_bounded`. An instruction-count bound
+/// alone does not bound the heap retained by a loop. Bounded dispatch checks
+/// this ceiling before the next instruction and returns `Halt::StepLimit`.
+/// Ordinary runs use the arena and allocation-admission limits instead.
 const BOUNDED_RUN_SLOT_CEILING: u32 = 1_000_000;
 /// XS reserves a fixed band at the top of the stack for the machine roots
 /// (`mxGlobal`/`mxException`/`mxProgram`/… — the `*StackIndex` slots in
@@ -352,12 +345,10 @@ pub use ironhorse_meter::PROGRAM_INVOCATION_COMPUTRONS;
 /// `48ee02d8cfe0`: every top-level program — even `1` — carries exactly
 /// this fractional remainder (`meterIndex & 0xFFFF == 17688` on a
 /// pure-expression program, verified via the oracle's raw meter). It is
-/// under one computron (< 1<<16), so the stage-1 pure-expression corpus
-/// never observes a carry from it (which is why stage 1 was bit-exact
-/// without modeling it); a program that also allocates at run time
-/// (§ Allocation-faithful metering) accrues on top of it and *does*
-/// carry, which is the stage-2b crux. Accrued once, at the `BEGIN_*`
-/// program-frame-entry opcode.
+/// under one computron (< 1<<16), so a pure-expression program need not
+/// carry from it. Runtime allocation charges accrue on top of the remainder
+/// and can produce a carry. Accrued once at the `BEGIN_*` program-frame-entry
+/// opcode; `golden_computrons.rs` pins the resulting guest receipts.
 pub use ironhorse_meter::PROGRAM_ENV_SETUP_METERING;
 
 /// The raw 16.16 cost XS accrues materializing one new own property on
@@ -909,12 +900,8 @@ pub use ironhorse_meter::APPLY_ARGUMENTS_ARRAYLIKE_CREDIT;
 /// with a fixed callee, each element grows the run by exactly `3 << 14` and
 /// the array-argument base by a constant `98304` beyond
 /// `CALL_TRAMPOLINE_METERING`. That base is `XS_CODE_METERING + 2 *
-/// XS_BUILTIN_METERING` — an exact XS shape, not a fitted number. It read
-/// `98040` until review wave 5 measured the residual directly: an exact
-/// slope of `-264` raw per apply-with-array, independent of element count
-/// AND of receiver kind, which localizes the error entirely to the base.
-/// The `≤~272-raw context residual` previously recorded here WAS that
-/// error, mistaken for chunk-alignment noise.
+/// XS_BUILTIN_METERING`. The fixed base is independent of element count and
+/// receiver kind; only the per-element term scales with the forwarded array.
 pub use ironhorse_meter::APPLY_ARRAY_BASE_METERING;
 pub use ironhorse_meter::APPLY_ARRAY_PER_ELEMENT_METERING;
 /// Observable reads on an ordinary array-like already carry part of the
@@ -1298,7 +1285,7 @@ pub use ironhorse_meter::ARRAY_POP_FRAME_METERING;
 pub use ironhorse_meter::ARRAY_PREDICATE_TOBOOL_METERING;
 /// The fixed raw 16.16 cost of a dense `Array.prototype.push` call beyond the
 /// per-item `mxMeterSome(5)`, the two bracketing `mxMeterSome(2)` steps, and
-/// the item-chunk grow this stage already models: two further built-in steps
+/// the modeled item-chunk growth: two further built-in steps
 /// (`2 << 14` = 32768) the fast path runs unconditionally (host-frame /
 /// `fxCheckArray` residual). Measured against the pin `48ee02d8cfe0` as the
 /// constant raw-gap across a spread of receiver lengths and argument counts.
@@ -2664,8 +2651,8 @@ pub enum NativeMethod {
     ArraySort,
     /// `Array.prototype.toSorted([comparator])`.
     ArrayToSorted,
-    /// `Array.prototype.toLocaleString()` — an honest named skip (locale-aware
-    /// element stringification is out of this stage's scope).
+    /// `Array.prototype.toLocaleString()` invokes non-nullish elements'
+    /// locale-string methods, with empty fields for holes and nullish values.
     ArrayToLocaleString,
     /// `%TypedArray%.prototype.copyWithin(target, start, end)`.
     TypedArrayCopyWithin,
@@ -2705,13 +2692,11 @@ pub enum NativeMethod {
     /// TypedArray constructors.
     TypedArrayFrom,
     TypedArrayOf,
-    /// `Array.from(iterable[, mapFn[, thisArg]])` — an honest named skip: the
-    /// C-level `fxGetIterator`/`fxIteratorNext` protocol metering (routing
-    /// through `%ArrayIteratorPrototype%.next` via `mxRunCount`) is not modeled
-    /// to a clean per-element constant this stage.
+    /// `Array.from(iterable[, mapFn[, thisArg]])`, including guest iterator,
+    /// mapper and constructor calls under a native exception boundary.
     ArrayFrom,
-    /// `Array.fromAsync(...)` — an honest named skip (returns a Promise; async
-    /// iteration is stage-4+ territory).
+    /// `Array.fromAsync(...)` returns a promise and drives iterator adoption
+    /// through the native `FromAsyncData` state machine.
     ArrayFromAsync,
     /// `Array.isArray(v)` — a static on the `Array` constructor: whether `v`
     /// is an array exotic object.
@@ -2974,8 +2959,8 @@ pub enum NativeMethod {
     ArrayBufferDetachedGetter,
     ArrayBufferMaxByteLengthGetter,
     ArrayBufferResizableGetter,
-    /// `ArrayBuffer.prototype.resize` — recognized-but-unimplemented (a
-    /// resizable buffer is an honest named skip this stage does not model).
+    /// `ArrayBuffer.prototype.resize` is recognized but returns
+    /// `Halt::NotImplemented`; only fixed-size buffers are modeled.
     ArrayBufferResize,
     /// `ArrayBuffer.prototype.transfer` / `transferToFixedLength`.
     ArrayBufferTransfer,
@@ -3208,9 +3193,8 @@ struct DisposableStackData {
 /// the byte length). Kept in the [`Interp::array_buffers`] side table like
 /// [`CollectionData`]; the backing bytes live in the chunk arena at
 /// `data`, relocated by the slide-compactor. `length` is the buffer's
-/// `byteLength` (`bufferInfo.length`). Resizable buffers (a non-negative
-/// `maxByteLength`) are an honest named skip this stage does not model, so
-/// there is no `max_length` field yet.
+/// `byteLength` (`bufferInfo.length`). Resizable buffers are unsupported,
+/// so this record has no maximum-length field.
 #[derive(Copy, Clone, Debug)]
 struct ArrayBufferData {
     /// The chunk-arena offset of the zero-filled backing store. Read by the
@@ -3351,7 +3335,7 @@ struct PromiseData {
 
 /// Per-instance RegExp state (XS's `XS_REGEXP_KIND` internal slot plus the
 /// key slot holding the source string). `program` is the compiled pattern
-/// (child 8's `ironhorse-regexp`): its `code[0]` is the flags word, `code[1]`
+/// from `ironhorse_regexp`: its `code[0]` is the flags word, `code[1]`
 /// the capture count (including the whole match at index 0), and it carries
 /// the compile meter. `source` is the pattern source string (the `.source`
 /// getter's value, minus the empty-pattern `(?:)` substitution which the
@@ -3651,9 +3635,10 @@ struct CombinatorState {
 /// bytecode of its own, so instead of a suspended frame it keeps this record in
 /// the [`Interp::from_async`] side table (indexed by the
 /// [`ReactionKind::FromAsyncNext`]/… payload) and steps through it at each
-/// promise-job drain. Like [`Interp::combinators`], it is append-only within a
-/// run and its reference-bearing slots stay live for the machine's lifetime
-/// (the stage-2 GC-roots contract — no mid-run collection sweeps under it).
+/// promise-job drain. Queued reactions keep the record's reference-bearing
+/// slots live. Collection compacts the arena to referenced records and remaps
+/// reaction indices; `reaction_arena_pruning.rs` pins reclamation and surviving
+/// reactions across that compaction.
 #[derive(Clone, Debug)]
 struct FromAsyncData {
     /// The result promise's resolve/reject functions (`promiseCapability`).
@@ -3757,12 +3742,9 @@ pub fn error_name_static(name: &str) -> Option<&'static str> {
 /// [`Native::display_name`] is the name XS's `Function.prototype.toString`
 /// prints for it (`function ["Object"] (){[native code]}`).
 ///
-/// The **fundamentals** built-ins (stage-3 child 2): the constructors and
-/// the Error hierarchy the design's stage-3 decomposition names. A bare
-/// reference and `typeof` are modeled for every variant (both are pure
-/// dispatch, bit-exact); the *call* and *construct* behaviors land
-/// incrementally, and an unmodeled one self-names [`Halt::NotImplemented`]
-/// (an honest skip) rather than mis-executing.
+/// Builtin constructors and the Error hierarchy use this closed dispatch set.
+/// Unsupported call or construct behavior returns [`Halt::NotImplemented`]
+/// with the builtin's name.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Native {
     /// The realm's intrinsic `eval` function. Direct calls are dispatched by
@@ -3841,8 +3823,7 @@ pub enum Native {
     /// `RegExp` — the regular-expression constructor (`xsRegExp.c`
     /// `fx_RegExp`). Its per-instance compiled program + source/flags live in
     /// the [`Interp::regexps`] side table; `lastIndex` is an ordinary own
-    /// integer property. The matcher itself is the `ironhorse-regexp` crate
-    /// (child 8).
+    /// integer property. The matcher itself is the `ironhorse-regexp` crate.
     RegExp,
     /// `Proxy` — the proxy constructor (`xsProxy.c` `fx_Proxy`). A special
     /// constructor: it has **no** `.prototype` property and its instances have
@@ -4357,28 +4338,6 @@ impl RunOutcome {
     }
 }
 
-/// One interpreter activation over a single top-level program frame
-/// (design § Interpreter and dispatch). The value stack is XS's
-/// downward-growing slot stack modeled as a `Vec` whose top is the last
-/// element; the program frame carries its scope slots (`locals`,
-/// declared by `NEW_LOCAL`/`NEW_TEMPORARY` and addressed by the
-/// `*_LOCAL` opcodes' index), the `id -> local` map the environment
-/// opcodes resolve `var` names through, the completion value
-/// (`result`), and the global bindings undeclared names fall back to.
-///
-/// Metering is per dispatched bytecode (§ Metering): the frame and
-/// control-flow opcodes each dispatch once, so running the exact XS
-/// bytecode yields the exact XS computron count without any separate
-/// per-opcode weight bookkeeping. The program-invocation baseline
-/// ([`PROGRAM_INVOCATION_COMPUTRONS`]) accounts for the program-frame
-/// entry XS meters outside the captured bytecode.
-///
-/// Call/return frame *switching* (nested user functions) and the object
-/// model are the next stage-2 work items; opcodes outside the
-/// frame/scope/variable/control-flow/expression subset halt with
-/// [`Halt::NotImplemented`] naming themselves, so the differential harness
-/// reports exactly what to implement next rather than diverging
-/// silently.
 /// Why [`Interp::relink_crank`] refused (side-table ledger G2). Every
 /// variant is fail-closed: nothing ran, the machine is unchanged.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -5646,7 +5605,7 @@ impl Interp {
     /// the `eval`/`Function` bridge call it with `full = false` and a
     /// filter that admits only the APPENDED ids, so a later unit that
     /// first references a built-in (`Math`, `arr.map`, an Intl
-    /// namespace) gets it bound (wave-4 P1) WITHOUT re-installing the
+    /// namespace) gets it bound WITHOUT re-installing the
     /// earlier link's bindings — a re-install would clobber a guest
     /// monkeypatch or deletion of an already-linked property.
     ///
@@ -5948,8 +5907,8 @@ impl Interp {
                 }
                 // A property the guest (or an earlier pass) already put
                 // there wins — installs are create-only on partial passes
-                // (wave-6 W6-7: the widened keep must not clobber a
-                // monkeypatch whose name was interned at runtime).
+                // so a partial pass cannot clobber a monkeypatch whose
+                // name was interned at runtime.
                 if !full && self.find_property(proto, mid).is_some() {
                     continue;
                 }
@@ -6468,7 +6427,7 @@ impl Interp {
                 // name, an absent file): it names nothing, so it is left as-is.
                 if id != 0 {
                     // Fail CLOSED on an id beyond the unit's own symbol
-                    // atom (wave-6 W6-18): `relink_crank` refuses the
+                    // atom: `relink_crank` refuses the
                     // same condition as MalformedBytecode; left in
                     // place it would denote whatever realm name holds
                     // that position.
@@ -6638,7 +6597,7 @@ impl Interp {
             None => return Err(Step::Host(Halt::EngineInvariant("eval:relink"))),
         };
         // Bind only the ids appended SINCE THE LAST INSTALL PASS (the
-        // installed-names floor, wave-6 W6-7 — a name interned at
+        // installed-names floor — a name interned at
         // runtime has an id no install has seen, so filtering by this
         // unit's own pre-relink length refused it forever); ids at or
         // below the floor keep their existing binding or a guest's
@@ -6858,7 +6817,7 @@ impl Interp {
         self.create_global_property(id, (value.kind, value.value));
     }
 
-    // --- Snapshot surface (stage-6 child 3) -------------------------------
+    // --- Snapshot surface -----------------------------------------------
     //
     // The narrow, engine-side conversion primitives the `ironhorse-snapshot`
     // `Machine`-level `write_snapshot_to_file`/`from_snapshot_file`/
@@ -6924,7 +6883,7 @@ impl Interp {
         // (Consumes `symbol_names`, so this both sets the forward table and
         // rebuilds the rest.)
         self.bind_program_symbols(&symbol_names);
-        // The installed-names floor (wave-6 W6-7) DEFAULTS to the full
+        // The installed-names floor defaults to the full
         // restored table — the conservative choice when no floor
         // traveled (a pre-schema-12 store or container): no partial
         // install pass may then touch any restored id, which can never
@@ -7047,7 +7006,7 @@ impl Interp {
     /// names the guest interned itself (a `JSON.parse` key, a
     /// defineProperty key). Run on EVERY relink, aligned or not: a
     /// crank that first references such a name must get it bound
-    /// exactly as a fresh link would (wave-4 P1), and gating the pass
+    /// exactly as a fresh link would. Gating the pass
     /// on table GROWTH left non-growing cranks reading `undefined`
     /// where the next growing crank read the binding — the
     /// deferred-install divergence the Intl carry's twins caught.
@@ -7211,7 +7170,7 @@ impl Interp {
         )
     }
 
-    /// The installed-names floor (wave-6 W6-7): ids at or below it keep
+    /// The installed-names floor: ids at or below it keep
     /// their existing binding on partial install passes; ids above it —
     /// names interned during an install pass (the Intl member keys, the
     /// `format` accessor key) or by the guest — are re-considered,
@@ -7259,9 +7218,8 @@ impl Interp {
     /// — so minting is no longer a persistence hazard either; this
     /// remains as the cheap pre-check that lets
     /// [`Self::stored_runtime_intern`] skip its O(heap) walk, and as a
-    /// test witness that a fixture really minted (review wave 5's
-    /// mint-counter lesson: minting happens on a LOOKUP, not a store, so
-    /// only [`Self::stored_runtime_intern`] proves an id was STORED).
+    /// test witness that a fixture minted a key. Minting can happen on a
+    /// lookup; only [`Self::stored_runtime_intern`] proves an id was stored.
     pub fn may_hold_runtime_interns(&self) -> bool {
         self.next_symbol_key_id != u16::MAX
     }
@@ -7273,7 +7231,7 @@ impl Interp {
     /// unification, so nothing else occupies that range.)
     ///
     /// Historically this was the persistence gate for the id-space hazard
-    /// (wave-4 P1): the symbol-key map did not travel, so a store refused
+    /// because the symbol-key map did not travel, so a store refused
     /// any machine that stored such an id. The map and its counter now
     /// ride the SYMB atom, so the gate is gone; this survives as a TEST
     /// WITNESS (`side_table_ledger.rs` uses it to prove a fixture stored
@@ -7372,7 +7330,7 @@ impl Interp {
         if self.func_segments.is_empty() {
             return None;
         }
-        // Deterministic witness (wave-6 W6-24): the MINIMUM live slot,
+        // Deterministic witness: the minimum live slot,
         // not whichever HashMap order surfaces first.
         self.func_segments
             .keys()
@@ -7381,31 +7339,14 @@ impl Interp {
             .min()
     }
 
-    /// The first SILENT-WRONG Pending-row class this heap HOLDS, or
-    /// `None` (wave-6 W6-9). These two side tables do not travel, and
-    /// a resumed slot that loses its row degrades to a PLAIN OBJECT
-    /// whose reads answer wrong values (a Proxy's gets answer
-    /// `undefined`, accessor properties read as absent) — unlike the
-    /// rows whose consuming natives happen to guard `this` and fail
-    /// visibly. Both remaining rows hold FUNCTION slots (traps,
-    /// getters/setters), so their honest carry is dependency-gated on
-    /// the `functions` row (a resumed guest function is uncallable
-    /// today — carrying a proxy whose traps cannot run would trade
-    /// silent-wrong for visible-broken, not for correct). Free-listed
-    /// owners are skipped: a swept instance's stale row names nothing.
-    /// (`error_data` and the typed-array family started here and
-    /// GRADUATED: they travel in the `ERRD` and `ABUF`/`TARR`/`DVIW`
-    /// atoms now.)
-    /// One accessor class is exempt: an entry that IS a boot
-    /// [`Self::proto_accessors`] seed — same `(proto, resolved key)` pair, the
-    /// seed's own getter and optional setter (today: the
-    /// `Intl.NumberFormat` `format` getter and the ES2025 Iterator
-    /// `constructor` and `Symbol.toStringTag` pairs). Each callable is a
-    /// boot-minted native whose `FuncInfo` lives on every
-    /// fresh boot, so [`Self::restore_snapshot_state`] re-derives the
-    /// entry exactly ([`Self::rebuild_boot_accessors`]) — the
-    /// `RebuiltAtRestore` pattern, not a carry. A guest REDEFINITION
-    /// at the seed key stores a different getter and still refuses.
+    /// A reason this machine cannot be faithfully restored, or `None`.
+    /// Refuses the test262 host, reactions needing unpersisted async state,
+    /// live async generators, and references to native functions that restore
+    /// cannot reconstruct. Guest functions, proxies and accessors have carried
+    /// state and are not categorically refused.
+    /// The heap and roster-generated persistence holders are checked against
+    /// `non_persisting_functions`; free-listed owners are skipped.
+    /// `pending_row_gates.rs` and `persist_gates.rs` exercise these refusals.
     pub fn stored_unpersistable_row(&self) -> Option<&'static str> {
         self.stored_unpersistable_row_inner(false)
     }
@@ -7480,17 +7421,11 @@ impl Interp {
         if async_reaction {
             return Some("a promise reaction that would resume a non-persisted async frame");
         }
-        // The still-Pending `async_generators` row, refused ON HOLD by
-        // the W6-9 rule while its atom is unbuilt. Unlike an async
-        // FUNCTION — whose every resumable suspension is anchored by a
-        // reaction the arm above refuses, and whose completed record
-        // nothing consults again — an async GENERATOR is a guest-held
-        // object whose row `.next()`/`.return()`/`.throw()` consult in
-        // EVERY state: suspended-between-yields it is resumable with no
-        // reaction anchor, and even completed it must keep answering
-        // done results. A resumed instance that lost the row degrades
-        // to a plain object — the silent-wrong class. Free-listed
-        // owners are skipped, as everywhere.
+        // Async generator rows do not persist. A live instance needs its row
+        // in every state: between yields it can resume without a pending
+        // reaction, and after completion next/return/throw must still observe
+        // completion. Losing the row would leave an ordinary object behind.
+        // Free-listed owners have no live instance to restore.
         if self
             .async_generators
             .keys()
@@ -7549,13 +7484,11 @@ impl Interp {
         None
     }
 
-    /// Whether a function SLOT survives resume: it is a boot native (a
-    /// fresh boot re-mints it at the same index), a proxy revoker, an
-    /// Intl bound native, or a promise resolving function (each rebuilt
-    /// from carried state), or a guest bytecode function (carried by
-    /// `FUNC`). Anything else is a native minted at runtime, which
-    /// travels in no table -- restore reinstates the reference without
-    /// its `FuncInfo`.
+    /// Whether restore has a reconstruction recipe for this function slot.
+    /// Boot natives, proxy revokers, Intl bound natives, promise resolving
+    /// functions and guest bytecode functions have such recipes. `CopyObject`
+    /// is an execution-only helper and is rejected even in a recycled boot slot;
+    /// an index below `boot_slot_count` alone cannot establish its ownership.
     fn function_persists(&self, function: crate::value::SlotIndex) -> bool {
         // This execution helper has no persisted reconstruction recipe. Its
         // slot can be a recycled boot slot after GC, so index alone is not
@@ -7581,10 +7514,9 @@ impl Interp {
             .is_some_and(|info| info.native.is_none() && info.method.is_none())
     }
 
-    /// The function slots resume cannot bring back: everything in
-    /// [`Self::functions`] that [`Self::function_persists`] rejects — a
-    /// native minted at RUNTIME, above `boot_slot_count`, carried by no
-    /// table. Usually empty.
+    /// Function slots rejected by [`Self::function_persists`], including
+    /// execution-only helpers that may occupy recycled boot indices.
+    /// Usually empty; holders of these slots prevent faithful restoration.
     fn non_persisting_functions(&self) -> std::collections::BTreeSet<u32> {
         self.functions
             .keys()
@@ -9783,8 +9715,8 @@ impl Interp {
         // one id simultaneously a string key and a symbol key, and
         // `o[sym]` would read the string-keyed slot while `Object.keys`
         // dropped it — silent aliasing from crafted or torn bytes, the
-        // class every sibling decoder refuses (review of the llm
-        // rebase). Runs after `bind_program_symbols`, so the table is
+        // class every sibling decoder refuses. Runs after
+        // `bind_program_symbols`, so the table is
         // the persisted one.
         if (next as usize) <= self.symbol_names.len() {
             return false;
@@ -10061,7 +9993,7 @@ impl Interp {
     }
 
     /// Re-arm a RESUMED machine's meter without destroying the restored
-    /// computron count (wave-6 W6-13): the meter's `index` survives; a
+    /// computron count: the meter's `index` survives; a
     /// fresh check window opens from it. This is the deliberate
     /// interval-CHANGE form — the host chose a new window, so the next
     /// check threshold restarts from the preserved index. A resume that
@@ -10131,8 +10063,8 @@ impl Interp {
 
     /// The three reaction-arena lengths `(combinators, from_async,
     /// promise_guards)` — diagnostic for the arena-growth lock
-    /// (wave-6 W6-19): settled entries must be RECLAIMED by a
-    /// collection, not accumulate for the machine's lifetime.
+    /// `reaction_arena_pruning.rs`: collection reclaims settled entries
+    /// instead of retaining them for the machine's lifetime.
     pub fn reaction_arena_lens(&self) -> (usize, usize, usize) {
         (
             self.combinators.len(),
@@ -10147,7 +10079,7 @@ impl Interp {
     }
 
     /// Whether the machine stands at a QUIESCENT crank boundary — the
-    /// precondition every persist verb requires (wave-6 W6-10).
+    /// precondition every persist verb requires.
     ///
     /// Quiescence is a LIFECYCLE property first and a table-emptiness
     /// property second. The first conjunct is the `last_crank_completed`
@@ -11066,7 +10998,7 @@ impl Interp {
     /// harness) that must stay total on arbitrary/malformed bytecode without
     /// wedging on a non-terminating dispatch cycle.
     pub fn run_bounded(&mut self, code: &[u8], step_limit: u64) -> RunOutcome {
-        // Scoped, not latched (wave-6 W6-16): the ceiling applies to
+        // Scoped, not latched: the ceiling applies to
         // THIS run; a later plain `run` is unbounded again.
         let prev = self.step_limit;
         self.step_limit = step_limit;
@@ -11153,13 +11085,10 @@ impl Interp {
         // No-function cranks retain no segment and keep the common path
         // allocation-free when the caller shares the buffer.
         self.active_segment = None;
-        // A crank's top level starts sloppy until its own `BEGIN_STRICT`
-        // says otherwise (wave-6 W6-6: nothing reset this register at
-        // crank entry, so one strict crank latched strict semantics onto
-        // every later crank's top level — and, unserialized, diverged
-        // from a resumed twin's fresh-boot `false`). Function frames are
-        // unaffected: `enter_call` sets it per callee and unwind/resume
-        // restore it.
+        // Each crank starts sloppy until its own BEGIN_STRICT. A previous
+        // strict crank must not affect later programs or distinguish a live
+        // machine from its resumed twin; see `strict_crank_boundary.rs`.
+        // Function entry and activation restore set strictness per frame.
         self.strict = false;
         // The lifecycle latch drops at entry: from here until the exit
         // below the machine is mid-crank, and any observer that asks
@@ -13292,7 +13221,7 @@ impl Interp {
                         // PROCESS, which no `catch_unwind` can contain; where
                         // overcommit lets it succeed, the worker stalls filling
                         // slots the meter never sees (measured: 132 seconds and
-                        // 8.6 GB for a two-call program — review wave 5).
+                        // 8.6 GB for a two-call program).
                         //
                         // Ordered this way the from-source path is exposed
                         // exactly as much as the length form `new TA(n)` it is
@@ -13365,8 +13294,8 @@ impl Interp {
                         // NOT a dense `0..length` `Vec<Slot>`: the declared
                         // length is guest-controlled and unbounded up to the
                         // arm's own cap, so a dense snapshot would re-arm the
-                        // wave-5 hazard — reserving `length * size_of::<Slot>()`
-                        // (32 bytes per DECLARED element) outside the meter,
+                        // dense-allocation hazard: reserving
+                        // `length * size_of::<Slot>()` outside the meter,
                         // while `alloc_array_buffer` charged only the packed
                         // `byte_length`. Cloning `items()` keeps the allocation
                         // proportional to the storage the meter already charged
@@ -13374,7 +13303,7 @@ impl Interp {
                         // `undefined` from the clone exactly as a hole would.
                         // The snapshot comes AFTER the length bound and the
                         // metered `alloc_array_buffer` charge above, so the
-                        // wave-5 ordering (reject first, charge second, only
+                        // admission ordering (reject first, charge second, only
                         // then any length-proportional allocation;
                         // `tests/typed_array_source_length.rs`) still holds and
                         // the length-proportional allocation the ordering exists
@@ -13603,7 +13532,7 @@ impl Interp {
             Native::Promise => return Err(self.catchable_type_error_msg("call: Promise".into())),
             // `new RegExp(pattern, flags)` and the bare-call `RegExp(...)`
             // (`fx_RegExp` + `fxInitializeRegExp`): coerce the pattern and
-            // flags to strings, compile the pattern with child 8's matcher,
+            // flags to strings, compile the pattern with `ironhorse_regexp`,
             // and build the instance (compiled program + source/flags in the
             // `regexps` side table, `lastIndex` = 0). A `/.../ ` literal reaches
             // here as `new RegExp(<pattern>, <flags>)`. An internal RegExp
@@ -26015,7 +25944,7 @@ impl Interp {
                 )))
             }
             // `RegExp.prototype.exec`/`test`/`toString` — the JavaScript RegExp
-            // surface over child 8's matcher.
+            // surface over `ironhorse_regexp`.
             NativeMethod::RegExpExec => {
                 let inst = match this.value {
                     Payload::Reference(r) if this.kind == Kind::Reference => r,
@@ -27330,21 +27259,12 @@ impl Interp {
     /// `mxMeterSome` and no chunk — the pin's bodies carry neither. A NaN
     /// result is the canonical `f64::NAN`.
     ///
-    /// LIBM DECISION-OF-RECORD (wave-6 W6-23): the transcendental bodies
-    /// call the platform libm (via `f64::sin`/`powf`/…), the engine's one
-    /// genuine host-environment dependence — and the pinned XS oracle
-    /// links the SAME platform libm, which is what the differential
-    /// suite's bit-exactness rests on. The recorded stance: determinism
-    /// is scoped PER RELEASE BINARY PER PLATFORM (one pinned toolchain
-    /// and libm per release; twins on one host are always exact).
-    /// Heterogeneous-fleet consensus needs a vendored deterministic libm
-    /// (the pure-Rust `libm` crate is the named candidate), which must
-    /// land TOGETHER with an oracle built against the same library — a
-    /// unilateral swap here would break the differential pin wherever
-    /// glibc and MUSL disagree in the last ulp, and a last-ulp divergence
-    /// is a full determinism break (results feed guest branches, so
-    /// computrons diverge transitively). See the design's Remaining
-    /// ledger for the decision record.
+    /// Provider-sensitive operations currently use platform `f64` math.
+    /// Cross-platform bit identity is not established by same-host oracle
+    /// agreement: a last-bit difference can affect guest branches and receipts.
+    /// `math_determinism.rs` checks known answers and exports platform vectors.
+    /// The decision to vendor libm and its required coverage are recorded in
+    /// `designs/ironhorse-w6-decisions.md`, section 4.
     fn call_math(
         &mut self,
         id: MathId,
@@ -29154,9 +29074,9 @@ impl Interp {
     }
 
     /// The UTF-16 code units of a string receiver, for a primitive string or a
-    /// boxed `String` wrapper. `None` for any other receiver (an honest named
-    /// skip — `String.prototype` methods on a non-string `this` are not modeled
-    /// this stage).
+    /// boxed `String` wrapper. Returns `None` for other receivers;
+    /// `string_this_units` rejects nullish receivers and performs observable
+    /// ToString conversion for the others.
     fn string_receiver_units(&self, this: Slot) -> Option<Vec<u16>> {
         self.string_receiver_offset(this)
             .map(|off| self.str_units(off))
@@ -37450,9 +37370,9 @@ impl Interp {
     fn unwind_to_jump(&mut self) -> Option<ResumeTarget> {
         // A throw between `XS_CODE_SUPER` (which arms the pending
         // new-target for the construct about to happen) and the
-        // construct frame that consumes it abandons that construct
-        // (wave-6 W6-15: left armed, the machine's NEXT `new F()` took
-        // the stale target as its `new.target`). Disarm BEFORE the
+        // construct frame that consumes it abandons that construct.
+        // Leaving it armed would give a later constructor the stale target
+        // as its `new.target`. Disarm BEFORE the
         // empty-chain return below, so the uncaught direct
         // `THROW`/`RETHROW` (and rejected-await) host escapes are
         // covered exactly like the caught path and `raise_js`.
@@ -37509,7 +37429,7 @@ impl Interp {
             None => {
                 // Uncaught: the host-escape leaves the machine
                 // post-throw ([`Self::unwind_to_jump`] disarmed the
-                // pending new-target for every escape path, W6-15). The
+                // pending new-target for every escape path). The
                 // value travels through native catches without rendering;
                 // only finish_step renders an uncaught host escape.
                 self.meter_host_escape();
@@ -38006,8 +37926,8 @@ impl Interp {
         // interned a cached name ("length", "value", …) without
         // seeding its cache would gate the exotic fast paths
         // differently from its own resumed twin — a result AND
-        // computron divergence (review of the llm rebase, locked by
-        // `runtime_interned_special_name_gates_like_resumed`). The
+        // computron divergence, checked by
+        // `runtime_interned_special_name_gates_like_resumed`. The
         // refresh is additive (fills only `None` caches) and O(a few
         // map lookups) on the rare novel-intern path.
         self.refresh_special_ids_from_symbols();
@@ -46823,8 +46743,8 @@ fn count_new_locals(code: &[u8], start: usize, len: usize) -> usize {
             // carry past their id (the dispatch loop advances 5, not the
             // `instruction_len` id-opcode 3). The AT form has NO id
             // operand: a 1-byte opcode whose 2-byte INTEGER_1 flag is a
-            // separate instruction the loop below sizes itself (wave-6
-            // W6-17 - bundling it as 5 desynchronized the scan).
+            // separate instruction the loop below sizes itself. Counting it
+            // twice would desynchronize the scan.
             Opcode::XS_CODE_NEW_PROPERTY => 5,
             Opcode::XS_CODE_NEW_PROPERTY_AT => 1,
             Opcode::XS_CODE_NEW_PRIVATE_1 => 4,
@@ -46845,14 +46765,14 @@ fn branch_target(pc: usize, size: i8, offset: i32) -> usize {
     (pc as isize + size as isize + offset as isize) as usize
 }
 
-// ToBoolean (ECMAScript 7.1.2) for the stage-1 value kinds.
+// ToBoolean (ECMAScript 7.1.2) for values not requiring chunk inspection.
 fn to_boolean(s: &Slot) -> bool {
     match s.value {
         Payload::None => false, // undefined and null are both falsy
         Payload::Boolean(b) => b,
         Payload::Integer(i) => i != 0,
         Payload::Number(n) => !(n == 0.0 || n.is_nan()),
-        Payload::String(_) => true, // non-empty; stage-1 strings are results only
+        Payload::String(_) => true, // Interp::truthy handles string contents first
         Payload::Reference(_) => true,
         Payload::At(..) => true, // a transient key is never ToBoolean'd
         // A BigInt's zero-ness needs the digit chunk; [`Interp::truthy`]
