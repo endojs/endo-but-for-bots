@@ -1,10 +1,6 @@
 // @ts-check
-/* global setTimeout, clearTimeout */
+/** @import { NodePowers } from './platform/node-powers.js' */
 import harden from '@endo/harden';
-import { spawn } from 'node:child_process';
-import { mkdirSync } from 'node:fs';
-import { rm } from 'node:fs/promises';
-import { join } from 'node:path';
 
 import { Fail, q } from '@endo/errors';
 
@@ -35,6 +31,7 @@ const asciiJson = value =>
  * Build inputs: `cargo build --release -p thixotrope-xs-worker` (after
  * `yarn build:xs-bundles` in this package generates `dist-xs/`).
  *
+ * @param {NodePowers} powers
  * @param {object} options
  * @param {string} options.workerBinary path to the thixotrope-xs-worker binary
  * @param {string} options.bootPath pre-bundle boot script (dist-xs/boot.js)
@@ -42,12 +39,15 @@ const asciiJson = value =>
  * @param {string} options.casPath directory for content-addressed snapshots
  * @returns {WorkerEngine}
  */
-export const makeXsEngine = ({
-  workerBinary,
-  bootPath,
-  bundlePath,
-  casPath,
-}) => {
+export const makeXsEngine = (
+  powers,
+  { workerBinary, bootPath, bundlePath, casPath },
+) => {
+  const { spawn } = powers.childProcess;
+  const { mkdirSync } = powers.fs;
+  const { rm } = powers.fsPromises;
+  const { join } = powers.path;
+  const { setTimeout, clearTimeout } = powers.timers;
   mkdirSync(casPath, { recursive: true });
   return harden({
     canSnapshot: true,

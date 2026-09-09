@@ -23,8 +23,12 @@ import {
   makePeerJournalReplayEngine,
   makePeerSnapshottingReplayEngine,
 } from '../src/peer-replay-engine.js';
-import { makeMemoryStore } from '../src/store-fs.js';
+import { makeMemoryStore } from '../src/store-memory.js';
 import { makeTestOcapn } from './_util.js';
+
+import { makeNodePowers } from '../src/platform/node-powers.js';
+
+const nodePowers = makeNodePowers();
 
 const textEncoder = new TextEncoder();
 /** @param {string} text */
@@ -59,7 +63,7 @@ const makeHubKit = async (t, { workerId, engine, store, debugLabel }) => {
   const hub = makeOcapnHub({ codec: syrupCodec });
   /** @type {any} */
   const holder = {};
-  const transport = makeDurableWorkerTransport({
+  const transport = makeDurableWorkerTransport(nodePowers, {
     workerId,
     store: store.provideWorkerStore(workerId),
     engine,
@@ -111,7 +115,7 @@ test('a worker session sleeps and wakes by journal replay', async t => {
   const workerId = 'd'.repeat(32);
   const { transport, session } = await makeHubKit(t, {
     workerId,
-    engine: makePeerJournalReplayEngine(),
+    engine: makePeerJournalReplayEngine(nodePowers),
     store,
     debugLabel: 'sleeper',
   });
@@ -143,7 +147,7 @@ test('a worker session survives snapshot, sleep, and crash', async t => {
   const workerStore = store.provideWorkerStore(workerId);
   const { transport, session } = await makeHubKit(t, {
     workerId,
-    engine: makePeerSnapshottingReplayEngine(),
+    engine: makePeerSnapshottingReplayEngine(nodePowers),
     store,
     debugLabel: 'napper',
   });
@@ -212,7 +216,7 @@ test('a retired worker session breaks its imports', async t => {
   const workerId = 'f'.repeat(32);
   const { hub, transport, session } = await makeHubKit(t, {
     workerId,
-    engine: makePeerJournalReplayEngine(),
+    engine: makePeerJournalReplayEngine(nodePowers),
     store,
     debugLabel: 'retiree',
   });

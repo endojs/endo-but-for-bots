@@ -1,21 +1,12 @@
 // @ts-check
+/** @import { NodePowers } from './platform/node-powers.js' */
 import harden from '@endo/harden';
-import {
-  appendFileSync,
-  closeSync,
-  existsSync,
-  fsyncSync,
-  mkdirSync,
-  openSync,
-  readdirSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
-import { dirname, join } from 'node:path';
 
 import { Fail, q } from '@endo/errors';
+
+import { assertSessionToken, assertWorkerId } from './store-validators.js';
+
+export { assertWorkerId, isSessionToken } from './store-validators.js';
 
 /**
  * The daemon-side record of one endpoint session: export descriptions,
@@ -90,79 +81,6 @@ import { Fail, q } from '@endo/errors';
  * @property {(token: string) => void} deleteSession
  */
 
-// Worker ids are host-generated unguessable random hex, never
-// user-chosen names: reaching a worker requires a capability (a
-// publication, a durable cross-worker link, or a facade), not a string.
-const WORKER_ID_PATTERN = /^[0-9a-f]{32}$/;
-
-// Resume tokens arrive over the network and become directory names:
-// validate the exact shape the durable netlayer mints before any
-// filesystem use.
-const SESSION_TOKEN_PATTERN = /^[0-9a-f]{32}$/;
-
-/** @param {string} token */
-export const isSessionToken = token =>
-  typeof token === 'string' && SESSION_TOKEN_PATTERN.test(token);
-harden(isSessionToken);
-
-/** @param {string} token */
-const assertSessionToken = token => {
-  isSessionToken(token) ||
-    Fail`Session token must match ${q(SESSION_TOKEN_PATTERN.source)}`;
-};
-
-/** @param {string} workerId */
-export const assertWorkerId = workerId => {
-  WORKER_ID_PATTERN.test(workerId) ||
-    Fail`Worker id must match ${q(WORKER_ID_PATTERN.source)}, got ${q(
-      workerId,
-    )}`;
-};
-harden(assertWorkerId);
-
-/**
- * @param {string} path
- * @returns {any}
- */
-const readJsonMaybe = path => {
-  if (!existsSync(path)) {
-    return undefined;
-  }
-  return JSON.parse(readFileSync(path, 'utf8'));
-};
-
-/**
- * @param {string} path
- */
-const syncPath = path => {
-  const fd = openSync(path, 'r');
-  try {
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
-  }
-};
-
-/** @param {string} path */
-const makeDirectory = path => {
-  if (existsSync(path)) return;
-  makeDirectory(dirname(path));
-  mkdirSync(path, { recursive: true });
-  syncPath(dirname(path));
-};
-
-/**
- * @param {string} path
- * @param {string} text
- */
-const writeFileAtomic = (path, text) => {
-  const tempPath = `${path}.tmp`;
-  writeFileSync(tempPath, text);
-  syncPath(tempPath);
-  renameSync(tempPath, path);
-  syncPath(dirname(path));
-};
-
 /**
  * Filesystem-backed {@link ThixotropeStore}. All writes are synchronous
  * write-through so durable state always precedes any message reaching a
@@ -175,10 +93,68 @@ const writeFileAtomic = (path, text) => {
  * - `sessions/<token>/meta.json`
  * - `sessions/<token>/frames.jsonl`
  *
+ * @param {NodePowers} powers
  * @param {string} statePath
  * @returns {ThixotropeStore}
  */
-export const makeFsStore = statePath => {
+export const makeFsStore = (powers, statePath) => {
+  const {
+    appendFileSync,
+    closeSync,
+    existsSync,
+    fsyncSync,
+    mkdirSync,
+    openSync,
+    readdirSync,
+    readFileSync,
+    renameSync,
+    rmSync,
+    writeFileSync,
+  } = powers.fs;
+  const { dirname, join } = powers.path;
+  /**
+   * @param {string} path
+   * @returns {any}
+   */
+  const readJsonMaybe = path => {
+    if (!existsSync(path)) {
+      return undefined;
+    }
+    return JSON.parse(readFileSync(path, 'utf8'));
+  };
+
+  /**
+   * @param {string} path
+   */
+  const syncPath = path => {
+    const fd = openSync(path, 'r');
+    try {
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+  };
+
+  /** @param {string} path */
+  const makeDirectory = path => {
+    if (existsSync(path)) return;
+    makeDirectory(dirname(path));
+    mkdirSync(path, { recursive: true });
+    syncPath(dirname(path));
+  };
+
+  /**
+   * @param {string} path
+   * @param {string} text
+   */
+  const writeFileAtomic = (path, text) => {
+    const tempPath = `${path}.tmp`;
+    writeFileSync(tempPath, text);
+    syncPath(tempPath);
+    renameSync(tempPath, path);
+    syncPath(dirname(path));
+  };
+
   const workersPath = join(statePath, 'workers');
   const sessionsPath = join(statePath, 'sessions');
   makeDirectory(workersPath);
@@ -300,7 +276,6 @@ export const makeFsStore = statePath => {
         // Torn final line from a crash mid-append: the entry was never
         // delivered, so forgetting it is correct.
         entries = entries.slice(0, -1);
-        // eslint-disable-next-line no-use-before-define
         writeJournalFile(header.base, entries);
       }
       return { base: header.base, lines: entries };
@@ -393,99 +368,4 @@ export const makeFsStore = statePath => {
 };
 harden(makeFsStore);
 
-/**
- * In-memory {@link ThixotropeStore} for tests. Simulates restart survival as
- * long as the same store object is handed to each host incarnation.
- *
- * @returns {ThixotropeStore}
- */
-export const makeMemoryStore = () => {
-  /** @type {Map<string, { tables?: TablesRecord, meta: WorkerMeta, base: number, journal: Array<any> }>} */
-  const workers = new Map();
-  /** @type {any} */
-  let hubState;
-
-  /** @param {string} workerId */
-  const provideWorkerStore = workerId => {
-    assertWorkerId(workerId);
-    let entry = workers.get(workerId);
-    if (!entry) {
-      entry = { tables: undefined, meta: {}, base: 0, journal: [] };
-      workers.set(workerId, entry);
-    }
-    const state = entry;
-    /** @type {WorkerStore} */
-    const workerStore = {
-      getTablesRecord: () => state.tables,
-      setTablesRecord: record => {
-        state.tables = record;
-      },
-      getMeta: () => state.meta,
-      setMeta: meta => {
-        state.meta = meta;
-      },
-      appendJournal: message =>
-        state.journal.push(JSON.parse(JSON.stringify(message))),
-      readJournal: (from = 0) =>
-        state.journal.slice(Math.max(0, from - state.base)),
-      journalLength: () => state.base + state.journal.length,
-      truncateJournal: upTo => {
-        if (upTo <= state.base) {
-          return;
-        }
-        upTo <= state.base + state.journal.length ||
-          Fail`Cannot truncate journal beyond its length`;
-        state.journal = state.journal.slice(upTo - state.base);
-        state.base = upTo;
-      },
-    };
-    return harden(workerStore);
-  };
-
-  /** @type {Map<string, { meta: Record<string, any>, frames: Array<{ n: number, b64: string, hubSequence?: string }> }>} */
-  const sessions = new Map();
-
-  /** @param {string} token */
-  const provideSessionStore = token => {
-    assertSessionToken(token);
-    let entry = sessions.get(token);
-    if (!entry) {
-      entry = { meta: {}, frames: [] };
-      sessions.set(token, entry);
-    }
-    const state = entry;
-    /** @type {SessionStore} */
-    const sessionStore = {
-      getMeta: () => state.meta,
-      setMeta: meta => {
-        state.meta = JSON.parse(JSON.stringify(meta));
-      },
-      appendFrame: frame => state.frames.push({ ...frame }),
-      readFrames: () => state.frames.map(frame => ({ ...frame })),
-      truncateFramesUpTo: upToN => {
-        state.frames = state.frames.filter(frame => frame.n > upToN);
-      },
-    };
-    return harden(sessionStore);
-  };
-
-  /** @type {ThixotropeStore} */
-  const store = {
-    listWorkerIds: () => [...workers.keys()].sort(),
-    provideWorkerStore,
-    deleteWorker: workerId => {
-      workers.delete(workerId);
-    },
-    getHubState: () => hubState,
-    setHubState: state => {
-      hubState = JSON.parse(JSON.stringify(state));
-    },
-    listSessionTokens: () => [...sessions.keys()].sort(),
-    provideSessionStore,
-    deleteSession: token => {
-      sessions.delete(token);
-    },
-  };
-  return harden(store);
-};
-harden(makeMemoryStore);
+export { makeMemoryStore } from './store-memory.js';

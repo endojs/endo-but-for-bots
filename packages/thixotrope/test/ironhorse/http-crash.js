@@ -12,6 +12,10 @@ import { fileURLToPath } from 'node:url';
 import { connectLocalControl } from '../../src/local-control.js';
 import { makeFsStore } from '../../src/store-fs.js';
 
+import { makeNodePowers } from '../../src/platform/node-powers.js';
+
+const nodePowers = makeNodePowers();
+
 /** @import {ExecutionContext} from 'ava' */
 const cli = fileURLToPath(new URL('../../bin/thix.js', import.meta.url));
 
@@ -45,7 +49,10 @@ const start = async (t, path) => {
       throw Error(`serve exited: ${diagnostic}`);
     }),
   ]);
-  const client = await connectLocalControl(join(path, 'control.sock'));
+  const client = await connectLocalControl(
+    nodePowers,
+    join(path, 'control.sock'),
+  );
   t.teardown(() => client.close());
   return { child, exited, client };
 };
@@ -158,7 +165,7 @@ test.serial(
       await setTimeout(20);
     }
     t.true(accepted, 'guest handler committed its effect before the crash');
-    const store = makeFsStore(path);
+    const store = makeFsStore(nodePowers, path);
     t.true(
       Object.keys(store.getHubState().sessions).some(key =>
         key.startsWith('transient:'),

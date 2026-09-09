@@ -1,25 +1,29 @@
 // @ts-check
+/** @import { NodePowers } from './platform/node-powers.js' */
 import { E, Far } from '@endo/far';
 import harden from '@endo/harden';
-import { clearTimeout, setTimeout } from 'node:timers';
 
 /**
  * Reconstructible host timer index. The guest clock owns durable registrations.
  * Each host observation has a bounded lifetime and its own disposable session.
+ * @param {Pick<NodePowers, 'now' | 'timers'>} powers
  * @param {{openClient: () => Promise<any>, secret: string,
  * now?: () => bigint, setTimer?: (callback: () => void, ms: number) => any,
  * clearTimer?: (handle: any) => void, retryMs?: number,
  * requestTimeoutMs?: number}} options
  */
-export const makeAlarmScheduler = ({
-  openClient,
-  secret,
-  now = () => BigInt(Date.now()),
-  setTimer = setTimeout,
-  clearTimer = clearTimeout,
-  retryMs = 1000,
-  requestTimeoutMs = 30_000,
-}) => {
+export const makeAlarmScheduler = (
+  powers,
+  {
+    openClient,
+    secret,
+    now = () => BigInt(powers.now()),
+    setTimer = powers.timers.setTimeout,
+    clearTimer = powers.timers.clearTimeout,
+    retryMs = 1000,
+    requestTimeoutMs = 30_000,
+  },
+) => {
   if (!Number.isInteger(retryMs) || retryMs < 1 || retryMs > 2 ** 31 - 1)
     throw Error('Invalid alarm retry interval');
   if (

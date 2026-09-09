@@ -8,6 +8,10 @@ import { makeEphemeralHubClient } from '../src/ephemeral-hub-client.js';
 import { makeOcapnHub } from '../src/hub.js';
 import { makeWorkerPeer } from '../src/worker-peer.js';
 
+import { makeNodePowers } from '../src/platform/node-powers.js';
+
+const nodePowers = makeNodePowers();
+
 /** @import {ExecutionContext} from 'ava' */
 /** @param {ExecutionContext} t */
 const setup = async t => {
@@ -17,7 +21,7 @@ const setup = async t => {
   /** @type {Uint8Array[]} */
   const outbound = [];
   const workerId = 'b'.repeat(32);
-  const worker = await makeWorkerPeer({
+  const worker = await makeWorkerPeer(nodePowers, {
     workerId,
     send: bytes => {
       if (sink === undefined) outbound.push(bytes);
@@ -31,7 +35,7 @@ const setup = async t => {
   });
   for (const bytes of outbound) sink.deliver(bytes);
   hub.publish('worker', { session: workerId, position: 0n });
-  const client = await makeEphemeralHubClient({
+  const client = await makeEphemeralHubClient(nodePowers, {
     codec: syrupCodec,
     hub,
     sessionKey: 'transient:first',
@@ -79,7 +83,7 @@ test('one transient close leaves another client and guest effects intact', async
   t.timeout(10_000);
   const { hub, client, shell } = await setup(t);
   await E(shell).evaluate(`globalThis.count = 0`);
-  const second = await makeEphemeralHubClient({
+  const second = await makeEphemeralHubClient(nodePowers, {
     codec: syrupCodec,
     hub,
     sessionKey: 'transient:second',
@@ -110,7 +114,7 @@ test('failed hub cleanup remains retryable after the client is aborted', async t
   t.timeout(10_000);
   const { hub } = await setup(t);
   let fail = true;
-  const client = await makeEphemeralHubClient({
+  const client = await makeEphemeralHubClient(nodePowers, {
     codec: syrupCodec,
     sessionKey: 'transient:retry',
     hub: {

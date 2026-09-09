@@ -381,7 +381,7 @@ These tests verify exactly one counter increment after a fresh process restores 
 They do not simulate hardware power loss or storage devices that ignore fsync.
 `THIXOTROPE_IRONHORSE_WORKER` can select a different binary.
 
-`makeIronhorseEngine({ workerBinary, bootPaths, storePath, crankBudget,
+`makeIronhorseEngine(powers, { workerBinary, bootPaths, storePath, crankBudget,
 requestTimeoutMs })` implements the existing WorkerEngine interface. The
 bootstrap uses the real SES shim and compartments. Native `async` functions,
 ordinary promises, closures, and retained capabilities persist in SQLite without guest-side
@@ -460,6 +460,12 @@ There is no bootstrap priming workaround for `Symbol.unscopables`.
 
 ## Example
 
+Host factories take their platform powers explicitly as their first argument.
+The Node composition entry creates filesystem, socket, subprocess, timer, entropy, and diagnostic
+capabilities; the core never imports that entry or acquires platform authority by default.
+HTTP and clock managers receive a `SyncStringAtom` for metadata, with synchronous string reads and
+writes; their JSON interpretation is independent of the file-backed implementation.
+
 ```js
 // The daemon runs under Hardened JavaScript: lock down first.
 import '@endo/init';
@@ -468,10 +474,13 @@ import { E } from '@endo/eventual-send';
 import { makeTcpNetLayer } from '@endo/ocapn/netlayer/tcp-testing';
 import { syrupCodec } from '@endo/ocapn/syrup';
 import { makeFsStore, makeThixotropeDaemon, makeXsEngine } from '@endo/thixotrope';
+import { makeNodePowers } from '@endo/thixotrope/node-powers.js';
 
-const daemon = await makeThixotropeDaemon({
-  store: makeFsStore('/var/lib/thixotrope'),
-  engine: makeXsEngine({
+const powers = makeNodePowers();
+
+const daemon = await makeThixotropeDaemon(powers, {
+  store: makeFsStore(powers, '/var/lib/thixotrope'),
+  engine: makeXsEngine(powers, {
     workerBinary: 'target/release/thixotrope-xs-worker',
     bootPath: 'dist-xs/boot.js',
     bundlePath: 'dist-xs/worker-peer.js',
@@ -650,10 +659,10 @@ session — and every live remote reference in it — survives
 transparently:
 
 ```js
-const daemon = await makeThixotropeDaemon({
+const daemon = await makeThixotropeDaemon(powers, {
   // ...
   makeNetlayer: ({ handlers, logger, resumption }) =>
-    makeDurableNetLayer({
+    makeDurableNetLayer(powers, {
       handlers,
       logger,
       resumption,
@@ -754,9 +763,9 @@ endowments:
 ```js
 import { makeTimerResource } from '@endo/thixotrope';
 
-const daemon = await makeThixotropeDaemon({
+const daemon = await makeThixotropeDaemon(powers, {
   // ...
-  resources: { timer: makeTimerResource },
+  resources: { timer: description => makeTimerResource(powers, description) },
 });
 const worker = await daemon.createWorker({ debugLabel: 'clock' });
 const timer = daemon.makeResource('timer');
@@ -785,7 +794,7 @@ settle normally across restarts.
 
 ## API
 
-`makeThixotropeDaemon({ store, engine, codec, makeNetlayer, resources?, idleSleepMs?, verbose? })`
+`makeThixotropeDaemon(powers, { store, engine, codec, makeNetlayer, resources?, idleSleepMs?, verbose? })`
 resolves to a daemon (`idleSleepMs` parks any worker that has seen no
 deliveries for that long; workers run to quiescence per delivery and
 have no timer queue, so frame silence is exact dormancy):
