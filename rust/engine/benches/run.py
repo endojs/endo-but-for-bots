@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Run the release benchmark corpus serially and compare measured medians."""
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -13,6 +14,29 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 TARGETS = ("dispatch_bench", "attached_bench", "gc_bench", "wake_latency_bench")
+
+
+def fixture_digest(root=ROOT):
+    """Identify the exact common fixtures measured on both revisions."""
+    files = [root / f"ironhorse-snapshot/tests/{target}.rs" for target in TARGETS]
+    files += sorted((root / "ironhorse-snapshot/tests/bench_support").rglob("*.rs"))
+    files += [root / "rust-toolchain.toml"]
+    digest = hashlib.sha256()
+    for path in sorted(files):
+        name = path.relative_to(root).as_posix().encode()
+        content = path.read_bytes()
+        digest.update(len(name).to_bytes(8, "big"))
+        digest.update(name)
+        digest.update(len(content).to_bytes(8, "big"))
+        digest.update(content)
+    return digest.hexdigest()
+
+
+def validate_reference(reference, candidate):
+    """A portable ratio requires common fixtures and measurement environment."""
+    for key in ("platform", "machine", "cpu", "rustc", "fixture_sha256", "build_environment"):
+        if key not in reference or key not in candidate or reference[key] != candidate[key]:
+            raise ValueError(f"reference provenance differs: {key}")
 
 
 def read_metrics(output):
@@ -48,11 +72,16 @@ def main():
     mode.add_argument("--check-baseline", action="store_true")
     mode.add_argument("--write-baseline", action="store_true")
     parser.add_argument("--reference-baseline", action="store_true",
-                        help="remeasure the pinned baseline revision on this host before checking")
+                        help="remeasure the pinned revision on this host (automatic with --check-baseline)")
     args = parser.parse_args()
     baseline = None if args.write_baseline else json.loads(args.baseline.read_text())
+    maximum = 1.25 if baseline is None else baseline["maximum_ratio"]
+    if isinstance(maximum, bool) or not isinstance(maximum, (float, int)) or not math.isfinite(maximum) or maximum < 1:
+        parser.error("invalid maximum_ratio")
+    if baseline is not None:
+        compare({}, baseline["medians"], maximum)
     reference_provenance = None
-    if args.reference_baseline:
+    if args.reference_baseline or args.check_baseline:
         if baseline is None:
             parser.error("--reference-baseline requires an existing baseline")
         # Use the same fixtures and compiler on both revisions. Absolute timings
@@ -73,6 +102,9 @@ def main():
             reference_report = reference / "report.json"
             reference_env = os.environ.copy()
             reference_env["IRONHORSE_REFERENCE_COMMIT"] = revision
+            # Keep archived-reference builds isolated from an inherited target
+            # directory while retaining the same compilation settings.
+            reference_env["CARGO_TARGET_DIR"] = str(reference / "target")
             subprocess.run([sys.executable, str(ref_engine / "benches/run.py"),
                             "--write-baseline", "--output", str(reference_report)],
                            check=True, env=reference_env)
@@ -107,14 +139,21 @@ def main():
         "platform": platform.platform(),
         "machine": platform.machine(),
         "cpu": platform.processor(),
+        "fixture_sha256": fixture_digest(),
+        "build_environment": {name: os.environ.get(name) for name in
+                              ("CARGO_INCREMENTAL", "RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS",
+                               "RUST_MIN_STACK", "RUSTUP_TOOLCHAIN", "CARGO_BUILD_TARGET")},
     }
-    maximum = 1.25 if baseline is None else baseline["maximum_ratio"]
-    if not isinstance(maximum, (float, int)) or not math.isfinite(maximum) or maximum < 1:
-        raise ValueError("invalid maximum_ratio")
     if args.check_baseline:
-        failures.extend(compare(metrics, baseline["medians"], maximum))
+        try:
+            validate_reference(reference_provenance, provenance)
+        except ValueError as error:
+            failures.append(str(error))
+        else:
+            failures.extend(compare(metrics, baseline["medians"], maximum))
     report = {"provenance": provenance, "medians": metrics, "maximum_ratio": maximum, "failures": failures, "reference_provenance": reference_provenance,
-              "reference_medians": None if baseline is None else baseline["medians"]}
+              "reference_medians": None if baseline is None else baseline["medians"],
+              "comparison_kind": "same-host-reference" if reference_provenance else "historical-context-only"}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2) + "\n")
     if args.write_baseline and not failures:

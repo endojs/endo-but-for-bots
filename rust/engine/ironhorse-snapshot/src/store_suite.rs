@@ -78,8 +78,13 @@ fn run_baseline(scenario: &str, compiled: &[(Vec<u8>, Vec<ironhorse_vm::SymbolNa
     m.link_intrinsics(&compiled[0].1);
     let mut results = Vec::new();
     let mut computrons = Vec::new();
-    for (i, (bytecode, _)) in compiled.iter().enumerate() {
-        let o = m.run(bytecode);
+    for (i, (bytecode, names)) in compiled.iter().enumerate() {
+        let code = if i == 0 {
+            bytecode.clone()
+        } else {
+            m.relink_crank(bytecode, names).expect("crank relinks")
+        };
+        let o = m.run(&code);
         // The suite's real precondition is a QUIESCENT boundary after
         // every crank, which `completed` now agrees with by
         // construction; asserting the predicate itself keeps the two
@@ -145,14 +150,19 @@ fn run_blob_scheduled(
     m.link_intrinsics(&compiled[0].1);
     let mut results = Vec::new();
     let mut computrons = Vec::new();
-    for (i, (bytecode, _)) in compiled.iter().enumerate() {
+    for (i, (bytecode, names)) in compiled.iter().enumerate() {
         if i > 0 && suspend_before[i] {
             let bytes = m
                 .write_snapshot(&sig())
                 .expect("quiescent machine snapshots");
             m = from_snapshot_bytes(&bytes, &sig()).expect("blob resumes");
         }
-        let o = m.run(bytecode);
+        let code = if i == 0 {
+            bytecode.clone()
+        } else {
+            m.relink_crank(bytecode, names).expect("crank relinks")
+        };
+        let o = m.run(&code);
         results.push(crank_result(&o));
         computrons.push(o.computrons);
     }
@@ -212,7 +222,7 @@ fn run_store_scheduled<S: HeapStore + 'static>(
         .expect("begin session");
 
     let mut evictions = 0u32;
-    for (i, (bytecode, _)) in compiled.iter().enumerate().skip(1) {
+    for (i, (bytecode, names)) in compiled.iter().enumerate().skip(1) {
         if suspend_before[i] {
             drop(session);
             session = match mode {
@@ -258,7 +268,11 @@ fn run_store_scheduled<S: HeapStore + 'static>(
                 session.machine().chunks.touch_extent(ext);
             }
         }
-        let o = session.machine_mut().run(bytecode);
+        let code = session
+            .machine_mut()
+            .relink_crank(bytecode, names)
+            .expect("crank relinks");
+        let o = session.machine_mut().run(&code);
         results.push(crank_result(&o));
         computrons.push(o.computrons);
         checkpoint_to_store(&mut session, &sig(), &mut *store.borrow_mut()).expect("checkpoint");
@@ -316,8 +330,12 @@ fn run_checkpoint_every_crank<S: HeapStore + 'static>(
         .map_err(|(_, e)| e)
         .expect("begin session");
 
-    for (bytecode, _) in compiled.iter().skip(1) {
-        let o = session.machine_mut().run(bytecode);
+    for (bytecode, names) in compiled.iter().skip(1) {
+        let code = session
+            .machine_mut()
+            .relink_crank(bytecode, names)
+            .expect("crank relinks");
+        let o = session.machine_mut().run(&code);
         results.push(crank_result(&o));
         computrons.push(o.computrons);
         checkpoint_to_store(&mut session, &sig(), &mut *store.borrow_mut()).expect("checkpoint");
@@ -364,7 +382,7 @@ fn metamorphic<S: HeapStore + 'static>(
 
 /// Compare uninterrupted, blob, eager-store, and lazy-store executions under
 /// an arbitrary subset of the boundaries before cranks. Element zero must be
-/// false (there is no predecessor to resume). Fixtures use one symbol table.
+/// false (there is no predecessor to resume). Later cranks are relinked by name.
 pub fn metamorphic_with_suspend_schedule<S: HeapStore + 'static>(
     mut fresh: impl FnMut() -> S,
     scenario: &str,
@@ -375,9 +393,6 @@ pub fn metamorphic_with_suspend_schedule<S: HeapStore + 'static>(
     assert_eq!(suspend_before.len(), cranks.len());
     assert!(!suspend_before[0]);
     let compiled: Vec<_> = cranks.iter().map(|source| compile(source)).collect();
-    for (_, names) in &compiled {
-        assert_eq!(names, &compiled[0].1);
-    }
     let baseline = run_baseline(scenario, &compiled);
     let (r, c, b) = run_blob_scheduled(&compiled, suspend_before);
     assert_agrees("scheduled-blob", scenario, &baseline, &r, &c, &b);
@@ -460,17 +475,9 @@ fn halting_crank_scenario<S: HeapStore + 'static>(fresh: &mut dyn FnMut() -> S) 
 /// `fresh` must return an EMPTY store; it is called once per
 /// store-backed variant.
 ///
-/// Fixtures follow the anchored equal-symbol-set discipline (every
-/// crank of a scenario uses the same program-symbol set).
-/// A carry scenario. Every crank of a scenario must reference the same
-/// program-symbol SET (the suite's anchored discipline: the baseline
-/// links intrinsics once, from crank 1's names, and runs the rest
-/// unrelinked, so a name first seen in crank 2 resolves to nothing).
-/// Setup and observation naturally use different members, so each
-/// crank carries the same dead `if (0)` mention block ahead of its
-/// own body -- compiling interns those names without executing
-/// anything, and the block is identical in every variant, so it
-/// cannot itself introduce a divergence.
+/// A carry scenario with a repeated declaration preamble.
+/// Every execution variant relinks later cranks independently, including when
+/// symbol names are reordered, omitted, or introduced for the first time.
 fn carry<S: HeapStore + 'static>(
     fresh: &mut dyn FnMut() -> S,
     scenario: &str,
@@ -493,25 +500,26 @@ fn carry<S: HeapStore + 'static>(
         })
         .collect();
     let cranks: Vec<&str> = bodies.iter().map(String::as_str).collect();
-    // Enforce the discipline rather than letting it surface as a
-    // baffling `TypeError` three layers down: symbol ids are
-    // POSITIONAL, so one name interned by only some cranks shifts
-    // every id after it and the unrelinked baseline resolves garbage.
-    let anchor = compile(cranks[0]).1;
-    for (i, crank) in cranks.iter().enumerate().skip(1) {
-        let names = compile(crank).1;
-        assert_eq!(
-            names,
-            anchor,
-            "{scenario} crank {} must intern exactly crank 1's program symbols, in order \
-             (add the ones it is missing to the scenario's mention block)",
-            i + 1
-        );
-    }
     metamorphic(fresh, scenario, &cranks);
 }
 
 pub fn metamorphic_suite<S: HeapStore + 'static>(mut fresh: impl FnMut() -> S) {
+    // Deliberately disjoint and reordered symbols; no mention-block anchor.
+    for seed in 0..8 {
+        let setup = format!("var retained = {{value: {seed}}}; var next = function(n) {{ retained.value += n; return retained.value; }}; 0");
+        let mutate = format!("var fresh{seed} = next(2); fresh{seed}");
+        metamorphic(
+            &mut fresh,
+            "changing-symbols",
+            &[
+                &setup,
+                &mutate,
+                "retained.value + next(3)",
+                "var later = retained; later.value",
+                "next(1)",
+            ],
+        );
+    }
     suspend_subset_scenario(&mut fresh);
     halting_crank_scenario(&mut fresh);
     metamorphic(
