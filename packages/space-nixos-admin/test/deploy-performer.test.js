@@ -44,7 +44,8 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 /**
  * @param {import('ava').ExecutionContext} t
- * @param {{ shell?: string, watchLimitMs?: number, pollMs?: number }}
+ * @param {{ shell?: string, watchLimitMs?: number, pollMs?: number,
+ *   timing?: { now: () => number, sleep: (ms: number) => Promise<void> } }}
  *   [options] - `shell` stands in for the lock holder's `/bin/sh`, so a test
  *   can model a holder that dies mid-transaction. `watchLimitMs` lets a test
  *   that must actually reach the cap do so in milliseconds rather than
@@ -64,7 +65,12 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
  */
 const makeHarness = async (
   t,
-  { shell = '/bin/sh', watchLimitMs = 60_000, pollMs = 10 } = {},
+  {
+    shell = '/bin/sh',
+    watchLimitMs = 60_000,
+    pollMs = 10,
+    timing = undefined,
+  } = {},
 ) => {
   const dir = await mkdtemp(join(tmpdir(), 'nixos-deploy-'));
   t.teardown(() => rm(dir, { recursive: true, force: true }));
@@ -119,6 +125,7 @@ const makeHarness = async (
   const reincarnate = () =>
     make(undefined, undefined, {
       env,
+      timing,
       systemPaths: {
         currentSystem,
         ...(process.platform === 'linux'
@@ -1301,60 +1308,49 @@ test('a JSON array in the status file is rejected the same way', async t => {
 });
 
 test('a watch inherits the wait deadline instead of restarting it', async t => {
-  // `driveOperation` and `awaitOutcome` each used to compute their own
-  // `Date.now() + watchLimitMs`, so an operation that spent most of its
-  // window waiting for the slot then got a second full window to watch —
-  // a 2x bound on a queue that is held for the whole time, delaying every
-  // later verb including `rollback`.
   t.timeout(20_000);
   const watchLimitMs = 2000;
-  const { admin, statusPath, spoolDir } = await makeHarness(t, {
+  let now = 0;
+  let polls = 0;
+  const { admin, statusPath, requestBytes } = await makeHarness(t, {
     watchLimitMs,
+    timing: {
+      now: () => now,
+      sleep: async () => {
+        await null;
+        polls += 1;
+        if (polls === 1) {
+          // The first wait proves the foreign operation held the slot.
+          t.is(await requestBytes(), undefined);
+          now = 1600;
+          await writeFile(
+            statusPath,
+            JSON.stringify({ id: 'other', phase: 'ok' }),
+            'utf8',
+          );
+        } else if (polls === 2) {
+          // We reached the outcome watch with 400ms left. Expire the original
+          // deadline, but not a fresh 2000ms deadline started at submission.
+          t.truthy(await requestBytes());
+          now = 2001;
+        } else {
+          throw Error('watch restarted its deadline');
+        }
+      },
+    },
   });
-  await mkdir(spoolDir, { recursive: true });
-  // A foreign NONTERMINAL status with an id and no outcome: slot-busy, so the
-  // operation waits rather than submitting.
   await writeFile(
     statusPath,
     JSON.stringify({ id: 'other', phase: 'building' }),
     'utf8',
   );
-
-  const attempt = admin.build('inherits the deadline', 'k-deadline-1');
-  // Free the slot late in the window, so most of the one permitted limit is
-  // already spent waiting; the caplet then submits and watches for an outcome
-  // that never comes.
-  //
-  // The replacement status keeps a foreign `id` on purpose. Dropping the id
-  // would free the slot just as well, but `awaitOutcome` would then hit the
-  // bounded id-less grace after ~30 polls and this would time the GRACE
-  // rather than the deadline — passing under a mutation that restores the
-  // fresh deadline, which is exactly the regression it must catch.
-  await delay(watchLimitMs * 0.8);
-  await writeFile(
-    statusPath,
-    JSON.stringify({ id: 'other', phase: 'ok' }),
-    'utf8',
+  // Retain the foreign id when freeing the slot: an id-less status could
+  // hit the separate grace limit and conceal a restarted watch deadline.
+  await t.throwsAsync(
+    () => admin.build('inherits the deadline', 'k-deadline-1'),
+    { message: /saw no outcome within the watch limit/ },
   );
-  // Measure the watch from the moment the slot is FREED, not from the start.
-  // The regression is a *fresh* full window granted at submission: inheriting,
-  // the deadline is absolute (`started + watchLimitMs`), so once ~0.8x of it
-  // is already spent the post-free watch can only run out the remaining ~0.2x
-  // — and none at all if load already carried real time past the deadline.
-  // Restarting, `awaitOutcome` would recompute `Date.now() + watchLimitMs` at
-  // submission and watch a whole further ~1x from here. The full-window bound
-  // below is the actual regression boundary: a restarted deadline cannot
-  // expire before that new window, while an inherited deadline has already
-  // consumed most of it. Unlike a tighter fraction, it leaves the inheriting
-  // side enough room for post-submit detect/poll overhead on a saturated
-  // runner without weakening the distinction from a fresh deadline.
-  const freed = Date.now();
-  await t.throwsAsync(() => attempt, { message: /within the watch limit/ });
-  const watchedAfterFree = Date.now() - freed;
-  t.true(
-    watchedAfterFree < watchLimitMs,
-    `watched ${watchedAfterFree}ms after the slot freed; a fresh window would be ~${watchLimitMs}ms`,
-  );
+  t.is(polls, 2);
 });
 
 test('a stale id-less status does not abort the watch of a slow, correct applier', async t => {
