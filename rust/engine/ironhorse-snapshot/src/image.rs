@@ -4944,128 +4944,7 @@ fn encode_machine(image: &MachineImage) -> Result<Vec<u8>, SnapshotError> {
     w.atom(CREA, &image.creation.encode())?;
     w.atom(BLOC, &image.chunks)?;
     w.atom(HEAP, &encode_heap(image))?;
-    w.atom(STAC, &encode_stack(&image.stack))?;
-    w.atom(KEYS, &encode_strings(&image.keys))?;
-    w.atom(NAME, &names)?;
-    w.atom(SYMB, &encode_symbol_keys(&image.symbols))?;
-    w.atom(METR, &image.meter.encode())?;
-    // Side-table ledger atoms, emitted ONLY when non-empty: a machine
-    // with no side-table state keeps its exact pre-ledger container
-    // bytes, so the CAS/blob identity of every existing container —
-    // the golden-vector pin included — is unchanged by the ledger.
-    // Presence is content-determined, so the canonical-bytes property
-    // (same image → same bytes) holds either way.
-    if !image.arrays.is_empty() {
-        w.atom(crate::format::ARRY, &encode_arrays(&image.arrays))?;
-    }
-    // After `ARRY`, matching `CANONICAL_ATOM_ORDER`: the container reader
-    // walks that list with a cursor and refuses anything out of order.
-    if !image.index_props.is_empty() {
-        w.atom(crate::format::IDXP, &encode_index_props(&image.index_props))?;
-    }
-    if !image.collections.is_empty() {
-        w.atom(crate::format::COLL, &encode_collections(&image.collections))?;
-    }
-    if !image.registry.is_empty() {
-        w.atom(crate::format::REGY, &encode_registry(&image.registry))?;
-    }
-    if !image.errors.is_empty() {
-        w.atom(crate::format::ERRD, &encode_errors(&image.errors))?;
-        // Emitted only when some error actually captured frames, so a
-        // machine whose errors have none writes byte-identically to
-        // before this atom existed.
-        if image.errors.iter().any(|e| !e.frames.is_empty()) {
-            w.atom(crate::format::ESTK, &encode_error_frames(&image.errors))?;
-        }
-    }
-    if !image.buffers.is_empty() {
-        w.atom(crate::format::ABUF, &encode_buffers(&image.buffers))?;
-    }
-    if !image.typed_arrays.is_empty() {
-        w.atom(
-            crate::format::TARR,
-            &encode_typed_arrays(&image.typed_arrays),
-        )?;
-    }
-    if !image.data_views.is_empty() {
-        w.atom(crate::format::DVIW, &encode_data_views(&image.data_views))?;
-    }
-    if !image.wrappers.is_empty() {
-        w.atom(crate::format::WRAP, &encode_wrappers(&image.wrappers))?;
-    }
-    if !image.regexps.is_empty() {
-        w.atom(crate::format::REGX, &encode_regexps(&image.regexps))?;
-    }
-    if !image.arguments_brands.is_empty() {
-        w.atom(
-            crate::format::ARGB,
-            &encode_arguments_brands(&image.arguments_brands),
-        )?;
-    }
-    if !image.temporal.is_empty() {
-        w.atom(crate::format::TMPR, &encode_temporal(&image.temporal))?;
-    }
-    if !image.intl.is_empty() {
-        w.atom(crate::format::INTL, &encode_intl(&image.intl))?;
-    }
-    if !image.iterators.is_empty() {
-        w.atom(crate::format::ITER, &encode_iterators(&image.iterators))?;
-    }
-    if !image.dates.is_empty() {
-        w.atom(crate::format::DATE, &encode_dates(&image.dates))?;
-    }
-    if !image.function_state.is_empty() {
-        w.atom(
-            crate::format::FUNC,
-            &encode_function_state(&image.function_state),
-        )?;
-    }
-    if !image.proxy_state.is_empty() {
-        w.atom(crate::format::PROX, &encode_proxy_state(&image.proxy_state))?;
-    }
-    if !image.accessors.is_empty() {
-        w.atom(crate::format::ACCS, &encode_accessors(&image.accessors))?;
-    }
-    if !image.intl_bound_functions.is_empty() {
-        w.atom(
-            crate::format::IBFN,
-            &encode_intl_bound_functions(&image.intl_bound_functions),
-        )?;
-    }
-    if !image.private_elements.is_empty() {
-        w.atom(
-            crate::format::PRIV,
-            &encode_private_elements(&image.private_elements),
-        )?;
-    }
-    if !image.disposable_stacks.is_empty() {
-        w.atom(
-            crate::format::DISP,
-            &encode_disposable_stacks(&image.disposable_stacks),
-        )?;
-    }
-    if !image.generators.is_empty() {
-        w.atom(crate::format::GENR, &encode_generators(&image.generators))?;
-    }
-    if !image.promise_cluster.is_empty() {
-        w.atom(
-            crate::format::PRMS,
-            &encode_promise_cluster(&image.promise_cluster),
-        )?;
-    }
-    // The installed-names floor: `Some` only when it differs from the
-    // name-table length (`with_name_floor` canonicalizes), so machines
-    // whose floor sits at the table stay byte-stable with every
-    // pre-floor container.
-    if !image.promise_cluster.async_instances.is_empty() {
-        w.atom(
-            crate::format::ASYN,
-            &encode_async_instances(&image.promise_cluster.async_instances),
-        )?;
-    }
-    if let Some(floor) = image.name_floor {
-        w.atom(crate::format::NFLR, &floor.to_be_bytes())?;
-    }
+    crate::snapshot_roster::write_payload_atoms(&mut w, image, &names)?;
     w.finish()
 }
 
@@ -7076,6 +6955,68 @@ mod tests {
         assert_eq!(back, img);
         // Second write byte-equals the first.
         assert_eq!(write_machine_unchecked(&back), bytes);
+    }
+
+    #[test]
+    fn roster_container_preserves_presence_and_legacy_name_bytes() {
+        let mut image = MachineImage::from_arenas(
+            sig(),
+            &SlotArena::new(),
+            &ChunkArena::new(),
+            &[],
+            vec!["😀".into()],
+            vec![],
+            SymbolKeyImage::default(),
+        );
+        image.version.format_version = 14;
+        let bytes = write_machine_unchecked(&image);
+        let reader = AtomReader::parse(&bytes).unwrap();
+        assert_eq!(
+            reader
+                .atoms()
+                .iter()
+                .map(|atom| atom.tag.0)
+                .collect::<Vec<_>>(),
+            [
+                *b"VERS", *b"SIGN", *b"CREA", *b"BLOC", *b"HEAP", *b"STAC", *b"KEYS", *b"NAME",
+                *b"SYMB", *b"METR"
+            ],
+        );
+        // Format 14 uses UTF-8, not CESU-8, even for supplementary scalars.
+        assert_eq!(
+            reader.find(NAME).unwrap().payload,
+            &[0, 0, 0, 1, 0, 0, 0, 4, 0xf0, 0x9f, 0x98, 0x80]
+        );
+        assert_eq!(
+            Version::decode(reader.find(VERS).unwrap().payload)
+                .unwrap()
+                .format_version,
+            14
+        );
+
+        // Writer-only fixtures isolate content-dependent omission, without
+        // asking the adoption gate to accept these synthetic owner records.
+        image.errors.push(ErrorImage {
+            owner: 0,
+            name: "Error".into(),
+            message: None,
+            frames: vec![],
+        });
+        let bytes = write_machine_unchecked(&image);
+        let reader = AtomReader::parse(&bytes).unwrap();
+        assert!(reader.find(crate::format::ERRD).is_some());
+        assert!(reader.find(crate::format::ESTK).is_none());
+        assert!(reader.find(crate::format::NFLR).is_none());
+        image.errors[0].frames.push("f".into());
+        image.name_floor = Some(0);
+        let bytes = write_machine_unchecked(&image);
+        let reader = AtomReader::parse(&bytes).unwrap();
+        assert!(reader.find(crate::format::ESTK).is_some());
+        assert_eq!(
+            reader.find(crate::format::NFLR).unwrap().payload,
+            &[0, 0, 0, 0]
+        );
+        assert_eq!(reader.atoms().last().unwrap().tag, crate::format::NFLR);
     }
 
     #[test]
