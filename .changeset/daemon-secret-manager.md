@@ -13,8 +13,13 @@ management facets reached by lookup — `@secrets/create`
 `@secrets/catalog` (`SecretCatalog.list()`, returning a `SecretAdmin` per entry
 for `replaceBase64` / `setDescription` / `revoke` / `delete`), and
 `@secrets/audit` (`SecretAuditReader.list(limit?)`). `@secrets/use/<grantId>`
-resolves the read capability itself: a `SecretBlob` with `getDescription()` and
-`readBase64()`. `createBase64` binds each grant under the ordinary `secrets`
+resolves the read capability itself: a `SecretBlob` with `getDescription()`,
+`readBase64()`, and `readBase64WithGeneration()`, which reports the record
+generation the returned bytes came from. A holder that derives a new value from
+a secret can pin its write to that version with
+`SecretAdmin.replaceBase64(bytesBase64, { ifGeneration })`, which is refused
+with `GENERATION_CONFLICT` if the record moved in between rather than
+overwriting a replacement the holder never read. `createBase64` binds each grant under the ordinary `secrets`
 pet directory, so a secret is passed on by reference and its bytes never appear
 in `list()`. Every operation writes an audit event (`create`, `release`,
 `replace`, `set-description`, `revoke`, `delete`, each recorded `attempted` /
