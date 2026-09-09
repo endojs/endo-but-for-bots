@@ -7835,3 +7835,507 @@ mod scalar_framing_refusals {
         );
     }
 }
+
+#[cfg(test)]
+mod side_table_order_refusals {
+    use super::*;
+
+    #[test]
+    fn arrays_require_unique_ascending_owners() {
+        let first = ArrayImage {
+            owner: 2,
+            length: 0,
+            items: vec![],
+        };
+        let mut second = first.clone();
+        second.owner = 3;
+        assert!(decode_arrays(&encode_arrays(&[first.clone(), second.clone()])).is_ok());
+        // Equal owners silently replace a row on restore; descending owners
+        // silently reorder it. Both violate the canonical stored representation.
+        for owner in [2, 1] {
+            second.owner = owner;
+            assert_eq!(
+                decode_arrays(&encode_arrays(&[first.clone(), second.clone()])),
+                Err(SnapshotError::Corrupt(
+                    "arrays side table: owners not strictly ascending"
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn index_props_require_unique_ascending_owners() {
+        let first = IndexPropsImage {
+            owner: 2,
+            high_water: 0,
+            items: vec![],
+        };
+        let mut second = first.clone();
+        second.owner = 3;
+        assert!(decode_index_props(&encode_index_props(&[first.clone(), second.clone()])).is_ok());
+        // Equal owners silently replace a row on restore; descending owners
+        // silently reorder it. Both violate the canonical stored representation.
+        for owner in [2, 1] {
+            second.owner = owner;
+            assert_eq!(
+                decode_index_props(&encode_index_props(&[first.clone(), second.clone()])),
+                Err(SnapshotError::Corrupt(
+                    "index-props side table: owners not strictly ascending"
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn collections_require_unique_ascending_owners() {
+        let first = CollectionImage {
+            owner: 2,
+            kind: 2,
+            table_length: 0,
+            entries: vec![],
+        };
+        let mut second = first.clone();
+        second.owner = 3;
+        assert!(decode_collections(&encode_collections(&[first.clone(), second.clone()])).is_ok());
+        // Equal owners silently replace a row on restore; descending owners
+        // silently reorder it. Both violate the canonical stored representation.
+        for owner in [2, 1] {
+            second.owner = owner;
+            assert_eq!(
+                decode_collections(&encode_collections(&[first.clone(), second.clone()])),
+                Err(SnapshotError::Corrupt(
+                    "collections side table: owners not strictly ascending"
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn buffers_require_unique_ascending_owners() {
+        let first = BufferImage {
+            owner: 2,
+            data: 0,
+            length: 0,
+            flags: 0,
+        };
+        let mut second = first.clone();
+        second.owner = 3;
+        assert!(decode_buffers(&encode_buffers(&[first.clone(), second.clone()])).is_ok());
+        // Equal owners silently replace a row on restore; descending owners
+        // silently reorder it. Both violate the canonical stored representation.
+        for owner in [2, 1] {
+            second.owner = owner;
+            assert_eq!(
+                decode_buffers(&encode_buffers(&[first.clone(), second.clone()])),
+                Err(SnapshotError::Corrupt(
+                    "array-buffers side table: owners not strictly ascending"
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn typed_arrays_require_unique_ascending_owners() {
+        let first = TypedArrayImage {
+            owner: 2,
+            kind: 0,
+            buffer: 0,
+            offset: 0,
+            length: 0,
+        };
+        let mut second = first.clone();
+        second.owner = 3;
+        assert!(
+            decode_typed_arrays(&encode_typed_arrays(&[first.clone(), second.clone()])).is_ok()
+        );
+        // Equal owners silently replace a row on restore; descending owners
+        // silently reorder it. Both violate the canonical stored representation.
+        for owner in [2, 1] {
+            second.owner = owner;
+            assert_eq!(
+                decode_typed_arrays(&encode_typed_arrays(&[first.clone(), second.clone()])),
+                Err(SnapshotError::Corrupt(
+                    "typed-arrays side table: owners not strictly ascending"
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn data_views_require_unique_ascending_owners() {
+        let first = DataViewImage {
+            owner: 2,
+            buffer: 0,
+            offset: 0,
+            size: 0,
+        };
+        let mut second = first.clone();
+        second.owner = 3;
+        assert!(decode_data_views(&encode_data_views(&[first.clone(), second.clone()])).is_ok());
+        // Equal owners silently replace a row on restore; descending owners
+        // silently reorder it. Both violate the canonical stored representation.
+        for owner in [2, 1] {
+            second.owner = owner;
+            assert_eq!(
+                decode_data_views(&encode_data_views(&[first.clone(), second.clone()])),
+                Err(SnapshotError::Corrupt(
+                    "data-views side table: owners not strictly ascending"
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn wrappers_require_unique_ascending_owners() {
+        let first = WrapperImage {
+            owner: 2,
+            value: Slot::integer(7),
+        };
+        let mut second = first.clone();
+        second.owner = 3;
+        assert!(decode_wrappers(&encode_wrappers(&[first.clone(), second.clone()])).is_ok());
+        // Equal owners silently replace a row on restore; descending owners
+        // silently reorder it. Both violate the canonical stored representation.
+        for owner in [2, 1] {
+            second.owner = owner;
+            assert_eq!(
+                decode_wrappers(&encode_wrappers(&[first.clone(), second.clone()])),
+                Err(SnapshotError::Corrupt(
+                    "wrapper side table: owners not strictly ascending"
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn dates_require_unique_ascending_owners() {
+        let first = DateImage {
+            owner: 2,
+            value_bits: 0,
+        };
+        let mut second = first.clone();
+        second.owner = 3;
+        assert!(decode_dates(&encode_dates(&[first.clone(), second.clone()])).is_ok());
+        // Equal owners silently replace a row on restore; descending owners
+        // silently reorder it. Both violate the canonical stored representation.
+        for owner in [2, 1] {
+            second.owner = owner;
+            assert_eq!(
+                decode_dates(&encode_dates(&[first.clone(), second.clone()])),
+                Err(SnapshotError::Corrupt(
+                    "date side table: owners not strictly ascending"
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn regexps_require_unique_ascending_owners() {
+        let first = RegExpImage {
+            owner: 2,
+            source: "a".into(),
+            flags: "g".into(),
+            last_index_bits: 0,
+        };
+        let mut second = first.clone();
+        second.owner = 3;
+        assert!(decode_regexps(&encode_regexps(&[first.clone(), second.clone()])).is_ok());
+        // Equal owners silently replace a row on restore; descending owners
+        // silently reorder it. Both violate the canonical stored representation.
+        for owner in [2, 1] {
+            second.owner = owner;
+            assert_eq!(
+                decode_regexps(&encode_regexps(&[first.clone(), second.clone()])),
+                Err(SnapshotError::Corrupt(
+                    "regexp side table: owners not strictly ascending"
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn errors_require_unique_ascending_owners() {
+        let first = ErrorImage {
+            owner: 2,
+            name: "Error".into(),
+            message: None,
+            frames: vec![],
+        };
+        let mut second = first.clone();
+        second.owner = 3;
+        assert!(decode_errors(&encode_errors(&[first.clone(), second.clone()])).is_ok());
+        // Equal owners silently replace a row on restore; descending owners
+        // silently reorder it. Both violate the canonical stored representation.
+        for owner in [2, 1] {
+            second.owner = owner;
+            assert_eq!(
+                decode_errors(&encode_errors(&[first.clone(), second.clone()])),
+                Err(SnapshotError::Corrupt(
+                    "error-data side table: owners not strictly ascending"
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn error_frames_require_unique_ascending_owners() {
+        let first = ErrorImage {
+            owner: 2,
+            name: "Error".into(),
+            message: None,
+            frames: vec!["f".into()],
+        };
+        let mut second = first.clone();
+        second.owner = 3;
+        assert!(
+            decode_error_frames(&encode_error_frames(&[first.clone(), second.clone()])).is_ok()
+        );
+        // Equal owners silently replace a row on restore; descending owners
+        // silently reorder it. Both violate the canonical stored representation.
+        for owner in [2, 1] {
+            second.owner = owner;
+            assert_eq!(
+                decode_error_frames(&encode_error_frames(&[first.clone(), second.clone()])),
+                Err(SnapshotError::Corrupt(
+                    "error-frame side table: owners not strictly ascending"
+                ))
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod side_table_field_refusals {
+    use super::*;
+
+    #[test]
+    fn sparse_item_order_and_bounds() {
+        let mut array = ArrayImage {
+            owner: 1,
+            length: 4,
+            items: vec![(1, Slot::integer(1)), (3, Slot::integer(2))],
+        };
+        let mut props = IndexPropsImage {
+            owner: 1,
+            high_water: 4,
+            items: array.items.clone(),
+        };
+        assert!(decode_arrays(&encode_arrays(&[array.clone()])).is_ok());
+        assert!(decode_index_props(&encode_index_props(&[props.clone()])).is_ok());
+        for index in [1, 0] {
+            array.items[1].0 = index;
+            props.items[1].0 = index;
+            assert_eq!(
+                decode_arrays(&encode_arrays(&[array.clone()])),
+                Err(SnapshotError::Corrupt(
+                    "arrays side table: item indices not strictly ascending"
+                ))
+            );
+            assert_eq!(
+                decode_index_props(&encode_index_props(&[props.clone()])),
+                Err(SnapshotError::Corrupt(
+                    "index-props side table: item indices not strictly ascending"
+                ))
+            );
+        }
+        array.items[1].0 = 3;
+        props.items[1].0 = 3;
+        for limit in [3, 2] {
+            array.length = limit;
+            props.high_water = limit;
+            assert_eq!(
+                decode_arrays(&encode_arrays(&[array.clone()])),
+                Err(SnapshotError::Corrupt(
+                    "arrays side table: item index at or past the declared length"
+                ))
+            );
+            assert_eq!(
+                decode_index_props(&encode_index_props(&[props.clone()])),
+                Err(SnapshotError::Corrupt(
+                    "index-props side table: high-water mark below its own items"
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn collection_geometry_and_kind() {
+        let minimum = ironhorse_vm::interp::MAP_MIN_TABLE_LENGTH;
+        let mut row = CollectionImage {
+            owner: 1,
+            kind: 0,
+            table_length: minimum,
+            entries: vec![],
+        };
+        assert!(decode_collections(&encode_collections(&[row.clone()])).is_ok());
+        for length in [0, minimum - 1, minimum * 3, 2 * 1024 * 1024] {
+            row.table_length = length;
+            assert_eq!(
+                decode_collections(&encode_collections(&[row.clone()])),
+                Err(SnapshotError::Corrupt(
+                    "collections side table: unreachable rehash geometry"
+                ))
+            );
+        }
+        row.table_length = 8;
+        let high = 6;
+        row.entries = (0..high)
+            .map(|i| (Slot::integer(i as i32), Slot::undefined()))
+            .collect();
+        assert!(decode_collections(&encode_collections(&[row.clone()])).is_ok());
+        row.entries
+            .push((Slot::integer(high as i32), Slot::undefined()));
+        assert_eq!(
+            decode_collections(&encode_collections(&[row.clone()])),
+            Err(SnapshotError::Corrupt(
+                "collections side table: live size past the grow threshold"
+            ))
+        );
+        row.entries.clear();
+        for kind in [2, 3] {
+            row.kind = kind;
+            row.table_length = 0;
+            assert!(decode_collections(&encode_collections(&[row.clone()])).is_ok());
+            row.table_length = minimum;
+            assert_eq!(
+                decode_collections(&encode_collections(&[row.clone()])),
+                Err(SnapshotError::Corrupt(
+                    "collections side table: weak kind carries a hash table"
+                ))
+            );
+        }
+        row.kind = 4;
+        assert_eq!(
+            decode_collections(&encode_collections(&[row])),
+            Err(SnapshotError::Corrupt("collection kind code"))
+        );
+    }
+
+    #[test]
+    fn buffer_flags_and_element_kinds() {
+        let mut buffer = BufferImage {
+            owner: 1,
+            data: 0,
+            length: 0,
+            flags: 0,
+        };
+        for flags in 0..=3 {
+            buffer.flags = flags;
+            assert!(decode_buffers(&encode_buffers(&[buffer.clone()])).is_ok());
+        }
+        for flags in [4, 128, 255] {
+            buffer.flags = flags;
+            assert_eq!(
+                decode_buffers(&encode_buffers(&[buffer.clone()])),
+                Err(SnapshotError::Corrupt(
+                    "array-buffers side table: unknown flag bits"
+                ))
+            );
+        }
+        let mut view = TypedArrayImage {
+            owner: 1,
+            kind: 0,
+            buffer: 2,
+            offset: 0,
+            length: 0,
+        };
+        for kind in 0..ironhorse_vm::TYPED_ARRAY_TYPES.len() as u8 {
+            view.kind = kind;
+            assert!(decode_typed_arrays(&encode_typed_arrays(&[view.clone()])).is_ok());
+        }
+        for kind in [ironhorse_vm::TYPED_ARRAY_TYPES.len() as u8, 255] {
+            view.kind = kind;
+            assert_eq!(
+                decode_typed_arrays(&encode_typed_arrays(&[view.clone()])),
+                Err(SnapshotError::Corrupt(
+                    "typed-arrays side table: unknown element kind"
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn error_and_regexp_text_fields() {
+        let row = ErrorImage {
+            owner: 1,
+            name: "Error".into(),
+            message: Some("m".into()),
+            frames: vec!["f".into()],
+        };
+        let bytes = encode_errors(&[row.clone()]);
+        assert!(decode_errors(&bytes).is_ok());
+        let mut invalid = bytes.clone();
+        invalid[12] = 0xff; // name follows count, owner, and length
+        assert_eq!(
+            decode_errors(&invalid),
+            Err(SnapshotError::Corrupt(
+                "error-data side table: name not UTF-8"
+            ))
+        );
+        invalid = bytes.clone();
+        invalid[12] = b'X';
+        assert_eq!(
+            decode_errors(&invalid),
+            Err(SnapshotError::Corrupt(
+                "error-data side table: not an engine error name"
+            ))
+        );
+        invalid = bytes.clone();
+        invalid[17] = 2;
+        assert_eq!(
+            decode_errors(&invalid),
+            Err(SnapshotError::Corrupt(
+                "error-data side table: message flag not 0/1"
+            ))
+        );
+        invalid = bytes;
+        *invalid.last_mut().unwrap() = 0xff;
+        assert_eq!(
+            decode_errors(&invalid),
+            Err(SnapshotError::Corrupt(
+                "error-data side table: message not UTF-8"
+            ))
+        );
+
+        let frames = encode_error_frames(&[row]);
+        assert!(decode_error_frames(&frames).is_ok());
+        invalid = frames.clone();
+        *invalid.last_mut().unwrap() = 0xff;
+        assert_eq!(
+            decode_error_frames(&invalid),
+            Err(SnapshotError::Corrupt(
+                "error-frame side table: frame name not UTF-8"
+            ))
+        );
+        invalid = frames[..12].to_vec();
+        invalid[8..12].copy_from_slice(&0u32.to_be_bytes());
+        assert_eq!(
+            decode_error_frames(&invalid),
+            Err(SnapshotError::Corrupt(
+                "error-frame side table: empty frame list is not emitted"
+            ))
+        );
+
+        let regexp = encode_regexps(&[RegExpImage {
+            owner: 1,
+            source: "a".into(),
+            flags: "g".into(),
+            last_index_bits: 0,
+        }]);
+        assert!(decode_regexps(&regexp).is_ok());
+        invalid = regexp.clone();
+        invalid[12] = 0xff;
+        assert_eq!(
+            decode_regexps(&invalid),
+            Err(SnapshotError::Corrupt(
+                "regexp side table: source not UTF-8"
+            ))
+        );
+        invalid = regexp;
+        invalid[17] = 0xff;
+        assert_eq!(
+            decode_regexps(&invalid),
+            Err(SnapshotError::Corrupt("regexp side table: flags not UTF-8"))
+        );
+    }
+}
