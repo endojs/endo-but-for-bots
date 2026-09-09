@@ -12,10 +12,6 @@ generator frame: current function has no body	Existing corruption guard; dedicat
 generator frame: malformed body bytecode	Existing corruption guard; dedicated exact-label regression fixture deferred.
 installed-names floor does not restore	Existing corruption guard; dedicated exact-label regression fixture deferred.
 manifest parent seal length	Existing corruption guard; dedicated exact-label regression fixture deferred.
-migration did not advance the store schema	Existing corruption guard; dedicated exact-label regression fixture deferred.
 name migration length	Existing corruption guard; dedicated exact-label regression fixture deferred.
 non-canonical machine encoding	Existing corruption guard; dedicated exact-label regression fixture deferred.
-store file directory offset overflow	Existing corruption guard; dedicated exact-label regression fixture deferred.
-store file header truncated	Existing corruption guard; dedicated exact-label regression fixture deferred.
-store file manifest region truncated	Existing corruption guard; dedicated exact-label regression fixture deferred.
 symbol-key table does not restore	Existing corruption guard; dedicated exact-label regression fixture deferred.

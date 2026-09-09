@@ -393,6 +393,12 @@ fn ladder_refuses_a_backend_that_does_not_advance() {
     let probe = std::thread::spawn(move || {
         let mut store = NoOpMigrationStore(FileStore::open(&path).expect("open v5 store"));
         let r = migrate_store(&mut store, &sig());
+        assert_eq!(
+            r,
+            Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                "migration did not advance the store schema"
+            )))
+        );
         // Render inside the thread: StoreError is not Send-friendly to
         // move across as-is, and the string is all the assertion needs.
         let _ = tx.send(match r {
@@ -560,6 +566,12 @@ fn ladder_refuses_a_backend_whose_schema_cycles() {
             reads: std::cell::Cell::new(0),
         };
         let r = migrate_store(&mut store, &sig());
+        assert_eq!(
+            r,
+            Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                "migration did not advance the store schema"
+            )))
+        );
         let _ = tx.send(match r {
             Err(StoreError::Snapshot(SnapshotError::Corrupt(msg))) => Ok(msg.to_string()),
             other => Err(format!("{other:?}")),
