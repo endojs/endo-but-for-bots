@@ -18,6 +18,8 @@
 //! perspectives in `designs/ironhorse-snapshot-schema*.md` for field-change obligations.
 //! This crate forbids unsafe Rust; the outer SQLite backend is outside that scope.
 
+mod stored_slots;
+
 pub mod atom;
 pub mod format;
 pub mod image;

@@ -345,6 +345,15 @@ pub struct Signature {
     boot: Option<[u8; 32]>,
 }
 
+// Signature's fields are private; classify them beside their declaration so a
+// future retained Slot cannot bypass the snapshot visitation type check.
+impl crate::stored_slots::Metadata for Signature {}
+const _: fn(&Signature) = |signature| {
+    let Signature { host, boot } = signature;
+    crate::stored_slots::metadata(host);
+    crate::stored_slots::metadata(boot);
+};
+
 impl Signature {
     pub fn new(host: impl Into<String>) -> Signature {
         Signature {
