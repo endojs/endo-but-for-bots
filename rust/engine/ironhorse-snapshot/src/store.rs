@@ -5228,6 +5228,77 @@ mod tests {
     }
 
     #[test]
+    fn authenticated_free_lists_still_require_valid_distinct_indices() {
+        let mut valid = ran_image();
+        for _ in 0..2 {
+            valid.slot_free.push(valid.slots.len() as u32);
+            valid.slots.push(Slot::undefined());
+        }
+        let mut store = MemoryStore::new();
+        store
+            .commit(&image_to_batch_unchecked(&valid, 1, ""))
+            .unwrap();
+        validate_store(&store, &sig()).unwrap();
+        for duplicate in [false, true] {
+            let mut invalid = valid.clone();
+            let last = invalid.slot_free.len() - 1;
+            invalid.slot_free[last] = if duplicate {
+                invalid.slot_free[last - 1]
+            } else {
+                invalid.slots.len() as u32
+            };
+            let mut store = MemoryStore::new();
+            // Rebuild all hashes and seals from malformed semantic contents;
+            // a stale leaf must not intercept the free-list validity check.
+            store
+                .commit(&image_to_batch_unchecked(&invalid, 1, ""))
+                .unwrap();
+            if duplicate {
+                assert_eq!(
+                    validate_store(&store, &sig()).unwrap_err(),
+                    StoreError::Snapshot(SnapshotError::Corrupt(
+                        "store free-list contains duplicate indices"
+                    ))
+                );
+            } else {
+                assert_eq!(
+                    validate_store(&store, &sig()).unwrap_err(),
+                    StoreError::Snapshot(SnapshotError::Corrupt(
+                        "store free-list index out of range"
+                    ))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn malformed_slot_record_is_rejected_even_with_matching_hashes() {
+        let mut store = MemoryStore::new();
+        store
+            .commit(&image_to_batch_unchecked(&ran_image(), 1, ""))
+            .unwrap();
+        store_to_image(&store).unwrap();
+        let bytes = store.slot_pages.get_mut(&0).unwrap();
+        bytes[0] = 200; // not a Kind discriminant
+        store.leaf_pages[0] = leaf_hash(LEAF_PAGE, 0, bytes);
+        let mut manifest = store.manifest().unwrap();
+        manifest.root = compute_root(
+            &manifest,
+            &crate::store_sections::framed_root(&store.read_small_state().unwrap()).unwrap(),
+            &store.leaf_pages,
+            &store.leaf_exts,
+            &store.leaf_frees,
+            &store.edges,
+        );
+        manifest.seal = seal_commit(&manifest.parent_seal, &manifest, &[], &[], &[], &[], &[]);
+        store.manifest = Some(manifest);
+        assert_eq!(
+            store_to_image(&store).unwrap_err(),
+            StoreError::Snapshot(SnapshotError::Corrupt("store slot page record"))
+        );
+    }
+
+    #[test]
     fn validate_fails_closed_on_missing_row() {
         let image = ran_image();
         let mut store = MemoryStore::new();
