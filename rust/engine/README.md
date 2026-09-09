@@ -42,7 +42,8 @@ See [Architecture](ARCHITECTURE.md) for dependency direction and the four seams.
 | `ironhorse-fuzz` | Testable fuzz-target logic; the nested cargo-fuzz project supplies libFuzzer drivers. |
 | `xs-oracle` | Audited XS C/FFI compiler and execution reference for tests, not the production engine. |
 
-All engine workspace crate roots except `xs-oracle` forbid unsafe Rust.
+All engine workspace library roots except `xs-oracle` forbid unsafe Rust.
+The Cargo-metadata test checks that scope; it does not cover every harness binary.
 This does not describe their transitive dependencies.
 The outer workspace's `ironhorse-store-sqlite` backend links bundled SQLite;
 `rust/endo` integrates IronHorse directly, alongside the separate xsnap engine.
@@ -82,7 +83,8 @@ at this audited tip.
 ## Native recursion budget and stack contract
 
 The native recursion budget aims to halt the crank before exhausting the host
-stack. Engine workspace crates except `xs-oracle` forbid unsafe Rust; a native stack overflow is not a panic, it is a `SIGABRT` no
+stack. Engine workspace library roots except `xs-oracle` forbid unsafe Rust.
+A native stack overflow is not a panic: it is a `SIGABRT` no
 `catch_unwind` contains, and until the budget below landed every native
 recursion the engine performed on a guest's behalf ran on the host's terms.
 `DISPATCH_REENTRY_LIMIT` bounded exactly one family (bytecode re-entry through
@@ -321,3 +323,8 @@ connects these outcomes to persistence and release policy.
 Per-stage implementation narratives and all recorded covered-count snapshots
 are preserved in [CHANGELOG.md](CHANGELOG.md).
 Use the acceptance table above for the current interpretation.
+
+## Documentation follow-ups
+
+[1F follow-ups](DOCUMENTATION-FOLLOWUPS.md) record the frozen interpreter comments,
+remaining implementation portions and determinism handoff.

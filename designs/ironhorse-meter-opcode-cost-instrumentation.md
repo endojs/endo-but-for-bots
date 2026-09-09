@@ -16,7 +16,9 @@ Audited 2026-09-09 at `96db92e23`.
 work-function model and zero-sized default recorder.
 That is the structural portion of C1, not its object-code firewall proof.
 No `ironhorse-calibrate` driver or calibration CI job exists at this base.
-The feature-enabled library suite is not yet wired into CI at this base either.
+Upstream `3e6c429a0` adds an isolated `test-ironhorse-calibration` CI job for
+feature-enabled library tests, frozen computron tests and consensus-feature rejection.
+This exercises the scaffold and isolation, not timing calibration.
 
 | Stage | State | Remaining acceptance |
 |---|---|---|

@@ -1,59 +1,21 @@
-//! The **`Machine`-level snapshot surface** (stage-6 child 3): the
-//! xsnap-shaped `write_snapshot_to_file` / `from_snapshot_file` /
-//! `suspend_to_cas` verbs the daemon supervisor's suspend/resume and CAS
-//! integration call (design `designs/daemon-xs-worker-snapshot.md`). It
-//! matches, verb-for-verb, what the `xsnap` crate exposes today
-//! (`rust/endo/xsnap/src/lib.rs`), so the embedder swaps the C engine for
-//! ironhorse without touching the supervisor:
+//! File/CAS snapshots and paged-store checkpoint/restore operations.
 //!
-//! - [`MachineSnapshot::write_snapshot_to_file`] — stream the machine's
-//!   heap image to a file, computing SHA-256 on the fly, returning the hex
-//!   digest.
-//! - [`MachineSnapshot::suspend_to_cas`] — write to a temp file in the CAS
-//!   directory then rename to `{cas_dir}/{sha256_hex}` (the atomic CAS
-//!   publish), returning the digest the supervisor holds as an ephemeral
-//!   GC root.
-//! - [`from_snapshot_file`] / [`resume_from_cas`] — rebuild a live machine
-//!   from a snapshot file / a CAS-stored blob.
+//! [`MachineSnapshot`] extends `ironhorse_vm::Interp` because the VM owns the
+//! interpreter while this crate owns encoding and persistence validation.
+//! File writes materialize the encoded image, hash that same buffer, and write it;
+//! this is not a constant-memory streaming serializer. CAS publication uses a
+//! content-addressed name and the read path validates content identity.
 //!
-//! **Why a trait, not inherent methods.** The `Interp`↔image conversion
-//! stays in the engine (`ironhorse_vm`, via its `stack_slots`/`meter_state`/
-//! `restore_snapshot_state` primitives) while the `XS_M` atom *format*
-//! stays here — and `ironhorse_vm` cannot depend on `ironhorse-snapshot` (the
-//! dependency runs the other way). So the surface is an **extension
-//! trait** on `Interp`, giving `interp.write_snapshot_to_file(…)`
-//! ergonomics from the crate that can see both the engine and the format.
-//! Construction (`from_snapshot_file`/`resume_from_cas`) cannot be an
-//! inherent `Interp::` associated function across the crate boundary, so
-//! it is a free function here that returns an `Interp`.
+//! Persistence requires a completed, quiescent crank and admitted side-table state.
+//! A halted crank can retain live registers even when tables appear empty; it must
+//! rewind rather than commit. Functions, proxies, accessors, generators and promises
+//! have carried representations subject to the current [`crate::sidetable`] policies.
+//! A resumed guest function is callable; historical dependency-gate arguments that
+//! assume it is uncallable no longer apply. Live unsupported activations still refuse.
 //!
-//! ## Suspend-point contract (job spec item 4 — the honest narrower shape)
-//!
-//! A snapshot is taken at **machine quiescence — between top-level `run`
-//! cranks**, never mid-dispatch. This is not a shortcut; it is exactly the
-//! `fxWriteSnapshot` constraint (design § Constraints: "outside any XS
-//! callback … the machine must be quiescent — no running JS") and exactly
-//! the xsnap embedding, which snapshots between deliveries. ironhorse's
-//! `Interp::run` is atomic per crank: it runs a program to its `END` (and
-//! drains the promise-job queue) and returns to the host with the value
-//! stack unwound. The suspend point is that return.
-//!
-//! What the round-trip carries today: the index arenas (`HEAP`/`BLOC`),
-//! the value stack (`STAC`, empty at quiescence), the program symbol names
-//! (`NAME`), and the **metering state** (`METR` — accumulated computrons,
-//! the check interval/threshold, and the frozen cost-table version). A
-//! machine whose reachable state is confined to those atoms round-trips
-//! **exactly**, and a resumed machine continues a following crank
-//! identically to one that never suspended — including its computron
-//! count (the row-6 bar).
-//!
-//! What it does **not** carry yet: the rich per-instance side tables
-//! enumerated `Pending` in [`crate::sidetable`] (closures, generators,
-//! promises, collections, …). A machine holding a **live generator or
-//! promise across the suspend** is the honest narrower contract: those
-//! tables are the enumerated remaining work, not a silent gap. The
-//! meter-continuity tests therefore suspend at crank boundaries with
-//! closures fully resolved, exactly where the contract holds.
+//! The outer Endo integration uses these operations directly; it is not a guarantee
+//! that xsnap's supervisor API or the full daemon worker protocol is unchanged.
+//! See `rust/engine/ARCHITECTURE.md` and the carry/persist-gate tests.
 
 use crate::store::HeapStoreCommit;
 use std::fs::File;
@@ -195,9 +157,8 @@ pub trait MachineSnapshot {
         Ok(write_machine(&self.snapshot_image(signature)?))
     }
 
-    /// Write this machine's heap snapshot to `file`, computing SHA-256 on
-    /// the fly, and return the hex digest. The digest is fed the bytes as
-    /// they are written, and the file is flushed and synced before return,
+    /// Materialize the encoded snapshot, hash that buffer, and write it to `file`.
+    /// Return the hex digest after the file is flushed and synced,
     /// so the caller may safely rename it into the CAS (the
     /// [`Self::suspend_to_cas`] contract).
     fn write_snapshot_to_file(

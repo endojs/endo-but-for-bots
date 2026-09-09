@@ -1,5 +1,8 @@
 //! Ironhorse's own frozen, XS-derived cost table. Oracle computrons are advisory.
 //! Weights and default keys have one canonical, platform-independent SHA-256 identity.
+//! That identity covers table data, not cross-platform execution. Execution is
+//! scoped per release binary per platform, with matching state, inputs and host policy.
+//! See designs/ironhorse-w6-decisions.md for the planned transcendental provider work.
 //! Changing a weight or charging point requires a new release and golden corpus.
 #![forbid(unsafe_code)]
 mod default_keys;

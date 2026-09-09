@@ -701,8 +701,9 @@ differential harness, not an interpreter integrity gap.
 ### Minimizing `unsafe` (requirement 2)
 
 The budget is zero in shipped engine crates, enforced by
-`#![forbid(unsafe_code)]` on every member of the `rust/engine` workspace
-except the audited `xs-oracle` FFI harness.
+`#![forbid(unsafe_code)]` on every library root in the `rust/engine` workspace
+except the audited `xs-oracle` FFI harness, checked by the Cargo-metadata test.
+Some harness binary roots lack that declaration; the check does not claim otherwise.
 This is a workspace-source rule, not a claim that transitive dependencies or
 the daemon contain no C.
 The index-arena design is what makes this achievable: no raw

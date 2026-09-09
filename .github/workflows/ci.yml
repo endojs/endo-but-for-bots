@@ -700,6 +700,11 @@ jobs:
           python3 rust/engine/scripts/test-lockfile-agreement.py
           python3 rust/engine/scripts/check-lockfile-agreement.py
 
+      - name: Check generated engine crate diagram and library safety declarations
+        run: |
+          python3 rust/engine/scripts/test-crate-graph.py
+          python3 rust/engine/scripts/crate-graph.py --check
+
       - name: Install pinned rustfmt
         run: rustup toolchain install 1.88.0 --profile minimal --component rustfmt
 

@@ -1,24 +1,23 @@
 #![forbid(unsafe_code)]
-//! ironhorse-vm: the safe, index-arena transliteration of the XS
-//! interpreter core (design: `designs/ironhorse-engine.md`,
-//! § Value and heap model, § Interpreter and dispatch, § Metering).
+//! Safe index-arena JavaScript interpreter and runtime.
 //!
-//! Stage 1 (thin slice) delivers: the `SlotIndex`/`ChunkOffset` arenas
-//! and 32-byte slot value model, a `Vec`-backed slot stack, a
-//! `match`-dispatch interpreter over the arithmetic / logic / bitwise /
-//! comparison / branch / stack opcode subset of the XS `XS_CODE_*` ISA,
-//! a frozen 16.16 fixed-point Ironhorse meter with XS-derived weights
-//! (oracle computrons are advisory), and a `Compartment.evaluate` seam.
+//! [`Interp`] owns slots, chunks, activation state, built-ins, modules and side tables.
+//! Guest strings use UTF-16; symbol-name conversion is shared through `ironhorse-text`.
+//! [`SourceCompiler`] supplies dynamic compilation without a production compiler dependency.
+//! [`gc::GcHooks`] connects the collector to references held outside the arenas.
+//! [`Halt`] includes [`Halt::HeapExhausted`] and [`Halt::Panic`]; resource stops and
+//! engine faults are not catchable guest exceptions.
 //!
-//! The whole crate is `#![forbid(unsafe_code)]` (requirement 2): the
-//! index-arena design removes the need for raw pointers, so the
-//! interpreter and heap are compiler-checked memory safe. Only
-//! `xs-oracle` (the dev/CI differential harness) links C.
+//! [`Compartment`] currently creates independently owned interpreters from pristine
+//! boot templates, not shared frozen intrinsics; Realm extraction is planned.
+//! `rust/engine/ARCHITECTURE.md` maps the four seams and current acceptance limits.
+//! The opcode tables follow the pinned XS ISA; broad runtime support does not imply
+//! full test262 or daemon SES acceptance.
 //!
-//! The opcode enum and its size / name tables are generated verbatim
-//! from `xsCommon.h` (the enum) and `xsCommon.c` (`gxCodeNames`,
-//! `gxCodeSizes`) at the `c/moddable` pin, so opcode byte values,
-//! instruction sizes, and mnemonics match the oracle exactly.
+//! Execution determinism is scoped per release binary per platform, with matching
+//! state, inputs and host policy. The shared meter digest identifies weights, not
+//! cross-platform execution semantics. This crate forbids unsafe Rust; that rule
+//! does not describe its dependencies or the outer daemon's SQLite/XS integrations.
 
 #[cfg(all(feature = "consensus", feature = "cost-calibration"))]
 compile_error!("consensus and cost-calibration are mutually exclusive");
