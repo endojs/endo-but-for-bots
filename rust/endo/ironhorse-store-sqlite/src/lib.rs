@@ -1496,12 +1496,32 @@ mod tests {
         assert_eq!(store.read_small_state().unwrap(), small);
         assert_eq!(&store_to_image(&store).unwrap(), image.image());
         let new = store.manifest().unwrap();
-        assert_eq!(new.store_schema, 28);
+        assert_eq!(new.store_schema, STORE_SCHEMA_VERSION);
         assert_ne!(new.root, old.root);
-        assert_eq!(
-            (new.epoch, new.cranks, new.parent_seal),
-            (old.epoch, old.cranks, old.seal)
+        assert_eq!((new.epoch, new.cranks), (old.epoch, old.cranks));
+        // Migration commits each schema step. The final manifest links to
+        // the section-tree migration at v28, followed by native names at v29.
+        let mut sections = old.clone();
+        sections.store_schema = 28;
+        sections.parent_seal = old.seal.clone();
+        sections.root = compute_root(
+            &sections,
+            &ironhorse_snapshot::store_sections::framed_root(&small).unwrap(),
+            &pages,
+            &exts,
+            &store.free_leaf_hashes().unwrap(),
+            &store.page_edges().unwrap(),
         );
+        sections.seal = ironhorse_snapshot::store::seal_commit(
+            &sections.parent_seal,
+            &sections,
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+        );
+        assert_eq!(new.parent_seal, sections.seal);
         assert_eq!(
             store
                 .conn
