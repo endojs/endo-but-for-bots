@@ -309,7 +309,7 @@ impl StoreManifest {
         // Schema 8 tail, appended AFTER the seal and ONLY when the
         // stamp says 8 — symmetric with the decoder, which reads it
         // under the same condition. The symmetry is load-bearing for
-        // the ladder: `migrate_v6_to_v7` writes a manifest stamped 7,
+        // the ladder: the 6→7 append step writes a manifest stamped 7,
         // and encoding a tail there would produce bytes its own decoder
         // rejects as trailing garbage, breaking the intermediate step.
         if self.store_schema >= 8 {
@@ -2349,31 +2349,17 @@ pub fn migrate_store(
             )));
         }
         prev_schema = Some(schema);
-        match schema {
-            v if v == STORE_SCHEMA_VERSION => return Ok(migrated),
-            5 => migrate_v5_to_v6(store)?,
-            6 => migrate_v6_to_v7(store)?,
-            7 => migrate_v7_to_v8(store)?,
-            8 => migrate_v8_to_v9(store)?,
-            9 => migrate_v9_to_v10(store)?,
-            10 => migrate_v10_to_v11(store)?,
-            11 => migrate_v11_to_v12(store)?,
-            12 => migrate_v12_to_v13(store)?,
-            13 => migrate_v13_to_v14(store)?,
-            14 => migrate_v14_to_v15(store)?,
-            15 => migrate_v15_to_v16(store)?,
-            16 => migrate_v16_to_v17(store)?,
-            17 => migrate_v17_to_v18(store)?,
-            18 => migrate_v18_to_v19(store)?,
-            19 => migrate_v19_to_v20(store)?,
-            20 => migrate_v20_to_v21(store)?,
-            21 => migrate_v21_to_v22(store)?,
-            22 => migrate_v22_to_v23(store)?,
-            23 => migrate_v23_to_v24(store)?,
-            24 => migrate_v24_to_v25(store)?,
-            25 => migrate_v25_to_v26(store)?,
-            26 => migrate_v26_to_v27(store)?,
-            27 => migrate_v27_to_v28(store)?,
+        let append_step = LADDER.iter().find(|&&(target, _)| target - 1 == schema);
+        match (schema, append_step) {
+            (v, _) if v == STORE_SCHEMA_VERSION => return Ok(migrated),
+            (5, _) => migrate_v5_to_v6(store)?,
+            (7, _) => migrate_v7_to_v8(store)?,
+            (25, _) => migrate_v25_to_v26(store)?,
+            (26, _) => migrate_v26_to_v27(store)?,
+            (27, _) => migrate_v27_to_v28(store)?,
+            (_, Some(&(target, extra_len))) => {
+                migrate_append_small_section(store, target, extra_len)?;
+            }
             _ => {
                 return Err(StoreError::Snapshot(SnapshotError::Corrupt(
                     "unsupported store schema version",
@@ -2382,6 +2368,71 @@ pub fn migrate_store(
         }
         migrated = true;
     }
+}
+
+/// Target schema and empty-section suffix length for content-preserving steps.
+/// Each section starts with a zero u32 byte length. These historical widths
+/// must remain fixed even when the current small-state format grows.
+const LADDER: &[(u32, usize)] = &[
+    (7, 12),  // Side-table ledger: three sections.
+    (9, 4),   // Error data.
+    (10, 12), // Array buffers, typed arrays, and DataViews.
+    (11, 16), // Wrappers, regexps, arguments, and template records.
+    (12, 8),  // Intl records and installed-names floor.
+    (13, 4),  // Iterator cursors.
+    (14, 4),  // Date values.
+    (15, 4),  // Retained callable metadata.
+    (16, 4),  // Proxy slots and revoker links.
+    (17, 4),  // Guest accessor mappings.
+    (18, 4),  // Intl bound-function links.
+    (19, 4),  // Private values and accessors.
+    (20, 4),  // Resource-management stacks.
+    (21, 4),  // Generator activations.
+    (22, 4),  // Error frames.
+    (23, 4),  // Promise cluster.
+    (24, 4),  // Async activations.
+    (25, 4),  // Indexed properties.
+];
+
+/// Verify the old root before appending empty sections, then atomically write
+/// the new small state and restamped manifest. Other stored rows and historical
+/// seals remain untouched, including when authentication fails.
+fn migrate_append_small_section(
+    store: &mut dyn HeapStore,
+    to_schema: u32,
+    extra_len: usize,
+) -> Result<(), StoreError> {
+    let mut manifest = store.manifest()?;
+    let small = store.read_small_state()?;
+    let (pages, exts) = store.leaf_hashes()?;
+    let frees = store.free_leaf_hashes()?;
+    let edges = store.page_edges()?;
+    let old = compute_root(
+        &manifest,
+        &leaf_hash(LEAF_SMALL, 0, &small),
+        &pages,
+        &exts,
+        &frees,
+        &edges,
+    );
+    if old != manifest.root {
+        return Err(StoreError::BaselineMismatch {
+            expected: old,
+            found: manifest.root.clone(),
+        });
+    }
+    let mut new_small = small;
+    new_small.resize(new_small.len() + extra_len, 0);
+    manifest.store_schema = to_schema;
+    manifest.root = compute_root(
+        &manifest,
+        &leaf_hash(LEAF_SMALL, 0, &new_small),
+        &pages,
+        &exts,
+        &frees,
+        &edges,
+    );
+    store.replace_manifest_and_small_for_migration(&manifest, &new_small)
 }
 
 /// Ladder step 5→6: same leaves, new root FORMULA (flat combine →
@@ -2408,49 +2459,6 @@ fn migrate_v5_to_v6(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     manifest.store_schema = 6;
     manifest.root = compute_root(&manifest, &small_leaf, &pages, &exts, &frees, &edges);
     store.replace_manifest_for_migration(&manifest)
-}
-
-/// Ladder step 6→7 (the side-table ledger): the small state grows the
-/// three ledger sections EMPTY — a pure 12-byte suffix of zero-length
-/// section headers, provably content-preserving (nothing a v6-era
-/// machine persisted lives in them). Verifies the v6 content against
-/// its stored root first, then writes the new small and the restamped
-/// manifest (new small leaf → new root) through the backend's one
-/// atomic migration write.
-fn migrate_v6_to_v7(store: &mut dyn HeapStore) -> Result<(), StoreError> {
-    let mut manifest = store.manifest()?;
-    let small = store.read_small_state()?;
-    let (pages, exts) = store.leaf_hashes()?;
-    let frees = store.free_leaf_hashes()?;
-    let edges = store.page_edges()?;
-    let old = compute_root(
-        &manifest,
-        &leaf_hash(LEAF_SMALL, 0, &small),
-        &pages,
-        &exts,
-        &frees,
-        &edges,
-    );
-    if old != manifest.root {
-        // `expected` = recomputed root, `found` = manifest's claim
-        // (review wave 4, F4).
-        return Err(StoreError::BaselineMismatch {
-            expected: old,
-            found: manifest.root.clone(),
-        });
-    }
-    let mut new_small = small;
-    new_small.extend_from_slice(&[0u8; 12]);
-    manifest.store_schema = 7;
-    manifest.root = compute_root(
-        &manifest,
-        &leaf_hash(LEAF_SMALL, 0, &new_small),
-        &pages,
-        &exts,
-        &frees,
-        &edges,
-    );
-    store.replace_manifest_and_small_for_migration(&manifest, &new_small)
 }
 
 /// Ladder step 7→8 (the durable crank counter): the manifest grows one
@@ -2491,662 +2499,6 @@ fn migrate_v7_to_v8(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     // this goes through the write that can shift the file's directory
     // offsets rather than the same-length splice.
     store.replace_manifest_and_small_for_migration(&manifest, &small)
-}
-
-/// Ladder step 8→9 (the error-data row): the small state grows the one
-/// `ERRD` section EMPTY — a pure 4-byte suffix of a zero-length section
-/// header, provably content-preserving (nothing a v8-era machine
-/// persisted lives in it: the persist gates refused any heap holding a
-/// live error row). Verifies the v8 content against its stored root
-/// first, then writes the new small and the restamped manifest through
-/// the backend's one atomic migration write — the `migrate_v6_to_v7`
-/// pattern exactly.
-fn migrate_v8_to_v9(store: &mut dyn HeapStore) -> Result<(), StoreError> {
-    let mut manifest = store.manifest()?;
-    let small = store.read_small_state()?;
-    let (pages, exts) = store.leaf_hashes()?;
-    let frees = store.free_leaf_hashes()?;
-    let edges = store.page_edges()?;
-    let old = compute_root(
-        &manifest,
-        &leaf_hash(LEAF_SMALL, 0, &small),
-        &pages,
-        &exts,
-        &frees,
-        &edges,
-    );
-    if old != manifest.root {
-        // `expected` = recomputed root, `found` = manifest's claim.
-        return Err(StoreError::BaselineMismatch {
-            expected: old,
-            found: manifest.root.clone(),
-        });
-    }
-    let mut new_small = small;
-    new_small.extend_from_slice(&[0u8; 4]);
-    manifest.store_schema = 9;
-    manifest.root = compute_root(
-        &manifest,
-        &leaf_hash(LEAF_SMALL, 0, &new_small),
-        &pages,
-        &exts,
-        &frees,
-        &edges,
-    );
-    store.replace_manifest_and_small_for_migration(&manifest, &new_small)
-}
-
-/// Ladder step 9→10 (the typed-array family): the small state grows
-/// the three `ABUF`/`TARR`/`DVIW` sections EMPTY — a pure 12-byte
-/// suffix of zero-length section headers, provably content-preserving
-/// (nothing a v9-era machine persisted lives in them: the persist
-/// gates refused any heap holding a live row). The `migrate_v6_to_v7`
-/// pattern exactly.
-fn migrate_v9_to_v10(store: &mut dyn HeapStore) -> Result<(), StoreError> {
-    let mut manifest = store.manifest()?;
-    let small = store.read_small_state()?;
-    let (pages, exts) = store.leaf_hashes()?;
-    let frees = store.free_leaf_hashes()?;
-    let edges = store.page_edges()?;
-    let old = compute_root(
-        &manifest,
-        &leaf_hash(LEAF_SMALL, 0, &small),
-        &pages,
-        &exts,
-        &frees,
-        &edges,
-    );
-    if old != manifest.root {
-        // `expected` = recomputed root, `found` = manifest's claim.
-        return Err(StoreError::BaselineMismatch {
-            expected: old,
-            found: manifest.root.clone(),
-        });
-    }
-    let mut new_small = small;
-    new_small.extend_from_slice(&[0u8; 12]);
-    manifest.store_schema = 10;
-    manifest.root = compute_root(
-        &manifest,
-        &leaf_hash(LEAF_SMALL, 0, &new_small),
-        &pages,
-        &exts,
-        &frees,
-        &edges,
-    );
-    store.replace_manifest_and_small_for_migration(&manifest, &new_small)
-}
-
-/// Ladder step 10→11 (the data-only language rows): the small state
-/// grows the four `WRAP`/`REGX`/`ARGB`/`TMPR` sections EMPTY — a pure
-/// 16-byte suffix of zero-length section headers, content-preserving
-/// by the same argument as every ladder step (a v10-era machine
-/// persisted nothing in them: these rows were silently dropped by
-/// resume, which is exactly what the carry fixes going forward). The
-/// `migrate_v6_to_v7` pattern exactly.
-fn migrate_v10_to_v11(store: &mut dyn HeapStore) -> Result<(), StoreError> {
-    let mut manifest = store.manifest()?;
-    let small = store.read_small_state()?;
-    let (pages, exts) = store.leaf_hashes()?;
-    let frees = store.free_leaf_hashes()?;
-    let edges = store.page_edges()?;
-    let old = compute_root(
-        &manifest,
-        &leaf_hash(LEAF_SMALL, 0, &small),
-        &pages,
-        &exts,
-        &frees,
-        &edges,
-    );
-    if old != manifest.root {
-        // `expected` = recomputed root, `found` = manifest's claim.
-        return Err(StoreError::BaselineMismatch {
-            expected: old,
-            found: manifest.root.clone(),
-        });
-    }
-    let mut new_small = small;
-    new_small.extend_from_slice(&[0u8; 16]);
-    manifest.store_schema = 11;
-    manifest.root = compute_root(
-        &manifest,
-        &leaf_hash(LEAF_SMALL, 0, &new_small),
-        &pages,
-        &exts,
-        &frees,
-        &edges,
-    );
-    store.replace_manifest_and_small_for_migration(&manifest, &new_small)
-}
-
-/// 11 → 12: the Intl record tables (the ledger's `IntlRecords`
-/// graduation) and the installed-names floor join the small state.
-/// Both new sections append EMPTY — a pure 8-byte suffix (two
-/// zero-length section headers), content-preserving by construction:
-/// the v11 persist path had no Intl atom and (before the
-/// accessor-seed exemption that landed with schema 12) any
-/// Intl-touching heap was refused at persist by the `accessors` gate,
-/// and an absent floor restores to exactly the full-table default
-/// every v11 resume already used. Verify the store against its OWN
-/// root first, then restamp schema and root together.
-fn migrate_v11_to_v12(store: &mut dyn HeapStore) -> Result<(), StoreError> {
-    let mut manifest = store.manifest()?;
-    let small = store.read_small_state()?;
-    let (pages, exts) = store.leaf_hashes()?;
-    let frees = store.free_leaf_hashes()?;
-    let edges = store.page_edges()?;
-    let old = compute_root(
-        &manifest,
-        &leaf_hash(LEAF_SMALL, 0, &small),
-        &pages,
-        &exts,
-        &frees,
-        &edges,
-    );
-    if old != manifest.root {
-        // `expected` = recomputed root, `found` = manifest's claim.
-        return Err(StoreError::BaselineMismatch {
-            expected: old,
-            found: manifest.root.clone(),
-        });
-    }
-    let mut new_small = small;
-    new_small.extend_from_slice(&[0u8; 8]);
-    manifest.store_schema = 12;
-    manifest.root = compute_root(
-        &manifest,
-        &leaf_hash(LEAF_SMALL, 0, &new_small),
-        &pages,
-        &exts,
-        &frees,
-        &edges,
-    );
-    store.replace_manifest_and_small_for_migration(&manifest, &new_small)
-}
-
-/// 12 → 13: the built-in iterator cursors join the small state (the
-/// ledger's `Iterators` graduation). The one new section appends
-/// EMPTY — a pure 4-byte suffix, content-preserving by construction:
-/// the v12 persist path had no `ITER` atom, and iterator rows a v12
-/// resume dropped were the visible-fail class the carry retires.
-/// Verify the store against its OWN root first, then restamp schema
-/// and root together.
-fn migrate_v12_to_v13(store: &mut dyn HeapStore) -> Result<(), StoreError> {
-    let mut manifest = store.manifest()?;
-    let small = store.read_small_state()?;
-    let (pages, exts) = store.leaf_hashes()?;
-    let frees = store.free_leaf_hashes()?;
-    let edges = store.page_edges()?;
-    let old = compute_root(
-        &manifest,
-        &leaf_hash(LEAF_SMALL, 0, &small),
-        &pages,
-        &exts,
-        &frees,
-        &edges,
-    );
-    if old != manifest.root {
-        // `expected` = recomputed root, `found` = manifest's claim.
-        return Err(StoreError::BaselineMismatch {
-            expected: old,
-            found: manifest.root.clone(),
-        });
-    }
-    let mut new_small = small;
-    new_small.extend_from_slice(&[0u8; 4]);
-    manifest.store_schema = 13;
-    manifest.root = compute_root(
-        &manifest,
-        &leaf_hash(LEAF_SMALL, 0, &new_small),
-        &pages,
-        &exts,
-        &frees,
-        &edges,
-    );
-    store.replace_manifest_and_small_for_migration(&manifest, &new_small)
-}
-
-/// 13 → 14: Date `[[DateValue]]` records join the small state. The
-/// new section appends empty: v13 did not serialize guest Date records,
-/// while the untouched `%Date.prototype%` seed is rebuilt by boot.
-fn migrate_v13_to_v14(store: &mut dyn HeapStore) -> Result<(), StoreError> {
-    let mut manifest = store.manifest()?;
-    let small = store.read_small_state()?;
-    let (pages, exts) = store.leaf_hashes()?;
-    let frees = store.free_leaf_hashes()?;
-    let edges = store.page_edges()?;
-    let old = compute_root(
-        &manifest,
-        &leaf_hash(LEAF_SMALL, 0, &small),
-        &pages,
-        &exts,
-        &frees,
-        &edges,
-    );
-    if old != manifest.root {
-        return Err(StoreError::BaselineMismatch {
-            expected: old,
-            found: manifest.root.clone(),
-        });
-    }
-    let mut new_small = small;
-    new_small.extend_from_slice(&[0u8; 4]);
-    manifest.store_schema = 14;
-    manifest.root = compute_root(
-        &manifest,
-        &leaf_hash(LEAF_SMALL, 0, &new_small),
-        &pages,
-        &exts,
-        &frees,
-        &edges,
-    );
-    store.replace_manifest_and_small_for_migration(&manifest, &new_small)
-}
-
-/// 14 → 15: the atomic retained guest-callability cluster joins the
-/// small state. Schema 14 did not carry callable metadata or defining
-/// bytecode, so the migration appends one empty section.
-fn migrate_v14_to_v15(store: &mut dyn HeapStore) -> Result<(), StoreError> {
-    let mut manifest = store.manifest()?;
-    let small = store.read_small_state()?;
-    let (pages, exts) = store.leaf_hashes()?;
-    let frees = store.free_leaf_hashes()?;
-    let edges = store.page_edges()?;
-    let old = compute_root(
-        &manifest,
-        &leaf_hash(LEAF_SMALL, 0, &small),
-        &pages,
-        &exts,
-        &frees,
-        &edges,
-    );
-    if old != manifest.root {
-        return Err(StoreError::BaselineMismatch {
-            expected: old,
-            found: manifest.root.clone(),
-        });
-    }
-    let mut new_small = small;
-    new_small.extend_from_slice(&[0u8; 4]);
-    manifest.store_schema = 15;
-    manifest.root = compute_root(
-        &manifest,
-        &leaf_hash(LEAF_SMALL, 0, &new_small),
-        &pages,
-        &exts,
-        &frees,
-        &edges,
-    );
-    store.replace_manifest_and_small_for_migration(&manifest, &new_small)
-}
-
-/// 15 → 16: proxy internal slots and revoker links join the small
-/// state. Schema 15 refused live proxies, so appending an empty section
-/// is content-preserving.
-fn migrate_v15_to_v16(store: &mut dyn HeapStore) -> Result<(), StoreError> {
-    let mut manifest = store.manifest()?;
-    let small = store.read_small_state()?;
-    let (pages, exts) = store.leaf_hashes()?;
-    let frees = store.free_leaf_hashes()?;
-    let edges = store.page_edges()?;
-    let old = compute_root(
-        &manifest,
-        &leaf_hash(LEAF_SMALL, 0, &small),
-        &pages,
-        &exts,
-        &frees,
-        &edges,
-    );
-    if old != manifest.root {
-        return Err(StoreError::BaselineMismatch {
-            expected: old,
-            found: manifest.root.clone(),
-        });
-    }
-    let mut new_small = small;
-    new_small.extend_from_slice(&[0u8; 4]);
-    manifest.store_schema = 16;
-    manifest.root = compute_root(
-        &manifest,
-        &leaf_hash(LEAF_SMALL, 0, &new_small),
-        &pages,
-        &exts,
-        &frees,
-        &edges,
-    );
-    store.replace_manifest_and_small_for_migration(&manifest, &new_small)
-}
-
-/// 16 → 17: guest accessor mappings join the small state. Schema 16
-/// refused every non-boot accessor, so the appended empty section is
-/// content-preserving.
-fn migrate_v16_to_v17(store: &mut dyn HeapStore) -> Result<(), StoreError> {
-    let mut manifest = store.manifest()?;
-    let small = store.read_small_state()?;
-    let (pages, exts) = store.leaf_hashes()?;
-    let frees = store.free_leaf_hashes()?;
-    let edges = store.page_edges()?;
-    let old = compute_root(
-        &manifest,
-        &leaf_hash(LEAF_SMALL, 0, &small),
-        &pages,
-        &exts,
-        &frees,
-        &edges,
-    );
-    if old != manifest.root {
-        return Err(StoreError::BaselineMismatch {
-            expected: old,
-            found: manifest.root.clone(),
-        });
-    }
-    let mut new_small = small;
-    new_small.extend_from_slice(&[0u8; 4]);
-    manifest.store_schema = 17;
-    manifest.root = compute_root(
-        &manifest,
-        &leaf_hash(LEAF_SMALL, 0, &new_small),
-        &pages,
-        &exts,
-        &frees,
-        &edges,
-    );
-    store.replace_manifest_and_small_for_migration(&manifest, &new_small)
-}
-
-/// 17 → 18: Intl bound-function links join the small state. Older
-/// snapshots deliberately dropped these caches, so the new section is
-/// an empty content-preserving suffix.
-fn migrate_v17_to_v18(store: &mut dyn HeapStore) -> Result<(), StoreError> {
-    let mut manifest = store.manifest()?;
-    let small = store.read_small_state()?;
-    let (pages, exts) = store.leaf_hashes()?;
-    let frees = store.free_leaf_hashes()?;
-    let edges = store.page_edges()?;
-    let old = compute_root(
-        &manifest,
-        &leaf_hash(LEAF_SMALL, 0, &small),
-        &pages,
-        &exts,
-        &frees,
-        &edges,
-    );
-    if old != manifest.root {
-        return Err(StoreError::BaselineMismatch {
-            expected: old,
-            found: manifest.root.clone(),
-        });
-    }
-    let mut new_small = small;
-    new_small.extend_from_slice(&[0u8; 4]);
-    manifest.store_schema = 18;
-    manifest.root = compute_root(
-        &manifest,
-        &leaf_hash(LEAF_SMALL, 0, &new_small),
-        &pages,
-        &exts,
-        &frees,
-        &edges,
-    );
-    store.replace_manifest_and_small_for_migration(&manifest, &new_small)
-}
-
-/// 18 → 19: private values/accessors join the small state. Older
-/// snapshots dropped these rows, so migration appends an empty section.
-fn migrate_v18_to_v19(store: &mut dyn HeapStore) -> Result<(), StoreError> {
-    let mut manifest = store.manifest()?;
-    let small = store.read_small_state()?;
-    let (pages, exts) = store.leaf_hashes()?;
-    let frees = store.free_leaf_hashes()?;
-    let edges = store.page_edges()?;
-    let old = compute_root(
-        &manifest,
-        &leaf_hash(LEAF_SMALL, 0, &small),
-        &pages,
-        &exts,
-        &frees,
-        &edges,
-    );
-    if old != manifest.root {
-        return Err(StoreError::BaselineMismatch {
-            expected: old,
-            found: manifest.root.clone(),
-        });
-    }
-    let mut new_small = small;
-    new_small.extend_from_slice(&[0u8; 4]);
-    manifest.store_schema = 19;
-    manifest.root = compute_root(
-        &manifest,
-        &leaf_hash(LEAF_SMALL, 0, &new_small),
-        &pages,
-        &exts,
-        &frees,
-        &edges,
-    );
-    store.replace_manifest_and_small_for_migration(&manifest, &new_small)
-}
-
-/// 19 → 20: explicit resource-management stacks join the small state.
-fn migrate_v19_to_v20(store: &mut dyn HeapStore) -> Result<(), StoreError> {
-    let mut manifest = store.manifest()?;
-    let small = store.read_small_state()?;
-    let (pages, exts) = store.leaf_hashes()?;
-    let frees = store.free_leaf_hashes()?;
-    let edges = store.page_edges()?;
-    let old = compute_root(
-        &manifest,
-        &leaf_hash(LEAF_SMALL, 0, &small),
-        &pages,
-        &exts,
-        &frees,
-        &edges,
-    );
-    if old != manifest.root {
-        return Err(StoreError::BaselineMismatch {
-            expected: old,
-            found: manifest.root.clone(),
-        });
-    }
-    let mut new_small = small;
-    new_small.extend_from_slice(&[0u8; 4]);
-    manifest.store_schema = 20;
-    manifest.root = compute_root(
-        &manifest,
-        &leaf_hash(LEAF_SMALL, 0, &new_small),
-        &pages,
-        &exts,
-        &frees,
-        &edges,
-    );
-    store.replace_manifest_and_small_for_migration(&manifest, &new_small)
-}
-
-/// 20 → 21: synchronous generator activations join the small state.
-/// Schema 21 -> 22: append the (empty) error-frames section. Content
-/// preserving -- a v21 store's errors carried no frames, and an empty
-/// section decodes to exactly that.
-fn migrate_v21_to_v22(store: &mut dyn HeapStore) -> Result<(), StoreError> {
-    let mut manifest = store.manifest()?;
-    let small = store.read_small_state()?;
-    let (pages, exts) = store.leaf_hashes()?;
-    let frees = store.free_leaf_hashes()?;
-    let edges = store.page_edges()?;
-    let old = compute_root(
-        &manifest,
-        &leaf_hash(LEAF_SMALL, 0, &small),
-        &pages,
-        &exts,
-        &frees,
-        &edges,
-    );
-    if old != manifest.root {
-        return Err(StoreError::BaselineMismatch {
-            expected: old,
-            found: manifest.root.clone(),
-        });
-    }
-    let mut new_small = small;
-    new_small.extend_from_slice(&[0u8; 4]);
-    manifest.store_schema = 22;
-    manifest.root = compute_root(
-        &manifest,
-        &leaf_hash(LEAF_SMALL, 0, &new_small),
-        &pages,
-        &exts,
-        &frees,
-        &edges,
-    );
-    store.replace_manifest_and_small_for_migration(&manifest, &new_small)
-}
-
-fn migrate_v20_to_v21(store: &mut dyn HeapStore) -> Result<(), StoreError> {
-    let mut manifest = store.manifest()?;
-    let small = store.read_small_state()?;
-    let (pages, exts) = store.leaf_hashes()?;
-    let frees = store.free_leaf_hashes()?;
-    let edges = store.page_edges()?;
-    let old = compute_root(
-        &manifest,
-        &leaf_hash(LEAF_SMALL, 0, &small),
-        &pages,
-        &exts,
-        &frees,
-        &edges,
-    );
-    if old != manifest.root {
-        return Err(StoreError::BaselineMismatch {
-            expected: old,
-            found: manifest.root.clone(),
-        });
-    }
-    let mut new_small = small;
-    new_small.extend_from_slice(&[0u8; 4]);
-    manifest.store_schema = 21;
-    manifest.root = compute_root(
-        &manifest,
-        &leaf_hash(LEAF_SMALL, 0, &new_small),
-        &pages,
-        &exts,
-        &frees,
-        &edges,
-    );
-    store.replace_manifest_and_small_for_migration(&manifest, &new_small)
-}
-
-/// Schema 22 -> 23: append the (empty) promise-cluster section.
-/// Content preserving -- a v22 store's persist gate refused any
-/// machine holding promise state a resume would lose, so the section
-/// it never wrote decodes to exactly the empty cluster it enforced.
-fn migrate_v22_to_v23(store: &mut dyn HeapStore) -> Result<(), StoreError> {
-    let mut manifest = store.manifest()?;
-    let small = store.read_small_state()?;
-    let (pages, exts) = store.leaf_hashes()?;
-    let frees = store.free_leaf_hashes()?;
-    let edges = store.page_edges()?;
-    let old = compute_root(
-        &manifest,
-        &leaf_hash(LEAF_SMALL, 0, &small),
-        &pages,
-        &exts,
-        &frees,
-        &edges,
-    );
-    if old != manifest.root {
-        return Err(StoreError::BaselineMismatch {
-            expected: old,
-            found: manifest.root.clone(),
-        });
-    }
-    let mut new_small = small;
-    new_small.extend_from_slice(&[0u8; 4]);
-    manifest.store_schema = 23;
-    manifest.root = compute_root(
-        &manifest,
-        &leaf_hash(LEAF_SMALL, 0, &new_small),
-        &pages,
-        &exts,
-        &frees,
-        &edges,
-    );
-    store.replace_manifest_and_small_for_migration(&manifest, &new_small)
-}
-
-/// Schema 23 -> 24: add suspended async activations, formerly refused.
-fn migrate_v23_to_v24(store: &mut dyn HeapStore) -> Result<(), StoreError> {
-    let mut manifest = store.manifest()?;
-    let small = store.read_small_state()?;
-    let (pages, exts) = store.leaf_hashes()?;
-    let frees = store.free_leaf_hashes()?;
-    let edges = store.page_edges()?;
-    let old = compute_root(
-        &manifest,
-        &leaf_hash(LEAF_SMALL, 0, &small),
-        &pages,
-        &exts,
-        &frees,
-        &edges,
-    );
-    if old != manifest.root {
-        return Err(StoreError::BaselineMismatch {
-            expected: old,
-            found: manifest.root.clone(),
-        });
-    }
-    let mut new_small = small;
-    new_small.extend_from_slice(&[0u8; 4]);
-    manifest.store_schema = 24;
-    manifest.root = compute_root(
-        &manifest,
-        &leaf_hash(LEAF_SMALL, 0, &new_small),
-        &pages,
-        &exts,
-        &frees,
-        &edges,
-    );
-    store.replace_manifest_and_small_for_migration(&manifest, &new_small)
-}
-
-/// Ladder step 24→25: the small state grows the index-props section
-/// (`IDXP`'s encoding), appended as a pure suffix like every section
-/// since the 6→7 migration, so the bytes an older root signed are not
-/// re-encoded. A migrating store holds no index property — the table did
-/// not exist when it was written — so the new section is empty, which
-/// encodes as a four-byte zero length. Same discipline as its
-/// predecessors: verify the old content against its own root before
-/// touching anything, then restamp schema and root together.
-fn migrate_v24_to_v25(store: &mut dyn HeapStore) -> Result<(), StoreError> {
-    let mut manifest = store.manifest()?;
-    let small = store.read_small_state()?;
-    let (pages, exts) = store.leaf_hashes()?;
-    let frees = store.free_leaf_hashes()?;
-    let edges = store.page_edges()?;
-    let old = compute_root(
-        &manifest,
-        &leaf_hash(LEAF_SMALL, 0, &small),
-        &pages,
-        &exts,
-        &frees,
-        &edges,
-    );
-    if old != manifest.root {
-        return Err(StoreError::BaselineMismatch {
-            expected: old,
-            found: manifest.root.clone(),
-        });
-    }
-    let mut new_small = small;
-    new_small.extend_from_slice(&[0u8; 4]);
-    manifest.store_schema = 25;
-    manifest.root = compute_root(
-        &manifest,
-        &leaf_hash(LEAF_SMALL, 0, &new_small),
-        &pages,
-        &exts,
-        &frees,
-        &edges,
-    );
-    store.replace_manifest_and_small_for_migration(&manifest, &new_small)
 }
 
 // Separate the address arithmetic from slicing so its usize boundary can be
@@ -4708,6 +4060,98 @@ mod tests {
                     "symbol-key table: counter inside the name table"
                 ))
             );
+        }
+    }
+
+    #[test]
+    fn append_migrations_preserve_authenticated_content_and_refuse_bad_roots() {
+        // Independent historical wire contract: target schema / added bytes.
+        // Pin individual steps so moving four bytes between adjacent steps
+        // cannot pass merely because a complete v5-to-current migration works.
+        const EXPECTED: &[(u32, usize)] = &[
+            (7, 12),
+            (9, 4),
+            (10, 12),
+            (11, 16),
+            (12, 8),
+            (13, 4),
+            (14, 4),
+            (15, 4),
+            (16, 4),
+            (17, 4),
+            (18, 4),
+            (19, 4),
+            (20, 4),
+            (21, 4),
+            (22, 4),
+            (23, 4),
+            (24, 4),
+            (25, 4),
+        ];
+        assert_eq!(LADDER, EXPECTED);
+        let image = ran_image();
+        for &(target, extra_len) in EXPECTED {
+            let mut store = MemoryStore::new();
+            store
+                .commit(&image_to_batch_unchecked(&image, 1, ""))
+                .unwrap();
+            let mut manifest = store.manifest().unwrap();
+            manifest.store_schema = target - 1;
+            let small = vec![0x71, 0x00, 0xff];
+            let (pages, exts) = store.leaf_hashes().unwrap();
+            let frees = store.free_leaf_hashes().unwrap();
+            let edges = store.page_edges().unwrap();
+            manifest.root = compute_root(
+                &manifest,
+                &leaf_hash(LEAF_SMALL, 0, &small),
+                &pages,
+                &exts,
+                &frees,
+                &edges,
+            );
+            store
+                .replace_manifest_and_small_for_migration(&manifest, &small)
+                .unwrap();
+            let slot_pages = store.slot_pages.clone();
+            let chunk_extents = store.chunk_extents.clone();
+            let free_segs = store.free_segs.clone();
+
+            // Authentication failure must leave both manifest and payload
+            // untouched, before any append or version stamp takes effect.
+            let mut corrupt = manifest.clone();
+            corrupt.root = "bad root".into();
+            store.replace_manifest_for_migration(&corrupt).unwrap();
+            assert_eq!(
+                migrate_append_small_section(&mut store, target, extra_len),
+                Err(StoreError::BaselineMismatch {
+                    expected: manifest.root.clone(),
+                    found: corrupt.root.clone()
+                })
+            );
+            assert_eq!(store.manifest().unwrap(), corrupt);
+            assert_eq!(store.read_small_state().unwrap(), small);
+
+            store.replace_manifest_for_migration(&manifest).unwrap();
+            migrate_append_small_section(&mut store, target, extra_len).unwrap();
+            let mut expected_small = small.clone();
+            expected_small.extend(vec![0; extra_len]);
+            assert_eq!(store.read_small_state().unwrap(), expected_small);
+            manifest.store_schema = target;
+            manifest.root = compute_root(
+                &manifest,
+                &leaf_hash(LEAF_SMALL, 0, &expected_small),
+                &pages,
+                &exts,
+                &frees,
+                &edges,
+            );
+            assert_eq!(store.manifest().unwrap(), manifest);
+            assert_eq!(store.slot_pages, slot_pages);
+            assert_eq!(store.chunk_extents, chunk_extents);
+            assert_eq!(store.free_segs, free_segs);
+            assert_eq!(store.leaf_hashes().unwrap(), (pages, exts));
+            assert_eq!(store.free_leaf_hashes().unwrap(), frees);
+            assert_eq!(store.page_edges().unwrap(), edges);
         }
     }
 
