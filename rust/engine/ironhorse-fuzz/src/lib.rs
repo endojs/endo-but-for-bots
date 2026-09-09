@@ -10,7 +10,7 @@
 //!   structure-aware generator produces a subset-grammar program from
 //!   raw fuzzer bytes; `differential_check` feeds identical source to
 //!   ironhorse and the XS oracle and compares completion kind, result
-//!   string, and computron count. Any divergence is a finding.
+//!   string. Computrons are release-pinned independently, not compared to XS.
 //! - **Target 2, bytecode decoder fuzzing**: `decoder_is_panic_free`
 //!   drives arbitrary/truncated bytes through the decoder and
 //!   interpreter, which must degrade to a `Halt::Decode`, never panic
@@ -24,6 +24,9 @@
 //! `rust/engine/README.md` and the regression tree's `README.md`.
 
 use ironhorse_vm::{disassemble, run_program, run_program_bounded};
+
+mod comparison;
+use comparison::{compare_observations, results_agree};
 
 /// Stage-3b XSRE matcher fuzz arm (child 8/9): a structure-aware regexp
 /// generator + differential check of `ironhorse-regexp` against the pin.
@@ -1634,55 +1637,6 @@ pub struct Divergence {
     pub detail: String,
 }
 
-/// Whether two completion result strings denote the same guest value.
-///
-/// Byte-identical strings agree. Beyond that, a **Number** completion is
-/// compared by its IEEE-754 double rather than its decimal spelling. XS's
-/// `fx_dtoa` renders some large integer-valued doubles in a non-shortest,
-/// exact-integer form — finding `d99d263fcf6ca7a7` reproduced
-/// `327155712 * ((327155712 * (729808896 % 603979776)) % 729808896)`, whose
-/// value is the exactly-representable double `57632001481506816`, which XS
-/// prints verbatim (17 digits). ironhorse — like V8/SpiderMonkey and
-/// ECMA-262 §6.1.6.1.20's "k is as small as possible" — prints the *shortest*
-/// round-tripping decimal, `57632001481506820` (16 digits). Both spellings
-/// parse back to the identical double, so the two engines computed the same
-/// value and disagree only on rendering; forcing byte-identity would make
-/// ironhorse reproduce XS's non-shortest, non-conformant rendering.
-///
-/// Comparing the parsed doubles suppresses that spurious spelling divergence
-/// while still flagging every genuine value divergence: two *different*
-/// doubles never share a parse (a decimal string parses to exactly one
-/// nearest double), so `a.to_bits() == b.to_bits()` fails the moment the
-/// engines actually computed different numbers.
-fn results_agree(oracle: &str, ironhorse: &str) -> bool {
-    if oracle == ironhorse {
-        return true;
-    }
-    match (as_ecma_number(oracle), as_ecma_number(ironhorse)) {
-        (Some(a), Some(b)) => a.to_bits() == b.to_bits(),
-        _ => false,
-    }
-}
-
-/// Parse a completion string as the ECMAScript `String()` of a finite
-/// Number, or `None` when it is not a plain decimal Number spelling — so
-/// `"Infinity"`, `"NaN"`, booleans, and string results fall through to the
-/// byte comparison in [`results_agree`] (and `Infinity`/`NaN` already match
-/// byte-for-byte anyway). The character allow-list is what keeps Rust's
-/// float parser from accepting `inf`/`nan`/`infinity`, which JS never prints.
-fn as_ecma_number(s: &str) -> Option<f64> {
-    if s.is_empty() {
-        return None;
-    }
-    if !s
-        .bytes()
-        .all(|b| b.is_ascii_digit() || matches!(b, b'+' | b'-' | b'.' | b'e' | b'E'))
-    {
-        return None;
-    }
-    s.parse::<f64>().ok().filter(|v| v.is_finite())
-}
-
 /// The one decision every differential body makes before comparing anything:
 /// does ironhorse's halt take the run out of the comparison, and in which
 /// direction?
@@ -1702,8 +1656,7 @@ fn as_ecma_number(s: &str) -> Option<f64> {
 ///   also aborted, where the completion comparison alone would agree, and it
 ///   is reported before the oracle's truncated-result carve-out, which is
 ///   about the oracle's capture buffer and says nothing about the engine.
-/// * Anything else (`None`) proceeds to the completion / result / computron
-///   comparison.
+/// * Anything else (`None`) proceeds to the completion / result comparison (XS cost drift is advisory).
 ///
 /// [`Halt::NotImplemented`]: ironhorse_vm::Halt::NotImplemented
 /// [`Halt::EngineInvariant`]: ironhorse_vm::Halt::EngineInvariant
@@ -1740,7 +1693,7 @@ fn halt_precheck(source: &str, halt: &ironhorse_vm::Halt) -> Option<Result<(), D
 }
 
 /// Target 1 body: run `source` on both engines, returning `Err` on any
-/// completion / result / computron divergence. `Ok(())` also covers the
+/// completion / result divergence. XS computrons are advisory. `Ok(())` also covers the
 /// legitimate "ironhorse reached an opcode outside the stage-1 subset" case
 /// (a generated program using an unimplemented feature is not a
 /// correctness bug), which keeps the target honest about scope.
@@ -1757,64 +1710,42 @@ pub fn differential_check(source: &str) -> Result<(), Divergence> {
         return verdict;
     }
 
-    if oracle.completed != ironhorse.completed {
-        return Err(Divergence {
-            source: source.to_string(),
-            detail: format!(
-                "completion: oracle={} ironhorse={} (halt {:?})",
-                oracle.completed, ironhorse.completed, ironhorse.halt
-            ),
-        });
-    }
-    if oracle.completed {
-        if !results_agree(&oracle.result, &ironhorse.result) {
-            return Err(Divergence {
-                source: source.to_string(),
-                detail: format!(
-                    "result: oracle={:?} ironhorse={:?}",
-                    oracle.result, ironhorse.result
-                ),
-            });
-        }
-        if oracle.computrons != ironhorse.computrons {
-            return Err(Divergence {
-                source: source.to_string(),
-                detail: format!(
-                    "computrons: oracle={} ironhorse={}",
-                    oracle.computrons, ironhorse.computrons
-                ),
-            });
-        }
-    }
-    Ok(())
+    compare_observations(
+        (oracle.completed, &oracle.result, oracle.computrons),
+        (ironhorse.completed, &ironhorse.result, ironhorse.computrons),
+    )
+    .map(|_computron_advisory| ())
+    .map_err(|detail| Divergence {
+        source: source.into(),
+        detail,
+    })
 }
 
 /// Differential check that **links the program's symbol table** before
-/// running on ironhorse (`run_program_with_symbols`), the full result+computron
-/// comparison. Required for any grammar whose bytecode references a named
+/// running on ironhorse (`run_program_with_symbols`), comparing observable
+/// results and independently checking armed/unarmed meter consistency. Required for any grammar whose bytecode references a named
 /// property or intrinsic the engine must recognize by name — the stage-3
 /// arrays surface needs it so `length` routes to the array length semantics
 /// (a bare [`differential_check`] runs without symbols, where `arr.length`
 /// would be read as an ordinary numeric-id property and diverge).
 pub fn differential_check_with_symbols(source: &str) -> Result<(), Divergence> {
-    differential_check_symbols_mode(source, false)
+    differential_check_symbols_mode(source)
 }
 
-/// Version-2 builtin families retain oracle semantics checks and independently
-/// require identical armed/unarmed outcomes and raw costs. Their work schedule
-/// intentionally differs from XS; frozen version-4 costs live in VM and corpus
-/// regression tests. Unaffected families still use the XS-exact checker.
+/// Compatibility entry point for existing fuzz targets. All symbol-linked
+/// families use the same semantics and armed/unarmed checks; XS computron
+/// equality cannot gate an IronHorse cost-table recalibration.
 pub fn differential_check_meter_v4(source: &str) -> Result<(), Divergence> {
-    differential_check_symbols_mode(source, true)
+    differential_check_with_symbols(source)
 }
 
-fn differential_check_symbols_mode(source: &str, version_two: bool) -> Result<(), Divergence> {
+fn differential_check_symbols_mode(source: &str) -> Result<(), Divergence> {
     let oracle = match xs_oracle::run(source) {
         Some(o) => o,
         None => return Ok(()),
     };
     let ironhorse = ironhorse_vm::run_program_with_symbols(&oracle.bytecode, &oracle.symbols);
-    if version_two {
+    {
         let mut armed = ironhorse_vm::Interp::new();
         armed.link_intrinsics(&ironhorse_vm::parse_symbols(&oracle.symbols));
         armed.arm_meter(1, Box::new(|_| true));
@@ -1827,7 +1758,7 @@ fn differential_check_symbols_mode(source: &str, version_two: bool) -> Result<()
             return Err(Divergence {
                 source: source.into(),
                 detail: format!(
-                    "version-4 armed/unarmed disagreement: armed={outcome:?} unarmed={ironhorse:?}"
+                    "armed/unarmed disagreement: armed={outcome:?} unarmed={ironhorse:?}"
                 ),
             });
         }
@@ -1845,36 +1776,15 @@ fn differential_check_symbols_mode(source: &str, version_two: bool) -> Result<()
     if oracle.result_truncated {
         return Ok(());
     }
-    if oracle.completed != ironhorse.completed {
-        return Err(Divergence {
-            source: source.to_string(),
-            detail: format!(
-                "completion: oracle={} ironhorse={} (halt {:?})",
-                oracle.completed, ironhorse.completed, ironhorse.halt
-            ),
-        });
-    }
-    if oracle.completed {
-        if !results_agree(&oracle.result, &ironhorse.result) {
-            return Err(Divergence {
-                source: source.to_string(),
-                detail: format!(
-                    "result: oracle={:?} ironhorse={:?}",
-                    oracle.result, ironhorse.result
-                ),
-            });
-        }
-        if !version_two && oracle.computrons != ironhorse.computrons {
-            return Err(Divergence {
-                source: source.to_string(),
-                detail: format!(
-                    "computrons: oracle={} ironhorse={}",
-                    oracle.computrons, ironhorse.computrons
-                ),
-            });
-        }
-    }
-    Ok(())
+    compare_observations(
+        (oracle.completed, &oracle.result, oracle.computrons),
+        (ironhorse.completed, &ironhorse.result, ironhorse.computrons),
+    )
+    .map(|_computron_advisory| ())
+    .map_err(|detail| Divergence {
+        source: source.into(),
+        detail,
+    })
 }
 
 /// Differential check for the **stage-2 allocating surface**: compares
@@ -2548,23 +2458,6 @@ mod tests {
                 panic!("finding 6f0b586a80019097 must not diverge: {divergence:?}")
             }
         }
-    }
-
-    #[test]
-    fn results_agree_on_equal_doubles_spelled_differently() {
-        // The finding's two renderings of the same double.
-        assert!(results_agree("57632001481506816", "57632001481506820"));
-        // A genuine value divergence is still caught.
-        assert!(!results_agree("57632001481506816", "57632001481506824"));
-        assert!(!results_agree("3", "4"));
-        // Non-numeric completions compare byte-for-byte.
-        assert!(results_agree("true", "true"));
-        assert!(!results_agree("true", "false"));
-        assert!(!results_agree("Infinity", "1e999"));
-        // `Infinity`/`NaN` are not parsed as numbers (they match as strings).
-        assert!(as_ecma_number("Infinity").is_none());
-        assert!(as_ecma_number("NaN").is_none());
-        assert!(as_ecma_number("").is_none());
     }
 
     /// Regression for continuous-fuzz finding `493390fc03979205` (target

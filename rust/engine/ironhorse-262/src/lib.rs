@@ -1492,27 +1492,20 @@ mod tests {
     }
 
     #[test]
-    fn uncaught_throw_is_a_bit_exact_shared_abort() {
-        // Behavioural spot-check decoupled from the corpus: an uncaught
-        // throw is a shared abort whose thrown-value string and run-only
-        // computron count both match the oracle (the host-escape metering
-        // and the shim's abort-path computron capture together make the
-        // shared-abort arm bit-exact, not merely "ironhorse also threw").
+    fn uncaught_throw_has_shared_abort_semantics() {
+        // Error rendering remains an oracle semantic gate. Runtime costs are
+        // pinned independently, so XS cannot veto a cost-table recalibration.
         let r = dual_run("throw 7").expect("oracle");
         assert_eq!(r.agreement, Agreement::BothAbort);
         assert_eq!(r.ironhorse_error, "7");
         assert_eq!(r.oracle_error, "7");
-        assert_eq!(
-            r.oracle_computrons, r.ironhorse_computrons,
-            "uncaught-throw computrons agree"
-        );
-        assert!(r.is_bit_exact(), "an agreeing uncaught throw is bit-exact");
+        assert!(r.observables_agree());
 
-        // A caught throw completes; its result and computrons agree.
+        // A caught throw completes with the same observable result.
         let c = dual_run("try { throw 7 } catch (e) { e + 1 }").expect("oracle");
         assert_eq!(c.agreement, Agreement::BothComplete);
         assert_eq!(c.ironhorse_result, "8");
-        assert!(c.is_bit_exact());
+        assert!(c.observables_agree());
     }
 
     #[test]

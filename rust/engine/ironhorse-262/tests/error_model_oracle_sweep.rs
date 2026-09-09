@@ -52,25 +52,19 @@ const KNOWN_DIVERGENCES: &[(&str, &str)] = &[
     ),
 ];
 
-/// Programs whose COMPUTRONS must also match: an uncaught throw rendered
-/// through the thrown object's own `toString`. The oracle shim records the
-/// run-only count before it stringifies the exception, so the guest
-/// `toString` the port runs at its host boundary must leave no charge.
-const METER_EXACT: &[&str] = &[
+/// Oracle semantic probes for host rendering. Its metering independence is
+/// covered without XS by ironhorse-vm/tests/host_rendering_meter.rs.
+const HOST_RENDERING: &[&str] = &[
     "throw { toString(){ return 'custom' } }",
     "var n=0; throw { toString(){ n++; return 'n=' + n } }",
     "throw {a:1}",
 ];
 
 #[test]
-fn an_uncaught_throws_host_rendering_is_not_metered() {
-    for src in METER_EXACT {
+fn an_uncaught_throws_host_rendering_agrees() {
+    for src in HOST_RENDERING {
         let run = dual_run(src).expect("the pinned XS oracle machine must start");
         assert!(run.error_agrees, "{src}: {run:?}");
-        assert_eq!(
-            run.oracle_computrons, run.ironhorse_computrons,
-            "{src}: the post-run `String(exception)` must add no run computrons"
-        );
     }
 }
 
