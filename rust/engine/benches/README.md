@@ -1048,3 +1048,22 @@ Full engine CI passed 1,490 tests, SQLite passed 116, and strict VM library Clip
 and the math check passed; rustdoc retained 61 warnings.
 This accepts the incremental extraction; full 1A performance acceptance remains
 outstanding.
+
+## Rejected live-linking extraction (1A)
+
+[results/1a-link-module.json](results/1a-link-module.json) preserves the 12-method
+`interp/link.rs` candidate from `06ce40f82`, including its complete patch.
+It reduced the parent from 31,072 to 29,690 lines and preserved public signatures,
+intrinsic installation order, and source-lock coverage under independent review.
+
+All three targeted linking controls passed, ranging from 0.912x to 0.974x with
+matching results and raw meter totals.
+Eight initial general comparisons exceeded the unchanged 1.25x gate.
+A fixed three-trial alternating audit retained all six runs and still failed the
+120,320-byte placeholder control at 1.755x.
+Both sets of measurements remain recorded; no further trials were run.
+
+Source locks, 1,490 engine tests, 116 SQLite tests, strict VM library Clippy, and
+the math check passed; rustdoc retained 61 warnings.
+The runtime, source-lock, and benchmark candidate changes were reverted.
+This extraction is rejected.
