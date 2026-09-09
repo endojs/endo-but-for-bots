@@ -1059,9 +1059,90 @@ test('a refresh that does not advance expiry is refused', async t => {
   });
   t.is(lease.calls.length, 0);
   t.is(lease.rotations.length, 0);
-  // The bad state was refused rather than persisted, so a later good exchange
-  // still starts from the stored refresh token.
+  // The bad state was refused rather than persisted, so the record still holds
+  // the original token.
   t.is(lease.stored().refreshToken, refreshToken);
+  t.is(lease.exchanges.length, 1);
+
+  // But the provider already consumed that token when it answered. A second
+  // request must not present it again: the exchange succeeded, only the
+  // validation after it failed, and every check between the exchange and a
+  // committed write sits in that window.
+  await t.throwsAsync(() => E(lease.endpoint).request(request), {
+    message: /Provider request failed/,
+  });
+  t.is(lease.exchanges.length, 1);
+});
+
+test('a validation failure after a successful exchange still fences the token', async t => {
+  await null;
+  // Every check between the exchange and a committed write is in the window
+  // where the token is spent but nothing has stored the result.
+  for (const exchange of [
+    // Names another account.
+    async () => oauthState({ accountId: 'account-2' }),
+    // Not a state document at all.
+    async () => harden({ nonsense: true }),
+    // A token that is header-unsafe.
+    async () => oauthState({ accessToken: 'has space' }),
+  ]) {
+    const record = makeRecord({
+      state: oauthState({ expiresAt: 10_000 }),
+      exchange,
+    });
+    const lease = setup({ limits: oauthLimits, oauth: true, record });
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(() => E(lease.endpoint).request(request), {
+      message: /Provider request failed/,
+    });
+    t.is(record.exchanges.length, 1);
+    t.is(record.rotations.length, 0);
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(() => E(lease.endpoint).request(request), {
+      message: /Provider request failed/,
+    });
+    t.is(record.exchanges.length, 1);
+  }
+});
+
+test('a refresh that may have been dispatched fences; one that provably was not does not', async t => {
+  // A rejection cannot be assumed to leave the token unspent: a lost response
+  // or a timeout may well have consumed it.
+  const ambiguous = makeRecord({
+    state: oauthState({ expiresAt: 10_000 }),
+    exchange: async () => {
+      throw Error('token endpoint unavailable');
+    },
+  });
+  const first = setup({ limits: oauthLimits, oauth: true, record: ambiguous });
+  await t.throwsAsync(() => E(first.endpoint).request(request), {
+    message: /Provider request failed/,
+  });
+  await t.throwsAsync(() => E(first.endpoint).request(request), {
+    message: /Provider request failed/,
+  });
+  t.is(ambiguous.exchanges.length, 1);
+
+  // An authority that can prove the request never left says so, and the token
+  // is still good to present.
+  const undispatched = makeRecord({
+    state: oauthState({ expiresAt: 10_000 }),
+    exchange: async () => {
+      throw Error('Refresh not dispatched');
+    },
+  });
+  const second = setup({
+    limits: oauthLimits,
+    oauth: true,
+    record: undispatched,
+  });
+  await t.throwsAsync(() => E(second.endpoint).request(request), {
+    message: /Provider request failed/,
+  });
+  await t.throwsAsync(() => E(second.endpoint).request(request), {
+    message: /Provider request failed/,
+  });
+  t.is(undispatched.exchanges.length, 2);
 });
 
 test('a forbidden request is not treated as a rejected credential', async t => {

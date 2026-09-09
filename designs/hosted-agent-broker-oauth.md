@@ -391,6 +391,27 @@ The credential remembers the generation whose token it spent, refuses to
 exchange while the record still holds it, and lifts the fence when the record
 changes, which is exactly the operator re-grant the situation calls for.
 
+The fence is set around the whole exchange, not around the write.
+A first version guarded only the write failure, which missed that the token is
+spent the moment the provider answers: every check between that answer and a
+committed write — the response shape, the account binding, the advanced expiry
+— sits in a window where the token is gone and nothing has stored the result.
+The short-lifetime check is the sharpest example, because this document already
+anticipated a provider returning a lifetime shorter than the configured skew,
+and that entirely ordinary case left the token unfenced for the next request to
+replay.
+It is cleared in exactly one place: a committed write.
+
+A rejected exchange is assumed to have consumed the token as well.
+A lost response or a timeout may have reached the provider, and a broker that
+assumed otherwise would present the token again; only an authority that can
+actually distinguish a pre-dispatch failure is in a position to say so, and
+`isUndispatchedRefresh` is how it says it.
+The default is therefore fail-closed, at the cost that a token endpoint blip
+fences a credential until an operator re-grants it — the right side to err on
+when the alternative is a revoked grant, and stated here so that cost is chosen
+rather than discovered.
+
 The fence is in memory and bounded by the process, and cannot be otherwise: the
 record is where a durable mark would go, and being unable to write the record
 is the condition being marked.
@@ -398,7 +419,16 @@ A broker restarted while a record is fenced will attempt one more exchange and
 can still trip replay detection once.
 That is a real remaining hole, stated rather than papered over, because the
 alternative is a comment claiming a completeness the code does not have — which
-is how the first version of this same failure got written.
+is how the first two versions of this same failure got written.
+
+It is a hole with a known shape, though, and review has already proposed the
+fix: a **generation-checked write-ahead refresh intent**, persisted *before*
+contacting the provider, with the rule that an intent which cannot be persisted
+means the exchange does not happen. A restart then finds an unresolved intent
+and fails closed rather than replaying. That inverts the ordering this design
+assumed — it writes before the exchange rather than after — and it needs a
+place in the record for intent state, so it is a design change rather than a
+patch, and it is left as the named next step instead of being improvised here.
 
 ### One retry, on one classification
 
@@ -509,6 +539,10 @@ session — which is the same bound every other row of this table carries.
       The unit suite covers refresh, expiry, account switching, refresh-token
       replay across two leases, quota accounting, and redaction; the rest need
       the live gate.
+- [ ] Replace the in-memory consumption fence with a generation-checked
+      write-ahead refresh intent, persisted before the exchange, so a restart
+      during an unresolved exchange fails closed instead of replaying. If the
+      intent cannot be persisted, the exchange must not happen.
 - [ ] Decide whether a persistently rejected credential deserves negative
       caching.
       Today each admitted turn costs one exchange and one secret write; the
