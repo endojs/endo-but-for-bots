@@ -770,3 +770,33 @@ then run its binary under `/usr/bin/time -l` with `IH_NODE_BENCH_SHAPE` set to
 The artifact records the exact commands and process ordering.
 These compiler measurements do not replace the outstanding full 1A performance
 comparison or close the retained general-control regressions.
+
+## Regexp native module extraction (1A, F142)
+
+[results/1a-regexp-module.json](results/1a-regexp-module.json) records the move of
+50 interpreter methods into `interp/natives/regexp.rs`, compared with `c5e47934a`.
+A Rust-token comparison verifies that executable method content is unchanged,
+allowing only parent-scoped visibility and formatter-added trailing commas.
+The generic `slot_from_number` helper remains in the parent.
+The GC and allocation source locks include the new module; allocation mutations
+also verify that moving a method cannot hide raw reservations or sized vectors.
+
+The initial same-host comparison failed one of 48 general controls:
+`placeholder_120320_ms` measured 1.767x against the unchanged 1.25x threshold.
+The artifact retains that failure explicitly, including both measured reports.
+A separate fixed three-trial audit alternates baseline/candidate process order,
+retains all six reports, and compares their per-metric medians without discarding
+trials or changing the threshold.
+All 48 audit ratios are below 1.25x, ranging from 0.772x to 1.186x.
+This audit does not erase the failed initial comparison or establish its cause.
+
+Four added regexp execution controls cover native exec, overridden-exec
+replacement, split/matchAll, and empty Unicode replacement.
+Their elapsed ratios are 0.981x–1.044x; guest results and raw meter totals match.
+Compilation, linking and boot precede each timed run, with one warmup and five
+measured repetitions.
+Run `regexp_execution_bench` explicitly in release mode to reproduce them.
+The artifact records the general-control commands, source hashes and measurement
+provenance as well.
+This is evidence for the incremental extraction; full 1A performance acceptance
+against the original decomposition baseline remains outstanding.

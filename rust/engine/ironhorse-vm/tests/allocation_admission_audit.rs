@@ -26,6 +26,8 @@ const SOURCE: &str = concat!(
     include_str!("../src/interp/suspend.rs"),
     "\n",
     include_str!("../src/interp/native_try.rs"),
+    "\n",
+    include_str!("../src/interp/natives/regexp.rs"),
 );
 
 fn method_in(source: &str, name: &str) -> String {
@@ -43,7 +45,13 @@ fn method(name: &str) -> String {
 
 #[test]
 fn method_anchors_survive_visibility_and_nested_bodies() {
-    for visibility in ["", "pub ", "pub(super) ", "pub(crate) "] {
+    for visibility in [
+        "",
+        "pub ",
+        "pub(super) ",
+        "pub(crate) ",
+        "pub(in crate::interp) ",
+    ] {
         let source = format!(
             "// Unicode comment: λ {{ }}\nimpl Interp {{ {visibility}fn target() {{ if true {{ admitted(); }} }} \
              pub(super) fn neighbor() {{ raw_growth(); }} }}"
@@ -55,28 +63,47 @@ fn method_anchors_survive_visibility_and_nested_bodies() {
     }
 }
 
-#[test]
-fn native_builtins_do_not_reserve_raw_guest_capacities() {
-    let start = SOURCE.find("    fn call_native(").unwrap();
-    let end = SOURCE.find("    fn concat_add(").unwrap();
-    let builtins = &SOURCE[start..end];
-    for (line, text) in builtins.lines().enumerate() {
-        if text.contains("Vec::with_capacity") {
-            assert_eq!(
-                text.trim(),
-                "let mut units = Vec::with_capacity(8);",
-                "raw builtin reservation at relative line {}",
-                line + 1
+fn check_builtin_capacities(source: &str, native_regexp: &str) {
+    let start = source.find("    fn call_native(").unwrap();
+    let end = source.find("    fn concat_add(").unwrap();
+    for builtins in [&source[start..end], native_regexp] {
+        for (line, text) in builtins.lines().enumerate() {
+            if text.contains("Vec::with_capacity") {
+                assert_eq!(
+                    text.trim(),
+                    "let mut units = Vec::with_capacity(8);",
+                    "raw builtin reservation at relative line {}",
+                    line + 1
+                );
+            }
+        }
+        // Catch the other explicit capacity spelling, including multiline macros.
+        for suffix in builtins.split("vec![").skip(1) {
+            let expression = suffix.split(']').next().unwrap();
+            assert!(
+                !expression.contains(';'),
+                "sized vec! bypasses admission: {expression}"
             );
         }
     }
-    // Catch the other explicit capacity spelling, including multiline macros.
-    for suffix in builtins.split("vec![").skip(1) {
-        let expression = suffix.split(']').next().unwrap();
-        assert!(
-            !expression.contains(';'),
-            "sized vec! bypasses admission: {expression}"
-        );
+}
+
+#[test]
+fn native_builtins_do_not_reserve_raw_guest_capacities() {
+    check_builtin_capacities(SOURCE, include_str!("../src/interp/natives/regexp.rs"));
+}
+
+#[test]
+fn moved_regexp_methods_cannot_bypass_allocation_admission() {
+    let original = include_str!("../src/interp/natives/regexp.rs");
+    let anchor = "self.charge_and_check(0)?;";
+    assert!(original.contains(anchor));
+    for allocation in [
+        "let raw = Vec::with_capacity(guest);",
+        "let raw = vec![0; guest];",
+    ] {
+        let mutated = original.replacen(anchor, allocation, 1);
+        assert!(std::panic::catch_unwind(|| check_builtin_capacities(SOURCE, &mutated)).is_err());
     }
 }
 
