@@ -714,7 +714,7 @@ mod tests {
             "id_space_exhausted",
             // The crank-lifecycle latch (review F011): dropped at `run`
             // entry, set at exit from the engine's own halt, and the
-            // first conjunct of `is_quiescent`. Provably TRUE at every
+            // lifecycle conjunct of `is_quiescent`. Provably TRUE at every
             // persistable boundary; a restore lands on a fresh machine,
             // which starts true.
             "last_crank_completed",
@@ -863,18 +863,7 @@ mod tests {
 
         // Every activation transient has an independent persistence gate.
         // Retained embedding policy belongs in HOST_WIRING, not this set.
-        let quiescence = src
-            .split("pub fn is_quiescent(&self)")
-            .nth(1)
-            .unwrap()
-            .split("\n    }")
-            .next()
-            .unwrap();
-        let quiescence = quiescence
-            .lines()
-            .map(|line| line.split("//").next().unwrap())
-            .collect::<Vec<_>>()
-            .join("\n");
+        let quiescence = checked_quiescence_source();
         for field in TRANSIENTS {
             assert!(
                 quiescence.split("self.").skip(1).any(|tail| {
@@ -998,11 +987,86 @@ mod tests {
         }
     }
 
+    fn check_quiescence_wiring(interp: &str, boundary: &str) {
+        let compact = |source: &str| {
+            source
+                .lines()
+                .map(|line| line.split("//").next().unwrap())
+                .collect::<String>()
+                .split_whitespace()
+                .collect::<String>()
+        };
+        let interp = compact(interp);
+        let boundary = compact(boundary);
+        assert!(
+            interp.contains("pubfnis_quiescent(&self)->bool{self.fields_are_quiescent()}"),
+            "public gate must invoke the generated field predicates"
+        );
+        assert!(boundary.contains("pub(super)fnfields_are_quiescent(&self)->bool{true$(&&boundary_predicate!(boundary_run,self,$field,$boundary))*}"),
+            "every field predicate must contribute conjunctively");
+        assert!(
+            boundary.contains("macro_rules!boundary_run{($($code:tt)*)=>{$($code)*};}"),
+            "runtime emitter must forward the exact predicate tokens"
+        );
+        assert!(
+            boundary
+                .contains("macro_rules!boundary_text{($($code:tt)*)=>{stringify!($($code)*)};}"),
+            "source emitter must stringify the exact predicate tokens"
+        );
+        assert!(boundary.contains("pubconstQUIESCENCE_SOURCE:&str=concat!($(boundary_predicate!(boundary_text,self,$field,$boundary),\"\\n\",)*);"),
+            "source evidence must cover every generated predicate");
+        assert!(
+            boundary.contains("interp_state!(define_boundary);"),
+            "field policies must come from the state roster"
+        );
+    }
+
+    fn checked_quiescence_source() -> String {
+        check_quiescence_wiring(
+            include_str!("../../ironhorse-vm/src/interp.rs"),
+            include_str!("../../ironhorse-vm/src/interp/boundary.rs"),
+        );
+        ironhorse_vm::interp::boundary::QUIESCENCE_SOURCE
+            .lines()
+            .map(|line| line.split_whitespace().collect::<String>())
+            .collect::<Vec<_>>()
+            .join(" && ")
+    }
+
+    #[test]
+    fn quiescence_source_lock_rejects_disconnected_emitters() {
+        let interp = include_str!("../../ironhorse-vm/src/interp.rs");
+        let boundary = include_str!("../../ironhorse-vm/src/interp/boundary.rs");
+        check_quiescence_wiring(interp, boundary);
+        for (before, after) in [
+            (
+                "true $(&& boundary_predicate!",
+                "true $(|| boundary_predicate!",
+            ),
+            ("=> { $($code)* }", "=> { true }"),
+            ("stringify!($($code)*)", "\"self.last_crank_completed\""),
+            ("interp_state!(define_boundary);", ""),
+            (
+                "boundary_predicate!(boundary_text, self, $field, $boundary)",
+                "\"true\"",
+            ),
+        ] {
+            let mutated = boundary.replace(before, after);
+            assert_ne!(mutated, boundary, "mutation must match: {before}");
+            assert!(
+                std::panic::catch_unwind(|| check_quiescence_wiring(interp, &mutated)).is_err(),
+                "disconnected evidence accepted: {before}"
+            );
+        }
+        let mutated = interp.replace("self.fields_are_quiescent()", "true");
+        assert!(std::panic::catch_unwind(|| check_quiescence_wiring(&mutated, boundary)).is_err());
+    }
+
     /// The `EmptyAtBoundary` classification is honest only while
     /// `Interp::is_quiescent` actually requires each such table empty
     /// (the persist gates all run the predicate; `persist_gates.rs`
-    /// enforces THAT behaviorally). Parse the predicate's body from
-    /// source and reconcile, both ways: every EmptyAtBoundary field
+    /// enforces that behaviorally). Verify the generated predicate is invoked,
+    /// then reconcile its exact emitted tokens in both directions: every EmptyAtBoundary field
     /// appears in it, and every field the predicate names is accounted
     /// for — an EmptyAtBoundary row, the value stack (an arena,
     /// serialized empty via `STAC`), `async_gen_run_stack`
@@ -1036,7 +1100,7 @@ mod tests {
             // Counted references need not be empty, but a poisoned
             // projection must never be checkpointed.
             "side_refs",
-            // The crank-lifecycle latch, the first conjunct.
+            // The crank-lifecycle latch.
             "last_crank_completed",
             // The Proxy-trap context, refused if leaked.
             "array_iterator_proxy_get_context",
@@ -1053,35 +1117,7 @@ mod tests {
             // The property-key id-space poison latch.
             "id_space_exhausted",
         ];
-        let src = include_str!("../../ironhorse-vm/src/interp.rs");
-        let start = src
-            .find("pub fn is_quiescent(&self)")
-            .expect("the predicate");
-        let open = start + src[start..].find('{').expect("body");
-        let mut depth = 0usize;
-        let mut end = open;
-        for (i, b) in src[open..].bytes().enumerate() {
-            match b {
-                b'{' => depth += 1,
-                b'}' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        end = open + i;
-                        break;
-                    }
-                }
-                _ => {}
-            }
-        }
-        // Parse CODE, not prose: a `//` comment inside the body that
-        // names a field must neither satisfy the forward check (a
-        // dropped conjunct surviving as a remark) nor trip the reverse
-        // one (a remark about an unclassified field).
-        let body: String = src[open..=end]
-            .lines()
-            .map(|line| line.split("//").next().unwrap_or(""))
-            .collect::<Vec<&str>>()
-            .join("\n");
+        let body = checked_quiescence_source();
         let body = body.as_str();
 
         // Forward: every EmptyAtBoundary field is required empty.

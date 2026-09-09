@@ -49,6 +49,8 @@ pub use state::SIDE_TABLES;
 #[doc(hidden)]
 #[macro_use]
 pub mod gc_tables;
+#[doc(hidden)]
+pub mod boundary;
 
 use ironhorse_meter::{
     ARRAY_FIND_VALUE_METERING, ARRAY_ITEM_BYTES, CHUNK_ALIGNMENT, CHUNK_ALLOCATION_METERING,
@@ -13082,42 +13084,7 @@ impl Interp {
     /// differential harness folds that into an abort
     /// ([`RunOutcome::host_coerced`]).
     pub fn is_quiescent(&self) -> bool {
-        self.last_crank_completed
-            && self.args.is_empty()
-            && self.this_captures.is_empty()
-            && self.locals.is_empty()
-            && self.id_map.is_empty()
-            && self.this_val.kind == Kind::Undefined
-            && self.env.kind == Kind::Undefined
-            && self.result.kind == Kind::Undefined
-            && self.cur_func == crate::value::SlotIndex::NULL
-            && self.target_func == crate::value::SlotIndex::NULL
-            && !self.cur_target
-            && self.frame_slots == 0
-            && !self.strict
-            && self.top_level_code.is_none()
-            && self.active_segment.is_none()
-            && !self.installing_intrinsics
-            && self.call_stack.is_empty()
-            && self.stack.is_empty()
-            && self.jumps.is_empty()
-            && self.promise_jobs.is_empty()
-            && self.gen_run_stack.is_empty()
-            && self.async_run_stack.is_empty()
-            && self.async_gen_run_stack.is_empty()
-            && self.array_iterator_proxy_get_context.is_none()
-            && self.pending_new_target.is_none()
-            && self.resume_status == ResumeStatus::NoStatus
-            && !self.eval_direct
-            && !self.direct_eval_hoist
-            && self.exception.kind == Kind::Undefined
-            && !self.id_space_exhausted
-            && !self.side_refs.is_poisoned()
-            // The native-recursion budget is released by every guarded entry
-            // on return; a machine holding a charge at a boundary was unwound
-            // by a panic, and a resumed twin (which starts at zero) would
-            // halt at a different depth than it does.
-            && self.native_depth == 0
+        self.fields_are_quiescent()
     }
 
     /// A loop-closing metering check (`mxCheckMeter`). Consults the host
