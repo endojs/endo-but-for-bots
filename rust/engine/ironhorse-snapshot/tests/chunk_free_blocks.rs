@@ -1,5 +1,5 @@
 //! Persisted free-block markers survive every machine restore path. The
-//! fixture installs format-17 bytes directly until local GC produces them.
+//! fixture installs format-17 bytes directly to test restore independently of GC.
 use std::{cell::RefCell, rc::Rc};
 
 use ironhorse_snapshot::{

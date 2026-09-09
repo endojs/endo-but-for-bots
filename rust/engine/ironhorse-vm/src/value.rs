@@ -1460,6 +1460,144 @@ impl ChunkReader<'_> {
             (end, false)
         }
     }
+
+    /// Reconcile roots with actual block boundaries, including dead blocks.
+    /// Visitors may prepare relocation plans, but must not mutate the arena
+    /// until this complete traversal returns successfully.
+    fn visit_blocks(
+        &mut self,
+        total: usize,
+        live: &[ChunkOffset],
+        mut visit: impl FnMut(usize, usize, bool),
+    ) {
+        let mut roots: Vec<_> = live.iter().copied().filter(|off| !off.is_null()).collect();
+        roots.sort_unstable_by_key(|off| off.0);
+        roots.dedup();
+        let mut matched = 0;
+        let mut header = 0;
+        while header < total {
+            let (end, reusable) = self.block_at(header, total);
+            // block_at proved that the complete header fits.
+            let payload = header + CHUNK_HEADER;
+            if let Some(off) = roots.get(matched) {
+                assert!(
+                    off.0 as usize >= payload,
+                    "chunk offset is not a payload boundary (corrupt heap)"
+                );
+            }
+            let marked = roots
+                .get(matched)
+                .is_some_and(|off| off.0 as usize == payload);
+            if marked {
+                assert!(
+                    !reusable,
+                    "chunk offset references a free block (corrupt heap)"
+                );
+                matched += 1;
+            }
+            visit(header, end, marked);
+            header = end;
+        }
+        assert_eq!(
+            matched,
+            roots.len(),
+            "chunk offset is not a payload boundary (corrupt heap)"
+        );
+    }
+
+    fn prepare_write(
+        &mut self,
+        prepared: &mut std::collections::BTreeMap<usize, Vec<u8>>,
+        total: usize,
+        mut destination: usize,
+        mut bytes: &[u8],
+    ) {
+        let per = CHUNK_EXTENT_BYTES as usize;
+        while !bytes.is_empty() {
+            let ext = destination / per;
+            let original = prepared.entry(ext).or_insert_with(|| {
+                let start = ext * per;
+                let mut original = vec![0; total.min(start + per) - start];
+                self.copy_into(start, &mut original);
+                original
+            });
+            let within = destination % per;
+            let count = bytes.len().min(original.len() - within);
+            original[within..within + count].copy_from_slice(&bytes[..count]);
+            destination += count;
+            bytes = &bytes[count..];
+        }
+    }
+}
+
+enum ChunkEdit {
+    Copy {
+        destination: usize,
+        source: usize,
+        size: usize,
+    },
+    Free {
+        header: usize,
+        span: usize,
+    },
+}
+
+/// A chain-aligned region contained in one extent. Crossing live blocks are
+/// immovable anchors outside these regions, so relocation never dirties an
+/// otherwise unrelated extent.
+#[derive(Default)]
+struct ChunkRegion {
+    start: usize,
+    end: usize,
+    live: Vec<(usize, usize)>,
+    live_bytes: usize,
+}
+
+impl ChunkRegion {
+    fn finish(
+        &mut self,
+        edits: &mut Vec<ChunkEdit>,
+        remap: &mut std::collections::HashMap<ChunkOffset, ChunkOffset>,
+        live_end: &mut usize,
+    ) {
+        let span = self.end - self.start;
+        if span == 0 {
+            return;
+        }
+        let dead = span - self.live_bytes;
+        // Compact when at least one quarter of THIS region is dead. ceil(span
+        // / 4) is exact without overflowing a product on 32-bit hosts. This is
+        // relocation policy inside an explicit GC, not automatic GC scheduling.
+        if dead >= span.div_ceil(4) {
+            let mut destination = self.start;
+            for &(source, size) in &self.live {
+                if destination != source {
+                    edits.push(ChunkEdit::Copy {
+                        destination,
+                        source,
+                        size,
+                    });
+                    remap.insert(
+                        ChunkOffset((source + CHUNK_HEADER) as u32),
+                        ChunkOffset((destination + CHUNK_HEADER) as u32),
+                    );
+                }
+                destination += size;
+                *live_end = destination;
+            }
+            if destination < self.end {
+                edits.push(ChunkEdit::Free {
+                    header: destination,
+                    span: self.end - destination,
+                });
+            }
+        } else if let Some(&(source, size)) = self.live.last() {
+            *live_end = source + size;
+        }
+        self.live.clear();
+        self.live_bytes = 0;
+        self.start = self.end;
+    }
 }
 
 /// A read guard over chunk bytes: a plain borrow on a resident arena,
@@ -2028,6 +2166,143 @@ impl ChunkArena {
         &mut self.bytes_mut()[start..start + len]
     }
 
+    /// Reclaim chunks without relocating across extent boundaries. Complete
+    /// blocks within one extent are packed when at least one quarter of their
+    /// chain-aligned region is dead; live crossing blocks remain fixed anchors.
+    /// Dead crossing blocks become reusable markers. Trailing garbage is always
+    /// truncated. Interior holes are reusable even though `byte_size` includes
+    /// them; below-threshold ordinary dead blocks wait for a later collection.
+    ///
+    /// Returns entries only for moved payload offsets. Root and block-chain
+    /// validation matches [`Self::compact`]. All reads finish before mutation;
+    /// clean unaffected extents retain their backing and residency. This does
+    /// not schedule GC: the caller must already have chosen to collect.
+    pub fn compact_local(
+        &mut self,
+        live: &[ChunkOffset],
+    ) -> std::collections::HashMap<ChunkOffset, ChunkOffset> {
+        let total = self.len();
+        let per = CHUNK_EXTENT_BYTES as usize;
+        let mut reader = ChunkReader {
+            bytes: &self.bytes,
+            cached: None,
+        };
+        let mut edits = Vec::new();
+        let mut remap = std::collections::HashMap::new();
+        let mut region = ChunkRegion::default();
+        let mut new_len = 0;
+        reader.visit_blocks(total, live, |header, end, marked| {
+            let contained = header / per == (end - 1) / per;
+            if !contained || (region.end > region.start && header / per != region.start / per) {
+                region.finish(&mut edits, &mut remap, &mut new_len);
+            }
+            if contained {
+                if region.start == region.end {
+                    region.start = header;
+                }
+                region.end = end;
+                if marked {
+                    region.live.push((header, end - header));
+                    region.live_bytes += end - header;
+                }
+            } else {
+                if marked {
+                    new_len = end;
+                } else {
+                    edits.push(ChunkEdit::Free {
+                        header,
+                        span: end - header,
+                    });
+                }
+                region.start = end;
+                region.end = end;
+            }
+        });
+        region.finish(&mut edits, &mut remap, &mut new_len);
+
+        let mut prepared = std::collections::BTreeMap::new();
+        let mut scratch = vec![0; per];
+        for edit in edits {
+            match edit {
+                ChunkEdit::Copy {
+                    destination,
+                    source,
+                    size,
+                } => {
+                    reader.copy_into(source, &mut scratch[..size]);
+                    reader.prepare_write(&mut prepared, total, destination, &scratch[..size]);
+                }
+                ChunkEdit::Free { header, span } if header < new_len => {
+                    // Every discarded block has at least a four-byte header.
+                    // Tiny holes stay ordinary unreferenced blocks, matching
+                    // the allocator's split encoding and rebuilt index.
+                    let mut marker = [0; FREE_CHUNK_HEADER];
+                    let width = if span >= FREE_CHUNK_HEADER {
+                        marker[..CHUNK_HEADER].copy_from_slice(&u32::MAX.to_le_bytes());
+                        marker[CHUNK_HEADER..].copy_from_slice(
+                            &u32::try_from(span)
+                                .expect("free chunk span exceeds address space (corrupt heap)")
+                                .to_le_bytes(),
+                        );
+                        FREE_CHUNK_HEADER
+                    } else {
+                        marker[..CHUNK_HEADER]
+                            .copy_from_slice(&((span - CHUNK_HEADER) as u32).to_le_bytes());
+                        CHUNK_HEADER
+                    };
+                    reader.prepare_write(&mut prepared, total, header, &marker[..width]);
+                }
+                ChunkEdit::Free { .. } => {} // Truncated trailing garbage.
+            }
+        }
+        let shortened_tail = (new_len < total && new_len % per != 0).then_some(new_len / per);
+        if let Some(ext) = shortened_tail {
+            // Even unchanged prefix bytes need a shorter authenticated row.
+            // Read before truncation so a failed fault cannot lose the tail.
+            prepared.entry(ext).or_insert_with(|| {
+                let start = ext * per;
+                let mut bytes = vec![0; total.min(start + per) - start];
+                reader.copy_into(start, &mut bytes);
+                bytes
+            });
+        }
+        prepared.retain(|&ext, bytes| {
+            let start = ext * per;
+            bytes.truncate(new_len.min(start + per) - start);
+            reader.copy_into(start, &mut scratch[..bytes.len()]);
+            Some(ext) == shortened_tail || bytes.as_slice() != &scratch[..bytes.len()]
+        });
+        drop(reader);
+        if prepared.is_empty() && new_len == total {
+            return remap;
+        }
+
+        // No fallible source access remains. Preserve untouched bytes, dirty
+        // bits and unbacked ownership; changed extents become resident before
+        // the next read can consult the older source snapshot.
+        for (&ext, bytes) in &prepared {
+            let start = ext * per;
+            self.bytes_mut()[start..start + bytes.len()].copy_from_slice(bytes);
+        }
+        self.bytes_mut().truncate(new_len);
+        let exts = new_len.div_ceil(per);
+        self.dirty.truncate(exts);
+        self.unbacked.truncate(exts);
+        if let ChunkBytes::Lazy { resident, .. } = &mut self.bytes {
+            resident.truncate(exts);
+            for &ext in prepared.keys() {
+                if let Some(bit) = resident.get(ext) {
+                    bit.set(true);
+                }
+            }
+        }
+        for &ext in prepared.keys() {
+            self.dirty[ext] = true;
+        }
+        *self.free_chunks.get_mut() = None;
+        remap
+    }
+
     /// Slide-compact: keep only the blocks whose payload offsets are in
     /// `live`, packing them to the front of the arena in ascending
     /// offset order, and return the old→new payload-offset remap for blocks
@@ -2041,107 +2316,28 @@ impl ChunkArena {
         &mut self,
         live: &[ChunkOffset],
     ) -> std::collections::HashMap<ChunkOffset, ChunkOffset> {
-        use std::collections::{HashMap, HashSet};
         let mut reader = ChunkReader {
             bytes: &self.bytes,
             cached: None,
         };
-        let mut seen: Vec<ChunkOffset> = live
-            .iter()
-            .copied()
-            .filter(|o| !o.is_null())
-            .collect::<HashSet<_>>()
-            .into_iter()
-            .collect();
-        // Relocate in ascending source order so the copy never overlaps
-        // a not-yet-moved block.
-        seen.sort_by_key(|o| o.0);
-
-        // Validate every live block against the CURRENT bytes BEFORE
-        // the backing vector is taken below: a corrupt offset or
-        // length (record-content corruption is not validated at open —
-        // the design's named limitation) must die here, while the
-        // arena is still intact. Panicking after the take would unwind
-        // with the byte space emptied — a machine caught by
-        // `catch_unwind` would then serialize a zero-length chunk
-        // space under offsets that point past its end.
-        {
-            let total = self.len();
-            for &old in &seen {
-                let h = (old.0 as usize)
-                    .checked_sub(CHUNK_HEADER)
-                    .expect("chunk offset below header (corrupt heap)");
-                assert!(
-                    h + CHUNK_HEADER <= total,
-                    "chunk header out of range (corrupt heap)"
-                );
-                let len = reader.length_at(h);
-                assert_ne!(
-                    len, FREE_CHUNK,
-                    "chunk offset references a free block (corrupt heap)"
-                );
-                // checked_add, not `+`: on a 32-bit usize a corrupt
-                // u32 length can wrap the sum past the guard, and the
-                // later slice would then panic AFTER the byte space
-                // was taken — exactly the state-loss this validation
-                // pass exists to prevent (review finding). Panicking
-                // HERE is fine: nothing has been taken yet.
-                let end = (old.0 as usize)
-                    .checked_add(len)
-                    .expect("chunk payload length overflows (corrupt heap)");
-                assert!(end <= total, "chunk payload out of range (corrupt heap)");
-            }
-        }
-
-        // Lengths preceding arbitrary in-range bytes can look plausible.
-        // Reconcile the sorted live offsets against the actual block chain,
-        // including dead blocks, before taking storage or rewriting offsets.
-        // A streaming merge needs no second set of all payload boundaries.
         let total = self.len();
-        let mut header = 0usize;
-        let mut matched = 0usize;
-        // Destination/source ranges include their headers. These runs define
-        // the output without requiring either arena to be fully resident.
-        let mut runs = Vec::with_capacity(seen.len());
+        let mut runs = Vec::new();
         let mut new_len = 0usize;
-        let mut remap = HashMap::new();
-        while header < total {
-            let payload = header
-                .checked_add(CHUNK_HEADER)
-                .filter(|&end| end <= total)
-                .expect("chunk chain header out of range (corrupt heap)");
-            if let Some(old) = seen.get(matched) {
-                assert!(
-                    old.0 as usize >= payload,
-                    "chunk offset is not a payload boundary (corrupt heap)"
+        let mut remap = std::collections::HashMap::new();
+        reader.visit_blocks(total, live, |header, end, marked| {
+            if marked {
+                let old = ChunkOffset((header + CHUNK_HEADER) as u32);
+                let new = ChunkOffset(
+                    u32::try_from(new_len + CHUNK_HEADER)
+                        .expect("compacted chunk offset exceeds address space"),
                 );
-            }
-            let (end, reusable) = reader.block_at(header, total);
-            if seen
-                .get(matched)
-                .is_some_and(|old| old.0 as usize == payload)
-            {
-                assert!(
-                    !reusable,
-                    "chunk offset references a free block (corrupt heap)"
-                );
-                let old = seen[matched];
-                let new_payload = u32::try_from(new_len + CHUNK_HEADER)
-                    .expect("compacted chunk offset exceeds address space");
-                if old.0 != new_payload {
-                    remap.insert(old, ChunkOffset(new_payload));
+                if old != new {
+                    remap.insert(old, new);
                 }
                 runs.push((new_len, header, end - header));
                 new_len += end - header;
-                matched += 1;
             }
-            header = end;
-        }
-        assert_eq!(
-            matched,
-            seen.len(),
-            "chunk offset is not a payload boundary (corrupt heap)"
-        );
+        });
 
         // Nothing moved or shrank: keep bytes, backing, dirt and residency
         // exactly as they were. Only headers were read during validation.

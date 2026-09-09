@@ -207,6 +207,21 @@ recombine measurable.
 
 **Phase 6 landed (2026-08-11): persisted page-edge summaries and the
 summary-driven partial collector.**
+Partial collection never reclaims chunk space.
+Workers using only this collector must be recycled before reaching their chunk
+ceiling, or run explicit full collection under their replicated collection policy.
+Full collection now packs chain-aligned regions within an extent when at least
+one quarter of the region's bytes are dead, keeping crossing live blocks fixed.
+It encodes reusable interior holes and truncates trailing garbage; the reported
+chunk byte length measures tail reclamation, not reusable interior capacity.
+Format 17 carries free-block markers, and allocation rebuilds its deterministic
+size-and-address index from those markers after resume.
+Unchanged extents retain their backing and residency; changed extents retain
+dirty and unbacked ownership until the appropriate checkpoint.
+The byte vector can retain its allocation after truncation for subsequent reuse.
+This changes relocation policy inside explicit full collection, without adding
+allocation-triggered GC or resolving W6's separate scheduling-policy question.
+
 Every checkpoint writes per-page outgoing-edge summaries
 (`derive_page_edges` — a pure function of the page's records, NULL
 links excluded), carried in the batch, signed by the seal, and — as
