@@ -822,3 +822,24 @@ The artifact retains both comparisons without attributing a cause or selecting
 further trials to obtain a pass.
 This extraction is not accepted; full 1A decomposition and performance acceptance
 remain outstanding.
+
+## Stored Slot root roster (1A, F052/F128)
+
+[results/1a-stored-slot-roster.json](results/1a-stored-slot-roster.json) records
+replacing three hand-maintained root inventories with visitors generated from the
+snapshot payload roster, compared with `666141107`.
+`MachineImage`, `SmallState`, and `BoundsTables` share each primary field's
+`slots` or `metadata` classification; extension-only payloads require `shared`.
+The generated destructuring and independent nested row classifications remain
+exhaustive, and the heap walk still excludes free records.
+A marker test pins the historical witness order across all three visitors.
+
+All 48 same-host general-control ratios passed the unchanged 1.25x threshold,
+ranging from 0.808x to 1.135x.
+Both reports and all ratios are retained; no repeat trials were selected.
+The snapshot suite passed 547 tests and SQLite passed 116 tests.
+After adversarial review added compile-time rejection of invalid policy shapes,
+all 219 snapshot library tests and strict Clippy passed again.
+The artifact includes the validation commands and compile-policy probe results.
+This incremental comparison does not replace the outstanding full 1A performance
+acceptance against the original decomposition baseline.

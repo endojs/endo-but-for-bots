@@ -1,6 +1,9 @@
 //! Snapshot payload ownership and codec wiring. Section identities come from
 //! the VM roster; declaration order here is the historical container atom order.
 //! Multiple payloads can share one image field (errors and promise state).
+//! Each primary field classifies stored Slot traversal as slots or metadata;
+//! extension payloads share their primary field's classification. Payload order
+//! preserves the historical Slot witness order as well as container atom order.
 //! Container presence is content-determined: empty optional atoms are omitted
 //! to preserve historical bytes and CAS identities. Error frames require an
 //! actual frame, async instances use their nested table, and a name floor
@@ -47,6 +50,7 @@ macro_rules! snapshot_payloads {
                 canonicalize(bytes): {
                     crate::image::decode_stack(bytes).map(|value| crate::image::encode_stack(&value))
                 },
+                slot_visit: slots,
             }
             RetiredFreeList {
                 image_field: slot_free,
@@ -70,6 +74,7 @@ macro_rules! snapshot_payloads {
                 canonicalize(bytes): {
                     crate::image::decode_u32s(bytes).map(|_| crate::image::encode_u32s(&[]))
                 },
+                slot_visit: metadata,
             }
             Keys {
                 image_field: keys,
@@ -99,6 +104,7 @@ macro_rules! snapshot_payloads {
                 canonicalize(bytes): {
                     crate::image::decode_strings(bytes).map(|value| crate::image::encode_strings(&value))
                 },
+                slot_visit: metadata,
             }
             Names {
                 image_field: names,
@@ -132,6 +138,7 @@ macro_rules! snapshot_payloads {
                 canonicalize(bytes): {
                     crate::image::decode_names(bytes).map(|value| crate::image::encode_names(&value))
                 },
+                slot_visit: metadata,
             }
             Symbols {
                 image_field: symbols,
@@ -174,6 +181,7 @@ macro_rules! snapshot_payloads {
                 canonicalize(bytes): {
                     crate::image::decode_symbol_keys(bytes).map(|value| crate::image::encode_symbol_keys(&value))
                 },
+                slot_visit: metadata,
             }
             Meter {
                 image_field: meter,
@@ -222,6 +230,7 @@ macro_rules! snapshot_payloads {
                 canonicalize(bytes): {
                     crate::image::MeterImage::decode(bytes).map(|value| value.encode())
                 },
+                slot_visit: metadata,
             }
             Arrays {
                 image_field: arrays,
@@ -306,6 +315,7 @@ macro_rules! snapshot_payloads {
                 canonicalize(bytes): {
                     crate::image::decode_arrays(bytes).map(|value| crate::image::encode_arrays(&value))
                 },
+                slot_visit: slots,
             }
             IndexProperties {
                 image_field: index_props,
@@ -365,6 +375,7 @@ macro_rules! snapshot_payloads {
                 canonicalize(bytes): {
                     crate::image::decode_index_props(bytes).map(|value| crate::image::encode_index_props(&value))
                 },
+                slot_visit: slots,
             }
             Collections {
                 image_field: collections,
@@ -425,6 +436,7 @@ macro_rules! snapshot_payloads {
                 canonicalize(bytes): {
                     crate::image::decode_collections(bytes).map(|value| crate::image::encode_collections(&value))
                 },
+                slot_visit: slots,
             }
             Registry {
                 image_field: registry,
@@ -476,6 +488,7 @@ macro_rules! snapshot_payloads {
                 canonicalize(bytes): {
                     crate::image::decode_registry(bytes).map(|value| crate::image::encode_registry(&value))
                 },
+                slot_visit: metadata,
             }
             Errors {
                 image_field: errors,
@@ -549,6 +562,7 @@ macro_rules! snapshot_payloads {
                 canonicalize(bytes): {
                     crate::image::decode_errors(bytes).map(|value| crate::image::encode_errors(&value))
                 },
+                slot_visit: metadata,
             }
             ErrorFrames {
                 image_field: errors,
@@ -605,6 +619,7 @@ macro_rules! snapshot_payloads {
                 canonicalize(bytes): {
                     crate::image::decode_error_frames(bytes).map(|_| bytes.to_vec())
                 },
+                slot_visit: shared,
             }
             Buffers {
                 image_field: buffers,
@@ -733,6 +748,7 @@ macro_rules! snapshot_payloads {
                 canonicalize(bytes): {
                     crate::image::decode_buffers(bytes).map(|value| crate::image::encode_buffers(&value))
                 },
+                slot_visit: metadata,
             }
             TypedArrays {
                 image_field: typed_arrays,
@@ -788,6 +804,7 @@ macro_rules! snapshot_payloads {
                 canonicalize(bytes): {
                     crate::image::decode_typed_arrays(bytes).map(|value| crate::image::encode_typed_arrays(&value))
                 },
+                slot_visit: metadata,
             }
             DataViews {
                 image_field: data_views,
@@ -842,6 +859,7 @@ macro_rules! snapshot_payloads {
                 canonicalize(bytes): {
                     crate::image::decode_data_views(bytes).map(|value| crate::image::encode_data_views(&value))
                 },
+                slot_visit: metadata,
             }
             Wrappers {
                 image_field: wrappers,
@@ -907,6 +925,7 @@ macro_rules! snapshot_payloads {
                 canonicalize(bytes): {
                     crate::image::decode_wrappers(bytes).map(|value| crate::image::encode_wrappers(&value))
                 },
+                slot_visit: slots,
             }
             Regexps {
                 image_field: regexps,
@@ -982,6 +1001,7 @@ macro_rules! snapshot_payloads {
                 canonicalize(bytes): {
                     crate::image::decode_regexps(bytes).map(|value| crate::image::encode_regexps(&value))
                 },
+                slot_visit: metadata,
             }
             ArgumentsBrands {
                 image_field: arguments_brands,
@@ -1032,6 +1052,7 @@ macro_rules! snapshot_payloads {
                     crate::image::decode_arguments_brands(bytes)
                         .map(|value| crate::image::encode_arguments_brands(&value))
                 },
+                slot_visit: metadata,
             }
             Temporal {
                 image_field: temporal,
@@ -1114,6 +1135,7 @@ macro_rules! snapshot_payloads {
                 canonicalize(bytes): {
                     crate::image::decode_temporal(bytes).map(|value| crate::image::encode_temporal(&value))
                 },
+                slot_visit: metadata,
             }
             Intl {
                 image_field: intl,
@@ -1205,6 +1227,7 @@ macro_rules! snapshot_payloads {
                 canonicalize(bytes): {
                     crate::image::decode_intl(bytes).map(|value| crate::image::encode_intl(&value))
                 },
+                slot_visit: metadata,
             }
             Iterators {
                 image_field: iterators,
@@ -1323,6 +1346,7 @@ macro_rules! snapshot_payloads {
                 canonicalize(bytes): {
                     crate::image::decode_iterators(bytes).map(|value| crate::image::encode_iterators(&value))
                 },
+                slot_visit: metadata,
             }
             Dates {
                 image_field: dates,
@@ -1381,6 +1405,7 @@ macro_rules! snapshot_payloads {
                 canonicalize(bytes): {
                     crate::image::decode_dates(bytes).map(|value| crate::image::encode_dates(&value))
                 },
+                slot_visit: metadata,
             }
             Functions {
                 image_field: function_state,
@@ -1553,6 +1578,7 @@ macro_rules! snapshot_payloads {
                     crate::image::decode_function_state(bytes)
                         .map(|value| crate::image::encode_function_state(&value))
                 },
+                slot_visit: slots,
             }
             Proxies {
                 image_field: proxy_state,
@@ -1638,6 +1664,7 @@ macro_rules! snapshot_payloads {
                 canonicalize(bytes): {
                     crate::image::decode_proxy_state(bytes).map(|value| crate::image::encode_proxy_state(&value))
                 },
+                slot_visit: metadata,
             }
             Accessors {
                 image_field: accessors,
@@ -1719,6 +1746,7 @@ macro_rules! snapshot_payloads {
                 canonicalize(bytes): {
                     crate::image::decode_accessors(bytes).map(|value| crate::image::encode_accessors(&value))
                 },
+                slot_visit: slots,
             }
             IntlBoundFunctions {
                 image_field: intl_bound_functions,
@@ -1810,6 +1838,7 @@ macro_rules! snapshot_payloads {
                     crate::image::decode_intl_bound_functions(bytes)
                         .map(|value| crate::image::encode_intl_bound_functions(&value))
                 },
+                slot_visit: metadata,
             }
             PrivateElements {
                 image_field: private_elements,
@@ -1891,6 +1920,7 @@ macro_rules! snapshot_payloads {
                     crate::image::decode_private_elements(bytes)
                         .map(|value| crate::image::encode_private_elements(&value))
                 },
+                slot_visit: slots,
             }
             DisposableStacks {
                 image_field: disposable_stacks,
@@ -1948,6 +1978,7 @@ macro_rules! snapshot_payloads {
                     crate::image::decode_disposable_stacks(bytes)
                         .map(|value| crate::image::encode_disposable_stacks(&value))
                 },
+                slot_visit: slots,
             }
             Generators {
                 image_field: generators,
@@ -2136,6 +2167,7 @@ macro_rules! snapshot_payloads {
                 canonicalize(bytes): {
                     crate::image::decode_generators(bytes).map(|value| crate::image::encode_generators(&value))
                 },
+                slot_visit: slots,
             }
             Promises {
                 image_field: promise_cluster,
@@ -2330,6 +2362,7 @@ macro_rules! snapshot_payloads {
                     crate::image::decode_promise_cluster(bytes)
                         .map(|value| crate::image::encode_promise_cluster(&value))
                 },
+                slot_visit: slots,
             }
             AsyncInstances {
                 image_field: promise_cluster,
@@ -2365,6 +2398,7 @@ macro_rules! snapshot_payloads {
                     crate::image::decode_async_instances(bytes)
                         .map(|value| crate::image::encode_async_instances(&value))
                 },
+                slot_visit: shared,
             }
             NameFloor {
                 image_field: name_floor,
@@ -2460,6 +2494,7 @@ macro_rules! snapshot_payloads {
                         ))
                     }
                 },
+                slot_visit: metadata,
             }
         }
     };
@@ -2517,6 +2552,7 @@ macro_rules! define_payloads {
         present($image:ident): $present:expr,
         encode($state:ident): $encode:block,
         canonicalize($bytes:ident): $canonicalize:block,
+        slot_visit: $slot_visit:ident,
     })*) => {
         pub(crate) const PAYLOADS: &[PayloadDesc] = &[
             $(PayloadDesc {
