@@ -2709,9 +2709,7 @@ pub fn store_to_image(store: &dyn HeapStore) -> Result<MachineImage, StoreError>
         );
     }
 
-    let image = crate::snapshot_roster::image_from_small(
-        small, manifest, chunks, slots, slot_free,
-    );
+    let image = crate::snapshot_roster::image_from_small(small, manifest, chunks, slots, slot_free);
     crate::image::check_machine_image_bounds(&image)?;
     crate::image::check_buffer_chunk_lengths(&image.buffers, &image.chunks)?;
     Ok(image)
@@ -3324,7 +3322,7 @@ impl HeapStore for MemoryStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::image::read_machine;
+    use crate::image::{encode_strings, read_machine};
     use crate::machine::MachineSnapshot;
     use ironhorse_vm::Interp;
 

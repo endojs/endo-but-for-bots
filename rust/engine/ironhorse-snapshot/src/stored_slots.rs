@@ -509,9 +509,18 @@ pub(crate) fn visit_image_slots(image: &MachineImage, f: &mut dyn FnMut(&Slot)) 
     promise_cluster.visit(f);
 }
 
-impl VisitSlots for crate::image::LangRows<'_> {
+impl VisitSlots for crate::image::BoundsTables<'_> {
     fn visit(&self, f: &mut dyn FnMut(&Slot)) {
         let Self {
+            arrays,
+            index_props,
+            collections,
+            registry,
+            errors,
+            buffers,
+            typed_arrays,
+            data_views,
+            iterators,
             wrappers,
             regexps,
             dates,
@@ -527,6 +536,12 @@ impl VisitSlots for crate::image::LangRows<'_> {
             temporal,
             intl,
         } = self;
+        metadata(*registry);
+        metadata(*errors);
+        metadata(*buffers);
+        metadata(*typed_arrays);
+        metadata(*data_views);
+        metadata(*iterators);
         metadata(*regexps);
         metadata(*dates);
         metadata(*proxy_state);
@@ -534,6 +549,9 @@ impl VisitSlots for crate::image::LangRows<'_> {
         metadata(*arguments_brands);
         metadata(*temporal);
         metadata(*intl);
+        arrays.visit(f);
+        index_props.visit(f);
+        collections.visit(f);
         wrappers.visit(f);
         function_state.visit(f);
         accessors.visit(f);

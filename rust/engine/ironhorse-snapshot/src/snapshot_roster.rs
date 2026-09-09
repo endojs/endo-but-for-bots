@@ -12,6 +12,7 @@ macro_rules! snapshot_payloads {
             Stack {
                 image_field: stack,
                 live: [],
+                bounds: [],
                 initialize: [stack = Default::default()],
                 legacy_label: "small state stack section",
                 decode_legacy(state, bytes): {
@@ -29,6 +30,7 @@ macro_rules! snapshot_payloads {
             RetiredFreeList {
                 image_field: slot_free,
                 live: [],
+                bounds: [],
                 initialize: [slot_free = Default::default()],
                 legacy_label: "small state free-list section",
                 decode_legacy(state, bytes): {
@@ -46,6 +48,7 @@ macro_rules! snapshot_payloads {
             Keys {
                 image_field: keys,
                 live: [],
+                bounds: [],
                 initialize: [keys = Default::default()],
                 legacy_label: "small state keys section",
                 decode_legacy(state, bytes): {
@@ -63,6 +66,7 @@ macro_rules! snapshot_payloads {
             Names {
                 image_field: names,
                 live: [],
+                bounds: [],
                 initialize: [names = Default::default()],
                 legacy_label: "small state names section",
                 decode_legacy(state, bytes): {
@@ -80,6 +84,7 @@ macro_rules! snapshot_payloads {
             Symbols {
                 image_field: symbols,
                 live: [],
+                bounds: [],
                 initialize: [symbols = Default::default()],
                 legacy_label: "small state symbols section",
                 decode_legacy(state, bytes): {
@@ -97,6 +102,7 @@ macro_rules! snapshot_payloads {
             Meter {
                 image_field: meter,
                 live: [],
+                bounds: [],
                 // Private decode placeholder: every successful decode replaces it
                 // with the required METR payload before returning the state.
                 initialize: [meter = crate::image::MeterImage {
@@ -138,6 +144,7 @@ macro_rules! snapshot_payloads {
                         Default::default()
                     }
                 }],
+                bounds: [arrays: [crate::image::ArrayImage] = &[]],
                 initialize: [arrays = Default::default()],
                 legacy_label: "small state arrays section",
                 decode_legacy(state, bytes): {
@@ -173,6 +180,7 @@ macro_rules! snapshot_payloads {
                         Default::default()
                     }
                 }],
+                bounds: [index_props: [crate::image::IndexPropsImage] = &[]],
                 initialize: [index_props = Default::default()],
                 legacy_label: "small state index-props section",
                 decode_legacy(state, bytes): {
@@ -213,6 +221,7 @@ macro_rules! snapshot_payloads {
                         Default::default()
                     }
                 }],
+                bounds: [collections: [crate::image::CollectionImage] = &[]],
                 initialize: [collections = Default::default()],
                 legacy_label: "small state collections section",
                 decode_legacy(state, bytes): {
@@ -244,6 +253,7 @@ macro_rules! snapshot_payloads {
                         Default::default()
                     }
                 }],
+                bounds: [registry: [crate::image::RegistryImage] = &[]],
                 initialize: [registry = Default::default()],
                 legacy_label: "small state registry section",
                 decode_legacy(state, bytes): {
@@ -282,6 +292,7 @@ macro_rules! snapshot_payloads {
                         Default::default()
                     }
                 }],
+                bounds: [errors: [crate::image::ErrorImage] = &[]],
                 initialize: [errors = Default::default()],
                 legacy_label: "small state errors section",
                 decode_legacy(state, bytes): {
@@ -303,6 +314,7 @@ macro_rules! snapshot_payloads {
             ErrorFrames {
                 image_field: errors,
                 live: [],
+                bounds: [],
                 initialize: [],
                 legacy_label: "small state error-frames section",
                 decode_legacy(state, bytes): {
@@ -346,6 +358,7 @@ macro_rules! snapshot_payloads {
                         Default::default()
                     }
                 }],
+                bounds: [buffers: [crate::image::BufferImage] = &[]],
                 initialize: [buffers = Default::default()],
                 legacy_label: "small state buffers section",
                 decode_legacy(state, bytes): {
@@ -385,6 +398,7 @@ macro_rules! snapshot_payloads {
                         Default::default()
                     }
                 }],
+                bounds: [typed_arrays: [crate::image::TypedArrayImage] = &[]],
                 initialize: [typed_arrays = Default::default()],
                 legacy_label: "small state typed-arrays section",
                 decode_legacy(state, bytes): {
@@ -423,6 +437,7 @@ macro_rules! snapshot_payloads {
                         Default::default()
                     }
                 }],
+                bounds: [data_views: [crate::image::DataViewImage] = &[]],
                 initialize: [data_views = Default::default()],
                 legacy_label: "small state data-views section",
                 decode_legacy(state, bytes): {
@@ -454,6 +469,7 @@ macro_rules! snapshot_payloads {
                         Default::default()
                     }
                 }],
+                bounds: [wrappers: [crate::image::WrapperImage] = &[]],
                 initialize: [wrappers = Default::default()],
                 legacy_label: "small state wrappers section",
                 decode_legacy(state, bytes): {
@@ -492,6 +508,7 @@ macro_rules! snapshot_payloads {
                         Default::default()
                     }
                 }],
+                bounds: [regexps: [crate::image::RegExpImage] = &[]],
                 initialize: [regexps = Default::default()],
                 legacy_label: "small state regexps section",
                 decode_legacy(state, bytes): {
@@ -519,6 +536,7 @@ macro_rules! snapshot_payloads {
                         Default::default()
                     }
                 }],
+                bounds: [arguments_brands: [u32] = &[]],
                 initialize: [arguments_brands = Default::default()],
                 legacy_label: "small state arguments section",
                 decode_legacy(state, bytes): {
@@ -556,6 +574,7 @@ macro_rules! snapshot_payloads {
                         }
                     }
                 }],
+                bounds: [temporal: crate::image::TemporalImage = &crate::image::EMPTY_TEMPORAL],
                 initialize: [temporal = Default::default()],
                 legacy_label: "small state temporal section",
                 decode_legacy(state, bytes): {
@@ -583,6 +602,7 @@ macro_rules! snapshot_payloads {
                         Default::default()
                     }
                 }],
+                bounds: [intl: ironhorse_vm::IntlTables = &crate::image::EMPTY_INTL],
                 initialize: [intl = Default::default()],
                 legacy_label: "small state intl section",
                 decode_legacy(state, bytes): {
@@ -610,6 +630,7 @@ macro_rules! snapshot_payloads {
                         Default::default()
                     }
                 }],
+                bounds: [iterators: [ironhorse_vm::IteratorRow] = &[]],
                 initialize: [iterators = Default::default()],
                 legacy_label: "small state iterators section",
                 decode_legacy(state, bytes): {
@@ -641,6 +662,7 @@ macro_rules! snapshot_payloads {
                         Default::default()
                     }
                 }],
+                bounds: [dates: [crate::image::DateImage] = &[]],
                 initialize: [dates = Default::default()],
                 legacy_label: "small state dates section",
                 decode_legacy(state, bytes): {
@@ -668,6 +690,7 @@ macro_rules! snapshot_payloads {
                         Default::default()
                     }
                 }],
+                bounds: [function_state: ironhorse_vm::FunctionStateSnapshot = &crate::image::EMPTY_FUNCTION_STATE],
                 initialize: [function_state = Default::default()],
                 legacy_label: "small state function section",
                 decode_legacy(state, bytes): {
@@ -696,6 +719,7 @@ macro_rules! snapshot_payloads {
                         Default::default()
                     }
                 }],
+                bounds: [proxy_state: ironhorse_vm::ProxyStateSnapshot = &crate::image::EMPTY_PROXY_STATE],
                 initialize: [proxy_state = Default::default()],
                 legacy_label: "small state proxy section",
                 decode_legacy(state, bytes): {
@@ -723,6 +747,7 @@ macro_rules! snapshot_payloads {
                         Default::default()
                     }
                 }],
+                bounds: [accessors: [ironhorse_vm::AccessorRow] = &[]],
                 initialize: [accessors = Default::default()],
                 legacy_label: "small state accessor section",
                 decode_legacy(state, bytes): {
@@ -750,6 +775,7 @@ macro_rules! snapshot_payloads {
                         Default::default()
                     }
                 }],
+                bounds: [intl_bound_functions: [ironhorse_vm::IntlBoundFunctionRow] = &[]],
                 initialize: [intl_bound_functions = Default::default()],
                 legacy_label: "small state Intl bound-function section",
                 decode_legacy(state, bytes): {
@@ -778,6 +804,7 @@ macro_rules! snapshot_payloads {
                         Default::default()
                     }
                 }],
+                bounds: [private_elements: ironhorse_vm::PrivateElementSnapshot = &crate::image::EMPTY_PRIVATE_ELEMENTS],
                 initialize: [private_elements = Default::default()],
                 legacy_label: "small state private-element section",
                 decode_legacy(state, bytes): {
@@ -806,6 +833,7 @@ macro_rules! snapshot_payloads {
                         Default::default()
                     }
                 }],
+                bounds: [disposable_stacks: [ironhorse_vm::DisposableStackRow] = &[]],
                 initialize: [disposable_stacks = Default::default()],
                 legacy_label: "small state disposable-stack section",
                 decode_legacy(state, bytes): {
@@ -834,6 +862,7 @@ macro_rules! snapshot_payloads {
                         Default::default()
                     }
                 }],
+                bounds: [generators: [ironhorse_vm::GeneratorRow] = &[]],
                 initialize: [generators = Default::default()],
                 legacy_label: "small state generator section",
                 decode_legacy(state, bytes): {
@@ -863,6 +892,7 @@ macro_rules! snapshot_payloads {
                         Default::default()
                     }
                 }],
+                bounds: [promise_cluster: ironhorse_vm::PromiseClusterSnapshot = &crate::image::EMPTY_PROMISE_CLUSTER],
                 initialize: [promise_cluster = Default::default()],
                 legacy_label: "small state promise section",
                 decode_legacy(state, bytes): {
@@ -885,6 +915,7 @@ macro_rules! snapshot_payloads {
             AsyncInstances {
                 image_field: promise_cluster,
                 live: [],
+                bounds: [],
                 initialize: [],
                 legacy_label: "small state async section",
                 decode_legacy(state, bytes): {
@@ -907,6 +938,7 @@ macro_rules! snapshot_payloads {
             NameFloor {
                 image_field: name_floor,
                 live: [],
+                bounds: [],
                 initialize: [name_floor = Default::default()],
                 legacy_label: "small state name-floor section",
                 decode_legacy(state, bytes): {
@@ -972,6 +1004,8 @@ use crate::SnapshotError;
 pub(crate) struct PayloadDesc {
     pub section: SmallSection,
     #[cfg(test)]
+    pub bounds_fields: &'static [&'static str],
+    #[cfg(test)]
     pub live_fields: &'static [&'static str],
     #[cfg(test)]
     pub image_field: &'static str,
@@ -982,6 +1016,7 @@ macro_rules! define_payloads {
     ($($section:ident {
         image_field: $field:ident,
         live: [$($live_field:ident: $ty:ty => ($interp:ident, $dirty:ident) $extract:block)?],
+        bounds: [$($bounds_field:ident: $bounds_ty:ty = $bounds_empty:expr)?],
         initialize: [$($init_field:ident = $init:expr)?],
         legacy_label: $legacy_label:literal,
         decode_legacy($decoded:ident, $input:ident): $decode:block,
@@ -991,7 +1026,7 @@ macro_rules! define_payloads {
         canonicalize($bytes:ident): $canonicalize:block,
     })*) => {
         pub(crate) const PAYLOADS: &[PayloadDesc] = &[
-            $(PayloadDesc { section: SmallSection::$section, #[cfg(test)] image_field: stringify!($field), #[cfg(test)] live_fields: &[$(stringify!($live_field))?], atom: $atom },)*
+            $(PayloadDesc { section: SmallSection::$section, #[cfg(test)] image_field: stringify!($field), #[cfg(test)] live_fields: &[$(stringify!($live_field))?], #[cfg(test)] bounds_fields: &[$(stringify!($bounds_field))?], atom: $atom },)*
         ];
         // Uniform field cloning also covers the Copy name-floor field.
         #[allow(clippy::clone_on_copy)]
@@ -1250,6 +1285,10 @@ mod tests {
         }
         let mut actual = BTreeSet::new();
         for row in PAYLOADS {
+            assert_eq!(
+                row.bounds_fields, row.live_fields,
+                "bounds must cover each live field"
+            );
             for field in row.live_fields {
                 assert_eq!(*field, row.image_field);
                 assert!(

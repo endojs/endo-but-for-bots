@@ -1783,32 +1783,7 @@ mod tests {
             iterators: vec![],
         };
         mutate(&mut rows);
-        restore_side_tables(
-            &mut Interp::new(),
-            rows.arrays,
-            rows.index_props,
-            rows.collections,
-            rows.registry,
-            rows.errors,
-            rows.buffers,
-            rows.typed_arrays,
-            rows.data_views,
-            rows.wrappers,
-            rows.regexps,
-            rows.dates,
-            rows.function_state,
-            rows.proxy_state,
-            rows.accessors,
-            rows.intl_bound_functions,
-            rows.private_elements,
-            rows.disposable_stacks,
-            rows.generators,
-            rows.promise_cluster,
-            rows.arguments_brands,
-            rows.temporal,
-            rows.intl,
-            rows.iterators,
-        )
+        restore_side_tables(&mut Interp::new(), rows)
     }
 
     #[test]

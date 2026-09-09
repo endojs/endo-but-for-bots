@@ -3718,45 +3718,38 @@ pub(crate) fn decode_iterators(p: &[u8]) -> Result<Vec<IteratorRow>, SnapshotErr
     Ok(out)
 }
 
-/// The data-only language rows, bundled for the bounds gate (one
-/// parameter instead of four more positionals as the ledger grows).
-pub(crate) struct LangRows<'a> {
-    pub wrappers: &'a [WrapperImage],
-    pub regexps: &'a [RegExpImage],
-    pub dates: &'a [DateImage],
-    pub function_state: &'a ironhorse_vm::FunctionStateSnapshot,
-    pub proxy_state: &'a ironhorse_vm::ProxyStateSnapshot,
-    pub accessors: &'a [ironhorse_vm::AccessorRow],
-    pub intl_bound_functions: &'a [ironhorse_vm::IntlBoundFunctionRow],
-    pub private_elements: &'a ironhorse_vm::PrivateElementSnapshot,
-    pub disposable_stacks: &'a [ironhorse_vm::DisposableStackRow],
-    pub generators: &'a [ironhorse_vm::GeneratorRow],
-    pub promise_cluster: &'a ironhorse_vm::PromiseClusterSnapshot,
-    pub arguments_brands: &'a [u32],
-    pub temporal: &'a TemporalImage,
-    pub intl: &'a IntlTables,
-}
-
-#[cfg(test)]
-impl LangRows<'_> {
-    /// The empty rows, for callers checking language-row-free content.
-    pub(crate) const EMPTY: LangRows<'static> = LangRows {
-        wrappers: &[],
-        regexps: &[],
-        dates: &[],
-        function_state: &EMPTY_FUNCTION_STATE,
-        proxy_state: &EMPTY_PROXY_STATE,
-        accessors: &[],
-        intl_bound_functions: &[],
-        private_elements: &EMPTY_PRIVATE_ELEMENTS,
-        disposable_stacks: &[],
-        generators: &[],
-        promise_cluster: &EMPTY_PROMISE_CLUSTER,
-        arguments_brands: &[],
-        temporal: &EMPTY_TEMPORAL,
-        intl: &EMPTY_INTL,
+/// All side tables borrowed for the shared semantic bounds gate. Field
+/// coverage comes from the snapshot roster, independently checked against
+/// MachineImage's source fields.
+macro_rules! define_bounds_tables {
+    ($($section:ident {
+        image_field: $field:ident,
+        live: [$($live:tt)*],
+        bounds: [$($bounds_field:ident: $ty:ty = $empty:expr)?],
+        $($rest:tt)*
+    })*) => {
+        pub(crate) struct BoundsTables<'a> {
+            $($(pub $bounds_field: &'a $ty,)?) *
+        }
+        impl MachineImage {
+            pub(crate) fn bounds_tables(&self) -> BoundsTables<'_> {
+                BoundsTables { $($($bounds_field: &self.$bounds_field,)?) * }
+            }
+        }
+        impl crate::store::SmallState {
+            pub(crate) fn bounds_tables(&self) -> BoundsTables<'_> {
+                BoundsTables { $($($bounds_field: &self.$bounds_field,)?) * }
+            }
+        }
+        #[cfg(test)]
+        impl BoundsTables<'_> {
+            pub(crate) const EMPTY: BoundsTables<'static> = BoundsTables {
+                $($($bounds_field: $empty,)?) *
+            };
+        }
     };
 }
+crate::snapshot_roster::snapshot_payloads!(define_bounds_tables);
 
 #[cfg(test)]
 static EMPTY_PROMISE_CLUSTER: ironhorse_vm::PromiseClusterSnapshot =
@@ -3949,31 +3942,7 @@ pub(crate) fn check_machine_image_bounds(image: &MachineImage) -> Result<(), Sna
     check_stored_bounds(
         &image.slots,
         |f| image.visit_slots(f),
-        &image.arrays,
-        &image.index_props,
-        &image.collections,
-        &image.registry,
-        &image.errors,
-        &image.buffers,
-        &image.typed_arrays,
-        &image.data_views,
-        &LangRows {
-            wrappers: &image.wrappers,
-            regexps: &image.regexps,
-            dates: &image.dates,
-            function_state: &image.function_state,
-            proxy_state: &image.proxy_state,
-            accessors: &image.accessors,
-            intl_bound_functions: &image.intl_bound_functions,
-            private_elements: &image.private_elements,
-            disposable_stacks: &image.disposable_stacks,
-            generators: &image.generators,
-            promise_cluster: &image.promise_cluster,
-            arguments_brands: &image.arguments_brands,
-            temporal: &image.temporal,
-            intl: &image.intl,
-        },
-        &image.iterators,
+        &image.bounds_tables(),
         image.names.len(),
         &image.symbols,
         image.slots.len() as u32,
@@ -3993,31 +3962,7 @@ pub(crate) fn check_small_state_bounds(
     check_stored_bounds(
         &[],
         |f| small.visit(f),
-        &small.arrays,
-        &small.index_props,
-        &small.collections,
-        &small.registry,
-        &small.errors,
-        &small.buffers,
-        &small.typed_arrays,
-        &small.data_views,
-        &LangRows {
-            wrappers: &small.wrappers,
-            regexps: &small.regexps,
-            dates: &small.dates,
-            function_state: &small.function_state,
-            proxy_state: &small.proxy_state,
-            accessors: &small.accessors,
-            intl_bound_functions: &small.intl_bound_functions,
-            private_elements: &small.private_elements,
-            disposable_stacks: &small.disposable_stacks,
-            generators: &small.generators,
-            promise_cluster: &small.promise_cluster,
-            arguments_brands: &small.arguments_brands,
-            temporal: &small.temporal,
-            intl: &small.intl,
-        },
-        &small.iterators,
+        &small.bounds_tables(),
         small.names.len(),
         &small.symbols,
         slot_count,
@@ -4033,16 +3978,7 @@ pub(crate) fn check_small_state_bounds(
 pub(crate) fn check_image_slot_bounds(
     heap: &[Slot],
     stack: &[Slot],
-    arrays: &[ArrayImage],
-    index_props: &[IndexPropsImage],
-    collections: &[CollectionImage],
-    registry: &[RegistryImage],
-    errors: &[ErrorImage],
-    buffers: &[BufferImage],
-    typed_arrays: &[TypedArrayImage],
-    data_views: &[DataViewImage],
-    lang: &LangRows<'_>,
-    iterators: &[IteratorRow],
+    tables: &BoundsTables<'_>,
     names_len: usize,
     symbols: &SymbolKeyImage,
     slot_count: u32,
@@ -4059,21 +3995,9 @@ pub(crate) fn check_image_slot_bounds(
                 }
             }
             stack.visit(f);
-            arrays.visit(f);
-            index_props.visit(f);
-            collections.visit(f);
-            lang.visit(f);
+            tables.visit(f);
         },
-        arrays,
-        index_props,
-        collections,
-        registry,
-        errors,
-        buffers,
-        typed_arrays,
-        data_views,
-        lang,
-        iterators,
+        tables,
         names_len,
         symbols,
         slot_count,
@@ -4086,16 +4010,7 @@ pub(crate) fn check_image_slot_bounds(
 fn check_stored_bounds(
     heap: &[Slot],
     visit: impl FnOnce(&mut dyn FnMut(&Slot)),
-    arrays: &[ArrayImage],
-    index_props: &[IndexPropsImage],
-    collections: &[CollectionImage],
-    registry: &[RegistryImage],
-    errors: &[ErrorImage],
-    buffers: &[BufferImage],
-    typed_arrays: &[TypedArrayImage],
-    data_views: &[DataViewImage],
-    lang: &LangRows<'_>,
-    iterators: &[IteratorRow],
+    tables: &BoundsTables<'_>,
     names_len: usize,
     symbols: &SymbolKeyImage,
     slot_count: u32,
@@ -4152,19 +4067,19 @@ fn check_stored_bounds(
         Ok(())
     };
     crate::stored_slots::check_slots(visit, &check)?;
-    for a in arrays {
+    for a in tables.arrays {
         owned(a.owner)?;
     }
-    for row in index_props {
+    for row in tables.index_props {
         owned(row.owner)?;
     }
-    for coll in collections {
+    for coll in tables.collections {
         owned(coll.owner)?;
     }
-    for e in registry {
+    for e in tables.registry {
         owned(e.descriptor)?;
     }
-    for e in errors {
+    for e in tables.errors {
         owned(e.owner)?;
     }
     // The typed-array family carries CROSS-table geometry, checked here
@@ -4175,12 +4090,13 @@ fn check_stored_bounds(
     // accessors project zero lengths. A view that merely named an in-bounds
     // SLOT with no buffer row would restore without a backing allocation.
     let buffer_shape = |slot: u32| -> Option<(u32, bool)> {
-        buffers
+        tables
+            .buffers
             .binary_search_by_key(&slot, |b| b.owner)
             .ok()
-            .map(|i| (buffers[i].length, buffers[i].flags & 1 != 0))
+            .map(|i| (tables.buffers[i].length, tables.buffers[i].flags & 1 != 0))
     };
-    for b in buffers {
+    for b in tables.buffers {
         owned(b.owner)?;
         if b.data == u32::MAX
             || (b.data as usize) < CHUNK_HEADER
@@ -4189,7 +4105,7 @@ fn check_stored_bounds(
             return Err(OOC);
         }
     }
-    for t in typed_arrays {
+    for t in tables.typed_arrays {
         owned(t.owner)?;
         owned(t.buffer)?;
         let shift = ironhorse_vm::TYPED_ARRAY_TYPES
@@ -4207,7 +4123,7 @@ fn check_stored_bounds(
             ));
         }
     }
-    for d in data_views {
+    for d in tables.data_views {
         owned(d.owner)?;
         owned(d.buffer)?;
         let covered = buffer_shape(d.buffer).is_some_and(|(len, detached)| {
@@ -4221,10 +4137,10 @@ fn check_stored_bounds(
     }
     // The language rows: weak owners bounded like every sibling's, and
     // scalar handles, callable kinds, and cross-table geometry checked here.
-    for w in lang.wrappers {
+    for w in tables.wrappers {
         owned(w.owner)?;
     }
-    for r in lang.regexps {
+    for r in tables.regexps {
         owned(r.owner)?;
         if !ironhorse_vm::regexp_source_compiles(&r.source, &r.flags) {
             return Err(SnapshotError::Corrupt(
@@ -4232,23 +4148,23 @@ fn check_stored_bounds(
             ));
         }
     }
-    for d in lang.dates {
+    for d in tables.dates {
         owned(d.owner)?;
     }
-    let function_owners: std::collections::BTreeSet<u32> = lang
+    let function_owners: std::collections::BTreeSet<u32> = tables
         .function_state
         .functions
         .iter()
         .map(|row| row.owner)
         .collect();
-    let bound_owners: std::collections::BTreeSet<u32> = lang
+    let bound_owners: std::collections::BTreeSet<u32> = tables
         .function_state
         .bound_functions
         .iter()
         .map(|row| row.owner)
         .collect();
     let mut referenced_segments = std::collections::BTreeSet::new();
-    for row in &lang.function_state.functions {
+    for row in &tables.function_state.functions {
         owned(row.owner)?;
         if row.closures != u32::MAX {
             owned(row.closures)?;
@@ -4264,7 +4180,7 @@ fn check_stored_bounds(
         }
         match (row.segment, row.body_start) {
             (Some(segment), Some(start)) => {
-                let Some(code) = lang.function_state.segments.get(segment as usize) else {
+                let Some(code) = tables.function_state.segments.get(segment as usize) else {
                     return Err(SnapshotError::Corrupt(
                         "function state: body names no segment",
                     ));
@@ -4304,17 +4220,17 @@ fn check_stored_bounds(
             }
         }
     }
-    if referenced_segments.len() != lang.function_state.segments.len()
+    if referenced_segments.len() != tables.function_state.segments.len()
         || referenced_segments
             .iter()
             .copied()
-            .ne(0..lang.function_state.segments.len() as u32)
+            .ne(0..tables.function_state.segments.len() as u32)
     {
         return Err(SnapshotError::Corrupt(
             "function state: segments not densely referenced",
         ));
     }
-    for row in &lang.function_state.bound_functions {
+    for row in &tables.function_state.bound_functions {
         owned(row.owner)?;
         owned(row.target)?;
         if !function_owners.contains(&row.owner) {
@@ -4323,7 +4239,7 @@ fn check_stored_bounds(
             ));
         }
     }
-    for &(owner, prototype) in &lang.function_state.ctor_prototypes {
+    for &(owner, prototype) in &tables.function_state.ctor_prototypes {
         owned(owner)?;
         owned(prototype)?;
         if !function_owners.contains(&owner) {
@@ -4332,7 +4248,7 @@ fn check_stored_bounds(
             ));
         }
     }
-    for &(owner, id) in &lang.function_state.deleted_meta {
+    for &(owner, id) in &tables.function_state.deleted_meta {
         owned(owner)?;
         if id == 0 || id as usize > names_len {
             return Err(SnapshotError::Corrupt(
@@ -4340,13 +4256,13 @@ fn check_stored_bounds(
             ));
         }
     }
-    let proxy_owners: std::collections::BTreeSet<u32> = lang
+    let proxy_owners: std::collections::BTreeSet<u32> = tables
         .proxy_state
         .proxies
         .iter()
         .map(|row| row.owner)
         .collect();
-    for row in &lang.proxy_state.proxies {
+    for row in &tables.proxy_state.proxies {
         owned(row.owner)?;
         if row.revoked {
             if row.target != u32::MAX || row.handler != u32::MAX {
@@ -4359,7 +4275,7 @@ fn check_stored_bounds(
             owned(row.handler)?;
         }
     }
-    for row in &lang.proxy_state.revokers {
+    for row in &tables.proxy_state.revokers {
         owned(row.owner)?;
         if !proxy_owners.contains(&row.proxy) {
             return Err(SnapshotError::Corrupt("proxy revoker names no proxy row"));
@@ -4373,7 +4289,8 @@ fn check_stored_bounds(
     }
     let symbol_ids = symbols.id_set();
     if first_stored_unregistered_id(
-        index_props
+        tables
+            .index_props
             .iter()
             .flat_map(|row| row.items.iter().map(|(_, value)| value)),
         names_len,
@@ -4386,7 +4303,7 @@ fn check_stored_bounds(
         ));
     }
 
-    for row in lang.accessors {
+    for row in tables.accessors {
         owned(row.owner)?;
         if row.id == 0 || (row.id as usize > names_len && !symbol_ids.contains(&row.id)) {
             return Err(SnapshotError::Corrupt(
@@ -4401,7 +4318,7 @@ fn check_stored_bounds(
             }
         }
     }
-    for row in lang.intl_bound_functions {
+    for row in tables.intl_bound_functions {
         owned(row.function)?;
         owned(row.owner)?;
         if row.name_chunk != u32::MAX {
@@ -4411,12 +4328,12 @@ fn check_stored_bounds(
             }
         }
         let owner_exists = match row.kind {
-            0 => lang
+            0 => tables
                 .intl
                 .collators
                 .binary_search_by_key(&row.owner, |(owner, _)| *owner)
                 .is_ok(),
-            1 => lang
+            1 => tables
                 .intl
                 .number_formats
                 .binary_search_by_key(&row.owner, |(owner, _)| *owner)
@@ -4429,17 +4346,17 @@ fn check_stored_bounds(
             ));
         }
     }
-    let private_value_keys: std::collections::BTreeSet<(u32, u32)> = lang
+    let private_value_keys: std::collections::BTreeSet<(u32, u32)> = tables
         .private_elements
         .values
         .iter()
         .map(|row| (row.receiver, row.brand))
         .collect();
-    for row in &lang.private_elements.values {
+    for row in &tables.private_elements.values {
         owned(row.receiver)?;
         owned(row.brand)?;
     }
-    for row in &lang.private_elements.accessors {
+    for row in &tables.private_elements.accessors {
         owned(row.receiver)?;
         owned(row.brand)?;
         if private_value_keys.contains(&(row.receiver, row.brand)) {
@@ -4455,7 +4372,7 @@ fn check_stored_bounds(
             }
         }
     }
-    for row in lang.disposable_stacks {
+    for row in tables.disposable_stacks {
         owned(row.owner)?;
         for record in &row.records {
             if record.method.kind != Kind::Reference {
@@ -4467,12 +4384,13 @@ fn check_stored_bounds(
     }
     let mut body_starts: std::collections::HashMap<u32, std::collections::BTreeSet<u64>> =
         std::collections::HashMap::new();
-    for (owner, frame) in lang
+    for (owner, frame) in tables
         .generators
         .iter()
         .map(|row| (row.owner, row.frame.as_ref()))
         .chain(
-            lang.promise_cluster
+            tables
+                .promise_cluster
                 .async_instances
                 .iter()
                 .map(|row| (row.owner, Some(&row.frame))),
@@ -4486,18 +4404,18 @@ fn check_stored_bounds(
         if frame.target_func != u32::MAX {
             owned(frame.target_func)?;
         }
-        let function = lang
+        let function = tables
             .function_state
             .functions
             .binary_search_by_key(&frame.cur_func, |function| function.owner)
             .ok()
-            .and_then(|index| lang.function_state.functions.get(index))
+            .and_then(|index| tables.function_state.functions.get(index))
             .ok_or(SnapshotError::Corrupt(
                 "generator frame: current function has no function row",
             ))?;
         let code = function
             .segment
-            .and_then(|segment| lang.function_state.segments.get(segment as usize))
+            .and_then(|segment| tables.function_state.segments.get(segment as usize))
             .ok_or(SnapshotError::Corrupt(
                 "generator frame: current function has no segment",
             ))?;
@@ -4527,7 +4445,7 @@ fn check_stored_bounds(
                 // That is the same "a pc in another function body"
                 // class the sibling-body arm closes, one level down, so
                 // subtract every contained body.
-                for other in &lang.function_state.functions {
+                for other in &tables.function_state.functions {
                     if other.owner == frame.cur_func || other.segment != function.segment {
                         continue;
                     }
@@ -4602,11 +4520,11 @@ fn check_stored_bounds(
     // Array must name an `ARRY` row (the element drain writes through
     // the dense store), the view-names-a-buffer-row discipline. Its
     // capability callbacks are bounded like every other carried Slot.
-    for row in &lang.promise_cluster.promises {
+    for row in &tables.promise_cluster.promises {
         owned(row.owner)?;
     }
     let mut awaited = std::collections::BTreeSet::new();
-    for reaction in lang
+    for reaction in tables
         .promise_cluster
         .promises
         .iter()
@@ -4614,7 +4532,7 @@ fn check_stored_bounds(
     {
         if reaction.kind == 3
             && (!awaited.insert(reaction.a)
-                || lang
+                || tables
                     .promise_cluster
                     .async_instances
                     .binary_search_by_key(&reaction.a, |a| a.owner)
@@ -4625,27 +4543,27 @@ fn check_stored_bounds(
             ));
         }
     }
-    for row in &lang.promise_cluster.async_instances {
+    for row in &tables.promise_cluster.async_instances {
         owned(row.owner)?;
         owned(row.result_promise)?;
 
         let function = |slot: &Slot| match slot.value {
-            Payload::Reference(owner) => lang
+            Payload::Reference(owner) => tables
                 .promise_cluster
                 .functions
                 .binary_search_by_key(&owner.0, |f| f.function)
                 .ok()
-                .map(|i| &lang.promise_cluster.functions[i]),
+                .map(|i| &tables.promise_cluster.functions[i]),
             _ => None,
         };
         let pair = matches!((function(&row.resolve), function(&row.reject)), (Some(a), Some(b))
             if a.promise == row.result_promise && b.promise == row.result_promise
                 && !a.reject && b.reject && a.guard == b.guard
-                && (a.guard as usize) < lang.promise_cluster.guards.len()
-                && !lang.promise_cluster.guards[a.guard as usize]);
+                && (a.guard as usize) < tables.promise_cluster.guards.len()
+                && !tables.promise_cluster.guards[a.guard as usize]);
         if !pair
             || !awaited.contains(&row.owner)
-            || lang
+            || tables
                 .promise_cluster
                 .promises
                 .binary_search_by_key(&row.result_promise, |p| p.owner)
@@ -4658,7 +4576,7 @@ fn check_stored_bounds(
             ));
         }
     }
-    for row in &lang.promise_cluster.functions {
+    for row in &tables.promise_cluster.functions {
         owned(row.function)?;
         owned(row.promise)?;
         if row.guard == u32::MAX {
@@ -4685,15 +4603,18 @@ fn check_stored_bounds(
             return Err(OOC);
         }
     }
-    let mut results_lengths = Vec::with_capacity(lang.promise_cluster.combinators.len());
-    for row in &lang.promise_cluster.combinators {
+    let mut results_lengths = Vec::with_capacity(tables.promise_cluster.combinators.len());
+    for row in &tables.promise_cluster.combinators {
         owned(row.results)?;
-        let Ok(k) = arrays.binary_search_by_key(&row.results, |a| a.owner) else {
+        let Ok(k) = tables
+            .arrays
+            .binary_search_by_key(&row.results, |a| a.owner)
+        else {
             return Err(SnapshotError::Corrupt(
                 "promise cluster: combinator's results Array has no row",
             ));
         };
-        let len = arrays[k].length;
+        let len = tables.arrays[k].length;
         // `remaining` starts at the ELEMENT COUNT — which is exactly
         // the results Array's preset length — and only ever
         // decrements, so a value above it can only be crafted (it
@@ -4717,7 +4638,7 @@ fn check_stored_bounds(
     // produces (and a huge one turns the aggregate walk into a
     // billions-long loop). This is a cross-ATOM check, so it lives here
     // beside the results-names-a-row gate, not in the atom decoder.
-    for r in lang
+    for r in tables
         .promise_cluster
         .promises
         .iter()
@@ -4733,47 +4654,47 @@ fn check_stored_bounds(
             ));
         }
     }
-    for &o in lang.arguments_brands {
+    for &o in tables.arguments_brands {
         owned(o)?;
     }
-    for &(o, _) in &lang.temporal.instants {
+    for &(o, _) in &tables.temporal.instants {
         owned(o)?;
     }
-    for &(o, _) in &lang.temporal.durations {
+    for &(o, _) in &tables.temporal.durations {
         owned(o)?;
     }
-    for &(o, _, _, _) in &lang.temporal.plains {
+    for &(o, _, _, _) in &tables.temporal.plains {
         owned(o)?;
     }
-    for (o, _, _, _) in &lang.temporal.zoneds {
+    for (o, _, _, _) in &tables.temporal.zoneds {
         owned(*o)?;
     }
     // The Intl rows: weak owners bounded like every sibling's, and a
     // segment ITERATOR must name an owner with a segments ROW whose
     // list covers its cursor — the view-names-a-buffer-row discipline.
-    for o in lang
+    for o in tables
         .intl
         .locales
         .iter()
         .map(|(o, _)| *o)
-        .chain(lang.intl.collators.iter().map(|(o, _)| *o))
-        .chain(lang.intl.list_formats.iter().map(|(o, _)| *o))
-        .chain(lang.intl.plural_rules.iter().map(|(o, _)| *o))
-        .chain(lang.intl.number_formats.iter().map(|(o, _)| *o))
-        .chain(lang.intl.segmenters.iter().map(|(o, _)| *o))
-        .chain(lang.intl.segments.iter().map(|(o, _)| *o))
-        .chain(lang.intl.segment_iterators.iter().map(|(o, _)| *o))
-        .chain(lang.intl.date_time_formats.iter().map(|(o, _)| *o))
+        .chain(tables.intl.collators.iter().map(|(o, _)| *o))
+        .chain(tables.intl.list_formats.iter().map(|(o, _)| *o))
+        .chain(tables.intl.plural_rules.iter().map(|(o, _)| *o))
+        .chain(tables.intl.number_formats.iter().map(|(o, _)| *o))
+        .chain(tables.intl.segmenters.iter().map(|(o, _)| *o))
+        .chain(tables.intl.segments.iter().map(|(o, _)| *o))
+        .chain(tables.intl.segment_iterators.iter().map(|(o, _)| *o))
+        .chain(tables.intl.date_time_formats.iter().map(|(o, _)| *o))
     {
         owned(o)?;
     }
-    for (_, it) in &lang.intl.segment_iterators {
-        let row = lang
+    for (_, it) in &tables.intl.segment_iterators {
+        let row = tables
             .intl
             .segments
             .binary_search_by_key(&it.segments_inst.0, |(o, _)| *o);
         let covered = match row {
-            Ok(k) => it.pos <= lang.intl.segments[k].1.segments.len(),
+            Ok(k) => it.pos <= tables.intl.segments[k].1.segments.len(),
             Err(_) => false,
         };
         if it.segments_inst.0 >= slot_count || !covered {
@@ -4788,16 +4709,18 @@ fn check_stored_bounds(
     // ordinal inside the compacted live list; a RegExp String Iterator must
     // carry valid mode bits and UTF-16; a for-in cursor's key ids must live in
     // the restored name table.
-    for r in iterators {
+    for r in tables.iterators {
         owned(r.owner)?;
         owned(r.result)?;
         if r.iterable != u32::MAX {
             owned(r.iterable)?;
         }
         if (5..=7).contains(&r.kind) {
-            let row = collections.binary_search_by_key(&r.iterable, |c| c.owner);
+            let row = tables
+                .collections
+                .binary_search_by_key(&r.iterable, |c| c.owner);
             let covered = match row {
-                Ok(k) => r.index as usize <= collections[k].entries.len(),
+                Ok(k) => r.index as usize <= tables.collections[k].entries.len(),
                 Err(_) => false,
             };
             if !covered {
@@ -5570,21 +5493,23 @@ mod tests {
         assert!(check_image_slot_bounds(
             &[],
             &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &oob,
-            &[],
-            &[],
-            &[],
-            &LangRows::EMPTY,
-            &[],
+            &BoundsTables {
+                arrays: &[],
+                index_props: &[],
+                collections: &[],
+                registry: &[],
+                errors: &oob,
+                buffers: &[],
+                typed_arrays: &[],
+                data_views: &[],
+                iterators: &[],
+                ..BoundsTables::EMPTY
+            },
             0,
             &SymbolKeyImage::default(),
             4,
             64,
-            &[]
+            &[],
         )
         .is_err());
     }
@@ -5756,21 +5681,23 @@ mod tests {
         assert!(check_image_slot_bounds(
             &[],
             &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &past,
-            &[],
-            &[],
-            &LangRows::EMPTY,
-            &[],
+            &BoundsTables {
+                arrays: &[],
+                index_props: &[],
+                collections: &[],
+                registry: &[],
+                errors: &[],
+                buffers: &past,
+                typed_arrays: &[],
+                data_views: &[],
+                iterators: &[],
+                ..BoundsTables::EMPTY
+            },
             0,
             &sym,
             4,
             64,
-            &[]
+            &[],
         )
         .is_err());
         // A buffer whose offset sits inside the chunk header.
@@ -5783,21 +5710,23 @@ mod tests {
         assert!(check_image_slot_bounds(
             &[],
             &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &low,
-            &[],
-            &[],
-            &LangRows::EMPTY,
-            &[],
+            &BoundsTables {
+                arrays: &[],
+                index_props: &[],
+                collections: &[],
+                registry: &[],
+                errors: &[],
+                buffers: &low,
+                typed_arrays: &[],
+                data_views: &[],
+                iterators: &[],
+                ..BoundsTables::EMPTY
+            },
             0,
             &sym,
             4,
             64,
-            &[]
+            &[],
         )
         .is_err());
         // The NULL chunk sentinel is never valid backing, even when a
@@ -5811,21 +5740,23 @@ mod tests {
         assert!(check_image_slot_bounds(
             &[],
             &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &null,
-            &[],
-            &[],
-            &LangRows::EMPTY,
-            &[],
+            &BoundsTables {
+                arrays: &[],
+                index_props: &[],
+                collections: &[],
+                registry: &[],
+                errors: &[],
+                buffers: &null,
+                typed_arrays: &[],
+                data_views: &[],
+                iterators: &[],
+                ..BoundsTables::EMPTY
+            },
             0,
             &sym,
             4,
             usize::MAX,
-            &[]
+            &[],
         )
         .is_err());
         // A view naming a buffer with NO row (an in-bounds slot is not
@@ -5840,21 +5771,23 @@ mod tests {
         assert!(check_image_slot_bounds(
             &[],
             &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &orphan,
-            &[],
-            &LangRows::EMPTY,
-            &[],
+            &BoundsTables {
+                arrays: &[],
+                index_props: &[],
+                collections: &[],
+                registry: &[],
+                errors: &[],
+                buffers: &[],
+                typed_arrays: &orphan,
+                data_views: &[],
+                iterators: &[],
+                ..BoundsTables::EMPTY
+            },
             0,
             &sym,
             4,
             64,
-            &[]
+            &[],
         )
         .is_err());
         // View geometry past its buffer's length (Uint32Array: shift 2).
@@ -5878,21 +5811,23 @@ mod tests {
         assert!(check_image_slot_bounds(
             &[],
             &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &buf,
-            &wide,
-            &[],
-            &LangRows::EMPTY,
-            &[],
+            &BoundsTables {
+                arrays: &[],
+                index_props: &[],
+                collections: &[],
+                registry: &[],
+                errors: &[],
+                buffers: &buf,
+                typed_arrays: &wide,
+                data_views: &[],
+                iterators: &[],
+                ..BoundsTables::EMPTY
+            },
             0,
             &sym,
             4,
             64,
-            &[]
+            &[],
         )
         .is_err());
         // A data view past its buffer.
@@ -5905,21 +5840,23 @@ mod tests {
         assert!(check_image_slot_bounds(
             &[],
             &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &buf,
-            &[],
-            &dv,
-            &LangRows::EMPTY,
-            &[],
+            &BoundsTables {
+                arrays: &[],
+                index_props: &[],
+                collections: &[],
+                registry: &[],
+                errors: &[],
+                buffers: &buf,
+                typed_arrays: &[],
+                data_views: &dv,
+                iterators: &[],
+                ..BoundsTables::EMPTY
+            },
             0,
             &sym,
             4,
             64,
-            &[]
+            &[],
         )
         .is_err());
         // The covered forms pass.
@@ -5939,21 +5876,23 @@ mod tests {
         assert!(check_image_slot_bounds(
             &[],
             &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &buf,
-            &fit_view,
-            &fit_dv,
-            &LangRows::EMPTY,
-            &[],
+            &BoundsTables {
+                arrays: &[],
+                index_props: &[],
+                collections: &[],
+                registry: &[],
+                errors: &[],
+                buffers: &buf,
+                typed_arrays: &fit_view,
+                data_views: &fit_dv,
+                iterators: &[],
+                ..BoundsTables::EMPTY
+            },
             0,
             &sym,
             4,
             64,
-            &[]
+            &[],
         )
         .is_ok());
     }
@@ -6152,41 +6091,11 @@ mod tests {
         use ironhorse_vm::{SegmentIteratorData, SegmentsData};
         let sym = SymbolKeyImage::default();
         let check = |intl: &IntlTables| {
-            let lang = LangRows {
-                wrappers: &[],
-                regexps: &[],
-                dates: &[],
-                function_state: &EMPTY_FUNCTION_STATE,
-                proxy_state: &EMPTY_PROXY_STATE,
-                accessors: &[],
-                intl_bound_functions: &[],
-                private_elements: &EMPTY_PRIVATE_ELEMENTS,
-                disposable_stacks: &[],
-                generators: &[],
-                promise_cluster: &EMPTY_PROMISE_CLUSTER,
-                arguments_brands: &[],
-                temporal: &EMPTY_TEMPORAL,
+            let tables = BoundsTables {
                 intl,
+                ..BoundsTables::EMPTY
             };
-            check_image_slot_bounds(
-                &[],
-                &[],
-                &[],
-                &[],
-                &[],
-                &[],
-                &[],
-                &[],
-                &[],
-                &[],
-                &lang,
-                &[],
-                0,
-                &sym,
-                4,
-                64,
-                &[],
-            )
+            check_image_slot_bounds(&[], &[], &tables, 0, &sym, 4, 64, &[])
         };
         let segs = |owner: u32| {
             (
@@ -6371,16 +6280,18 @@ mod tests {
             check_image_slot_bounds(
                 &[],
                 &[],
-                &[],
-                &[],
-                colls,
-                &[],
-                &[],
-                &[],
-                &[],
-                &[],
-                &LangRows::EMPTY,
-                rows,
+                &BoundsTables {
+                    arrays: &[],
+                    index_props: &[],
+                    collections: colls,
+                    registry: &[],
+                    errors: &[],
+                    buffers: &[],
+                    typed_arrays: &[],
+                    data_views: &[],
+                    iterators: rows,
+                    ..BoundsTables::EMPTY
+                },
                 names_len,
                 &sym,
                 4,
@@ -6455,16 +6366,18 @@ mod tests {
             check_image_slot_bounds(
                 heap,
                 stack,
-                &[],
-                &[],
-                &[],
-                &[],
-                &[],
-                &[],
-                &[],
-                &[],
-                &LangRows::EMPTY,
-                &[],
+                &BoundsTables {
+                    arrays: &[],
+                    index_props: &[],
+                    collections: &[],
+                    registry: &[],
+                    errors: &[],
+                    buffers: &[],
+                    typed_arrays: &[],
+                    data_views: &[],
+                    iterators: &[],
+                    ..BoundsTables::EMPTY
+                },
                 0,
                 &SymbolKeyImage::default(),
                 4,
@@ -6505,21 +6418,23 @@ mod tests {
         assert!(check_image_slot_bounds(
             &[],
             &[],
-            &[],
-            &[],
-            &[],
-            &bad_desc,
-            &[],
-            &[],
-            &[],
-            &[],
-            &LangRows::EMPTY,
-            &[],
+            &BoundsTables {
+                arrays: &[],
+                index_props: &[],
+                collections: &[],
+                registry: &bad_desc,
+                errors: &[],
+                buffers: &[],
+                typed_arrays: &[],
+                data_views: &[],
+                iterators: &[],
+                ..BoundsTables::EMPTY
+            },
             0,
             &SymbolKeyImage::default(),
             4,
             64,
-            &[]
+            &[],
         )
         .is_err());
         // A symbol-key descriptor beyond the arena is refused the same way.
@@ -6530,21 +6445,23 @@ mod tests {
         assert!(check_image_slot_bounds(
             &[],
             &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &LangRows::EMPTY,
-            &[],
+            &BoundsTables {
+                arrays: &[],
+                index_props: &[],
+                collections: &[],
+                registry: &[],
+                errors: &[],
+                buffers: &[],
+                typed_arrays: &[],
+                data_views: &[],
+                iterators: &[],
+                ..BoundsTables::EMPTY
+            },
             0,
             &bad_sym,
             4,
             64,
-            &[]
+            &[],
         )
         .is_err());
         let bad_owner = [ArrayImage {
@@ -6555,21 +6472,23 @@ mod tests {
         assert!(check_image_slot_bounds(
             &[],
             &[],
-            &bad_owner,
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &LangRows::EMPTY,
-            &[],
+            &BoundsTables {
+                arrays: &bad_owner,
+                index_props: &[],
+                collections: &[],
+                registry: &[],
+                errors: &[],
+                buffers: &[],
+                typed_arrays: &[],
+                data_views: &[],
+                iterators: &[],
+                ..BoundsTables::EMPTY
+            },
             0,
             &SymbolKeyImage::default(),
             4,
             64,
-            &[]
+            &[],
         )
         .is_err());
         let bad_ref = [ArrayImage {
@@ -6580,21 +6499,23 @@ mod tests {
         assert!(check_image_slot_bounds(
             &[],
             &[],
-            &bad_ref,
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &LangRows::EMPTY,
-            &[],
+            &BoundsTables {
+                arrays: &bad_ref,
+                index_props: &[],
+                collections: &[],
+                registry: &[],
+                errors: &[],
+                buffers: &[],
+                typed_arrays: &[],
+                data_views: &[],
+                iterators: &[],
+                ..BoundsTables::EMPTY
+            },
             0,
             &SymbolKeyImage::default(),
             4,
             64,
-            &[]
+            &[],
         )
         .is_err());
         // Collections were passed `&[]` in every wave-4 case, so that
@@ -6609,21 +6530,23 @@ mod tests {
         assert!(check_image_slot_bounds(
             &[],
             &[],
-            &[],
-            &[],
-            &bad_key,
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &LangRows::EMPTY,
-            &[],
+            &BoundsTables {
+                arrays: &[],
+                index_props: &[],
+                collections: &bad_key,
+                registry: &[],
+                errors: &[],
+                buffers: &[],
+                typed_arrays: &[],
+                data_views: &[],
+                iterators: &[],
+                ..BoundsTables::EMPTY
+            },
             0,
             &SymbolKeyImage::default(),
             4,
             64,
-            &[]
+            &[],
         )
         .is_err());
         let bad_val = [CollectionImage {
@@ -6635,21 +6558,23 @@ mod tests {
         assert!(check_image_slot_bounds(
             &[],
             &[],
-            &[],
-            &[],
-            &bad_val,
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &LangRows::EMPTY,
-            &[],
+            &BoundsTables {
+                arrays: &[],
+                index_props: &[],
+                collections: &bad_val,
+                registry: &[],
+                errors: &[],
+                buffers: &[],
+                typed_arrays: &[],
+                data_views: &[],
+                iterators: &[],
+                ..BoundsTables::EMPTY
+            },
             0,
             &SymbolKeyImage::default(),
             4,
             64,
-            &[]
+            &[],
         )
         .is_err());
 
@@ -6691,16 +6616,18 @@ mod tests {
                         check_image_slot_bounds(
                             &heap,
                             &stack,
-                            &arrays,
-                            &[],
-                            &[],
-                            &[],
-                            &[],
-                            &[],
-                            &[],
-                            &[],
-                            &LangRows::EMPTY,
-                            &[],
+                            &BoundsTables {
+                                arrays: &arrays,
+                                index_props: &[],
+                                collections: &[],
+                                registry: &[],
+                                errors: &[],
+                                buffers: &[],
+                                typed_arrays: &[],
+                                data_views: &[],
+                                iterators: &[],
+                                ..BoundsTables::EMPTY
+                            },
                             0,
                             &SymbolKeyImage::default(),
                             3,
@@ -6731,16 +6658,18 @@ mod tests {
             check_image_slot_bounds(
                 heap,
                 &[],
-                &[],
-                &[],
-                &[],
-                &[],
-                errors,
-                &[],
-                &[],
-                &[],
-                &LangRows::EMPTY,
-                &[],
+                &BoundsTables {
+                    arrays: &[],
+                    index_props: &[],
+                    collections: &[],
+                    registry: &[],
+                    errors,
+                    buffers: &[],
+                    typed_arrays: &[],
+                    data_views: &[],
+                    iterators: &[],
+                    ..BoundsTables::EMPTY
+                },
                 0,
                 &sym,
                 4,
@@ -9056,23 +8985,25 @@ mod function_decoder_refusals {
     }
 
     fn check(state: &FunctionStateSnapshot) -> Result<(), SnapshotError> {
-        let lang = LangRows {
+        let lang = BoundsTables {
             function_state: state,
-            ..LangRows::EMPTY
+            ..BoundsTables::EMPTY
         };
         check_image_slot_bounds(
             &[],
             &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &lang,
-            &[],
+            &BoundsTables {
+                arrays: &[],
+                index_props: &[],
+                collections: &[],
+                registry: &[],
+                errors: &[],
+                buffers: &[],
+                typed_arrays: &[],
+                data_views: &[],
+                iterators: &[],
+                ..lang
+            },
             4,
             &SymbolKeyImage::default(),
             8,
@@ -9286,24 +9217,26 @@ mod generator_decoder_refusals {
             state: 1,
             frame: Some(saved.clone()),
         }];
-        let lang = LangRows {
+        let lang = BoundsTables {
             function_state: functions,
             generators: &generators,
-            ..LangRows::EMPTY
+            ..BoundsTables::EMPTY
         };
         check_image_slot_bounds(
             &[],
             &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &lang,
-            &[],
+            &BoundsTables {
+                arrays: &[],
+                index_props: &[],
+                collections: &[],
+                registry: &[],
+                errors: &[],
+                buffers: &[],
+                typed_arrays: &[],
+                data_views: &[],
+                iterators: &[],
+                ..lang
+            },
             4,
             &SymbolKeyImage::default(),
             8,
@@ -9683,23 +9616,25 @@ mod promise_decoder_refusals {
         arrays: &[ArrayImage],
         heap: &[Slot],
     ) -> Result<(), SnapshotError> {
-        let lang = LangRows {
+        let lang = BoundsTables {
             promise_cluster: state,
-            ..LangRows::EMPTY
+            ..BoundsTables::EMPTY
         };
         check_image_slot_bounds(
             heap,
             &[],
-            arrays,
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &lang,
-            &[],
+            &BoundsTables {
+                arrays,
+                index_props: &[],
+                collections: &[],
+                registry: &[],
+                errors: &[],
+                buffers: &[],
+                typed_arrays: &[],
+                data_views: &[],
+                iterators: &[],
+                ..lang
+            },
             4,
             &SymbolKeyImage::default(),
             8,
@@ -9824,24 +9759,26 @@ mod promise_decoder_refusals {
             },
         });
         let check = |state: &PromiseClusterSnapshot| {
-            let lang = LangRows {
+            let lang = BoundsTables {
                 promise_cluster: state,
                 function_state: &functions,
-                ..LangRows::EMPTY
+                ..BoundsTables::EMPTY
             };
             check_image_slot_bounds(
                 &[],
                 &[],
-                &[],
-                &[],
-                &[],
-                &[],
-                &[],
-                &[],
-                &[],
-                &[],
-                &lang,
-                &[],
+                &BoundsTables {
+                    arrays: &[],
+                    index_props: &[],
+                    collections: &[],
+                    registry: &[],
+                    errors: &[],
+                    buffers: &[],
+                    typed_arrays: &[],
+                    data_views: &[],
+                    iterators: &[],
+                    ..lang
+                },
                 4,
                 &SymbolKeyImage::default(),
                 8,
@@ -10322,20 +10259,22 @@ mod object_semantic_refusals {
     fn reference() -> Slot {
         Slot::of(Kind::Reference, Payload::Reference(SlotIndex(7)))
     }
-    fn check(lang: &LangRows<'_>) -> Result<(), SnapshotError> {
+    fn check(lang: &BoundsTables<'_>) -> Result<(), SnapshotError> {
         check_image_slot_bounds(
             &[],
             &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            lang,
-            &[],
+            &BoundsTables {
+                arrays: &[],
+                index_props: &[],
+                collections: &[],
+                registry: &[],
+                errors: &[],
+                buffers: &[],
+                typed_arrays: &[],
+                data_views: &[],
+                iterators: &[],
+                ..*lang
+            },
             4,
             &SymbolKeyImage::default(),
             8,
@@ -10354,9 +10293,9 @@ mod object_semantic_refusals {
                 last_index_bits: 0,
             }];
             assert_eq!(
-                check(&LangRows {
+                check(&BoundsTables {
                     regexps: &rows,
-                    ..LangRows::EMPTY
+                    ..BoundsTables::EMPTY
                 }),
                 Ok(())
             );
@@ -10369,9 +10308,9 @@ mod object_semantic_refusals {
                 last_index_bits: 0,
             }];
             assert_eq!(
-                check(&LangRows {
+                check(&BoundsTables {
                     regexps: &rows,
-                    ..LangRows::EMPTY
+                    ..BoundsTables::EMPTY
                 }),
                 Err(SnapshotError::Corrupt(
                     "regexp side table: persisted source does not compile"
@@ -10407,10 +10346,10 @@ mod object_semantic_refusals {
         };
         let rows = [valid.clone()];
         assert_eq!(
-            check(&LangRows {
+            check(&BoundsTables {
                 intl: &intl,
                 intl_bound_functions: &rows,
-                ..LangRows::EMPTY
+                ..BoundsTables::EMPTY
             }),
             Ok(())
         );
@@ -10421,10 +10360,10 @@ mod object_semantic_refusals {
                 ..valid.clone()
             }];
             assert_eq!(
-                check(&LangRows {
+                check(&BoundsTables {
                     intl: &intl,
                     intl_bound_functions: &rows,
-                    ..LangRows::EMPTY
+                    ..BoundsTables::EMPTY
                 }),
                 Err(SnapshotError::Corrupt(
                     "Intl bound-function state: owner has no Intl row"
@@ -10432,9 +10371,9 @@ mod object_semantic_refusals {
             );
         }
         assert_eq!(
-            check(&LangRows {
+            check(&BoundsTables {
                 intl_bound_functions: &rows,
-                ..LangRows::EMPTY
+                ..BoundsTables::EMPTY
             }),
             Err(SnapshotError::Corrupt(
                 "Intl bound-function state: owner has no Intl row"
@@ -10458,9 +10397,9 @@ mod object_semantic_refusals {
             }],
         };
         let check_state = |state: &ProxyStateSnapshot| {
-            check(&LangRows {
+            check(&BoundsTables {
                 proxy_state: state,
-                ..LangRows::EMPTY
+                ..BoundsTables::EMPTY
             })
         };
         assert_eq!(check_state(&state), Ok(()));
@@ -10499,9 +10438,9 @@ mod object_semantic_refusals {
             set: Some(reference()),
         };
         let check_row = |row: &AccessorRow| {
-            check(&LangRows {
+            check(&BoundsTables {
                 accessors: std::slice::from_ref(row),
-                ..LangRows::EMPTY
+                ..BoundsTables::EMPTY
             })
         };
         assert_eq!(check_row(&valid), Ok(()));
@@ -10551,9 +10490,9 @@ mod object_semantic_refusals {
             }],
         };
         let check_state = |state: &PrivateElementSnapshot| {
-            check(&LangRows {
+            check(&BoundsTables {
                 private_elements: state,
-                ..LangRows::EMPTY
+                ..BoundsTables::EMPTY
             })
         };
         assert_eq!(check_state(&valid), Ok(()));
@@ -10598,9 +10537,9 @@ mod object_semantic_refusals {
             }],
         };
         let check_row = |row: &DisposableStackRow| {
-            check(&LangRows {
+            check(&BoundsTables {
                 disposable_stacks: std::slice::from_ref(row),
-                ..LangRows::EMPTY
+                ..BoundsTables::EMPTY
             })
         };
         assert_eq!(check_row(&row), Ok(()));
@@ -10625,16 +10564,18 @@ mod buffer_geometry_refusals {
         check_image_slot_bounds(
             &[],
             &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            buffers,
-            typed,
-            views,
-            &LangRows::EMPTY,
-            &[],
+            &BoundsTables {
+                arrays: &[],
+                index_props: &[],
+                collections: &[],
+                registry: &[],
+                errors: &[],
+                buffers,
+                typed_arrays: typed,
+                data_views: views,
+                iterators: &[],
+                ..BoundsTables::EMPTY
+            },
             0,
             &SymbolKeyImage::default(),
             4,
