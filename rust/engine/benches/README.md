@@ -627,3 +627,25 @@ builds.
 The architecture review remains unchanged; an independent scope audit found the
 F052 production enumerations generated, while codec wiring and migration/test
 ladders remain under F128 and F141.
+
+## Helper extraction checkpoint
+
+[results/1a-helper-extraction.json](results/1a-helper-extraction.json) records
+clean commit `59b0cdb08` after the BigInt, Temporal, Date/locale, UTF-16, and
+numeric helper moves.
+Both runs compare against fresh serial measurements of `96db92e2` on the same
+macOS arm64 host with Rust 1.91.1 and identical fixtures.
+No task builds or tests ran concurrently with either benchmark.
+The first run fails five slide checkpoint measurements at 1.290–1.311x the
+reference; the repeat also fails slide measurements and a placeholder metric.
+Dispatch in the first run is 0.994x the reference.
+The complete raw medians, failures, provenance, and derived ratios from both
+runs are retained, with the repeat under `repeat`.
+This is an unresolved performance checkpoint, not acceptance of the helper
+extraction or the full 1A decomposition.
+The slide instrument times checkpointing after collection; its failed metrics
+must not be described as timings of the compaction algorithm itself.
+
+Validation for the measured code passed 1,243 engine tests and 116 SQLite tests,
+including the source locks, plus clippy, formatting, and documentation builds
+with no new warning headings.
