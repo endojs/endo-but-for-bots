@@ -163,7 +163,9 @@ macro_rules! gc_root {
 
 macro_rules! define_root_walk {
     (() $vis:vis struct $name:ident {
-        $(#[gc_root($root:ident)]
+        $(#[boot_new($boot_new:expr)]
+          #[boot_template($boot_template:expr)]
+          #[gc_root($root:ident)]
           #[quiescent($boundary:ident)]
           #[persist_refs($persist:ident)]
           #[runtime_keys($runtime_keys:ident)]
@@ -173,7 +175,7 @@ macro_rules! define_root_walk {
           #[gc_weak($weak:ident)]
           #[snapshot_table($($snapshot:tt)*)]
           $(#[$attr:meta])* $field_vis:vis $field:ident: $ty:ty,)*
-    } external_tables { $($external:tt)* }) => {
+    } boot_context { $($boot_context:tt)* } external_tables { $($external:tt)* }) => {
         impl Interp {
             pub(super) fn append_gc_roots(&self, roots: &mut Vec<SlotIndex>) {
                 $(gc_root!(gc_run, self, $field, roots, $root);)*

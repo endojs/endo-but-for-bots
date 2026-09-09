@@ -14,6 +14,8 @@
 //! of native-reference persistence checks; `none` does not mean slot-free.
 //! `gc_root(none)` means no direct root walk; reaction arenas are reached through
 //! queued jobs, and weak symbol keys are reached through ephemeron tracing.
+//! Boot policies specify every fresh and template initializer in declaration order.
+//! Context names bind prepared owned values without cloning them.
 //! Field order, visibility, and types stay explicit in the declaration.
 //! `unborrowed` means the field is not passed to GcHooks; it does not claim the
 //! field is slot-free. Root, arena, transient, and derived-state obligations are
@@ -24,6 +26,8 @@ macro_rules! interp_state {
         $consumer! {
             ($($arg),*)
 pub struct Interp {
+    #[boot_new(classes.clone())]
+    #[boot_template(classes.clone())]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -35,6 +39,8 @@ pub struct Interp {
     #[snapshot_table(none)]
     /// Derived membership; never persisted or traced as a guest root.
     classes: ClassIndex,
+    #[boot_new(std::rc::Rc::new(()))]
+    #[boot_template(std::rc::Rc::new(()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -45,6 +51,8 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     snapshot_baseline_identity: std::rc::Rc<()>,
+    #[boot_new(Vec::with_capacity(64))]
+    #[boot_template(state.stack.clone())]
     #[gc_root(slots)]
     #[quiescent(empty)]
     #[persist_refs(slots)]
@@ -55,6 +63,8 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     stack: Vec<Slot>,
+    #[boot_new(Vec::new())]
+    #[boot_template(state.locals.clone())]
     #[gc_root(slots)]
     #[quiescent(empty)]
     #[persist_refs(none)]
@@ -68,6 +78,8 @@ pub struct Interp {
     /// append (XS's `--mxScope`); a `*_LOCAL` opcode's 1-based index `k`
     /// addresses `locals[k - 1]` (XS's `mxEnvironment - index`).
     locals: Vec<Slot>,
+    #[boot_new(std::collections::HashMap::new())]
+    #[boot_template(state.id_map.clone())]
     #[gc_root(none)]
     #[quiescent(empty)]
     #[persist_refs(none)]
@@ -82,6 +94,8 @@ pub struct Interp {
     /// slot (XS aliases the frame locals through the environment
     /// instance; this map is the behavioral equivalent).
     id_map: std::collections::HashMap<u16, usize>,
+    #[boot_new(global_obj)]
+    #[boot_template(state.global_obj)]
     #[gc_root(index)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -99,6 +113,8 @@ pub struct Interp {
     /// properties are real arena slots, so their allocation meters
     /// faithfully and the GC traces them.
     global_obj: crate::value::SlotIndex,
+    #[boot_new(std::collections::HashMap::new())]
+    #[boot_template(state.global_props.clone())]
     #[gc_root(values)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -116,6 +132,8 @@ pub struct Interp {
     /// value. The global property slot remains materialized for allocation
     /// accounting and for tracing the global object's property chain.
     global_props: std::collections::HashMap<u16, crate::value::SlotIndex>,
+    #[boot_new(false)]
+    #[boot_template(state.direct_eval_hoist)]
     #[gc_root(none)]
     #[quiescent(false)]
     #[persist_refs(none)]
@@ -132,6 +150,8 @@ pub struct Interp {
     /// which an indirect eval — running in a fresh global variable scope that
     /// does not see the caller's lexical environment — does not raise.
     direct_eval_hoist: bool,
+    #[boot_new(false)]
+    #[boot_template(state.eval_program_hoist)]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -162,6 +182,8 @@ pub struct Interp {
     /// using it here would wrongly make an indirect eval's `var`
     /// non-configurable.
     eval_program_hoist: bool,
+    #[boot_new(Slot::undefined())]
+    #[boot_template(state.result)]
     #[gc_root(slot)]
     #[quiescent(undefined)]
     #[persist_refs(none)]
@@ -172,6 +194,8 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     result: Slot,
+    #[boot_new(false)]
+    #[boot_template(state.strict)]
     #[gc_root(none)]
     #[quiescent(false)]
     #[persist_refs(none)]
@@ -185,6 +209,8 @@ pub struct Interp {
     /// for the exception/`this` semantics that observe it; the covered
     /// subset does not yet branch on it.
     strict: bool,
+    #[boot_new(Meter::new())]
+    #[boot_template(state.meter.clone())]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -195,6 +221,8 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(Meter, 41, 41, Serialized, "meter")]
     meter: Meter,
+    #[boot_new(crate::cost::CostRecorder::default())]
+    #[boot_template(state.cost.clone())]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -212,6 +240,8 @@ pub struct Interp {
     /// computrons are identical feature-on and feature-off. See
     /// [`crate::cost`].
     cost: crate::cost::CostRecorder,
+    #[boot_new(None)]
+    #[boot_template(None)]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -231,6 +261,8 @@ pub struct Interp {
     /// is the fail-closed state: every check point aborts
     /// ([`Interp::check_meter`]).
     meter_host: Option<Box<dyn FnMut(u64) -> bool>>,
+    #[boot_new(u64::MAX)]
+    #[boot_template(state.step_limit)]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -249,6 +281,14 @@ pub struct Interp {
     /// self-targeting backward branch, an unbounded loop) aborts in bounded
     /// time rather than wedging the caller.
     step_limit: u64,
+    #[boot_new(slots)]
+    #[boot_template(SlotArena::from_image(
+        (0..state.slots.capacity())
+            .map(|i| state.slots.get(crate::value::SlotIndex(i)))
+            .collect(),
+        state.slots.free_list().to_vec(),
+        state.slots.live_count(),
+    ))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -260,6 +300,8 @@ pub struct Interp {
     #[snapshot_table(HardenState, 40, 40, InArena, "harden slot flags (no side table)")]
     /// The machine slot heap (design § Value and heap model).
     pub slots: SlotArena,
+    #[boot_new(chunks)]
+    #[boot_template(ChunkArena::from_image(state.chunks.raw_vec()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -271,6 +313,8 @@ pub struct Interp {
     #[snapshot_table(none)]
     /// The machine chunk heap (UTF-16BE strings and later data).
     pub chunks: ChunkArena,
+    #[boot_new(static_str)]
+    #[boot_template(state.static_str)]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -283,6 +327,8 @@ pub struct Interp {
     /// The interned `typeof` result strings (XS's `mxUndefinedString`
     /// &co.), allocated once at construction so `typeof` is dispatch-only.
     static_str: StaticStrings,
+    #[boot_new(0)]
+    #[boot_template(state.n_dispatched)]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -298,6 +344,8 @@ pub struct Interp {
     /// computron count, which now also folds in the program overhead and
     /// the allocation metering.
     n_dispatched: u64,
+    #[boot_new(0)]
+    #[boot_template(state.boot_slot_count)]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -311,6 +359,8 @@ pub struct Interp {
     /// Runtime native functions sit above this boundary; boot functions
     /// below it are re-derived at the same indices on restore.
     boot_slot_count: u32,
+    #[boot_new(0)]
+    #[boot_template(state.native_depth)]
     #[gc_root(none)]
     #[quiescent(zero)]
     #[persist_refs(none)]
@@ -334,6 +384,8 @@ pub struct Interp {
     /// native entry; accepting it would make a restored twin halt at a different
     /// recursion depth, so the boundary policy refuses it.
     native_depth: usize,
+    #[boot_new(None)]
+    #[boot_template(state.source_compiler.clone())]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -351,6 +403,12 @@ pub struct Interp {
     /// un-armed VM answers a string `eval` with an honest
     /// [`Halt::NotImplemented`] rather than a source-text guess.
     source_compiler: Option<std::rc::Rc<dyn SourceCompiler>>,
+    #[boot_new(Tracked::new(
+        Vec::new(),
+        classes.1.clone(),
+        SnapshotSection::Functions.mask(),
+    ))]
+    #[boot_template(state.code_segments.copy_to(classes.1.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -369,6 +427,8 @@ pub struct Interp {
     /// behind [`std::rc::Rc`] so a cross-segment dispatch can borrow the
     /// buffer locally without aliasing `&mut self`.
     code_segments: Tracked<Vec<std::rc::Rc<[u8]>>>,
+    #[boot_new(None)]
+    #[boot_template(state.active_segment)]
     #[gc_root(none)]
     #[quiescent(none)]
     #[persist_refs(none)]
@@ -384,6 +444,8 @@ pub struct Interp {
     /// segment's buffer rather than continue in-loop; this is the comparison
     /// key. Saved/restored around every nested cross-segment dispatch.
     active_segment: Option<usize>,
+    #[boot_new(None)]
+    #[boot_template(state.top_level_code.clone())]
     #[gc_root(none)]
     #[quiescent(none)]
     #[persist_refs(none)]
@@ -401,6 +463,12 @@ pub struct Interp {
     /// the cross-segment call path, which is itself gated on
     /// [`Self::func_segments`] being non-empty (an eval having run).
     top_level_code: Option<std::rc::Rc<[u8]>>,
+    #[boot_new(Tracked::new(
+        std::collections::HashMap::new(),
+        classes.1.clone(),
+        SnapshotSection::Functions.mask(),
+    ))]
+    #[boot_template(state.func_segments.copy_to(classes.1.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -414,6 +482,8 @@ pub struct Interp {
     /// lives in. Top-level crank buffers are promoted lazily at their first
     /// function definition; eval/`Function` buffers enter directly.
     func_segments: Tracked<std::collections::HashMap<crate::value::SlotIndex, usize>>,
+    #[boot_new(false)]
+    #[boot_template(state.eval_direct)]
     #[gc_root(none)]
     #[quiescent(false)]
     #[persist_refs(none)]
@@ -429,6 +499,25 @@ pub struct Interp {
     /// always the realm global). A direct eval retains the caller's published
     /// environment chain and `this`.
     eval_direct: bool,
+    #[boot_new(ClassMap::new_refined(
+        ExoticKind::FUNCTIONS,
+        ExoticKind::NATIVE.union(ExoticKind::METHOD),
+        |info: &FuncInfo| {
+            let native = if info.native.is_some() {
+                ExoticKind::NATIVE
+            } else {
+                ExoticKind::default()
+            };
+            let method = if info.method.is_some() {
+                ExoticKind::METHOD
+            } else {
+                ExoticKind::default()
+            };
+            native.union(method)
+        },
+        classes.clone(),
+    ))]
+    #[boot_template(state.functions.copy_to(classes.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -442,6 +531,8 @@ pub struct Interp {
     /// closures), keyed by the function instance's slot index. See
     /// [`FuncInfo`].
     functions: ClassMap<FuncInfo>,
+    #[boot_new(ClassMap::new(ExoticKind::BOUND_FUNCTIONS, classes.clone()))]
+    #[boot_template(state.bound_functions.copy_to(classes.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(bound)]
@@ -457,6 +548,8 @@ pub struct Interp {
     /// the `run` dispatch trampolines into the target (XS's
     /// `fx_Function_prototype_bound`).
     bound_functions: ClassMap<BoundData>,
+    #[boot_new(ClassMap::new(ExoticKind::PROXIES, classes.clone()))]
+    #[boot_template(state.proxies.copy_to(classes.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(proxies)]
@@ -471,6 +564,8 @@ pub struct Interp {
     /// what makes an instance a proxy: [`Interp::is_ordinary_object`] excludes
     /// it and every internal-method dispatch site routes it to the trap logic.
     proxies: ClassMap<ProxyData>,
+    #[boot_new(None)]
+    #[boot_template(state.array_iterator_proxy_get_context)]
     #[gc_root(none)]
     #[quiescent(none)]
     #[persist_refs(none)]
@@ -482,6 +577,12 @@ pub struct Interp {
     #[snapshot_table(none)]
     /// Synchronous recursive-Get context; always `None` at a crank boundary.
     array_iterator_proxy_get_context: Option<ArrayIteratorProxyGetContext>,
+    #[boot_new(Tracked::new(
+        std::collections::HashMap::new(),
+        classes.1.clone(),
+        SnapshotSection::Proxies.mask(),
+    ))]
+    #[boot_template(state.proxy_revokers.copy_to(classes.1.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -495,6 +596,8 @@ pub struct Interp {
     /// proxy instance it revokes (`fx_Proxy_revoke`'s bound `[[RevocableProxy]]`).
     proxy_revokers:
         Tracked<std::collections::HashMap<crate::value::SlotIndex, crate::value::SlotIndex>>,
+    #[boot_new(Vec::new())]
+    #[boot_template(Vec::new())]
     #[gc_root(callers)]
     #[quiescent(empty)]
     #[persist_refs(none)]
@@ -517,6 +620,8 @@ pub struct Interp {
     /// geometry (arguments below the frame, `result`/`function`/`this` at
     /// fixed offsets) that `run`/`argument`/`end` read.
     call_stack: Vec<CallerState>,
+    #[boot_new(Vec::new())]
+    #[boot_template(state.args.clone())]
     #[gc_root(slots)]
     #[quiescent(empty)]
     #[persist_refs(none)]
@@ -529,6 +634,8 @@ pub struct Interp {
     /// The active frame's positional arguments (`mxFrameArgv`), read by
     /// `XS_CODE_ARGUMENT`. Empty in the program frame.
     args: Vec<Slot>,
+    #[boot_new(Slot::undefined())]
+    #[boot_template(state.this_val)]
     #[gc_root(slot)]
     #[quiescent(undefined)]
     #[persist_refs(none)]
@@ -541,6 +648,8 @@ pub struct Interp {
     /// The active frame's `this` (`mxFrameThis`). Bound by `begin_*`;
     /// the covered subset does not yet branch on it.
     this_val: Slot,
+    #[boot_new(Vec::new())]
+    #[boot_template(state.this_captures.clone())]
     #[gc_root(none)]
     #[quiescent(empty)]
     #[persist_refs(none)]
@@ -555,6 +664,8 @@ pub struct Interp {
     /// this list with the activation; `SET_THIS` updates each property in
     /// place and clears it, so escaped arrows observe the initialized value.
     this_captures: Vec<crate::value::SlotIndex>,
+    #[boot_new(Slot::undefined())]
+    #[boot_template(state.env)]
     #[gc_root(slot)]
     #[quiescent(undefined)]
     #[persist_refs(none)]
@@ -579,6 +690,8 @@ pub struct Interp {
     /// (XS resets `mxEnvironment` at frame setup, `xsRun.c`) and restored on
     /// return / throw-unwind, so a callee never inherits its caller's `with`.
     env: Slot,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.cur_func)]
     #[gc_root(index)]
     #[quiescent(null)]
     #[persist_refs(none)]
@@ -592,6 +705,8 @@ pub struct Interp {
     /// [`FuncInfo`] carries the closure environment closure opcodes resolve
     /// against. `NULL` in the program frame.
     cur_func: crate::value::SlotIndex,
+    #[boot_new(false)]
+    #[boot_template(state.cur_target)]
     #[gc_root(none)]
     #[quiescent(false)]
     #[persist_refs(none)]
@@ -608,6 +723,8 @@ pub struct Interp {
     /// construct return semantics at `end` (a non-object completion yields
     /// `this`). `false` for a plain call and the program frame.
     cur_target: bool,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.target_func)]
     #[gc_root(index)]
     #[quiescent(null)]
     #[persist_refs(none)]
@@ -620,6 +737,8 @@ pub struct Interp {
     /// The actual `new.target`. It differs from `cur_func` while a derived
     /// constructor is executing its heritage through `super()`.
     target_func: crate::value::SlotIndex,
+    #[boot_new(None)]
+    #[boot_template(state.pending_new_target)]
     #[gc_root(optional)]
     #[quiescent(none)]
     #[persist_refs(none)]
@@ -632,6 +751,8 @@ pub struct Interp {
     /// One-shot target override installed by `super()` for the following
     /// construct-frame `run`.
     pending_new_target: Option<crate::value::SlotIndex>,
+    #[boot_new(Slot::undefined())]
+    #[boot_template(state.exception)]
     #[gc_root(slot)]
     #[quiescent(undefined)]
     #[persist_refs(none)]
@@ -646,6 +767,8 @@ pub struct Interp {
     /// (binding the catch parameter) and clears it back to `undefined`;
     /// `RETHROW` re-unwinds with it. Default `undefined`.
     exception: Slot,
+    #[boot_new(0)]
+    #[boot_template(state.frame_slots)]
     #[gc_root(none)]
     #[quiescent(zero)]
     #[persist_refs(none)]
@@ -662,6 +785,8 @@ pub struct Interp {
     /// ([`Self::live_stack_slots`]), this mirrors XS's `stackTop - stack`
     /// so the stack-overflow abort fires at the same fixed-geometry budget.
     frame_slots: usize,
+    #[boot_new(std::collections::HashMap::new())]
+    #[boot_template(state.intrinsics.clone())]
     #[gc_root(values)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -678,6 +803,8 @@ pub struct Interp {
     /// XS compiler assigned that name. Each value is a `functions`-tracked
     /// native function instance.
     intrinsics: std::collections::HashMap<&'static str, crate::value::SlotIndex>,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.intl_object)]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -688,6 +815,8 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     intl_object: crate::value::SlotIndex,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.locale_proto)]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -698,6 +827,8 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     locale_proto: crate::value::SlotIndex,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.collator_proto)]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -708,6 +839,8 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     collator_proto: crate::value::SlotIndex,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.list_format_proto)]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -718,6 +851,8 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     list_format_proto: crate::value::SlotIndex,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.plural_rules_proto)]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -728,6 +863,8 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     plural_rules_proto: crate::value::SlotIndex,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.segmenter_proto)]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -738,6 +875,8 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     segmenter_proto: crate::value::SlotIndex,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.segments_proto)]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -748,6 +887,8 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     segments_proto: crate::value::SlotIndex,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.segment_iterator_proto)]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -758,6 +899,8 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     segment_iterator_proto: crate::value::SlotIndex,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.segments_iterator_method)]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -776,6 +919,8 @@ pub struct Interp {
     /// a plain object and `for..of` over a resumed `Segments` dies. Boot
     /// slots come back at identical indices with identical name chunks.
     segments_iterator_method: crate::value::SlotIndex,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.segment_iterator_identity)]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -786,6 +931,8 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     segment_iterator_identity: crate::value::SlotIndex,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.date_time_format_proto)]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -796,6 +943,8 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     date_time_format_proto: crate::value::SlotIndex,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.number_format_proto)]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -806,6 +955,8 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     number_format_proto: crate::value::SlotIndex,
+    #[boot_new(ClassMap::new(ExoticKind::LOCALES, classes.clone()))]
+    #[boot_template(state.locales.copy_to(classes.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -816,6 +967,8 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(IntlRecords, 30, 31, Serialized, "locales/collators/…/date_time_formats")]
     locales: ClassMap<LocaleData>,
+    #[boot_new(ClassMap::new(ExoticKind::COLLATORS, classes.clone()))]
+    #[boot_template(state.collators.copy_to(classes.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -826,6 +979,12 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     collators: ClassMap<CollatorData>,
+    #[boot_new(Tracked::new(
+        std::collections::HashMap::new(),
+        classes.1.clone(),
+        SnapshotSection::Intl.mask(),
+    ))]
+    #[boot_template(state.list_formats.copy_to(classes.1.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -836,6 +995,12 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     list_formats: Tracked<std::collections::HashMap<crate::value::SlotIndex, ListFormatData>>,
+    #[boot_new(Tracked::new(
+        std::collections::HashMap::new(),
+        classes.1.clone(),
+        SnapshotSection::Intl.mask(),
+    ))]
+    #[boot_template(state.plural_rules.copy_to(classes.1.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -846,6 +1011,12 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     plural_rules: Tracked<std::collections::HashMap<crate::value::SlotIndex, PluralRulesData>>,
+    #[boot_new(Tracked::new(
+        std::collections::HashMap::new(),
+        classes.1.clone(),
+        SnapshotSection::Intl.mask(),
+    ))]
+    #[boot_template(state.number_formats.copy_to(classes.1.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -856,6 +1027,12 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     number_formats: Tracked<std::collections::HashMap<crate::value::SlotIndex, NumberFormatData>>,
+    #[boot_new(Tracked::new(
+        std::collections::HashMap::new(),
+        classes.1.clone(),
+        SnapshotSection::Intl.mask(),
+    ))]
+    #[boot_template(state.segmenters.copy_to(classes.1.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -866,6 +1043,12 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     segmenters: Tracked<std::collections::HashMap<crate::value::SlotIndex, SegmenterData>>,
+    #[boot_new(Tracked::new(
+        std::collections::HashMap::new(),
+        classes.1.clone(),
+        SnapshotSection::Intl.mask(),
+    ))]
+    #[boot_template(state.segments.copy_to(classes.1.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -876,6 +1059,12 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     segments: Tracked<std::collections::HashMap<crate::value::SlotIndex, SegmentsData>>,
+    #[boot_new(Tracked::new(
+        std::collections::HashMap::new(),
+        classes.1.clone(),
+        SnapshotSection::Intl.mask(),
+    ))]
+    #[boot_template(state.segment_iterators.copy_to(classes.1.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -887,6 +1076,12 @@ pub struct Interp {
     #[snapshot_table(none)]
     segment_iterators:
         Tracked<std::collections::HashMap<crate::value::SlotIndex, SegmentIteratorData>>,
+    #[boot_new(Tracked::new(
+        std::collections::HashMap::new(),
+        classes.1.clone(),
+        SnapshotSection::Intl.mask(),
+    ))]
+    #[boot_template(state.date_time_formats.copy_to(classes.1.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -898,6 +1093,8 @@ pub struct Interp {
     #[snapshot_table(none)]
     date_time_formats:
         Tracked<std::collections::HashMap<crate::value::SlotIndex, DateTimeFormatData>>,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.temporal_object)]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -908,6 +1105,8 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     temporal_object: crate::value::SlotIndex,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.temporal_instant_proto)]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -918,6 +1117,8 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     temporal_instant_proto: crate::value::SlotIndex,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.temporal_duration_proto)]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -928,6 +1129,8 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     temporal_duration_proto: crate::value::SlotIndex,
+    #[boot_new([crate::value::SlotIndex::NULL; 6])]
+    #[boot_template(state.temporal_plain_protos)]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -938,6 +1141,8 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     temporal_plain_protos: [crate::value::SlotIndex; 6],
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.temporal_zoned_proto)]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -948,6 +1153,8 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     temporal_zoned_proto: crate::value::SlotIndex,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.temporal_now_object)]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -959,6 +1166,8 @@ pub struct Interp {
     #[snapshot_table(none)]
     /// The `Temporal.Now` namespace object (a boot object, not a constructor).
     temporal_now_object: crate::value::SlotIndex,
+    #[boot_new(ClassMap::new(ExoticKind::TEMPORAL_INSTANTS, classes.clone()))]
+    #[boot_template(state.temporal_instants.copy_to(classes.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -969,6 +1178,8 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(TemporalRecords, 26, 26, Serialized, "temporal_instants/temporal_durations/temporal_plains/temporal_zoneds")]
     temporal_instants: ClassMap<TemporalInstantRecord>,
+    #[boot_new(ClassMap::new(ExoticKind::TEMPORAL_DURATIONS, classes.clone()))]
+    #[boot_template(state.temporal_durations.copy_to(classes.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -979,6 +1190,8 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     temporal_durations: ClassMap<TemporalDurationRecord>,
+    #[boot_new(ClassMap::new(ExoticKind::TEMPORAL_PLAINS, classes.clone()))]
+    #[boot_template(state.temporal_plains.copy_to(classes.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -989,6 +1202,8 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     temporal_plains: ClassMap<TemporalPlainRecord>,
+    #[boot_new(ClassMap::new(ExoticKind::TEMPORAL_ZONEDS, classes.clone()))]
+    #[boot_template(state.temporal_zoneds.copy_to(classes.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -999,6 +1214,12 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     temporal_zoneds: ClassMap<TemporalZonedRecord>,
+    #[boot_new(Tracked::new(
+        std::collections::HashMap::new(),
+        classes.1.clone(),
+        SnapshotSection::IntlBoundFunctions.mask(),
+    ))]
+    #[boot_template(state.collator_compare_functions.copy_to(classes.1.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1010,6 +1231,14 @@ pub struct Interp {
     #[snapshot_table(IntlBoundFunctions, 32, 32, Serialized, "collator_compare_functions/number_format_bound_functions")]
     collator_compare_functions:
         Tracked<std::collections::HashMap<crate::value::SlotIndex, crate::value::SlotIndex>>,
+    #[boot_new(Tracked::new(
+        std::collections::HashMap::new(),
+        classes.1.clone(),
+        SnapshotSection::IntlBoundFunctions.mask(),
+    ))]
+    #[boot_template(state
+        .number_format_bound_functions
+        .copy_to(classes.1.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1028,6 +1257,12 @@ pub struct Interp {
     /// owner side table" shape as `collator_compare_functions`.
     number_format_bound_functions:
         Tracked<std::collections::HashMap<crate::value::SlotIndex, crate::value::SlotIndex>>,
+    #[boot_new(Tracked::new(
+        std::collections::HashSet::new(),
+        classes.1.clone(),
+        SnapshotSection::Functions.mask(),
+    ))]
+    #[boot_template(state.deleted_fn_meta.copy_to(classes.1.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1048,6 +1283,8 @@ pub struct Interp {
     /// `intern_key` makes identical for the static `.length` access and the
     /// string-literal `'length'` key.
     deleted_fn_meta: Tracked<std::collections::HashSet<(crate::value::SlotIndex, u16)>>,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.object_proto)]
     #[gc_root(index)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1065,6 +1302,8 @@ pub struct Interp {
     /// prototype objects carry no data properties — so this is invisible to
     /// the existing corpora; only the prototype *identity* chain is new.
     object_proto: crate::value::SlotIndex,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.function_proto)]
     #[gc_root(index)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1078,6 +1317,8 @@ pub struct Interp {
     /// instance (native and user), so `f.toString`/`f.call`/… resolve up the
     /// chain. A boot object.
     function_proto: crate::value::SlotIndex,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.function_has_instance_method)]
     #[gc_root(index)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1090,6 +1331,8 @@ pub struct Interp {
     /// Boot-minted function identity for the lazily materialized
     /// `%Function.prototype%[Symbol.hasInstance]` property.
     function_has_instance_method: crate::value::SlotIndex,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.template_cache)]
     #[gc_root(index)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1104,6 +1347,12 @@ pub struct Interp {
     /// `mxRealmTemplateCache`; the object itself is a boot root and its
     /// properties therefore travel in the ordinary heap snapshot.
     template_cache: crate::value::SlotIndex,
+    #[boot_new(Tracked::new(
+        std::collections::HashMap::new(),
+        classes.1.clone(),
+        SnapshotSection::Functions.mask(),
+    ))]
+    #[boot_template(state.ctor_prototype.copy_to(classes.1.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1122,6 +1371,12 @@ pub struct Interp {
     /// are prototype-chain identity checks (`fxOrdinaryHasInstance`).
     ctor_prototype:
         Tracked<std::collections::HashMap<crate::value::SlotIndex, crate::value::SlotIndex>>,
+    #[boot_new(Tracked::new(
+        std::collections::HashMap::new(),
+        classes.1.clone(),
+        SnapshotSection::PrivateElements.mask(),
+    ))]
+    #[boot_template(state.private_values.copy_to(classes.1.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(values)]
@@ -1138,6 +1393,12 @@ pub struct Interp {
     private_values: Tracked<
         std::collections::HashMap<(crate::value::SlotIndex, crate::value::SlotIndex), Slot>,
     >,
+    #[boot_new(Tracked::new(
+        std::collections::HashMap::new(),
+        classes.1.clone(),
+        SnapshotSection::PrivateElements.mask(),
+    ))]
+    #[boot_template(state.private_accessors.copy_to(classes.1.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(accessors)]
@@ -1150,6 +1411,8 @@ pub struct Interp {
     private_accessors: Tracked<
         std::collections::HashMap<(crate::value::SlotIndex, crate::value::SlotIndex), AccessorData>,
     >,
+    #[boot_new(Vec::new())]
+    #[boot_template(state.proto_methods.clone())]
     #[gc_root(proto_methods)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1169,6 +1432,8 @@ pub struct Interp {
         &'static str,
         crate::value::SlotIndex,
     )>,
+    #[boot_new(Vec::new())]
+    #[boot_template(state.proto_data.clone())]
     #[gc_root(proto_data)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1184,6 +1449,8 @@ pub struct Interp {
     /// `err.hasOwnProperty('name')` is correctly `false`, matching XS). Bound
     /// only when the program references the name; unmetered.
     proto_data: Vec<(crate::value::SlotIndex, &'static str, String)>,
+    #[boot_new(Vec::new())]
+    #[boot_template(state.proto_accessors.clone())]
     #[gc_root(proto_accessors)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1222,6 +1489,8 @@ pub struct Interp {
         Option<crate::value::SlotIndex>,
         &'static str,
     )>,
+    #[boot_new(Vec::new())]
+    #[boot_template(state.well_known_symbols.clone())]
     #[gc_root(symbols)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1236,6 +1505,8 @@ pub struct Interp {
     /// boot and bound as own properties of the `Symbol` constructor at link
     /// time (only when referenced), so `Symbol.iterator === Symbol.iterator`.
     well_known_symbols: Vec<(&'static str, Slot)>,
+    #[boot_new(SymbolIds::default())]
+    #[boot_template(state.symbol_ids.clone())]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1254,6 +1525,8 @@ pub struct Interp {
     /// against, exactly as the intrinsic constructors relink by name. A name
     /// the program never references has no id (and no read of it occurs).
     symbol_ids: SymbolIds,
+    #[boot_new(crate::default_keys::DEFAULT_KEYS.iter().copied().collect())]
+    #[boot_template(state.default_keys.clone())]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1269,6 +1542,8 @@ pub struct Interp {
     /// outside this set (and not a program symbol / not previously seen) is
     /// genuinely novel and meters one `fxNewSlot`. See [`Self::intern_key`].
     default_keys: std::collections::HashSet<&'static str>,
+    #[boot_new(u16::MAX)]
+    #[boot_template(state.next_symbol_key_id)]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1288,6 +1563,8 @@ pub struct Interp {
     /// `u16::MAX` — handled by the [`Self::id_space_exhausted`] poison
     /// latch: the meet halts the machine by name instead of aliasing.
     next_symbol_key_id: u16,
+    #[boot_new(0)]
+    #[boot_template(state.installed_names_len)]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1304,6 +1581,8 @@ pub struct Interp {
     /// RUNTIME (a computed string key) has an id no install has seen, and
     /// filtering by the unit's own table length refused it forever.
     installed_names_len: usize,
+    #[boot_new(false)]
+    #[boot_template(state.installing_intrinsics)]
     #[gc_root(none)]
     #[quiescent(false)]
     #[persist_refs(none)]
@@ -1314,6 +1593,8 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     installing_intrinsics: bool,
+    #[boot_new(false)]
+    #[boot_template(state.id_space_exhausted)]
     #[gc_root(none)]
     #[quiescent(false)]
     #[persist_refs(none)]
@@ -1334,6 +1615,8 @@ pub struct Interp {
     /// and [`Self::is_quiescent`] reports a poisoned machine
     /// non-quiescent so the persist gates refuse it.
     id_space_exhausted: bool,
+    #[boot_new(true)]
+    #[boot_template(state.last_crank_completed)]
     #[gc_root(none)]
     #[quiescent(completed)]
     #[persist_refs(none)]
@@ -1355,6 +1638,14 @@ pub struct Interp {
     /// alone admitted it to the persist verbs while its boundary
     /// registers stayed rooted (architecture review F011).
     last_crank_completed: bool,
+    #[boot_new(Tracked::new(
+        Vec::new(),
+        classes.1.clone(),
+        SnapshotSection::Names.mask()
+            | SnapshotSection::NameFloor.mask()
+            | SnapshotSection::Accessors.mask(),
+    ))]
+    #[boot_template(state.symbol_names.copy_to(classes.1.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1368,6 +1659,12 @@ pub struct Interp {
     /// atom, verbatim), so a function definition can recover its own name
     /// string for `Function.prototype.toString`.
     symbol_names: Tracked<Vec<SymbolName>>,
+    #[boot_new(Tracked::new(
+        std::collections::HashMap::new(),
+        classes.1.clone(),
+        SnapshotSection::Errors.mask() | SnapshotSection::ErrorFrames.mask(),
+    ))]
+    #[boot_template(state.error_data.copy_to(classes.1.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1384,6 +1681,8 @@ pub struct Interp {
     /// exact abort value without a symbol-id lookup, graduating abort-value
     /// parity from primitive throws to real Error objects.
     error_data: Tracked<std::collections::HashMap<crate::value::SlotIndex, ErrorInfo>>,
+    #[boot_new(ClassMap::new(ExoticKind::WRAPPER_DATA, classes.clone()))]
+    #[boot_template(state.wrapper_data.copy_to(classes.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(values)]
@@ -1399,6 +1698,8 @@ pub struct Interp {
     /// completion/`String()` stringifies as its wrapped primitive, so
     /// [`Self::render`] reads it here.
     wrapper_data: ClassMap<Slot>,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.array_proto)]
     #[gc_root(index)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1412,6 +1713,8 @@ pub struct Interp {
     /// and `new Array` instance chains to it, so `arr.push`/`arr.join`/… (the
     /// native methods bound on it) resolve up the prototype chain.
     array_proto: crate::value::SlotIndex,
+    #[boot_new(ClassMap::new(ExoticKind::ARRAYS, classes.clone()))]
+    #[boot_template(ClassMap::from_rows(arrays, ExoticKind::ARRAYS, classes.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(indexed)]
@@ -1430,6 +1733,16 @@ pub struct Interp {
     /// from a live owner. Counted page edges retain them during partial GC;
     /// both sweep paths release those counts when their owner dies.
     arrays: ClassMap<ArrayData>,
+    #[boot_new(Tracked::new(
+        std::collections::HashMap::new(),
+        classes.1.clone(),
+        SnapshotSection::IndexProperties.mask(),
+    ))]
+    #[boot_template(Tracked::new(
+        index_props,
+        classes.1.clone(),
+        SnapshotSection::IndexProperties.mask(),
+    ))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(indexed)]
@@ -1462,6 +1775,12 @@ pub struct Interp {
     /// `length` field is unused here and stays 0, because an ordinary object
     /// has no array `length` semantics.
     index_props: Tracked<std::collections::HashMap<crate::value::SlotIndex, ArrayData>>,
+    #[boot_new(Tracked::new(
+        std::collections::HashSet::new(),
+        classes.1.clone(),
+        SnapshotSection::ArgumentsBrands.mask(),
+    ))]
+    #[boot_template(state.arguments_objects.copy_to(classes.1.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1481,6 +1800,8 @@ pub struct Interp {
     /// two without changing the element storage (the `.length`/indexed reads
     /// stay the array side table).
     arguments_objects: Tracked<std::collections::HashSet<crate::value::SlotIndex>>,
+    #[boot_new(ClassMap::new(ExoticKind::DISPOSABLE_STACKS, classes.clone()))]
+    #[boot_template(state.disposable_stacks.copy_to(classes.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(disposable)]
@@ -1494,6 +1815,8 @@ pub struct Interp {
     /// source order and consumed from the tail, implementing the proposal's
     /// mandatory LIFO cleanup order.
     disposable_stacks: ClassMap<DisposableStackData>,
+    #[boot_new(ClassMap::new(ExoticKind::COLLECTIONS, classes.clone()))]
+    #[boot_template(ClassMap::from_rows(collections, ExoticKind::COLLECTIONS, classes.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(collections)]
@@ -1507,6 +1830,8 @@ pub struct Interp {
     /// internal slots). Keyed by the collection instance's slot, like
     /// [`Self::arrays`]. See [`CollectionData`].
     collections: ClassMap<CollectionData>,
+    #[boot_new(SideRefCounts::new())]
+    #[boot_template(side_refs)]
     #[gc_root(none)]
     #[quiescent(healthy)]
     #[persist_refs(none)]
@@ -1522,6 +1847,8 @@ pub struct Interp {
     /// entries. Maintained by every counted mutation in
     /// [`crate::bulk`]; whole-row drops decrement via `drop_refs`.
     side_refs: SideRefCounts,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.map_proto)]
     #[gc_root(index)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1535,6 +1862,8 @@ pub struct Interp {
     /// `%WeakSet.prototype%` (boot objects), so a `new Map()` instance chains
     /// to the right one and its methods resolve.
     map_proto: crate::value::SlotIndex,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.set_proto)]
     #[gc_root(index)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1545,6 +1874,8 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     set_proto: crate::value::SlotIndex,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.weakmap_proto)]
     #[gc_root(index)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1555,6 +1886,8 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     weakmap_proto: crate::value::SlotIndex,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.weakset_proto)]
     #[gc_root(index)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1565,6 +1898,8 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     weakset_proto: crate::value::SlotIndex,
+    #[boot_new(ClassMap::new(ExoticKind::ARRAY_BUFFERS, classes.clone()))]
+    #[boot_template(state.array_buffers.copy_to(classes.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1578,6 +1913,12 @@ pub struct Interp {
     /// internal slot). Keyed by the buffer instance's slot, like
     /// [`Self::collections`]. See [`ArrayBufferData`].
     array_buffers: ClassMap<ArrayBufferData>,
+    #[boot_new(Tracked::new(
+        std::collections::HashSet::new(),
+        classes.1.clone(),
+        SnapshotSection::Buffers.mask(),
+    ))]
+    #[boot_template(state.detached_buffers.copy_to(classes.1.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1592,6 +1933,12 @@ pub struct Interp {
     /// operation that performs `ValidateTypedArray` rejects the detached
     /// buffer with a realm-local TypeError.
     detached_buffers: Tracked<std::collections::HashSet<crate::value::SlotIndex>>,
+    #[boot_new(Tracked::new(
+        std::collections::HashSet::new(),
+        classes.1.clone(),
+        SnapshotSection::Buffers.mask(),
+    ))]
+    #[boot_template(state.shared_buffers.copy_to(classes.1.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1607,6 +1954,8 @@ pub struct Interp {
     /// plain one; this set only gates the `Atomics.wait`/`notify` shared
     /// requirement and the `SharedArrayBuffer` brand.
     shared_buffers: Tracked<std::collections::HashSet<crate::value::SlotIndex>>,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.arraybuffer_proto)]
     #[gc_root(index)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1619,6 +1968,8 @@ pub struct Interp {
     /// The realm's `%ArrayBuffer.prototype%` (a boot object), so a
     /// `new ArrayBuffer()` instance chains to it and its methods resolve.
     arraybuffer_proto: crate::value::SlotIndex,
+    #[boot_new(None)]
+    #[boot_template(state.byte_length_id)]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1633,6 +1984,8 @@ pub struct Interp {
     /// `buffer.byteLength` get routes to the buffer byte-length accessor.
     /// `None` when the program never references `byteLength`.
     byte_length_id: Option<u16>,
+    #[boot_new(ClassMap::new(ExoticKind::TYPED_ARRAYS, classes.clone()))]
+    #[boot_template(state.typed_arrays.copy_to(classes.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1647,6 +2000,8 @@ pub struct Interp {
     /// view instance's slot, like [`Self::array_buffers`]. See
     /// [`TypedArrayData`].
     typed_arrays: ClassMap<TypedArrayData>,
+    #[boot_new(None)]
+    #[boot_template(state.byte_offset_id)]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1661,6 +2016,8 @@ pub struct Interp {
     /// routes to the TypedArray (and DataView) view accessors. `None` when
     /// the program never references the name.
     byte_offset_id: Option<u16>,
+    #[boot_new(None)]
+    #[boot_template(state.buffer_id)]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1671,6 +2028,8 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     buffer_id: Option<u16>,
+    #[boot_new(ClassMap::new(ExoticKind::DATA_VIEWS, classes.clone()))]
+    #[boot_template(state.data_views.copy_to(classes.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1684,6 +2043,8 @@ pub struct Interp {
     /// slot + buffer reference). Keyed by the view instance's slot. See
     /// [`DataViewData`].
     data_views: ClassMap<DataViewData>,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.dataview_proto)]
     #[gc_root(index)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1697,6 +2058,8 @@ pub struct Interp {
     /// `new DataView()` instance chains to it and its `get*`/`set*` methods
     /// resolve.
     dataview_proto: crate::value::SlotIndex,
+    #[boot_new(None)]
+    #[boot_template(state.size_id)]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1711,6 +2074,8 @@ pub struct Interp {
     /// `set.size` get routes to the collection size accessor. `None` when the
     /// program never references `size`.
     size_id: Option<u16>,
+    #[boot_new(None)]
+    #[boot_template(state.length_id)]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1725,6 +2090,8 @@ pub struct Interp {
     /// `arr.length` get/set routes to the array length semantics. `None`
     /// when the program never references `length`.
     length_id: Option<u16>,
+    #[boot_new(None)]
+    #[boot_template(state.name_id)]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1738,6 +2105,8 @@ pub struct Interp {
     /// `f.name` read routes to the function's own `name` property. `None`
     /// when the program never references `name`.
     name_id: Option<u16>,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.array_iterator_proto)]
     #[gc_root(index)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1752,6 +2121,8 @@ pub struct Interp {
     /// `arr[Symbol.iterator]()` produce. Carries `next` and a
     /// `Symbol.iterator` returning the iterator itself.
     array_iterator_proto: crate::value::SlotIndex,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.iterator_proto)]
     #[gc_root(index)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1762,6 +2133,8 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     iterator_proto: crate::value::SlotIndex,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.iterator_wrapper_proto)]
     #[gc_root(index)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1772,6 +2145,8 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     iterator_wrapper_proto: crate::value::SlotIndex,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.map_iterator_proto)]
     #[gc_root(index)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1782,6 +2157,8 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     map_iterator_proto: crate::value::SlotIndex,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.set_iterator_proto)]
     #[gc_root(index)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1792,6 +2169,8 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     set_iterator_proto: crate::value::SlotIndex,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.regexp_string_iterator_proto)]
     #[gc_root(index)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1803,6 +2182,8 @@ pub struct Interp {
     #[snapshot_table(none)]
     /// `%RegExpStringIteratorPrototype%`, inheriting `%Iterator.prototype%`.
     regexp_string_iterator_proto: crate::value::SlotIndex,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.math_object)]
     #[gc_root(index)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1818,6 +2199,8 @@ pub struct Interp {
     /// the program-local `Math` id at [`Self::link_intrinsics`]. Not a
     /// function, so `typeof Math === "object"`.
     math_object: crate::value::SlotIndex,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.string_proto)]
     #[gc_root(index)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1833,6 +2216,8 @@ pub struct Interp {
     /// this chain. Held here so a `GET_PROPERTY` on a `Kind::String` receiver
     /// routes here without materializing a wrapper object.
     string_proto: crate::value::SlotIndex,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.string_iterator_method)]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1844,6 +2229,8 @@ pub struct Interp {
     #[snapshot_table(none)]
     /// The intrinsic function installed at `%String.prototype%[Symbol.iterator]`.
     string_iterator_method: crate::value::SlotIndex,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.number_proto)]
     #[gc_root(index)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1856,6 +2243,8 @@ pub struct Interp {
     /// The realm's `%Number.prototype%` (a boot object) — the box target for a
     /// primitive number's method access (`(42).toString(2)`, …).
     number_proto: crate::value::SlotIndex,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.boolean_proto)]
     #[gc_root(index)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1868,6 +2257,8 @@ pub struct Interp {
     /// The realm's `%Boolean.prototype%` (a boot object) — the box target for a
     /// primitive boolean's method access (`true.toString()`, …).
     boolean_proto: crate::value::SlotIndex,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.date_proto)]
     #[gc_root(index)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1881,6 +2272,8 @@ pub struct Interp {
     /// remains an ordinary arena object for property/prototype behavior; its
     /// time value is the one non-property internal slot recorded here.
     date_proto: crate::value::SlotIndex,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.date_to_primitive_method)]
     #[gc_root(index)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1893,6 +2286,12 @@ pub struct Interp {
     /// Boot-minted function identity for the lazily materialized
     /// `%Date.prototype%[Symbol.toPrimitive]` property.
     date_to_primitive_method: crate::value::SlotIndex,
+    #[boot_new(Tracked::new(
+        std::collections::HashMap::new(),
+        classes.1.clone(),
+        SnapshotSection::Dates.mask(),
+    ))]
+    #[boot_template(state.dates.copy_to(classes.1.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1903,6 +2302,8 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(Dates, 31, 27, Serialized, "dates")]
     dates: Tracked<std::collections::HashMap<crate::value::SlotIndex, f64>>,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.symbol_proto)]
     #[gc_root(index)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1915,6 +2316,8 @@ pub struct Interp {
     /// The realm's `%Symbol.prototype%` (a boot object) — the box target for a
     /// primitive symbol's method access (`Symbol("x").toString()`, …).
     symbol_proto: crate::value::SlotIndex,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.symbol_to_primitive_method)]
     #[gc_root(index)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1927,6 +2330,8 @@ pub struct Interp {
     /// Boot-minted function identity for the lazily materialized
     /// `%Symbol.prototype%[Symbol.toPrimitive]` property.
     symbol_to_primitive_method: crate::value::SlotIndex,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.bigint_proto)]
     #[gc_root(index)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1939,6 +2344,12 @@ pub struct Interp {
     /// The realm's `%BigInt.prototype%` (a boot object) — the box target for a
     /// primitive bigint's method access (`(42n).toString(2)`, …).
     bigint_proto: crate::value::SlotIndex,
+    #[boot_new(Tracked::new(
+        std::collections::HashMap::new(),
+        classes.1.clone(),
+        SnapshotSection::Registry.mask(),
+    ))]
+    #[boot_template(state.symbol_registry.copy_to(classes.1.clone()))]
     #[gc_root(values)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1952,6 +2363,8 @@ pub struct Interp {
     /// the registry key → the canonical symbol-description slot that is the
     /// registered symbol's identity, so `Symbol.for(k) === Symbol.for(k)`.
     symbol_registry: Tracked<std::collections::HashMap<Vec<u8>, crate::value::SlotIndex>>,
+    #[boot_new(std::collections::HashMap::new())]
+    #[boot_template(state.symbol_registry_keys.clone())]
     #[gc_root(keys)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1964,6 +2377,12 @@ pub struct Interp {
     /// The reverse of [`Self::symbol_registry`]: a registered symbol's
     /// identity slot → its registry key, so `Symbol.keyFor(sym)` recovers it.
     symbol_registry_keys: std::collections::HashMap<crate::value::SlotIndex, Vec<u8>>,
+    #[boot_new(Tracked::new(
+        std::collections::HashMap::new(),
+        classes.1.clone(),
+        SnapshotSection::Symbols.mask() | SnapshotSection::Accessors.mask(),
+    ))]
+    #[boot_template(state.symbol_key_ids.copy_to(classes.1.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1985,6 +2404,12 @@ pub struct Interp {
     /// string-key enumerations) skip it — matching the spec's string/symbol key
     /// partition (and the boot-key soundness gate).
     symbol_key_ids: Tracked<std::collections::HashMap<crate::value::SlotIndex, u16>>,
+    #[boot_new(Tracked::new(
+        std::collections::HashMap::new(),
+        classes.1.clone(),
+        SnapshotSection::Accessors.mask(),
+    ))]
+    #[boot_template(state.accessors.copy_to(classes.1.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(accessors)]
@@ -1998,6 +2423,8 @@ pub struct Interp {
     /// owner and property id; the owner's normal property chain remains the
     /// source of truth for presence, attributes, and creation order.
     accessors: Tracked<std::collections::HashMap<(crate::value::SlotIndex, u16), AccessorData>>,
+    #[boot_new(Vec::new())]
+    #[boot_template(state.proto_value_data.clone())]
     #[gc_root(proto_values)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -2012,6 +2439,12 @@ pub struct Interp {
     /// (the `Math` constants) and `Number.MAX_VALUE` &co.; bound only when the
     /// program references the name, unmetered.
     proto_value_data: Vec<(crate::value::SlotIndex, &'static str, Slot)>,
+    #[boot_new(Tracked::new(
+        std::collections::HashMap::new(),
+        classes.1.clone(),
+        SnapshotSection::Iterators.mask(),
+    ))]
+    #[boot_template(state.iterators.copy_to(classes.1.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -2027,6 +2460,8 @@ pub struct Interp {
     /// **reused** result object (`{value, done}`) `next()` mutates and returns
     /// — XS allocates it once at iterator creation, not per `next()`.
     iterators: Tracked<std::collections::HashMap<crate::value::SlotIndex, IterState>>,
+    #[boot_new(None)]
+    #[boot_template(state.value_id)]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -2040,6 +2475,8 @@ pub struct Interp {
     /// [`Self::link_intrinsics`], so `next()` sets them on the result object
     /// under the ids the program reads them by.
     value_id: Option<u16>,
+    #[boot_new(None)]
+    #[boot_template(state.done_id)]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -2050,6 +2487,12 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     done_id: Option<u16>,
+    #[boot_new(Tracked::new(
+        std::collections::HashMap::new(),
+        classes.1.clone(),
+        SnapshotSection::Promises.mask() | SnapshotSection::AsyncInstances.mask(),
+    ))]
+    #[boot_template(state.promises.copy_to(classes.1.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(promises)]
@@ -2063,6 +2506,8 @@ pub struct Interp {
     /// RESULT/THENS internal slots). Keyed by the promise instance's slot,
     /// like [`Self::collections`]. See [`PromiseData`].
     promises: Tracked<std::collections::HashMap<crate::value::SlotIndex, PromiseData>>,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.promise_proto)]
     #[gc_root(index)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -2075,6 +2520,16 @@ pub struct Interp {
     /// The realm's `%Promise.prototype%` (a boot object), so a `new Promise`
     /// instance chains to it and `then`/`catch`/`finally` resolve.
     promise_proto: crate::value::SlotIndex,
+    #[boot_new(Tracked::new(
+        std::collections::HashMap::new(),
+        classes.1.clone(),
+        SnapshotSection::Generators.mask(),
+    ))]
+    #[boot_template(Tracked::new(
+        std::collections::HashMap::new(),
+        classes.1.clone(),
+        SnapshotSection::Generators.mask(),
+    ))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(generators)]
@@ -2089,6 +2544,8 @@ pub struct Interp {
     /// resume. Keyed by the generator instance's slot index, modeled on
     /// `promises`.
     generators: Tracked<std::collections::HashMap<crate::value::SlotIndex, GeneratorData>>,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.generator_proto)]
     #[gc_root(index)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -2103,6 +2560,8 @@ pub struct Interp {
     /// to it, so a generator instance resolves those methods by the ordinary
     /// prototype-chain walk.
     generator_proto: crate::value::SlotIndex,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.generator_function_proto)]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -2120,6 +2579,8 @@ pub struct Interp {
     /// [`Self::new_generator_function`]) so `(function*(){}).constructor`
     /// resolves `%GeneratorFunction%`, not plain `Function`.
     generator_function_proto: crate::value::SlotIndex,
+    #[boot_new(Vec::new())]
+    #[boot_template(Vec::new())]
     #[gc_root(generators)]
     #[quiescent(empty)]
     #[persist_refs(none)]
@@ -2133,6 +2594,16 @@ pub struct Interp {
     /// [`Self::resume_generator`] dispatch (its top is the innermost). The
     /// `YIELD` arm reads the top to snapshot the right instance.
     gen_run_stack: Vec<GenRunFrame>,
+    #[boot_new(Tracked::new(
+        std::collections::HashMap::new(),
+        classes.1.clone(),
+        SnapshotSection::Promises.mask() | SnapshotSection::AsyncInstances.mask(),
+    ))]
+    #[boot_template(Tracked::new(
+        std::collections::HashMap::new(),
+        classes.1.clone(),
+        SnapshotSection::Promises.mask() | SnapshotSection::AsyncInstances.mask(),
+    ))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(async_instances)]
@@ -2148,6 +2619,8 @@ pub struct Interp {
     /// async instance's slot index. Modeled on [`Self::generators`]. The
     /// suspended `frame` and the promise/function slots join the GC root set.
     async_instances: Tracked<std::collections::HashMap<crate::value::SlotIndex, AsyncData>>,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.async_function_proto)]
     #[gc_root(index)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -2161,6 +2634,8 @@ pub struct Interp {
     /// — a plain object off `%Function.prototype%`). An async function's
     /// instance `[[Prototype]]` chains to it (see [`Self::new_async_function`]).
     async_function_proto: crate::value::SlotIndex,
+    #[boot_new(Vec::new())]
+    #[boot_template(Vec::new())]
     #[gc_root(async_instances)]
     #[quiescent(empty)]
     #[persist_refs(none)]
@@ -2175,6 +2650,8 @@ pub struct Interp {
     /// arm reads the top to snapshot the right instance — the async analog of
     /// [`Self::gen_run_stack`].
     async_run_stack: Vec<AsyncRunFrame>,
+    #[boot_new(std::collections::HashMap::new())]
+    #[boot_template(std::collections::HashMap::new())]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -2188,6 +2665,8 @@ pub struct Interp {
     /// request queues. Each `.next`/`.return`/`.throw` capability is kept in
     /// FIFO order until the currently executing/awaiting request finishes.
     async_generators: std::collections::HashMap<crate::value::SlotIndex, AsyncGeneratorData>,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.async_generator_proto)]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -2198,6 +2677,8 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     async_generator_proto: crate::value::SlotIndex,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.async_generator_function_proto)]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -2208,6 +2689,8 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     async_generator_function_proto: crate::value::SlotIndex,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.async_iterator_identity)]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -2218,6 +2701,8 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     async_iterator_identity: crate::value::SlotIndex,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.iterator_identity)]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -2230,6 +2715,8 @@ pub struct Interp {
     /// `%IteratorPrototype%[@@iterator]`. See `segments_iterator_method`
     /// for why this is a boot field rather than a link-time mint.
     iterator_identity: crate::value::SlotIndex,
+    #[boot_new(Vec::new())]
+    #[boot_template(Vec::new())]
     #[gc_root(generators)]
     #[quiescent(empty)]
     #[persist_refs(none)]
@@ -2240,6 +2727,8 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     async_gen_run_stack: Vec<AsyncGenRunFrame>,
+    #[boot_new(ResumeStatus::NoStatus)]
+    #[boot_template(state.resume_status)]
     #[gc_root(none)]
     #[quiescent(no_status)]
     #[persist_refs(none)]
@@ -2257,6 +2746,8 @@ pub struct Interp {
     /// `NoStatus` outside a `step_async` resume, so the generator `BRANCH_STATUS`
     /// path (which only ever resumes `NoStatus`) is unchanged.
     resume_status: ResumeStatus,
+    #[boot_new(ClassMap::new(ExoticKind::PROMISE_FUNCTIONS, classes.clone()))]
+    #[boot_template(state.promise_functions.copy_to(classes.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -2271,6 +2762,12 @@ pub struct Interp {
     /// resolver, capability executor, or `finally` closure it was handed. See
     /// [`PromiseFnData`].
     promise_functions: ClassMap<PromiseFnData>,
+    #[boot_new(Tracked::new(
+        Vec::new(),
+        classes.1.clone(),
+        SnapshotSection::Promises.mask() | SnapshotSection::AsyncInstances.mask(),
+    ))]
+    #[boot_template(state.promise_guards.copy_to(classes.1.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -2286,6 +2783,8 @@ pub struct Interp {
     /// metered no-op. A thenable-resolved promise acquires a *second* pair with
     /// its own guard, which is why the guard is per-pair, not per-promise.
     promise_guards: Tracked<Vec<bool>>,
+    #[boot_new(std::collections::VecDeque::new())]
+    #[boot_template(state.promise_jobs.clone())]
     #[gc_root(jobs)]
     #[quiescent(empty)]
     #[persist_refs(none)]
@@ -2301,6 +2800,12 @@ pub struct Interp {
     /// the host-driven pump-loop drain the ironhorse embedding performs (design
     /// § promises, the pump-loop latch).
     promise_jobs: std::collections::VecDeque<PromiseJob>,
+    #[boot_new(Tracked::new(
+        Vec::new(),
+        classes.1.clone(),
+        SnapshotSection::Promises.mask() | SnapshotSection::AsyncInstances.mask(),
+    ))]
+    #[boot_template(state.combinators.copy_to(classes.1.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(combinators)]
@@ -2316,6 +2821,8 @@ pub struct Interp {
     /// [`ReactionKind::Combine`]'s combinator index; append-only within a run,
     /// consumed as its element reactions drain. See [`CombinatorState`].
     combinators: Tracked<Vec<CombinatorState>>,
+    #[boot_new(Vec::new())]
+    #[boot_template(state.from_async.clone())]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -2329,6 +2836,8 @@ pub struct Interp {
     /// within a run; indexed by the [`ReactionKind::FromAsyncNext`]/… payload.
     /// See [`FromAsyncData`].
     from_async: Vec<FromAsyncData>,
+    #[boot_new(None)]
+    #[boot_template(state.then_id)]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -2344,6 +2853,8 @@ pub struct Interp {
     /// Read by the thenable-adoption path (a later increment).
     #[allow(dead_code)]
     then_id: Option<u16>,
+    #[boot_new(None)]
+    #[boot_template(state.constructor_id)]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -2362,6 +2873,8 @@ pub struct Interp {
     /// keeping non-`constructor` programs (and the exact-metering corpus)
     /// byte-identical.
     constructor_id: Option<u16>,
+    #[boot_new(None)]
+    #[boot_template(state.error_stack_accessor)]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -2380,6 +2893,8 @@ pub struct Interp {
         crate::value::SlotIndex,
         crate::value::SlotIndex,
     )>,
+    #[boot_new(None)]
+    #[boot_template(state.prototype_key_id)]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -2394,6 +2909,8 @@ pub struct Interp {
     /// (unobservable otherwise), exactly like [`Self::constructor_id`] gates
     /// the `prototype.constructor` back-reference.
     prototype_key_id: Option<u16>,
+    #[boot_new(ClassMap::new(ExoticKind::REGEXPS, classes.clone()))]
+    #[boot_template(state.regexps.copy_to(classes.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -2409,6 +2926,8 @@ pub struct Interp {
     /// own data property of the instance; [`RegExpData::last_index`] exists
     /// only as the legacy schema-11 snapshot fallback.
     regexps: ClassMap<RegExpData>,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.regexp_proto)]
     #[gc_root(index)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -2422,6 +2941,8 @@ pub struct Interp {
     /// instance (and a `/.../` literal) chains to it and `exec`/`test`/the
     /// accessor getters resolve.
     regexp_proto: crate::value::SlotIndex,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.regexp_replace_method)]
     #[gc_root(index)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -2433,6 +2954,8 @@ pub struct Interp {
     #[snapshot_table(none)]
     /// Boot-minted `%RegExp.prototype%[Symbol.replace]` function identity.
     regexp_replace_method: crate::value::SlotIndex,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.regexp_match_method)]
     #[gc_root(index)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -2444,6 +2967,8 @@ pub struct Interp {
     #[snapshot_table(none)]
     /// Boot-minted `%RegExp.prototype%[Symbol.match]` function identity.
     regexp_match_method: crate::value::SlotIndex,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.regexp_match_all_method)]
     #[gc_root(index)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -2455,6 +2980,8 @@ pub struct Interp {
     #[snapshot_table(none)]
     /// Boot-minted `%RegExp.prototype%[Symbol.matchAll]` function identity.
     regexp_match_all_method: crate::value::SlotIndex,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.regexp_search_method)]
     #[gc_root(index)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -2466,6 +2993,8 @@ pub struct Interp {
     #[snapshot_table(none)]
     /// Boot-minted `%RegExp.prototype%[Symbol.search]` function identity.
     regexp_search_method: crate::value::SlotIndex,
+    #[boot_new(crate::value::SlotIndex::NULL)]
+    #[boot_template(state.regexp_split_method)]
     #[gc_root(index)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -2477,6 +3006,8 @@ pub struct Interp {
     #[snapshot_table(none)]
     /// Boot-minted `%RegExp.prototype%[Symbol.split]` function identity.
     regexp_split_method: crate::value::SlotIndex,
+    #[boot_new(None)]
+    #[boot_template(state.last_index_id)]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -2490,6 +3021,8 @@ pub struct Interp {
     /// resolved at [`Self::link_intrinsics`], so `re.lastIndex` reads/writes
     /// the instance's own last-index property. `None` when unreferenced.
     last_index_id: Option<u16>,
+    #[boot_new(RegExpGetterIds::default())]
+    #[boot_template(state.regexp_getter_ids)]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -2504,6 +3037,8 @@ pub struct Interp {
     /// `unicode`/`hasIndices`/`unicodeSets`), so a `re.source` &co. get routes
     /// to the accessor in `GET_PROPERTY`. `None` when unreferenced.
     regexp_getter_ids: RegExpGetterIds,
+    #[boot_new(RegExpResultIds::default())]
+    #[boot_template(state.regexp_result_ids)]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -2517,6 +3052,8 @@ pub struct Interp {
     /// (`index`/`input`/`groups`), set on the match array by `exec`. `None`
     /// when unreferenced.
     regexp_result_ids: RegExpResultIds,
+    #[boot_new(Vec::new())]
+    #[boot_template(state.jumps.clone())]
     #[gc_root(jumps)]
     #[quiescent(empty)]
     #[persist_refs(none)]
@@ -2536,6 +3073,10 @@ pub struct Interp {
     /// XS's `jump->flag = 1`; the host is the absence of a jump).
     jumps: Vec<CatchJump>,
 }
+boot_context {
+    fresh(classes, slots, chunks, global_obj, static_str);
+    template(state, classes, side_refs, arrays, index_props, collections);
+}
 external_tables {
     Modules, 39, 39, Pending, "module::ModuleGraph";
 }
@@ -2545,7 +3086,9 @@ external_tables {
 
 macro_rules! define_interp_state {
     (() $vis:vis struct $name:ident {
-        $(#[gc_root($root:ident)]
+        $(#[boot_new($boot_new:expr)]
+          #[boot_template($boot_template:expr)]
+          #[gc_root($root:ident)]
           #[quiescent($boundary:ident)]
           #[persist_refs($persist:ident)]
           #[runtime_keys($runtime_keys:ident)]
@@ -2555,7 +3098,7 @@ macro_rules! define_interp_state {
           #[gc_weak($weak:ident)]
           #[snapshot_table($($snapshot:tt)*)]
           $(#[$attr:meta])* $field_vis:vis $field:ident: $ty:ty,)*
-    } external_tables { $($external:tt)* }) => {
+    } boot_context { $($boot_context:tt)* } external_tables { $($external:tt)* }) => {
         $vis struct $name {
             $($(#[$attr])* $field_vis $field: $ty,)*
         }
@@ -2572,7 +3115,9 @@ macro_rules! define_interp_state {
 // each callback consumes the fields and policies from the declaration above.
 macro_rules! select_gc_tables {
     (($consumer:ident $(, $arg:ident)*) $vis:vis struct $name:ident {
-        $(#[gc_root($root:ident)]
+        $(#[boot_new($boot_new:expr)]
+          #[boot_template($boot_template:expr)]
+          #[gc_root($root:ident)]
           #[quiescent($boundary:ident)]
           #[persist_refs($persist:ident)]
           #[runtime_keys($runtime_keys:ident)]
@@ -2582,7 +3127,7 @@ macro_rules! select_gc_tables {
           #[gc_weak($weak:ident)]
           #[snapshot_table($($snapshot:tt)*)]
           $(#[$attr:meta])* $field_vis:vis $field:ident: $ty:ty,)*
-    } external_tables { $($external:tt)* }) => {
+    } boot_context { $($boot_context:tt)* } external_tables { $($external:tt)* }) => {
         select_gc_tables! {
             @scan ($consumer $(, $arg)*) [] [] [];
             $(($phase, $policy, $field, $ty))*
@@ -2624,7 +3169,9 @@ macro_rules! select_gc_tables {
 // Select only inert snapshot metadata. Private field types never leave the VM.
 macro_rules! select_snapshot_tables {
     (($consumer:ident, $dollar:tt) $vis:vis struct $name:ident {
-        $(#[gc_root($root:ident)]
+        $(#[boot_new($boot_new:expr)]
+          #[boot_template($boot_template:expr)]
+          #[gc_root($root:ident)]
           #[quiescent($boundary:ident)]
           #[persist_refs($persist:ident)]
           #[runtime_keys($runtime_keys:ident)]
@@ -2634,7 +3181,7 @@ macro_rules! select_snapshot_tables {
           #[gc_weak($weak:ident)]
           #[snapshot_table($($snapshot:tt)*)]
           $(#[$attr:meta])* $field_vis:vis $field:ident: $ty:ty,)*
-    } external_tables {
+    } boot_context { $($boot_context:tt)* } external_tables {
         $($ext:ident, $ext_id:literal, $ext_order:literal, $ext_coverage:ident, $ext_display:literal;)*
     }) => {
         select_snapshot_tables! {

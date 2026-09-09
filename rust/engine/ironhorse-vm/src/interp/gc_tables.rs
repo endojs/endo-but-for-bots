@@ -367,7 +367,9 @@ macro_rules! gc_chunk {
 
 macro_rules! define_chunk_walk {
     (() $vis:vis struct $name:ident {
-        $(#[gc_root($root:ident)]
+        $(#[boot_new($boot_new:expr)]
+          #[boot_template($boot_template:expr)]
+          #[gc_root($root:ident)]
           #[quiescent($boundary:ident)]
           #[persist_refs($persist:ident)]
           #[runtime_keys($runtime_keys:ident)]
@@ -377,7 +379,7 @@ macro_rules! define_chunk_walk {
           #[gc_weak($weak:ident)]
           #[snapshot_table($($snapshot:tt)*)]
           $(#[$attr:meta])* $field_vis:vis $field:ident: $ty:ty,)*
-    } external_tables { $($external:tt)* }) => {
+    } boot_context { $($boot_context:tt)* } external_tables { $($external:tt)* }) => {
         impl Hooks<'_> {
             fn visit_chunks(&mut self, visit: &mut dyn FnMut(&mut ChunkOffset)) {
                 $(gc_chunk!(gc_run, self, $field, visit, $chunk);)*
@@ -655,7 +657,9 @@ macro_rules! gc_slot_table {
 }
 macro_rules! define_slot_walks {
     (() $vis:vis struct $name:ident {
-        $(#[gc_root($root:ident)]
+        $(#[boot_new($boot_new:expr)]
+          #[boot_template($boot_template:expr)]
+          #[gc_root($root:ident)]
           #[quiescent($boundary:ident)]
           #[persist_refs($persist:ident)]
           #[runtime_keys($runtime_keys:ident)]
@@ -665,7 +669,7 @@ macro_rules! define_slot_walks {
           #[gc_weak($weak:ident)]
           #[snapshot_table($($snapshot:tt)*)]
           $(#[$attr:meta])* $field_vis:vis $field:ident: $ty:ty,)*
-    } external_tables { $($external:tt)* }) => {
+    } boot_context { $($boot_context:tt)* } external_tables { $($external:tt)* }) => {
         impl Hooks<'_> {
             fn visit_owner_slots(&self, idx: SlotIndex, visit: &mut dyn FnMut(SlotIndex)) {
                 $(gc_slot_table!(gc_run, full, self, $field, idx, visit, $shape, $row);)*
@@ -810,7 +814,9 @@ macro_rules! gc_weak {
 
 macro_rules! define_weak_walks {
     (() $vis:vis struct $name:ident {
-        $(#[gc_root($root:ident)]
+        $(#[boot_new($boot_new:expr)]
+          #[boot_template($boot_template:expr)]
+          #[gc_root($root:ident)]
           #[quiescent($boundary:ident)]
           #[persist_refs($persist:ident)]
           #[runtime_keys($runtime_keys:ident)]
@@ -820,7 +826,7 @@ macro_rules! define_weak_walks {
           #[gc_weak($weak:ident)]
           #[snapshot_table($($snapshot:tt)*)]
           $(#[$attr:meta])* $field_vis:vis $field:ident: $ty:ty,)*
-    } external_tables { $($external:tt)* }) => {
+    } boot_context { $($boot_context:tt)* } external_tables { $($external:tt)* }) => {
         impl Hooks<'_> {
             fn visit_ephemerons(&self, slots: &SlotArena, visit: &mut dyn FnMut(SlotIndex)) {
                 $(gc_weak!(gc_run, trace, self, $field, slots, visit, $weak);)*
