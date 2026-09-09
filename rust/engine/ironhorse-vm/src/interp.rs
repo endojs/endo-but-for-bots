@@ -45,6 +45,7 @@
 mod state;
 
 mod native_try;
+use native_try::CallerHandlers;
 
 mod suspend;
 use suspend::Suspension;
@@ -20296,113 +20297,116 @@ impl Interp {
             target_func: self.target_func,
             ret_pc: 0,
         });
-        let stack_base = self.stack.len();
-        let jumps_base = self.jumps.len();
-        let return_depth = self.call_stack.len();
-        let resume_pc = self.reinstall_activation(saved, stack_base, return_depth);
-        // On a yield-resume the sent value becomes the yield expression's value
-        // (XS overwrites the saved yield slot with `the->scratch`); the first
-        // `next`'s argument is discarded per spec.
-        if !was_start {
-            self.push(sent);
-        }
-        self.resume_status = match status {
-            GenStatus::Next => ResumeStatus::NoStatus,
-            GenStatus::Return => ResumeStatus::Return,
-            GenStatus::Throw => ResumeStatus::Throw,
-        };
-        if let Some(g) = self.generators.get_mut(&gen) {
-            g.state = GeneratorState::Executing;
-        }
-
-        self.gen_run_stack.push(GenRunFrame {
-            gen,
-            stack_base,
-            jumps_base,
-            call_depth_base: return_depth,
-        });
-        // Resume over the generator function's own code segment (a dynamic
-        // `%GeneratorFunction%` / eval-defined body lives in a persisted
-        // segment, not the driver's `code`).
-        let (resume_seg, resume_buf) = self.resume_segment_buffer(self.cur_func);
-        let saved_segment = self.active_segment;
-        if resume_buf.is_some() {
-            self.active_segment = resume_seg;
-        }
-        let body_code: &[u8] = match &resume_buf {
-            Some(buf) => &buf[..],
-            None => code,
-        };
-        let outcome = self.dispatch_at(body_code, resume_pc, return_depth);
-        self.active_segment = saved_segment;
-        self.gen_run_stack.pop();
-        self.resume_status = ResumeStatus::NoStatus;
-        match outcome {
-            Step::Yielded(v) => {
-                // The `YIELD` arm snapshotted the generator and truncated the
-                // stack to `stack_base`; the driver is still suspended — restore
-                // it (its own `leave_call`). `v` is the `{value, done: false}`
-                // object the generator body **built by bytecode** (`OBJECT` +
-                // `NEW_PROPERTY`×2 before `YIELD`), so it is the `.next` result
-                // as-is — NOT re-wrapped (its allocation is already metered by
-                // those opcodes both engines dispatch).
-                let _ = self.leave_call();
-                self.stack.truncate(stack_base);
-                self.jumps.truncate(jumps_base);
-                Ok(v)
+        // Sync generators may unwind directly into a caller's live handler.
+        self.run_guest_under_native_try(CallerHandlers::Preserve, |machine| {
+            let stack_base = machine.stack.len();
+            let jumps_base = machine.jumps.len();
+            let return_depth = machine.call_stack.len();
+            let resume_pc = machine.reinstall_activation(saved, stack_base, return_depth);
+            // On a yield-resume the sent value becomes the yield expression's value
+            // (XS overwrites the saved yield slot with `the->scratch`); the first
+            // `next`'s argument is discarded per spec.
+            if !was_start {
+                machine.push(sent);
             }
-            Step::Returned => {
-                // The generator's `END` boundary branch already ran
-                // `leave_call` (driver restored) and pushed the completion, so
-                // `call_stack.len() < return_depth` here. A body terminated by
-                // the top-level-*only* `RETURN` opcode instead returns
-                // `Halt::Return` WITHOUT that boundary `leave_call`, leaking the
-                // driver frame — the generator twin of the async
-                // `START_ASYNC, RETURN` frame-leak (endojs/endo-but-for-bots
-                // #1046). Pop the leaked frame(s) and degrade to a named skip,
-                // symmetric with the `other` arm and the frame-underflow guards.
-                if self.call_stack.len() >= return_depth {
-                    while self.call_stack.len() >= return_depth {
-                        let _ = self.leave_call();
+            machine.resume_status = match status {
+                GenStatus::Next => ResumeStatus::NoStatus,
+                GenStatus::Return => ResumeStatus::Return,
+                GenStatus::Throw => ResumeStatus::Throw,
+            };
+            if let Some(g) = machine.generators.get_mut(&gen) {
+                g.state = GeneratorState::Executing;
+            }
+
+            machine.gen_run_stack.push(GenRunFrame {
+                gen,
+                stack_base,
+                jumps_base,
+                call_depth_base: return_depth,
+            });
+            // Resume over the generator function's own code segment (a dynamic
+            // `%GeneratorFunction%` / eval-defined body lives in a persisted
+            // segment, not the driver's `code`).
+            let (resume_seg, resume_buf) = machine.resume_segment_buffer(machine.cur_func);
+            let saved_segment = machine.active_segment;
+            if resume_buf.is_some() {
+                machine.active_segment = resume_seg;
+            }
+            let body_code: &[u8] = match &resume_buf {
+                Some(buf) => &buf[..],
+                None => code,
+            };
+            let outcome = machine.dispatch_at(body_code, resume_pc, return_depth);
+            machine.active_segment = saved_segment;
+            machine.gen_run_stack.pop();
+            machine.resume_status = ResumeStatus::NoStatus;
+            match outcome {
+                Step::Yielded(v) => {
+                    // The `YIELD` arm snapshotted the generator and truncated the
+                    // stack to `stack_base`; the driver is still suspended — restore
+                    // it (its own `leave_call`). `v` is the `{value, done: false}`
+                    // object the generator body **built by bytecode** (`OBJECT` +
+                    // `NEW_PROPERTY`×2 before `YIELD`), so it is the `.next` result
+                    // as-is — NOT re-wrapped (its allocation is already metered by
+                    // those opcodes both engines dispatch).
+                    let _ = machine.leave_call();
+                    machine.stack.truncate(stack_base);
+                    machine.jumps.truncate(jumps_base);
+                    Ok(v)
+                }
+                Step::Returned => {
+                    // The generator's `END` boundary branch already ran
+                    // `leave_call` (driver restored) and pushed the completion, so
+                    // `call_stack.len() < return_depth` here. A body terminated by
+                    // the top-level-*only* `RETURN` opcode instead returns
+                    // `Halt::Return` WITHOUT that boundary `leave_call`, leaking the
+                    // driver frame — the generator twin of the async
+                    // `START_ASYNC, RETURN` frame-leak (endojs/endo-but-for-bots
+                    // #1046). Pop the leaked frame(s) and degrade to a named skip,
+                    // symmetric with the `other` arm and the frame-underflow guards.
+                    if machine.call_stack.len() >= return_depth {
+                        while machine.call_stack.len() >= return_depth {
+                            let _ = machine.leave_call();
+                        }
+                        machine.stack.truncate(stack_base);
+                        machine.jumps.truncate(jumps_base);
+                        if let Some(g) = machine.generators.get_mut(&gen) {
+                            g.state = GeneratorState::Completed;
+                            g.frame = None;
+                        }
+                        return Err(Step::Host(Halt::EngineInvariant(
+                            "generator:non-boundary-return",
+                        )));
                     }
-                    self.stack.truncate(stack_base);
-                    self.jumps.truncate(jumps_base);
-                    if let Some(g) = self.generators.get_mut(&gen) {
+                    let ret = machine.pop();
+                    machine.stack.truncate(stack_base);
+                    machine.jumps.truncate(jumps_base);
+                    if let Some(g) = machine.generators.get_mut(&gen) {
                         g.state = GeneratorState::Completed;
                         g.frame = None;
                     }
-                    return Err(Step::Host(Halt::EngineInvariant(
-                        "generator:non-boundary-return",
-                    )));
+                    Ok(machine.new_generator_result(ret, true))
                 }
-                let ret = self.pop();
-                self.stack.truncate(stack_base);
-                self.jumps.truncate(jumps_base);
-                if let Some(g) = self.generators.get_mut(&gen) {
-                    g.state = GeneratorState::Completed;
-                    g.frame = None;
+                other => {
+                    // A throw / meter-abort / overflow escaped the body. Restore the
+                    // driver best-effort, mark the generator done, propagate.
+                    while machine.call_stack.len() >= return_depth {
+                        let _ = machine.leave_call();
+                    }
+                    if machine.stack.len() > stack_base {
+                        machine.stack.truncate(stack_base);
+                    }
+                    if machine.jumps.len() > jumps_base {
+                        machine.jumps.truncate(jumps_base);
+                    }
+                    if let Some(g) = machine.generators.get_mut(&gen) {
+                        g.state = GeneratorState::Completed;
+                        g.frame = None;
+                    }
+                    Err(other)
                 }
-                Ok(self.new_generator_result(ret, true))
             }
-            other => {
-                // A throw / meter-abort / overflow escaped the body. Restore the
-                // driver best-effort, mark the generator done, propagate.
-                while self.call_stack.len() >= return_depth {
-                    let _ = self.leave_call();
-                }
-                if self.stack.len() > stack_base {
-                    self.stack.truncate(stack_base);
-                }
-                if self.jumps.len() > jumps_base {
-                    self.jumps.truncate(jumps_base);
-                }
-                if let Some(g) = self.generators.get_mut(&gen) {
-                    g.state = GeneratorState::Completed;
-                    g.frame = None;
-                }
-                Err(other)
-            }
-        }
+        })
     }
 
     fn enqueue_async_generator(
@@ -20612,132 +20616,132 @@ impl Interp {
             target_func: self.target_func,
             ret_pc: 0,
         });
-        // FENCE the caller's live handlers for the nested body run.
-        // XS's fxStepAsync / fxAsyncGeneratorStep run the body under
-        // their own native mxTry: an uncaught body throw REJECTS the
-        // promise (the Halt::Throw arm below), it never lands in a
-        // `try` live around the synchronous start — where, unfenced,
-        // the mainline's cross-frame unwind consumed the caller's
-        // handler (a caught `1` where XS answers `after`, or a leaked
-        // Step::Unwound — review of the llm rebase, locked by the
-        // await_in_try boundary cases). Sync generators stay UNfenced:
-        // there the cross-frame catch is XS's own behavior. The body's
-        // rebased handlers live above the (now empty) chain and are
-        // consumed or truncated before the unfence.
-        let fenced_jumps = std::mem::take(&mut self.jumps);
-        let stack_base = self.stack.len();
-        let jumps_base = self.jumps.len();
-        let return_depth = self.call_stack.len();
-        let resume_pc = self.reinstall_activation(saved, stack_base, return_depth);
-        if !is_start {
-            self.push(sent);
-        }
-        self.resume_status = if is_start {
-            ResumeStatus::NoStatus
-        } else {
-            status
-        };
-        self.async_generators.get_mut(&gen).unwrap().state = AsyncGeneratorState::Executing;
+        // Async body throws reject their promise, without consuming a handler
+        // live around the caller's synchronous start. Rebased body handlers
+        // run behind the shared fence and are consumed before it is restored.
+        self.run_guest_under_native_try(CallerHandlers::Isolate, |machine| {
+            let stack_base = machine.stack.len();
+            let jumps_base = machine.jumps.len();
+            let return_depth = machine.call_stack.len();
+            let resume_pc = machine.reinstall_activation(saved, stack_base, return_depth);
+            if !is_start {
+                machine.push(sent);
+            }
+            machine.resume_status = if is_start {
+                ResumeStatus::NoStatus
+            } else {
+                status
+            };
+            machine.async_generators.get_mut(&gen).unwrap().state = AsyncGeneratorState::Executing;
 
-        self.async_gen_run_stack.push(AsyncGenRunFrame {
-            gen,
-            stack_base,
-            jumps_base,
-            call_depth_base: return_depth,
-        });
-        // Resume over the async-generator function's own code segment (a
-        // dynamic `%AsyncGeneratorFunction%` / eval-defined body is persisted
-        // in its own segment).
-        let (resume_seg, resume_buf) = self.resume_segment_buffer(self.cur_func);
-        let saved_segment = self.active_segment;
-        if resume_buf.is_some() {
-            self.active_segment = resume_seg;
-        }
-        let body_code: &[u8] = match &resume_buf {
-            Some(buf) => &buf[..],
-            None => code,
-        };
-        let outcome = self.dispatch_at(body_code, resume_pc, return_depth);
-        self.active_segment = saved_segment;
-        self.async_gen_run_stack.pop();
-        self.resume_status = ResumeStatus::NoStatus;
-        let step_result = match outcome {
-            Step::AsyncYielded(value) => {
-                let _ = self.leave_call();
-                self.stack.truncate(stack_base);
-                self.jumps.truncate(jumps_base);
-                self.schedule_native_await(code, value, ReactionKind::AsyncGeneratorYield(gen))
+            machine.async_gen_run_stack.push(AsyncGenRunFrame {
+                gen,
+                stack_base,
+                jumps_base,
+                call_depth_base: return_depth,
+            });
+            // Resume over the async-generator function's own code segment (a
+            // dynamic `%AsyncGeneratorFunction%` / eval-defined body is persisted
+            // in its own segment).
+            let (resume_seg, resume_buf) = machine.resume_segment_buffer(machine.cur_func);
+            let saved_segment = machine.active_segment;
+            if resume_buf.is_some() {
+                machine.active_segment = resume_seg;
             }
-            Step::Awaited(value) => {
-                let _ = self.leave_call();
-                self.stack.truncate(stack_base);
-                self.jumps.truncate(jumps_base);
-                self.schedule_native_await(code, value, ReactionKind::AsyncGeneratorAwait(gen))
-            }
-            Step::Returned => {
-                // A boundary `END` already ran `leave_call` (driver restored),
-                // so `call_stack.len() < return_depth`. A body terminated by the
-                // top-level-*only* `RETURN` opcode instead skips that boundary
-                // `leave_call`, leaking the driver frame — the async-generator
-                // twin of the `START_ASYNC, RETURN` frame-leak
-                // (endojs/endo-but-for-bots#1046). Pop the leaked frame(s) and
-                // degrade to a named skip, symmetric with the `other` arm.
-                if self.call_stack.len() >= return_depth {
-                    while self.call_stack.len() >= return_depth {
-                        let _ = self.leave_call();
+            let body_code: &[u8] = match &resume_buf {
+                Some(buf) => &buf[..],
+                None => code,
+            };
+            let outcome = machine.dispatch_at(body_code, resume_pc, return_depth);
+            machine.active_segment = saved_segment;
+            machine.async_gen_run_stack.pop();
+            machine.resume_status = ResumeStatus::NoStatus;
+            let step_result = match outcome {
+                Step::AsyncYielded(value) => {
+                    let _ = machine.leave_call();
+                    machine.stack.truncate(stack_base);
+                    machine.jumps.truncate(jumps_base);
+                    machine.schedule_native_await(
+                        code,
+                        value,
+                        ReactionKind::AsyncGeneratorYield(gen),
+                    )
+                }
+                Step::Awaited(value) => {
+                    let _ = machine.leave_call();
+                    machine.stack.truncate(stack_base);
+                    machine.jumps.truncate(jumps_base);
+                    machine.schedule_native_await(
+                        code,
+                        value,
+                        ReactionKind::AsyncGeneratorAwait(gen),
+                    )
+                }
+                Step::Returned => {
+                    // A boundary `END` already ran `leave_call` (driver restored),
+                    // so `call_stack.len() < return_depth`. A body terminated by the
+                    // top-level-*only* `RETURN` opcode instead skips that boundary
+                    // `leave_call`, leaking the driver frame — the async-generator
+                    // twin of the `START_ASYNC, RETURN` frame-leak
+                    // (endojs/endo-but-for-bots#1046). Pop the leaked frame(s) and
+                    // degrade to a named skip, symmetric with the `other` arm.
+                    if machine.call_stack.len() >= return_depth {
+                        while machine.call_stack.len() >= return_depth {
+                            let _ = machine.leave_call();
+                        }
+                        machine.stack.truncate(stack_base);
+                        machine.jumps.truncate(jumps_base);
+                        let data = machine.async_generators.get_mut(&gen).unwrap();
+                        data.state = AsyncGeneratorState::Completed;
+                        data.frame = None;
+                        return Err(Step::Host(Halt::EngineInvariant(
+                            "async-generator:non-boundary-return",
+                        )));
                     }
-                    self.stack.truncate(stack_base);
-                    self.jumps.truncate(jumps_base);
-                    let data = self.async_generators.get_mut(&gen).unwrap();
+                    let value = machine.pop();
+                    machine.stack.truncate(stack_base);
+                    machine.jumps.truncate(jumps_base);
+                    let data = machine.async_generators.get_mut(&gen).unwrap();
                     data.state = AsyncGeneratorState::Completed;
                     data.frame = None;
-                    return Err(Step::Host(Halt::EngineInvariant(
-                        "async-generator:non-boundary-return",
-                    )));
+                    machine.schedule_native_await(
+                        code,
+                        value,
+                        ReactionKind::AsyncGeneratorReturn(gen),
+                    )
                 }
-                let value = self.pop();
-                self.stack.truncate(stack_base);
-                self.jumps.truncate(jumps_base);
-                let data = self.async_generators.get_mut(&gen).unwrap();
-                data.state = AsyncGeneratorState::Completed;
-                data.frame = None;
-                self.schedule_native_await(code, value, ReactionKind::AsyncGeneratorReturn(gen))
-            }
-            Step::Threw { value: reason, .. } => {
-                while self.call_stack.len() >= return_depth {
-                    let _ = self.leave_call();
+                Step::Threw { value: reason, .. } => {
+                    while machine.call_stack.len() >= return_depth {
+                        let _ = machine.leave_call();
+                    }
+                    machine.stack.truncate(stack_base);
+                    machine.jumps.truncate(jumps_base);
+                    machine.exception = Slot::undefined();
+                    let data = machine.async_generators.get_mut(&gen).unwrap();
+                    data.state = AsyncGeneratorState::Completed;
+                    data.frame = None;
+                    machine.finish_async_generator_request(code, gen, reason, true)
                 }
-                self.stack.truncate(stack_base);
-                self.jumps.truncate(jumps_base);
-                self.exception = Slot::undefined();
-                let data = self.async_generators.get_mut(&gen).unwrap();
-                data.state = AsyncGeneratorState::Completed;
-                data.frame = None;
-                self.finish_async_generator_request(code, gen, reason, true)
-            }
-            other => {
-                while self.call_stack.len() >= return_depth {
-                    let _ = self.leave_call();
+                other => {
+                    while machine.call_stack.len() >= return_depth {
+                        let _ = machine.leave_call();
+                    }
+                    machine.stack.truncate(stack_base);
+                    machine.jumps.truncate(jumps_base);
+                    // A halt (meter abort, unsupported opcode) abandons the
+                    // step: complete the instance like the sibling arms do
+                    // (wave-6 W6-20 — leaving it `Executing` with no frame
+                    // was a lifecycle state the machine cannot otherwise
+                    // produce, and a raw caller's later `next()` met it).
+                    let data = machine.async_generators.get_mut(&gen).unwrap();
+                    data.state = AsyncGeneratorState::Completed;
+                    data.frame = None;
+                    Err(other)
                 }
-                self.stack.truncate(stack_base);
-                self.jumps.truncate(jumps_base);
-                // A halt (meter abort, unsupported opcode) abandons the
-                // step: complete the instance like the sibling arms do
-                // (wave-6 W6-20 — leaving it `Executing` with no frame
-                // was a lifecycle state the machine cannot otherwise
-                // produce, and a raw caller's later `next()` met it).
-                let data = self.async_generators.get_mut(&gen).unwrap();
-                data.state = AsyncGeneratorState::Completed;
-                data.frame = None;
-                Err(other)
-            }
-        };
-        // Unfence: the caller's chain returns exactly as it was; the
-        // body's own handlers were consumed above (every arm truncates
-        // to the fenced-empty base).
-        debug_assert!(self.jumps.is_empty(), "async body left handlers behind");
-        self.jumps = fenced_jumps;
-        step_result
+            };
+            debug_assert!(machine.jumps.is_empty(), "async body left handlers behind");
+            step_result
+        })
     }
 
     /// Run one step of an async-function instance (XS's `fxStepAsync`): install
@@ -20807,168 +20811,156 @@ impl Interp {
             target_func: self.target_func,
             ret_pc: 0,
         });
-        // FENCE the caller's live handlers for the nested body run.
-        // XS's fxStepAsync / fxAsyncGeneratorStep run the body under
-        // their own native mxTry: an uncaught body throw REJECTS the
-        // promise (the Halt::Throw arm below), it never lands in a
-        // `try` live around the synchronous start — where, unfenced,
-        // the mainline's cross-frame unwind consumed the caller's
-        // handler (a caught `1` where XS answers `after`, or a leaked
-        // Step::Unwound — review of the llm rebase, locked by the
-        // await_in_try boundary cases). Sync generators stay UNfenced:
-        // there the cross-frame catch is XS's own behavior. The body's
-        // rebased handlers live above the (now empty) chain and are
-        // consumed or truncated before the unfence.
-        let fenced_jumps = std::mem::take(&mut self.jumps);
-        let stack_base = self.stack.len();
-        let jumps_base = self.jumps.len();
-        let return_depth = self.call_stack.len();
-        let resume_pc = self.reinstall_activation(saved, stack_base, return_depth);
-        // On a resume the sent value becomes the `await` expression's value (XS
-        // writes `the->scratch` at the resume slot in `fxRunID`); the initial
-        // synchronous start pushes nothing (the body runs from a clean frame).
-        if !is_start {
-            self.push(sent);
-        }
-        self.resume_status = if is_start {
-            ResumeStatus::NoStatus
-        } else {
-            status
-        };
-
-        self.async_run_stack.push(AsyncRunFrame {
-            inst,
-            stack_base,
-            jumps_base,
-            call_depth_base: return_depth,
-        });
-        // Resume over the async function's own code segment (a dynamic
-        // `%AsyncFunction%` / eval-defined body is persisted in its own
-        // segment, not the await-driver's `code`).
-        let (resume_seg, resume_buf) = self.resume_segment_buffer(self.cur_func);
-        let saved_segment = self.active_segment;
-        if resume_buf.is_some() {
-            self.active_segment = resume_seg;
-        }
-        let body_code: &[u8] = match &resume_buf {
-            Some(buf) => &buf[..],
-            None => code,
-        };
-        let outcome = self.dispatch_at(body_code, resume_pc, return_depth);
-        self.active_segment = saved_segment;
-        self.async_run_stack.pop();
-        // Any `BRANCH_STATUS` will have consumed the status; reset defensively.
-        self.resume_status = ResumeStatus::NoStatus;
-        let step_result = match outcome {
-            Step::Awaited(v) => {
-                // The `AWAIT` arm snapshotted the instance and truncated the
-                // stack to `stack_base`; the ambient frame is still suspended —
-                // restore it (its own `leave_call`), then schedule the await.
-                let _ = self.leave_call();
-                self.stack.truncate(stack_base);
-                self.jumps.truncate(jumps_base);
-                self.await_schedule(code, inst, v)
+        // Async body throws reject their promise, without consuming a handler
+        // live around the caller's synchronous start. Rebased body handlers
+        // run behind the shared fence and are consumed before it is restored.
+        self.run_guest_under_native_try(CallerHandlers::Isolate, |machine| {
+            let stack_base = machine.stack.len();
+            let jumps_base = machine.jumps.len();
+            let return_depth = machine.call_stack.len();
+            let resume_pc = machine.reinstall_activation(saved, stack_base, return_depth);
+            // On a resume the sent value becomes the `await` expression's value (XS
+            // writes `the->scratch` at the resume slot in `fxRunID`); the initial
+            // synchronous start pushes nothing (the body runs from a clean frame).
+            if !is_start {
+                machine.push(sent);
             }
-            Step::Returned => {
-                // The body's `END` boundary branch already ran `leave_call`
-                // (ambient restored) and pushed the completion value — so the
-                // driver frame is gone (`call_stack.len() < return_depth`).
-                // Crafted bytecode can instead terminate the async body with
-                // `RETURN`, the top-level-*only* terminator, which returns
-                // `Halt::Return` WITHOUT the boundary `leave_call`: the driver
-                // frame is left on `call_stack` and the async activation is
-                // still current. `START_ASYNC` would then `leave_call` that
-                // stray driver and resume at its sentinel `ret_pc` (0),
-                // re-executing this very `START_ASYNC` and allocating a fresh
-                // async instance every step until the fuzz OOM / `StepLimit`
-                // (the `[193, 169]` = `START_ASYNC, RETURN` reproducer,
-                // endojs/endo-but-for-bots#1046). Degrade that malformed exit
-                // to a named skip, symmetric with the `other` arm below and the
-                // `start_async:frame-underflow` guard — pop the leaked driver
-                // frame(s) so the caller's frame accounting is not corrupted.
-                if self.call_stack.len() >= return_depth {
-                    while self.call_stack.len() >= return_depth {
-                        let _ = self.leave_call();
+            machine.resume_status = if is_start {
+                ResumeStatus::NoStatus
+            } else {
+                status
+            };
+
+            machine.async_run_stack.push(AsyncRunFrame {
+                inst,
+                stack_base,
+                jumps_base,
+                call_depth_base: return_depth,
+            });
+            // Resume over the async function's own code segment (a dynamic
+            // `%AsyncFunction%` / eval-defined body is persisted in its own
+            // segment, not the await-driver's `code`).
+            let (resume_seg, resume_buf) = machine.resume_segment_buffer(machine.cur_func);
+            let saved_segment = machine.active_segment;
+            if resume_buf.is_some() {
+                machine.active_segment = resume_seg;
+            }
+            let body_code: &[u8] = match &resume_buf {
+                Some(buf) => &buf[..],
+                None => code,
+            };
+            let outcome = machine.dispatch_at(body_code, resume_pc, return_depth);
+            machine.active_segment = saved_segment;
+            machine.async_run_stack.pop();
+            // Any `BRANCH_STATUS` will have consumed the status; reset defensively.
+            machine.resume_status = ResumeStatus::NoStatus;
+            let step_result = match outcome {
+                Step::Awaited(v) => {
+                    // The `AWAIT` arm snapshotted the instance and truncated the
+                    // stack to `stack_base`; the ambient frame is still suspended —
+                    // restore it (its own `leave_call`), then schedule the await.
+                    let _ = machine.leave_call();
+                    machine.stack.truncate(stack_base);
+                    machine.jumps.truncate(jumps_base);
+                    machine.await_schedule(code, inst, v)
+                }
+                Step::Returned => {
+                    // The body's `END` boundary branch already ran `leave_call`
+                    // (ambient restored) and pushed the completion value — so the
+                    // driver frame is gone (`call_stack.len() < return_depth`).
+                    // Crafted bytecode can instead terminate the async body with
+                    // `RETURN`, the top-level-*only* terminator, which returns
+                    // `Halt::Return` WITHOUT the boundary `leave_call`: the driver
+                    // frame is left on `call_stack` and the async activation is
+                    // still current. `START_ASYNC` would then `leave_call` that
+                    // stray driver and resume at its sentinel `ret_pc` (0),
+                    // re-executing this very `START_ASYNC` and allocating a fresh
+                    // async instance every step until the fuzz OOM / `StepLimit`
+                    // (the `[193, 169]` = `START_ASYNC, RETURN` reproducer,
+                    // endojs/endo-but-for-bots#1046). Degrade that malformed exit
+                    // to a named skip, symmetric with the `other` arm below and the
+                    // `start_async:frame-underflow` guard — pop the leaked driver
+                    // frame(s) so the caller's frame accounting is not corrupted.
+                    if machine.call_stack.len() >= return_depth {
+                        while machine.call_stack.len() >= return_depth {
+                            let _ = machine.leave_call();
+                        }
+                        machine.stack.truncate(stack_base);
+                        machine.jumps.truncate(jumps_base);
+                        if let Some(a) = machine.async_instances.get_mut(&inst) {
+                            a.done = true;
+                            a.frame = None;
+                        }
+                        return Err(Step::Host(Halt::EngineInvariant(
+                            "async:non-boundary-return",
+                        )));
                     }
-                    self.stack.truncate(stack_base);
-                    self.jumps.truncate(jumps_base);
-                    if let Some(a) = self.async_instances.get_mut(&inst) {
+                    let ret = machine.pop();
+                    machine.stack.truncate(stack_base);
+                    machine.jumps.truncate(jumps_base);
+                    if let Some(a) = machine.async_instances.get_mut(&inst) {
                         a.done = true;
                         a.frame = None;
                     }
-                    return Err(Step::Host(Halt::EngineInvariant(
-                        "async:non-boundary-return",
-                    )));
+                    // Resolve the result promise with the completion value (XS calls
+                    // the instance's `resolveFunction` via `mxRunCount(1)`; a thenable
+                    // return value adopts). The direct-settle omits the native call
+                    // framing, carried by `ASYNC_STEP_SETTLE_METERING`.
+                    machine.meter.tick_raw(ASYNC_STEP_SETTLE_METERING);
+                    let resolve_fn = machine.async_instances[&inst].resolve_fn;
+                    machine.settle_via_function(code, resolve_fn, ret)
                 }
-                let ret = self.pop();
-                self.stack.truncate(stack_base);
-                self.jumps.truncate(jumps_base);
-                if let Some(a) = self.async_instances.get_mut(&inst) {
-                    a.done = true;
-                    a.frame = None;
+                Step::Threw { value: reason, .. } => {
+                    // A body throw that escaped every handler rejects the result
+                    // promise (XS's `mxCatch` → `fxRejectException`), not the host.
+                    while machine.call_stack.len() >= return_depth {
+                        let _ = machine.leave_call();
+                    }
+                    if machine.stack.len() > stack_base {
+                        machine.stack.truncate(stack_base);
+                    }
+                    if machine.jumps.len() > jumps_base {
+                        machine.jumps.truncate(jumps_base);
+                    }
+                    machine.exception = Slot::undefined();
+                    if let Some(a) = machine.async_instances.get_mut(&inst) {
+                        a.done = true;
+                        a.frame = None;
+                    }
+                    machine.meter.tick_raw(ASYNC_STEP_SETTLE_METERING);
+                    if is_start {
+                        // See the constant's doc: the sync-start reject
+                        // crosses one more dispatch in XS than the
+                        // drain-side reject.
+                        machine.meter.tick_raw(ASYNC_START_REJECT_BOUNDARY_METERING);
+                    }
+                    let reject_fn = machine.async_instances[&inst].reject_fn;
+                    machine.settle_via_function(code, reject_fn, reason)
                 }
-                // Resolve the result promise with the completion value (XS calls
-                // the instance's `resolveFunction` via `mxRunCount(1)`; a thenable
-                // return value adopts). The direct-settle omits the native call
-                // framing, carried by `ASYNC_STEP_SETTLE_METERING`.
-                self.meter.tick_raw(ASYNC_STEP_SETTLE_METERING);
-                let resolve_fn = self.async_instances[&inst].resolve_fn;
-                self.settle_via_function(code, resolve_fn, ret)
-            }
-            Step::Threw { value: reason, .. } => {
-                // A body throw that escaped every handler rejects the result
-                // promise (XS's `mxCatch` → `fxRejectException`), not the host.
-                while self.call_stack.len() >= return_depth {
-                    let _ = self.leave_call();
+                other => {
+                    // An un-modeled surface (a named skip), meter abort, or overflow
+                    // escaped the body: restore the ambient frame best-effort, mark
+                    // the instance done, and propagate — the whole async call becomes
+                    // an honest named skip rather than a wrong settlement.
+                    while machine.call_stack.len() >= return_depth {
+                        let _ = machine.leave_call();
+                    }
+                    if machine.stack.len() > stack_base {
+                        machine.stack.truncate(stack_base);
+                    }
+                    if machine.jumps.len() > jumps_base {
+                        machine.jumps.truncate(jumps_base);
+                    }
+                    if let Some(a) = machine.async_instances.get_mut(&inst) {
+                        a.done = true;
+                        a.frame = None;
+                    }
+                    Err(other)
                 }
-                if self.stack.len() > stack_base {
-                    self.stack.truncate(stack_base);
-                }
-                if self.jumps.len() > jumps_base {
-                    self.jumps.truncate(jumps_base);
-                }
-                self.exception = Slot::undefined();
-                if let Some(a) = self.async_instances.get_mut(&inst) {
-                    a.done = true;
-                    a.frame = None;
-                }
-                self.meter.tick_raw(ASYNC_STEP_SETTLE_METERING);
-                if is_start {
-                    // See the constant's doc: the sync-start reject
-                    // crosses one more dispatch in XS than the
-                    // drain-side reject.
-                    self.meter.tick_raw(ASYNC_START_REJECT_BOUNDARY_METERING);
-                }
-                let reject_fn = self.async_instances[&inst].reject_fn;
-                self.settle_via_function(code, reject_fn, reason)
-            }
-            other => {
-                // An un-modeled surface (a named skip), meter abort, or overflow
-                // escaped the body: restore the ambient frame best-effort, mark
-                // the instance done, and propagate — the whole async call becomes
-                // an honest named skip rather than a wrong settlement.
-                while self.call_stack.len() >= return_depth {
-                    let _ = self.leave_call();
-                }
-                if self.stack.len() > stack_base {
-                    self.stack.truncate(stack_base);
-                }
-                if self.jumps.len() > jumps_base {
-                    self.jumps.truncate(jumps_base);
-                }
-                if let Some(a) = self.async_instances.get_mut(&inst) {
-                    a.done = true;
-                    a.frame = None;
-                }
-                Err(other)
-            }
-        };
-        // Unfence: the caller's chain returns exactly as it was; the
-        // body's own handlers were consumed above (every arm truncates
-        // to the fenced-empty base).
-        debug_assert!(self.jumps.is_empty(), "async body left handlers behind");
-        self.jumps = fenced_jumps;
-        step_result
+            };
+            debug_assert!(machine.jumps.is_empty(), "async body left handlers behind");
+            step_result
+        })
     }
 
     /// Schedule an `await` (XS's `fxStepAsync` await-branch): register the
@@ -27352,8 +27344,9 @@ impl Interp {
     // ------------------------------------------------------------------
 
     fn array_from(&mut self, code: &[u8], base: usize, argc: usize) -> Result<Slot, Step> {
-        let outcome =
-            self.run_guest_under_native_try(|machine| machine.array_from_inner(code, base, argc));
+        let outcome = self.run_guest_under_native_try(CallerHandlers::Isolate, |machine| {
+            machine.array_from_inner(code, base, argc)
+        });
         match outcome {
             Ok(Ok(value)) => Ok(value),
             Ok(Err(error)) => Err(self.raise_js(error)),
@@ -27368,8 +27361,9 @@ impl Interp {
     // ------------------------------------------------------------------
 
     fn array_of(&mut self, code: &[u8], base: usize, argc: usize) -> Result<Slot, Step> {
-        let outcome =
-            self.run_guest_under_native_try(|machine| machine.array_of_inner(code, base, argc));
+        let outcome = self.run_guest_under_native_try(CallerHandlers::Isolate, |machine| {
+            machine.array_of_inner(code, base, argc)
+        });
         match outcome {
             Ok(Ok(value)) => Ok(value),
             Ok(Err(error)) => Err(self.raise_js(error)),
@@ -28116,7 +28110,7 @@ impl Interp {
         // jumps stack across the prologue (the callbacks it invokes push and pop
         // their own handlers above this boundary). Every later step already runs
         // at the microtask drain with a clean stack.
-        let r = self.run_guest_under_native_try(|machine| {
+        let r = self.run_guest_under_native_try(CallerHandlers::Isolate, |machine| {
             machine.from_async_start(code, id, this_c, items, argc != 0)
         });
         r?;
@@ -29109,7 +29103,7 @@ impl Interp {
         // hide the caller's jump targets so a getter/callback throw escapes to
         // the native boundary as a value instead of synchronously resuming the
         // caller's surrounding `try` statement.
-        self.run_guest_under_native_try(|machine| {
+        self.run_guest_under_native_try(CallerHandlers::Isolate, |machine| {
             machine.promise_combinator_inner(code, kind, iterable, constructor, capability)
         })
     }
@@ -37940,8 +37934,9 @@ impl Interp {
     /// abrupt iterator step propagates directly; there is no later per-element
     /// operation requiring IteratorClose.
     fn iterable_to_list(&mut self, code: &[u8], items: Slot) -> Result<Vec<Slot>, Step> {
-        let outcome =
-            self.run_guest_under_native_try(|machine| machine.iterable_to_list_inner(code, items));
+        let outcome = self.run_guest_under_native_try(CallerHandlers::Isolate, |machine| {
+            machine.iterable_to_list_inner(code, items)
+        });
         match outcome {
             Ok(Ok(values)) => Ok(values),
             Ok(Err(error)) => Err(self.raise_js(error)),
@@ -38422,7 +38417,7 @@ impl Interp {
         iterable: Slot,
         adder: Option<Slot>,
     ) -> Result<(), Step> {
-        let outcome = self.run_guest_under_native_try(|machine| {
+        let outcome = self.run_guest_under_native_try(CallerHandlers::Isolate, |machine| {
             machine.populate_collection_from_iterable_inner(code, inst, iterable, adder)
         });
         match outcome {
@@ -41561,7 +41556,7 @@ impl Interp {
         base: usize,
         argc: usize,
     ) -> Result<Slot, Step> {
-        let outcome = self.run_guest_under_native_try(|machine| {
+        let outcome = self.run_guest_under_native_try(CallerHandlers::Isolate, |machine| {
             machine.iterator_terminal_helper_inner(code, op, this, base, argc)
         });
         match outcome {
@@ -53044,7 +53039,7 @@ impl Interp {
     /// obtained, every abrupt entry-processing completion closes the iterator;
     /// failures while advancing the iterator itself do not.
     fn object_from_entries(&mut self, code: &[u8], iterable: Slot) -> Result<Slot, Step> {
-        let outcome = self.run_guest_under_native_try(|machine| {
+        let outcome = self.run_guest_under_native_try(CallerHandlers::Isolate, |machine| {
             machine.object_from_entries_inner(code, iterable)
         });
         match outcome {
