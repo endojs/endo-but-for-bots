@@ -5393,6 +5393,79 @@ mod tests {
     }
 
     #[test]
+    fn name_migration_requires_complete_section_headers_and_bodies() {
+        let image = ran_image();
+        let make_store = |small: &[u8]| {
+            let mut store = MemoryStore::new();
+            store
+                .commit(&image_to_batch_unchecked(&image, 1, ""))
+                .unwrap();
+            let mut manifest = store.manifest().unwrap();
+            manifest.store_schema = 25;
+            let (pages, exts) = store.leaf_hashes().unwrap();
+            manifest.root = compute_root(
+                &manifest,
+                &leaf_hash(LEAF_SMALL, 0, small),
+                &pages,
+                &exts,
+                &store.free_leaf_hashes().unwrap(),
+                &store.page_edges().unwrap(),
+            );
+            store
+                .replace_manifest_and_small_for_migration(&manifest, small)
+                .unwrap();
+            store
+        };
+        // Migration interprets only NAME; opaque earlier sections and the tail
+        // must survive byte-for-byte. This tests the individual migration step.
+        let mut small = Vec::new();
+        let mut headers = Vec::new();
+        for section in [
+            vec![1],
+            vec![2, 3],
+            vec![4],
+            encode_strings(&["name".into()]),
+        ] {
+            headers.push(small.len());
+            small.extend_from_slice(&(section.len() as u32).to_be_bytes());
+            small.extend_from_slice(&section);
+        }
+        let end = small.len();
+        small.extend_from_slice(b"opaque tail");
+        let mut valid = make_store(&small);
+        migrate_v25_to_v26(&mut valid).unwrap();
+        assert_eq!(valid.manifest().unwrap().store_schema, 26);
+        let migrated = valid.read_small_state().unwrap();
+        assert_eq!(&migrated[..headers[3]], &small[..headers[3]]);
+        assert!(migrated.ends_with(b"opaque tail"));
+        let names = encode_names(&[SymbolName::from("name")]);
+        let mut expected = small[..headers[3]].to_vec();
+        expected.extend_from_slice(&(names.len() as u32).to_be_bytes());
+        expected.extend_from_slice(&names);
+        expected.extend_from_slice(b"opaque tail");
+        assert_eq!(migrated, expected);
+        for (index, &header) in headers.iter().enumerate() {
+            for cut in header..header + 4 {
+                assert_eq!(
+                    migrate_v25_to_v26(&mut make_store(&small[..cut])),
+                    Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                        "name migration header"
+                    )))
+                );
+            }
+            let body_end = headers.get(index + 1).copied().unwrap_or(end);
+            for cut in header + 4..body_end {
+                assert_eq!(
+                    migrate_v25_to_v26(&mut make_store(&small[..cut])),
+                    Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                        "name migration body"
+                    )))
+                );
+            }
+        }
+    }
+
+    #[test]
     fn small_state_rejects_legacy_empty_sections_until_migrated() {
         let mut store = MemoryStore::new();
         store
