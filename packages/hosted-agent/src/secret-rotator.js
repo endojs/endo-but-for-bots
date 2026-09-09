@@ -15,7 +15,18 @@ const SecretBase64Shape = M.string({
 });
 
 export const SecretRotatorInterface = M.interface('SecretRotator', {
-  replaceBase64: M.call(SecretBase64Shape).returns(M.promise()),
+  // The `{ ifGeneration }` precondition travels with the write, because a
+  // rotation that cannot be made conditional cannot avoid overwriting a
+  // replacement it never read.
+  //
+  // The closed rest is load-bearing, exactly as it is on the secret manager's
+  // own guard: two-argument `M.splitRecord` leaves unlisted properties
+  // unconstrained, so a misspelled `{ ifGeneraton }` would pass here, arrive as
+  // `undefined`, and turn a conditional write into a blind overwrite of the
+  // operator's credential.
+  replaceBase64: M.call(SecretBase64Shape)
+    .optional(M.splitRecord({}, { ifGeneration: M.bigint() }, harden({})))
+    .returns(M.promise()),
 });
 
 /**
@@ -32,7 +43,7 @@ export const SecretRotatorInterface = M.interface('SecretRotator', {
  * `replaceBase64` method can back it, which is what lets a test drive rotation
  * without a secret manager.
  *
- * @param {{ replaceBase64(base64: string): Promise<unknown> }} admin
+ * @param {{ replaceBase64(base64: string, options?: {ifGeneration?: bigint}): Promise<unknown> }} admin
  */
 export const makeSecretRotator = admin => {
   // Only that it could be a facet at all. Checking for `replaceBase64` here
@@ -42,9 +53,12 @@ export const makeSecretRotator = admin => {
   (admin && (typeof admin === 'object' || typeof admin === 'function')) ||
     Fail`Secret rotator requires an administration facet`;
   return makeExo('SecretRotator', SecretRotatorInterface, {
-    /** @param {string} base64 */
-    async replaceBase64(base64) {
-      return E(admin).replaceBase64(base64);
+    /**
+     * @param {string} base64
+     * @param {{ ifGeneration?: bigint }} [options]
+     */
+    async replaceBase64(base64, options) {
+      return E(admin).replaceBase64(base64, options);
     },
   });
 };

@@ -25,7 +25,13 @@ const policy = harden({
 });
 
 /** @param {any} [options] */
-const fixture = ({ leaseDurationMs = 60_000, startBarrier, now } = {}) => {
+const fixture = ({
+  leaseDurationMs = 60_000,
+  startBarrier,
+  now,
+  policy: policyOverride,
+  credential,
+} = {}) => {
   let stops = 0;
   let fails = false;
   let drift = false;
@@ -63,7 +69,8 @@ const fixture = ({ leaseDurationMs = 60_000, startBarrier, now } = {}) => {
       },
     }),
     fetch: async () => new Response('ok'),
-    policy,
+    policy: policyOverride ?? policy,
+    ...(credential === undefined ? {} : { credential }),
     leaseDurationMs,
     now,
     imageDigest: digest,
@@ -231,4 +238,32 @@ test('queued lease request cannot be changed after issue invocation', async t =>
   mutable.sessionId = 'different';
   const lease = await issuing;
   t.is((await E(lease).attestation()).sessionId, 'session');
+});
+
+const oauthCredential = (accountRef = spec.accountRef) =>
+  harden({ accountRef, current: async () => harden({}) });
+
+test('an oauth issuer requires a credential bound to its own account', async t => {
+  const base = { ...policy, authMode: /** @type {const} */ ('oauth') };
+  // No credential at all: the mode is refused at admission rather than on the
+  // first turn, which is the whole point of checking here.
+  t.throws(() => fixture({ policy: base }), {
+    message: /Invalid provider lease issuer policy/,
+  });
+  // A credential for another account is a different session's.
+  t.throws(
+    () => fixture({ policy: base, credential: oauthCredential('other') }),
+    { message: /Invalid provider lease issuer policy/ },
+  );
+  // One that cannot refresh is refused too: it would otherwise be admitted,
+  // report `authMode: 'oauth'` in its attestation, and fail on first use.
+  t.throws(
+    () =>
+      fixture({
+        policy: base,
+        credential: harden({ accountRef: spec.accountRef }),
+      }),
+    { message: /Unprovisioned broker OAuth mode/ },
+  );
+  t.notThrows(() => fixture({ policy: base, credential: oauthCredential() }));
 });

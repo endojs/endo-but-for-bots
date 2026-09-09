@@ -71,19 +71,34 @@ const makeRecord = ({
 } = {}) => {
   const exchanges = [];
   const rotations = [];
+  // Every `ifGeneration` the broker pinned, so a test can assert the value it
+  // named rather than only that a write happened.
+  const pins = [];
   const spentTokens = new Set();
   let stored =
     rawStored ?? globalThis.btoa(JSON.stringify(state ?? oauthState()));
+  // The record's generation, as the secret manager keeps it: incremented by
+  // every replacement, so a conditional write can name the version it read.
+  let generation = 1n;
   const facets = {
     exchanges,
     rotations,
+    pins,
     stored: () => JSON.parse(globalThis.atob(stored)),
+    generation: () => generation,
+    // An operator replacing the record out from under the broker.
     replace: next => {
       stored = globalThis.btoa(JSON.stringify(next));
+      generation += 1n;
     },
     secret: Far('secret', {
+      // Both, as a real `SecretBlob` has: the api-key path reads the plain
+      // form, the OAuth credential the generation-carrying one.
       async readBase64() {
         return stored;
+      },
+      async readBase64WithGeneration() {
+        return harden({ base64: stored, generation });
       },
     }),
     refresh: Far('refresh', {
@@ -102,9 +117,15 @@ const makeRecord = ({
       },
     }),
     rotate: Far('rotate', {
-      async replaceBase64(base64) {
+      async replaceBase64(base64, options) {
+        pins.push(options?.ifGeneration);
+        // The manager refuses a conditional write whose generation moved.
+        options?.ifGeneration === undefined ||
+          options.ifGeneration === generation ||
+          Fail`Secret operation failed: "GENERATION_CONFLICT"`;
         rotations.push(base64);
         stored = base64;
+        generation += 1n;
       },
     }),
   };
@@ -188,6 +209,7 @@ const setup = ({
     record,
     exchanges: record ? record.exchanges : [],
     rotations: record ? record.rotations : [],
+    pins: record ? record.pins : [],
     stored: () => /** @type {any} */ (record).stored(),
     advance: ms => {
       time += ms;
@@ -952,39 +974,56 @@ test('two leases over one record never redeem the same refresh token', async t =
   );
 });
 
-test('a read that lost the race is not exchanged over', async t => {
-  // A request whose secret read observed the pre-rotation record must not
-  // redeem the token that read carried: another lease has already spent it.
-  let release = () => {};
-  const held = new Promise(resolve => {
-    release = () => resolve(undefined);
-  });
+test('the guard re-reads, so a credential refreshed elsewhere is not re-exchanged', async t => {
+  // The single-flight guard re-reads the record before exchanging. Without
+  // that, a caller whose first read saw a spent credential would redeem a
+  // refresh token another holder had already spent — the replay this guard
+  // exists to prevent.
   const record = makeRecord({ state: oauthState({ expiresAt: 10_000 }) });
-  // A second view of the same record whose read resolves late, so one lease
-  // observes the pre-rotation state after the other has already rotated it.
   let reads = 0;
-  const slow = {
-    ...record,
-    secret: Far('secret', {
-      async readBase64() {
-        reads += 1;
-        if (reads === 2) await held;
-        return globalThis.btoa(JSON.stringify(record.stored()));
-      },
-    }),
-  };
-  const first = setup({ limits: oauthLimits, oauth: true, record });
-  const second = setup({ limits: oauthLimits, oauth: true, record: slow });
-  const a = E(first.endpoint).request(request);
-  const b = E(second.endpoint).request(request);
-  await a;
-  release();
-  await b;
-  t.deepEqual(
-    record.exchanges.map(entry => entry.refreshToken),
-    [refreshToken],
+  // The credential reads the record twice per refresh: once for the caller,
+  // once inside the guard. Another holder installs a fresh credential in
+  // between.
+  const watched = Far('secret', {
+    async readBase64() {
+      return E(record.secret).readBase64();
+    },
+    async readBase64WithGeneration() {
+      reads += 1;
+      if (reads === 2) {
+        record.replace(oauthState({ accessToken: 'refreshed-elsewhere' }));
+      }
+      return E(record.secret).readBase64WithGeneration();
+    },
+  });
+  const calls = [];
+  const credentialOverWatched = makeBrokerOAuthCredential({
+    secret: watched,
+    refresh: record.refresh,
+    rotate: record.rotate,
+    accountRef: 'account-1',
+    now: () => 0,
+  });
+  const lease = makeProviderBrokerLease(
+    { ...policy, ...oauthLimits },
+    {
+      secret: record.secret,
+      transport: Far('transport', {
+        async request(r) {
+          calls.push(r);
+          return { status: 200, body: 'ok' };
+        },
+      }),
+      now: () => 0,
+      credential: credentialOverWatched,
+    },
   );
-  t.is(record.rotations.length, 1);
+  await E(lease.endpoint).request(request);
+  // The guard saw the fresher credential and did not exchange at all.
+  t.is(record.exchanges.length, 0);
+  t.is(record.rotations.length, 0);
+  t.is(reads, 2);
+  t.is(calls[0].headers.authorization, 'Bearer refreshed-elsewhere');
 });
 
 test('a refresh that omits the refresh token keeps the stored one', async t => {
@@ -1161,4 +1200,90 @@ test('a shared credential refuses a state whose account is not the bound one', t
       }),
     { message: /Unprovisioned broker OAuth mode/ },
   );
+});
+
+test('an operator replacement during an exchange is not overwritten', async t => {
+  // The window Tokyo's trial reproduced against the real secret manager: a
+  // refresh in flight, an operator installing a new grant, and an
+  // unconditional write landing afterwards.
+  let release = () => {};
+  const held = new Promise(resolve => {
+    release = () => resolve(undefined);
+  });
+  let started = () => {};
+  const begun = new Promise(resolve => {
+    started = () => resolve(undefined);
+  });
+  const record = makeRecord({
+    state: oauthState({ expiresAt: 10_000 }),
+    exchange: async () => {
+      started();
+      await held;
+      return oauthState({ accessToken: 'from-stale-exchange' });
+    },
+  });
+  const lease = setup({ limits: oauthLimits, oauth: true, record });
+  const pending = E(lease.endpoint).request(request);
+  // Wait until the exchange is actually in flight, so the broker has already
+  // read generation 1. Replacing before that would simply be read normally and
+  // would prove nothing.
+  await begun;
+  record.replace(
+    oauthState({
+      accessToken: 'operator-regrant',
+      refreshToken: 'operator-refresh',
+    }),
+  );
+  release();
+  await pending;
+  // The stale exchange never displaced the operator's grant, and the turn ran
+  // on the credential that is actually stored rather than on one nothing kept.
+  // The exchange really did run and really was refused: without this, the
+  // test would also pass if the replacement had simply landed before the
+  // broker's first read, which is a different and much weaker scenario.
+  t.is(record.exchanges.length, 1);
+  t.deepEqual(record.pins, [1n]);
+  t.is(record.stored().accessToken, 'operator-regrant');
+  t.is(record.rotations.length, 0);
+  t.is(lease.calls[0].headers.authorization, 'Bearer operator-regrant');
+  t.deepEqual(
+    lease.audit.map(entry => entry.event),
+    ['admitted', 'refresh-discarded', 'completed'],
+  );
+});
+
+test('a rotation that fails outright never hands out the unstored credential', async t => {
+  const record = makeRecord({ state: oauthState({ expiresAt: 10_000 }) });
+  const stranded = makeBrokerOAuthCredential({
+    secret: record.secret,
+    refresh: record.refresh,
+    rotate: Far('rotate', {
+      async replaceBase64() {
+        throw Error('secret backend unavailable');
+      },
+    }),
+    accountRef: 'account-1',
+    now: () => 0,
+  });
+  // The generation did not move, so nothing else rotated: the stored
+  // credential is the one this exchange already spent, and there is nothing
+  // safe to return.
+  await t.throwsAsync(() => E(stranded).current(harden({})), {
+    message: /Broker credential rotation failed/,
+  });
+  t.is(record.rotations.length, 0);
+  t.is(record.stored().accessToken, accessToken);
+});
+
+test('a conditional write names the generation it read', async t => {
+  const record = makeRecord({ state: oauthState({ expiresAt: 10_000 }) });
+  const lease = setup({ limits: oauthLimits, oauth: true, record });
+  t.is(record.generation(), 1n);
+  await E(lease.endpoint).request(request);
+  // The write named the generation the credential read, rather than being
+  // unconditional: asserting only that a write happened would pass with the
+  // precondition removed.
+  t.deepEqual(record.pins, [1n]);
+  t.is(record.rotations.length, 1);
+  t.is(record.generation(), 2n);
 });
