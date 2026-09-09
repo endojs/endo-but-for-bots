@@ -493,10 +493,9 @@ impl Interp {
     }
 
     /// Run the compiled matcher for `inst` over `subject` and charge its
-    /// meter, interruptibly when a meter is armed (architecture review
-    /// F012: before this seam, all check points lay in the dispatch loop,
-    /// so a catastrophic backtracking match ran to completion, and an
-    /// armed crank limit structurally could not see it).
+    /// meter, interruptibly when a meter is armed. Dispatch-only check
+    /// points cannot bound a long-running backtracking match; the matcher
+    /// must expose its own incremental work to the same host limit.
     ///
     /// Un-armed (the differential harness): the plain matcher, the whole
     /// `match_meter_raw` charged once after it returns — bit-identical to

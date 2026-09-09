@@ -100,7 +100,7 @@ impl Default for Meter {
 }
 
 /// Scale a host **computron** interval to raw 16.16 units without
-/// truncation (architecture review F013). A plain `interval << 16` drops
+/// truncation. A plain `interval << 16` drops
 /// the high 16 bits of any interval at or above `2^48`, and an interval
 /// that is an exact multiple of `2^48` scales to `0`, which
 /// [`Meter::check`] reads as "metering disabled": a supervisor asking for
@@ -167,7 +167,7 @@ impl Meter {
     /// so a restored machine reports armed exactly as it was suspended;
     /// the host callback does not travel with it, which is why the
     /// interpreter's check point fails closed on an armed meter with no
-    /// host attached (architecture review F014).
+    /// host attached.
     #[inline]
     pub fn is_armed(&self) -> bool {
         self.interval != 0

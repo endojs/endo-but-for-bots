@@ -1631,12 +1631,12 @@ pub struct Interp {
     /// (a restore lands on one, and a linked machine that never ran is
     /// at its boot boundary); cleared at run entry and set at run exit
     /// from the engine's OWN halt — the dispatch reached `END` and the
-    /// job queue drained — before the host-boundary coercions rewrite
-    /// the reported halt. A required conjunct of [`Self::is_quiescent`]:
+    /// job queue drained — independently of any host-boundary coercion
+    /// reported alongside the completion. A required conjunct of [`Self::is_quiescent`]:
     /// a crank halted by a top-level meter check, the dispatch ceiling,
     /// or a decode fault leaves every table empty, so table emptiness
-    /// alone admitted it to the persist verbs while its boundary
-    /// registers stayed rooted (architecture review F011).
+    /// alone cannot admit it to persistence while its boundary
+    /// registers remain rooted. Snapshot `tests/persist_gates.rs` checks this.
     last_crank_completed: bool,
     #[boot_new(Tracked::new(
         Vec::new(),

@@ -1586,8 +1586,7 @@ impl Interp {
         // The test262 `$262` host object is NOT part of the boot: a hardened
         // realm's global surface must be auditable, and a host object
         // carrying an ArrayBuffer-detach primitive is exactly what lockdown
-        // exists to keep out of a production machine (architecture review
-        // F143). The conformance harness installs it explicitly through
+        // exists to keep out of a production machine. The conformance harness installs it explicitly through
         // [`Self::install_test262_host`] before linking.
 
         // Native function instances must inherit call/apply/bind through
@@ -2168,8 +2167,8 @@ impl Interp {
     ///
     /// **Harness only.** A default machine has no `$262`: the host object
     /// carries a memory-detach primitive that a hardened realm must not
-    /// expose, so `Interp::new` does not build it (architecture review
-    /// F143) and only the conformance harness calls this. Idempotent.
+    /// expose, so `Interp::new` does not build it and only the conformance
+    /// harness calls this. Idempotent.
     ///
     /// **Must be called BEFORE [`Self::link_intrinsics`]**, and now
     /// PANICS rather than merely documenting it. The link pass binds the

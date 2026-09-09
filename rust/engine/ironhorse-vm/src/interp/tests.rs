@@ -1450,8 +1450,7 @@ fn bare_symbol_completion_is_a_completion_the_harness_coerces_to_a_typeerror() {
     // Symbol's descriptive string. The oracle harness's post-run
     // `String(result)` throws (a symbol cannot coerce to a string),
     // which travels beside the completion as `coercion_error` and
-    // becomes the abort only through `host_coerced` (architecture
-    // review F030). The exact XS bytecode for `Symbol()` (captured
+    // becomes the abort only through `host_coerced`. The exact XS bytecode for `Symbol()` (captured
     // from the oracle).
     let code: [u8; 15] = [
         0x0b, 0x00, 0x4b, 0xe0, 0x4d, 0x01, 0x00, 0x66, 0x01, 0x00, 0x28, 0xab, 0x00, 0xbb, 0xa9,

@@ -2819,7 +2819,7 @@ impl Interp {
     /// halt all the same: its boundary registers were never cleared, so
     /// a checkpoint there would root pages a resumed twin frees and the
     /// two would fork at their next collection while answering every
-    /// crank identically (architecture review F011). The managed
+    /// crank identically. The managed
     /// lifecycle rewinds halted cranks; this is the seam-level gate for
     /// every other caller.
     ///

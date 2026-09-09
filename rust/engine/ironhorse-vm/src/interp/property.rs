@@ -519,7 +519,7 @@ impl Interp {
             // was read from.
             return self.ordinary_get(code, boxed_proto, id, obj);
         }
-        // `null[k]` / `undefined[k]`: `fxToInstance` throws (review F007).
+        // `null[k]` / `undefined[k]`: `fxToInstance` throws.
         if matches!(obj.kind, Kind::Null | Kind::Undefined) {
             return Err(self.catchable_type_error_msg(cannot_coerce_to_object(obj.kind)));
         }
@@ -1341,7 +1341,7 @@ impl Interp {
         value: Slot,
         define: bool,
     ) -> Result<(), Step> {
-        // `null[k] = v` / `undefined[k] = v`: `fxToInstance` throws (review F007).
+        // `null[k] = v` / `undefined[k] = v`: `fxToInstance` throws.
         if matches!(obj.kind, Kind::Null | Kind::Undefined) {
             return Err(self.catchable_type_error_msg(cannot_coerce_to_object(obj.kind)));
         }

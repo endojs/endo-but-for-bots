@@ -97,8 +97,7 @@ pub trait GcHooks {
     }
 }
 
-/// The full collection the machine wires (the side-table liveness fix
-/// from the adversarial review): mark/sweep/compact over the two
+/// The full collection the machine wires: mark/sweep/compact over the two
 /// arenas, extended with the machine state the arenas cannot see.
 ///
 /// - `extra_edges(idx, visit)` is called once per newly marked slot;

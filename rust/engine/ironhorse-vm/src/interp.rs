@@ -2210,8 +2210,8 @@ pub enum MathId {
 }
 
 /// A native prototype method ironhorse models (dispatched with the receiver as
-/// `this`). These compute a value from the receiver with no re-entry into
-/// user code — the `call`/`apply`/`bind` re-entrant methods are separate.
+/// `this`). Some methods invoke guest callbacks or accessors; their bodies
+/// use the interpreter's re-entry and exception machinery.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum NativeMethod {
     /// `%Function.prototype%` itself is a callable, non-constructable built-in
@@ -3836,7 +3836,7 @@ pub enum Native {
     /// `%GeneratorFunction%` — the (non-global) dynamic **generator** function
     /// constructor, reachable as `(function*(){}).constructor`. Call and
     /// construct both run CreateDynamicFunction with the `function*` grammar
-    /// through the runtime source bridge ([`Self::create_dynamic_function`]).
+    /// through the runtime source bridge ([`Interp::create_dynamic_function`]).
     GeneratorFunction,
     /// `%AsyncFunction%` — the (non-global) dynamic **async** function
     /// constructor, reachable as `(async function(){}).constructor`.
@@ -4274,10 +4274,8 @@ pub struct RunOutcome {
     /// The guest never threw this: it is a HOST coercion the 262 runner
     /// and the fuzz harness emulate through [`Self::host_coerced`], while
     /// an embedder that wants the raw completion reads
-    /// `completed`/`result` as they are (architecture review F030: the
-    /// engine used to rewrite the halt itself, so a legal program was
-    /// reported to the operator as an uncaught `TypeError` and the
-    /// managed lifecycle rewound it).
+    /// `completed`/`result` as they are. Host coercion must not turn a
+    /// completed guest crank into a halt that the managed lifecycle rewinds.
     pub coercion_error: Option<String>,
     /// Bounded host rendering failed after a successful dispatch. This never
     /// changes persistence eligibility; only `host_coerced` folds it into the
@@ -7225,7 +7223,7 @@ impl Interp {
         self.meter_host = Some(host);
     }
 
-    /// The embedder's resume form (architecture review F014/F020): make
+    /// The embedder's resume form: make
     /// a restored machine metered under `interval` whatever its snapshot
     /// carried. If the meter was suspended armed under exactly this
     /// `interval`, this is [`Self::reattach_meter_host`] — the window
@@ -7287,7 +7285,7 @@ impl Interp {
     /// the differential harness uses) keeps running. Adds nothing to
     /// `meterIndex`.
     ///
-    /// Fail-closed (architecture review F014): a meter that is ARMED
+    /// Fail-closed: a meter that is ARMED
     /// (`interval != 0`, which a snapshot carries) but has no host
     /// attached — a restored machine whose embedder skipped every arm
     /// form — aborts at its first check point instead of running
@@ -8054,7 +8052,8 @@ impl Interp {
     /// native `mxTry` (a promise executor, a reaction, a disposer) may still
     /// catch it, and XS's `mxCatch` copies `mxException` without running any
     /// guest code — so the escape sites carry the static render and the
-    /// guest `toString` runs here or never (review round 3). The shim's
+    /// guest `toString` runs here or never. See
+    /// `tests/engine_throws_are_catchable.rs` for the once-at-host-boundary lock. The shim's
     /// stringification is post-run, so its metering is discarded too: the
     /// oracle records the run-only count at the throw.
     ///
@@ -8292,12 +8291,9 @@ impl Interp {
         // and the job queue drained, so the machine stands at a crank
         // boundary. `completed`, the boundary-register clear and the
         // quiescence latch all key on it, whatever the oracle harness
-        // makes of the completion value below (architecture review
-        // F030/F022: `run` used to rewrite this halt into a synthetic
-        // `TypeError` throw for a Symbol or null-prototype completion,
-        // which skipped the register clear on a machine every persist
-        // verb accepted, and reported a legal program to the operator as
-        // an uncaught error).
+        // makes of the completion value below. A host coercion failure must
+        // neither skip the register clear nor change this guest verdict;
+        // snapshot `tests/persist_gates.rs` checks the resulting boundary.
         let completed = halt == Halt::Return;
         let completion = self.result;
         // Dispatch owns the lifecycle verdict. Clear activation roots before
@@ -9105,7 +9101,7 @@ impl Interp {
         // Only a user function has a body segment to dispatch over. A
         // non-callable reference (a plain object, an array) is not a
         // cross-segment callee: it stays in-loop, where `enter_call` raises
-        // the catchable `TypeError` `Call` requires (review F024).
+        // the catchable `TypeError` `Call` requires.
         if !self.functions.contains_key(&f) {
             return None;
         }
@@ -29311,12 +29307,9 @@ impl Interp {
     /// frame local is not this function's business: `SET_VARIABLE` handles the
     /// global arm itself, through the global object's full `[[Set]]`, so that
     /// an accessor or a non-writable descriptor installed reflectively stays
-    /// binding-correct. This used to carry a global arm that wrote the property
-    /// slot's kind and value directly, with no `XS_DONT_SET_FLAG` check — the
-    /// bare-name bypass of a frozen `globalThis` the architecture review
-    /// recorded as F057. It was already unreachable (the sole caller gates on
-    /// `id_map`), and is deleted rather than left as a working bypass for the
-    /// next caller to find.
+    /// binding-correct. A direct global-slot write here would bypass those
+    /// descriptor checks. The caller selects this path only for names in
+    /// `id_map`; all other writes must retain the global object's semantics.
     ///
     /// Returns `false` when the binding is an initialized `const` and the write
     /// must raise a TypeError instead. `CONST_LOCAL`/`CONST_CLOSURE` stamp

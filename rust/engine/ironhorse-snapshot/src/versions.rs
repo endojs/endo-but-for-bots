@@ -1,4 +1,4 @@
-//! Release and persistence compatibility: the five identifiers named by the review.
+//! Release and persistence compatibility: version ownership and upgrade rules.
 //!
 //! # Meter and compiler policy
 //!
