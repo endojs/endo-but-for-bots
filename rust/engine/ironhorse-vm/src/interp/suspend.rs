@@ -691,10 +691,8 @@ impl Interp {
                     machine.stack.truncate(stack_base);
                     machine.jumps.truncate(jumps_base);
                     // A halt (meter abort, unsupported opcode) abandons the
-                    // step: complete the instance like the sibling arms do
-                    // (wave-6 W6-20 — leaving it `Executing` with no frame
-                    // was a lifecycle state the machine cannot otherwise
-                    // produce, and a raw caller's later `next()` met it).
+                    // step. Complete the instance so a later next() cannot
+                    // observe Executing with no saved frame.
                     let data = machine.async_generators.get_mut(&gen).unwrap();
                     data.state = AsyncGeneratorState::Completed;
                     data.frame = None;

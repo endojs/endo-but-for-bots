@@ -172,7 +172,7 @@ impl Interp {
             if self.step_limit != u64::MAX && self.slots.live_count() >= BOUNDED_RUN_SLOT_CEILING {
                 return Step::Host(Halt::StepLimit(self.n_dispatched));
             }
-            // Property-key id-space poison latch (wave-6 Remaining item):
+            // Property-key id-space poison latch:
             // an intern that would alias sets the flag instead of handing
             // out a duplicate id; the halt here fires before the next
             // instruction so no aliased read or write is guest-observable.
@@ -4127,7 +4127,7 @@ impl Interp {
                     pc += size as usize;
                 }
 
-                // ---- stage-3 language opcodes -----------------------
+                // ---- Global and object opcodes ---------------------
                 // `global` (XS_CODE_GLOBAL, xsRun.c:2733): push a
                 // reference to the realm's global object. Dispatch-metered
                 // (no allocation).
@@ -5041,8 +5041,8 @@ impl Interp {
                 // top-level program never reaches `end` (it ends in
                 // `return`), so a JS caller always exists when `end` runs in
                 // the covered grammar — but the guard is explicit so the
-                // abort-point semantics are exact (stage-2a review finding
-                // 1).
+                // return-depth guard determines whether to leave dispatch
+                // or restore a caller frame.
                 XS_CODE_END | XS_CODE_END_ARROW | XS_CODE_END_BASE | XS_CODE_END_DERIVED => {
                     if self.call_stack.len() == return_depth {
                         // The frame this dispatch was entered to run has
@@ -5323,8 +5323,8 @@ impl Interp {
                     // helper's activation into the GENERATOR's side-table
                     // entry: the helper's own resume then found no frame
                     // (`async:no-frame`) and the generator's saved frame was
-                    // transiently clobbered (review of the llm rebase; XS
-                    // completes the composition).
+                    // transiently clobbered. The deepest active frame owns
+                    // the suspension.
                     let async_gen_is_innermost = self.async_gen_run_stack.last().is_some_and(|a| {
                         self.async_run_stack
                             .last()
@@ -5499,9 +5499,8 @@ impl Interp {
                         }
                         // The @@dispose lookup serves BOTH forms: it is the
                         // sync `using`'s primary protocol and the async
-                        // form's fallback (wave-6 W6-5 — gating it behind
-                        // the async opcode made every sync `using` with a
-                        // disposer throw TypeError at the declaration).
+                        // form's fallback. Both opcodes must perform this
+                        // lookup before rejecting a non-callable disposer.
                         if !self.is_callable_value(value) {
                             if let Some(id) = self.well_known_symbol_property_id("dispose") {
                                 value = dispatch_result!(
@@ -5659,17 +5658,10 @@ impl Interp {
                     pc += size as usize;
                 }
 
-                // Dynamic `import()` and `import.meta` (xsModule.c's
-                // `fxRunImport` / `mxModuleInternal` meta): these need the
-                // asynchronous host loader (`importHook`/`resolveHook`) and
-                // per-module `meta` object the stage-4 static half (child
-                // 5/8) deliberately does not build — the module machinery
-                // that lands is `ModuleSource`, namespaces, and cyclic
-                // static linkage (`ironhorse_vm::module`). Rather than let them
-                // fall to the generic op-name skip, they self-name so the
-                // differential harness reports the exact unimplemented
-                // surface (design § accuracy over parity: an honest named
-                // skip, never a wrong value).
+                // Dynamic import and import.meta need an asynchronous host
+                // loader and per-module metadata. The static linkage engine
+                // in `ironhorse_vm::module` supplies neither capability, so
+                // these operations return specific unsupported labels.
                 XS_CODE_IMPORT => {
                     return Step::Host(Halt::NotImplemented("module:dynamic-import"));
                 }

@@ -929,7 +929,7 @@ fn legacy_arguments_migration_allocates_properties_in_owner_order() {
     );
 }
 
-/// Wave-6 W6-17: `NEW_PROPERTY_AT` is a 1-byte opcode followed by a
+/// `NEW_PROPERTY_AT` is a 1-byte opcode followed by a
 /// SEPARATE 2-byte `INTEGER_1` flag instruction (the coder emits
 /// them as two instructions; dispatch advances 3). The local-count
 /// walker hard-coded 5 — `NEW_PROPERTY`'s footprint (3-byte id op +
@@ -953,7 +953,7 @@ fn local_count_walker_sizes_new_property_at_exactly() {
     );
 }
 
-/// Wave-6 W6-18: the eval-bridge relinker must FAIL CLOSED on an id
+/// The eval-bridge relinker must fail closed on an id
 /// beyond the unit's own symbol atom, exactly as `relink_crank`
 /// refuses `MalformedBytecode` — not silently leave the id denoting
 /// whatever realm name holds that position.
@@ -1261,8 +1261,7 @@ fn hostile_suspend_below_run_base_fails_closed() {
 
 #[test]
 fn every_opcode_decodes_and_dispatches_without_panic_or_decode_error() {
-    // Full 245-opcode decode + dispatch coverage (the stage-2 bar's
-    // "full opcode coverage, built-ins stubbed"): every opcode byte
+    // Exhaustive opcode decode and dispatch coverage: every opcode byte
     // must (a) decode (`from_u8` is dense), (b) resolve an instruction
     // length on a well-formed instruction, and (c) DISPATCH to a
     // defined effect — either it executes (the implemented subset and
@@ -1806,7 +1805,7 @@ fn generator_suspend_resume_returns_yield_sum() {
     assert_eq!(out.result, "3", "1 + 2 from two yields");
 }
 
-/// Exercise the stage-4 promise thenable-adoption keystone path:
+/// Exercise promise thenable adoption:
 /// `var x=0; Promise.resolve({then:function(res){res(7)}}).then(function(v)
 /// {x=v}); x` drives the second-resolving-pair allocation
 /// (`make_resolving_functions` — the `promise_guards` Vec push), the
@@ -1845,7 +1844,7 @@ fn promise_thenable_adoption_preserves_script_completion() {
     assert_eq!(out.result, "0", "pre-drain x");
 }
 
-/// The stage-4b async-function suspend/resume + result-promise settle path
+/// The async-function suspend/resume and result-promise settlement path
 /// is exercised by `var x=0; async function f(){ x = await 7; } f(); x`, driving
 /// `new_async_instance` (the result-promise + resolving-pair allocation and
 /// the `async_instances` HashMap insert), `START_ASYNC`'s frame clone,
