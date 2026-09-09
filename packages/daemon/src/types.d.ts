@@ -1613,11 +1613,25 @@ export interface SecretBlob {
   help(): string;
   getDescription(): Promise<string>;
   readBase64(): Promise<string>;
+  /**
+   * The same bytes plus the generation they came from. A holder deriving a new
+   * value from a secret needs the version it read in order to pin its write to
+   * it with `SecretAdmin.replaceBase64`'s `ifGeneration`.
+   */
+  readBase64WithGeneration(): Promise<{ base64: string; generation: bigint }>;
 }
 
 export interface SecretAdmin {
   getSummary(): Promise<SecretSummary>;
-  replaceBase64(bytesBase64: string): Promise<void>;
+  /**
+   * `ifGeneration` makes the replacement conditional on the record still being
+   * at that generation, so a caller replacing a value it derived from an
+   * earlier read is refused rather than overwriting a change it never saw.
+   */
+  replaceBase64(
+    bytesBase64: string,
+    options?: { ifGeneration?: bigint },
+  ): Promise<void>;
   setDescription(description: string): Promise<void>;
   revoke(): Promise<void>;
   delete(): Promise<void>;

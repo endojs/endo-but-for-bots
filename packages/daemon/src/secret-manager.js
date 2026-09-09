@@ -232,71 +232,78 @@ export const makeSecretManager = ({
     // exo-tools splices into guard-violation messages, so a tag bearing the
     // grant identifier would publish a live read capability to every recipient
     // of the blob and into every guard-violation message that mentions it.
-    const blob = makeExo('SecretBlob', SecretBlobInterface, {
-      help: () => secretBlobHelp,
-      getDescription: async () => requireRecord(secretId).description,
-      readBase64: async () => {
-        const before = requireRecord(secretId);
-        const operationId = await randomHex256();
-        // Recorded before the state is checked, so exercising a revoked
-        // capability leaves a trace. A holder repeatedly retrying a revoked
-        // secret is precisely what an audit trail exists to show.
+    // The bytes and the generation they belong to are established together:
+    // the check below already refuses a read whose generation moved underneath
+    // it, so the generation this returns is exactly the one the bytes came
+    // from. Returning it lets a holder that derives a new value from these
+    // bytes pin its write to the version it read.
+    const readWithGeneration = async () => {
+      const before = requireRecord(secretId);
+      const operationId = await randomHex256();
+      // Recorded before the state is checked, so exercising a revoked
+      // capability leaves a trace. A holder repeatedly retrying a revoked
+      // secret is precisely what an audit trail exists to show.
+      await audit(
+        secretId,
+        'read',
+        'attempted',
+        before.generation,
+        operationId,
+      );
+      let bytes;
+      // Carries the specific fixed code out of the try so the audit event
+      // and the caller both learn why the read failed. Every value is a
+      // fixed code that never reflects secret material.
+      let reasonCode = 'READ_FAILED';
+      try {
+        // This state check is intentionally adjacent to the backend call.
+        if (requireRecord(secretId).state !== 'active') {
+          reasonCode = 'REVOKED';
+          throw fixedError('REVOKED');
+        }
+        bytes = await backend.read(before.backendRef);
+        const after = requireRecord(secretId);
+        if (
+          after.state !== 'active' ||
+          after.generation !== before.generation ||
+          // A replacement whose bytes have physically landed but whose
+          // generation is not yet committed would otherwise return the new
+          // bytes under the old generation, so the audit trail would name a
+          // version that was never the one read.
+          replacementsInFlight.has(secretId)
+        ) {
+          bytes.fill(0);
+          reasonCode = 'STALE_READ';
+          throw fixedError('STALE_READ');
+        }
         await audit(
           secretId,
           'read',
-          'attempted',
-          before.generation,
+          'succeeded',
+          after.generation,
           operationId,
         );
-        let bytes;
-        // Carries the specific fixed code out of the try so the audit event
-        // and the caller both learn why the read failed. Every value is a
-        // fixed code that never reflects secret material.
-        let reasonCode = 'READ_FAILED';
-        try {
-          // This state check is intentionally adjacent to the backend call.
-          if (requireRecord(secretId).state !== 'active') {
-            reasonCode = 'REVOKED';
-            throw fixedError('REVOKED');
-          }
-          bytes = await backend.read(before.backendRef);
-          const after = requireRecord(secretId);
-          if (
-            after.state !== 'active' ||
-            after.generation !== before.generation ||
-            // A replacement whose bytes have physically landed but whose
-            // generation is not yet committed would otherwise return the new
-            // bytes under the old generation, so the audit trail would name a
-            // version that was never the one read.
-            replacementsInFlight.has(secretId)
-          ) {
-            bytes.fill(0);
-            reasonCode = 'STALE_READ';
-            throw fixedError('STALE_READ');
-          }
-          await audit(
-            secretId,
-            'read',
-            'succeeded',
-            after.generation,
-            operationId,
-          );
-          const bytesBase64 = encodeBase64(bytes);
-          bytes.fill(0);
-          return bytesBase64;
-        } catch {
-          if (bytes !== undefined) bytes.fill(0);
-          await audit(
-            secretId,
-            'read',
-            'failed',
-            before.generation,
-            operationId,
-            { reasonCode },
-          );
-          throw fixedError(reasonCode);
-        }
-      },
+        const bytesBase64 = encodeBase64(bytes);
+        bytes.fill(0);
+        return harden({ base64: bytesBase64, generation: after.generation });
+      } catch {
+        if (bytes !== undefined) bytes.fill(0);
+        await audit(
+          secretId,
+          'read',
+          'failed',
+          before.generation,
+          operationId,
+          { reasonCode },
+        );
+        throw fixedError(reasonCode);
+      }
+    };
+    const blob = makeExo('SecretBlob', SecretBlobInterface, {
+      help: () => secretBlobHelp,
+      getDescription: async () => requireRecord(secretId).description,
+      readBase64: async () => (await readWithGeneration()).base64,
+      readBase64WithGeneration: readWithGeneration,
     });
     blobs.set(grantId, blob);
     return blob;
@@ -311,13 +318,45 @@ export const makeSecretManager = ({
     requireRecord(secretId);
     return makeExo(`SecretAdmin ${secretId}`, SecretAdminInterface, {
       getSummary: async () => summaryFor(requireRecord(secretId)),
-      replaceBase64: bytesBase64 =>
+      replaceBase64: (bytesBase64, options = {}) =>
         serializeMutation(secretId, async () => {
           // State is checked before the caller's bytes are parsed, so a
           // rejected replacement never leaves a decoded plaintext buffer
           // outside the zeroing scope below.
           const before = requireRecord(secretId);
           if (before.state !== 'active') throw fixedError('REVOKED');
+          // A caller writing a value it derived from bytes it read pins the
+          // generation those bytes came from, so a replacement that landed in
+          // between is refused here rather than silently overwritten. Checked
+          // inside the serialized mutation, so no other replacement can
+          // interleave between this comparison and the commit below. Refused
+          // before the bytes are decoded, for the same reason the state is.
+          //
+          // Presence, not definedness: an explicit `{ ifGeneration: undefined }`
+          // is a caller that meant to pin and computed nothing to pin to, and
+          // silently promoting that to an unconditional write is the failure
+          // this precondition exists to prevent.
+          if ('ifGeneration' in options) {
+            const { ifGeneration } = options;
+            if (typeof ifGeneration !== 'bigint') {
+              throw fixedError('INVALID_GENERATION');
+            }
+            if (before.generation !== ifGeneration) {
+              // Audited, unlike the bare state check above: a holder repeatedly
+              // trying to overwrite a replacement it never read is precisely
+              // what an audit trail exists to show, and it is the most
+              // audit-worthy event this precondition can produce.
+              await audit(
+                secretId,
+                'replace',
+                'failed',
+                before.generation,
+                await randomHex256(),
+                { reasonCode: 'GENERATION_CONFLICT' },
+              );
+              throw fixedError('GENERATION_CONFLICT');
+            }
+          }
           return withDecodedSecret(bytesBase64, async bytes => {
             const operationId = await randomHex256();
             await audit(
