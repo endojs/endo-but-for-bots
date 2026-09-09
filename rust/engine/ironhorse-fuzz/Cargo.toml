@@ -18,7 +18,7 @@ ironhorse-vm = { path = "../ironhorse-vm" }
 xs-oracle = { path = "../xs-oracle" }
 ironhorse-regexp = { path = "../ironhorse-regexp" }
 ironhorse-compile = { path = "../ironhorse-compile" }
-# Stage-6 child 4: the snapshot round-trip-invariance and malformed-atom
+# The snapshot round-trip-invariance and malformed-atom
 # decoder fuzz arms drive the XS_M writer/reader (design § Snapshots,
 # Fuzzability). The substance stays here in the forbid(unsafe_code) lib so it
 # builds and unit-tests without a libFuzzer toolchain.

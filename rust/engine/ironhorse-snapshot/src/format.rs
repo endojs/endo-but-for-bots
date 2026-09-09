@@ -145,7 +145,7 @@ pub const PRMS: FourCc = FourCc(*b"PRMS");
 /// than wider `ERRD` rows, so an older container stays an
 /// encoding-identical subset and the read range keeps its meaning.
 pub const ESTK: FourCc = FourCc(*b"ESTK");
-/// `NFLR` — the installed-names floor (wave-6 W6-7): the id ceiling at
+/// `NFLR` — the installed-names floor: the id ceiling at
 /// or below which partial install passes leave bindings alone. Four
 /// big-endian bytes. Emitted only when it differs from the name-table
 /// length (the conservative default a floor-less restore assumes), so

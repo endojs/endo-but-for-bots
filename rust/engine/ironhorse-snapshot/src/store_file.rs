@@ -69,8 +69,8 @@ pub const FILE_MAGIC: [u8; 8] = *b"IHSTORE5";
 
 /// Temp files are uniquely named per process and per commit
 /// (`.tmp-{pid}-{n}`), so two writers can never interleave bytes in a
-/// shared temp inode (the PR-review concurrency finding); leftover
-/// temps from torn commits are inert (`open` never reads them).
+/// shared temp inode. Leftover temps from torn commits are inert
+/// (`open` never reads them).
 /// Cross-process last-rename-wins remains bounded by the documented
 /// single-writer-per-path model plus the durable succession check —
 /// a lost lineage is detected at its next commit or resume via the
@@ -170,8 +170,8 @@ impl FileStore {
     ///
     /// Open does NOT migrate: an older but decodable store opens as-is
     /// and the caller upgrades it with [`crate::store::migrate_store`],
-    /// which gates the restamp on the callback-table signature (review
-    /// wave 4, F2). Resuming without migrating first fails closed with
+    /// which gates the restamp on the callback-table signature.
+    /// Resuming without migrating first fails closed with
     /// [`StoreError::NeedsMigration`].
     pub fn open(path: impl Into<PathBuf>) -> Result<FileStore, StoreError> {
         let path = path.into();
@@ -251,7 +251,7 @@ impl FileStore {
         let pages = read_dir(n_pages)?;
         let extents = read_dir(n_exts)?;
 
-        // The row-leaf hashes (phase 5), 32 bytes per row; the same
+        // The row-leaf hashes, 32 bytes per row; the same
         // reservation clamp discipline as the directories.
         if (n_pages + n_exts) * 32 > file_len {
             return Err(file_corrupt("file store leaf hashes truncated"));
@@ -269,13 +269,12 @@ impl FileStore {
         let leaf_pages = read_leaves(n_pages)?;
         let leaf_exts = read_leaves(n_exts)?;
 
-        // Page-edge summaries (phase 6): u32 length + targets per
+        // Page-edge summaries: u32 length + targets per
         // page, with the same clamp discipline. The OUTER vector
         // grows against real reads — a `with_capacity(n)` here would
         // reserve 24 bytes per counted entry against a 4-byte-per-
-        // entry clamp, the ~6x amplification the review flagged in
-        // the free-segment read below (the over-allocation trophy
-        // class applies to reservation RATIOS, not just totals).
+        // entry clamp. Reservation amplification must be bounded by
+        // the encoded bytes, as in the free-segment read below.
         let mut edges: Vec<Vec<u32>> = Vec::new();
         for _ in 0..n_pages {
             let len = read_u32(file)? as u64;
@@ -289,7 +288,7 @@ impl FileStore {
             edges.push(ts);
         }
 
-        // Free-list segments + their leaves (phase 9), clamp-checked;
+        // Free-list segments and their leaves, clamp-checked;
         // outer vectors grow against real reads (see the edges note).
         let n_frees = read_u32(file)? as u64;
         if n_frees * 4 > file_len {
@@ -319,9 +318,9 @@ impl FileStore {
 
         // The directories must cover exactly the manifest's geometry —
         // the same promise the row inventory of `validate_store`
-        // re-checks with lengths. The free-segment count gets the same
-        // open-time symmetry (the review found it deferred to
-        // validation while pages/extents were checked here).
+        // re-checks with lengths. Pages, extents, and free segments
+        // all receive this check at open time; see
+        // `file_metadata_has_exact_refusals`.
         if pages.len() != slot_page_count(manifest.slot_count) as usize {
             return Err(file_corrupt(
                 "file store page directory disagrees with geometry",
@@ -378,10 +377,10 @@ impl HeapStore for FileStore {
             .ok_or(StoreError::Empty)
     }
 
-    /// The one backend that caches: `open` reads the header once and
-    /// `manifest()` serves that copy, so a handle opened before another
+    /// `open` reads the header once and `manifest()` serves that copy,
+    /// so a handle opened before another
     /// process upgraded the file would otherwise decide a ladder step
-    /// from a schema the file no longer has (review wave 5). Re-reads
+    /// from a schema the file no longer has. Re-reads
     /// the header off disk.
     fn reread_manifest(&self) -> Result<StoreManifest, StoreError> {
         if !self.path.exists() {
@@ -408,7 +407,7 @@ impl HeapStore for FileStore {
         // file. Those agree under the store's single-writer discipline —
         // no other process rewrites the file between open and migrate —
         // which is the same assumption the whole in-place migration
-        // rests on (review wave 4, F7). A multi-writer backend would have
+        // rests on. A multi-writer backend would have
         // to reload-then-verify instead.
         if self.state.is_none() {
             return Err(StoreError::Empty);
@@ -426,8 +425,9 @@ impl HeapStore for FileStore {
         // The header's manifest length is trusted only after the file
         // is proven long enough to hold it: an externally truncated
         // file (header intact, body cut) must fail closed here, not
-        // panic on the splice (review wave 4, F6). The 6→7 step below
-        // already bounds every offset the same way.
+        // panic on the splice. The replacement of manifest and small
+        // state below bounds every offset the same way; see
+        // `migration_splices_refuse_truncation_and_offset_overflow`.
         let man_end = 12usize
             .checked_add(old_len)
             .filter(|&end| end <= bytes.len())
@@ -569,9 +569,8 @@ impl HeapStore for FileStore {
 
     fn commit_verified(&mut self, verify: &mut CommitVerifier<'_>) -> Result<(), StoreError> {
         // Reload the durable file: the cached view can be stale if
-        // another handle on this path committed (the review's silent
-        // ping-pong finding). Both the succession check and the
-        // clean-row merge below must run against what is actually on
+        // another handle on this path committed. Both the succession
+        // check and the clean-row merge below must run against what is actually on
         // disk, so a forked handle fails closed with
         // EpochMismatch/BaselineMismatch instead of resurrecting its
         // stale baseline over the other's commit.
@@ -735,7 +734,7 @@ impl HeapStore for FileStore {
         };
         // Stage the whole new file; on ANY failure remove the temp so
         // a flaky disk does not accumulate `.tmp-*` litter beside the
-        // store (leftovers are inert but unbounded — review nit).
+        // store. Leftovers are inert but can accumulate across retries.
         let write_tmp = || -> Result<(), StoreError> {
             let mut tmp = File::create(&tmp_path).map_err(io_err)?;
             tmp.write_all(&FILE_MAGIC).map_err(io_err)?;
@@ -804,20 +803,19 @@ impl HeapStore for FileStore {
         if let Err(e) = std::fs::rename(&tmp_path, &self.path) {
             // A failed RENAME must clean up like a failed write does:
             // the tmp file is inert litter (opens ignore it) but
-            // unbounded across retries (wave-3 finding — the cleanup
-            // wrapped only the write stage while the comment above it
-            // promised "any failure").
+            // unbounded across retries. See
+            // `failed_rename_removes_the_temp_file`.
             let _ = std::fs::remove_file(&tmp_path);
             return Err(io_err(e));
         }
         // The rename is the commit point, and it is durable only once
-        // the containing directory is synced (the review's power-loss
-        // finding: an acked checkpoint must not roll back on crash).
+        // the containing directory is synced: an acknowledged checkpoint
+        // must not roll back on crash.
         // `Path::parent()` returns `Some("")` for a bare relative
         // filename, and opening "" fails ENOENT AFTER the rename — a
         // durable commit misreported as failed, wedging the session
-        // one epoch behind its own file (the review's bare-filename
-        // finding). An empty parent means the current directory.
+        // one epoch behind its own file. An empty parent means the
+        // current directory.
         let dir = match self.path.parent() {
             Some(p) if !p.as_os_str().is_empty() => p,
             _ => std::path::Path::new("."),
@@ -899,9 +897,8 @@ mod tests {
 
     #[test]
     fn failed_rename_removes_the_temp_file() {
-        // wave-3: the cleanup used to wrap only the WRITE stage, so a
-        // failed rename leaked its .tmp file — inert litter (opens
-        // ignore it) but unbounded across retries. Parking a
+        // A failed rename must remove its .tmp file: opens ignore it,
+        // but leaked files can accumulate across retries. Parking a
         // non-empty directory at the store path makes the rename fail
         // deterministically (EISDIR/ENOTEMPTY), which works under
         // root too, where permission-bit tricks do not.
