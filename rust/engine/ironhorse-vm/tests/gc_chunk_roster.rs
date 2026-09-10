@@ -42,7 +42,7 @@ fn bulk_strings_relocate_without_changing_counted_object_edges() {
             .expect("index string")
     };
     let before = index_chunk(&collected);
-    let stats = collected.collect_garbage();
+    let stats = collected.collect_garbage().unwrap();
     assert!(stats.chunk_bytes_before > stats.chunk_bytes_after);
     assert!(index_chunk(&collected).0 < before.0, "string must move");
     collected.side_table_ref_page_bits();
@@ -51,7 +51,7 @@ fn bulk_strings_relocate_without_changing_counted_object_edges() {
         "counted page-edge parity after remap"
     );
     // A second compaction must not rewrite already-remapped offsets incorrectly.
-    collected.collect_garbage();
+    collected.collect_garbage().unwrap();
     let actual = collected.run(&code);
     let expected = control.run(&code);
     assert!(actual.completed, "{:?}", actual.halt);

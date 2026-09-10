@@ -232,7 +232,7 @@ fn collection_content_indexes_survive_lazy_restore_and_chunk_compaction() {
     let mut machine = Interp::new();
     machine.link_intrinsics(&names);
     assert!(machine.run(&code).completed);
-    machine.collect_garbage();
+    machine.collect_garbage().unwrap();
     for (source, expected) in observations
         .iter()
         .zip(["1,2,2", "4,2,12345678901234567890"])

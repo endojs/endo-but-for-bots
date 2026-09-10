@@ -21,7 +21,7 @@ fn recycled_objects_do_not_inherit_dead_indexed_properties() {
         &mut m,
         "(() => { for (let i = 0; i < 100; i++) { const dead = {}; dead[17] = 'ghost'; } })(); 0",
     );
-    m.collect_garbage();
+    m.collect_garbage().unwrap();
     let result = crank(&mut m, "(() => { for (let i = 0; i < 1000; i++) { const fresh = {}; if (fresh[17] !== undefined) return 'ghost'; } return 'clean'; })()");
     assert_eq!(result, "clean");
 }

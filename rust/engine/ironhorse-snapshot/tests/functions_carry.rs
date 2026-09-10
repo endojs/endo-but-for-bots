@@ -161,7 +161,7 @@ fn collection_compacts_unreferenced_code_segments() {
         assert!(crank(&mut machine, &source).0);
     }
     assert!(machine.retained_code_segment_count() >= 12);
-    machine.collect_garbage();
+    machine.collect_garbage().unwrap();
     assert_eq!(machine.retained_code_segment_count(), 1);
     assert_eq!(crank(&mut machine, "var f; var t; t = f(31); t").2, "42");
 }

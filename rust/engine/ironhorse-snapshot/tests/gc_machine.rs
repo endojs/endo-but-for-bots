@@ -58,7 +58,7 @@ fn collected_machine_keeps_executing_and_agrees() {
     m.link_intrinsics(&compiled[0].1);
     let o1 = m.run(&compiled[0].0);
     assert!(o1.completed);
-    let stats = m.collect_garbage();
+    let stats = m.collect_garbage().unwrap();
     assert!(stats.slots_reclaimed > 0, "the loop's dead objects sweep");
     assert!(
         stats.chunk_bytes_after < stats.chunk_bytes_before,
@@ -71,8 +71,8 @@ fn collected_machine_keeps_executing_and_agrees() {
 
     // A second collect right after the first is a fixpoint apart from
     // the crank's own garbage — nothing live is lost either way.
-    let live_before = m.collect_garbage().slots_live;
-    let again = m.collect_garbage();
+    let live_before = m.collect_garbage().unwrap().slots_live;
+    let again = m.collect_garbage().unwrap();
     assert_eq!(
         again.slots_live, live_before,
         "collect is idempotent on live set"
@@ -87,7 +87,7 @@ fn collected_machine_checkpoints_and_resumes_exactly() {
     let mut m = Interp::new();
     m.link_intrinsics(&compiled[0].1);
     assert!(m.run(&compiled[0].0).completed);
-    m.collect_garbage();
+    m.collect_garbage().unwrap();
 
     // The GC'd machine, uninterrupted, is the oracle for its own
     // store round-trip.
@@ -340,7 +340,7 @@ fn partial_collect_reclaims_page_isolated_garbage() {
             .expect("quiescent machine snapshots"),
         "post-reclaim store round-trip is byte-exact"
     );
-    session.machine_mut().collect_garbage();
+    session.machine_mut().collect_garbage().unwrap();
 }
 
 /// Phase 9 bar: small state is O(1) in heap size — a machine with a
@@ -359,7 +359,7 @@ fn small_state_stays_small_with_a_large_free_list() {
     m.link_intrinsics(&compiled[0].1);
     assert!(m.run(&compiled[0].0).completed);
     // Full GC sweeps the dropped chain onto the free list.
-    let stats = m.collect_garbage();
+    let stats = m.collect_garbage().unwrap();
     assert!(stats.slots_reclaimed > 3000, "chain swept: {stats:?}");
 
     let mut store = MemoryStore::new();
@@ -437,7 +437,7 @@ fn lifo_churn_rewrites_only_the_tail_free_segment() {
     assert!(m.run(&compiled[0].0).completed);
     // Sweep the dropped chain onto the free list — thousands of
     // entries, spanning multiple segments.
-    m.collect_garbage();
+    m.collect_garbage().unwrap();
 
     let mut store = MemoryStore::new();
     let mut session = begin_store_session(m, &sig(), &mut store)
@@ -535,7 +535,7 @@ fn ephemeron_marking_reclaims_dead_keyed_weak_entries() {
     assert!(o1.completed, "fixture halted: {:?}", o1.halt);
     assert_eq!(o1.result, "7");
 
-    let stats = m.collect_garbage();
+    let stats = m.collect_garbage().unwrap();
     assert!(
         stats.slots_reclaimed >= 2000,
         "dead-keyed weak entries AND the plain garbage reclaim: {stats:?}"
@@ -570,7 +570,7 @@ fn weak_set_membership_keeps_nothing_alive() {
     m.link_intrinsics(&compiled[0].1);
     let o1 = m.run(&compiled[0].0);
     assert!(o1.completed, "fixture halted: {:?}", o1.halt);
-    let stats = m.collect_garbage();
+    let stats = m.collect_garbage().unwrap();
     assert!(
         stats.slots_reclaimed >= 380,
         "set-only members are dead by ephemeron semantics: {stats:?}"
@@ -621,7 +621,7 @@ fn symbol_key_descriptor_survives_collection() {
         o1.result, "1",
         "the symbol key is partitioned out before GC"
     );
-    let stats = m.collect_garbage();
+    let stats = m.collect_garbage().unwrap();
     assert!(
         stats.slots_reclaimed > 0,
         "the plain garbage was real: {stats:?}"
@@ -728,7 +728,7 @@ fn dead_keyed_symbol_interns_are_reclaimed_precisely() {
     assert!(o1.completed, "fixture halted: {:?}", o1.halt);
     assert_eq!(o1.result, "7");
 
-    let stats = m.collect_garbage();
+    let stats = m.collect_garbage().unwrap();
     // 50 dead owners (2-slot objects + their symbol property slots)
     // and 50 dead descriptors; the exact figure rides slot layout, so
     // bound it from below well past what plain-object garbage alone
@@ -850,7 +850,7 @@ fn relocated_native_names_survive_repeated_collection_and_restore() {
     let setup = compile("var saved = Proxy.revocable; Object.defineProperty(saved, 'name', { value: 'renamed' }); delete Math.max.name; (() => { for (let i = 0; i < 2000; i++) { const garbage = 'discard-this-long-transient-string-' + i; } })(); 0");
     m.link_intrinsics(&setup.1);
     assert!(m.run(&setup.0).completed);
-    m.collect_garbage();
+    m.collect_garbage().unwrap();
     let names = m.function_state_snapshot().native_names.unwrap();
     assert!(
         names.iter().any(|&(owner, offset)| boot_names
@@ -870,8 +870,8 @@ fn relocated_native_names_survive_repeated_collection_and_restore() {
         assert!(expected.completed && actual.completed);
         assert_eq!(actual.result, "[\"renamed\",\"\",\"undefined\",\"object\",\"boolean\",\"number\",\"string\",\"function\",\"symbol\",\"bigint\"]");
         assert_eq!(actual.result, expected.result);
-        session.machine_mut().collect_garbage();
-        resumed.machine_mut().collect_garbage();
+        session.machine_mut().collect_garbage().unwrap();
+        resumed.machine_mut().collect_garbage().unwrap();
         assert_eq!(
             session.machine().write_snapshot(&sig()).unwrap(),
             resumed.machine().write_snapshot(&sig()).unwrap(),

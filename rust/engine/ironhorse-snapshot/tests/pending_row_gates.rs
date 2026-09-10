@@ -114,7 +114,7 @@ fn a_heap_holding_only_the_boot_seed_accessor_persists() {
 #[test]
 fn a_collected_proxy_persists_again() {
     let mut m = machine_running("(function () { var p = new Proxy({}, {}); })(); 0;");
-    m.collect_garbage();
+    m.collect_garbage().unwrap();
     let mut store = MemoryStore::new();
     begin_store_session(m, &sig(), &mut store)
         .map_err(|(_, e)| e)

@@ -107,7 +107,7 @@ fn carried_holders_refuse_non_persisted_natives() {
     ] {
         let mut vm = stored_native(source);
         // Remove abandoned temporaries so only live holders can justify refusal.
-        vm.collect_garbage();
+        vm.collect_garbage().unwrap();
         let refusal = Some("a stored reference to a non-persisted native function");
         assert_eq!(vm.stored_unpersistable_row(), refusal, "{holder}");
         assert_eq!(
@@ -126,7 +126,7 @@ fn suspended_generator_refuses_a_non_persisted_native() {
         "function* f() { let x = 12345; yield 1; return x; } var box = f(); box.next(); 0;",
         Opcode::XS_CODE_INTEGER_2,
     );
-    vm.collect_garbage();
+    vm.collect_garbage().unwrap();
     let refusal = Some("a stored reference to a non-persisted native function");
     assert_eq!(vm.stored_unpersistable_row(), refusal);
     assert_eq!(vm.stored_unpersistable_row_at_checkpoint(), refusal);

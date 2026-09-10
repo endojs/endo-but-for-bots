@@ -67,7 +67,11 @@ fn mixed_live_state_survives_alternating_collectors_and_lazy_resume() {
         if round % 2 == 0 {
             partial_freed += partial_collect(&mut session, &*store.borrow()).unwrap();
         } else {
-            full_freed += session.machine_mut().collect_garbage().slots_reclaimed;
+            full_freed += session
+                .machine_mut()
+                .collect_garbage()
+                .unwrap()
+                .slots_reclaimed;
         }
         checkpoint_to_store(&mut session, &sig, &mut *store.borrow_mut()).unwrap();
         for p in 0..session.machine().slots.capacity().div_ceil(SLOTS_PER_PAGE) {
@@ -133,9 +137,9 @@ fn lazy_collection_relocates_suspended_async_generator_handlers() {
     "#;
     assert_same_crank(session.machine_mut(), &mut baseline, suspend);
     assert_eq!(session.machine().retained_code_segment_count(), 2);
-    session.machine_mut().collect_garbage();
+    session.machine_mut().collect_garbage().unwrap();
     assert_eq!(session.machine().retained_code_segment_count(), 1);
-    session.machine_mut().collect_garbage();
+    session.machine_mut().collect_garbage().unwrap();
     assert_same_crank(
         session.machine_mut(),
         &mut baseline,
@@ -149,7 +153,7 @@ fn lazy_collection_relocates_suspended_async_generator_handlers() {
     // Live async generators deliberately cannot persist yet. After exercising
     // the saved catch/finally targets, drop the completed generator and commit.
     assert_same_crank(session.machine_mut(), &mut baseline, "iterator = null; 0");
-    session.machine_mut().collect_garbage();
+    session.machine_mut().collect_garbage().unwrap();
     checkpoint_to_store(&mut session, &sig, &mut *store.borrow_mut()).unwrap();
     let mut restored = resume_from_store_lazy(store, &sig).unwrap();
     assert_same_crank(restored.machine_mut(), &mut baseline, "trace");

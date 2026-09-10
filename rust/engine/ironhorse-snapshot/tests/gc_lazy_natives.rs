@@ -29,8 +29,8 @@ fn check(source: &str, expected: &str) {
     assert_eq!(run(&mut machine, "0"), "0");
     // No probe names have been interned: none of these lazy properties is
     // installed yet. A second collection also catches stale chunk references.
-    machine.collect_garbage();
-    machine.collect_garbage();
+    machine.collect_garbage().unwrap();
+    machine.collect_garbage().unwrap();
     let signature = Signature::new("gc-lazy-natives");
     let bytes = machine.write_snapshot(&signature).expect("write blob");
     let mut blob = from_snapshot_bytes(&bytes, &signature).expect("restore blob");
@@ -52,7 +52,7 @@ fn check(source: &str, expected: &str) {
             "(() => { for (let i = 0; i < 32; i++) { ({ value: i }); } })(); 0",
         );
         assert_eq!(run(machine, source), expected, "{label}: {source}");
-        machine.collect_garbage();
+        machine.collect_garbage().unwrap();
         assert_eq!(
             run(machine, source),
             expected,

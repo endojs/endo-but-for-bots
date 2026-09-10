@@ -175,12 +175,12 @@ fn a_suspended_eval_handler_survives_code_segment_compaction() {
         assert!(vm.is_quiescent());
     }
     let before = collected.retained_code_segment_count();
-    collected.collect_garbage();
+    collected.collect_garbage().unwrap();
     assert!(
         collected.retained_code_segment_count() < before,
         "the dead earlier segment must be removed to exercise remapping"
     );
-    collected.collect_garbage();
+    collected.collect_garbage().unwrap();
     let expected = control.run(&code);
     let actual = collected.run(&code);
     assert!(expected.completed, "{:?}", expected.halt);

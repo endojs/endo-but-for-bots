@@ -1,0 +1,32 @@
+{
+  "commit": "26bbe71b6f25d0f6b599fbd3de4efc523981b03e",
+  "platform": "Darwin arm64",
+  "rustc": "rustc 1.91.1 (ed61e7d7e 2025-11-07)",
+  "command": "cargo test --release -p ironhorse-snapshot --test gc_bench gc_cost_across_heap_sizes -- --ignored --nocapture",
+  "medians": {
+    "gc_5000_full_first_ms": 2.764042,
+    "gc_5000_full_steady_ms": 0.810083,
+    "gc_5000_partial_ms": 0.422541,
+    "gc_5000_gate_ms": 0.002709,
+    "gc_5000_enum_ms": 0.02275,
+    "gc_5000_query_ms": 0.005584,
+    "gc_5000_free_ms": 0.385041,
+    "gc_5000_sweep_ns_per_slot": 26.215171431,
+    "gc_20000_full_first_ms": 10.853292,
+    "gc_20000_full_steady_ms": 3.087416,
+    "gc_20000_partial_ms": 1.708834,
+    "gc_20000_gate_ms": 0.01,
+    "gc_20000_enum_ms": 0.031875,
+    "gc_20000_query_ms": 0.018542,
+    "gc_20000_free_ms": 1.648792,
+    "gc_20000_sweep_ns_per_slot": 24.513595341,
+    "gc_80000_full_first_ms": 44.161333,
+    "gc_80000_full_steady_ms": 11.823125,
+    "gc_80000_partial_ms": 7.398708,
+    "gc_80000_gate_ms": 0.0405,
+    "gc_80000_enum_ms": 0.0615,
+    "gc_80000_query_ms": 0.07175,
+    "gc_80000_free_ms": 7.226959,
+    "gc_80000_sweep_ns_per_slot": 24.726183074
+  }
+}

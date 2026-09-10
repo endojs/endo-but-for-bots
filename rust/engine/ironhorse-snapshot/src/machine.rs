@@ -1467,7 +1467,10 @@ pub fn partial_collect(
     let roots: Vec<u32> = root_pages.into_iter().collect();
     let reached = store.reachable_page_set(&roots)?;
     let dead: Vec<u32> = (0..total).filter(|p| !reached.contains(p)).collect();
-    let freed = session.machine_mut().free_pages(&dead);
+    let freed = session
+        .machine_mut()
+        .free_pages(&dead)
+        .map_err(|_| StoreError::MachineNotQuiescent)?;
     // Pruning a dead bulk row can discover an undercount masked in
     // the bitmap by another reference to the same page.
     if !session.machine().is_quiescent() {
@@ -1580,7 +1583,10 @@ pub fn generational_collect(
     let seed_vec: Vec<u32> = seeds.into_iter().collect();
     let kept = store.reachable_within(&seed_vec, &dirty)?;
     let dead: Vec<u32> = dirty.into_iter().filter(|p| !kept.contains(p)).collect();
-    let freed = session.machine_mut().free_pages(&dead);
+    let freed = session
+        .machine_mut()
+        .free_pages(&dead)
+        .map_err(|_| StoreError::MachineNotQuiescent)?;
     if !session.machine().is_quiescent() {
         return Err(StoreError::MachineNotQuiescent);
     }
@@ -2091,7 +2097,7 @@ mod tests {
             resume_from_store_lazy(std::rc::Rc::new(std::cell::RefCell::new(store)), &sig())
                 .expect("lazy attach");
         // Force every page resident - the poisoned one faults.
-        resumed.machine_mut().collect_garbage();
+        resumed.machine_mut().collect_garbage().unwrap();
     }
 
     /// The chunk-offset half of the same class (the recorded lazy
@@ -2126,7 +2132,7 @@ mod tests {
             resume_from_store_lazy(std::rc::Rc::new(std::cell::RefCell::new(store)), &sig())
                 .expect("lazy attach");
         // Force every page resident - the poisoned one faults.
-        resumed.machine_mut().collect_garbage();
+        resumed.machine_mut().collect_garbage().unwrap();
     }
 
     // The exact XS bytecode for `(function(x){return x+1})(5)` (captured

@@ -161,7 +161,17 @@ impl Interp {
                         false
                     }
                 }) {
-                    self.collect_garbage();
+                    let before = super::tests::refusal_state(self);
+                    assert_eq!(
+                        self.collect_garbage(),
+                        Err(crate::gc::GcAdmissionError::NotQuiescent)
+                    );
+                    assert_eq!(
+                        self.free_pages(&[]),
+                        Err(crate::gc::GcAdmissionError::NotQuiescent)
+                    );
+                    assert_eq!(super::tests::refusal_state(self), before);
+                    assert!(!self.gc_failed);
                     super::tests::GC_HITS.with(|hits| hits.set(hits.get() + 1));
                 }
             }

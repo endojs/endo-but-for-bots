@@ -162,7 +162,7 @@ fn collected_eval_function_persists_again() {
     assert!(o.completed, "eval crank: {:?}", o.halt);
     assert_eq!(o.result, "2");
     // The function never escaped to a root; collect it.
-    m.collect_garbage();
+    m.collect_garbage().unwrap();
     assert!(
         m.live_dynamic_segment_function().is_none(),
         "the collector pruned the dead eval function's segment entry"

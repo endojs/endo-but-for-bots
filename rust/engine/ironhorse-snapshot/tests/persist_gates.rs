@@ -1134,8 +1134,8 @@ fn uncoercible_completion_twins() {
         let mut twin = from_snapshot_bytes(&bytes, &sig()).expect("resumes");
 
         // Both twins collect at the boundary and run the same next crank.
-        let cont_gc = cont.collect_garbage();
-        let twin_gc = twin.collect_garbage();
+        let cont_gc = cont.collect_garbage().unwrap();
+        let twin_gc = twin.collect_garbage().unwrap();
         assert_eq!(
             cont_gc.slots_live, twin_gc.slots_live,
             "{name}: the boundary registers must not root anything the twin cannot see"

@@ -47,7 +47,7 @@ fn suspended() -> Interp {
     "#,
     );
     assert_eq!(vm.retained_code_segment_count(), 2);
-    vm.collect_garbage();
+    vm.collect_garbage().unwrap();
     assert_eq!(vm.retained_code_segment_count(), 1);
     vm
 }

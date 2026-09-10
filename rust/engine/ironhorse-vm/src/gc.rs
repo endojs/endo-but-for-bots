@@ -19,6 +19,26 @@
 
 use crate::value::{ChunkArena, ChunkOffset, SlotArena, SlotIndex};
 
+/// A whole-machine collection request refused before any mutation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GcAdmissionError {
+    /// Execution has not reached a supported, quiescent boundary.
+    NotQuiescent,
+    /// A previous collector failure permanently disqualified this machine.
+    PreviousCollectionFailed,
+}
+
+impl std::fmt::Display for GcAdmissionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::NotQuiescent => "collection requires a quiescent machine",
+            Self::PreviousCollectionFailed => "collection after failed garbage collection",
+        })
+    }
+}
+
+impl std::error::Error for GcAdmissionError {}
+
 /// The machine heap: the slot arena and the chunk arena the collector
 /// operates over together. The interpreter threads one of these as its
 /// object heap; the collector is a method so the two arenas are
@@ -114,6 +134,12 @@ pub trait GcHooks {
 ///   a side table or on the value stack). It is called before compaction
 ///   so those chunks count as live, and again only when offsets move so
 ///   they are rewritten — exactly the treatment arena-resident string slots get.
+///
+/// This raw-arena primitive is for standalone heaps and collector implementations.
+/// It does not establish an interpreter's quiescence or supply its side-table
+/// roots. Do not apply it to an `Interp`'s public arenas: use
+/// [`crate::Interp::collect_garbage`] for supported whole-machine collection.
+/// Public arena access is a low-level mutation escape hatch, not a checked VM API.
 pub fn collect_full(
     slots: &mut SlotArena,
     chunks: &mut ChunkArena,

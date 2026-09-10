@@ -30,7 +30,7 @@ fn run(crank1: &str, crank2: &str, gc: bool) -> (String, u64) {
     let o1 = m.run(&b1);
     assert!(o1.completed, "crank 1: {:?}", o1.halt);
     if gc {
-        m.collect_garbage();
+        m.collect_garbage().unwrap();
     }
     let b2 = m.relink_crank(&b2, &n2).expect("relink");
     let o = m.run(&b2);
