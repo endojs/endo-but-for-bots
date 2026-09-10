@@ -75,7 +75,7 @@ export const hostedTurnPartialOf = error =>
 harden(hostedTurnPartialOf);
 
 /**
- * @param {{ client: any, text: string, writer: any, signal?: AbortSignal, model?: string, reasoningEffort?: string, systemPrompt?: string, acknowledgedCheckpoint?: string, recordToolEvent?: (event: any) => Promise<void> }} options
+ * @param {{ client: any, text: string, writer: any, signal?: AbortSignal, model?: string, reasoningEffort?: string, systemPrompt?: string, acknowledgedCheckpoint?: string, continuityContext?: string, continuityContextUnavailable?: string, recordToolEvent?: (event: any) => Promise<void> }} options
  */
 export const runHostedTurn = async ({
   client,
@@ -86,6 +86,8 @@ export const runHostedTurn = async ({
   reasoningEffort,
   systemPrompt,
   acknowledgedCheckpoint,
+  continuityContext,
+  continuityContextUnavailable,
   recordToolEvent,
 }) => {
   const recordObservedTool = async event => {
@@ -160,6 +162,10 @@ export const runHostedTurn = async ({
         ...(reasoningEffort ? { reasoningEffort } : {}),
         ...(systemPrompt ? { systemPrompt } : {}),
         ...(acknowledgedCheckpoint ? { acknowledgedCheckpoint } : {}),
+        ...(continuityContext === undefined ? {} : { continuityContext }),
+        ...(continuityContextUnavailable
+          ? { continuityContextUnavailable }
+          : {}),
       }),
     );
     const outcome = signal
