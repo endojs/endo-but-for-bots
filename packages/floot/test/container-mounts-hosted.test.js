@@ -325,6 +325,16 @@ const runTurn = async (factory, world) => {
   await world.finishTools();
   world.setFactory(factory);
   const session = await E(factory).getSession('one');
+  // These mount fixtures predate private journals. Acknowledge their imported
+  // empty history explicitly; this suite exercises mounts, not migration UX.
+  const imported = (await E(session).getTurns()).find(
+    turn => turn.turnId === 'legacy-import' && !turn.resolution,
+  );
+  if (imported)
+    await E(session).resolveTurn(
+      'legacy-import',
+      'Fixture has no prior external effects',
+    );
   const turn = await E(session).startTurn('hello');
   /** @type {any[]} */
   const events = [];
@@ -493,6 +503,9 @@ test('a persisted bind is declared on the first create after a restart, without 
   // "Daemon restart": a fresh factory over the same host petstore. The
   // registrar replays its journal into the adapter BEFORE the first create,
   // so that create already declares the bind — no terminate, no recreate.
+  // Finish the old writer before reviving the replacement. A real daemon
+  // restart never leaves both incarnations writing the same private journal.
+  await world.finishTools();
   const restarted = make(world.host);
   t.teardown(async () => {
     world.closeInboxes();

@@ -30,6 +30,55 @@ const options = harden({
   modelId: 'sol',
 });
 
+test('legacy import acknowledgement is independent of event capacity and unknown turns', async t => {
+  const { powers } = fixture();
+  const pending = await makeTurnJournal(powers).begin(options);
+  let resolution;
+  const migration = Far('Migration', {
+    status: () =>
+      harden({ required: true, ...(resolution ? { resolution } : {}) }),
+    resolve: note => {
+      resolution = note;
+    },
+  });
+  const journal = makeTurnJournal(powers, { migration });
+  t.is((await journal.list())[0].turnId, 'legacy-import');
+  await t.throwsAsync(journal.begin(options), { message: /imported legacy/ });
+  await t.throwsAsync(journal.resolve('legacy-import', '   '));
+  const before = await journal.status();
+  await journal.resolve(
+    'legacy-import',
+    'Checked the external system independently',
+  );
+  t.deepEqual(await journal.status(), before);
+  await t.throwsAsync(journal.assertReady(), { message: /unknown turn/ });
+  await journal.resolve(pending, 'No external effects occurred');
+  await journal.assertReady();
+  const revived = makeTurnJournal(powers, { migration });
+  await revived.assertReady();
+  t.is((await revived.list())[0].resolution, resolution);
+});
+
+test('legacy acknowledgement loss poisons only the current incarnation', async t => {
+  const { powers } = fixture();
+  let resolution;
+  const migration = Far('Migration', {
+    status: () =>
+      harden({ required: true, ...(resolution ? { resolution } : {}) }),
+    resolve: note => {
+      resolution = note;
+      throw Error('Lost acknowledgement');
+    },
+  });
+  const journal = makeTurnJournal(powers, { migration });
+  await t.throwsAsync(
+    journal.resolve('legacy-import', 'External effects checked'),
+  );
+  await t.throwsAsync(journal.assertReady(), { message: /uncertain storage/ });
+  await makeTurnJournal(powers, { migration }).assertReady();
+  t.pass();
+});
+
 test('empty input and backend-default model are valid, optional usage is omitted', async t => {
   const { powers } = fixture();
   const journal = makeTurnJournal(powers);
