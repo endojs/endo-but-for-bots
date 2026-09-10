@@ -1476,7 +1476,9 @@ export const makeExecTool = powers => {
       description:
         'Execute JavaScript code with access to your guest powers. ' +
         'The code runs as an async function body (top-level await works). ' +
-        'Return a value to get it as the tool result.\n\n' +
+        'Use a top-level return to produce the tool result, e.g. return await E(powers).list(); ' +
+        'A final expression or an unreturned nested IIFE does not return a result. ' +
+        'console output goes to daemon logs, not the tool result.\n\n' +
         'Available globals:\n' +
         '- powers: your guest interface (adopt, reply, send, lookup, list, followMessages, etc.)\n' +
         '- E: eventual send — use E(ref).method() for all remote calls\n' +
@@ -1559,13 +1561,14 @@ export const makeExecTool = powers => {
         });
       const result = await fn(powers, E, harden, console, sleep);
       if (result === undefined) {
-        return 'done (no return value)';
+        return 'done (no return value). Use a top-level return to produce a result (for example: return await E(powers).list();). Final expressions and unreturned nested functions do not return a result; console output goes to daemon logs. Any effects already performed still happened: do not repeat them just to obtain output.';
       }
       return renderToolResult(result);
     },
     help() {
       return (
         'Execute JavaScript code with access to guest powers, E, and harden. ' +
+        'Use top-level return for the result; console output is only logged. ' +
         'Use for multi-step operations like adopting values, joining channels, ' +
         'and posting messages in a single call.'
       );
