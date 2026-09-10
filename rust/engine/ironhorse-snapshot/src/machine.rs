@@ -1370,6 +1370,44 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
     })
 }
 
+/// Exact whole-machine collection at a clean, current checkpoint boundary.
+///
+/// Unlike partial collection this processes weak edges and reclaims chunk
+/// storage. It can fault in the full heap and dirty relocated records; the
+/// consumer must checkpoint the result to make the collection durable.
+/// Scheduling and collection-event counters belong to the consumer.
+/// Collector panics retain the VM's permanent failure latch; discard or rewind
+/// that session before further execution or persistence.
+pub fn full_collect(
+    session: &mut StoreSession,
+    store: &dyn HeapStore,
+) -> Result<ironhorse_vm::gc::GcStats, StoreError> {
+    let interp = session.machine();
+    if !interp.is_quiescent() {
+        return Err(StoreError::MachineNotQuiescent);
+    }
+    assert!(
+        interp.slots.dirty_pages().is_empty() && interp.chunks.dirty_extents().is_empty(),
+        "full collect requires a clean checkpoint boundary (dirty rows present)"
+    );
+    let manifest = store.manifest()?;
+    if manifest.epoch != session.epoch || manifest.seal != session.seal {
+        return Err(StoreError::BaselineMismatch {
+            expected: session.seal.clone(),
+            found: manifest.seal,
+        });
+    }
+    let stats = session
+        .machine_mut()
+        .collect_garbage()
+        .map_err(|_| StoreError::MachineNotQuiescent)?;
+    if !session.machine().is_quiescent() {
+        return Err(StoreError::MachineNotQuiescent);
+    }
+    session.gen_dirty.clear();
+    Ok(stats)
+}
+
 /// **Summary-driven partial collection**: free
 /// every page unreachable from the machine's GC roots and side-table
 /// references, deciding arena reachability ENTIRELY from the store's

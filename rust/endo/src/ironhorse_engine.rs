@@ -682,9 +682,11 @@ pub mod engine {
         /// suspend (`close`) always flushes pending cranks first, so
         /// the widened window exists only while the machine is live.
         pub checkpoint_every: u32,
-        /// Run the durable summary-driven partial collection after
+        /// Run durable exact collection (including chunks and weak entries) after
         /// every Mth completed crank; `0` (the default) never does —
         /// the supervisor calls [`PersistentMachine::collect`] itself.
+        /// Exact collection can make the full heap resident and the following
+        /// checkpoint rewrites relocated data; choose cadence for that cost.
         /// An automatic collection flushes pending cranks first (the
         /// collector requires a checkpoint boundary) and then
         /// checkpoints again for durability, exactly as the manual
@@ -716,10 +718,10 @@ pub mod engine {
     /// `checkpoint_every: N` (flush every Nth crank; halts and failed
     /// flushes then rewind past up to N-1 completed cranks — the
     /// documented window, closed by `close`'s final flush) and
-    /// `collect_every: M` (the durable partial collection on a
+    /// `collect_every: M` (durable exact collection on a
     /// replica-visible crank schedule); manual
     /// [`PersistentMachine::collect`] remains available either way and
-    /// restarts the collect clock.
+    /// records an additional collection without resetting the crank clock.
     ///
     /// The SES boot bundle and the worker envelope protocol remain the
     /// named gaps they were; this type is the heap-persistence half the
@@ -1227,46 +1229,47 @@ pub mod engine {
             }
         }
 
-        /// Summary-driven partial collection at the current crank
-        /// boundary (the machine is always clean here — `eval` either
-        /// checkpointed or rewound), made DURABLE before it returns:
-        /// collection rewrites the free list, and free-list order
-        /// feeds subsequent allocation, so an unrecorded collection
-        /// would be silently discarded by `close()` and replayed
-        /// differently after reopen (review finding). The checkpoint
-        /// advances the epoch; a failed checkpoint rewinds, so the
-        /// collection either persists or never happened. Returns the
-        /// number of slots freed. The supervisor owns the cadence;
-        /// the schedule is replica-visible, like the full collector's.
+        /// Exact collection at a quiescent checkpoint boundary, made durable
+        /// before returning. Reclaims slots, weak entries, and chunk storage.
+        /// The supervisor owns the schedule; replicas requiring identical heaps
+        /// must coordinate it. Collection may fault in the full heap and makes
+        /// the following checkpoint rewrite relocated records.
+        ///
+        /// Pending completed cranks are flushed first. A collection or checkpoint
+        /// failure rewinds to that durable boundary: delivery remains committed,
+        /// while the failed collection event is not counted. Returns slots freed.
         pub fn collect(&mut self) -> Result<u32, MachineError> {
-            use ironhorse_snapshot::machine::{checkpoint_to_store, partial_collect};
-            // The collector requires a checkpoint boundary; under a
-            // deferred cadence, flush the pending cranks first.
+            use ironhorse_snapshot::machine::{checkpoint_to_store, full_collect};
             self.flush_pending()?;
-            let (freed, checkpointed) = {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let session = self.session.as_mut().ok_or_else(|| {
                     MachineError::Store("machine has no session (a rewind failed)".to_string())
                 })?;
                 let collections = session.collections().checked_add(1).ok_or_else(|| {
                     MachineError::Store("collection counter exhausted".to_string())
                 })?;
-                let freed = partial_collect(session, &*self.store.borrow()).map_err(store_err)?;
+                let stats = full_collect(session, &*self.store.borrow()).map_err(store_err)?;
                 session.set_collections(collections);
-                let r =
-                    checkpoint_to_store(session, &self.signature, &mut *self.store.borrow_mut());
-                (freed, r)
-            };
-            match checkpointed {
-                Ok(_epoch) => Ok(freed),
-                Err(e) => {
-                    if let Err(rewind_err) = self.rewind_to_last_checkpoint() {
-                        return Err(MachineError::Store(format!(
-                            "rewind failed after a failed collection checkpoint ({e:?}): {rewind_err}"
-                        )));
-                    }
-                    Err(store_err(e))
+                checkpoint_to_store(session, &self.signature, &mut *self.store.borrow_mut())
+                    .map_err(store_err)?;
+                Ok(stats.slots_reclaimed)
+            }))
+            .unwrap_or_else(|payload| {
+                let message = payload
+                    .downcast_ref::<String>()
+                    .cloned()
+                    .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
+                    .unwrap_or_else(|| "non-string collection panic".to_string());
+                Err(MachineError::Store(format!("collection failed: {message}")))
+            });
+            if let Err(error) = &result {
+                if let Err(rewind_err) = self.rewind_to_last_checkpoint() {
+                    return Err(MachineError::Store(format!(
+                        "rewind failed after collection failure ({error:?}): {rewind_err}"
+                    )));
                 }
             }
+            result
         }
 
         /// How many SCHEDULED collections have failed on this machine,
@@ -1416,6 +1419,36 @@ pub mod engine {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[test]
+        fn collector_panic_rewinds_to_the_committed_heap() {
+            let dir = tempfile::tempdir().unwrap();
+            let options = HeapStoreOptions {
+                path: dir.path().join("collector-panic.sqlite"),
+                signature: "collector-panic".to_string(),
+                cadence: CadencePolicy::default(),
+                meter: MeterBounds::default(),
+            };
+            let mut machine = PersistentMachine::open(&options).unwrap();
+            machine
+                .eval("var committed=42; var garbage={}; garbage=null;")
+                .unwrap();
+            let epoch = machine.epoch().unwrap();
+            let vm = machine.session.as_mut().unwrap().machine_mut();
+            let mut bytes = vm.chunks.raw_vec();
+            bytes[..4].copy_from_slice(&(u32::MAX - 1).to_le_bytes());
+            vm.chunks = ironhorse_vm::value::ChunkArena::from_image(bytes);
+            assert!(vm.is_quiescent());
+            assert!(
+                matches!(machine.collect(), Err(MachineError::Store(message)) if message.contains("collection failed"))
+            );
+            assert_eq!(machine.epoch().unwrap(), epoch);
+            assert_eq!(machine.session.as_ref().unwrap().collections(), 0);
+            assert!(machine.session.as_ref().unwrap().machine().is_quiescent());
+            machine.collect().unwrap();
+            assert_eq!(machine.session.as_ref().unwrap().collections(), 1);
+            assert_eq!(machine.eval("committed").unwrap().result, "42");
+        }
 
         #[test]
         fn top_level_compilation_adds_exact_live_charges() {
