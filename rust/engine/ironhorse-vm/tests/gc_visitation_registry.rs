@@ -401,6 +401,8 @@ const REGISTRY: &[(&str, &[Req], &str)] = &[
     ("gen_run_stack", &[Req::GcRoots], "mid-resume generator stack"),
     ("async_run_stack", &[Req::GcRoots], "mid-step async stack"),
     ("async_gen_run_stack", &[Req::GcRoots], "mid-step async-generator stack"),
+    ("unhandled_rejection", &[Req::GcRoots], "first reported rejection roots its promise and reason"),
+    ("pending_rejections", &[Req::GcRoots], "settlement candidates survive collection until the job drain"),
     ("promise_jobs", &[Req::GcRoots], "queued microtasks (survive halted cranks)"),
     // --- side tables with strong outgoing edges, walked by BOTH collectors ---
     ("functions", &[Req::GcRoots, Req::Edges, Req::PrunedBothPaths], "lazy intrinsic getters are roots; other functions remain weak owners of closure/super edges (W6-2)"),

@@ -2696,7 +2696,8 @@ pub(crate) fn decode_async_instances(
 /// promise section): four `u32`-counted lists in the fixed order
 /// promises, resolving functions, guards, combinators. See
 /// [`ironhorse_vm::PromiseClusterSnapshot`] for the row shapes and the
-/// compacted-arena canonical form.
+/// compacted-arena canonical form. A present historical rejection adds its
+/// owner as a four-byte suffix; an absent report keeps the legacy payload.
 pub(crate) fn encode_promise_cluster(c: &ironhorse_vm::PromiseClusterSnapshot) -> Vec<u8> {
     let mut v = Vec::new();
     v.extend_from_slice(&(c.promises.len() as u32).to_be_bytes());
@@ -2735,6 +2736,9 @@ pub(crate) fn encode_promise_cluster(c: &ironhorse_vm::PromiseClusterSnapshot) -
         crate::slot_codec::encode_slot(&row.reject, &mut v);
         v.extend_from_slice(&row.remaining.to_be_bytes());
         v.extend_from_slice(&row.results.to_be_bytes());
+    }
+    if let Some(owner) = c.unhandled_rejection {
+        v.extend_from_slice(&owner.to_be_bytes());
     }
     v
 }
@@ -2875,7 +2879,15 @@ pub(crate) fn decode_promise_cluster(
             results: c.u32()?,
         });
     }
+    let unhandled_rejection = if c.i == p.len() { None } else { Some(c.u32()?) };
     c.done()?;
+    if unhandled_rejection.is_some_and(|owner| {
+        !promises
+            .iter()
+            .any(|row| row.owner == owner && row.state == 2)
+    }) {
+        return Err(SnapshotError::Corrupt("promise cluster"));
+    }
 
     // The cross-references, all four tables now in hand.
     let owners: std::collections::BTreeSet<u32> = promises.iter().map(|row| row.owner).collect();
@@ -3044,6 +3056,7 @@ pub(crate) fn decode_promise_cluster(
         }
     }
     Ok(ironhorse_vm::PromiseClusterSnapshot {
+        unhandled_rejection,
         promises,
         functions,
         guards,
@@ -3852,6 +3865,7 @@ static EMPTY_PROMISE_CLUSTER: ironhorse_vm::PromiseClusterSnapshot =
         guards: Vec::new(),
         combinators: Vec::new(),
         async_instances: Vec::new(),
+        unhandled_rejection: None,
     };
 
 #[cfg(test)]
@@ -9019,8 +9033,34 @@ mod promise_decoder_refusals {
             guards: vec![false],
             combinators: vec![],
             async_instances: vec![],
+            unhandled_rejection: None,
         }
     }
+    #[test]
+    fn reported_rejection_suffix_requires_a_rejected_promise_and_preserves_legacy_bytes() {
+        let mut state = valid();
+        let legacy = encode_promise_cluster(&state);
+        assert_eq!(
+            decode_promise_cluster(&legacy).unwrap().unhandled_rejection,
+            None
+        );
+        state.unhandled_rejection = Some(1);
+        assert!(decode(&state).is_err(), "pending promise is not a report");
+        state.promises[0].state = 2;
+        state.promises[0].ever_handled = true;
+        assert_eq!(
+            decode(&state).unwrap(),
+            state,
+            "a later handler keeps history"
+        );
+        state.unhandled_rejection = Some(999);
+        assert!(decode(&state).is_err(), "unknown owner");
+        state.unhandled_rejection = None;
+        state.promises[0].state = 0;
+        state.promises[0].ever_handled = false;
+        assert_eq!(encode_promise_cluster(&state), legacy);
+    }
+
     fn decode(state: &PromiseClusterSnapshot) -> Result<PromiseClusterSnapshot, SnapshotError> {
         decode_promise_cluster(&encode_promise_cluster(state))
     }

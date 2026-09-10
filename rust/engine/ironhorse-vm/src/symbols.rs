@@ -77,6 +77,7 @@ pub fn parse_symbols_checked(atom: &[u8]) -> Result<Vec<SymbolName>, crate::Halt
 
 pub(crate) fn decode_refusal(halt: crate::Halt) -> crate::RunOutcome {
     crate::RunOutcome {
+        unhandled_rejection: None,
         completed: false,
         result: String::new(),
         coercion_error: None,

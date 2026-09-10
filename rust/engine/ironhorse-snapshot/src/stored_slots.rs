@@ -378,7 +378,7 @@ row!(SavedJumpRow {
 });
 row!(PromiseClusterSnapshot {
     slots: [async_instances, promises, combinators],
-    metadata: [functions, guards]
+    metadata: [functions, guards, unhandled_rejection]
 });
 row!(PromiseRow {
     slots: [result, reactions],

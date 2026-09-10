@@ -2779,6 +2779,32 @@ pub struct Interp {
     /// metered no-op. A thenable-resolved promise acquires a *second* pair with
     /// its own guard, which is why the guard is per-pair, not per-promise.
     promise_guards: Tracked<Vec<bool>>,
+    #[boot_new(None)]
+    #[boot_template(state.unhandled_rejection)]
+    #[gc_root(optional)]
+    #[quiescent(retained)]
+    #[persist_refs(none)]
+    #[runtime_keys(none)]
+    #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
+    #[gc_slots(none, none)]
+    #[gc_weak(none)]
+    #[snapshot_table(none)]
+    /// First rejection still unhandled at a completed crank boundary. Its rooted promise owns the reason.
+    unhandled_rejection: Option<crate::value::SlotIndex>,
+    #[boot_new(Vec::new())]
+    #[boot_template(state.pending_rejections.clone())]
+    #[gc_root(indices)]
+    #[quiescent(empty)]
+    #[persist_refs(none)]
+    #[runtime_keys(none)]
+    #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
+    #[gc_slots(none, none)]
+    #[gc_weak(none)]
+    #[snapshot_table(none)]
+    /// Settlement order until the first report. Root every candidate until the job drain decides which remains unhandled.
+    pending_rejections: Vec<crate::value::SlotIndex>,
     #[boot_new(std::collections::VecDeque::new())]
     #[boot_template(state.promise_jobs.clone())]
     #[gc_root(jobs)]

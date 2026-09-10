@@ -35,6 +35,7 @@ fn carried_state_has_frozen_bytes_seals_costs_and_continuations() {
     assert_eq!(ironhorse_vm::COST_TABLE_VERSION, "ironhorse-meter-5");
     let corpus = include_str!("fixtures/state_golden.tsv");
     assert!(corpus.starts_with("# ironhorse-meter-5 "));
+    let format_19_corpus = include_str!("fixtures/state_golden_format_19.tsv");
     let prior_corpus = include_str!("fixtures/state_golden_meter_4.tsv");
     let format_16_corpus = include_str!("fixtures/state_golden_format_16.tsv");
     let controls = include_str!("fixtures/state_golden_reserved_ids.tsv");
@@ -45,6 +46,12 @@ fn carried_state_has_frozen_bytes_seals_costs_and_continuations() {
         assert_eq!(f.len(), 10);
         let label = f[0];
         let format_16: Vec<_> = format_16_corpus
+            .lines()
+            .skip(1)
+            .map(|line| line.split('\t').collect::<Vec<_>>())
+            .find(|row| row[0] == label)
+            .unwrap();
+        let format_19: Vec<_> = format_19_corpus
             .lines()
             .skip(1)
             .map(|line| line.split('\t').collect::<Vec<_>>())
@@ -71,6 +78,7 @@ fn carried_state_has_frozen_bytes_seals_costs_and_continuations() {
         assert!(labels.insert(label));
         for repeat in 0..2 {
             let machine = fresh(f[1]);
+            assert_format_19_bytes(&machine, &sig, format_19[5]);
             assert_previous_bytes(&machine, &sig, control[1]);
             assert_format_16_bytes(&machine, &sig, control[2]);
             let bytes = machine.write_snapshot(&sig).unwrap();
@@ -124,6 +132,7 @@ fn carried_state_has_frozen_bytes_seals_costs_and_continuations() {
                     f[8].parse::<u64>().unwrap(),
                     "{label}/{path}: final raw cost"
                 );
+                assert_format_19_bytes(&machine, &sig, format_19[9]);
                 assert_previous_bytes(&machine, &sig, control[3]);
                 assert_format_16_bytes(&machine, &sig, control[4]);
                 assert_eq!(
@@ -226,6 +235,15 @@ fn assert_previous_bytes(machine: &Interp, sig: &Signature, expected: &str) {
     image.meter.cost_table_version = "ironhorse-meter-4".into();
     image.version.format_version = 16;
     image.function_state.native_names = None;
+    assert_eq!(
+        hex_sha256(&ironhorse_snapshot::image::write_machine_unchecked(&image)),
+        expected
+    );
+}
+
+fn assert_format_19_bytes(machine: &Interp, sig: &Signature, expected: &str) {
+    let mut image = machine.snapshot_image(sig).unwrap().into_image();
+    image.version.format_version = 19;
     assert_eq!(
         hex_sha256(&ironhorse_snapshot::image::write_machine_unchecked(&image)),
         expected

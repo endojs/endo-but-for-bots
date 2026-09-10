@@ -1493,6 +1493,11 @@ pub struct RunOutcome {
     /// [`Self::host_coerced`] folds into an abort for a differential
     /// comparison.
     pub completed: bool,
+    /// First rejection still unhandled at a completed crank boundary, retained
+    /// for this machine's lifetime. This is a raw heap value, never guest-coerced.
+    /// Read [`Interp::unhandled_rejection`] again after heap collection: chunk
+    /// offsets in a previously copied outcome may have moved.
+    pub unhandled_rejection: Option<(crate::value::SlotIndex, Slot)>,
     /// Completion value rendered with ECMAScript `String()` semantics
     /// (valid when `completed`). For a value `String()` cannot coerce
     /// (see [`Self::coercion_error`]) this is the engine's display
@@ -2068,6 +2073,29 @@ impl Interp {
             .any(|p| p.state == PromiseState::Rejected && !p.ever_handled)
     }
 
+    /// The first rejection reported at a completed crank boundary. A handler
+    /// attached during that crank suppresses reporting; a later handler does
+    /// not erase a report already delivered. The promise and its reason remain
+    /// rooted and travel with snapshots. No guest conversion runs here.
+    pub fn unhandled_rejection(&self) -> Option<(crate::value::SlotIndex, Slot)> {
+        self.unhandled_rejection
+            .map(|owner| (owner, self.promises[&owner].result))
+    }
+
+    fn publish_unhandled_rejection(&mut self) {
+        if self.unhandled_rejection.is_none() {
+            self.unhandled_rejection = self.pending_rejections.iter().copied().find(|owner| {
+                self.promises
+                    .get(owner)
+                    .is_some_and(|promise| !promise.ever_handled)
+            });
+            if self.unhandled_rejection.is_some() {
+                self.snapshot_dirt.mark(SnapshotSection::Promises.mask());
+            }
+        }
+        self.pending_rejections.clear();
+    }
+
     /// The raw bytecode-dispatch count (`n_dispatched`), exposed for the C1
     /// histogram-reconciliation check (`opcode_total()` must equal this).
     #[cfg(feature = "cost-calibration")]
@@ -2262,6 +2290,7 @@ impl Interp {
     pub fn run_shared(&mut self, shared: std::rc::Rc<[u8]>) -> RunOutcome {
         if self.gc_failed {
             return RunOutcome {
+                unhandled_rejection: None,
                 completed: false,
                 result: String::new(),
                 coercion_error: None,
@@ -2281,6 +2310,7 @@ impl Interp {
                 self.last_crank_completed = false;
                 RunOutcome {
                     completed: false,
+                    unhandled_rejection: self.unhandled_rejection(),
                     result: String::new(),
                     coercion_error: None,
                     computrons: self.meter.computrons(),
@@ -2381,6 +2411,7 @@ impl Interp {
         // either host coercion; rendering reads the captured value and cannot
         // execute guest code or collect the heap.
         if completed {
+            self.publish_unhandled_rejection();
             self.result = Slot::undefined();
             self.exception = Slot::undefined();
             self.locals.clear();
@@ -2450,6 +2481,7 @@ impl Interp {
         // entry, so no segment cursor crosses a crank boundary.
         self.active_segment = None;
         RunOutcome {
+            unhandled_rejection: self.unhandled_rejection(),
             completed,
             result,
             coercion_error,

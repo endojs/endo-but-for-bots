@@ -2411,6 +2411,7 @@ impl Interp {
             .collect();
         async_instances.sort_unstable_by_key(|row| row.owner);
         PromiseClusterSnapshot {
+            unhandled_rejection: self.unhandled_rejection.map(|owner| owner.0),
             async_instances,
             promises: promises
                 .into_iter()
@@ -2513,6 +2514,15 @@ impl Interp {
         self.validate_restore_owners(snap.promises.iter().map(|row| row.owner), ROW)?;
         self.validate_restore_owners(snap.functions.iter().map(|row| row.function), ROW)?;
         self.validate_restore_owners(snap.async_instances.iter().map(|row| row.owner), ROW)?;
+        if let Some(owner) = snap.unhandled_rejection {
+            if !snap
+                .promises
+                .iter()
+                .any(|row| row.owner == owner && row.state == 2)
+            {
+                return Err(refuse("reported rejection has no rejected promise row"));
+            }
+        }
         let mut complete = std::collections::HashSet::new();
         for row in &snap.functions {
             self.validate_restore_owner(row.promise, ROW)?;
@@ -2888,6 +2898,7 @@ impl Interp {
                 },
             ));
         }
+        self.unhandled_rejection = snap.unhandled_rejection.map(crate::value::SlotIndex);
         self.promises.extend(promises);
         for (owner, data) in functions {
             self.functions.insert(owner, data);

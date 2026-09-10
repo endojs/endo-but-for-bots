@@ -773,6 +773,9 @@ impl Interp {
             pd.result = value;
             std::mem::take(&mut pd.reactions)
         };
+        if reject && !self.promises[&promise].ever_handled && self.unhandled_rejection.is_none() {
+            self.pending_rejections.push(promise);
+        }
         // Queue one job per registered reaction (XS's `fxQueueJob` per THEN),
         // preserving registration (FIFO) order.
         for reaction in reactions {
@@ -1955,5 +1958,35 @@ impl Interp {
             .tick_raw(AGGREGATE_ERROR_EXTRA + n * AGGREGATE_ERROR_PER_ELEMENT);
         self.install_aggregate_errors(inst, errors);
         Slot::of(Kind::Reference, Payload::Reference(inst))
+    }
+}
+
+#[cfg(test)]
+mod rejection_report_tests {
+    use super::*;
+
+    #[test]
+    fn pending_candidates_refuse_collection_until_boundary_selection() {
+        let mut vm = Interp::new();
+        let first = vm.new_promise_instance();
+        let second = vm.new_promise_instance();
+        vm.finish_promise_settlement(first, Slot::of(Kind::Integer, Payload::Integer(1)), true)
+            .unwrap();
+        vm.finish_promise_settlement(second, Slot::of(Kind::Integer, Payload::Integer(2)), true)
+            .unwrap();
+        vm.promises.get_mut(&first).unwrap().ever_handled = true;
+        assert_eq!(
+            vm.collect_garbage(),
+            Err(crate::gc::GcAdmissionError::NotQuiescent)
+        );
+        assert!(vm.promises.contains_key(&second));
+        vm.publish_unhandled_rejection();
+        assert_eq!(vm.unhandled_rejection().unwrap().0, second);
+        assert!(vm.pending_rejections.is_empty());
+        vm.collect_garbage().unwrap();
+        assert_eq!(
+            vm.unhandled_rejection().unwrap().1.value,
+            Payload::Integer(2)
+        );
     }
 }

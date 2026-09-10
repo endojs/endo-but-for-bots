@@ -222,6 +222,10 @@ pub mod engine {
     /// readings rather than a placeholder.
     #[derive(Debug)]
     pub struct EvalOutcome {
+        /// The VM's retained first unhandled rejection, without guest coercion.
+        /// Coordinates belong to the current interpreter and may move after
+        /// a later collection; this is not an independently owned guest value.
+        pub unhandled_rejection: Option<(ironhorse_vm::value::SlotIndex, ironhorse_vm::value::Slot)>,
         /// Completion value under ECMAScript `String()` semantics, or
         /// the engine's display rendering when `String()` cannot coerce
         /// the value (see `coercion_error`).
@@ -253,6 +257,7 @@ pub mod engine {
     impl From<RunOutcome> for EvalOutcome {
         fn from(o: RunOutcome) -> Self {
             EvalOutcome {
+                unhandled_rejection: o.unhandled_rejection,
                 result: o.result,
                 completed: o.completed,
                 coercion_error: o.coercion_error,
@@ -452,6 +457,7 @@ pub mod engine {
 
     fn unrun_outcome(halt: Halt, meter_raw: u64) -> RunOutcome {
         RunOutcome {
+            unhandled_rejection: None,
             completed: false,
             result: String::new(),
             coercion_error: None,
@@ -1138,7 +1144,7 @@ pub mod engine {
                     (outcome, None, crank_start_raw)
                 })
             })();
-            let (outcome, checkpointed, crank_start_raw) = match prepared {
+            let (mut outcome, checkpointed, crank_start_raw) = match prepared {
                 Ok(prepared) => prepared,
                 Err(error) => return Err(self.rewind_preparation_error(error)),
             };
@@ -1206,6 +1212,10 @@ pub mod engine {
                             );
                         }
                     }
+                    // Scheduled collection (or its recovery) may relocate reason
+                    // chunks after run_shared produced the original outcome.
+                    outcome.unhandled_rejection = self.session.as_ref()
+                        .and_then(|session| session.machine().unhandled_rejection());
                     Ok(outcome.into())
                 }
                 Some(Err(e)) => {
@@ -1438,9 +1448,11 @@ pub mod engine {
                 .unwrap();
             let epoch = machine.epoch().unwrap();
             let vm = machine.session.as_mut().unwrap().machine_mut();
-            let mut bytes = vm.chunks.raw_vec();
-            bytes[..4].copy_from_slice(&(u32::MAX - 1).to_le_bytes());
-            vm.chunks = ironhorse_vm::value::ChunkArena::from_image(bytes);
+            // Deliberately bypass the host checkpoint path. The collector's
+            // dirty-boundary assertion must be caught and rewind this state.
+            let (code, names) = ironhorse_compile::compile_atoms("committed=99").unwrap();
+            let code = vm.relink_crank(&code, &ironhorse_vm::parse_symbols(&names)).unwrap();
+            assert!(vm.run(&code).completed);
             assert!(vm.is_quiescent());
             assert!(
                 matches!(machine.collect(), Err(MachineError::Store(message)) if message.contains("collection failed"))
@@ -1451,6 +1463,30 @@ pub mod engine {
             machine.collect().unwrap();
             assert_eq!(machine.session.as_ref().unwrap().collections(), 1);
             assert_eq!(machine.eval("committed").unwrap().result, "42");
+        }
+
+        #[test]
+        fn scheduled_collection_refreshes_report_before_delivering_outcome() {
+            let dir = tempfile::tempdir().unwrap();
+            let options = HeapStoreOptions {
+                path: dir.path().join("rejection.sqlite"),
+                signature: "rejection-report-test".to_owned(),
+                cadence: CadencePolicy { checkpoint_every: 1, collect_every: 1 },
+                meter: MeterBounds::default(),
+            };
+            let mut machine = PersistentMachine::open(&options).unwrap();
+            let outcome = machine.eval(
+                "var garbage = 'x'.repeat(2000); garbage = null; Promise.reject(String.fromCharCode(55296));"
+            ).unwrap();
+            let current = machine.session.as_ref().unwrap().machine();
+            assert_eq!(outcome.unhandled_rejection, current.unhandled_rejection());
+            let (_, reason) = outcome.unhandled_rejection.unwrap();
+            let ironhorse_vm::value::Payload::String(chunk) = reason.value else {
+                panic!("string reason");
+            };
+            assert_eq!(current.chunks().slice(chunk, 2)[..], [0xd8, 0]);
+            assert_eq!(machine.failed_collections().0, 0);
+            machine.close().unwrap();
         }
 
         #[test]

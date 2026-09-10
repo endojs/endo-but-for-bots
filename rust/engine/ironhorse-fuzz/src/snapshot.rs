@@ -777,6 +777,7 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
         }
     }
     let promise_cluster = ironhorse_vm::PromiseClusterSnapshot {
+        unhandled_rejection: None,
         async_instances: Vec::new(),
         promises: prms_promises,
         functions: prms_functions,
