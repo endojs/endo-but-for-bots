@@ -3361,7 +3361,8 @@ fn accepted_compilation_check_cannot_reset_the_accumulated_index() {
             interval: 1000,
             count: u64::MAX - 101,
         },
-    );
+    )
+    .unwrap();
     vm.reattach_meter_host(Box::new(|_| true));
     assert!(vm.charge_compilation(1));
     assert_eq!(vm.meter_index(), u64::MAX - 99);

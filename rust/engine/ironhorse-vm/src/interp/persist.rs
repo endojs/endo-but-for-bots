@@ -177,7 +177,30 @@ impl Interp {
         stack: Vec<Slot>,
         symbol_names: Vec<SymbolName>,
         meter: crate::meter::MeterState,
-    ) {
+    ) -> Result<(), RestoreError> {
+        let refuse = |reason| RestoreError {
+            row: "snapshot_state",
+            reason,
+        };
+        // Slot collection reuses records but never shrinks the arena below
+        // its deterministic boot footprint. Boot-derived indices must remain
+        // addressable before rebuilding any prototype accessor metadata.
+        if slots.capacity() < self.boot_slot_count {
+            return Err(refuse("slot arena is smaller than the boot footprint"));
+        }
+        if !stack.is_empty() {
+            return Err(refuse("a quiescent restore requires an empty value stack"));
+        }
+        if symbol_names.len() > usize::from(u16::MAX) {
+            return Err(refuse("name table exceeds the property ID space"));
+        }
+        if slots.is_free_index(self.global_obj) {
+            return Err(refuse("global root is a free slot"));
+        }
+        let global = slots.get(self.global_obj);
+        if global.kind != Kind::Instance || !matches!(global.value, Payload::Reference(_)) {
+            return Err(refuse("global root is not an instance"));
+        }
         self.slots = slots;
         self.chunks = chunks;
         self.stack = stack;
@@ -215,6 +238,7 @@ impl Interp {
         // getter entry does not; re-derive it from the boot seeds (the
         // persist gate admits no other entry at a seed key).
         self.rebuild_boot_accessors();
+        Ok(())
     }
 
     /// The installed-names floor: ids at or below it keep
