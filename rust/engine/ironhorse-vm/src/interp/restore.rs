@@ -450,14 +450,7 @@ impl RestoreSession {
         snap: PromiseClusterSnapshot,
     ) -> Result<(), RestoreError> {
         self.admit("promise_cluster")?;
-        let result = if self.interp.restore_promise_cluster(snap) {
-            Ok(())
-        } else {
-            Err(RestoreError {
-                row: "promise_cluster",
-                reason: "malformed row set",
-            })
-        };
+        let result = self.interp.restore_promise_cluster(snap);
         self.failed = result.err();
         result
     }
@@ -680,6 +673,64 @@ mod tests {
             assert_eq!(error.row, "snapshot_state");
             assert_eq!(error.reason, expected);
             assert!(session.finish().is_err());
+        }
+    }
+
+    fn carried_promises() -> Interp {
+        let (code, names) = ironhorse_compile::compile_atoms(
+            "var a = Promise.resolve(1); var b = new Promise(function(r) { globalThis.resolveB = r; });",
+        ).unwrap();
+        let mut interp = Interp::new();
+        interp.link_intrinsics(&crate::parse_symbols(&names));
+        assert!(interp.run(&code).completed);
+        interp
+    }
+
+    #[test]
+    fn promise_cluster_prepares_all_rows_before_publication() {
+        let mut positive = carried_promises();
+        let rows = positive.promise_cluster_snapshot();
+        for row in &rows.functions {
+            positive
+                .functions
+                .remove(&crate::value::SlotIndex(row.function));
+        }
+        positive.restore_promise_cluster(rows.clone()).unwrap();
+        assert_eq!(positive.promise_cluster_snapshot(), rows);
+        for case in 0..9 {
+            let mut interp = carried_promises();
+            let before = interp.promise_cluster_snapshot();
+            assert_eq!(before.promises.len(), 2);
+            assert!(!before.functions.is_empty());
+            let mut rows = before.clone();
+            // This otherwise valid change must never be published on refusal.
+            rows.promises[0].result = Slot::of(Kind::Integer, Payload::Integer(2));
+            match case {
+                0 => rows.promises[1].state = 3,
+                1 => rows.promises[1].owner = rows.promises[0].owner,
+                2 => rows.promises[1].owner = u32::MAX,
+                3 => rows.promises[1].result = Slot::of(Kind::Reference, Payload::None),
+                4 => rows.functions[0].function = u32::MAX,
+                5 => rows.functions[0].promise = u32::MAX,
+                6 => rows.functions[0].name_chunk = 0,
+                7 => rows.functions[0].guard = 12345,
+                8 => rows.functions.push(rows.functions[0]),
+                _ => unreachable!(),
+            }
+            let functions: Vec<_> = before
+                .functions
+                .iter()
+                .map(|row| {
+                    let owner = crate::value::SlotIndex(row.function);
+                    (owner, interp.functions.remove(&owner).unwrap())
+                })
+                .collect();
+            assert!(interp.restore_promise_cluster(rows).is_err(), "case {case}");
+            for (owner, data) in functions {
+                assert!(!interp.functions.contains_key(&owner), "case {case}");
+                interp.functions.insert(owner, data);
+            }
+            assert_eq!(interp.promise_cluster_snapshot(), before, "case {case}");
         }
     }
 
