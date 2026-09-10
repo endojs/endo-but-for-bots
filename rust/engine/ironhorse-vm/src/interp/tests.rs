@@ -952,6 +952,72 @@ fn side_ref_tail_masked_undercount_poisons_during_page_pruning() {
 }
 
 #[test]
+fn regexp_restore_refuses_exhausted_legacy_key_space_without_poisoning() {
+    let mut interp = Interp::new();
+    let owner = interp.new_object();
+    assert!(!interp.symbol_ids.contains_key("lastIndex"));
+    interp.next_symbol_key_id = (interp.symbol_names.len() + 1) as u16;
+    let slots = interp.slots.records();
+    let error = interp
+        .restore_regexps(vec![(owner.0, "x".into(), String::new(), 0)])
+        .unwrap_err();
+    assert_eq!(error.row, "RegExps");
+    assert!(!interp.id_space_exhausted);
+    assert!(!interp.symbol_ids.contains_key("lastIndex"));
+    assert!(interp.regexps.is_empty());
+    assert_eq!(interp.slots.records(), slots);
+}
+
+#[test]
+fn regexp_restore_checks_the_entire_batch_before_legacy_migration() {
+    let mut interp = Interp::new();
+    let first = interp.new_object();
+    let second = interp.new_object();
+    let slots = interp.slots.records();
+    let names = interp.program_symbol_names().to_vec();
+    for (source, flags) in [("[", ""), ("x", "gg")] {
+        let error = interp
+            .restore_regexps(vec![
+                (first.0, "x".into(), String::new(), 2.0f64.to_bits()),
+                (second.0, source.into(), flags.into(), 0),
+            ])
+            .unwrap_err();
+        assert_eq!(error.row, "RegExps");
+        assert!(interp.regexps_snapshot().is_empty());
+        assert_eq!(interp.slots.records(), slots);
+        assert_eq!(interp.program_symbol_names(), names);
+    }
+    // A descriptor rejection must likewise leave the preceding legacy row alone.
+    let id = interp.regexp_last_index_id();
+    interp.set_own_unmetered(second, id, Slot::integer(1));
+    let slots = interp.slots.records();
+    assert!(interp
+        .restore_regexps(vec![
+            (first.0, "x".into(), String::new(), 0),
+            (second.0, "x".into(), String::new(), 0),
+        ])
+        .is_err());
+    assert_eq!(interp.slots.records(), slots);
+    let source = SymbolName::from_units(&[0xd800]);
+    interp
+        .restore_regexps(vec![(
+            first.0,
+            source.clone(),
+            String::new(),
+            2.0f64.to_bits(),
+        )])
+        .unwrap();
+    assert_eq!(interp.regexps_snapshot()[0].1, source);
+    assert_eq!(
+        interp
+            .slots
+            .get(interp.find_property(first, id).unwrap())
+            .value,
+        Payload::Integer(2)
+    );
+}
+
+#[test]
 fn error_restore_rejects_invalid_batches_without_partial_installation() {
     let mut interp = Interp::new();
     let first = interp.new_object();

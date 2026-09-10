@@ -955,17 +955,12 @@ macro_rules! snapshot_payloads {
                     }
                 }],
                 restore: [Dates, [regexps], (interp) {
-                    let ok = interp.restore_regexps(
+                    interp.restore_regexps(
                         regexps
                             .into_iter()
                             .map(|r| (r.owner, r.source, r.flags, r.last_index_bits))
                             .collect(),
-                    );
-                    if !ok {
-                        return Err(SnapshotError::Corrupt(
-                            "side-table restore: invalid persisted regexp state",
-                        ));
-                    }
+                    ).map_err(|_| SnapshotError::Corrupt("side-table restore: invalid persisted regexp state"))?;
                 }],
                 initialize: [Dates;
                     #[doc = " The regexp side table (schema 11; the `REGX` encoding)."]

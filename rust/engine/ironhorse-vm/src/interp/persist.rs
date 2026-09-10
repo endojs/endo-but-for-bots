@@ -945,43 +945,71 @@ impl Interp {
     /// no heap `lastIndex` property, so materialize it from the legacy numeric
     /// field. A newer snapshot must carry the standard non-enumerable,
     /// non-configurable data descriptor; reject any other shape.
-    pub fn restore_regexps(&mut self, rows: Vec<(u32, SymbolName, String, u64)>) -> bool {
+    pub fn restore_regexps(
+        &mut self,
+        rows: Vec<(u32, SymbolName, String, u64)>,
+    ) -> Result<(), RestoreError> {
+        self.validate_restore_owners(rows.iter().map(|row| row.0), "RegExps")?;
+        let id = self.symbol_ids.get("lastIndex").copied();
+        let mut prepared = Vec::with_capacity(rows.len());
         for (owner, source, flags, last_index_bits) in rows {
-            let Ok(program) =
-                ironhorse_regexp::compile_units_checked(&source.to_units(), &flags, u64::MAX, None)
-                    .result
-            else {
-                return false;
-            };
+            let source = source.to_units();
+            let program = ironhorse_regexp::compile_units_checked(&source, &flags, u64::MAX, None)
+                .result
+                .map_err(|_| RestoreError {
+                    row: "RegExps",
+                    reason: "invalid pattern or flags",
+                })?;
             let owner = crate::value::SlotIndex(owner);
-            let id = self.regexp_last_index_id();
-            match self.ordinary_get_own_descriptor(owner, id) {
+            let missing = match id.and_then(|id| self.ordinary_get_own_descriptor(owner, id)) {
                 Some(descriptor)
                     if descriptor.is_data()
                         && descriptor.enumerable == Some(false)
-                        && descriptor.configurable == Some(false) => {}
-                Some(_) => return false,
-                None => {
-                    let value = Self::slot_from_number(f64::from_bits(last_index_bits));
-                    self.set_own_unmetered_with_flag(
-                        owner,
-                        id,
-                        value,
-                        XS_DONT_ENUM_FLAG | XS_DONT_DELETE_FLAG,
-                    );
+                        && descriptor.configurable == Some(false) =>
+                {
+                    false
                 }
-            }
-            self.regexps.insert(
+                Some(_) => {
+                    return Err(RestoreError {
+                        row: "RegExps",
+                        reason: "invalid lastIndex descriptor",
+                    })
+                }
+                None => true,
+            };
+            prepared.push((
                 owner,
+                missing,
                 RegExpData {
                     program,
-                    source: source.to_units(),
+                    source,
                     flags,
                     last_index: f64::from_bits(last_index_bits),
                 },
-            );
+            ));
         }
-        true
+        if id.is_none()
+            && prepared.iter().any(|(_, missing, _)| *missing)
+            && self.symbol_names.len().saturating_add(1) >= usize::from(self.next_symbol_key_id)
+        {
+            return Err(RestoreError {
+                row: "RegExps",
+                reason: "no name ID available for lastIndex",
+            });
+        }
+        for (owner, missing, data) in prepared {
+            if missing {
+                let id = self.regexp_last_index_id();
+                self.set_own_unmetered_with_flag(
+                    owner,
+                    id,
+                    Self::slot_from_number(data.last_index),
+                    XS_DONT_ENUM_FLAG | XS_DONT_DELETE_FLAG,
+                );
+            }
+            self.regexps.insert(owner, data);
+        }
+        Ok(())
     }
 
     /// Quiescent snapshot of the `arguments_objects` brand set (the
