@@ -2156,7 +2156,7 @@ impl Interp {
             // every level passes through `mop_set` (a light frame) and back into
             // `call_native_method` (a heavy one). The pinned XS does not
             // complete this program either (it aborts at ~8180 computrons); the
-            // point is to degrade to a `Halt::StackOverflow` the host can
+            // point is to degrade to a `Halt::ReentryLimit` the host can
             // observe rather than overflowing the real thread stack and taking
             // the process down.
             self.mop_set(code, inst, id, value, this)?

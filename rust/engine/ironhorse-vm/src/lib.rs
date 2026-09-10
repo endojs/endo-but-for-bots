@@ -51,6 +51,7 @@ pub use compartment::{
     Compartment, CompartmentId, CompartmentOptions, CompartmentSkip, Intrinsics, Machine,
 };
 pub use gc::{GcStats, Heap};
+pub use interp::DecodeError;
 #[doc(hidden)]
 pub use interp::SIDE_TABLES;
 pub use interp::{
@@ -200,7 +201,7 @@ mod tests {
         // dispatch-count step limit does not bound, blowing the native stack.
         // The native re-entry depth is now capped by the native-recursion
         // budget ([`NATIVE_DEPTH_LIMIT`]), so an arbitrary corrupt snapshot
-        // degrades to `Halt::StackOverflow` instead of aborting the process.
+        // degrades to `Halt::ReentryLimit` instead of aborting the process.
         //
         // Run on the stack the budget is calibrated for
         // ([`NATIVE_STACK_BYTES`]): the default Rust *test* harness gives
@@ -218,8 +219,8 @@ mod tests {
             .expect("spawn regression thread");
         let halt = handle.join().expect("regression thread must not overflow");
         assert!(
-            matches!(halt, Halt::StackOverflow(_)),
-            "nested START_ASYNC must bound to StackOverflow, got {halt:?}"
+            matches!(halt, Halt::ReentryLimit { .. }),
+            "nested START_ASYNC must bound to ReentryLimit, got {halt:?}"
         );
     }
 
@@ -279,7 +280,10 @@ mod tests {
         .is_panic());
         // Provisional members (Open Question), included for the commit
         // decision:
-        assert!(Halt::Decode("truncated".to_string()).is_panic());
+        assert!(
+            Halt::Decode(crate::DecodeError::ProgramCounterOutOfBounds { pc: 0, len: 0 })
+                .is_panic()
+        );
         assert!(Halt::StepLimit(9).is_panic());
         // Not panics: an ordinary (uncaught) throw and normal completion.
         assert!(!Halt::synthetic_throw("catchable".to_string()).is_panic());

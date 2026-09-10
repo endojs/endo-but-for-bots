@@ -2053,7 +2053,7 @@ mod tests {
             Halt::MeterAbort,
             Halt::StepLimit(1),
             Halt::StackOverflow(1),
-            Halt::Decode("short".into()),
+            Halt::Decode(ironhorse_vm::DecodeError::ProgramCounterOutOfBounds { pc: 0, len: 0 }),
         ] {
             assert!(
                 halt_precheck("1", &halt).is_none(),

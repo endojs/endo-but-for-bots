@@ -123,7 +123,10 @@ pub mod engine {
             Halt::Decode(e) => format!("bytecode decode error: {e}"),
             Halt::Throw { rendered, .. } => format!("uncaught throw: {rendered}"),
             Halt::StackOverflow(n) => {
-                format!("stack overflow (value stack or native-recursion budget; {n} slots in use)")
+                format!("value stack overflow ({n} slots in use)")
+            }
+            Halt::ReentryLimit { depth, limit } => {
+                format!("native recursion limit (attempted weighted depth {depth}; limit {limit})")
             }
             Halt::Panic(PanicKind::EngineFault { message, location }) => match location {
                 Some(location) => format!("engine fault at {location}: {message}"),
@@ -1564,10 +1567,17 @@ pub mod engine {
         fn every_panic_source_classifies_as_panicked() {
             for halt in [
                 Halt::StackOverflow(7),
+                Halt::ReentryLimit {
+                    depth: 2049,
+                    limit: 2048,
+                },
                 Halt::MeterAbort,
                 Halt::EngineInvariant("bitwise:stack-underflow"),
                 engine_fault(),
-                Halt::Decode("truncated".to_string()),
+                Halt::Decode(ironhorse_vm::DecodeError::ProgramCounterOutOfBounds {
+                    pc: 0,
+                    len: 0,
+                }),
                 Halt::StepLimit(42),
             ] {
                 assert!(halt.is_panic(), "{halt:?} should be a panic");
@@ -1582,6 +1592,21 @@ pub mod engine {
         }
 
         #[test]
+        fn stack_diagnostics_distinguish_value_geometry_from_native_depth() {
+            assert_eq!(
+                describe_halt(&Halt::StackOverflow(4000)),
+                "value stack overflow (4000 slots in use)"
+            );
+            assert_eq!(
+                describe_halt(&Halt::ReentryLimit {
+                    depth: 2064,
+                    limit: 2048
+                }),
+                "native recursion limit (attempted weighted depth 2064; limit 2048)"
+            );
+        }
+
+        #[test]
         fn panicked_delegates_to_is_panic_for_every_panic() {
             // For every genuine panic variant the classifier's `Panicked`
             // arm fires *exactly when* `is_panic()` is true — never
@@ -1593,10 +1618,14 @@ pub mod engine {
                 Halt::Return,
                 Halt::synthetic_throw("x".to_string()),
                 Halt::StackOverflow(1),
+                Halt::ReentryLimit {
+                    depth: 2049,
+                    limit: 2048,
+                },
                 Halt::MeterAbort,
                 Halt::EngineInvariant("bitwise:stack-underflow"),
                 engine_fault(),
-                Halt::Decode("d".to_string()),
+                Halt::Decode(ironhorse_vm::DecodeError::InvalidSymbols),
                 Halt::StepLimit(1),
             ] {
                 let panicked = matches!(

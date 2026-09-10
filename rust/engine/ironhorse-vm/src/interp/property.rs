@@ -639,7 +639,7 @@ impl Interp {
     // a trap that runs guest code comes back in through the same entries — so
     // each of these is where a guest-shaped chain recurses on the host stack.
     // The `_inner` body is the internal method; the guarded entry charges
-    // [`LIGHT_FRAME_COST`] around it and halts with [`Halt::StackOverflow`]
+    // [`LIGHT_FRAME_COST`] around it and halts with [`Halt::ReentryLimit`]
     // past [`NATIVE_DEPTH_LIMIT`].
 
     /// `O.[[GetPrototypeOf]]()` as a slot (`Reference(proto)` or `Null`).

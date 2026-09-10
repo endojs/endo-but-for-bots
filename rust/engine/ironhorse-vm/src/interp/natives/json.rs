@@ -776,7 +776,7 @@ impl Interp {
     /// caller charges [`JSON_PARSE_SETUP_METERING`] once and `cost` at the end).
     /// A malformed input throws a catchable `SyntaxError`. Each nesting level
     /// of the input is one light frame of the native-recursion budget, so
-    /// `"[".repeat(1e6)` halts with [`Halt::StackOverflow`] instead of
+    /// `"[".repeat(1e6)` halts with [`Halt::ReentryLimit`] instead of
     /// overflowing the host stack (XS's `fxParseJSONValue` recurses the same
     /// way, bounded by its C stack).
     fn json_parse_value(

@@ -3135,7 +3135,7 @@ impl Interp {
     ) -> Result<u64, Step> {
         // One light frame of the native-recursion budget per nested array:
         // a self-containing array under `flat(Infinity)` halts with
-        // `Halt::StackOverflow` (XS recurses `fxFlattenIntoArray` on its C
+        // `Halt::ReentryLimit` (XS recurses `fxFlattenIntoArray` on its C
         // stack to the same end) instead of overflowing the host stack.
         self.with_native_frame(LIGHT_FRAME_COST, |vm| {
             vm.array_generic_flatten_into_inner(

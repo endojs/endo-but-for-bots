@@ -843,8 +843,8 @@ pub(super) fn parse_temporal_duration(text: &str) -> Option<TemporalDurationReco
             return None;
         }
         let number = &rest[..end];
-        let designator = rest.as_bytes().get(end).copied()? as char;
-        rest = &rest[end + 1..];
+        let designator = rest[end..].chars().next()?;
+        rest = &rest[end + designator.len_utf8()..];
         saw = true;
         if number.contains('.') {
             if designator != 'S' || !time {

@@ -284,7 +284,7 @@ pub const FRAME_OVERHEAD_SLOTS: usize = 4;
 ///
 /// One counter, [`Interp::native_depth`], is charged by every one of those
 /// re-entry points and checked against this ceiling; past it the engine halts
-/// with [`Halt::StackOverflow`] — the abort-to-host XS raises from
+/// with [`Halt::ReentryLimit`] — distinct from the value-stack abort XS raises from
 /// `fxCheckCStack`, deterministic across hosts because it is a counter rather
 /// than a stack-address margin. The *depth* at which it fires is this
 /// engine's, sized to its own frames, not XS's: the oracle's C stack admits
@@ -309,6 +309,9 @@ pub const FRAME_OVERHEAD_SLOTS: usize = 4;
 /// budget: [`crate::NATIVE_STACK_BYTES`] states the size the engine requires,
 /// per build profile, and `tests/native_recursion_budget.rs` pins each family
 /// at the ceiling on a thread of exactly that size.
+/// This is a deliberate release-versioned engine limit. Changing the budget
+/// or frame weights changes execution acceptance and requires a release change;
+/// the exact 63/64 callback boundary is pinned by `native_recursion_budget`.
 pub const NATIVE_DEPTH_LIMIT: usize = 2048;
 
 /// Budget units charged by a **heavy** native frame: a `dispatch_at`
@@ -1280,7 +1283,7 @@ pub enum Halt {
     /// `tests/halt_label_registry.rs`.
     EngineInvariant(&'static str),
     /// The bytecode was truncated or an opcode byte was invalid.
-    Decode(String),
+    Decode(DecodeError),
     /// A JS-level throw that escaped every guest handler and reached the
     /// host boundary. `value` is the original guest value, carried through
     /// nested dispatch and native catches before this outcome is constructed;
@@ -1293,15 +1296,14 @@ pub enum Halt {
     /// engine error built anywhere else must be a real error object routed
     /// through `raise_js`, so guest `try`/`catch` can observe it.
     Throw { value: Slot, rendered: String },
-    /// The value stack was exhausted (XS's `fxOverflow` →
-    /// `fxAbort(XS_JAVASCRIPT_STACK_OVERFLOW_EXIT)`): a fixed-geometry
-    /// stack overflow — or the native-recursion budget was exhausted
-    /// ([`NATIVE_DEPTH_LIMIT`], XS's `fxCheckCStack`). Like XS's, this is an
-    /// **abort to the host**, not a catchable `RangeError` — a deterministic,
-    /// consensus-relevant limit in the xsnap lineage. Carries the value-stack
-    /// slot count in use at the halt for diagnostics (over the limit in the
-    /// first case; incidental in the second).
+    /// XS's fixed-geometry value-stack abort (`fxOverflow`). Carries the
+    /// slots in use before the refused frame installation. Not catchable.
     StackOverflow(usize),
+    /// The release's implementation-specific native recursion budget was
+    /// exhausted. `depth` is the attempted weighted depth, including the
+    /// refused activation; `limit` is the release's maximum weighted depth.
+    /// This abort is distinct from the modeled XS value-stack geometry.
+    ReentryLimit { depth: usize, limit: usize },
     /// A **net-new panic** with no legacy `Halt` variant (design
     /// `ironhorse-panic.md` § The Formal `Panic` Category, item 3). The
     /// pre-existing panics (`StackOverflow`, `MeterAbort`) keep their flat,
@@ -1360,7 +1362,7 @@ impl Halt {
     /// still the sole definition of "is a panic," not of "must discard the
     /// crank" (a strictly larger set).
     ///
-    /// The settled core is `StackOverflow | MeterAbort | EngineInvariant(_) | Panic(_)`.
+    /// The settled core is `StackOverflow | ReentryLimit | MeterAbort | EngineInvariant(_) | Panic(_)`.
     /// `Decode` and the harness-only `StepLimit` are **provisional**
     /// members: they terminate-without-commit like a panic, but their
     /// provenance is supervisor/harness rather than guest behavior, so
@@ -1377,6 +1379,7 @@ impl Halt {
         matches!(
             self,
             Halt::StackOverflow(_)
+                | Halt::ReentryLimit { .. }
                 | Halt::MeterAbort
                 | Halt::HeapExhausted
                 | Halt::Panic(_)
@@ -1559,6 +1562,71 @@ impl RunOutcome {
         }
     }
 }
+
+/// A structured failure to decode execution input. Hosts can inspect the
+/// category and offsets without parsing diagnostic text.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum DecodeError {
+    ProgramCounterOutOfBounds {
+        pc: usize,
+        len: usize,
+    },
+    InvalidOpcode {
+        pc: usize,
+        byte: u8,
+    },
+    UnresolvableInstructionLength {
+        pc: usize,
+        opcode: u8,
+    },
+    TruncatedInstruction {
+        pc: usize,
+        opcode: u8,
+        needed: usize,
+        remaining: usize,
+    },
+    InvalidCatchTarget {
+        pc: usize,
+        target: usize,
+        len: usize,
+    },
+    InvalidSymbols,
+    Relink(RelinkError),
+    /// Tooling had no bytecode to submit after source compilation failed.
+    MissingBytecode,
+}
+
+impl std::fmt::Display for DecodeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ProgramCounterOutOfBounds { pc, len } => write!(f, "pc {pc} past end {len}"),
+            Self::InvalidOpcode { pc, byte } => {
+                write!(f, "invalid opcode byte {byte:#04x} at {pc}")
+            }
+            Self::UnresolvableInstructionLength { pc, opcode } => {
+                write!(f, "opcode {opcode:#04x} at {pc} has unresolvable length")
+            }
+            Self::TruncatedInstruction {
+                pc,
+                opcode,
+                needed,
+                remaining,
+            } => write!(
+                f,
+                "opcode {opcode:#04x} at {pc} needs {needed} bytes, {remaining} left"
+            ),
+            Self::InvalidCatchTarget { pc, target, len } => {
+                write!(f, "catch target {target} past end {len} at {pc}")
+            }
+            Self::InvalidSymbols => f.write_str("invalid CESU-8 symbols atom"),
+            Self::Relink(error) => write!(f, "relink refused: {error:?}"),
+            Self::MissingBytecode => f.write_str("compile produced no bytecode"),
+        }
+    }
+}
+
+impl std::error::Error for DecodeError {}
 
 /// Why [`Interp::relink_crank`] refused (side-table ledger G2). Every
 /// variant is fail-closed: nothing ran, the machine is unchanged.

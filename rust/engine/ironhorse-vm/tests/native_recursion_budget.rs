@@ -1,7 +1,7 @@
 //! Guest code halts the crank, never the process: every guest-reachable
 //! native recursion is bounded by the engine's one native-recursion budget
 //! ([`NATIVE_DEPTH_LIMIT`]) and degrades to a structured
-//! [`Halt::StackOverflow`] — the abort-to-host XS raises from
+//! [`Halt::ReentryLimit`] — the abort-to-host XS raises from
 //! `fxCheckCStack` — instead of overflowing the host thread's stack, which is
 //! a `SIGABRT` no `catch_unwind` can contain.
 //!
@@ -76,8 +76,8 @@ fn on_contract_stack_with_global(
 
 fn assert_stack_overflow(out: &RunOutcome, what: &str) {
     assert!(
-        matches!(out.halt, Halt::StackOverflow(_)),
-        "{what} must halt with StackOverflow at the native-recursion budget; halt: {:?}",
+        matches!(out.halt, Halt::ReentryLimit { depth, limit } if depth > limit && limit == NATIVE_DEPTH_LIMIT),
+        "{what} must halt with ReentryLimit at the native-recursion budget; halt: {:?}",
         out.halt
     );
     assert!(!out.completed, "{what} must not complete");

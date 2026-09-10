@@ -23,7 +23,7 @@ impl Interp {
         // Charged against the native-recursion budget like every other MOP
         // entry point: forwarding down a chain of untrapped proxies recurses
         // here, and an unbudgeted recursion overflows the real stack and
-        // aborts the process instead of halting with `StackOverflow`.
+        // aborts the process instead of halting with `ReentryLimit`.
         self.with_native_frame(LIGHT_FRAME_COST, |vm| {
             vm.uninterned_index_get_inner(code, inst, index, receiver)
         })

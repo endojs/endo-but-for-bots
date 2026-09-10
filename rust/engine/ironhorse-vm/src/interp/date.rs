@@ -115,7 +115,7 @@ fn parse_iso_date_string(text: &str) -> Option<f64> {
     if date.len() < year_width {
         return None;
     }
-    let year_text = &date[..year_width];
+    let year_text = date.get(..year_width)?;
     let year_digits = year_text.trim_start_matches(['+', '-']);
     if year_digits.len() != year_width - usize::from(year_width == 7)
         || !year_digits.bytes().all(|byte| byte.is_ascii_digit())
@@ -147,13 +147,13 @@ fn parse_iso_date_string(text: &str) -> Option<f64> {
             let zone = &zone[1..];
             let (hours, minutes) = if zone.len() == 5 && zone.as_bytes()[2] == b':' {
                 (
-                    zone[..2].parse::<i128>().ok()?,
+                    zone.get(..2)?.parse::<i128>().ok()?,
                     zone[3..].parse::<i128>().ok()?,
                 )
             } else if zone.len() == 4 {
                 (
-                    zone[..2].parse::<i128>().ok()?,
-                    zone[2..].parse::<i128>().ok()?,
+                    zone.get(..2)?.parse::<i128>().ok()?,
+                    zone.get(2..)?.parse::<i128>().ok()?,
                 )
             } else {
                 return None;
@@ -215,7 +215,7 @@ fn parse_xs_legacy_iso_string(text: &str) -> Option<f64> {
     if date.len() < year_width {
         return None;
     }
-    let year_text = &date[..year_width];
+    let year_text = date.get(..year_width)?;
     let year_digits = year_text.trim_start_matches(['+', '-']);
     if year_digits.len() != year_width - usize::from(year_width == 7)
         || !year_digits.bytes().all(|byte| byte.is_ascii_digit())
@@ -258,13 +258,13 @@ fn parse_xs_legacy_iso_string(text: &str) -> Option<f64> {
             let zone = &zone[1..];
             let (hours, minutes) = if zone.len() == 5 && zone.as_bytes()[2] == b':' {
                 (
-                    zone[..2].parse::<i128>().ok()?,
+                    zone.get(..2)?.parse::<i128>().ok()?,
                     zone[3..].parse::<i128>().ok()?,
                 )
             } else if zone.len() == 4 {
                 (
-                    zone[..2].parse::<i128>().ok()?,
-                    zone[2..].parse::<i128>().ok()?,
+                    zone.get(..2)?.parse::<i128>().ok()?,
+                    zone.get(2..)?.parse::<i128>().ok()?,
                 )
             } else if zone.len() == 2 {
                 (zone.parse::<i128>().ok()?, 0)
