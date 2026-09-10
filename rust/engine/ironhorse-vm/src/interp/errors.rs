@@ -308,6 +308,32 @@ impl Interp {
         Slot::of(Kind::Reference, Payload::Reference(inst))
     }
 
+    /// Install the shared non-enumerable, writable, configurable `errors`
+    /// array after each caller has charged its own construction path.
+    pub(super) fn install_aggregate_errors(
+        &mut self,
+        inst: crate::value::SlotIndex,
+        errors: Vec<Slot>,
+    ) {
+        let n = errors.len();
+        let arr_inst = self.slots.alloc(Slot::instance(self.array_proto));
+        let mut arr_data = ArrayData::default();
+        for (i, mut v) in errors.into_iter().enumerate() {
+            v.id = 0;
+            v.next = crate::value::SlotIndex::NULL;
+            arr_data.insert_item(i as u32, v, &mut self.side_refs);
+        }
+        arr_data.length = n as u32;
+        self.arrays.insert(arr_inst, arr_data);
+        let eid = self.intern_static_key_unmetered("errors");
+        self.set_own_unmetered_with_flag(
+            inst,
+            eid,
+            Slot::of(Kind::Reference, Payload::Reference(arr_inst)),
+            XS_DONT_ENUM_FLAG,
+        );
+    }
+
     /// `new AggregateError(errors, message)` (`fx_AggregateError`): the base
     /// error (name "AggregateError", message from arg **1**), plus an own
     /// `errors` Array built by iterating arg 0. XS builds the base with
@@ -389,22 +415,7 @@ impl Interp {
         // `fxCacheArray`) plus the `fxGetIterator`/`fxIteratorNext` walk cost.
         let n = err_elems.len() as u64;
         self.charge_and_check(AGGREGATE_ERROR_EXTRA + n * AGGREGATE_ERROR_PER_ELEMENT)?;
-        let arr_inst = self.slots.alloc(Slot::instance(self.array_proto));
-        let mut arr_data = ArrayData::default();
-        for (i, mut v) in err_elems.into_iter().enumerate() {
-            v.id = 0;
-            v.next = crate::value::SlotIndex::NULL;
-            arr_data.insert_item(i as u32, v, &mut self.side_refs);
-        }
-        arr_data.length = n as u32;
-        self.arrays.insert(arr_inst, arr_data);
-        let eid = self.intern_static_key_unmetered("errors");
-        self.set_own_unmetered_with_flag(
-            inst,
-            eid,
-            Slot::of(Kind::Reference, Payload::Reference(arr_inst)),
-            XS_DONT_ENUM_FLAG,
-        );
+        self.install_aggregate_errors(inst, err_elems);
         Ok(Slot::of(Kind::Reference, Payload::Reference(inst)))
     }
 
