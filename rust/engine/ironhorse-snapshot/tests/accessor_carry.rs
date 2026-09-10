@@ -193,3 +193,35 @@ fn malformed_accessor_rows_are_refused() {
         Ok(_) => panic!("an unregistered accessor id must not restore"),
     }
 }
+
+#[test]
+fn collection_size_getters_and_guest_edits_survive_resume() {
+    for (first, observation, expected) in [
+        (
+            "var s = new Set([1, 2]); var m = new Map([[1, 2]]); var get = Object.getOwnPropertyDescriptor(Set.prototype, 'size').get; 0",
+            "s.size + ':' + m.size + ':' + get.call(s)",
+            "2:1:2",
+        ),
+        (
+            "var s = new Set([1]); Object.defineProperty(Set.prototype, 'size', { get() { return 42; }, configurable: true }); 0",
+            "s.size",
+            "42",
+        ),
+        (
+            "var s = new Set([1]); delete Set.prototype.size; 0",
+            "typeof s.size",
+            "undefined",
+        ),
+    ] {
+        let mut store = MemoryStore::new();
+        let seen = twin(first, &[observation], &mut store);
+        assert_eq!(seen[0].2, expected);
+        let (code, names) = compile(first);
+        let mut vm = Interp::new();
+        vm.link_intrinsics(&names);
+        assert!(vm.run(&code).completed);
+        let bytes = vm.write_snapshot(&sig()).unwrap();
+        let mut restored = from_snapshot_bytes(&bytes, &sig()).unwrap();
+        assert_eq!(crank(&mut restored, observation).2, expected);
+    }
+}

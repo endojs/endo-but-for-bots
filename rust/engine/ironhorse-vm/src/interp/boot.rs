@@ -897,6 +897,21 @@ impl Interp {
                 2 => self.weakmap_proto = proto,
                 _ => self.weakset_proto = proto,
             }
+            if cache < 2 {
+                let method = if cache == 0 {
+                    NativeMethod::MapSizeGetter
+                } else {
+                    NativeMethod::SetSizeGetter
+                };
+                let getter = self.alloc_named_method(method, "get size", 0);
+                self.proto_accessors.push((
+                    proto,
+                    ProtoAccessorKey::String("size"),
+                    getter,
+                    None,
+                    name,
+                ));
+            }
             let methods: &[(&'static str, u32, NativeMethod)] = match cache {
                 0 => &[
                     ("set", 2, NativeMethod::MapSet),

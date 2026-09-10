@@ -169,6 +169,24 @@ impl Interp {
         {
             self.intern_static_key_unmetered("constructor");
         }
+        // GetSetRecord and iterator stepping perform these observable reads
+        // even when source names only the Set operation itself.
+        if [
+            "union",
+            "intersection",
+            "difference",
+            "symmetricDifference",
+            "isSubsetOf",
+            "isSupersetOf",
+            "isDisjointFrom",
+        ]
+        .iter()
+        .any(|name| names_method(name))
+        {
+            for name in ["size", "has", "keys", "next", "value", "done"] {
+                self.intern_static_key_unmetered(name);
+            }
+        }
         if ["all", "allSettled", "race", "any"]
             .iter()
             .any(|name| names_method(name))

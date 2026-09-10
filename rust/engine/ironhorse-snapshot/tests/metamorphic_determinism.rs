@@ -105,6 +105,8 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
     // Pin the current heap under both historical meter/version markers as
     // independent encoding controls. The F189 namespace reservation moves
     // symbol IDs in this heap, so these no longer reconstruct pre-2B bytes.
+    // Map/Set size getter allocations change the boot fingerprint and heap.
+    // These controls encode the current heap, not historical boot layouts.
     // This fixture does not generate reusable chunk blocks.
     let mut previous = session.machine().snapshot_image(&sig).unwrap().into_image();
     previous.meter.cost_table_version = "ironhorse-meter-4".into();
@@ -113,20 +115,20 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
     assert_eq!(
         hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&previous)),
         // F189 reserves MAX for environments; symbol IDs now start at MAX-1.
-        "65e6e5c7d7713d17a9512e6805a0ce3760898c53d42df0b5aafbfc521426f6fb"
+        "d84c86dd44b32f40402931419d7ec173fcd427b661b12dd77a220b6858001332"
     );
     previous.meter.cost_table_version = "ironhorse-meter-5".into();
     assert_eq!(
         hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&previous)),
         // F189 reserves MAX for environments; symbol IDs now start at MAX-1.
-        "bbd3d7dd20719bc3f94265de2843dcf1a9fba6104035a9789ed5e7aff89a759a"
+        "9f021000434cf04136a4a35fe3ddc2943c6522dc8a2c31be9ab57ae339e521a7"
     );
 
     let mut format19 = session.machine().snapshot_image(&sig).unwrap().into_image();
     format19.version.format_version = 19;
     assert_eq!(
         hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&format19)),
-        "01773ba067f13551484735648c96e27ca3907059c039684d1cc9b80af46530bb"
+        "f1557aab3334933b351940ca7b5cbe070ee42d325a440ed61c0820b8d7b38e90"
     );
 
     let blob = session
@@ -348,7 +350,7 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Format18 adds the boot-native name table to FUNC.
         // Format19: saved-handler segment identity. Guest result and meter pins stay fixed.
         // Format20 / schema31 carry the first reported rejection.
-        "b3567bd4b3d8a99c09693f99bf22a764cac564a1e7a8bf2bbfc263384f76e86a",
+        "e129c2191459e2f228d5fd84f78ca28873c16f36786396ab19ce95db7ec90fce",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -562,7 +564,7 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Store29 and FUNC native-name rows change the authenticated state.
         // Schema30 and format19 authenticate the saved-handler layout.
         // Schema31 / format20 authenticate the rejection-report suffix.
-        "1b6a74257b33ad22fc30fb04cbeee85c406abda26d67cb98657cba614aa67eec",
+        "601fece7ad269cb87dab53afa8d9d79af97f185fd0b43c3c0589578412c3f007",
         "epoch-3 seal chain"
     );
 }

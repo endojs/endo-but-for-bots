@@ -239,3 +239,87 @@ fn growing_links_install_implicit_dependencies_without_reviving_deleted_properti
         assert_eq!(outcome.completed, completed, "{second}: {:?}", outcome.halt);
     }
 }
+
+#[test]
+fn set_operations_link_their_implicit_property_reads() {
+    for (expression, expected) in [
+        (
+            "[...new Set([1,2]).union(new Set([2,3]))].join(',')",
+            "1,2,3",
+        ),
+        (
+            "[...new Set([1,2]).intersection(new Set([2,3]))].join(',')",
+            "2",
+        ),
+        (
+            "[...new Set([1,2]).difference(new Set([2,3]))].join(',')",
+            "1",
+        ),
+        (
+            "[...new Set([1,2]).symmetricDifference(new Set([2,3]))].join(',')",
+            "1,3",
+        ),
+        ("new Set([1]).isSubsetOf(new Set([1,2]))", "true"),
+        ("new Set([1,2]).isSupersetOf(new Set([1]))", "true"),
+        ("new Set([1]).isDisjointFrom(new Set([2]))", "true"),
+    ] {
+        for later in [false, true] {
+            let mut vm = Interp::new();
+            let (mut code, names) = compile(expression);
+            if later {
+                let (initial, initial_names) = compile("0");
+                vm.link_intrinsics(&initial_names);
+                assert!(vm.run(&initial).completed);
+                code = vm.relink_crank(&code, &names).unwrap();
+            } else {
+                vm.link_intrinsics(&names);
+            }
+            let outcome = vm.run(&code);
+            assert!(outcome.completed, "{expression}: {outcome:?}");
+            assert_eq!(outcome.result, expected);
+        }
+    }
+    let mut vm = Interp::new();
+    let (initial, names) = compile("delete Set.prototype.size; 0");
+    vm.link_intrinsics(&names);
+    assert!(vm.run(&initial).completed);
+    let (code, names) = compile("new Set([1]).union(new Set([2]))");
+    let code = vm.relink_crank(&code, &names).unwrap();
+    let outcome = vm.run(&code);
+    assert!(!outcome.completed);
+    assert!(format!("{:?}", outcome.halt).contains("other.size is NaN"));
+}
+
+#[test]
+fn collection_size_is_an_observable_brand_checked_accessor() {
+    let (code, names) = compile(
+        r#"
+        var checks = [];
+        for (var C of [Map, Set]) {
+            var d = Object.getOwnPropertyDescriptor(C.prototype, 'size');
+            var value = new C();
+            checks.push(typeof d.get === 'function' && d.set === undefined &&
+                d.configurable && !d.enumerable && d.get.name === 'get size' &&
+                d.get.length === 0 && d.get.call(value) === 0);
+            for (var wrong of [{}, new WeakMap(), new WeakSet(),
+                               C === Map ? new Set() : new Map(),
+                               new Proxy(value, {})]) {
+                try { d.get.call(wrong); checks.push(false); }
+                catch (e) { checks.push(e instanceof TypeError); }
+            }
+            Object.defineProperty(value, 'size', { value: 17 });
+            checks.push(value.size === 17 && Reflect.get(value, 'size') === 17);
+            Object.defineProperty(C.prototype, 'size', { get() { return 23; } });
+            checks.push(new C().size === 23);
+            delete C.prototype.size;
+            checks.push(new C().size === undefined);
+        }
+        checks.every(Boolean)
+        "#,
+    );
+    let mut vm = Interp::new();
+    vm.link_intrinsics(&names);
+    let outcome = vm.run(&code);
+    assert!(outcome.completed, "{outcome:?}");
+    assert_eq!(outcome.result, "true");
+}

@@ -5665,6 +5665,19 @@ impl Interp {
             NativeMethod::JsonStringify | NativeMethod::JsonParse => {
                 self.call_json(m, base, argc, code)?
             }
+            NativeMethod::MapSizeGetter | NativeMethod::SetSizeGetter => {
+                let expected = if m == NativeMethod::MapSizeGetter {
+                    CollKind::Map
+                } else {
+                    CollKind::Set
+                };
+                let inst = self
+                    .collection_ref(this)
+                    .filter(|inst| self.collections[inst].kind == expected)
+                    .ok_or_else(|| self.collection_brand_error(expected, false))?;
+                self.meter.tick_raw(COLLECTION_SIZE_GET_METERING);
+                Slot::integer(self.collections[&inst].live_len() as i32)
+            }
             NativeMethod::MapSet
             | NativeMethod::MapGet
             | NativeMethod::MapHas

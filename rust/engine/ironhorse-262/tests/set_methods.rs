@@ -149,3 +149,16 @@ fn set_methods_require_a_set_receiver() {
          catch (e) { ok = e instanceof TypeError; } ok",
     );
 }
+
+#[test]
+fn collection_size_getters_preserve_metering() {
+    for source in [
+        "new Map().size",
+        "new Set().size",
+        "var s = new Set(); s.size + s.size + s.size + s.size",
+    ] {
+        let run = dual_run(source).expect("the XS oracle machine must start");
+        assert!(run.observables_agree(), "{source}: {run:?}");
+        assert_eq!(run.ironhorse_meter_raw, run.oracle_meter_raw, "{source}");
+    }
+}

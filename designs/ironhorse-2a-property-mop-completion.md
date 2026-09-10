@@ -139,7 +139,7 @@ This is not a proof of every arbitrary heap edge, prototype graph, chunk block
 boundary, or deferred payload.
 Existing unsupported JSON surrogate syntax remains an explicit refusal; this work
 does not claim complete JSON conformance.
-The XS oracle was not run.
+The initial integration did not run the XS oracle.
 
 Upstream's quiescent-only collection admission, shared catch-scope maps, checked
 stack operands, reserved environment/key IDs, and read-only diagnostic rendering
@@ -161,8 +161,39 @@ Strict VM clippy passes with warnings denied.
 Engine formatting passes.
 Rustdoc completes with fifty-nine VM warnings about existing links and private
 items; it is not a warning-free documentation build.
-No XS oracle tests or differential oracle suite were run.
+The initial validation did not run the XS oracle.
+The CI follow-up passes the full compiler/RegExp/262/fuzz parity suite,
+as well as targeted oracle-free regressions.
 
 Each implementation increment and rebase conflict resolution received an
 adversarial read-only subagent review before commit.
 The final review found no remaining blocker, with the limitations above retained.
+
+
+## CI follow-up
+
+The late-catch multi-crank oracle case now passes and no longer has a known-failure
+exception.
+Restore accepts null-prototype instances while retaining instance-kind and live-slot
+checks; regression coverage includes indexed objects, arrays, collections, functions,
+and the global object.
+The SQLite migration witness includes schema 30 in the chain to schema 31.
+
+Map and Set now expose real, brand-checked `size` accessors through the MOP.
+Set operations link their implicit property dependencies on initial and growing links.
+Direct reads, reflection, native calls, and restored accessors observe the same property;
+guest shadows, replacements, and deletions are preserved.
+The getter allocations change the mechanically derived boot fingerprint and canonical
+snapshot/store golden values, without changing format 20 or schema 31.
+Snapshots from the earlier boot layout fail the existing `BootLayoutMismatch` gate;
+this is not a transparent migration of that layout.
+
+All 41 release-worker tests pass after the null-prototype restore correction.
+The Set differential suite passes, including raw meter equality for direct and repeated
+size reads on empty collections.
+Array-initialized collections and a loop probe still expose meter differences;
+this does not claim raw parity for those cases.
+The full SQLite suite (116 tests) and the vat-surgery example (20 tests) pass
+with store-integrity enabled.
+After adding the collection accessors, the rebuilt release worker also passes the
+cross-vat counter and persisted promise-listener restart scenarios.
