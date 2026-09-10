@@ -1549,9 +1549,9 @@ pub fn partial_collect(
 /// container-visible — so the replicas' bytes diverge.
 ///
 /// This is latent today and must stay that way: `PersistentMachine`'s
-/// scheduled collection calls [`partial_collect`], whose candidate set is
-/// the whole store and which is therefore resume-invariant, and this
-/// collector is reached only from tests. The `CadencePolicy` replica
+/// scheduled collection calls [`full_collect`], which traces the whole retained
+/// graph independently of `gen_dirty`, and this collector is reached only from
+/// tests. The `CadencePolicy` replica
 /// claim ("same policy ⟹ same bytes") assumes a resume-invariant
 /// collector. Anyone flipping `collect_every` to this one must first make
 /// the candidate set depend on durable state rather than session

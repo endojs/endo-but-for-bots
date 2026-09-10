@@ -3,16 +3,32 @@
 | | |
 |---|---|
 | **Created** | 2026-09-10 |
+| **Updated** | 2026-09-10 |
 | **Author** | kumavis (prompted) |
-| **Status** | Not Started |
+| **Status** | In Progress |
 | **Source** | GC correctness follow-up to PRs #1250–#1253 |
 
 ## Status and scope
 
-This is an accepted implementation direction, **not implemented by this document**.
-The observed code baseline is `211e094c2246d5e977bd54177ef06f1c7fc3e59e`.
-Locate constructs by name in the current tree; this document does not depend on line numbers.
-No runtime behavior, test contract, collection cadence, or snapshot format changes here.
+The admission and production collection implementation has landed on the Phase 2B branch.
+`Interp::collect_garbage` and `free_pages` return typed refusal before mutation unless
+`is_quiescent()` holds, and the snapshot `full_collect` adapter preserves store admission.
+`PersistentMachine::collect` now uses the exact collector, reclaiming weak entries and
+chunk garbage before checkpointing; failure rewinds to the last durable delivery.
+MacOS debug/release admission, root, persistence, and recovery tests pass.
+Cross-platform CI and final performance analysis remain in progress.
+The historical architecture review is unchanged.
+
+The promise temporary-root ranges remain in place after review.
+The finally paths now read and update settlement/capability state through those ranges,
+and their cleanup distinguishes ordinary completion from a preserved host-halt activation.
+Removing the ranges would require an independent execution-state refactor; this change
+retains their operand-preservation and next-run-reset coverage.
+The native-local rooting obligation at an unsupported in-crank collection point is removed
+by admission, rather than by claiming every native local is traced.
+
+The observed pre-implementation baseline was `211e094c2246d5e977bd54177ef06f1c7fc3e59e`.
+The table below records that baseline, not current behavior.
 
 For now, the only supported whole-machine collection point will be a quiescent interpreter.
 This narrows the supported invocation boundaries in

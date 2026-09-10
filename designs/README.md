@@ -365,8 +365,8 @@ LLM-agent stack).*
 | [ironhorse-known-defects](ironhorse-known-defects.md) | 2026-09-04 | 2026-09-07 | Reference |
 | [ironhorse-engine-trait-research](ironhorse-engine-trait-research.md) | 2026-09-08 | — | Reference |
 | [ironhorse-w6-decisions](ironhorse-w6-decisions.md) | 2026-09-09 | 2026-09-10 | Active |
-| [ironhorse-quiescent-gc](ironhorse-quiescent-gc.md) | 2026-09-10 | — | Not Started |
-| [ironhorse-engine](ironhorse-engine.md) | 2026-07-02 | 2026-09-09 | Approved |
+| [ironhorse-quiescent-gc](ironhorse-quiescent-gc.md) | 2026-09-10 | 2026-09-10 | In Progress |
+| [ironhorse-engine](ironhorse-engine.md) | 2026-07-02 | 2026-09-10 | Approved |
 | [ironhorse-meter-opcode-cost-instrumentation](ironhorse-meter-opcode-cost-instrumentation.md) | 2026-07-05 | 2026-09-09 | In Progress |
 | [ironhorse-test262-convergence](ironhorse-test262-convergence.md) | 2026-07-05 | 2026-09-08 | In Progress |
 | [test262-fixture-consolidation](test262-fixture-consolidation.md) | 2026-08-06 | 2026-08-14 | In Progress |
@@ -656,7 +656,7 @@ flowchart TD
         ihschema --> ihgc
         ihschema --> ihdebug
         ihw6[ironhorse-w6-decisions]
-        ihquiet[ironhorse-quiescent-gc<br/><i>NOT STARTED</i>]
+        ihquiet[ironhorse-quiescent-gc<br/><i>IN PROGRESS</i>]
         ihw6 --> ihquiet
         ihstore --> ihquiet
     end
@@ -1451,7 +1451,7 @@ user interface move to Rust.
 | [ironhorse-snapshot-schema-surgery](ironhorse-snapshot-schema-surgery.md) | Reference | Existing upgrade experiments and schema requirements, with fixture-specific limits and compatibility gaps. |
 | [ironhorse-snapshot-schema-gc](ironhorse-snapshot-schema-gc.md) | Proposed | Collector-oriented schema requirements and measurements; implementation remains part of the existing Ironhorse/store program. |
 | [ironhorse-snapshot-schema-debugging](ironhorse-snapshot-schema-debugging.md) | Proposed | Read-only graph, Chrome heap export, and optional debugger adapters; no implemented integration claimed. |
-| [ironhorse-quiescent-gc](ironhorse-quiescent-gc.md) | Not Started | Restrict whole-machine collection to quiescence; migrate admission and tests while retaining consumer cadence and existing GC correctness obligations. |
+| [ironhorse-quiescent-gc](ironhorse-quiescent-gc.md) | In Progress | Restrict whole-machine collection to quiescence; migrate admission and tests while retaining consumer cadence and existing GC correctness obligations. |
 | ironhorse-snapshot-store-seam | In Progress | Paged heap-store persistence for IronHorse with transactional checkpoints and validated resume. See the design Status section for implementation history and open gates. |
 | endor-registry-proxy-worker | Proposed | Map Rust-acquired CAS package graphs in a separate XS worker using `@endo/compartment-mapper`; replace handwritten package resolution and share packaged-application fixtures with Node and compartment-mapper. |
 | ironhorse-debugger-recovery-and-uncaught | Proposed | Recovers the Ironhorse debugger row (roadmap stage 7) that left the branch before PR #600 merged, and lands break-on-uncaught-exceptions natively. Recovery recommendation: a fresh `builder` re-deriving against current `llm` (not a `weaver` cherry-pick) — the three unreachable slices (`2b6a8d7070`/`6bac90c221`/`8024ee3f55`) predate a wholesale `endor-* -> ironhorse-*` crate rename and a 505-commit interpreter rewrite, so they are reference material, not a mergeable branch; slice 1 (`ironhorse-debug` protocol core) ports nearly verbatim, slice 2's VM seam re-derives against today's `interp.rs`. Break-on-uncaught uses the structural predicate `jumps.is_empty()` plus a one-byte target-opcode peek for finally-only handlers (no bytecode change, oracle-locked to `fxTryNodeCode`), the `uncaughtExceptions` pseudo-breakpoint (option A, matching the already-shipped client), and a `caught` attribute on `<break>`. Gating prerequisite: Ironhorse's engine-raised errors must first unwind through the jump chain (verified: they `return Halt::Throw` inline with no raise helper, so `try/catch` cannot catch an engine `TypeError`). Folds the three `BreakpointTable` parity nits into slice 1's re-land. The Endo debugger client, not xsbug, is the protocol compatibility target; C-XS receives no new work and retires once Ironhorse reaches parity. The required modes are exactly `none`, `uncaught`, and `all`; caught-only breaking is out of scope. Supersedes the break-on-uncaught section of daemon-xs-worker-debugger for the Ironhorse engine. |

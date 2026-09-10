@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-07-02 |
-| **Updated** | 2026-09-09 |
+| **Updated** | 2026-09-10 |
 | **Author** | endolinbot (prompted) |
 | **Status** | Approved (2026-07-02, program supervisor `port-xs-to-rust-memory-safe-engine`; all ten open questions resolved, see § Resolved Questions) |
 | **Revised** | 2026-07-04 — **metering doctrine: accuracy over parity** (maintainer directive). The meter is Ironhorse's own release-versioned deterministic cost model, a proxy for real (wall-clock) execution cost, NOT a reproduction of XS's computron counts. The XS differential oracle is retained for **result** correctness only; computron comparison is demoted to advisory telemetry. This selects the "stated determinism-equivalence proof" branch the § Prompt already permitted. See § Metering (requirement 1a) and § Agoric consensus compatibility for the authoritative statement. |
@@ -1060,20 +1060,22 @@ meter's internal fast/slow-path consistency within a release):
    KLOC cost the verdict priced in), RegExp built-in + literals, and a
    structure-aware regex fuzz target.
 
-**GC roots contract (recorded by the s5 review).** `Heap::collect(roots)`
-is deliberately standalone in stage 2 (never called mid-run; the arenas
-grow without pressure). Whichever stage wires collection into the
-allocation path MUST pass a root set covering the interpreter's side
-tables — `functions[*].closures` environments, saved `CallerState`
-activations, `CatchJump` snapshots, and `global_props` — not just the
-value stack and scope, or arena-index reuse corrupts silently. The
-trigger points must also be deterministic (collection fires on
-allocation pressure at fixed thresholds), so that within an Ironhorse
-release collection scheduling cannot perturb the meter — i.e., it
-preserves determinism per release (§ Metering). If GC-driven
-allocation is a metered event in the cost table, its scheduling must
-be a pure function of the release's fixed thresholds, not of
-wall-clock or host state.
+**GC roots and scheduling contract (updated by Phase 1G/2B).**
+Whole-machine collection must trace the interpreter's complete retained graph, including
+side tables and suspended continuations; arena-index reuse must never rely only on the
+value stack and scope.
+The supported boundary is quiescence, as specified in
+[collection only at quiescence](ironhorse-quiescent-gc.md).
+A halted crank must be rewound or discarded before collection; allocation does not trigger
+emergency collection inside guest execution.
+
+[W6 decision 5](ironhorse-w6-decisions.md#5-gc-schedule--decided-engine-consumer-policy)
+supersedes the former requirement for release-fixed allocation-pressure thresholds.
+The consumer chooses explicit, delivery, pressure, idle, or timed requests.
+Consumers requiring replica-identical heaps must coordinate collection events and recovery
+across resume; equal guest input and release alone do not establish equal heap bytes under
+different schedules.
+Existing meter accounting and authenticated store cadence remain required.
 
 ## Dependencies
 
