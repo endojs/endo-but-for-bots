@@ -1499,6 +1499,9 @@ The historical architecture review and its status lines remain unchanged.
 
 [results/2f-final.json](results/2f-final.json) records the combined branch at
 `9bf005e38`, including failed controls and the follow-up investigation.
+These measurements precede the rebase onto `b127466ca`, which adds reclamation,
+frame admission, and key-space changes from other workstreams.
+They retain their recorded revision provenance and do not measure the rebased tree.
 The code addresses F044, F029, F093, F099, F119, F120, F162, F169, and F171.
 The architecture review remains a historical re-verification record and is unchanged.
 
