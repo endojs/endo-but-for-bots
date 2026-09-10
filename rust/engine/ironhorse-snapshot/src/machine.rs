@@ -1707,13 +1707,14 @@ mod tests {
         mutate(&mut rows);
         let source = Interp::new();
         let meter = source.meter_state();
+        let (next_symbol_key, symbol_keys) = source.symbol_key_table();
         let (slots, chunks) = source.into_arenas();
         let mut session = Interp::begin_restore();
         session
             .restore_snapshot_state(slots, chunks, Vec::new(), Vec::new(), meter)
             .map_err(|_| SnapshotError::Corrupt("arena restore failed"))?;
         session
-            .restore_symbol_key_table(u16::MAX, &[])
+            .restore_symbol_key_table(next_symbol_key, &symbol_keys)
             .map_err(|_| SnapshotError::Corrupt("symbol-key table does not restore"))?;
         restore_side_tables(&mut session, rows)?;
         finish_restore(session).map(|_| ())
