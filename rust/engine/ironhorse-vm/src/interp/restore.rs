@@ -312,14 +312,7 @@ impl RestoreSession {
             self.failed = Some(error);
             return Err(error);
         }
-        let result = if self.interp.restore_function_state(state) {
-            Ok(())
-        } else {
-            Err(RestoreError {
-                row: "function_state",
-                reason: "malformed row set",
-            })
-        };
+        let result = self.interp.restore_function_state(state);
         self.failed = result.err();
         result
     }
