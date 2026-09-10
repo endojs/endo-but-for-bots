@@ -21,7 +21,7 @@ pub type CollectionSnapshot = (u32, u8, u32, Vec<(Slot, Slot)>);
 
 /// One built-in iterator cursor as the snapshot carries it (the ledger
 /// `Iterators` row, the `ITER` atom) — [`Interp::iterators_snapshot`]'s
-/// emission and [`Interp::restore_iterators`]'s input. Kinds: 0-2 array
+/// emission and [`RestoreSession::restore_iterators`]'s input. Kinds: 0-2 array
 /// values/keys/entries, 3 for-in enumerator, 4 string, 5-7 collection
 /// keys/values/entries, 8 for an `Iterator.from` generic wrapper, and 9 for a
 /// RegExp String Iterator. Two boundary

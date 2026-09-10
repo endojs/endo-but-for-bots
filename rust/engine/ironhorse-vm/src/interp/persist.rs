@@ -342,7 +342,7 @@ impl Interp {
     /// persisted name table (`append_name_key`), so its id→name map
     /// round-trips every snapshot. Symbol keys travel too now — the map
     /// plus this counter ride the SYMB atom
-    /// ([`Self::symbol_key_table`] / [`Self::restore_symbol_key_table`])
+    /// ([`Self::symbol_key_table`] / [`RestoreSession::restore_symbol_key_table`])
     /// — so minting is no longer a persistence hazard either; this
     /// remains as the cheap pre-check that lets
     /// [`Self::stored_runtime_intern`] skip its O(heap) walk, and as a
@@ -3425,7 +3425,7 @@ impl Interp {
 
     /// The symbol-key property-id table (ledger `SYMB` row): the
     /// top-down mint counter and every `(id, descriptor slot)` pair,
-    /// ascending by id. [`Self::restore_symbol_key_table`] is the exact
+    /// ascending by id. [`RestoreSession::restore_symbol_key_table`] is the exact
     /// inverse; persisting the pair of them is what lets a heap holding
     /// symbol-KEYED properties round-trip a snapshot (the stored ids
     /// re-bind to the same descriptor slots instead of aliasing).
