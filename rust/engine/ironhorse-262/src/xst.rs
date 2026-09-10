@@ -2959,10 +2959,9 @@ mod tests {
         // in miniature: a strict Script's `var` must be a global-object
         // property. The shim frames the source as a strict eval (a frame
         // local), fails the assertion, and Ironhorse's Script goal passes it.
-        // (`dual_run` loads no harness, so the assertion error is inlined the
-        // way `harness/sta.js` defines it.)
-        let harness = "function Test262Error(m) { this.message = m; } \
-            Test262Error.prototype.toString = function () { return 'Test262Error: ' + this.message; }; ";
+        // Native Error data preserves exact diagnostics without guest coercion.
+        let harness = "function Test262Error(m) { var e = new Error(m); \
+            e.name = 'Test262Error'; return e; } ";
         let body = "this['v'] = 'x'; if (v !== 'x') { throw new Test262Error('#2'); } var v;";
         let source = format!("\"use strict\";\n{harness}{body}");
         let run = dual_run(&source).expect("oracle machine");
@@ -2984,6 +2983,25 @@ mod tests {
             ),
             crate::report::Category::Infrastructure
         );
+
+        // The real sta.js-style custom object requires guest toString in XS.
+        // A read-only host diagnostic cannot establish identical failure text;
+        // this case must remain gating rather than widening the exclusion.
+        let custom_harness = "function Test262Error(m) { this.message = m; } \
+            Test262Error.prototype.toString = function () { return 'Test262Error: ' + this.message; }; ";
+        let custom =
+            dual_run(&format!("\"use strict\";\n{custom_harness}{body}")).expect("oracle machine");
+        assert_eq!(custom.agreement, Agreement::IronhorseOnlyComplete);
+        assert_eq!(custom.oracle_error, "Test262Error: #2");
+        assert_eq!(
+            crate::ironhorse_eval_goal_error(&custom.source).as_deref(),
+            Some("[object Object]")
+        );
+        assert!(!oracle_eval_frames_script_declarations(&custom));
+        assert!(matches!(
+            evaluate_positive(&Config::default(), &custom, false),
+            Verdict::Fail(_)
+        ));
 
         // The sloppy twin agrees on both engines: nothing to exclude.
         let sloppy = dual_run(&format!("{harness}{body}")).expect("oracle machine");

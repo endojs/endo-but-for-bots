@@ -30,11 +30,12 @@ fn intl_result(source: &str, expected: &str) {
 /// pinned oracle throws its own `ReferenceError` for the missing `Intl`, so the
 /// two abort with different values (`BothAbort`); the point is that Ironhorse
 /// rejects the input at the ECMA-402 validation step rather than over-accepting.
-fn intl_throws(source: &str, error_name: &str) {
+fn intl_throws(source: &str, expected: &str) {
     let run = dual_run(source).expect("the XS oracle machine must start");
+    assert_eq!(run.agreement, Agreement::BothAbort);
     assert_eq!(
-        run.ironhorse_error, error_name,
-        "Ironhorse must reject `{source}` with a {error_name}",
+        run.ironhorse_error, expected,
+        "Ironhorse must reject `{source}` with {expected}",
     );
     assert!(
         run.oracle_error.contains("Intl"),
@@ -183,7 +184,7 @@ fn date_time_format_time_zone_canonicalization_is_exact() {
     // An unknown time zone is a RangeError.
     intl_throws(
         "new Intl.DateTimeFormat('en',{timeZone:'Not/AZone'})",
-        "RangeError",
+        "RangeError: Intl.DateTimeFormat: invalid or unsupported timeZone",
     );
 }
 
@@ -217,22 +218,24 @@ fn date_time_format_parts_and_range_are_exact() {
 
 #[test]
 fn date_time_format_non_finite_date_throws_range_error() {
-    intl_throws("new Intl.DateTimeFormat('en').format(NaN)", "RangeError");
+    intl_throws(
+        "new Intl.DateTimeFormat('en').format(NaN)",
+        "RangeError: Intl.DateTimeFormat: time value out of range",
+    );
     intl_throws(
         "new Intl.DateTimeFormat('en').format(Infinity)",
-        "RangeError",
+        "RangeError: Intl.DateTimeFormat: time value out of range",
     );
 }
 
 #[test]
 fn date_time_format_invalid_options_throw_range_error() {
-    for source in [
-        "new Intl.DateTimeFormat('en',{hour:'bogus'})",
-        "new Intl.DateTimeFormat('en',{weekday:'bogus'})",
-        "new Intl.DateTimeFormat('en',{dateStyle:'bogus'})",
-        "new Intl.DateTimeFormat('en',{calendar:'!'})",
-    ] {
-        intl_throws(source, "RangeError");
+    for option in ["hour", "weekday", "dateStyle", "calendar"] {
+        let value = if option == "calendar" { "!" } else { "bogus" };
+        intl_throws(
+            &format!("new Intl.DateTimeFormat('en',{{{option}:'{value}'}})"),
+            &format!("RangeError: Intl.DateTimeFormat: invalid {option} option"),
+        );
     }
 }
 
@@ -240,7 +243,7 @@ fn date_time_format_invalid_options_throw_range_error() {
 fn date_time_format_style_and_component_conflict_throws_type_error() {
     intl_throws(
         "new Intl.DateTimeFormat('en',{dateStyle:'full',hour:'numeric'})",
-        "TypeError",
+        "TypeError: Intl.DateTimeFormat: dateStyle/timeStyle cannot be combined with components",
     );
 }
 
@@ -273,7 +276,7 @@ fn segmenter_resolved_options_are_exact() {
     // An invalid granularity is a RangeError.
     intl_throws(
         "new Intl.Segmenter('en',{granularity:'bogus'})",
-        "RangeError",
+        "RangeError: Intl: invalid granularity option",
     );
 }
 

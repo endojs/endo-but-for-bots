@@ -3715,8 +3715,8 @@ mod hostile_suspend_tests {
         let out = ironhorse_vm::run_program_with_symbols(&patched, &symbols);
         assert_eq!(
             out.halt,
-            ironhorse_vm::Halt::EngineInvariant("yield:stack-underflow"),
-            "the YIELD guard refuses a frame drained below its run base"
+            ironhorse_vm::Halt::EngineInvariant("value-stack:underflow"),
+            "the first excess POP refuses before YIELD can observe a drained frame"
         );
     }
 }
