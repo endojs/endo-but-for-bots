@@ -45,7 +45,7 @@ const start = async (t, path) => {
       throw Error(`serve exited: ${diagnostic}`);
     }),
   ]);
-  return { child, exited };
+  return { child, exited, diagnostic: () => diagnostic };
 };
 
 /** @param {ExecutionContext} t @param {string} path */
@@ -354,7 +354,7 @@ const waitForViews = async (t, client, expected) => {
 test.serial(
   'observable inventory crosses a persistent guest and ephemeral views without retaining closed subscriptions',
   async t => {
-    t.timeout(120_000);
+    t.timeout(180_000);
     const path = await mkdtemp('/tmp/thix-inventory-');
     t.teardown(() => rm(path, { recursive: true, force: true }));
     const first = await start(t, path);
@@ -432,10 +432,17 @@ test.serial(
     });
     // Let the actual idle policy snapshot both kinds of subscription while
     // the UI remains connected. status is read-only and does not wake the vat.
+    // The 30-second idle timer only starts parking. Snapshot completion also
+    // closes SQLite, copies and syncs the heap, and relaunches the worker.
+    // Allow another engine-watchdog interval (60 seconds) for that work on CI;
+    // this is a test allowance, not an upper bound on filesystem latency.
+    const sleepDeadline = performance.now() + 90_000;
     let slept = false;
-    for (let attempt = 0; attempt < 400; attempt += 1) {
+    let lastStatus;
+    while (performance.now() < sleepDeadline) {
       // eslint-disable-next-line no-await-in-loop
       const status = await admin.call('status');
+      lastStatus = status;
       if (
         !status.workers.find(worker => worker.workerId === status.workspace)
           .awake
@@ -445,6 +452,10 @@ test.serial(
       }
       // eslint-disable-next-line no-await-in-loop
       await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    if (!slept) {
+      t.log('Last supervisor status:', lastStatus);
+      t.log('Supervisor stderr:', first.diagnostic());
     }
     t.true(slept, 'workspace slept with an attached UI');
     await admin.call('evaluate', "inventory.set('woke', true); undefined");

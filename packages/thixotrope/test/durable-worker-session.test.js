@@ -12,6 +12,9 @@
  */
 import test from '@endo/ses-ava/test.js';
 
+import { setTimeout as delay } from 'node:timers/promises';
+
+import harden from '@endo/harden';
 import { frozenBytes } from '@endo/immutable-arraybuffer';
 import { E } from '@endo/eventual-send';
 import { syrupCodec } from '@endo/ocapn/syrup';
@@ -230,4 +233,55 @@ test('a retired worker session breaks its imports', async t => {
   await t.throwsAsync(() => E(counter).incr(), {
     message: /retired/,
   });
+});
+
+test('idle parking reports awake until the snapshot commits', async t => {
+  t.timeout(10_000);
+  const snapshotStarted = Promise.withResolvers();
+  const snapshot = Promise.withResolvers();
+  const terminated = Promise.withResolvers();
+  const workerId = 'a'.repeat(32);
+  const store = makeMemoryStore().provideWorkerStore(workerId);
+  let snapshots = 0;
+  const transport = makeDurableWorkerTransport({
+    workerId,
+    store,
+    idleSleepMs: 1,
+    onFrame: () => {},
+    engine: harden({
+      canSnapshot: true,
+      start: async () =>
+        harden({
+          deliver: async () => {},
+          snapshot: () => {
+            snapshots += 1;
+            snapshotStarted.resolve(undefined);
+            return snapshot.promise;
+          },
+          terminate: async () => {
+            terminated.resolve(undefined);
+          },
+        }),
+    }),
+  });
+  t.teardown(async () => {
+    snapshot.resolve('snapshot');
+    await transport.retire();
+  });
+  await transport.wake();
+  // Read-only polling must not postpone the idle timer.
+  while (snapshots === 0) {
+    t.true(transport.isAwake());
+    // eslint-disable-next-line no-await-in-loop
+    await delay(1);
+  }
+  await snapshotStarted.promise;
+  // The idle threshold has elapsed, but parking is not yet complete.
+  t.true(transport.isAwake());
+  t.is(store.getMeta().snapshot, undefined);
+  snapshot.resolve('snapshot');
+  await terminated.promise;
+  t.false(transport.isAwake());
+  t.is(store.getMeta().snapshot?.ref, 'snapshot');
+  t.is(snapshots, 1);
 });
