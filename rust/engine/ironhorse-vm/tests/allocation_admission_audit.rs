@@ -235,7 +235,7 @@ fn check_builtin_capacities(moved_modules: &[&str]) {
             "local_index",
             "get_local",
             "set_local",
-            "resolve_get",
+            "resolve_frame_get",
             "resolve_set",
             "truthy",
             "binary_arith",

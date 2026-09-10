@@ -112,7 +112,7 @@ fn a_post_gc_checkpoint_resumes_lazily_and_faults_every_page() {
     drop(session);
     let shared = Rc::new(RefCell::new(store));
     let mut resumed = resume_from_store_lazy(shared, &sig()).expect("lazy resume");
-    resumed.machine().slots.ensure_all_resident();
+    resumed.machine().slots().ensure_all_resident();
     assert_eq!(
         crank(resumed.machine_mut(), "var keep; var t; t = keep + '.'; t"),
         "kept."

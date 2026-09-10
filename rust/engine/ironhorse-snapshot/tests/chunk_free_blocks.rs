@@ -5,7 +5,7 @@ use std::{cell::RefCell, rc::Rc};
 use ironhorse_snapshot::{
     atom::{AtomReader, AtomWriter},
     format::{SnapshotError, Version, VERS},
-    image::{read_validated_machine, write_machine},
+    image::{read_validated_machine, write_machine, write_machine_unchecked},
     machine::{
         begin_store_session, from_snapshot_bytes, resume_from_store, resume_from_store_lazy,
         MachineSnapshot,
@@ -13,16 +13,19 @@ use ironhorse_snapshot::{
     store::MemoryStore,
     Signature,
 };
-use ironhorse_vm::{ChunkArena, ChunkOffset, Interp};
+use ironhorse_vm::{ChunkOffset, Interp};
 
 fn with_free_block() -> (Interp, usize) {
-    let mut machine = Interp::new();
-    let mut bytes = machine.chunks.raw_vec();
-    let free = bytes.len();
-    bytes.extend_from_slice(&u32::MAX.to_le_bytes());
-    bytes.extend_from_slice(&64u32.to_le_bytes());
-    bytes.resize(free + 64, 0xa5);
-    machine.chunks = ChunkArena::from_image(bytes);
+    let signature = Signature::new("chunk-free-blocks");
+    let mut image = Interp::new()
+        .snapshot_image_for_testing(&signature)
+        .unwrap();
+    let free = image.chunks.len();
+    image.chunks.extend_from_slice(&u32::MAX.to_le_bytes());
+    image.chunks.extend_from_slice(&64u32.to_le_bytes());
+    image.chunks.resize(free + 64, 0xa5);
+    image.creation.initial_chunk_bytes = image.chunks.len() as u32;
+    let machine = from_snapshot_bytes(&write_machine_unchecked(&image), &signature).unwrap();
     (machine, free)
 }
 
@@ -30,7 +33,7 @@ fn with_free_block() -> (Interp, usize) {
 fn blob_eager_store_and_lazy_store_preserve_free_block_allocation_order() {
     let signature = Signature::new("chunk-free-blocks");
     let (machine, free) = with_free_block();
-    assert!(machine.chunks.can_allocate(8)); // Build the uninterrupted index.
+    assert!(machine.chunks().can_allocate(8)); // Build the uninterrupted index.
     let snapshot = machine.write_snapshot(&signature).unwrap();
     let blob = from_snapshot_bytes(&snapshot, &signature).unwrap();
     let mut store = MemoryStore::new();
@@ -40,18 +43,21 @@ fn blob_eager_store_and_lazy_store_preserve_free_block_allocation_order() {
     let eager = resume_from_store(&store, &signature).unwrap();
     let lazy = resume_from_store_lazy(Rc::new(RefCell::new(store)), &signature).unwrap();
     let mut expected = None;
-    for mut machine in [
+    for machine in [
         continuous.into_machine(),
         blob,
         eager.into_machine(),
         lazy.into_machine(),
     ] {
+        // Keep the actual restored arena, including lazy residency, while
+        // permanently consuming the machine before raw allocator operations.
+        let (_, mut chunks) = machine.into_arenas();
         let mut offsets = Vec::new();
         for size in [8, 0, 20, 17, 1] {
-            offsets.push(machine.chunks.alloc(&vec![size as u8; size]));
+            offsets.push(chunks.alloc(&vec![size as u8; size]));
         }
         assert_eq!(offsets[0], ChunkOffset(u32::try_from(free + 4).unwrap()));
-        let state = (offsets, machine.write_snapshot(&signature).unwrap());
+        let state = (offsets, chunks.raw_vec());
         if let Some(expected) = &expected {
             assert_eq!(&state, expected);
         } else {

@@ -299,7 +299,7 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(HardenState, 40, 40, InArena, "harden slot flags (no side table)")]
     /// The machine slot heap (design § Value and heap model).
-    pub slots: SlotArena,
+    pub(crate) slots: SlotArena,
     #[boot_new(chunks)]
     #[boot_template(ChunkArena::from_image(state.chunks.raw_vec()))]
     #[gc_root(none)]
@@ -312,7 +312,7 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     /// The machine chunk heap (UTF-16BE strings and later data).
-    pub chunks: ChunkArena,
+    pub(crate) chunks: ChunkArena,
     #[boot_new(static_str)]
     #[boot_template(state.static_str)]
     #[gc_root(none)]

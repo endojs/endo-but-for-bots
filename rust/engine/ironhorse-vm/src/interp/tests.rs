@@ -1,5 +1,8 @@
 #![cfg(test)]
 
+mod gc_chunk_roster;
+mod gc_consumer_schedules;
+
 use super::*;
 use crate::gc::GcAdmissionError::{NotQuiescent, PreviousCollectionFailed};
 use crate::opcode::Opcode;
@@ -949,6 +952,27 @@ fn side_ref_tail_masked_undercount_poisons_during_page_pruning() {
         Err(NotQuiescent),
         "later reclamation is refused"
     );
+}
+
+#[test]
+fn failed_collection_keeps_the_machine_nonquiescent_after_another_run() {
+    let mut machine = Interp::new();
+    // Deliberately corrupt private heap state to exercise failure after GC
+    // may have swept slots. Public snapshot restore must refuse these bytes.
+    let mut bytes = machine.chunks.raw_vec();
+    bytes[..4].copy_from_slice(&(u32::MAX - 1).to_le_bytes());
+    machine.chunks = ChunkArena::from_image(bytes);
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| machine.collect_garbage()))
+            .is_err()
+    );
+    assert!(!machine.is_quiescent());
+    assert!(
+        !machine
+            .run(&[crate::Opcode::XS_CODE_RETURN as u8])
+            .completed
+    );
+    assert!(!machine.is_quiescent());
 }
 
 #[test]
@@ -3089,6 +3113,47 @@ fn generator_resume_admission_counts_sent_value_and_retains_refused_frame() {
 }
 
 #[test]
+fn internal_native_name_restore_rejects_before_mutation() {
+    let source = Interp::new();
+    let valid = source.function_state_snapshot();
+    assert!(!valid.native_names.as_ref().unwrap().is_empty());
+
+    let mut duplicate = valid.clone();
+    let rows = duplicate.native_names.as_mut().unwrap();
+    rows.insert(1, rows[0]);
+    let mut restored = Interp::new();
+    assert!(!restored.restore_function_state(duplicate));
+    assert_eq!(restored.function_state_snapshot(), valid);
+
+    // A valid authoritative empty native subset must not be applied before
+    // unrelated malformed guest-function metadata is rejected.
+    let mut invalid_guest = valid.clone();
+    invalid_guest.native_names = Some(vec![]);
+    invalid_guest.ctor_prototypes.push((0, 0));
+    let mut restored = Interp::new();
+    assert!(!restored.restore_function_state(invalid_guest));
+    assert_eq!(restored.function_state_snapshot(), valid);
+
+    for invalid_owner in [0, u32::MAX] {
+        let mut state = valid.clone();
+        state.native_names.as_mut().unwrap()[0].0 = invalid_owner;
+        let mut restored = Interp::new();
+        let before = restored.function_state_snapshot();
+        assert!(!restored.restore_function_state(state));
+        assert_eq!(restored.function_state_snapshot(), before);
+    }
+
+    for invalid_offset in [0, 3, u32::MAX - 1] {
+        let mut state = valid.clone();
+        state.native_names.as_mut().unwrap()[0].1 = invalid_offset;
+        let mut restored = Interp::new();
+        let before = restored.function_state_snapshot();
+        assert!(!restored.restore_function_state(state));
+        assert_eq!(restored.function_state_snapshot(), before);
+    }
+}
+
+#[test]
 fn static_key_vocabulary_fits_the_reserved_id_band() {
     use crate::source_scan::{code_only, marker_positions, rs_files, string_literals};
     let vm = Interp::new();
@@ -3279,4 +3344,54 @@ fn native_type_and_range_messages_do_not_add_guest_meter_charges() {
             messaged.meter_index() - before_message
         );
     }
+}
+
+#[test]
+fn accepted_compilation_check_cannot_reset_the_accumulated_index() {
+    let mut vm = Interp::new();
+    let slots = std::mem::take(&mut vm.slots);
+    let chunks = std::mem::take(&mut vm.chunks);
+    vm.restore_snapshot_state(
+        slots,
+        chunks,
+        Vec::new(),
+        Vec::new(),
+        crate::meter::MeterState {
+            index: u64::MAX - 100,
+            interval: 1000,
+            count: u64::MAX - 101,
+        },
+    );
+    vm.reattach_meter_host(Box::new(|_| true));
+    assert!(vm.charge_compilation(1));
+    assert_eq!(vm.meter_index(), u64::MAX - 99);
+    assert_eq!(vm.meter_state().count, u64::MAX);
+    assert!(!vm.charge_compilation(100));
+    assert_eq!(vm.meter_index(), u64::MAX - 99);
+    assert!(!vm.charge_compilation(99));
+    assert_eq!(vm.meter_index(), u64::MAX);
+}
+
+#[test]
+fn reserved_symbol_ids_are_refused_without_mutating_the_table() {
+    let mut vm = Interp::new();
+    let before = vm.symbol_key_table();
+    assert!(!vm.restore_symbol_key_table(u16::MAX, &[]));
+    assert!(!vm.restore_symbol_key_table(u16::MAX - 2, &[(u16::MAX, 1)]));
+    assert_eq!(vm.symbol_key_table(), before);
+    let (code, names) =
+        ironhorse_compile::compile_atoms("var key=Symbol('kept'), o={}; o[key]=42; key=null;")
+            .unwrap();
+    vm.link_intrinsics(&crate::parse_symbols(&names));
+    assert!(vm.run(&code).completed);
+    assert!(vm.stored_runtime_intern().is_some());
+    vm.collect_garbage().unwrap();
+    let (code, names) =
+        ironhorse_compile::compile_atoms("o[Object.getOwnPropertySymbols(o)[0]]").unwrap();
+    let code = vm
+        .relink_crank(&code, &crate::parse_symbols(&names))
+        .unwrap();
+    let out = vm.run(&code);
+    assert!(out.completed, "{:?}", out.halt);
+    assert_eq!(out.result, "42");
 }

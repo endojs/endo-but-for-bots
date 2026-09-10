@@ -106,7 +106,7 @@ fn gc_cost_across_heap_sizes() {
             let mut m = Interp::new();
             m.link_intrinsics(&names);
             assert!(m.run(&b).completed);
-            slots_total = m.slots.capacity();
+            slots_total = m.slots().capacity();
             let t0 = Instant::now();
             let s1 = m.collect_garbage().require_collection();
             first_ms.push(t0.elapsed().as_secs_f64() * 1e3);
@@ -209,12 +209,12 @@ fn gc_cost_across_heap_sizes() {
         m.link_intrinsics(&names);
         assert!(m.run(&b).completed);
         m.collect_garbage().require_collection();
-        let free_len = m.slots.free_list().len();
+        let free_len = m.slots().free_list().len();
         let mut sweep_times = Vec::new();
         for _ in 0..5 {
             let t0 = Instant::now();
             m.collect_garbage().require_collection();
-            sweep_times.push(t0.elapsed().as_secs_f64() * 1e9 / m.slots.capacity() as f64);
+            sweep_times.push(t0.elapsed().as_secs_f64() * 1e9 / m.slots().capacity() as f64);
         }
         let sweep_ns_per_slot = median(sweep_times);
 
@@ -290,7 +290,7 @@ fn generational_steady_state_cost() {
             assert!(session.machine_mut().run(&bc).completed);
             checkpoint_to_store(&mut session, &sig(), &mut store).expect("ckpt");
 
-            slots_total = session.machine().slots.capacity();
+            slots_total = session.machine().slots().capacity();
             let t0 = std::time::Instant::now();
             freed_gen = generational_collect(&mut session, &store).expect("gen");
             gen_ms.push(t0.elapsed().as_secs_f64() * 1e3);

@@ -276,7 +276,7 @@ macro_rules! snapshot_payloads {
                             .into_iter()
                             .map(|r| (r.key, r.descriptor))
                             .collect(),
-                    );
+                    ).is_ok();
                     if !ok {
                         return Err(SnapshotError::Corrupt(
                             "side-table restore: unknown kind code",
@@ -707,7 +707,7 @@ macro_rules! snapshot_payloads {
                             .into_iter()
                             .map(|d| (d.owner, d.buffer, d.offset, d.size))
                             .collect(),
-                    );
+                    ).is_ok();
                     if !ok {
                         return Err(SnapshotError::Corrupt(
                             "side-table restore: malformed typed-array family",
@@ -1085,7 +1085,7 @@ macro_rules! snapshot_payloads {
                         temporal.durations,
                         temporal.plains,
                         temporal.zoneds,
-                    );
+                    ).is_ok();
                     if !ok {
                         return Err(SnapshotError::Corrupt(
                             "side-table restore: malformed temporal record",
@@ -1177,7 +1177,7 @@ macro_rules! snapshot_payloads {
                     // The Intl record rows (schema 12): pure resolved-options data;
                     // segment geometry and the iterator cross-reference were validated
                     // at decode/bounds, and the vm re-validates them on the way in.
-                    let ok = interp.restore_intl(intl);
+                    let ok = interp.restore_intl(intl).is_ok();
                     if !ok {
                         return Err(SnapshotError::Corrupt(
                             "side-table restore: malformed intl record",
@@ -1301,7 +1301,7 @@ macro_rules! snapshot_payloads {
                     // (kinds, cursor ranges, the covering-collection cross-check);
                     // restored AFTER the collections so the covering rows are in hand
                     // for the vm's own re-validation.
-                    let ok = interp.restore_iterators(iterators);
+                    let ok = interp.restore_iterators(iterators).is_ok();
                     if !ok {
                         return Err(SnapshotError::Corrupt(
                             "side-table restore: malformed iterator cursor",
@@ -1523,16 +1523,12 @@ macro_rules! snapshot_payloads {
                     }
                 }],
                 restore: [Generators, [function_state], (interp) {
-                    if !interp.restore_function_state(function_state) {
+                    if interp.restore_function_state(function_state).is_err() {
                         return Err(SnapshotError::Corrupt(
                             "side-table restore: malformed retained function state",
                         ));
                     }
-                    if !interp.restored_promise_capabilities_are_valid() {
-                        return Err(SnapshotError::Corrupt(
-                            "side-table restore: malformed promise capability",
-                        ));
-                    }
+
                 }],
                 initialize: [Proxies;
                     #[doc = " Atomic retained guest-callability state (schema 15; `FUNC`)."]
@@ -1615,7 +1611,7 @@ macro_rules! snapshot_payloads {
                     }
                 }],
                 restore: [Intl, [proxy_state], (interp) {
-                    if !interp.restore_proxy_state(proxy_state) {
+                    if interp.restore_proxy_state(proxy_state).is_err() {
                         return Err(SnapshotError::Corrupt(
                             "side-table restore: malformed proxy state",
                         ));
@@ -1702,7 +1698,7 @@ macro_rules! snapshot_payloads {
                     }
                 }],
                 restore: [PrivateElements, [accessors], (interp) {
-                    if !interp.restore_accessors(accessors) {
+                    if interp.restore_accessors(accessors).is_err() {
                         return Err(SnapshotError::Corrupt(
                             "side-table restore: malformed accessor state",
                         ));
@@ -1793,7 +1789,7 @@ macro_rules! snapshot_payloads {
                     // the two collision checks stay mutually exclusive: `IBFN` still
                     // refuses a slot boot already minted, and `FUNC` still refuses one
                     // an earlier verb installed.
-                    if !interp.restore_intl_bound_functions(intl_bound_functions) {
+                    if interp.restore_intl_bound_functions(intl_bound_functions).is_err() {
                         return Err(SnapshotError::Corrupt(
                             "side-table restore: malformed Intl bound-function state",
                         ));
@@ -1870,7 +1866,7 @@ macro_rules! snapshot_payloads {
                     }
                 }],
                 restore: [DisposableStacks, [private_elements], (interp) {
-                    if !interp.restore_private_elements(private_elements) {
+                    if interp.restore_private_elements(private_elements).is_err() {
                         return Err(SnapshotError::Corrupt(
                             "side-table restore: malformed private elements",
                         ));
@@ -2124,7 +2120,7 @@ macro_rules! snapshot_payloads {
                     // capability callbacks are bounded like every other carried Slot.
                 }],
                 restore: [ArgumentsBrands, [generators], (interp) {
-                    if !interp.restore_generators(generators) {
+                    if interp.restore_generators(generators).is_err() {
                         return Err(SnapshotError::Corrupt(
                             "side-table restore: malformed generator state",
                         ));
@@ -2313,7 +2309,7 @@ macro_rules! snapshot_payloads {
                     // retained-state adjudication must find already installed. The
                     // collision checks stay two-sided: this verb refuses a slot boot
                     // already minted, and `FUNC` refuses one an earlier verb installed.
-                    if !interp.restore_promise_cluster(promise_cluster) {
+                    if interp.restore_promise_cluster(promise_cluster).is_err() {
                         return Err(SnapshotError::Corrupt(
                             "side-table restore: malformed promise cluster",
                         ));

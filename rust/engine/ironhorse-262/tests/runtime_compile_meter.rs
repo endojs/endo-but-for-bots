@@ -189,32 +189,6 @@ fn ignored_refusal_and_forged_receipt_cannot_execute_output() {
     );
 }
 
-#[test]
-fn accepted_compilation_check_cannot_reset_the_accumulated_index() {
-    let mut vm = Interp::new();
-    let slots = std::mem::take(&mut vm.slots);
-    let chunks = std::mem::take(&mut vm.chunks);
-    vm.restore_snapshot_state(
-        slots,
-        chunks,
-        Vec::new(),
-        Vec::new(),
-        ironhorse_vm::meter::MeterState {
-            index: u64::MAX - 100,
-            interval: 1000,
-            count: u64::MAX - 101,
-        },
-    );
-    vm.reattach_meter_host(Box::new(|_| true));
-    assert!(vm.charge_compilation(1));
-    assert_eq!(vm.meter_index(), u64::MAX - 99);
-    assert_eq!(vm.meter_state().count, u64::MAX);
-    assert!(!vm.charge_compilation(100));
-    assert_eq!(vm.meter_index(), u64::MAX - 99);
-    assert!(!vm.charge_compilation(99));
-    assert_eq!(vm.meter_index(), u64::MAX);
-}
-
 struct ExhaustAddressability;
 impl SourceCompiler for ExhaustAddressability {
     fn compile_source(

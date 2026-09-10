@@ -441,10 +441,11 @@ fn donor_edits_refuse_stale_donors_types_free_rows_and_internal_links() {
         .to_string()
         .contains("version"));
 
-    let mut machine = from_snapshot_bytes(&source, &sig()).unwrap();
-    let free = machine.slots.alloc(Slot::integer(99));
-    machine.slots.free(free);
-    let source = machine.write_snapshot(&sig()).unwrap();
+    let mut image = validated_source(&source, &sig()).unwrap();
+    let free = ironhorse_vm::SlotIndex(image.slots.len() as u32);
+    image.slots.push(Slot::integer(99));
+    image.slot_free.push(free.0);
+    let source = candidate(&image);
     let image = validated_source(&source, &sig()).unwrap();
     let db = inspect(&source, &sig()).unwrap();
     let target = named_slot(&image, "surgeryValue") as u32;

@@ -514,10 +514,10 @@ fn a_refault_after_a_growing_checkpoint_verifies_against_the_committed_arena() {
 
     // Throw the just-committed, now-clean rows away and read them back.
     // Pre-fix this panicked: `out-of-arena chunk offset ... corrupt store`.
-    let pages = session.machine().slots.capacity().div_ceil(256);
+    let pages = session.machine().slots().capacity().div_ceil(256);
     let mut evicted = 0;
     for page in 0..pages {
-        evicted += session.machine().slots.evict_page(page) as u32;
+        evicted += session.machine().slots().evict_page(page) as u32;
     }
     assert!(evicted > 0, "the arm's premise: something was evictable");
 
@@ -850,67 +850,63 @@ fn the_image_of_a_halted_machine_is_unobtainable() {
     );
 }
 
-/// The third predicate of the gate, the one the store verb ran and the
-/// blob verbs did not: a stored property id outside the name and
-/// symbol-key tables. A live machine cannot mint one, so the fixture
-/// poisons a live property slot's id directly, past the end of the
-/// name table and far below the top-down symbol-key range. The gated
-/// image, the blob verb and the store verb must all refuse it by the
-/// same name and write nothing; the control before the poison admits
-/// the same machine, so the refusal is the audit's and not the gate's
-/// other arms'.
+/// An external caller can no longer poison a runnable machine's property
+/// records. Malformed keys supplied in an offline image must be refused by
+/// eager adoption. Lazy adoption defers heap validation, so publication must
+/// still refuse if attachment itself does not.
 #[test]
-fn a_stored_unregistered_key_id_refuses_the_gated_image_and_every_verb() {
-    use ironhorse_snapshot::SnapshotError;
-    use ironhorse_vm::SlotIndex;
-
+fn a_stored_unregistered_key_id_refuses_adoption_or_publication() {
+    use ironhorse_snapshot::{
+        image::write_machine_unchecked,
+        machine::{from_snapshot_bytes, resume_from_store, resume_from_store_lazy},
+        store::{image_to_batch_unchecked, HeapStoreCommit},
+    };
+    use std::{cell::RefCell, rc::Rc};
     let (b, n) = compile("var x = 0; x = 41; x");
     let mut m = Interp::new();
     m.link_intrinsics(&n);
     assert!(m.run(&b).completed);
-    m.snapshot_image_for_testing(&sig())
-        .expect("the control: the clean machine is admitted");
-
-    // The global `x`'s property slot carries `x`'s program id.
-    let names = m.program_symbol_names().to_vec();
-    let x_id = names
+    let mut image = m.snapshot_image_for_testing(&sig()).unwrap();
+    let x_id = image.names.iter().position(|name| name == "x").unwrap() as u16 + 1;
+    let holder = image
+        .slots
         .iter()
-        .position(|name| name == "x")
-        .expect("x is a program symbol") as u16
-        + 1;
-    // A LIVE slot: the audit skips free records, so a freed record with
-    // a stale `x` id at a lower index would be poisoned harmlessly and
-    // misreport the gate as broken.
-    let holder = (0..m.slots.capacity())
-        .map(SlotIndex)
-        .filter(|&i| !m.slots.is_free_index(i))
-        .find(|&i| m.slots.get(i).id == x_id)
-        .expect("a live slot keyed by x");
-    let unregistered = names.len() as u16 + 1;
-    m.slots.get_mut(holder).id = unregistered;
-
-    const REFUSAL: &str = "stored property id outside the name and symbol-key tables";
-    match m.snapshot_image_for_testing(&sig()) {
-        Err(MachineSnapshotError::Snapshot(SnapshotError::Corrupt(msg))) => {
-            assert_eq!(msg, REFUSAL, "the gated image refuses by the audit's name")
-        }
-        other => panic!("the gated image must refuse the poisoned id: {other:?}"),
-    }
-    match m.write_snapshot(&sig()) {
-        Err(MachineSnapshotError::Snapshot(SnapshotError::Corrupt(msg))) => {
-            assert_eq!(msg, REFUSAL, "the blob verb refuses by the same name")
-        }
-        other => panic!("the blob verb must refuse the poisoned id: {other:?}"),
-    }
+        .enumerate()
+        .find(|(index, slot)| slot.id == x_id && !image.slot_free.contains(&(*index as u32)))
+        .map(|(index, _)| index)
+        .unwrap();
+    image.slots[holder].id = image.names.len() as u16 + 1;
+    assert!(from_snapshot_bytes(&write_machine_unchecked(&image), &sig()).is_err());
     let mut store = MemoryStore::new();
-    match begin_store_session(m, &sig(), &mut store) {
-        Err((_, StoreError::Snapshot(SnapshotError::Corrupt(msg)))) => {
-            assert_eq!(msg, REFUSAL, "the store verb refuses by the same name")
-        }
-        Err((_, other)) => panic!("the store verb refused by the wrong gate: {other:?}"),
-        Ok(_) => panic!("the store verb must refuse the poisoned id"),
+    store
+        .commit(&image_to_batch_unchecked(&image, 1, ""))
+        .unwrap();
+    assert!(resume_from_store(&store, &sig()).is_err());
+    if let Ok(lazy) = resume_from_store_lazy(Rc::new(RefCell::new(store)), &sig()) {
+        use ironhorse_snapshot::SnapshotError;
+        const REFUSAL: &str = "stored property id outside the name and symbol-key tables";
+        assert!(matches!(
+            lazy.machine().snapshot_image(&sig()),
+            Err(MachineSnapshotError::Snapshot(SnapshotError::Corrupt(
+                REFUSAL
+            )))
+        ));
+        assert!(matches!(
+            lazy.machine().write_snapshot(&sig()),
+            Err(MachineSnapshotError::Snapshot(SnapshotError::Corrupt(
+                REFUSAL
+            )))
+        ));
+        let mut destination = MemoryStore::new();
+        assert!(matches!(
+            begin_store_session(lazy.into_machine(), &sig(), &mut destination),
+            Err((_, StoreError::Snapshot(SnapshotError::Corrupt(REFUSAL))))
+        ));
+        assert!(
+            destination.manifest().is_err(),
+            "refused publication writes nothing"
+        );
     }
-    assert!(store.manifest().is_err(), "a refused begin writes nothing");
 }
 
 /// A metered crank the host refuses at a TOP-LEVEL loop-closing check:

@@ -34,7 +34,7 @@ use crate::store::{
     validate_store, CheckpointBatch, HeapStore, SmallState, StoreError, StoreLeaves, StoreManifest,
     LEAF_EXT, LEAF_PAGE, STORE_SCHEMA_VERSION,
 };
-use ironhorse_vm::Interp;
+use ironhorse_vm::{Interp, RestoreSession};
 
 /// An error from the file/CAS snapshot surface: either an I/O failure or a
 /// container decode/validation failure. (Kept distinct from
@@ -251,8 +251,8 @@ fn ungated_image(interp: &Interp, signature: &Signature) -> MachineImage {
     let (next_id, pairs) = interp.symbol_key_table();
     let image = MachineImage::from_arenas(
         signature.clone(),
-        &interp.slots,
-        &interp.chunks,
+        interp.slots(),
+        interp.chunks(),
         interp.stack_slots(),
         interp.program_symbol_names().to_vec(),
         Vec::new(),
@@ -368,14 +368,14 @@ macro_rules! define_restore_chain {
     (($d:tt); $($section:ident => $next:ident [$($field:ident),+] ($interp:ident) $body:block)*) => {
         #[deny(unused_variables)]
         fn restore_side_tables(
-            interp: &mut Interp,
+            interp: &mut RestoreSession,
             mut tables: SideTableImages,
         ) -> Result<(), crate::format::SnapshotError> {
             use crate::format::SnapshotError;
             // Prune collected boot-native metadata before runtime function
             // clusters can reuse those slots, and restore relocated names.
             let native_names = tables.function_state.native_names.take();
-            if !interp.restore_native_names(native_names.as_deref()) {
+            if interp.restore_native_names(native_names.as_deref()).is_err() {
                 return Err(SnapshotError::Corrupt(
                     "side-table restore: malformed native names",
                 ));
@@ -392,11 +392,7 @@ macro_rules! define_restore_chain {
                 (End, $d current_interp:ident, $d current_tables:ident) => {};
             }
             restore_step!(Arrays, interp, tables);
-            // Semantic migrations run only after the persisted name floor, symbol-key
-            // map, and arguments brands have all been reinstated. They can therefore
-            // distinguish a never-installed implicit intrinsic from a guest deletion,
-            // and a legacy arguments layout from current guest customization.
-            interp.migrate_restored_layout();
+            // RestoreSession::finish owns cross-table validation and migrations.
             Ok(())
         }
     };
@@ -422,7 +418,7 @@ crate::snapshot_roster::snapshot_payloads!(define_restore_steps);
 /// arenas, stack, program symbol names, and metering state). The
 /// boot-derived intrinsics/prototypes come from the fresh boot at their
 /// deterministic slot indices, matching the image's boot region. See
-/// [`Interp::restore_snapshot_state`].
+/// [`RestoreSession::restore_snapshot_state`].
 ///
 /// The proof wrapper prevents mutation between validation and restore.
 /// Restoration remains fallible while the VM keeps belt-and-braces
@@ -434,14 +430,16 @@ pub fn image_to_interp(
     let image = snapshot.into_image();
     let meter = image.meter.to_state();
     let (slots, chunks) = image.to_arenas();
-    let mut interp = Interp::new();
-    interp.restore_snapshot_state(slots, chunks, image.stack, image.names, meter);
+    let mut interp = Interp::begin_restore();
+    interp
+        .restore_snapshot_state(slots, chunks, image.stack, image.names, meter)
+        .map_err(|_| SnapshotError::Corrupt("arena restore failed"))?;
     // The installed-names floor: adopt the live floor
     // when it traveled, so names interned during the last install pass
     // stay lazily installable exactly as they were live. Bounds were
     // validated at decode.
     if let Some(floor) = image.name_floor {
-        if !interp.restore_installed_names_floor(floor) {
+        if interp.restore_installed_names_floor(floor).is_err() {
             return Err(crate::format::SnapshotError::Corrupt(
                 "installed-names floor does not restore",
             ));
@@ -451,7 +449,10 @@ pub fn image_to_interp(
     // descriptor slot and reinstate the top-down mint counter, so a
     // symbol-keyed property reads back under the same id and a later
     // mint cannot reuse a stored number.
-    if !interp.restore_symbol_key_table(image.symbols.next_id, &image.symbols.pairs) {
+    if !interp
+        .restore_symbol_key_table(image.symbols.next_id, &image.symbols.pairs)
+        .is_ok()
+    {
         return Err(crate::format::SnapshotError::Corrupt(
             "symbol-key table does not restore",
         ));
@@ -460,7 +461,19 @@ pub fn image_to_interp(
     // restored through the counted accessors so the side-ref page
     // counts rebuild in lockstep.
     restore_side_tables(&mut interp, side_tables_from!(image))?;
-    Ok(interp)
+    finish_restore(interp)
+}
+
+// Keep the existing capability-refusal diagnostic on every adoption path,
+// including lazy stores. Other cross-row failures use the session category.
+fn finish_restore(session: RestoreSession) -> Result<Interp, SnapshotError> {
+    session.finish().map_err(|error| {
+        SnapshotError::Corrupt(if error.row == "promise_cluster" {
+            "side-table restore: malformed promise capability"
+        } else {
+            "restore session did not validate"
+        })
+    })
 }
 
 /// Rebuild a machine from `XS_M` container bytes, enforcing the ironhorse
@@ -568,6 +581,7 @@ struct LazyPin {
 }
 
 pub struct StoreSession {
+    backing_authority: Option<ironhorse_vm::BackingCommitAuthority>,
     snapshot_baseline: ironhorse_vm::SnapshotBaseline,
     interp: Interp,
     epoch: u64,
@@ -677,13 +691,13 @@ fn manifest_of(interp: &Interp, signature: &Signature, epoch: u64, cranks: u64) 
         store_schema: STORE_SCHEMA_VERSION,
         signature: signature.clone(),
         creation: crate::image::CreationParams {
-            initial_slot_count: interp.slots.capacity(),
-            initial_chunk_bytes: interp.chunks.byte_size() as u32,
+            initial_slot_count: interp.slots().capacity(),
+            initial_chunk_bytes: interp.chunks().byte_size() as u32,
         },
-        slot_count: interp.slots.capacity(),
-        slot_live: interp.slots.live_count(),
-        chunk_len: interp.chunks.byte_size() as u64,
-        free_len: interp.slots.free_list().len() as u32,
+        slot_count: interp.slots().capacity(),
+        slot_live: interp.slots().live_count(),
+        chunk_len: interp.chunks().byte_size() as u64,
+        free_len: interp.slots().free_list().len() as u32,
         epoch,
         cranks,
         collect_every: 0,
@@ -749,8 +763,7 @@ pub fn begin_store_session_with_cadence(
     }
     // Only a successful commit clears the bitmaps: a failed commit
     // forgets nothing and the next attempt re-offers the same dirt.
-    interp.slots.clear_dirty();
-    interp.chunks.clear_dirty();
+    interp.acknowledge_arena_commit();
     // Seed the session's root ledger from the epoch-1 batch — it
     // carries EVERY row, so an empty ledger advanced by it is the
     // store's exact state (`root_ledger_tracks_real_batches`).
@@ -785,6 +798,7 @@ pub fn begin_store_session_with_cadence(
         epoch: 1,
         seal,
         pin: None,
+        backing_authority: None,
         root_ledger,
         // A fresh store has absorbed no cranks; the first checkpoint
         // records however many the caller reports.
@@ -809,6 +823,16 @@ pub fn checkpoint_to_store(
     store: &mut dyn HeapStore,
 ) -> Result<u64, StoreError> {
     signature.check_boot()?;
+    if let Some(authority) = &session.backing_authority {
+        session
+            .interp
+            .check_backing_authority(authority)
+            .map_err(|_| {
+                StoreError::Snapshot(SnapshotError::Corrupt(
+                    "commit authority does not match the machine's backing",
+                ))
+            })?;
+    }
     // Runtime-interned property ids remain resumable: string keys live
     // in the NAME table (persisted every checkpoint via the small
     // state) and symbol keys travel in the SYMB table, so a live
@@ -855,7 +879,7 @@ pub fn checkpoint_to_store(
         // owns the same RefCell and cannot be borrowed during checkpoint.
         session
             .interp
-            .slots
+            .slots()
             .validate_backing_before_checkpoint(|page| {
                 let bytes = store.read_slot_page(page)?;
                 if pin.leaves.borrow().pages.get(page as usize).copied()
@@ -940,12 +964,12 @@ pub fn checkpoint_to_store(
     let page_count = slot_page_count(manifest.slot_count);
     let mut page_edges: Vec<(u32, Vec<u32>)> = Vec::new();
     let slot_pages: Vec<(u32, Vec<u8>)> = interp
-        .slots
+        .slots()
         .dirty_pages()
         .into_iter()
         .filter(|&p| p < page_count)
         .map(|page| {
-            let records = interp.slots.page_records(page);
+            let records = interp.slots().page_records(page);
             // The page-edge summary falls out of the records
             // already in hand — a pure function of page content.
             page_edges.push((page, derive_page_edges(page, &records)));
@@ -962,11 +986,11 @@ pub fn checkpoint_to_store(
     // guard is belt-and-braces against a future bitmap bug.
     let ext_count = chunk_extent_count(manifest.chunk_len);
     let chunk_extents: Vec<(u32, Vec<u8>)> = interp
-        .chunks
+        .chunks()
         .dirty_extents()
         .into_iter()
         .filter(|&e| e < ext_count)
-        .map(|e| (e, interp.chunks.extent_bytes(e)))
+        .map(|e| (e, interp.chunks().extent_bytes(e)))
         .collect();
 
     // Select before extraction and encoding; hash only dirty candidates.
@@ -994,7 +1018,7 @@ pub fn checkpoint_to_store(
     // The ledger holds prior free leaves, either retained from the last
     // successful checkpoint or rebuilt from the verified store inventory.
     let prior_frees = ledger.free_leaves();
-    let free_all = crate::store::encode_all_free_segs(interp.slots.free_list());
+    let free_all = crate::store::encode_all_free_segs(interp.slots().free_list());
     let free_segs: Vec<(u32, Vec<u8>)> = free_all
         .into_iter()
         .filter(|(i, bytes)| {
@@ -1041,14 +1065,9 @@ pub fn checkpoint_to_store(
             .as_ref()
             .is_some_and(|pin| committed.cast::<()>() == pin.store_addr)
     };
-    session
-        .interp
-        .slots
-        .clear_dirty_after_commit(landed_in_backing);
-    session
-        .interp
-        .chunks
-        .clear_dirty_after_commit(landed_in_backing);
+    if !landed_in_backing {
+        session.interp.acknowledge_arena_commit();
+    }
     session.snapshot_baseline = session.interp.acknowledge_snapshot();
     session.epoch = epoch;
     session.seal = seal.clone();
@@ -1089,9 +1108,17 @@ pub fn checkpoint_to_store(
             // tail row's expected fault length is the committed one.
             session
                 .interp
-                .slots
-                .advance_backing(batch.manifest.chunk_len);
-            session.interp.chunks.advance_backing();
+                .acknowledge_backing_commit(
+                    session
+                        .backing_authority
+                        .as_mut()
+                        .expect("lazy session has backing authority"),
+                )
+                .map_err(|_| {
+                    StoreError::Snapshot(SnapshotError::Corrupt(
+                        "commit authority does not match the machine's backing",
+                    ))
+                })?;
         }
     }
     Ok(epoch)
@@ -1166,6 +1193,7 @@ pub fn resume_from_store(
         epoch: manifest.epoch,
         seal: manifest.seal,
         pin: None,
+        backing_authority: None,
         root_ledger: Some(root_ledger),
         cranks: manifest.cranks,
         collect_every: manifest.collect_every,
@@ -1318,26 +1346,28 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
         store: store.clone(),
         pin: pin.clone(),
     });
-    let slots = ironhorse_vm::SlotArena::lazy_from_parts(
+    let (slots, chunks, backing_authority) = ironhorse_vm::BackingCommitAuthority::lazy_arenas(
         manifest.slot_count,
         small.slot_free.clone(),
         manifest.slot_live,
-        source.clone(),
-        manifest.chunk_len,
-    );
-    let chunks = ironhorse_vm::ChunkArena::lazy_from_parts(manifest.chunk_len as usize, source);
-    let mut interp = Interp::new();
-    interp.restore_snapshot_state(
-        slots,
-        chunks,
-        small.stack.clone(),
-        small.names.clone(),
-        small.meter.to_state(),
-    );
+        manifest.chunk_len as usize,
+        source,
+    )
+    .map_err(|_| StoreError::Snapshot(SnapshotError::Corrupt("invalid lazy arena metadata")))?;
+    let mut interp = Interp::begin_restore();
+    interp
+        .restore_snapshot_state(
+            slots,
+            chunks,
+            small.stack.clone(),
+            small.names.clone(),
+            small.meter.to_state(),
+        )
+        .map_err(|_| StoreError::Snapshot(SnapshotError::Corrupt("arena restore failed")))?;
     // The installed-names floor, exactly as the container
     // path adopts it; bounds were validated by `SmallState::decode`.
     if let Some(floor) = small.name_floor {
-        if !interp.restore_installed_names_floor(floor) {
+        if interp.restore_installed_names_floor(floor).is_err() {
             return Err(StoreError::Snapshot(crate::format::SnapshotError::Corrupt(
                 "installed-names floor does not restore",
             )));
@@ -1345,7 +1375,10 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
     }
     // The symbol-key id table rides the small state too, restored
     // before anything can mint.
-    if !interp.restore_symbol_key_table(small.symbols.next_id, &small.symbols.pairs) {
+    if !interp
+        .restore_symbol_key_table(small.symbols.next_id, &small.symbols.pairs)
+        .is_ok()
+    {
         return Err(StoreError::Snapshot(crate::format::SnapshotError::Corrupt(
             "symbol-key table does not restore",
         )));
@@ -1354,6 +1387,7 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
     // restores them eagerly like everything else small — only arena
     // rows fault on demand.
     restore_side_tables(&mut interp, side_tables_from!(small)).map_err(StoreError::Snapshot)?;
+    let interp = finish_restore(interp).map_err(StoreError::Snapshot)?;
     // Restore can normalize older payloads; preserve that dirt until committed.
     let snapshot_baseline = interp.snapshot_baseline();
     Ok(StoreSession {
@@ -1363,6 +1397,7 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
         epoch: manifest.epoch,
         seal: manifest.seal,
         pin: Some(pin),
+        backing_authority: Some(backing_authority),
         root_ledger: Some(root_ledger),
         cranks: manifest.cranks,
         collect_every: manifest.collect_every,
@@ -1387,7 +1422,7 @@ pub fn full_collect(
         return Err(StoreError::MachineNotQuiescent);
     }
     assert!(
-        interp.slots.dirty_pages().is_empty() && interp.chunks.dirty_extents().is_empty(),
+        interp.slots().dirty_pages().is_empty() && interp.chunks().dirty_extents().is_empty(),
         "full collect requires a clean checkpoint boundary (dirty rows present)"
     );
     let manifest = store.manifest()?;
@@ -1456,7 +1491,7 @@ pub fn partial_collect(
         return Err(StoreError::MachineNotQuiescent);
     }
     assert!(
-        interp.slots.dirty_pages().is_empty() && interp.chunks.dirty_extents().is_empty(),
+        interp.slots().dirty_pages().is_empty() && interp.chunks().dirty_extents().is_empty(),
         "partial collect requires a clean checkpoint boundary (dirty rows present)"
     );
     let manifest = store.manifest()?;
@@ -1565,7 +1600,7 @@ pub fn generational_collect(
         return Err(StoreError::MachineNotQuiescent);
     }
     assert!(
-        interp.slots.dirty_pages().is_empty() && interp.chunks.dirty_extents().is_empty(),
+        interp.slots().dirty_pages().is_empty() && interp.chunks().dirty_extents().is_empty(),
         "generational collect requires a clean checkpoint boundary (dirty rows present)"
     );
     let manifest = store.manifest()?;
@@ -1670,7 +1705,38 @@ mod tests {
             iterators: vec![],
         };
         mutate(&mut rows);
-        restore_side_tables(&mut Interp::new(), rows)
+        let source = Interp::new();
+        let meter = source.meter_state();
+        let (slots, chunks) = source.into_arenas();
+        let mut session = Interp::begin_restore();
+        session
+            .restore_snapshot_state(slots, chunks, Vec::new(), Vec::new(), meter)
+            .map_err(|_| SnapshotError::Corrupt("arena restore failed"))?;
+        session
+            .restore_symbol_key_table(u16::MAX, &[])
+            .map_err(|_| SnapshotError::Corrupt("symbol-key table does not restore"))?;
+        restore_side_tables(&mut session, rows)?;
+        finish_restore(session).map(|_| ())
+    }
+
+    #[test]
+    fn restore_boundary_rejects_a_cyclic_proxy_before_exposing_the_machine() {
+        let owner = Interp::new()
+            .function_state_snapshot()
+            .native_names
+            .unwrap()[0]
+            .0;
+        assert_eq!(
+            restore_rows(|rows| {
+                rows.proxy_state.proxies.push(ironhorse_vm::ProxyRow {
+                    owner,
+                    target: owner,
+                    handler: owner,
+                    revoked: false,
+                });
+            }),
+            Err(SnapshotError::Corrupt("restore session did not validate"))
+        );
     }
 
     #[test]
@@ -1697,7 +1763,7 @@ mod tests {
                 frames: vec![],
             })),
             Err(SnapshotError::Corrupt(
-                "side-table restore: unknown error name"
+                "side-table restore: malformed Errors row"
             ))
         );
         assert_eq!(
@@ -1765,6 +1831,48 @@ mod tests {
             ),
             Err(SnapshotError::Corrupt(
                 "side-table restore: malformed private elements"
+            ))
+        );
+    }
+
+    #[test]
+    fn restore_boundary_reports_vm_owned_row_validation() {
+        use crate::image::{DateImage, WrapperImage};
+        assert_eq!(
+            restore_rows(|rows| rows.arguments_brands.push(u32::MAX)),
+            Err(SnapshotError::Corrupt(
+                "side-table restore: malformed ArgumentsBrands row"
+            ))
+        );
+        assert_eq!(
+            restore_rows(|rows| rows.dates.push(DateImage {
+                owner: u32::MAX,
+                value_bits: 0,
+            })),
+            Err(SnapshotError::Corrupt(
+                "side-table restore: malformed Dates row"
+            ))
+        );
+        assert_eq!(
+            restore_rows(|rows| rows.wrappers.push(WrapperImage {
+                owner: u32::MAX,
+                value: ironhorse_vm::Slot::integer(1),
+            })),
+            Err(SnapshotError::Corrupt(
+                "side-table restore: malformed Wrappers row"
+            ))
+        );
+        assert_eq!(
+            restore_rows(|rows| rows
+                .disposable_stacks
+                .push(ironhorse_vm::DisposableStackRow {
+                    owner: u32::MAX,
+                    disposed: false,
+                    asynchronous: false,
+                    records: vec![],
+                })),
+            Err(SnapshotError::Corrupt(
+                "side-table restore: malformed DisposableStacks row"
             ))
         );
     }
@@ -1905,7 +2013,7 @@ mod tests {
     fn checkpoint_refuses_corrupt_deferred_pages_before_committing() {
         use crate::store::{HeapStore, HeapStoreCommit};
         use crate::store_file::FileStore;
-        use ironhorse_vm::{Slot, SlotIndex, SLOTS_PER_PAGE};
+        use ironhorse_vm::{Opcode, Slot, SLOTS_PER_PAGE};
         let mut image = Interp::new().snapshot_image_for_testing(&sig()).unwrap();
         let count = (image.slots.len() as u32).div_ceil(SLOTS_PER_PAGE) * SLOTS_PER_PAGE
             + 2 * SLOTS_PER_PAGE;
@@ -1920,11 +2028,18 @@ mod tests {
             store.commit(&image_to_batch(&image, 1, "")).unwrap();
             let shared = std::rc::Rc::new(std::cell::RefCell::new(store));
             let mut session = resume_from_store_lazy(shared.clone(), &sig()).unwrap();
-            assert!(!session.machine().slots.is_fully_resident());
-            assert_eq!(
-                session.machine_mut().slots.alloc(Slot::undefined()),
-                SlotIndex(count)
+            assert!(!session.machine().slots().is_fully_resident());
+            assert!(
+                session
+                    .machine_mut()
+                    .run(&[
+                        Opcode::XS_CODE_OBJECT as u8,
+                        Opcode::XS_CODE_POP as u8,
+                        Opcode::XS_CODE_RETURN as u8,
+                    ])
+                    .completed
             );
+            assert!(session.machine().slots().capacity() > count);
             let original = std::fs::read(&path).unwrap();
             let read_len =
                 |at: usize| u32::from_be_bytes(original[at..at + 4].try_into().unwrap()) as usize;
@@ -2089,13 +2204,20 @@ mod tests {
             let mut resumed = resume_from_store_lazy(shared.clone(), &sig()).expect("lazy attach");
             let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 if checkpoint {
-                    assert_eq!(
-                        resumed.machine_mut().slots.alloc(Slot::undefined()),
-                        SlotIndex(free)
+                    assert!(
+                        resumed
+                            .machine_mut()
+                            .run(&[
+                                ironhorse_vm::Opcode::XS_CODE_OBJECT as u8,
+                                ironhorse_vm::Opcode::XS_CODE_POP as u8,
+                                ironhorse_vm::Opcode::XS_CODE_RETURN as u8,
+                            ])
+                            .completed
                     );
+                    assert!(!resumed.machine().slots().is_free_index(SlotIndex(free)));
                     checkpoint_to_store(&mut resumed, &sig(), &mut *shared.borrow_mut()).unwrap();
                 } else {
-                    resumed.machine().slots.ensure_all_resident();
+                    resumed.machine().slots().ensure_all_resident();
                 }
             }))
             .expect_err("the live-to-free edge must fail before fault or commit can follow poison");

@@ -466,10 +466,10 @@ fn lazy_fault_refuses_row_read_across_a_foreign_commit() {
         // Touch every page and extent: whichever row the resume left
         // unfaulted trips the armed interleave first.
         for page in 0..slot_page_count(manifest.slot_count) {
-            session.machine().slots.touch_page(page);
+            session.machine().slots().touch_page(page);
         }
         for ext in 0..ironhorse_snapshot::store::chunk_extent_count(manifest.chunk_len) {
-            session.machine().chunks.touch_extent(ext);
+            session.machine().chunks().touch_extent(ext);
         }
         panic!("machine was fully resident before the interleave could fire");
     }));
@@ -555,10 +555,10 @@ fn length_preserving_flip_at_rest_fails_closed() {
         let session = resume_from_store_lazy(shared.clone(), &sig())?;
         let manifest = shared.borrow().manifest().unwrap();
         for ext in 0..ironhorse_snapshot::store::chunk_extent_count(manifest.chunk_len) {
-            session.machine().chunks.touch_extent(ext);
+            session.machine().chunks().touch_extent(ext);
         }
         for page in 0..slot_page_count(manifest.slot_count) {
-            session.machine().slots.touch_page(page);
+            session.machine().slots().touch_page(page);
         }
         Ok::<(), StoreError>(())
     }));
@@ -675,7 +675,7 @@ fn reachability_query_reads_no_row_content() {
 #[test]
 fn evict_after_own_checkpoint_refaults_cleanly() {
     use ironhorse_snapshot::store::chunk_extent_count;
-    use ironhorse_vm::{Slot, SLOTS_PER_PAGE};
+    use ironhorse_vm::{Opcode, SLOTS_PER_PAGE};
     use std::cell::RefCell;
     use std::rc::Rc;
 
@@ -691,7 +691,16 @@ fn evict_after_own_checkpoint_refaults_cleanly() {
     // row is longer than the attach-time one — the geometry half of
     // the finding.
     for _ in 0..(2 * SLOTS_PER_PAGE + 17) {
-        session.machine_mut().slots.alloc(Slot::integer(7));
+        assert!(
+            session
+                .machine_mut()
+                .run(&[
+                    Opcode::XS_CODE_OBJECT as u8,
+                    Opcode::XS_CODE_POP as u8,
+                    Opcode::XS_CODE_RETURN as u8
+                ])
+                .completed
+        );
     }
     checkpoint_to_store(&mut session, &sig(), &mut *store.borrow_mut()).expect("checkpoint");
 
@@ -706,10 +715,10 @@ fn evict_after_own_checkpoint_refaults_cleanly() {
     let manifest = store.borrow().manifest().unwrap();
     let mut evictions = 0u32;
     for page in 0..slot_page_count(manifest.slot_count) {
-        evictions += session.machine().slots.evict_page(page) as u32;
+        evictions += session.machine().slots().evict_page(page) as u32;
     }
     for ext in 0..chunk_extent_count(manifest.chunk_len) {
-        evictions += session.machine().chunks.evict_extent(ext) as u32;
+        evictions += session.machine().chunks().evict_extent(ext) as u32;
     }
     assert!(
         evictions > 0,
@@ -726,6 +735,57 @@ fn evict_after_own_checkpoint_refaults_cleanly() {
         expect,
         "post-commit eviction re-faults reinstall the committed bytes"
     );
+}
+
+/// A caller with a runnable machine can acknowledge a twin commit, but
+/// cannot claim a pinned commit with an unrelated backing capability.
+#[test]
+fn unrelated_backing_authority_cannot_make_uncommitted_pages_evictable() {
+    use ironhorse_vm::{BackingCommitAuthority, PageSource, Slot};
+    use std::{cell::RefCell, rc::Rc};
+    struct UnusedSource;
+    impl PageSource for UnusedSource {
+        fn slot_page(&self, _: u32) -> Vec<Slot> {
+            panic!("no reads expected")
+        }
+        fn chunk_extent(&self, _: u32) -> Vec<u8> {
+            panic!("no reads expected")
+        }
+    }
+    let (code, names) =
+        ironhorse_compile::compile_atoms("var item = { value: 7 }; item.value").unwrap();
+    let mut machine = Interp::new();
+    machine.link_intrinsics(&ironhorse_vm::parse_symbols(&names));
+    assert!(machine.run(&code).completed);
+    let store = Rc::new(RefCell::new(MemoryStore::new()));
+    drop(begin(machine, &mut *store.borrow_mut()));
+    let mut session = resume_from_store_lazy(store.clone(), &sig()).unwrap();
+    let (code, names) = ironhorse_compile::compile_atoms("item.value = 9; item.value").unwrap();
+    let code = session
+        .machine_mut()
+        .relink_crank(&code, &ironhorse_vm::parse_symbols(&names))
+        .unwrap();
+    assert_eq!(session.machine_mut().run(&code).result, "9");
+    let dirty = session.machine().slots().dirty_pages();
+    assert!(!dirty.is_empty());
+    let (_, _, mut other) =
+        BackingCommitAuthority::lazy_arenas(0, vec![], 0, 0, Rc::new(UnusedSource)).unwrap();
+    assert!(session
+        .machine_mut()
+        .acknowledge_backing_commit(&mut other)
+        .is_err());
+    assert_eq!(session.machine().slots().dirty_pages(), dirty);
+    session.machine_mut().acknowledge_arena_commit();
+    for page in dirty {
+        assert!(!session.machine().slots().evict_page(page));
+    }
+    let (code, names) = ironhorse_compile::compile_atoms("item.value").unwrap();
+    let code = session
+        .machine_mut()
+        .relink_crank(&code, &ironhorse_vm::parse_symbols(&names))
+        .unwrap();
+    assert_eq!(session.machine_mut().run(&code).result, "9");
+    assert_eq!(store.borrow().manifest().unwrap().epoch, 1);
 }
 
 /// Review wave 5: the same sequence with the checkpoint going into a
@@ -747,26 +807,39 @@ fn evict_after_a_twin_store_checkpoint_keeps_the_modified_body() {
     use std::cell::RefCell;
     use std::rc::Rc;
 
+    let (build, names) = ironhorse_compile::compile_atoms(
+        "var backed = []; for (var i = 0; i < 2048; i++) backed.push({value: 7});",
+    )
+    .unwrap();
     let mut m = Interp::new();
-    assert!(m.run(&PROG_A).completed);
+    m.link_intrinsics(&ironhorse_vm::parse_symbols(&names));
+    assert!(m.run(&build).completed);
     let store = Rc::new(RefCell::new(MemoryStore::new()));
-    let session = begin(m, &mut *store.borrow_mut());
-    drop(session);
+    drop(begin(m, &mut *store.borrow_mut()));
 
-    // Resume against `store` — that is the PIN, and every fault reads
-    // it. The checkpoint below goes somewhere else.
+    // Change properties distributed across the existing backed heap through
+    // guest execution, rather than manufacturing malformed arena records.
     let mut session = resume_from_store_lazy(store.clone(), &sig()).expect("lazy resume");
-    assert!(session.machine_mut().run(&PROG_B).completed);
-    // Modify records the store ALREADY backs, so the divergence is in
-    // the body rather than in an appended tail. Rewriting record 0 of
-    // every attach-time page guarantees at least one such page.
+    let (mutate, names) = ironhorse_compile::compile_atoms(
+        "for (var i = 0; i < backed.length; i++) backed[i].value = 0x5eed + i;",
+    )
+    .unwrap();
+    let code = session
+        .machine_mut()
+        .relink_crank(&mutate, &ironhorse_vm::parse_symbols(&names))
+        .unwrap();
+    assert!(session.machine_mut().run(&code).completed);
     let backed_pages = slot_page_count(store.borrow().manifest().unwrap().slot_count);
-    for page in 0..backed_pages {
-        let idx = ironhorse_vm::SlotIndex(page * ironhorse_vm::SLOTS_PER_PAGE);
-        session.machine_mut().slots.get_mut(idx).id = 0;
-        session.machine_mut().slots.get_mut(idx).value =
-            ironhorse_vm::Payload::Integer(0x5EED + page as i32);
-    }
+    assert!(
+        session
+            .machine()
+            .slots()
+            .dirty_pages()
+            .iter()
+            .filter(|&&page| page < backed_pages)
+            .count()
+            > 1
+    );
 
     // The twin is a byte-identical copy of the pinned store, so the
     // commit succeeds on succession — it is a legitimate operation, and
@@ -789,10 +862,10 @@ fn evict_after_a_twin_store_checkpoint_keeps_the_modified_body() {
     let manifest = store.borrow().manifest().unwrap();
     let mut evictions = 0u32;
     for page in 0..slot_page_count(manifest.slot_count) {
-        evictions += session.machine().slots.evict_page(page) as u32;
+        evictions += session.machine().slots().evict_page(page) as u32;
     }
     for ext in 0..chunk_extent_count(manifest.chunk_len) {
-        evictions += session.machine().chunks.evict_extent(ext) as u32;
+        evictions += session.machine().chunks().evict_extent(ext) as u32;
     }
     // Some rows are untouched and still evictable, so the sweep is not
     // vacuously refused; what must not happen is losing the edits.
@@ -914,4 +987,26 @@ fn checkpoint_recovers_through_a_failed_commit() {
             .expect("gated image"),
         "a resume sees exactly the recovered history"
     );
+}
+
+#[test]
+fn replacing_a_lazy_sessions_machine_refuses_before_durable_commit() {
+    use std::{cell::RefCell, rc::Rc};
+    let store = Rc::new(RefCell::new(MemoryStore::new()));
+    drop(begin(Interp::new(), &mut *store.borrow_mut()));
+    let mut session = resume_from_store_lazy(store.clone(), &sig()).unwrap();
+    let before = store_to_image(&*store.borrow()).unwrap();
+    let epoch = session.epoch();
+    *session.machine_mut() = Interp::new();
+    assert!(matches!(
+        checkpoint_to_store(&mut session, &sig(), &mut *store.borrow_mut()),
+        Err(StoreError::Snapshot(
+            ironhorse_snapshot::SnapshotError::Corrupt(
+                "commit authority does not match the machine's backing"
+            )
+        ))
+    ));
+    assert_eq!(session.epoch(), epoch);
+    assert_eq!(store.borrow().manifest().unwrap().epoch, epoch);
+    assert_eq!(store_to_image(&*store.borrow()).unwrap(), before);
 }

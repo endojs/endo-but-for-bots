@@ -4,27 +4,27 @@ use ironhorse_vm::{Halt, Interp, SlotIndex};
 
 fn assert_refused_unchanged(vm: &mut Interp) {
     assert!(!vm.is_quiescent());
-    let slots: Vec<_> = (0..vm.slots.capacity())
-        .map(|i| vm.slots.get(SlotIndex(i)))
+    let slots: Vec<_> = (0..vm.slots().capacity())
+        .map(|i| vm.slots().get(SlotIndex(i)))
         .collect();
-    let free = vm.slots.free_list().to_vec();
-    let dirty = vm.slots.dirty_pages();
-    let chunks = vm.chunks.raw_vec();
+    let free = vm.slots().free_list().to_vec();
+    let dirty = vm.slots().dirty_pages();
+    let chunks = vm.chunks().raw_vec();
     let stack = vm.stack_slots().to_vec();
-    let chunk_dirty = vm.chunks.dirty_extents();
+    let chunk_dirty = vm.chunks().dirty_extents();
     let raw = vm.meter_state();
     assert_eq!(vm.collect_garbage(), Err(GcAdmissionError::NotQuiescent));
     // A destructive page request must be refused before touching even boot slots.
     assert_eq!(vm.free_pages(&[0]), Err(GcAdmissionError::NotQuiescent));
-    assert_eq!(vm.slots.capacity() as usize, slots.len());
+    assert_eq!(vm.slots().capacity() as usize, slots.len());
     for (i, slot) in slots.iter().enumerate() {
-        assert_eq!(vm.slots.get(SlotIndex(i as u32)), *slot);
+        assert_eq!(vm.slots().get(SlotIndex(i as u32)), *slot);
     }
-    assert_eq!(vm.slots.free_list(), free);
-    assert_eq!(vm.slots.dirty_pages(), dirty);
-    assert_eq!(vm.chunks.raw_vec(), chunks);
+    assert_eq!(vm.slots().free_list(), free);
+    assert_eq!(vm.slots().dirty_pages(), dirty);
+    assert_eq!(vm.chunks().raw_vec(), chunks);
     assert_eq!(vm.stack_slots(), stack);
-    assert_eq!(vm.chunks.dirty_extents(), chunk_dirty);
+    assert_eq!(vm.chunks().dirty_extents(), chunk_dirty);
     assert_eq!(vm.meter_state(), raw);
     assert!(!vm.is_quiescent());
 }
@@ -48,7 +48,7 @@ fn halts_and_uncaught_throws_do_not_admit_collection() {
             vm.arm_meter(1, Box::new(|_| false));
         }
         if heap {
-            vm.slots.set_ceiling(vm.slots.capacity() + 20);
+            vm.set_slot_ceiling(vm.slots().capacity() + 20);
         }
         let result = vm.run_bounded(&code, limit);
         assert!(
@@ -68,7 +68,7 @@ fn halts_and_uncaught_throws_do_not_admit_collection() {
     }
     // Admission must use the lifecycle predicate even without activation frames.
     let mut vm = Interp::new();
-    vm.chunks.set_ceiling(0);
+    vm.set_chunk_ceiling(0);
     assert_eq!(vm.run(&[]).halt, Halt::HeapExhausted);
     assert_refused_unchanged(&mut vm);
 }

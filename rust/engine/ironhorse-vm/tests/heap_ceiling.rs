@@ -38,7 +38,7 @@ fn guest_cannot_catch_slot_exhaustion() {
     let (code, names) = compile("try { while (true) { ({a:1}); } } catch (_) { 'caught'; }");
     let mut vm = Interp::new();
     vm.link_intrinsics(&names);
-    vm.slots.set_ceiling(vm.slots.capacity() + 100);
+    vm.set_slot_ceiling(vm.slots().capacity() + 100);
     let out = vm.run_bounded(&code, 10_000);
     assert_eq!(out.halt, Halt::HeapExhausted);
     assert!(out.halt.is_panic());
@@ -52,7 +52,7 @@ fn guest_cannot_catch_chunk_exhaustion() {
         compile("try { var s='x'; while (true) { s=s+'abcdefgh'; } } catch (_) { 'caught'; }");
     let mut vm = Interp::new();
     vm.link_intrinsics(&names);
-    vm.chunks.set_ceiling(vm.chunks.byte_size() + 4096);
+    vm.set_chunk_ceiling(vm.chunks().byte_size() + 4096);
     let out = vm.run_bounded(&code, 10_000);
     assert_eq!(out.halt, Halt::HeapExhausted);
     assert!(!out.completed);
@@ -62,7 +62,7 @@ fn guest_cannot_catch_chunk_exhaustion() {
 #[test]
 fn lowering_ceiling_below_existing_heap_refuses_even_allocation_free_code() {
     let mut vm = Interp::new();
-    vm.chunks.set_ceiling(0);
+    vm.set_chunk_ceiling(0);
     assert_eq!(vm.run(&[]).halt, Halt::HeapExhausted);
 }
 
@@ -103,7 +103,7 @@ fn guest_sized_temporary_buffers_are_refused_before_they_are_created() {
         let (code, names) = compile(source);
         let mut vm = Interp::new();
         vm.link_intrinsics(&names);
-        vm.chunks.set_ceiling(vm.chunks.byte_size() + 4096);
+        vm.set_chunk_ceiling(vm.chunks().byte_size() + 4096);
         let out = vm.run(&code);
         assert_eq!(out.halt, Halt::HeapExhausted, "{source}");
     }
@@ -146,7 +146,7 @@ fn element_scratch_is_bounded_by_bytes_instead_of_source_element_count() {
         let (code, names) = compile(source);
         let mut vm = Interp::new();
         vm.link_intrinsics(&names);
-        vm.chunks.set_ceiling(vm.chunks.byte_size() + 1_000_000);
+        vm.set_chunk_ceiling(vm.chunks().byte_size() + 1_000_000);
         let out = vm.run(&code);
         assert_eq!(out.halt, Halt::HeapExhausted, "{source}");
         assert!(!vm.is_quiescent());
@@ -163,7 +163,7 @@ fn replacement_expansion_checks_each_append() {
         let (code, names) = compile(source);
         let mut vm = Interp::new();
         vm.link_intrinsics(&names);
-        vm.chunks.set_ceiling(vm.chunks.byte_size() + 100_000);
+        vm.set_chunk_ceiling(vm.chunks().byte_size() + 100_000);
         assert_eq!(vm.run(&code).halt, Halt::HeapExhausted, "{source}");
     }
 }
@@ -175,7 +175,7 @@ fn empty_search_replace_all_streams_positions_under_low_headroom() {
     vm.link_intrinsics(&names);
     // Enough for UTF-16 source/result and construction scratch, less than an
     // extra usize per input code unit. Empty replacement needs no index list.
-    vm.chunks.set_ceiling(vm.chunks.byte_size() + 70_000);
+    vm.set_chunk_ceiling(vm.chunks().byte_size() + 70_000);
     let out = vm.run(&code);
     assert!(out.completed, "{:?}", out.halt);
     assert_eq!(out.result.len(), 10_000);
@@ -202,7 +202,7 @@ fn concat_unicode_expansion_and_dense_copies_share_admission() {
         } else {
             100_000
         };
-        vm.chunks.set_ceiling(vm.chunks.byte_size() + headroom);
+        vm.set_chunk_ceiling(vm.chunks().byte_size() + headroom);
         let out = vm.run(&code);
         assert_eq!(out.halt, Halt::HeapExhausted, "{source}");
     }
@@ -218,7 +218,7 @@ fn compact_json_and_argument_lists_obey_element_storage_limits() {
         let (code, names) = compile(source);
         let mut vm = Interp::new();
         vm.link_intrinsics(&names);
-        vm.chunks.set_ceiling(vm.chunks.byte_size() + 60_000);
+        vm.set_chunk_ceiling(vm.chunks().byte_size() + 60_000);
         assert_eq!(vm.run(&code).halt, Halt::HeapExhausted, "{source}");
     }
 }
@@ -228,6 +228,6 @@ fn bound_name_growth_obeys_the_heap_ceiling() {
     let (code, names) = compile("var f=function(){};for(var i=0;i<2000;i++)f=f.bind(null);f()");
     let mut vm = Interp::new();
     vm.link_intrinsics(&names);
-    vm.chunks.set_ceiling(vm.chunks.byte_size() + 100_000);
+    vm.set_chunk_ceiling(vm.chunks().byte_size() + 100_000);
     assert_eq!(vm.run(&code).halt, Halt::HeapExhausted);
 }

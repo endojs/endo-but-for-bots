@@ -356,7 +356,7 @@ fn free_list_reuse_survives_sqlite_sleep_cycles() {
     assert!(m.run(&b1).completed);
     assert!(m.run(&b2).completed);
     assert!(
-        !m.slots.free_list().is_empty(),
+        !m.slots().free_list().is_empty(),
         "delete must push the property record onto the free list"
     );
 }
@@ -477,9 +477,9 @@ fn multi_page_heap_survives_sqlite_sleep_cycles() {
     m.link_intrinsics(&names);
     assert!(m.run(&bytecode).completed);
     assert!(
-        m.slots.capacity() > 4 * SLOTS_PER_PAGE,
+        m.slots().capacity() > 4 * SLOTS_PER_PAGE,
         "fixture must span several slot pages, has {} records",
-        m.slots.capacity()
+        m.slots().capacity()
     );
 }
 
@@ -498,9 +498,9 @@ fn multi_extent_chunks_survive_sqlite_sleep_cycles() {
     m.link_intrinsics(&names);
     assert!(m.run(&bytecode).completed);
     assert!(
-        m.chunks.byte_size() > 2 * CHUNK_EXTENT_BYTES as usize,
+        m.chunks().byte_size() > 2 * CHUNK_EXTENT_BYTES as usize,
         "fixture must span several chunk extents, has {} bytes",
-        m.chunks.byte_size()
+        m.chunks().byte_size()
     );
 }
 

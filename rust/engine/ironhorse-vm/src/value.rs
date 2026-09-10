@@ -67,12 +67,61 @@ pub trait PageSource {
     fn chunk_extent(&self, ext: u32) -> Vec<u8>;
 }
 
+/// Authority to acknowledge commits to one pair of lazy arenas' backing.
+/// The trusted store adapter retains this capability privately. Neither a
+/// runnable interpreter nor its read-only arena views can recover it.
+pub struct BackingCommitAuthority {
+    identity: Rc<()>,
+}
+
+impl BackingCommitAuthority {
+    /// Establish a backing and its commit authority together, before the
+    /// arenas enter a restore session. No page content is read here.
+    pub fn lazy_arenas(
+        slot_count: u32,
+        free: Vec<u32>,
+        live: u32,
+        chunk_len: usize,
+        source: Rc<dyn PageSource>,
+    ) -> Result<(SlotArena, ChunkArena, Self), SlotArenaImageError> {
+        let mut slots = SlotArena::try_lazy_from_parts(
+            slot_count,
+            free,
+            live,
+            source.clone(),
+            chunk_len as u64,
+        )?;
+        let mut chunks = ChunkArena::lazy_from_parts(chunk_len, source);
+        let identity = Rc::new(());
+        slots
+            .lazy
+            .as_mut()
+            .expect("fresh lazy arena")
+            .commit_identity = Some(identity.clone());
+        chunks.commit_identity = Some(identity.clone());
+        Ok((slots, chunks, Self { identity }))
+    }
+
+    pub(crate) fn authorizes(&self, slots: &SlotArena, chunks: &ChunkArena) -> bool {
+        slots
+            .lazy
+            .as_ref()
+            .and_then(|backing| backing.commit_identity.as_ref())
+            .is_some_and(|identity| Rc::ptr_eq(identity, &self.identity))
+            && chunks
+                .commit_identity
+                .as_ref()
+                .is_some_and(|identity| Rc::ptr_eq(identity, &self.identity))
+    }
+}
+
 /// The lazy backing of a [`SlotArena`]: the page source plus one
 /// residency bit per attach-time page. `Cell` residency bits let the
 /// by-value read path fault through `&self`; pages past the
 /// attach-time count are locally allocated and implicitly resident.
 struct SlotBacking {
     source: Rc<dyn PageSource>,
+    commit_identity: Option<Rc<()>>,
     resident: Vec<Cell<bool>>,
     /// The attach-time record count — what the source's geometry can
     /// serve, and the exact-length bound every fault is checked
@@ -729,6 +778,7 @@ impl SlotArena {
             unbacked: vec![false; pages],
             lazy: Some(SlotBacking {
                 source,
+                commit_identity: None,
                 resident: (0..pages).map(|_| Cell::new(false)).collect(),
                 snapshot_count: slot_count,
                 snapshot_free: free_marks,
@@ -1680,6 +1730,7 @@ fn chunk_allocation_fits(header: usize, payload: usize, ceiling: usize) -> bool 
 
 pub struct ChunkArena {
     ceiling: usize,
+    commit_identity: Option<Rc<()>>,
     bytes: ChunkBytes,
     /// One dirty bit per [`CHUNK_EXTENT_BYTES`]-byte extent of the byte
     /// space, set by the byte-mutating paths ([`ChunkArena::alloc`],
@@ -1707,6 +1758,7 @@ impl ChunkArena {
     pub fn new() -> ChunkArena {
         ChunkArena {
             ceiling: DEFAULT_CHUNK_CEILING,
+            commit_identity: None,
             bytes: ChunkBytes::Plain(Vec::new()),
             dirty: Vec::new(),
             unbacked: Vec::new(),
@@ -1721,6 +1773,7 @@ impl ChunkArena {
         let exts = snapshot_len.div_ceil(CHUNK_EXTENT_BYTES as usize);
         ChunkArena {
             ceiling: DEFAULT_CHUNK_CEILING,
+            commit_identity: None,
             bytes: ChunkBytes::Lazy {
                 cell: RefCell::new(vec![0u8; snapshot_len]),
                 resident: (0..exts).map(|_| Cell::new(false)).collect(),
@@ -2479,6 +2532,7 @@ impl ChunkArena {
         let exts = bytes.len().div_ceil(CHUNK_EXTENT_BYTES as usize);
         ChunkArena {
             ceiling: DEFAULT_CHUNK_CEILING,
+            commit_identity: None,
             bytes: ChunkBytes::Plain(bytes),
             dirty: vec![false; exts],
             unbacked: vec![false; exts],
@@ -2845,5 +2899,28 @@ mod dirty_tests {
     fn chunk_from_image_starts_clean() {
         let c = ChunkArena::from_image(vec![9u8; (CHUNK_EXTENT_BYTES + 1) as usize]);
         assert!(c.dirty_extents().is_empty());
+    }
+
+    #[test]
+    fn backing_authority_is_bound_to_both_original_arenas() {
+        struct Unread;
+        impl PageSource for Unread {
+            fn slot_page(&self, _: u32) -> Vec<Slot> {
+                panic!("no page read")
+            }
+            fn chunk_extent(&self, _: u32) -> Vec<u8> {
+                panic!("no extent read")
+            }
+        }
+        let source: Rc<dyn PageSource> = Rc::new(Unread);
+        let (slots, chunks, authority) =
+            BackingCommitAuthority::lazy_arenas(0, vec![], 0, 0, source.clone()).unwrap();
+        let (other_slots, other_chunks, other) =
+            BackingCommitAuthority::lazy_arenas(0, vec![], 0, 0, source).unwrap();
+        assert!(authority.authorizes(&slots, &chunks));
+        assert!(!authority.authorizes(&slots, &other_chunks));
+        assert!(!authority.authorizes(&other_slots, &chunks));
+        assert!(!other.authorizes(&slots, &chunks));
+        assert!(!authority.authorizes(&SlotArena::new(), &ChunkArena::new()));
     }
 }
