@@ -2,13 +2,6 @@
 use super::*;
 
 impl Interp {
-    /// Build a fresh Error instance of type `name` from a native Error
-    /// constructor call/construct (`fx_Error`). Meters the construct cost
-    /// (the native `Object` object cost plus [`ERROR_CONSTRUCT_EXTRA`]) and,
-    /// when a message argument is present, ToString's it into an own
-    /// `message` property ([`ERROR_MESSAGE_METERING`]). Records the
-    /// construction metadata in [`Self::error_data`] for snapshot compatibility;
-    /// live properties, not that original metadata, determine display text.
     /// The frame-name chain an error captures at construction (XS's
     /// `fxCaptureErrorStack` recording): the current activation's function
     /// name, each suspended caller's, then the empty program frame. A
@@ -28,7 +21,9 @@ impl Interp {
         frames
     }
 
-    pub(super) fn build_error(&mut self, name: &'static str, base: usize, argc: usize) -> Slot {
+    /// Allocate an internal error without guest arguments. Public Error
+    /// constructors use `build_native_error` for coercion and cause lookup.
+    pub(super) fn build_error(&mut self, name: &'static str) -> Slot {
         // Raw bytecode runners may never link intrinsic property keys. Install
         // the boot names once before constructing their first error. Linked
         // realms already have this key, so guest deletions remain authoritative.
@@ -63,71 +58,15 @@ impl Interp {
         {
             self.slots.get_mut(inst).value = Payload::Reference(proto);
         }
-        // The message argument: absent or `undefined` ⇒ no own message (XS
-        // inherits `Error.prototype.message == ""`).
-        let message: Option<String> = if argc >= 1 {
-            let a = self
-                .stack
-                .get(base + 4)
-                .copied()
-                .unwrap_or_else(Slot::undefined);
-            if a.kind == Kind::Undefined {
-                None
-            } else {
-                let bytes = self.to_string_bytes_metered(a);
-                self.meter.tick_raw(ERROR_MESSAGE_METERING);
-                Some(String::from_utf8_lossy(&bytes).into_owned())
-            }
-        } else {
-            None
-        };
         let frames = self.capture_error_frames();
         self.error_data.insert(
             inst,
             ErrorInfo {
                 name,
-                message: message.clone(),
+                message: None,
                 frames,
             },
         );
-        // An own `message` property only when a message argument was given
-        // (XS): a no-argument error inherits `message == ""` from the
-        // prototype. `name` is always inherited from the prototype, never own
-        // — so `err.hasOwnProperty('name')` is `false`, matching XS. Both are
-        // set unmetered (the own message slot cost is folded into the
-        // measured construct constants). The key is INTERNED, not looked up:
-        // XS's key table is machine-global ("message" is a boot key), so the
-        // own property exists whether or not the constructing crank ever
-        // compiled the name — a later crank's `e.message` must resolve
-        // (locked by `error_own_properties.rs`).
-        if let Some(text) = message {
-            let mid = self.intern_static_key_unmetered("message");
-            let off = self.alloc_str_text(text.as_bytes());
-            self.set_own_unmetered_with_flag(
-                inst,
-                mid,
-                Slot::of(Kind::String, Payload::String(off)),
-                XS_DONT_ENUM_FLAG,
-            );
-        }
-        // `InstallErrorCause`: when the options object has a `cause`
-        // property, copy its value to a writable, non-enumerable,
-        // configurable own property on the new realm-local Error instance.
-        if argc >= 2 {
-            let options = self
-                .stack
-                .get(base + 5)
-                .copied()
-                .unwrap_or_else(Slot::undefined);
-            if let (Payload::Reference(options), Some(&cause_id)) =
-                (options.value, self.symbol_ids.get("cause"))
-            {
-                if self.instance_has(options, cause_id).0 {
-                    let cause = self.instance_get(options, cause_id);
-                    self.set_own_unmetered_with_flag(inst, cause_id, cause, XS_DONT_ENUM_FLAG);
-                }
-            }
-        }
         Slot::of(Kind::Reference, Payload::Reference(inst))
     }
 
@@ -227,7 +166,7 @@ impl Interp {
     /// An engine-internal error with a diagnostic message. Callers supply
     /// oracle-pinned text where available and profile-specific diagnostics
     /// otherwise. Built exactly like
-    /// `build_error(name, 0, 0)` — same object geometry, prototype chain, and
+    /// `build_error(name)` — same object geometry, prototype chain, and
     /// meter charge — then augmented with the message in construction metadata
     /// and as a real own non-enumerable `message` property (so `err.message`
     /// is observable exactly as XS's thrown error's is). The message is set
@@ -236,7 +175,7 @@ impl Interp {
     /// text existed (the oracle's own message construction is likewise off the
     /// metered opcode path, `fxThrowMessage` after `mxSaveState`).
     pub(super) fn internal_error(&mut self, name: &'static str, message: String) -> Slot {
-        let err = self.build_error(name, 0, 0);
+        let err = self.build_error(name);
         if let Payload::Reference(inst) = err.value {
             if let Some(info) = self.error_data.get_mut(&inst) {
                 info.message = Some(message.clone());

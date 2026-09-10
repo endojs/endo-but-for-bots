@@ -55,17 +55,6 @@ impl Interp {
         }
     }
 
-    /// The pre-discount flat form of [`Self::tick_property_create`], for the
-    /// internal materializations (the legacy `caller`/`arguments` own
-    /// properties a function define installs through `instance_put`) whose
-    /// costs are folded into calibrated cluster constants measured with this
-    /// flat charge — discounting them would unbalance those clusters.
-    #[inline]
-    pub(super) fn tick_property_create_flat(&mut self) {
-        self.meter.tick_slot_alloc();
-        self.meter.tick_raw(PROPERTY_CREATE_REMAINDER);
-    }
-
     /// `fxRunEvalEnvironment`'s global-hoist branch: each declared
     /// top-level `var` (a `NEW_LOCAL` name) becomes an own property of
     /// the global object. Materialize each not-yet-present name's global

@@ -205,10 +205,8 @@ impl Interp {
             ];
             let mut seen = [false; 9];
             for (n, name) in names.iter().enumerate() {
-                let Some(&id) = self.symbol_ids.get(*name) else {
-                    continue;
-                };
-                let item = self.ordinary_get(code, i, id, value)?;
+                let id = self.intern_static_key(*name);
+                let item = self.mop_get(code, i, id, value)?;
                 if item.kind == Kind::Undefined {
                     continue;
                 }
@@ -334,10 +332,8 @@ impl Interp {
                 .iter()
                 .enumerate()
                 {
-                    let Some(&id) = self.symbol_ids.get(*name) else {
-                        continue;
-                    };
-                    let v = self.ordinary_get(code, i, id, arg0)?;
+                    let id = self.intern_static_key(*name);
+                    let v = self.mop_get(code, i, id, arg0)?;
                     if v.kind == Kind::Undefined {
                         continue;
                     }
@@ -508,11 +504,9 @@ impl Interp {
             let mut fields = [0i64; 10];
             let mut any = false;
             for (i, name) in names.iter().enumerate() {
-                let Some(&id) = self.symbol_ids.get(*name) else {
-                    continue;
-                };
+                let id = self.intern_static_key(*name);
                 let receiver = Slot::of(Kind::Reference, Payload::Reference(r));
-                let item = self.ordinary_get(code, r, id, receiver)?;
+                let item = self.mop_get(code, r, id, receiver)?;
                 if item.kind != Kind::Undefined {
                     fields[i] = self.temporal_integer(item)?;
                     any = true;
@@ -580,10 +574,8 @@ impl Interp {
         if options.kind != Kind::Reference {
             return Err(self.catchable_type_error_msg("Temporal: options must be an object".into()));
         }
-        let Some(&id) = self.symbol_ids.get("relativeTo") else {
-            return Ok(None);
-        };
-        let value = self.ordinary_get(code, r, id, options)?;
+        let id = self.intern_static_key("relativeTo");
+        let value = self.mop_get(code, r, id, options)?;
         if value.kind == Kind::Undefined || value.kind == Kind::Null {
             return Ok(None);
         }
@@ -663,15 +655,14 @@ impl Interp {
                     "Temporal.round: smallestUnit or largestUnit is required".into(),
                 ));
             }
-            let increment = if let Some(&id) = self.symbol_ids.get("roundingIncrement") {
-                let v = self.ordinary_get(code, r, id, options)?;
+            let increment = {
+                let id = self.intern_static_key("roundingIncrement");
+                let v = self.mop_get(code, r, id, options)?;
                 if v.kind == Kind::Undefined {
                     1
                 } else {
                     self.temporal_integer(v)?
                 }
-            } else {
-                1
             };
             if increment < 1 {
                 return Err(self.catchable_range_error_msg(
@@ -1013,10 +1004,8 @@ impl Interp {
                 let mut fields = old.fields();
                 let mut any = false;
                 for (i, name) in names.iter().enumerate() {
-                    let Some(&id) = self.symbol_ids.get(*name) else {
-                        continue;
-                    };
-                    let item = self.ordinary_get(code, r, id, arg0)?;
+                    let id = self.intern_static_key(*name);
+                    let item = self.mop_get(code, r, id, arg0)?;
                     if item.kind != Kind::Undefined {
                         fields[i] = self.temporal_integer(item)?;
                         any = true;
@@ -1157,12 +1146,8 @@ impl Interp {
         }
         if let Payload::Reference(r) = value.value {
             if value.kind == Kind::Reference {
-                let Some(&tz_id) = self.symbol_ids.get("timeZone") else {
-                    return Err(self.catchable_type_error_msg(
-                        "Temporal.ZonedDateTime: timeZone is required".into(),
-                    ));
-                };
-                let tz_val = self.ordinary_get(code, r, tz_id, value)?;
+                let tz_id = self.intern_static_key("timeZone");
+                let tz_val = self.mop_get(code, r, tz_id, value)?;
                 if tz_val.kind == Kind::Undefined {
                     return Err(self.catchable_type_error_msg(
                         "Temporal.ZonedDateTime: timeZone is required".into(),
@@ -1192,10 +1177,8 @@ impl Interp {
                 ];
                 let mut seen = [false; 9];
                 for (n, name) in names.iter().enumerate() {
-                    let Some(&fid) = self.symbol_ids.get(*name) else {
-                        continue;
-                    };
-                    let item = self.ordinary_get(code, r, fid, value)?;
+                    let fid = self.intern_static_key(*name);
+                    let item = self.mop_get(code, r, fid, value)?;
                     if item.kind == Kind::Undefined {
                         continue;
                     }
@@ -1264,8 +1247,9 @@ impl Interp {
                 }
                 // A provided `offset` must agree with the fixed zone offset
                 // (Temporal's default `offset: "reject"`).
-                if let Some(&off_id) = self.symbol_ids.get("offset") {
-                    let off_val = self.ordinary_get(code, r, off_id, value)?;
+                {
+                    let off_id = self.intern_static_key("offset");
+                    let off_val = self.mop_get(code, r, off_id, value)?;
                     if off_val.kind != Kind::Undefined {
                         let s = self.value_to_string(code, off_val)?;
                         let provided = parse_offset_ns(&s).ok_or_else(|| {
@@ -1353,15 +1337,14 @@ impl Interp {
         let mode = self
             .intl_option_string(code, r, "roundingMode")?
             .unwrap_or_else(|| mode_default.to_string());
-        let increment = if let Some(&id) = self.symbol_ids.get("roundingIncrement") {
-            let v = self.instance_get(r, id);
+        let increment = {
+            let id = self.intern_static_key("roundingIncrement");
+            let v = self.mop_get(code, r, id, arg)?;
             if v.kind == Kind::Undefined {
                 1
             } else {
                 self.temporal_integer(v)? as i128
             }
-        } else {
-            1
         };
         if increment < 1 {
             return Err(self
@@ -1422,10 +1405,8 @@ impl Interp {
                 .iter()
                 .enumerate()
                 {
-                    let Some(&id) = self.symbol_ids.get(*name) else {
-                        continue;
-                    };
-                    let v = self.ordinary_get(code, r, id, arg0)?;
+                    let id = self.intern_static_key(*name);
+                    let v = self.mop_get(code, r, id, arg0)?;
                     if v.kind == Kind::Undefined {
                         continue;
                     }

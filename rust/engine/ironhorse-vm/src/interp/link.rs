@@ -537,16 +537,25 @@ impl Interp {
         // (the common function prototype object), not to the dynamic
         // `%AsyncGeneratorFunction%` constructor.  Its descriptor is
         // non-writable, non-enumerable, and configurable.
-        if let Some(cid) = self.constructor_id {
-            self.set_own_unmetered_with_flag(
-                self.async_generator_proto,
-                cid,
-                Slot::of(
-                    Kind::Reference,
-                    Payload::Reference(self.async_generator_function_proto),
-                ),
-                XS_DONT_SET_FLAG | XS_DONT_ENUM_FLAG,
-            );
+        if let Some(cid) = self.constructor_id.filter(|&id| keep(id)) {
+            if full
+                || (self
+                    .find_property(self.async_generator_proto, cid)
+                    .is_none()
+                    && !self
+                        .accessors
+                        .contains_key(&(self.async_generator_proto, cid)))
+            {
+                self.set_own_unmetered_with_flag(
+                    self.async_generator_proto,
+                    cid,
+                    Slot::of(
+                        Kind::Reference,
+                        Payload::Reference(self.async_generator_function_proto),
+                    ),
+                    XS_DONT_SET_FLAG | XS_DONT_ENUM_FLAG,
+                );
+            }
         }
         // Inherited prototype data (Error `name`/`message`).
         let data = std::mem::take(&mut self.proto_data);
@@ -639,14 +648,23 @@ impl Interp {
             ]
             .iter()
             .any(|n| self.symbol_ids.contains_key(*n));
-            if names_error_family {
+            // The property id, not a later Error-family constructor name,
+            // owns installation. Otherwise introducing RangeError resurrects
+            // a stack property the guest deleted in an earlier crank.
+            let stack_is_kept = self.symbol_ids.get("stack").copied().is_none_or(&keep);
+            if names_error_family && (full || stack_is_kept) {
                 let sid = self.intern_static_key_unmetered("stack");
-                self.set_own_accessor_unmetered(
-                    proto,
-                    sid,
-                    Some(Slot::of(Kind::Reference, Payload::Reference(getter))),
-                    Some(Slot::of(Kind::Reference, Payload::Reference(setter))),
-                );
+                if full
+                    || (self.find_property(proto, sid).is_none()
+                        && !self.accessors.contains_key(&(proto, sid)))
+                {
+                    self.set_own_accessor_unmetered(
+                        proto,
+                        sid,
+                        Some(Slot::of(Kind::Reference, Payload::Reference(getter))),
+                        Some(Slot::of(Kind::Reference, Payload::Reference(setter))),
+                    );
+                }
             }
         }
         // Native numeric data properties (`Math.PI` &co.): bound as own
@@ -943,7 +961,7 @@ impl Interp {
             let Some(symbol_id) = self.well_known_symbol_property_id(symbol_name) else {
                 continue;
             };
-            let function = self.instance_get(proto, string_id);
+            let function = self.boot_chain_get(proto, string_id);
             if self.is_callable_value(function) {
                 self.set_own_unmetered_with_flag(proto, symbol_id, function, XS_DONT_ENUM_FLAG);
             }

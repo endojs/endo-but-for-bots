@@ -165,3 +165,45 @@ fn a_runtime_interned_name_does_not_block_a_later_eval_install() {
     assert!(o.completed, "eval crank: {:?}", o.halt);
     assert_eq!(o.result, "1");
 }
+
+/// F060: name-based partial installation must preserve both descriptor kinds
+/// and deletion, even when a later crank introduces another Error constructor.
+#[test]
+fn relink_preserves_guest_intrinsic_edits() {
+    for target in [
+        "Error.prototype",
+        "Object.getPrototypeOf(Object.getPrototypeOf((async function* () {})()))",
+    ] {
+        let key = if target == "Error.prototype" {
+            "stack"
+        } else {
+            "constructor"
+        };
+        for edit in [
+            format!("Object.defineProperty(target, '{key}', {{value: 73, configurable: true}})"),
+            format!("Object.defineProperty(target, '{key}', {{get: function () {{ return 73; }}, configurable: true}})"),
+            format!("delete target['{key}']"),
+        ] {
+            let deleted = edit.starts_with("delete");
+            let check = if deleted {
+                format!("!Object.prototype.hasOwnProperty.call(target, '{key}')")
+            } else {
+                format!("target['{key}'] === 73")
+            };
+            let (code, names) = compile(&format!("var target = {target}; {edit}; {check}"));
+            let mut vm = Interp::new();
+            let (initial, initial_names) = compile("0");
+            vm.link_intrinsics(&initial_names);
+            assert!(vm.run(&initial).completed);
+            let code = vm.relink_crank(&code, &names).expect("first intrinsic use");
+            let result = vm.run(&code);
+            assert!(result.completed, "{target}: {edit}: {:?}", result.halt);
+            assert_eq!(result.result, "true", "initial edit: {edit}");
+            let (code, names) = compile(&format!("var target; var freshName2A = RangeError; {check}"));
+            let code = vm.relink_crank(&code, &names).expect("relink");
+            let result = vm.run(&code);
+            assert!(result.completed, "{target}: {edit}: {:?}", result.halt);
+            assert_eq!(result.result, "true", "relink reverted: {target}: {edit}");
+        }
+    }
+}

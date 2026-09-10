@@ -41,7 +41,7 @@ impl Interp {
                 match self.scalar_key_text(id).as_deref() {
                     Some("epochNanoseconds") => self.temporal_i128_bigint(ns),
                     Some("epochMilliseconds") => Slot::number((ns / 1_000_000) as f64),
-                    _ => self.instance_get(inst, id),
+                    _ => self.mop_get(code, inst, id, obj)?,
                 }
             }
             Payload::Reference(inst)
@@ -61,7 +61,7 @@ impl Interp {
                     Some("nanoseconds") => Slot::number(d.nanoseconds as f64),
                     Some("sign") => Slot::number(d.sign() as f64),
                     Some("blank") => Slot::boolean(d.sign() == 0),
-                    _ => self.instance_get(inst, id),
+                    _ => self.mop_get(code, inst, id, obj)?,
                 }
             }
             Payload::Reference(inst)
@@ -116,7 +116,7 @@ impl Interp {
                     }
                     Some("monthsInYear") => Slot::number(12.0),
                     Some("inLeapYear") => Slot::boolean(days_from_civil(r.year, 2, 29).is_some()),
-                    _ => self.instance_get(inst, id),
+                    _ => self.mop_get(code, inst, id, obj)?,
                 }
             }
             Payload::Reference(inst)
@@ -184,7 +184,7 @@ impl Interp {
                     Some("inLeapYear") => Slot::boolean(days_from_civil(p.year, 2, 29).is_some()),
                     // The ISO 8601 calendar exposes no era/eraYear.
                     Some("era") | Some("eraYear") => Slot::undefined(),
-                    _ => self.instance_get(inst, id),
+                    _ => self.mop_get(code, inst, id, obj)?,
                 }
             }
             Payload::Reference(inst)
@@ -218,7 +218,7 @@ impl Interp {
                 // These are real accessors on the intrinsic
                 // prototypes. Ordinary lookup preserves guest
                 // deletion, replacement, and own-property shadows.
-                (self.ordinary_get(code, inst, id, obj))?
+                (self.mop_get(code, inst, id, obj))?
             }
             Payload::Reference(inst)
                 if Some(id) == self.byte_length_id
@@ -261,7 +261,7 @@ impl Interp {
                     let f = self.regexps[&inst].program.flags();
                     Slot::boolean(f & bit != 0)
                 } else {
-                    self.instance_get(inst, id)
+                    self.mop_get(code, inst, id, obj)?
                 }
             }
             Payload::Reference(inst)
@@ -295,7 +295,7 @@ impl Interp {
                     } else if recognized {
                         Slot::undefined()
                     } else {
-                        self.instance_get(inst, id)
+                        self.mop_get(code, inst, id, obj)?
                     }
                 }
             }
@@ -350,7 +350,7 @@ impl Interp {
             // symbol as its receiver. A data property costs the
             // same: the ordinary chain walk meters nothing.
             Payload::Reference(_) if obj.kind == Kind::Symbol && !self.symbol_proto.is_null() => {
-                (self.ordinary_get(code, self.symbol_proto, id, obj))?
+                (self.mop_get(code, self.symbol_proto, id, obj))?
             }
             // …and with no `%Symbol.prototype%` linked there is
             // nothing to resolve against — never the description.
@@ -369,7 +369,7 @@ impl Interp {
             // that throws (the `format` accessor read on a
             // non-NumberFormat `this`, or any user getter) inside a
             // `try` would escape its handler.
-            Payload::Reference(inst) => (self.ordinary_get(code, inst, id, obj))?,
+            Payload::Reference(inst) => (self.mop_get(code, inst, id, obj))?,
             // A primitive string boxes to `%String.prototype%`
             // (XS's `fxCoerceToString`/string behavior): `.length`
             // is the UTF-16 code-unit count; any other name
@@ -378,16 +378,16 @@ impl Interp {
             // A primitive number boxes to `%Number.prototype%`
             // (`(42).toString(2)`): resolve the inherited method.
             Payload::Integer(_) | Payload::Number(_) if !self.number_proto.is_null() => {
-                (self.ordinary_get(code, self.number_proto, id, obj))?
+                (self.mop_get(code, self.number_proto, id, obj))?
             }
             // A primitive bigint boxes to `%BigInt.prototype%`.
             Payload::BigInt(_) if !self.bigint_proto.is_null() => {
-                (self.ordinary_get(code, self.bigint_proto, id, obj))?
+                (self.mop_get(code, self.bigint_proto, id, obj))?
             }
             // A primitive boolean boxes to `%Boolean.prototype%`
             // (`true.toString()`): resolve the inherited method.
             Payload::Boolean(_) if !self.boolean_proto.is_null() => {
-                (self.ordinary_get(code, self.boolean_proto, id, obj))?
+                (self.mop_get(code, self.boolean_proto, id, obj))?
             }
             // `null.f` / `undefined.f`: `mxToInstance(mxStack)` throws
             // before the lookup (`fxToInstance`). Reading a property

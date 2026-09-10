@@ -3497,7 +3497,7 @@ impl Interp {
                         self.ta_index_define(code, ta, n, descriptor)?
                     } else {
                         let id = self.to_property_id(code, key)?;
-                        self.ordinary_define_own_property(target, id, descriptor)
+                        self.mop_define_own_property(code, target, id, descriptor)?
                     };
                     if !accepted {
                         // A realm-local, catchable `TypeError` (the
@@ -6189,36 +6189,31 @@ impl Interp {
                     Some(info) => {
                         // `name`/`message` are read live off the instance
                         // (`mxGetID`), so a post-construction rename shows.
-                        let mut text = match self.name_id.map(|id| self.instance_get(inst, id)) {
-                            Some(v) if v.kind != Kind::Undefined => self.render(&v)?,
-                            _ => info.name.to_string(),
+                        let name_id = self.intern_static_key("name");
+                        let name = self.mop_get(code, inst, name_id, this)?;
+                        let mut text = if name.kind == Kind::Undefined {
+                            info.name.encode_utf16().collect::<Vec<_>>()
+                        } else {
+                            self.to_string_units(code, name)?
                         };
-                        let message = match self.symbol_ids.get("message").copied() {
-                            Some(id) => {
-                                let v = self.instance_get(inst, id);
-                                if v.kind == Kind::Undefined {
-                                    None
-                                } else {
-                                    Some(self.render(&v)?)
-                                }
-                            }
-                            None => info.message.clone(),
-                        };
-                        if let Some(m) = message {
-                            if !m.is_empty() {
-                                text.push_str(": ");
-                                text.push_str(&m);
+                        let message_id = self.intern_static_key("message");
+                        let message = self.mop_get(code, inst, message_id, this)?;
+                        if message.kind != Kind::Undefined {
+                            let message = self.to_string_units(code, message)?;
+                            if !message.is_empty() {
+                                text.extend(": ".encode_utf16());
+                                text.extend(message);
                             }
                         }
                         for frame in &info.frames {
-                            text.push_str("\n at");
+                            text.extend("\n at".encode_utf16());
                             if !frame.is_empty() {
-                                text.push(' ');
-                                text.push_str(frame);
+                                text.push(u16::from(b' '));
+                                text.extend(frame.encode_utf16());
                             }
-                            text.push_str(" ()");
+                            text.extend(" ()".encode_utf16());
                         }
-                        self.new_string_metered(text.as_bytes())
+                        self.new_string_units(&text)
                     }
                 }
             }

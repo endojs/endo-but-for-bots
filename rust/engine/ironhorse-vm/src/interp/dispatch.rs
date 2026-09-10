@@ -911,7 +911,7 @@ impl Interp {
                     let id = id!(1);
                     let property_flag = code[pc + 4];
                     dispatch_result!(
-                        self.dispatch_new_property(id, property_flag),
+                        self.dispatch_new_property(code, id, property_flag),
                         pc,
                         self,
                         return_depth,

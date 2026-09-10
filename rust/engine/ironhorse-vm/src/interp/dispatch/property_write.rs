@@ -69,7 +69,7 @@ impl Interp {
                     );
                     return Err(self.raise_js(error));
                 }
-            } else if !(self.ordinary_set(code, inst, id, value, obj))? {
+            } else if !(self.mop_set(code, inst, id, value, obj))? {
                 // A frozen / non-writable property, or a new key on a
                 // non-extensible object: XS's `mxBehaviorSetProperty`
                 // stores nothing. A **sloppy** callee silently
@@ -277,7 +277,12 @@ impl Interp {
         Ok(())
     }
 
-    pub(super) fn dispatch_new_property(&mut self, id: u16, property_flag: u8) -> Result<(), Step> {
+    pub(super) fn dispatch_new_property(
+        &mut self,
+        code: &[u8],
+        id: u16,
+        property_flag: u8,
+    ) -> Result<(), Step> {
         let value = self.pop_checked()?;
         let obj = self.pop_checked()?;
         if let Payload::Reference(inst) = obj.value {
@@ -322,20 +327,28 @@ impl Interp {
             // built-in step plus the property-slot allocation.
             // A later data member with the same literal key must
             // replace an earlier accessor member completely.
-            if self.accessors.contains_key(&(inst, id)) {
-                self.ordinary_define_own_property(
-                    inst,
-                    id,
-                    OrdinaryDescriptor {
-                        value: Some(value),
-                        writable: Some(true),
-                        enumerable: Some(true),
-                        configurable: Some(true),
-                        ..OrdinaryDescriptor::default()
-                    },
+            // DefineOwnProperty charges the slot and non-default key. Literal
+            // definitions retain the calibrated flat charge for default keys.
+            if self.find_property(inst, id).is_none()
+                && self.default_keys.contains(self.id_name(id).as_str())
+            {
+                self.meter.tick_raw(PROPERTY_CREATE_REMAINDER);
+            }
+            if !self.mop_define_own_property(
+                code,
+                inst,
+                id,
+                OrdinaryDescriptor {
+                    value: Some(value),
+                    writable: Some(true),
+                    enumerable: Some(true),
+                    configurable: Some(true),
+                    ..OrdinaryDescriptor::default()
+                },
+            )? {
+                return Err(
+                    self.catchable_type_error_msg("define property: definition rejected".into())
                 );
-            } else {
-                self.instance_put(inst, id, value);
             }
             if let Some(property) = self.find_property(inst, id) {
                 self.slots.get_mut(property).flag =

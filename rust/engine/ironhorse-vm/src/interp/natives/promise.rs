@@ -350,11 +350,30 @@ impl Interp {
         );
         let executor = Slot::of(Kind::Reference, Payload::Reference(function));
         let promise = self.construct_value(code, constructor, &[executor], constructor)?;
-        if self.instance_get(home, resolve_id).kind == Kind::Uninitialized {
+        if self
+            .mop_get(
+                code,
+                home,
+                resolve_id,
+                Slot::of(Kind::Reference, Payload::Reference(home)),
+            )?
+            .kind
+            == Kind::Uninitialized
+        {
             return Err(self.catchable_type_error_msg("executor not called".into()));
         }
-        let resolve = self.instance_get(home, resolve_id);
-        let reject = self.instance_get(home, reject_id);
+        let resolve = self.mop_get(
+            code,
+            home,
+            resolve_id,
+            Slot::of(Kind::Reference, Payload::Reference(home)),
+        )?;
+        let reject = self.mop_get(
+            code,
+            home,
+            reject_id,
+            Slot::of(Kind::Reference, Payload::Reference(home)),
+        )?;
         for (name, function) in [("resolve", resolve), ("reject", reject)] {
             if function.kind != Kind::Reference {
                 return Err(self.catchable_type_error_msg(format!("{name}: not an object")));
@@ -524,8 +543,18 @@ impl Interp {
         if data.guard == PROMISE_CAPABILITY_EXECUTOR_GUARD {
             let resolve_id = self.intern_static_key("[[PromiseCapabilityResolve]]");
             let reject_id = self.intern_static_key("[[PromiseCapabilityReject]]");
-            let resolve = self.instance_get(data.promise, resolve_id);
-            let reject = self.instance_get(data.promise, reject_id);
+            let resolve = self.mop_get(
+                code,
+                data.promise,
+                resolve_id,
+                Slot::of(Kind::Reference, Payload::Reference(data.promise)),
+            )?;
+            let reject = self.mop_get(
+                code,
+                data.promise,
+                reject_id,
+                Slot::of(Kind::Reference, Payload::Reference(data.promise)),
+            )?;
             if !matches!(resolve.kind, Kind::Undefined | Kind::Uninitialized)
                 || !matches!(reject.kind, Kind::Undefined | Kind::Uninitialized)
             {
@@ -604,7 +633,12 @@ impl Interp {
     ) -> Result<Slot, Step> {
         if data.guard == PROMISE_FINALLY_VALUE_GUARD {
             let value_id = self.intern_static_key("[[PromiseFinallyValue]]");
-            let value = self.instance_get(data.promise, value_id);
+            let value = self.mop_get(
+                code,
+                data.promise,
+                value_id,
+                Slot::of(Kind::Reference, Payload::Reference(data.promise)),
+            )?;
             if data.reject {
                 return Err(self.raise_js(value));
             }
@@ -617,8 +651,18 @@ impl Interp {
         }
         let handler_id = self.intern_static_key("[[PromiseFinallyHandler]]");
         let constructor_id = self.intern_static_key("[[PromiseFinallyConstructor]]");
-        let on_finally = self.instance_get(data.promise, handler_id);
-        let constructor = self.instance_get(data.promise, constructor_id);
+        let on_finally = self.mop_get(
+            code,
+            data.promise,
+            handler_id,
+            Slot::of(Kind::Reference, Payload::Reference(data.promise)),
+        )?;
+        let constructor = self.mop_get(
+            code,
+            data.promise,
+            constructor_id,
+            Slot::of(Kind::Reference, Payload::Reference(data.promise)),
+        )?;
         let result = self.call_any(code, on_finally, Slot::undefined(), &[])?;
         let promise = self.promise_resolve_with_constructor(code, constructor, result)?;
         let value_thunk = self.make_promise_finally_value(argument, data.reject);

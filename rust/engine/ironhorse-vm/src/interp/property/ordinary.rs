@@ -506,7 +506,7 @@ impl Interp {
         Ok(())
     }
 
-    pub(in crate::interp) fn ordinary_get(
+    pub(in crate::interp::property) fn ordinary_get(
         &mut self,
         code: &[u8],
         inst: crate::value::SlotIndex,
@@ -568,7 +568,7 @@ impl Interp {
         }
     }
 
-    pub(in crate::interp) fn ordinary_set(
+    pub(in crate::interp::property) fn ordinary_set(
         &mut self,
         code: &[u8],
         inst: crate::value::SlotIndex,
@@ -691,44 +691,6 @@ impl Interp {
         self.mop_define_own_property(code, receiver_inst, id, descriptor)
     }
 
-    pub(in crate::interp) fn instance_put(
-        &mut self,
-        inst: crate::value::SlotIndex,
-        id: u16,
-        value: Slot,
-    ) -> bool {
-        if let Some(p) = self.find_property(inst, id) {
-            let s = self.slots.get_mut(p);
-            s.kind = value.kind;
-            s.value = value.value;
-            false
-        } else {
-            self.tick_property_create_flat(); // fxNewSlot + property-table growth (536)
-            if inst == self.global_obj {
-                // A new own property of the global object — a `globalThis.x = 1`
-                // (or computed `globalThis["x"] = 1`) creating a binding — is a
-                // new *global*, which identifier resolution and every later
-                // `var`/sloppy-global op must see. Route it through
-                // `create_global_property`, the sole writer of the
-                // `global_props` fast index, so the index and the chain stay
-                // one-to-one (the invariant `rebuild_global_props` relies on).
-                // The metering is already charged above, exactly as for any
-                // other property create; `create_global_property` itself does
-                // not meter.
-                self.create_global_property(id, (value.kind, value.value));
-            } else {
-                let head = self.slots.get(inst).next;
-                let mut prop = value;
-                prop.id = id;
-                prop.flag = 0;
-                prop.next = head;
-                let idx = self.slots.alloc(prop);
-                self.slots.get_mut(inst).next = idx;
-            }
-            true
-        }
-    }
-
     /// Delete own property `id` from instance `inst` (XS's
     /// `mxBehaviorDeleteProperty` for an ordinary object): unlink the
     /// property slot from the owner's `next`-linked list and free it.
@@ -822,10 +784,9 @@ impl Interp {
         true
     }
 
-    /// Read own property `id` of instance `inst` (or `undefined` when
-    /// absent — the covered grammar has a null prototype, so there is no
-    /// prototype walk yet).
-    pub(in crate::interp) fn instance_get(&self, inst: crate::value::SlotIndex, id: u16) -> Slot {
+    /// Boot/restore inspection of an authoritative slot chain, without guest
+    /// accessors or proxy dispatch. Guest property reads must use `mop_get`.
+    pub(in crate::interp) fn boot_chain_get(&self, inst: crate::value::SlotIndex, id: u16) -> Slot {
         // Walk the prototype chain (XS's `mxBehaviorGetProperty`): own first,
         // then each prototype, to the root. Metering is unchanged — a chain
         // walk meters no built-in step, exactly as an own read. The prototype
@@ -841,35 +802,5 @@ impl Interp {
             cur = self.instance_prototype(cur);
         }
         Slot::undefined()
-    }
-
-    /// Does `inst` have property `id` as an own-or-inherited property (XS's
-    /// `mxBehaviorHasProperty` chain walk, the `fxHasAll` half of `fxHasAt`)?
-    /// Returns `(present, recursions)` where `recursions` is the number of
-    /// prototype levels descended past the receiver — exactly the count of
-    /// recursive `fxOrdinaryHasProperty` calls XS makes, each of which meters
-    /// one `XS_CODE_METERING`: `0` when found own, `k` when found on the
-    /// k-th prototype, and the full chain length minus one on a total miss.
-    /// The prototype objects carry data only for names the program references,
-    /// so a `false` here is only *sound* for a name that cannot be an unlinked
-    /// inherited built-in — the caller (`XS_CODE_IN`) gates on `default_keys`.
-    pub(in crate::interp) fn instance_has(
-        &self,
-        inst: crate::value::SlotIndex,
-        id: u16,
-    ) -> (bool, u64) {
-        let mut cur = inst;
-        let mut recursions = 0u64;
-        loop {
-            if self.find_property(cur, id).is_some() {
-                return (true, recursions);
-            }
-            let proto = self.instance_prototype(cur);
-            if proto.is_null() {
-                return (false, recursions);
-            }
-            cur = proto;
-            recursions += 1;
-        }
     }
 }
