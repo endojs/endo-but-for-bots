@@ -1769,7 +1769,68 @@ impl Interp {
         PrivateElementSnapshot { values, accessors }
     }
 
-    pub(super) fn restore_private_elements(&mut self, state: PrivateElementSnapshot) -> bool {
+    pub(super) fn restore_private_elements(
+        &mut self,
+        state: PrivateElementSnapshot,
+    ) -> Result<(), RestoreError> {
+        const ROW: &str = "PrivateElements";
+        let refuse = |reason| RestoreError { row: ROW, reason };
+        let value_keys: Vec<_> = state
+            .values
+            .iter()
+            .map(|row| (row.receiver, row.brand))
+            .collect();
+        let accessor_keys: Vec<_> = state
+            .accessors
+            .iter()
+            .map(|row| (row.receiver, row.brand))
+            .collect();
+        for keys in [&value_keys, &accessor_keys] {
+            if keys.windows(2).any(|pair| pair[0] >= pair[1]) {
+                return Err(refuse("keys are not strictly ascending"));
+            }
+            for &(receiver, brand) in keys {
+                self.validate_restore_owner(receiver, ROW)?;
+                // A private brand is a captured binding cell, not an object.
+                // Its value may still be uninitialized; only its live identity
+                // participates in private-element lookup.
+                let brand = crate::value::SlotIndex(brand);
+                if brand.is_null()
+                    || brand.0 >= self.slots.capacity()
+                    || self.slots.is_free_index(brand)
+                {
+                    return Err(refuse("brand is not a live slot"));
+                }
+            }
+        }
+        if accessor_keys
+            .iter()
+            .any(|key| value_keys.binary_search(key).is_ok())
+        {
+            return Err(refuse("key has both value and accessor rows"));
+        }
+        self.validate_restore_values(
+            state.values.iter().map(|row| row.value).chain(
+                state
+                    .accessors
+                    .iter()
+                    .flat_map(|row| [row.get, row.set].into_iter().flatten()),
+            ),
+            ROW,
+        )?;
+        for row in &state.accessors {
+            for value in [row.get, row.set].into_iter().flatten() {
+                if value.kind != Kind::Reference {
+                    return Err(refuse("getter or setter is not callable"));
+                }
+                let Payload::Reference(function) = value.value else {
+                    return Err(refuse("getter or setter is not callable"));
+                };
+                if !self.functions.contains_key(&function) {
+                    return Err(refuse("getter or setter is not callable"));
+                }
+            }
+        }
         for row in state.values {
             self.private_values.insert(
                 (
@@ -1780,14 +1841,6 @@ impl Interp {
             );
         }
         for row in state.accessors {
-            for value in [row.get, row.set].into_iter().flatten() {
-                let Payload::Reference(function) = value.value else {
-                    return false;
-                };
-                if !self.functions.contains_key(&function) {
-                    return false;
-                }
-            }
             self.private_accessors.insert(
                 (
                     crate::value::SlotIndex(row.receiver),
@@ -1799,7 +1852,7 @@ impl Interp {
                 },
             );
         }
-        true
+        Ok(())
     }
 
     pub fn disposable_stacks_snapshot(&self) -> Vec<DisposableStackRow> {
