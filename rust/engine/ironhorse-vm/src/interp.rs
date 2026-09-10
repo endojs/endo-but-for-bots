@@ -1233,7 +1233,7 @@ struct ErrorInfo {
 
 /// Resolve a decoded error-constructor name to the engine's static
 /// name, or `None` for anything the engine never records — the closed
-/// name set `ErrorInfo.name` draws from ([`Interp::restore_error_data`]
+/// name set `ErrorInfo.name` draws from ([`RestoreSession::restore_error_data`]
 /// and the `ERRD` decoder both refuse an unknown name as corrupt: no
 /// honest snapshot can carry one).
 pub fn error_name_static(name: &str) -> Option<&'static str> {

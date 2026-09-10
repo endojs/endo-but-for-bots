@@ -181,7 +181,31 @@ fn schema29_migration_preserves_payloads_and_authenticates_the_seal_link() {
     assert!(migrate_store(&mut store, &signature).unwrap());
     let migrated = store.manifest().unwrap();
     assert_eq!(migrated.store_schema, STORE_SCHEMA_VERSION);
-    assert_eq!(migrated.parent_seal, manifest.seal);
+    // Every identity migration authenticates the immediately preceding seal.
+    // Schema 31 adds another step after the original 29 -> 30 migration.
+    let mut predecessor = manifest.clone();
+    for version in 30..STORE_SCHEMA_VERSION {
+        predecessor.parent_seal = predecessor.seal.clone();
+        predecessor.store_schema = version;
+        predecessor.root = compute_root(
+            &predecessor,
+            &framed_root(&small).unwrap(),
+            &pages,
+            &exts,
+            &frees,
+            &edges,
+        );
+        predecessor.seal = seal_commit(
+            &predecessor.parent_seal,
+            &predecessor,
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+        );
+    }
+    assert_eq!(migrated.parent_seal, predecessor.seal);
     assert_eq!(
         (migrated.epoch, migrated.cranks),
         (manifest.epoch, manifest.cranks)

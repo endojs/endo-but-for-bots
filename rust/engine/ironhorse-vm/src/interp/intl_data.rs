@@ -154,7 +154,7 @@ pub struct DateTimeFormatData {
 
 /// The nine Intl DATA record tables of one machine, each ascending by
 /// owning slot — the ledger `IntlRecords` row as
-/// [`Interp::intl_snapshot`] emits it and [`Interp::restore_intl`]
+/// [`Interp::intl_snapshot`] emits it and [`crate::RestoreSession::restore_intl`]
 /// reinstates it. Pure resolved-options data; the bound-function link
 /// satellites (`collator_compare_functions`,
 /// `number_format_bound_functions`) are deliberately absent — a minted
