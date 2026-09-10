@@ -63,7 +63,8 @@ export const SessionSidebar = ({
 
   const items = sessions.length
     ? sessions.map(session => {
-        const status = session.status || 'idle';
+        const unavailable = session.lifecycle && session.lifecycle !== 'ready';
+        const status = unavailable ? 'error' : session.status || 'idle';
         const editing = editingId === session.id;
         return h(
           'div',
@@ -78,6 +79,9 @@ export const SessionSidebar = ({
           h(
             'div',
             { class: 'floot-session-meta' },
+            unavailable
+              ? h('div', null, `Unavailable: ${session.lifecycle}`)
+              : null,
             editing
               ? h('input', {
                   class: 'floot-session-title-input',
