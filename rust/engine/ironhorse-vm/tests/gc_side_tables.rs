@@ -33,7 +33,7 @@ fn run_two_cranks_with_gc(crank1: &str, crank2: &str) -> ironhorse_vm::RunOutcom
     m.link_intrinsics(&n1);
     let o1 = m.run(&b1);
     assert!(o1.completed, "crank 1: {:?}", o1.halt);
-    m.collect_garbage();
+    m.collect_garbage().unwrap();
     let b2 = m.relink_crank(&b2, &n2).expect("relink");
     m.run(&b2)
 }
@@ -168,7 +168,7 @@ fn a_recycled_slot_does_not_inherit_a_dead_dates_brand() {
         crank(&mut m, "var churn; var zz = 0; zz = 1; 0;").completed,
         "drain crank"
     );
-    m.collect_garbage();
+    m.collect_garbage().unwrap();
     assert!(
         crank(
             &mut m,

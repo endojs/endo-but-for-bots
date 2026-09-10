@@ -78,6 +78,7 @@ fn a_failed_collection_cannot_be_published_even_after_another_run() {
         image.names,
         image.meter.to_state(),
     );
+    assert!(machine.is_quiescent());
     assert!(catch_unwind(AssertUnwindSafe(|| machine.collect_garbage())).is_err());
     assert!(machine.write_snapshot(&sig).is_err());
     let outcome = machine.run(&[ironhorse_vm::Opcode::XS_CODE_RETURN as u8]);

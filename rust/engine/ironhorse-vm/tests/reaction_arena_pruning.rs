@@ -33,7 +33,7 @@ fn phased(src: &str, phases: usize, gc: bool) -> (String, u64) {
     let mut last = String::new();
     for i in 0..phases {
         if gc && i > 0 {
-            m.collect_garbage();
+            m.collect_garbage().unwrap();
         }
         let o = m.run(&b);
         assert!(o.completed, "phase {i} (gc={gc}): {:?}", o.halt);
@@ -73,7 +73,7 @@ fn settled_reaction_arenas_are_reclaimed_by_collection() {
     for i in 0..20 {
         let o = m.run(&b);
         assert!(o.completed, "crank {i}: {:?}", o.halt);
-        m.collect_garbage();
+        m.collect_garbage().unwrap();
     }
     let (comb, fa, guards) = m.reaction_arena_lens();
     assert!(

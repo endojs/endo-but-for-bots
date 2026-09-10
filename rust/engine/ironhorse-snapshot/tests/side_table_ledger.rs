@@ -131,7 +131,7 @@ fn lazy_resumed_tables_survive_a_full_collect() {
     let mut cont = Interp::new();
     cont.link_intrinsics(&compiled[0].1);
     assert!(cont.run(&compiled[0].0).completed);
-    cont.collect_garbage();
+    cont.collect_garbage().unwrap();
     let uninterrupted = cont.run(&compiled[1].0);
     assert!(uninterrupted.completed);
     // 10 + 18 + 30
@@ -148,7 +148,7 @@ fn lazy_resumed_tables_survive_a_full_collect() {
     );
     let mut session =
         ironhorse_snapshot::machine::resume_from_store_lazy(store.clone(), &sig()).expect("lazy");
-    session.machine_mut().collect_garbage();
+    session.machine_mut().collect_garbage().unwrap();
     let resumed = session.machine_mut().run(&compiled[1].0);
     assert!(resumed.completed, "resumed crank 2: {:?}", resumed.halt);
     assert_eq!(

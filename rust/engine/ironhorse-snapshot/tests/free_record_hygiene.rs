@@ -55,7 +55,7 @@ fn post_gc_machine() -> Interp {
     assert_eq!(o.result, "4096");
     let r = crank(&mut m, "var keep; var junk; var t; junk = 0; t = keep; t");
     assert_eq!(r, "kept");
-    let stats = m.collect_garbage();
+    let stats = m.collect_garbage().unwrap();
     assert!(
         stats.chunk_bytes_after < stats.chunk_bytes_before,
         "the fixture must compact chunks out from under the freed strings: {stats:?}"

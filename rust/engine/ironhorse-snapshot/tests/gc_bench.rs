@@ -83,11 +83,11 @@ fn gc_cost_across_heap_sizes() {
             assert!(m.run(&b).completed);
             slots_total = m.slots.capacity();
             let t0 = Instant::now();
-            let s1 = m.collect_garbage();
+            let s1 = m.collect_garbage().unwrap();
             first_ms.push(t0.elapsed().as_secs_f64() * 1e3);
             assert!(s1.slots_reclaimed > n, "garbage swept: {s1:?}");
             let t1 = Instant::now();
-            m.collect_garbage();
+            m.collect_garbage().unwrap();
             steady_ms.push(t1.elapsed().as_secs_f64() * 1e3);
         }
 
@@ -163,7 +163,7 @@ fn gc_cost_across_heap_sizes() {
             // Phase 4 — the page free (the dominant, O(garbage) term).
             let dead: Vec<u32> = (0..total).filter(|p| !reached.contains(p)).collect();
             let t3 = Instant::now();
-            let freed = session.machine_mut().free_pages(&dead);
+            let freed = session.machine_mut().free_pages(&dead).unwrap();
             let free_p = t3.elapsed().as_secs_f64() * 1e3;
             assert_eq!(freed, ref_freed, "inline phases match partial_collect");
 
@@ -183,12 +183,12 @@ fn gc_cost_across_heap_sizes() {
         let mut m = Interp::new();
         m.link_intrinsics(&names);
         assert!(m.run(&b).completed);
-        m.collect_garbage();
+        m.collect_garbage().unwrap();
         let free_len = m.slots.free_list().len();
         let mut sweep_times = Vec::new();
         for _ in 0..5 {
             let t0 = Instant::now();
-            m.collect_garbage();
+            m.collect_garbage().unwrap();
             sweep_times.push(t0.elapsed().as_secs_f64() * 1e9 / m.slots.capacity() as f64);
         }
         let sweep_ns_per_slot = median(sweep_times);
@@ -362,7 +362,7 @@ fn compaction_slide_checkpoint_cost() {
                     .unwrap();
                 let extents_before = (store.manifest().unwrap().chunk_len as usize)
                     .div_ceil(CHUNK_EXTENT_BYTES as usize);
-                session.machine_mut().collect_garbage();
+                session.machine_mut().collect_garbage().unwrap();
                 let t0 = Instant::now();
                 checkpoint_to_store(&mut session, &sig(), &mut store).unwrap();
                 let ms = t0.elapsed().as_secs_f64() * 1e3;

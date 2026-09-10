@@ -25,6 +25,19 @@ The bounded full-test262 automation is documented in
 the package-local oracle build compiled from the `c/moddable` pin (§ Building
 the oracle: the `c/moddable` pin).
 
+## Garbage collection
+
+Whole-machine garbage collection is supported only when `Interp::is_quiescent()` is true.
+Consumers choose the schedule and may retry a refused request at a later boundary.
+`Interp::collect_garbage` and `Interp::free_pages` now return `Result` with
+`gc::GcAdmissionError`, a source compatibility change from their direct statistics/count returns.
+Non-quiescent requests are refused before mutation; a previous collector failure remains
+permanently disqualifying.
+Collection cannot rescue a halted or oversized crank: managed consumers must rewind, and
+standalone consumers can discard the machine.
+Direct public-arena mutation and `gc::collect_full` are low-level capabilities, not alternate
+supported whole-machine collection APIs.
+
 ## Crates
 
 The workspace has **nine members**.

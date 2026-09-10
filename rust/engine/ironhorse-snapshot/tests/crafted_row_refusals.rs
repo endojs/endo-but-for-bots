@@ -1223,7 +1223,7 @@ fn indexed_row_refusal(case: &str, expected: &'static str) {
     let mut machine = quiescent_machine(
         "var disposable = {}; disposable = null; var indexed = {0: 7}; indexed[0]",
     );
-    machine.collect_garbage();
+    machine.collect_garbage().unwrap();
     let honest = read_machine(&machine.write_snapshot(&sig()).unwrap(), &sig()).unwrap();
     assert_eq!(honest.index_props.len(), 1);
     let mut image = honest.clone();

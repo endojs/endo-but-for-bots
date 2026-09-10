@@ -33,7 +33,7 @@ fn full_gc_drops_dead_index_rows_before_compacting_chunks() {
     assert!(vm.side_table_ref_page_bits()[target_page]);
 
     crank(&mut vm, "var owner; owner = null; 0;");
-    let stats = vm.collect_garbage();
+    let stats = vm.collect_garbage().unwrap();
     assert!(vm.slots.is_free_index(owner));
     assert!(vm.slots.is_free_index(target));
     assert!(
@@ -55,7 +55,7 @@ fn full_gc_drops_dead_index_rows_before_compacting_chunks() {
         "the counted-reference parity net must remain healthy"
     );
     // Repeated collection must not decrement the removed row's counts twice.
-    vm.collect_garbage();
+    vm.collect_garbage().unwrap();
     vm.side_table_ref_page_bits();
     assert!(vm.is_quiescent());
 }

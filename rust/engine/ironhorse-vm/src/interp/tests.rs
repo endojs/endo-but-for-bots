@@ -1,9 +1,36 @@
 #![cfg(test)]
 
 use super::*;
+use crate::gc::GcAdmissionError::{NotQuiescent, PreviousCollectionFailed};
 use crate::opcode::Opcode;
 use std::cell::RefCell;
 use std::rc::Rc;
+
+/// Test-only observations, without using the persistence API on active state.
+pub(super) fn refusal_state(vm: &Interp) -> String {
+    format!(
+        "{:?} {:?} {:?} {:?} {:?} {:?} {:?} {:?} {:?} {:?} {:?} {:?}",
+        vm.stack,
+        vm.call_stack,
+        vm.jumps,
+        vm.promise_jobs,
+        (
+            vm.cur_func,
+            vm.target_func,
+            vm.pending_new_target,
+            vm.this_val
+        ),
+        (vm.native_depth, vm.last_crank_completed, vm.gc_failed),
+        vm.slots.free_list(),
+        vm.slots.dirty_pages(),
+        vm.chunks.dirty_extents(),
+        vm.chunks.raw_vec(),
+        (0..vm.slots.capacity())
+            .map(|i| vm.slots.get(crate::value::SlotIndex(i)))
+            .collect::<Vec<_>>(),
+        vm.meter_state()
+    )
+}
 
 #[test]
 fn failed_collection_permanently_disqualifies_the_machine() {
@@ -32,17 +59,17 @@ fn failed_collection_permanently_disqualifies_the_machine() {
     assert!(!outcome.completed);
     assert_eq!(machine.meter.raw(), raw);
     assert!(!machine.is_quiescent());
-    assert!(catch_unwind(AssertUnwindSafe(|| machine.collect_garbage())).is_err());
-    assert!(catch_unwind(AssertUnwindSafe(|| machine.free_pages(&[]))).is_err());
+    assert_eq!(machine.collect_garbage(), Err(PreviousCollectionFailed));
+    assert_eq!(machine.free_pages(&[]), Err(PreviousCollectionFailed));
 }
 
 #[test]
 fn successful_collection_clears_only_its_own_failure_latch() {
     let mut machine = Interp::new();
-    machine.collect_garbage();
+    machine.collect_garbage().unwrap();
     assert!(machine.is_quiescent());
     machine.last_crank_completed = false;
-    machine.collect_garbage();
+    assert_eq!(machine.collect_garbage(), Err(NotQuiescent));
     assert!(!machine.gc_failed);
     assert!(
         !machine.is_quiescent(),
@@ -147,17 +174,20 @@ fn partial_collection_rejects_reaction_indices_even_when_cardinalities_match() {
         }
         // One holder and one arena entry used to take the identity shortcut,
         // even though the holder names index 1 and the only entry is index 0.
-        machine.promise_jobs.push_back(PromiseJob::Reaction {
-            reaction: PromiseReaction {
+        let (promise, _, _) = machine.new_promise_capability();
+        machine
+            .promises
+            .get_mut(&promise)
+            .unwrap()
+            .reactions
+            .push(PromiseReaction {
                 on_fulfilled: Slot::undefined(),
                 on_rejected: Slot::undefined(),
                 resolve: Slot::undefined(),
                 reject: Slot::undefined(),
                 kind,
-            },
-            value: Slot::undefined(),
-            rejected: false,
-        });
+            });
+        assert!(machine.is_quiescent());
         let error = catch_unwind(AssertUnwindSafe(|| machine.free_pages(&[])))
             .expect_err("invalid reaction index must fail before the identity shortcut");
         let message = error
@@ -246,7 +276,7 @@ thread_local! {
 }
 
 #[test]
-fn every_dispatch_boundary_survives_a_full_collection() {
+fn every_dispatch_boundary_refuses_collection_without_changing_execution() {
     let scenarios = [
         "function outer(x) { var s='captured'; return function inner(y) { return x+y+s; }; } var f=outer(7); f(8)",
         "class A { constructor(x) { this.x=x; } } class B extends A { constructor(x) { super(x+1); this.y=2; } } var b=new B(4); b.x+b.y",
@@ -340,7 +370,7 @@ fn active_target_register_is_an_independent_gc_root() {
     let target = machine.slots.alloc(Slot::undefined());
     machine.target_func = target;
     assert!(machine.gc_roots().contains(&target));
-    machine.collect_garbage();
+    assert_eq!(machine.collect_garbage(), Err(NotQuiescent));
     assert!(!machine.slots.free_list().contains(&target.0));
 }
 
@@ -473,7 +503,8 @@ fn pending_new_target_is_rooted_and_gated_after_every_non_throw_halt() {
             !m.is_quiescent(),
             "{kind}: halted activation must not persist"
         );
-        m.collect_garbage();
+        assert_eq!(m.collect_garbage(), Err(NotQuiescent));
+        assert_eq!(m.free_pages(&[]), Err(NotQuiescent));
         assert!(
             !m.slots.free_list().contains(&target.0),
             "{kind}: collection lost the target"
@@ -503,11 +534,12 @@ fn pending_new_target_is_rooted_and_gated_after_every_non_throw_halt() {
     let mut m = Interp::new();
     let orphan = m.slots.alloc(Slot::instance(SlotIndex::NULL));
     m.pending_new_target = Some(orphan);
+    assert!(m.gc_roots().contains(&orphan));
     assert!(!m.is_quiescent());
-    m.collect_garbage();
+    assert_eq!(m.collect_garbage(), Err(NotQuiescent));
     assert!(!m.slots.free_list().contains(&orphan.0));
     m.pending_new_target = None;
-    m.collect_garbage();
+    m.collect_garbage().unwrap();
     assert!(m.slots.free_list().contains(&orphan.0));
 }
 
@@ -595,7 +627,7 @@ fn classification_tracks_boot_guest_mutation_gc_and_reuse() {
         let result = interp.run(&code);
         assert!(result.completed, "{:?}", result.halt);
         assert_classification_matches_tables(&interp);
-        interp.collect_garbage();
+        interp.collect_garbage().unwrap();
         assert_classification_matches_tables(&interp);
     }
 }
@@ -695,7 +727,7 @@ fn shared_program_and_escaping_function_retain_the_callers_allocation() {
         .iter()
         .any(|segment| std::rc::Rc::ptr_eq(segment, &code)));
     drop(code);
-    interp.collect_garbage();
+    interp.collect_garbage().unwrap();
     let (bytes, symbols) = ironhorse_compile::compile_atoms("f()").unwrap();
     let bytes = interp
         .relink_crank(&bytes, &crate::parse_symbols(&symbols))
@@ -853,10 +885,10 @@ fn side_ref_undercount_blocks_quiescence_and_page_freeing() {
     assert!(!interp.is_quiescent());
     assert_eq!(
         interp.free_pages(&[value.0 / crate::value::SLOTS_PER_PAGE]),
-        0
+        Err(NotQuiescent)
     );
     assert!(!interp.slots.is_free_index(value));
-    interp.collect_garbage();
+    assert_eq!(interp.collect_garbage(), Err(NotQuiescent));
     assert!(
         !interp.is_quiescent(),
         "full GC cannot erase the poison latch"
@@ -889,7 +921,7 @@ fn side_ref_parity_mismatch_refuses_reclamation_including_release() {
     let bits = interp.side_table_ref_page_bits();
     assert!(bits.iter().all(|hit| *hit), "no page can be reclaimed");
     assert!(!interp.is_quiescent(), "checkpoint gate refuses corruption");
-    assert_eq!(interp.free_pages(&[next_page]), 0);
+    assert_eq!(interp.free_pages(&[next_page]), Err(NotQuiescent));
     assert!(!interp.slots.is_free_index(value));
     // Repairing the bitmap does not permit this machine to persist.
     interp
@@ -923,13 +955,17 @@ fn side_ref_tail_masked_undercount_poisons_during_page_pruning() {
     interp.side_refs = SideRefCounts::new();
     assert_eq!(interp.side_table_ref_page_bits(), before);
     assert!(interp.is_quiescent());
-    assert!(interp.free_pages(&[next_page]) > 0);
+    assert!(interp.free_pages(&[next_page]).unwrap() > 0);
     assert!(interp.slots.is_free_index(array));
     assert!(
         !interp.is_quiescent(),
         "pruning detected the masked undercount"
     );
-    assert_eq!(interp.free_pages(&[0]), 0, "later reclamation is refused");
+    assert_eq!(
+        interp.free_pages(&[0]),
+        Err(NotQuiescent),
+        "later reclamation is refused"
+    );
 }
 
 #[test]
@@ -2511,9 +2547,8 @@ fn segment_compaction_remaps_handlers_in_every_suspension_family() {
     assert_eq!(vm.retained_code_segment_count(), 2);
     check(&vm, 1);
     assert_eq!(GC_AT_STEP.with(|step| step.get()), None);
-    // Mid-crank GC removed the earlier function without renumbering buffers.
-    // Export must use FUNC's dense mapping even before physical compaction.
-    assert_eq!(vm.function_state_snapshot().segments.len(), 1);
+    // Dispatch refused collection; both buffers remain until quiescence.
+    assert_eq!(vm.function_state_snapshot().segments.len(), 2);
     let generators = vm.generators_snapshot();
     assert!(generators[0]
         .frame
@@ -2521,17 +2556,17 @@ fn segment_compaction_remaps_handlers_in_every_suspension_family() {
         .unwrap()
         .jumps
         .iter()
-        .all(|jump| jump.segment == Some(0)));
+        .all(|jump| jump.segment == Some(1)));
     let promises = vm.promise_cluster_snapshot();
     assert!(promises.async_instances[0]
         .frame
         .jumps
         .iter()
-        .all(|jump| jump.segment == Some(0)));
-    vm.collect_garbage();
+        .all(|jump| jump.segment == Some(1)));
+    vm.collect_garbage().unwrap();
     assert_eq!(vm.retained_code_segment_count(), 1);
     check(&vm, 0);
-    vm.collect_garbage();
+    vm.collect_garbage().unwrap();
     check(&vm, 0);
 }
 
@@ -2552,7 +2587,7 @@ fn segment_indices_stay_stable_until_a_halted_activation_is_abandoned() {
     assert!(!vm.jumps.is_empty());
     assert_eq!(vm.retained_code_segment_count(), 2);
     let retained = vm.code_segments[1].clone();
-    vm.collect_garbage();
+    assert_eq!(vm.collect_garbage(), Err(NotQuiescent));
     assert_eq!(vm.retained_code_segment_count(), 2);
     assert!(std::rc::Rc::ptr_eq(&retained, &vm.code_segments[1]));
     assert!(vm.jumps.iter().all(|jump| jump.segment == Some(1)));
@@ -2561,13 +2596,13 @@ fn segment_indices_stay_stable_until_a_halted_activation_is_abandoned() {
         .relink_crank(&code, &crate::parse_symbols(&names))
         .unwrap();
     assert!(vm.run(&code).completed);
-    vm.collect_garbage();
+    vm.collect_garbage().unwrap();
     assert_eq!(vm.retained_code_segment_count(), 1);
     assert!(std::rc::Rc::ptr_eq(&retained, &vm.code_segments[0]));
 }
 
 #[test]
-fn promise_handler_collection_preserves_the_derived_capability() {
+fn promise_handler_collection_refusal_preserves_the_derived_capability() {
     for throws in [false, true] {
         let handler = if throws { "throw x" } else { "return x + '!'" };
         let source = format!(
@@ -2579,7 +2614,7 @@ fn promise_handler_collection_preserves_the_derived_capability() {
         baseline.link_intrinsics(&names);
         let expected = baseline.run_bounded(&code, 20_000);
         assert!(expected.completed, "{:?}", expected.halt);
-        // Deterministically place one collection at each instruction of this
+        // Deterministically request collection at each instruction of this
         // small promise chain, including inside the handler after dequeue.
         for at in 0..baseline.n_dispatched {
             let mut machine = Interp::new();
@@ -2614,7 +2649,7 @@ fn promise_handler_collection_preserves_the_derived_capability() {
 }
 
 #[test]
-fn finally_and_thenable_collection_preserves_settlement() {
+fn finally_and_thenable_collection_refusal_preserves_settlement() {
     for (source, expected_value) in [
         ("var out; Promise.resolve('original-value').finally(function(){return 1;}).then(function(v){out=v;});", "original-value"),
         ("var out; Promise.resolve({then:new Proxy(function(){},{apply:function(t,s,args){args.length=0; throw 'replacement';}})}).then(undefined,function(e){out=e;});", "replacement"),
@@ -2674,7 +2709,10 @@ fn promise_native_roots_preserve_halted_operand_stack() {
         });
         assert!(retained.is_some(), "callee remains installed but its live caller operand disappeared: {source}; stack={}, frames={}", vm.stack.len(), vm.call_stack.len());
         let object = retained.unwrap();
-        vm.collect_garbage();
+        let before = refusal_state(&vm);
+        assert_eq!(vm.collect_garbage(), Err(NotQuiescent));
+        assert_eq!(vm.free_pages(&[]), Err(NotQuiescent));
+        assert_eq!(refusal_state(&vm), before);
         assert_eq!(vm.instance_get(object, key), Slot::integer(314159));
         let (next, names) = ironhorse_compile::compile_atoms("42").unwrap();
         let next = vm.relink_crank(&next, &crate::parse_symbols(&names)).unwrap();
@@ -2707,7 +2745,10 @@ fn promise_native_roots_preserve_stack_overflow_operands() {
         });
         assert!(retained.is_some(), "callee remains installed but its live caller operand disappeared: {source}; stack={}, frames={}", vm.stack.len(), vm.call_stack.len());
         let object = retained.unwrap();
-        vm.collect_garbage();
+        let before = refusal_state(&vm);
+        assert_eq!(vm.collect_garbage(), Err(NotQuiescent));
+        assert_eq!(vm.free_pages(&[]), Err(NotQuiescent));
+        assert_eq!(refusal_state(&vm), before);
         assert_eq!(vm.instance_get(object, key), Slot::integer(314159));
         let (next, names) = ironhorse_compile::compile_atoms("42").unwrap();
         let next = vm.relink_crank(&next, &crate::parse_symbols(&names)).unwrap();

@@ -3,6 +3,16 @@
 use super::{gc_tables, is_promise_resolving_guard, Interp, PromiseJob, ReactionKind};
 
 impl Interp {
+    fn admit_collection(&self) -> Result<(), crate::gc::GcAdmissionError> {
+        if self.gc_failed {
+            return Err(crate::gc::GcAdmissionError::PreviousCollectionFailed);
+        }
+        if !self.is_quiescent() {
+            return Err(crate::gc::GcAdmissionError::NotQuiescent);
+        }
+        Ok(())
+    }
+
     /// The machine's complete GC root set (registers, value stack,
     /// frames, globals, boot/proto anchors, run stacks, the completion
     /// register, the pending microtask queue, in-flight combinator
@@ -34,11 +44,12 @@ impl Interp {
     /// like arena-resident strings. Deterministic: trace order is
     /// worklist order from a fixed (sorted) root sequence, sweep is
     /// index order.
-    pub fn collect_garbage(&mut self) -> crate::gc::GcStats {
-        assert!(
-            !self.gc_failed,
-            "collection after failed garbage collection"
-        );
+    ///
+    /// Only quiescent machines may collect. Refusal changes no state and
+    /// does not queue work; consumers choose when to retry. Collector faults
+    /// remain panics and permanently disqualify the machine.
+    pub fn collect_garbage(&mut self) -> Result<crate::gc::GcStats, crate::gc::GcAdmissionError> {
+        self.admit_collection()?;
         self.gc_failed = true;
         self.classes.1.mark_all();
         use crate::value::SlotIndex;
@@ -56,7 +67,7 @@ impl Interp {
         self.compact_reaction_arenas();
 
         self.gc_failed = false;
-        stats
+        Ok(stats)
     }
 
     /// Compact `combinators`, `from_async`, and `promise_guards`.
@@ -247,17 +258,12 @@ impl Interp {
     /// never dirties: no record byte changes — the reclamation
     /// travels as free-list state (free-segment rows plus the
     /// manifest's `free_len`), exactly like a sweep.
-    pub fn free_pages(&mut self, pages: &[u32]) -> u32 {
+    ///
+    /// Requires quiescence in addition to the caller's reachability proof.
+    /// Admission refusal occurs before any mutation, including dirty flags.
+    pub fn free_pages(&mut self, pages: &[u32]) -> Result<u32, crate::gc::GcAdmissionError> {
         use crate::value::{SlotIndex, SLOTS_PER_PAGE};
-        assert!(
-            !self.gc_failed,
-            "page freeing after failed garbage collection"
-        );
-        // A counted-reference failure is permanent for this machine.
-        // No caller may free from a projection known to be corrupt.
-        if self.side_refs.is_poisoned() {
-            return 0;
-        }
+        self.admit_collection()?;
         self.gc_failed = true;
         let mut freed: Vec<SlotIndex> = Vec::new();
         let mut sorted: Vec<u32> = pages.to_vec();
@@ -284,7 +290,7 @@ impl Interp {
         self.compact_code_segments();
         self.compact_reaction_arenas();
         self.gc_failed = false;
-        freed.len() as u32
+        Ok(freed.len() as u32)
     }
 
     /// Every slot index held in a side-table VALUE — the same edge

@@ -761,8 +761,8 @@ pub fn boundary_collection_twins<S: HeapStore + 'static>(mut fresh: impl FnMut()
             .unwrap_or_else(|e| panic!("{name}: resume: {e:?}"));
         let twin = resumed.machine_mut();
 
-        let cont_gc = cont.collect_garbage();
-        let twin_gc = twin.collect_garbage();
+        let cont_gc = cont.collect_garbage().unwrap();
+        let twin_gc = twin.collect_garbage().unwrap();
         assert_eq!(
             cont_gc.slots_live, twin_gc.slots_live,
             "{name}: the boundary must root the same live set on both twins"

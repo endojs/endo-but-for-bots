@@ -1620,6 +1620,7 @@ pub fn dtf_component_key_static(name: &str) -> Option<&'static str> {
 /// plus the environment the frame aliases). The value stack is shared and
 /// not saved here; `end` resets it to the frame boundary and pushes the
 /// callee's result, matching XS's `mxStack = mxFrameEnd; *mxStack = *slot`.
+#[cfg_attr(test, derive(Debug))]
 struct CallerState {
     locals: Vec<Slot>,
     id_map: std::collections::HashMap<u16, usize>,
@@ -1650,6 +1651,7 @@ struct CallerState {
 /// established the catch). `flag` mirrors XS's `jump->flag = 1` (a JS
 /// jump); every ironhorse jump is JS, and the host boundary is the empty chain.
 #[derive(Clone)]
+#[cfg_attr(test, derive(Debug))]
 struct CatchJump {
     target_pc: usize,
     segment: Option<usize>,

@@ -10,7 +10,7 @@ fn copy_object_in_recycled_boot_slot_is_not_a_boot_native() {
     // depend on incorrectly collecting a lazily installed intrinsic.
     let disposable = m.slots.alloc(Slot::instance(m.object_proto));
     m.boot_slot_count = m.slots.capacity();
-    m.collect_garbage();
+    m.collect_garbage().unwrap();
     let function = m.alloc_method(NativeMethod::CopyObject);
     assert_eq!(
         function, disposable,
