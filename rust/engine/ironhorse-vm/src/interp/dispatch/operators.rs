@@ -4,7 +4,7 @@ use super::super::*;
 
 impl Interp {
     pub(super) fn dispatch_to_string(&mut self, code: &[u8]) -> Result<(), Step> {
-        let top = *self.stack.last().unwrap_or(&Slot::undefined());
+        let top = self.peek_checked()?;
         let primitive = (self.to_primitive(code, top, true))?;
         if primitive.kind == Kind::Symbol {
             return Err(Step::Host(Halt::NotImplemented("to_string:symbol")));
@@ -51,16 +51,16 @@ impl Interp {
     }
 
     pub(super) fn dispatch_instanceof(&mut self, code: &[u8]) -> Result<(), Step> {
-        let right = self.pop();
-        let left = self.pop();
+        let right = self.pop_checked()?;
+        let left = self.pop_checked()?;
         let result = (self.instanceof_operator(code, left, right))?;
         self.push(Slot::boolean(result));
         Ok(())
     }
 
     pub(super) fn dispatch_in(&mut self, code: &[u8]) -> Result<(), Step> {
-        let obj = self.pop();
-        let key = self.pop();
+        let obj = self.pop_checked()?;
+        let key = self.pop_checked()?;
         let objref = match obj.value {
             // A primitive symbol is NOT an object, however much its
             // `Payload::Reference(desc)` looks like one: the target

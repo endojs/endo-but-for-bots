@@ -2365,7 +2365,7 @@ fn utf16_lone_surrogate_round_trips_through_storage_comparison_and_concat() {
     let high = interp.new_string_units(&[0xD800]);
     let low = interp.new_string_units(&[0xDC00]);
     interp.concat_add(high, low);
-    let joined = interp.pop();
+    let joined = interp.pop_checked().unwrap();
     assert_eq!(
         interp.str_units(str_off(&joined)),
         vec![0xD800u16, 0xDC00],
@@ -2375,7 +2375,7 @@ fn utf16_lone_surrogate_round_trips_through_storage_comparison_and_concat() {
     let high1 = interp.new_string_units(&[0xD800]);
     let high2 = interp.new_string_units(&[0xD801]);
     interp.concat_add(high1, high2);
-    let both = interp.pop();
+    let both = interp.pop_checked().unwrap();
     assert_eq!(
         interp.str_units(str_off(&both)),
         vec![0xD800u16, 0xD801],
@@ -2950,4 +2950,59 @@ fn catch_entry_shares_names_until_a_binding_changes() {
     assert!(!vm.jumps[0].id_map.contains_key(&8));
     vm.unwind_to_jump().unwrap();
     assert!(std::rc::Rc::ptr_eq(&vm.id_map, &names));
+}
+
+#[test]
+fn call_entry_failures_retire_the_pending_frame_tuple() {
+    for failure in ["noncallable", "bodyless", "overflow"] {
+        let (code, symbols) = ironhorse_compile::compile_atoms("function f(x){return x}0").unwrap();
+        let mut vm = Interp::new();
+        vm.link_intrinsics(&crate::parse_symbols(&symbols));
+        assert!(vm.run(&code).completed);
+        let callable = vm.instance_get(vm.global_obj, *vm.symbol_ids.get("f").unwrap());
+        let function = match failure {
+            "noncallable" => Slot::integer(7),
+            "bodyless" => Slot::of(Kind::Reference, Payload::Reference(vm.intrinsics["Object"])),
+            _ => callable,
+        };
+        if failure == "overflow" {
+            vm.locals.resize(STACK_SLOT_COUNT, Slot::undefined());
+        }
+        vm.stack = vec![
+            Slot::integer(99),
+            Slot::undefined(),
+            function,
+            Slot::undefined(),
+            Slot::uninitialized(),
+            Slot::integer(42),
+        ];
+        let result = vm.enter_call(1, 0, false);
+        match failure {
+            "noncallable" => assert!(matches!(result, Err(Step::Threw { .. }))),
+            "bodyless" => assert_eq!(
+                result,
+                Err(Step::Host(Halt::EngineInvariant("bind:bound-callback")))
+            ),
+            _ => assert_eq!(
+                result,
+                Err(Step::Host(Halt::StackOverflow(
+                    STACK_SLOT_COUNT + FRAME_OVERHEAD_SLOTS + 1
+                )))
+            ),
+        }
+        assert_eq!(vm.stack, [Slot::integer(99)], "{failure}");
+        assert!(vm.call_stack.is_empty());
+        assert_eq!(vm.frame_slots, 0);
+    }
+}
+
+#[test]
+fn impossible_call_argument_count_refuses_without_arithmetic_overflow() {
+    let mut vm = Interp::new();
+    vm.stack.push(Slot::integer(1));
+    assert_eq!(
+        vm.enter_call(usize::MAX, 0, false),
+        Err(Step::Host(Halt::EngineInvariant("call:stack-underflow")))
+    );
+    assert_eq!(vm.stack, [Slot::integer(1)]);
 }

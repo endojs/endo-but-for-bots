@@ -139,7 +139,7 @@ impl Interp {
         match outcome {
             // A caller's handler travels outward as Step::Unwound; only
             // this activation's normal return supplies a call result.
-            Step::Returned => Ok(self.pop()),
+            Step::Returned => self.pop_checked(),
             other => Err(other),
         }
     }

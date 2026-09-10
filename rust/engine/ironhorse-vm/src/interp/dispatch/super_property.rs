@@ -4,7 +4,7 @@ use super::super::*;
 
 impl Interp {
     pub(super) fn dispatch_get_super(&mut self, code: &[u8], id: u16) -> Result<(), Step> {
-        let receiver = self.pop();
+        let receiver = self.pop_checked()?;
         let home = self
             .functions
             .get(&self.cur_func)
@@ -30,8 +30,8 @@ impl Interp {
     }
 
     pub(super) fn dispatch_get_super_at(&mut self, code: &[u8]) -> Result<(), Step> {
-        let key = self.pop();
-        let super_ref = self.pop();
+        let key = self.pop_checked()?;
+        let super_ref = self.pop_checked()?;
         let receiver_ref = match super_ref.value {
             Payload::Reference(receiver) if super_ref.kind == Kind::EnvReference => receiver,
             _ => return Err(Step::Host(Halt::EngineInvariant("get_super_at:reference"))),
@@ -69,8 +69,8 @@ impl Interp {
     }
 
     pub(super) fn dispatch_set_super(&mut self, code: &[u8], id: u16) -> Result<(), Step> {
-        let value = self.pop();
-        let receiver = self.pop();
+        let value = self.pop_checked()?;
+        let receiver = self.pop_checked()?;
         let home = self
             .functions
             .get(&self.cur_func)
@@ -99,9 +99,9 @@ impl Interp {
     }
 
     pub(super) fn dispatch_set_super_at(&mut self, code: &[u8]) -> Result<(), Step> {
-        let value = self.pop();
-        let key = self.pop();
-        let super_ref = self.pop();
+        let value = self.pop_checked()?;
+        let key = self.pop_checked()?;
+        let super_ref = self.pop_checked()?;
         let receiver_ref = match super_ref.value {
             Payload::Reference(receiver) if super_ref.kind == Kind::EnvReference => receiver,
             _ => return Err(Step::Host(Halt::EngineInvariant("set_super_at:reference"))),

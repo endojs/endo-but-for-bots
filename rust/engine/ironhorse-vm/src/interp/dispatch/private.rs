@@ -8,8 +8,8 @@ impl Interp {
             Some(cell) => cell,
             None => return Err(Step::Host(Halt::NotImplemented("private:missing-brand"))),
         };
-        let value = self.pop();
-        let receiver = self.pop();
+        let value = self.pop_checked()?;
+        let receiver = self.pop_checked()?;
         let object = match receiver.value {
             Payload::Reference(object) if receiver.kind == Kind::Reference => object,
             _ => {
@@ -68,7 +68,7 @@ impl Interp {
         let private_name = self.property_debug_name(
             self.locals[self.local_index(index).expect("private name binding")].id,
         );
-        let receiver = self.pop();
+        let receiver = self.pop_checked()?;
         let object = match receiver.value {
             Payload::Reference(object) if receiver.kind == Kind::Reference => object,
             _ => {
@@ -107,11 +107,11 @@ impl Interp {
             Some(cell) => cell,
             None => return Err(Step::Host(Halt::NotImplemented("private:missing-brand"))),
         };
-        let value = self.pop();
+        let value = self.pop_checked()?;
         let private_name = self.property_debug_name(
             self.locals[self.local_index(index).expect("private name binding")].id,
         );
-        let receiver = self.pop();
+        let receiver = self.pop_checked()?;
         let object = match receiver.value {
             Payload::Reference(object) if receiver.kind == Kind::Reference => object,
             _ => {
@@ -158,7 +158,7 @@ impl Interp {
             Some(cell) => cell,
             None => return Err(Step::Host(Halt::NotImplemented("private:missing-brand"))),
         };
-        let receiver = self.pop();
+        let receiver = self.pop_checked()?;
         let present = match receiver.value {
             Payload::Reference(object) if receiver.kind == Kind::Reference => {
                 let key = (object, brand);

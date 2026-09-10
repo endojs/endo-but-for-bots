@@ -354,7 +354,7 @@ impl Interp {
                             "generator:non-boundary-return",
                         )));
                     }
-                    let ret = machine.pop();
+                    let ret = machine.pop_checked()?;
                     machine.stack.truncate(stack_base);
                     machine.jumps.truncate(jumps_base);
                     if let Some(g) = machine.generators.get_mut(&gen) {
@@ -688,7 +688,7 @@ impl Interp {
                             "async-generator:non-boundary-return",
                         )));
                     }
-                    let value = machine.pop();
+                    let value = machine.pop_checked()?;
                     machine.stack.truncate(stack_base);
                     machine.jumps.truncate(jumps_base);
                     let data = machine.async_generators.get_mut(&gen).unwrap();
@@ -897,7 +897,7 @@ impl Interp {
                             "async:non-boundary-return",
                         )));
                     }
-                    let ret = machine.pop();
+                    let ret = machine.pop_checked()?;
                     machine.stack.truncate(stack_base);
                     machine.jumps.truncate(jumps_base);
                     if let Some(a) = machine.async_instances.get_mut(&inst) {

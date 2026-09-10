@@ -33,8 +33,12 @@ fn catch_can_resume_at_the_last_byte() {
         (Opcode::XS_CODE_CATCH_4, 4),
     ] {
         let mut code = vec![opcode as u8];
-        code.extend_from_slice(&1_i32.to_le_bytes()[..width]);
-        code.extend([Opcode::XS_CODE_THROW as u8, Opcode::XS_CODE_RETURN as u8]);
+        code.extend_from_slice(&2_i32.to_le_bytes()[..width]);
+        code.extend([
+            Opcode::XS_CODE_UNDEFINED as u8,
+            Opcode::XS_CODE_THROW as u8,
+            Opcode::XS_CODE_RETURN as u8,
+        ]);
         assert_eq!(run_program_bounded(&code, 100).halt, Halt::Return);
     }
 }

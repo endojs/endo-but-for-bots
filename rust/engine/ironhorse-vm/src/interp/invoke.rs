@@ -65,7 +65,7 @@ impl Interp {
                     self.push(*a);
                 }
                 return match self.call_native_method(m, base, args.len(), code) {
-                    Ok(()) => Ok(self.pop()),
+                    Ok(()) => self.pop_checked(),
                     Err(h) => {
                         self.stack.truncate(base);
                         Err(h)
@@ -90,7 +90,7 @@ impl Interp {
                     self.push(*a);
                 }
                 return match self.call_native(native, base, args.len(), false, code) {
-                    Ok(()) => Ok(self.pop()),
+                    Ok(()) => self.pop_checked(),
                     Err(h) => {
                         self.stack.truncate(base);
                         Err(h)
@@ -139,7 +139,7 @@ impl Interp {
         match outcome {
             // Only this activation's normal return supplies a callback result.
             // A caller's handler travels outward as Step::Unwound instead.
-            Step::Returned => Ok(self.pop()),
+            Step::Returned => self.pop_checked(),
             other => Err(other),
         }
     }
@@ -358,7 +358,7 @@ impl Interp {
                     self.push(*a);
                 }
                 return match self.call_promise_function(code, f, base, args.len()) {
-                    Ok(()) => Ok(self.pop()),
+                    Ok(()) => self.pop_checked(),
                     Err(h) => {
                         self.stack.truncate(base);
                         Err(h)
@@ -484,7 +484,7 @@ impl Interp {
                     self.call_native_method(method.unwrap(), base, args.len(), code)
                 };
                 return match result {
-                    Ok(()) => Ok(self.pop()),
+                    Ok(()) => self.pop_checked(),
                     Err(h) => {
                         self.stack.truncate(base);
                         Err(h)
@@ -539,7 +539,7 @@ impl Interp {
             let result = self.call_native(n, base, args.len(), true, code);
             self.pending_new_target = saved_pending_new_target;
             result?;
-            return Ok(self.pop());
+            return self.pop_checked();
         }
         // A user-defined constructor: re-enter with the construct geometry.
         self.run_callback_construct(code, func, args, new_target)
@@ -599,7 +599,7 @@ impl Interp {
         let outcome = self.dispatch_at(body_code, body_start, return_depth);
         self.active_segment = saved_segment;
         match outcome {
-            Step::Returned => Ok(self.pop()),
+            Step::Returned => self.pop_checked(),
             other => Err(other),
         }
     }

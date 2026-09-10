@@ -499,7 +499,8 @@ impl Interp {
                 // (child B) can target the head. Metering is the two slot
                 // allocations only (the dispatch code unit is charged centrally).
                 XS_CODE_WITH => {
-                    let with_value = *self.stack.last().unwrap_or(&Slot::undefined());
+                    let with_value =
+                        dispatch_result!(self.peek_checked(), pc, self, return_depth, code);
                     self.meter.tick_raw(WITH_ENV_SETUP_METERING);
                     let inst = self.new_environment_instance(with_value);
                     let head = Slot::of(Kind::Reference, Payload::Reference(inst));
@@ -560,13 +561,13 @@ impl Interp {
                 XS_CODE_VAR_LOCAL_1 | XS_CODE_VAR_LOCAL_2 | XS_CODE_LET_LOCAL_1
                 | XS_CODE_LET_LOCAL_2 => {
                     let k = self.local_operand(op, code, pc);
-                    let top = *self.stack.last().unwrap_or(&Slot::undefined());
+                    let top = dispatch_result!(self.peek_checked(), pc, self, return_depth, code);
                     self.set_local(k, top);
                     pc += size as usize;
                 }
                 XS_CODE_CONST_LOCAL_1 | XS_CODE_CONST_LOCAL_2 => {
                     let k = self.local_operand(op, code, pc);
-                    let top = *self.stack.last().unwrap_or(&Slot::undefined());
+                    let top = dispatch_result!(self.peek_checked(), pc, self, return_depth, code);
                     self.set_local(k, top);
                     if let Some(index) = self.local_index(k) {
                         self.locals[index].flag |= XS_DONT_SET_FLAG;
@@ -586,7 +587,7 @@ impl Interp {
                         );
                         dispatch_halt!(self.raise_js(error), pc, self, return_depth, code);
                     }
-                    let top = *self.stack.last().unwrap_or(&Slot::undefined());
+                    let top = dispatch_result!(self.peek_checked(), pc, self, return_depth, code);
                     self.set_local(k, top);
                     pc += size as usize;
                 }
@@ -603,7 +604,7 @@ impl Interp {
                         );
                         dispatch_halt!(self.raise_js(error), pc, self, return_depth, code);
                     }
-                    let v = self.pop();
+                    let v = dispatch_result!(self.pop_checked(), pc, self, return_depth, code);
                     self.set_local(k, v);
                     pc += size as usize;
                 }
@@ -715,7 +716,7 @@ impl Interp {
                 // is ignored in favor of `%Object.prototype%`. The member is
                 // not subsequently defined as an own data property.
                 XS_CODE_INSTANTIATE => {
-                    let value = self.pop();
+                    let value = dispatch_result!(self.pop_checked(), pc, self, return_depth, code);
                     let proto = match (value.kind, value.value) {
                         (Kind::Reference, Payload::Reference(proto)) => proto,
                         (Kind::Null, _) => crate::value::SlotIndex::NULL,
@@ -747,20 +748,17 @@ impl Interp {
                 // integer/symbol paths are dispatch-only.
                 XS_CODE_AT | XS_CODE_AT_2 => {
                     let depth = if op == XS_CODE_AT_2 { 1 } else { 0 };
-                    let idx = self.stack.len().checked_sub(1 + depth);
-                    let key = match idx.map(|i| self.stack[i]) {
-                        Some(k) => k,
-                        None => return Step::Host(Halt::EngineInvariant("at:stack-underflow")),
+                    let Some(base_index) = self.stack.len().checked_sub(2 + depth) else {
+                        return Step::Host(Halt::EngineInvariant("at:stack-underflow"));
                     };
+                    let idx = base_index + 1;
+                    let key = self.stack[idx];
                     // XS coerces the BASE first (`mxToInstance(mxStack + 1)`,
                     // below the key): `null[k]` throws before `k`'s
                     // `toString` ever runs, and `null[k] = rhs` throws after
                     // the RHS (the compiler's `at_2` follows it) but before
                     // the key coercion.
-                    let base = idx
-                        .and_then(|i| i.checked_sub(1))
-                        .map(|i| self.stack[i])
-                        .unwrap_or_else(Slot::undefined);
+                    let base = self.stack[base_index];
                     if matches!(base.kind, Kind::Null | Kind::Undefined) {
                         dispatch_halt!(
                             self.catchable_type_error_msg(cannot_coerce_to_object(base.kind)),
@@ -793,17 +791,15 @@ impl Interp {
                         // not match its kind, the engine's own value being malformed.
                         None => return Step::Host(Halt::EngineInvariant("at:key-kind")),
                     };
-                    if let Some(i) = idx {
-                        self.stack[i] = at;
-                    }
+                    self.stack[idx] = at;
                     pc += size as usize;
                 }
                 // `arr[k]` read (`XS_CODE_GET_PROPERTY_AT`). Stack:
                 // [.., objectRef, atKey] → [.., value]. Like `GET_PROPERTY`,
                 // meters no built-in step.
                 XS_CODE_GET_PROPERTY_AT => {
-                    let key = self.pop();
-                    let obj = self.pop();
+                    let key = dispatch_result!(self.pop_checked(), pc, self, return_depth, code);
+                    let obj = dispatch_result!(self.pop_checked(), pc, self, return_depth, code);
                     let s = dispatch_result!(
                         self.property_at_get(code, obj, key),
                         pc,
@@ -817,9 +813,9 @@ impl Interp {
                 // `arr[k] = v` (`XS_CODE_SET_PROPERTY_AT`). Stack:
                 // [.., objectRef, atKey, value] → [.., value].
                 XS_CODE_SET_PROPERTY_AT => {
-                    let value = self.pop();
-                    let key = self.pop();
-                    let obj = self.pop();
+                    let value = dispatch_result!(self.pop_checked(), pc, self, return_depth, code);
+                    let key = dispatch_result!(self.pop_checked(), pc, self, return_depth, code);
+                    let obj = dispatch_result!(self.pop_checked(), pc, self, return_depth, code);
                     dispatch_result!(
                         self.property_at_set(code, obj, key, value, false),
                         pc,
@@ -884,7 +880,7 @@ impl Interp {
                 // result must be an object; a non-reference top throws a
                 // `TypeError` (XS's `fxRunDebug`). Dispatch-metered only.
                 XS_CODE_CHECK_INSTANCE => {
-                    let top = self.stack.last().copied().unwrap_or_else(Slot::undefined);
+                    let top = dispatch_result!(self.peek_checked(), pc, self, return_depth, code);
                     if top.kind != Kind::Reference {
                         dispatch_halt!(
                             self.catchable_type_error_msg("iterator result: not an object".into()),
@@ -1122,6 +1118,8 @@ impl Interp {
                 // body address on the top-of-stack function; execution skips
                 // past the body (it runs only when the function is called).
                 XS_CODE_CODE_1 | XS_CODE_CODE_2 | XS_CODE_CODE_4 => {
+                    let function =
+                        dispatch_result!(self.peek_checked(), pc, self, return_depth, code);
                     let n = match op {
                         XS_CODE_CODE_1 => code[pc + 1] as usize,
                         XS_CODE_CODE_2 => u16::from_le_bytes([code[pc + 1], code[pc + 2]]) as usize,
@@ -1144,9 +1142,7 @@ impl Interp {
                     // definition rather than per call.
                     let locals = count_new_locals(code, body_start, n);
                     self.meter.tick_raw(FUNCTION_LOCAL_METERING * locals as u64);
-                    if let Payload::Reference(f) =
-                        self.stack.last().map(|s| s.value).unwrap_or(Payload::None)
-                    {
+                    if let Payload::Reference(f) = function.value {
                         // `fxNewFunctionLength(the, variable, *(code+1))`: XS
                         // sets the function's `.length` from the second byte of
                         // the body chunk — `begin`'s declared-parameter-count
@@ -1180,6 +1176,8 @@ impl Interp {
                 // a `pop` discards it. (For a non-capturing function no
                 // `store` follows and the `pop` discards the env directly.)
                 XS_CODE_FUNCTION_ENVIRONMENT | XS_CODE_ENVIRONMENT => {
+                    let function =
+                        dispatch_result!(self.peek_checked(), pc, self, return_depth, code);
                     let env = self.new_environment();
                     // Plain `environment` captures no surrounding dynamic
                     // environment (`fxNewEnvironmentInstance(the, NULL)`),
@@ -1190,11 +1188,7 @@ impl Interp {
                     }
                     // The function is the current top; record its captured
                     // environment before pushing the env reference.
-                    if let Some(&Slot {
-                        value: Payload::Reference(f),
-                        ..
-                    }) = self.stack.last()
-                    {
+                    if let Payload::Reference(f) = function.value {
                         self.functions
                             .update_or_default(f, |info| info.closures = env);
                     }
@@ -1206,7 +1200,8 @@ impl Interp {
                 // the heritage and the newly-created prototype on the stack.
                 // `class` later consumes `[heritage, prototype, constructor]`.
                 XS_CODE_EXTEND => {
-                    let heritage = self.stack.last().copied().unwrap_or_else(Slot::undefined);
+                    let heritage =
+                        dispatch_result!(self.peek_checked(), pc, self, return_depth, code);
                     let parent_proto = match heritage.value {
                         Payload::None if heritage.kind == Kind::Null => {
                             crate::value::SlotIndex::NULL
@@ -1235,9 +1230,12 @@ impl Interp {
                 // class-created links and standard descriptors are installed
                 // here; subsequent reads/writes use ordinary_get/set.
                 XS_CODE_CLASS => {
-                    let constructor = self.pop();
-                    let prototype = self.pop();
-                    let heritage = self.pop();
+                    let constructor =
+                        dispatch_result!(self.pop_checked(), pc, self, return_depth, code);
+                    let prototype =
+                        dispatch_result!(self.pop_checked(), pc, self, return_depth, code);
+                    let heritage =
+                        dispatch_result!(self.pop_checked(), pc, self, return_depth, code);
                     let (ctor, proto) = match (constructor.value, prototype.value) {
                         (Payload::Reference(ctor), Payload::Reference(proto))
                             if constructor.kind == Kind::Reference
@@ -1288,8 +1286,9 @@ impl Interp {
                 // home object is on top and is consumed; the function remains
                 // for capture/call by the following opcode.
                 XS_CODE_SET_HOME => {
-                    let home = self.pop();
-                    let function = self.stack.last().copied().unwrap_or_else(Slot::undefined);
+                    let home = dispatch_result!(self.pop_checked(), pc, self, return_depth, code);
+                    let function =
+                        dispatch_result!(self.peek_checked(), pc, self, return_depth, code);
                     if let (Payload::Reference(f), Payload::Reference(h)) =
                         (function.value, home.value)
                     {
@@ -1302,12 +1301,10 @@ impl Interp {
                 // Give an anonymous/class function its inferred binding name
                 // (`fxRenameFunction`). The callable stays on the stack.
                 XS_CODE_NAME => {
+                    let function =
+                        dispatch_result!(self.peek_checked(), pc, self, return_depth, code);
                     let id = id!(1);
-                    if let Some(&Slot {
-                        value: Payload::Reference(f),
-                        ..
-                    }) = self.stack.last()
-                    {
+                    if let Payload::Reference(f) = function.value {
                         let name = (id as usize)
                             .checked_sub(1)
                             .and_then(|i| self.symbol_names.get(i).cloned())
@@ -1342,7 +1339,7 @@ impl Interp {
                 // with the fresh instance. No heap allocation here (the frame
                 // is stack slots); dispatch-metered only, as XS's `NEW`.
                 XS_CODE_NEW => {
-                    let ctor = self.pop();
+                    let ctor = dispatch_result!(self.pop_checked(), pc, self, return_depth, code);
                     self.push(Slot::uninitialized()); // THIS (construct placeholder)
                     self.push(ctor); // FUNCTION
                     self.push(Slot::undefined()); // RESULT
@@ -1375,7 +1372,7 @@ impl Interp {
                 // eval and must use ordinary Call; retain that as a precise
                 // gap instead of accidentally granting eval semantics.
                 XS_CODE_EVAL | XS_CODE_EVAL_TAIL => {
-                    let argc = self.pop_run_count();
+                    let argc = dispatch_result!(self.pop_run_count(), pc, self, return_depth, code);
                     let Some(base) = self.stack.len().checked_sub(argc + 4) else {
                         return Step::Host(Halt::EngineInvariant("eval:frame-underflow"));
                     };
@@ -1412,7 +1409,9 @@ impl Interp {
                 XS_CODE_RUN | XS_CODE_RUN_1 | XS_CODE_RUN_2 | XS_CODE_RUN_4 | XS_CODE_RUN_TAIL
                 | XS_CODE_RUN_TAIL_1 | XS_CODE_RUN_TAIL_2 | XS_CODE_RUN_TAIL_4 => {
                     let argc = match op {
-                        XS_CODE_RUN | XS_CODE_RUN_TAIL => self.pop_run_count(),
+                        XS_CODE_RUN | XS_CODE_RUN_TAIL => {
+                            dispatch_result!(self.pop_run_count(), pc, self, return_depth, code)
+                        }
                         XS_CODE_RUN_1 | XS_CODE_RUN_TAIL_1 => code[pc + 1] as usize,
                         XS_CODE_RUN_2 | XS_CODE_RUN_TAIL_2 => {
                             u16::from_le_bytes([code[pc + 1], code[pc + 2]]) as usize
@@ -1815,7 +1814,7 @@ impl Interp {
                 | XS_CODE_LET_CLOSURE_1
                 | XS_CODE_LET_CLOSURE_2 => {
                     let k = self.closure_index(op, code, pc);
-                    let top = *self.stack.last().unwrap_or(&Slot::undefined());
+                    let top = dispatch_result!(self.peek_checked(), pc, self, return_depth, code);
                     self.write_closure_cell(k, top);
                     pc += op.size() as usize;
                 }
@@ -1832,13 +1831,13 @@ impl Interp {
                         );
                         dispatch_halt!(self.raise_js(error), pc, self, return_depth, code);
                     }
-                    let top = *self.stack.last().unwrap_or(&Slot::undefined());
+                    let top = dispatch_result!(self.peek_checked(), pc, self, return_depth, code);
                     self.write_closure_cell(k, top);
                     pc += op.size() as usize;
                 }
                 XS_CODE_CONST_CLOSURE_1 | XS_CODE_CONST_CLOSURE_2 => {
                     let k = self.closure_index(op, code, pc);
-                    let top = *self.stack.last().unwrap_or(&Slot::undefined());
+                    let top = dispatch_result!(self.peek_checked(), pc, self, return_depth, code);
                     if let Some(cell) = self.closure_cell(k) {
                         let target = self.slots.get_mut(cell);
                         target.kind = top.kind;
@@ -1898,7 +1897,7 @@ impl Interp {
                         );
                         dispatch_halt!(self.raise_js(error), pc, self, return_depth, code);
                     }
-                    let v = self.pop();
+                    let v = dispatch_result!(self.pop_checked(), pc, self, return_depth, code);
                     self.write_closure_cell(k, v);
                     pc += op.size() as usize;
                 }
@@ -1954,7 +1953,7 @@ impl Interp {
                 // appending a shared-cell reference (`fxNewSlot`, metered).
                 XS_CODE_STORE_1 | XS_CODE_STORE_2 => {
                     let k = self.closure_index(op, code, pc);
-                    self.store_closure(k);
+                    dispatch_result!(self.store_closure(k), pc, self, return_depth, code);
                     pc += op.size() as usize;
                 }
                 XS_CODE_STORE_ARROW => {
@@ -2133,7 +2132,7 @@ impl Interp {
                 // those in `functions`), else "object"; `null` is "object".
                 // Dispatch-only: the type strings are preinterned.
                 XS_CODE_TYPEOF => {
-                    let top = self.stack.last().copied().unwrap_or_else(Slot::undefined);
+                    let top = dispatch_result!(self.peek_checked(), pc, self, return_depth, code);
                     let off = match top.kind {
                         Kind::Undefined => self.static_str.undefined,
                         Kind::Null => self.static_str.object,
@@ -2269,7 +2268,7 @@ impl Interp {
                     pc += size as usize;
                 }
                 XS_CODE_BIT_NOT => {
-                    let raw = self.pop();
+                    let raw = dispatch_result!(self.pop_checked(), pc, self, return_depth, code);
                     let a = dispatch_result!(
                         self.to_numeric_integer_value(code, raw),
                         pc,
@@ -2370,7 +2369,7 @@ impl Interp {
 
                 // ---- unary ------------------------------------------
                 XS_CODE_MINUS => {
-                    let raw = self.pop();
+                    let raw = dispatch_result!(self.pop_checked(), pc, self, return_depth, code);
                     let a = dispatch_result!(
                         self.to_number_value(code, raw),
                         pc,
@@ -2394,7 +2393,7 @@ impl Interp {
                     pc += size as usize;
                 }
                 XS_CODE_PLUS => {
-                    let raw = self.pop();
+                    let raw = dispatch_result!(self.pop_checked(), pc, self, return_depth, code);
                     let a = dispatch_result!(
                         self.to_number_value(code, raw),
                         pc,
@@ -2414,13 +2413,13 @@ impl Interp {
                     pc += size as usize;
                 }
                 XS_CODE_NOT => {
-                    let a = self.pop();
+                    let a = dispatch_result!(self.pop_checked(), pc, self, return_depth, code);
                     let t = self.truthy(&a);
                     self.push(Slot::boolean(!t));
                     pc += size as usize;
                 }
                 XS_CODE_VOID => {
-                    let _ = self.pop();
+                    let _ = dispatch_result!(self.pop_checked(), pc, self, return_depth, code);
                     self.push(Slot::undefined());
                     pc += size as usize;
                 }
@@ -2491,12 +2490,13 @@ impl Interp {
                     pc += size as usize;
                 }
                 XS_CODE_SET_THIS => {
+                    let value = dispatch_result!(self.peek_checked(), pc, self, return_depth, code);
                     if self.this_val.kind != Kind::Uninitialized {
                         let error = self
                             .internal_error("ReferenceError", "this: already initialized".into());
                         dispatch_halt!(self.raise_js(error), pc, self, return_depth, code);
                     }
-                    self.this_val = self.stack.last().copied().unwrap_or_else(Slot::undefined);
+                    self.this_val = value;
                     for capture in self.this_captures.drain(..) {
                         let slot = self.slots.get_mut(capture);
                         slot.kind = self.this_val.kind;
@@ -2622,7 +2622,7 @@ impl Interp {
                 // needs the ToPrimitive/BigInt path outside the covered
                 // primitive subset, so it self-names unsupported.
                 XS_CODE_TO_NUMERIC => {
-                    let top = *self.stack.last().unwrap_or(&Slot::undefined());
+                    let top = dispatch_result!(self.peek_checked(), pc, self, return_depth, code);
                     match top.kind {
                         Kind::Integer | Kind::Number | Kind::BigInt => {}
                         Kind::Boolean | Kind::Null | Kind::Undefined => {
@@ -2661,7 +2661,8 @@ impl Interp {
                 // `_inc`/`_dec`, which add/subtract the static BigInt one.
                 XS_CODE_INCREMENT | XS_CODE_DECREMENT => {
                     let inc = op == XS_CODE_INCREMENT;
-                    let current = *self.stack.last().unwrap_or(&Slot::undefined());
+                    let current =
+                        dispatch_result!(self.peek_checked(), pc, self, return_depth, code);
                     let numeric = match current.kind {
                         Kind::Integer | Kind::Number | Kind::BigInt => current,
                         _ => dispatch_result!(
@@ -2768,7 +2769,7 @@ impl Interp {
 
                 // ---- stack ------------------------------------------
                 XS_CODE_DUB => {
-                    let top = self.stack.last().copied().unwrap_or_else(Slot::undefined);
+                    let top = dispatch_result!(self.peek_checked(), pc, self, return_depth, code);
                     self.push(top);
                     pc += size as usize;
                 }
@@ -2786,7 +2787,7 @@ impl Interp {
                     pc += size as usize;
                 }
                 XS_CODE_POP => {
-                    let _ = self.pop();
+                    let _ = dispatch_result!(self.pop_checked(), pc, self, return_depth, code);
                     pc += size as usize;
                 }
                 // `swap` (`XS_CODE_SWAP`): exchange the top two stack slots
@@ -2794,9 +2795,10 @@ impl Interp {
                 // mxStack[1] = aSlot`). Pure stack, dispatch-metered.
                 XS_CODE_SWAP => {
                     let n = self.stack.len();
-                    if n >= 2 {
-                        self.stack.swap(n - 1, n - 2);
+                    if n < 2 {
+                        return Step::Host(Halt::EngineInvariant("value-stack:underflow"));
                     }
+                    self.stack.swap(n - 1, n - 2);
                     pc += size as usize;
                 }
                 // Debug / source markers (`line`, `file`, `debugger`,
@@ -2878,7 +2880,8 @@ impl Interp {
                             // handler — or escape to the host (`Halt::Throw`),
                             // which `step_async` turns into a result-promise
                             // rejection.
-                            let v = *self.stack.last().unwrap_or(&Slot::undefined());
+                            let v =
+                                dispatch_result!(self.peek_checked(), pc, self, return_depth, code);
                             dispatch_halt!(self.raise_js(v), pc, self, return_depth, code);
                         }
                         ResumeStatus::Return => {
@@ -2902,7 +2905,7 @@ impl Interp {
                 // is an `mxBranch`, so it checks when its offset < 0.
                 XS_CODE_BRANCH_ELSE_1 => {
                     let off = s1!(1);
-                    let v = self.pop();
+                    let v = dispatch_result!(self.pop_checked(), pc, self, return_depth, code);
                     let cond = self.truthy(&v);
                     if cond {
                         pc += size as usize;
@@ -2915,7 +2918,7 @@ impl Interp {
                 }
                 XS_CODE_BRANCH_ELSE_2 => {
                     let off = i16::from_le_bytes([code[pc + 1], code[pc + 2]]) as i32;
-                    let v = self.pop();
+                    let v = dispatch_result!(self.pop_checked(), pc, self, return_depth, code);
                     let cond = self.truthy(&v);
                     if cond {
                         pc += size as usize;
@@ -2931,7 +2934,7 @@ impl Interp {
                 // fall-through takes INDEX with no check.
                 XS_CODE_BRANCH_IF_1 => {
                     let off = s1!(1);
-                    let v = self.pop();
+                    let v = dispatch_result!(self.pop_checked(), pc, self, return_depth, code);
                     let cond = self.truthy(&v);
                     if cond {
                         if off < 0 && self.check_meter() == MeterCheck::Abort {
@@ -2944,7 +2947,7 @@ impl Interp {
                 }
                 XS_CODE_BRANCH_IF_2 => {
                     let off = i16::from_le_bytes([code[pc + 1], code[pc + 2]]) as i32;
-                    let v = self.pop();
+                    let v = dispatch_result!(self.pop_checked(), pc, self, return_depth, code);
                     let cond = self.truthy(&v);
                     if cond {
                         if off < 0 && self.check_meter() == MeterCheck::Abort {
@@ -2975,9 +2978,9 @@ impl Interp {
                             code[pc + 4],
                         ]),
                     };
-                    let top = *self.stack.last().unwrap_or(&Slot::undefined());
+                    let top = dispatch_result!(self.peek_checked(), pc, self, return_depth, code);
                     if matches!(top.kind, Kind::Undefined | Kind::Null) {
-                        let _ = self.pop();
+                        let _ = dispatch_result!(self.pop_checked(), pc, self, return_depth, code);
                         pc += size as usize;
                     } else {
                         if off < 0 && self.check_meter() == MeterCheck::Abort {
@@ -3003,7 +3006,7 @@ impl Interp {
                             code[pc + 4],
                         ]),
                     };
-                    let top = *self.stack.last().unwrap_or(&Slot::undefined());
+                    let top = dispatch_result!(self.peek_checked(), pc, self, return_depth, code);
                     if matches!(top.kind, Kind::Undefined | Kind::Null) {
                         if let Some(s) = self.stack.last_mut() {
                             *s = Slot::undefined();
@@ -3019,7 +3022,8 @@ impl Interp {
 
                 // ---- result / return --------------------------------
                 XS_CODE_SET_RESULT => {
-                    self.result = self.pop();
+                    self.result =
+                        dispatch_result!(self.pop_checked(), pc, self, return_depth, code);
                     pc += size as usize;
                 }
                 XS_CODE_GET_RESULT => {
@@ -3167,7 +3171,8 @@ impl Interp {
                         let (gen, stack_base, jumps_base, call_depth_base) =
                             (a.gen, a.stack_base, a.jumps_base, a.call_depth_base);
                         let resume_pc = pc + size as usize;
-                        let yielded = self.pop();
+                        let yielded =
+                            dispatch_result!(self.pop_checked(), pc, self, return_depth, code);
                         let frame = match self.suspend_activation(
                             stack_base,
                             jumps_base,
@@ -3190,7 +3195,8 @@ impl Interp {
                             None => return Step::Host(Halt::EngineInvariant("yield:no-generator")),
                         };
                     let resume_pc = pc + size as usize;
-                    let yielded = self.pop();
+                    let yielded =
+                        dispatch_result!(self.pop_checked(), pc, self, return_depth, code);
                     let frame = match self.suspend_activation(
                         stack_base,
                         jumps_base,
@@ -3331,7 +3337,8 @@ impl Interp {
                         let (gen, stack_base, jumps_base, call_depth_base) =
                             (a.gen, a.stack_base, a.jumps_base, a.call_depth_base);
                         let resume_pc = pc + size as usize;
-                        let awaited = self.pop();
+                        let awaited =
+                            dispatch_result!(self.pop_checked(), pc, self, return_depth, code);
                         let frame = match self.suspend_activation(
                             stack_base,
                             jumps_base,
@@ -3356,7 +3363,8 @@ impl Interp {
                             }
                         };
                     let resume_pc = pc + size as usize;
-                    let awaited = self.pop();
+                    let awaited =
+                        dispatch_result!(self.pop_checked(), pc, self, return_depth, code);
                     let frame = match self.suspend_activation(
                         stack_base,
                         jumps_base,
@@ -3441,7 +3449,7 @@ impl Interp {
                 // target (a `mxFirstCode` meter check fires on resume). With
                 // no handler the throw escapes to the host: `Halt::Throw`.
                 XS_CODE_THROW => {
-                    let v = *self.stack.last().unwrap_or(&Slot::undefined());
+                    let v = dispatch_result!(self.peek_checked(), pc, self, return_depth, code);
                     dispatch_halt!(self.raise_js(v), pc, self, return_depth, code);
                 }
                 // `rethrow` (`XS_CODE_RETHROW`, xsRun.c:1405): re-`fxJump`
@@ -3476,7 +3484,8 @@ impl Interp {
                     } else {
                         "using: [Symbol.dispose] is not a function"
                     };
-                    let resource = *self.stack.last().unwrap_or(&Slot::undefined());
+                    let resource =
+                        dispatch_result!(self.peek_checked(), pc, self, return_depth, code);
                     let disposer = if matches!(resource.kind, Kind::Null | Kind::Undefined) {
                         Slot::null()
                     } else {
@@ -3561,10 +3570,13 @@ impl Interp {
                 // named static-linking boundary until the filesystem loader is
                 // connected to the bytecode interpreter.
                 XS_CODE_TRANSFER | XS_CODE_TRANSFER_JSON => {
-                    let count = match self.pop().value {
-                        Payload::Integer(n) if n >= 3 => n as usize,
-                        _ => return Step::Host(Halt::EngineInvariant("module:transfer-shape")),
-                    };
+                    let count =
+                        match dispatch_result!(self.pop_checked(), pc, self, return_depth, code)
+                            .value
+                        {
+                            Payload::Integer(n) if n >= 3 => n as usize,
+                            _ => return Step::Host(Halt::EngineInvariant("module:transfer-shape")),
+                        };
                     let start = match self.stack.len().checked_sub(count) {
                         Some(start) => start,
                         None => return Step::Host(Halt::EngineInvariant("module:transfer-stack")),
@@ -3589,10 +3601,13 @@ impl Interp {
                     if flags & 64 != 0 {
                         return Step::Host(Halt::NotImplemented("module:import-meta"));
                     }
-                    let count = match self.pop().value {
-                        Payload::Integer(n) if n >= 2 => n as usize,
-                        _ => return Step::Host(Halt::EngineInvariant("module:envelope-shape")),
-                    };
+                    let count =
+                        match dispatch_result!(self.pop_checked(), pc, self, return_depth, code)
+                            .value
+                        {
+                            Payload::Integer(n) if n >= 2 => n as usize,
+                            _ => return Step::Host(Halt::EngineInvariant("module:envelope-shape")),
+                        };
                     let start = match self.stack.len().checked_sub(count) {
                         Some(start) => start,
                         None => return Step::Host(Halt::EngineInvariant("module:envelope-stack")),

@@ -36,8 +36,19 @@ impl Interp {
     }
 
     #[inline]
-    pub(super) fn pop(&mut self) -> Slot {
-        self.stack.pop().unwrap_or_else(Slot::undefined)
+    pub(super) fn pop_checked(&mut self) -> Result<Slot, Step> {
+        self.stack
+            .pop()
+            .ok_or(Step::Host(Halt::EngineInvariant("value-stack:underflow")))
+    }
+
+    /// Read an operand without manufacturing `undefined` for corrupt code.
+    #[inline]
+    pub(super) fn peek_checked(&self) -> Result<Slot, Step> {
+        self.stack
+            .last()
+            .copied()
+            .ok_or(Step::Host(Halt::EngineInvariant("value-stack:underflow")))
     }
 
     /// Charge `cost` budget units for a native activation about to be entered,
@@ -107,10 +118,10 @@ impl Interp {
 
     /// `XS_CODE_RUN`'s inline argument count (pushed as an integer just
     /// below the frame). The variadic `run` reads it off the stack.
-    pub(super) fn pop_run_count(&mut self) -> usize {
-        match self.pop().value {
-            Payload::Integer(i) if i >= 0 => i as usize,
-            _ => 0,
+    pub(super) fn pop_run_count(&mut self) -> Result<usize, Step> {
+        match self.pop_checked()?.value {
+            Payload::Integer(i) if i >= 0 => Ok(i as usize),
+            _ => Err(Step::Host(Halt::EngineInvariant("run:argument-count"))),
         }
     }
 
@@ -128,15 +139,23 @@ impl Interp {
         ret_pc: usize,
         has_target: bool,
     ) -> Result<usize, Step> {
-        let len = self.stack.len();
-        if len < argc + 4 {
-            return Err(Step::Host(Halt::EngineInvariant("call:stack-underflow")));
-        }
-        let base = len - argc - 4; // index of THIS
+        let base = self
+            .stack
+            .len()
+            .checked_sub(argc)
+            .and_then(|n| n.checked_sub(4))
+            .ok_or(Step::Host(Halt::EngineInvariant("call:stack-underflow")))?; // THIS
         let func_slot = self.stack[base + 1];
         // Collect arguments (arg0 is the deepest of the argc; XS's
         // `mxFrameArgv(i) = mxFrame - 1 - i`).
         let args: Vec<Slot> = self.stack[base + 4..base + 4 + argc].to_vec();
+        let this_val = self.stack[base];
+        // Keep the existing conservative overflow decision, which includes
+        // the pending tuple, but retire that tuple before any validation can
+        // return or unwind. The reported slot count describes the cleaned
+        // stack rather than retaining the old deliberate over-count.
+        let exceeds_budget = self.would_overflow(FRAME_OVERHEAD_SLOTS + argc);
+        self.stack.truncate(base);
         let func = match func_slot.value {
             Payload::Reference(f) if self.functions.contains_key(&f) => f,
             // The callee is not callable (a non-function reference, or a
@@ -167,7 +186,6 @@ impl Interp {
             Some(bs) => bs,
             None => return Err(Step::Host(Halt::EngineInvariant("bind:bound-callback"))),
         };
-        let this_val = self.stack[base];
         // Stack-overflow guard (XS's `fxOverflow` on the callee's frame
         // allocation): entering this call suspends the caller (its frame
         // quartet, args, and scope stay live) and opens a fresh callee
@@ -180,11 +198,9 @@ impl Interp {
         // on top of everything currently live (the caller's frame stays
         // suspended on the stack). If that crosses the fixed budget, abort
         // to the host exactly as XS's `fxOverflow`.
-        if self.would_overflow(FRAME_OVERHEAD_SLOTS + argc) {
+        if exceeds_budget {
             return Err(Step::Host(Halt::StackOverflow(self.stack_slots_in_use())));
         }
-        // Unwind the frame region (THIS..last arg).
-        self.stack.truncate(base);
         // The caller's frame is now suspended: account its live slots.
         self.frame_slots += caller_footprint;
         // Save the caller's activation and install the callee's.

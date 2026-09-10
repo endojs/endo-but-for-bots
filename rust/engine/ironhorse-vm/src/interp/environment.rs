@@ -530,17 +530,17 @@ impl Interp {
     /// environment's property list (`fxNewSlot`, metered). The stored slot
     /// keeps the same cell reference, so the captured closure and the
     /// defining frame share one cell.
-    pub(super) fn store_closure(&mut self, k: usize) {
-        let env = match self.stack.last() {
-            Some(&Slot {
+    pub(super) fn store_closure(&mut self, k: usize) -> Result<(), Step> {
+        let env = match self.peek_checked()? {
+            Slot {
                 value: Payload::Reference(e),
                 ..
-            }) => e,
-            _ => return,
+            } => e,
+            _ => return Ok(()),
         };
         let i = match self.local_index(k) {
             Some(i) => i,
-            None => return,
+            None => return Ok(()),
         };
         let src = self.locals[i];
         // fxNewSlot for the appended closure slot.
@@ -559,6 +559,7 @@ impl Interp {
             tail = next;
         }
         self.slots.get_mut(tail).next = idx;
+        Ok(())
     }
 
     /// Append a lexical arrow capture to a function closure environment.

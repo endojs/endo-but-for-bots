@@ -557,8 +557,8 @@ impl Interp {
     /// operand has already gone through `ToPrimitive`. Non-string kinds keep
     /// the existing primitive/reference-identity comparison.
     pub(super) fn equality(&mut self, code: &[u8], strict: bool, negate: bool) -> Result<(), Step> {
-        let mut b = self.pop();
-        let mut a = self.pop();
+        let mut b = self.pop_checked()?;
+        let mut a = self.pop_checked()?;
         // Abstract Equality Comparison converts an object operand to a
         // primitive when the other operand is primitive. This is the ordinary
         // wrapper path (`Object(1) == 1`, `new Boolean(true) == true`) as well
