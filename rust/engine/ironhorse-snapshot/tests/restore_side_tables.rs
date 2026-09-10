@@ -258,3 +258,29 @@ fn mapped_arguments_cells_survive_blob_restore() {
     assert_eq!(resumed.result, baseline.result);
     assert_eq!(resumed.computrons, baseline.computrons);
 }
+
+#[test]
+fn null_prototype_owners_and_values_survive_restore() {
+    let (code, names) = compile(
+        "var o={0:7}, a=[o], m=new Map([[o,a]]); function f(){return 11;} \
+         Object.setPrototypeOf(o,null); Object.setPrototypeOf(a,null); \
+         Object.setPrototypeOf(m,null); Object.setPrototypeOf(f,null); \
+         Object.setPrototypeOf(globalThis,null); 0",
+    );
+    let mut original = Interp::new();
+    original.link_intrinsics(&names);
+    assert!(original.run(&code).completed);
+    let bytes = original.write_snapshot(&sig()).unwrap();
+    let mut restored = from_snapshot_bytes(&bytes, &sig()).unwrap();
+    let (code, names) = compile(
+        "[o[0],a[0][0],Map.prototype.get.call(m,o)[0][0],f(), \
+         [o,a,m,f,globalThis].every(x=>Object.getPrototypeOf(x)===null)].join(':')",
+    );
+    for vm in [&mut original, &mut restored] {
+        let linked = vm.relink_crank(&code, &names).unwrap();
+        let outcome = vm.run(&linked);
+        assert!(outcome.completed, "{outcome:?}");
+        assert_eq!(outcome.result, "7:7:7:11:true");
+    }
+    assert_eq!(original.meter_index(), restored.meter_index());
+}

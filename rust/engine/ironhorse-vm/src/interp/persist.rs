@@ -33,7 +33,9 @@ pub(super) fn validate_restore_chain(
         return Err(refuse("owner is not a live slot"));
     }
     let instance = slots.get(owner);
-    if instance.kind != Kind::Instance || !matches!(instance.value, Payload::Reference(_)) {
+    if instance.kind != Kind::Instance
+        || !matches!(instance.value, Payload::None | Payload::Reference(_))
+    {
         return Err(refuse("owner is not an instance"));
     }
     let mut current = instance.next;
@@ -65,7 +67,9 @@ impl Interp {
             });
         }
         let instance = self.slots.get(index);
-        if instance.kind != Kind::Instance || !matches!(instance.value, Payload::Reference(_)) {
+        if instance.kind != Kind::Instance
+            || !matches!(instance.value, Payload::None | Payload::Reference(_))
+        {
             return Err(RestoreError {
                 row,
                 reason: "owner is not an instance",
@@ -254,7 +258,9 @@ impl Interp {
             return Err(refuse("global root is a free slot"));
         }
         let global = slots.get(self.global_obj);
-        if global.kind != Kind::Instance || !matches!(global.value, Payload::Reference(_)) {
+        if global.kind != Kind::Instance
+            || !matches!(global.value, Payload::None | Payload::Reference(_))
+        {
             return Err(refuse("global root is not an instance"));
         }
         validate_restore_chain(&slots, self.global_obj, &mut Default::default())?;
