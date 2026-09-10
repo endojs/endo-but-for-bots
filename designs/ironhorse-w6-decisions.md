@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-09-09 |
-| **Updated** | 2026-09-09 |
+| **Updated** | 2026-09-10 |
 | **Author** | kumavis (prompted) |
 | **Status** | Active |
 | **Source** | Architecture review workstream W6 (`rust/engine/architecture-review/2026-09-06/ARCHITECTURE-REVIEW.md`) |
@@ -297,6 +297,19 @@ The consumer decides when to request it and what scheduling guarantees its own
 application requires.
 Phase 1G changes no runtime code and does not touch `interp.rs`, which belongs
 exclusively to 1A during the freeze.
+
+### Planned invocation restriction (2026-09-10; not implemented)
+
+[Collection only at quiescence](ironhorse-quiescent-gc.md) records the accepted
+next implementation direction and its motivation, API admission rules, and test migration.
+When implemented, quiescence will be the only supported whole-machine collection boundary,
+including for explicit consumer requests; collection during dispatch or after a halted crank
+will be refused before mutation.
+This narrows the invocation latitude in the Phase 2B contract below, including its statement
+against a universal engine gate, but does not transfer scheduling policy to the engine.
+Pressure, idle, time, and delivery-based policies still belong to consumers; their requests
+must be serviced at a supported boundary.
+No runtime gate is introduced by this documentation amendment.
 
 ### Current behavior and the determinism boundary
 
