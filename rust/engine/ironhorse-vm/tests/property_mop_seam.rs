@@ -246,6 +246,113 @@ fn public_restore_verbs_are_confined_to_the_owned_session() {
     );
 }
 
+fn restore_row_contract_violations(source: &str, rows: &[&str]) -> Vec<String> {
+    use ironhorse_vm::source_scan::{code_only, literal_end, matching_delimiter, tokens};
+    let code = code_only(source);
+    let scanned = tokens(&code);
+    let mut remaining: std::collections::BTreeSet<_> = rows.iter().copied().collect();
+    let mut violations = Vec::new();
+    if remaining.len() != rows.len() {
+        violations.push("duplicate row registration".into());
+    }
+    for (i, pair) in scanned.windows(2).enumerate() {
+        if pair[0].text != "fn" {
+            continue;
+        }
+        let Some(row) = pair[1].text.strip_prefix("restore_") else {
+            continue;
+        };
+        // restore_row_bit is private machinery, not a row verb.
+        let visibility = scanned[..i].iter().rev().find(|token| {
+            !matches!(token.text, "async" | "unsafe" | "const" | "extern")
+                && literal_end(token.text, 0).is_none()
+        });
+        if !visibility.is_some_and(|token| token.text == "pub") {
+            continue;
+        }
+        if !remaining.remove(row) {
+            violations.push(format!("unregistered or repeated verb: {row}"));
+        }
+        let params = i + 2;
+        if scanned[params].text != "(" {
+            violations.push(format!("unexpected generic verb: {row}"));
+            continue;
+        }
+        let end = matching_delimiter(&scanned, params);
+        let body = end
+            + 1
+            + scanned[end + 1..]
+                .iter()
+                .position(|t| t.text == "{")
+                .unwrap();
+        let result: Vec<_> = scanned[end + 1..body].iter().map(|t| t.text).collect();
+        if result != ["-", ">", "Result", "<", "(", ")", ",", "RestoreError", ">"] {
+            violations.push(format!("nonuniform return type: {row}"));
+        }
+        let first: Vec<_> = scanned[body + 1..].iter().take(8).map(|t| t.text).collect();
+        let literal = format!("\"{row}\"");
+        if first != ["self", ".", "admit", "(", &literal, ")", "?", ";"] {
+            violations.push(format!("verb must admit its own row first: {row}"));
+        }
+    }
+    violations.extend(
+        remaining
+            .into_iter()
+            .map(|row| format!("row has no verb: {row}")),
+    );
+    violations
+}
+
+#[test]
+fn restore_row_guard_rejects_unregistered_and_nonuniform_verbs() {
+    let good = "pub fn restore_sample(&mut self) -> Result<(), RestoreError> { self.admit(\"sample\")?; Ok(()) }";
+    assert!(restore_row_contract_violations(good, &["sample"]).is_empty());
+    for bad in [
+        good.replace("Result<(), RestoreError>", "bool"),
+        good.replace("pub fn", "pub unsafe extern \"C\" fn")
+            .replace("Result<(), RestoreError>", "bool"),
+        good.replace("self.admit(\"sample\")?;", ""),
+        good.replace("self.admit(\"sample\")?;", "self.admit(\"other\")?;"),
+        good.replace("restore_sample", "restore_other"),
+    ] {
+        assert!(
+            !restore_row_contract_violations(&bad, &["sample"]).is_empty(),
+            "{bad}"
+        );
+    }
+    assert!(!restore_row_contract_violations(good, &["sample", "sample"]).is_empty());
+    assert!(!restore_row_contract_violations("", &["sample"]).is_empty());
+}
+
+#[test]
+fn every_restore_verb_has_one_required_row_and_uniform_result() {
+    use ironhorse_vm::source_scan::{code_only, matching_delimiter, tokens};
+    let source = include_str!("../src/interp/restore.rs");
+    let code = code_only(source);
+    let scanned = tokens(&code);
+    let registration = scanned
+        .windows(2)
+        .position(|pair| pair[0].text == "const" && pair[1].text == "RESTORE_ROWS")
+        .unwrap();
+    let equal = registration
+        + scanned[registration..]
+            .iter()
+            .position(|t| t.text == "=")
+            .unwrap();
+    let open = equal + scanned[equal..].iter().position(|t| t.text == "[").unwrap();
+    let close = matching_delimiter(&scanned, open);
+    let rows: Vec<_> = scanned[open + 1..close]
+        .iter()
+        .filter(|t| t.text != ",")
+        .map(|t| t.text.strip_prefix('"').unwrap().strip_suffix('"').unwrap())
+        .collect();
+    let violations = restore_row_contract_violations(source, &rows);
+    assert!(
+        violations.is_empty(),
+        "restore row contract: {violations:?}"
+    );
+}
+
 #[test]
 fn additional_option_readers_do_not_gate_on_atom_presence() {
     check(

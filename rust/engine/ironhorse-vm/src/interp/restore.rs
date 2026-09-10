@@ -1,6 +1,43 @@
 //! Exclusive ownership of a machine while snapshot rows are restored.
 use super::*;
 
+// One registration list drives both completion and duplicate admission.
+// The source guard requires a matching Result-returning public verb for every
+// row and requires that verb to admit its own row before doing any work.
+const RESTORE_ROWS: &[&str] = &[
+    "snapshot_state",
+    "installed_names_floor",
+    "error_data",
+    "typed_array_family",
+    "wrapper_data",
+    "regexps",
+    "arguments_brands",
+    "dates",
+    "native_names",
+    "function_state",
+    "proxy_state",
+    "accessors",
+    "intl_bound_functions",
+    "private_elements",
+    "disposable_stacks",
+    "generators",
+    "promise_cluster",
+    "temporal_records",
+    "intl",
+    "iterators",
+    "symbol_key_table",
+    "bulk_side_tables",
+];
+const _: () = assert!(RESTORE_ROWS.len() <= u32::BITS as usize);
+
+fn restore_row_bit(row: &str) -> u32 {
+    let index = RESTORE_ROWS
+        .iter()
+        .position(|name| *name == row)
+        .expect("restore row must be registered");
+    1u32 << index
+}
+
 /// A machine under restoration cannot execute guest code or expose its arenas.
 /// Drop the session to discard a failed or abandoned restore.
 #[must_use]
@@ -29,7 +66,8 @@ impl RestoreSession {
         }
         // Every row set is explicit, including empty tables. The installed
         // name floor alone is optional for legacy snapshots.
-        let required = ((1u32 << 22) - 1) & !(1 << 1);
+        let required = (u32::MAX >> (u32::BITS as usize - RESTORE_ROWS.len()))
+            & !restore_row_bit("installed_names_floor");
         if self.seen & required != required {
             return Err(RestoreError {
                 row: "session",
@@ -121,20 +159,24 @@ impl RestoreSession {
         Ok(())
     }
 
-    fn admit(&mut self, bit: u32, row: &'static str) -> Result<(), RestoreError> {
+    fn admit(&mut self, row: &'static str) -> Result<(), RestoreError> {
+        let bit = restore_row_bit(row);
         let error = self.failed.or({
             if self.seen & bit != 0 {
                 Some(RestoreError {
                     row,
                     reason: "row set already restored",
                 })
-            } else if bit != 1 && self.seen & 1 == 0 {
+            } else if row != "snapshot_state" && self.seen & restore_row_bit("snapshot_state") == 0
+            {
                 Some(RestoreError {
                     row,
                     reason: "arenas must be restored first",
                 })
-            } else if bit & ((1 << 0) | (1 << 1) | (1 << 8) | (1 << 20)) == 0
-                && self.seen & (1 << 8) == 0
+            } else if !matches!(
+                row,
+                "snapshot_state" | "installed_names_floor" | "native_names" | "symbol_key_table"
+            ) && self.seen & restore_row_bit("native_names") == 0
             {
                 Some(RestoreError {
                     row,
@@ -164,7 +206,7 @@ impl RestoreSession {
         symbol_names: Vec<SymbolName>,
         meter: crate::meter::MeterState,
     ) -> Result<(), RestoreError> {
-        self.admit(1 << 0, "snapshot_state")?;
+        self.admit("snapshot_state")?;
         let result = self
             .interp
             .restore_snapshot_state(slots, chunks, stack, symbol_names, meter);
@@ -172,7 +214,7 @@ impl RestoreSession {
         result
     }
     pub fn restore_installed_names_floor(&mut self, floor: u32) -> Result<(), RestoreError> {
-        self.admit(1 << 1, "installed_names_floor")?;
+        self.admit("installed_names_floor")?;
         let result = if self.interp.restore_installed_names_floor(floor) {
             Ok(())
         } else {
@@ -188,7 +230,7 @@ impl RestoreSession {
         &mut self,
         rows: Vec<(u32, String, Option<SymbolName>, Vec<String>)>,
     ) -> Result<(), RestoreError> {
-        self.admit(1 << 2, "error_data")?;
+        self.admit("error_data")?;
         let result = self.interp.restore_error_data(rows);
         self.failed = result.err();
         result
@@ -199,7 +241,7 @@ impl RestoreSession {
         views: Vec<(u32, u8, u32, u32, u32)>,
         data_views: Vec<(u32, u32, u32, u32)>,
     ) -> Result<(), RestoreError> {
-        self.admit(1 << 3, "typed_array_family")?;
+        self.admit("typed_array_family")?;
         let result = if self
             .interp
             .restore_typed_array_family(buffers, views, data_views)
@@ -215,7 +257,7 @@ impl RestoreSession {
         result
     }
     pub fn restore_wrapper_data(&mut self, rows: Vec<(u32, Slot)>) -> Result<(), RestoreError> {
-        self.admit(1 << 4, "wrapper_data")?;
+        self.admit("wrapper_data")?;
         let result = self.interp.restore_wrapper_data(rows);
         self.failed = result.err();
         result
@@ -224,19 +266,19 @@ impl RestoreSession {
         &mut self,
         rows: Vec<(u32, SymbolName, String, u64)>,
     ) -> Result<(), RestoreError> {
-        self.admit(1 << 5, "regexps")?;
+        self.admit("regexps")?;
         let result = self.interp.restore_regexps(rows);
         self.failed = result.err();
         result
     }
     pub fn restore_arguments_brands(&mut self, owners: Vec<u32>) -> Result<(), RestoreError> {
-        self.admit(1 << 6, "arguments_brands")?;
+        self.admit("arguments_brands")?;
         let result = self.interp.restore_arguments_brands(owners);
         self.failed = result.err();
         result
     }
     pub fn restore_dates(&mut self, rows: Vec<(u32, u64)>) -> Result<(), RestoreError> {
-        self.admit(1 << 7, "dates")?;
+        self.admit("dates")?;
         let result = self.interp.restore_dates(rows);
         self.failed = result.err();
         result
@@ -245,7 +287,7 @@ impl RestoreSession {
         &mut self,
         rows: Option<&[(u32, u32)]>,
     ) -> Result<(), RestoreError> {
-        self.admit(1 << 8, "native_names")?;
+        self.admit("native_names")?;
         let result = if self.interp.restore_native_names(rows) {
             Ok(())
         } else {
@@ -261,7 +303,7 @@ impl RestoreSession {
         &mut self,
         state: FunctionStateSnapshot,
     ) -> Result<(), RestoreError> {
-        self.admit(1 << 9, "function_state")?;
+        self.admit("function_state")?;
         if state.native_names.is_some() {
             let error = RestoreError {
                 row: "function_state",
@@ -282,13 +324,13 @@ impl RestoreSession {
         result
     }
     pub fn restore_proxy_state(&mut self, state: ProxyStateSnapshot) -> Result<(), RestoreError> {
-        self.admit(1 << 10, "proxy_state")?;
+        self.admit("proxy_state")?;
         let result = self.interp.restore_proxy_state(state);
         self.failed = result.err();
         result
     }
     pub fn restore_accessors(&mut self, rows: Vec<AccessorRow>) -> Result<(), RestoreError> {
-        self.admit(1 << 11, "accessors")?;
+        self.admit("accessors")?;
         let result = if self.interp.restore_accessors(rows) {
             Ok(())
         } else {
@@ -304,7 +346,7 @@ impl RestoreSession {
         &mut self,
         rows: Vec<IntlBoundFunctionRow>,
     ) -> Result<(), RestoreError> {
-        self.admit(1 << 12, "intl_bound_functions")?;
+        self.admit("intl_bound_functions")?;
         let result = if self.interp.restore_intl_bound_functions(rows) {
             Ok(())
         } else {
@@ -320,7 +362,7 @@ impl RestoreSession {
         &mut self,
         state: PrivateElementSnapshot,
     ) -> Result<(), RestoreError> {
-        self.admit(1 << 13, "private_elements")?;
+        self.admit("private_elements")?;
         let result = if self.interp.restore_private_elements(state) {
             Ok(())
         } else {
@@ -336,13 +378,13 @@ impl RestoreSession {
         &mut self,
         rows: Vec<DisposableStackRow>,
     ) -> Result<(), RestoreError> {
-        self.admit(1 << 14, "disposable_stacks")?;
+        self.admit("disposable_stacks")?;
         let result = self.interp.restore_disposable_stacks(rows);
         self.failed = result.err();
         result
     }
     pub fn restore_generators(&mut self, rows: Vec<GeneratorRow>) -> Result<(), RestoreError> {
-        self.admit(1 << 15, "generators")?;
+        self.admit("generators")?;
         let result = if self.interp.restore_generators(rows) {
             Ok(())
         } else {
@@ -358,7 +400,7 @@ impl RestoreSession {
         &mut self,
         snap: PromiseClusterSnapshot,
     ) -> Result<(), RestoreError> {
-        self.admit(1 << 16, "promise_cluster")?;
+        self.admit("promise_cluster")?;
         let result = if self.interp.restore_promise_cluster(snap) {
             Ok(())
         } else {
@@ -377,7 +419,7 @@ impl RestoreSession {
         plains: Vec<(u32, u8, i64, [u32; 8])>,
         zoneds: Vec<(u32, i128, String, i64)>,
     ) -> Result<(), RestoreError> {
-        self.admit(1 << 17, "temporal_records")?;
+        self.admit("temporal_records")?;
         let result = if self
             .interp
             .restore_temporal_records(instants, durations, plains, zoneds)
@@ -393,7 +435,7 @@ impl RestoreSession {
         result
     }
     pub fn restore_intl(&mut self, t: IntlTables) -> Result<(), RestoreError> {
-        self.admit(1 << 18, "intl")?;
+        self.admit("intl")?;
         let result = if self.interp.restore_intl(t) {
             Ok(())
         } else {
@@ -406,7 +448,7 @@ impl RestoreSession {
         result
     }
     pub fn restore_iterators(&mut self, rows: Vec<IteratorRow>) -> Result<(), RestoreError> {
-        self.admit(1 << 19, "iterators")?;
+        self.admit("iterators")?;
         let result = if self.interp.restore_iterators(rows) {
             Ok(())
         } else {
@@ -423,7 +465,7 @@ impl RestoreSession {
         next: u16,
         pairs: &[(u16, u32)],
     ) -> Result<(), RestoreError> {
-        self.admit(1 << 20, "symbol_key_table")?;
+        self.admit("symbol_key_table")?;
         let result = if self.interp.restore_symbol_key_table(next, pairs) {
             Ok(())
         } else {
@@ -442,7 +484,7 @@ impl RestoreSession {
         collections: Vec<CollectionSnapshot>,
         registry: Vec<(Vec<u8>, u32)>,
     ) -> Result<(), RestoreError> {
-        self.admit(1 << 21, "bulk_side_tables")?;
+        self.admit("bulk_side_tables")?;
         let result =
             if self
                 .interp
