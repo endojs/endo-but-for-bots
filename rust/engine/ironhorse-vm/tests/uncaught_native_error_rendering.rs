@@ -105,3 +105,18 @@ fn explicit_guest_stringification_remains_observable() {
     assert!(out.completed);
     assert_eq!(out.result, "Error: live:1");
 }
+
+#[test]
+fn eval_framing_diagnostics_require_live_data_for_exact_attribution() {
+    for (harness, expected) in [
+        ("function Test262Error(m){var e=new Error(m);e.name='Test262Error';return e;}", "Test262Error: #2"),
+        ("function Test262Error(m){this.message=m;}Test262Error.prototype.toString=function(){return 'Test262Error: '+this.message;};", "[object Object]"),
+    ] {
+        let source = format!("\"use strict\";{harness}this['v']='x';if(v!=='x')throw new Test262Error('#2');var v;");
+        let (code, symbols) = ironhorse_compile::compile_atoms_with(&source, false).unwrap();
+        let mut vm = Interp::new();
+        vm.link_intrinsics(&parse_symbols(&symbols));
+        vm.set_eval_program_framing(true);
+        assert_eq!(vm.run(&code).halt.thrown_rendering(), Some(expected));
+    }
+}

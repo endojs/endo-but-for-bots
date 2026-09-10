@@ -29,6 +29,25 @@ impl Interp {
     }
 
     pub(super) fn build_error(&mut self, name: &'static str, base: usize, argc: usize) -> Slot {
+        // Raw bytecode runners may never link intrinsic property keys. Install
+        // the boot names once before constructing their first error. Linked
+        // realms already have this key, so guest deletions remain authoritative.
+        if !self.symbol_ids.contains_key("name") {
+            let id = self.intern_key_unmetered("name");
+            let data = std::mem::take(&mut self.proto_data);
+            for (proto, property, value) in &data {
+                if *property == "name" {
+                    let off = self.alloc_str_text(value.as_bytes());
+                    self.set_own_unmetered_with_flag(
+                        *proto,
+                        id,
+                        Slot::of(Kind::String, Payload::String(off)),
+                        XS_DONT_ENUM_FLAG,
+                    );
+                }
+            }
+            self.proto_data = data;
+        }
         // Base object cost, exactly as the native `Object` constructor
         // (`tick_builtin` + `fxNewObject`), plus the error-instance extra.
         self.meter.tick_builtin();
