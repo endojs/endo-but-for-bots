@@ -1608,7 +1608,7 @@ impl Interp {
         };
         Some(SavedFrame {
             locals: row.locals,
-            id_map: map(row.id_map)?,
+            id_map: std::rc::Rc::new(map(row.id_map)?),
             args: row.args,
             this_val: row.this_val,
             env: row.env,
@@ -1628,7 +1628,7 @@ impl Interp {
                         segment: jump.segment.map(|segment| segment as usize),
                         stack_offset: usize::try_from(jump.stack_offset).ok()?,
                         locals_len: usize::try_from(jump.locals_len).ok()?,
-                        id_map: map(jump.id_map)?,
+                        id_map: std::rc::Rc::new(map(jump.id_map)?),
                         call_depth_offset: usize::try_from(jump.call_depth_offset).ok()?,
                         env: jump.env,
                         flag: jump.flag,

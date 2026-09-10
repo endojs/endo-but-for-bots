@@ -359,7 +359,7 @@ fn each_activation_register_independently_refuses_quiescence() {
         |m| m.this_captures.push(crate::value::SlotIndex::NULL),
         |m| m.locals.push(Slot::undefined()),
         |m| {
-            m.id_map.insert(1, 0);
+            std::rc::Rc::make_mut(&mut m.id_map).insert(1, 0);
         },
         |m| m.this_val = Slot::integer(1),
         |m| m.env = Slot::integer(1),
@@ -2930,4 +2930,24 @@ fn eval_key_admission_is_catchable_and_does_not_append_names() {
     assert!(matches!(result, Err(Step::Threw { .. })), "{result:?}");
     assert_eq!(&*vm.symbol_names, &*names);
     assert!(!vm.id_space_exhausted);
+}
+
+#[test]
+fn catch_entry_shares_names_until_a_binding_changes() {
+    let mut vm = Interp::new();
+    std::rc::Rc::make_mut(&mut vm.id_map).insert(7, 0);
+    let names = vm.id_map.clone();
+    // dispatch_at preserves the prepared frame; run's new-crank reset does not.
+    let code = [Opcode::XS_CODE_CATCH_1 as u8, 0, Opcode::XS_CODE_END as u8];
+    vm.step_limit = 1;
+    assert_eq!(vm.dispatch_at(&code, 0, 0), Step::Host(Halt::StepLimit(1)));
+    assert_eq!(vm.jumps.len(), 1);
+    assert!(std::rc::Rc::ptr_eq(&vm.jumps[0].id_map, &names));
+    assert!(std::rc::Rc::ptr_eq(&vm.id_map, &names));
+    std::rc::Rc::make_mut(&mut vm.id_map).insert(7, 1);
+    std::rc::Rc::make_mut(&mut vm.id_map).insert(8, 2);
+    assert_eq!(vm.jumps[0].id_map.get(&7), Some(&0));
+    assert!(!vm.jumps[0].id_map.contains_key(&8));
+    vm.unwind_to_jump().unwrap();
+    assert!(std::rc::Rc::ptr_eq(&vm.id_map, &names));
 }
