@@ -1504,7 +1504,7 @@ mod tests {
         assert_eq!((new.epoch, new.cranks), (old.epoch, old.cranks));
         // Verify every metadata-only seal link after the section-tree migration.
         let mut parent_seal = old.seal.clone();
-        for schema in [28, 29] {
+        for schema in [28, 29, 30] {
             let mut intermediate = new.clone();
             intermediate.store_schema = schema;
             intermediate.parent_seal = parent_seal;
