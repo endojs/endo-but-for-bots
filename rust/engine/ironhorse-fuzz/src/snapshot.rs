@@ -233,7 +233,8 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
     // At most one pair per distinct in-bounds descriptor, or the
     // dedup nudge below cannot terminate on a tiny arena.
     let n_sym = ((c.byte() % 5) as usize).min(bound as usize);
-    let sym_next = u16::MAX - n_sym as u16 - (c.byte() % 4) as u16;
+    // The maximum id is reserved for the internal environment marker.
+    let sym_next = u16::MAX - 1 - n_sym as u16 - (c.byte() % 4) as u16;
     let mut seen = std::collections::BTreeSet::new();
     let sym_pairs: Vec<(u16, u32)> = (0..n_sym)
         .map(|k| {
