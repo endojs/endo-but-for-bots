@@ -55,6 +55,7 @@ import { makePublishTool } from './src/publish-tool.js';
 import { makeSessionTurnSlot } from './src/session-turn-slot.js';
 import { makeEndoToolSet, makeFlootToolRegistry } from './src/tool-registry.js';
 import { makeTurnJournal } from './src/turn-journal.js';
+import { makeHostedContinuityOptions } from './src/hosted-continuity.js';
 import { providePrivateTurnStorage } from './src/private-turn-storage.js';
 import { makeContainerMountRegistrar } from './src/container-mounts.js';
 
@@ -1386,6 +1387,7 @@ export const makeStreamingAgent = async (
           signal,
           systemPrompt: effectivePrompt,
           acknowledgedCheckpoint,
+          ...makeHostedContinuityOptions(await getHistory(turnId)),
           recordToolEvent: event => turnJournal.append(turnId, event),
         });
       } catch (error) {

@@ -98,6 +98,7 @@ test('hosted turns translate normalized lifecycle events', async t => {
     text: 'go',
     writer,
     systemPrompt: 'stay scoped',
+    continuityContext: 'prior dialogue',
   });
   t.deepEqual(result, {
     delivered: true,
@@ -106,6 +107,7 @@ test('hosted turns translate normalized lifecycle events', async t => {
     toolCalls: [{ id: '1', name: 'shell', args: '{}', result: 'ok' }],
   });
   t.truthy(optionsSeen);
+  t.like(optionsSeen, { continuityContext: 'prior dialogue' });
   t.is(
     /** @type {{ systemPrompt?: string }} */ (
       /** @type {unknown} */ (optionsSeen)
@@ -116,6 +118,33 @@ test('hosted turns translate normalized lifecycle events', async t => {
   t.false(output.some(([, value]) => value === 'Checking…'));
   t.true(output.some(([kind]) => kind === 'call'));
   t.true(output.some(([kind]) => kind === 'result'));
+});
+
+test('continuity options preserve explicit empty and unavailable without choosing policy', async t => {
+  for (const options of [
+    { continuityContext: '' },
+    { continuityContextUnavailable: 'history exceeds replay limit' },
+  ]) {
+    let seen;
+    const client = harden({
+      send: async (_text, opts) => {
+        seen = opts;
+        return readerFromIterator(
+          (async function* events() {
+            yield { type: 'end' };
+          })(),
+        );
+      },
+    });
+    // eslint-disable-next-line no-await-in-loop
+    await runHostedTurn({
+      client,
+      text: 'next',
+      writer: harden({}),
+      ...options,
+    });
+    t.deepEqual(seen, options);
+  }
 });
 
 test('a pre-aborted hosted turn never reaches the client', async t => {
