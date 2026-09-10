@@ -67,6 +67,7 @@ mod link;
 mod native_try;
 mod natives;
 mod persist;
+pub use persist::RestoreError;
 mod property;
 use native_try::CallerHandlers;
 
