@@ -3,7 +3,7 @@ import '@endo/init';
 import test from 'ava';
 import { Far } from '@endo/far';
 import { createServer, request as httpRequest } from 'node:http';
-import { createConnection } from 'node:net';
+import { createConnection, createServer as createTcpServer } from 'node:net';
 
 import { makePublicEgressListener } from '../src/public-egress-listener.js';
 import { makePublicEgress } from '../src/public-egress.js';
@@ -412,6 +412,61 @@ test.serial(
       uploadEnded,
       'the proxy did not pretend the incomplete upload finished',
     );
+  },
+);
+
+test.serial(
+  'HTTP origin can finish its response after reading complete framing',
+  async t => {
+    const origin = createTcpServer(socket => {
+      let bytes = '';
+      let scheduled = false;
+      socket.on('data', chunk => {
+        bytes += chunk.toString('utf8');
+        if (!scheduled && bytes.endsWith('0\r\n\r\n')) {
+          scheduled = true;
+          setTimeout(
+            () =>
+              socket.end(
+                'HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 2\r\n\r\nOK',
+              ),
+            20,
+          );
+        }
+      });
+    });
+    await new Promise(resolve =>
+      origin.listen(0, '127.0.0.1', () => resolve(undefined)),
+    );
+    t.teardown(
+      () =>
+        new Promise((resolve, reject) =>
+          origin.close(error => (error ? reject(error) : resolve(undefined))),
+        ),
+    );
+    const address = origin.address();
+    if (!address || typeof address === 'string')
+      throw Error('Fixture did not bind');
+    const egress = makePublicEgress({
+      policy: 'public-internet',
+      getLocalAddresses: () => [],
+      lookup: async () => [{ address: '93.184.215.14', family: 4 }],
+      connect: settings =>
+        createConnection({
+          ...settings,
+          host: '127.0.0.1',
+          port: address.port,
+        }),
+    });
+    t.teardown(egress.dispose);
+    const proxy = await listener(t, egress.endpoint);
+    const response = await exchange(
+      t,
+      proxy.url,
+      'GET http://public.example/ HTTP/1.1\r\nHost: public.example\r\n\r\n',
+    );
+    t.regex(response, /^HTTP\/1\.1 200 OK/);
+    t.true(response.endsWith('OK'));
   },
 );
 
