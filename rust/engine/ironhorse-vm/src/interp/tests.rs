@@ -952,6 +952,32 @@ fn side_ref_tail_masked_undercount_poisons_during_page_pruning() {
 }
 
 #[test]
+fn arguments_restore_rejects_invalid_owners_without_partial_branding() {
+    let mut interp = Interp::new();
+    let first = interp.new_array_unmetered();
+    let second = interp.new_array_unmetered();
+    let primitive = interp.slots.alloc(Slot::integer(1));
+    let freed = interp.new_array_unmetered();
+    interp.slots.free(freed);
+    interp.restore_arguments_brands(vec![first.0]).unwrap();
+    let before = interp.arguments_brands_snapshot();
+    for owners in [
+        vec![u32::MAX],
+        vec![u32::MAX - 1],
+        vec![second.0, primitive.0],
+        vec![second.0, freed.0],
+        vec![second.0, second.0],
+        vec![second.0, first.0],
+    ] {
+        let error = interp.restore_arguments_brands(owners).unwrap_err();
+        assert_eq!(error.row, "ArgumentsBrands");
+        assert_eq!(interp.arguments_brands_snapshot(), before);
+    }
+    interp.restore_arguments_brands(vec![second.0]).unwrap();
+    assert_eq!(interp.arguments_brands_snapshot(), vec![first.0, second.0]);
+}
+
+#[test]
 fn date_restore_validates_rows_before_mutating_the_table() {
     let mut interp = Interp::new();
     let first = interp.slots.alloc(Slot::instance(interp.date_proto));
@@ -1035,7 +1061,9 @@ fn marker_free_restore_installs_join_and_migrates_arguments_layout() {
         .well_known_symbol_property_id("iterator")
         .expect("boot iterator symbol");
     interp.set_own_unmetered(custom_args, iterator_id, Slot::integer(17));
-    interp.restore_arguments_brands(vec![default_args.0, custom_args.0, custom_missing_args.0]);
+    interp
+        .restore_arguments_brands(vec![default_args.0, custom_args.0, custom_missing_args.0])
+        .unwrap();
 
     interp.migrate_restored_layout();
 
@@ -1135,7 +1163,7 @@ fn current_restore_preserves_guest_join_and_arguments_edits() {
     let iterator_id = interp
         .well_known_symbol_property_id("iterator")
         .expect("boot iterator symbol");
-    interp.restore_arguments_brands(vec![args.0]);
+    interp.restore_arguments_brands(vec![args.0]).unwrap();
 
     interp.migrate_restored_layout();
 
@@ -1173,7 +1201,7 @@ fn marker_free_current_layout_preserves_guest_arguments_edits() {
     let iterator_id = interp
         .well_known_symbol_property_id("iterator")
         .expect("boot iterator symbol");
-    interp.restore_arguments_brands(vec![args.0]);
+    interp.restore_arguments_brands(vec![args.0]).unwrap();
 
     interp.migrate_restored_layout();
 
@@ -1204,7 +1232,9 @@ fn legacy_arguments_migration_allocates_properties_in_owner_order() {
     interp.bind_program_symbols(&old_names);
     interp.install_intrinsic_bindings(&old_names, 0, true, |_| true);
     let owners: Vec<_> = (0..12).map(|_| interp.new_array_unmetered()).collect();
-    interp.restore_arguments_brands(owners.iter().map(|owner| owner.0).collect());
+    interp
+        .restore_arguments_brands(owners.iter().map(|owner| owner.0).collect())
+        .unwrap();
 
     interp.migrate_restored_layout();
 
