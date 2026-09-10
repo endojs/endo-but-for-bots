@@ -70,13 +70,13 @@ fn donor_plan(db: &Connection, image: &MachineImage, target: &str, donor: &str) 
 }
 
 fn candidate(image: &MachineImage) -> Vec<u8> {
-    let bytes = write_machine(image);
+    let bytes = write_machine_unchecked(image);
     validated_source(&bytes, &sig()).unwrap();
     bytes
 }
 
 fn cycle(mut m: Interp) -> Interp {
-    m.collect_garbage();
+    m.collect_garbage().unwrap();
     store_cycle(m)
 }
 
@@ -255,7 +255,7 @@ fn linked_function_body_upgrade_preserves_alias_bound_target_and_map_key() {
     assert_eq!(old.len(), 2);
     assert_eq!(used.len(), 1);
     assert!(matches!(
-        from_snapshot_bytes(&write_machine(&image), &sig()),
+        from_snapshot_bytes(&write_machine_unchecked(&image), &sig()),
         Err(ironhorse_snapshot::SnapshotError::Corrupt(
             "function state: segments not densely referenced"
         ))
@@ -330,10 +330,9 @@ fn function_upgrade_reaches_an_already_registered_promise_reaction() {
     let mut m = cycle(from_snapshot_bytes(&candidate(&image), &sig()).unwrap());
     crank(&mut m, "settle(2)");
     assert_eq!(crank(&mut m, "callbackResult"), "102");
-    // A second full collection currently fails even for the unedited source;
-    // preserve a separate ignored baseline reproducer rather than attribute
-    // that failure to the replacement. Check persistence without another GC.
-    let mut m = store_cycle(m);
+    // Repeated exact collection must preserve the upgraded saved reaction
+    // through another checkpoint and reopen.
+    let mut m = cycle(m);
     assert_eq!(crank(&mut m, "callbackResult"), "102");
 }
 
@@ -342,12 +341,11 @@ fn reaction_fixture() -> Vec<u8> {
 }
 
 #[test]
-#[ignore = "known baseline GC panic after compact/checkpoint/reopen; no image edits"]
 fn unedited_reaction_heap_repeated_gc_regression() {
     let mut m = cycle(from_snapshot_bytes(&reaction_fixture(), &sig()).unwrap());
-    // Desired behavior: repeated collection remains valid after resume.
-    // Current base panics in ChunkArena::compact: chunk payload out of range.
-    m.collect_garbage();
+    // Repeated collection remains valid after compact/checkpoint/reopen,
+    // including before the saved reaction has settled.
+    m.collect_garbage().unwrap();
     crank(&mut m, "settle(2)");
     assert_eq!(crank(&mut m, "callbackResult"), "3");
 }
@@ -488,7 +486,7 @@ fn suspended_generator_needs_pc_mapping_and_keeps_old_locals_after_mapping() {
         .contains("saved frame"));
     transplant_body(&mut image, target, donor);
     assert!(
-        from_snapshot_bytes(&write_machine(&image), &sig()).is_err(),
+        from_snapshot_bytes(&write_machine_unchecked(&image), &sig()).is_err(),
         "old absolute PC should not belong to donor body"
     );
     let donor_pc = image

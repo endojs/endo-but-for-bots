@@ -73,7 +73,7 @@ fn shared_closure_repair_survives_gc_sqlite_checkpoint_and_reopen() {
     assert_eq!(crank(&mut machine, "read()"), "40414250");
     assert_eq!(crank(&mut machine, "add()"), "40414251");
     assert_eq!(crank(&mut machine, "read()"), "40414251");
-    machine.collect_garbage();
+    machine.collect_garbage().unwrap();
     assert_eq!(crank(&mut machine, "read()"), "40414251");
 
     let dir = common::TempDir::new("vat-surgery-roundtrip");
