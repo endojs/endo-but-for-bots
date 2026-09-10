@@ -296,6 +296,7 @@ pub const ENGINE_INVARIANT_LABELS: &[&str] = &[
     "start_generator:frame-underflow",
     "store_arrow:frame",
     "string-iterator:truncated-sequence",
+    "string:slice-range",
     "super_at:stack",
     "template:object",
     "to-bigint:string",

@@ -1455,3 +1455,42 @@ with identical results and raw charges and all warmup/measured samples retained.
 That longer workload changes pressure and cadence and does not disprove the short
 observations or replace the pinned failure.
 No original fixture, baseline, threshold, or release profile was changed.
+
+## 2F: bounded slices and shared catch scopes
+
+[results/2f-slices-catches.json](results/2f-slices-catches.json) retains the first
+2F performance increments, including their original logs and earlier variants.
+The comparison starts at `a65686fda`, after the independent F171 property fix.
+It covers F044's remaining `slice`/`substring` copies and F120's catch-entry map
+cloning; it does not claim completion of the other 2F findings.
+
+For 1,000 one-unit results from a 1,048,576-unit receiver, `slice` changes from
+335.797 ms to 0.640 ms and `substring` from 335.092 ms to 0.604 ms.
+Receiver construction and relinking are outside the timer.
+All three receiver sizes retain identical raw charges and dispatch counts.
+Oracle-free tests additionally pin zero whole-receiver decodes, UTF-16 boundaries,
+coercion order, bounded lazy extent reads, and heap refusal before payload access.
+
+Catch-entry measurements with 2–400 locals improve by approximately 16–25%, with
+identical per-fixture charges and dispatch counts.
+`CATCH` shares the name map; binding changes copy on write, and `UNWIND` still prunes
+names in proportion to map size, so complete try loops are not claimed constant-time.
+A new carried cost remains: saving a frame with `mem::take` allocates an empty `Rc`.
+Clearing a uniquely owned map retains its reusable capacity.
+A fixed before/after/after/before run of the existing eight classification controls
+measures ratios from 0.781x to 1.244x, including the 24.4% populated plain-call slowdown.
+Every ratio is below the unchanged 1.25x threshold; these results do not support an
+unqualified speedup claim.
+The initial classification run overlapped compilation and is retained but excluded
+from those fixed-order ratios.
+
+Before the performance edits, all 48 general controls pass against a fresh same-host
+measurement of `b2b78ad0`, the revision in `linux-reference-controls.json`.
+This avoids comparing macOS absolute times directly with the historical Linux host.
+That report establishes the starting state only; final combined-branch controls
+remain required.
+The full VM suite, strict all-target VM Clippy, and 20 saved-activation snapshot tests
+pass for these increments.
+The local VM test run disables debug symbols to fit disk capacity while retaining
+debug assertions.
+The historical architecture review and its status lines remain unchanged.

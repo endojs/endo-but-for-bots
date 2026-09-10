@@ -277,6 +277,35 @@ impl Interp {
         self.meter.tick_raw(STRING_METHOD_FRAME_METERING);
         use NativeMethod::*;
         let result = match m {
+            StringSlice | StringSubstring => {
+                // Convert in receiver/start/end order before borrowing any
+                // arena bytes: coercion can allocate or re-enter the guest.
+                let (start, end) = if m == StringSlice {
+                    let start = self.string_arg_to_index(code, argn(0), 0, ulen)?;
+                    let end = self.string_arg_to_index(code, argn(1), ulen, ulen)?;
+                    (clamp(start), clamp(end).max(clamp(start)))
+                } else {
+                    let start = self.string_arg_to_position(code, argn(0), 0, ulen)?;
+                    let end = self.string_arg_to_position(code, argn(1), ulen, ulen)?;
+                    (clamp(start.min(end)), clamp(start.max(end)))
+                };
+                let count = self.reserve_units((end - start) as u64)?;
+                let mut units = Self::reserved_vec(count)?;
+                if let Some(off) = offset {
+                    let bytes = self
+                        .chunks
+                        .payload_range(off, start * 2..end * 2)
+                        .ok_or(Step::Host(Halt::EngineInvariant("string:slice-range")))?;
+                    units.extend(
+                        bytes
+                            .chunks_exact(2)
+                            .map(|pair| u16::from_be_bytes([pair[0], pair[1]])),
+                    );
+                } else {
+                    units.extend_from_slice(&fallback[start..end]);
+                }
+                self.new_reserved_string_units(&units)
+            }
             // charCodeAt(pos): the UTF-16 code unit at `pos`, else NaN. No
             // chunk, no mxMeterSome.
             StringCharCodeAt => {
@@ -518,24 +547,13 @@ impl Interp {
                 | NativeMethod::StringIncludes
                 | NativeMethod::StringIndexOf
                 | NativeMethod::StringLastIndexOf
+                | NativeMethod::StringSlice
+                | NativeMethod::StringSubstring
         ) {
             return self.call_string_indexed(m, this, base, argc, code);
         }
         let content = self.string_this_units(code, this)?;
         let ulen = content.len() as i64; // UTF-16 code-unit length
-                                         // Clamp a (possibly negative / out-of-range) code-unit position to a
-                                         // valid slice index into `content` (units). Replaces the CESU-8
-                                         // byte-offset lookup — with UTF-16 storage the unit index *is* the
-                                         // slice index.
-        let clamp = |unit: i64| -> usize {
-            if unit <= 0 {
-                0
-            } else if unit >= ulen {
-                content.len()
-            } else {
-                unit as usize
-            }
-        };
         let args: Vec<Slot> = (0..argc)
             .map(|i| {
                 self.stack
@@ -548,31 +566,6 @@ impl Interp {
         self.meter.tick_raw(STRING_METHOD_FRAME_METERING);
         use NativeMethod::*;
         let result = match m {
-            // slice([start[,end]]): the substring `[start,end)` with negative
-            // offsets counted from the end.
-            StringSlice => {
-                let start = self.string_arg_to_index(code, argn(0), 0, ulen)?;
-                let end = self.string_arg_to_index(code, argn(1), ulen, ulen)?;
-                if start < end {
-                    self.new_string_units(&content[clamp(start)..clamp(end)])
-                } else {
-                    self.new_string_units(&[])
-                }
-            }
-            // substring([start[,end]]): clamp both to `[0,len]`, swap if
-            // start>end.
-            StringSubstring => {
-                let mut start = self.string_arg_to_position(code, argn(0), 0, ulen)?;
-                let mut stop = self.string_arg_to_position(code, argn(1), ulen, ulen)?;
-                if start > stop {
-                    std::mem::swap(&mut start, &mut stop);
-                }
-                if start < stop {
-                    self.new_string_units(&content[clamp(start)..clamp(stop)])
-                } else {
-                    self.new_string_units(&[])
-                }
-            }
             // concat(...args): the receiver followed by each stringified
             // argument; mxMeterSome(argc) + the result chunk. Argument
             // `ToString` conversions run left-to-right and may re-enter guest
@@ -823,3 +816,6 @@ impl Interp {
         }
     }
 }
+
+#[cfg(test)]
+mod slice_tests;
