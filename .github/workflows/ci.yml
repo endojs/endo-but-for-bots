@@ -846,6 +846,7 @@ jobs:
           flags=()
           if [ "$PROFILE" = release ]; then flags+=(--release); fi
           cargo test --locked "${flags[@]}" -p ironhorse-store-sqlite --features ironhorse-vm/store-integrity
+          cargo test --locked "${flags[@]}" -p ironhorse-store-sqlite --features ironhorse-vm/store-integrity --example vat_surgery
 
   test-ironhorse-calibration:
     needs: changes
