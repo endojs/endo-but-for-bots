@@ -36,6 +36,31 @@ use ironhorse_snapshot::store::{slot_page_count, HeapStore, MemoryStore};
 use ironhorse_snapshot::Signature;
 use ironhorse_vm::{parse_symbols, Interp};
 
+// The benchmark runner copies this fixture into the pinned reference tree.
+// Before quiescent admission, collection returned bare values; keep identical
+// workloads usable against both APIs without depending on the new error type.
+trait RequireCollection<T> {
+    fn require_collection(self) -> T;
+}
+
+impl RequireCollection<ironhorse_vm::gc::GcStats> for ironhorse_vm::gc::GcStats {
+    fn require_collection(self) -> ironhorse_vm::gc::GcStats {
+        self
+    }
+}
+
+impl RequireCollection<u32> for u32 {
+    fn require_collection(self) -> u32 {
+        self
+    }
+}
+
+impl<T, E: std::fmt::Debug> RequireCollection<T> for Result<T, E> {
+    fn require_collection(self) -> T {
+        self.expect("benchmark collects at a quiescent boundary")
+    }
+}
+
 fn sig() -> Signature {
     Signature::new("ironhorse-worker-v1")
 }
@@ -83,11 +108,11 @@ fn gc_cost_across_heap_sizes() {
             assert!(m.run(&b).completed);
             slots_total = m.slots.capacity();
             let t0 = Instant::now();
-            let s1 = m.collect_garbage().unwrap();
+            let s1 = m.collect_garbage().require_collection();
             first_ms.push(t0.elapsed().as_secs_f64() * 1e3);
             assert!(s1.slots_reclaimed > n, "garbage swept: {s1:?}");
             let t1 = Instant::now();
-            m.collect_garbage().unwrap();
+            m.collect_garbage().require_collection();
             steady_ms.push(t1.elapsed().as_secs_f64() * 1e3);
         }
 
@@ -163,7 +188,7 @@ fn gc_cost_across_heap_sizes() {
             // Phase 4 — the page free (the dominant, O(garbage) term).
             let dead: Vec<u32> = (0..total).filter(|p| !reached.contains(p)).collect();
             let t3 = Instant::now();
-            let freed = session.machine_mut().free_pages(&dead).unwrap();
+            let freed = session.machine_mut().free_pages(&dead).require_collection();
             let free_p = t3.elapsed().as_secs_f64() * 1e3;
             assert_eq!(freed, ref_freed, "inline phases match partial_collect");
 
@@ -183,12 +208,12 @@ fn gc_cost_across_heap_sizes() {
         let mut m = Interp::new();
         m.link_intrinsics(&names);
         assert!(m.run(&b).completed);
-        m.collect_garbage().unwrap();
+        m.collect_garbage().require_collection();
         let free_len = m.slots.free_list().len();
         let mut sweep_times = Vec::new();
         for _ in 0..5 {
             let t0 = Instant::now();
-            m.collect_garbage().unwrap();
+            m.collect_garbage().require_collection();
             sweep_times.push(t0.elapsed().as_secs_f64() * 1e9 / m.slots.capacity() as f64);
         }
         let sweep_ns_per_slot = median(sweep_times);
@@ -362,7 +387,7 @@ fn compaction_slide_checkpoint_cost() {
                     .unwrap();
                 let extents_before = (store.manifest().unwrap().chunk_len as usize)
                     .div_ceil(CHUNK_EXTENT_BYTES as usize);
-                session.machine_mut().collect_garbage().unwrap();
+                session.machine_mut().collect_garbage().require_collection();
                 let t0 = Instant::now();
                 checkpoint_to_store(&mut session, &sig(), &mut store).unwrap();
                 let ms = t0.elapsed().as_secs_f64() * 1e3;
