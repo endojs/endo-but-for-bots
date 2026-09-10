@@ -1145,7 +1145,11 @@ impl Interp {
         {
             return false;
         }
-        true
+        let offsets: Vec<_> = rows
+            .iter()
+            .map(|&(_, offset)| crate::value::ChunkOffset(offset))
+            .collect();
+        self.chunks.validate_references(&offsets).is_ok()
     }
 
     /// Restore the authoritative surviving boot-native name table before

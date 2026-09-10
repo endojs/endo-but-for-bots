@@ -47,6 +47,84 @@ fn block(arena: &mut ChunkArena, span: usize, value: u8) -> ChunkOffset {
 }
 
 #[test]
+fn reference_validation_reads_only_headers_through_the_last_reference() {
+    let mut plain = ChunkArena::new();
+    let first = block(&mut plain, 3 * PER, 1);
+    block(&mut plain, PER, 2);
+    let (chunks, source) = lazy(&plain);
+    chunks
+        .validate_references(&[first, first, ChunkOffset::NULL])
+        .unwrap();
+    assert_eq!(*source.reads.borrow(), vec![0]);
+    assert_eq!(chunks.resident_extent_count(), 0);
+    assert!(chunks.dirty_extents().is_empty());
+    assert!(chunks
+        .validate_references(&[ChunkOffset(first.0 + 1)])
+        .is_err());
+    assert_eq!(chunks.resident_extent_count(), 0);
+    assert!(chunks.dirty_extents().is_empty());
+}
+
+#[test]
+fn reference_validation_handles_lazy_headers_split_across_extents() {
+    for before_boundary in 1..=3 {
+        let mut plain = ChunkArena::new();
+        block(&mut plain, PER - before_boundary, 1);
+        let referenced = block(&mut plain, 12, 2);
+        for truncated in [false, true] {
+            let mut bytes = plain.raw_vec();
+            if truncated {
+                let header = referenced.0 as usize - 4;
+                bytes[header..header + 4].copy_from_slice(&(u32::MAX - 1).to_le_bytes());
+            }
+            let (chunks, source) = lazy(&ChunkArena::from_image(bytes));
+            let result = chunks.validate_references(&[referenced]);
+            if truncated {
+                assert_eq!(
+                    result,
+                    Err("chunk chain payload out of range (corrupt heap)")
+                );
+            } else {
+                assert_eq!(result, Ok(()));
+            }
+            assert_eq!(*source.reads.borrow(), vec![0, 1]);
+            assert_eq!(chunks.resident_extent_count(), 0);
+            assert!(chunks.dirty_extents().is_empty());
+        }
+    }
+}
+
+#[test]
+fn reference_validation_handles_lazy_free_spans_split_across_extents() {
+    for before_boundary in 1..=3 {
+        let mut plain = ChunkArena::new();
+        // The free tag fits in extent 0; its span word straddles 0 and 1.
+        let header = PER - before_boundary - 4;
+        block(&mut plain, header, 1);
+        block(&mut plain, 8, 2);
+        let referenced = block(&mut plain, 12, 3);
+        let past_end = (plain.byte_size() - header + 1) as u32;
+        for span in [0, 7, 8, past_end] {
+            let mut bytes = plain.raw_vec();
+            bytes[header..header + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+            bytes[header + 4..header + 8].copy_from_slice(&span.to_le_bytes());
+            let (chunks, source) = lazy(&ChunkArena::from_image(bytes));
+            let result = chunks.validate_references(&[referenced]);
+            if span < 8 {
+                assert_eq!(result, Err("free chunk span too short (corrupt heap)"));
+            } else if span == past_end {
+                assert_eq!(result, Err("free chunk span out of range (corrupt heap)"));
+            } else {
+                assert_eq!(result, Ok(()));
+            }
+            assert_eq!(*source.reads.borrow(), vec![0, 1]);
+            assert_eq!(chunks.resident_extent_count(), 0);
+            assert!(chunks.dirty_extents().is_empty());
+        }
+    }
+}
+
+#[test]
 fn scattered_garbage_does_not_move_or_fault_a_clean_neighbor() {
     let mut plain = ChunkArena::new();
     block(&mut plain, PER / 4, 1);
