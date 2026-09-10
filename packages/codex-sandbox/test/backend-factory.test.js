@@ -458,6 +458,76 @@ test('backend factory requires an approved image and exact workspace cwd', async
   }
 });
 
+test('Codex advertises only proved off networking and refuses others before effects', async t => {
+  const specs = [];
+  const factory = makeCodexBackendFactory({
+    imageDigest,
+    destroy: async () => t.fail('must not destroy'),
+    listModels: async () => [],
+    provision: async spec => {
+      specs.push(spec);
+      throw Error('reached safe provisioning');
+    },
+  });
+  t.deepEqual((await E(factory).describe()).supportedNetworkPolicies, ['off']);
+  const toolSet = makeToolSet();
+  for (const networkPolicy of ['public-internet', 'private', '', null, true]) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(
+      E(factory).create(
+        harden({ sessionId: 'session-1', networkPolicy }),
+        toolSet,
+      ),
+      { message: /only the off network policy/ },
+    );
+  }
+  t.deepEqual(specs, []);
+  for (const spec of [
+    { sessionId: 'session-1' },
+    { sessionId: 'session-1', networkPolicy: 'off' },
+  ]) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(E(factory).create(harden(spec), toolSet), {
+      message: /safe provisioning/,
+    });
+  }
+  t.is(specs.length, 2);
+  t.true(specs.every(spec => spec.networkPolicy === 'off'));
+});
+
+test('direct resource provisioning refuses public networking before cleanup or acquisition', async t => {
+  const effects = [];
+  const unexpected = async () => {
+    effects.push('unexpected');
+    throw Error('must not acquire');
+  };
+  const provision = makeCodexResourceProvisioner({
+    imageDigest,
+    providerOrigin,
+    accountRef,
+    makeWorkspace: unexpected,
+    mountWorkspace: unexpected,
+    issueBrokerLease: unexpected,
+    makeSlice: unexpected,
+    startTransport: unexpected,
+    loadThreadState: unexpected,
+    saveThreadState: unexpected,
+    retrySliceCleanup: async () => {
+      effects.push('cleanup');
+    },
+    makeAuditJournal: async () => {
+      effects.push('audit');
+      throw Error('must not acquire');
+    },
+  });
+  await t.throwsAsync(
+    () =>
+      provision({ sessionId: 'session-1', networkPolicy: 'public-internet' }),
+    { message: /only the off network policy/ },
+  );
+  t.deepEqual(effects, []);
+});
+
 test('failed attestation disposes provisioned resources', async t => {
   let disposed = 0;
   const factory = makeCodexBackendFactory({

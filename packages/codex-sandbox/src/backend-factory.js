@@ -719,11 +719,15 @@ export const makeCodexResourceProvisioner = powers => {
   };
   return harden(
     Object.assign(
-      spec =>
-        enqueue(async () => {
+      async spec => {
+        spec?.networkPolicy === undefined ||
+          spec.networkPolicy === 'off' ||
+          Fail`Codex supports only the off network policy`;
+        return enqueue(async () => {
           await retryPending();
-          return provision(spec);
-        }),
+          return provision(harden({ ...spec, networkPolicy: 'off' }));
+        });
+      },
       { retryCleanup: () => enqueue(retryPending) },
     ),
   );
@@ -1034,7 +1038,12 @@ export const makeCodexBackendFactory = ({
   const create = async (spec, toolSet) => {
     !shuttingDown || Fail`Codex backend is shutting down`;
     assertSessionId(spec?.sessionId);
-    return inSessionOrder(spec.sessionId, () => createSession(spec, toolSet));
+    spec.networkPolicy === undefined ||
+      spec.networkPolicy === 'off' ||
+      Fail`Codex supports only the off network policy`;
+    return inSessionOrder(spec.sessionId, () =>
+      createSession(harden({ ...spec, networkPolicy: 'off' }), toolSet),
+    );
   };
 
   const destroySession = async spec => {
@@ -1065,6 +1074,7 @@ export const makeCodexBackendFactory = ({
         kind: 'hosted',
         continuity: 'opaque-reconciled',
         toolOwnership: 'endo',
+        supportedNetworkPolicies: ['off'],
       });
     },
     listModels: listHostedModels,
