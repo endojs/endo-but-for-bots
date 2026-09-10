@@ -23,6 +23,8 @@ const SOURCE: &str = concat!(
     include_str!("../src/interp/unwind.rs"),
     "\n",
     include_str!("../src/interp/dispatch.rs"),
+    include_str!("../src/interp/dispatch/property_read.rs"),
+    include_str!("../src/interp/dispatch/property_write.rs"),
     "\n",
     include_str!("../src/interp/boot.rs"),
     "\n",
@@ -302,6 +304,8 @@ fn strings_without_concat(source: &str) -> String {
 fn execution_children_keep_allocation_admission() {
     for original in [
         include_str!("../src/interp/admission.rs"),
+        include_str!("../src/interp/dispatch/property_read.rs"),
+        include_str!("../src/interp/dispatch/property_write.rs"),
         include_str!("../src/interp/apply.rs"),
         include_str!("../src/interp/code.rs"),
         include_str!("../src/interp/coerce.rs"),
@@ -337,6 +341,8 @@ fn native_builtins_do_not_reserve_raw_guest_capacities() {
     check_builtin_capacities(&[
         include_str!("../src/interp/natives/regexp.rs"),
         include_str!("../src/interp/admission.rs"),
+        include_str!("../src/interp/dispatch/property_read.rs"),
+        include_str!("../src/interp/dispatch/property_write.rs"),
         include_str!("../src/interp/apply.rs"),
         include_str!("../src/interp/code.rs"),
         include_str!("../src/interp/coerce.rs"),
