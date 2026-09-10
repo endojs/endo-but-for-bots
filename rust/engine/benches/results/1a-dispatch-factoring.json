@@ -1,0 +1,1825 @@
+{
+  "description": "Dispatch handler extraction in three reviewed increments. Final measurements include the uncommitted private/super/operator extraction over 1035373aa9c1a6f22962fe9f2e80ab09d55bc120. Source hashes below identify that working tree.",
+  "baseline_before_dispatch": "0bee5c0ea0afd69aa0b638be764a086d82fb0254",
+  "source_sha256": {
+    "rust/engine/ironhorse-vm/src/interp/dispatch.rs": "ca3a9212685a06d258b15b8e0de7a3c296696af556d360aa913505e20bfc4d81",
+    "rust/engine/ironhorse-vm/src/interp/dispatch/environment.rs": "b8f3609b0cbdd96481bc3a2e4a45cb670d90f4660930176ed422e3da44ab69fa",
+    "rust/engine/ironhorse-vm/src/interp/dispatch/iteration.rs": "e86886b66060b74e61d35076822fc9be7e646ad2b70ed21a24f8aecda735c1a7",
+    "rust/engine/ironhorse-vm/src/interp/dispatch/operators.rs": "e8a037144587d346bea9aacab631de7512d64b7a4dcd626955868a8cac039006",
+    "rust/engine/ironhorse-vm/src/interp/dispatch/private.rs": "34777419ce89b85f4b7684176e34069f886149aa82f5d91ecb5aa2a2ff0cd44d",
+    "rust/engine/ironhorse-vm/src/interp/dispatch/property_read.rs": "df3def857e70a99e5f6e3e01c7af4f9a584f8d0d78d65eff81a0a39adfdf5508",
+    "rust/engine/ironhorse-vm/src/interp/dispatch/property_write.rs": "10dc517aba3b508328f9cce51f250d59f03d3e7ab7e25a3e90e07024ad521150",
+    "rust/engine/ironhorse-vm/src/interp/dispatch/super_property.rs": "054f860daa5629c2c1dfd66b443e4b54bf3f506afef0d889c9e495f64a7f2223",
+    "rust/engine/ironhorse-vm/tests/allocation_admission_audit.rs": "06c1e277d1949191cacb5d6158ba6b67faeb030ed30c1d0940c594ea4c1faf05",
+    "rust/engine/ironhorse-vm/tests/gc_visitation_registry.rs": "68d9f19f9b42c7e485de31a3906e50f47605e0c4b11ddd803660931ba18c11b2",
+    "rust/engine/ironhorse-vm/tests/dispatch_loop_control_transfer.rs": "1fcb83582b15e98ce67d2957c5a95a6e8db3f2e496ade17a270cbd7983cbf1b8",
+    "rust/engine/ironhorse-vm/tests/dispatch_handler_boundaries.rs": "a90dcf42df3f21e9380606c4ff093898ff2a8edbace44189302288b561756d23",
+    "rust/engine/ironhorse-vm/tests/dispatch_execution_bench.rs": "0cff19702970700c36de5d46fa108c9524188bbf9519f5fa3ed8d8f01d75f985"
+  },
+  "lines": {
+    "rust/engine/ironhorse-vm/src/interp/dispatch.rs": 3664,
+    "rust/engine/ironhorse-vm/src/interp/dispatch/environment.rs": 341,
+    "rust/engine/ironhorse-vm/src/interp/dispatch/iteration.rs": 251,
+    "rust/engine/ironhorse-vm/src/interp/dispatch/operators.rs": 144,
+    "rust/engine/ironhorse-vm/src/interp/dispatch/private.rs": 175,
+    "rust/engine/ironhorse-vm/src/interp/dispatch/property_read.rs": 393,
+    "rust/engine/ironhorse-vm/src/interp/dispatch/property_write.rs": 464,
+    "rust/engine/ironhorse-vm/src/interp/dispatch/super_property.rs": 133
+  },
+  "validation": {
+    "dispatch-property-tests": {
+      "passed": 726,
+      "failed": 0,
+      "ignored": 12
+    },
+    "dispatch-environment-tests": {
+      "passed": 730,
+      "failed": 0,
+      "ignored": 12
+    },
+    "dispatch-final-engine": {
+      "passed": 1526,
+      "failed": 0,
+      "ignored": 35
+    },
+    "dispatch-final-sqlite": {
+      "passed": 116,
+      "failed": 0,
+      "ignored": 3
+    },
+    "dispatch-revised-release-recursion": {
+      "passed": 24,
+      "failed": 0,
+      "ignored": 0
+    },
+    "dispatch-revised-release-receipts": {
+      "passed": 15,
+      "failed": 0,
+      "ignored": 0
+    },
+    "dispatch-revised-focus": {
+      "passed": 67,
+      "failed": 0,
+      "ignored": 0
+    },
+    "dispatch-revised-vm": {
+      "passed": 735,
+      "failed": 0,
+      "ignored": 13
+    }
+  },
+  "checks": [
+    "Strict VM library Clippy -D warnings passed",
+    "Engine cargo fmt --all --check passed",
+    "git diff --check passed"
+  ],
+  "oracle_free_receipts": {
+    "baseline": "0bee5c0ea",
+    "baseline_log": "   Compiling ironhorse-vm v0.0.1 (/tmp/dispatch-before-engine/rust/engine/ironhorse-vm)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.36s\n     Running tests/dispatch_handler_boundaries.rs (/tmp/dispatch-before-engine/rust/engine/target/debug/deps/dispatch_handler_boundaries-fbfbc181916cbada)\n\nrunning 14 tests\ntest accessor_definition_advances_once ... receipt 4514744\nok\ntest computed_definition_and_delete_continue_once ... receipt 7050304\nok\ntest getter_unwind_reaches_outer_callback_handler ... receipt 7644928\nok\ntest global_accessor_throw_reaches_variable_handler ... receipt 9544088\nok\ntest iterator_method_throw_reaches_outer_handler ... receipt 6264416\nok\ntest numeric_coercion_and_membership_preserve_throws ... receipt 10167464\nok\ntest private_accessors_preserve_receiver_and_throw_identity ... receipt 11110376\nok\ntest proxy_get_set_and_delete_preserve_thrown_values ... receipt 12315864\nok\ntest setter_unwind_stops_assignment_and_resumes_catch ... receipt 5691544\nok\ntest sloppy_nonwritable_length_advances_once ... receipt 5213376\nok\ntest strict_failed_write_reaches_handler ... receipt 7868560\nok\ntest super_accessors_keep_this_and_propagate_throws ... receipt 11717224\nok\ntest unbound_typeof_keeps_its_exception ... receipt 5230008\nok\ntest with_environment_reads_and_writes_advance_once ... receipt 4083296\nok\n\ntest result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s\n\n",
+    "cross_buffer_baseline_log": "   Compiling ironhorse-vm v0.0.1 (/tmp/dispatch-before-engine/rust/engine/ironhorse-vm)\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.18s\n     Running tests/dispatch_handler_boundaries.rs (/tmp/dispatch-before-engine/rust/engine/target/debug/deps/dispatch_handler_boundaries-fbfbc181916cbada)\n\nrunning 1 test\ntest getter_from_an_earlier_crank_unwinds_to_the_current_buffer ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.01s\n\n"
+  },
+  "property_control_fixture": {
+    "path": "rust/engine/ironhorse-vm/tests/property_execution_bench.rs",
+    "sha256": "de33280b9ec5a21a416fa6f2304d0c178089368e54a8b341cd3cdccf2c81b4a1",
+    "same_bytes_on_both_revisions": true
+  },
+  "fixed_comparisons": {
+    "property": {
+      "baseline": "0bee5c0ea",
+      "comparison": "fixed before/after/after/before, mean of fixture medians",
+      "runs": [
+        {
+          "label": "before",
+          "binary_sha256": "e396392a13766866cc1fc05ff32c07fc6b24a2a166f44728f4d8cab6fb2d2b0c",
+          "metrics": {
+            "ordinary": {
+              "seconds": 0.002487458,
+              "raw": 3870347408,
+              "result": "6001"
+            },
+            "indexed": {
+              "seconds": 0.001669083,
+              "raw": 3314338872,
+              "result": "2006"
+            },
+            "proxy": {
+              "seconds": 0.01059275,
+              "raw": 15701434960,
+              "result": "2003000"
+            },
+            "descriptors": {
+              "seconds": 0.017620792,
+              "raw": 13945550432,
+              "result": "20000"
+            }
+          },
+          "output": "\nrunning 1 test\ntest property_execution ... PROPERTY_MODULE_METRIC ordinary seconds=0.002487458 raw=3870347408 result=6001\nPROPERTY_MODULE_METRIC indexed seconds=0.001669083 raw=3314338872 result=2006\nPROPERTY_MODULE_METRIC proxy seconds=0.010592750 raw=15701434960 result=2003000\nPROPERTY_MODULE_METRIC descriptors seconds=0.017620792 raw=13945550432 result=20000\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s\n\n"
+        },
+        {
+          "label": "after",
+          "binary_sha256": "2446c7781b9b5d3e7a262c5256fefb6a57b994bc51c78229a2fa831bdf651d79",
+          "metrics": {
+            "ordinary": {
+              "seconds": 0.002527084,
+              "raw": 3870347408,
+              "result": "6001"
+            },
+            "indexed": {
+              "seconds": 0.001744875,
+              "raw": 3314338872,
+              "result": "2006"
+            },
+            "proxy": {
+              "seconds": 0.010401708,
+              "raw": 15701434960,
+              "result": "2003000"
+            },
+            "descriptors": {
+              "seconds": 0.017557375,
+              "raw": 13945550432,
+              "result": "20000"
+            }
+          },
+          "output": "\nrunning 1 test\ntest property_execution ... PROPERTY_MODULE_METRIC ordinary seconds=0.002527084 raw=3870347408 result=6001\nPROPERTY_MODULE_METRIC indexed seconds=0.001744875 raw=3314338872 result=2006\nPROPERTY_MODULE_METRIC proxy seconds=0.010401708 raw=15701434960 result=2003000\nPROPERTY_MODULE_METRIC descriptors seconds=0.017557375 raw=13945550432 result=20000\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s\n\n"
+        },
+        {
+          "label": "after",
+          "binary_sha256": "2446c7781b9b5d3e7a262c5256fefb6a57b994bc51c78229a2fa831bdf651d79",
+          "metrics": {
+            "ordinary": {
+              "seconds": 0.00181625,
+              "raw": 3870347408,
+              "result": "6001"
+            },
+            "indexed": {
+              "seconds": 0.001242792,
+              "raw": 3314338872,
+              "result": "2006"
+            },
+            "proxy": {
+              "seconds": 0.010312167,
+              "raw": 15701434960,
+              "result": "2003000"
+            },
+            "descriptors": {
+              "seconds": 0.017431333,
+              "raw": 13945550432,
+              "result": "20000"
+            }
+          },
+          "output": "\nrunning 1 test\ntest property_execution ... PROPERTY_MODULE_METRIC ordinary seconds=0.001816250 raw=3870347408 result=6001\nPROPERTY_MODULE_METRIC indexed seconds=0.001242792 raw=3314338872 result=2006\nPROPERTY_MODULE_METRIC proxy seconds=0.010312167 raw=15701434960 result=2003000\nPROPERTY_MODULE_METRIC descriptors seconds=0.017431333 raw=13945550432 result=20000\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s\n\n"
+        },
+        {
+          "label": "before",
+          "binary_sha256": "e396392a13766866cc1fc05ff32c07fc6b24a2a166f44728f4d8cab6fb2d2b0c",
+          "metrics": {
+            "ordinary": {
+              "seconds": 0.001806,
+              "raw": 3870347408,
+              "result": "6001"
+            },
+            "indexed": {
+              "seconds": 0.001300208,
+              "raw": 3314338872,
+              "result": "2006"
+            },
+            "proxy": {
+              "seconds": 0.010335542,
+              "raw": 15701434960,
+              "result": "2003000"
+            },
+            "descriptors": {
+              "seconds": 0.018024209,
+              "raw": 13945550432,
+              "result": "20000"
+            }
+          },
+          "output": "\nrunning 1 test\ntest property_execution ... PROPERTY_MODULE_METRIC ordinary seconds=0.001806000 raw=3870347408 result=6001\nPROPERTY_MODULE_METRIC indexed seconds=0.001300208 raw=3314338872 result=2006\nPROPERTY_MODULE_METRIC proxy seconds=0.010335542 raw=15701434960 result=2003000\nPROPERTY_MODULE_METRIC descriptors seconds=0.018024209 raw=13945550432 result=20000\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s\n\n"
+        }
+      ],
+      "ratios": {
+        "ordinary": 1.0116167434268601,
+        "indexed": 1.006188682752886,
+        "proxy": 0.9897546823219018,
+        "descriptors": 0.9815880773856621
+      },
+      "candidate_source": "c76c2f15b"
+    },
+    "environment": {
+      "baseline": "0bee5c0ea",
+      "comparison": "fixed before/after/after/before, mean of fixture medians",
+      "runs": [
+        {
+          "label": "before",
+          "binary_sha256": "e396392a13766866cc1fc05ff32c07fc6b24a2a166f44728f4d8cab6fb2d2b0c",
+          "metrics": {
+            "ordinary": {
+              "seconds": 0.001808,
+              "raw": 3870347408,
+              "result": "6001"
+            },
+            "indexed": {
+              "seconds": 0.001295541,
+              "raw": 3314338872,
+              "result": "2006"
+            },
+            "proxy": {
+              "seconds": 0.010145917,
+              "raw": 15701434960,
+              "result": "2003000"
+            },
+            "descriptors": {
+              "seconds": 0.017894,
+              "raw": 13945550432,
+              "result": "20000"
+            }
+          },
+          "output": "\nrunning 1 test\ntest property_execution ... PROPERTY_MODULE_METRIC ordinary seconds=0.001808000 raw=3870347408 result=6001\nPROPERTY_MODULE_METRIC indexed seconds=0.001295541 raw=3314338872 result=2006\nPROPERTY_MODULE_METRIC proxy seconds=0.010145917 raw=15701434960 result=2003000\nPROPERTY_MODULE_METRIC descriptors seconds=0.017894000 raw=13945550432 result=20000\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s\n\n"
+        },
+        {
+          "label": "after",
+          "binary_sha256": "3682bc657de169526ba5d0885098d7a8db09d446eea1ece5a5a63c5d37956dad",
+          "metrics": {
+            "ordinary": {
+              "seconds": 0.001959333,
+              "raw": 3870347408,
+              "result": "6001"
+            },
+            "indexed": {
+              "seconds": 0.001403125,
+              "raw": 3314338872,
+              "result": "2006"
+            },
+            "proxy": {
+              "seconds": 0.010471333,
+              "raw": 15701434960,
+              "result": "2003000"
+            },
+            "descriptors": {
+              "seconds": 0.01778275,
+              "raw": 13945550432,
+              "result": "20000"
+            }
+          },
+          "output": "\nrunning 1 test\ntest property_execution ... PROPERTY_MODULE_METRIC ordinary seconds=0.001959333 raw=3870347408 result=6001\nPROPERTY_MODULE_METRIC indexed seconds=0.001403125 raw=3314338872 result=2006\nPROPERTY_MODULE_METRIC proxy seconds=0.010471333 raw=15701434960 result=2003000\nPROPERTY_MODULE_METRIC descriptors seconds=0.017782750 raw=13945550432 result=20000\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s\n\n"
+        },
+        {
+          "label": "after",
+          "binary_sha256": "3682bc657de169526ba5d0885098d7a8db09d446eea1ece5a5a63c5d37956dad",
+          "metrics": {
+            "ordinary": {
+              "seconds": 0.001860791,
+              "raw": 3870347408,
+              "result": "6001"
+            },
+            "indexed": {
+              "seconds": 0.001319916,
+              "raw": 3314338872,
+              "result": "2006"
+            },
+            "proxy": {
+              "seconds": 0.010583625,
+              "raw": 15701434960,
+              "result": "2003000"
+            },
+            "descriptors": {
+              "seconds": 0.017883667,
+              "raw": 13945550432,
+              "result": "20000"
+            }
+          },
+          "output": "\nrunning 1 test\ntest property_execution ... PROPERTY_MODULE_METRIC ordinary seconds=0.001860791 raw=3870347408 result=6001\nPROPERTY_MODULE_METRIC indexed seconds=0.001319916 raw=3314338872 result=2006\nPROPERTY_MODULE_METRIC proxy seconds=0.010583625 raw=15701434960 result=2003000\nPROPERTY_MODULE_METRIC descriptors seconds=0.017883667 raw=13945550432 result=20000\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s\n\n"
+        },
+        {
+          "label": "before",
+          "binary_sha256": "e396392a13766866cc1fc05ff32c07fc6b24a2a166f44728f4d8cab6fb2d2b0c",
+          "metrics": {
+            "ordinary": {
+              "seconds": 0.001835375,
+              "raw": 3870347408,
+              "result": "6001"
+            },
+            "indexed": {
+              "seconds": 0.001301791,
+              "raw": 3314338872,
+              "result": "2006"
+            },
+            "proxy": {
+              "seconds": 0.010315542,
+              "raw": 15701434960,
+              "result": "2003000"
+            },
+            "descriptors": {
+              "seconds": 0.018224708,
+              "raw": 13945550432,
+              "result": "20000"
+            }
+          },
+          "output": "\nrunning 1 test\ntest property_execution ... PROPERTY_MODULE_METRIC ordinary seconds=0.001835375 raw=3870347408 result=6001\nPROPERTY_MODULE_METRIC indexed seconds=0.001301791 raw=3314338872 result=2006\nPROPERTY_MODULE_METRIC proxy seconds=0.010315542 raw=15701434960 result=2003000\nPROPERTY_MODULE_METRIC descriptors seconds=0.018224708 raw=13945550432 result=20000\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s\n\n"
+        }
+      ],
+      "ratios": {
+        "ordinary": 1.0485124369574914,
+        "indexed": 1.0483992804924438,
+        "proxy": 1.0290057028680113,
+        "descriptors": 0.9874776528551353
+      },
+      "candidate_source": "1035373aa"
+    },
+    "final": {
+      "baseline": "0bee5c0ea",
+      "comparison": "fixed before/initial/after/after/initial/before, mean of fixture medians",
+      "runs": [
+        {
+          "label": "before",
+          "binary_sha256": "e396392a13766866cc1fc05ff32c07fc6b24a2a166f44728f4d8cab6fb2d2b0c",
+          "metrics": {
+            "ordinary": {
+              "seconds": 0.001930208,
+              "raw": 3870347408,
+              "result": "6001"
+            },
+            "indexed": {
+              "seconds": 0.001334959,
+              "raw": 3314338872,
+              "result": "2006"
+            },
+            "proxy": {
+              "seconds": 0.009927166,
+              "raw": 15701434960,
+              "result": "2003000"
+            },
+            "descriptors": {
+              "seconds": 0.017146083,
+              "raw": 13945550432,
+              "result": "20000"
+            }
+          },
+          "output": "\nrunning 1 test\ntest property_execution ... PROPERTY_MODULE_METRIC ordinary seconds=0.001930208 raw=3870347408 result=6001\nPROPERTY_MODULE_METRIC indexed seconds=0.001334959 raw=3314338872 result=2006\nPROPERTY_MODULE_METRIC proxy seconds=0.009927166 raw=15701434960 result=2003000\nPROPERTY_MODULE_METRIC descriptors seconds=0.017146083 raw=13945550432 result=20000\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s\n\n"
+        },
+        {
+          "label": "initial",
+          "binary_sha256": "20f9ab7752891140b26eae3cd4e1d7f23b00f77924c0b7b10d8ad8fc4ea93f5e",
+          "metrics": {
+            "ordinary": {
+              "seconds": 0.003139291,
+              "raw": 3870347408,
+              "result": "6001"
+            },
+            "indexed": {
+              "seconds": 0.001797416,
+              "raw": 3314338872,
+              "result": "2006"
+            },
+            "proxy": {
+              "seconds": 0.010402584,
+              "raw": 15701434960,
+              "result": "2003000"
+            },
+            "descriptors": {
+              "seconds": 0.01682625,
+              "raw": 13945550432,
+              "result": "20000"
+            }
+          },
+          "output": "\nrunning 1 test\ntest property_execution ... PROPERTY_MODULE_METRIC ordinary seconds=0.003139291 raw=3870347408 result=6001\nPROPERTY_MODULE_METRIC indexed seconds=0.001797416 raw=3314338872 result=2006\nPROPERTY_MODULE_METRIC proxy seconds=0.010402584 raw=15701434960 result=2003000\nPROPERTY_MODULE_METRIC descriptors seconds=0.016826250 raw=13945550432 result=20000\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s\n\n"
+        },
+        {
+          "label": "after",
+          "binary_sha256": "a00161379b6153ddc7ddeefc524600352404e6e4ef80561e1aa403d514201dab",
+          "metrics": {
+            "ordinary": {
+              "seconds": 0.003202208,
+              "raw": 3870347408,
+              "result": "6001"
+            },
+            "indexed": {
+              "seconds": 0.001812542,
+              "raw": 3314338872,
+              "result": "2006"
+            },
+            "proxy": {
+              "seconds": 0.010278375,
+              "raw": 15701434960,
+              "result": "2003000"
+            },
+            "descriptors": {
+              "seconds": 0.01678175,
+              "raw": 13945550432,
+              "result": "20000"
+            }
+          },
+          "output": "\nrunning 1 test\ntest property_execution ... PROPERTY_MODULE_METRIC ordinary seconds=0.003202208 raw=3870347408 result=6001\nPROPERTY_MODULE_METRIC indexed seconds=0.001812542 raw=3314338872 result=2006\nPROPERTY_MODULE_METRIC proxy seconds=0.010278375 raw=15701434960 result=2003000\nPROPERTY_MODULE_METRIC descriptors seconds=0.016781750 raw=13945550432 result=20000\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s\n\n"
+        },
+        {
+          "label": "after",
+          "binary_sha256": "a00161379b6153ddc7ddeefc524600352404e6e4ef80561e1aa403d514201dab",
+          "metrics": {
+            "ordinary": {
+              "seconds": 0.00179925,
+              "raw": 3870347408,
+              "result": "6001"
+            },
+            "indexed": {
+              "seconds": 0.001250875,
+              "raw": 3314338872,
+              "result": "2006"
+            },
+            "proxy": {
+              "seconds": 0.010179166,
+              "raw": 15701434960,
+              "result": "2003000"
+            },
+            "descriptors": {
+              "seconds": 0.016823208,
+              "raw": 13945550432,
+              "result": "20000"
+            }
+          },
+          "output": "\nrunning 1 test\ntest property_execution ... PROPERTY_MODULE_METRIC ordinary seconds=0.001799250 raw=3870347408 result=6001\nPROPERTY_MODULE_METRIC indexed seconds=0.001250875 raw=3314338872 result=2006\nPROPERTY_MODULE_METRIC proxy seconds=0.010179166 raw=15701434960 result=2003000\nPROPERTY_MODULE_METRIC descriptors seconds=0.016823208 raw=13945550432 result=20000\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s\n\n"
+        },
+        {
+          "label": "initial",
+          "binary_sha256": "20f9ab7752891140b26eae3cd4e1d7f23b00f77924c0b7b10d8ad8fc4ea93f5e",
+          "metrics": {
+            "ordinary": {
+              "seconds": 0.001775166,
+              "raw": 3870347408,
+              "result": "6001"
+            },
+            "indexed": {
+              "seconds": 0.001220334,
+              "raw": 3314338872,
+              "result": "2006"
+            },
+            "proxy": {
+              "seconds": 0.00987825,
+              "raw": 15701434960,
+              "result": "2003000"
+            },
+            "descriptors": {
+              "seconds": 0.016724375,
+              "raw": 13945550432,
+              "result": "20000"
+            }
+          },
+          "output": "\nrunning 1 test\ntest property_execution ... PROPERTY_MODULE_METRIC ordinary seconds=0.001775166 raw=3870347408 result=6001\nPROPERTY_MODULE_METRIC indexed seconds=0.001220334 raw=3314338872 result=2006\nPROPERTY_MODULE_METRIC proxy seconds=0.009878250 raw=15701434960 result=2003000\nPROPERTY_MODULE_METRIC descriptors seconds=0.016724375 raw=13945550432 result=20000\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s\n\n"
+        },
+        {
+          "label": "before",
+          "binary_sha256": "e396392a13766866cc1fc05ff32c07fc6b24a2a166f44728f4d8cab6fb2d2b0c",
+          "metrics": {
+            "ordinary": {
+              "seconds": 0.001765042,
+              "raw": 3870347408,
+              "result": "6001"
+            },
+            "indexed": {
+              "seconds": 0.001233792,
+              "raw": 3314338872,
+              "result": "2006"
+            },
+            "proxy": {
+              "seconds": 0.009761625,
+              "raw": 15701434960,
+              "result": "2003000"
+            },
+            "descriptors": {
+              "seconds": 0.016949708,
+              "raw": 13945550432,
+              "result": "20000"
+            }
+          },
+          "output": "\nrunning 1 test\ntest property_execution ... PROPERTY_MODULE_METRIC ordinary seconds=0.001765042 raw=3870347408 result=6001\nPROPERTY_MODULE_METRIC indexed seconds=0.001233792 raw=3314338872 result=2006\nPROPERTY_MODULE_METRIC proxy seconds=0.009761625 raw=15701434960 result=2003000\nPROPERTY_MODULE_METRIC descriptors seconds=0.016949708 raw=13945550432 result=20000\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s\n\n"
+        }
+      ],
+      "ratios": {
+        "ordinary": 1.353482984913064,
+        "indexed": 1.1925706306294381,
+        "proxy": 1.0390450586833901,
+        "descriptors": 0.9856042935035589
+      },
+      "initial_ratios": {
+        "ordinary": 1.3299389757120628,
+        "indexed": 1.1747927300076964,
+        "proxy": 1.0300700535649954,
+        "descriptors": 0.9840107537027077
+      },
+      "candidate_source": "uncommitted final extraction over 1035373aa9c1a6f22962fe9f2e80ab09d55bc120"
+    }
+  },
+  "all_handlers_candidate": {
+    "source_sha256": {
+      "rust/engine/ironhorse-vm/src/interp/dispatch.rs": "7f0cafe5d12186fde0c0b039b37d052d6e16905ce887fc2660d6743fa54e8b7a",
+      "rust/engine/ironhorse-vm/src/interp/dispatch/environment.rs": "b8f3609b0cbdd96481bc3a2e4a45cb670d90f4660930176ed422e3da44ab69fa",
+      "rust/engine/ironhorse-vm/src/interp/dispatch/iteration.rs": "e86886b66060b74e61d35076822fc9be7e646ad2b70ed21a24f8aecda735c1a7",
+      "rust/engine/ironhorse-vm/src/interp/dispatch/operators.rs": "e0527ef3cccaacf39721e1bdcba405f7ab42c0f34abf3f19c6466aeae481ec51",
+      "rust/engine/ironhorse-vm/src/interp/dispatch/private.rs": "34777419ce89b85f4b7684176e34069f886149aa82f5d91ecb5aa2a2ff0cd44d",
+      "rust/engine/ironhorse-vm/src/interp/dispatch/property_read.rs": "df3def857e70a99e5f6e3e01c7af4f9a584f8d0d78d65eff81a0a39adfdf5508",
+      "rust/engine/ironhorse-vm/src/interp/dispatch/property_write.rs": "10dc517aba3b508328f9cce51f250d59f03d3e7ab7e25a3e90e07024ad521150",
+      "rust/engine/ironhorse-vm/src/interp/dispatch/super_property.rs": "054f860daa5629c2c1dfd66b443e4b54bf3f506afef0d889c9e495f64a7f2223"
+    },
+    "short_control": {
+      "baseline": "0bee5c0ea",
+      "comparison": "fixed before/after/after/before, mean of fixture medians",
+      "runs": [
+        {
+          "label": "before",
+          "binary_sha256": "e396392a13766866cc1fc05ff32c07fc6b24a2a166f44728f4d8cab6fb2d2b0c",
+          "metrics": {
+            "ordinary": {
+              "seconds": 0.001848584,
+              "raw": 3870347408,
+              "result": "6001"
+            },
+            "indexed": {
+              "seconds": 0.001306542,
+              "raw": 3314338872,
+              "result": "2006"
+            },
+            "proxy": {
+              "seconds": 0.010397542,
+              "raw": 15701434960,
+              "result": "2003000"
+            },
+            "descriptors": {
+              "seconds": 0.018695834,
+              "raw": 13945550432,
+              "result": "20000"
+            }
+          },
+          "output": "\nrunning 1 test\ntest property_execution ... PROPERTY_MODULE_METRIC ordinary seconds=0.001848584 raw=3870347408 result=6001\nPROPERTY_MODULE_METRIC indexed seconds=0.001306542 raw=3314338872 result=2006\nPROPERTY_MODULE_METRIC proxy seconds=0.010397542 raw=15701434960 result=2003000\nPROPERTY_MODULE_METRIC descriptors seconds=0.018695834 raw=13945550432 result=20000\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s\n\n"
+        },
+        {
+          "label": "after",
+          "binary_sha256": "20f9ab7752891140b26eae3cd4e1d7f23b00f77924c0b7b10d8ad8fc4ea93f5e",
+          "metrics": {
+            "ordinary": {
+              "seconds": 0.002592375,
+              "raw": 3870347408,
+              "result": "6001"
+            },
+            "indexed": {
+              "seconds": 0.001906833,
+              "raw": 3314338872,
+              "result": "2006"
+            },
+            "proxy": {
+              "seconds": 0.010592125,
+              "raw": 15701434960,
+              "result": "2003000"
+            },
+            "descriptors": {
+              "seconds": 0.017497584,
+              "raw": 13945550432,
+              "result": "20000"
+            }
+          },
+          "output": "\nrunning 1 test\ntest property_execution ... PROPERTY_MODULE_METRIC ordinary seconds=0.002592375 raw=3870347408 result=6001\nPROPERTY_MODULE_METRIC indexed seconds=0.001906833 raw=3314338872 result=2006\nPROPERTY_MODULE_METRIC proxy seconds=0.010592125 raw=15701434960 result=2003000\nPROPERTY_MODULE_METRIC descriptors seconds=0.017497584 raw=13945550432 result=20000\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s\n\n"
+        },
+        {
+          "label": "after",
+          "binary_sha256": "20f9ab7752891140b26eae3cd4e1d7f23b00f77924c0b7b10d8ad8fc4ea93f5e",
+          "metrics": {
+            "ordinary": {
+              "seconds": 0.001820958,
+              "raw": 3870347408,
+              "result": "6001"
+            },
+            "indexed": {
+              "seconds": 0.001304125,
+              "raw": 3314338872,
+              "result": "2006"
+            },
+            "proxy": {
+              "seconds": 0.010574541,
+              "raw": 15701434960,
+              "result": "2003000"
+            },
+            "descriptors": {
+              "seconds": 0.017636375,
+              "raw": 13945550432,
+              "result": "20000"
+            }
+          },
+          "output": "\nrunning 1 test\ntest property_execution ... PROPERTY_MODULE_METRIC ordinary seconds=0.001820958 raw=3870347408 result=6001\nPROPERTY_MODULE_METRIC indexed seconds=0.001304125 raw=3314338872 result=2006\nPROPERTY_MODULE_METRIC proxy seconds=0.010574541 raw=15701434960 result=2003000\nPROPERTY_MODULE_METRIC descriptors seconds=0.017636375 raw=13945550432 result=20000\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s\n\n"
+        },
+        {
+          "label": "before",
+          "binary_sha256": "e396392a13766866cc1fc05ff32c07fc6b24a2a166f44728f4d8cab6fb2d2b0c",
+          "metrics": {
+            "ordinary": {
+              "seconds": 0.001839458,
+              "raw": 3870347408,
+              "result": "6001"
+            },
+            "indexed": {
+              "seconds": 0.001272875,
+              "raw": 3314338872,
+              "result": "2006"
+            },
+            "proxy": {
+              "seconds": 0.010408709,
+              "raw": 15701434960,
+              "result": "2003000"
+            },
+            "descriptors": {
+              "seconds": 0.0183975,
+              "raw": 13945550432,
+              "result": "20000"
+            }
+          },
+          "output": "\nrunning 1 test\ntest property_execution ... PROPERTY_MODULE_METRIC ordinary seconds=0.001839458 raw=3870347408 result=6001\nPROPERTY_MODULE_METRIC indexed seconds=0.001272875 raw=3314338872 result=2006\nPROPERTY_MODULE_METRIC proxy seconds=0.010408709 raw=15701434960 result=2003000\nPROPERTY_MODULE_METRIC descriptors seconds=0.018397500 raw=13945550432 result=20000\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s\n\n"
+        }
+      ],
+      "ratios": {
+        "ordinary": 1.1966601790326683,
+        "indexed": 1.244838659278434,
+        "proxy": 1.017322438338363,
+        "descriptors": 0.9471771666574914
+      }
+    },
+    "pinned_gate": {
+      "provenance": {
+        "commit": "1035373aa9c1a6f22962fe9f2e80ab09d55bc120",
+        "rustc": "rustc 1.91.1 (ed61e7d7e 2025-11-07)",
+        "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+        "machine": "arm64",
+        "cpu": "arm",
+        "fixture_sha256": "57186d5e665baee27203114dfad6615889863e3099fa57ca319d6927f6bda46d",
+        "build_environment": {
+          "CARGO_INCREMENTAL": "0",
+          "RUSTFLAGS": null,
+          "CARGO_ENCODED_RUSTFLAGS": null,
+          "RUST_MIN_STACK": "33554432",
+          "RUSTUP_TOOLCHAIN": null,
+          "CARGO_BUILD_TARGET": null
+        }
+      },
+      "medians": {
+        "dispatch_ms": 1064.995959,
+        "slots_ms": 484.752708,
+        "chunks_ms": 31.19275,
+        "attached_detached_ms": 18.908791,
+        "attached_resident_ms": 26.968334,
+        "attached_faulting_ms": 26.835625,
+        "slide_500_front_ms": 1.025875,
+        "slide_500_tail_ms": 0.673583,
+        "slide_2000_front_ms": 1.885459,
+        "slide_2000_tail_ms": 0.7735,
+        "slide_8000_front_ms": 5.571125,
+        "slide_8000_tail_ms": 2.328083,
+        "gc_5000_full_first_ms": 2.673791,
+        "gc_5000_full_steady_ms": 0.802167,
+        "gc_5000_partial_ms": 0.400166,
+        "gc_5000_gate_ms": 0.002417,
+        "gc_5000_enum_ms": 0.016375,
+        "gc_5000_query_ms": 0.004375,
+        "gc_5000_free_ms": 0.374125,
+        "gc_5000_sweep_ns_per_slot": 24.330624535,
+        "gc_20000_full_first_ms": 10.719083,
+        "gc_20000_full_steady_ms": 2.892958,
+        "gc_20000_partial_ms": 1.687417,
+        "gc_20000_gate_ms": 0.00925,
+        "gc_20000_enum_ms": 0.02925,
+        "gc_20000_query_ms": 0.0175,
+        "gc_20000_free_ms": 1.63025,
+        "gc_20000_sweep_ns_per_slot": 24.694210296,
+        "gc_80000_full_first_ms": 43.137875,
+        "gc_80000_full_steady_ms": 11.415084,
+        "gc_80000_partial_ms": 7.165458,
+        "gc_80000_gate_ms": 0.04225,
+        "gc_80000_enum_ms": 0.059917,
+        "gc_80000_query_ms": 0.0695,
+        "gc_80000_free_ms": 7.001667,
+        "gc_80000_sweep_ns_per_slot": 23.372434688,
+        "gc_5000_generational_ms": 0.037792,
+        "gc_5000_full_partial_ms": 0.045292,
+        "gc_20000_generational_ms": 0.054667,
+        "gc_20000_full_partial_ms": 0.084541,
+        "gc_80000_generational_ms": 0.10925,
+        "gc_80000_full_partial_ms": 0.194292,
+        "placeholder_120320_ms": 0.020167,
+        "placeholder_500000_ms": 0.030208,
+        "placeholder_1000000_ms": 0.108625,
+        "placeholder_4000000_ms": 0.271083,
+        "wake_eager_ms": 10.713792,
+        "wake_lazy_ms": 1.461125
+      },
+      "maximum_ratio": 1.25,
+      "failures": [
+        "slide_500_front_ms: 1.253x > 1.250x",
+        "placeholder_1000000_ms: 1.812x > 1.250x"
+      ],
+      "reference_provenance": {
+        "commit": "51b99651b63d4e652f9af4eae603422783233182",
+        "rustc": "rustc 1.91.1 (ed61e7d7e 2025-11-07)",
+        "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+        "machine": "arm64",
+        "cpu": "arm",
+        "fixture_sha256": "57186d5e665baee27203114dfad6615889863e3099fa57ca319d6927f6bda46d",
+        "build_environment": {
+          "CARGO_INCREMENTAL": "0",
+          "RUSTFLAGS": null,
+          "CARGO_ENCODED_RUSTFLAGS": null,
+          "RUST_MIN_STACK": "33554432",
+          "RUSTUP_TOOLCHAIN": null,
+          "CARGO_BUILD_TARGET": null
+        }
+      },
+      "reference_medians": {
+        "dispatch_ms": 1015.184083,
+        "slots_ms": 463.03675,
+        "chunks_ms": 29.007792,
+        "attached_detached_ms": 18.585917,
+        "attached_resident_ms": 27.679042,
+        "attached_faulting_ms": 27.692333,
+        "slide_500_front_ms": 0.818709,
+        "slide_500_tail_ms": 0.67475,
+        "slide_2000_front_ms": 1.630125,
+        "slide_2000_tail_ms": 1.598459,
+        "slide_8000_front_ms": 5.5995,
+        "slide_8000_tail_ms": 5.59075,
+        "gc_5000_full_first_ms": 2.63725,
+        "gc_5000_full_steady_ms": 0.852541,
+        "gc_5000_partial_ms": 0.378082,
+        "gc_5000_gate_ms": 0.002708,
+        "gc_5000_enum_ms": 0.016917,
+        "gc_5000_query_ms": 0.004125,
+        "gc_5000_free_ms": 0.354041,
+        "gc_5000_sweep_ns_per_slot": 27.140609318,
+        "gc_20000_full_first_ms": 10.294542,
+        "gc_20000_full_steady_ms": 3.014333,
+        "gc_20000_partial_ms": 1.582375,
+        "gc_20000_gate_ms": 0.00975,
+        "gc_20000_enum_ms": 0.027833,
+        "gc_20000_query_ms": 0.016708,
+        "gc_20000_free_ms": 1.524625,
+        "gc_20000_sweep_ns_per_slot": 25.666531554,
+        "gc_80000_full_first_ms": 41.056625,
+        "gc_80000_full_steady_ms": 11.766417,
+        "gc_80000_partial_ms": 6.917042,
+        "gc_80000_gate_ms": 0.039542,
+        "gc_80000_enum_ms": 0.059167,
+        "gc_80000_query_ms": 0.067542,
+        "gc_80000_free_ms": 6.752667,
+        "gc_80000_sweep_ns_per_slot": 24.687279964,
+        "gc_5000_generational_ms": 0.040833,
+        "gc_5000_full_partial_ms": 0.04625,
+        "gc_20000_generational_ms": 0.054667,
+        "gc_20000_full_partial_ms": 0.086625,
+        "gc_80000_generational_ms": 0.103833,
+        "gc_80000_full_partial_ms": 0.194,
+        "placeholder_120320_ms": 0.016166,
+        "placeholder_500000_ms": 0.031041,
+        "placeholder_1000000_ms": 0.059958,
+        "placeholder_4000000_ms": 0.220209,
+        "wake_eager_ms": 10.650125,
+        "wake_lazy_ms": 1.268375
+      },
+      "comparison_kind": "same-host-reference"
+    }
+  },
+  "longer_diagnostic": {
+    "baseline": "0bee5c0ea",
+    "comparison": "fixed before/after/after/before, mean of fixture medians",
+    "runs": [
+      {
+        "label": "before",
+        "binary_sha256": "86ca624010be530c2b51426434c90ed0a5cd9bac42673c1e78be759c18f90392",
+        "metrics": {
+          "ordinary": {
+            "seconds": 0.018080167,
+            "raw": 38669963408,
+            "result": "60001"
+          },
+          "indexed": {
+            "seconds": 0.01240775,
+            "raw": 33100450872,
+            "result": "20006"
+          },
+          "proxy": {
+            "seconds": 0.096613084,
+            "raw": 156965578960,
+            "result": "200030000"
+          },
+          "descriptors": {
+            "seconds": 0.166634208,
+            "raw": 139432622432,
+            "result": "200000"
+          }
+        },
+        "samples": [
+          {
+            "name": "ordinary",
+            "round": 0,
+            "warmup": true,
+            "seconds": 0.030902791,
+            "raw": 38669963408,
+            "result": "60001"
+          },
+          {
+            "name": "ordinary",
+            "round": 1,
+            "warmup": false,
+            "seconds": 0.022575417,
+            "raw": 38669963408,
+            "result": "60001"
+          },
+          {
+            "name": "ordinary",
+            "round": 2,
+            "warmup": false,
+            "seconds": 0.019332375,
+            "raw": 38669963408,
+            "result": "60001"
+          },
+          {
+            "name": "ordinary",
+            "round": 3,
+            "warmup": false,
+            "seconds": 0.018080167,
+            "raw": 38669963408,
+            "result": "60001"
+          },
+          {
+            "name": "ordinary",
+            "round": 4,
+            "warmup": false,
+            "seconds": 0.017336834,
+            "raw": 38669963408,
+            "result": "60001"
+          },
+          {
+            "name": "ordinary",
+            "round": 5,
+            "warmup": false,
+            "seconds": 0.01766025,
+            "raw": 38669963408,
+            "result": "60001"
+          },
+          {
+            "name": "indexed",
+            "round": 0,
+            "warmup": true,
+            "seconds": 0.012420083,
+            "raw": 33100450872,
+            "result": "20006"
+          },
+          {
+            "name": "indexed",
+            "round": 1,
+            "warmup": false,
+            "seconds": 0.012451042,
+            "raw": 33100450872,
+            "result": "20006"
+          },
+          {
+            "name": "indexed",
+            "round": 2,
+            "warmup": false,
+            "seconds": 0.012073167,
+            "raw": 33100450872,
+            "result": "20006"
+          },
+          {
+            "name": "indexed",
+            "round": 3,
+            "warmup": false,
+            "seconds": 0.012449291,
+            "raw": 33100450872,
+            "result": "20006"
+          },
+          {
+            "name": "indexed",
+            "round": 4,
+            "warmup": false,
+            "seconds": 0.012307709,
+            "raw": 33100450872,
+            "result": "20006"
+          },
+          {
+            "name": "indexed",
+            "round": 5,
+            "warmup": false,
+            "seconds": 0.01240775,
+            "raw": 33100450872,
+            "result": "20006"
+          },
+          {
+            "name": "proxy",
+            "round": 0,
+            "warmup": true,
+            "seconds": 0.096070541,
+            "raw": 156965578960,
+            "result": "200030000"
+          },
+          {
+            "name": "proxy",
+            "round": 1,
+            "warmup": false,
+            "seconds": 0.096613084,
+            "raw": 156965578960,
+            "result": "200030000"
+          },
+          {
+            "name": "proxy",
+            "round": 2,
+            "warmup": false,
+            "seconds": 0.096730542,
+            "raw": 156965578960,
+            "result": "200030000"
+          },
+          {
+            "name": "proxy",
+            "round": 3,
+            "warmup": false,
+            "seconds": 0.09655125,
+            "raw": 156965578960,
+            "result": "200030000"
+          },
+          {
+            "name": "proxy",
+            "round": 4,
+            "warmup": false,
+            "seconds": 0.096704625,
+            "raw": 156965578960,
+            "result": "200030000"
+          },
+          {
+            "name": "proxy",
+            "round": 5,
+            "warmup": false,
+            "seconds": 0.095077667,
+            "raw": 156965578960,
+            "result": "200030000"
+          },
+          {
+            "name": "descriptors",
+            "round": 0,
+            "warmup": true,
+            "seconds": 0.167633792,
+            "raw": 139432622432,
+            "result": "200000"
+          },
+          {
+            "name": "descriptors",
+            "round": 1,
+            "warmup": false,
+            "seconds": 0.167226292,
+            "raw": 139432622432,
+            "result": "200000"
+          },
+          {
+            "name": "descriptors",
+            "round": 2,
+            "warmup": false,
+            "seconds": 0.166249875,
+            "raw": 139432622432,
+            "result": "200000"
+          },
+          {
+            "name": "descriptors",
+            "round": 3,
+            "warmup": false,
+            "seconds": 0.165626625,
+            "raw": 139432622432,
+            "result": "200000"
+          },
+          {
+            "name": "descriptors",
+            "round": 4,
+            "warmup": false,
+            "seconds": 0.166837458,
+            "raw": 139432622432,
+            "result": "200000"
+          },
+          {
+            "name": "descriptors",
+            "round": 5,
+            "warmup": false,
+            "seconds": 0.166634208,
+            "raw": 139432622432,
+            "result": "200000"
+          }
+        ],
+        "output": "\nrunning 1 test\ntest dispatch_execution_longer ... DISPATCH_MODULE_SAMPLE ordinary round=0 warmup=true seconds=0.030902791 raw=38669963408 result=60001\nDISPATCH_MODULE_SAMPLE ordinary round=1 warmup=false seconds=0.022575417 raw=38669963408 result=60001\nDISPATCH_MODULE_SAMPLE ordinary round=2 warmup=false seconds=0.019332375 raw=38669963408 result=60001\nDISPATCH_MODULE_SAMPLE ordinary round=3 warmup=false seconds=0.018080167 raw=38669963408 result=60001\nDISPATCH_MODULE_SAMPLE ordinary round=4 warmup=false seconds=0.017336834 raw=38669963408 result=60001\nDISPATCH_MODULE_SAMPLE ordinary round=5 warmup=false seconds=0.017660250 raw=38669963408 result=60001\nDISPATCH_MODULE_METRIC ordinary seconds=0.018080167 raw=38669963408 result=60001\nDISPATCH_MODULE_SAMPLE indexed round=0 warmup=true seconds=0.012420083 raw=33100450872 result=20006\nDISPATCH_MODULE_SAMPLE indexed round=1 warmup=false seconds=0.012451042 raw=33100450872 result=20006\nDISPATCH_MODULE_SAMPLE indexed round=2 warmup=false seconds=0.012073167 raw=33100450872 result=20006\nDISPATCH_MODULE_SAMPLE indexed round=3 warmup=false seconds=0.012449291 raw=33100450872 result=20006\nDISPATCH_MODULE_SAMPLE indexed round=4 warmup=false seconds=0.012307709 raw=33100450872 result=20006\nDISPATCH_MODULE_SAMPLE indexed round=5 warmup=false seconds=0.012407750 raw=33100450872 result=20006\nDISPATCH_MODULE_METRIC indexed seconds=0.012407750 raw=33100450872 result=20006\nDISPATCH_MODULE_SAMPLE proxy round=0 warmup=true seconds=0.096070541 raw=156965578960 result=200030000\nDISPATCH_MODULE_SAMPLE proxy round=1 warmup=false seconds=0.096613084 raw=156965578960 result=200030000\nDISPATCH_MODULE_SAMPLE proxy round=2 warmup=false seconds=0.096730542 raw=156965578960 result=200030000\nDISPATCH_MODULE_SAMPLE proxy round=3 warmup=false seconds=0.096551250 raw=156965578960 result=200030000\nDISPATCH_MODULE_SAMPLE proxy round=4 warmup=false seconds=0.096704625 raw=156965578960 result=200030000\nDISPATCH_MODULE_SAMPLE proxy round=5 warmup=false seconds=0.095077667 raw=156965578960 result=200030000\nDISPATCH_MODULE_METRIC proxy seconds=0.096613084 raw=156965578960 result=200030000\nDISPATCH_MODULE_SAMPLE descriptors round=0 warmup=true seconds=0.167633792 raw=139432622432 result=200000\nDISPATCH_MODULE_SAMPLE descriptors round=1 warmup=false seconds=0.167226292 raw=139432622432 result=200000\nDISPATCH_MODULE_SAMPLE descriptors round=2 warmup=false seconds=0.166249875 raw=139432622432 result=200000\nDISPATCH_MODULE_SAMPLE descriptors round=3 warmup=false seconds=0.165626625 raw=139432622432 result=200000\nDISPATCH_MODULE_SAMPLE descriptors round=4 warmup=false seconds=0.166837458 raw=139432622432 result=200000\nDISPATCH_MODULE_SAMPLE descriptors round=5 warmup=false seconds=0.166634208 raw=139432622432 result=200000\nDISPATCH_MODULE_METRIC descriptors seconds=0.166634208 raw=139432622432 result=200000\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.79s\n\n"
+      },
+      {
+        "label": "after",
+        "binary_sha256": "dc3c139883ed7596e442bc239ad27fb2d9449c1ad259f18f0c4c04698f771379",
+        "metrics": {
+          "ordinary": {
+            "seconds": 0.017975875,
+            "raw": 38669963408,
+            "result": "60001"
+          },
+          "indexed": {
+            "seconds": 0.012467417,
+            "raw": 33100450872,
+            "result": "20006"
+          },
+          "proxy": {
+            "seconds": 0.096986333,
+            "raw": 156965578960,
+            "result": "200030000"
+          },
+          "descriptors": {
+            "seconds": 0.168039958,
+            "raw": 139432622432,
+            "result": "200000"
+          }
+        },
+        "samples": [
+          {
+            "name": "ordinary",
+            "round": 0,
+            "warmup": true,
+            "seconds": 0.031397417,
+            "raw": 38669963408,
+            "result": "60001"
+          },
+          {
+            "name": "ordinary",
+            "round": 1,
+            "warmup": false,
+            "seconds": 0.022411875,
+            "raw": 38669963408,
+            "result": "60001"
+          },
+          {
+            "name": "ordinary",
+            "round": 2,
+            "warmup": false,
+            "seconds": 0.019350375,
+            "raw": 38669963408,
+            "result": "60001"
+          },
+          {
+            "name": "ordinary",
+            "round": 3,
+            "warmup": false,
+            "seconds": 0.017975875,
+            "raw": 38669963408,
+            "result": "60001"
+          },
+          {
+            "name": "ordinary",
+            "round": 4,
+            "warmup": false,
+            "seconds": 0.017378625,
+            "raw": 38669963408,
+            "result": "60001"
+          },
+          {
+            "name": "ordinary",
+            "round": 5,
+            "warmup": false,
+            "seconds": 0.017672833,
+            "raw": 38669963408,
+            "result": "60001"
+          },
+          {
+            "name": "indexed",
+            "round": 0,
+            "warmup": true,
+            "seconds": 0.012499292,
+            "raw": 33100450872,
+            "result": "20006"
+          },
+          {
+            "name": "indexed",
+            "round": 1,
+            "warmup": false,
+            "seconds": 0.012474958,
+            "raw": 33100450872,
+            "result": "20006"
+          },
+          {
+            "name": "indexed",
+            "round": 2,
+            "warmup": false,
+            "seconds": 0.012440333,
+            "raw": 33100450872,
+            "result": "20006"
+          },
+          {
+            "name": "indexed",
+            "round": 3,
+            "warmup": false,
+            "seconds": 0.012506,
+            "raw": 33100450872,
+            "result": "20006"
+          },
+          {
+            "name": "indexed",
+            "round": 4,
+            "warmup": false,
+            "seconds": 0.012403209,
+            "raw": 33100450872,
+            "result": "20006"
+          },
+          {
+            "name": "indexed",
+            "round": 5,
+            "warmup": false,
+            "seconds": 0.012467417,
+            "raw": 33100450872,
+            "result": "20006"
+          },
+          {
+            "name": "proxy",
+            "round": 0,
+            "warmup": true,
+            "seconds": 0.097247667,
+            "raw": 156965578960,
+            "result": "200030000"
+          },
+          {
+            "name": "proxy",
+            "round": 1,
+            "warmup": false,
+            "seconds": 0.096612833,
+            "raw": 156965578960,
+            "result": "200030000"
+          },
+          {
+            "name": "proxy",
+            "round": 2,
+            "warmup": false,
+            "seconds": 0.096900041,
+            "raw": 156965578960,
+            "result": "200030000"
+          },
+          {
+            "name": "proxy",
+            "round": 3,
+            "warmup": false,
+            "seconds": 0.097481125,
+            "raw": 156965578960,
+            "result": "200030000"
+          },
+          {
+            "name": "proxy",
+            "round": 4,
+            "warmup": false,
+            "seconds": 0.097067,
+            "raw": 156965578960,
+            "result": "200030000"
+          },
+          {
+            "name": "proxy",
+            "round": 5,
+            "warmup": false,
+            "seconds": 0.096986333,
+            "raw": 156965578960,
+            "result": "200030000"
+          },
+          {
+            "name": "descriptors",
+            "round": 0,
+            "warmup": true,
+            "seconds": 0.167249125,
+            "raw": 139432622432,
+            "result": "200000"
+          },
+          {
+            "name": "descriptors",
+            "round": 1,
+            "warmup": false,
+            "seconds": 0.1700525,
+            "raw": 139432622432,
+            "result": "200000"
+          },
+          {
+            "name": "descriptors",
+            "round": 2,
+            "warmup": false,
+            "seconds": 0.167403,
+            "raw": 139432622432,
+            "result": "200000"
+          },
+          {
+            "name": "descriptors",
+            "round": 3,
+            "warmup": false,
+            "seconds": 0.1685225,
+            "raw": 139432622432,
+            "result": "200000"
+          },
+          {
+            "name": "descriptors",
+            "round": 4,
+            "warmup": false,
+            "seconds": 0.168039958,
+            "raw": 139432622432,
+            "result": "200000"
+          },
+          {
+            "name": "descriptors",
+            "round": 5,
+            "warmup": false,
+            "seconds": 0.167802042,
+            "raw": 139432622432,
+            "result": "200000"
+          }
+        ],
+        "output": "\nrunning 1 test\ntest dispatch_execution_longer ... DISPATCH_MODULE_SAMPLE ordinary round=0 warmup=true seconds=0.031397417 raw=38669963408 result=60001\nDISPATCH_MODULE_SAMPLE ordinary round=1 warmup=false seconds=0.022411875 raw=38669963408 result=60001\nDISPATCH_MODULE_SAMPLE ordinary round=2 warmup=false seconds=0.019350375 raw=38669963408 result=60001\nDISPATCH_MODULE_SAMPLE ordinary round=3 warmup=false seconds=0.017975875 raw=38669963408 result=60001\nDISPATCH_MODULE_SAMPLE ordinary round=4 warmup=false seconds=0.017378625 raw=38669963408 result=60001\nDISPATCH_MODULE_SAMPLE ordinary round=5 warmup=false seconds=0.017672833 raw=38669963408 result=60001\nDISPATCH_MODULE_METRIC ordinary seconds=0.017975875 raw=38669963408 result=60001\nDISPATCH_MODULE_SAMPLE indexed round=0 warmup=true seconds=0.012499292 raw=33100450872 result=20006\nDISPATCH_MODULE_SAMPLE indexed round=1 warmup=false seconds=0.012474958 raw=33100450872 result=20006\nDISPATCH_MODULE_SAMPLE indexed round=2 warmup=false seconds=0.012440333 raw=33100450872 result=20006\nDISPATCH_MODULE_SAMPLE indexed round=3 warmup=false seconds=0.012506000 raw=33100450872 result=20006\nDISPATCH_MODULE_SAMPLE indexed round=4 warmup=false seconds=0.012403209 raw=33100450872 result=20006\nDISPATCH_MODULE_SAMPLE indexed round=5 warmup=false seconds=0.012467417 raw=33100450872 result=20006\nDISPATCH_MODULE_METRIC indexed seconds=0.012467417 raw=33100450872 result=20006\nDISPATCH_MODULE_SAMPLE proxy round=0 warmup=true seconds=0.097247667 raw=156965578960 result=200030000\nDISPATCH_MODULE_SAMPLE proxy round=1 warmup=false seconds=0.096612833 raw=156965578960 result=200030000\nDISPATCH_MODULE_SAMPLE proxy round=2 warmup=false seconds=0.096900041 raw=156965578960 result=200030000\nDISPATCH_MODULE_SAMPLE proxy round=3 warmup=false seconds=0.097481125 raw=156965578960 result=200030000\nDISPATCH_MODULE_SAMPLE proxy round=4 warmup=false seconds=0.097067000 raw=156965578960 result=200030000\nDISPATCH_MODULE_SAMPLE proxy round=5 warmup=false seconds=0.096986333 raw=156965578960 result=200030000\nDISPATCH_MODULE_METRIC proxy seconds=0.096986333 raw=156965578960 result=200030000\nDISPATCH_MODULE_SAMPLE descriptors round=0 warmup=true seconds=0.167249125 raw=139432622432 result=200000\nDISPATCH_MODULE_SAMPLE descriptors round=1 warmup=false seconds=0.170052500 raw=139432622432 result=200000\nDISPATCH_MODULE_SAMPLE descriptors round=2 warmup=false seconds=0.167403000 raw=139432622432 result=200000\nDISPATCH_MODULE_SAMPLE descriptors round=3 warmup=false seconds=0.168522500 raw=139432622432 result=200000\nDISPATCH_MODULE_SAMPLE descriptors round=4 warmup=false seconds=0.168039958 raw=139432622432 result=200000\nDISPATCH_MODULE_SAMPLE descriptors round=5 warmup=false seconds=0.167802042 raw=139432622432 result=200000\nDISPATCH_MODULE_METRIC descriptors seconds=0.168039958 raw=139432622432 result=200000\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.81s\n\n"
+      },
+      {
+        "label": "after",
+        "binary_sha256": "dc3c139883ed7596e442bc239ad27fb2d9449c1ad259f18f0c4c04698f771379",
+        "metrics": {
+          "ordinary": {
+            "seconds": 0.017544958,
+            "raw": 38669963408,
+            "result": "60001"
+          },
+          "indexed": {
+            "seconds": 0.012457917,
+            "raw": 33100450872,
+            "result": "20006"
+          },
+          "proxy": {
+            "seconds": 0.097657584,
+            "raw": 156965578960,
+            "result": "200030000"
+          },
+          "descriptors": {
+            "seconds": 0.166986917,
+            "raw": 139432622432,
+            "result": "200000"
+          }
+        },
+        "samples": [
+          {
+            "name": "ordinary",
+            "round": 0,
+            "warmup": true,
+            "seconds": 0.017489666,
+            "raw": 38669963408,
+            "result": "60001"
+          },
+          {
+            "name": "ordinary",
+            "round": 1,
+            "warmup": false,
+            "seconds": 0.017503583,
+            "raw": 38669963408,
+            "result": "60001"
+          },
+          {
+            "name": "ordinary",
+            "round": 2,
+            "warmup": false,
+            "seconds": 0.017542167,
+            "raw": 38669963408,
+            "result": "60001"
+          },
+          {
+            "name": "ordinary",
+            "round": 3,
+            "warmup": false,
+            "seconds": 0.017544958,
+            "raw": 38669963408,
+            "result": "60001"
+          },
+          {
+            "name": "ordinary",
+            "round": 4,
+            "warmup": false,
+            "seconds": 0.017629125,
+            "raw": 38669963408,
+            "result": "60001"
+          },
+          {
+            "name": "ordinary",
+            "round": 5,
+            "warmup": false,
+            "seconds": 0.017661417,
+            "raw": 38669963408,
+            "result": "60001"
+          },
+          {
+            "name": "indexed",
+            "round": 0,
+            "warmup": true,
+            "seconds": 0.012428083,
+            "raw": 33100450872,
+            "result": "20006"
+          },
+          {
+            "name": "indexed",
+            "round": 1,
+            "warmup": false,
+            "seconds": 0.012457917,
+            "raw": 33100450872,
+            "result": "20006"
+          },
+          {
+            "name": "indexed",
+            "round": 2,
+            "warmup": false,
+            "seconds": 0.012420833,
+            "raw": 33100450872,
+            "result": "20006"
+          },
+          {
+            "name": "indexed",
+            "round": 3,
+            "warmup": false,
+            "seconds": 0.012485417,
+            "raw": 33100450872,
+            "result": "20006"
+          },
+          {
+            "name": "indexed",
+            "round": 4,
+            "warmup": false,
+            "seconds": 0.01241125,
+            "raw": 33100450872,
+            "result": "20006"
+          },
+          {
+            "name": "indexed",
+            "round": 5,
+            "warmup": false,
+            "seconds": 0.012460042,
+            "raw": 33100450872,
+            "result": "20006"
+          },
+          {
+            "name": "proxy",
+            "round": 0,
+            "warmup": true,
+            "seconds": 0.0964955,
+            "raw": 156965578960,
+            "result": "200030000"
+          },
+          {
+            "name": "proxy",
+            "round": 1,
+            "warmup": false,
+            "seconds": 0.098765167,
+            "raw": 156965578960,
+            "result": "200030000"
+          },
+          {
+            "name": "proxy",
+            "round": 2,
+            "warmup": false,
+            "seconds": 0.097995875,
+            "raw": 156965578960,
+            "result": "200030000"
+          },
+          {
+            "name": "proxy",
+            "round": 3,
+            "warmup": false,
+            "seconds": 0.097414542,
+            "raw": 156965578960,
+            "result": "200030000"
+          },
+          {
+            "name": "proxy",
+            "round": 4,
+            "warmup": false,
+            "seconds": 0.097657584,
+            "raw": 156965578960,
+            "result": "200030000"
+          },
+          {
+            "name": "proxy",
+            "round": 5,
+            "warmup": false,
+            "seconds": 0.096615333,
+            "raw": 156965578960,
+            "result": "200030000"
+          },
+          {
+            "name": "descriptors",
+            "round": 0,
+            "warmup": true,
+            "seconds": 0.167780125,
+            "raw": 139432622432,
+            "result": "200000"
+          },
+          {
+            "name": "descriptors",
+            "round": 1,
+            "warmup": false,
+            "seconds": 0.169849875,
+            "raw": 139432622432,
+            "result": "200000"
+          },
+          {
+            "name": "descriptors",
+            "round": 2,
+            "warmup": false,
+            "seconds": 0.1695775,
+            "raw": 139432622432,
+            "result": "200000"
+          },
+          {
+            "name": "descriptors",
+            "round": 3,
+            "warmup": false,
+            "seconds": 0.166986917,
+            "raw": 139432622432,
+            "result": "200000"
+          },
+          {
+            "name": "descriptors",
+            "round": 4,
+            "warmup": false,
+            "seconds": 0.165840417,
+            "raw": 139432622432,
+            "result": "200000"
+          },
+          {
+            "name": "descriptors",
+            "round": 5,
+            "warmup": false,
+            "seconds": 0.166088375,
+            "raw": 139432622432,
+            "result": "200000"
+          }
+        ],
+        "output": "\nrunning 1 test\ntest dispatch_execution_longer ... DISPATCH_MODULE_SAMPLE ordinary round=0 warmup=true seconds=0.017489666 raw=38669963408 result=60001\nDISPATCH_MODULE_SAMPLE ordinary round=1 warmup=false seconds=0.017503583 raw=38669963408 result=60001\nDISPATCH_MODULE_SAMPLE ordinary round=2 warmup=false seconds=0.017542167 raw=38669963408 result=60001\nDISPATCH_MODULE_SAMPLE ordinary round=3 warmup=false seconds=0.017544958 raw=38669963408 result=60001\nDISPATCH_MODULE_SAMPLE ordinary round=4 warmup=false seconds=0.017629125 raw=38669963408 result=60001\nDISPATCH_MODULE_SAMPLE ordinary round=5 warmup=false seconds=0.017661417 raw=38669963408 result=60001\nDISPATCH_MODULE_METRIC ordinary seconds=0.017544958 raw=38669963408 result=60001\nDISPATCH_MODULE_SAMPLE indexed round=0 warmup=true seconds=0.012428083 raw=33100450872 result=20006\nDISPATCH_MODULE_SAMPLE indexed round=1 warmup=false seconds=0.012457917 raw=33100450872 result=20006\nDISPATCH_MODULE_SAMPLE indexed round=2 warmup=false seconds=0.012420833 raw=33100450872 result=20006\nDISPATCH_MODULE_SAMPLE indexed round=3 warmup=false seconds=0.012485417 raw=33100450872 result=20006\nDISPATCH_MODULE_SAMPLE indexed round=4 warmup=false seconds=0.012411250 raw=33100450872 result=20006\nDISPATCH_MODULE_SAMPLE indexed round=5 warmup=false seconds=0.012460042 raw=33100450872 result=20006\nDISPATCH_MODULE_METRIC indexed seconds=0.012457917 raw=33100450872 result=20006\nDISPATCH_MODULE_SAMPLE proxy round=0 warmup=true seconds=0.096495500 raw=156965578960 result=200030000\nDISPATCH_MODULE_SAMPLE proxy round=1 warmup=false seconds=0.098765167 raw=156965578960 result=200030000\nDISPATCH_MODULE_SAMPLE proxy round=2 warmup=false seconds=0.097995875 raw=156965578960 result=200030000\nDISPATCH_MODULE_SAMPLE proxy round=3 warmup=false seconds=0.097414542 raw=156965578960 result=200030000\nDISPATCH_MODULE_SAMPLE proxy round=4 warmup=false seconds=0.097657584 raw=156965578960 result=200030000\nDISPATCH_MODULE_SAMPLE proxy round=5 warmup=false seconds=0.096615333 raw=156965578960 result=200030000\nDISPATCH_MODULE_METRIC proxy seconds=0.097657584 raw=156965578960 result=200030000\nDISPATCH_MODULE_SAMPLE descriptors round=0 warmup=true seconds=0.167780125 raw=139432622432 result=200000\nDISPATCH_MODULE_SAMPLE descriptors round=1 warmup=false seconds=0.169849875 raw=139432622432 result=200000\nDISPATCH_MODULE_SAMPLE descriptors round=2 warmup=false seconds=0.169577500 raw=139432622432 result=200000\nDISPATCH_MODULE_SAMPLE descriptors round=3 warmup=false seconds=0.166986917 raw=139432622432 result=200000\nDISPATCH_MODULE_SAMPLE descriptors round=4 warmup=false seconds=0.165840417 raw=139432622432 result=200000\nDISPATCH_MODULE_SAMPLE descriptors round=5 warmup=false seconds=0.166088375 raw=139432622432 result=200000\nDISPATCH_MODULE_METRIC descriptors seconds=0.166986917 raw=139432622432 result=200000\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.78s\n\n"
+      },
+      {
+        "label": "before",
+        "binary_sha256": "86ca624010be530c2b51426434c90ed0a5cd9bac42673c1e78be759c18f90392",
+        "metrics": {
+          "ordinary": {
+            "seconds": 0.017220291,
+            "raw": 38669963408,
+            "result": "60001"
+          },
+          "indexed": {
+            "seconds": 0.012360208,
+            "raw": 33100450872,
+            "result": "20006"
+          },
+          "proxy": {
+            "seconds": 0.095048208,
+            "raw": 156965578960,
+            "result": "200030000"
+          },
+          "descriptors": {
+            "seconds": 0.16667775,
+            "raw": 139432622432,
+            "result": "200000"
+          }
+        },
+        "samples": [
+          {
+            "name": "ordinary",
+            "round": 0,
+            "warmup": true,
+            "seconds": 0.017150666,
+            "raw": 38669963408,
+            "result": "60001"
+          },
+          {
+            "name": "ordinary",
+            "round": 1,
+            "warmup": false,
+            "seconds": 0.017220291,
+            "raw": 38669963408,
+            "result": "60001"
+          },
+          {
+            "name": "ordinary",
+            "round": 2,
+            "warmup": false,
+            "seconds": 0.017215125,
+            "raw": 38669963408,
+            "result": "60001"
+          },
+          {
+            "name": "ordinary",
+            "round": 3,
+            "warmup": false,
+            "seconds": 0.017482541,
+            "raw": 38669963408,
+            "result": "60001"
+          },
+          {
+            "name": "ordinary",
+            "round": 4,
+            "warmup": false,
+            "seconds": 0.017423,
+            "raw": 38669963408,
+            "result": "60001"
+          },
+          {
+            "name": "ordinary",
+            "round": 5,
+            "warmup": false,
+            "seconds": 0.017214958,
+            "raw": 38669963408,
+            "result": "60001"
+          },
+          {
+            "name": "indexed",
+            "round": 0,
+            "warmup": true,
+            "seconds": 0.012408166,
+            "raw": 33100450872,
+            "result": "20006"
+          },
+          {
+            "name": "indexed",
+            "round": 1,
+            "warmup": false,
+            "seconds": 0.012360208,
+            "raw": 33100450872,
+            "result": "20006"
+          },
+          {
+            "name": "indexed",
+            "round": 2,
+            "warmup": false,
+            "seconds": 0.012142708,
+            "raw": 33100450872,
+            "result": "20006"
+          },
+          {
+            "name": "indexed",
+            "round": 3,
+            "warmup": false,
+            "seconds": 0.012406125,
+            "raw": 33100450872,
+            "result": "20006"
+          },
+          {
+            "name": "indexed",
+            "round": 4,
+            "warmup": false,
+            "seconds": 0.012507166,
+            "raw": 33100450872,
+            "result": "20006"
+          },
+          {
+            "name": "indexed",
+            "round": 5,
+            "warmup": false,
+            "seconds": 0.01211725,
+            "raw": 33100450872,
+            "result": "20006"
+          },
+          {
+            "name": "proxy",
+            "round": 0,
+            "warmup": true,
+            "seconds": 0.095784583,
+            "raw": 156965578960,
+            "result": "200030000"
+          },
+          {
+            "name": "proxy",
+            "round": 1,
+            "warmup": false,
+            "seconds": 0.094526542,
+            "raw": 156965578960,
+            "result": "200030000"
+          },
+          {
+            "name": "proxy",
+            "round": 2,
+            "warmup": false,
+            "seconds": 0.095206959,
+            "raw": 156965578960,
+            "result": "200030000"
+          },
+          {
+            "name": "proxy",
+            "round": 3,
+            "warmup": false,
+            "seconds": 0.095238875,
+            "raw": 156965578960,
+            "result": "200030000"
+          },
+          {
+            "name": "proxy",
+            "round": 4,
+            "warmup": false,
+            "seconds": 0.094508041,
+            "raw": 156965578960,
+            "result": "200030000"
+          },
+          {
+            "name": "proxy",
+            "round": 5,
+            "warmup": false,
+            "seconds": 0.095048208,
+            "raw": 156965578960,
+            "result": "200030000"
+          },
+          {
+            "name": "descriptors",
+            "round": 0,
+            "warmup": true,
+            "seconds": 0.166995542,
+            "raw": 139432622432,
+            "result": "200000"
+          },
+          {
+            "name": "descriptors",
+            "round": 1,
+            "warmup": false,
+            "seconds": 0.166658833,
+            "raw": 139432622432,
+            "result": "200000"
+          },
+          {
+            "name": "descriptors",
+            "round": 2,
+            "warmup": false,
+            "seconds": 0.167702042,
+            "raw": 139432622432,
+            "result": "200000"
+          },
+          {
+            "name": "descriptors",
+            "round": 3,
+            "warmup": false,
+            "seconds": 0.16667775,
+            "raw": 139432622432,
+            "result": "200000"
+          },
+          {
+            "name": "descriptors",
+            "round": 4,
+            "warmup": false,
+            "seconds": 0.16787525,
+            "raw": 139432622432,
+            "result": "200000"
+          },
+          {
+            "name": "descriptors",
+            "round": 5,
+            "warmup": false,
+            "seconds": 0.164626208,
+            "raw": 139432622432,
+            "result": "200000"
+          }
+        ],
+        "output": "\nrunning 1 test\ntest dispatch_execution_longer ... DISPATCH_MODULE_SAMPLE ordinary round=0 warmup=true seconds=0.017150666 raw=38669963408 result=60001\nDISPATCH_MODULE_SAMPLE ordinary round=1 warmup=false seconds=0.017220291 raw=38669963408 result=60001\nDISPATCH_MODULE_SAMPLE ordinary round=2 warmup=false seconds=0.017215125 raw=38669963408 result=60001\nDISPATCH_MODULE_SAMPLE ordinary round=3 warmup=false seconds=0.017482541 raw=38669963408 result=60001\nDISPATCH_MODULE_SAMPLE ordinary round=4 warmup=false seconds=0.017423000 raw=38669963408 result=60001\nDISPATCH_MODULE_SAMPLE ordinary round=5 warmup=false seconds=0.017214958 raw=38669963408 result=60001\nDISPATCH_MODULE_METRIC ordinary seconds=0.017220291 raw=38669963408 result=60001\nDISPATCH_MODULE_SAMPLE indexed round=0 warmup=true seconds=0.012408166 raw=33100450872 result=20006\nDISPATCH_MODULE_SAMPLE indexed round=1 warmup=false seconds=0.012360208 raw=33100450872 result=20006\nDISPATCH_MODULE_SAMPLE indexed round=2 warmup=false seconds=0.012142708 raw=33100450872 result=20006\nDISPATCH_MODULE_SAMPLE indexed round=3 warmup=false seconds=0.012406125 raw=33100450872 result=20006\nDISPATCH_MODULE_SAMPLE indexed round=4 warmup=false seconds=0.012507166 raw=33100450872 result=20006\nDISPATCH_MODULE_SAMPLE indexed round=5 warmup=false seconds=0.012117250 raw=33100450872 result=20006\nDISPATCH_MODULE_METRIC indexed seconds=0.012360208 raw=33100450872 result=20006\nDISPATCH_MODULE_SAMPLE proxy round=0 warmup=true seconds=0.095784583 raw=156965578960 result=200030000\nDISPATCH_MODULE_SAMPLE proxy round=1 warmup=false seconds=0.094526542 raw=156965578960 result=200030000\nDISPATCH_MODULE_SAMPLE proxy round=2 warmup=false seconds=0.095206959 raw=156965578960 result=200030000\nDISPATCH_MODULE_SAMPLE proxy round=3 warmup=false seconds=0.095238875 raw=156965578960 result=200030000\nDISPATCH_MODULE_SAMPLE proxy round=4 warmup=false seconds=0.094508041 raw=156965578960 result=200030000\nDISPATCH_MODULE_SAMPLE proxy round=5 warmup=false seconds=0.095048208 raw=156965578960 result=200030000\nDISPATCH_MODULE_METRIC proxy seconds=0.095048208 raw=156965578960 result=200030000\nDISPATCH_MODULE_SAMPLE descriptors round=0 warmup=true seconds=0.166995542 raw=139432622432 result=200000\nDISPATCH_MODULE_SAMPLE descriptors round=1 warmup=false seconds=0.166658833 raw=139432622432 result=200000\nDISPATCH_MODULE_SAMPLE descriptors round=2 warmup=false seconds=0.167702042 raw=139432622432 result=200000\nDISPATCH_MODULE_SAMPLE descriptors round=3 warmup=false seconds=0.166677750 raw=139432622432 result=200000\nDISPATCH_MODULE_SAMPLE descriptors round=4 warmup=false seconds=0.167875250 raw=139432622432 result=200000\nDISPATCH_MODULE_SAMPLE descriptors round=5 warmup=false seconds=0.164626208 raw=139432622432 result=200000\nDISPATCH_MODULE_METRIC descriptors seconds=0.166677750 raw=139432622432 result=200000\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.76s\n\n"
+      }
+    ],
+    "ratios": {
+      "ordinary": 1.0062428368493124,
+      "indexed": 1.006354015942695,
+      "proxy": 1.0155619581235005,
+      "descriptors": 1.00514508093346
+    }
+  },
+  "validation_scope": "Full engine and SQLite runs preceded restoration of the two short hot numeric arms. The final VM suite, focused source audits, boundary receipts and release recursion tests were rerun after restoration. Other engine crates and SQLite code did not change.",
+  "unchanged_gc_source_sha256_from_pre_dispatch": {
+    "rust/engine/ironhorse-vm/src/interp/gc.rs": "b597488ced82e5b906fd164de6f14c7636ee70c976c8ef1cb69e39d1919ec70e",
+    "rust/engine/ironhorse-vm/src/interp/gc_tables.rs": "c22a1871a9e1544c8077479e774ab13c544ea4f33fcbce259dac4a608c85eda1",
+    "rust/engine/ironhorse-snapshot/tests/gc_bench.rs": "da4b9eb6756c91d0e3f66628a14dec664c6106934da7ad0db3f0708962f792da"
+  },
+  "pinned_gate": {
+    "provenance": {
+      "commit": "1035373aa9c1a6f22962fe9f2e80ab09d55bc120",
+      "rustc": "rustc 1.91.1 (ed61e7d7e 2025-11-07)",
+      "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+      "machine": "arm64",
+      "cpu": "arm",
+      "fixture_sha256": "57186d5e665baee27203114dfad6615889863e3099fa57ca319d6927f6bda46d",
+      "build_environment": {
+        "CARGO_INCREMENTAL": "0",
+        "RUSTFLAGS": null,
+        "CARGO_ENCODED_RUSTFLAGS": null,
+        "RUST_MIN_STACK": "33554432",
+        "RUSTUP_TOOLCHAIN": null,
+        "CARGO_BUILD_TARGET": null
+      }
+    },
+    "medians": {
+      "dispatch_ms": 1026.484542,
+      "slots_ms": 469.095167,
+      "chunks_ms": 30.314666,
+      "attached_detached_ms": 18.544083,
+      "attached_resident_ms": 26.618,
+      "attached_faulting_ms": 26.625041,
+      "slide_500_front_ms": 1.196208,
+      "slide_500_tail_ms": 0.828834,
+      "slide_2000_front_ms": 2.343709,
+      "slide_2000_tail_ms": 0.91575,
+      "slide_8000_front_ms": 6.977792,
+      "slide_8000_tail_ms": 2.831709,
+      "gc_5000_full_first_ms": 2.670666,
+      "gc_5000_full_steady_ms": 0.788708,
+      "gc_5000_partial_ms": 0.385957,
+      "gc_5000_gate_ms": 0.002625,
+      "gc_5000_enum_ms": 0.014542,
+      "gc_5000_query_ms": 0.004375,
+      "gc_5000_free_ms": 0.362833,
+      "gc_5000_sweep_ns_per_slot": 25.018616246,
+      "gc_20000_full_first_ms": 10.471375,
+      "gc_20000_full_steady_ms": 2.826833,
+      "gc_20000_partial_ms": 1.631334,
+      "gc_20000_gate_ms": 0.009833,
+      "gc_20000_enum_ms": 0.028,
+      "gc_20000_query_ms": 0.016917,
+      "gc_20000_free_ms": 1.576584,
+      "gc_20000_sweep_ns_per_slot": 23.457509906,
+      "gc_80000_full_first_ms": 42.388,
+      "gc_80000_full_steady_ms": 11.198125,
+      "gc_80000_partial_ms": 7.038833,
+      "gc_80000_gate_ms": 0.037375,
+      "gc_80000_enum_ms": 0.059,
+      "gc_80000_query_ms": 0.066458,
+      "gc_80000_free_ms": 6.872583,
+      "gc_80000_sweep_ns_per_slot": 23.152615895,
+      "gc_5000_generational_ms": 0.039916,
+      "gc_5000_full_partial_ms": 0.042333,
+      "gc_20000_generational_ms": 0.050333,
+      "gc_20000_full_partial_ms": 0.068375,
+      "gc_80000_generational_ms": 0.095542,
+      "gc_80000_full_partial_ms": 0.187,
+      "placeholder_120320_ms": 0.02175,
+      "placeholder_500000_ms": 0.035667,
+      "placeholder_1000000_ms": 0.058834,
+      "placeholder_4000000_ms": 0.2625,
+      "wake_eager_ms": 10.659666,
+      "wake_lazy_ms": 1.432541
+    },
+    "maximum_ratio": 1.25,
+    "failures": [
+      "gc_20000_enum_ms: 1.273x > 1.250x"
+    ],
+    "reference_provenance": {
+      "commit": "51b99651b63d4e652f9af4eae603422783233182",
+      "rustc": "rustc 1.91.1 (ed61e7d7e 2025-11-07)",
+      "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+      "machine": "arm64",
+      "cpu": "arm",
+      "fixture_sha256": "57186d5e665baee27203114dfad6615889863e3099fa57ca319d6927f6bda46d",
+      "build_environment": {
+        "CARGO_INCREMENTAL": "0",
+        "RUSTFLAGS": null,
+        "CARGO_ENCODED_RUSTFLAGS": null,
+        "RUST_MIN_STACK": "33554432",
+        "RUSTUP_TOOLCHAIN": null,
+        "CARGO_BUILD_TARGET": null
+      }
+    },
+    "reference_medians": {
+      "dispatch_ms": 991.498875,
+      "slots_ms": 452.322667,
+      "chunks_ms": 28.199042,
+      "attached_detached_ms": 17.982917,
+      "attached_resident_ms": 27.06175,
+      "attached_faulting_ms": 27.430542,
+      "slide_500_front_ms": 1.063292,
+      "slide_500_tail_ms": 0.826458,
+      "slide_2000_front_ms": 2.036208,
+      "slide_2000_tail_ms": 2.034875,
+      "slide_8000_front_ms": 7.257,
+      "slide_8000_tail_ms": 7.33275,
+      "gc_5000_full_first_ms": 2.571916,
+      "gc_5000_full_steady_ms": 0.825125,
+      "gc_5000_partial_ms": 0.364959,
+      "gc_5000_gate_ms": 0.002459,
+      "gc_5000_enum_ms": 0.015042,
+      "gc_5000_query_ms": 0.004042,
+      "gc_5000_free_ms": 0.343208,
+      "gc_5000_sweep_ns_per_slot": 26.99760417,
+      "gc_20000_full_first_ms": 10.349917,
+      "gc_20000_full_steady_ms": 3.033875,
+      "gc_20000_partial_ms": 1.534333,
+      "gc_20000_gate_ms": 0.009584,
+      "gc_20000_enum_ms": 0.022,
+      "gc_20000_query_ms": 0.015375,
+      "gc_20000_free_ms": 1.487542,
+      "gc_20000_sweep_ns_per_slot": 24.228891444,
+      "gc_80000_full_first_ms": 41.135875,
+      "gc_80000_full_steady_ms": 11.632,
+      "gc_80000_partial_ms": 6.70975,
+      "gc_80000_gate_ms": 0.0415,
+      "gc_80000_enum_ms": 0.061792,
+      "gc_80000_query_ms": 0.069458,
+      "gc_80000_free_ms": 6.527583,
+      "gc_80000_sweep_ns_per_slot": 23.742671355,
+      "gc_5000_generational_ms": 0.037333,
+      "gc_5000_full_partial_ms": 0.049167,
+      "gc_20000_generational_ms": 0.048458,
+      "gc_20000_full_partial_ms": 0.068792,
+      "gc_80000_generational_ms": 0.102541,
+      "gc_80000_full_partial_ms": 0.177541,
+      "placeholder_120320_ms": 0.019,
+      "placeholder_500000_ms": 0.03325,
+      "placeholder_1000000_ms": 0.0625,
+      "placeholder_4000000_ms": 0.22675,
+      "wake_eager_ms": 13.051709,
+      "wake_lazy_ms": 1.595792
+    },
+    "comparison_kind": "same-host-reference"
+  },
+  "qualification": "Property and environment increments use fixed ABBA comparisons. Final short controls use a fixed before/all-handlers/revised/revised/all-handlers/before comparison, with unchanged property fixtures. Each comparison measures the cumulative candidate against the pre-dispatch baseline, not solely the latest increment. Both runs per revision retain fixture medians and raw outputs. The short controls retain substantial slowdowns, including run-order variation; the longer 20,000-iteration ABBA diagnostic preserves all warmups and samples but changes pressure and cadence and does not disprove those observations. Neither diagnostic replaces the full pinned gate or its failures. The final source keeps TO_NUMERIC and INCREMENT in the loop; emitted-symbol inspection did not show helper calls and the short comparison did not establish a causal benefit from this restoration. Previous factoring measurements, including the 47/48 pinned result in 1a-final-factoring.json, remain unchanged. No threshold, baseline or release-profile changes."
+}

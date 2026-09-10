@@ -79,3 +79,37 @@ fn iterator_method_throw_reaches_outer_handler() {
 fn unbound_typeof_keeps_its_exception() {
     check("var n=typeof dispatchUnboundName; var caught=0; try{dispatchUnboundName}catch(e){caught=e instanceof ReferenceError?1:2} n+':'+caught;", "undefined:1", 5230008);
 }
+
+#[test]
+fn private_accessors_preserve_receiver_and_throw_identity() {
+    check("class C { #x=3; get #y(){throw this.#x} set #y(v){this.#x=v} run(){this.#y=7;try{return this.#y}catch(e){return e}} } new C().run();", "7", 11110376);
+}
+
+#[test]
+fn super_accessors_keep_this_and_propagate_throws() {
+    check("class A {get x(){throw this.y} set x(v){this.y=v}} class B extends A {run(){super.x=7;try{return super['x']}catch(e){return e}}} new B().run();", "7", 11717224);
+}
+
+#[test]
+fn numeric_coercion_and_membership_preserve_throws() {
+    check("var o={[Symbol.toPrimitive](){throw 3}},p=new Proxy({}, {has(){throw 7}}),n=0; try{o++;n=100}catch(e){n+=e} try{'x' in p;n=100}catch(e){n+=e} n;", "10", 10167464);
+}
+
+#[test]
+fn getter_from_an_earlier_crank_unwinds_to_the_current_buffer() {
+    let mut vm = Interp::new();
+    let (code, symbols) =
+        ironhorse_compile::compile_atoms("var dispatchObject={get x(){throw 9}};")
+            .expect("compiles");
+    vm.link_intrinsics(&parse_symbols(&symbols));
+    assert!(vm.run(&code).completed);
+    let (code, symbols) =
+        ironhorse_compile::compile_atoms("var n=0;try{dispatchObject.x;n=100}catch(e){n=e}n+1;")
+            .expect("compiles");
+    let code = vm
+        .relink_crank(&code, &parse_symbols(&symbols))
+        .expect("relinks");
+    let out = vm.run(&code);
+    assert!(out.completed, "{:?}", out.halt);
+    assert_eq!(out.result, "10");
+}

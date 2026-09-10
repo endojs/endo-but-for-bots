@@ -28,6 +28,9 @@ const SRC: &str = concat!(
     "\n",
     include_str!("../src/interp/dispatch.rs"),
     include_str!("../src/interp/dispatch/property_read.rs"),
+    include_str!("../src/interp/dispatch/private.rs"),
+    include_str!("../src/interp/dispatch/super_property.rs"),
+    include_str!("../src/interp/dispatch/operators.rs"),
     include_str!("../src/interp/dispatch/environment.rs"),
     include_str!("../src/interp/dispatch/iteration.rs"),
     include_str!("../src/interp/dispatch/property_write.rs")
@@ -236,6 +239,9 @@ fn control_scan_rejects_missing_depth_and_meter_guards() {
 
 const HANDLERS: &[&str] = &[
     include_str!("../src/interp/dispatch/property_read.rs"),
+    include_str!("../src/interp/dispatch/private.rs"),
+    include_str!("../src/interp/dispatch/super_property.rs"),
+    include_str!("../src/interp/dispatch/operators.rs"),
     include_str!("../src/interp/dispatch/environment.rs"),
     include_str!("../src/interp/dispatch/iteration.rs"),
     include_str!("../src/interp/dispatch/property_write.rs"),
@@ -353,5 +359,26 @@ fn handler_lock_rejects_discarded_errors_and_consumed_unwinds() {
     for source in HANDLERS {
         let mutated = format!("{source}\nfn bad() {{ match result {{ Err(Step::Unwound(t)) => Ok(()), other => other }} }}");
         assert!(handler_consumes_transfer(&mutated));
+    }
+}
+
+#[test]
+fn source_roster_covers_every_dispatch_child() {
+    let mut directories =
+        vec![std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/interp/dispatch")];
+    while let Some(directory) = directories.pop() {
+        for entry in std::fs::read_dir(directory).expect("dispatch directory") {
+            let path = entry.expect("directory entry").path();
+            if path.is_dir() {
+                directories.push(path);
+            } else if path.extension().is_some_and(|extension| extension == "rs") {
+                let source = std::fs::read_to_string(&path).expect("Rust source");
+                assert!(
+                    HANDLERS.contains(&source.as_str()),
+                    "{} needs source-lock enrollment",
+                    path.display()
+                );
+            }
+        }
     }
 }
