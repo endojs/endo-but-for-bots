@@ -136,8 +136,8 @@ var o={};Object.defineProperty(o,'constructor',d);o.constructor=1;'done'";
         "both engines must abort: {run:?}",
     );
     assert!(
-        matches!(run.ironhorse_halt, Halt::StackOverflow(_)),
-        "ironhorse must report a bounded stack overflow, got {:?}",
+        matches!(run.ironhorse_halt, Halt::ReentryLimit { depth, limit } if depth > limit),
+        "ironhorse must report the native reentry limit, got {:?}",
         run.ironhorse_halt,
     );
 }
