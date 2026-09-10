@@ -3593,15 +3593,26 @@ impl Interp {
         // Content-key chunks intentionally remain lazy. This checks shapes,
         // live slot identities, and chunk coordinates, without deriving keys
         // or deduplicating the historically admitted duplicate-key entries.
-        for value in arrays
+        for (_, _, items) in arrays.iter().chain(&index_props) {
+            for &(_, value) in items {
+                // Mapped arguments retain formal-parameter cells as internal
+                // index values. These are not ordinary guest value slots.
+                if let (Kind::Closure, Payload::Reference(cell)) = (value.kind, value.value) {
+                    if cell.is_null()
+                        || cell.0 >= self.slots.capacity()
+                        || self.slots.is_free_index(cell)
+                    {
+                        return Err(refuse("mapped argument cell is not live"));
+                    }
+                    self.validate_restore_value_shape(self.slots.get(cell), ROW)?;
+                } else {
+                    self.validate_restore_value_shape(value, ROW)?;
+                }
+            }
+        }
+        for value in collections
             .iter()
-            .chain(&index_props)
-            .flat_map(|row| row.2.iter().map(|(_, value)| *value))
-            .chain(
-                collections
-                    .iter()
-                    .flat_map(|row| row.3.iter().flat_map(|(key, value)| [*key, *value])),
-            )
+            .flat_map(|row| row.3.iter().flat_map(|(key, value)| [*key, *value]))
         {
             self.validate_restore_value_shape(value, ROW)?;
         }

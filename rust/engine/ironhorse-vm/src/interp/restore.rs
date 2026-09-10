@@ -77,6 +77,7 @@ impl RestoreSession {
         self.validate_callable_graph()?;
         self.validate_suspended_cursors()?;
         self.validate_accessor_backing()?;
+        self.validate_mapped_arguments()?;
         if !self.interp.restored_promise_capabilities_are_valid() {
             return Err(RestoreError {
                 row: "promise_cluster",
@@ -97,6 +98,28 @@ impl RestoreSession {
             });
         }
         Ok(self.interp)
+    }
+
+    fn validate_mapped_arguments(&self) -> Result<(), RestoreError> {
+        for (owner, data) in self
+            .interp
+            .arrays
+            .iter()
+            .chain(self.interp.index_props.iter())
+        {
+            if data
+                .items()
+                .values()
+                .any(|value| value.kind == Kind::Closure)
+                && !self.interp.arguments_objects.contains(owner)
+            {
+                return Err(RestoreError {
+                    row: "ArgumentsBrands",
+                    reason: "mapped cells require an arguments owner",
+                });
+            }
+        }
+        Ok(())
     }
 
     fn validate_suspended_cursors(&self) -> Result<(), RestoreError> {
@@ -1235,6 +1258,53 @@ mod tests {
             interp.symbol_registry_snapshot(),
             vec![(vec![b'a', 0], descriptor.0)]
         );
+    }
+
+    #[test]
+    fn bulk_cells_require_live_guest_values_and_an_arguments_brand() {
+        for array_layout in [false, true] {
+            for case in 0..6 {
+                let mut session = Interp::begin_restore();
+                let interp = &mut session.interp;
+                let owner = interp.new_object();
+                let cell = interp.slots.alloc(Slot::integer(42));
+                let mut value = Slot::of(Kind::Closure, Payload::Reference(cell));
+                match case {
+                    0 => {}
+                    1 => interp.slots.free(cell),
+                    2 => value.value = Payload::Reference(crate::SlotIndex::NULL),
+                    3 => {
+                        value.value = Payload::Reference(crate::SlotIndex(interp.slots.capacity()))
+                    }
+                    4 => value.value = Payload::Integer(0),
+                    _ => {
+                        *interp.slots.get_mut(cell) =
+                            Slot::of(Kind::Closure, Payload::Reference(cell))
+                    }
+                }
+                let before_arrays = interp.arrays_snapshot();
+                let before_indices = interp.index_props_snapshot();
+                let rows = vec![(owner.0, 1, vec![(0, value)])];
+                let (arrays, indices) = if array_layout {
+                    (rows, vec![])
+                } else {
+                    (vec![], rows)
+                };
+                let result = interp.restore_bulk_side_tables(arrays, indices, vec![], vec![]);
+                assert_eq!(result.is_ok(), case == 0, "case {case}: {result:?}");
+                if case != 0 {
+                    assert_eq!(interp.arrays_snapshot(), before_arrays);
+                    assert_eq!(interp.index_props_snapshot(), before_indices);
+                } else {
+                    assert!(session.validate_mapped_arguments().is_err());
+                    session
+                        .interp
+                        .restore_arguments_brands(vec![owner.0])
+                        .unwrap();
+                    session.validate_mapped_arguments().unwrap();
+                }
+            }
+        }
     }
 
     #[test]
