@@ -17,6 +17,40 @@ impl std::fmt::Display for RestoreError {
 
 impl std::error::Error for RestoreError {}
 
+// Validate only chains reconstruction is about to traverse. In particular, do
+// not materialize every lazy arena page just to rebuild boot metadata. Completed
+// tails are shared across owners, just as the derived property index permits.
+pub(super) fn validate_restore_chain(
+    slots: &SlotArena,
+    owner: crate::value::SlotIndex,
+    complete: &mut std::collections::HashSet<crate::value::SlotIndex>,
+) -> Result<(), RestoreError> {
+    let refuse = |reason| RestoreError {
+        row: "property_chain",
+        reason,
+    };
+    if owner.is_null() || owner.0 >= slots.capacity() || slots.is_free_index(owner) {
+        return Err(refuse("owner is not a live slot"));
+    }
+    let instance = slots.get(owner);
+    if instance.kind != Kind::Instance || !matches!(instance.value, Payload::Reference(_)) {
+        return Err(refuse("owner is not an instance"));
+    }
+    let mut current = instance.next;
+    let mut path = std::collections::HashSet::new();
+    while !current.is_null() && !complete.contains(&current) {
+        if current.0 >= slots.capacity() || slots.is_free_index(current) {
+            return Err(refuse("property link is not a live slot"));
+        }
+        if current == owner || !path.insert(current) {
+            return Err(refuse("cyclic property chain"));
+        }
+        current = slots.get(current).next;
+    }
+    complete.extend(path);
+    Ok(())
+}
+
 impl Interp {
     pub(super) fn validate_restore_owner(
         &self,
@@ -201,6 +235,7 @@ impl Interp {
         if global.kind != Kind::Instance || !matches!(global.value, Payload::Reference(_)) {
             return Err(refuse("global root is not an instance"));
         }
+        validate_restore_chain(&slots, self.global_obj, &mut Default::default())?;
         self.slots = slots;
         self.chunks = chunks;
         self.stack = stack;
@@ -237,7 +272,7 @@ impl Interp {
         // install's PROPERTY slot travels in the arena but its side-table
         // getter entry does not; re-derive it from the boot seeds (the
         // persist gate admits no other entry at a seed key).
-        self.rebuild_boot_accessors();
+        self.rebuild_boot_accessors()?;
         Ok(())
     }
 
@@ -667,7 +702,13 @@ impl Interp {
     /// seed key can only mean the boot accessor. A guest deletion or
     /// data-property redefinition leaves no accessor-flagged slot and
     /// rebuilds nothing.
-    pub(super) fn rebuild_boot_accessors(&mut self) {
+    pub(super) fn rebuild_boot_accessors(&mut self) -> Result<(), RestoreError> {
+        let mut complete = std::collections::HashSet::new();
+        for &(proto, key, ..) in &self.proto_accessors {
+            if self.boot_accessor_key_id(key).is_some() {
+                validate_restore_chain(&self.slots, proto, &mut complete)?;
+            }
+        }
         let seeds = std::mem::take(&mut self.proto_accessors);
         for &(proto, key, getter, setter, _) in &seeds {
             let Some(pid) = self.boot_accessor_key_id(key) else {
@@ -691,6 +732,7 @@ impl Interp {
             );
         }
         self.proto_accessors = seeds;
+        Ok(())
     }
 
     /// Quiescent snapshot of the `error_data` side table (ledger
@@ -2928,8 +2970,7 @@ impl Interp {
         // idempotent derivation now so well-known-symbol seeds (notably
         // `%Iterator.prototype%[@@toStringTag]`) regain their native pair
         // before serialized guest accessor rows are overlaid.
-        self.rebuild_boot_accessors();
-        true
+        self.rebuild_boot_accessors().is_ok()
     }
 
     /// Quiescent snapshot of the `index_props` side table (ledger
@@ -3038,30 +3079,14 @@ impl Interp {
     /// exactly. Used at restore, where the arena round-trips the chain but the
     /// map (plain side-table state, not arena-resident) must be re-derived.
     ///
-    /// Because this runs on the *restored* arena — which on the malformed-atom
-    /// fuzz path may hold arbitrary bytes — every index is bounds-checked
-    /// against the arena capacity and the walk is capped at the slot count, so
-    /// a garbage or cyclic `next` pointer stops the walk (yielding a partial /
-    /// empty index) instead of panicking or hanging. On a well-formed snapshot
-    /// the caps are never reached and the reconstruction is exact.
+    /// Initial adoption validates this chain before installing the arenas.
     pub(super) fn rebuild_global_props(&mut self) {
         self.global_props.clear();
-        let cap = self.slots.capacity();
-        // A valid chain visits each of the global object's own properties
-        // once; capping at the slot count makes a fuzzer-induced cycle
-        // terminate rather than spin.
-        let in_bounds = |idx: crate::value::SlotIndex| !idx.is_null() && idx.0 < cap;
-        if !in_bounds(self.global_obj) {
-            return;
-        }
         let mut cur = self.slots.get(self.global_obj).next;
-        let mut budget = cap as usize;
-        while in_bounds(cur) && budget > 0 {
+        while !cur.is_null() {
             let s = self.slots.get(cur);
-            let (id, next) = (s.id, s.next);
-            self.global_props.insert(id, cur);
-            cur = next;
-            budget -= 1;
+            self.global_props.insert(s.id, cur);
+            cur = s.next;
         }
     }
 

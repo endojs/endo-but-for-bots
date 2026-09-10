@@ -631,6 +631,71 @@ mod tests {
     }
 
     #[test]
+    fn reconstruction_refuses_malformed_property_chains() {
+        for case in 0..4 {
+            let mut source = Interp::new();
+            let owner = source.global_obj;
+            let property = source.slots.alloc(Slot::undefined());
+            source.slots.get_mut(owner).next = property;
+            let expected = match case {
+                0 => {
+                    source.slots.get_mut(property).next = property;
+                    "cyclic property chain"
+                }
+                1 => {
+                    source.slots.get_mut(property).next = owner;
+                    "cyclic property chain"
+                }
+                2 => {
+                    source.slots.free(property);
+                    "property link is not a live slot"
+                }
+                _ => {
+                    source.slots.get_mut(property).next =
+                        crate::value::SlotIndex(source.slots.capacity());
+                    "property link is not a live slot"
+                }
+            };
+            let meter = source.meter_state();
+            let mut session = Interp::begin_restore();
+            let error = session
+                .restore_snapshot_state(source.slots, source.chunks, vec![], vec![], meter)
+                .unwrap_err();
+            assert_eq!(error.row, "property_chain");
+            assert_eq!(error.reason, expected);
+            assert_eq!(session.finish().err().unwrap(), error);
+        }
+    }
+
+    #[test]
+    fn boot_reconstruction_validates_even_a_suffix_after_the_matching_key() {
+        let mut interp = Interp::new();
+        let (owner, key, ..) = interp.proto_accessors[0];
+        let ProtoAccessorKey::String(name) = key else {
+            panic!("fixture needs a string-keyed seed");
+        };
+        let id = interp.intern_key_unmetered(name);
+        let mut property = Slot::undefined();
+        property.id = id;
+        let property = interp.slots.alloc(property);
+        interp.slots.get_mut(owner).next = property;
+        interp.slots.get_mut(property).next = property;
+        assert_eq!(
+            interp.rebuild_boot_accessors().unwrap_err().reason,
+            "cyclic property chain"
+        );
+        // Acyclic shared tails are legal and need not be copied or unlinked.
+        interp.slots.get_mut(property).next = crate::value::SlotIndex::NULL;
+        let other = interp.new_object();
+        interp.slots.get_mut(other).next = property;
+        let mut complete = Default::default();
+        super::super::persist::validate_restore_chain(&interp.slots, owner, &mut complete).unwrap();
+        super::super::persist::validate_restore_chain(&interp.slots, other, &mut complete).unwrap();
+        assert_eq!(interp.slots.get(other).next, property);
+        interp.rebuild_boot_accessors().unwrap();
+    }
+
+    #[test]
     fn a_caught_restore_panic_cannot_reopen_the_session() {
         struct FailedBacking;
         impl crate::PageSource for FailedBacking {
