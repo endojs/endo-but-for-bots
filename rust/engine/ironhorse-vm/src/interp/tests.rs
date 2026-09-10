@@ -2565,3 +2565,155 @@ fn segment_indices_stay_stable_until_a_halted_activation_is_abandoned() {
     assert_eq!(vm.retained_code_segment_count(), 1);
     assert!(std::rc::Rc::ptr_eq(&retained, &vm.code_segments[0]));
 }
+
+#[test]
+fn promise_handler_collection_preserves_the_derived_capability() {
+    for throws in [false, true] {
+        let handler = if throws { "throw x" } else { "return x + '!'" };
+        let source = format!(
+            "var out; Promise.resolve('abcdefgh').then(function(x){{ {handler}; }}).then(function(x){{out=x;}},function(e){{out='caught:'+e;}});"
+        );
+        let (code, symbols) = ironhorse_compile::compile_atoms(&source).unwrap();
+        let names = crate::parse_symbols(&symbols);
+        let mut baseline = Interp::new();
+        baseline.link_intrinsics(&names);
+        let expected = baseline.run_bounded(&code, 20_000);
+        assert!(expected.completed, "{:?}", expected.halt);
+        // Deterministically place one collection at each instruction of this
+        // small promise chain, including inside the handler after dequeue.
+        for at in 0..baseline.n_dispatched {
+            let mut machine = Interp::new();
+            machine.link_intrinsics(&names);
+            GC_AT_STEP.with(|step| step.set(Some(at)));
+            GC_HITS.with(|hits| hits.set(0));
+            let actual = machine.run_bounded(&code, 20_000);
+            GC_AT_STEP.with(|step| step.set(None));
+            GC_HITS.with(|hits| assert_eq!(hits.get(), 1));
+            assert!(actual.completed, "step {at}: {:?}", actual.halt);
+            assert_eq!(actual.meter_raw, expected.meter_raw, "step {at}");
+            assert!(
+                machine.is_quiescent(),
+                "temporary roots leaked at step {at}"
+            );
+            let (read, symbols) = ironhorse_compile::compile_atoms("out").unwrap();
+            let read = machine
+                .relink_crank(&read, &crate::parse_symbols(&symbols))
+                .unwrap();
+            let observed = machine.run(&read);
+            assert!(observed.completed);
+            assert_eq!(
+                observed.result,
+                if throws {
+                    "caught:abcdefgh"
+                } else {
+                    "abcdefgh!"
+                }
+            );
+        }
+    }
+}
+
+#[test]
+fn finally_and_thenable_collection_preserves_settlement() {
+    for (source, expected_value) in [
+        ("var out; Promise.resolve('original-value').finally(function(){return 1;}).then(function(v){out=v;});", "original-value"),
+        ("var out; Promise.resolve({then:new Proxy(function(){},{apply:function(t,s,args){args.length=0; throw 'replacement';}})}).then(undefined,function(e){out=e;});", "replacement"),
+        ("var out; Promise.resolve('original').finally(function(){var p=Promise.resolve(1); p.then=new Proxy(function(){},{apply:function(t,s,args){args.length=0; throw 'replacement';}}); return p;}).then(undefined,function(e){out=e;});", "replacement"),
+        ("var out; Promise.resolve('original-value').finally(function(){return {then:function(resolve){resolve(1);}};}).then(function(v){out=v;});", "original-value"),
+        ("var out; Promise.resolve('original-value').finally(function(){var p=Promise.resolve(1); Object.defineProperty(p,'constructor',{get:function(){return Promise;}}); Object.defineProperty(p,'then',{get:function(){return Promise.prototype.then;}}); return p;}).then(function(v){out=v;});", "original-value"),
+        ("var dead=''; for(var i=0;i<50;i++)dead=dead+'garbage'; dead=null; var out; Promise.resolve('original-'+42).finally(function(){return 1;}).then(function(v){out=v;});", "original-42"),
+        ("var out; Promise.reject('original-value').finally(function(){return 1;}).then(undefined,function(v){out=v;});", "original-value"),
+        ("var out; Promise.resolve('original-value').finally(function(){throw 'replacement';}).then(undefined,function(v){out=v;});", "replacement"),
+    ] {
+        let (code, symbols) = ironhorse_compile::compile_atoms(source).unwrap();
+        let names = crate::parse_symbols(&symbols);
+        let mut baseline = Interp::new();
+        baseline.link_intrinsics(&names);
+        let expected = baseline.run_bounded(&code, 20_000);
+        assert!(expected.completed, "{:?}", expected.halt);
+        for at in 0..baseline.n_dispatched {
+            let mut machine = Interp::new();
+            machine.link_intrinsics(&names);
+            GC_AT_STEP.with(|step| step.set(Some(at)));
+            GC_HITS.with(|hits| hits.set(0));
+            let actual = machine.run_bounded(&code, 20_000);
+            GC_AT_STEP.with(|step| step.set(None));
+            GC_HITS.with(|hits| assert_eq!(hits.get(), 1));
+            assert!(actual.completed, "step {at}: {:?}: {source}", actual.halt);
+            assert_eq!(actual.meter_raw, expected.meter_raw, "step {at}");
+            assert!(machine.is_quiescent());
+            let (read, symbols) = ironhorse_compile::compile_atoms("out").unwrap();
+            let read = machine.relink_crank(&read, &crate::parse_symbols(&symbols)).unwrap();
+            let observed = machine.run(&read);
+            assert!(observed.completed);
+            assert_eq!(observed.result, expected_value, "step {at}: {source}");
+        }
+    }
+}
+
+#[test]
+fn promise_native_roots_preserve_halted_operand_stack() {
+    for source in [
+        "Promise.resolve(1).then(function(){ return ({haltOnlyOperand:314159})[function(){while(true){}}()]; });",
+        "Promise.resolve({then:function(){ return ({haltOnlyOperand:314159})[function(){while(true){}}()]; }});",
+        "Promise.resolve(1).finally(function(){ return ({haltOnlyOperand:314159})[function(){while(true){}}()]; });",
+        "Promise.resolve(1).finally(function(){return {then:function(){ return ({haltOnlyOperand:314159})[function(){while(true){}}()]; }};});",
+    ] {
+        let (code, symbols) = ironhorse_compile::compile_atoms(source).unwrap();
+        let mut vm = Interp::new();
+        vm.link_intrinsics(&crate::parse_symbols(&symbols));
+        let out = vm.run_bounded(&code, 2_000);
+        assert!(matches!(out.halt, Halt::StepLimit(_)), "{:?}", out.halt);
+        assert!(!vm.call_stack.is_empty(), "halted callee must remain installed");
+        assert!(!vm.cur_func.is_null());
+        let key = vm.intern_key("haltOnlyOperand");
+        let retained = vm.stack.iter().find_map(|slot| match slot.value {
+            Payload::Reference(object) if slot.kind == Kind::Reference
+                && vm.instance_get(object, key) == Slot::integer(314159) => Some(object),
+            _ => None,
+        });
+        assert!(retained.is_some(), "callee remains installed but its live caller operand disappeared: {source}; stack={}, frames={}", vm.stack.len(), vm.call_stack.len());
+        let object = retained.unwrap();
+        vm.collect_garbage();
+        assert_eq!(vm.instance_get(object, key), Slot::integer(314159));
+        let (next, names) = ironhorse_compile::compile_atoms("42").unwrap();
+        let next = vm.relink_crank(&next, &crate::parse_symbols(&names)).unwrap();
+        let out = vm.run(&next);
+        assert!(out.completed, "{:?}", out.halt);
+        assert_eq!(out.result, "42");
+        assert!(vm.is_quiescent());
+    }
+}
+#[test]
+fn promise_native_roots_preserve_stack_overflow_operands() {
+    for source in [
+        "Promise.resolve(1).then(function(){ return ({haltOnlyOperand:314159})[function spin(){return spin();}()]; });",
+        "Promise.resolve({then:function(){ return ({haltOnlyOperand:314159})[function spin(){return spin();}()]; }});",
+        "Promise.resolve(1).finally(function(){ return ({haltOnlyOperand:314159})[function spin(){return spin();}()]; });",
+        "Promise.resolve(1).finally(function(){return {then:function(){ return ({haltOnlyOperand:314159})[function spin(){return spin();}()]; }};});",
+    ] {
+        let (code, symbols) = ironhorse_compile::compile_atoms(source).unwrap();
+        let mut vm = Interp::new();
+        vm.link_intrinsics(&crate::parse_symbols(&symbols));
+        let out = vm.run_bounded(&code, 100_000);
+        assert!(matches!(out.halt, Halt::StackOverflow(_)), "{:?}", out.halt);
+        assert!(!vm.call_stack.is_empty(), "halted callee must remain installed");
+        assert!(!vm.cur_func.is_null());
+        let key = vm.intern_key("haltOnlyOperand");
+        let retained = vm.stack.iter().find_map(|slot| match slot.value {
+            Payload::Reference(object) if slot.kind == Kind::Reference
+                && vm.instance_get(object, key) == Slot::integer(314159) => Some(object),
+            _ => None,
+        });
+        assert!(retained.is_some(), "callee remains installed but its live caller operand disappeared: {source}; stack={}, frames={}", vm.stack.len(), vm.call_stack.len());
+        let object = retained.unwrap();
+        vm.collect_garbage();
+        assert_eq!(vm.instance_get(object, key), Slot::integer(314159));
+        let (next, names) = ironhorse_compile::compile_atoms("42").unwrap();
+        let next = vm.relink_crank(&next, &crate::parse_symbols(&names)).unwrap();
+        let out = vm.run(&next);
+        assert!(out.completed, "{:?}", out.halt);
+        assert_eq!(out.result, "42");
+        assert!(vm.is_quiescent());
+    }
+}
