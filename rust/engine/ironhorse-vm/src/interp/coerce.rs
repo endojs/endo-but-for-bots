@@ -137,16 +137,17 @@ impl Interp {
         Slot::of(Kind::Reference, Payload::Reference(inst))
     }
 
-    pub(super) fn value_to_string(&mut self, code: &[u8], value: Slot) -> Result<String, Step> {
-        let primitive = if value.kind == Kind::Reference {
-            self.to_primitive(code, value, true)?
-        } else {
-            value
-        };
-        if primitive.kind == Kind::Symbol {
-            return Err(self.catchable_type_error_msg("cannot coerce symbol to string".into()));
-        }
-        Ok(String::from_utf8_lossy(&self.to_string_bytes_metered(primitive)).into_owned())
+    /// ToString for a scalar-only grammar (locale, calendar, time zone or
+    /// option enumeration). Unpaired surrogates cannot satisfy that grammar.
+    pub(super) fn value_to_scalar_text(
+        &mut self,
+        code: &[u8],
+        value: Slot,
+    ) -> Result<String, Step> {
+        let units = self.to_string_units(code, value)?;
+        String::from_utf16(&units).map_err(|_| {
+            self.catchable_range_error_msg("text contains an unpaired surrogate".into())
+        })
     }
 
     /// ECMAScript `ToString`, retaining UTF-16 code units when the primitive
@@ -166,8 +167,7 @@ impl Interp {
         if let Payload::String(off) = primitive.value {
             return Ok(self.str_units(off));
         }
-        let bytes = self.to_string_bytes_metered(primitive);
-        Ok(String::from_utf8_lossy(&bytes).encode_utf16().collect())
+        Ok(self.to_string_units_metered(primitive))
     }
 
     /// ECMAScript `ToString`, retaining the resulting primitive as a String
@@ -495,18 +495,22 @@ impl Interp {
                     Some(bi_cmp(nx, &mx, ny, &my))
                 }
                 (Payload::BigInt(x), Payload::String(y)) => {
-                    let text = self.str_text(y);
-                    parse_bigint_string(&text).map(|(ny, my)| {
-                        let (nx, mx) = self.read_bigint(x);
-                        bi_cmp(nx, &mx, ny, &my)
-                    })
+                    let text = self.str_scalar_text(y);
+                    text.as_deref()
+                        .and_then(parse_bigint_string)
+                        .map(|(ny, my)| {
+                            let (nx, mx) = self.read_bigint(x);
+                            bi_cmp(nx, &mx, ny, &my)
+                        })
                 }
                 (Payload::String(x), Payload::BigInt(y)) => {
-                    let text = self.str_text(x);
-                    parse_bigint_string(&text).map(|(nx, mx)| {
-                        let (ny, my) = self.read_bigint(y);
-                        bi_cmp(nx, &mx, ny, &my)
-                    })
+                    let text = self.str_scalar_text(x);
+                    text.as_deref()
+                        .and_then(parse_bigint_string)
+                        .map(|(nx, mx)| {
+                            let (ny, my) = self.read_bigint(y);
+                            bi_cmp(nx, &mx, ny, &my)
+                        })
                 }
                 (Payload::BigInt(x), _) => {
                     let number = self.to_number_value(code, b)?;
@@ -599,9 +603,7 @@ impl Interp {
                     false
                 } else {
                     let x = match a.value {
-                        Payload::String(off) => {
-                            string_to_number(self.str_text(off).as_bytes(), true)
-                        }
+                        Payload::String(off) => self.str_number(off),
                         _ => f64::NAN,
                     };
                     let y = to_number(&b);
@@ -614,9 +616,7 @@ impl Interp {
                 } else {
                     let x = to_number(&a);
                     let y = match b.value {
-                        Payload::String(off) => {
-                            string_to_number(self.str_text(off).as_bytes(), true)
-                        }
+                        Payload::String(off) => self.str_number(off),
                         _ => f64::NAN,
                     };
                     !x.is_nan() && !y.is_nan() && x == y
@@ -785,9 +785,9 @@ impl Interp {
                 // (`fxToPrimitive` tests both `mxIsUndefined` and `mxIsNull`).
                 if !matches!(exotic.kind, Kind::Undefined | Kind::Null) {
                     let hint = match hint {
-                        PrimitiveHint::Default => b"default".as_slice(),
-                        PrimitiveHint::Number => b"number".as_slice(),
-                        PrimitiveHint::String => b"string".as_slice(),
+                        PrimitiveHint::Default => "default",
+                        PrimitiveHint::Number => "number",
+                        PrimitiveHint::String => "string",
                     };
                     let off = self.alloc_str_text(hint);
                     let result = self.call_primitive_method(
@@ -875,10 +875,7 @@ impl Interp {
         match primitive.kind {
             Kind::Integer | Kind::Number => Ok(primitive),
             Kind::String => match primitive.value {
-                Payload::String(off) => Ok(math_to_integer(string_to_number(
-                    self.str_text(off).as_bytes(),
-                    true,
-                ))),
+                Payload::String(off) => Ok(math_to_integer(self.str_number(off))),
                 _ => unreachable!(),
             },
             Kind::Boolean | Kind::Null | Kind::Undefined => Ok(Slot::number(to_number(&primitive))),

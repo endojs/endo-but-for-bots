@@ -380,7 +380,7 @@ impl Interp {
         self.template_cache = self.slots.alloc(Slot::instance(object_proto));
         let func_proto = self.slots.alloc(Slot::instance(object_proto));
         self.function_proto = func_proto;
-        let function_proto_name = self.alloc_str_text(b"");
+        let function_proto_name = self.alloc_str_text("");
         self.functions.insert(
             func_proto,
             FuncInfo {
@@ -398,7 +398,7 @@ impl Interp {
         // family. `Object.getPrototypeOf(Int8Array)` exposes the constructor;
         // `Object.getPrototypeOf(Int8Array.prototype)` exposes the prototype.
         let typed_array_ctor = self.slots.alloc(Slot::instance(func_proto));
-        let typed_array_name = self.alloc_str_text(b"TypedArray");
+        let typed_array_name = self.alloc_str_text("TypedArray");
         self.functions.insert(
             typed_array_ctor,
             FuncInfo {
@@ -418,7 +418,7 @@ impl Interp {
             .push((typed_array_ctor, "prototype", typed_array_proto));
         for (name, native) in Native::intrinsics() {
             let f = self.slots.alloc(Slot::instance(func_proto));
-            let name_chunk = self.alloc_str_text(name.as_bytes());
+            let name_chunk = self.alloc_str_text(&name);
             self.functions.insert(
                 f,
                 FuncInfo {
@@ -1243,7 +1243,7 @@ impl Interp {
         ] {
             let name = native.display_name();
             let f = self.slots.alloc(Slot::instance(ctor_proto));
-            let name_chunk = self.alloc_str_text(name.as_bytes());
+            let name_chunk = self.alloc_str_text(&name);
             self.functions.insert(
                 f,
                 FuncInfo {
@@ -1526,7 +1526,7 @@ impl Interp {
             "asyncDispose",
             "dispose",
         ] {
-            let desc = self.alloc_str_text(format!("Symbol.{}", name).as_bytes());
+            let desc = self.alloc_str_text(&format!("Symbol.{}", name));
             let d = self
                 .slots
                 .alloc(Slot::of(Kind::String, Payload::String(desc)));
@@ -1627,7 +1627,7 @@ impl Interp {
     fn alloc_named_native(&mut self, native: Native) -> crate::value::SlotIndex {
         let f = self.slots.alloc(Slot::instance(self.function_proto));
         let name = native.display_name();
-        let name_chunk = self.alloc_str_text(name.as_bytes());
+        let name_chunk = self.alloc_str_text(&name);
         self.functions.insert(
             f,
             FuncInfo {
@@ -2065,7 +2065,7 @@ impl Interp {
     /// while an indirect call reaches the same explicit evaluator gap.
     fn create_eval(&mut self) {
         let f = self.slots.alloc(Slot::instance(self.function_proto));
-        let name_chunk = self.alloc_str_text(b"eval");
+        let name_chunk = self.alloc_str_text("eval");
         self.functions.insert(
             f,
             FuncInfo {
@@ -2231,7 +2231,7 @@ impl Interp {
     fn create_proxy(&mut self) {
         let func_proto = self.function_proto;
         let f = self.slots.alloc(Slot::instance(func_proto));
-        let name_chunk = self.alloc_str_text(b"Proxy");
+        let name_chunk = self.alloc_str_text("Proxy");
         self.functions.insert(
             f,
             FuncInfo {
@@ -2244,7 +2244,7 @@ impl Interp {
         );
         self.intrinsics.insert("Proxy", f);
         let revocable = self.alloc_method(NativeMethod::ProxyRevocable);
-        let revocable_name = self.alloc_str_text(b"revocable");
+        let revocable_name = self.alloc_str_text("revocable");
         self.functions.update(&revocable, |info| {
             info.name = "revocable".to_string();
             info.name_chunk = revocable_name;
@@ -2558,7 +2558,7 @@ impl Interp {
     /// primordials with `Function.prototype.call.bind(nativeMethod)`.
     pub(super) fn alloc_method(&mut self, m: NativeMethod) -> crate::value::SlotIndex {
         let f = self.slots.alloc(Slot::instance(self.function_proto));
-        let name_chunk = self.alloc_str_text(b"");
+        let name_chunk = self.alloc_str_text("");
         self.functions.insert(
             f,
             FuncInfo {
@@ -2581,7 +2581,7 @@ impl Interp {
         arity: u32,
     ) -> crate::value::SlotIndex {
         let f = self.slots.alloc(Slot::instance(self.function_proto));
-        let name_chunk = self.alloc_str_text(name.as_bytes());
+        let name_chunk = self.alloc_str_text(&name);
         self.functions.insert(
             f,
             FuncInfo {

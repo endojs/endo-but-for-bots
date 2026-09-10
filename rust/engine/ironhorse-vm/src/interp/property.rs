@@ -1051,6 +1051,43 @@ impl Interp {
         }
     }
 
+    /// [[Get]] for fixed, non-index Intl/Temporal option fields, without
+    /// interning an ordinary negative lookup. These specification fields do
+    /// not name lazy intrinsic methods. If no global id exists, no ordinary
+    /// object can own the field; numeric index storage is outside this domain.
+    /// Exotic objects (including Proxies and functions) still enter the full
+    /// dispatcher, which must observe traps and virtual own properties.
+    /// Keeping this proof here avoids both native-specific bypasses and
+    /// persistent atom growth merely from reading absent option fields.
+    pub(super) fn mop_get_option_field(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        name: &'static str,
+        receiver: Slot,
+    ) -> Result<Slot, Step> {
+        if let Some(id) = self.symbol_ids.get(name).copied() {
+            return self.mop_get(code, inst, id, receiver);
+        }
+        let mut current = inst;
+        while !current.is_null() {
+            // These are the authoritative populations consulted by MOP Get
+            // for traps or virtual own properties. Other brands use ordinary
+            // named properties, which cannot exist without an interned id.
+            if self.proxies.contains_key(&current)
+                || self.arrays.contains_key(&current)
+                || self.typed_arrays.contains_key(&current)
+                || self.wrapper_data.contains_key(&current)
+                || self.functions.contains_key(&current)
+            {
+                let id = self.intern_static_key(name);
+                return self.mop_get(code, current, id, receiver);
+            }
+            current = self.instance_prototype(current);
+        }
+        Ok(Slot::undefined())
+    }
+
     /// `O.[[Get]](P, Receiver)`.
     pub(super) fn mop_get(
         &mut self,
@@ -1314,7 +1351,7 @@ impl Interp {
             self.symbol_key_ids.iter().find(|(_, key)| **key == id)
         {
             let description = match self.slots.get(descriptor).value {
-                Payload::String(offset) => self.str_text(offset),
+                Payload::String(offset) => self.str_text_lossy(offset),
                 _ => String::new(),
             };
             format!("[{description}]")

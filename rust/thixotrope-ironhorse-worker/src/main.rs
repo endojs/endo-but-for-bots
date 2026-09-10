@@ -54,6 +54,46 @@ impl SourceCompiler for Compiler {
             },
         }
     }
+
+    fn compile_source_units(
+        &self,
+        source: &[u16],
+        strict: bool,
+        raw_budget: u64,
+        charge: &mut dyn FnMut(u64) -> bool,
+    ) -> Result<CompiledSource, SourceCompileError> {
+        match ironhorse_compile::compile_atoms_units_budgeted_with_limit(
+            source,
+            ironhorse_compile::Goal::Eval,
+            strict,
+            raw_budget,
+            charge,
+        ) {
+            Ok(compiled) => Ok(ironhorse_vm::CompiledSource {
+                bytecode: compiled.bytecode,
+                symbols: compiled.symbols,
+                parse_meter_raw: compiled.parse_meter_raw,
+                parse_computrons: compiled.parse_computrons,
+            }),
+            Err(ironhorse_compile::CompileError::MeterAbort) => {
+                Err(ironhorse_vm::SourceCompileError::MeterAbort)
+            }
+            Err(ironhorse_compile::CompileError::Parse(error)) => match error.kind {
+                ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
+                    kind: ironhorse_compile::LexErrorKind::RegExpResourceLimit,
+                    ..
+                }) => Err(ironhorse_vm::SourceCompileError::HeapExhausted),
+                ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
+                    kind: ironhorse_compile::LexErrorKind::RegExpBudgetExceeded,
+                    ..
+                }) => Err(ironhorse_vm::SourceCompileError::MeterAbort),
+                ironhorse_compile::ParseErrorKind::Unsupported => Err(
+                    ironhorse_vm::SourceCompileError::Unsupported(error.to_string()),
+                ),
+                _ => Err(ironhorse_vm::SourceCompileError::Syntax(error.message)),
+            },
+        }
+    }
 }
 
 fn eval(session: &mut StoreSession, source: &str, budget: u64) -> Result<String, String> {

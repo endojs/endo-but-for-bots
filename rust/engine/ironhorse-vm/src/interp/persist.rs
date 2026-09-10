@@ -554,15 +554,17 @@ impl Interp {
     /// `None` (bare-name render) or the recorded text — exactly what
     /// the abort-value render consults, so a resumed `throw e`
     /// stringifies as the uninterrupted machine's would.
-    pub fn errors_snapshot(&self) -> Vec<(u32, &'static str, Option<String>, Vec<String>)> {
-        let mut out: Vec<(u32, &'static str, Option<String>, Vec<String>)> = self
+    pub fn errors_snapshot(&self) -> Vec<(u32, &'static str, Option<SymbolName>, Vec<String>)> {
+        let mut out: Vec<(u32, &'static str, Option<SymbolName>, Vec<String>)> = self
             .error_data
             .iter()
             .map(|(owner, info)| {
                 (
                     owner.0,
                     info.name,
-                    info.message.clone(),
+                    info.message
+                        .as_ref()
+                        .map(|units| SymbolName::from_units(units)),
                     info.frames.clone(),
                 )
             })
@@ -580,7 +582,7 @@ impl Interp {
     /// (the caller fails its decode closed).
     pub fn restore_error_data(
         &mut self,
-        rows: Vec<(u32, String, Option<String>, Vec<String>)>,
+        rows: Vec<(u32, String, Option<SymbolName>, Vec<String>)>,
     ) -> bool {
         for (owner, name, message, frames) in rows {
             let Some(name) = error_name_static(&name) else {
@@ -590,7 +592,7 @@ impl Interp {
                 crate::value::SlotIndex(owner),
                 ErrorInfo {
                     name,
-                    message,
+                    message: message.map(|text| text.to_units()),
                     frames,
                 },
             );
@@ -778,8 +780,8 @@ impl Interp {
     /// restore recompiles it. The final numeric field preserves the schema-11
     /// wire shape for old readers; the authoritative `lastIndex` value and
     /// attributes now ride the ordinary heap property.
-    pub fn regexps_snapshot(&self) -> Vec<(u32, String, String, u64)> {
-        let mut out: Vec<(u32, String, String, u64)> = self
+    pub fn regexps_snapshot(&self) -> Vec<(u32, SymbolName, String, u64)> {
+        let mut out: Vec<(u32, SymbolName, String, u64)> = self
             .regexps
             .iter()
             .map(|(owner, r)| {
@@ -790,7 +792,7 @@ impl Interp {
                     .unwrap_or(r.last_index);
                 (
                     owner.0,
-                    r.source.clone(),
+                    SymbolName::from_units(&r.source),
                     r.flags.clone(),
                     last_index.to_bits(),
                 )
@@ -805,9 +807,12 @@ impl Interp {
     /// no heap `lastIndex` property, so materialize it from the legacy numeric
     /// field. A newer snapshot must carry the standard non-enumerable,
     /// non-configurable data descriptor; reject any other shape.
-    pub fn restore_regexps(&mut self, rows: Vec<(u32, String, String, u64)>) -> bool {
+    pub fn restore_regexps(&mut self, rows: Vec<(u32, SymbolName, String, u64)>) -> bool {
         for (owner, source, flags, last_index_bits) in rows {
-            let Ok(program) = ironhorse_regexp::compile(&source, &flags) else {
+            let Ok(program) =
+                ironhorse_regexp::compile_units_checked(&source.to_units(), &flags, u64::MAX, None)
+                    .result
+            else {
                 return false;
             };
             let owner = crate::value::SlotIndex(owner);
@@ -832,7 +837,7 @@ impl Interp {
                 owner,
                 RegExpData {
                     program,
-                    source,
+                    source: source.to_units(),
                     flags,
                     last_index: f64::from_bits(last_index_bits),
                 },

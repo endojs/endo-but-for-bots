@@ -99,6 +99,62 @@ impl ironhorse_vm::SourceCompiler for IronhorseSourceCompiler {
             )),
         }
     }
+
+    fn compile_source_units(
+        &self,
+        source: &[u16],
+        strict: bool,
+        raw_budget: u64,
+        charge: &mut dyn FnMut(u64) -> bool,
+    ) -> Result<ironhorse_vm::CompiledSource, ironhorse_vm::SourceCompileError> {
+        let meter = ironhorse_compile::ParseMeter::with_charge_callback(raw_budget, charge);
+        let compiled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            ironhorse_compile::compile_atoms_units_with_meter(
+                source,
+                ironhorse_compile::Goal::Eval,
+                strict,
+                meter.clone(),
+            )
+        }));
+        if meter.exhausted() {
+            return Err(ironhorse_vm::SourceCompileError::MeterAbort);
+        }
+        match compiled {
+            Ok(Ok((bytecode, symbols))) => Ok(ironhorse_vm::CompiledSource {
+                bytecode,
+                symbols,
+                parse_meter_raw: meter.raw(),
+                parse_computrons: meter.computrons(),
+            }),
+            Ok(Err(e)) => {
+                match e.kind {
+                    ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
+                        kind: ironhorse_compile::LexErrorKind::RegExpResourceLimit,
+                        ..
+                    }) => Err(ironhorse_vm::SourceCompileError::HeapExhausted),
+                    ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
+                        kind: ironhorse_compile::LexErrorKind::RegExpBudgetExceeded,
+                        ..
+                    }) => Err(ironhorse_vm::SourceCompileError::MeterAbort),
+                    ironhorse_compile::parser::ParseErrorKind::MeterLimit => {
+                        Err(ironhorse_vm::SourceCompileError::MeterAbort)
+                    }
+                    ironhorse_compile::parser::ParseErrorKind::Unsupported => {
+                        Err(ironhorse_vm::SourceCompileError::Unsupported(e.to_string()))
+                    }
+                    // Carry the bare diagnostic (`e.message`, no `line N:`
+                    // prefix) so the bridge's realm-local `SyntaxError` renders
+                    // with XS's exact wording — the pinned oracle's thrown
+                    // `String(exception)` is `SyntaxError: <message>`, and the
+                    // differential harness compares the whole string.
+                    _ => Err(ironhorse_vm::SourceCompileError::Syntax(e.message)),
+                }
+            }
+            Err(payload) => Err(ironhorse_vm::SourceCompileError::Unsupported(
+                panic_message(payload.as_ref()),
+            )),
+        }
+    }
 }
 
 /// Construct a realm interpreter linked against `names` **and** armed with the

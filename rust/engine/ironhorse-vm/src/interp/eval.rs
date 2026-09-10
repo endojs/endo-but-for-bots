@@ -32,7 +32,7 @@ impl Interp {
     /// - **Job/meter behavior.** Execution accrues on the shared meter; the
     ///   eval unit's promise reactions drain with the outer program's job
     ///   pump (not a nested drain), matching a single host crank.
-    pub(super) fn eval_source(&mut self, source: &str, strict: bool) -> Result<Slot, Step> {
+    pub(super) fn eval_source(&mut self, source: &[u16], strict: bool) -> Result<Slot, Step> {
         // Whether this is a direct eval (its declaration instantiation observes
         // the caller's lexical environment). Captured before the nested-frame
         // setup clears `eval_direct`.
@@ -45,7 +45,7 @@ impl Interp {
         let raw_budget = u64::MAX - self.meter_index();
         let mut charged = 0u64;
         let mut refused = false;
-        let result = compiler.compile_source(source, strict, raw_budget, &mut |raw| {
+        let result = compiler.compile_source_units(source, strict, raw_budget, &mut |raw| {
             if refused {
                 return false;
             }
@@ -223,8 +223,8 @@ impl Interp {
         argc: usize,
         code: &[u8],
     ) -> Result<Slot, Step> {
-        let mut params: Vec<String> = Vec::new();
-        let mut body = String::new();
+        let mut params: Vec<Vec<u16>> = Vec::new();
+        let mut body = Vec::new();
         for i in 0..argc {
             let slot = self
                 .stack
@@ -233,7 +233,7 @@ impl Interp {
                 .unwrap_or_else(Slot::undefined);
             // ToString each argument (the spec coerces every parameter chunk and
             // the body). A `Symbol` throws a realm `TypeError` from here.
-            let piece = self.value_to_string(code, slot)?;
+            let piece = self.to_string_units(code, slot)?;
             if i + 1 == argc {
                 body = piece;
             } else {
@@ -255,7 +255,16 @@ impl Interp {
         // expression. The `\n` before `)` and after `{` are the spec's exact
         // separators (they defeat a trailing line comment in the parameter list
         // or a `//`-terminated body from swallowing the closing punctuation).
-        let source = format!("({}({}\n) {{\n{}\n}})", head, params.join(","), body);
+        let mut source: Vec<u16> = format!("({head}(").encode_utf16().collect();
+        for (index, param) in params.into_iter().enumerate() {
+            if index != 0 {
+                source.push(u16::from(b','));
+            }
+            source.extend(param);
+        }
+        source.extend("\n) {\n".encode_utf16());
+        source.extend(body);
+        source.extend("\n})".encode_utf16());
         self.eval_source(&source, false)
     }
 }

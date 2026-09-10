@@ -56,8 +56,9 @@ pub mod matcher;
 pub mod unicode;
 
 pub use compile::{
-    compile, compile_checked, validate, validate_checked, CompileError, CompileOutcome, Program,
-    ValidationOutcome, COMPILE_CHECK_STRIDE, MAX_NESTING_DEPTH,
+    compile, compile_checked, compile_units_checked, validate, validate_checked,
+    validate_units_checked, CompileError, CompileOutcome, Program, ValidationOutcome,
+    COMPILE_CHECK_STRIDE, MAX_NESTING_DEPTH,
 };
 pub use flags::{
     XS_REGEXP_D, XS_REGEXP_G, XS_REGEXP_I, XS_REGEXP_M, XS_REGEXP_N, XS_REGEXP_S, XS_REGEXP_U,

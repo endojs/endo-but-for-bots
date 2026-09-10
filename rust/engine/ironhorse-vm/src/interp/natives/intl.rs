@@ -23,7 +23,9 @@ impl Interp {
             ));
         }
         match primitive.value {
-            Payload::String(off) => Ok(self.str_text(off)),
+            Payload::String(off) => self.str_scalar_text(off).ok_or_else(|| {
+                self.catchable_range_error_msg("Intl: locale contains an unpaired surrogate".into())
+            }),
             _ => Err(self.catchable_type_error_msg("Intl: locale must be a string".into())),
         }
     }
@@ -96,38 +98,33 @@ impl Interp {
         &mut self,
         code: &[u8],
         options: crate::value::SlotIndex,
-        name: &str,
+        name: &'static str,
     ) -> Result<Option<String>, Step> {
-        let id = self.intern_key(name)?;
-        let value = self.mop_get(
+        let value = self.mop_get_option_field(
             code,
             options,
-            id,
+            name,
             Slot::of(Kind::Reference, Payload::Reference(options)),
         )?;
         if value.kind == Kind::Undefined {
             return Ok(None);
         }
-        let primitive = if value.kind == Kind::Reference {
-            self.to_primitive(code, value, true)?
-        } else {
-            value
-        };
-        let bytes = self.to_string_bytes_metered(primitive);
-        Ok(Some(String::from_utf8_lossy(&bytes).into_owned()))
+        let units = self.to_string_units(code, value)?;
+        Ok(Some(String::from_utf16(&units).map_err(|_| {
+            self.catchable_range_error_msg("Intl: option contains an unpaired surrogate".into())
+        })?))
     }
 
     fn intl_option_bool(
         &mut self,
         code: &[u8],
         options: crate::value::SlotIndex,
-        name: &str,
+        name: &'static str,
     ) -> Result<Option<bool>, Step> {
-        let id = self.intern_key(name)?;
-        let value = self.mop_get(
+        let value = self.mop_get_option_field(
             code,
             options,
-            id,
+            name,
             Slot::of(Kind::Reference, Payload::Reference(options)),
         )?;
         Ok((value.kind != Kind::Undefined).then(|| self.truthy(&value)))
@@ -262,17 +259,16 @@ impl Interp {
         &mut self,
         code: &[u8],
         options: crate::value::SlotIndex,
-        name: &str,
+        name: &'static str,
         allowed: &[&str],
         default: &str,
     ) -> Result<String, Step> {
-        let id = self.intern_key(name)?;
         let receiver = Slot::of(Kind::Reference, Payload::Reference(options));
-        let value = self.mop_get(code, options, id, receiver)?;
+        let value = self.mop_get_option_field(code, options, name, receiver)?;
         if value.kind == Kind::Undefined {
             return Ok(default.to_string());
         }
-        let text = self.value_to_string(code, value)?;
+        let text = self.value_to_scalar_text(code, value)?;
         if allowed.iter().any(|a| *a == text) {
             Ok(text)
         } else {
@@ -289,14 +285,13 @@ impl Interp {
         &mut self,
         code: &[u8],
         options: crate::value::SlotIndex,
-        name: &str,
+        name: &'static str,
         minimum: f64,
         maximum: f64,
         default: Option<u32>,
     ) -> Result<Option<u32>, Step> {
-        let id = self.intern_key(name)?;
         let receiver = Slot::of(Kind::Reference, Payload::Reference(options));
-        let value = self.mop_get(code, options, id, receiver)?;
+        let value = self.mop_get_option_field(code, options, name, receiver)?;
         if value.kind == Kind::Undefined {
             return Ok(default);
         }
@@ -367,16 +362,15 @@ impl Interp {
         &mut self,
         code: &[u8],
         options: crate::value::SlotIndex,
-        name: &str,
+        name: &'static str,
         allowed: &[&str],
     ) -> Result<Option<String>, Step> {
-        let id = self.intern_key(name)?;
         let receiver = Slot::of(Kind::Reference, Payload::Reference(options));
-        let value = self.mop_get(code, options, id, receiver)?;
+        let value = self.mop_get_option_field(code, options, name, receiver)?;
         if value.kind == Kind::Undefined {
             return Ok(None);
         }
-        let text = self.value_to_string(code, value)?;
+        let text = self.value_to_scalar_text(code, value)?;
         if allowed.iter().any(|a| *a == text) {
             Ok(Some(text))
         } else {
@@ -758,9 +752,9 @@ impl Interp {
 
     /// A single list element must be a String (ECMA-402 StringListFromIterable
     /// step: `If Type(next) is not String, throw a TypeError`).
-    fn list_element_string(&mut self, value: Slot) -> Result<String, Step> {
+    fn list_element_string(&mut self, value: Slot) -> Result<Vec<u16>, Step> {
         match value.value {
-            Payload::String(off) if value.kind == Kind::String => Ok(self.str_text(off)),
+            Payload::String(off) if value.kind == Kind::String => Ok(self.str_units(off)),
             _ => Err(self
                 .catchable_type_error_msg("Intl.ListFormat: list elements must be strings".into())),
         }
@@ -775,14 +769,21 @@ impl Interp {
         &mut self,
         code: &[u8],
         iterable: Slot,
-    ) -> Result<Vec<String>, Step> {
+    ) -> Result<Vec<Vec<u16>>, Step> {
         if iterable.kind == Kind::Undefined {
             return Ok(Vec::new());
         }
         if iterable.kind == Kind::String {
             if let Payload::String(off) = iterable.value {
-                let text = self.str_text(off);
-                return Ok(text.chars().map(|c| c.to_string()).collect());
+                let units = self.str_units(off);
+                let mut result = Vec::new();
+                for decoded in char::decode_utf16(units) {
+                    result.push(match decoded {
+                        Ok(ch) => ch.encode_utf16(&mut [0u16; 2]).to_vec(),
+                        Err(error) => vec![error.unpaired_surrogate()],
+                    });
+                }
+                return Ok(result);
             }
         }
         let obj = match iterable.value {
@@ -904,7 +905,7 @@ impl Interp {
                 ));
             }
             let s = match value.value {
-                Payload::String(off) => self.str_text(off),
+                Payload::String(off) => self.str_units(off),
                 _ => {
                     return Err(self.catchable_type_error_msg(
                         "Intl.ListFormat: list elements must be strings".into(),
@@ -1285,12 +1286,11 @@ impl Interp {
         &mut self,
         code: &[u8],
         options: crate::value::SlotIndex,
-        name: &str,
+        name: &'static str,
         fallback: &str,
     ) -> Result<String, Step> {
-        let id = self.intern_key(name)?;
         let receiver = Slot::of(Kind::Reference, Payload::Reference(options));
-        let value = self.mop_get(code, options, id, receiver)?;
+        let value = self.mop_get_option_field(code, options, name, receiver)?;
         if value.kind == Kind::Undefined {
             return Ok(fallback.to_string());
         }
@@ -1305,7 +1305,7 @@ impl Interp {
         if !self.truthy(&value) {
             return Ok("false".to_string());
         }
-        let text = self.value_to_string(code, value)?;
+        let text = self.value_to_scalar_text(code, value)?;
         if matches!(text.as_str(), "min2" | "auto" | "always") {
             Ok(text)
         } else {

@@ -237,7 +237,7 @@ pub struct RegistryImage {
 pub struct ErrorImage {
     pub owner: u32,
     pub name: String,
-    pub message: Option<String>,
+    pub message: Option<SymbolName>,
     /// The call-frame names captured when the error was CONSTRUCTED,
     /// which the `stack` accessor renders as `\n at <name> ()` lines.
     /// They must travel: the constructing call stack is gone by the
@@ -307,7 +307,7 @@ pub struct WrapperImage {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RegExpImage {
     pub owner: u32,
-    pub source: String,
+    pub source: SymbolName,
     pub flags: String,
     pub last_index_bits: u64,
 }
@@ -1461,7 +1461,10 @@ pub(crate) fn encode_errors(errors: &[ErrorImage]) -> Vec<u8> {
         match &e.message {
             Some(m) => {
                 v.push(1);
-                let m = m.as_bytes();
+                let scalar = m.to_text();
+                let m = scalar
+                    .as_ref()
+                    .map_or_else(|| m.as_bytes(), |s| s.as_bytes());
                 v.extend_from_slice(&(m.len() as u32).to_be_bytes());
                 v.extend_from_slice(m);
             }
@@ -1495,9 +1498,13 @@ pub(crate) fn decode_errors(p: &[u8]) -> Result<Vec<ErrorImage>, SnapshotError> 
             0 => None,
             1 => {
                 let msg_len = c.u32()? as usize;
-                Some(String::from_utf8(c.bytes(msg_len)?.to_vec()).map_err(|_| {
-                    SnapshotError::Corrupt("error-data side table: message not UTF-8")
-                })?)
+                let bytes = c.bytes(msg_len)?;
+                Some(match std::str::from_utf8(bytes) {
+                    Ok(text) => SymbolName::from(text),
+                    Err(_) => SymbolName::from_cesu8(bytes).ok_or(SnapshotError::Corrupt(
+                        "error-data side table: invalid message encoding",
+                    ))?,
+                })
             }
             _ => {
                 return Err(SnapshotError::Corrupt(
@@ -1782,7 +1789,12 @@ pub(crate) fn encode_regexps(regexps: &[RegExpImage]) -> Vec<u8> {
     v.extend_from_slice(&(regexps.len() as u32).to_be_bytes());
     for r in regexps {
         v.extend_from_slice(&r.owner.to_be_bytes());
-        let src = r.source.as_bytes();
+        // Retain legacy UTF-8 bytes for scalar sources. Non-scalar sources
+        // use canonical CESU-8, which old decoders reject explicitly.
+        let scalar = r.source.to_text();
+        let src = scalar
+            .as_ref()
+            .map_or_else(|| r.source.as_bytes(), |s| s.as_bytes());
         v.extend_from_slice(&(src.len() as u32).to_be_bytes());
         v.extend_from_slice(src);
         let flags = r.flags.as_bytes();
@@ -1804,8 +1816,13 @@ pub(crate) fn decode_regexps(p: &[u8]) -> Result<Vec<RegExpImage>, SnapshotError
     for _ in 0..count {
         let owner = c.u32()?;
         let source_len = c.u32()? as usize;
-        let source = String::from_utf8(c.bytes(source_len)?.to_vec())
-            .map_err(|_| SnapshotError::Corrupt("regexp side table: source not UTF-8"))?;
+        let source_bytes = c.bytes(source_len)?;
+        let source = match std::str::from_utf8(source_bytes) {
+            Ok(text) => SymbolName::from(text),
+            Err(_) => SymbolName::from_cesu8(source_bytes).ok_or(SnapshotError::Corrupt(
+                "regexp side table: invalid source encoding",
+            ))?,
+        };
         let flags_len = c.u32()? as usize;
         let flags = String::from_utf8(c.bytes(flags_len)?.to_vec())
             .map_err(|_| SnapshotError::Corrupt("regexp side table: flags not UTF-8"))?;
@@ -4672,7 +4689,7 @@ mod tests {
             ErrorImage {
                 owner: 2,
                 name: "RangeError".to_string(),
-                message: Some("r".to_string()),
+                message: Some("r".into()),
                 frames: Vec::new(),
             },
             ErrorImage {
@@ -4718,7 +4735,7 @@ mod tests {
     fn regexp_encoding_canonicalizes_legacy_nan() {
         let rows = vec![RegExpImage {
             owner: 7,
-            source: String::new(),
+            source: SymbolName::default(),
             flags: String::new(),
             last_index_bits: 0xfff0_0000_0000_0001,
         }];
@@ -7704,7 +7721,7 @@ mod side_table_field_refusals {
         assert_eq!(
             decode_errors(&invalid),
             Err(SnapshotError::Corrupt(
-                "error-data side table: message not UTF-8"
+                "error-data side table: invalid message encoding"
             ))
         );
 
@@ -7739,7 +7756,7 @@ mod side_table_field_refusals {
         assert_eq!(
             decode_regexps(&invalid),
             Err(SnapshotError::Corrupt(
-                "regexp side table: source not UTF-8"
+                "regexp side table: invalid source encoding"
             ))
         );
         invalid = regexp;
@@ -10277,5 +10294,36 @@ mod container_grammar_refusals {
             read_machine(&write_machine_unchecked(&wrong_size), &wrong_size.signature),
             Err(SnapshotError::Corrupt("BLOC length differs from CREA"))
         );
+    }
+}
+
+#[cfg(test)]
+mod regexp_utf16_source {
+    use super::*;
+
+    #[test]
+    fn source_encoding_preserves_legacy_scalar_bytes_and_all_units() {
+        for units in [
+            vec![0xd800],
+            vec![0xdc00],
+            vec![0xd83d, 0xde00],
+            vec![0],
+            vec![0xd800, 0, 0xd83d, 0xde00, 0xfffd],
+        ] {
+            let row = RegExpImage {
+                owner: 1,
+                source: SymbolName::from_units(&units),
+                flags: String::new(),
+                last_index_bits: 0,
+            };
+            let encoded = encode_regexps(std::slice::from_ref(&row));
+            let decoded = decode_regexps(&encoded).expect("valid source encoding");
+            assert_eq!(decoded[0].source.to_units(), units);
+            if let Ok(text) = String::from_utf16(&units) {
+                let length = u32::from_be_bytes(encoded[8..12].try_into().unwrap()) as usize;
+                assert_eq!(&encoded[12..12 + length], text.as_bytes());
+            }
+            assert!(ironhorse_vm::regexp_source_compiles(&decoded[0].source, ""));
+        }
     }
 }

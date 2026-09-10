@@ -1115,8 +1115,18 @@ fn compile_goal_metered(
     meter: crate::meter::ParseMeter<'_>,
 ) -> Result<(Vec<u8>, Vec<u8>), crate::parser::ParseError> {
     let module = goal == Goal::Module;
-    let mut parser =
+    let parser =
         crate::parser::Parser::with_meter(source, strict || module, module, meter.clone())?;
+    compile_parser(parser, goal, strict, meter)
+}
+
+fn compile_parser(
+    mut parser: crate::parser::Parser<'_>,
+    goal: Goal,
+    strict: bool,
+    meter: crate::meter::ParseMeter<'_>,
+) -> Result<(Vec<u8>, Vec<u8>), crate::parser::ParseError> {
+    let module = goal == Goal::Module;
     let mut root = if module {
         parser.parse_module()?
     } else {
@@ -1192,6 +1202,48 @@ pub fn compile_atoms_budgeted_with_limit(
         parse_meter_raw: meter.raw(),
         parse_computrons: meter.computrons(),
     })
+}
+
+/// Compile ECMAScript source code units without a scalar-value round trip.
+/// Scalar source has the same byte offsets and admission bill as the UTF-8 API.
+pub fn compile_atoms_units_budgeted_with_limit(
+    source: &[u16],
+    goal: Goal,
+    strict: bool,
+    raw_budget: u64,
+    charge: &mut dyn FnMut(u64) -> bool,
+) -> Result<CompiledAtoms, CompileError> {
+    let meter = crate::ParseMeter::with_charge_callback(raw_budget, charge);
+    let result = compile_atoms_units_with_meter(source, goal, strict, meter.clone());
+    if meter.exhausted() {
+        return Err(CompileError::MeterAbort);
+    }
+    let (bytecode, symbols) = result.map_err(CompileError::Parse)?;
+    Ok(CompiledAtoms {
+        bytecode,
+        symbols,
+        parse_meter_raw: meter.raw(),
+        parse_computrons: meter.computrons(),
+    })
+}
+
+/// UTF-16 source counterpart of `compile_atoms_goal_with_meter`.
+pub fn compile_atoms_units_with_meter(
+    source: &[u16],
+    goal: Goal,
+    strict: bool,
+    meter: crate::ParseMeter<'_>,
+) -> Result<(Vec<u8>, Vec<u8>), crate::parser::ParseError> {
+    let result = crate::meter::catch_refusal(|| {
+        let module = goal == Goal::Module;
+        let parser =
+            crate::parser::Parser::with_units(source, strict || module, module, meter.clone())?;
+        compile_parser(parser, goal, strict, meter.clone())
+    });
+    if meter.exhausted() {
+        return Err(crate::meter::limit_error());
+    }
+    result.map_err(|()| crate::meter::limit_error())?
 }
 
 fn node_of(item: &Item) -> &Node {

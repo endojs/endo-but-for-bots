@@ -116,24 +116,6 @@ impl Interp {
         Ok(())
     }
 
-    /// Admit UTF-8 scratch bytes while pricing the stored UTF-16 code units.
-    /// The running unit count avoids rescanning the accumulated result.
-    pub(super) fn extend_reserved_text(
-        &mut self,
-        output: &mut Vec<u8>,
-        addition: &[u8],
-        units: &mut u64,
-    ) -> Result<(), Step> {
-        let added = String::from_utf8_lossy(addition).encode_utf16().count() as u64;
-        let next = units
-            .checked_add(added)
-            .ok_or(Step::Host(Halt::HeapExhausted))?;
-        self.reserve_units_growth(*units, next)?;
-        self.extend_prepaid_scratch(output, addition)?;
-        *units = next;
-        Ok(())
-    }
-
     /// Bound an unmetered temporary by the heap profile before reserving it.
     /// Its caller prepays the operation's existing work charge first.
     pub(super) fn reserve_scratch<T>(&mut self, capacity: usize) -> Result<Vec<T>, Step> {

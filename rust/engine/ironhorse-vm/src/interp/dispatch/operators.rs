@@ -83,8 +83,9 @@ impl Interp {
             // key spelled from the index, minting nothing.
             let index = match (key.kind, key.value) {
                 (Kind::String, Payload::String(off)) => {
-                    let name = self.str_text(off);
-                    string_to_index(&name).filter(|_| !self.symbol_ids.contains_key(&name))
+                    self.str_scalar_text(off).and_then(|name| {
+                        string_to_index(&name).filter(|_| !self.symbol_ids.contains_key(&name))
+                    })
                 }
                 _ => None,
             };
@@ -116,8 +117,10 @@ impl Interp {
         // and mints nothing, so `for (i…) i in o` cannot walk the
         // id space into its saturation guard.
         let read_key = if let (Kind::String, Payload::String(off)) = (key.kind, key.value) {
-            let name = self.str_text(off);
-            match string_to_index(&name).filter(|_| !self.symbol_ids.contains_key(&name)) {
+            let index = self.str_scalar_text(off).and_then(|name| {
+                string_to_index(&name).filter(|_| !self.symbol_ids.contains_key(&name))
+            });
+            match index {
                 Some(index) => ReadKey::Index(index),
                 None => ReadKey::Id((self.to_property_id(code, key))?),
             }

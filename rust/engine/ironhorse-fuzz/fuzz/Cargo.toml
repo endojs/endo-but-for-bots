@@ -87,3 +87,9 @@ doc = false
 
 [workspace]
 # Own workspace: cargo-fuzz builds this tree in isolation.
+
+[[bin]]
+name = "utf16_boundary"
+path = "fuzz_targets/utf16_boundary.rs"
+test = false
+doc = false

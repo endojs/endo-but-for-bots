@@ -51,11 +51,23 @@ impl Interp {
     }
 
     /// The string value rendered to a Rust `String` (`String::from_utf16_lossy`
-    /// over the code units), for the display/debug boundary and text-semantic
-    /// built-ins. Lone surrogates render as U+FFFD, matching the oracle shim's
-    /// lossy decode at the same boundary.
-    pub(super) fn str_text(&self, off: crate::value::ChunkOffset) -> String {
+    /// over the code units), only for display/debug diagnostics. Guest value
+    /// and source production must use code units; grammar parsing must use
+    /// `str_scalar_text` and handle invalid input explicitly.
+    pub(super) fn str_text_lossy(&self, off: crate::value::ChunkOffset) -> String {
         String::from_utf16_lossy(&self.str_units(off))
+    }
+
+    /// Convert only when all units form Unicode scalar values. Grammar
+    /// consumers must choose their specified invalid-input result on None.
+    pub(super) fn str_scalar_text(&self, off: crate::value::ChunkOffset) -> Option<String> {
+        String::from_utf16(&self.str_units(off)).ok()
+    }
+
+    /// StringNumericLiteral cannot contain an unpaired surrogate.
+    pub(super) fn str_number(&self, off: crate::value::ChunkOffset) -> f64 {
+        self.str_scalar_text(off)
+            .map_or(f64::NAN, |text| string_to_number(text.as_bytes(), true))
     }
 
     /// Allocate a String value's chunk from **UTF-8 text** bytes, encoding them
@@ -63,8 +75,8 @@ impl Interp {
     /// allocation do so separately (at code-unit granularity). For text that is
     /// pure ASCII (rendered numbers, names, typeof atoms) the code-unit count
     /// equals the input byte count.
-    pub(super) fn alloc_str_text(&mut self, text: &[u8]) -> crate::value::ChunkOffset {
-        let units: Vec<u16> = String::from_utf8_lossy(text).encode_utf16().collect();
+    pub(super) fn alloc_str_text(&mut self, text: &str) -> crate::value::ChunkOffset {
+        let units: Vec<u16> = text.encode_utf16().collect();
         self.chunks.alloc(&units_to_be16(&units))
     }
 
@@ -152,25 +164,12 @@ impl Interp {
         Slot::of(Kind::String, Payload::String(off))
     }
 
-    /// `ToString` of a value to its UTF-16 code units, metering the render
-    /// allocation exactly where `to_string_bytes_metered` does. A string
-    /// returns its stored units verbatim (exact — lone surrogates survive); a
-    /// non-string renders to text (ASCII-shaped) and encodes to units. Used
-    /// where the coerced string is retained/joined at storage fidelity
-    /// (`concat`, `to_string_slot_metered`).
+    /// Primitive ToString has one representation: UTF-16 code units. A
+    /// string is copied losslessly; numeric renderers produce scalar text and
+    /// retain their existing conversion/allocation charges.
     pub(super) fn to_string_units_metered(&mut self, s: Slot) -> Vec<u16> {
-        if s.kind == Kind::String {
-            if let Payload::String(off) = s.value {
-                return self.str_units(off);
-            }
-        }
-        let bytes = self.to_string_bytes_metered(s);
-        String::from_utf8_lossy(&bytes).encode_utf16().collect()
-    }
-
-    pub(super) fn to_string_bytes_metered(&mut self, s: Slot) -> Vec<u8> {
-        match s.value {
-            Payload::String(off) => self.str_text(off).into_bytes(),
+        let bytes = match s.value {
+            Payload::String(off) => return self.str_units(off),
             Payload::Integer(i) => {
                 let r = i.to_string().into_bytes();
                 // `fxToString`/`fxNumberToString` on a number renders into a
@@ -211,6 +210,8 @@ impl Interp {
                 self.meter.tick_string(r.len() as u64);
                 r
             }
-        }
+        };
+        // Every non-string rendering above is ASCII.
+        bytes.into_iter().map(u16::from).collect()
     }
 }

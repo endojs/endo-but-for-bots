@@ -318,7 +318,7 @@ impl Interp {
     /// not-yet-ported pattern feature self-names an honest skip.
     pub(in crate::interp) fn build_regexp(
         &mut self,
-        pattern: String,
+        pattern: Vec<u16>,
         flags: String,
     ) -> Result<Slot, Step> {
         self.charge_and_check(0)?;
@@ -334,7 +334,7 @@ impl Interp {
                 charged = raw;
                 self.charge_and_check(delta).is_ok()
             };
-            ironhorse_regexp::compile_checked(&pattern, &flags, budget, Some(&mut check))
+            ironhorse_regexp::compile_units_checked(&pattern, &flags, budget, Some(&mut check))
         };
         if outcome.work_meter_raw > charged {
             self.charge_and_check(outcome.work_meter_raw - charged)?;
@@ -1809,7 +1809,7 @@ impl Interp {
                         .position(|&unit| unit == b'>' as u16)
                     {
                         let end = i + 2 + relative;
-                        let name = String::from_utf16_lossy(&replacement[i + 2..end]);
+                        let name = SymbolName::from_units(&replacement[i + 2..end]);
                         let id = self.intern_key(&name)?;
                         let (object_inst, object) = named_captures.unwrap();
                         let capture = self.mop_get(code, object_inst, id, object)?;
@@ -2257,13 +2257,9 @@ impl Interp {
         self.meter.tick_raw(REGEXP_TOSTRING_METERING);
         // `mxGetID(_source)` → the source getter: an escaped source allocates a
         // fresh chunk (charged here); an unescaped source is the interned key.
-        let (source_bytes, source_escaped) = self.regexp_source_bytes_metered(inst)?;
+        let (source_bytes, source_escaped) = self.regexp_source_units_metered(inst)?;
         if source_escaped {
-            self.charge_and_check(string_chunk_cost(
-                String::from_utf8_lossy(&source_bytes)
-                    .encode_utf16()
-                    .count() as u64,
-            ))?;
+            self.charge_and_check(string_chunk_cost(source_bytes.len() as u64))?;
         }
         // `mxGetID(_flags)` → the composite flags getter (the eight-property
         // cascade) + its result-string chunk.
@@ -2274,21 +2270,19 @@ impl Interp {
         // (`fxConcatString`/`fxConcatStringC`): `"/"` + source, + `"/"`, +
         // flags — each `fxNewChunk` of the running content length.
         let s = source_bytes.len();
-        let units = String::from_utf8_lossy(&source_bytes)
-            .encode_utf16()
-            .count();
+        let units = source_bytes.len();
         let f = flags.len();
         self.charge_and_check(string_chunk_cost((1 + units) as u64))?; // "/" + source
         self.charge_and_check(string_chunk_cost((2 + units) as u64))?; // + "/"
         self.charge_and_check(string_chunk_cost((2 + units + f) as u64))?; // + flags
         let mut out = self.reserve_scratch(s + f + 2)?;
-        out.push(b'/');
+        out.push(b'/' as u16);
         out.extend_from_slice(&source_bytes);
-        out.push(b'/');
-        out.extend_from_slice(flags.as_bytes());
+        out.push(b'/' as u16);
+        out.extend(flags.encode_utf16());
         // The final chunk is the third concat, already metered; allocate it
         // without re-charging.
-        let off = self.alloc_str_text(&out);
+        let off = self.chunks.alloc(&units_to_be16(&out));
         Ok(Slot::of(Kind::String, Payload::String(off)))
     }
 
@@ -2308,11 +2302,11 @@ impl Interp {
             && self.regexp_getter_uses_default(inst, source_id)
         {
             self.meter.tick_raw(REGEXP_GETTER_METERING);
-            let (bytes, allocated) = self.regexp_source_bytes_metered(inst)?;
+            let (bytes, allocated) = self.regexp_source_units_metered(inst)?;
             if allocated {
-                self.new_string_metered(&bytes)
+                self.new_string_units(&bytes)
             } else {
-                let offset = self.alloc_str_text(&bytes);
+                let offset = self.chunks.alloc(&units_to_be16(&bytes));
                 Slot::of(Kind::String, Payload::String(offset))
             }
         } else {
@@ -2346,93 +2340,94 @@ impl Interp {
         Ok(Slot::of(Kind::String, Payload::String(off)))
     }
 
-    /// The `.source` getter's bytes (`fx_RegExp_prototype_get_source`): the
-    /// empty pattern renders as `(?:)`; otherwise `/`, newlines, and LS/PS are
-    /// backslash-escaped. Returns `(bytes, allocated)` where `allocated` is
-    /// true when XS builds a fresh escaped chunk (an unescaped source is
-    /// returned as the interned key string, no allocation).
-    /// Guest source rendering admits its scan and worst-case escaped buffer
-    /// before either runs. Immutable host diagnostics use the writer below.
-    pub(in crate::interp) fn regexp_source_bytes_metered(
+    /// Render the source as UTF-16, escaping ECMAScript line terminators and
+    /// unescaped delimiters. The boolean records whether escaping allocated
+    /// a fresh source chunk in the reference engine.
+    pub(in crate::interp) fn regexp_source_units_metered(
         &mut self,
         inst: crate::value::SlotIndex,
-    ) -> Result<(Vec<u8>, bool), Step> {
+    ) -> Result<(Vec<u16>, bool), Step> {
         let length = self.regexps[&inst].source.len();
+        // Prepay the minimum scan before decoding. Charge the remaining
+        // width per code point to retain the scalar UTF-8 entry's bill.
         self.charge_and_check(
             (length as u64)
                 .checked_mul(crate::meter::BUILTIN_METERING)
                 .ok_or(Step::Host(Halt::MeterAbort))?,
         )?;
-        self.admit_scratch::<u8>(
-            length
-                .checked_mul(2)
-                .ok_or(Step::Host(Halt::HeapExhausted))?,
-        )?;
-        Ok(self.regexp_source_bytes(inst))
+        let mut index = 0;
+        while index < length {
+            let unit = self.regexps[&inst].source[index];
+            let paired = (0xd800..=0xdbff).contains(&unit)
+                && self.regexps[&inst]
+                    .source
+                    .get(index + 1)
+                    .is_some_and(|next| (0xdc00..=0xdfff).contains(next));
+            let extra = if paired {
+                2
+            } else if unit < 0x80 {
+                0
+            } else if unit < 0x800 {
+                1
+            } else {
+                2
+            };
+            self.charge_and_check(extra * crate::meter::BUILTIN_METERING)?;
+            index += if paired { 2 } else { 1 };
+        }
+        let capacity = regexp_rendered_source_len(&self.regexps[&inst].source);
+        self.admit_scratch::<u16>(capacity)?;
+        Ok(self.regexp_source_units(inst))
     }
 
-    pub(in crate::interp) fn regexp_source_bytes(
+    pub(in crate::interp) fn regexp_source_units(
         &self,
         inst: crate::value::SlotIndex,
-    ) -> (Vec<u8>, bool) {
-        let src = self.regexps[&inst].source.as_bytes();
+    ) -> (Vec<u16>, bool) {
+        let src = &self.regexps[&inst].source;
         if src.is_empty() {
-            return (b"(?:)".to_vec(), false);
+            return ("(?:)".encode_utf16().collect(), false);
         }
-        // Does any character need escaping?
-        let mut needs = false;
-        let mut prev = 0u8;
-        let mut i = 0;
-        while i < src.len() {
-            let c = src[i];
-            if (c == b'/' && prev != b'\\') || c == 10 || c == 13 {
-                needs = true;
-            } else if c == 0xE2
-                && i + 2 < src.len()
-                && src[i + 1] == 0x80
-                && (src[i + 2] == 0xA8 || src[i + 2] == 0xA9)
-            {
-                needs = true;
-            }
-            prev = c;
-            i += 1;
-        }
-        if !needs {
-            let mut copy = self.reserve_copy_scratch(src.len());
-            copy.extend_from_slice(src);
-            return (copy, false);
-        }
-        // Every source byte produces at most two escaped bytes.
-        let capacity = src
-            .len()
-            .checked_mul(2)
-            .unwrap_or_else(|| crate::value::heap_exhausted());
-        let mut out = self.reserve_copy_scratch(capacity);
-        prev = 0;
-        i = 0;
-        while i < src.len() {
-            let c = src[i];
-            if c == b'/' && prev != b'\\' {
-                out.push(b'\\');
-                out.push(b'/');
-            } else if c == 10 {
-                out.push(b'\\');
-                out.push(b'n');
-            } else if c == 13 {
-                out.push(b'\\');
-                out.push(b'r');
-            } else if c == 0xE2 && i + 2 < src.len() && src[i + 1] == 0x80 && src[i + 2] == 0xA8 {
-                out.extend_from_slice(b"\\u2028");
-                i += 2;
-            } else if c == 0xE2 && i + 2 < src.len() && src[i + 1] == 0x80 && src[i + 2] == 0xA9 {
-                out.extend_from_slice(b"\\u2029");
-                i += 2;
+        let mut out = self.reserve_copy_scratch(regexp_rendered_source_len(src));
+        let mut escaped = false;
+        let mut allocated = false;
+        for &unit in src {
+            let replacement = regexp_source_escape(unit, escaped);
+            if let Some(text) = replacement {
+                out.extend(text.encode_utf16());
+                allocated = true;
             } else {
-                out.push(c);
+                out.push(unit);
             }
-            prev = c;
-            i += 1;
+            escaped = unit == 0x5c && !escaped;
         }
-        (out, true)
+        (out, allocated)
     }
+}
+
+fn regexp_source_escape(unit: u16, escaped: bool) -> Option<&'static str> {
+    match unit {
+        0x2f if !escaped => Some("\\/"),
+        10 => Some("\\n"),
+        13 => Some("\\r"),
+        0x2028 => Some("\\u2028"),
+        0x2029 => Some("\\u2029"),
+        _ => None,
+    }
+}
+
+fn regexp_rendered_source_len(source: &[u16]) -> usize {
+    if source.is_empty() {
+        return 4;
+    }
+    let mut length = 0usize;
+    let mut escaped = false;
+    for &unit in source {
+        let width = regexp_source_escape(unit, escaped).map_or(1, str::len);
+        length = length
+            .checked_add(width)
+            .unwrap_or_else(|| crate::value::heap_exhausted());
+        escaped = unit == 0x5c && !escaped;
+    }
+    length
 }

@@ -20,7 +20,9 @@ impl Interp {
             Kind::Boolean => Ok(matches!(primitive.value, Payload::Boolean(true)) as u64),
             Kind::String => {
                 let text = match primitive.value {
-                    Payload::String(off) => self.str_text(off),
+                    Payload::String(off) => self
+                        .str_scalar_text(off)
+                        .ok_or_else(|| self.catchable_syntax_error())?,
                     _ => return Err(Step::Host(Halt::EngineInvariant("to-bigint:string"))),
                 };
                 // `StringToBigInt`: an integer body (decimal or `0x`/`0o`/`0b`,
@@ -195,7 +197,9 @@ impl Interp {
             )),
             Kind::String => {
                 let text = match primitive.value {
-                    Payload::String(off) => self.str_text(off),
+                    Payload::String(off) => self
+                        .str_scalar_text(off)
+                        .ok_or_else(|| self.catchable_syntax_error())?,
                     _ => return Err(self.catchable_syntax_error()),
                 };
                 let (negative, magnitude) = parse_bigint_string(&text).ok_or_else(|| {

@@ -654,9 +654,7 @@ impl Interp {
                 {
                     self.apply_collator_options(code, options, &mut data)?;
                 }
-                let left = String::from_utf16_lossy(&content);
-                let right = String::from_utf16_lossy(&right);
-                Slot::integer(collator_compare(&data, &left, &right))
+                Slot::integer(collator_compare_units(&data, &content, &right))
             }
             // normalize: default to NFC, otherwise coerce `form` after the
             // receiver and accept only the four exact normalization names.

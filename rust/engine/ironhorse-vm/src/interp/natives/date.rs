@@ -18,8 +18,12 @@ impl Interp {
         };
         match op {
             0 => {
-                let text = self.value_to_string(code, arg(&self.stack, 0))?;
-                Ok(Slot::number(parse_date_string(&text).unwrap_or(f64::NAN)))
+                let units = self.to_string_units(code, arg(&self.stack, 0))?;
+                let parsed = String::from_utf16(&units)
+                    .ok()
+                    .as_deref()
+                    .and_then(parse_date_string);
+                Ok(Slot::number(parsed.unwrap_or(f64::NAN)))
             }
             1 => {
                 let inputs: Vec<Slot> = (0..7)

@@ -101,8 +101,10 @@ impl Interp {
         code: &[u8],
     ) -> Result<Slot, Step> {
         if kind == 5 {
-            let id =
-                self.value_to_string(code, args.first().copied().unwrap_or_else(Slot::undefined))?;
+            let id = self.value_to_scalar_text(
+                code,
+                args.first().copied().unwrap_or_else(Slot::undefined),
+            )?;
             if id != "iso8601" {
                 return Err(self.catchable_range_error_msg("Temporal: unsupported calendar".into()));
             }
@@ -172,7 +174,7 @@ impl Interp {
                     return Ok(*r);
                 }
             }
-            let id = self.value_to_string(code, value)?;
+            let id = self.value_to_scalar_text(code, value)?;
             return if id == "iso8601" {
                 Ok(TemporalPlainRecord {
                     kind,
@@ -205,8 +207,7 @@ impl Interp {
             ];
             let mut seen = [false; 9];
             for (n, name) in names.iter().enumerate() {
-                let id = self.intern_static_key(*name);
-                let item = self.mop_get(code, i, id, value)?;
+                let item = self.mop_get_option_field(code, i, name, value)?;
                 if item.kind == Kind::Undefined {
                     continue;
                 }
@@ -276,7 +277,7 @@ impl Interp {
             }
             return Ok(r);
         }
-        let text = self.value_to_string(code, value)?;
+        let text = self.value_to_scalar_text(code, value)?;
         parse_temporal_plain(kind, &text).ok_or_else(|| {
             self.catchable_range_error_msg("Temporal: invalid date/time string".into())
         })
@@ -332,8 +333,7 @@ impl Interp {
                 .iter()
                 .enumerate()
                 {
-                    let id = self.intern_static_key(*name);
-                    let v = self.mop_get(code, i, id, arg0)?;
+                    let v = self.mop_get_option_field(code, i, name, arg0)?;
                     if v.kind == Kind::Undefined {
                         continue;
                     }
@@ -474,7 +474,7 @@ impl Interp {
                 return Ok(record.epoch_nanoseconds);
             }
         }
-        let text = self.value_to_string(code, value)?;
+        let text = self.value_to_scalar_text(code, value)?;
         parse_temporal_instant(&text).ok_or_else(|| {
             self.catchable_range_error_msg("Temporal.Instant: invalid instant string".into())
         })
@@ -504,9 +504,8 @@ impl Interp {
             let mut fields = [0i64; 10];
             let mut any = false;
             for (i, name) in names.iter().enumerate() {
-                let id = self.intern_static_key(*name);
                 let receiver = Slot::of(Kind::Reference, Payload::Reference(r));
-                let item = self.mop_get(code, r, id, receiver)?;
+                let item = self.mop_get_option_field(code, r, name, receiver)?;
                 if item.kind != Kind::Undefined {
                     fields[i] = self.temporal_integer(item)?;
                     any = true;
@@ -525,7 +524,7 @@ impl Interp {
             }
             return Ok(record);
         }
-        let text = self.value_to_string(code, value)?;
+        let text = self.value_to_scalar_text(code, value)?;
         parse_temporal_duration(&text).ok_or_else(|| {
             self.catchable_range_error_msg("Temporal.Duration: invalid duration string".into())
         })
@@ -548,7 +547,7 @@ impl Interp {
             }
             return Ok(default.to_string());
         }
-        self.value_to_string(code, value)
+        self.value_to_scalar_text(code, value)
     }
 
     /// Resolve a `relativeTo` option to its ISO `PlainDate` (`kind == 0`). In
@@ -574,8 +573,7 @@ impl Interp {
         if options.kind != Kind::Reference {
             return Err(self.catchable_type_error_msg("Temporal: options must be an object".into()));
         }
-        let id = self.intern_static_key("relativeTo");
-        let value = self.mop_get(code, r, id, options)?;
+        let value = self.mop_get_option_field(code, r, "relativeTo", options)?;
         if value.kind == Kind::Undefined || value.kind == Kind::Null {
             return Ok(None);
         }
@@ -636,7 +634,7 @@ impl Interp {
         const DAY_NS: i128 = 86_400_000_000_000;
         let (smallest, largest_opt, increment, mode, relative) = if options.kind == Kind::String {
             (
-                Some(self.value_to_string(code, options)?),
+                Some(self.value_to_scalar_text(code, options)?),
                 None,
                 1i64,
                 "halfExpand".to_string(),
@@ -656,8 +654,7 @@ impl Interp {
                 ));
             }
             let increment = {
-                let id = self.intern_static_key("roundingIncrement");
-                let v = self.mop_get(code, r, id, options)?;
+                let v = self.mop_get_option_field(code, r, "roundingIncrement", options)?;
                 if v.kind == Kind::Undefined {
                     1
                 } else {
@@ -1004,8 +1001,7 @@ impl Interp {
                 let mut fields = old.fields();
                 let mut any = false;
                 for (i, name) in names.iter().enumerate() {
-                    let id = self.intern_static_key(*name);
-                    let item = self.mop_get(code, r, id, arg0)?;
+                    let item = self.mop_get_option_field(code, r, name, arg0)?;
                     if item.kind != Kind::Undefined {
                         fields[i] = self.temporal_integer(item)?;
                         any = true;
@@ -1033,7 +1029,7 @@ impl Interp {
                 // an options bag must carry a `unit` property (no default), and
                 // anything else is a TypeError.
                 let (unit, relative) = if arg0.kind == Kind::String {
-                    (self.value_to_string(code, arg0)?, None)
+                    (self.value_to_scalar_text(code, arg0)?, None)
                 } else if let Payload::Reference(r) = arg0.value {
                     if arg0.kind != Kind::Reference {
                         return Err(self.catchable_type_error_msg(
@@ -1146,14 +1142,13 @@ impl Interp {
         }
         if let Payload::Reference(r) = value.value {
             if value.kind == Kind::Reference {
-                let tz_id = self.intern_static_key("timeZone");
-                let tz_val = self.mop_get(code, r, tz_id, value)?;
+                let tz_val = self.mop_get_option_field(code, r, "timeZone", value)?;
                 if tz_val.kind == Kind::Undefined {
                     return Err(self.catchable_type_error_msg(
                         "Temporal.ZonedDateTime: timeZone is required".into(),
                     ));
                 }
-                let tz_text = self.value_to_string(code, tz_val)?;
+                let tz_text = self.value_to_scalar_text(code, tz_val)?;
                 let (time_zone, offset_ns) =
                     resolve_zoned_time_zone(&tz_text).ok_or_else(|| {
                         self.catchable_range_error_msg(
@@ -1177,8 +1172,7 @@ impl Interp {
                 ];
                 let mut seen = [false; 9];
                 for (n, name) in names.iter().enumerate() {
-                    let fid = self.intern_static_key(*name);
-                    let item = self.mop_get(code, r, fid, value)?;
+                    let item = self.mop_get_option_field(code, r, name, value)?;
                     if item.kind == Kind::Undefined {
                         continue;
                     }
@@ -1248,10 +1242,9 @@ impl Interp {
                 // A provided `offset` must agree with the fixed zone offset
                 // (Temporal's default `offset: "reject"`).
                 {
-                    let off_id = self.intern_static_key("offset");
-                    let off_val = self.mop_get(code, r, off_id, value)?;
+                    let off_val = self.mop_get_option_field(code, r, "offset", value)?;
                     if off_val.kind != Kind::Undefined {
-                        let s = self.value_to_string(code, off_val)?;
+                        let s = self.value_to_scalar_text(code, off_val)?;
                         let provided = parse_offset_ns(&s).ok_or_else(|| {
                             self.catchable_range_error_msg("Temporal: invalid UTC offset".into())
                         })?;
@@ -1274,7 +1267,7 @@ impl Interp {
                 });
             }
         }
-        let text = self.value_to_string(code, value)?;
+        let text = self.value_to_scalar_text(code, value)?;
         parse_temporal_zoned(&text).ok_or_else(|| {
             self.catchable_range_error_msg(
                 "Temporal.ZonedDateTime: invalid zoned date/time string".into(),
@@ -1296,7 +1289,7 @@ impl Interp {
     ) -> Result<(String, String, i128, String), Step> {
         // A bare string argument is the smallestUnit.
         if arg.kind == Kind::String {
-            let unit = self.value_to_string(code, arg)?;
+            let unit = self.value_to_scalar_text(code, arg)?;
             return Ok((
                 unit,
                 largest_default.to_string(),
@@ -1338,8 +1331,7 @@ impl Interp {
             .intl_option_string(code, r, "roundingMode")?
             .unwrap_or_else(|| mode_default.to_string());
         let increment = {
-            let id = self.intern_static_key("roundingIncrement");
-            let v = self.mop_get(code, r, id, arg)?;
+            let v = self.mop_get_option_field(code, r, "roundingIncrement", arg)?;
             if v.kind == Kind::Undefined {
                 1
             } else {
@@ -1405,8 +1397,7 @@ impl Interp {
                 .iter()
                 .enumerate()
                 {
-                    let id = self.intern_static_key(*name);
-                    let v = self.mop_get(code, r, id, arg0)?;
+                    let v = self.mop_get_option_field(code, r, name, arg0)?;
                     if v.kind == Kind::Undefined {
                         continue;
                     }
@@ -1748,7 +1739,7 @@ impl Interp {
             }
             16 => {
                 // withTimeZone: same instant, different zone.
-                let text = self.value_to_string(code, arg0)?;
+                let text = self.value_to_scalar_text(code, arg0)?;
                 let (time_zone, offset_ns) = resolve_zoned_time_zone(&text).ok_or_else(|| {
                     self.catchable_range_error_msg(
                         "Temporal: invalid or unsupported time zone".into(),
@@ -1758,7 +1749,7 @@ impl Interp {
             }
             17 => {
                 // withCalendar: only iso8601 is modeled.
-                let id = self.value_to_string(code, arg0)?;
+                let id = self.value_to_scalar_text(code, arg0)?;
                 if id.to_ascii_lowercase() != "iso8601" {
                     return Err(
                         self.catchable_range_error_msg("Temporal: unsupported calendar".into())
@@ -1855,7 +1846,7 @@ impl Interp {
             if arg.kind == Kind::Undefined {
                 return Ok(0);
             }
-            let s = this.value_to_string(code, arg)?;
+            let s = this.value_to_scalar_text(code, arg)?;
             resolve_zoned_time_zone(&s)
                 .map(|(_, off)| off)
                 .ok_or_else(|| {
@@ -1871,7 +1862,7 @@ impl Interp {
                 let (time_zone, offset_ns) = if arg0.kind == Kind::Undefined {
                     ("UTC".to_string(), 0)
                 } else {
-                    let s = self.value_to_string(code, arg0)?;
+                    let s = self.value_to_scalar_text(code, arg0)?;
                     resolve_zoned_time_zone(&s).ok_or_else(|| {
                         self.catchable_range_error_msg(
                             "Temporal: invalid or unsupported time zone".into(),

@@ -55,8 +55,8 @@ impl Interp {
                 let source = arg(0);
                 if source.kind == Kind::String {
                     let text = match source.value {
-                        Payload::String(off) => self.str_text(off),
-                        _ => String::new(),
+                        Payload::String(off) => self.str_units(off),
+                        _ => Vec::new(),
                     };
                     // A direct eval inherits the caller's strictness; an
                     // indirect eval of ordinary source is sloppy (a
@@ -385,7 +385,7 @@ impl Interp {
                         "Temporal.ZonedDateTime: timeZone must be a string".into(),
                     ));
                 }
-                let tz_text = self.value_to_string(code, tz_value)?;
+                let tz_text = self.value_to_scalar_text(code, tz_value)?;
                 let (time_zone, offset_ns) =
                     resolve_zoned_time_zone(&tz_text).ok_or_else(|| {
                         self.catchable_range_error_msg(
@@ -393,7 +393,7 @@ impl Interp {
                         )
                     })?;
                 if cal.kind != Kind::Undefined {
-                    let id = self.value_to_string(code, cal)?;
+                    let id = self.value_to_scalar_text(code, cal)?;
                     if id.to_ascii_lowercase() != "iso8601" {
                         return Err(
                             self.catchable_range_error_msg("Temporal: unsupported calendar".into())
@@ -406,7 +406,7 @@ impl Interp {
                 let now = 0.0;
                 if !has_target {
                     let text = date_local_string(now);
-                    let off = self.alloc_str_text(text.as_bytes());
+                    let off = self.alloc_str_text(&text);
                     Slot::of(Kind::String, Payload::String(off))
                 } else {
                     let time = if argc == 0 {
@@ -420,20 +420,24 @@ impl Interp {
                                 let primitive = self.to_primitive_default(code, value)?;
                                 if primitive.kind == Kind::String {
                                     let text = match primitive.value {
-                                        Payload::String(o) => self.str_text(o),
-                                        _ => String::new(),
+                                        Payload::String(o) => self.str_scalar_text(o),
+                                        _ => None,
                                     };
-                                    parse_date_string(&text).unwrap_or(f64::NAN)
+                                    text.as_deref()
+                                        .and_then(parse_date_string)
+                                        .unwrap_or(f64::NAN)
                                 } else {
                                     time_clip(self.to_number_f64(code, primitive)?)
                                 }
                             }
                         } else if value.kind == Kind::String {
                             let text = match value.value {
-                                Payload::String(o) => self.str_text(o),
-                                _ => String::new(),
+                                Payload::String(o) => self.str_scalar_text(o),
+                                _ => None,
                             };
-                            parse_date_string(&text).unwrap_or(f64::NAN)
+                            text.as_deref()
+                                .and_then(parse_date_string)
+                                .unwrap_or(f64::NAN)
                         } else {
                             time_clip(self.to_number_f64(code, value)?)
                         }
@@ -503,10 +507,9 @@ impl Interp {
                     }
                     Kind::String if argc >= 1 => match a.value {
                         Payload::String(off) => {
-                            let bytes = self.str_text(off).into_bytes();
                             // `fx_Number` folds the ToNumber result to integer
                             // kind (`fx_Math_toInteger`) in the non-target case.
-                            math_to_integer(string_to_number(&bytes, true))
+                            math_to_integer(self.str_number(off))
                         }
                         _ => {
                             return Err(Step::Host(Halt::NotImplemented(native_unsupported_name(
@@ -549,7 +552,7 @@ impl Interp {
             // `String(v)` / `new String(v)`: the primitive string is
             // ToString(v). A string argument is identity (metering-neutral);
             // the general ToString of other kinds is metered via
-            // `to_string_bytes_metered`. `new` wraps the primitive.
+            // `to_string_units_metered`. `new` wraps the primitive.
             Native::String => {
                 let prim = if argc == 0 {
                     let off = self.chunks.alloc(b"");
@@ -563,8 +566,8 @@ impl Interp {
                         // `Symbol(<description>)`. (Implicit coercion still
                         // throws — that path stays in [`Self::run`].)
                         Kind::Symbol => {
-                            let bytes = self.symbol_descriptive_bytes(a);
-                            let off = self.alloc_str_text(&bytes);
+                            let units = self.symbol_descriptive_units(a);
+                            let off = self.chunks.alloc(&units_to_be16(&units));
                             Slot::of(Kind::String, Payload::String(off))
                         }
                         Kind::Reference => {
@@ -572,25 +575,15 @@ impl Interp {
                             if primitive.kind == Kind::Symbol {
                                 return Err(Step::Host(Halt::NotImplemented("to_string:symbol")));
                             }
-                            let bytes = self.to_string_bytes_metered(primitive);
-                            let off = self.alloc_str_text(&bytes);
-                            Slot::of(Kind::String, Payload::String(off))
+                            self.to_string_slot_metered(primitive)
                         }
                         // `String(aBigInt)` uses the same arbitrary-precision
                         // decimal renderer as implicit ToString. The helper
                         // charges the conversion step and result chunk; the
                         // constructor adds no separate allocation unless this
                         // is the `new String` wrapper path below.
-                        Kind::BigInt => {
-                            let bytes = self.to_string_bytes_metered(a);
-                            let off = self.alloc_str_text(&bytes);
-                            Slot::of(Kind::String, Payload::String(off))
-                        }
-                        _ => {
-                            let bytes = self.to_string_bytes_metered(a);
-                            let off = self.alloc_str_text(&bytes);
-                            Slot::of(Kind::String, Payload::String(off))
-                        }
+                        Kind::BigInt => self.to_string_slot_metered(a),
+                        _ => self.to_string_slot_metered(a),
                     }
                 };
                 if has_target {
@@ -643,7 +636,9 @@ impl Interp {
                     },
                     Kind::String => {
                         let text = match primitive.value {
-                            Payload::String(off) => self.str_text(off),
+                            Payload::String(off) => self
+                                .str_scalar_text(off)
+                                .ok_or_else(|| self.catchable_syntax_error())?,
                             _ => return Err(self.catchable_syntax_error()),
                         };
                         let (negative, magnitude) =
@@ -1523,9 +1518,9 @@ impl Interp {
                             if !self.regexp_getter_uses_default(r, source_id) {
                                 let source = self.mop_get(code, r, source_id, pattern_arg)?;
                                 if source.kind == Kind::Undefined {
-                                    String::new()
+                                    Vec::new()
                                 } else {
-                                    String::from_utf16_lossy(&self.to_string_units(code, source)?)
+                                    self.to_string_units(code, source)?
                                 }
                             } else {
                                 self.regexps[&r].source.clone()
@@ -1536,15 +1531,15 @@ impl Interp {
                             };
                             let source = self.mop_get(code, r, source_id, pattern_arg)?;
                             if source.kind == Kind::Undefined {
-                                String::new()
+                                Vec::new()
                             } else {
-                                String::from_utf16_lossy(&self.to_string_units(code, source)?)
+                                self.to_string_units(code, source)?
                             }
                         }
                     } else if pattern_arg.kind == Kind::Undefined {
-                        String::new()
+                        Vec::new()
                     } else {
-                        String::from_utf16_lossy(&self.to_string_units(code, pattern_arg)?)
+                        self.to_string_units(code, pattern_arg)?
                     };
                     let flags = if flags_arg.kind == Kind::Undefined {
                         if pattern_is_regexp {
@@ -1555,9 +1550,8 @@ impl Interp {
                                     if value.kind == Kind::Undefined {
                                         String::new()
                                     } else {
-                                        String::from_utf16_lossy(
-                                            &self.to_string_units(code, value)?,
-                                        )
+                                        String::from_utf16(&self.to_string_units(code, value)?)
+                                            .map_err(|_| self.catchable_syntax_error())?
                                     }
                                 } else {
                                     self.regexps[&r].flags.clone()
@@ -1570,14 +1564,16 @@ impl Interp {
                                 if value.kind == Kind::Undefined {
                                     String::new()
                                 } else {
-                                    String::from_utf16_lossy(&self.to_string_units(code, value)?)
+                                    String::from_utf16(&self.to_string_units(code, value)?)
+                                        .map_err(|_| self.catchable_syntax_error())?
                                 }
                             }
                         } else {
                             String::new()
                         }
                     } else {
-                        String::from_utf16_lossy(&self.to_string_units(code, flags_arg)?)
+                        String::from_utf16(&self.to_string_units(code, flags_arg)?)
+                            .map_err(|_| self.catchable_syntax_error())?
                     };
                     let regexp = self.build_regexp(pattern, flags)?;
                     if has_target {
@@ -1922,16 +1918,14 @@ impl Interp {
                     }
                 };
                 let data = self.collators[&collator].clone();
-                let left =
-                    String::from_utf8_lossy(&self.to_string_bytes_metered(arg0)).into_owned();
+                let left = self.to_string_units(code, arg0)?;
                 let right_slot = self
                     .stack
                     .get(base + 5)
                     .copied()
                     .unwrap_or_else(Slot::undefined);
-                let right =
-                    String::from_utf8_lossy(&self.to_string_bytes_metered(right_slot)).into_owned();
-                Slot::integer(collator_compare(&data, &left, &right))
+                let right = self.to_string_units(code, right_slot)?;
+                Slot::integer(collator_compare_units(&data, &left, &right))
             }
             NativeMethod::ListFormatFormat | NativeMethod::ListFormatFormatToParts => {
                 let inst = match this.value {
@@ -1946,16 +1940,16 @@ impl Interp {
                 let list = self.string_list_from_iterable(code, arg0)?;
                 let parts = list_format_parts(&data, &list);
                 if m == NativeMethod::ListFormatFormat {
-                    let mut s = String::new();
+                    let mut s = Vec::new();
                     for (_, value) in &parts {
-                        s.push_str(value);
+                        s.extend_from_slice(value);
                     }
-                    self.intl_string(&s)
+                    self.new_string_units(&s)
                 } else {
                     let arr = self.new_array();
                     for (i, (ty, value)) in parts.iter().enumerate() {
                         let obj = self.slots.alloc(Slot::instance(self.object_proto));
-                        let value_slot = self.intl_string(value);
+                        let value_slot = self.new_string_units(value);
                         let type_slot = self.intl_string(ty);
                         // Insert in `type`, `value` enumeration order.
                         self.define_descriptor_field(obj, "type", type_slot);
@@ -2741,12 +2735,13 @@ impl Interp {
                         .len()
                         .checked_add(9)
                         .ok_or(Step::Host(Halt::HeapExhausted))?;
-                    self.charge_and_check(string_chunk_cost(
-                        (tag.encode_utf16().count() + 9) as u64,
-                    ))?;
-                    self.admit_scratch::<u8>(length)?;
-                    let owned = format!("[object {}]", tag);
-                    let off = self.alloc_str_text(owned.as_bytes());
+                    self.charge_and_check(string_chunk_cost(length as u64))?;
+                    self.admit_scratch::<u16>(length)?;
+                    let mut units = Self::reserved_vec(length)?;
+                    units.extend("[object ".encode_utf16());
+                    units.extend(tag);
+                    units.push(u16::from(b']'));
+                    let off = self.chunks.alloc(&units_to_be16(&units));
                     Slot::of(Kind::String, Payload::String(off))
                 } else {
                     // `Object.prototype.toString` builtinTag (ECMA-262
@@ -2843,9 +2838,7 @@ impl Interp {
                     _ => None,
                 }
                 .unwrap_or(this);
-                let bytes = self.to_string_bytes_metered(prim);
-                let off = self.alloc_str_text(&bytes);
-                Slot::of(Kind::String, Payload::String(off))
+                self.to_string_slot_metered(prim)
             }
             // `Function.prototype.bind(thisArg, ...boundArgs)`: create a bound
             // function (its creation; the bound call is a `run` trampoline).
@@ -2858,9 +2851,9 @@ impl Interp {
             // `")"`). Accept either a Symbol primitive or its realm wrapper.
             NativeMethod::SymbolToString => {
                 let symbol = self.symbol_this_value(this)?;
-                let bytes = self.symbol_descriptive_bytes(symbol);
+                let units = self.symbol_descriptive_units(symbol);
                 self.meter.tick_raw(SYMBOL_TO_STRING_METERING);
-                let off = self.alloc_str_text(&bytes);
+                let off = self.chunks.alloc(&units_to_be16(&units));
                 Slot::of(Kind::String, Payload::String(off))
             }
             // `Symbol.prototype.valueOf()`: the symbol primitive itself.
@@ -2902,7 +2895,9 @@ impl Interp {
                         kind: Kind::String,
                         value: Payload::String(offset),
                         ..
-                    } => self.str_text(offset),
+                    } => self
+                        .str_scalar_text(offset)
+                        .ok_or_else(|| self.catchable_type_error_msg("invalid hint".into()))?,
                     _ => return Err(self.catchable_type_error_msg("invalid hint".into())),
                 };
                 match hint.as_str() {
@@ -5405,12 +5400,12 @@ impl Interp {
                     self.push(result);
                     return Ok(());
                 }
-                let sep: Vec<u8> = if argc == 0 || arg0.kind == Kind::Undefined {
-                    b",".to_vec()
+                let sep: Vec<u16> = if argc == 0 || arg0.kind == Kind::Undefined {
+                    vec![u16::from(b',')]
                 } else if arg0.kind == Kind::String {
                     match arg0.value {
-                        Payload::String(off) => self.str_text(off).into_bytes(),
-                        _ => b",".to_vec(),
+                        Payload::String(off) => self.str_units(off),
+                        _ => vec![u16::from(b',')],
                     }
                 } else {
                     unreachable!("non-string separators use the general path")
@@ -5418,15 +5413,14 @@ impl Interp {
                 let length = self.arrays[&inst].length;
                 self.meter.tick_raw(ARRAY_JOIN_FRAME_METERING);
                 self.meter.tick_slot_alloc(); // `fxNewInstance` (the key list)
-                let mut out: Vec<u8> = Vec::new();
-                let mut output_units = 0;
+                let mut out: Vec<u16> = Vec::new();
                 for i in 0..length {
                     let item = self.arrays[&inst].items().get(&i).copied();
                     // Every index is read (`mxGetIndex`) regardless of type.
                     self.charge_and_check(ARRAY_JOIN_PER_ELEMENT_METERING)?;
                     if i > 0 {
                         self.meter.tick_slot_alloc(); // the separator key slot
-                        self.extend_reserved_text(&mut out, &sep, &mut output_units)?;
+                        self.extend_reserved_units(&mut out, &sep)?;
                     }
                     match item {
                         Some(s) if s.kind != Kind::Undefined && s.kind != Kind::Null => {
@@ -5436,8 +5430,8 @@ impl Interp {
                                 )));
                             }
                             self.meter.tick_slot_alloc(); // the element key slot
-                            let bytes = self.to_string_bytes_metered(s);
-                            self.extend_reserved_text(&mut out, &bytes, &mut output_units)?;
+                            let bytes = self.to_string_units_metered(s);
+                            self.extend_reserved_units(&mut out, &bytes)?;
                         }
                         _ => {}
                     }
@@ -5445,7 +5439,7 @@ impl Interp {
                 if out.is_empty() {
                     self.charge_and_check(string_chunk_cost(0))?; // empty join chunk
                 }
-                let off = self.alloc_str_text(&out);
+                let off = self.chunks.alloc(&units_to_be16(&out));
                 Slot::of(Kind::String, Payload::String(off))
             }
             // `Array.prototype.toString()` delegates to `this.join()` with the
@@ -5494,14 +5488,13 @@ impl Interp {
                 let length = self.arrays[&inst].length;
                 self.meter.tick_raw(ARRAY_JOIN_FRAME_METERING);
                 self.meter.tick_slot_alloc();
-                let mut out: Vec<u8> = Vec::new();
-                let mut output_units = 0;
+                let mut out: Vec<u16> = Vec::new();
                 for i in 0..length {
                     self.charge_and_check(ARRAY_JOIN_PER_ELEMENT_METERING)?;
                     let item = self.arrays[&inst].items().get(&i).copied();
                     if i > 0 {
                         self.meter.tick_slot_alloc();
-                        self.extend_reserved_text(&mut out, b",", &mut output_units)?;
+                        self.extend_reserved_units(&mut out, &[u16::from(b',')])?;
                     }
                     match item {
                         Some(s) if s.kind != Kind::Undefined && s.kind != Kind::Null => {
@@ -5511,8 +5504,8 @@ impl Interp {
                                 )));
                             }
                             self.meter.tick_slot_alloc();
-                            let bytes = self.to_string_bytes_metered(s);
-                            self.extend_reserved_text(&mut out, &bytes, &mut output_units)?;
+                            let bytes = self.to_string_units_metered(s);
+                            self.extend_reserved_units(&mut out, &bytes)?;
                         }
                         _ => {}
                     }
@@ -5520,7 +5513,7 @@ impl Interp {
                 if out.is_empty() {
                     self.charge_chunk_work(1)?;
                 }
-                let off = self.alloc_str_text(&out);
+                let off = self.chunks.alloc(&units_to_be16(&out));
                 Slot::of(Kind::String, Payload::String(off))
             }
             NativeMethod::ArraySort => self.array_sort(this, base, argc, code, false)?,

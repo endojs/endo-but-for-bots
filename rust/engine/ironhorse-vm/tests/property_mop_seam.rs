@@ -147,6 +147,14 @@ fn raw_property_reads_are_confined_to_boot_restore_and_mop() {
         for token in tokens(&code) {
             let allowed = match token.text {
                 "instance_get" | "instance_has" | "instance_put" => false,
+                "mop_get_option_field" => matches!(
+                    relative,
+                    "interp/property.rs" | "interp/natives/intl.rs" | "interp/natives/temporal.rs"
+                ),
+                "symbol_ids" => !matches!(
+                    relative,
+                    "interp/natives/intl.rs" | "interp/natives/temporal.rs"
+                ),
                 "boot_chain_get" => matches!(
                     relative,
                     "interp/link.rs"
@@ -210,6 +218,71 @@ fn set_like_size_read_invokes_proxy_get() {
         }});
         var union = new Set([1]).union(other);
         union.size === 2 && log.join(',') === 'size,has,keys'
+    "#,
+        "true",
+    );
+}
+
+#[test]
+fn lossy_utf16_text_is_diagnostic_only() {
+    use ironhorse_vm::source_scan::{code_only, rs_files, token_body, tokens};
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut violations = Vec::new();
+    for path in rs_files(&root) {
+        let relative = path.strip_prefix(&root).unwrap().to_str().unwrap();
+        let source = std::fs::read_to_string(&path).unwrap();
+        let code = code_only(&source);
+        let tokens = tokens(&code);
+        let allowed_functions: &[&str] = match relative {
+            "interp/strings.rs" => &["str_text_lossy"],
+            "interp/render.rs" => &[
+                "render_at",
+                "render_uncaught",
+                "string_tag_of",
+                "render_symbol_lossy",
+            ],
+            "interp/property.rs" => &["property_debug_name"],
+            _ => &[],
+        };
+        let ranges: Vec<_> = allowed_functions
+            .iter()
+            .map(|name| token_body(&tokens, &format!("fn {name}")))
+            .collect();
+        for (index, token) in tokens.iter().enumerate() {
+            let allowed = match token.text {
+                "str_text" | "to_string_bytes_metered" | "value_to_string" => false,
+                "str_text_lossy" => {
+                    ranges.iter().any(|range| range.contains(&index))
+                        || (relative == "interp/strings.rs"
+                            && index > 0
+                            && tokens[index - 1].text == "fn")
+                }
+                "from_utf16_lossy" => {
+                    relative != "interp/property.rs"
+                        && ranges.iter().any(|range| range.contains(&index))
+                }
+                "string_tag_of" => relative == "interp/render.rs",
+                _ => true,
+            };
+            if !allowed {
+                violations.push(format!("{relative}: {}", token.text));
+            }
+        }
+    }
+    assert!(violations.is_empty(), "lossy value text: {violations:?}");
+}
+
+#[test]
+fn absent_option_names_still_reach_inherited_proxy_gets() {
+    check(
+        r#"
+        var receiver;
+        var options = Object.create(new Proxy({}, {get(target, key, actual) {
+            if (key === 'locale' + 'Matcher') receiver = actual;
+            return undefined;
+        }}));
+        new Intl.NumberFormat('en', options);
+        receiver === options
     "#,
         "true",
     );
