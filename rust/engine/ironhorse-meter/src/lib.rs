@@ -1,8 +1,10 @@
 //! Ironhorse's own frozen, XS-derived cost table. Oracle computrons are advisory.
 //! Weights and default keys have one canonical, platform-independent SHA-256 identity.
 //! That identity covers table data, not cross-platform execution. Execution is
-//! scoped per release binary per platform, with matching state, inputs and host policy.
-//! See designs/ironhorse-w6-decisions.md for the planned transcendental provider work.
+//! scoped by the VM provider: `deterministic-math` (also enabled by `consensus`)
+//! carries cross-host execution; platform Math remains per binary/platform.
+//! Both require matching release, state, input and host policy.
+//! See rust/engine/DETERMINISM-METERING.md for provider coverage and identity.
 //! Changing a weight or charging point requires a new release and golden corpus.
 #![forbid(unsafe_code)]
 mod default_keys;

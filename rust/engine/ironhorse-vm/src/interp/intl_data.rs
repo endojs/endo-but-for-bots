@@ -2,9 +2,9 @@
 #[cfg(doc)]
 use super::Interp;
 
-// Frozen, in-tree locale-data profile. Intl never consults the host locale,
-// libc, environment variables, or a dynamically-updated database.
-pub(super) const INTL_DATA_VERSION: &str = "ironhorse-intl-2026a";
+// Generated locked ICU profile, also included in the boot fingerprint.
+// Intl never consults host locale or a dynamically updated database.
+pub(super) use crate::intl_profile::INTL_DATA_VERSION;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LocaleData {

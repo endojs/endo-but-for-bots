@@ -94,13 +94,23 @@ and [CHANGELOG](CHANGELOG.md) for the verbatim per-stage measurement history.
 
 ## Determinism
 
-Execution determinism is **scoped per release binary per platform**, with the
-same initial state, input and host policy.
-The weight table's platform-independent SHA-256 identity does not guarantee
-identical execution across platform math libraries.
-[W6 §4](../../designs/ironhorse-w6-decisions.md#4-determinism-scope--decided-vendor-libm-behind-a-feature)
-records the planned provider feature and prerequisite coverage; it is not present
-at this audited tip.
+`deterministic-math` selects the versioned pure-Rust transcendental provider;
+`consensus` enables it.
+This is the configuration carrying cross-host execution determinism, with the
+same release, initial state, input and host policy.
+The ordinary default uses platform Math and remains scoped per binary/platform.
+The cost-table digest identifies weights, not the full execution configuration.
+Provider identity participates in the boot fingerprint and snapshot compatibility.
+See [the implementation record](DETERMINISM-METERING.md) for prerequisite coverage,
+the exact 30-file oracle divergence inventory, and cross-platform CI vectors.
+
+Intl and Temporal are retained in the engine by the amended
+[design decision 10](../../designs/ironhorse-engine.md#design-decisions).
+Their acceptance uses oracle-free tests where XS omits the corresponding global.
+ICU data comes from locked registry dependencies, checked by
+`scripts/intl-profile.py`; custom data builds are outside the supported profile.
+Temporal.Now returns the Unix epoch and the system time zone is UTC.
+Neither subsystem consults a host clock, locale, or time-zone database.
 
 ## Native recursion budget and stack contract
 

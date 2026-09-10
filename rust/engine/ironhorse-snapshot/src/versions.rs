@@ -30,16 +30,16 @@
 //!
 //! # Intl data and derived identity
 //!
-//! `INTL_DATA_VERSION` in `ironhorse-vm/src/interp.rs` is exposed to guests as
-//! `Intl.__ironhorseDataVersion`. Built-in data changes need an identifier update
-//! and release review. Today this label neither captures every resolved ICU data
-//! dependency nor has a comprehensive independent persisted equality gate.
-//! Updating the label alone therefore does not establish safe cross-version resume.
+//! Generated `ironhorse-vm/src/intl_profile.rs` exposes `INTL_DATA_VERSION` as
+//! `Intl.__ironhorseDataVersion`. `scripts/intl-profile.py` binds the in-tree
+//! profile to locked ICU versions, checksums, dependency edges and root features;
+//! CI rejects stale generation. Custom data builds are outside this profile.
+//! In-tree locale algorithm/table changes still require deliberate release review.
 //!
-//! [`ironhorse_vm::Interp::boot_fingerprint`] replaces the retired boot-layout
-//! counter. It hashes ordered intrinsic layout and gates execution compatibility;
-//! even a Debug-format change can conservatively refuse previously valid heaps.
-//! It is not a substitute for pinning Intl/ICU dependencies.
+//! [`ironhorse_vm::Interp::boot_fingerprint`] hashes ordered intrinsic layout,
+//! the Intl profile and the selected deterministic Math provider. SIGN therefore
+//! refuses incompatible profiles before execution. A matching cost-table digest
+//! alone does not establish execution compatibility.
 //!
 //! # Upgrade consequence
 //!
