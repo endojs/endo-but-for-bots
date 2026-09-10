@@ -165,11 +165,9 @@ impl RestoreSession {
         meter: crate::meter::MeterState,
     ) -> Result<(), RestoreError> {
         self.admit(1 << 0, "snapshot_state")?;
-        let result = {
-            self.interp
-                .restore_snapshot_state(slots, chunks, stack, symbol_names, meter);
-            Ok(())
-        };
+        let result = self
+            .interp
+            .restore_snapshot_state(slots, chunks, stack, symbol_names, meter);
         self.failed = result.err();
         result
     }
@@ -574,16 +572,87 @@ mod tests {
     }
 
     #[test]
-    fn a_caught_restore_panic_cannot_reopen_the_session() {
+    fn malformed_initial_state_is_refused_before_boot_reconstruction() {
         let mut session = Interp::begin_restore();
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            session.restore_snapshot_state(
+        let old_root = session.interp.slots.get(session.interp.global_obj);
+        let error = session
+            .restore_snapshot_state(
                 SlotArena::new(),
                 ChunkArena::new(),
-                Vec::new(),
+                vec![],
                 vec!["format".into()],
                 Interp::new().meter_state(),
             )
+            .unwrap_err();
+        assert_eq!(
+            error,
+            RestoreError {
+                row: "snapshot_state",
+                reason: "slot arena is smaller than the boot footprint",
+            }
+        );
+        assert_eq!(
+            session.interp.slots.get(session.interp.global_obj),
+            old_root
+        );
+        assert_eq!(session.restore_native_names(None).unwrap_err(), error);
+        assert_eq!(session.finish().err().unwrap(), error);
+        for case in 0..4 {
+            let mut source = Interp::new();
+            let mut stack = vec![];
+            let mut names = vec![];
+            let expected = match case {
+                0 => {
+                    source.slots.free(source.global_obj);
+                    "global root is a free slot"
+                }
+                1 => {
+                    source.slots.get_mut(source.global_obj).value = Payload::Integer(0);
+                    "global root is not an instance"
+                }
+                2 => {
+                    stack.push(Slot::undefined());
+                    "a quiescent restore requires an empty value stack"
+                }
+                _ => {
+                    names.resize(usize::from(u16::MAX) + 1, "x".into());
+                    "name table exceeds the property ID space"
+                }
+            };
+            let meter = source.meter_state();
+            let mut session = Interp::begin_restore();
+            let error = session
+                .restore_snapshot_state(source.slots, source.chunks, stack, names, meter)
+                .unwrap_err();
+            assert_eq!(error.row, "snapshot_state");
+            assert_eq!(error.reason, expected);
+            assert!(session.finish().is_err());
+        }
+    }
+
+    #[test]
+    fn a_caught_restore_panic_cannot_reopen_the_session() {
+        struct FailedBacking;
+        impl crate::PageSource for FailedBacking {
+            fn slot_page(&self, _: u32) -> Vec<Slot> {
+                panic!("fixture backing fault")
+            }
+            fn chunk_extent(&self, _: u32) -> Vec<u8> {
+                panic!("fixture backing fault")
+            }
+        }
+        let source = Interp::new();
+        let slots = SlotArena::lazy_from_parts(
+            source.slots.capacity(),
+            source.slots.free_list().to_vec(),
+            source.slots.live_count(),
+            std::rc::Rc::new(FailedBacking),
+            source.chunks.byte_size() as u64,
+        );
+        let meter = source.meter_state();
+        let mut session = Interp::begin_restore();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            session.restore_snapshot_state(slots, source.chunks, vec![], vec![], meter)
         }));
         assert!(result.is_err());
         let error = session.restore_dates(Vec::new()).unwrap_err();

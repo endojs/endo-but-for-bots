@@ -1320,3 +1320,53 @@ fn indexed_property_id_must_be_registered() {
         "stored property id outside the name and symbol-key tables",
     );
 }
+
+#[test]
+fn a_non_instance_global_root_is_refused_by_vm_adoption() {
+    use ironhorse_vm::{Kind, Payload};
+    let machine = quiescent_machine("globalThis");
+    let mut image = machine.snapshot_image_for_testing(&sig()).unwrap();
+    let id = image
+        .names
+        .iter()
+        .position(|name| name == "globalThis")
+        .unwrap() as u16
+        + 1;
+    let root = image
+        .slots
+        .iter()
+        .find_map(|slot| {
+            if slot.id == id {
+                if let Payload::Reference(owner) = slot.value {
+                    return Some(owner);
+                }
+            }
+            None
+        })
+        .unwrap();
+    image.slots[root.0 as usize].kind = Kind::Integer;
+    image.slots[root.0 as usize].value = Payload::Integer(0);
+    assert!(matches!(
+        from_snapshot_bytes(&write_machine_unchecked(&image), &sig()),
+        Err(SnapshotError::Corrupt("arena restore failed"))
+    ));
+    let mut store = MemoryStore::new();
+    store
+        .commit(&image_to_batch_unchecked(&image, 1, ""))
+        .unwrap();
+    assert!(matches!(
+        ironhorse_snapshot::machine::resume_from_store(&store, &sig()),
+        Err(StoreError::Snapshot(SnapshotError::Corrupt(
+            "arena restore failed"
+        )))
+    ));
+    assert!(matches!(
+        ironhorse_snapshot::machine::resume_from_store_lazy(
+            std::rc::Rc::new(std::cell::RefCell::new(store)),
+            &sig()
+        ),
+        Err(StoreError::Snapshot(SnapshotError::Corrupt(
+            "arena restore failed"
+        )))
+    ));
+}

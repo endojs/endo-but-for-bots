@@ -2,5 +2,4 @@
 # These are coverage debt, not permission to accept the corrupt input.
 # The registry removes an exception when a direct literal assertion is added.
 # New labels require a regression assertion or an individually reviewed entry.
-arena restore failed	Fresh-session admission cannot currently return an error: these adapters restore arenas first, and raw arena-content restoration does not yet return Result. VM session-order and poisoned-session refusals are tested directly; full arena validation remains pending.
 invalid lazy arena metadata	Defensive duplicate VM arena metadata check: store validation has already established free-list bounds, uniqueness and live/free accounting. SlotArena::try_lazy_from_parts tests exercise those refusals directly.
