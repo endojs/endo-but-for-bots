@@ -6,6 +6,206 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 #[test]
+fn failed_collection_permanently_disqualifies_the_machine() {
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+    let mut machine = Interp::new();
+    let owner = machine.intrinsics["Object"];
+    machine
+        .functions
+        .update(&owner, |info| {
+            info.name_chunk = crate::value::ChunkOffset(1);
+        })
+        .unwrap();
+    assert!(machine.is_quiescent());
+    let garbage = machine.slots.alloc(Slot::integer(42));
+    assert!(catch_unwind(AssertUnwindSafe(|| machine.collect_garbage())).is_err());
+    // This failure occurs after sweeping, so retrying an ordinary crank must
+    // not turn a partially mutated machine back into a checkpoint candidate.
+    assert!(machine.slots.is_free_index(garbage));
+    assert!(!machine.is_quiescent());
+    let raw = machine.meter.raw();
+    let outcome = machine.run(&[Opcode::XS_CODE_RETURN as u8]);
+    assert_eq!(
+        outcome.halt,
+        Halt::EngineInvariant("gc:previous-collection-failed")
+    );
+    assert!(!outcome.completed);
+    assert_eq!(machine.meter.raw(), raw);
+    assert!(!machine.is_quiescent());
+    assert!(catch_unwind(AssertUnwindSafe(|| machine.collect_garbage())).is_err());
+    assert!(catch_unwind(AssertUnwindSafe(|| machine.free_pages(&[]))).is_err());
+}
+
+#[test]
+fn successful_collection_clears_only_its_own_failure_latch() {
+    let mut machine = Interp::new();
+    machine.collect_garbage();
+    assert!(machine.is_quiescent());
+    machine.last_crank_completed = false;
+    machine.collect_garbage();
+    assert!(!machine.gc_failed);
+    assert!(
+        !machine.is_quiescent(),
+        "GC must not complete an interrupted crank"
+    );
+}
+
+#[test]
+fn partial_collection_rejects_a_guard_index_even_when_cardinalities_match() {
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+    let mut machine = Interp::new();
+    let (_, resolve, _) = machine.new_promise_capability();
+    let Payload::Reference(owner) = resolve.value else {
+        unreachable!()
+    };
+    let bad_guard = machine.promise_guards.len();
+    // Both resolving functions must name the same corrupt index. The number
+    // of referenced guards still equals the arena length, but it is not the
+    // identity mapping that the no-compaction fast path requires.
+    for function in machine.promise_functions.values_mut() {
+        function.guard = bad_guard;
+    }
+    assert_eq!(machine.promise_functions[&owner].guard, bad_guard);
+    // Keep the corrupt resolving functions alive while actually sweeping a
+    // disposable page beyond all boot and promise allocations.
+    let garbage_page = machine
+        .slots
+        .capacity()
+        .div_ceil(crate::value::SLOTS_PER_PAGE);
+    let garbage = loop {
+        let slot = machine.slots.alloc(Slot::integer(42));
+        if slot.0 / crate::value::SLOTS_PER_PAGE == garbage_page {
+            break slot;
+        }
+    };
+    let error = catch_unwind(AssertUnwindSafe(|| machine.free_pages(&[garbage_page])))
+        .expect_err("bad guard must fail before the cardinality shortcut");
+    assert!(machine.slots.is_free_index(garbage));
+    assert!(!machine.slots.is_free_index(owner));
+    let message = error
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| error.downcast_ref::<&str>().copied())
+        .unwrap();
+    assert!(message.contains("gc:promise-guard-index-out-of-arena"));
+    assert!(machine.gc_failed);
+    assert!(!machine.is_quiescent());
+    let raw = machine.meter.raw();
+    let outcome = machine.run(&[Opcode::XS_CODE_RETURN as u8]);
+    assert_eq!(
+        outcome.halt,
+        Halt::EngineInvariant("gc:previous-collection-failed")
+    );
+    assert!(!outcome.completed);
+    assert_eq!(machine.meter.raw(), raw);
+    assert!(!machine.is_quiescent());
+}
+
+#[test]
+fn partial_collection_rejects_reaction_indices_even_when_cardinalities_match() {
+    use crate::value::SlotIndex;
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+    for kind in [
+        ReactionKind::Combine(1, 0),
+        ReactionKind::CombineDirect(1, 0),
+        ReactionKind::FromAsyncNext(1),
+        ReactionKind::FromAsyncElem(1),
+        ReactionKind::FromAsyncMap(1),
+        ReactionKind::FromAsyncClose(1),
+    ] {
+        let mut machine = Interp::new();
+        let combinator = matches!(
+            kind,
+            ReactionKind::Combine(..) | ReactionKind::CombineDirect(..)
+        );
+        if combinator {
+            machine.combinators.push(CombinatorState {
+                kind: CombinatorKind::All,
+                resolve: Slot::undefined(),
+                reject: Slot::undefined(),
+                remaining: 1,
+                results: SlotIndex::NULL,
+            });
+        } else {
+            machine.from_async.push(FromAsyncData {
+                resolve: Slot::undefined(),
+                reject: Slot::undefined(),
+                target: SlotIndex::NULL,
+                target_is_array: false,
+                k: 0,
+                mapfn: Slot::undefined(),
+                mapping: false,
+                this_arg: Slot::undefined(),
+                settled: false,
+                iterator: Slot::undefined(),
+                next_method: Slot::undefined(),
+                sync_wrapped: false,
+                array_like: Slot::undefined(),
+                len: 0,
+                close_error: Slot::undefined(),
+            });
+        }
+        // One holder and one arena entry used to take the identity shortcut,
+        // even though the holder names index 1 and the only entry is index 0.
+        machine.promise_jobs.push_back(PromiseJob::Reaction {
+            reaction: PromiseReaction {
+                on_fulfilled: Slot::undefined(),
+                on_rejected: Slot::undefined(),
+                resolve: Slot::undefined(),
+                reject: Slot::undefined(),
+                kind,
+            },
+            value: Slot::undefined(),
+            rejected: false,
+        });
+        let error = catch_unwind(AssertUnwindSafe(|| machine.free_pages(&[])))
+            .expect_err("invalid reaction index must fail before the identity shortcut");
+        let message = error
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| error.downcast_ref::<&str>().copied())
+            .unwrap();
+        assert!(
+            message.contains(if combinator {
+                "gc:combinator-index-out-of-arena"
+            } else {
+                "gc:from-async-index-out-of-arena"
+            }),
+            "{kind:?}: {message}"
+        );
+        assert!(machine.gc_failed);
+    }
+}
+
+#[test]
+fn partial_collection_rejects_an_out_of_arena_code_segment() {
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+    let mut machine = Interp::new();
+    assert!(machine.code_segments.is_empty());
+    machine
+        .code_segments
+        .push(Rc::from([Opcode::XS_CODE_RETURN as u8]));
+    let owner = machine.intrinsics["Object"];
+    machine.func_segments.insert(owner, 1);
+    let error = catch_unwind(AssertUnwindSafe(|| machine.free_pages(&[])))
+        .expect_err("code segment reference must name an existing buffer");
+    let message = error
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| error.downcast_ref::<&str>().copied())
+        .unwrap();
+    assert!(message.contains("gc:code-segment-index-out-of-arena"));
+    assert_eq!(
+        machine.code_segments.len(),
+        1,
+        "validate before dropping buffers"
+    );
+    assert_eq!(machine.func_segments[&owner], 1);
+    assert!(machine.gc_failed);
+    assert!(!machine.is_quiescent());
+}
+
+#[test]
 fn prototype_method_roots_preserve_repeated_and_revisited_holders() {
     use crate::value::SlotIndex;
 
