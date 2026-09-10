@@ -17,12 +17,15 @@ import {
   rmdir,
   symlink,
   unlink,
+  open,
 } from 'node:fs/promises';
 import { join } from 'node:path';
 import process from 'node:process';
+import { networkInterfaces } from 'node:os';
 import { promisify } from 'node:util';
 
 import { makeProviderPipe } from './provider-pipe.js';
+import { providerNetworkBootstrap } from './provider-network-bootstrap.js';
 
 const execute = promisify(execFile);
 const LABEL = 'io.endo.provider.owner';
@@ -71,6 +74,7 @@ const readStart = async pid => {
  * @param {string} options.stateDirectory Private directory for a process lock.
  * @param {number} [options.maxListeners]
  * @param {any} [options.host] Trusted host powers, never session inputs.
+ * @param {{address: string, bootstrapImageRef: string}} [options.publicInternet] Operator-owned synthetic IPv4 address and pinned helper image.
  */
 export const makePodmanProviderListenerRuntime = async ({
   imageRef,
@@ -78,6 +82,7 @@ export const makePodmanProviderListenerRuntime = async ({
   stateDirectory,
   host = {},
   maxListeners = 16,
+  publicInternet,
 }) => {
   (/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(ownerId) &&
     /^[a-z0-9][a-z0-9._:/-]*@sha256:[a-f0-9]{64}$/.test(imageRef)) ||
@@ -85,6 +90,19 @@ export const makePodmanProviderListenerRuntime = async ({
   (Number.isInteger(maxListeners) && maxListeners > 0 && maxListeners <= 256) ||
     Fail`Invalid listener capacity`;
   const imageDigest = imageRef.slice(imageRef.indexOf('@') + 1);
+  if (publicInternet !== undefined) {
+    (/^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(publicInternet.address) &&
+      /^[a-z0-9][a-z0-9._:/-]*@sha256:[a-f0-9]{64}$/.test(
+        publicInternet.bootstrapImageRef,
+      )) ||
+      Fail`Invalid public network bootstrap configuration`;
+    const assigned = (host.networkInterfaces ?? networkInterfaces)();
+    Object.values(assigned)
+      .flatMap(items => /** @type {any[]} */ (items || []))
+      .some(item => item.address === publicInternet.address) ||
+      Fail`Synthetic proxy address must be assigned to this operator host`;
+    harden(publicInternet);
+  }
   // Host-side rootless Podman configuration, never container environment.
   // Proxy and credential variables are deliberately excluded.
   const hostEnvironment = Object.fromEntries(
@@ -127,6 +145,31 @@ export const makePodmanProviderListenerRuntime = async ({
   const start = await processStart(process.pid);
   start !== null || Fail`Provider runtime requires a procfs process identity`;
   const identity = `${process.pid}-${start}`;
+  const resolverConfigPath = join(stateDirectory, 'public-resolv.conf');
+  const resolverContents =
+    'nameserver 127.0.0.53\noptions attempts:1 timeout:2\n';
+  if (publicInternet) {
+    try {
+      const file = await open(resolverConfigPath, 'wx', 0o444);
+      try {
+        await file.writeFile(resolverContents);
+        await file.chmod(0o444);
+      } finally {
+        await file.close();
+      }
+    } catch (error) {
+      if (/** @type {NodeJS.ErrnoException} */ (error).code !== 'EEXIST')
+        throw error;
+    }
+    const resolverStat = await lstat(resolverConfigPath);
+    // eslint-disable-next-line no-bitwise
+    const resolverMode = resolverStat.mode & 0o777;
+    (resolverStat.isFile() &&
+      resolverStat.uid === process.getuid?.() &&
+      resolverMode === 0o444 &&
+      (await readFile(resolverConfigPath, 'utf8')) === resolverContents) ||
+      Fail`Public resolver configuration is not immutable`;
+  }
   const lockPath = join(stateDirectory, `${ownerId}.lock`);
   try {
     await symlink(identity, lockPath);
@@ -201,8 +244,15 @@ export const makePodmanProviderListenerRuntime = async ({
     await unlink(lockPath);
     throw error;
   }
-  const startListener = ({ endpoint, limits }) =>
+  /** @param {{endpoint:any,limits:any,network?:{endpoint:any,address:string}}} configuration */
+  const startListener = ({ endpoint, limits, network = undefined }) =>
     serialize(async () => {
+      if (network !== undefined) {
+        (publicInternet &&
+          network.address === publicInternet.address &&
+          network.endpoint) ||
+          Fail`Public network is not configured by the operator`;
+      }
       !disposed || Fail`Provider runtime disposed`;
       await retryCleanup();
       cleanup.size < maxListeners || Fail`Provider listener capacity exceeded`;
@@ -214,6 +264,8 @@ export const makePodmanProviderListenerRuntime = async ({
       let live = false;
       let channelClosed = false;
       let namespaceId;
+      let networkEvidence;
+      let helperName;
       const stop = () => {
         if (stopping) return stopping;
         live = false;
@@ -224,6 +276,7 @@ export const makePodmanProviderListenerRuntime = async ({
           // Container removal, not killing only the attached podman CLI, reaps
           // the isolated worker. Failure retains this closure for a retry.
           await remove(name);
+          if (helperName) await remove(helperName);
           if (child) await deadline(child.finished, 5000);
           cleanup.delete(stop);
           pendingCleanup.delete(stop);
@@ -244,6 +297,9 @@ export const makePodmanProviderListenerRuntime = async ({
           '--label',
           `${LABEL}=${ownerId}`,
           '--network=none',
+          ...(network
+            ? ['--sysctl=net.ipv4.ip_unprivileged_port_start=0']
+            : []),
           '--pid=private',
           '--ipc=private',
           // Rootless Podman establishes its mapped user namespace; admission
@@ -286,7 +342,11 @@ export const makePodmanProviderListenerRuntime = async ({
         pipe = makeProviderPipe({
           input: subprocess.stdout,
           output: subprocess.stdin,
-          bootstrap: harden({ endpoint, limits }),
+          bootstrap: harden({
+            endpoint,
+            limits,
+            ...(network ? { network } : {}),
+          }),
         });
         void pipe.closed.then(() => {
           channelClosed = true;
@@ -318,14 +378,14 @@ export const makePodmanProviderListenerRuntime = async ({
             inspected.HostConfig?.NetworkMode === 'none' &&
             inspected.HostConfig?.ReadonlyRootfs === true) ||
             Fail`Provider listener process identity mismatch`;
-          const [network, namespaces, posture] = await Promise.all([
+          const [observedNetwork, namespaces, posture] = await Promise.all([
             readNetworkNamespace(procfs, pid),
             readNamespaceIdentities(procfs, pid),
             readProcessStatus(procfs, pid),
           ]);
-          (network.interfaces.length === 1 &&
-            network.interfaces[0] === 'lo' &&
-            network.routableRoutes === 0 &&
+          (observedNetwork.interfaces.length === 1 &&
+            observedNetwork.interfaces[0] === 'lo' &&
+            observedNetwork.routableRoutes === 0 &&
             Object.values(namespaces).every(value => value.unshared) &&
             posture.uid === 1000 &&
             posture.gid === 1000 &&
@@ -334,7 +394,7 @@ export const makePodmanProviderListenerRuntime = async ({
             posture.effectiveCapabilities === 0n &&
             posture.permittedCapabilities === 0n &&
             posture.boundingCapabilities === 0n &&
-            (!namespaceId || namespaceId === network.namespaceId)) ||
+            (!namespaceId || namespaceId === observedNetwork.namespaceId)) ||
             Fail`Provider listener isolation is not proved`;
           const final = JSON.parse(
             (await run(['inspect', '--format', '{{json .}}', name])).stdout,
@@ -346,17 +406,82 @@ export const makePodmanProviderListenerRuntime = async ({
             final.ImageDigest === imageDigest &&
             final.Config?.Labels?.[LABEL] === ownerId) ||
             Fail`Provider listener changed during observation`;
-          namespaceId = network.namespaceId;
+          namespaceId = observedNetwork.namespaceId;
           return harden({
             endpoint: ready.endpoint,
             containerName: name,
             networkNamespaceId: namespaceId,
             listenerImageDigest: imageDigest,
+            ...(networkEvidence ? { network: networkEvidence } : {}),
           });
         };
         !channelClosed || Fail`Provider listener channel closed`;
         live = true;
         await observe();
+        if (network) {
+          if (!publicInternet) throw Error('Public network unavailable');
+          helperName = `endo-provider-${randomUUID()}`;
+          const result = await run([
+            'run',
+            '--rm',
+            '--pull=never',
+            '--name',
+            helperName,
+            '--label',
+            `${LABEL}=${ownerId}`,
+            '--network',
+            `container:${name}`,
+            '--pid=private',
+            '--ipc=private',
+            '--user=0',
+            '--read-only',
+            '--read-only-tmpfs=false',
+            '--cap-drop=ALL',
+            '--cap-add=NET_ADMIN',
+            '--security-opt=no-new-privileges',
+            '--memory=64m',
+            '--memory-swap=64m',
+            '--pids-limit=16',
+            '--cpus=1',
+            '--ulimit',
+            'nofile=64:64',
+            '--ulimit',
+            'core=0:0',
+            '--entrypoint=python3',
+            publicInternet.bootstrapImageRef,
+            '-I',
+            '-c',
+            providerNetworkBootstrap,
+            publicInternet.address,
+          ]);
+          result.stdout.trim() === 'EndoPublicProxyAddressV1' ||
+            Fail`Public network bootstrap failed`;
+          await remove(helperName);
+          helperName = undefined;
+          const activated = await deadline(
+            E(control).activateNetwork(),
+            10_000,
+          );
+          const proxy = new URL(activated.proxyUrl);
+          (activated.policy === 'public-internet' &&
+            activated.dnsHost === '127.0.0.53' &&
+            proxy.protocol === 'http:' &&
+            proxy.hostname === publicInternet.address &&
+            proxy.port !== '' &&
+            proxy.username === '' &&
+            proxy.password === '' &&
+            proxy.pathname === '/' &&
+            proxy.search === '' &&
+            proxy.hash === '') ||
+            Fail`Public network listener handshake failed`;
+          networkEvidence = harden({
+            policy: 'public-internet',
+            proxyUrl: proxy.origin,
+            dnsHost: '127.0.0.53',
+            resolverConfigPath,
+          });
+          await observe();
+        }
         !channelClosed || Fail`Provider listener channel closed`;
         void pipe.closed.then(() => stop()).catch(() => {});
         return harden({ observe, stop, closed: pipe.closed });

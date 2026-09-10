@@ -141,3 +141,90 @@ for (const diagnosticsEnabled of [false, true]) {
     },
   );
 }
+
+test.serial(
+  'network listeners start only after trusted activation and are disposed with the worker',
+  async t => {
+    t.timeout(5000);
+    const worker = spawn(
+      process.execPath,
+      [
+        '--input-type=module',
+        '-e',
+        `
+    import { startProviderListenerWorker } from ${JSON.stringify(new URL('../src/provider-worker.js', import.meta.url).href)};
+    import { E } from '@endo/eventual-send';
+    await startProviderListenerWorker({input:process.stdin,output:process.stdout,
+      async makeNetworkListeners({endpoint}) {
+        await E(endpoint).activated();
+        return harden({evidence:{policy:'test-only'},dispose:()=>E(endpoint).disposed()});
+      }});
+  `,
+      ],
+      {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env: {
+          PATH: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+          NODE_VERSION: '22.19.0',
+          YARN_VERSION: '1.22.22',
+          HOME: '/home/node',
+          LANG: 'C.UTF-8',
+          LC_ALL: 'C.UTF-8',
+        },
+      },
+    );
+    const finished = new Promise(resolve => worker.once('close', resolve));
+    t.teardown(async () => {
+      worker.kill();
+      await finished;
+    });
+    let activations = 0;
+    let disposals = 0;
+    const pipe = makeProviderPipe({
+      input: worker.stdout,
+      output: worker.stdin,
+      bootstrap: harden({
+        endpoint: Far('unused inference', {
+          requestStream() {
+            throw Error('unused');
+          },
+        }),
+        limits: {
+          maxConnections: 2,
+          maxRequestBytes: 1024n,
+          maxResponseBytes: 1024n,
+          timeoutMs: 1000,
+        },
+        network: {
+          endpoint: Far('test network lifecycle', {
+            activated() {
+              activations += 1;
+            },
+            disposed() {
+              disposals += 1;
+            },
+          }),
+        },
+      }),
+    });
+    t.teardown(pipe.close);
+    const control = await pipe.getBootstrap();
+    await E(control).ready();
+    t.is(activations, 0);
+    t.deepEqual(
+      await Promise.all([
+        E(control).activateNetwork(),
+        E(control).activateNetwork(),
+      ]),
+      [{ policy: 'test-only' }, { policy: 'test-only' }],
+    );
+    t.is(activations, 1);
+    await E(control).stop();
+    t.is(disposals, 1);
+    await t.throwsAsync(E(control).activateNetwork(), {
+      message: /network unavailable|Provider pipe closed/,
+    });
+    pipe.close();
+    t.is(await finished, 0);
+  },
+);

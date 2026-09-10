@@ -1504,8 +1504,35 @@ export const makePodmanDriver = ({
       }
       const proc = await getProcfs();
       const attachDeclared = request.mounts.filter(
-        mount => mount.kind === 'attach',
+        mount => mount.kind === 'attach' || mount.kind === 'resolver',
       );
+      let resolverContents;
+      if (request.mounts.some(mount => mount.kind === 'resolver')) {
+        // Read the effective mounted file, not the host pathname that could
+        // have been replaced after mounting. This fixed operation retains the
+        // anchor's cap-drop ALL profile and exposes no caller-supplied argv.
+        const resolver = await spawnAndCollect(
+          cp,
+          'podman',
+          podmanArgs(runtime, [
+            'exec',
+            '--user',
+            '1000:1000',
+            anchorName,
+            '/bin/head',
+            '-c',
+            '1025',
+            '/etc/resolv.conf',
+          ]),
+          { timeoutMs: CONTROL_COMMAND_TIMEOUT_MS },
+        );
+        if (resolver.code !== 0 || resolver.stdout.length > 1024) {
+          throw makeError(
+            X`Cannot observe the effective resolver configuration`,
+          );
+        }
+        resolverContents = resolver.stdout;
+      }
       const [
         namespaces,
         anchorNetwork,
@@ -1567,6 +1594,7 @@ export const makePodmanDriver = ({
         }),
       );
       const attestation = attestSlicePolicy(request, {
+        ...(resolverContents === undefined ? {} : { resolverContents }),
         inspect,
         rootless,
         namespaces,

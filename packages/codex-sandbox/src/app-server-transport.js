@@ -9,6 +9,7 @@ import { iterateBytesWriter } from '@endo/exo-stream/iterate-bytes-writer.js';
 import {
   makeBrokerAppServerArgv,
   assertBrokerEndpoint,
+  makeBrokerEnvironment,
 } from './broker-launch.js';
 
 import { encodeJsonLine, parseJsonLines } from './codex-protocol.js';
@@ -71,23 +72,15 @@ export const startAppServerTransport = async ({
     );
   }
   await null;
-  const brokerEndpoint = brokerLease
-    ? assertBrokerEndpoint((await E(brokerLease).attestation()).endpoint)
+  const lease = brokerLease ? await E(brokerLease).attestation() : undefined;
+  const brokerEndpoint = lease
+    ? assertBrokerEndpoint(lease.endpoint)
     : undefined;
-  const effectiveEnv = harden({
-    CODEX_HOME: '/codex-home',
-    HOME: '/home/node',
-    LANG: 'C.UTF-8',
-    LC_ALL: 'C.UTF-8',
-    TEMP: '/tmp',
-    TMP: '/tmp',
-    TMPDIR: '/tmp',
-    TZ: 'UTC',
-  });
+  const effectiveEnv = makeBrokerEnvironment(lease?.network);
   const proc = /** @type {ProcessHandle} */ (
     await E(slice).spawn(
       brokerEndpoint
-        ? makeBrokerAppServerArgv(brokerEndpoint, executable)
+        ? makeBrokerAppServerArgv(brokerEndpoint, executable, lease?.network)
         : harden([executable, 'app-server', '--listen', 'stdio://']),
       harden({
         cwd,
@@ -210,6 +203,7 @@ export const startAppServerTransport = async ({
 
     return harden({
       ...(brokerEndpoint ? { brokerEndpoint } : {}),
+      ...(lease?.network ? { network: lease.network } : {}),
       messages,
       send,
       close,

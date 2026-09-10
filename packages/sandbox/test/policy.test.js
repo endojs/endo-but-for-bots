@@ -210,6 +210,74 @@ test('parseByteSize reads the forms container tooling writes back', t => {
   t.is(parseByteSize(-1), null);
 });
 
+test('only the fixed generated resolver is admitted, read-only with observed exact contents', t => {
+  const resolver = harden({
+    role: 'resolver',
+    kind: 'resolver',
+    source: '/private/provider/public-resolv.conf',
+    destination: '/etc/resolv.conf',
+    mode: 'ro',
+  });
+  const request = makeRequest();
+  const policy = assertSlicePolicyRequest({
+    ...request,
+    mounts: [...request.mounts, resolver],
+  });
+  t.true(
+    assemblePolicyArgv(policy).includes(
+      'type=bind,source=/private/provider/public-resolv.conf,destination=/etc/resolv.conf,ro,nosuid,nodev,bind-propagation=rprivate',
+    ),
+  );
+  const inspect = makeInspect(record =>
+    record.Mounts.push({
+      Type: 'bind',
+      Source: resolver.source,
+      Destination: resolver.destination,
+      Options: ['ro', 'nodev', 'nosuid'],
+      RW: false,
+    }),
+  );
+  const state = makeState({
+    inspect,
+    resolverContents: 'nameserver 127.0.0.53\noptions attempts:1 timeout:2\n',
+    attachMounts: new Map([
+      [
+        resolver.destination,
+        {
+          fstype: 'ext4',
+          root: '/public-resolv.conf',
+          options: ['ro', 'nodev', 'nosuid'],
+        },
+      ],
+    ]),
+  });
+  t.is(attestSlicePolicy(policy, state).mounts.at(-1)?.mode, 'ro');
+  for (const change of [
+    { resolverContents: 'nameserver 1.1.1.1\n' },
+    { resolverContents: undefined },
+    { attachMounts: new Map() },
+  ]) {
+    t.throws(() => attestSlicePolicy(policy, { ...state, ...change }), {
+      message: /resolver mount/,
+    });
+  }
+  for (const change of [
+    { mode: 'rw' },
+    { source: '/etc/shadow' },
+    { destination: '/codex-home' },
+    { role: 'workspace' },
+  ]) {
+    t.throws(
+      () =>
+        assertSlicePolicyRequest({
+          ...request,
+          mounts: [...request.mounts, { ...resolver, ...change }],
+        }),
+      { message: /resolver/ },
+    );
+  }
+});
+
 test('a well-formed request normalizes and hardens', t => {
   const policy = assertSlicePolicyRequest(makeRequest());
   t.is(policy.profile, 'hosted-agent-v1');
