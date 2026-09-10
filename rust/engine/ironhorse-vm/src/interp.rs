@@ -150,10 +150,9 @@ use ironhorse_meter::{
 use ironhorse_meter::{string_chunk_cost, PROXY_INTERNAL_METHOD_METERING};
 
 use crate::bulk::{ArrayData, CollKey, CollKind, CollectionData, SideRefCounts};
-use crate::classification::{ClassIndex, ClassMap, ExoticKind};
 use crate::meter::{Meter, MeterCheck};
 use crate::opcode::Opcode;
-use crate::snapshot_dirty::{SnapshotSection, Tracked};
+use crate::snapshot_dirty::{SnapshotDirt, SnapshotSection, Tracked};
 use crate::symbols::{SymbolIds, SymbolName};
 use crate::value::{
     canonicalize_nan, number_to_ecma_string, to_int32, ChunkArena, Kind, Payload, Slot, SlotArena,

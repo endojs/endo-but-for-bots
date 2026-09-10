@@ -51,7 +51,7 @@ impl Interp {
     pub fn collect_garbage(&mut self) -> Result<crate::gc::GcStats, crate::gc::GcAdmissionError> {
         self.admit_collection()?;
         self.gc_failed = true;
-        self.classes.1.mark_all();
+        self.snapshot_dirt.mark_all();
         use crate::value::SlotIndex;
 
         let roots = self.gc_roots();

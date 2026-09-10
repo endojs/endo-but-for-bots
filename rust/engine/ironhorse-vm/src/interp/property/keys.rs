@@ -164,7 +164,7 @@ impl Interp {
             (id, true)
         } else {
             let id = self.next_symbol_key_id;
-            self.classes.1.mark(SnapshotSection::Symbols.mask());
+            self.snapshot_dirt.mark(SnapshotSection::Symbols.mask());
             self.next_symbol_key_id -= 1;
             self.symbol_key_ids.insert(desc, id);
             (id, true)

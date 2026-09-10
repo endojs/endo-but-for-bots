@@ -89,6 +89,48 @@ impl<T> Tracked<T> {
         Self::new(self.value.clone(), dirt, self.mask)
     }
 }
+// The former classification maps need only snapshot tracking now. These
+// callback helpers preserve their mutation API without a derived type index.
+impl<V> Tracked<std::collections::HashMap<crate::value::SlotIndex, V>> {
+    pub(crate) fn update<R>(
+        &mut self,
+        key: &crate::value::SlotIndex,
+        update: impl FnOnce(&mut V) -> R,
+    ) -> Option<R> {
+        self.dirt.mark(self.mask);
+        self.value.get_mut(key).map(update)
+    }
+
+    pub(crate) fn update_or_default<R>(
+        &mut self,
+        key: crate::value::SlotIndex,
+        update: impl FnOnce(&mut V) -> R,
+    ) -> R
+    where
+        V: Default,
+    {
+        self.dirt.mark(self.mask);
+        update(self.value.entry(key).or_default())
+    }
+
+    pub(crate) fn update_values(&mut self, update: impl FnMut(&mut V)) {
+        self.dirt.mark(self.mask);
+        self.value.values_mut().for_each(update);
+    }
+
+    /// GC sees keys only. Mark before each removal so panic/unwind cannot
+    /// hide an earlier removal, while a no-op sweep keeps its baseline clean.
+    pub(crate) fn retain_keys(&mut self, mut keep: impl FnMut(&crate::value::SlotIndex) -> bool) {
+        self.value.retain(|key, _| {
+            let retained = keep(key);
+            if !retained {
+                self.dirt.mark(self.mask);
+            }
+            retained
+        });
+    }
+}
+
 impl<T> Deref for Tracked<T> {
     type Target = T;
     fn deref(&self) -> &T {
@@ -177,6 +219,67 @@ mod tests {
         dirt.clear();
         assert_eq!(values.take(), vec![2]);
         assert!(dirt.snapshot().contains(SnapshotSection::Arrays));
+    }
+
+    #[test]
+    fn tracked_map_callbacks_mark_before_unwind() {
+        use crate::value::SlotIndex;
+        use std::collections::HashMap;
+        for operation in 0..4 {
+            let dirt = SnapshotDirt::default();
+            let mask = SnapshotSection::Functions.mask() | SnapshotSection::Promises.mask();
+            let mut rows = Tracked::new(HashMap::from([(SlotIndex(1), 1)]), dirt.clone(), mask);
+            dirt.clear();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let fail = |value: &mut i32| {
+                    *value = 2;
+                    panic!("after mutation");
+                };
+                match operation {
+                    0 => {
+                        rows.update(&SlotIndex(1), fail);
+                    }
+                    1 => rows.update_or_default(SlotIndex(1), fail),
+                    2 => rows.update_values(fail),
+                    _ => rows.retain(|_, value| {
+                        fail(value);
+                        false
+                    }),
+                }
+            }));
+            assert!(result.is_err());
+            assert_eq!(rows[&SlotIndex(1)], 2);
+            assert!(dirt.snapshot().contains(SnapshotSection::Functions));
+            assert!(dirt.snapshot().contains(SnapshotSection::Promises));
+            assert!(!dirt.snapshot().contains(SnapshotSection::Arrays));
+        }
+    }
+
+    #[test]
+    fn key_retention_keeps_noop_clean_and_tracks_removals_before_unwind() {
+        use crate::value::SlotIndex;
+        use std::collections::HashMap;
+        let dirt = SnapshotDirt::default();
+        let mut rows = Tracked::new(
+            HashMap::from([(SlotIndex(1), 1), (SlotIndex(2), 2)]),
+            dirt.clone(),
+            SnapshotSection::Functions.mask(),
+        );
+        dirt.clear();
+        rows.retain_keys(|_| true);
+        assert!(!dirt.snapshot().contains(SnapshotSection::Functions));
+        let mut removed = None;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            rows.retain_keys(|key| {
+                assert!(removed.is_none(), "after one completed removal");
+                removed = Some(*key);
+                false
+            });
+        }));
+        assert!(result.is_err());
+        assert_eq!(rows.len(), 1);
+        assert!(!rows.contains_key(&removed.unwrap()));
+        assert!(dirt.snapshot().contains(SnapshotSection::Functions));
     }
 
     #[test]

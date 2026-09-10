@@ -5,13 +5,9 @@ use super::super::*;
 impl Interp {
     pub(super) fn dispatch_get_property(&mut self, code: &[u8], id: u16) -> Result<(), Step> {
         let obj = self.pop_checked()?;
-        let kind = match (obj.kind, obj.value) {
-            (Kind::Reference, Payload::Reference(inst)) => self.classes.get(inst),
-            _ => ExoticKind::default(),
-        };
         let v = match obj.value {
             Payload::Reference(inst)
-                if kind.has(ExoticKind::ARRAYS)
+                if (obj.kind == Kind::Reference && self.arrays.contains_key(&inst))
                     && !self.arguments_objects.contains(&inst)
                     && Some(id) == self.length_id =>
             {
@@ -21,7 +17,7 @@ impl Interp {
                 Self::array_index_number(u64::from(self.arrays[&inst].length))
             }
             Payload::Reference(inst)
-                if kind.has(ExoticKind::WRAPPER_DATA)
+                if (obj.kind == Kind::Reference && self.wrapper_data.contains_key(&inst))
                     && Some(id) == self.length_id
                     && matches!(
                         self.wrapper_data.get(&inst),
@@ -38,7 +34,9 @@ impl Interp {
                 };
                 Slot::integer(self.str_len(off) as i32)
             }
-            Payload::Reference(inst) if kind.has(ExoticKind::TEMPORAL_INSTANTS) => {
+            Payload::Reference(inst)
+                if (obj.kind == Kind::Reference && self.temporal_instants.contains_key(&inst)) =>
+            {
                 let ns = self.temporal_instants[&inst].epoch_nanoseconds;
                 match self.scalar_key_text(id).as_deref() {
                     Some("epochNanoseconds") => self.temporal_i128_bigint(ns),
@@ -46,7 +44,9 @@ impl Interp {
                     _ => self.instance_get(inst, id),
                 }
             }
-            Payload::Reference(inst) if kind.has(ExoticKind::TEMPORAL_DURATIONS) => {
+            Payload::Reference(inst)
+                if (obj.kind == Kind::Reference && self.temporal_durations.contains_key(&inst)) =>
+            {
                 let d = self.temporal_durations[&inst];
                 match self.scalar_key_text(id).as_deref() {
                     Some("years") => Slot::number(d.years as f64),
@@ -64,7 +64,9 @@ impl Interp {
                     _ => self.instance_get(inst, id),
                 }
             }
-            Payload::Reference(inst) if kind.has(ExoticKind::TEMPORAL_PLAINS) => {
+            Payload::Reference(inst)
+                if (obj.kind == Kind::Reference && self.temporal_plains.contains_key(&inst)) =>
+            {
                 let r = self.temporal_plains[&inst];
                 let key = self.scalar_key_text(id);
                 match key.as_deref() {
@@ -117,7 +119,9 @@ impl Interp {
                     _ => self.instance_get(inst, id),
                 }
             }
-            Payload::Reference(inst) if kind.has(ExoticKind::TEMPORAL_ZONEDS) => {
+            Payload::Reference(inst)
+                if (obj.kind == Kind::Reference && self.temporal_zoneds.contains_key(&inst)) =>
+            {
                 let rec = self.temporal_zoneds[&inst].clone();
                 let p = zoned_local_datetime(rec.epoch_nanoseconds, rec.offset_ns);
                 match self.scalar_key_text(id).as_deref() {
@@ -185,13 +189,14 @@ impl Interp {
             }
             Payload::Reference(inst)
                 if self.symbol_ids.get("disposed") == Some(&id)
-                    && kind.has(ExoticKind::DISPOSABLE_STACKS) =>
+                    && (obj.kind == Kind::Reference
+                        && self.disposable_stacks.contains_key(&inst)) =>
             {
                 Slot::boolean(self.disposable_stacks[&inst].disposed)
             }
             Payload::Reference(inst)
                 if Some(id) == self.size_id
-                    && kind.has(ExoticKind::COLLECTIONS)
+                    && (obj.kind == Kind::Reference && self.collections.contains_key(&inst))
                     && self
                         .collections
                         .get(&inst)
@@ -205,10 +210,10 @@ impl Interp {
                 Slot::integer(self.collections[&inst].live_len() as i32)
             }
             Payload::Reference(inst)
-                if (kind.has(ExoticKind::ARRAY_BUFFERS)
+                if ((obj.kind == Kind::Reference && self.array_buffers.contains_key(&inst))
                     && !self.shared_buffers.contains(&inst))
-                    || kind.has(ExoticKind::TYPED_ARRAYS)
-                    || kind.has(ExoticKind::DATA_VIEWS) =>
+                    || (obj.kind == Kind::Reference && self.typed_arrays.contains_key(&inst))
+                    || (obj.kind == Kind::Reference && self.data_views.contains_key(&inst)) =>
             {
                 // These are real accessors on the intrinsic
                 // prototypes. Ordinary lookup preserves guest
@@ -217,13 +222,15 @@ impl Interp {
             }
             Payload::Reference(inst)
                 if Some(id) == self.byte_length_id
-                    && kind.has(ExoticKind::ARRAY_BUFFERS)
+                    && (obj.kind == Kind::Reference && self.array_buffers.contains_key(&inst))
                     && self.shared_buffers.contains(&inst) =>
             {
                 self.meter.tick_raw(ARRAY_BUFFER_BYTE_LENGTH_GET_METERING);
                 Slot::integer(self.array_buffers[&inst].length as i32)
             }
-            Payload::Reference(inst) if kind.has(ExoticKind::REGEXPS) => {
+            Payload::Reference(inst)
+                if (obj.kind == Kind::Reference && self.regexps.contains_key(&inst)) =>
+            {
                 // The RegExp accessor getters (`fx_RegExp_prototype_
                 // get_*`). `source`/`flags` return strings (a fresh
                 // chunk); the per-flag getters read `code[0]` and
@@ -257,7 +264,9 @@ impl Interp {
                     self.instance_get(inst, id)
                 }
             }
-            Payload::Reference(inst) if kind.has(ExoticKind::LOCALES) => {
+            Payload::Reference(inst)
+                if (obj.kind == Kind::Reference && self.locales.contains_key(&inst)) =>
+            {
                 let name = self
                     .symbol_names
                     .get(id.saturating_sub(1) as usize)
@@ -291,7 +300,7 @@ impl Interp {
                 }
             }
             Payload::Reference(inst)
-                if kind.has(ExoticKind::COLLATORS)
+                if (obj.kind == Kind::Reference && self.collators.contains_key(&inst))
                     && self.symbol_ids.get("compare") == Some(&id) =>
             {
                 let existing = self
@@ -307,7 +316,7 @@ impl Interp {
             }
             Payload::Reference(inst)
                 if (Some(id) == self.length_id || Some(id) == self.name_id)
-                    && kind.has(ExoticKind::FUNCTIONS)
+                    && (obj.kind == Kind::Reference && self.functions.contains_key(&inst))
                     && !self.deleted_fn_meta.contains(&(inst, id))
                     && self.find_property(inst, id).is_none() =>
             {
@@ -348,7 +357,9 @@ impl Interp {
             Payload::Reference(_) if obj.kind == Kind::Symbol => Slot::undefined(),
             // A proxy `p.k` routes through the `get` trap
             // (ECMA-262 10.5.8), never the ordinary store.
-            Payload::Reference(inst) if kind.has(ExoticKind::PROXIES) => {
+            Payload::Reference(inst)
+                if (obj.kind == Kind::Reference && self.proxies.contains_key(&inst)) =>
+            {
                 (self.proxy_get(code, inst, id, obj))?
             }
             // Route a thrown getter through the enclosing

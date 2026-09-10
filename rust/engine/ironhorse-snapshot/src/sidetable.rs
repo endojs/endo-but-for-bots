@@ -671,9 +671,9 @@ mod tests {
             "from_async",
             "arguments_objects",
             "side_refs",
-            // Derived membership/refinement bits rebuilt by ClassMap inserts
-            // when the authoritative side-table rows are restored.
-            "classes",
+            // Mutation bits are reset/rebound on boot and restore; no
+            // derived object-classification index is retained.
+            "snapshot_dirt",
             "snapshot_baseline_identity",
         ];
         const TRANSIENTS: &[&str] = &[

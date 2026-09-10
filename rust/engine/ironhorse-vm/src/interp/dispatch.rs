@@ -11,8 +11,8 @@
 use super::{
     branch_target, cannot_coerce_to_object, canonicalize_nan, cesu8_to_units, count_new_locals,
     to_int32, to_number, unary_minus, units_to_be16, ArithOp, AsyncGeneratorState, BitOp,
-    CatchJump, ExoticKind, GeneratorState, Halt, Interp, Kind, MeterCheck, Native, NativeMethod,
-    Opcode, Payload, RelOp, ResumeStatus, Slot, Step, Suspension, BIGINT_LITERAL_METERING,
+    CatchJump, GeneratorState, Halt, Interp, Kind, MeterCheck, Native, NativeMethod, Opcode,
+    Payload, RelOp, ResumeStatus, Slot, Step, Suspension, BIGINT_LITERAL_METERING,
     BIGINT_NEG_FRAME_METERING, BOUNDED_RUN_SLOT_CEILING, FUNCTION_LOCAL_METERING, HEAVY_FRAME_COST,
     USING_DECL_METERING, USING_RESOURCE_METERING, WITH_ENV_SETUP_METERING, XS_DONT_DELETE_FLAG,
     XS_DONT_ENUM_FLAG, XS_DONT_SET_FLAG,
@@ -1446,24 +1446,20 @@ impl Interp {
                             Some(Payload::Reference(f)) => Some((f, base)),
                             _ => None,
                         });
-                    // One membership lookup preserves overlapping restored
-                    // roles; body metadata does not establish exclusivity.
-                    let kind = func_ref
-                        .map(|(f, _)| self.classes.get(f))
-                        .unwrap_or_default();
-                    let metadata = func_ref
-                        .filter(|_| kind.has(ExoticKind::NATIVE) || kind.has(ExoticKind::METHOD))
-                        .and_then(|(f, base)| {
-                            self.functions
-                                .get(&f)
-                                .map(|info| (info.native, info.method, base))
-                        });
+                    // Consult authoritative tables directly. Restored roles
+                    // may overlap; the dispatch order below remains decisive.
+                    let metadata = func_ref.and_then(|(f, base)| {
+                        self.functions
+                            .get(&f)
+                            .map(|info| (info.native, info.method, base))
+                    });
                     let callee =
                         metadata.and_then(|(native, _, base)| native.map(|native| (native, base)));
                     let method =
                         metadata.and_then(|(_, method, base)| method.map(|method| (method, base)));
                     // Promise functions precede their generic method marker.
-                    let promise_fn = func_ref.filter(|_| kind.has(ExoticKind::PROMISE_FUNCTIONS));
+                    let promise_fn =
+                        func_ref.filter(|(f, _)| self.promise_functions.contains_key(f));
                     if let Some((f, base)) = promise_fn {
                         if has_target {
                             dispatch_halt!(
@@ -1608,7 +1604,7 @@ impl Interp {
                         }
                         pc = ret_pc;
                     } else if let Some((bf, base)) =
-                        func_ref.filter(|_| kind.has(ExoticKind::BOUND_FUNCTIONS))
+                        func_ref.filter(|(f, _)| self.bound_functions.contains_key(f))
                     {
                         // A bound function (`fx_Function_prototype_bound`):
                         // re-enter the target with the bound `this` and the
@@ -1665,7 +1661,7 @@ impl Interp {
                         }
                         pc = ret_pc;
                     } else if let Some((px, base)) =
-                        func_ref.filter(|_| kind.has(ExoticKind::PROXIES))
+                        func_ref.filter(|(f, _)| self.proxies.contains_key(f))
                     {
                         // `p(...)` / `new p(...)`: collect the frame's args and
                         // receiver, clear the frame, and run the proxy's

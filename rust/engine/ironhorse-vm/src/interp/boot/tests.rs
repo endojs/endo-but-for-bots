@@ -25,7 +25,7 @@ fn compact(source: &str) -> String {
 
 // Captured from the handwritten template constructor before generation.
 const TEMPLATE_ORDER: &[&str] = &[
-    "classes",
+    "snapshot_dirt",
     "snapshot_baseline_identity",
     "stack",
     "locals",
@@ -214,7 +214,7 @@ const TEMPLATE_ORDER: &[&str] = &[
 
 // Captured independently from the handwritten fresh constructor.
 const FRESH_ORDER: &[&str] = &[
-    "classes",
+    "snapshot_dirt",
     "snapshot_baseline_identity",
     "stack",
     "locals",
@@ -450,18 +450,18 @@ fn check_wiring(source: &str) {
     };
     for needle in [
         "#[boot_new($new:expr)] #[boot_template($template:expr)]",
-        "fresh($new_classes:ident, $slots:ident, $chunks:ident, $global:ident, $static:ident);",
-        "template($state:ident, $classes:ident, $refs:ident, $arrays:ident, $indexed:ident, $collections:ident);",
-        "let $new_classes = $d classes; let $slots = $d slots; let $chunks = $d chunks; let $global = $d global; let $static = $d strings; Interp { $($field: $new,)* }",
-        "let $state = $d state; let $classes = $d classes; let $refs = $d refs; let $arrays = $d arrays; let $indexed = $d indexed; let $collections = $d collections; Interp { $($field: $template,)* }",
+        "fresh($new_dirt:ident, $slots:ident, $chunks:ident, $global:ident, $static:ident);",
+        "template($state:ident, $snapshot_dirt:ident, $refs:ident, $arrays:ident, $indexed:ident, $collections:ident);",
+        "let $new_dirt = $d snapshot_dirt; let $slots = $d slots; let $chunks = $d chunks; let $global = $d global; let $static = $d strings; Interp { $($field: $new,)* }",
+        "let $state = $d state; let $snapshot_dirt = $d snapshot_dirt; let $refs = $d refs; let $arrays = $d arrays; let $indexed = $d indexed; let $collections = $d collections; Interp { $($field: $template,)* }",
     ] { once(emitter, needle); }
     once(&code, "interp_state!(define_boot_initializers, $);");
     let fresh = &code[token_body(&code, "pub fn new() -> Interp")];
-    once(fresh, "let mut interp = boot_fresh!(classes, slots, chunks, global_obj, static_str); interp.create_intrinsics(); interp.boot_slot_count = interp.slots.capacity(); interp");
+    once(fresh, "let mut interp = boot_fresh!(snapshot_dirt, slots, chunks, global_obj, static_str); interp.create_intrinsics(); interp.boot_slot_count = interp.slots.capacity(); interp");
     let template = &code[token_body(&code, "pub(crate) fn instantiate(&self) -> Interp")];
     once(
         template,
-        "boot_template!(state, classes, side_refs, arrays, index_props, collections)",
+        "boot_template!(state, snapshot_dirt, side_refs, arrays, index_props, collections)",
     );
 }
 
@@ -473,8 +473,8 @@ fn constructor_emitter_forwards_policies_and_owned_contexts() {
         ("$($field: $new,)*", "$($field: Default::default(),)*"),
         ("$($field: $template,)*", "$($field: $new,)*"),
         (
-            "let $classes = $d classes;",
-            "let $classes = ClassIndex::default();",
+            "let $snapshot_dirt = $d snapshot_dirt;",
+            "let $snapshot_dirt = SnapshotDirt::default();",
         ),
         ("let $refs = $d refs;", "let $refs = SideRefCounts::new();"),
         (
@@ -483,11 +483,11 @@ fn constructor_emitter_forwards_policies_and_owned_contexts() {
         ),
         ("interp_state!(define_boot_initializers, $);", ""),
         (
-            "boot_fresh!(classes, slots, chunks, global_obj, static_str)",
+            "boot_fresh!(snapshot_dirt, slots, chunks, global_obj, static_str)",
             "Interp::default()",
         ),
         (
-            "boot_template!(state, classes, side_refs, arrays, index_props, collections)",
+            "boot_template!(\n            state,\n            snapshot_dirt,\n            side_refs,\n            arrays,\n            index_props,\n            collections\n        )",
             "Interp::new()",
         ),
     ] {
@@ -515,7 +515,7 @@ fn template_instances_keep_independent_trackers_and_baselines() {
     );
     let first_baseline = first.acknowledge_snapshot();
     let second_baseline = second.acknowledge_snapshot();
-    template.inner.classes.1.clear();
+    template.inner.snapshot_dirt.clear();
     first.dates.insert(first.global_obj, 123.0);
     assert!(first
         .snapshot_dirty_sections(&first_baseline)
@@ -525,8 +525,7 @@ fn template_instances_keep_independent_trackers_and_baselines() {
         .contains(SnapshotSection::Dates));
     assert!(!template
         .inner
-        .classes
-        .1
+        .snapshot_dirt
         .snapshot()
         .contains(SnapshotSection::Dates));
     assert!(!second.dates.contains_key(&first.global_obj));

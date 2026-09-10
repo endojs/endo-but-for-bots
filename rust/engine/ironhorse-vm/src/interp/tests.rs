@@ -565,80 +565,40 @@ fn pending_new_target_is_rooted_and_gated_after_every_non_throw_halt() {
     assert!(m.slots.free_list().contains(&orphan.0));
 }
 
-fn assert_classification_matches_tables(interp: &Interp) {
-    for slot in 0..interp.slots.capacity() {
-        let owner = crate::SlotIndex(slot);
-        let mut expected = ExoticKind::default();
-        if interp.arrays.contains_key(&owner) {
-            expected = expected.union(ExoticKind::ARRAYS);
-        }
-        if interp.wrapper_data.contains_key(&owner) {
-            expected = expected.union(ExoticKind::WRAPPER_DATA);
-        }
-        if interp.temporal_instants.contains_key(&owner) {
-            expected = expected.union(ExoticKind::TEMPORAL_INSTANTS);
-        }
-        if interp.temporal_durations.contains_key(&owner) {
-            expected = expected.union(ExoticKind::TEMPORAL_DURATIONS);
-        }
-        if interp.temporal_plains.contains_key(&owner) {
-            expected = expected.union(ExoticKind::TEMPORAL_PLAINS);
-        }
-        if interp.temporal_zoneds.contains_key(&owner) {
-            expected = expected.union(ExoticKind::TEMPORAL_ZONEDS);
-        }
-        if interp.disposable_stacks.contains_key(&owner) {
-            expected = expected.union(ExoticKind::DISPOSABLE_STACKS);
-        }
-        if interp.collections.contains_key(&owner) {
-            expected = expected.union(ExoticKind::COLLECTIONS);
-        }
-        if interp.array_buffers.contains_key(&owner) {
-            expected = expected.union(ExoticKind::ARRAY_BUFFERS);
-        }
-        if interp.typed_arrays.contains_key(&owner) {
-            expected = expected.union(ExoticKind::TYPED_ARRAYS);
-        }
-        if interp.data_views.contains_key(&owner) {
-            expected = expected.union(ExoticKind::DATA_VIEWS);
-        }
-        if interp.regexps.contains_key(&owner) {
-            expected = expected.union(ExoticKind::REGEXPS);
-        }
-        if interp.locales.contains_key(&owner) {
-            expected = expected.union(ExoticKind::LOCALES);
-        }
-        if interp.collators.contains_key(&owner) {
-            expected = expected.union(ExoticKind::COLLATORS);
-        }
-        if interp.functions.contains_key(&owner) {
-            expected = expected.union(ExoticKind::FUNCTIONS);
-        }
-        if interp.proxies.contains_key(&owner) {
-            expected = expected.union(ExoticKind::PROXIES);
-        }
-        if interp.bound_functions.contains_key(&owner) {
-            expected = expected.union(ExoticKind::BOUND_FUNCTIONS);
-        }
-        if interp.promise_functions.contains_key(&owner) {
-            expected = expected.union(ExoticKind::PROMISE_FUNCTIONS);
-        }
-        if let Some(info) = interp.functions.get(&owner) {
-            if info.native.is_some() {
-                expected = expected.union(ExoticKind::NATIVE);
-            }
-            if info.method.is_some() {
-                expected = expected.union(ExoticKind::METHOD);
-            }
-        }
-        assert_eq!(interp.classes.get(owner), expected, "slot {slot}");
+fn assert_side_tables_have_live_owners(interp: &Interp) {
+    for owner in interp
+        .arrays
+        .keys()
+        .chain(interp.wrapper_data.keys())
+        .chain(interp.temporal_instants.keys())
+        .chain(interp.temporal_durations.keys())
+        .chain(interp.temporal_plains.keys())
+        .chain(interp.temporal_zoneds.keys())
+        .chain(interp.disposable_stacks.keys())
+        .chain(interp.collections.keys())
+        .chain(interp.array_buffers.keys())
+        .chain(interp.typed_arrays.keys())
+        .chain(interp.data_views.keys())
+        .chain(interp.regexps.keys())
+        .chain(interp.locales.keys())
+        .chain(interp.collators.keys())
+        .chain(interp.functions.keys())
+        .chain(interp.proxies.keys())
+        .chain(interp.bound_functions.keys())
+        .chain(interp.promise_functions.keys())
+    {
+        assert!(owner.0 < interp.slots.capacity(), "invalid owner {owner:?}");
+        assert!(
+            !interp.slots.free_list().contains(&owner.0),
+            "free owner {owner:?}"
+        );
     }
 }
 
 #[test]
-fn classification_tracks_boot_guest_mutation_gc_and_reuse() {
+fn side_tables_survive_boot_guest_mutation_gc_and_reuse() {
     let mut interp = Interp::new();
-    assert_classification_matches_tables(&interp);
+    assert_side_tables_have_live_owners(&interp);
     for source in [
         "var keep=[[],new Map(),new Uint8Array(4),new String('x'),/x/,new Intl.Locale('en'),new Proxy(function(){}, {})]; function f(){}; f.bind(null); 0",
         "keep=null; f=null; 0",
@@ -648,9 +608,9 @@ fn classification_tracks_boot_guest_mutation_gc_and_reuse() {
         let code = interp.relink_crank(&code, &crate::parse_symbols(&symbols)).unwrap();
         let result = interp.run(&code);
         assert!(result.completed, "{:?}", result.halt);
-        assert_classification_matches_tables(&interp);
+        assert_side_tables_have_live_owners(&interp);
         interp.collect_garbage().unwrap();
-        assert_classification_matches_tables(&interp);
+        assert_side_tables_have_live_owners(&interp);
     }
 }
 
@@ -664,7 +624,7 @@ fn restored_bound_metadata_takes_precedence_over_a_runnable_body() {
         args: Vec::new(),
     });
     assert!(interp.restore_function_state(state));
-    assert_classification_matches_tables(&interp);
+    assert_side_tables_have_live_owners(&interp);
     assert_restored_overlap_calls_target(&mut interp);
 }
 
@@ -685,7 +645,7 @@ fn restored_proxy_metadata_takes_precedence_over_a_runnable_body() {
         }],
         revokers: Vec::new(),
     }));
-    assert_classification_matches_tables(&interp);
+    assert_side_tables_have_live_owners(&interp);
     assert_restored_overlap_calls_target(&mut interp);
 }
 
