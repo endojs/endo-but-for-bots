@@ -97,6 +97,8 @@ export const ComposeBar = ({ state, controller }) => {
         rows: 1,
         disabled:
           state.unavailable ||
+          state.network?.changing ||
+          state.network?.blocked ||
           state.recovery?.resolving ||
           state.recovery?.blocked,
         placeholder: 'Message Floot…',
@@ -115,6 +117,8 @@ export const ComposeBar = ({ state, controller }) => {
           disabled:
             !busy &&
             (state.unavailable ||
+              state.network?.changing ||
+              state.network?.blocked ||
               state.recovery?.resolving ||
               state.recovery?.blocked),
           'aria-label': busy ? 'Stop' : 'Send',

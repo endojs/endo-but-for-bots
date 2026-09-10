@@ -1061,3 +1061,18 @@
 .floot-recovery-turn {
   margin-block: 1rem;
 }
+.floot-network-policy {
+  padding-block: 1rem;
+}
+
+.floot-network-policy pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 12rem;
+  overflow: auto;
+}
+
+.floot-network-policy textarea {
+  display: block;
+  width: 100%;
+}
