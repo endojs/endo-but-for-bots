@@ -5,7 +5,7 @@ use Opcode::*;
 
 impl Interp {
     pub(super) fn dispatch_for_of(&mut self, code: &[u8], op: Opcode) -> Result<(), Step> {
-        let iterable = self.pop();
+        let iterable = self.pop_checked()?;
         // A guest-defined `@@iterator` takes precedence over the
         // intrinsic dense fast paths below. Accessor lookup and a
         // user iterator method both re-enter the interpreter; the
@@ -136,7 +136,7 @@ impl Interp {
     }
 
     pub(super) fn dispatch_for_in(&mut self) -> Result<(), Step> {
-        let obj = self.pop();
+        let obj = self.pop_checked()?;
         let inst = match obj.value {
             // A primitive symbol carries `Payload::Reference(desc)`
             // — its description slot, NOT an instance — so this
@@ -170,7 +170,7 @@ impl Interp {
     }
 
     pub(super) fn dispatch_to_instance(&mut self) -> Result<(), Step> {
-        let top = *self.stack.last().unwrap_or(&Slot::undefined());
+        let top = self.peek_checked()?;
         match top.kind {
             // Already an object — ToObject is identity, no allocation.
             Kind::Reference | Kind::Instance => {}

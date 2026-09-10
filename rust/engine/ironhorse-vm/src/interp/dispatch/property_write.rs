@@ -4,8 +4,8 @@ use super::super::*;
 
 impl Interp {
     pub(super) fn dispatch_set_property(&mut self, code: &[u8], id: u16) -> Result<(), Step> {
-        let value = self.pop();
-        let obj = self.pop();
+        let value = self.pop_checked()?;
+        let obj = self.pop_checked()?;
         // A primitive symbol's `Payload::Reference` is its
         // DESCRIPTION slot, not an instance — so it must be
         // matched off BEFORE the generic reference arm, or
@@ -89,7 +89,7 @@ impl Interp {
     }
 
     pub(super) fn dispatch_delete_property(&mut self, code: &[u8], id: u16) -> Result<(), Step> {
-        let obj = *self.stack.last().unwrap_or(&Slot::undefined());
+        let obj = self.peek_checked()?;
         match obj.value {
             Payload::Reference(inst) => {
                 // `fxRunDelete` wraps `mxBehaviorDeleteProperty`
@@ -146,8 +146,8 @@ impl Interp {
     }
 
     pub(super) fn dispatch_delete_property_at(&mut self, code: &[u8]) -> Result<(), Step> {
-        let key = self.pop();
-        let obj = self.pop();
+        let key = self.pop_checked()?;
+        let obj = self.pop_checked()?;
         let (id, index) = match key.value {
             Payload::At(id, index) => (id, index),
             _ => return Err(Step::Host(Halt::EngineInvariant("delete_property_at:key"))),
@@ -274,8 +274,8 @@ impl Interp {
     }
 
     pub(super) fn dispatch_new_property(&mut self, id: u16, property_flag: u8) -> Result<(), Step> {
-        let value = self.pop();
-        let obj = self.pop();
+        let value = self.pop_checked()?;
+        let obj = self.pop_checked()?;
         if let Payload::Reference(inst) = obj.value {
             if property_flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) != 0 {
                 if property_flag & XS_METHOD_FLAG != 0 {
@@ -380,9 +380,9 @@ impl Interp {
         code: &[u8],
         property_flag: u8,
     ) -> Result<(), Step> {
-        let value = self.pop();
-        let key = self.pop();
-        let obj = self.pop();
+        let value = self.pop_checked()?;
+        let key = self.pop_checked()?;
+        let obj = self.pop_checked()?;
 
         let handled_class_member = match (obj.value, key.value) {
             (Payload::Reference(inst), Payload::At(raw_id, index))

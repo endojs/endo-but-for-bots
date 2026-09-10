@@ -287,6 +287,7 @@ pub const ENGINE_INVARIANT_LABELS: &[&str] = &[
     "promise:settle-non-promise",
     "promise:unknown-finally-function",
     "return:non-program-frame",
+    "run:argument-count",
     "set-method:unexpected-method",
     "set_property_at:key",
     "set_super_at:key",
@@ -306,6 +307,7 @@ pub const ENGINE_INVARIANT_LABELS: &[&str] = &[
     "to_read_key:non-string-key",
     "to_read_key:symbol-without-descriptor",
     "typeof:non-value-kind",
+    "value-stack:underflow",
     "yield:no-generator",
     "yield:stack-underflow",
 ];

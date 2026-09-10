@@ -455,7 +455,7 @@ impl Interp {
                 // truncating, so restore the stack to `base` before
                 // propagating — else the leaked frame corrupts the value stack.
                 return match self.call_native_method(m, base, 0, code) {
-                    Ok(()) => Ok(self.pop()),
+                    Ok(()) => self.pop_checked(),
                     Err(h) => {
                         self.stack.truncate(base);
                         Err(h)
@@ -492,7 +492,7 @@ impl Interp {
                 self.push(value);
                 return match self.call_native_method(m, base, 1, code) {
                     Ok(()) => {
-                        let _ = self.pop();
+                        let _ = self.pop_checked()?;
                         Ok(())
                     }
                     Err(h) => {

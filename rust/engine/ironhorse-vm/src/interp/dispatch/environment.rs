@@ -44,7 +44,7 @@ impl Interp {
     ) -> Result<(), Step> {
         // Consume the environment reference EVAL_REFERENCE
         // pushed and resolve the name.
-        let envref = self.pop();
+        let envref = self.pop_checked()?;
         // A real `Reference` (not the `EnvReference` sentinel) means
         // `EVAL_REFERENCE` resolved the name to a live `with`/eval
         // object environment; do a full `[[Get]]` on it
@@ -163,8 +163,8 @@ impl Interp {
         // Stack: [.., envref, value]. Keep the value, drop
         // the reference from under it (XS's SET_ALL pops the
         // reference and leaves the assigned value).
-        let value = self.pop();
-        let envref = self.pop();
+        let value = self.pop_checked()?;
+        let envref = self.pop_checked()?;
         // A real `Reference` (not the `EnvReference` sentinel) means
         // the name resolved to a live `with`/eval object
         // environment; do a full `[[Set]]` on it. XS's

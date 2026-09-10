@@ -1271,7 +1271,7 @@ impl Interp {
                             code,
                         );
                         match constructed {
-                            Ok(()) => self.pop(),
+                            Ok(()) => self.pop_checked()?,
                             Err(halt) => {
                                 self.stack.truncate(construct_base);
                                 return Err(halt);

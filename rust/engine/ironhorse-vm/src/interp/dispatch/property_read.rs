@@ -4,7 +4,7 @@ use super::super::*;
 
 impl Interp {
     pub(super) fn dispatch_get_property(&mut self, code: &[u8], id: u16) -> Result<(), Step> {
-        let obj = self.pop();
+        let obj = self.pop_checked()?;
         let kind = match (obj.kind, obj.value) {
             (Kind::Reference, Payload::Reference(inst)) => self.classes.get(inst),
             _ => ExoticKind::default(),
