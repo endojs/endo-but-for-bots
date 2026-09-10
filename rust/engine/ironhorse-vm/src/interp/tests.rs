@@ -3006,3 +3006,19 @@ fn impossible_call_argument_count_refuses_without_arithmetic_overflow() {
     );
     assert_eq!(vm.stack, [Slot::integer(1)]);
 }
+
+#[test]
+fn native_type_and_range_messages_do_not_add_guest_meter_charges() {
+    for name in ["TypeError", "RangeError"] {
+        let mut bare = Interp::new();
+        let mut messaged = Interp::new();
+        let before_bare = bare.meter_index();
+        let before_message = messaged.meter_index();
+        let _ = bare.build_error(name, 0, 0);
+        let _ = messaged.internal_error(name, "specific validation failure".into());
+        assert_eq!(
+            bare.meter_index() - before_bare,
+            messaged.meter_index() - before_message
+        );
+    }
+}

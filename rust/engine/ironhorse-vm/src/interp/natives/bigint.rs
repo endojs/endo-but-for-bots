@@ -229,7 +229,9 @@ impl Interp {
         const MAX_BIGINT_WIDTH_BITS: u64 = 64 * 1024;
 
         let Payload::BigInt(off) = value.value else {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg(
+                "BigInt width conversion requires a BigInt value".into(),
+            ));
         };
         let (negative, magnitude) = self.read_bigint(off);
         if bits == 0 || bi_is_zero(&magnitude) {

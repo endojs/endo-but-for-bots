@@ -42,7 +42,9 @@ impl Interp {
         let value = self.to_number_value(&[], value)?;
         let n = to_number(&value);
         if !n.is_finite() || n.fract() != 0.0 || n.abs() > 9_007_199_254_740_991.0 {
-            return Err(self.catchable_range_error());
+            return Err(self.catchable_range_error_msg(
+                "Temporal: expected a finite integral value within the supported range".into(),
+            ));
         }
         Ok(n as i64)
     }
@@ -53,7 +55,9 @@ impl Interp {
     ) -> Result<Slot, Step> {
         const LIMIT: i128 = 8_640_000_000_000_000_000_000;
         if !(-LIMIT..=LIMIT).contains(&epoch_nanoseconds) {
-            return Err(self.catchable_range_error());
+            return Err(
+                self.catchable_range_error_msg("Temporal: epoch nanoseconds out of range".into())
+            );
         }
         let inst = self
             .slots
@@ -68,7 +72,9 @@ impl Interp {
         record: TemporalDurationRecord,
     ) -> Result<Slot, Step> {
         if !temporal_duration_sign_valid(record) {
-            return Err(self.catchable_range_error());
+            return Err(self.catchable_range_error_msg(
+                "Temporal.Duration: fields must have a consistent sign".into(),
+            ));
         }
         let inst = self
             .slots
@@ -79,7 +85,7 @@ impl Interp {
 
     fn temporal_new_plain(&mut self, record: TemporalPlainRecord) -> Result<Slot, Step> {
         if !temporal_plain_valid(record) {
-            return Err(self.catchable_range_error());
+            return Err(self.catchable_range_error_msg("Temporal: invalid date/time fields".into()));
         }
         let inst = self.slots.alloc(Slot::instance(
             self.temporal_plain_protos[record.kind as usize],
@@ -98,7 +104,7 @@ impl Interp {
             let id =
                 self.value_to_string(code, args.first().copied().unwrap_or_else(Slot::undefined))?;
             if id != "iso8601" {
-                return Err(self.catchable_range_error());
+                return Err(self.catchable_range_error_msg("Temporal: unsupported calendar".into()));
             }
             return self.temporal_new_plain(TemporalPlainRecord {
                 kind,
@@ -120,10 +126,12 @@ impl Interp {
         match kind {
             0 | 2 => {
                 r.year = integer(self, 0, 0)?;
-                r.month = u32::try_from(integer(self, 1, 0)?)
-                    .map_err(|_| self.catchable_range_error())?;
-                r.day = u32::try_from(integer(self, 2, 0)?)
-                    .map_err(|_| self.catchable_range_error())?;
+                r.month = u32::try_from(integer(self, 1, 0)?).map_err(|_| {
+                    self.catchable_range_error_msg("Temporal: month out of range".into())
+                })?;
+                r.day = u32::try_from(integer(self, 2, 0)?).map_err(|_| {
+                    self.catchable_range_error_msg("Temporal: day out of range".into())
+                })?;
                 if kind == 2 {
                     temporal_set_time_args(self, &mut r, args, 3)?;
                 }
@@ -131,16 +139,20 @@ impl Interp {
             1 => temporal_set_time_args(self, &mut r, args, 0)?,
             3 => {
                 r.year = integer(self, 0, 0)?;
-                r.month = u32::try_from(integer(self, 1, 0)?)
-                    .map_err(|_| self.catchable_range_error())?;
-                r.day = u32::try_from(integer(self, 3, 1)?)
-                    .map_err(|_| self.catchable_range_error())?;
+                r.month = u32::try_from(integer(self, 1, 0)?).map_err(|_| {
+                    self.catchable_range_error_msg("Temporal: month out of range".into())
+                })?;
+                r.day = u32::try_from(integer(self, 3, 1)?).map_err(|_| {
+                    self.catchable_range_error_msg("Temporal: day out of range".into())
+                })?;
             }
             4 => {
-                r.month = u32::try_from(integer(self, 0, 0)?)
-                    .map_err(|_| self.catchable_range_error())?;
-                r.day = u32::try_from(integer(self, 1, 0)?)
-                    .map_err(|_| self.catchable_range_error())?;
+                r.month = u32::try_from(integer(self, 0, 0)?).map_err(|_| {
+                    self.catchable_range_error_msg("Temporal: month out of range".into())
+                })?;
+                r.day = u32::try_from(integer(self, 1, 0)?).map_err(|_| {
+                    self.catchable_range_error_msg("Temporal: day out of range".into())
+                })?;
                 r.year = integer(self, 3, 1972)?;
             }
             _ => unreachable!(),
@@ -167,7 +179,7 @@ impl Interp {
                     ..Default::default()
                 })
             } else {
-                Err(self.catchable_range_error())
+                Err(self.catchable_range_error_msg("Temporal: unsupported calendar".into()))
             };
         }
         if let Payload::Reference(i) = value.value {
@@ -204,21 +216,51 @@ impl Interp {
                 seen[n] = true;
                 match n {
                     0 => r.year = v,
-                    1 => r.month = u32::try_from(v).map_err(|_| self.catchable_range_error())?,
-                    2 => r.day = u32::try_from(v).map_err(|_| self.catchable_range_error())?,
-                    3 => r.hour = u32::try_from(v).map_err(|_| self.catchable_range_error())?,
-                    4 => r.minute = u32::try_from(v).map_err(|_| self.catchable_range_error())?,
-                    5 => r.second = u32::try_from(v).map_err(|_| self.catchable_range_error())?,
+                    1 => {
+                        r.month = u32::try_from(v).map_err(|_| {
+                            self.catchable_range_error_msg("Temporal: month out of range".into())
+                        })?
+                    }
+                    2 => {
+                        r.day = u32::try_from(v).map_err(|_| {
+                            self.catchable_range_error_msg("Temporal: day out of range".into())
+                        })?
+                    }
+                    3 => {
+                        r.hour = u32::try_from(v).map_err(|_| {
+                            self.catchable_range_error_msg("Temporal: hour out of range".into())
+                        })?
+                    }
+                    4 => {
+                        r.minute = u32::try_from(v).map_err(|_| {
+                            self.catchable_range_error_msg("Temporal: minute out of range".into())
+                        })?
+                    }
+                    5 => {
+                        r.second = u32::try_from(v).map_err(|_| {
+                            self.catchable_range_error_msg("Temporal: second out of range".into())
+                        })?
+                    }
                     6 => {
-                        r.millisecond =
-                            u32::try_from(v).map_err(|_| self.catchable_range_error())?
+                        r.millisecond = u32::try_from(v).map_err(|_| {
+                            self.catchable_range_error_msg(
+                                "Temporal: millisecond out of range".into(),
+                            )
+                        })?
                     }
                     7 => {
-                        r.microsecond =
-                            u32::try_from(v).map_err(|_| self.catchable_range_error())?
+                        r.microsecond = u32::try_from(v).map_err(|_| {
+                            self.catchable_range_error_msg(
+                                "Temporal: microsecond out of range".into(),
+                            )
+                        })?
                     }
                     _ => {
-                        r.nanosecond = u32::try_from(v).map_err(|_| self.catchable_range_error())?
+                        r.nanosecond = u32::try_from(v).map_err(|_| {
+                            self.catchable_range_error_msg(
+                                "Temporal: nanosecond out of range".into(),
+                            )
+                        })?
                     }
                 }
             }
@@ -230,12 +272,16 @@ impl Interp {
                 _ => false,
             };
             if !required || !temporal_plain_valid(r) {
-                return Err(self.catchable_type_error());
+                return Err(self.catchable_type_error_msg(
+                    "Temporal: missing or invalid required date/time fields".into(),
+                ));
             }
             return Ok(r);
         }
         let text = self.value_to_string(code, value)?;
-        parse_temporal_plain(kind, &text).ok_or_else(|| self.catchable_range_error())
+        parse_temporal_plain(kind, &text).ok_or_else(|| {
+            self.catchable_range_error_msg("Temporal: invalid date/time string".into())
+        })
     }
 
     pub(in crate::interp) fn temporal_plain_method(
@@ -260,11 +306,17 @@ impl Interp {
         }
         let old = temporal_brand(this, &self.temporal_plains)
             .filter(|r| r.kind == kind)
-            .ok_or_else(|| self.catchable_type_error())?;
+            .ok_or_else(|| {
+                self.catchable_type_error_msg(
+                    "Temporal: incompatible plain date/time receiver".into(),
+                )
+            })?;
         match op {
             2 => {
                 let Payload::Reference(i) = arg0.value else {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg(
+                        "Temporal.with: fields must be an object".into(),
+                    ));
                 };
                 let mut r = old;
                 let mut any = false;
@@ -294,41 +346,80 @@ impl Interp {
                     match n {
                         0 => r.year = v,
                         1 => {
-                            r.month = u32::try_from(v).map_err(|_| self.catchable_range_error())?
+                            r.month = u32::try_from(v).map_err(|_| {
+                                self.catchable_range_error_msg(
+                                    "Temporal: month out of range".into(),
+                                )
+                            })?
                         }
-                        2 => r.day = u32::try_from(v).map_err(|_| self.catchable_range_error())?,
-                        3 => r.hour = u32::try_from(v).map_err(|_| self.catchable_range_error())?,
+                        2 => {
+                            r.day = u32::try_from(v).map_err(|_| {
+                                self.catchable_range_error_msg("Temporal: day out of range".into())
+                            })?
+                        }
+                        3 => {
+                            r.hour = u32::try_from(v).map_err(|_| {
+                                self.catchable_range_error_msg("Temporal: hour out of range".into())
+                            })?
+                        }
                         4 => {
-                            r.minute = u32::try_from(v).map_err(|_| self.catchable_range_error())?
+                            r.minute = u32::try_from(v).map_err(|_| {
+                                self.catchable_range_error_msg(
+                                    "Temporal: minute out of range".into(),
+                                )
+                            })?
                         }
                         5 => {
-                            r.second = u32::try_from(v).map_err(|_| self.catchable_range_error())?
+                            r.second = u32::try_from(v).map_err(|_| {
+                                self.catchable_range_error_msg(
+                                    "Temporal: second out of range".into(),
+                                )
+                            })?
                         }
                         6 => {
-                            r.millisecond =
-                                u32::try_from(v).map_err(|_| self.catchable_range_error())?
+                            r.millisecond = u32::try_from(v).map_err(|_| {
+                                self.catchable_range_error_msg(
+                                    "Temporal: millisecond out of range".into(),
+                                )
+                            })?
                         }
                         7 => {
-                            r.microsecond =
-                                u32::try_from(v).map_err(|_| self.catchable_range_error())?
+                            r.microsecond = u32::try_from(v).map_err(|_| {
+                                self.catchable_range_error_msg(
+                                    "Temporal: microsecond out of range".into(),
+                                )
+                            })?
                         }
                         _ => {
-                            r.nanosecond =
-                                u32::try_from(v).map_err(|_| self.catchable_range_error())?
+                            r.nanosecond = u32::try_from(v).map_err(|_| {
+                                self.catchable_range_error_msg(
+                                    "Temporal: nanosecond out of range".into(),
+                                )
+                            })?
                         }
                     }
                 }
                 if !any {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg(
+                        "Temporal.with: at least one date/time field is required".into(),
+                    ));
                 }
                 self.temporal_new_plain(r)
             }
             3 | 4 => {
                 let mut d = self.temporal_duration_from(arg0, code)?;
                 if op == 4 {
-                    d = d.negated().ok_or_else(|| self.catchable_range_error())?;
+                    d = d.negated().ok_or_else(|| {
+                        self.catchable_range_error_msg(
+                            "Temporal.Duration: negation out of range".into(),
+                        )
+                    })?;
                 }
-                let r = temporal_plain_add(old, d).ok_or_else(|| self.catchable_range_error())?;
+                let r = temporal_plain_add(old, d).ok_or_else(|| {
+                    self.catchable_range_error_msg(
+                        "Temporal: date/time arithmetic out of range".into(),
+                    )
+                })?;
                 self.temporal_new_plain(r)
             }
             5 | 6 => {
@@ -343,7 +434,9 @@ impl Interp {
                 old == self.temporal_plain_from(kind, arg0, code)?,
             )),
             8 | 9 => Ok(self.new_string_metered(format_temporal_plain(old).as_bytes())),
-            10 => Err(self.catchable_type_error()),
+            10 => Err(self.catchable_type_error_msg(
+                "Temporal: valueOf cannot convert to a primitive".into(),
+            )),
             11 => self.temporal_new_plain(TemporalPlainRecord { kind: 0, ..old }),
             12 => self.temporal_new_plain(TemporalPlainRecord {
                 kind: 1,
@@ -386,7 +479,9 @@ impl Interp {
             }
         }
         let text = self.value_to_string(code, value)?;
-        parse_temporal_instant(&text).ok_or_else(|| self.catchable_range_error())
+        parse_temporal_instant(&text).ok_or_else(|| {
+            self.catchable_range_error_msg("Temporal.Instant: invalid instant string".into())
+        })
     }
 
     fn temporal_duration_from(
@@ -424,16 +519,22 @@ impl Interp {
                 }
             }
             if !any {
-                return Err(self.catchable_type_error());
+                return Err(self.catchable_type_error_msg(
+                    "Temporal.Duration: at least one duration field is required".into(),
+                ));
             }
             let record = TemporalDurationRecord::from_fields(fields);
             if !temporal_duration_sign_valid(record) {
-                return Err(self.catchable_range_error());
+                return Err(self.catchable_range_error_msg(
+                    "Temporal.Duration: fields must have a consistent sign".into(),
+                ));
             }
             return Ok(record);
         }
         let text = self.value_to_string(code, value)?;
-        parse_temporal_duration(&text).ok_or_else(|| self.catchable_range_error())
+        parse_temporal_duration(&text).ok_or_else(|| {
+            self.catchable_range_error_msg("Temporal.Duration: invalid duration string".into())
+        })
     }
 
     fn temporal_unit_option(
@@ -474,10 +575,10 @@ impl Interp {
         let Payload::Reference(r) = options.value else {
             // A non-object, non-undefined options argument is a TypeError for
             // every Temporal reader that accepts an options bag.
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg("Temporal: options must be an object".into()));
         };
         if options.kind != Kind::Reference {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg("Temporal: options must be an object".into()));
         }
         let Some(&id) = self.symbol_ids.get("relativeTo") else {
             return Ok(None);
@@ -509,15 +610,20 @@ impl Interp {
         relative: Option<TemporalPlainRecord>,
     ) -> Result<i128, Step> {
         match relative {
-            Some(start) => {
-                iso_duration_span_nanoseconds(start, d).ok_or_else(|| self.catchable_range_error())
-            }
+            Some(start) => iso_duration_span_nanoseconds(start, d).ok_or_else(|| {
+                self.catchable_range_error_msg("Temporal: duration span out of range".into())
+            }),
             None => {
                 if d.has_calendar_units() {
-                    return Err(self.catchable_range_error());
+                    return Err(self.catchable_range_error_msg(
+                        "Temporal: relativeTo is required for calendar units".into(),
+                    ));
                 }
-                d.time_nanoseconds(true)
-                    .ok_or_else(|| self.catchable_range_error())
+                d.time_nanoseconds(true).ok_or_else(|| {
+                    self.catchable_range_error_msg(
+                        "Temporal: duration cannot be represented in nanoseconds".into(),
+                    )
+                })
             }
         }
     }
@@ -546,12 +652,16 @@ impl Interp {
             )
         } else if let Payload::Reference(r) = options.value {
             if options.kind != Kind::Reference {
-                return Err(self.catchable_type_error());
+                return Err(self.catchable_type_error_msg(
+                    "Temporal: expected a unit string or options object".into(),
+                ));
             }
             let smallest = self.intl_option_string(code, r, "smallestUnit")?;
             let largest = self.intl_option_string(code, r, "largestUnit")?;
             if smallest.is_none() && largest.is_none() {
-                return Err(self.catchable_range_error());
+                return Err(self.catchable_range_error_msg(
+                    "Temporal.round: smallestUnit or largestUnit is required".into(),
+                ));
             }
             let increment = if let Some(&id) = self.symbol_ids.get("roundingIncrement") {
                 let v = self.ordinary_get(code, r, id, options)?;
@@ -564,7 +674,9 @@ impl Interp {
                 1
             };
             if increment < 1 {
-                return Err(self.catchable_range_error());
+                return Err(self.catchable_range_error_msg(
+                    "Temporal: roundingIncrement must be positive".into(),
+                ));
             }
             let mode = self
                 .intl_option_string(code, r, "roundingMode")?
@@ -572,31 +684,44 @@ impl Interp {
             let relative = self.temporal_relative_to_date(options, code)?;
             (smallest, largest, increment, mode, relative)
         } else {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg(
+                "Temporal: expected a unit string or options object".into(),
+            ));
         };
 
         let default_present = temporal_duration_default_largest_rank(d);
         let smallest_rank = match &smallest {
-            Some(s) => temporal_unit_rank(s).ok_or_else(|| self.catchable_range_error())?,
+            Some(s) => temporal_unit_rank(s).ok_or_else(|| {
+                self.catchable_range_error_msg("Temporal: invalid duration unit".into())
+            })?,
             None => 9,
         };
         let largest_rank = match largest_opt.as_deref() {
             Some("auto") | None => default_present.min(smallest_rank),
-            Some(l) => temporal_unit_rank(l).ok_or_else(|| self.catchable_range_error())?,
+            Some(l) => temporal_unit_rank(l).ok_or_else(|| {
+                self.catchable_range_error_msg("Temporal: invalid duration unit".into())
+            })?,
         };
         // largestUnit must be the same size or coarser (smaller rank) than smallestUnit.
         if largest_rank > smallest_rank {
-            return Err(self.catchable_range_error());
+            return Err(self.catchable_range_error_msg(
+                "Temporal: largestUnit must not be smaller than smallestUnit".into(),
+            ));
         }
-        validate_duration_increment(smallest_rank, increment)
-            .ok_or_else(|| self.catchable_range_error())?;
+        validate_duration_increment(smallest_rank, increment).ok_or_else(|| {
+            self.catchable_range_error_msg(
+                "Temporal: invalid roundingIncrement for smallestUnit".into(),
+            )
+        })?;
 
         let smallest_name = temporal_unit_name(smallest_rank);
         let largest_name = temporal_unit_name(largest_rank);
 
         let calendar_involved = d.has_calendar_units() || smallest_rank < 3 || largest_rank < 3;
         if calendar_involved && relative.is_none() {
-            return Err(self.catchable_range_error());
+            return Err(self.catchable_range_error_msg(
+                "Temporal: relativeTo is required for calendar units".into(),
+            ));
         }
 
         if smallest_rank >= 3 {
@@ -605,21 +730,34 @@ impl Interp {
             let unit_ns = if smallest_name == "day" {
                 DAY_NS
             } else {
-                temporal_unit_nanoseconds(smallest_name)
-                    .ok_or_else(|| self.catchable_range_error())?
+                temporal_unit_nanoseconds(smallest_name).ok_or_else(|| {
+                    self.catchable_range_error_msg("Temporal: invalid time unit".into())
+                })?
             };
-            let quantum = unit_ns
-                .checked_mul(increment as i128)
-                .ok_or_else(|| self.catchable_range_error())?;
-            let rounded =
-                round_temporal(span, quantum, &mode).ok_or_else(|| self.catchable_range_error())?;
+            let quantum = unit_ns.checked_mul(increment as i128).ok_or_else(|| {
+                self.catchable_range_error_msg("Temporal: rounding increment out of range".into())
+            })?;
+            let rounded = round_temporal(span, quantum, &mode).ok_or_else(|| {
+                self.catchable_range_error_msg(
+                    "Temporal: invalid rounding mode or result out of range".into(),
+                )
+            })?;
             if largest_rank >= 3 {
-                balance_zoned_diff(rounded, largest_name)
-                    .ok_or_else(|| self.catchable_range_error())
+                balance_zoned_diff(rounded, largest_name).ok_or_else(|| {
+                    self.catchable_range_error_msg("Temporal: duration balance out of range".into())
+                })
             } else {
-                let start = relative.ok_or_else(|| self.catchable_range_error())?;
-                let start_days = days_from_civil(start.year, start.month, start.day)
-                    .ok_or_else(|| self.catchable_range_error())?;
+                let start = relative.ok_or_else(|| {
+                    self.catchable_range_error_msg(
+                        "Temporal: relativeTo is required for calendar units".into(),
+                    )
+                })?;
+                let start_days =
+                    days_from_civil(start.year, start.month, start.day).ok_or_else(|| {
+                        self.catchable_range_error_msg(
+                            "Temporal: relativeTo date out of range".into(),
+                        )
+                    })?;
                 let day_offset = rounded.div_euclid(DAY_NS);
                 let time_ns = rounded.rem_euclid(DAY_NS);
                 let (ey, em, ed) = civil_from_days(start_days + day_offset);
@@ -642,18 +780,30 @@ impl Interp {
                     microsecond: ((time_ns / 1_000) % 1000) as u32,
                     nanosecond: (time_ns % 1000) as u32,
                 };
-                iso_datetime_difference(start_dt, end_dt, largest_name)
-                    .ok_or_else(|| self.catchable_range_error())
+                iso_datetime_difference(start_dt, end_dt, largest_name).ok_or_else(|| {
+                    self.catchable_range_error_msg(
+                        "Temporal: date/time difference out of range".into(),
+                    )
+                })
             }
         } else {
             // Calendar smallest unit: round the fractional calendar total, then
             // re-express the whole-unit endpoint as a calendar difference.
-            let start = relative.ok_or_else(|| self.catchable_range_error())?;
-            let span = iso_duration_span_nanoseconds(start, d)
-                .ok_or_else(|| self.catchable_range_error())?;
+            let start = relative.ok_or_else(|| {
+                self.catchable_range_error_msg(
+                    "Temporal: relativeTo is required for calendar units".into(),
+                )
+            })?;
+            let span = iso_duration_span_nanoseconds(start, d).ok_or_else(|| {
+                self.catchable_range_error_msg("Temporal: duration span out of range".into())
+            })?;
             let total = match smallest_name {
                 "year" | "month" => iso_total_calendar_units(start, span, smallest_name)
-                    .ok_or_else(|| self.catchable_range_error())?,
+                    .ok_or_else(|| {
+                        self.catchable_range_error_msg(
+                            "Temporal: calendar duration total out of range".into(),
+                        )
+                    })?,
                 _ => span as f64 / (7.0 * DAY_NS as f64), // week
             };
             let count = round_number_to_increment(total, increment, &mode) as i64;
@@ -662,8 +812,14 @@ impl Interp {
                 "month" => iso_date_add(start, 0, count, 0, 0),
                 _ => iso_date_add(start, 0, 0, count, 0), // week
             }
-            .ok_or_else(|| self.catchable_range_error())?;
-            iso_date_until(start, dest, largest_name).ok_or_else(|| self.catchable_range_error())
+            .ok_or_else(|| {
+                self.catchable_range_error_msg(
+                    "Temporal: rounded calendar date out of range".into(),
+                )
+            })?;
+            iso_date_until(start, dest, largest_name).ok_or_else(|| {
+                self.catchable_range_error_msg("Temporal: calendar difference out of range".into())
+            })
         }
     }
 
@@ -686,14 +842,20 @@ impl Interp {
                 let n = self.temporal_integer(arg0)? as i128;
                 let ns = match n.checked_mul(1_000_000) {
                     Some(ns) => ns,
-                    None => return Err(self.catchable_range_error()),
+                    None => {
+                        return Err(self.catchable_range_error_msg(
+                            "Temporal: epoch nanoseconds out of range".into(),
+                        ))
+                    }
                 };
                 self.temporal_new_instant(ns)
             }
             TemporalInstantFromEpochNanoseconds => {
-                let ns = self
-                    .temporal_bigint_to_i128(arg0)
-                    .ok_or_else(|| self.catchable_type_error())?;
+                let ns = self.temporal_bigint_to_i128(arg0).ok_or_else(|| {
+                    self.catchable_type_error_msg(
+                        "Temporal.Instant: epochNanoseconds must be a supported BigInt".into(),
+                    )
+                })?;
                 self.temporal_new_instant(ns)
             }
             TemporalInstantCompare => {
@@ -702,26 +864,36 @@ impl Interp {
                 Ok(Slot::integer(a.cmp(&b) as i32))
             }
             TemporalInstantAdd | TemporalInstantSubtract => {
-                let inst = temporal_brand(this, &self.temporal_instants)
-                    .ok_or_else(|| self.catchable_type_error())?;
+                let inst = temporal_brand(this, &self.temporal_instants).ok_or_else(|| {
+                    self.catchable_type_error_msg("Temporal.Instant: incompatible receiver".into())
+                })?;
                 let d = self.temporal_duration_from(arg0, code)?;
-                let mut delta = d
-                    .time_nanoseconds(false)
-                    .ok_or_else(|| self.catchable_range_error())?;
+                let mut delta = d.time_nanoseconds(false).ok_or_else(|| {
+                    self.catchable_range_error_msg(
+                        "Temporal: duration cannot be represented in nanoseconds".into(),
+                    )
+                })?;
                 if method == TemporalInstantSubtract {
-                    delta = delta
-                        .checked_neg()
-                        .ok_or_else(|| self.catchable_range_error())?;
+                    delta = delta.checked_neg().ok_or_else(|| {
+                        self.catchable_range_error_msg(
+                            "Temporal.Duration: negation out of range".into(),
+                        )
+                    })?;
                 }
                 let ns = match inst.epoch_nanoseconds.checked_add(delta) {
                     Some(ns) => ns,
-                    None => return Err(self.catchable_range_error()),
+                    None => {
+                        return Err(self.catchable_range_error_msg(
+                            "Temporal: epoch nanoseconds out of range".into(),
+                        ))
+                    }
                 };
                 self.temporal_new_instant(ns)
             }
             TemporalInstantUntil | TemporalInstantSince => {
-                let inst = temporal_brand(this, &self.temporal_instants)
-                    .ok_or_else(|| self.catchable_type_error())?;
+                let inst = temporal_brand(this, &self.temporal_instants).ok_or_else(|| {
+                    self.catchable_type_error_msg("Temporal.Instant: incompatible receiver".into())
+                })?;
                 let other = self.temporal_instant_from(arg0, code)?;
                 let delta = if method == TemporalInstantUntil {
                     other - inst.epoch_nanoseconds
@@ -731,28 +903,34 @@ impl Interp {
                 self.temporal_new_duration(duration_from_nanoseconds(delta))
             }
             TemporalInstantRound => {
-                let inst = temporal_brand(this, &self.temporal_instants)
-                    .ok_or_else(|| self.catchable_type_error())?;
+                let inst = temporal_brand(this, &self.temporal_instants).ok_or_else(|| {
+                    self.catchable_type_error_msg("Temporal.Instant: incompatible receiver".into())
+                })?;
                 let unit = self.temporal_unit_option(arg0, code, "nanosecond")?;
-                let quantum =
-                    temporal_unit_nanoseconds(&unit).ok_or_else(|| self.catchable_range_error())?;
+                let quantum = temporal_unit_nanoseconds(&unit).ok_or_else(|| {
+                    self.catchable_range_error_msg("Temporal: invalid time unit".into())
+                })?;
                 let ns = round_half_expand(inst.epoch_nanoseconds, quantum);
                 self.temporal_new_instant(ns)
             }
             TemporalInstantEquals => {
-                let inst = temporal_brand(this, &self.temporal_instants)
-                    .ok_or_else(|| self.catchable_type_error())?;
+                let inst = temporal_brand(this, &self.temporal_instants).ok_or_else(|| {
+                    self.catchable_type_error_msg("Temporal.Instant: incompatible receiver".into())
+                })?;
                 Ok(Slot::boolean(
                     inst.epoch_nanoseconds == self.temporal_instant_from(arg0, code)?,
                 ))
             }
             TemporalInstantToString | TemporalInstantToJSON => {
-                let inst = temporal_brand(this, &self.temporal_instants)
-                    .ok_or_else(|| self.catchable_type_error())?;
+                let inst = temporal_brand(this, &self.temporal_instants).ok_or_else(|| {
+                    self.catchable_type_error_msg("Temporal.Instant: incompatible receiver".into())
+                })?;
                 Ok(self
                     .new_string_metered(format_temporal_instant(inst.epoch_nanoseconds).as_bytes()))
             }
-            TemporalInstantValueOf | TemporalDurationValueOf => Err(self.catchable_type_error()),
+            TemporalInstantValueOf | TemporalDurationValueOf => Err(self.catchable_type_error_msg(
+                "Temporal: valueOf cannot convert to a primitive".into(),
+            )),
             TemporalDurationFrom => {
                 let record = self.temporal_duration_from(arg0, code)?;
                 self.temporal_new_duration(record)
@@ -775,35 +953,50 @@ impl Interp {
                 Ok(Slot::integer(av.cmp(&bv) as i32))
             }
             TemporalDurationNegated | TemporalDurationAbs => {
-                let mut d = temporal_brand(this, &self.temporal_durations)
-                    .ok_or_else(|| self.catchable_type_error())?;
+                let mut d = temporal_brand(this, &self.temporal_durations).ok_or_else(|| {
+                    self.catchable_type_error_msg("Temporal.Duration: incompatible receiver".into())
+                })?;
                 if method == TemporalDurationNegated || d.sign() < 0 {
-                    d = d.negated().ok_or_else(|| self.catchable_range_error())?;
+                    d = d.negated().ok_or_else(|| {
+                        self.catchable_range_error_msg(
+                            "Temporal.Duration: negation out of range".into(),
+                        )
+                    })?;
                 }
                 self.temporal_new_duration(d)
             }
             TemporalDurationAdd | TemporalDurationSubtract => {
-                let a = temporal_brand(this, &self.temporal_durations)
-                    .ok_or_else(|| self.catchable_type_error())?;
+                let a = temporal_brand(this, &self.temporal_durations).ok_or_else(|| {
+                    self.catchable_type_error_msg("Temporal.Duration: incompatible receiver".into())
+                })?;
                 let mut b = self.temporal_duration_from(arg0, code)?;
                 if method == TemporalDurationSubtract {
-                    b = b.negated().ok_or_else(|| self.catchable_range_error())?;
+                    b = b.negated().ok_or_else(|| {
+                        self.catchable_range_error_msg(
+                            "Temporal.Duration: negation out of range".into(),
+                        )
+                    })?;
                 }
                 let af = a.fields();
                 let bf = b.fields();
                 let mut out = [0i64; 10];
                 for i in 0..10 {
-                    out[i] = af[i]
-                        .checked_add(bf[i])
-                        .ok_or_else(|| self.catchable_range_error())?;
+                    out[i] = af[i].checked_add(bf[i]).ok_or_else(|| {
+                        self.catchable_range_error_msg(
+                            "Temporal.Duration: field addition out of range".into(),
+                        )
+                    })?;
                 }
                 self.temporal_new_duration(TemporalDurationRecord::from_fields(out))
             }
             TemporalDurationWith => {
-                let old = temporal_brand(this, &self.temporal_durations)
-                    .ok_or_else(|| self.catchable_type_error())?;
+                let old = temporal_brand(this, &self.temporal_durations).ok_or_else(|| {
+                    self.catchable_type_error_msg("Temporal.Duration: incompatible receiver".into())
+                })?;
                 let Payload::Reference(r) = arg0.value else {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg(
+                        "Temporal.with: fields must be an object".into(),
+                    ));
                 };
                 let names = [
                     "years",
@@ -830,19 +1023,23 @@ impl Interp {
                     }
                 }
                 if !any {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg(
+                        "Temporal.Duration: at least one duration field is required".into(),
+                    ));
                 }
                 self.temporal_new_duration(TemporalDurationRecord::from_fields(fields))
             }
             TemporalDurationRound => {
-                let d = temporal_brand(this, &self.temporal_durations)
-                    .ok_or_else(|| self.catchable_type_error())?;
+                let d = temporal_brand(this, &self.temporal_durations).ok_or_else(|| {
+                    self.catchable_type_error_msg("Temporal.Duration: incompatible receiver".into())
+                })?;
                 let record = self.temporal_duration_round(d, arg0, code)?;
                 self.temporal_new_duration(record)
             }
             TemporalDurationTotal => {
-                let d = temporal_brand(this, &self.temporal_durations)
-                    .ok_or_else(|| self.catchable_type_error())?;
+                let d = temporal_brand(this, &self.temporal_durations).ok_or_else(|| {
+                    self.catchable_type_error_msg("Temporal.Duration: incompatible receiver".into())
+                })?;
                 // `total` requires a `unit`: a bare string argument IS the unit,
                 // an options bag must carry a `unit` property (no default), and
                 // anything else is a TypeError.
@@ -850,23 +1047,40 @@ impl Interp {
                     (self.value_to_string(code, arg0)?, None)
                 } else if let Payload::Reference(r) = arg0.value {
                     if arg0.kind != Kind::Reference {
-                        return Err(self.catchable_type_error());
+                        return Err(self.catchable_type_error_msg(
+                            "Temporal: expected a unit string or options object".into(),
+                        ));
                     }
-                    let unit = self
-                        .intl_option_string(code, r, "unit")?
-                        .ok_or_else(|| self.catchable_range_error())?;
+                    let unit = self.intl_option_string(code, r, "unit")?.ok_or_else(|| {
+                        self.catchable_range_error_msg(
+                            "Temporal.Duration.total: unit is required".into(),
+                        )
+                    })?;
                     (unit, self.temporal_relative_to_date(arg0, code)?)
                 } else {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg(
+                        "Temporal: expected a unit string or options object".into(),
+                    ));
                 };
                 let unit_key = unit.trim_end_matches('s');
                 match unit_key {
                     "year" | "month" => {
-                        let start = relative.ok_or_else(|| self.catchable_range_error())?;
-                        let span = iso_duration_span_nanoseconds(start, d)
-                            .ok_or_else(|| self.catchable_range_error())?;
-                        let total = iso_total_calendar_units(start, span, unit_key)
-                            .ok_or_else(|| self.catchable_range_error())?;
+                        let start = relative.ok_or_else(|| {
+                            self.catchable_range_error_msg(
+                                "Temporal: relativeTo is required for calendar units".into(),
+                            )
+                        })?;
+                        let span = iso_duration_span_nanoseconds(start, d).ok_or_else(|| {
+                            self.catchable_range_error_msg(
+                                "Temporal: duration span out of range".into(),
+                            )
+                        })?;
+                        let total =
+                            iso_total_calendar_units(start, span, unit_key).ok_or_else(|| {
+                                self.catchable_range_error_msg(
+                                    "Temporal: calendar duration total out of range".into(),
+                                )
+                            })?;
                         Ok(Slot::number(total))
                     }
                     "week" | "day" | "hour" | "minute" | "second" | "millisecond"
@@ -875,17 +1089,20 @@ impl Interp {
                         let q = if unit_key == "week" {
                             7 * 86_400_000_000_000i128
                         } else {
-                            temporal_unit_nanoseconds(unit_key)
-                                .ok_or_else(|| self.catchable_range_error())?
+                            temporal_unit_nanoseconds(unit_key).ok_or_else(|| {
+                                self.catchable_range_error_msg("Temporal: invalid time unit".into())
+                            })?
                         };
                         Ok(Slot::number(span as f64 / q as f64))
                     }
-                    _ => Err(self.catchable_range_error()),
+                    _ => Err(self
+                        .catchable_range_error_msg("Temporal.Duration.total: invalid unit".into())),
                 }
             }
             TemporalDurationToString | TemporalDurationToJSON => {
-                let d = temporal_brand(this, &self.temporal_durations)
-                    .ok_or_else(|| self.catchable_type_error())?;
+                let d = temporal_brand(this, &self.temporal_durations).ok_or_else(|| {
+                    self.catchable_type_error_msg("Temporal.Duration: incompatible receiver".into())
+                })?;
                 Ok(self.new_string_metered(format_temporal_duration(d).as_bytes()))
             }
             _ => unreachable!("non-Temporal method routed to temporal_method"),
@@ -900,7 +1117,9 @@ impl Interp {
     ) -> Result<Slot, Step> {
         const LIMIT: i128 = 8_640_000_000_000_000_000_000;
         if !(-LIMIT..=LIMIT).contains(&epoch_nanoseconds) {
-            return Err(self.catchable_range_error());
+            return Err(
+                self.catchable_range_error_msg("Temporal: epoch nanoseconds out of range".into())
+            );
         }
         let inst = self.slots.alloc(Slot::instance(self.temporal_zoned_proto));
         self.temporal_zoneds.insert(
@@ -939,15 +1158,23 @@ impl Interp {
         if let Payload::Reference(r) = value.value {
             if value.kind == Kind::Reference {
                 let Some(&tz_id) = self.symbol_ids.get("timeZone") else {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg(
+                        "Temporal.ZonedDateTime: timeZone is required".into(),
+                    ));
                 };
                 let tz_val = self.ordinary_get(code, r, tz_id, value)?;
                 if tz_val.kind == Kind::Undefined {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg(
+                        "Temporal.ZonedDateTime: timeZone is required".into(),
+                    ));
                 }
                 let tz_text = self.value_to_string(code, tz_val)?;
-                let (time_zone, offset_ns) = resolve_zoned_time_zone(&tz_text)
-                    .ok_or_else(|| self.catchable_range_error())?;
+                let (time_zone, offset_ns) =
+                    resolve_zoned_time_zone(&tz_text).ok_or_else(|| {
+                        self.catchable_range_error_msg(
+                            "Temporal: invalid or unsupported time zone".into(),
+                        )
+                    })?;
                 let mut p = TemporalPlainRecord {
                     kind: 2,
                     ..Default::default()
@@ -977,32 +1204,63 @@ impl Interp {
                     match n {
                         0 => p.year = v,
                         1 => {
-                            p.month = u32::try_from(v).map_err(|_| self.catchable_range_error())?
+                            p.month = u32::try_from(v).map_err(|_| {
+                                self.catchable_range_error_msg(
+                                    "Temporal: month out of range".into(),
+                                )
+                            })?
                         }
-                        2 => p.day = u32::try_from(v).map_err(|_| self.catchable_range_error())?,
-                        3 => p.hour = u32::try_from(v).map_err(|_| self.catchable_range_error())?,
+                        2 => {
+                            p.day = u32::try_from(v).map_err(|_| {
+                                self.catchable_range_error_msg("Temporal: day out of range".into())
+                            })?
+                        }
+                        3 => {
+                            p.hour = u32::try_from(v).map_err(|_| {
+                                self.catchable_range_error_msg("Temporal: hour out of range".into())
+                            })?
+                        }
                         4 => {
-                            p.minute = u32::try_from(v).map_err(|_| self.catchable_range_error())?
+                            p.minute = u32::try_from(v).map_err(|_| {
+                                self.catchable_range_error_msg(
+                                    "Temporal: minute out of range".into(),
+                                )
+                            })?
                         }
                         5 => {
-                            p.second = u32::try_from(v).map_err(|_| self.catchable_range_error())?
+                            p.second = u32::try_from(v).map_err(|_| {
+                                self.catchable_range_error_msg(
+                                    "Temporal: second out of range".into(),
+                                )
+                            })?
                         }
                         6 => {
-                            p.millisecond =
-                                u32::try_from(v).map_err(|_| self.catchable_range_error())?
+                            p.millisecond = u32::try_from(v).map_err(|_| {
+                                self.catchable_range_error_msg(
+                                    "Temporal: millisecond out of range".into(),
+                                )
+                            })?
                         }
                         7 => {
-                            p.microsecond =
-                                u32::try_from(v).map_err(|_| self.catchable_range_error())?
+                            p.microsecond = u32::try_from(v).map_err(|_| {
+                                self.catchable_range_error_msg(
+                                    "Temporal: microsecond out of range".into(),
+                                )
+                            })?
                         }
                         _ => {
-                            p.nanosecond =
-                                u32::try_from(v).map_err(|_| self.catchable_range_error())?
+                            p.nanosecond = u32::try_from(v).map_err(|_| {
+                                self.catchable_range_error_msg(
+                                    "Temporal: nanosecond out of range".into(),
+                                )
+                            })?
                         }
                     }
                 }
                 if !(seen[0] && seen[1] && seen[2]) || !temporal_plain_valid(p) {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg(
+                        "Temporal: missing or invalid required date/time fields".into(),
+                    ));
                 }
                 // A provided `offset` must agree with the fixed zone offset
                 // (Temporal's default `offset: "reject"`).
@@ -1010,15 +1268,21 @@ impl Interp {
                     let off_val = self.ordinary_get(code, r, off_id, value)?;
                     if off_val.kind != Kind::Undefined {
                         let s = self.value_to_string(code, off_val)?;
-                        let provided =
-                            parse_offset_ns(&s).ok_or_else(|| self.catchable_range_error())?;
+                        let provided = parse_offset_ns(&s).ok_or_else(|| {
+                            self.catchable_range_error_msg("Temporal: invalid UTC offset".into())
+                        })?;
                         if provided != offset_ns {
-                            return Err(self.catchable_range_error());
+                            return Err(self.catchable_range_error_msg(
+                                "Temporal.ZonedDateTime: offset does not match timeZone".into(),
+                            ));
                         }
                     }
                 }
-                let epoch = local_datetime_to_epoch(&p, offset_ns)
-                    .ok_or_else(|| self.catchable_range_error())?;
+                let epoch = local_datetime_to_epoch(&p, offset_ns).ok_or_else(|| {
+                    self.catchable_range_error_msg(
+                        "Temporal: date/time outside supported epoch range".into(),
+                    )
+                })?;
                 return Ok(TemporalZonedRecord {
                     epoch_nanoseconds: epoch,
                     time_zone,
@@ -1027,7 +1291,11 @@ impl Interp {
             }
         }
         let text = self.value_to_string(code, value)?;
-        parse_temporal_zoned(&text).ok_or_else(|| self.catchable_range_error())
+        parse_temporal_zoned(&text).ok_or_else(|| {
+            self.catchable_range_error_msg(
+                "Temporal.ZonedDateTime: invalid zoned date/time string".into(),
+            )
+        })
     }
 
     /// Resolve `round`/`until`/`since`'s options argument (a string smallestUnit
@@ -1060,17 +1328,23 @@ impl Interp {
                     1,
                     mode_default.to_string(),
                 )),
-                None => Err(self.catchable_type_error()),
+                None => Err(self.catchable_type_error_msg(
+                    "Temporal: expected a unit string or options object".into(),
+                )),
             };
         };
         if arg.kind != Kind::Reference {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg("Temporal: options must be an object".into()));
         }
         let smallest = match self.intl_option_string(code, r, "smallestUnit")? {
             Some(u) => u,
             None => match smallest_default {
                 Some(d) => d.to_string(),
-                None => return Err(self.catchable_range_error()),
+                None => {
+                    return Err(self.catchable_range_error_msg(
+                        "Temporal.round: smallestUnit is required".into(),
+                    ))
+                }
             },
         };
         let largest = self
@@ -1090,7 +1364,8 @@ impl Interp {
             1
         };
         if increment < 1 {
-            return Err(self.catchable_range_error());
+            return Err(self
+                .catchable_range_error_msg("Temporal: roundingIncrement must be positive".into()));
         }
         Ok((smallest, largest, increment, mode))
     }
@@ -1115,17 +1390,21 @@ impl Interp {
                 a.epoch_nanoseconds.cmp(&b.epoch_nanoseconds) as i32
             ));
         }
-        let old = self
-            .temporal_zoned_brand(this)
-            .ok_or_else(|| self.catchable_type_error())?;
+        let old = self.temporal_zoned_brand(this).ok_or_else(|| {
+            self.catchable_type_error_msg("Temporal.ZonedDateTime: incompatible receiver".into())
+        })?;
         match op {
             2 => {
                 // with(fields): override present ISO date/time fields; the zone is fixed.
                 let Payload::Reference(r) = arg0.value else {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg(
+                        "Temporal.with: fields must be an object".into(),
+                    ));
                 };
                 if arg0.kind != Kind::Reference {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg(
+                        "Temporal.with: fields must be an object".into(),
+                    ));
                 }
                 let mut p = zoned_local_datetime(old.epoch_nanoseconds, old.offset_ns);
                 let mut any = false;
@@ -1155,42 +1434,80 @@ impl Interp {
                     match n {
                         0 => p.year = v,
                         1 => {
-                            p.month = u32::try_from(v).map_err(|_| self.catchable_range_error())?
+                            p.month = u32::try_from(v).map_err(|_| {
+                                self.catchable_range_error_msg(
+                                    "Temporal: month out of range".into(),
+                                )
+                            })?
                         }
-                        2 => p.day = u32::try_from(v).map_err(|_| self.catchable_range_error())?,
-                        3 => p.hour = u32::try_from(v).map_err(|_| self.catchable_range_error())?,
+                        2 => {
+                            p.day = u32::try_from(v).map_err(|_| {
+                                self.catchable_range_error_msg("Temporal: day out of range".into())
+                            })?
+                        }
+                        3 => {
+                            p.hour = u32::try_from(v).map_err(|_| {
+                                self.catchable_range_error_msg("Temporal: hour out of range".into())
+                            })?
+                        }
                         4 => {
-                            p.minute = u32::try_from(v).map_err(|_| self.catchable_range_error())?
+                            p.minute = u32::try_from(v).map_err(|_| {
+                                self.catchable_range_error_msg(
+                                    "Temporal: minute out of range".into(),
+                                )
+                            })?
                         }
                         5 => {
-                            p.second = u32::try_from(v).map_err(|_| self.catchable_range_error())?
+                            p.second = u32::try_from(v).map_err(|_| {
+                                self.catchable_range_error_msg(
+                                    "Temporal: second out of range".into(),
+                                )
+                            })?
                         }
                         6 => {
-                            p.millisecond =
-                                u32::try_from(v).map_err(|_| self.catchable_range_error())?
+                            p.millisecond = u32::try_from(v).map_err(|_| {
+                                self.catchable_range_error_msg(
+                                    "Temporal: millisecond out of range".into(),
+                                )
+                            })?
                         }
                         7 => {
-                            p.microsecond =
-                                u32::try_from(v).map_err(|_| self.catchable_range_error())?
+                            p.microsecond = u32::try_from(v).map_err(|_| {
+                                self.catchable_range_error_msg(
+                                    "Temporal: microsecond out of range".into(),
+                                )
+                            })?
                         }
                         _ => {
-                            p.nanosecond =
-                                u32::try_from(v).map_err(|_| self.catchable_range_error())?
+                            p.nanosecond = u32::try_from(v).map_err(|_| {
+                                self.catchable_range_error_msg(
+                                    "Temporal: nanosecond out of range".into(),
+                                )
+                            })?
                         }
                     }
                 }
                 if !any || !temporal_plain_valid(p) {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg(
+                        "Temporal: missing or invalid required date/time fields".into(),
+                    ));
                 }
-                let epoch = local_datetime_to_epoch(&p, old.offset_ns)
-                    .ok_or_else(|| self.catchable_range_error())?;
+                let epoch = local_datetime_to_epoch(&p, old.offset_ns).ok_or_else(|| {
+                    self.catchable_range_error_msg(
+                        "Temporal: date/time outside supported epoch range".into(),
+                    )
+                })?;
                 self.temporal_new_zoned(epoch, old.time_zone, old.offset_ns)
             }
             3 | 4 => {
                 // add / subtract a duration.
                 let mut d = self.temporal_duration_from(arg0, code)?;
                 if op == 4 {
-                    d = d.negated().ok_or_else(|| self.catchable_range_error())?;
+                    d = d.negated().ok_or_else(|| {
+                        self.catchable_range_error_msg(
+                            "Temporal.Duration: negation out of range".into(),
+                        )
+                    })?;
                 }
                 let mut p = zoned_local_datetime(old.epoch_nanoseconds, old.offset_ns);
                 // Add the date part (years/months/weeks/days) to the wall-clock
@@ -1211,13 +1528,19 @@ impl Interp {
                     days: d.days,
                     ..Default::default()
                 };
-                let shifted = temporal_plain_add(date, date_only)
-                    .ok_or_else(|| self.catchable_range_error())?;
+                let shifted = temporal_plain_add(date, date_only).ok_or_else(|| {
+                    self.catchable_range_error_msg(
+                        "Temporal: date/time arithmetic out of range".into(),
+                    )
+                })?;
                 p.year = shifted.year;
                 p.month = shifted.month;
                 p.day = shifted.day;
-                let intermediate = local_datetime_to_epoch(&p, old.offset_ns)
-                    .ok_or_else(|| self.catchable_range_error())?;
+                let intermediate = local_datetime_to_epoch(&p, old.offset_ns).ok_or_else(|| {
+                    self.catchable_range_error_msg(
+                        "Temporal: date/time outside supported epoch range".into(),
+                    )
+                })?;
                 let time_ns = TemporalDurationRecord {
                     hours: d.hours,
                     minutes: d.minutes,
@@ -1228,10 +1551,16 @@ impl Interp {
                     ..Default::default()
                 }
                 .time_nanoseconds(false)
-                .ok_or_else(|| self.catchable_range_error())?;
-                let epoch = intermediate
-                    .checked_add(time_ns)
-                    .ok_or_else(|| self.catchable_range_error())?;
+                .ok_or_else(|| {
+                    self.catchable_range_error_msg(
+                        "Temporal: duration cannot be represented in nanoseconds".into(),
+                    )
+                })?;
+                let epoch = intermediate.checked_add(time_ns).ok_or_else(|| {
+                    self.catchable_range_error_msg(
+                        "Temporal: epoch nanoseconds out of range".into(),
+                    )
+                })?;
                 self.temporal_new_zoned(epoch, old.time_zone, old.offset_ns)
             }
             5 | 6 => {
@@ -1249,27 +1578,47 @@ impl Interp {
                     "hour",
                     "trunc",
                 )?;
-                let smallest_rank =
-                    temporal_unit_rank(&smallest).ok_or_else(|| self.catchable_range_error())?;
-                let largest_rank =
-                    temporal_unit_rank(&largest).ok_or_else(|| self.catchable_range_error())?;
+                let smallest_rank = temporal_unit_rank(&smallest).ok_or_else(|| {
+                    self.catchable_range_error_msg("Temporal: invalid duration unit".into())
+                })?;
+                let largest_rank = temporal_unit_rank(&largest).ok_or_else(|| {
+                    self.catchable_range_error_msg("Temporal: invalid duration unit".into())
+                })?;
                 // largestUnit must be the same size or coarser than smallestUnit.
                 if largest_rank > smallest_rank {
-                    return Err(self.catchable_range_error());
+                    return Err(self.catchable_range_error_msg(
+                        "Temporal: largestUnit must not be smaller than smallestUnit".into(),
+                    ));
                 }
-                validate_duration_increment(smallest_rank, increment as i64)
-                    .ok_or_else(|| self.catchable_range_error())?;
+                validate_duration_increment(smallest_rank, increment as i64).ok_or_else(|| {
+                    self.catchable_range_error_msg(
+                        "Temporal: invalid roundingIncrement for smallestUnit".into(),
+                    )
+                })?;
                 if largest_rank >= 3 {
                     // Fixed-length largest unit: round the exact instant difference.
                     let mut diff = b.epoch_nanoseconds - a.epoch_nanoseconds;
                     let quantum = temporal_unit_nanoseconds(temporal_unit_name(smallest_rank))
-                        .ok_or_else(|| self.catchable_range_error())?
+                        .ok_or_else(|| {
+                            self.catchable_range_error_msg("Temporal: invalid time unit".into())
+                        })?
                         .checked_mul(increment)
-                        .ok_or_else(|| self.catchable_range_error())?;
-                    diff = round_temporal(diff, quantum, &mode)
-                        .ok_or_else(|| self.catchable_range_error())?;
+                        .ok_or_else(|| {
+                            self.catchable_range_error_msg(
+                                "Temporal: rounding increment out of range".into(),
+                            )
+                        })?;
+                    diff = round_temporal(diff, quantum, &mode).ok_or_else(|| {
+                        self.catchable_range_error_msg(
+                            "Temporal: invalid rounding mode or result out of range".into(),
+                        )
+                    })?;
                     let record = balance_zoned_diff(diff, temporal_unit_name(largest_rank))
-                        .ok_or_else(|| self.catchable_range_error())?;
+                        .ok_or_else(|| {
+                            self.catchable_range_error_msg(
+                                "Temporal: duration balance out of range".into(),
+                            )
+                        })?;
                     self.temporal_new_duration(record)
                 } else {
                     // Calendar largest unit (week/month/year): difference the local
@@ -1280,17 +1629,32 @@ impl Interp {
                     let b_local = zoned_local_datetime(b.epoch_nanoseconds, b.offset_ns);
                     let mut record =
                         iso_datetime_difference(a_local, b_local, temporal_unit_name(largest_rank))
-                            .ok_or_else(|| self.catchable_range_error())?;
+                            .ok_or_else(|| {
+                                self.catchable_range_error_msg(
+                                    "Temporal: date/time difference out of range".into(),
+                                )
+                            })?;
                     if smallest_rank > 3 {
-                        let time_ns = record
-                            .time_only_nanoseconds()
-                            .ok_or_else(|| self.catchable_range_error())?;
+                        let time_ns = record.time_only_nanoseconds().ok_or_else(|| {
+                            self.catchable_range_error_msg(
+                                "Temporal: duration cannot be represented in nanoseconds".into(),
+                            )
+                        })?;
                         let quantum = temporal_unit_nanoseconds(temporal_unit_name(smallest_rank))
-                            .ok_or_else(|| self.catchable_range_error())?
+                            .ok_or_else(|| {
+                                self.catchable_range_error_msg("Temporal: invalid time unit".into())
+                            })?
                             .checked_mul(increment)
-                            .ok_or_else(|| self.catchable_range_error())?;
-                        let rounded = round_temporal(time_ns, quantum, &mode)
-                            .ok_or_else(|| self.catchable_range_error())?;
+                            .ok_or_else(|| {
+                                self.catchable_range_error_msg(
+                                    "Temporal: rounding increment out of range".into(),
+                                )
+                            })?;
+                        let rounded = round_temporal(time_ns, quantum, &mode).ok_or_else(|| {
+                            self.catchable_range_error_msg(
+                                "Temporal: invalid rounding mode or result out of range".into(),
+                            )
+                        })?;
                         let t = duration_from_nanoseconds(rounded);
                         record.hours = t.hours;
                         record.minutes = t.minutes;
@@ -1306,16 +1670,22 @@ impl Interp {
                 // round(smallestUnit | options).
                 let (smallest, _largest, increment, mode) =
                     self.temporal_zoned_round_options(arg0, code, None, "hour", "halfExpand")?;
-                let unit_ns = temporal_unit_nanoseconds(&smallest)
-                    .ok_or_else(|| self.catchable_range_error())?;
-                let quantum = unit_ns
-                    .checked_mul(increment)
-                    .ok_or_else(|| self.catchable_range_error())?;
+                let unit_ns = temporal_unit_nanoseconds(&smallest).ok_or_else(|| {
+                    self.catchable_range_error_msg("Temporal: invalid time unit".into())
+                })?;
+                let quantum = unit_ns.checked_mul(increment).ok_or_else(|| {
+                    self.catchable_range_error_msg(
+                        "Temporal: rounding increment out of range".into(),
+                    )
+                })?;
                 // Fixed-offset day boundaries align to every sub-day quantum, so
                 // rounding the local wall-time value is exact for all units.
                 let local = old.epoch_nanoseconds + old.offset_ns as i128;
-                let rounded_local = round_temporal(local, quantum, &mode)
-                    .ok_or_else(|| self.catchable_range_error())?;
+                let rounded_local = round_temporal(local, quantum, &mode).ok_or_else(|| {
+                    self.catchable_range_error_msg(
+                        "Temporal: invalid rounding mode or result out of range".into(),
+                    )
+                })?;
                 let epoch = rounded_local - old.offset_ns as i128;
                 self.temporal_new_zoned(epoch, old.time_zone, old.offset_ns)
             }
@@ -1336,7 +1706,10 @@ impl Interp {
             10 => {
                 // getTimeZoneTransition(direction): a fixed offset never transitions.
                 if arg0.kind == Kind::Undefined {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg(
+                        "Temporal.ZonedDateTime.getTimeZoneTransition: direction is required"
+                            .into(),
+                    ));
                 }
                 Ok(Slot::null())
             }
@@ -1385,22 +1758,30 @@ impl Interp {
                 p.millisecond = t.millisecond;
                 p.microsecond = t.microsecond;
                 p.nanosecond = t.nanosecond;
-                let epoch = local_datetime_to_epoch(&p, old.offset_ns)
-                    .ok_or_else(|| self.catchable_range_error())?;
+                let epoch = local_datetime_to_epoch(&p, old.offset_ns).ok_or_else(|| {
+                    self.catchable_range_error_msg(
+                        "Temporal: date/time outside supported epoch range".into(),
+                    )
+                })?;
                 self.temporal_new_zoned(epoch, old.time_zone, old.offset_ns)
             }
             16 => {
                 // withTimeZone: same instant, different zone.
                 let text = self.value_to_string(code, arg0)?;
-                let (time_zone, offset_ns) =
-                    resolve_zoned_time_zone(&text).ok_or_else(|| self.catchable_range_error())?;
+                let (time_zone, offset_ns) = resolve_zoned_time_zone(&text).ok_or_else(|| {
+                    self.catchable_range_error_msg(
+                        "Temporal: invalid or unsupported time zone".into(),
+                    )
+                })?;
                 self.temporal_new_zoned(old.epoch_nanoseconds, time_zone, offset_ns)
             }
             17 => {
                 // withCalendar: only iso8601 is modeled.
                 let id = self.value_to_string(code, arg0)?;
                 if id.to_ascii_lowercase() != "iso8601" {
-                    return Err(self.catchable_range_error());
+                    return Err(
+                        self.catchable_range_error_msg("Temporal: unsupported calendar".into())
+                    );
                 }
                 self.temporal_new_zoned(old.epoch_nanoseconds, old.time_zone, old.offset_ns)
             }
@@ -1416,7 +1797,9 @@ impl Interp {
             20 => Err(Step::Host(Halt::NotImplemented(
                 "Temporal.ZonedDateTime.toLocaleString:needs-intl",
             ))),
-            21 => Err(self.catchable_type_error()),
+            21 => Err(self.catchable_type_error_msg(
+                "Temporal: valueOf cannot convert to a primitive".into(),
+            )),
             _ => Err(Step::Host(Halt::NotImplemented(
                 "Temporal.ZonedDateTime:method",
             ))),
@@ -1438,7 +1821,9 @@ impl Interp {
             if let Payload::Reference(r) = options.value {
                 if let Some(cn) = self.intl_option_string(code, r, "calendarName")? {
                     if !matches!(cn.as_str(), "auto" | "always" | "never" | "critical") {
-                        return Err(self.catchable_range_error());
+                        return Err(self.catchable_range_error_msg(
+                            "Temporal.toString: invalid calendarName option".into(),
+                        ));
                     }
                     calendar_name = cn;
                 }
@@ -1446,19 +1831,27 @@ impl Interp {
                     match off.as_str() {
                         "auto" => {}
                         "never" => show_offset = false,
-                        _ => return Err(self.catchable_range_error()),
+                        _ => {
+                            return Err(self.catchable_range_error_msg(
+                                "Temporal.toString: invalid offset option".into(),
+                            ))
+                        }
                     }
                 }
                 if let Some(tzn) = self.intl_option_string(code, r, "timeZoneName")? {
                     match tzn.as_str() {
                         "auto" | "critical" => {}
                         "never" => show_zone = false,
-                        _ => return Err(self.catchable_range_error()),
+                        _ => {
+                            return Err(self.catchable_range_error_msg(
+                                "Temporal.toString: invalid timeZoneName option".into(),
+                            ))
+                        }
                     }
                 }
             }
         } else if options.kind != Kind::Undefined {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg("Temporal: options must be an object".into()));
         }
         let show_cal = matches!(calendar_name.as_str(), "always" | "critical");
         Ok(format_zoned(
@@ -1484,7 +1877,11 @@ impl Interp {
             let s = this.value_to_string(code, arg)?;
             resolve_zoned_time_zone(&s)
                 .map(|(_, off)| off)
-                .ok_or_else(|| this.catchable_range_error())
+                .ok_or_else(|| {
+                    this.catchable_range_error_msg(
+                        "Temporal: invalid or unsupported time zone".into(),
+                    )
+                })
         };
         match op {
             0 => self.temporal_new_instant(NOW_EPOCH_NS),
@@ -1494,7 +1891,11 @@ impl Interp {
                     ("UTC".to_string(), 0)
                 } else {
                     let s = self.value_to_string(code, arg0)?;
-                    resolve_zoned_time_zone(&s).ok_or_else(|| self.catchable_range_error())?
+                    resolve_zoned_time_zone(&s).ok_or_else(|| {
+                        self.catchable_range_error_msg(
+                            "Temporal: invalid or unsupported time zone".into(),
+                        )
+                    })?
                 };
                 self.temporal_new_zoned(NOW_EPOCH_NS, time_zone, offset_ns)
             }

@@ -15,7 +15,10 @@ impl Interp {
             _ => {
                 // Valid compiled private initialization always has an
                 // instance receiver; this guards malformed VM input.
-                let error = self.build_error("TypeError", 0, 0);
+                let error = self.internal_error(
+                    "TypeError",
+                    "private initialization: receiver must be an object".into(),
+                );
                 return Err(self.raise_js(error));
             }
         };

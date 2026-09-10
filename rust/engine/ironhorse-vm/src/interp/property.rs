@@ -335,7 +335,7 @@ impl Interp {
 
     /// Diagnose XS's super setter without repeating guest getters or traps.
     /// A data property on the home prototype leads XS to the receiver's own
-    /// property. Keep spec-only rejections bare when XS would instead succeed.
+    /// property. Spec-only rejections use descriptive fallback diagnostics.
     pub(super) fn failed_super_set_error(
         &mut self,
         base: crate::value::SlotIndex,
@@ -345,7 +345,7 @@ impl Interp {
         let mut current = base;
         while !current.is_null() {
             if self.proxies.contains_key(&current) {
-                return self.catchable_type_error();
+                return self.catchable_type_error_msg("set: proxy rejected assignment".into());
             }
             let descriptor = self
                 .ordinary_get_own_descriptor(current, id)
@@ -359,17 +359,17 @@ impl Interp {
                         let name = self.property_debug_name(id);
                         return self.catchable_type_error_msg(format!("set {name}: no setter"));
                     }
-                    return self.catchable_type_error();
+                    return self.catchable_type_error_msg("set: assignment rejected".into());
                 }
                 break;
             }
             current = self.instance_prototype(current);
         }
         let Payload::Reference(object) = receiver.value else {
-            return self.catchable_type_error();
+            return self.catchable_type_error_msg("set: receiver is not an object".into());
         };
         if receiver.kind != Kind::Reference || self.proxies.contains_key(&object) {
-            return self.catchable_type_error();
+            return self.catchable_type_error_msg("set: receiver rejected assignment".into());
         }
         let descriptor = self
             .ordinary_get_own_descriptor(object, id)
@@ -382,12 +382,13 @@ impl Interp {
                 {
                     "no setter"
                 } else {
-                    return self.catchable_type_error();
+                    return self
+                        .catchable_type_error_msg("set: receiver rejected assignment".into());
                 }
             }
             Some(descriptor) if descriptor.writable == Some(false) => "not writable",
             None if !self.instance_extensible(object) => "not extensible",
-            _ => return self.catchable_type_error(),
+            _ => return self.catchable_type_error_msg("set: assignment rejected".into()),
         };
         let name = self.property_debug_name(id);
         self.catchable_type_error_msg(format!("set {name}: {reason}"))
@@ -452,7 +453,9 @@ impl Interp {
                 // The spec rejects a false strict Proxy Set; pinned XS ignores
                 // that trap result here, so it has no matching diagnostic.
                 if !accepted && self.strict {
-                    return Err(self.catchable_type_error());
+                    return Err(
+                        self.catchable_type_error_msg("set: proxy trap returned false".into())
+                    );
                 }
             }
             return Ok(());
@@ -609,7 +612,8 @@ impl Interp {
             if !accepted && self.strict {
                 // Preserve the spec's failed length-shrink error. XS's array
                 // length setter ignores fxSetArrayLength's false return.
-                return Err(self.catchable_type_error());
+                return Err(self
+                    .catchable_type_error_msg("set length: array length update rejected".into()));
             }
             Ok(())
         } else {
@@ -1350,8 +1354,8 @@ impl Interp {
         while !current.is_null() {
             if self.proxies.contains_key(&current) {
                 // A false Proxy set result has different behavior in the
-                // pinned XS C setter; do not fabricate a parity diagnostic.
-                return self.internal_error("TypeError", String::new());
+                // pinned XS C setter; this is an engine-specific diagnostic.
+                return self.internal_error("TypeError", "set: proxy rejected assignment".into());
             }
             let descriptor = self
                 .ordinary_get_own_descriptor(current, id)
@@ -1387,8 +1391,9 @@ impl Interp {
         while !current.is_null() {
             if self.proxies.contains_key(&current) {
                 // A false Proxy set result has different behavior in the
-                // pinned XS C setter; do not fabricate a parity diagnostic.
-                let error = self.internal_error("TypeError", String::new());
+                // pinned XS C setter; this is an engine-specific diagnostic.
+                let error =
+                    self.internal_error("TypeError", "set: proxy rejected assignment".into());
                 return self.raise_js(error);
             }
             let descriptor = self

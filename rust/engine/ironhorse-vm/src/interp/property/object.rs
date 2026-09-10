@@ -290,7 +290,10 @@ impl Interp {
             // The fresh ordinary result cannot reject an all-true data
             // descriptor. XS does not expose an error diagnostic for this guard.
             if !self.ordinary_define_own_property(result, id, descriptor) {
-                let error = self.build_error("TypeError", 0, 0);
+                let error = self.internal_error(
+                    "TypeError",
+                    "Object.fromEntries: result property definition failed".into(),
+                );
                 let error = self.array_from_close(code, iterator, error)?;
                 return Ok(Err(error));
             }

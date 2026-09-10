@@ -69,7 +69,9 @@ impl Interp {
                 if matches!(sync_method.kind, Kind::Undefined | Kind::Null) {
                     return Err(self.catchable_type_error_msg("call: not a function".into()));
                 }
-                return Err(self.catchable_type_error());
+                return Err(self.catchable_type_error_msg(
+                    "async generator: synchronous iterator fallback unavailable".into(),
+                ));
             }
         }
         match iterable.value {

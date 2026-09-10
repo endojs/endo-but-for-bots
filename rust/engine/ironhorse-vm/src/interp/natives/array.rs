@@ -1977,7 +1977,11 @@ impl Interp {
                     self.catchable_type_error_msg("cannot coerce undefined to object".into())
                 )
             }
-            _ => return Err(self.catchable_type_error()),
+            _ => {
+                return Err(self.catchable_type_error_msg(
+                    "Array method: cannot convert receiver to object".into(),
+                ))
+            }
         };
         let inst = self.box_object_primitive(native, this);
         Ok(Slot::of(Kind::Reference, Payload::Reference(inst)))
@@ -3231,7 +3235,9 @@ impl Interp {
             if target_index >= MAX_SAFE_INTEGER {
                 // This spec guard has no matching XS diagnostic: the pinned
                 // flat helper uses txIndex without a safe-integer guard.
-                return Err(self.catchable_type_error());
+                return Err(self.catchable_type_error_msg(
+                    "Array.flat: result exceeds maximum array-like length".into(),
+                ));
             }
             self.charge_and_check(ARRAY_FLAT_PER_LEAF_METERING)?;
             let count =
@@ -3305,7 +3311,9 @@ impl Interp {
         for operand in operands {
             if !self.array_generic_is_concat_spreadable(code, operand)? {
                 if n >= MAX_SAFE_INTEGER {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg(
+                        "Array.concat: result exceeds maximum array-like length".into(),
+                    ));
                 }
                 self.array_generic_create_data_property(code, result, n, operand)?;
                 n += 1;
@@ -3317,7 +3325,9 @@ impl Interp {
             };
             let length = self.array_generic_length(code, source)?;
             if n > MAX_SAFE_INTEGER - length {
-                return Err(self.catchable_type_error());
+                return Err(self.catchable_type_error_msg(
+                    "Array.concat: result exceeds maximum array-like length".into(),
+                ));
             }
             // Integer-indexed own elements need no observable `has`/`get`
             // property walk. Keep validating attachment before every read:

@@ -80,27 +80,17 @@ impl Interp {
         }
     }
 
-    /// As [`Self::catchable_type_error`], carrying a diagnostic message so
-    /// the thrown `TypeError` renders `TypeError: <message>` — XS's
-    /// `mxTypeError("...")` texts (`invalid object`, `invalid descriptor`,
-    /// `cannot coerce null to object`, …), which the oracle's
-    /// `String(exception)` reports verbatim.
+    /// Raise a realm-local TypeError carrying a diagnostic message. Existing
+    /// oracle-pinned messages remain verbatim; profile-specific guards supply
+    /// descriptive diagnostics even where XS has no corresponding refusal.
     pub(super) fn catchable_type_error_msg(&mut self, message: String) -> Step {
         let error = self.internal_error("TypeError", message);
         self.raise_js(error)
     }
 
-    /// Raise a realm-local TypeError from a native helper. The dispatch loop
-    /// consumes `Resume` and continues at the catch/finally target; an uncaught
-    /// error retains the ordinary host `Throw` result from [`Self::raise_js`].
-    pub(super) fn catchable_type_error(&mut self) -> Step {
-        let error = self.build_error("TypeError", 0, 0);
-        self.raise_js(error)
-    }
-
     /// Raise a realm-local, catchable `SyntaxError` from a native helper —
     /// the shape `new RegExp(badPattern)` throws (`fxThrowMessage` with
-    /// `XS_SYNTAX_ERROR`). Like [`Self::catchable_type_error`], `try`/`catch`
+    /// `XS_SYNTAX_ERROR`). Like [`Self::catchable_type_error_msg`], `try`/`catch`
     /// observes a realm-correct `SyntaxError` object (so `instanceof
     /// SyntaxError` and `assert.throws(SyntaxError, …)` hold) rather than an
     /// uncatchable host `Unsupported` halt.
