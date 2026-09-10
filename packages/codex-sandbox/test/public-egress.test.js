@@ -29,6 +29,7 @@ const setup = (t, options = {}) => {
   const kit = makePublicEgress({
     policy: 'public-internet',
     localAddresses: [],
+    getLocalAddresses: () => [],
     lookup: async (hostname, settings) => {
       lookups.push({ hostname, settings });
       return [{ address: '93.184.215.14', family: 4 }];
@@ -94,6 +95,56 @@ test('public address classification excludes private, special and transition ran
     '2130706433',
   ])
     t.false(isPublicEgressAddress(address), address);
+});
+
+test('live host addresses and their history are denied after lease creation', async t => {
+  let addresses = [];
+  const kit = setup(t, {
+    localAddresses: ['8.8.8.8'],
+    getLocalAddresses: () => addresses,
+    lookup: async () => {
+      addresses = ['93.184.215.14'];
+      return [{ address: '93.184.215.14', family: 4 }];
+    },
+  });
+  await t.throwsAsync(E(kit.endpoint).resolvePublic('changed.example'));
+  addresses = [];
+  await t.throwsAsync(E(kit.endpoint).resolvePublic('93.184.215.14'));
+  await t.throwsAsync(E(kit.endpoint).open('93.184.215.14', 443));
+  await t.throwsAsync(E(kit.endpoint).open('8.8.8.8', 443));
+  t.deepEqual(kit.connects, []);
+});
+
+test('address becoming host-local during connect closes before exposing payload authority', async t => {
+  let addresses = [];
+  const mock = mockSocket();
+  const kit = setup(t, {
+    getLocalAddresses: () => addresses,
+    connect: () => {
+      queueMicrotask(() => {
+        addresses = ['93.184.215.14'];
+        mock.socket.emit('connect');
+      });
+      return mock.socket;
+    },
+  });
+  await t.throwsAsync(E(kit.endpoint).open('example.com', 443));
+  t.true(mock.socket.destroyed);
+  t.deepEqual(mock.written, []);
+});
+
+test('host address history exhaustion remains fail-closed after addresses disappear', async t => {
+  let addresses = [];
+  const kit = setup(t, { getLocalAddresses: () => addresses });
+  addresses = Array.from(
+    { length: 4097 },
+    (_, i) => `11.0.${Math.floor(i / 256)}.${i % 256}`,
+  );
+  await t.throwsAsync(E(kit.endpoint).resolvePublic('1.1.1.1'));
+  addresses = [];
+  await t.throwsAsync(E(kit.endpoint).resolvePublic('11.0.16.0'));
+  await t.throwsAsync(E(kit.endpoint).open('1.1.1.1', 443));
+  t.deepEqual(kit.connects, []);
 });
 
 test('off and unsupported ports reject before DNS or connection effects', async t => {

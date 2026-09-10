@@ -76,6 +76,7 @@ const { atob, btoa } = globalThis;
  * @param {(hostname:string, options:{all:true,verbatim:true})=>Promise<LookupAddress[]>} [options.lookup]
  * @param {(options:{host:string,family:number,port:number,highWaterMark:number})=>Socket} [options.connect]
  * @param {readonly string[]} [options.localAddresses]
+ * @param {()=>readonly string[]} [options.getLocalAddresses] Live host addresses; previously observed addresses remain denied.
  * @param {number} [options.maxConnections] At most 64 simultaneous sockets/resolutions.
  * @param {number} [options.maxRequests] At most 65536 connections per generation.
  * @param {bigint} [options.maxBytes] Aggregate bidirectional payload quota.
@@ -86,9 +87,11 @@ export const makePublicEgress = ({
   policy,
   lookup = lookupAddress,
   connect = createConnection,
-  localAddresses = Object.values(networkInterfaces()).flatMap(items =>
-    (items || []).map(item => item.address),
-  ),
+  localAddresses = [],
+  getLocalAddresses = () =>
+    Object.values(networkInterfaces()).flatMap(items =>
+      (items || []).map(item => item.address),
+    ),
   maxConnections = 8,
   maxRequests = 1024,
   maxBytes = 2n * 1024n ** 3n,
@@ -112,10 +115,25 @@ export const makePublicEgress = ({
     dnsTimeoutMs <= 30_000) ||
     Fail`Invalid public egress limits`;
   const local = new BlockList();
-  for (const address of localAddresses) {
-    const family = isIP(address);
-    if (family) local.addAddress(address, family === 4 ? 'ipv4' : 'ipv6');
-  }
+  const observedLocal = new Set();
+  let localHistoryExhausted = false;
+  const rememberLocal = addresses => {
+    !localHistoryExhausted || Fail`Host address history exhausted`;
+    for (const address of addresses) {
+      const family = isIP(address);
+      if (family && !observedLocal.has(address)) {
+        if (observedLocal.size >= 4096) {
+          localHistoryExhausted = true;
+          Fail`Host address history exhausted`;
+        }
+        observedLocal.add(address);
+        local.addAddress(address, family === 4 ? 'ipv4' : 'ipv6');
+      }
+    }
+  };
+  const refreshLocal = () => rememberLocal(getLocalAddresses());
+  rememberLocal(localAddresses);
+  refreshLocal();
   const publicTarget = address =>
     isPublicEgressAddress(address) &&
     !local.check(address, isIP(address) === 4 ? 'ipv4' : 'ipv6');
@@ -127,6 +145,7 @@ export const makePublicEgress = ({
       !hostname.includes('%')) ||
     Fail`Invalid public egress host`;
   const assertAnswers = answers => {
+    refreshLocal();
     (Array.isArray(answers) &&
       answers.length > 0 &&
       answers.length <= 32 &&
@@ -284,6 +303,7 @@ export const makePublicEgress = ({
           const answers = await untilStopped(lookupResult);
           (!closed && !disposed) || Fail`Public egress expired`;
           const target = answers[0];
+          assertAnswers([target]);
           // An IP literal suppresses net.connect's resolver entirely.
           socket = connect({
             host: target.address,
@@ -305,7 +325,19 @@ export const makePublicEgress = ({
             active.delete(close);
           });
           await untilStopped(
-            new Promise(resolve => connection.once('connect', resolve)),
+            new Promise((resolve, reject) =>
+              connection.once('connect', () => {
+                try {
+                  // Address assignment can change while connect is pending.
+                  // Never expose a tunnel (or write payload) before rechecking.
+                  assertAnswers([target]);
+                  resolve(undefined);
+                } catch (error) {
+                  close();
+                  reject(error);
+                }
+              }),
+            ),
           );
           let reading = false;
           let writing = false;
