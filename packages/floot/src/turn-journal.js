@@ -56,14 +56,19 @@ const assertText = (value, limit = 1024, allowEmpty = false) => {
  * A new incarnation replays every event and fences unresolved outcomes.
  * All operations are serialized, including reads and acknowledgements.
  * @param {any} powers
+ * @param {{ migration?: any }} [options]
  */
-export const makeTurnJournal = powers => {
+export const makeTurnJournal = (powers, { migration } = {}) => {
   /** @type {Map<string, any>} */
   const records = new Map();
   let next = 1n;
   let initialized = false;
   let poisoned = false;
   let queue = Promise.resolve();
+  let migrationStatus = {
+    required: false,
+    resolution: /** @type {string | undefined} */ (undefined),
+  };
 
   /**
    * @param {any} event
@@ -152,6 +157,7 @@ export const makeTurnJournal = powers => {
 
   const initialize = async () => {
     if (initialized) return;
+    if (migration) migrationStatus = await E(migration).status();
     const names = await E(powers).list();
     const journalNames = names
       .filter(name => typeof name === 'string' && name.startsWith(PREFIX))
@@ -193,6 +199,9 @@ export const makeTurnJournal = powers => {
   };
 
   const assertUnfenced = () => {
+    !migrationStatus.required ||
+      migrationStatus.resolution ||
+      Fail`Verify the imported legacy journal before dispatching another turn`;
     ![...records.values()].some(
       record => record.state === 'outcome-unknown' && !record.resolution,
     ) || Fail`Resolve the unknown turn outcome before dispatching another turn`;
@@ -255,7 +264,41 @@ export const makeTurnJournal = powers => {
       }),
     list: () =>
       serialized(async () =>
-        harden(JSON.parse(JSON.stringify([...records.values()]))),
+        harden(
+          JSON.parse(
+            JSON.stringify([
+              ...(migrationStatus.required
+                ? [
+                    {
+                      turnId: 'legacy-import',
+                      input: 'Verify imported legacy journal evidence',
+                      backendId: 'migration',
+                      modelId: '',
+                      state: 'outcome-unknown',
+                      terminal: true,
+                      tools: [],
+                      activity: [],
+                      error:
+                        'This journal was imported from model-writable storage. Independently verify external effects before acknowledging; imported records are not authenticated evidence.',
+                      ...(migrationStatus.resolution
+                        ? { resolution: migrationStatus.resolution }
+                        : {}),
+                    },
+                  ]
+                : []),
+              ...records.values(),
+            ]),
+          ),
+        ),
+      ),
+    status: () =>
+      serialized(async () =>
+        harden({
+          usedEvents: `${next - 1n}`,
+          eventLimit: `${MAX_EVENTS}`,
+          remainingEvents: `${MAX_EVENTS - next + 1n}`,
+          nearCapacity: MAX_EVENTS - next + 1n <= 1000n,
+        }),
       ),
     assertReady: () =>
       serialized(async () => {
@@ -267,6 +310,22 @@ export const makeTurnJournal = powers => {
      */
     resolve: (turnId, note) =>
       serialized(async () => {
+        if (turnId === 'legacy-import') {
+          (migrationStatus.required && !migrationStatus.resolution) ||
+            Fail`No unresolved legacy journal import`;
+          assertText(note, 8192);
+          note.trim().length > 0 || Fail`Resolution note must not be blank`;
+          try {
+            await E(migration).resolve(note);
+          } catch (error) {
+            poisoned = true;
+            throw error;
+          }
+          migrationStatus = { required: true, resolution: note };
+          return;
+        }
+        assertText(note, 8192);
+        note.trim().length > 0 || Fail`Resolution note must not be blank`;
         await write({ type: 'resolve', turnId, note });
       }),
   });

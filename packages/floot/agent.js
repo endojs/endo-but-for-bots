@@ -55,6 +55,7 @@ import { makePublishTool } from './src/publish-tool.js';
 import { makeSessionTurnSlot } from './src/session-turn-slot.js';
 import { makeEndoToolSet, makeFlootToolRegistry } from './src/tool-registry.js';
 import { makeTurnJournal } from './src/turn-journal.js';
+import { providePrivateTurnStorage } from './src/private-turn-storage.js';
 import { makeContainerMountRegistrar } from './src/container-mounts.js';
 
 // Cap the tool-call loop so a misbehaving model can't spin forever before it
@@ -176,6 +177,7 @@ const FlootSessionInterface = M.interface('FlootSession', {
   getCurrentTurn: M.callWhen().returns(M.or(M.null(), M.record())),
   getHistory: M.callWhen().returns(M.any()),
   getTurns: M.callWhen().returns(M.any()),
+  getJournalStatus: M.callWhen().returns(M.any()),
   resolveTurn: M.callWhen(M.string(), M.string()).returns(M.undefined()),
   getUsage: M.callWhen().returns(M.any()),
   getAccount: M.callWhen().optional(M.boolean()).returns(M.record()),
@@ -885,6 +887,8 @@ const provisionPresetObjects = async (
  *   price its usage.
  * @param {string} [options.backendId] - Durable backend selection.
  * @param {string} [options.reasoningEffort] - Pinned reasoning selection.
+ * @param {any} [options.journalPowers] - Factory-private journal storage. Standalone callers that omit this retain cooperative guest storage.
+ * @param {any} [options.journalMigration] - Private legacy-import acknowledgement capability.
  * @param {number} [options.maxToolRounds] - Provider calls one turn may make
  *   before the tool-step fallback. Defaults to `DEFAULT_MAX_TOOL_ROUNDS`.
  * @param {{ setTimeout: typeof setTimeout, clearTimeout: typeof clearTimeout }} [options.timers]
@@ -906,6 +910,7 @@ const provisionPresetObjects = async (
  *   ) => Promise<void>,
  *   getHistory: () => Promise<Array<Record<string, any>>>,
  *   getTurns: () => Promise<Array<Record<string, any>>>,
+ *   getJournalStatus: () => Promise<Record<string, any>>,
  *   resolveTurn: (turnId: string, note: string) => Promise<void>,
  *   getUsage: () => Promise<{ inputTokens: number, outputTokens: number, turns: number }>,
  *   startInbox: () => void,
@@ -927,6 +932,8 @@ export const makeStreamingAgent = async (
     maxToolRounds = DEFAULT_MAX_TOOL_ROUNDS,
     extraTools,
     hostedContinuity,
+    journalPowers = powers,
+    journalMigration,
   } = {},
 ) => {
   const retainsDeliveredTurns = hostedContinuity === 'transcript';
@@ -960,7 +967,11 @@ export const makeStreamingAgent = async (
 
   const effectivePrompt = systemPrompt || defaultSystemPrompt;
   const tree = makeConversationTree(makeEndoPetstoreBackend(powers));
-  const turnJournal = makeTurnJournal(powers);
+  const turnJournal = makeTurnJournal(journalPowers, {
+    migration: journalMigration,
+  });
+  // Validate persisted evidence before installing a backend or starting inbox work.
+  await turnJournal.list();
   let activeJournalTurn;
   let completedJournalTurn;
   let activeJournalUsage;
@@ -1647,9 +1658,20 @@ export const makeStreamingAgent = async (
     writer.end();
   };
 
+  const admissionErrors = new WeakSet();
   const runTurn = async (input, writer, meta, signal) => {
     const text = await resolveUserText(input);
-    await turnJournal.assertReady();
+    try {
+      await turnJournal.assertReady();
+    } catch (error) {
+      // Only this pre-dispatch failure permits the inbox to retry admission.
+      // An already-journaled mail turn must never be replayed automatically.
+      const admissionError = Error(
+        error instanceof Error ? error.message : String(error),
+      );
+      admissionErrors.add(admissionError);
+      throw admissionError;
+    }
     const turnId = await turnJournal.begin({
       input: text,
       backendId:
@@ -1821,6 +1843,22 @@ export const makeStreamingAgent = async (
   const inboxStopped = new Promise(resolve => {
     signalInboxStopped = resolve;
   });
+  let signalJournalRecovery;
+  let journalRecovery = new Promise(resolve => {
+    signalJournalRecovery = resolve;
+  });
+  const waitForJournalRecovery = async () => {
+    while (!stopped && !quarantineError) {
+      // Capture before the read so a concurrent acknowledgement cannot be lost.
+      const wake = journalRecovery;
+      try {
+        await turnJournal.assertReady();
+        return;
+      } catch {
+        await Promise.race([wake, inboxStopped]);
+      }
+    }
+  };
   /** Wakes the mail worker; rebound when a pump starts. */
   let wakeMailWorker = () => {};
   const startInbox = () => {
@@ -1899,6 +1937,9 @@ export const makeStreamingAgent = async (
             pendingMail.shift()
           );
           try {
+            // Keep queued mail intact while an operator verifies recovery.
+            // Waiting outside turnChain leaves resolveTurn free to unblock us.
+            await waitForJournalRecovery();
             if (stopped || quarantineError) return;
             const { writer, done: turnDone } = makeBufferingWriter();
             // Route through converse so the turn joins turnChain and shares
@@ -1918,7 +1959,11 @@ export const makeStreamingAgent = async (
             }).then(
               () => undefined,
               error =>
-                harden({ ok: false, error: `${error?.message || error}` }),
+                harden({
+                  ok: false,
+                  error: `${error?.message || error}`,
+                  admissionBlocked: admissionErrors.has(error),
+                }),
             );
             // Raced, not simply awaited: `runTurn` has early exits that return
             // *successfully* without settling the writer, and only
@@ -1946,6 +1991,14 @@ export const makeStreamingAgent = async (
             // incarnation. Typed incoming mail is already recorded, and its
             // message number deduplicates the receipt on replay.
             if (!result.ok && stopped) return;
+            const failedTurn = !result.ok ? await turnP : undefined;
+            if (!result.ok && failedTurn?.admissionBlocked) {
+              // Admission never dispatched this task. Requeue even if recovery
+              // completed meanwhile; never answer/dismiss unperformed work.
+              pendingMail.unshift({ number, text, fromName, type });
+              // eslint-disable-next-line no-continue
+              continue;
+            }
             const replyText = result.ok
               ? result.text || ''
               : `Error: ${result.error}`;
@@ -2312,11 +2365,20 @@ export const makeStreamingAgent = async (
   };
 
   const getTurns = () => turnJournal.list();
+  const getJournalStatus = async () =>
+    harden({
+      ...(await turnJournal.status()),
+      storage: journalPowers === powers ? 'legacy' : 'private',
+    });
   const resolveTurn = (turnId, note) =>
     turnChain.then(async () => {
       if (activeJournalTurn || executingTools.size)
         throw Error('Cannot resolve an active Floot turn or unsettled tool');
       await turnJournal.resolve(turnId, note);
+      signalJournalRecovery();
+      journalRecovery = new Promise(resolve => {
+        signalJournalRecovery = resolve;
+      });
     });
 
   const getUsage = async () => harden({ ...(await loadUsage()) });
@@ -2333,6 +2395,7 @@ export const makeStreamingAgent = async (
     converse,
     getHistory,
     getTurns,
+    getJournalStatus,
     resolveTurn,
     getUsage,
     startInbox,
@@ -3247,8 +3310,15 @@ export const make = (hostPowers, _context, { env } = {}) => {
         // control methods. So we pass an explicit agentName and look the
         // controlling *agent* up by that name to get the full guest facet for
         // the session's powers (the same agent fae runs its driver against).
+        const legacyRequired = await E(host).has(agentName);
         await E(host).provideGuest(handleName, { agentName });
         const sessionGuest = await E(host).lookup(agentName);
+        const journalKit = await providePrivateTurnStorage(
+          host,
+          id,
+          sessionGuest,
+          { legacyRequired },
+        );
         // Introduce the user to the session under the petname "user" so the
         // agent can mail them directly (send/reply target "user"). The factory
         // host's own "@host" is the user — the @agent that provisioned the
@@ -3401,6 +3471,8 @@ export const make = (hostPowers, _context, { env } = {}) => {
           sessionPrompt,
           harden({
             maxToolRounds,
+            journalPowers: journalKit.storage,
+            journalMigration: journalKit.migration,
             backendId: entry?.backendId || 'provider',
             modelId: await sessionModelId(entry),
             reasoningEffort: entry?.reasoningEffort || '',
@@ -3525,6 +3597,10 @@ export const make = (hostPowers, _context, { env } = {}) => {
           await assertSessionReady(id);
           return (await getAgent(id)).getTurns();
         },
+        async getJournalStatus() {
+          await assertSessionReady(id);
+          return (await getAgent(id)).getJournalStatus();
+        },
         async resolveTurn(turnId, note) {
           await assertSessionReady(id);
           if (turns.getCurrent())
@@ -3587,6 +3663,8 @@ export const make = (hostPowers, _context, { env } = {}) => {
         help(methodName) {
           if (methodName === 'getTurns')
             return 'getTurns() — Durable turn records, including state, Endo tool intents/results, observed native activity, partial usage, errors, and explicit resolutions.';
+          if (methodName === 'getJournalStatus')
+            return 'getJournalStatus() — Journal event capacity and storage isolation profile. Private storage excludes ordinary guests, not administrators with factory-host authority.';
           if (methodName === 'resolveTurn')
             return 'resolveTurn(turnId, note) — On an idle session, acknowledge an unknown outcome after independently checking external effects. Preserves evidence and never replays work.';
           return 'Floot session: startTurn(input) returns a FlootTurn — getStatus(), watch() for a disposable view stream, speak(ttsServer, options?) for a spoken view (the audio stream a TtsServer synthesizes from the reply; call again to restart with other options), cancel(), whenFinished() — that runs on the daemon whether or not anyone is watching; getCurrentTurn() recovers { input, turn, history } or null; one UI turn may be outstanding; getHistory() replays the conversation; getUsage() returns cumulative { inputTokens, outputTokens, turns }; getAccount(refresh?) returns the plan, rate limits, and this session’s estimated cost; getInfo() returns { id, title, createdAt }.';

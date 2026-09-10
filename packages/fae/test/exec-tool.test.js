@@ -19,7 +19,11 @@ const powers = {};
 
 test('exec explains missing returns without inviting effect replay', async t => {
   const tool = makeExecTool(powers);
-  for (const code of ['21 * 2;', 'await (async () => 42)();', 'return undefined;']) {
+  for (const code of [
+    '21 * 2;',
+    'await (async () => 42)();',
+    'return undefined;',
+  ]) {
     // eslint-disable-next-line no-await-in-loop
     const result = await tool.execute({ code });
     t.regex(result, /top-level return/);

@@ -106,7 +106,6 @@ test('factory facets retain disconnected turns, commit history, and provision de
   const lookups = [];
   hostStore.set('session-agent-legacy', guest);
   hostStore.set('codex-backend', backend);
-  hostStore.set('session-agent-one', guest);
   const host = Far('TestHost', {
     list: () => harden([...hostStore.keys()]),
     has: name => hostStore.has(name),
@@ -114,7 +113,9 @@ test('factory facets retain disconnected turns, commit history, and provision de
       lookups.push(name);
       return hostStore.get(name);
     },
-    provideGuest: () => undefined,
+    provideGuest: (_name, { agentName }) => {
+      hostStore.set(agentName, guest);
+    },
     storeValue: (value, name) => {
       hostStore.set(name, value);
     },
