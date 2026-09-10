@@ -31,7 +31,7 @@ fn reflection_keeps_symbol_identity_and_utf16_names_after_collection() {
         "303"
     );
     for _ in 0..2 {
-        vm.collect_garbage();
+        vm.collect_garbage().expect("quiescent collection succeeds");
         assert_eq!(
             run(
                 &mut vm,
