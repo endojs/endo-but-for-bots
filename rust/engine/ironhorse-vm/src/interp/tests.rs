@@ -3477,3 +3477,22 @@ fn reserved_symbol_ids_are_refused_without_mutating_the_table() {
     assert!(out.completed, "{:?}", out.halt);
     assert_eq!(out.result, "42");
 }
+
+#[test]
+fn conflicting_symbol_restore_is_atomic_and_exhaustion_does_not_alias() {
+    let mut vm = Interp::new();
+    vm.link_intrinsics(&["seed".into()]);
+    let first = vm.slots.alloc(Slot::undefined());
+    let second = vm.slots.alloc(Slot::undefined());
+    let first_id = vm.intern_symbol_key_reserved(first);
+    let before = vm.symbol_key_table();
+    assert!(!vm.restore_symbol_key_table(first_id, &[]));
+    assert_eq!(vm.symbol_key_table(), before);
+    assert!(!vm.restore_symbol_key_table(before.0, &[(first_id, second.0)]));
+    assert_eq!(vm.symbol_key_table(), before);
+    vm.next_symbol_key_id = vm.symbol_names.len() as u16 + 1;
+    let placeholder = vm.intern_symbol_key_reserved(second);
+    assert!(vm.id_space_exhausted);
+    assert_eq!(vm.symbol_key_ids.descriptor(placeholder), None);
+    assert_eq!(vm.symbol_key_ids.descriptor(first_id), Some(first));
+}

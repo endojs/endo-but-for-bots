@@ -49,8 +49,15 @@ impl Interp {
     #[inline]
     pub(super) fn tick_property_create(&mut self, id: u16) {
         self.meter.tick_slot_alloc();
-        let name = self.id_name(id);
-        if !self.default_keys.contains(name.as_str()) {
+        let is_default = match self.symbol_names.get(usize::from(id).saturating_sub(1)) {
+            Some(name) => name
+                .as_str()
+                .is_some_and(|name| self.default_keys.contains(name)),
+            // id_name historically renders symbol IDs as the empty string,
+            // itself a default key. Preserve that frozen charge without a clone.
+            None => self.default_keys.contains(""),
+        };
+        if !is_default {
             self.meter.tick_raw(PROPERTY_CREATE_REMAINDER);
         }
     }

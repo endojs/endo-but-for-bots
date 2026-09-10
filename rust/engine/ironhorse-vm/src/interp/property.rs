@@ -1347,9 +1347,7 @@ impl Interp {
             } else {
                 name
             }
-        } else if let Some((&descriptor, _)) =
-            self.symbol_key_ids.iter().find(|(_, key)| **key == id)
-        {
+        } else if let Some(descriptor) = self.symbol_key_ids.descriptor(id) {
             let description = match self.slots.get(descriptor).value {
                 Payload::String(offset) => self.str_text_lossy(offset),
                 _ => String::new(),
