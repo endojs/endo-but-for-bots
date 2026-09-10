@@ -857,6 +857,12 @@ impl Interp {
     /// continues until the queue empties. Metering accumulates through the
     /// reactions, matching the oracle shim's post-`fxRunScript` drain.
     pub(in crate::interp) fn drain_promise_jobs(&mut self, code: &[u8]) -> Result<(), Step> {
+        // An empty drain is not a meter checkpoint: returning a straight-line
+        // script to the host historically does not consult the meter. Once a
+        // drain starts, retain the final check after its last native-only job.
+        if self.promise_jobs.is_empty() {
+            return Ok(());
+        }
         loop {
             // Pass-through jobs can do only native work, with no bytecode
             // checkpoint. Consult between jobs and after the last one, before

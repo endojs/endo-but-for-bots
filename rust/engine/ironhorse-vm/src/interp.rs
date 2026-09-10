@@ -2441,9 +2441,9 @@ impl Interp {
             self.dispatch(code)
         } else if self.id_space_exhausted {
             Step::Host(Halt::Refused("property-key:id-space-exhausted"))
-        } else if self.check_meter() == MeterCheck::Abort {
-            Step::Host(Halt::MeterAbort)
         } else {
+            // A nonempty drain checks the meter before taking its first job.
+            // An empty public pump, like an empty post-script drain, is free.
             Step::Returned
         };
         // Pump-loop latch: after the script settles, drain the promise job
