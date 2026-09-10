@@ -1537,16 +1537,22 @@ pub struct RunOutcome {
     /// changes persistence eligibility; only `host_coerced` folds it into the
     /// oracle harness verdict. The rendered `result` is empty in this case.
     pub host_render_halt: Option<Halt>,
-    /// Whole computrons under Ironhorse's frozen cost-table release.
-    /// Oracle counts are advisory; this includes all costs charged to the meter.
+    /// Machine-lifetime whole computrons under the frozen cost-table release.
+    /// Includes compilation/linking costs charged before this invocation.
+    /// See `computrons_this_run` for this invocation's receipt.
     pub computrons: u64,
-    /// Raw dispatched-opcode count, before the invocation baseline
-    /// (useful for isolating a metering divergence).
+    /// Machine-lifetime dispatched-opcode count.
     pub dispatched: u64,
-    /// Raw 16.16 fixed-point meter index (`the->meterIndex`), for
-    /// diagnosing fractional (allocation/built-in) metering during
-    /// calibration.
+    /// Machine-lifetime raw 16.16 fixed-point meter index.
     pub meter_raw: u64,
+    /// Raw cost incurred by this invocation, including its promise drain.
+    /// Excludes compilation/linking performed before entry. Never resets the
+    /// lifetime meter or its host consultation window.
+    pub meter_raw_this_run: u64,
+    /// `meter_raw_this_run >> 16`: round once after subtracting raw indices.
+    pub computrons_this_run: u64,
+    /// Opcodes dispatched during this invocation.
+    pub dispatched_this_run: u64,
     /// Why the run stopped.
     pub halt: Halt,
 }
@@ -2290,9 +2296,22 @@ impl Interp {
     /// Execute caller-owned immutable bytecode without copying its bytes.
     /// Escaping functions retain this same allocation across later cranks.
     pub fn run_shared(&mut self, shared: std::rc::Rc<[u8]>) -> RunOutcome {
+        let start_raw = self.meter.raw();
+        let start_dispatched = self.n_dispatched;
+        let mut outcome = self.run_shared_outcome(shared);
+        outcome.meter_raw_this_run = outcome.meter_raw.saturating_sub(start_raw);
+        outcome.computrons_this_run = outcome.meter_raw_this_run >> 16;
+        outcome.dispatched_this_run = outcome.dispatched.saturating_sub(start_dispatched);
+        outcome
+    }
+
+    fn run_shared_outcome(&mut self, shared: std::rc::Rc<[u8]>) -> RunOutcome {
         if self.gc_failed {
             return RunOutcome {
                 unhandled_rejection: None,
+                meter_raw_this_run: 0,
+                computrons_this_run: 0,
+                dispatched_this_run: 0,
                 completed: false,
                 result: String::new(),
                 coercion_error: None,
@@ -2311,6 +2330,9 @@ impl Interp {
                 self.native_depth = 0;
                 self.last_crank_completed = false;
                 RunOutcome {
+                    meter_raw_this_run: 0,
+                    computrons_this_run: 0,
+                    dispatched_this_run: 0,
                     completed: false,
                     unhandled_rejection: self.unhandled_rejection(),
                     result: String::new(),
@@ -2484,6 +2506,9 @@ impl Interp {
         self.active_segment = None;
         RunOutcome {
             unhandled_rejection: self.unhandled_rejection(),
+            meter_raw_this_run: 0,
+            computrons_this_run: 0,
+            dispatched_this_run: 0,
             completed,
             result,
             coercion_error,

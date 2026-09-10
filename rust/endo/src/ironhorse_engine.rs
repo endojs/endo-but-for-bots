@@ -245,28 +245,30 @@ pub mod engine {
         /// from the engine so a host that wants the harness's verdict can
         /// apply it. The managed lifecycle does not: the crank completed.
         pub coercion_error: Option<String>,
-        /// Computrons, the meter's release-versioned count.
+        /// Whole computrons for this evaluation, including compilation and linking.
         pub computrons: u64,
-        /// Dispatched opcodes before the invocation baseline.
+        /// Opcodes dispatched by this evaluation.
         pub dispatched: u64,
-        /// Raw 16.16 fixed-point meter index.
+        /// Raw 16.16 cost for this evaluation, including compilation and linking.
         pub meter_raw: u64,
+        /// Machine-lifetime raw meter index at completion.
+        pub meter_raw_total: u64,
         /// Why the run stopped.
         pub halt: Halt,
     }
 
-    impl From<RunOutcome> for EvalOutcome {
-        fn from(o: RunOutcome) -> Self {
-            EvalOutcome {
-                unhandled_rejection: o.unhandled_rejection,
-                result: o.result,
-                completed: o.completed,
-                coercion_error: o.coercion_error,
-                computrons: o.computrons,
-                dispatched: o.dispatched,
-                meter_raw: o.meter_raw,
-                halt: o.halt,
-            }
+    fn eval_outcome(o: RunOutcome, start_raw: u64) -> EvalOutcome {
+        let raw = o.meter_raw.saturating_sub(start_raw);
+        EvalOutcome {
+            unhandled_rejection: o.unhandled_rejection,
+            result: o.result,
+            completed: o.completed,
+            coercion_error: o.coercion_error,
+            computrons: raw >> 16,
+            dispatched: o.dispatched_this_run,
+            meter_raw: raw,
+            meter_raw_total: o.meter_raw,
+            halt: o.halt,
         }
     }
 
@@ -459,6 +461,9 @@ pub mod engine {
     fn unrun_outcome(halt: Halt, meter_raw: u64) -> RunOutcome {
         RunOutcome {
             unhandled_rejection: None,
+            meter_raw_this_run: 0,
+            computrons_this_run: 0,
+            dispatched_this_run: 0,
             completed: false,
             result: String::new(),
             coercion_error: None,
@@ -550,19 +555,20 @@ pub mod engine {
             let (bytecode, symbols) = match compiled {
                 Ok(atoms) => atoms,
                 Err(MachineError::Halt(halt)) => {
-                    return Ok(unrun_outcome(halt, meter.state().index).into())
+                    return Ok(eval_outcome(unrun_outcome(halt, meter.state().index), 0))
                 }
                 Err(error) => return Err(error),
             };
             let comp = self.inner.new_compartment();
-            Ok(comp
-                .evaluate_with_symbols_continuing_meter_shared(
+            Ok(eval_outcome(
+                comp.evaluate_with_symbols_continuing_meter_shared(
                     bytecode.into(),
                     &symbols,
                     meter,
                     host,
-                )
-                .into())
+                ),
+                0,
+            ))
         }
 
         /// Evaluate and return only the completion value, failing when
@@ -1219,7 +1225,7 @@ pub mod engine {
                         .session
                         .as_ref()
                         .and_then(|session| session.machine().unhandled_rejection());
-                    Ok(outcome.into())
+                    Ok(eval_outcome(outcome, crank_start_raw))
                 }
                 Some(Err(e)) => {
                     // A failed rewind poisons the session (later
@@ -1240,7 +1246,7 @@ pub mod engine {
                     // crank, an automatic or manual collection, or
                     // close's final flush).
                     self.pending_cranks = pending_after;
-                    Ok(outcome.into())
+                    Ok(eval_outcome(outcome, crank_start_raw))
                 }
             }
         }

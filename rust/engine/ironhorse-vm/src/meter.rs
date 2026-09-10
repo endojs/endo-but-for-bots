@@ -179,13 +179,6 @@ impl Meter {
         self.interval
     }
 
-    /// Reset the raw index to zero (the oracle shim does this after
-    /// parse so the run-only count is comparable).
-    pub fn reset(&mut self) {
-        self.index = 0;
-        self.count = self.interval;
-    }
-
     /// Add one bytecode dispatch (`the->meterIndex += XS_CODE_METERING`
     /// in `mxBreak`).
     #[inline]

@@ -424,6 +424,9 @@ impl Compartment {
     fn refused(skip: CompartmentSkip) -> RunOutcome {
         RunOutcome {
             unhandled_rejection: None,
+            meter_raw_this_run: 0,
+            computrons_this_run: 0,
+            dispatched_this_run: 0,
             completed: false,
             result: String::new(),
             coercion_error: None,
@@ -579,6 +582,9 @@ impl Compartment {
         if !interp.charge_compilation(link_charge) {
             return RunOutcome {
                 unhandled_rejection: interp.unhandled_rejection(),
+                meter_raw_this_run: 0,
+                computrons_this_run: 0,
+                dispatched_this_run: 0,
                 completed: false,
                 result: String::new(),
                 coercion_error: None,
