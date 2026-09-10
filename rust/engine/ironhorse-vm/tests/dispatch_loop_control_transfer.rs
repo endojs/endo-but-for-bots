@@ -26,7 +26,9 @@ const SRC: &str = concat!(
     include_str!("../src/interp/strings.rs"),
     include_str!("../src/interp/unwind.rs"),
     "\n",
-    include_str!("../src/interp/dispatch.rs")
+    include_str!("../src/interp/dispatch.rs"),
+    include_str!("../src/interp/dispatch/property_read.rs"),
+    include_str!("../src/interp/dispatch/property_write.rs")
 );
 
 fn unwrapped_raises(code: &[Token<'_>]) -> Vec<usize> {
@@ -228,4 +230,124 @@ fn control_scan_rejects_missing_depth_and_meter_guards() {
     }
     let source = code_only("if unrelated { return Step /* comment */ :: Unwound(target); }");
     assert_eq!(unguarded_unwinds(&tokens(&source)).len(), 1);
+}
+
+const HANDLERS: &[&str] = &[
+    include_str!("../src/interp/dispatch/property_read.rs"),
+    include_str!("../src/interp/dispatch/property_write.rs"),
+];
+
+// Discover declarations independently of call sites: a new handler cannot
+// silently fall outside this lock merely because its name changed.
+fn handler_names(source: &str) -> Vec<String> {
+    let source = code_only(source);
+    let code = tokens(&source);
+    token_positions(&code, "fn")
+        .into_iter()
+        .map(|at| code[at + 1].text.to_owned())
+        .collect()
+}
+
+fn handler_call_is_wrapped(code: &[Token<'_>], name: &str) -> bool {
+    let sites = token_positions(code, &format!("self.{name}("));
+    sites.len() == 1
+        && sites.iter().all(|&at| {
+            if at < 3 || token_positions(&code[at - 3..at], "dispatch_result!(") != vec![0] {
+                return false;
+            }
+            let mut depth = 0;
+            for end in at + 3..code.len() {
+                match code[end].text {
+                    "(" => depth += 1,
+                    ")" => {
+                        depth -= 1;
+                        if depth == 0 {
+                            return token_positions(
+                                &code[end + 1..],
+                                ", pc, self, return_depth, code)",
+                            )
+                            .first()
+                                == Some(&0);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            false
+        })
+}
+
+fn handler_consumes_transfer(source: &str) -> bool {
+    let source = code_only(source);
+    let code = tokens(&source);
+    [
+        "Step::Unwound",
+        "check_meter",
+        "assert_resume_target",
+        "resume_target_belongs_to",
+        "dispatch_halt",
+        "dispatch_result",
+        "return_depth",
+    ]
+    .iter()
+    .any(|pattern| !token_positions(&code, pattern).is_empty())
+        || token_positions(&code, "return").iter().any(|&at| {
+            !["Err(", "Ok("]
+                .iter()
+                .any(|pattern| token_positions(&code[at + 1..], pattern).first() == Some(&0))
+        })
+}
+
+#[test]
+fn extracted_handlers_leave_all_transfers_to_dispatch() {
+    let source = code_only(SRC);
+    let code = tokens(&source);
+    let body = &code[token_body(&code, "fn dispatch_at_inner(")];
+    for source in HANDLERS {
+        assert!(!handler_consumes_transfer(source));
+        let names = handler_names(source);
+        assert!(!names.is_empty());
+        for name in names {
+            assert!(
+                handler_call_is_wrapped(body, &name),
+                "{name} must propagate through dispatch_result!"
+            );
+        }
+    }
+}
+
+#[test]
+fn handler_lock_rejects_discarded_errors_and_consumed_unwinds() {
+    for source in [
+        "self.dispatch_get_property(code, id);",
+        "let _ = self.dispatch_get_property(code, id);",
+        "return self.dispatch_get_property(code, id);",
+        "dispatch_result!(self.dispatch_get_property(code, id), pc, self, 0, code);",
+        "dispatch_result!(self.dispatch_get_property(code, id), other_pc, self, return_depth, code);",
+        "dispatch_result!(self.dispatch_get_property(code, id), pc, other_machine, return_depth, code);",
+        "dispatch_result!(self.dispatch_get_property(code, id), pc, self, return_depth, other_code);",
+    ] {
+        assert!(!handler_call_is_wrapped(
+            &tokens(source),
+            "dispatch_get_property"
+        ));
+    }
+    assert!(handler_call_is_wrapped(
+        &tokens(
+            "dispatch_result!(self.dispatch_get_property(code, id), pc, self, return_depth, code);"
+        ),
+        "dispatch_get_property"
+    ));
+    for source in [
+        "if let Err(Step::Unwound(target)) = result { return Ok(()); }",
+        "self.check_meter();",
+        "return halt;",
+        "self.assert_resume_target(target, code);",
+    ] {
+        assert!(handler_consumes_transfer(source), "{source}");
+    }
+    for source in HANDLERS {
+        let mutated = format!("{source}\nfn bad() {{ match result {{ Err(Step::Unwound(t)) => Ok(()), other => other }} }}");
+        assert!(handler_consumes_transfer(&mutated));
+    }
 }

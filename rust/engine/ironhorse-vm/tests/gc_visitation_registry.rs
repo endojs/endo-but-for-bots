@@ -54,6 +54,8 @@ const SRC: &str = concat!(
     include_str!("../src/interp/unwind.rs"),
     "\n",
     include_str!("../src/interp/dispatch.rs"),
+    include_str!("../src/interp/dispatch/property_read.rs"),
+    include_str!("../src/interp/dispatch/property_write.rs"),
     "\n",
     include_str!("../src/interp/boot.rs"),
     "\n",
