@@ -816,13 +816,69 @@ impl Interp {
     }
 
     /// Reinstate the `wrapper_data` side table from a snapshot (the
-    /// exact inverse of [`Self::wrappers_snapshot`]); the decoded
-    /// slots were already bounds-checked with the heap.
-    pub fn restore_wrapper_data(&mut self, rows: Vec<(u32, Slot)>) {
+    /// exact inverse of [`Self::wrappers_snapshot`]). Validate owners and
+    /// primitive representations before installing any row.
+    pub fn restore_wrapper_data(&mut self, rows: Vec<(u32, Slot)>) -> Result<(), RestoreError> {
+        self.validate_restore_owners(rows.iter().map(|&(owner, _)| owner), "Wrappers")?;
+        let malformed = || RestoreError {
+            row: "Wrappers",
+            reason: "invalid boxed primitive",
+        };
+        let mut chunks = Vec::new();
+        for &(_, value) in &rows {
+            let primitive = match (value.kind, value.value) {
+                (Kind::Boolean, Payload::Boolean(_))
+                | (Kind::Integer, Payload::Integer(_))
+                | (Kind::Number, Payload::Number(_)) => continue,
+                (Kind::String, Payload::String(_)) | (Kind::BigInt, Payload::BigInt(_)) => value,
+                (Kind::Symbol, Payload::Reference(index)) => {
+                    if index.is_null()
+                        || index.0 >= self.slots.capacity()
+                        || self.slots.is_free_index(index)
+                    {
+                        return Err(malformed());
+                    }
+                    let descriptor = self.slots.get(index);
+                    match (descriptor.kind, descriptor.value) {
+                        (Kind::Undefined, Payload::None) => continue,
+                        (Kind::String, Payload::String(_)) => descriptor,
+                        _ => return Err(malformed()),
+                    }
+                }
+                _ => return Err(malformed()),
+            };
+            let off = primitive.chunk_ref().ok_or_else(malformed)?;
+            if off.is_null() {
+                return Err(malformed());
+            }
+            chunks.push((off, primitive.kind));
+        }
+        // One header walk for the batch, rather than rescanning the arena
+        // for every boxed String, BigInt, or Symbol description.
+        let offsets: Vec<_> = chunks.iter().map(|&(off, _)| off).collect();
+        self.chunks
+            .validate_references(&offsets)
+            .map_err(|_| malformed())?;
+        for (off, kind) in chunks {
+            let bytes = self.chunks.payload(off);
+            match kind {
+                Kind::String if bytes.len().is_multiple_of(2) => {}
+                Kind::BigInt
+                    if bytes.len() >= 5 && (bytes.len() - 1).is_multiple_of(4) && bytes[0] <= 1 =>
+                {
+                    let high_is_zero = bytes[bytes.len() - 4..].iter().all(|&byte| byte == 0);
+                    if high_is_zero && (bytes.len() > 5 || bytes[0] != 0) {
+                        return Err(malformed());
+                    }
+                }
+                _ => return Err(malformed()),
+            }
+        }
         for (owner, value) in rows {
             self.wrapper_data
                 .insert(crate::value::SlotIndex(owner), value);
         }
+        Ok(())
     }
 
     /// Quiescent snapshot of the `regexps` side table (ledger `RegExps`
