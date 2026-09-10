@@ -2108,6 +2108,18 @@ impl Interp {
     /// Execute caller-owned immutable bytecode without copying its bytes.
     /// Escaping functions retain this same allocation across later cranks.
     pub fn run_shared(&mut self, shared: std::rc::Rc<[u8]>) -> RunOutcome {
+        if self.gc_failed {
+            return RunOutcome {
+                completed: false,
+                result: String::new(),
+                coercion_error: None,
+                computrons: self.meter.computrons(),
+                dispatched: self.n_dispatched,
+                meter_raw: self.meter.raw(),
+                halt: Halt::EngineInvariant("gc:previous-collection-failed"),
+                host_render_halt: None,
+            };
+        }
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.run_inner(shared))) {
             Ok(outcome) => outcome,
             Err(payload) if payload.is::<crate::value::HeapExhausted>() => {
