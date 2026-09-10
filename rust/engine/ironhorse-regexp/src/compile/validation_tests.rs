@@ -38,7 +38,7 @@ fn resources<const MATERIALIZE: bool>(
     mutate: impl FnOnce(&mut Compiler<'_, '_, MATERIALIZE>),
 ) -> (PResult<()>, u64) {
     checked_work(u64::MAX, None, |work| {
-        let mut compiler = compile_inner::<MATERIALIZE>("", "", work)?;
+        let mut compiler = compile_inner::<MATERIALIZE>(b"", "", work, false)?;
         mutate(&mut compiler);
         Ok(())
     })

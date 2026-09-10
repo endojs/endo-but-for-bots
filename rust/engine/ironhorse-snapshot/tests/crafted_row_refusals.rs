@@ -131,7 +131,7 @@ fn a_regexp_row_that_cannot_recompile_is_refused_with_a_structured_error() {
         !image.regexps.is_empty(),
         "the fixture persisted its regexp row"
     );
-    image.regexps[0].source = "(".to_string();
+    image.regexps[0].source = "(".into();
     let crafted = write_machine_unchecked(&image);
     match from_snapshot_bytes(&crafted, &sig()) {
         Err(SnapshotError::Corrupt("regexp side table: persisted source does not compile")) => {}

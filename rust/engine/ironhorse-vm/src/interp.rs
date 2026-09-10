@@ -99,7 +99,7 @@ use date::{
 
 mod locale;
 use locale::{
-    canonicalize_locale, collator_compare, currency_digits, format_date_time_parts,
+    canonicalize_locale, collator_compare_units, currency_digits, format_date_time_parts,
     format_date_time_range_parts, is_well_formed_currency_code, is_well_formed_unit_identifier,
     list_format_parts, locale_base_name, locale_is_supported, locale_to_tag, maximize_locale,
     minimize_locale, plural_categories, plural_select, segment_units, supported_locale,
@@ -227,6 +227,23 @@ pub trait SourceCompiler {
         raw_budget: u64,
         charge: &mut dyn FnMut(u64) -> bool,
     ) -> Result<CompiledSource, SourceCompileError>;
+
+    /// Compile JavaScript source without folding unpaired UTF-16 code units.
+    /// Scalar-only host compilers retain their existing entry point; hosts
+    /// supporting full ECMAScript source override this method. Refuse a
+    /// non-scalar source explicitly instead of compiling a different program.
+    fn compile_source_units(
+        &self,
+        source: &[u16],
+        strict: bool,
+        raw_budget: u64,
+        charge: &mut dyn FnMut(u64) -> bool,
+    ) -> Result<CompiledSource, SourceCompileError> {
+        let text = String::from_utf16(source).map_err(|_| {
+            SourceCompileError::Unsupported("compiler does not accept UTF-16 source".into())
+        })?;
+        self.compile_source(&text, strict, raw_budget, charge)
+    }
 }
 
 /// XS's value stack is a fixed array of `stackCount` slots
@@ -883,7 +900,7 @@ struct PromiseData {
 #[derive(Clone, Debug)]
 struct RegExpData {
     program: ironhorse_regexp::Program,
-    source: String,
+    source: Vec<u16>,
     flags: String,
     /// The legacy schema-11 `REGX` value used only when restoring a snapshot
     /// written before `lastIndex` became a real heap property. New machines
@@ -1202,7 +1219,7 @@ struct IterState {
 #[derive(Clone, Debug)]
 struct ErrorInfo {
     name: &'static str,
-    message: Option<String>,
+    message: Option<Vec<u16>>,
     /// The call-frame names captured at construction (innermost first,
     /// ending with the empty program frame), the way XS records the frame
     /// chain `fx_Error_prototype_get_stack` renders as `\n at <name> ()`
@@ -2358,7 +2375,7 @@ impl Interp {
             // `String(sym)` throws, so the `render` boundary has no
             // `ToString` to mirror; the engine's own display rendering is
             // the descriptive string `Symbol.prototype.toString` gives.
-            String::from_utf8_lossy(&self.symbol_descriptive_bytes(completion)).into_owned()
+            self.render_symbol_lossy(completion)
         } else {
             // Host rendering has its own bounded failure channel. The
             // guest already completed; the harness can fold this afterward.

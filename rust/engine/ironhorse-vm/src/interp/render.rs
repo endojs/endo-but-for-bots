@@ -28,7 +28,7 @@ impl Interp {
 
     pub(super) fn render_at(&self, s: &Slot, depth: usize) -> Result<String, Step> {
         Ok(match s.value {
-            Payload::String(off) => self.str_text(off),
+            Payload::String(off) => self.str_text_lossy(off),
             // A BigInt completion renders as its decimal magnitude (XS's
             // `String(aBigInt)`), no `n` suffix.
             Payload::BigInt(off) => {
@@ -140,8 +140,8 @@ impl Interp {
                     // A RegExp stringifies through `RegExp.prototype.toString`
                     // as the `/source/flags` literal (the empty pattern renders
                     // its `(?:)` source).
-                    let (source, _alloc) = self.regexp_source_bytes(r);
-                    format!("/{}/{}", String::from_utf8_lossy(&source), d.flags)
+                    let (source, _alloc) = self.regexp_source_units(r);
+                    format!("/{}/{}", String::from_utf16_lossy(&source), d.flags)
                 } else if self.error_data.contains_key(&r) {
                     let name = self.render_error_property(r, "name", "Error");
                     let message = self.render_error_property(r, "message", "");
@@ -230,9 +230,7 @@ impl Interp {
                 return match value.kind {
                     Kind::Undefined => default.to_string(),
                     Kind::Reference => "<object>".to_string(),
-                    Kind::Symbol => {
-                        String::from_utf8_lossy(&self.symbol_descriptive_bytes(value)).into_owned()
-                    }
+                    Kind::Symbol => self.render_symbol_lossy(value),
                     _ => self.render_or_stub(&value),
                 };
             }
@@ -283,7 +281,7 @@ impl Interp {
                 let slot = self.slots.get(prop);
                 if slot.kind == Kind::String {
                     if let Payload::String(off) = slot.value {
-                        return Some(self.str_text(off));
+                        return Some(self.str_text_lossy(off));
                     }
                 }
                 return None;
@@ -297,14 +295,18 @@ impl Interp {
     /// `Symbol(` + the description (empty when the description is `undefined`)
     /// + `)`. A symbol carries `Payload::Reference(desc)`, the description slot
     /// (a `String` or `undefined`).
-    pub(super) fn symbol_descriptive_bytes(&self, sym: Slot) -> Vec<u8> {
-        let mut out = b"Symbol(".to_vec();
+    pub(super) fn render_symbol_lossy(&self, sym: Slot) -> String {
+        String::from_utf16_lossy(&self.symbol_descriptive_units(sym))
+    }
+
+    pub(super) fn symbol_descriptive_units(&self, sym: Slot) -> Vec<u16> {
+        let mut out: Vec<u16> = "Symbol(".encode_utf16().collect();
         if let Payload::Reference(d) = sym.value {
             if let Payload::String(off) = self.slots.get(d).value {
-                out.extend_from_slice(self.str_text(off).as_bytes());
+                out.extend(self.str_units(off));
             }
         }
-        out.push(b')');
+        out.push(u16::from(b')'));
         out
     }
 }

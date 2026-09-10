@@ -362,7 +362,7 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
             break;
         }
         let name = ERROR_NAMES[(c.byte() % 4) as usize].to_string();
-        let message = (c.byte() % 2 == 1).then(|| format!("m{}", c.u32() % 1000));
+        let message = (c.byte() % 2 == 1).then(|| format!("m{}", c.u32() % 1000).into());
         errors.push(ironhorse_snapshot::image::ErrorImage {
             owner: next_owner,
             name,

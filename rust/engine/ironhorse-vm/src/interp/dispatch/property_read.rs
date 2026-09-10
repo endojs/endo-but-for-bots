@@ -241,15 +241,15 @@ impl Interp {
                 let g = self.regexp_getter_ids;
                 if Some(id) == g.source {
                     self.meter.tick_raw(REGEXP_GETTER_METERING);
-                    let (bytes, allocated) = (self.regexp_source_bytes_metered(inst))?;
+                    let (bytes, allocated) = (self.regexp_source_units_metered(inst))?;
                     if allocated {
-                        self.new_string_metered(&bytes)
+                        self.new_string_units(&bytes)
                     } else {
                         // XS returns the constructor's existing
                         // source key when no escaping is needed;
                         // materialize the equivalent primitive in
                         // our arena without charging a new chunk.
-                        let offset = self.alloc_str_text(&bytes);
+                        let offset = self.chunks.alloc(&units_to_be16(&bytes));
                         Slot::of(Kind::String, Payload::String(offset))
                     }
                 } else if Some(id) == g.flags {

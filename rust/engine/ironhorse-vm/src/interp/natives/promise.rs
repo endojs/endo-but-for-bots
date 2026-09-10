@@ -157,7 +157,7 @@ impl Interp {
         // `name` — a NULL chunk would fault when read. Unmetered (the boot chunk
         // allocation is outside the guest meter), matching the pre-existing
         // `alloc_named_method("", …)` empty-name convention.
-        let empty_name = self.alloc_str_text(b"");
+        let empty_name = self.alloc_str_text("");
         let resolve = self.slots.alloc(Slot::instance(fp));
         self.functions.insert(
             resolve,
@@ -329,7 +329,7 @@ impl Interp {
         self.set_own_unmetered(home, resolve_id, Slot::uninitialized());
         self.set_own_unmetered(home, reject_id, Slot::uninitialized());
 
-        let empty_name = self.alloc_str_text(b"");
+        let empty_name = self.alloc_str_text("");
         let function = self.slots.alloc(Slot::instance(self.function_proto));
         self.functions.insert(
             function,
@@ -1914,7 +1914,7 @@ impl Interp {
     /// `.status`/`.value`/`.reason` read hits the same ids.
     fn make_settled_record(&mut self, value: Slot, rejected: bool) -> Slot {
         let inst = self.new_object();
-        let status_text: &[u8] = if rejected { b"rejected" } else { b"fulfilled" };
+        let status_text = if rejected { "rejected" } else { "fulfilled" };
         let off = self.alloc_str_text(status_text);
         let status = Slot::of(Kind::String, Payload::String(off));
         self.define_descriptor_field(inst, "status", status);

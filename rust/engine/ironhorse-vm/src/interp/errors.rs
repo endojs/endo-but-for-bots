@@ -32,7 +32,7 @@ impl Interp {
             let data = std::mem::take(&mut self.proto_data);
             for (proto, property, value) in &data {
                 if *property == "name" {
-                    let off = self.alloc_str_text(value.as_bytes());
+                    let off = self.alloc_str_text(value);
                     self.set_own_unmetered_with_flag(
                         *proto,
                         id,
@@ -114,9 +114,7 @@ impl Interp {
             inst,
             ErrorInfo {
                 name,
-                message: message_units
-                    .as_ref()
-                    .map(|units| String::from_utf16_lossy(units)),
+                message: message_units.clone(),
                 frames,
             },
         );
@@ -178,10 +176,10 @@ impl Interp {
         let err = self.build_error(name);
         if let Payload::Reference(inst) = err.value {
             if let Some(info) = self.error_data.get_mut(&inst) {
-                info.message = Some(message.clone());
+                info.message = Some(message.encode_utf16().collect());
             }
             let mid = self.intern_static_key_unmetered("message");
-            let off = self.alloc_str_text(message.as_bytes());
+            let off = self.alloc_str_text(&message);
             self.set_own_unmetered_with_flag(
                 inst,
                 mid,
@@ -225,11 +223,11 @@ impl Interp {
         {
             self.slots.get_mut(inst).value = Payload::Reference(proto);
         }
-        let message: Option<String> = match message_arg {
+        let message: Option<Vec<u16>> = match message_arg {
             Some(a) if a.kind != Kind::Undefined => {
-                let bytes = self.to_string_bytes_metered(a);
+                let units = self.to_string_units_metered(a);
                 self.meter.tick_raw(ERROR_MESSAGE_METERING);
-                Some(String::from_utf8_lossy(&bytes).into_owned())
+                Some(units)
             }
             _ => None,
         };
@@ -247,7 +245,7 @@ impl Interp {
         );
         if let Some(text) = message {
             let mid = self.intern_static_key_unmetered("message");
-            let off = self.alloc_str_text(text.as_bytes());
+            let off = self.chunks.alloc(&units_to_be16(&text));
             self.set_own_unmetered_with_flag(
                 inst,
                 mid,
@@ -338,9 +336,7 @@ impl Interp {
             inst,
             ErrorInfo {
                 name: "AggregateError",
-                message: message_units
-                    .as_ref()
-                    .map(|units| String::from_utf16_lossy(units)),
+                message: message_units.clone(),
                 frames,
             },
         );

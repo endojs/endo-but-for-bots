@@ -1,21 +1,17 @@
 //! The scanner, a transliteration of `fxGetNextTokenAux` and friends in
 //! `c/moddable/xs/sources/xsLexical.c` at the oracle pin.
 //!
-//! It reads a `&str` and yields [`Lexeme`]s. The control flow — which
+//! It reads scalar UTF-8 or JavaScript UTF-16 and yields [`Lexeme`]s. The control flow — which
 //! character opens which token, how numbers and strings and templates
 //! and regular expressions are scanned, how line terminators and the
 //! ASI-relevant `crlf` flag are tracked, how contextual keywords are
 //! classified — follows XS statement for statement so the parser and
 //! coder built on top see EXACTLY what XS sees.
 //!
-//! Two deliberate departures from XS, neither affecting the token
-//! stream this stage is judged on (byte-identity is child-1-out-of-scope):
-//! ironhorse decodes the source as UTF-8 scalar values rather than CESU-8
-//! (astral characters are single `char`s, so XS's surrogate-pair
-//! combining is a no-op on valid UTF-8), and cooked/raw strings are
-//! `String`s rather than CESU-8 byte runs. Regexp *validation* stays with
-//! `ironhorse-regexp`; this scanner only delimits the literal (raw body +
-//! flags), exactly as `fxGetNextRegExp` does before handing off.
+//! Valid surrogate pairs are combined while scanning source; lone surrogates
+//! remain distinct code values. Cooked and raw strings retain UTF-16 units.
+//! Regexp validation uses `ironhorse-regexp` after this scanner delimits the
+//! literal body and flags.
 
 use crate::error::{LexError, LexErrorKind};
 use crate::meter::ParseMeter;
@@ -108,7 +104,7 @@ impl Lexeme {
 /// two-char window), the running line, the mode flags XS keeps in
 /// `parser->flags`, and the parse meter threaded from the first token.
 pub struct Lexer<'a> {
-    chars: Vec<char>,
+    chars: Vec<u32>,
     /// Byte offset of each char in `chars`, plus a final total-length
     /// entry so `offsets[i]` is always valid up to `chars.len()`.
     offsets: Vec<usize>,
@@ -148,12 +144,37 @@ impl<'a> Lexer<'a> {
         // Admission precedes both eager source-sized allocations and scanning,
         // including a single huge comment/string with no intervening token.
         meter.source(source.len());
-        let chars: Vec<char> = source.chars().collect();
+        let chars: Vec<u32> = source.chars().map(u32::from).collect();
+        Self::from_codes(chars, meter)
+    }
+
+    pub(crate) fn with_units(source: &[u16], meter: ParseMeter<'a>) -> Lexer<'a> {
+        // Price the same UTF-8 width for scalar source under either API;
+        // unpaired UTF-16 units occupy three bytes in the source encoding.
+        // Each UTF-16 unit contributes at least one byte. Admit this bound
+        // before scanning, then admit each additional encoded byte before
+        // retaining the decoded code point. Scalar totals match with_meter.
+        meter.source(source.len());
+        let mut codes = Vec::new();
+        for decoded in char::decode_utf16(source.iter().copied()) {
+            let (code, width, units) = match decoded {
+                Ok(ch) => (u32::from(ch), ch.len_utf8(), ch.len_utf16()),
+                Err(error) => (u32::from(error.unpaired_surrogate()), 3, 1),
+            };
+            if width > units {
+                meter.source(width - units);
+            }
+            codes.push(code);
+        }
+        Self::from_codes(codes, meter)
+    }
+
+    fn from_codes(chars: Vec<u32>, meter: ParseMeter<'a>) -> Lexer<'a> {
         let mut offsets = Vec::with_capacity(chars.len() + 1);
         let mut b = 0usize;
-        for c in &chars {
+        for &code in &chars {
             offsets.push(b);
-            b += c.len_utf8();
+            b += char::from_u32(code).map_or(3, char::len_utf8);
         }
         offsets.push(b);
         let mut lexer = Lexer {
@@ -207,7 +228,7 @@ impl<'a> Lexer<'a> {
 
     fn read_code(&mut self) -> u32 {
         if self.next_index < self.chars.len() {
-            let c = self.chars[self.next_index] as u32;
+            let c = self.chars[self.next_index];
             self.next_index += 1;
             c
         } else {
@@ -954,13 +975,13 @@ impl<'a> Lexer<'a> {
     /// delimiter `c` (`"`, `'`, or `` ` ``), then cook escapes. On entry
     /// `self.ch` is the first body char.
     fn scan_string(&mut self, st: &mut Lexeme, c: u32) -> Result<(), LexError> {
-        let mut raw = String::new();
+        let mut raw = Vec::<u32>::new();
         loop {
             match self.ch {
                 EOF => return Err(self.err(LexErrorKind::UnterminatedString)),
                 10 => {
                     if c == b'`' as u32 {
-                        raw.push('\n');
+                        raw.push('\n' as u32);
                         self.advance();
                     } else {
                         return Err(self.err(LexErrorKind::LineTerminatorInString));
@@ -969,7 +990,7 @@ impl<'a> Lexer<'a> {
                 }
                 13 => {
                     if c == b'`' as u32 {
-                        raw.push('\n');
+                        raw.push('\n' as u32);
                         self.advance();
                         if self.ch == 10 {
                             self.advance();
@@ -981,7 +1002,7 @@ impl<'a> Lexer<'a> {
                 }
                 0x2028 | 0x2029 => {
                     self.line += 1;
-                    raw.push(char::from_u32(self.ch).unwrap());
+                    raw.push(self.ch);
                     self.advance();
                 }
                 ch if ch == c => break,
@@ -990,21 +1011,21 @@ impl<'a> Lexer<'a> {
                     if c == b'`' as u32 && self.ch == b'{' as u32 {
                         break;
                     }
-                    raw.push('$');
+                    raw.push('$' as u32);
                 }
                 ch if ch == b'\\' as u32 => {
                     st.escaped = true;
-                    raw.push('\\');
+                    raw.push('\\' as u32);
                     self.advance();
                     match self.ch {
                         10 | 0x2028 | 0x2029 => {
                             self.line += 1;
-                            raw.push(char::from_u32(self.ch).unwrap());
+                            raw.push(self.ch);
                             self.advance();
                         }
                         13 => {
                             self.line += 1;
-                            raw.push('\n');
+                            raw.push('\n' as u32);
                             self.advance();
                             if self.ch == 10 {
                                 self.advance();
@@ -1012,18 +1033,25 @@ impl<'a> Lexer<'a> {
                         }
                         EOF => { /* trailing backslash: leave raw ending in '\\' */ }
                         other => {
-                            raw.push(char::from_u32(other).unwrap());
+                            raw.push(other);
                             self.advance();
                         }
                     }
                 }
                 other => {
-                    raw.push(char::from_u32(other).unwrap());
+                    raw.push(other);
                     self.advance();
                 }
             }
         }
-        st.raw = Some(crate::ast::str_to_units(&raw));
+        let raw_units = || {
+            let mut units = Vec::new();
+            for &code in &raw {
+                push_unit(&mut units, code);
+            }
+            units
+        };
+        st.raw = Some(raw_units());
         if st.escaped {
             let (cooked, legacy, error) = self.cook_string(&raw, c == b'`' as u32);
             st.legacy_octal = legacy;
@@ -1032,7 +1060,7 @@ impl<'a> Lexer<'a> {
         } else {
             // The raw body is verbatim UTF-8 source (no lone surrogates),
             // so its code units are the cooked value too.
-            st.string = Some(crate::ast::str_to_units(&raw));
+            st.string = Some(raw_units());
         }
         Ok(())
     }
@@ -1040,8 +1068,13 @@ impl<'a> Lexer<'a> {
     /// Port of `fxGetNextString`'s cooking pass: resolve escapes in `raw`,
     /// returning `(cooked, legacy_octal, error)`. `template` gates the
     /// legacy-octal-in-template error XS raises.
-    fn cook_string(&self, raw: &str, template: bool) -> (Vec<u16>, bool, bool) {
-        let chars: Vec<char> = raw.chars().collect();
+    fn cook_string(&self, raw: &[u32], template: bool) -> (Vec<u16>, bool, bool) {
+        // The sentinel is only used for escape classification below; literal
+        // emission always reads the original code, including surrogates.
+        let chars: Vec<char> = raw
+            .iter()
+            .map(|&code| char::from_u32(code).unwrap_or('\u{FFFD}'))
+            .collect();
         let mut out: Vec<u16> = Vec::new();
         let mut legacy = false;
         let mut error = false;
@@ -1126,16 +1159,16 @@ impl<'a> Lexer<'a> {
                     }
                     '8' | '9' => {
                         legacy = true;
-                        push_char_unit(&mut out, chars[i]);
+                        push_unit(&mut out, raw[i]);
                         i += 1;
                     }
-                    other => {
-                        push_char_unit(&mut out, other);
+                    _ => {
+                        push_unit(&mut out, raw[i]);
                         i += 1;
                     }
                 }
             } else {
-                push_char_unit(&mut out, chars[i]);
+                push_unit(&mut out, raw[i]);
                 i += 1;
             }
         }
@@ -1181,7 +1214,7 @@ impl<'a> Lexer<'a> {
         let mut st = Lexeme::blank();
         st.line = self.line;
         st.start = self.ch_offset;
-        let mut body = String::new();
+        let mut source_units = Vec::new();
         let mut backslash = false;
         let mut bracket = false;
         let mut first = true;
@@ -1224,7 +1257,7 @@ impl<'a> Lexer<'a> {
             } else {
                 backslash = false;
             }
-            body.push(char::from_u32(c).unwrap());
+            push_unit(&mut source_units, c);
             if pending {
                 pending = false;
             } else {
@@ -1233,7 +1266,6 @@ impl<'a> Lexer<'a> {
             c = self.ch;
             first = false;
         }
-        st.string = Some(crate::ast::str_to_units(&body));
         // Flags: XS advances past the closing '/', then reads id-continue.
         let mut flags = String::new();
         loop {
@@ -1258,7 +1290,12 @@ impl<'a> Lexer<'a> {
             charged = raw;
             admitted
         };
-        let outcome = ironhorse_regexp::validate_checked(&body, &flags, u64::MAX, Some(&mut check));
+        let outcome = ironhorse_regexp::validate_units_checked(
+            &source_units,
+            &flags,
+            u64::MAX,
+            Some(&mut check),
+        );
         if !self.meter.charge_raw(outcome.work_meter_raw - charged) {
             return Err(self.err(LexErrorKind::RegExpBudgetExceeded));
         }
@@ -1274,6 +1311,7 @@ impl<'a> Lexer<'a> {
                 return Err(self.err(LexErrorKind::RegExpResourceLimit))
             }
         }
+        st.string = Some(source_units);
         st.modifier = Some(flags);
         st.token = Token::Regexp;
         st.end = self.ch_offset;
@@ -1432,13 +1470,6 @@ fn push_unit(out: &mut Vec<u16>, value: u32) {
         out.push((0xD800 + (v >> 10)) as u16);
         out.push((0xDC00 + (v & 0x3FF)) as u16);
     }
-}
-
-/// Push a verbatim source `char` (astral scalars are single `char`s in
-/// valid UTF-8 input) as its UTF-16 code units.
-fn push_char_unit(out: &mut Vec<u16>, c: char) {
-    let mut buf = [0u16; 2];
-    out.extend_from_slice(c.encode_utf16(&mut buf));
 }
 
 /// Port of `fxParseHexEscape`: exactly two hex digits from `chars[*i]`.

@@ -334,12 +334,79 @@ pub fn compile_checked(
     check: Option<&mut dyn FnMut(u64) -> bool>,
 ) -> CompileOutcome {
     let (result, work_meter_raw) = checked_work(budget, check, |work| {
-        compile_inner::<true>(pattern, flags, work).map(Compiler::into_program)
+        compile_inner::<true>(pattern.as_bytes(), flags, work, false).map(Compiler::into_program)
     });
     CompileOutcome {
         result,
         work_meter_raw,
     }
+}
+
+/// Compile a JavaScript UTF-16 pattern without replacing unpaired surrogates.
+/// Scalar input retains the UTF-8 entry point's work receipt and grammar.
+pub fn compile_units_checked(
+    pattern: &[u16],
+    flags: &str,
+    budget: u64,
+    check: Option<&mut dyn FnMut(u64) -> bool>,
+) -> CompileOutcome {
+    let (result, work_meter_raw) = checked_work(budget, check, |work| {
+        let bytes = pattern_units(pattern, work)?;
+        compile_inner::<true>(&bytes, flags, work, true).map(Compiler::into_program)
+    });
+    CompileOutcome {
+        result,
+        work_meter_raw,
+    }
+}
+
+/// Validate a JavaScript UTF-16 pattern using the compiler's exact grammar.
+pub fn validate_units_checked(
+    pattern: &[u16],
+    flags: &str,
+    budget: u64,
+    check: Option<&mut dyn FnMut(u64) -> bool>,
+) -> ValidationOutcome {
+    let (result, work_meter_raw) = checked_work(budget, check, |work| {
+        let bytes = pattern_units(pattern, work)?;
+        compile_inner::<false>(&bytes, flags, work, true).map(|_| ())
+    });
+    ValidationOutcome {
+        result,
+        work_meter_raw,
+    }
+}
+
+// The parser already decodes non-scalar three-byte sequences. Encode valid
+// pairs as scalar UTF-8 to retain its existing work and offset conventions.
+// Admission precedes both the scan and its temporary allocation. Prepay
+// one byte per unit, then the extra UTF-8 width before encoding each code.
+fn pattern_units(pattern: &[u16], work: &WorkBudget<'_>) -> PResult<Vec<u8>> {
+    if pattern.len() > MAX_PATTERN_BYTES {
+        stop(CompileStop::Resource);
+    }
+    work.charge(pattern.len() as u64);
+    work.check_now();
+    work.allocate(pattern.len().saturating_mul(3));
+    let mut bytes = Vec::with_capacity(pattern.len());
+    for code in char::decode_utf16(pattern.iter().copied()) {
+        match code {
+            Ok(ch) => {
+                work.charge((ch.len_utf8() - ch.len_utf16()) as u64);
+                bytes.extend_from_slice(ch.encode_utf8(&mut [0; 4]).as_bytes());
+            }
+            Err(error) => {
+                let unit = error.unpaired_surrogate();
+                work.charge(2);
+                bytes.extend_from_slice(&[
+                    0xe0 | (unit >> 12) as u8,
+                    0x80 | ((unit >> 6) & 63) as u8,
+                    0x80 | (unit & 63) as u8,
+                ]);
+            }
+        }
+    }
+    Ok(bytes)
 }
 
 /// Validate a pattern and flags without constructing a matcher program.
@@ -358,7 +425,7 @@ pub fn validate_checked(
     check: Option<&mut dyn FnMut(u64) -> bool>,
 ) -> ValidationOutcome {
     let (result, work_meter_raw) = checked_work(budget, check, |work| {
-        compile_inner::<false>(pattern, flags, work).map(|_| ())
+        compile_inner::<false>(pattern.as_bytes(), flags, work, false).map(|_| ())
     });
     ValidationOutcome {
         result,
@@ -397,14 +464,19 @@ fn checked_work<T>(
 }
 
 fn compile_inner<'a, 'b, const MATERIALIZE: bool>(
-    pattern: &str,
+    pattern: &[u8],
     flags: &str,
     work: &'a WorkBudget<'b>,
+    source_prepaid: bool,
 ) -> PResult<Compiler<'a, 'b, MATERIALIZE>> {
     if pattern.len() > MAX_PATTERN_BYTES {
         stop(CompileStop::Resource);
     }
-    work.charge(pattern.len() as u64 + flags.len() as u64);
+    work.charge(if source_prepaid {
+        flags.len() as u64
+    } else {
+        pattern.len() as u64 + flags.len() as u64
+    });
     let mut parser_flags: u32 = 0;
     // Flag modifier parse (fxCompileRegExp head).
     for c in flags.bytes() {
@@ -420,8 +492,17 @@ fn compile_inner<'a, 'b, const MATERIALIZE: bool>(
             _ => return Err(CompileError::Syntax(" invalid flags".into())),
         }
     }
-    work.allocate(pattern.len() + 1);
-    let mut pattern_bytes = pattern.as_bytes().to_vec();
+    // Literal NUL is a pattern character, not the decoder's terminator.
+    let encoded_len = pattern.len() + pattern.iter().filter(|&&byte| byte == 0).count() + 1;
+    work.allocate(encoded_len);
+    let mut pattern_bytes = Vec::with_capacity(encoded_len);
+    for &byte in pattern {
+        if byte == 0 {
+            pattern_bytes.extend_from_slice(&[0xc0, 0x80]);
+        } else {
+            pattern_bytes.push(byte);
+        }
+    }
     pattern_bytes.push(0);
     let mut c = Compiler::<MATERIALIZE> {
         work,

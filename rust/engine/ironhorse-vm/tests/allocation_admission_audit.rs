@@ -177,7 +177,7 @@ fn check_builtin_capacities(moved_modules: &[&str]) {
             "enter_call_dot_apply",
             "enter_construct_bound",
             "error_to_string",
-            "value_to_string",
+            "value_to_scalar_text",
             "call_native_method",
             "arraylike_to_vec",
             "apply_arraylike_metering",

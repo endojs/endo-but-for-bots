@@ -1400,13 +1400,15 @@ impl Interp {
                 Payload::BigInt(_) | Payload::Boolean(_) => {
                     self.slot_to_bigint_u64(primitive).unwrap()
                 }
-                Payload::String(off) => {
-                    parse_bigint_string_u64(&self.str_text(off)).ok_or_else(|| {
+                Payload::String(off) => self
+                    .str_scalar_text(off)
+                    .as_deref()
+                    .and_then(parse_bigint_string_u64)
+                    .ok_or_else(|| {
                         self.catchable_syntax_error_with_message(
                             "cannot coerce string to bigint".into(),
                         )
-                    })?
-                }
+                    })?,
                 _ => {
                     return Err(self.catchable_type_error_msg(
                         match primitive.kind {
@@ -1424,9 +1426,7 @@ impl Interp {
         let number = match primitive.kind {
             Kind::Integer | Kind::Number => primitive,
             Kind::String => match primitive.value {
-                Payload::String(off) => {
-                    Slot::number(string_to_number(self.str_text(off).as_bytes(), true))
-                }
+                Payload::String(off) => Slot::number(self.str_number(off)),
                 _ => unreachable!(),
             },
             Kind::Boolean | Kind::Null | Kind::Undefined => Slot::number(to_number(&primitive)),
@@ -1525,7 +1525,10 @@ impl Interp {
             return None;
         }
         match key.value {
-            Payload::String(off) => canonical_numeric_index_string(&self.str_text(off)),
+            Payload::String(off) => self
+                .str_scalar_text(off)
+                .as_deref()
+                .and_then(canonical_numeric_index_string),
             _ => None,
         }
     }
@@ -1599,7 +1602,7 @@ impl Interp {
         let num = match primitive.kind {
             Kind::Integer | Kind::Number => numeric_of(&primitive).unwrap_or(f64::NAN),
             Kind::String => match primitive.value {
-                Payload::String(off) => string_to_number(self.str_text(off).as_bytes(), true),
+                Payload::String(off) => self.str_number(off),
                 _ => unreachable!(),
             },
             Kind::Boolean | Kind::Null | Kind::Undefined => to_number(&primitive),

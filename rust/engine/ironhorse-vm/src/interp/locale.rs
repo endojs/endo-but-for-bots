@@ -700,11 +700,11 @@ pub(super) fn format_date_time_range_parts(
 
 pub(super) fn list_format_parts(
     data: &ListFormatData,
-    list: &[String],
-) -> Vec<(&'static str, String)> {
+    list: &[Vec<u16>],
+) -> Vec<(&'static str, Vec<u16>)> {
     let [two, start, middle, end] = list_patterns(&data.locale, &data.kind, &data.style);
     let n = list.len();
-    let mut parts: Vec<(&'static str, String)> = Vec::new();
+    let mut parts: Vec<(&'static str, Vec<u16>)> = Vec::new();
     if n == 0 {
         return parts;
     }
@@ -714,18 +714,18 @@ pub(super) fn list_format_parts(
     }
     if n == 2 {
         parts.push(("element", list[0].clone()));
-        parts.push(("literal", two.to_string()));
+        parts.push(("literal", two.encode_utf16().collect()));
         parts.push(("element", list[1].clone()));
         return parts;
     }
     parts.push(("element", list[0].clone()));
-    parts.push(("literal", start.to_string()));
+    parts.push(("literal", start.encode_utf16().collect()));
     for i in 1..n - 1 {
         parts.push(("element", list[i].clone()));
         if i < n - 2 {
-            parts.push(("literal", middle.to_string()));
+            parts.push(("literal", middle.encode_utf16().collect()));
         } else {
-            parts.push(("literal", end.to_string()));
+            parts.push(("literal", end.encode_utf16().collect()));
         }
     }
     parts.push(("element", list[n - 1].clone()));
@@ -905,28 +905,48 @@ pub(super) fn plural_select(data: &PluralRulesData, x: f64) -> &'static str {
     }
 }
 
-pub(super) fn collator_compare(data: &CollatorData, left: &str, right: &str) -> i32 {
+pub(super) fn collator_compare_units(data: &CollatorData, left: &[u16], right: &[u16]) -> i32 {
     use std::cmp::Ordering;
-    let normalizer = icu_normalizer::ComposingNormalizer::new_nfc();
-    let mut left = normalizer.normalize(left).into_owned();
-    let mut right = normalizer.normalize(right).into_owned();
-    if data.ignore_punctuation {
-        left.retain(|c| !c.is_ascii_punctuation() && !c.is_whitespace());
-        right.retain(|c| !c.is_ascii_punctuation() && !c.is_whitespace());
-    }
-    if data.collation == "phonebk" && data.locale.starts_with("de") {
-        for (s, replacement) in [("ä", "ae"), ("ö", "oe"), ("ü", "ue"), ("ß", "ss")] {
-            left = left.replace(s, replacement);
-            right = right.replace(s, replacement);
+    // Normalize scalar runs independently. Unpaired code units are distinct
+    // collation elements, never U+FFFD; scalar Unicode values cannot collide
+    // with their reserved surrogate range.
+    let keys = |units: &[u16]| {
+        let mut original = Vec::<u32>::new();
+        let mut folded = Vec::<u32>::new();
+        let mut run = String::new();
+        let flush = |run: &mut String, original: &mut Vec<u32>, folded: &mut Vec<u32>| {
+            let normalizer = icu_normalizer::ComposingNormalizer::new_nfc();
+            let mut text = normalizer.normalize(run).into_owned();
+            if data.ignore_punctuation {
+                text.retain(|c| !c.is_ascii_punctuation() && !c.is_whitespace());
+            }
+            if data.collation == "phonebk" && data.locale.starts_with("de") {
+                for (s, replacement) in [("ä", "ae"), ("ö", "oe"), ("ü", "ue"), ("ß", "ss")] {
+                    text = text.replace(s, replacement);
+                }
+            }
+            original.extend(text.chars().map(u32::from));
+            folded.extend(text.to_lowercase().chars().map(u32::from));
+            run.clear();
+        };
+        for decoded in char::decode_utf16(units.iter().copied()) {
+            match decoded {
+                Ok(ch) => run.push(ch),
+                Err(error) => {
+                    flush(&mut run, &mut original, &mut folded);
+                    let unit = u32::from(error.unpaired_surrogate());
+                    original.push(unit);
+                    folded.push(unit);
+                }
+            }
         }
-    }
-    // Unicode collation compares case-folded primary weights before applying
-    // the requested case distinction. This keeps ordinary locale ordering
-    // (`"a" < "Z"`) while canonically equivalent strings compare equal.
-    let left_key = left.to_lowercase();
-    let right_key = right.to_lowercase();
+        flush(&mut run, &mut original, &mut folded);
+        (original, folded)
+    };
+    let (left, left_key) = keys(left);
+    let (right, right_key) = keys(right);
     let ordering = if data.numeric {
-        numeric_string_cmp(&left_key, &right_key)
+        numeric_collation_cmp(&left_key, &right_key)
     } else {
         left_key.cmp(&right_key)
     };
@@ -948,11 +968,23 @@ pub(super) fn collator_compare(data: &CollatorData, left: &str, right: &str) -> 
     }
 }
 
-fn numeric_string_cmp(left: &str, right: &str) -> std::cmp::Ordering {
-    let parse = |s: &str| {
-        s.split(|c: char| !c.is_ascii_digit())
-            .find(|part| !part.is_empty())
-            .and_then(|part| part.parse::<u128>().ok())
+fn numeric_collation_cmp(left: &[u32], right: &[u32]) -> std::cmp::Ordering {
+    let parse = |units: &[u32]| {
+        let digits = units
+            .iter()
+            .copied()
+            .skip_while(|&unit| !(0x30..=0x39).contains(&unit))
+            .take_while(|&unit| (0x30..=0x39).contains(&unit));
+        let mut result = None;
+        for digit in digits {
+            result = Some(
+                result
+                    .unwrap_or(0u128)
+                    .checked_mul(10)?
+                    .checked_add(u128::from(digit - 0x30))?,
+            );
+        }
+        result
     };
     match (parse(left), parse(right)) {
         (Some(a), Some(b)) if a != b => a.cmp(&b),

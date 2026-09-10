@@ -396,9 +396,7 @@ impl Interp {
                     // built-ins (measured against the pin) beyond the metered
                     // `fxNumberToString` step + result chunk.
                     self.meter.tick_raw(STRING_METERSOME_FRAME_METERING);
-                    let bytes = self.to_string_bytes_metered(prim);
-                    let off = self.alloc_str_text(&bytes);
-                    Slot::of(Kind::String, Payload::String(off))
+                    self.to_string_slot_metered(prim)
                 } else {
                     let n = to_number(&prim);
                     let bytes = match number_to_radix_string(n, radix) {
@@ -418,7 +416,7 @@ impl Interp {
             // prefix parse.
             GlobalParseInt => {
                 let units = self.to_string_units(code, arg0.unwrap_or_else(Slot::undefined))?;
-                let bytes = String::from_utf16_lossy(&units).into_bytes();
+                let bytes = scalar_numeric_prefix(&units).into_bytes();
                 let radix_arg = self.stack.get(base + 5).copied();
                 let radix = match radix_arg {
                     Some(s) if argc > 1 && s.kind != Kind::Undefined => {
@@ -436,7 +434,7 @@ impl Interp {
             // (`fxStringToNumber`, whole = 0).
             GlobalParseFloat => {
                 let units = self.to_string_units(code, arg0.unwrap_or_else(Slot::undefined))?;
-                let bytes = String::from_utf16_lossy(&units).into_bytes();
+                let bytes = scalar_numeric_prefix(&units).into_bytes();
                 Slot::number(string_to_number(&bytes, false))
             }
             // isNaN(x)/isFinite(x) — ToNumber then the fpclassify test. A
@@ -457,4 +455,12 @@ impl Interp {
         };
         Ok(result)
     }
+}
+
+// A non-scalar code unit ends either numeric prefix grammar. Preserve the
+// scalar prefix exactly instead of inventing a replacement character.
+fn scalar_numeric_prefix(units: &[u16]) -> String {
+    char::decode_utf16(units.iter().copied())
+        .map_while(Result::ok)
+        .collect()
 }

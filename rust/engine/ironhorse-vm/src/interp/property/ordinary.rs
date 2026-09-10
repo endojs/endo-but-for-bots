@@ -24,7 +24,7 @@ impl Interp {
         &mut self,
         code: &[u8],
         inst: crate::value::SlotIndex,
-    ) -> Result<Option<String>, Step> {
+    ) -> Result<Option<Vec<u16>>, Step> {
         let Some(tag_id) = self.well_known_symbol_property_id("toStringTag") else {
             return Ok(None);
         };
@@ -35,7 +35,7 @@ impl Interp {
                 kind: Kind::String,
                 value: Payload::String(off),
                 ..
-            } => Some(self.str_text(off)),
+            } => Some(self.str_units(off)),
             _ => None,
         })
     }

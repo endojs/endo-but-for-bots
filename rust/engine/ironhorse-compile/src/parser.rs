@@ -210,6 +210,19 @@ impl<'a> Parser<'a> {
         module: bool,
         meter: ParseMeter<'a>,
     ) -> PResult<Parser<'a>> {
+        Self::with_lexer(Lexer::with_meter(source, meter), strict, module)
+    }
+
+    pub(crate) fn with_units(
+        source: &[u16],
+        strict: bool,
+        module: bool,
+        meter: ParseMeter<'a>,
+    ) -> PResult<Parser<'a>> {
+        Self::with_lexer(Lexer::with_units(source, meter), strict, module)
+    }
+
+    fn with_lexer(mut lexer: Lexer<'a>, strict: bool, module: bool) -> PResult<Parser<'a>> {
         let mut flags = 0u32;
         if strict {
             flags |= flags::STRICT;
@@ -217,7 +230,6 @@ impl<'a> Parser<'a> {
         if module {
             flags |= flags::STRICT | flags::ASYNC;
         }
-        let mut lexer = Lexer::with_meter(source, meter);
         lexer.set_strict(flags & flags::STRICT != 0);
         lexer.set_async(flags & flags::ASYNC != 0);
         lexer.set_generator(flags & flags::GENERATOR != 0);

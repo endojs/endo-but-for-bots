@@ -265,12 +265,9 @@ impl Interp {
                 // valid surrogate pair round-trips through that text, while a
                 // genuinely unpaired code unit cannot and must stay an honest
                 // named skip instead of being silently changed to U+FFFD.
-                if char::decode_utf16(units.iter().copied()).any(|unit| unit.is_err()) {
-                    return Err(Step::Host(Halt::NotImplemented(
-                        "JSON.parse:lone-surrogate",
-                    )));
-                }
-                let input = String::from_utf16_lossy(&units).into_bytes();
+                let input = String::from_utf16(&units)
+                    .map_err(|_| Step::Host(Halt::NotImplemented("JSON.parse:lone-surrogate")))?
+                    .into_bytes();
                 self.charge_and_check(JSON_PARSE_SETUP_METERING)?;
                 let mut pos = 0usize;
                 self.json_parse_whitespace(&input, &mut pos);
