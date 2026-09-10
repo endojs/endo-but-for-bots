@@ -76,6 +76,8 @@ import { renderConfined, unmount } from '@endo/preact-container/renderer';
 
 /**
  * @typedef {object} DefineController
+ * @property {() => DefineState} getState
+ * @property {() => FocusTarget} getFocusTarget
  * @property {(state: DefineState) => void} [setState]
  * @property {(target: FocusTarget) => void} [setFocusTarget]
  */
@@ -390,6 +392,10 @@ const Root = ({
   useEffect(() => {
     controller.setState = setState;
     controller.setFocusTarget = setFocusTarget;
+    // Host calls and input events can arrive before this passive effect runs.
+    // Replay the latest values instead of losing updates made during mounting.
+    setState(controller.getState());
+    setFocusTarget(controller.getFocusTarget());
     return () => {
       if (controller.setState === setState) delete controller.setState;
       if (controller.setFocusTarget === setFocusTarget) {
@@ -433,19 +439,22 @@ export const createInlineDefine = ({
   onCancel,
   onValidityChange,
 }) => {
-  // Mutable bridge to the root component's state setters (populated by the
-  // component's effect). Intentionally NOT hardened — the component writes onto
-  // it.
-  /** @type {DefineController} */
-  const controller = {};
-
   // The AUTHORITATIVE view state lives here in the host closure, not in the
   // component, so that `getData`/`isValid` are always read synchronously-fresh
   // regardless of when Preact flushes its render and effects. The component
   // mirrors it for display via `controller.setState`.
   /** @type {DefineState} */
   let state = { source: '', slots: [], disabled: false };
-  let focusNonce = 0;
+  /** @type {FocusTarget} */
+  let focusTarget = { kind: 'source', index: 0, nonce: 0 };
+  // Mutable bridge to the root component's state setters (populated by the
+  // component's effect). Intentionally NOT hardened — the component writes onto
+  // it.
+  /** @type {DefineController} */
+  const controller = {
+    getState: () => state,
+    getFocusTarget: () => focusTarget,
+  };
 
   /** @param {DefineState} next */
   const render = next => {
@@ -463,13 +472,9 @@ export const createInlineDefine = ({
 
   /** @param {Omit<FocusTarget, 'nonce'>} target */
   const requestFocus = target => {
-    focusNonce += 1;
+    focusTarget = { ...target, nonce: focusTarget.nonce + 1 };
     if (controller.setFocusTarget) {
-      controller.setFocusTarget({
-        kind: target.kind,
-        index: target.index,
-        nonce: focusNonce,
-      });
+      controller.setFocusTarget(focusTarget);
     }
   };
 
@@ -529,7 +534,7 @@ export const createInlineDefine = ({
     h(Root, {
       controller,
       initialState: state,
-      initialFocus: { kind: 'source', index: 0, nonce: 0 },
+      initialFocus: focusTarget,
       onSourceInput,
       onSlotChange,
       onSlotRemove,
