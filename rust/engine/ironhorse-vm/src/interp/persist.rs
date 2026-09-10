@@ -93,6 +93,54 @@ impl Interp {
         Ok(())
     }
 
+    /// Check value shape and coordinates without loading chunk contents.
+    /// Returns the primitive whose chunk needs content validation, if any;
+    /// a Symbol's String descriptor is that primitive rather than the Symbol.
+    fn validate_restore_value_shape(
+        &self,
+        value: Slot,
+        row: &'static str,
+    ) -> Result<Option<Slot>, RestoreError> {
+        let malformed = || RestoreError {
+            row,
+            reason: "invalid guest value",
+        };
+        let primitive = match (value.kind, value.value) {
+            (Kind::Undefined | Kind::Null, Payload::None)
+            | (Kind::Boolean, Payload::Boolean(_))
+            | (Kind::Integer, Payload::Integer(_))
+            | (Kind::Number, Payload::Number(_)) => return Ok(None),
+            (Kind::Reference, Payload::Reference(index)) => {
+                self.validate_restore_owner(index.0, row)?;
+                return Ok(None);
+            }
+            (Kind::String, Payload::String(_)) | (Kind::BigInt, Payload::BigInt(_)) => value,
+            (Kind::Symbol, Payload::Reference(index)) => {
+                if index.is_null()
+                    || index.0 >= self.slots.capacity()
+                    || self.slots.is_free_index(index)
+                {
+                    return Err(malformed());
+                }
+                let descriptor = self.slots.get(index);
+                match (descriptor.kind, descriptor.value) {
+                    (Kind::Undefined, Payload::None) => return Ok(None),
+                    (Kind::String, Payload::String(_)) => descriptor,
+                    _ => return Err(malformed()),
+                }
+            }
+            _ => return Err(malformed()),
+        };
+        let off = primitive.chunk_ref().ok_or_else(malformed)?;
+        if off.is_null()
+            || (off.0 as usize) < crate::value::CHUNK_HEADER
+            || (off.0 as usize) > self.chunks.byte_size()
+        {
+            return Err(malformed());
+        }
+        Ok(Some(primitive))
+    }
+
     fn validate_restore_values(
         &self,
         values: impl IntoIterator<Item = Slot>,
@@ -104,37 +152,10 @@ impl Interp {
         };
         let mut chunks = Vec::new();
         for value in values {
-            let primitive = match (value.kind, value.value) {
-                (Kind::Undefined | Kind::Null, Payload::None) => continue,
-                (Kind::Reference, Payload::Reference(index)) => {
-                    self.validate_restore_owner(index.0, row)?;
-                    continue;
-                }
-                (Kind::Boolean, Payload::Boolean(_))
-                | (Kind::Integer, Payload::Integer(_))
-                | (Kind::Number, Payload::Number(_)) => continue,
-                (Kind::String, Payload::String(_)) | (Kind::BigInt, Payload::BigInt(_)) => value,
-                (Kind::Symbol, Payload::Reference(index)) => {
-                    if index.is_null()
-                        || index.0 >= self.slots.capacity()
-                        || self.slots.is_free_index(index)
-                    {
-                        return Err(malformed());
-                    }
-                    let descriptor = self.slots.get(index);
-                    match (descriptor.kind, descriptor.value) {
-                        (Kind::Undefined, Payload::None) => continue,
-                        (Kind::String, Payload::String(_)) => descriptor,
-                        _ => return Err(malformed()),
-                    }
-                }
-                _ => return Err(malformed()),
-            };
-            let off = primitive.chunk_ref().ok_or_else(malformed)?;
-            if off.is_null() {
-                return Err(malformed());
+            if let Some(primitive) = self.validate_restore_value_shape(value, row)? {
+                let off = primitive.chunk_ref().ok_or_else(malformed)?;
+                chunks.push((off, primitive.kind));
             }
-            chunks.push((off, primitive.kind));
         }
         // One header walk for the batch, rather than rescanning the arena
         // for every boxed String, BigInt, or Symbol description.
@@ -3166,17 +3187,89 @@ impl Interp {
     /// whose tables are empty; every insert routes through the counted
     /// accessors so the side-ref page counts the partial collector
     /// reads are rebuilt in lockstep, and the registry's forward and
-    /// reverse maps are repopulated pairwise. An unknown collection
-    /// kind code is a corrupt image and returns `false` (the caller
-    /// fails its decode closed); a well-formed snapshot always
-    /// restores fully.
+    /// reverse maps are repopulated pairwise. The complete batch is checked
+    /// before any table changes, while content-key chunks stay unloaded.
     pub(super) fn restore_bulk_side_tables(
         &mut self,
         arrays: Vec<ArraySnapshot>,
         index_props: Vec<IndexPropsSnapshot>,
         collections: Vec<CollectionSnapshot>,
         registry: Vec<(Vec<u8>, u32)>,
-    ) -> bool {
+    ) -> Result<(), RestoreError> {
+        const ROW: &str = "BulkSideTables";
+        let refuse = |reason| RestoreError { row: ROW, reason };
+        self.validate_restore_owners(arrays.iter().map(|row| row.0), ROW)?;
+        self.validate_restore_owners(index_props.iter().map(|row| row.0), ROW)?;
+        self.validate_restore_owners(collections.iter().map(|row| row.0), ROW)?;
+        for (_, length, items) in arrays.iter().chain(&index_props) {
+            if items.windows(2).any(|pair| pair[0].0 >= pair[1].0) {
+                return Err(refuse("item indices are not strictly ascending"));
+            }
+            if items.last().is_some_and(|(index, _)| index >= length) {
+                return Err(refuse("length or high-water mark does not cover items"));
+            }
+        }
+        for (_, code, length, entries) in &collections {
+            let kind = crate::bulk::CollKind::from_code(*code)
+                .ok_or_else(|| refuse("unknown collection kind"))?;
+            if matches!(
+                kind,
+                crate::bulk::CollKind::WeakMap | crate::bulk::CollKind::WeakSet
+            ) {
+                if *length != 0 {
+                    return Err(refuse("weak collection carries a hash table"));
+                }
+            } else {
+                // The runtime doubles/halves the XS-compatible table within
+                // this profile's cap; preserve its post-mutation geometry.
+                const TABLE_MAX: u32 = 1024 * 1024;
+                if !length.is_power_of_two()
+                    || *length < MAP_MIN_TABLE_LENGTH
+                    || *length > TABLE_MAX
+                {
+                    return Err(refuse("unreachable collection table geometry"));
+                }
+                let high = (length >> 1) + (length >> 2);
+                if *length < TABLE_MAX && entries.len() as u64 > u64::from(high) {
+                    return Err(refuse("collection size is past the grow threshold"));
+                }
+            }
+        }
+        // Content-key chunks intentionally remain lazy. This checks shapes,
+        // live slot identities, and chunk coordinates, without deriving keys
+        // or deduplicating the historically admitted duplicate-key entries.
+        for value in arrays
+            .iter()
+            .chain(&index_props)
+            .flat_map(|row| row.2.iter().map(|(_, value)| *value))
+            .chain(
+                collections
+                    .iter()
+                    .flat_map(|row| row.3.iter().flat_map(|(key, value)| [*key, *value])),
+            )
+        {
+            self.validate_restore_value_shape(value, ROW)?;
+        }
+        if registry.windows(2).any(|pair| pair[0].0 >= pair[1].0) {
+            return Err(refuse("registry keys are not strictly ascending"));
+        }
+        let mut descriptors = std::collections::HashSet::new();
+        for (key, descriptor) in &registry {
+            if !key.len().is_multiple_of(2) {
+                return Err(refuse("registry key is not UTF-16 bytes"));
+            }
+            if !descriptors.insert(*descriptor) {
+                return Err(refuse("registry keys share a descriptor"));
+            }
+            let symbol = Slot::of(
+                Kind::Symbol,
+                Payload::Reference(crate::value::SlotIndex(*descriptor)),
+            );
+            if self.validate_restore_value_shape(symbol, ROW)?.is_none() {
+                return Err(refuse("registry descriptor has no string description"));
+            }
+        }
+
         for (owner, high_water, items) in index_props {
             let owner = crate::value::SlotIndex(owner);
             for (index, value) in items {
@@ -3202,9 +3295,8 @@ impl Interp {
             self.arrays.insert(crate::value::SlotIndex(owner), a);
         }
         for (owner, kind_code, table_length, entries) in collections {
-            let Some(kind) = crate::bulk::CollKind::from_code(kind_code) else {
-                return false;
-            };
+            let kind = crate::bulk::CollKind::from_code(kind_code)
+                .expect("collection kind was validated before restore");
             let mut c = crate::bulk::CollectionData::new(kind, table_length);
             for (key, value) in entries {
                 c.push_entry(key, value, &mut self.side_refs);
@@ -3216,7 +3308,7 @@ impl Interp {
             self.symbol_registry.insert(key.clone(), desc);
             self.symbol_registry_keys.insert(desc, key);
         }
-        true
+        Ok(())
     }
 
     /// Rebuild the [`Self::global_props`] id→slot fast index by walking the
