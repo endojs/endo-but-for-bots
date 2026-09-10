@@ -85,14 +85,19 @@ impl Interp {
             }
             Native::Locale => {
                 if !has_target {
-                    return Err(self.catchable_type_error());
+                    return Err(self
+                        .catchable_type_error_msg("Intl.Locale: constructor requires new".into()));
                 }
                 let source = arg(0);
                 let options_arg = arg(1);
                 let text = self.intl_locale_argument(code, source)?;
                 let mut locale = match canonicalize_locale(&text) {
                     Some(locale) => locale,
-                    None => return Err(self.catchable_range_error()),
+                    None => {
+                        return Err(
+                            self.catchable_range_error_msg("Intl: invalid language tag".into())
+                        )
+                    }
                 };
                 if let Payload::Reference(options) = options_arg.value {
                     self.apply_locale_options(code, options, &mut locale)?;
@@ -110,7 +115,11 @@ impl Interp {
                     .unwrap_or_else(|| "en".to_string());
                 let locale = match canonicalize_locale(&locale) {
                     Some(locale) => locale,
-                    None => return Err(self.catchable_range_error()),
+                    None => {
+                        return Err(
+                            self.catchable_range_error_msg("Intl: invalid language tag".into())
+                        )
+                    }
                 };
                 let mut data = CollatorData {
                     locale: supported_locale(&locale.tag),
@@ -138,7 +147,9 @@ impl Interp {
             }
             Native::ListFormat => {
                 if !has_target {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg(
+                        "Intl.ListFormat: constructor requires new".into(),
+                    ));
                 }
                 let locale_arg = arg(0);
                 let options_arg = arg(1);
@@ -186,7 +197,9 @@ impl Interp {
             }
             Native::PluralRules => {
                 if !has_target {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg(
+                        "Intl.PluralRules: constructor requires new".into(),
+                    ));
                 }
                 let locale_arg = arg(0);
                 let options_arg = arg(1);
@@ -245,7 +258,9 @@ impl Interp {
             }
             Native::Segmenter => {
                 if !has_target {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg(
+                        "Intl.Segmenter: constructor requires new".into(),
+                    ));
                 }
                 let locale_arg = arg(0);
                 let options_arg = arg(1);
@@ -280,7 +295,9 @@ impl Interp {
             }
             Native::DateTimeFormat => {
                 if !has_target {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg(
+                        "Intl.DateTimeFormat: constructor requires new".into(),
+                    ));
                 }
                 let locale_arg = arg(0);
                 let options_arg = arg(1);
@@ -304,16 +321,22 @@ impl Interp {
             }
             Native::TemporalInstant => {
                 if !has_target {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg(
+                        "Temporal.Instant: constructor requires new".into(),
+                    ));
                 }
-                let ns = self
-                    .temporal_bigint_to_i128(arg(0))
-                    .ok_or_else(|| self.catchable_type_error())?;
+                let ns = self.temporal_bigint_to_i128(arg(0)).ok_or_else(|| {
+                    self.catchable_type_error_msg(
+                        "Temporal.Instant: epochNanoseconds must be a supported BigInt".into(),
+                    )
+                })?;
                 self.temporal_new_instant(ns)?
             }
             Native::TemporalDuration => {
                 if !has_target {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg(
+                        "Temporal.Duration: constructor requires new".into(),
+                    ));
                 }
                 let values: Vec<Slot> = (0..10).map(arg).collect();
                 let mut fields = [0i64; 10];
@@ -326,13 +349,17 @@ impl Interp {
                 }
                 let record = TemporalDurationRecord::from_fields(fields);
                 if !temporal_duration_sign_valid(record) {
-                    return Err(self.catchable_range_error());
+                    return Err(self.catchable_range_error_msg(
+                        "Temporal.Duration: fields must have a consistent sign".into(),
+                    ));
                 }
                 self.temporal_new_duration(record)?
             }
             Native::TemporalPlain(kind) => {
                 if !has_target {
-                    return Err(self.catchable_type_error());
+                    return Err(
+                        self.catchable_type_error_msg("Temporal: constructor requires new".into())
+                    );
                 }
                 let values = (0..10).map(arg).collect::<Vec<_>>();
                 self.temporal_plain_construct(kind, &values, code)?
@@ -340,24 +367,37 @@ impl Interp {
             Native::TemporalZonedDateTime => {
                 // `new Temporal.ZonedDateTime(epochNanoseconds, timeZone[, calendar])`.
                 if !has_target {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg(
+                        "Temporal.ZonedDateTime: constructor requires new".into(),
+                    ));
                 }
                 let (epoch_arg, tz_value, cal) = (arg(0), arg(1), arg(2));
-                let ns = self
-                    .temporal_bigint_to_i128(epoch_arg)
-                    .ok_or_else(|| self.catchable_type_error())?;
+                let ns = self.temporal_bigint_to_i128(epoch_arg).ok_or_else(|| {
+                    self.catchable_type_error_msg(
+                        "Temporal.ZonedDateTime: epochNanoseconds must be a supported BigInt"
+                            .into(),
+                    )
+                })?;
                 if tz_value.kind != Kind::String {
                     // The constructor requires a *string* time-zone identifier
                     // (an object is not accepted here, unlike `from`).
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg(
+                        "Temporal.ZonedDateTime: timeZone must be a string".into(),
+                    ));
                 }
                 let tz_text = self.value_to_string(code, tz_value)?;
-                let (time_zone, offset_ns) = resolve_zoned_time_zone(&tz_text)
-                    .ok_or_else(|| self.catchable_range_error())?;
+                let (time_zone, offset_ns) =
+                    resolve_zoned_time_zone(&tz_text).ok_or_else(|| {
+                        self.catchable_range_error_msg(
+                            "Temporal: invalid or unsupported time zone".into(),
+                        )
+                    })?;
                 if cal.kind != Kind::Undefined {
                     let id = self.value_to_string(code, cal)?;
                     if id.to_ascii_lowercase() != "iso8601" {
-                        return Err(self.catchable_range_error());
+                        return Err(
+                            self.catchable_range_error_msg("Temporal: unsupported calendar".into())
+                        );
                     }
                 }
                 self.temporal_new_zoned(ns, time_zone, offset_ns)?
@@ -484,7 +524,10 @@ impl Interp {
                     }
                     Kind::BigInt => match a.value {
                         Payload::BigInt(off) => Slot::number(self.bigint_to_f64(off)),
-                        _ => return Err(self.catchable_type_error()),
+                        _ => {
+                            return Err(self
+                                .catchable_type_error_msg("Number: invalid BigInt value".into()))
+                        }
                     },
                     Kind::Symbol => {
                         return Err(
@@ -578,7 +621,10 @@ impl Interp {
                             let magnitude = (i as i64).unsigned_abs() as u32;
                             self.make_bigint(i < 0, vec![magnitude])
                         }
-                        _ => return Err(self.catchable_type_error()),
+                        _ => {
+                            return Err(self
+                                .catchable_type_error_msg("BigInt: invalid integer value".into()))
+                        }
                     },
                     Kind::Number => match primitive.value {
                         Payload::Number(n) if n.is_finite() && n.trunc() == n => {
@@ -590,7 +636,10 @@ impl Interp {
                                 "cannot coerce number to bigint".into(),
                             ))
                         }
-                        _ => return Err(self.catchable_type_error()),
+                        _ => {
+                            return Err(self
+                                .catchable_type_error_msg("BigInt: invalid number value".into()))
+                        }
                     },
                     Kind::String => {
                         let text = match primitive.value {
@@ -1786,7 +1835,11 @@ impl Interp {
                         "yard",
                         "year",
                     ],
-                    _ => return Err(self.catchable_range_error()),
+                    _ => {
+                        return Err(self.catchable_range_error_msg(
+                            "Intl.supportedValuesOf: invalid key".into(),
+                        ))
+                    }
                 };
                 let slots = values
                     .iter()
@@ -1797,7 +1850,10 @@ impl Interp {
             NativeMethod::LocaleToString => {
                 let inst = match this.value {
                     Payload::Reference(r) if self.locales.contains_key(&r) => r,
-                    _ => return Err(self.catchable_type_error()),
+                    _ => {
+                        return Err(self
+                            .catchable_type_error_msg("Intl.Locale: incompatible receiver".into()))
+                    }
                 };
                 let tag = self.locales[&inst].tag.clone();
                 self.intl_string(&tag)
@@ -1805,7 +1861,10 @@ impl Interp {
             NativeMethod::LocaleMaximize | NativeMethod::LocaleMinimize => {
                 let inst = match this.value {
                     Payload::Reference(r) if self.locales.contains_key(&r) => r,
-                    _ => return Err(self.catchable_type_error()),
+                    _ => {
+                        return Err(self
+                            .catchable_type_error_msg("Intl.Locale: incompatible receiver".into()))
+                    }
                 };
                 let mut locale = self.locales[&inst].clone();
                 if m == NativeMethod::LocaleMaximize {
@@ -1819,7 +1878,11 @@ impl Interp {
             NativeMethod::CollatorResolvedOptions => {
                 let inst = match this.value {
                     Payload::Reference(r) if self.collators.contains_key(&r) => r,
-                    _ => return Err(self.catchable_type_error()),
+                    _ => {
+                        return Err(self.catchable_type_error_msg(
+                            "Intl.Collator: incompatible receiver".into(),
+                        ))
+                    }
                 };
                 let data = self.collators[&inst].clone();
                 let result = self.slots.alloc(Slot::instance(self.object_proto));
@@ -1844,11 +1907,19 @@ impl Interp {
                     .unwrap_or_else(Slot::undefined);
                 let f = match function.value {
                     Payload::Reference(r) => r,
-                    _ => return Err(self.catchable_type_error()),
+                    _ => {
+                        return Err(self.catchable_type_error_msg(
+                            "Intl.Collator.compare: invalid bound function".into(),
+                        ))
+                    }
                 };
                 let collator = match self.collator_compare_functions.get(&f).copied() {
                     Some(collator) => collator,
-                    None => return Err(self.catchable_type_error()),
+                    None => {
+                        return Err(self.catchable_type_error_msg(
+                            "Intl.Collator.compare: invalid bound function".into(),
+                        ))
+                    }
                 };
                 let data = self.collators[&collator].clone();
                 let left =
@@ -1865,7 +1936,11 @@ impl Interp {
             NativeMethod::ListFormatFormat | NativeMethod::ListFormatFormatToParts => {
                 let inst = match this.value {
                     Payload::Reference(r) if self.list_formats.contains_key(&r) => r,
-                    _ => return Err(self.catchable_type_error()),
+                    _ => {
+                        return Err(self.catchable_type_error_msg(
+                            "Intl.ListFormat: incompatible receiver".into(),
+                        ))
+                    }
                 };
                 let data = self.list_formats[&inst].clone();
                 let list = self.string_list_from_iterable(code, arg0)?;
@@ -1901,7 +1976,11 @@ impl Interp {
             NativeMethod::ListFormatResolvedOptions => {
                 let inst = match this.value {
                     Payload::Reference(r) if self.list_formats.contains_key(&r) => r,
-                    _ => return Err(self.catchable_type_error()),
+                    _ => {
+                        return Err(self.catchable_type_error_msg(
+                            "Intl.ListFormat: incompatible receiver".into(),
+                        ))
+                    }
                 };
                 let data = self.list_formats[&inst].clone();
                 let result = self.slots.alloc(Slot::instance(self.object_proto));
@@ -1916,7 +1995,11 @@ impl Interp {
             NativeMethod::PluralRulesSelect => {
                 let inst = match this.value {
                     Payload::Reference(r) if self.plural_rules.contains_key(&r) => r,
-                    _ => return Err(self.catchable_type_error()),
+                    _ => {
+                        return Err(self.catchable_type_error_msg(
+                            "Intl.PluralRules: incompatible receiver".into(),
+                        ))
+                    }
                 };
                 let data = self.plural_rules[&inst].clone();
                 let number = self.to_number_value(code, arg0)?;
@@ -1927,7 +2010,11 @@ impl Interp {
             NativeMethod::PluralRulesSelectRange => {
                 let inst = match this.value {
                     Payload::Reference(r) if self.plural_rules.contains_key(&r) => r,
-                    _ => return Err(self.catchable_type_error()),
+                    _ => {
+                        return Err(self.catchable_type_error_msg(
+                            "Intl.PluralRules: incompatible receiver".into(),
+                        ))
+                    }
                 };
                 let data = self.plural_rules[&inst].clone();
                 let start_arg = arg0;
@@ -1937,12 +2024,16 @@ impl Interp {
                     .copied()
                     .unwrap_or_else(Slot::undefined);
                 if start_arg.kind == Kind::Undefined || end_arg.kind == Kind::Undefined {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg(
+                        "Intl.PluralRules.selectRange: endpoints are required".into(),
+                    ));
                 }
                 let start = to_number(&self.to_number_value(code, start_arg)?);
                 let end = to_number(&self.to_number_value(code, end_arg)?);
                 if start.is_nan() || end.is_nan() {
-                    return Err(self.catchable_range_error());
+                    return Err(self.catchable_range_error_msg(
+                        "Intl.PluralRules.selectRange: endpoints must not be NaN".into(),
+                    ));
                 }
                 // PluralRuleSelectRange: without CLDR range data, fall back to
                 // the plural category of the end value (correct for the tested
@@ -1953,7 +2044,11 @@ impl Interp {
             NativeMethod::PluralRulesResolvedOptions => {
                 let inst = match this.value {
                     Payload::Reference(r) if self.plural_rules.contains_key(&r) => r,
-                    _ => return Err(self.catchable_type_error()),
+                    _ => {
+                        return Err(self.catchable_type_error_msg(
+                            "Intl.PluralRules: incompatible receiver".into(),
+                        ))
+                    }
                 };
                 let data = self.plural_rules[&inst].clone();
                 let result = self.slots.alloc(Slot::instance(self.object_proto));
@@ -2037,7 +2132,11 @@ impl Interp {
             NativeMethod::NumberFormatFormat => {
                 let inst = match this.value {
                     Payload::Reference(r) if self.number_formats.contains_key(&r) => r,
-                    _ => return Err(self.catchable_type_error()),
+                    _ => {
+                        return Err(self.catchable_type_error_msg(
+                            "Intl.NumberFormat: incompatible receiver".into(),
+                        ))
+                    }
                 };
                 let n = to_number(&self.to_number_value(code, arg0)?);
                 let resolved = self.nf_resolved(&self.number_formats[&inst].clone());
@@ -2052,7 +2151,11 @@ impl Interp {
                 // reverse side table the bound call handler consults.
                 let inst = match this.value {
                     Payload::Reference(r) if self.number_formats.contains_key(&r) => r,
-                    _ => return Err(self.catchable_type_error()),
+                    _ => {
+                        return Err(self.catchable_type_error_msg(
+                            "Intl.NumberFormat: incompatible receiver".into(),
+                        ))
+                    }
                 };
                 let function = match self.number_formats[&inst].bound_format {
                     Some(f) => f,
@@ -2077,11 +2180,19 @@ impl Interp {
                     .unwrap_or_else(Slot::undefined);
                 let f = match function.value {
                     Payload::Reference(r) => r,
-                    _ => return Err(self.catchable_type_error()),
+                    _ => {
+                        return Err(self.catchable_type_error_msg(
+                            "Intl.NumberFormat.format: invalid bound function".into(),
+                        ))
+                    }
                 };
                 let inst = match self.number_format_bound_functions.get(&f).copied() {
                     Some(inst) => inst,
-                    None => return Err(self.catchable_type_error()),
+                    None => {
+                        return Err(self.catchable_type_error_msg(
+                            "Intl.NumberFormat.format: invalid bound function".into(),
+                        ))
+                    }
                 };
                 let n = to_number(&self.to_number_value(code, arg0)?);
                 let resolved = self.nf_resolved(&self.number_formats[&inst].clone());
@@ -2091,7 +2202,11 @@ impl Interp {
             NativeMethod::NumberFormatFormatToParts => {
                 let inst = match this.value {
                     Payload::Reference(r) if self.number_formats.contains_key(&r) => r,
-                    _ => return Err(self.catchable_type_error()),
+                    _ => {
+                        return Err(self.catchable_type_error_msg(
+                            "Intl.NumberFormat: incompatible receiver".into(),
+                        ))
+                    }
                 };
                 let n = to_number(&self.to_number_value(code, arg0)?);
                 let resolved = self.nf_resolved(&self.number_formats[&inst].clone());
@@ -2104,7 +2219,11 @@ impl Interp {
                 // yet modeled; self-name an honest skip rather than mis-execute.
                 let _inst = match this.value {
                     Payload::Reference(r) if self.number_formats.contains_key(&r) => r,
-                    _ => return Err(self.catchable_type_error()),
+                    _ => {
+                        return Err(self.catchable_type_error_msg(
+                            "Intl.NumberFormat: incompatible receiver".into(),
+                        ))
+                    }
                 };
                 return Err(Step::Host(Halt::NotImplemented(
                     "Intl.NumberFormat:formatRange",
@@ -2113,7 +2232,11 @@ impl Interp {
             NativeMethod::NumberFormatResolvedOptions => {
                 let inst = match this.value {
                     Payload::Reference(r) if self.number_formats.contains_key(&r) => r,
-                    _ => return Err(self.catchable_type_error()),
+                    _ => {
+                        return Err(self.catchable_type_error_msg(
+                            "Intl.NumberFormat: incompatible receiver".into(),
+                        ))
+                    }
                 };
                 let data = self.number_formats[&inst].clone();
                 let result = self.slots.alloc(Slot::instance(self.object_proto));
@@ -2207,7 +2330,11 @@ impl Interp {
             NativeMethod::SegmenterSegment => {
                 let inst = match this.value {
                     Payload::Reference(r) if self.segmenters.contains_key(&r) => r,
-                    _ => return Err(self.catchable_type_error()),
+                    _ => {
+                        return Err(self.catchable_type_error_msg(
+                            "Intl.Segmenter: incompatible receiver".into(),
+                        ))
+                    }
                 };
                 let granularity = self.segmenters[&inst].granularity.clone();
                 let units = self.to_string_units(code, arg0)?;
@@ -2224,7 +2351,11 @@ impl Interp {
             NativeMethod::SegmenterResolvedOptions => {
                 let inst = match this.value {
                     Payload::Reference(r) if self.segmenters.contains_key(&r) => r,
-                    _ => return Err(self.catchable_type_error()),
+                    _ => {
+                        return Err(self.catchable_type_error_msg(
+                            "Intl.Segmenter: incompatible receiver".into(),
+                        ))
+                    }
                 };
                 let data = self.segmenters[&inst].clone();
                 let result = self.slots.alloc(Slot::instance(self.object_proto));
@@ -2237,7 +2368,11 @@ impl Interp {
             NativeMethod::SegmentsIterator => {
                 let inst = match this.value {
                     Payload::Reference(r) if self.segments.contains_key(&r) => r,
-                    _ => return Err(self.catchable_type_error()),
+                    _ => {
+                        return Err(self.catchable_type_error_msg(
+                            "Intl.Segments: incompatible receiver".into(),
+                        ))
+                    }
                 };
                 let it = self
                     .slots
@@ -2255,7 +2390,11 @@ impl Interp {
             NativeMethod::SegmentIteratorNext => {
                 let it = match this.value {
                     Payload::Reference(r) if self.segment_iterators.contains_key(&r) => r,
-                    _ => return Err(self.catchable_type_error()),
+                    _ => {
+                        return Err(self.catchable_type_error_msg(
+                            "Intl.SegmentIterator: incompatible receiver".into(),
+                        ))
+                    }
                 };
                 let (segments_inst, pos) = {
                     let s = &self.segment_iterators[&it];
@@ -2277,7 +2416,11 @@ impl Interp {
             NativeMethod::SegmentsContaining => {
                 let inst = match this.value {
                     Payload::Reference(r) if self.segments.contains_key(&r) => r,
-                    _ => return Err(self.catchable_type_error()),
+                    _ => {
+                        return Err(self.catchable_type_error_msg(
+                            "Intl.Segments: incompatible receiver".into(),
+                        ))
+                    }
                 };
                 let n = self.to_number_value(code, arg0)?;
                 let idx = to_number(&n).trunc();
@@ -2333,7 +2476,11 @@ impl Interp {
                 let proxy = self.make_proxy(target, handler)?;
                 let proxy_inst = match proxy.value {
                     Payload::Reference(p) => p,
-                    _ => return Err(self.catchable_type_error()),
+                    _ => {
+                        return Err(self.catchable_type_error_msg(
+                            "Proxy.revocable: invalid proxy result".into(),
+                        ))
+                    }
                 };
                 let revoke = self.alloc_method(NativeMethod::ProxyRevoke);
                 self.proxy_revokers.insert(revoke, proxy_inst);
@@ -2534,7 +2681,11 @@ impl Interp {
                     });
                     return Err(error);
                 }
-                _ => return Err(self.catchable_type_error()),
+                _ => {
+                    return Err(self.catchable_type_error_msg(
+                        "Object.valueOf: cannot convert receiver to object".into(),
+                    ))
+                }
             },
             // `<wrapper>.valueOf`: the wrapped primitive.
             NativeMethod::WrapperValueOf => match this.value {
@@ -2783,7 +2934,8 @@ impl Interp {
                     n as u32
                 };
                 let Payload::BigInt(off) = value.value else {
-                    return Err(self.catchable_type_error());
+                    return Err(self
+                        .catchable_type_error_msg("BigInt.asIntN: value must be a BigInt".into()));
                 };
                 let (negative, magnitude) = self.read_bigint(off);
                 let rendered = bi_to_radix(self, negative, &magnitude, radix)?;
@@ -2804,7 +2956,9 @@ impl Interp {
                     .copied()
                     .unwrap_or_else(Slot::undefined);
                 let Payload::BigInt(off) = value.value else {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg(
+                        "BigInt.asUintN: value must be a BigInt".into(),
+                    ));
                 };
                 let (negative, magnitude) = self.read_bigint(off);
                 let digits = bi_to_decimal(false, &magnitude);
@@ -2898,7 +3052,11 @@ impl Interp {
                             object = parent;
                         }
                         (Kind::Null, _) => break Slot::boolean(false),
-                        _ => return Err(self.catchable_type_error()),
+                        _ => {
+                            return Err(self.catchable_type_error_msg(
+                                "instanceof: prototype chain contains a non-object".into(),
+                            ))
+                        }
                     }
                 }
             }
@@ -6141,7 +6299,11 @@ impl Interp {
                     }
                     // Spec requires an object. XS boxes other primitives and
                     // can complete, so this guard has no XS error counterpart.
-                    _ => return Err(self.catchable_type_error()),
+                    _ => {
+                        return Err(self.catchable_type_error_msg(
+                            "RegExp.toString: receiver must be an object".into(),
+                        ))
+                    }
                 };
                 let source_id = self.intern_static_key("source");
                 let flags_id = self.intern_static_key("flags");

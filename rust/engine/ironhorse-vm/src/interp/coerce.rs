@@ -819,7 +819,9 @@ impl Interp {
     ) -> Result<Slot, Step> {
         let inst = match value.value {
             Payload::Reference(inst) if value.kind == Kind::Reference => inst,
-            _ => return Err(self.catchable_type_error()),
+            _ => {
+                return Err(self.catchable_type_error_msg("ToPrimitive: expected an object".into()))
+            }
         };
         let names = if string_hint {
             ["toString", "valueOf"]

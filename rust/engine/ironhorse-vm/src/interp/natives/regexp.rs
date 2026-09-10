@@ -170,7 +170,9 @@ impl Interp {
             if reject_nullish && matches!(flags.kind, Kind::Undefined | Kind::Null) {
                 // Keep RequireObjectCoercible from the spec. Pinned XS instead
                 // stringifies these values and reports its missing-global-flag error.
-                return Err(self.catchable_type_error());
+                return Err(self.catchable_type_error_msg(
+                    "RegExp: flags must not be null or undefined".into(),
+                ));
             }
             return self.to_string_units(code, flags);
         }
@@ -745,7 +747,11 @@ impl Interp {
             self.construct_value(code, constructor, &[regexp, flags_slot], constructor)?;
         let splitter_inst = match splitter.value {
             Payload::Reference(inst) if splitter.kind == Kind::Reference => inst,
-            _ => return Err(self.catchable_type_error()),
+            _ => {
+                return Err(self.catchable_type_error_msg(
+                    "RegExp.split: species constructor must return an object".into(),
+                ))
+            }
         };
 
         let array = self.new_array();
@@ -849,7 +855,11 @@ impl Interp {
             self.construct_value(code, constructor, &[regexp, flags_slot], constructor)?;
         let matcher_inst = match matcher.value {
             Payload::Reference(inst) if matcher.kind == Kind::Reference => inst,
-            _ => return Err(self.catchable_type_error()),
+            _ => {
+                return Err(self.catchable_type_error_msg(
+                    "RegExp.matchAll: species constructor must return an object".into(),
+                ))
+            }
         };
         let last_index = self.regexp_last_index_length(code, regexp_inst)?;
         let last_index_id = self.regexp_last_index_id();

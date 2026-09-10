@@ -1347,7 +1347,10 @@ impl Interp {
             }
             // XS reads `next` from boxed primitives and can proceed through
             // their prototypes. Keep the spec-only object guard distinct.
-            _ => return Err(self.catchable_type_error()),
+            _ => {
+                return Err(self
+                    .catchable_type_error_msg("Set operation: iterator must be an object".into()))
+            }
         };
         let next_id = self.intern_static_key("next");
         let next = self.ordinary_get(code, iter_inst, next_id, iter)?;

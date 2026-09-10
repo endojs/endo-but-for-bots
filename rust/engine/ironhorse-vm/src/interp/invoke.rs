@@ -267,7 +267,9 @@ impl Interp {
                     _ => crate::value::SlotIndex::NULL,
                 };
                 if proto.is_null() {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg(
+                        "method receiver has no intrinsic prototype".into(),
+                    ));
                 }
                 self.mop_get(code, proto, id, value)?
             }
@@ -560,7 +562,7 @@ impl Interp {
     ) -> Result<Slot, Step> {
         let f = match func.value {
             Payload::Reference(f) if self.functions.contains_key(&f) => f,
-            _ => return Err(self.catchable_type_error()),
+            _ => return Err(self.catchable_type_error_msg("construct: not a constructor".into())),
         };
         if self.functions[&f].native.is_some()
             || self.functions[&f].method.is_some()

@@ -7,7 +7,11 @@ impl Interp {
     pub(super) fn arraylike_to_vec(&mut self, code: &[u8], value: Slot) -> Result<Vec<Slot>, Step> {
         let inst = match value.value {
             Payload::Reference(i) if value.kind == Kind::Reference => i,
-            _ => return Err(self.catchable_type_error()),
+            _ => {
+                return Err(
+                    self.catchable_type_error_msg("array-like value must be an object".into())
+                )
+            }
         };
         let length = self.arraylike_length(code, inst, value)?;
         let len = self.to_length_value(code, length)?;

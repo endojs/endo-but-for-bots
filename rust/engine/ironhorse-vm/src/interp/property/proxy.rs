@@ -102,7 +102,9 @@ impl Interp {
             }
             // The pinned XS boxes other primitives here; retain the ECMA
             // object requirement until that semantic divergence is resolved.
-            _ => return Err(self.catchable_type_error()),
+            _ => {
+                return Err(self.catchable_type_error_msg("Proxy: target must be an object".into()))
+            }
         };
         let length = self.arraylike_length(code, inst, value)?;
         let len = self.to_length_value(code, length)?;

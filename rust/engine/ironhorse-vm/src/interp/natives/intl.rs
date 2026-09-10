@@ -18,11 +18,13 @@ impl Interp {
             value
         };
         if primitive.kind != Kind::String {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg(
+                "Intl: locale must be a string or string-convertible object".into(),
+            ));
         }
         match primitive.value {
             Payload::String(off) => Ok(self.str_text(off)),
-            _ => Err(self.catchable_type_error()),
+            _ => Err(self.catchable_type_error_msg("Intl: locale must be a string".into())),
         }
     }
 
@@ -71,7 +73,7 @@ impl Interp {
         for item in values {
             let raw = self.intl_locale_argument(code, item)?;
             let canonical = canonicalize_locale(&raw)
-                .ok_or_else(|| self.catchable_range_error())?
+                .ok_or_else(|| self.catchable_range_error_msg("Intl: invalid language tag".into()))?
                 .tag;
             if !result.contains(&canonical) {
                 result.push(canonical);
@@ -126,19 +128,25 @@ impl Interp {
     ) -> Result<(), Step> {
         if let Some(language) = self.intl_option_string(code, options, "language")? {
             if !valid_language(&language) {
-                return Err(self.catchable_range_error());
+                return Err(
+                    self.catchable_range_error_msg("Intl.Locale: invalid language option".into())
+                );
             }
             locale.language = language.to_ascii_lowercase();
         }
         if let Some(script) = self.intl_option_string(code, options, "script")? {
             if !valid_script(&script) {
-                return Err(self.catchable_range_error());
+                return Err(
+                    self.catchable_range_error_msg("Intl.Locale: invalid script option".into())
+                );
             }
             locale.script = Some(titlecase_ascii(&script));
         }
         if let Some(region) = self.intl_option_string(code, options, "region")? {
             if !valid_region(&region) {
-                return Err(self.catchable_range_error());
+                return Err(
+                    self.catchable_range_error_msg("Intl.Locale: invalid region option".into())
+                );
             }
             locale.region = Some(region.to_ascii_uppercase());
         }
@@ -159,7 +167,9 @@ impl Interp {
                 if !valid_unicode_type(&value)
                     || (!allowed.is_empty() && !allowed.contains(&value.as_str()))
                 {
-                    return Err(self.catchable_range_error());
+                    return Err(self.catchable_range_error_msg(format!(
+                        "Intl.Locale: invalid {option} option"
+                    )));
                 }
                 locale.unicode.insert(key.to_string(), value);
             }
@@ -198,7 +208,9 @@ impl Interp {
                 if (!allowed.is_empty() && !allowed.contains(&value.as_str()))
                     || (name == "collation" && !valid_unicode_type(&value))
                 {
-                    return Err(self.catchable_range_error());
+                    return Err(self.catchable_range_error_msg(format!(
+                        "Intl.Collator: invalid {name} option"
+                    )));
                 }
                 *target = value;
             }
@@ -223,9 +235,9 @@ impl Interp {
             Kind::Undefined => Ok(None),
             Kind::Reference => match options_arg.value {
                 Payload::Reference(r) => Ok(Some(r)),
-                _ => Err(self.catchable_type_error()),
+                _ => Err(self.catchable_type_error_msg("Intl: options must be an object".into())),
             },
-            _ => Err(self.catchable_type_error()),
+            _ => Err(self.catchable_type_error_msg("Intl: options must be an object".into())),
         }
     }
 
@@ -253,7 +265,7 @@ impl Interp {
         if allowed.iter().any(|a| *a == text) {
             Ok(text)
         } else {
-            Err(self.catchable_range_error())
+            Err(self.catchable_range_error_msg(format!("Intl: invalid {name} option")))
         }
     }
 
@@ -282,7 +294,9 @@ impl Interp {
         let n = self.to_number_value(code, value)?;
         let number = to_number(&n);
         if number.is_nan() || number < minimum || number > maximum {
-            return Err(self.catchable_range_error());
+            return Err(self.catchable_range_error_msg(format!(
+                "Intl: {name} must be between {minimum} and {maximum}"
+            )));
         }
         Ok(Some(number.floor() as u32))
     }
@@ -300,8 +314,9 @@ impl Interp {
         let requested = self.intl_first_locale(code, locale_arg)?;
         match requested {
             Some(raw) => {
-                let locale =
-                    canonicalize_locale(&raw).ok_or_else(|| self.catchable_range_error())?;
+                let locale = canonicalize_locale(&raw).ok_or_else(|| {
+                    self.catchable_range_error_msg("Intl: invalid language tag".into())
+                })?;
                 Ok(locale_base_name(&locale))
             }
             None => Ok("en".to_string()),
@@ -358,7 +373,8 @@ impl Interp {
         if allowed.iter().any(|a| *a == text) {
             Ok(Some(text))
         } else {
-            Err(self.catchable_range_error())
+            Err(self
+                .catchable_range_error_msg(format!("Intl.DateTimeFormat: invalid {name} option")))
         }
     }
 
@@ -375,7 +391,9 @@ impl Interp {
         let requested = self.intl_first_locale(code, locale_arg)?;
         let (locale_base, ext) = match &requested {
             Some(raw) => {
-                let loc = canonicalize_locale(raw).ok_or_else(|| self.catchable_range_error())?;
+                let loc = canonicalize_locale(raw).ok_or_else(|| {
+                    self.catchable_range_error_msg("Intl: invalid language tag".into())
+                })?;
                 (locale_base_name(&loc), loc.unicode.clone())
             }
             None => ("en".to_string(), std::collections::BTreeMap::new()),
@@ -397,14 +415,18 @@ impl Interp {
             if let Some(v) = self.intl_option_string(code, opts, "calendar")? {
                 let v = v.to_ascii_lowercase();
                 if !valid_unicode_type(&v) {
-                    return Err(self.catchable_range_error());
+                    return Err(self.catchable_range_error_msg(
+                        "Intl.DateTimeFormat: invalid calendar option".into(),
+                    ));
                 }
                 calendar = Some(v);
             }
             if let Some(v) = self.intl_option_string(code, opts, "numberingSystem")? {
                 let v = v.to_ascii_lowercase();
                 if !valid_unicode_type(&v) {
-                    return Err(self.catchable_range_error());
+                    return Err(self.catchable_range_error_msg(
+                        "Intl.DateTimeFormat: invalid numberingSystem option".into(),
+                    ));
                 }
                 numbering = Some(v);
             }
@@ -426,7 +448,11 @@ impl Interp {
         // timeZone: default UTC, else canonicalize the requested identifier.
         let (time_zone, offset_minutes) = match options {
             Some(opts) => match self.intl_option_string(code, opts, "timeZone")? {
-                Some(raw) => resolve_time_zone(&raw).ok_or_else(|| self.catchable_range_error())?,
+                Some(raw) => resolve_time_zone(&raw).ok_or_else(|| {
+                    self.catchable_range_error_msg(
+                        "Intl.DateTimeFormat: invalid or unsupported timeZone".into(),
+                    )
+                })?,
                 None => ("UTC".to_string(), 0),
             },
             None => ("UTC".to_string(), 0),
@@ -506,7 +532,10 @@ impl Interp {
         }
         // A dateStyle/timeStyle cannot combine with explicit components.
         if (date_style.is_some() || time_style.is_some()) && any_component {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg(
+                "Intl.DateTimeFormat: dateStyle/timeStyle cannot be combined with components"
+                    .into(),
+            ));
         }
         // Default: with neither style nor components, the date defaults to
         // numeric year/month/day (ToDateTimeOptions "date" required, "any").
@@ -570,7 +599,10 @@ impl Interp {
     ) -> Result<Slot, Step> {
         let inst = match this.value {
             Payload::Reference(r) if self.date_time_formats.contains_key(&r) => r,
-            _ => return Err(self.catchable_type_error()),
+            _ => {
+                return Err(self
+                    .catchable_type_error_msg("Intl.DateTimeFormat: incompatible receiver".into()))
+            }
         };
         let data = self.date_time_formats[&inst].clone();
         match m {
@@ -593,7 +625,9 @@ impl Interp {
             NativeMethod::DateTimeFormatFormatRange
             | NativeMethod::DateTimeFormatFormatRangeToParts => {
                 if arg0.kind == Kind::Undefined || arg1.kind == Kind::Undefined {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg(
+                        "Intl.DateTimeFormat: range endpoints are required".into(),
+                    ));
                 }
                 let t1 = self.date_time_arg_to_time(code, arg0)?;
                 let t2 = self.date_time_arg_to_time(code, arg1)?;
@@ -623,7 +657,8 @@ impl Interp {
             to_number(&v)
         };
         if !n.is_finite() || n.abs() > 8.64e15 {
-            return Err(self.catchable_range_error());
+            return Err(self
+                .catchable_range_error_msg("Intl.DateTimeFormat: time value out of range".into()));
         }
         Ok(n.trunc())
     }
@@ -719,7 +754,8 @@ impl Interp {
     fn list_element_string(&mut self, value: Slot) -> Result<String, Step> {
         match value.value {
             Payload::String(off) if value.kind == Kind::String => Ok(self.str_text(off)),
-            _ => Err(self.catchable_type_error()),
+            _ => Err(self
+                .catchable_type_error_msg("Intl.ListFormat: list elements must be strings".into())),
         }
     }
 
@@ -744,7 +780,11 @@ impl Interp {
         }
         let obj = match iterable.value {
             Payload::Reference(r) => r,
-            _ => return Err(self.catchable_type_error()),
+            _ => {
+                return Err(
+                    self.catchable_type_error_msg("Intl.ListFormat: expected an iterable".into())
+                )
+            }
         };
         // GetIterator: a guest-defined `@@iterator` takes precedence. Arrays and
         // the intrinsic array iterators do not expose `@@iterator`/`next` as
@@ -806,12 +846,18 @@ impl Interp {
                     return Ok(result);
                 }
             }
-            return Err(self.catchable_type_error());
+            return Err(
+                self.catchable_type_error_msg("Intl.ListFormat: expected an iterable".into())
+            );
         }
         let iterator = self.call_primitive_method(code, custom, iterable, &[])?;
         let iterator_inst = match iterator.value {
             Payload::Reference(r) => r,
-            _ => return Err(self.catchable_type_error()),
+            _ => {
+                return Err(self.catchable_type_error_msg(
+                    "Intl.ListFormat: iterator must be an object".into(),
+                ))
+            }
         };
         let next_id = self.intern_static_key("next");
         let value_id = match self.value_id {
@@ -830,7 +876,11 @@ impl Interp {
             let step = self.call_primitive_method(code, next_method, iterator, &[])?;
             let step_inst = match step.value {
                 Payload::Reference(r) => r,
-                _ => return Err(self.catchable_type_error()),
+                _ => {
+                    return Err(self.catchable_type_error_msg(
+                        "Intl.ListFormat: iterator result must be an object".into(),
+                    ))
+                }
             };
             let done = self.ordinary_get(code, step_inst, done_id, step)?;
             if self.truthy(&done) {
@@ -842,15 +892,21 @@ impl Interp {
                 // iterator has no `return` method, so closing is a no-op, and
                 // the observable effect is the TypeError with the iterator left
                 // where it stopped.
-                return Err(self.catchable_type_error());
+                return Err(self.catchable_type_error_msg(
+                    "Intl.ListFormat: list elements must be strings".into(),
+                ));
             }
             let s = match value.value {
                 Payload::String(off) => self.str_text(off),
-                _ => return Err(self.catchable_type_error()),
+                _ => {
+                    return Err(self.catchable_type_error_msg(
+                        "Intl.ListFormat: list elements must be strings".into(),
+                    ))
+                }
             };
             result.push(s);
         }
-        Err(self.catchable_range_error())
+        Err(self.catchable_range_error_msg("Intl.ListFormat: iteration limit exceeded".into()))
     }
 
     /// `SetNumberFormatDigitOptions(intlObj, options, mnfdDefault, mxfdDefault,
@@ -896,7 +952,8 @@ impl Interp {
             1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 2500, 5000,
         ];
         if !VALID_INCREMENTS.contains(&rounding_increment) {
-            return Err(self.catchable_range_error());
+            return Err(self
+                .catchable_range_error_msg("Intl.NumberFormat: invalid roundingIncrement".into()));
         }
         data.rounding_increment = rounding_increment;
         data.rounding_mode = self.intl_get_option_enum(
@@ -941,7 +998,10 @@ impl Interp {
             let rmnsd = mnsd.unwrap_or(1);
             let rmxsd = mxsd.unwrap_or(21);
             if rmnsd > rmxsd {
-                return Err(self.catchable_range_error());
+                return Err(self.catchable_range_error_msg(
+                    "Intl.NumberFormat: minimumSignificantDigits exceeds maximumSignificantDigits"
+                        .into(),
+                ));
             }
             data.minimum_significant_digits = Some(rmnsd);
             data.maximum_significant_digits = Some(rmxsd);
@@ -951,7 +1011,7 @@ impl Interp {
             let (rmnfd, rmxfd) = match (mnfd, mxfd) {
                 (Some(a), Some(b)) => {
                     if a > b {
-                        return Err(self.catchable_range_error());
+                        return Err(self.catchable_range_error_msg("Intl.NumberFormat: minimumFractionDigits exceeds maximumFractionDigits".into()));
                     }
                     (a, b)
                 }
@@ -1004,7 +1064,9 @@ impl Interp {
         let requested = self.intl_first_locale(code, locale_arg)?;
         let (locale_base, ext) = match &requested {
             Some(raw) => {
-                let loc = canonicalize_locale(raw).ok_or_else(|| self.catchable_range_error())?;
+                let loc = canonicalize_locale(raw).ok_or_else(|| {
+                    self.catchable_range_error_msg("Intl: invalid language tag".into())
+                })?;
                 (locale_base_name(&loc), loc.unicode.clone())
             }
             None => ("en".to_string(), std::collections::BTreeMap::new()),
@@ -1024,7 +1086,9 @@ impl Interp {
             if let Some(v) = self.intl_option_string(code, opts, "numberingSystem")? {
                 let v = v.to_ascii_lowercase();
                 if !valid_unicode_type(&v) {
-                    return Err(self.catchable_range_error());
+                    return Err(self.catchable_range_error_msg(
+                        "Intl.NumberFormat: invalid numberingSystem option".into(),
+                    ));
                 }
                 numbering = Some(v);
             }
@@ -1050,12 +1114,16 @@ impl Interp {
         if let Some(o) = options {
             if let Some(c) = self.intl_option_string(code, o, "currency")? {
                 if !is_well_formed_currency_code(&c) {
-                    return Err(self.catchable_range_error());
+                    return Err(self.catchable_range_error_msg(
+                        "Intl.NumberFormat: invalid currency code".into(),
+                    ));
                 }
                 currency = Some(c.to_ascii_uppercase());
             }
             if style == "currency" && currency.is_none() {
-                return Err(self.catchable_type_error());
+                return Err(self.catchable_type_error_msg(
+                    "Intl.NumberFormat: currency is required for currency style".into(),
+                ));
             }
             currency_display = self.intl_get_option_enum(
                 code,
@@ -1073,12 +1141,16 @@ impl Interp {
             )?;
             if let Some(u) = self.intl_option_string(code, o, "unit")? {
                 if !is_well_formed_unit_identifier(&u) {
-                    return Err(self.catchable_range_error());
+                    return Err(self.catchable_range_error_msg(
+                        "Intl.NumberFormat: invalid unit identifier".into(),
+                    ));
                 }
                 unit = Some(u);
             }
             if style == "unit" && unit.is_none() {
-                return Err(self.catchable_type_error());
+                return Err(self.catchable_type_error_msg(
+                    "Intl.NumberFormat: unit is required for unit style".into(),
+                ));
             }
             unit_display = self.intl_get_option_enum(
                 code,
@@ -1089,7 +1161,9 @@ impl Interp {
             )?;
         } else if style == "currency" || style == "unit" {
             // Unreachable — style defaults to decimal when no options object.
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg(
+                "Intl.NumberFormat: currency or unit option is required".into(),
+            ));
         }
 
         let (mnfd_default, mxfd_default) = if style == "currency" {
@@ -1230,7 +1304,8 @@ impl Interp {
         if matches!(text.as_str(), "min2" | "auto" | "always") {
             Ok(text)
         } else {
-            Err(self.catchable_range_error())
+            Err(self
+                .catchable_range_error_msg("Intl.NumberFormat: invalid useGrouping option".into()))
         }
     }
 

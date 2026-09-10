@@ -665,7 +665,11 @@ impl Interp {
             }
             let units = match key.value {
                 Payload::String(offset) if key.kind == Kind::String => self.str_units(offset),
-                _ => return Err(self.catchable_type_error()),
+                _ => {
+                    return Err(self.catchable_type_error_msg(
+                        "JSON.stringify: own property key must be a string or symbol".into(),
+                    ))
+                }
             };
             let key_id = self.to_read_key(code, key)?;
             if self

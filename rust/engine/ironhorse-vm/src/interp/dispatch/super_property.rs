@@ -53,9 +53,9 @@ impl Interp {
         // TypeError to GetValue (ECMA-262 6.2.5.5 via ToObject).
         // XS rejects earlier in SUPER_AT, before coercing the key,
         // and formats the prior opcode's ID. Keep this spec-ordered
-        // guard bare rather than invent a corresponding XS text.
+        // guard with an engine diagnostic rather than an XS parity claim.
         if super_ref.next.is_null() {
-            let error = self.build_error("TypeError", 0, 0);
+            let error = self.internal_error("TypeError", "get super: base is null".into());
             return Err(self.raise_js(error));
         }
         let value = (match read_key {
@@ -120,7 +120,7 @@ impl Interp {
         // XS rejects earlier in SUPER_AT using the prior opcode's
         // ID; there is no corresponding stable diagnostic here.
         if super_ref.next.is_null() {
-            let error = self.build_error("TypeError", 0, 0);
+            let error = self.internal_error("TypeError", "set super: base is null".into());
             return Err(self.raise_js(error));
         }
         let accepted = (self.ordinary_set(code, super_ref.next, id, value, receiver))?;

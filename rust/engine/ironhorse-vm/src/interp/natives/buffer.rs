@@ -504,7 +504,11 @@ impl Interp {
                 Payload::Reference(_) if items.kind == Kind::Reference => items,
                 _ => match self.from_async_box_primitive(items) {
                     Some(object) => Slot::of(Kind::Reference, Payload::Reference(object)),
-                    None => return Err(self.catchable_type_error()),
+                    None => {
+                        return Err(self.catchable_type_error_msg(
+                            "TypedArray.from: cannot convert source to object".into(),
+                        ))
+                    }
                 },
             };
             let array_like_inst = match array_like.value {
@@ -636,14 +640,20 @@ impl Interp {
         let result = self.construct_value(code, constructor, args, constructor)?;
         let result_ref = match result.value {
             Payload::Reference(reference) if result.kind == Kind::Reference => reference,
-            _ => return Err(self.catchable_type_error()),
+            _ => {
+                return Err(self.catchable_type_error_msg(
+                    "TypedArray species constructor must return an object".into(),
+                ))
+            }
         };
         let target = self.validate_typed_array(result)?;
         // Preserve the spec content-domain guard. Pinned XS defers this to
         // element coercion, so empty/mapped cross-domain species can succeed;
         // there is no corresponding XS diagnostic for this earlier error.
         if (source.kind <= 1) != (target.kind <= 1) {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg(
+                "TypedArray species must preserve the Number or BigInt element domain".into(),
+            ));
         }
         if minimum_length.is_some_and(|minimum| target.length < minimum) {
             return Err(
@@ -724,7 +734,11 @@ impl Interp {
             let byte_offset = source
                 .offset
                 .checked_add(begin.saturating_mul(element_size))
-                .ok_or_else(|| self.catchable_range_error())?;
+                .ok_or_else(|| {
+                    self.catchable_range_error_msg(
+                        "TypedArray.subarray: byte offset out of range".into(),
+                    )
+                })?;
             let buffer = Slot::of(Kind::Reference, Payload::Reference(source.buffer));
             let args = [
                 buffer,
@@ -1237,7 +1251,10 @@ impl Interp {
                         // Keep the spec's content-domain guard; pinned XS only
                         // rejects when an element conversion encounters the mismatch.
                         if (ta.kind <= 1) != (src.kind <= 1) {
-                            return Err(self.catchable_type_error());
+                            return Err(self.catchable_type_error_msg(
+                                "TypedArray.set: Number and BigInt element domains cannot be mixed"
+                                    .into(),
+                            ));
                         }
                         if src.length > ta.length.saturating_sub(offset) || offset > ta.length {
                             return Err(self.catchable_range_error_msg("invalid offset".into()));
@@ -1428,7 +1445,11 @@ impl Interp {
                     self.catchable_type_error_msg(format!("cannot coerce{symbol} to {target}"))
                 );
             }
-            _ => return Err(self.catchable_type_error()),
+            _ => {
+                return Err(self.catchable_type_error_msg(
+                    "TypedArray: element cannot be converted to a number".into(),
+                ))
+            }
         };
         let n = numeric_of(&number).unwrap_or(f64::NAN);
         encode_element_le(kind, n).ok_or(Step::Host(Halt::NotImplemented("typed-array-set:bigint")))
@@ -1597,7 +1618,11 @@ impl Interp {
                     self.catchable_type_error_msg(format!("cannot coerce{symbol} to {target}"))
                 );
             }
-            _ => return Err(self.catchable_type_error()),
+            _ => {
+                return Err(self.catchable_type_error_msg(
+                    "TypedArray: value cannot be converted to a number".into(),
+                ))
+            }
         };
         if let Some(index) = self.ta_valid_index(ta, n) {
             let size = TYPED_ARRAY_TYPES[ta.kind as usize].size as usize;

@@ -205,9 +205,9 @@ impl Interp {
         Ok(())
     }
 
-    /// An **engine-internal** error carrying XS's descriptive message text
-    /// (the `mxRunDebug`/`mxRunDebugID` diagnostics the pinned oracle emits,
-    /// e.g. `"get f: undefined variable"`). Built exactly like
+    /// An engine-internal error with a diagnostic message. Callers supply
+    /// oracle-pinned text where available and profile-specific diagnostics
+    /// otherwise. Built exactly like
     /// `build_error(name, 0, 0)` — same object geometry, prototype chain, and
     /// meter charge — then augmented with the message in construction metadata
     /// and as a real own non-enumerable `message` property (so `err.message`
@@ -498,14 +498,9 @@ impl Interp {
         }
     }
 
-    /// Raise an XS RangeError diagnostic through the guest jump chain.
+    /// Raise a RangeError diagnostic through the guest jump chain.
     pub(super) fn catchable_range_error_msg(&mut self, message: String) -> Step {
         let error = self.internal_error("RangeError", message);
-        self.raise_js(error)
-    }
-
-    pub(super) fn catchable_range_error(&mut self) -> Step {
-        let error = self.build_error("RangeError", 0, 0);
         self.raise_js(error)
     }
 }

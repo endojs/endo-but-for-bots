@@ -143,7 +143,11 @@ impl Interp {
                     object = parent;
                 }
                 (Kind::Null, _) => return Ok(false),
-                _ => return Err(self.catchable_type_error()),
+                _ => {
+                    return Err(self.catchable_type_error_msg(
+                        "instanceof: prototype chain contains a non-object".into(),
+                    ))
+                }
             }
         }
     }

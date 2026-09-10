@@ -28,8 +28,9 @@ impl Interp {
                 let accepted = (self.proxy_set(code, inst, id, value, obj))?;
                 if !accepted && self.strict {
                     // XS ignores a false set-trap result here. Keep
-                    // the spec strict rejection without invented text.
-                    let error = self.build_error("TypeError", 0, 0);
+                    // the spec strict rejection with an engine diagnostic.
+                    let error =
+                        self.internal_error("TypeError", "set: proxy trap returned false".into());
                     return Err(self.raise_js(error));
                 }
             } else if self.arrays.contains_key(&inst)
@@ -62,7 +63,10 @@ impl Interp {
                 if !accepted && self.strict {
                     // XS ignores the failed shrink result here; this
                     // spec strict rejection has no XS throw message.
-                    let error = self.build_error("TypeError", 0, 0);
+                    let error = self.internal_error(
+                        "TypeError",
+                        "set length: array length update rejected".into(),
+                    );
                     return Err(self.raise_js(error));
                 }
             } else if !(self.ordinary_set(code, inst, id, value, obj))? {
