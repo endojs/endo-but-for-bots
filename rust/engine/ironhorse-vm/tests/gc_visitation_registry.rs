@@ -329,11 +329,11 @@ enum Req {
     /// Pruned in BOTH sweep paths (`collect_garbage` and
     /// `free_pages`), so a swept owner's row cannot go stale.
     PrunedBothPaths,
-    /// No mechanical requirement; the note records why (transitively
+    /// A named behavioral test is required; the note records why (transitively
     /// rooted through `intrinsics`/proto rows, or a boundary-empty
     /// transient). `gc_anchor_truth.rs` holds the behavioral twins
     /// for the transitively-rooted anchors.
-    DocumentedOnly,
+    BehavioralTwin(&'static str),
 }
 
 /// The classification of EVERY slot-bearing `Interp` field. Adding a
@@ -459,36 +459,36 @@ const REGISTRY: &[(&str, &[Req], &str)] = &[
     //     values and the rooted proto_methods/proto_data holders; the
     //     behavioral twins in gc_anchor_truth.rs construct through each
     //     cache after churn + GC) ---
-    ("intl_object", &[Req::DocumentedOnly], "reachable via intrinsics root"),
-    ("temporal_object", &[Req::DocumentedOnly], "reachable via intrinsics root"),
-    ("temporal_now_object", &[Req::DocumentedOnly], "reachable via Temporal's arena property chain"),
-    ("locale_proto", &[Req::DocumentedOnly], "reachable via rooted constructor's prototype property"),
-    ("collator_proto", &[Req::DocumentedOnly], "reachable via rooted constructor's prototype property"),
-    ("list_format_proto", &[Req::DocumentedOnly], "reachable via rooted constructor's prototype property"),
-    ("plural_rules_proto", &[Req::DocumentedOnly], "reachable via rooted constructor's prototype property"),
-    ("segmenter_proto", &[Req::DocumentedOnly], "reachable via rooted constructor's prototype property"),
-    ("segments_proto", &[Req::DocumentedOnly], "reachable via rooted proto rows"),
-    ("segment_iterator_proto", &[Req::DocumentedOnly], "reachable via rooted proto rows"),
-    ("date_time_format_proto", &[Req::DocumentedOnly], "reachable via rooted constructor's prototype property"),
-    ("number_format_proto", &[Req::DocumentedOnly], "reachable via rooted constructor's prototype property"),
-    ("temporal_instant_proto", &[Req::DocumentedOnly], "reachable via rooted constructor's prototype property"),
-    ("temporal_duration_proto", &[Req::DocumentedOnly], "reachable via rooted constructor's prototype property"),
-    ("temporal_plain_protos", &[Req::DocumentedOnly], "reachable via rooted constructors' prototype properties"),
-    ("temporal_zoned_proto", &[Req::DocumentedOnly], "reachable via rooted constructor's prototype property"),
-    ("generator_function_proto", &[Req::DocumentedOnly], "reachable via rooted proto rows"),
-    ("async_generator_proto", &[Req::DocumentedOnly], "reachable via rooted proto rows"),
-    ("async_generator_function_proto", &[Req::DocumentedOnly], "reachable via rooted proto rows"),
+    ("intl_object", &[Req::BehavioralTwin("intl_proto_caches_survive_construction_after_a_collection")], "reachable via intrinsics root"),
+    ("temporal_object", &[Req::BehavioralTwin("temporal_proto_caches_survive_construction_after_a_collection")], "reachable via intrinsics root"),
+    ("temporal_now_object", &[Req::BehavioralTwin("temporal_proto_caches_survive_construction_after_a_collection")], "reachable via Temporal's arena property chain"),
+    ("locale_proto", &[Req::BehavioralTwin("intl_proto_caches_survive_construction_after_a_collection")], "reachable via rooted constructor's prototype property"),
+    ("collator_proto", &[Req::BehavioralTwin("intl_proto_caches_survive_construction_after_a_collection")], "reachable via rooted constructor's prototype property"),
+    ("list_format_proto", &[Req::BehavioralTwin("intl_proto_caches_survive_construction_after_a_collection")], "reachable via rooted constructor's prototype property"),
+    ("plural_rules_proto", &[Req::BehavioralTwin("intl_proto_caches_survive_construction_after_a_collection")], "reachable via rooted constructor's prototype property"),
+    ("segmenter_proto", &[Req::BehavioralTwin("intl_proto_caches_survive_construction_after_a_collection")], "reachable via rooted constructor's prototype property"),
+    ("segments_proto", &[Req::BehavioralTwin("intl_proto_caches_survive_construction_after_a_collection")], "reachable via rooted proto rows"),
+    ("segment_iterator_proto", &[Req::BehavioralTwin("intl_proto_caches_survive_construction_after_a_collection")], "reachable via rooted proto rows"),
+    ("date_time_format_proto", &[Req::BehavioralTwin("intl_proto_caches_survive_construction_after_a_collection")], "reachable via rooted constructor's prototype property"),
+    ("number_format_proto", &[Req::BehavioralTwin("intl_proto_caches_survive_construction_after_a_collection")], "reachable via rooted constructor's prototype property"),
+    ("temporal_instant_proto", &[Req::BehavioralTwin("temporal_proto_caches_survive_construction_after_a_collection")], "reachable via rooted constructor's prototype property"),
+    ("temporal_duration_proto", &[Req::BehavioralTwin("temporal_proto_caches_survive_construction_after_a_collection")], "reachable via rooted constructor's prototype property"),
+    ("temporal_plain_protos", &[Req::BehavioralTwin("temporal_proto_caches_survive_construction_after_a_collection")], "reachable via rooted constructors' prototype properties"),
+    ("temporal_zoned_proto", &[Req::BehavioralTwin("temporal_proto_caches_survive_construction_after_a_collection")], "reachable via rooted constructor's prototype property"),
+    ("generator_function_proto", &[Req::BehavioralTwin("generator_function_protos_survive_definition_after_a_collection")], "reachable via rooted proto rows"),
+    ("async_generator_proto", &[Req::BehavioralTwin("generator_function_protos_survive_definition_after_a_collection")], "reachable via rooted proto rows"),
+    ("async_generator_function_proto", &[Req::BehavioralTwin("generator_function_protos_survive_definition_after_a_collection")], "reachable via rooted proto rows"),
     ("string_iterator_method", &[Req::GcRoots], "lazy intrinsic identity must survive before its property is installed"),
     ("async_iterator_identity", &[Req::GcRoots], "lazy intrinsic identity must survive before its property is installed"),
     ("iterator_identity", &[Req::GcRoots], "lazy intrinsic identity must survive before its property is installed"),
     ("segments_iterator_method", &[Req::GcRoots], "lazy intrinsic identity must survive before its property is installed"),
     ("segment_iterator_identity", &[Req::GcRoots], "lazy intrinsic identity must survive before its property is installed"),
     ("error_stack_accessor", &[Req::GcRoots], "lazy intrinsic identity must survive before its property is installed"),
-    ("this_captures", &[Req::DocumentedOnly], "non-owning property-slot indices; each property is owned by a closure environment reachable through its rooted arrow function"),
-    ("classes", &[Req::DocumentedOnly], "derived non-root membership; ClassMap removal/retention clears owner bits in both collectors before slot reuse"),
+    ("this_captures", &[Req::BehavioralTwin("each_activation_register_independently_refuses_quiescence")], "non-owning property-slot indices; each property is owned by a closure environment reachable through its rooted arrow function"),
+    ("classes", &[Req::BehavioralTwin("classification_tracks_boot_guest_mutation_gc_and_reuse")], "derived non-root membership; ClassMap removal/retention clears owner bits in both collectors before slot reuse"),
     // --- boundary-empty transient ---
     ("pending_new_target", &[Req::GcRoots], "armed by SUPER; rooted across non-throw halts, gated at quiescence, reset at run entry (F025)"),
-    ("array_iterator_proxy_get_context", &[Req::DocumentedOnly], "installed only across one synchronous Proxy trap call, restored on success/throw, and rejected by is_quiescent if leaked"),
+    ("array_iterator_proxy_get_context", &[Req::BehavioralTwin("each_activation_register_independently_refuses_quiescence")], "installed only across one synchronous Proxy trap call, restored on success/throw, and rejected by is_quiescent if leaked"),
 ];
 
 #[test]
@@ -605,7 +605,11 @@ fn every_slot_bearing_field_is_classified_and_the_classification_holds() {
                     };
                     !is_bearing(after_key)
                 }
-                Req::DocumentedOnly => true,
+                Req::BehavioralTwin(test) => {
+                    let witness = format!("#[test]\nfn {test}(");
+                    include_str!("gc_anchor_truth.rs").contains(&witness)
+                        || include_str!("../src/interp/tests.rs").contains(&witness)
+                }
             };
             if !ok {
                 violations.push(format!("{name}: requirement {req:?} not satisfied"));

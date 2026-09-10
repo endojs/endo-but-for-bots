@@ -3948,8 +3948,8 @@ mod tests {
             keys: vec!["dyn".to_string()],
             names: vec!["Object".into(), "x".into()],
             symbols: crate::image::SymbolKeyImage {
-                next_id: u16::MAX - 2,
-                pairs: vec![(u16::MAX - 1, 11), (u16::MAX, 22)],
+                next_id: u16::MAX - 3,
+                pairs: vec![(u16::MAX - 2, 11), (u16::MAX - 1, 22)],
             },
             meter: MeterImage::current(),
             arrays: Vec::new(),

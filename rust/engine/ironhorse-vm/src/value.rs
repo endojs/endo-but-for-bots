@@ -498,7 +498,8 @@ impl Slot {
     /// keyed, and the only writes to it are a key (a property's key, a
     /// closure scope slot's captured binding name) or a reset to `0`
     /// when a property's value is copied out onto the stack. So a
-    /// non-zero `id` IS a key id, whatever the kind.
+    /// non-zero `id` IS a key id, except `u16::MAX`, reserved for the
+    /// internal environment behavior marker. That marker carries no key.
     ///
     /// Do not look for [`Kind::Property`] here. A property slot takes
     /// the kind of the VALUE it holds (`create_global_property` and
@@ -521,6 +522,10 @@ impl Slot {
     pub fn stored_key_id(&self) -> Option<u16> {
         let id = match self.value {
             Payload::At(at, _) => at,
+            // Bit 0 is XS_INTERNAL_FLAG on property records. The id alone
+            // is not enough: a crafted ordinary key at MAX must still be
+            // exposed to key-table validation and refused.
+            _ if self.id == u16::MAX && self.flag & 1 != 0 => return None,
             _ => self.id,
         };
         (id != 0).then_some(id)

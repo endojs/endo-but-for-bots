@@ -102,21 +102,24 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         checkpoint_to_store(&mut session, &sig, &mut store).expect("checkpoint");
     }
 
-    // Compiler policy release 5 leaves execution-only state unchanged.
-    // Reconstruct the HEAD/W2 release-4, format-16 identity by restoring its
-    // two markers. This fixture does not generate reusable chunk blocks.
+    // Pin the current heap under both historical meter/version markers as
+    // independent encoding controls. The F189 namespace reservation moves
+    // symbol IDs in this heap, so these no longer reconstruct pre-2B bytes.
+    // This fixture does not generate reusable chunk blocks.
     let mut previous = session.machine().snapshot_image(&sig).unwrap().into_image();
     previous.meter.cost_table_version = "ironhorse-meter-4".into();
     previous.version.format_version = 16;
     previous.function_state.native_names = None;
     assert_eq!(
         hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&previous)),
-        "c602c4b2c29683162482eb324f0ab96732108a8ce16020e76d1f08c358a6cbcd"
+        // F189 reserves MAX for environments; symbol IDs now start at MAX-1.
+        "65e6e5c7d7713d17a9512e6805a0ce3760898c53d42df0b5aafbfc521426f6fb"
     );
     previous.meter.cost_table_version = "ironhorse-meter-5".into();
     assert_eq!(
         hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&previous)),
-        "0d9673eda565c28bdc526e2a50218ba0844958303046555ade2f3e99eaadd536"
+        // F189 reserves MAX for environments; symbol IDs now start at MAX-1.
+        "bbd3d7dd20719bc3f94265de2843dcf1a9fba6104035a9789ed5e7aff89a759a"
     );
 
     let blob = session
@@ -337,7 +340,8 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Format 17 permits reusable chunk markers; only VERS changes here.
         // Format18 adds the boot-native name table to FUNC.
         // Format19: saved-handler segment identity. Guest result and meter pins stay fixed.
-        "72a76e10f58408fe021ee1a59a5612ed12c4d01335310321a18ea8e48e5329e3",
+        // F189 reserves MAX for environments; symbol IDs now start at MAX-1.
+        "01773ba067f13551484735648c96e27ca3907059c039684d1cc9b80af46530bb",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -550,7 +554,8 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Format 17 travels in every epoch's manifest and changes the chain.
         // Store29 and FUNC native-name rows change the authenticated state.
         // Schema30 and format19 authenticate the saved-handler layout.
-        "44ae806c9d7045e915e810dac088e34a81f3d882720690fe93675c81690e0c4c",
+        // F189 reserves MAX for environments; symbol IDs now start at MAX-1.
+        "ba18e8b6986649ebfe884d8b319aab65d68f03bccd6fd2bb7479b6f4137795d3",
         "epoch-3 seal chain"
     );
 }
