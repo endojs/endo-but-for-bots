@@ -54,6 +54,73 @@ impl Interp {
         Ok(())
     }
 
+    fn validate_restore_values(
+        &self,
+        values: impl IntoIterator<Item = Slot>,
+        row: &'static str,
+    ) -> Result<(), RestoreError> {
+        let malformed = || RestoreError {
+            row,
+            reason: "invalid guest value",
+        };
+        let mut chunks = Vec::new();
+        for value in values {
+            let primitive = match (value.kind, value.value) {
+                (Kind::Undefined | Kind::Null, Payload::None) => continue,
+                (Kind::Reference, Payload::Reference(index)) => {
+                    self.validate_restore_owner(index.0, row)?;
+                    continue;
+                }
+                (Kind::Boolean, Payload::Boolean(_))
+                | (Kind::Integer, Payload::Integer(_))
+                | (Kind::Number, Payload::Number(_)) => continue,
+                (Kind::String, Payload::String(_)) | (Kind::BigInt, Payload::BigInt(_)) => value,
+                (Kind::Symbol, Payload::Reference(index)) => {
+                    if index.is_null()
+                        || index.0 >= self.slots.capacity()
+                        || self.slots.is_free_index(index)
+                    {
+                        return Err(malformed());
+                    }
+                    let descriptor = self.slots.get(index);
+                    match (descriptor.kind, descriptor.value) {
+                        (Kind::Undefined, Payload::None) => continue,
+                        (Kind::String, Payload::String(_)) => descriptor,
+                        _ => return Err(malformed()),
+                    }
+                }
+                _ => return Err(malformed()),
+            };
+            let off = primitive.chunk_ref().ok_or_else(malformed)?;
+            if off.is_null() {
+                return Err(malformed());
+            }
+            chunks.push((off, primitive.kind));
+        }
+        // One header walk for the batch, rather than rescanning the arena
+        // for every boxed String, BigInt, or Symbol description.
+        let offsets: Vec<_> = chunks.iter().map(|&(off, _)| off).collect();
+        self.chunks
+            .validate_references(&offsets)
+            .map_err(|_| malformed())?;
+        for (off, kind) in chunks {
+            let bytes = self.chunks.payload(off);
+            match kind {
+                Kind::String if bytes.len().is_multiple_of(2) => {}
+                Kind::BigInt
+                    if bytes.len() >= 5 && (bytes.len() - 1).is_multiple_of(4) && bytes[0] <= 1 =>
+                {
+                    let high_is_zero = bytes[bytes.len() - 4..].iter().all(|&byte| byte == 0);
+                    if high_is_zero && (bytes.len() > 5 || bytes[0] != 0) {
+                        return Err(malformed());
+                    }
+                }
+                _ => return Err(malformed()),
+            }
+        }
+        Ok(())
+    }
+
     // --- Snapshot surface -----------------------------------------------
     //
     // The narrow, engine-side conversion primitives the `ironhorse-snapshot`
@@ -820,60 +887,23 @@ impl Interp {
     /// primitive representations before installing any row.
     pub fn restore_wrapper_data(&mut self, rows: Vec<(u32, Slot)>) -> Result<(), RestoreError> {
         self.validate_restore_owners(rows.iter().map(|&(owner, _)| owner), "Wrappers")?;
-        let malformed = || RestoreError {
-            row: "Wrappers",
-            reason: "invalid boxed primitive",
-        };
-        let mut chunks = Vec::new();
-        for &(_, value) in &rows {
-            let primitive = match (value.kind, value.value) {
-                (Kind::Boolean, Payload::Boolean(_))
-                | (Kind::Integer, Payload::Integer(_))
-                | (Kind::Number, Payload::Number(_)) => continue,
-                (Kind::String, Payload::String(_)) | (Kind::BigInt, Payload::BigInt(_)) => value,
-                (Kind::Symbol, Payload::Reference(index)) => {
-                    if index.is_null()
-                        || index.0 >= self.slots.capacity()
-                        || self.slots.is_free_index(index)
-                    {
-                        return Err(malformed());
-                    }
-                    let descriptor = self.slots.get(index);
-                    match (descriptor.kind, descriptor.value) {
-                        (Kind::Undefined, Payload::None) => continue,
-                        (Kind::String, Payload::String(_)) => descriptor,
-                        _ => return Err(malformed()),
-                    }
-                }
-                _ => return Err(malformed()),
-            };
-            let off = primitive.chunk_ref().ok_or_else(malformed)?;
-            if off.is_null() {
-                return Err(malformed());
-            }
-            chunks.push((off, primitive.kind));
+        if rows.iter().any(|(_, value)| {
+            !matches!(
+                value.kind,
+                Kind::Boolean
+                    | Kind::Integer
+                    | Kind::Number
+                    | Kind::String
+                    | Kind::BigInt
+                    | Kind::Symbol
+            )
+        }) {
+            return Err(RestoreError {
+                row: "Wrappers",
+                reason: "invalid boxed primitive",
+            });
         }
-        // One header walk for the batch, rather than rescanning the arena
-        // for every boxed String, BigInt, or Symbol description.
-        let offsets: Vec<_> = chunks.iter().map(|&(off, _)| off).collect();
-        self.chunks
-            .validate_references(&offsets)
-            .map_err(|_| malformed())?;
-        for (off, kind) in chunks {
-            let bytes = self.chunks.payload(off);
-            match kind {
-                Kind::String if bytes.len().is_multiple_of(2) => {}
-                Kind::BigInt
-                    if bytes.len() >= 5 && (bytes.len() - 1).is_multiple_of(4) && bytes[0] <= 1 =>
-                {
-                    let high_is_zero = bytes[bytes.len() - 4..].iter().all(|&byte| byte == 0);
-                    if high_is_zero && (bytes.len() > 5 || bytes[0] != 0) {
-                        return Err(malformed());
-                    }
-                }
-                _ => return Err(malformed()),
-            }
-        }
+        self.validate_restore_values(rows.iter().map(|&(_, value)| value), "Wrappers")?;
         for (owner, value) in rows {
             self.wrapper_data
                 .insert(crate::value::SlotIndex(owner), value);
@@ -1662,7 +1692,38 @@ impl Interp {
         rows
     }
 
-    pub fn restore_disposable_stacks(&mut self, rows: Vec<DisposableStackRow>) {
+    /// Validate and restore retained disposal records as one batch.
+    /// Method references must name live instances; their callable identity is
+    /// a cross-table obligation involving restored functions and proxies.
+    pub fn restore_disposable_stacks(
+        &mut self,
+        rows: Vec<DisposableStackRow>,
+    ) -> Result<(), RestoreError> {
+        self.validate_restore_owners(rows.iter().map(|row| row.owner), "DisposableStacks")?;
+        for row in &rows {
+            if row.disposed && !row.records.is_empty() {
+                return Err(RestoreError {
+                    row: "DisposableStacks",
+                    reason: "disposed stack retains records",
+                });
+            }
+            for record in &row.records {
+                if record.method.kind != Kind::Reference {
+                    return Err(RestoreError {
+                        row: "DisposableStacks",
+                        reason: "disposal method is not a reference",
+                    });
+                }
+            }
+        }
+        self.validate_restore_values(
+            rows.iter().flat_map(|row| {
+                row.records
+                    .iter()
+                    .flat_map(|record| [record.resource, record.method])
+            }),
+            "DisposableStacks",
+        )?;
         for row in rows {
             self.disposable_stacks.insert(
                 crate::value::SlotIndex(row.owner),
@@ -1681,6 +1742,7 @@ impl Interp {
                 },
             );
         }
+        Ok(())
     }
 
     pub(super) fn saved_frame_snapshot(

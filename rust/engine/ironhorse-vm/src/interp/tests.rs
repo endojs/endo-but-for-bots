@@ -952,6 +952,69 @@ fn side_ref_tail_masked_undercount_poisons_during_page_pruning() {
 }
 
 #[test]
+fn disposable_restore_rejects_invalid_records_before_mutation() {
+    let mut interp = Interp::new();
+    let first = interp.new_object();
+    let second = interp.new_object();
+    let empty = |owner| DisposableStackRow {
+        owner,
+        disposed: false,
+        asynchronous: false,
+        records: Vec::new(),
+    };
+    interp
+        .restore_disposable_stacks(vec![empty(first.0)])
+        .unwrap();
+    let before = interp.disposable_stacks_snapshot();
+    let reference = Slot::of(Kind::Reference, Payload::Reference(first));
+    for (disposed, resource, method) in [
+        (true, Slot::undefined(), reference),
+        (false, Slot::undefined(), Slot::integer(1)),
+        (
+            false,
+            Slot::of(
+                Kind::Reference,
+                Payload::Reference(crate::value::SlotIndex::NULL),
+            ),
+            reference,
+        ),
+        (
+            false,
+            Slot::of(Kind::Boolean, Payload::Integer(1)),
+            reference,
+        ),
+        (
+            false,
+            Slot::undefined(),
+            Slot::of(
+                Kind::Reference,
+                Payload::Reference(crate::value::SlotIndex(u32::MAX - 1)),
+            ),
+        ),
+    ] {
+        let error = interp
+            .restore_disposable_stacks(vec![
+                DisposableStackRow {
+                    disposed: true,
+                    ..empty(first.0)
+                },
+                DisposableStackRow {
+                    disposed,
+                    records: vec![DisposalRecordRow {
+                        resource,
+                        method,
+                        pass_resource: true,
+                    }],
+                    ..empty(second.0)
+                },
+            ])
+            .unwrap_err();
+        assert_eq!(error.row, "DisposableStacks");
+        assert_eq!(interp.disposable_stacks_snapshot(), before);
+    }
+}
+
+#[test]
 fn wrapper_restore_rejects_malformed_primitives_atomically() {
     let mut interp = Interp::new();
     let first = interp.new_object();

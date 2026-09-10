@@ -1947,7 +1947,8 @@ macro_rules! snapshot_payloads {
                     }
                 }],
                 restore: [Iterators, [disposable_stacks], (interp) {
-                    interp.restore_disposable_stacks(disposable_stacks);
+                    interp.restore_disposable_stacks(disposable_stacks)
+                        .map_err(|_| SnapshotError::Corrupt("side-table restore: malformed DisposableStacks row"))?;
                 }],
                 initialize: [Generators;
                     #[doc = " Explicit resource-management stacks (schema 20; `DISP`)."]
