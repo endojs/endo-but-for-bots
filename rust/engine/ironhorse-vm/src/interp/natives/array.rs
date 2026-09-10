@@ -92,7 +92,7 @@ impl Interp {
             Payload::Reference(inst) if iterator.kind == Kind::Reference => inst,
             _ => return Ok(original),
         };
-        let return_id = self.intern_key("return");
+        let return_id = self.intern_static_key("return");
         let return_method =
             match self.array_from_try(|this| this.mop_get(code, inst, return_id, iterator))? {
                 Ok(method) => method,
@@ -224,11 +224,11 @@ impl Interp {
             return if self.array_length_writable(target) && self.array_set_length(target, value) {
                 Ok(Ok(()))
             } else {
-                let id = self.intern_key_unmetered("length");
+                let id = self.intern_static_key_unmetered("length");
                 Ok(Err(self.failed_set_error_value(target, id, "C: xsSet")))
             };
         }
-        let id = self.intern_key("length");
+        let id = self.intern_static_key("length");
         let receiver = Slot::of(Kind::Reference, Payload::Reference(target));
         match self.array_from_try(|this| this.mop_set(code, target, id, value, receiver))? {
             Ok(true) => Ok(Ok(())),
@@ -305,8 +305,8 @@ impl Interp {
         // Intrinsic iterator result objects only materialize fields whose ids
         // are cached when they are created. Seed these before constructing an
         // Array/String/collection iterator below.
-        let value_id = self.intern_key("value");
-        let done_id = self.intern_key("done");
+        let value_id = self.intern_static_key("value");
+        let done_id = self.intern_static_key("done");
         self.value_id = Some(value_id);
         self.done_id = Some(done_id);
 
@@ -389,7 +389,7 @@ impl Interp {
                     ))
                 }
             };
-            let next_id = self.intern_key("next");
+            let next_id = self.intern_static_key("next");
             next_method =
                 match self.array_from_try(|this| this.mop_get(code, inst, next_id, iterator))? {
                     Ok(method) if self.is_callable_value(method) => method,
@@ -589,7 +589,7 @@ impl Interp {
             return;
         }
         for name in ["next", "value", "done", "length", "return", "then"] {
-            let _ = self.intern_key(name);
+            let _ = self.intern_static_key(name);
         }
         if self.value_id.is_none() {
             self.value_id = self.symbol_ids.get("value").copied();
@@ -854,7 +854,7 @@ impl Interp {
                     return self.from_async_reject(id, e);
                 }
             };
-            let next_id = self.intern_key("next");
+            let next_id = self.intern_static_key("next");
             let next_method = {
                 let g =
                     self.native_try(|machine| machine.mop_get(code, iter_inst, next_id, iterator));
@@ -888,7 +888,7 @@ impl Interp {
         };
         let len: u64 = if let Payload::Reference(inst) = array_like.value {
             if array_like.kind == Kind::Reference {
-                let length_id = self.intern_key("length");
+                let length_id = self.intern_static_key("length");
                 let g =
                     self.native_try(|machine| machine.mop_get(code, inst, length_id, array_like));
                 let raw = match g? {
@@ -1002,7 +1002,7 @@ impl Interp {
                     return self.from_async_reject(id, e);
                 }
             };
-            let done_id = self.intern_key("done");
+            let done_id = self.intern_static_key("done");
             let done = {
                 let g = self.native_try(|machine| machine.mop_get(code, step_inst, done_id, step));
                 match g? {
@@ -1013,7 +1013,7 @@ impl Interp {
             if self.truthy(&done) {
                 return self.from_async_finish(code, id);
             }
-            let value_id = self.intern_key("value");
+            let value_id = self.intern_static_key("value");
             let value = {
                 let g = self.native_try(|machine| machine.mop_get(code, step_inst, value_id, step));
                 match g? {
@@ -1039,7 +1039,7 @@ impl Interp {
             // The same non-minting read as the synchronous twin
             // (`arraylike_index`): `Array.fromAsync({length: 70000})` interned
             // one name per element and poisoned the machine.
-            let key = self.array_index_read_key(k);
+            let key = self.array_index_read_key(k)?;
             let kvalue = {
                 let g =
                     self.native_try(|machine| machine.mop_get_read(code, inst, key, array_like));
@@ -1075,7 +1075,7 @@ impl Interp {
                 return self.from_async_reject(id, e);
             }
         };
-        let done_id = self.intern_key("done");
+        let done_id = self.intern_static_key("done");
         let done = {
             let g = self.native_try(|machine| machine.mop_get(code, step_inst, done_id, value));
             match g? {
@@ -1086,7 +1086,7 @@ impl Interp {
         if self.truthy(&done) {
             return self.from_async_finish(code, id);
         }
-        let value_id = self.intern_key("value");
+        let value_id = self.intern_static_key("value");
         let next_value = {
             let g = self.native_try(|machine| machine.mop_get(code, step_inst, value_id, value));
             match g? {
@@ -1165,7 +1165,7 @@ impl Interp {
         if self.from_async[id].target_is_array {
             self.array_set_dense(target, k as u32, v);
         } else {
-            let key = self.array_index_read_key(k);
+            let key = self.array_index_read_key(k)?;
             let desc = OrdinaryDescriptor {
                 value: Some(v),
                 writable: Some(true),
@@ -1201,7 +1201,7 @@ impl Interp {
         if self.from_async[id].target_is_array {
             self.array_set_length(target, len_val);
         } else {
-            let length_id = self.intern_key("length");
+            let length_id = self.intern_static_key("length");
             let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
             let r = self.native_try(|machine| {
                 machine.mop_set(code, target, length_id, len_val, target_slot)
@@ -1237,7 +1237,7 @@ impl Interp {
             Payload::Reference(r) => r,
             _ => return self.from_async_reject(id, err),
         };
-        let return_id = self.intern_key("return");
+        let return_id = self.intern_static_key("return");
         let ret = {
             let g = self.native_try(|machine| machine.mop_get(code, inst, return_id, iterator));
             match g? {
@@ -1734,7 +1734,7 @@ impl Interp {
         if self.instance_prototype(inst) != self.array_proto {
             return false;
         }
-        let join_id = self.intern_key("join");
+        let join_id = self.intern_static_key("join");
         self.chain_resolves_native_data_method(inst, join_id, NativeMethod::ArrayJoin)
     }
 
@@ -1933,7 +1933,7 @@ impl Interp {
 
     /// The property **id** for integer element index `k` (its canonical decimal
     /// string key), interned like any ordinary string key.
-    pub(in crate::interp) fn array_generic_index_id(&mut self, k: u64) -> u16 {
+    pub(in crate::interp) fn array_generic_index_id(&mut self, k: u64) -> Result<u16, Step> {
         let name = k.to_string();
         self.intern_key(&name)
     }
@@ -1945,14 +1945,14 @@ impl Interp {
     /// [`ReadKey::Index`] cannot hold it — so that one is interned, as XS
     /// interns it too (`fxAt` takes its name branch there). Every real element
     /// index resolves to a name only if one already exists.
-    pub(in crate::interp) fn array_index_read_key(&mut self, k: u64) -> ReadKey {
-        match u32::try_from(k) {
+    pub(in crate::interp) fn array_index_read_key(&mut self, k: u64) -> Result<ReadKey, Step> {
+        Ok(match u32::try_from(k) {
             Ok(index) => match self.index_read_key_id(index) {
                 Some(id) => ReadKey::Id(id),
                 None => ReadKey::Index(index),
             },
-            Err(_) => ReadKey::Id(self.intern_key(k.to_string())),
-        }
+            Err(_) => ReadKey::Id(self.intern_key(k.to_string())?),
+        })
     }
 
     /// `ToObject(this)` for a generic Array prototype method. Unlike the
@@ -2010,7 +2010,7 @@ impl Interp {
         let length_id = match self.length_id {
             Some(id) => id,
             None => {
-                let id = self.intern_key("length");
+                let id = self.intern_static_key("length");
                 self.length_id = Some(id);
                 id
             }
@@ -2031,7 +2031,7 @@ impl Interp {
         let length_id = match self.length_id {
             Some(id) => id,
             None => {
-                let id = self.intern_key("length");
+                let id = self.intern_static_key("length");
                 self.length_id = Some(id);
                 id
             }
@@ -2117,9 +2117,10 @@ impl Interp {
         &mut self,
         o: crate::value::SlotIndex,
         k: u64,
-    ) -> Option<ReadKey> {
+    ) -> Result<Option<ReadKey>, Step> {
         self.array_generic_index_answerable(o, k)
             .then(|| self.array_index_read_key(k))
+            .transpose()
     }
 
     /// Whether resolving index `k` on `o`'s chain genuinely needs the MOP
@@ -2183,7 +2184,7 @@ impl Interp {
         o: crate::value::SlotIndex,
         k: u64,
     ) -> Result<bool, Step> {
-        match self.array_generic_index_read_key(o, k) {
+        match self.array_generic_index_read_key(o, k)? {
             Some(key) => Ok(self.mop_has_read_with_recursions(code, o, key)?.0),
             None => Ok(false),
         }
@@ -2198,7 +2199,7 @@ impl Interp {
         o: crate::value::SlotIndex,
         k: u64,
     ) -> Result<Slot, Step> {
-        match self.array_generic_index_read_key(o, k) {
+        match self.array_generic_index_read_key(o, k)? {
             Some(key) => {
                 let recv = Slot::of(Kind::Reference, Payload::Reference(o));
                 self.mop_get_read(code, o, key, recv)
@@ -2221,7 +2222,7 @@ impl Interp {
         // by lookup, never minted: a Proxy anywhere on the chain makes every
         // index answerable, so minting here meant `Array.from(new Proxy(a,
         // {}))` spent one id per element and poisoned the machine.
-        let Some(key) = self.array_generic_index_read_key(o, k) else {
+        let Some(key) = self.array_generic_index_read_key(o, k)? else {
             return Ok(Slot::undefined());
         };
         let recv = Slot::of(Kind::Reference, Payload::Reference(o));
@@ -2310,7 +2311,7 @@ impl Interp {
         let Payload::Reference(inst) = object.value else {
             unreachable!("ToObject result")
         };
-        let join_id = self.intern_key("join");
+        let join_id = self.intern_static_key("join");
         let join = self.mop_get(code, inst, join_id, object)?;
         if self.is_callable_value(join) {
             return self.call_any(code, join, object, &[]);
@@ -2345,7 +2346,7 @@ impl Interp {
             unreachable!("ToObject result")
         };
         let length = self.array_generic_length(code, inst)?;
-        let length_id = self.intern_key("length");
+        let length_id = self.intern_static_key("length");
 
         match method {
             NativeMethod::ArrayPush => {
@@ -2362,7 +2363,7 @@ impl Interp {
                     })
                     .collect();
                 for (offset, value) in args.into_iter().enumerate() {
-                    let id = self.array_generic_index_id(length + offset as u64);
+                    let id = self.array_generic_index_id(length + offset as u64)?;
                     if !self.mop_set(code, inst, id, value, object)? {
                         return Err(self.failed_set_error(inst, id, "C: xsSet"));
                     }
@@ -2386,7 +2387,7 @@ impl Interp {
                     return Ok(Slot::undefined());
                 }
                 let new_length = length - 1;
-                let id = self.array_generic_index_id(new_length);
+                let id = self.array_generic_index_id(new_length)?;
                 let value = self.mop_get(code, inst, id, object)?;
                 if !self.mop_delete(code, inst, id)? {
                     return Err(self.failed_delete_error(id));
@@ -2424,7 +2425,7 @@ impl Interp {
             unreachable!("ToObject result")
         };
         let length = self.array_generic_length(code, inst)?;
-        let length_id = self.intern_key("length");
+        let length_id = self.intern_static_key("length");
         const GENERIC_MOVE_CAP: u64 = 1 << 24;
 
         match method {
@@ -2435,7 +2436,7 @@ impl Interp {
                     }
                     return Ok(Slot::undefined());
                 }
-                let first_id = self.array_generic_index_id(0);
+                let first_id = self.array_generic_index_id(0)?;
                 let first = self.mop_get(code, inst, first_id, object)?;
                 let mut linear_steps = 0u64;
                 for k in 1..length {
@@ -2443,8 +2444,8 @@ impl Interp {
                         return Err(Step::Host(Halt::Refused("shift:oversized-array-like")));
                     }
                     linear_steps += 1;
-                    let from_id = self.array_generic_index_id(k);
-                    let to_id = self.array_generic_index_id(k - 1);
+                    let from_id = self.array_generic_index_id(k)?;
+                    let to_id = self.array_generic_index_id(k - 1)?;
                     if self.mop_has(code, inst, from_id)? {
                         let value = self.mop_get(code, inst, from_id, object)?;
                         if !self.mop_set(code, inst, to_id, value, object)? {
@@ -2454,7 +2455,7 @@ impl Interp {
                         return Err(self.failed_delete_error(to_id));
                     }
                 }
-                let last_id = self.array_generic_index_id(length - 1);
+                let last_id = self.array_generic_index_id(length - 1)?;
                 if !self.mop_delete(code, inst, last_id)? {
                     return Err(self.failed_delete_error(last_id));
                 }
@@ -2492,8 +2493,8 @@ impl Interp {
                         }
                         linear_steps += 1;
                         k -= 1;
-                        let from_id = self.array_generic_index_id(k);
-                        let to_id = self.array_generic_index_id(k + count);
+                        let from_id = self.array_generic_index_id(k)?;
+                        let to_id = self.array_generic_index_id(k + count)?;
                         if self.mop_has(code, inst, from_id)? {
                             let value = self.mop_get(code, inst, from_id, object)?;
                             if !self.mop_set(code, inst, to_id, value, object)? {
@@ -2504,7 +2505,7 @@ impl Interp {
                         }
                     }
                     for (index, value) in args.into_iter().enumerate() {
-                        let id = self.array_generic_index_id(index as u64);
+                        let id = self.array_generic_index_id(index as u64)?;
                         if !self.mop_set(code, inst, id, value, object)? {
                             return Err(self.failed_set_error(inst, id, "C: xsSet"));
                         }
@@ -2544,8 +2545,8 @@ impl Interp {
                 return Err(Step::Host(Halt::Refused("reverse:oversized-array-like")));
             }
             let upper = length - lower - 1;
-            let lower_id = self.array_generic_index_id(lower);
-            let upper_id = self.array_generic_index_id(upper);
+            let lower_id = self.array_generic_index_id(lower)?;
+            let upper_id = self.array_generic_index_id(upper)?;
             let lower_exists = self.mop_has(code, inst, lower_id)?;
             let lower_value = if lower_exists {
                 Some(self.mop_get(code, inst, lower_id, object)?)
@@ -2654,13 +2655,13 @@ impl Interp {
             if offset >= GENERIC_SPLICE_CAP {
                 return Err(Step::Host(Halt::Refused("splice:oversized-delete")));
             }
-            let source_id = self.array_generic_index_id(actual_start + offset);
+            let source_id = self.array_generic_index_id(actual_start + offset)?;
             if self.mop_has(code, inst, source_id)? {
                 let value = self.mop_get(code, inst, source_id, object)?;
                 self.array_generic_create_data_property(code, removed, offset, value)?;
             }
         }
-        let length_id = self.intern_key("length");
+        let length_id = self.intern_static_key("length");
         if !self.mop_set(
             code,
             removed,
@@ -2679,8 +2680,8 @@ impl Interp {
                 if index - actual_start >= GENERIC_SPLICE_CAP {
                     return Err(Step::Host(Halt::Refused("splice:oversized-move")));
                 }
-                let source_id = self.array_generic_index_id(index + actual_delete_count);
-                let target_id = self.array_generic_index_id(index + insert_count);
+                let source_id = self.array_generic_index_id(index + actual_delete_count)?;
+                let target_id = self.array_generic_index_id(index + insert_count)?;
                 if self.mop_has(code, inst, source_id)? {
                     let value = self.mop_get(code, inst, source_id, object)?;
                     if !self.mop_set(code, inst, target_id, value, object)? {
@@ -2698,7 +2699,7 @@ impl Interp {
                     return Err(Step::Host(Halt::Refused("splice:oversized-delete-tail")));
                 }
                 index -= 1;
-                let id = self.array_generic_index_id(index);
+                let id = self.array_generic_index_id(index)?;
                 if !self.mop_delete(code, inst, id)? {
                     return Err(self.failed_delete_error(id));
                 }
@@ -2711,8 +2712,8 @@ impl Interp {
                     return Err(Step::Host(Halt::Refused("splice:oversized-move")));
                 }
                 index -= 1;
-                let source_id = self.array_generic_index_id(index + actual_delete_count);
-                let target_id = self.array_generic_index_id(index + insert_count);
+                let source_id = self.array_generic_index_id(index + actual_delete_count)?;
+                let target_id = self.array_generic_index_id(index + insert_count)?;
                 if self.mop_has(code, inst, source_id)? {
                     let value = self.mop_get(code, inst, source_id, object)?;
                     if !self.mop_set(code, inst, target_id, value, object)? {
@@ -2725,7 +2726,7 @@ impl Interp {
         }
 
         for (offset, value) in arguments.into_iter().skip(2).enumerate() {
-            let id = self.array_generic_index_id(actual_start + offset as u64);
+            let id = self.array_generic_index_id(actual_start + offset as u64)?;
             if !self.mop_set(code, inst, id, value, object)? {
                 return Err(self.failed_set_error(inst, id, "C: xsSet"));
             }
@@ -2802,8 +2803,8 @@ impl Interp {
                 source -= 1;
                 target -= 1;
             }
-            let source_id = self.array_generic_index_id(source);
-            let target_id = self.array_generic_index_id(target);
+            let source_id = self.array_generic_index_id(source)?;
+            let target_id = self.array_generic_index_id(target)?;
             if self.mop_has(code, inst, source_id)? {
                 let value = self.mop_get(code, inst, source_id, object)?;
                 if !self.mop_set(code, inst, target_id, value, object)? {
@@ -2877,7 +2878,7 @@ impl Interp {
             if index - start >= GENERIC_FILL_CAP {
                 return Err(Step::Host(Halt::Refused("fill:oversized-array-like")));
             }
-            let id = self.array_generic_index_id(index);
+            let id = self.array_generic_index_id(index)?;
             if !self.mop_set(code, inst, id, value, object)? {
                 return Err(self.failed_set_error(inst, id, "C: xsSet"));
             }
@@ -2954,7 +2955,7 @@ impl Interp {
     ) -> Result<crate::value::SlotIndex, Step> {
         let mut constructor = Slot::undefined();
         if self.array_generic_is_array(original)? {
-            let constructor_id = self.intern_key("constructor");
+            let constructor_id = self.intern_static_key("constructor");
             let receiver = Slot::of(Kind::Reference, Payload::Reference(original));
             constructor = self.mop_get(code, original, constructor_id, receiver)?;
             if constructor.kind == Kind::Reference {
@@ -3025,7 +3026,7 @@ impl Interp {
         // into the saturation guard. `concat` and `slice` do not route
         // through here and already match the oracle exactly at 70,000
         // elements.
-        let id = self.array_generic_index_id(index);
+        let id = self.array_generic_index_id(index)?;
         // A compact Array index is strictly below 2^32 - 1. The string
         // "4294967295" and every wider safe-integer key are ordinary
         // properties, including on an Array result; an ordinary custom-species
@@ -3370,7 +3371,7 @@ impl Interp {
             }
         }
 
-        let length_id = self.intern_key("length");
+        let length_id = self.intern_static_key("length");
         if !self.mop_set(
             code,
             result,
@@ -3465,7 +3466,7 @@ impl Interp {
         }
         debug_assert_eq!(target, count);
 
-        let length_id = self.intern_key("length");
+        let length_id = self.intern_static_key("length");
         let receiver = Slot::of(Kind::Reference, Payload::Reference(result));
         if !self.mop_set(
             code,
@@ -4450,13 +4451,13 @@ impl Interp {
         }
 
         for (index, value) in values.iter().copied().enumerate() {
-            let id = self.array_generic_index_id(index as u64);
+            let id = self.array_generic_index_id(index as u64)?;
             if !self.mop_set(code, inst, id, value, object)? {
                 return Err(self.failed_set_error(inst, id, "C: xsSet"));
             }
         }
         for index in values.len() as u64..length {
-            let id = self.array_generic_index_id(index);
+            let id = self.array_generic_index_id(index)?;
             if !self.mop_delete(code, inst, id)? {
                 return Err(self.failed_delete_error(id));
             }

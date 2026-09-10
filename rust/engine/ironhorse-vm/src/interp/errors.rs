@@ -85,7 +85,7 @@ impl Interp {
         // compiled the name — a later crank's `e.message` must resolve
         // (locked by `error_own_properties.rs`).
         if let Some(text) = message {
-            let mid = self.intern_key_unmetered("message");
+            let mid = self.intern_static_key_unmetered("message");
             let off = self.alloc_str_text(text.as_bytes());
             self.set_own_unmetered_with_flag(
                 inst,
@@ -166,7 +166,7 @@ impl Interp {
             },
         );
         if let Some(units) = message_units {
-            let message_id = self.intern_key_unmetered("message");
+            let message_id = self.intern_static_key_unmetered("message");
             let offset = self.chunks.alloc(&units_to_be16(&units));
             self.set_own_unmetered_with_flag(
                 inst,
@@ -200,7 +200,7 @@ impl Interp {
             Payload::Reference(options_ref) if options.kind == Kind::Reference => options_ref,
             _ => return Ok(()),
         };
-        let cause_id = self.intern_key_unmetered("cause");
+        let cause_id = self.intern_static_key_unmetered("cause");
         if self.mop_has(code, options_ref, cause_id)? {
             let cause = self.mop_get(code, options_ref, cause_id, options)?;
             self.set_own_unmetered_with_flag(error, cause_id, cause, XS_DONT_ENUM_FLAG);
@@ -226,7 +226,7 @@ impl Interp {
             if let Some(info) = self.error_data.get_mut(&inst) {
                 info.message = Some(message.clone());
             }
-            let mid = self.intern_key_unmetered("message");
+            let mid = self.intern_static_key_unmetered("message");
             let off = self.alloc_str_text(message.as_bytes());
             self.set_own_unmetered_with_flag(
                 inst,
@@ -292,7 +292,7 @@ impl Interp {
             },
         );
         if let Some(text) = message {
-            let mid = self.intern_key_unmetered("message");
+            let mid = self.intern_static_key_unmetered("message");
             let off = self.alloc_str_text(text.as_bytes());
             self.set_own_unmetered_with_flag(
                 inst,
@@ -302,7 +302,7 @@ impl Interp {
             );
         }
         for (name, value) in [("error", error), ("suppressed", suppressed)] {
-            let id = self.intern_key_unmetered(name);
+            let id = self.intern_static_key_unmetered(name);
             self.set_own_unmetered_with_flag(inst, id, value, XS_DONT_ENUM_FLAG);
         }
         Slot::of(Kind::Reference, Payload::Reference(inst))
@@ -367,7 +367,7 @@ impl Interp {
         if let Some(units) = message_units {
             // Interned, not looked up — the machine-global key rule
             // `build_error` documents.
-            let mid = self.intern_key_unmetered("message");
+            let mid = self.intern_static_key_unmetered("message");
             let off = self.chunks.alloc(&units_to_be16(&units));
             self.set_own_unmetered_with_flag(
                 inst,
@@ -398,7 +398,7 @@ impl Interp {
         }
         arr_data.length = n as u32;
         self.arrays.insert(arr_inst, arr_data);
-        let eid = self.intern_key_unmetered("errors");
+        let eid = self.intern_static_key_unmetered("errors");
         self.set_own_unmetered_with_flag(
             inst,
             eid,
@@ -425,8 +425,8 @@ impl Interp {
                 let iterator_id = self
                     .well_known_symbol_property_id("iterator")
                     .expect("well-known iterator symbol");
-                let next_id = self.intern_key("next");
-                let return_id = self.intern_key("return");
+                let next_id = self.intern_static_key("next");
+                let return_id = self.intern_static_key("return");
                 let intrinsic_protocol = self.chain_resolves_native_data_method(
                     array,
                     iterator_id,
@@ -464,8 +464,8 @@ impl Interp {
             Payload::Reference(inst) if this.kind == Kind::Reference => inst,
             _ => return Err(self.catchable_type_error_msg("this: not an object".into())),
         };
-        let name_id = self.intern_key_unmetered("name");
-        let message_id = self.intern_key_unmetered("message");
+        let name_id = self.intern_static_key_unmetered("name");
+        let message_id = self.intern_static_key_unmetered("message");
         let name_value = self.mop_get(code, inst, name_id, this)?;
         let name = if name_value.kind == Kind::Undefined {
             "Error".encode_utf16().collect()

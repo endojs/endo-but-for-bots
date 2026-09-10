@@ -395,7 +395,7 @@ fn active_target_register_is_an_independent_gc_root() {
 }
 
 #[test]
-fn first_relink_refuses_when_implicit_initialization_exhausts_ids() {
+fn first_relink_refuses_before_implicit_initialization_exhausts_ids() {
     let mut machine = Interp::new();
     // A tiny remaining id space models a nearly full symbol namespace
     // without building a quadratic-size explicit name table.
@@ -404,7 +404,9 @@ fn first_relink_refuses_when_implicit_initialization_exhausts_ids() {
         machine.relink_crank(&[b(Opcode::XS_CODE_END)], &["x".into()]),
         Err(RelinkError::TableFull)
     );
-    assert!(!machine.is_quiescent());
+    assert!(machine.is_quiescent());
+    assert!(machine.symbol_names.is_empty());
+    assert!(!machine.id_space_exhausted);
 }
 
 #[test]
@@ -1253,7 +1255,7 @@ fn eval_relink_refuses_an_id_beyond_the_unit_table() {
     assert!(
         interp
             .relink_program_symbols(&code, &["only".into()])
-            .is_none(),
+            .is_err(),
         "an out-of-table id must refuse, not fail open"
     );
 }
@@ -1840,12 +1842,12 @@ fn build_harden_graph() -> (
     let mut interp = Interp::new();
     let proto = interp.object_proto;
     let inner = interp.slots.alloc(Slot::instance(proto));
-    let id_c = interp.intern_key("c");
+    let id_c = interp.intern_static_key("c");
     interp.instance_put(inner, id_c, Slot::number(2.0));
     let outer = interp.slots.alloc(Slot::instance(proto));
-    let id_a = interp.intern_key("a");
+    let id_a = interp.intern_static_key("a");
     interp.instance_put(outer, id_a, Slot::number(1.0));
-    let id_b = interp.intern_key("b");
+    let id_b = interp.intern_static_key("b");
     interp.instance_put(
         outer,
         id_b,
@@ -2722,7 +2724,7 @@ fn promise_native_roots_preserve_halted_operand_stack() {
         assert!(matches!(out.halt, Halt::StepLimit(_)), "{:?}", out.halt);
         assert!(!vm.call_stack.is_empty(), "halted callee must remain installed");
         assert!(!vm.cur_func.is_null());
-        let key = vm.intern_key("haltOnlyOperand");
+        let key = vm.intern_static_key("haltOnlyOperand");
         let retained = vm.stack.iter().find_map(|slot| match slot.value {
             Payload::Reference(object) if slot.kind == Kind::Reference
                 && vm.instance_get(object, key) == Slot::integer(314159) => Some(object),
@@ -2758,7 +2760,7 @@ fn promise_native_roots_preserve_stack_overflow_operands() {
         assert!(matches!(out.halt, Halt::StackOverflow(_)), "{:?}", out.halt);
         assert!(!vm.call_stack.is_empty(), "halted callee must remain installed");
         assert!(!vm.cur_func.is_null());
-        let key = vm.intern_key("haltOnlyOperand");
+        let key = vm.intern_static_key("haltOnlyOperand");
         let retained = vm.stack.iter().find_map(|slot| match slot.value {
             Payload::Reference(object) if slot.kind == Kind::Reference
                 && vm.instance_get(object, key) == Slot::integer(314159) => Some(object),
@@ -2826,4 +2828,106 @@ fn generator_resume_admission_counts_sent_value_and_retains_refused_frame() {
             assert!(vm.call_stack.is_empty());
         }
     }
+}
+
+#[test]
+fn static_key_vocabulary_fits_the_reserved_id_band() {
+    use crate::source_scan::{code_only, marker_positions, rs_files, string_literals};
+    let vm = Interp::new();
+    let mut names: std::collections::HashSet<String> =
+        vm.default_keys.iter().map(|s| s.to_string()).collect();
+    names.extend(vm.intrinsics.keys().map(|s| s.to_string()));
+    names.extend(vm.proto_methods.iter().map(|(_, name, _)| name.to_string()));
+    names.extend(vm.proto_data.iter().map(|(_, name, _)| name.to_string()));
+    names.extend(
+        vm.proto_value_data
+            .iter()
+            .map(|(_, name, _)| name.to_string()),
+    );
+    names.extend(
+        vm.proto_accessors
+            .iter()
+            .filter_map(|(_, key, _, _, _)| match key {
+                ProtoAccessorKey::String(name) => Some(name.to_string()),
+                _ => None,
+            }),
+    );
+    names.extend(
+        vm.well_known_symbols
+            .iter()
+            .map(|(name, _)| name.to_string()),
+    );
+    names.extend(ARRAY_UNSCOPABLES.iter().map(|name| name.to_string()));
+    // Include internal names (such as promise capability slots), which are
+    // deliberately absent from the XS default-key and intrinsic catalogues.
+    for path in rs_files(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/interp")) {
+        if path.ends_with("tests.rs") {
+            continue;
+        }
+        let source = code_only(&std::fs::read_to_string(path).unwrap());
+        for marker in [".intern_static_key(", ".intern_static_key_unmetered("] {
+            for at in marker_positions(&source, marker) {
+                let args = crate::source_scan::balanced_args(&source, at, marker);
+                names.extend(string_literals(args));
+            }
+        }
+    }
+    let symbol_count = vm.well_known_symbols.len() + 1; // private template cache
+    assert!(
+        names.len() + symbol_count < PROPERTY_KEY_RESERVE,
+        "{} static names plus {symbol_count} symbols exceed reserve {PROPERTY_KEY_RESERVE}",
+        names.len()
+    );
+}
+
+#[test]
+fn hard_key_space_backstop_still_poison_latches() {
+    let mut vm = Interp::new();
+    vm.link_intrinsics(&[]);
+    vm.next_symbol_key_id = (vm.symbol_names.len() + 1) as u16;
+    vm.append_name_key("beyond-hard-ceiling");
+    assert!(vm.id_space_exhausted);
+    let out = vm.run(&[Opcode::XS_CODE_RETURN as u8]);
+    assert_eq!(out.halt, Halt::Refused("property-key:id-space-exhausted"));
+    assert!(!vm.is_quiescent());
+}
+
+#[test]
+fn relink_admits_template_sites_and_names_before_mutating() {
+    let mut vm = Interp::new();
+    vm.link_intrinsics(&[]);
+    // Leave precisely one guest id: the source name fits but its private
+    // template identity does not. Refusal must leave the table unchanged.
+    vm.next_symbol_key_id = (vm.symbol_names.len() + PROPERTY_KEY_RESERVE + 2) as u16;
+    let names = vm.symbol_names.clone();
+    let code = [
+        Opcode::XS_CODE_TEMPLATE_CACHE as u8,
+        Opcode::XS_CODE_GET_PROPERTY as u8,
+        1,
+        0,
+    ];
+    assert_eq!(
+        vm.relink_crank(&code, &["#fresh-site".into()]),
+        Err(RelinkError::TableFull)
+    );
+    assert_eq!(&*vm.symbol_names, &*names);
+    assert!(!vm.id_space_exhausted);
+}
+
+#[test]
+fn eval_key_admission_is_catchable_and_does_not_append_names() {
+    let mut vm = Interp::new();
+    vm.link_intrinsics(&[]);
+    vm.next_symbol_key_id = (vm.symbol_names.len() + PROPERTY_KEY_RESERVE + 2) as u16;
+    let names = vm.symbol_names.clone();
+    let code = [
+        Opcode::XS_CODE_TEMPLATE_CACHE as u8,
+        Opcode::XS_CODE_GET_PROPERTY as u8,
+        1,
+        0,
+    ];
+    let result = vm.relink_program_symbols(&code, &["#fresh-site".into()]);
+    assert!(matches!(result, Err(Step::Threw { .. })), "{result:?}");
+    assert_eq!(&*vm.symbol_names, &*names);
+    assert!(!vm.id_space_exhausted);
 }

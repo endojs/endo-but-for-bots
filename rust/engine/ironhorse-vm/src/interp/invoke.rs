@@ -235,7 +235,7 @@ impl Interp {
         &mut self,
         code: &[u8],
         value: Slot,
-        name: &str,
+        name: &'static str,
         args: &[Slot],
     ) -> Result<Slot, Step> {
         if matches!(value.kind, Kind::Null | Kind::Undefined) {
@@ -248,7 +248,7 @@ impl Interp {
                 .into(),
             ));
         }
-        let id = self.intern_key(name);
+        let id = self.intern_static_key(name);
         let method = match value.value {
             Payload::Reference(inst) if value.kind == Kind::Reference => {
                 self.mop_get(code, inst, id, value)?

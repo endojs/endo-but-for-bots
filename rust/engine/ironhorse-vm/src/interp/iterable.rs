@@ -65,8 +65,8 @@ impl Interp {
             };
             return Ok(Err(self.internal_error("TypeError", message.into())));
         }
-        let value_id = self.intern_key("value");
-        let done_id = self.intern_key("done");
+        let value_id = self.intern_static_key("value");
+        let done_id = self.intern_static_key("done");
         self.value_id = Some(value_id);
         self.done_id = Some(done_id);
         let iterator_id = self
@@ -122,7 +122,7 @@ impl Interp {
                 ))
             }
         };
-        let next_id = self.intern_key("next");
+        let next_id = self.intern_static_key("next");
         let next = match self
             .array_from_try(|this| this.mop_get(code, iterator_inst, next_id, iterator))?
         {

@@ -134,7 +134,7 @@ impl Interp {
         let Payload::Reference(cooked_inst) = cooked.value else {
             unreachable!("ToObject returns an object")
         };
-        let raw_id = self.intern_key("raw");
+        let raw_id = self.intern_static_key("raw");
         let raw = self.mop_get(code, cooked_inst, raw_id, cooked)?;
         let raw = self.array_to_object(raw)?;
         let Payload::Reference(raw_inst) = raw.value else {
@@ -153,7 +153,7 @@ impl Interp {
         let substitutions = argc.saturating_sub(1) as u64;
         let mut out = Vec::new();
         for index in 0..literal_segments {
-            let id = self.array_generic_index_id(index);
+            let id = self.array_generic_index_id(index)?;
             let segment = self.mop_get(code, raw_inst, id, raw)?;
             let units = self.to_string_units(code, segment)?;
             self.extend_reserved_units(&mut out, &units)?;

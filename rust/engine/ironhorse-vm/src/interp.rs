@@ -256,6 +256,10 @@ const BOUNDED_RUN_SLOT_CEILING: u32 = 1_000_000;
 /// usable value region is below them. Held as a small reserve so ironhorse's
 /// overflow point brackets XS's rather than overrunning it.
 pub const STACK_SLOT_RESERVED: usize = 32;
+
+/// Ids retained for the engine's bounded static vocabulary after guest key
+/// admission stops. Does not change the positional persisted NAME mapping.
+const PROPERTY_KEY_RESERVE: usize = 1024;
 /// The per-call fixed frame footprint XS keeps live on the stack for the
 /// duration of a call: the `result`/`function`/`this`/`frame` quartet
 /// (XS's `mxFrameResult`/`mxFrameFunction`/`mxFrameThis` at fixed offsets

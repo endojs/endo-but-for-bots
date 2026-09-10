@@ -45,7 +45,7 @@ impl Interp {
         constructor: crate::value::SlotIndex,
         fallback: crate::value::SlotIndex,
     ) -> Result<crate::value::SlotIndex, Step> {
-        let id = self.intern_key("prototype");
+        let id = self.intern_static_key("prototype");
         let receiver = Slot::of(Kind::Reference, Payload::Reference(constructor));
         let value = self.mop_get(code, constructor, id, receiver)?;
         Ok(match value {
@@ -125,7 +125,7 @@ impl Interp {
             _ => return Ok(false),
         };
         self.meter.tick_raw(INSTANCEOF_OBJECT_METERING);
-        let prototype_id = self.intern_key("prototype");
+        let prototype_id = self.intern_static_key("prototype");
         let prototype = self.mop_get(code, ctor, prototype_id, constructor)?;
         let target = match prototype.value {
             Payload::Reference(target) if prototype.kind == Kind::Reference => target,

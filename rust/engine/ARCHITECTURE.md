@@ -208,7 +208,7 @@ The schema perspectives describe those duties by task:
 
 `Halt` distinguishes guest/control-flow outcomes from host stops.
 It includes **`HeapExhausted`** and **`Panic(PanicKind)`** as well as
-`MeterAbort`, `StackOverflow`, `StepLimit`, `Decode`, `NotImplemented`, `Refused`,
+`MeterAbort`, `StackOverflow`, `ReentryLimit`, `StepLimit`, `Decode`, `NotImplemented`, `Refused`,
 `EngineInvariant`, `Throw` and `Return`.
 Yield/await are internal `DispatchOutcome` control outcomes, not `Halt` variants.
 A guest exception handler must not catch resource exhaustion or an engine panic.
@@ -216,6 +216,18 @@ A guest exception handler must not catch resource exhaustion or an engine panic.
 non-panic outcomes that cannot commit a crank.
 The unsupported-label registry limits which declines the differential harness may skip.
 Engine invariant failures and contained panics are not missing-feature acceptance.
+
+`Decode` carries a structured `DecodeError`, including category and byte offsets.
+`StackOverflow` reports modeled value-stack usage; `ReentryLimit` reports attempted weighted
+native depth and its release-fixed limit.
+The native limit remains 2,048 weighted units, admitting 63 nested `forEach` callbacks.
+
+Guest-created string and symbol keys raise a catchable `RangeError` before exhausting the
+16-bit namespace, retaining 1,024 IDs for the bounded engine vocabulary and error construction.
+Existing keys remain usable, including through implicit protocol operations such as Proxy traps.
+The name table is still monotone and positional in snapshots: this is exhaustion handling,
+not reclamation or an unlimited lifetime key budget.
+The hard poison latch remains the backstop for invalid host-provided state.
 
 The frozen table and default keys have a canonical platform-independent SHA-256 identity.
 Execution determinism is **scoped per release binary per platform**, with identical

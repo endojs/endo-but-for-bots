@@ -214,8 +214,8 @@ impl Interp {
         for _ in 0..4 {
             self.meter.tick_slot_alloc();
         }
-        let handler_id = self.intern_key("[[PromiseFinallyHandler]]");
-        let constructor_id = self.intern_key("[[PromiseFinallyConstructor]]");
+        let handler_id = self.intern_static_key("[[PromiseFinallyHandler]]");
+        let constructor_id = self.intern_static_key("[[PromiseFinallyConstructor]]");
         let home = self
             .slots
             .alloc(Slot::instance(crate::value::SlotIndex::NULL));
@@ -242,7 +242,7 @@ impl Interp {
         for _ in 0..3 {
             self.meter.tick_slot_alloc();
         }
-        let value_id = self.intern_key("[[PromiseFinallyValue]]");
+        let value_id = self.intern_static_key("[[PromiseFinallyValue]]");
         let home = self
             .slots
             .alloc(Slot::instance(crate::value::SlotIndex::NULL));
@@ -317,8 +317,8 @@ impl Interp {
             self.meter.tick_slot_alloc();
         }
         self.meter.tick_raw(PROMISE_CAPABILITY_METERING);
-        let resolve_id = self.intern_key("[[PromiseCapabilityResolve]]");
-        let reject_id = self.intern_key("[[PromiseCapabilityReject]]");
+        let resolve_id = self.intern_static_key("[[PromiseCapabilityResolve]]");
+        let reject_id = self.intern_static_key("[[PromiseCapabilityReject]]");
         let home = self
             .slots
             .alloc(Slot::instance(crate::value::SlotIndex::NULL));
@@ -522,8 +522,8 @@ impl Interp {
             };
         }
         if data.guard == PROMISE_CAPABILITY_EXECUTOR_GUARD {
-            let resolve_id = self.intern_key("[[PromiseCapabilityResolve]]");
-            let reject_id = self.intern_key("[[PromiseCapabilityReject]]");
+            let resolve_id = self.intern_static_key("[[PromiseCapabilityResolve]]");
+            let reject_id = self.intern_static_key("[[PromiseCapabilityReject]]");
             let resolve = self.instance_get(data.promise, resolve_id);
             let reject = self.instance_get(data.promise, reject_id);
             if !matches!(resolve.kind, Kind::Undefined | Kind::Uninitialized)
@@ -603,7 +603,7 @@ impl Interp {
         argument: Slot,
     ) -> Result<Slot, Step> {
         if data.guard == PROMISE_FINALLY_VALUE_GUARD {
-            let value_id = self.intern_key("[[PromiseFinallyValue]]");
+            let value_id = self.intern_static_key("[[PromiseFinallyValue]]");
             let value = self.instance_get(data.promise, value_id);
             if data.reject {
                 return Err(self.raise_js(value));
@@ -615,8 +615,8 @@ impl Interp {
                 "promise:unknown-finally-function",
             )));
         }
-        let handler_id = self.intern_key("[[PromiseFinallyHandler]]");
-        let constructor_id = self.intern_key("[[PromiseFinallyConstructor]]");
+        let handler_id = self.intern_static_key("[[PromiseFinallyHandler]]");
+        let constructor_id = self.intern_static_key("[[PromiseFinallyConstructor]]");
         let on_finally = self.instance_get(data.promise, handler_id);
         let constructor = self.instance_get(data.promise, constructor_id);
         let result = self.call_any(code, on_finally, Slot::undefined(), &[])?;
@@ -1098,7 +1098,7 @@ impl Interp {
             .get("Promise")
             .expect("Promise intrinsic is linked");
         let default = Slot::of(Kind::Reference, Payload::Reference(default_ref));
-        let constructor_id = self.intern_key("constructor");
+        let constructor_id = self.intern_static_key("constructor");
         let constructor = self.mop_get(code, promise_inst, constructor_id, promise)?;
         if constructor.kind == Kind::Undefined {
             return Ok(default);
@@ -1134,7 +1134,7 @@ impl Interp {
     ) -> Result<Slot, Step> {
         if let Payload::Reference(inst) = value.value {
             if value.kind == Kind::Reference && self.promises.contains_key(&inst) {
-                let constructor_id = self.intern_key("constructor");
+                let constructor_id = self.intern_static_key("constructor");
                 let observed = self.mop_get(code, inst, constructor_id, value)?;
                 if self.same_value(observed, constructor) {
                     return Ok(value);
@@ -1163,7 +1163,7 @@ impl Interp {
             _ => return Err(self.catchable_type_error_msg("this: not an object".into())),
         };
         let constructor = self.promise_species_constructor(code, promise)?;
-        let then_id = self.intern_key("then");
+        let then_id = self.intern_static_key("then");
         let then = self.mop_get(code, promise_inst, then_id, promise)?;
         if !self.is_callable_value(then) {
             return Err(self.catchable_type_error_msg("call: not a function".into()));
@@ -1266,7 +1266,7 @@ impl Interp {
             // its observable constructor is the selected constructor.
             let identity = if let Payload::Reference(inst) = result.value {
                 if result.kind == Kind::Reference && self.promises.contains_key(&inst) {
-                    let constructor_id = self.intern_key("constructor");
+                    let constructor_id = self.intern_static_key("constructor");
                     match self
                         .array_from_try(|this| this.mop_get(code, inst, constructor_id, result))?
                     {
@@ -1338,7 +1338,7 @@ impl Interp {
                     );
                 }
             };
-            let then_id = self.intern_key("then");
+            let then_id = self.intern_static_key("then");
             self.install_pending_intrinsics();
             self.then_id = Some(then_id);
             let then = match self
@@ -1462,7 +1462,7 @@ impl Interp {
                 return Ok(result_promise);
             }
         };
-        let resolve_id = self.intern_key("resolve");
+        let resolve_id = self.intern_static_key("resolve");
         self.install_pending_intrinsics();
         let promise_resolve = match self
             .array_from_try(|this| this.mop_get(code, constructor_inst, resolve_id, constructor))?
@@ -1481,8 +1481,8 @@ impl Interp {
 
         // Intrinsic iterator result objects materialize only cached fields, so
         // seed the two IteratorResult keys before an intrinsic iterator runs.
-        let value_id = self.intern_key("value");
-        let done_id = self.intern_key("done");
+        let value_id = self.intern_static_key("value");
+        let done_id = self.intern_static_key("done");
         self.value_id = Some(value_id);
         self.done_id = Some(done_id);
 
@@ -1559,7 +1559,7 @@ impl Interp {
             Payload::Reference(inst) => inst,
             _ => unreachable!(),
         };
-        let next_id = self.intern_key("next");
+        let next_id = self.intern_static_key("next");
         let next_method = match self
             .array_from_try(|this| this.mop_get(code, iterator_inst, next_id, iterator))?
         {
@@ -1670,7 +1670,7 @@ impl Interp {
                     return Ok(result_promise);
                 }
             };
-            let then_id = self.intern_key("then");
+            let then_id = self.intern_static_key("then");
             self.install_pending_intrinsics();
             self.then_id = Some(then_id);
             let then = match self.array_from_try(|this| {
@@ -1918,7 +1918,7 @@ impl Interp {
         }
         arr_data.length = n as u32;
         self.arrays.insert(arr_inst, arr_data);
-        let eid = self.intern_key_unmetered("errors");
+        let eid = self.intern_static_key_unmetered("errors");
         self.set_own_unmetered(
             inst,
             eid,

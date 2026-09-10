@@ -25,7 +25,7 @@ impl Interp {
         {
             return Ok(Slot::integer(self.str_len(off) as i32));
         }
-        let length_id = self.intern_key("length");
+        let length_id = self.intern_static_key("length");
         self.mop_get(code, inst, length_id, receiver)
     }
 
@@ -77,7 +77,7 @@ impl Interp {
         i: u64,
         receiver: Slot,
     ) -> Result<Slot, Step> {
-        match self.array_generic_index_read_key(inst, i) {
+        match self.array_generic_index_read_key(inst, i)? {
             Some(key) => self.mop_get_read(code, inst, key, receiver),
             None => Ok(Slot::undefined()),
         }
@@ -118,8 +118,8 @@ impl Interp {
             ));
         }
 
-        let value_id = self.intern_key("value");
-        let done_id = self.intern_key("done");
+        let value_id = self.intern_static_key("value");
+        let done_id = self.intern_static_key("done");
         self.value_id = Some(value_id);
         self.done_id = Some(done_id);
 
@@ -186,7 +186,7 @@ impl Interp {
                     ))
                 }
             };
-            let next_id = self.intern_key("next");
+            let next_id = self.intern_static_key("next");
             next_method =
                 match self.array_from_try(|this| this.mop_get(code, inst, next_id, iterator))? {
                     Ok(method) if self.is_callable_value(method) => method,
@@ -425,7 +425,7 @@ impl Interp {
                             // accessor, a Proxy or TypedArray prototype whose
                             // behaviour must observe the key).
                             None => {
-                                let id = self.read_key_intern(key);
+                                let id = self.read_key_intern(key)?;
                                 if !self.mop_set(code, target_inst, id, value, to)? {
                                     return Err(self.failed_set_error(target_inst, id, "C: xsSet"));
                                 }
@@ -433,7 +433,7 @@ impl Interp {
                         }
                     }
                     _ => {
-                        let id = self.read_key_intern(key);
+                        let id = self.read_key_intern(key)?;
                         if !self.mop_set(code, target_inst, id, value, to)? {
                             return Err(self.failed_set_error(target_inst, id, "C: xsSet"));
                         }

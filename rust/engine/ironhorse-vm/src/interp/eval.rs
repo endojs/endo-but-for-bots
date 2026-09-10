@@ -82,10 +82,7 @@ impl Interp {
         }
         let eval_names =
             crate::symbols::parse_symbols_checked(&compiled.symbols).map_err(Step::Host)?;
-        let code = match self.relink_program_symbols(&compiled.bytecode, &eval_names) {
-            Some(code) => code,
-            None => return Err(Step::Host(Halt::EngineInvariant("eval:relink"))),
-        };
+        let code = self.relink_program_symbols(&compiled.bytecode, &eval_names)?;
         // Bind only the ids appended SINCE THE LAST INSTALL PASS (the
         // installed-names floor — a name interned at
         // runtime has an id no install has seen, so filtering by this

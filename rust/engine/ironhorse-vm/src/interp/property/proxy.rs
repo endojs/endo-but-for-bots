@@ -53,7 +53,7 @@ impl Interp {
     pub(in crate::interp) fn proxy_target_handler(
         &mut self,
         proxy: crate::value::SlotIndex,
-        name: &str,
+        name: &'static str,
     ) -> Result<(crate::value::SlotIndex, crate::value::SlotIndex), Step> {
         self.meter.tick_raw(PROXY_INTERNAL_METHOD_METERING);
         self.meter.tick_builtin(); // target/handler validity check
@@ -69,9 +69,9 @@ impl Interp {
         &mut self,
         code: &[u8],
         handler: crate::value::SlotIndex,
-        name: &str,
+        name: &'static str,
     ) -> Result<Option<Slot>, Step> {
-        let id = self.intern_key(name);
+        let id = self.intern_static_key(name);
         let hslot = Slot::of(Kind::Reference, Payload::Reference(handler));
         let m = self.mop_get(code, handler, id, hslot)?;
         if m.kind == Kind::Undefined || m.kind == Kind::Null {
@@ -135,7 +135,7 @@ impl Interp {
         // Inline GetMethod here because its non-callable rejection has a
         // distinct XS meter outcome from a throwing getter. Other proxy traps
         // continue to share `proxy_trap`.
-        let trap_id = self.intern_key("getPrototypeOf");
+        let trap_id = self.intern_static_key("getPrototypeOf");
         let handler_slot = Slot::of(Kind::Reference, Payload::Reference(handler));
         let trap = self.mop_get(code, handler, trap_id, handler_slot)?;
         if trap.kind == Kind::Undefined || trap.kind == Kind::Null {

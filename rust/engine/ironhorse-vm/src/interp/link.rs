@@ -141,20 +141,20 @@ impl Interp {
         // unmetered. Include them in the full install's input/floor so their
         // intrinsic prototype methods are present from realm creation and a
         // later partial relink cannot resurrect a guest deletion.
-        self.intern_key("toString");
-        self.intern_key("valueOf");
-        self.intern_key("join");
+        self.intern_static_key("toString");
+        self.intern_static_key("valueOf");
+        self.intern_static_key("join");
         // Error.prototype.toString reads these implicitly. Materialize their
         // inherited boot data even when source names neither property, so a
         // caught native TypeError does not stringify with the default Error
         // name. Including them in the install floor preserves guest deletions.
-        self.intern_key("name");
-        self.intern_key("message");
+        self.intern_static_key("name");
+        self.intern_static_key("message");
         // A non-guest-reachable descriptor in the persisted symbol-key table
         // marks the current arguments layout. Unlike a reserved string, this
         // cannot be pre-interned or spoofed by guest JavaScript; no property
         // uses the minted id. Reusing the table avoids a schema-only atom.
-        self.intern_symbol_key(self.template_cache);
+        self.intern_symbol_key_reserved(self.template_cache);
         // ArraySpeciesCreate performs an implicit `Get(original,
         // "constructor")` for Array receivers. Reify the boot-default key
         // before fixing the installed-name floor whenever an allocating
@@ -165,7 +165,7 @@ impl Interp {
             .iter()
             .any(|name| self.symbol_ids.contains_key(*name))
         {
-            self.intern_key("constructor");
+            self.intern_static_key("constructor");
         }
         // Promise combinators perform these property operations implicitly:
         // GetPromiseResolve(C), GetIterator, IteratorStepValue, and Invoke of
@@ -179,7 +179,7 @@ impl Interp {
             .any(|name| self.symbol_ids.contains_key(*name))
         {
             for name in ["resolve", "then", "next", "value", "done"] {
-                self.intern_key(name);
+                self.intern_static_key(name);
             }
         }
         // `catch` performs Invoke(this, "then", ...), while `finally` first
@@ -189,15 +189,15 @@ impl Interp {
             .iter()
             .any(|name| self.symbol_ids.contains_key(*name))
         {
-            self.intern_key("then");
-            self.intern_key("constructor");
+            self.intern_static_key("then");
+            self.intern_static_key("constructor");
         }
         // `Promise.resolve` performs both the branded-promise constructor
         // identity read and thenable assimilation even when neither property
         // name appears in source text.
         if self.symbol_ids.contains_key("resolve") {
-            self.intern_key("constructor");
-            self.intern_key("then");
+            self.intern_static_key("constructor");
+            self.intern_static_key("then");
         }
         let names = self.symbol_names.clone();
         self.install_intrinsic_bindings(&names, 0, true, |_| true);
@@ -335,7 +335,7 @@ impl Interp {
             for name in [
                 "size", "has", "keys", "values", "next", "done", "value", "return",
             ] {
-                self.intern_key(name);
+                self.intern_static_key(name);
             }
             // The set methods drive a native collection's `keys()`/`values()`
             // iterator from Rust, reading the reused result object's `value`/
@@ -346,10 +346,10 @@ impl Interp {
             // the caches at the just-interned ids (a no-op when the program did
             // spell them, so their compiled id already wins).
             if self.value_id.is_none() {
-                self.value_id = Some(self.intern_key("value"));
+                self.value_id = Some(self.intern_static_key("value"));
             }
             if self.done_id.is_none() {
-                self.done_id = Some(self.intern_key("done"));
+                self.done_id = Some(self.intern_static_key("done"));
             }
         }
         let iterator_helpers_used = [
@@ -360,13 +360,13 @@ impl Interp {
         .any(|name| self.symbol_ids.contains_key(*name));
         if iterator_helpers_used {
             for name in ["next", "done", "value", "return"] {
-                self.intern_key(name);
+                self.intern_static_key(name);
             }
             if self.value_id.is_none() {
-                self.value_id = Some(self.intern_key("value"));
+                self.value_id = Some(self.intern_static_key("value"));
             }
             if self.done_id.is_none() {
-                self.done_id = Some(self.intern_key("done"));
+                self.done_id = Some(self.intern_static_key("done"));
             }
         }
         // `Array.from`, `Object.fromEntries`, and `AggregateError` perform the
@@ -380,13 +380,13 @@ impl Interp {
             || self.symbol_ids.contains_key("AggregateError")
         {
             for name in ["next", "done", "value", "return"] {
-                self.intern_key(name);
+                self.intern_static_key(name);
             }
             if self.value_id.is_none() {
-                self.value_id = Some(self.intern_key("value"));
+                self.value_id = Some(self.intern_static_key("value"));
             }
             if self.done_id.is_none() {
-                self.done_id = Some(self.intern_key("done"));
+                self.done_id = Some(self.intern_static_key("done"));
             }
         }
         // The four collection constructors perform AddEntriesFromIterable (or
@@ -401,13 +401,13 @@ impl Interp {
             .any(|name| self.symbol_ids.contains_key(*name));
         if collection_constructor_used {
             for name in ["add", "set", "next", "done", "value", "return"] {
-                self.intern_key(name);
+                self.intern_static_key(name);
             }
             if self.value_id.is_none() {
-                self.value_id = Some(self.intern_key("value"));
+                self.value_id = Some(self.intern_static_key("value"));
             }
             if self.done_id.is_none() {
-                self.done_id = Some(self.intern_key("done"));
+                self.done_id = Some(self.intern_static_key("done"));
             }
         }
         // `Date.prototype.toJSON` invokes the receiver's `toISOString`
@@ -415,7 +415,7 @@ impl Interp {
         // Intern it before the prototype-method pass so a Date receiver sees
         // the intrinsic and an ordinary receiver can expose an override.
         if self.symbol_ids.contains_key("toJSON") {
-            self.intern_key("toISOString");
+            self.intern_static_key("toISOString");
         }
         // `Map.groupBy` / `Object.groupBy` drive `GetIterator(items)` from Rust,
         // reading the produced result object's `next`/`value`/`done` — even when
@@ -425,13 +425,13 @@ impl Interp {
         // iterator driver reads the reused result object's own properties.
         if self.symbol_ids.contains_key("groupBy") {
             for name in ["next", "done", "value"] {
-                self.intern_key(name);
+                self.intern_static_key(name);
             }
             if self.value_id.is_none() {
-                self.value_id = Some(self.intern_key("value"));
+                self.value_id = Some(self.intern_static_key("value"));
             }
             if self.done_id.is_none() {
-                self.done_id = Some(self.intern_key("done"));
+                self.done_id = Some(self.intern_static_key("done"));
             }
         }
         // `Array.fromAsync` is a native async state machine that drives the
@@ -463,7 +463,7 @@ impl Interp {
             // atom for the name). It is an XS boot default key, so assigning
             // its program-local id here is unmetered.
             let mid = if mname == "prototype" {
-                let pid = self.intern_key(mname);
+                let pid = self.intern_static_key(mname);
                 // The canonical `prototype` key id (a boot default key,
                 // present whether or not the program names it statically) —
                 // the id `install_own_function_prototype`/`prototype_of` use.
@@ -482,7 +482,7 @@ impl Interp {
                 // `getOwnPropertyDescriptor(Intl, 'NumberFormat')` reveals the
                 // real own data property. Non-Intl programs never enter this
                 // branch, so their metering is untouched.
-                Some(self.intern_key_unmetered(mname))
+                Some(self.intern_static_key_unmetered(mname))
             } else if names_typed_array
                 && (Some(proto) == typed_array_ctor || Some(proto) == typed_array_proto)
             {
@@ -494,7 +494,7 @@ impl Interp {
                 // linked, just as the reflective Intl namespace path above
                 // does, so `hasOwnProperty` and descriptor operations do not
                 // depend on a coincidental static `.from`/`.set` reference.
-                Some(self.intern_key_unmetered(mname))
+                Some(self.intern_static_key_unmetered(mname))
             } else if names_date && (Some(proto) == date_ctor || proto == self.date_proto) {
                 // Date's constructor and prototype are likewise routinely
                 // inspected through runtime strings (`hasOwnProperty`,
@@ -502,7 +502,7 @@ impl Interp {
                 // linked, expose its complete modeled surface so reflection
                 // does not depend on a coincidental static `.UTC`/`.getTime`
                 // reference in the same compilation unit.
-                Some(self.intern_key_unmetered(mname))
+                Some(self.intern_static_key_unmetered(mname))
             } else {
                 None
             };
@@ -606,7 +606,7 @@ impl Interp {
             };
             let property_is_kept = self.symbol_ids.get(pname).copied().is_some_and(&keep);
             if guard_is_kept || property_is_kept {
-                let pid = self.intern_key_unmetered(pname);
+                let pid = self.intern_static_key_unmetered(pname);
                 if !full && self.find_property(proto, pid).is_some() {
                     continue;
                 }
@@ -640,7 +640,7 @@ impl Interp {
             .iter()
             .any(|n| self.symbol_ids.contains_key(*n));
             if names_error_family {
-                let sid = self.intern_key_unmetered("stack");
+                let sid = self.intern_static_key_unmetered("stack");
                 self.set_own_accessor_unmetered(
                     proto,
                     sid,
@@ -961,14 +961,7 @@ impl Interp {
     /// program and every eval unit share one realm symbol space (rather than
     /// the compiler's per-unit numbering colliding).
     pub(super) fn intern_program_symbol(&mut self, name: impl Into<SymbolName>) -> u16 {
-        let name = name.into();
-        let id = self.intern_key(&name);
-        let idx = (id as usize).saturating_sub(1);
-        if idx >= self.symbol_names.len() {
-            self.symbol_names.resize(idx + 1, SymbolName::default());
-        }
-        self.symbol_names[idx] = name;
-        id
+        self.intern_key_reserved(name)
     }
 
     /// Relink an independently-compiled unit's bytecode into this realm's
@@ -985,38 +978,57 @@ impl Interp {
     /// own instruction length. Nested function bodies are **inline** after
     /// their `XS_CODE_CODE_*` header (a fixed-size opcode, not a
     /// length-prefixed payload), so this single linear pass rewrites their
-    /// ids too. Returns `None` only on a truncated/invalid stream.
+    /// ids too. Invalid compiler bytecode returns an invariant halt; key-space
+    /// admission raises a catchable RangeError before names are appended.
     pub(super) fn relink_program_symbols(
         &mut self,
         code: &[u8],
         eval_names: &[SymbolName],
-    ) -> Option<Vec<u8>> {
-        let mut out = code.to_vec();
-        let mut pc = 0usize;
-        while pc < out.len() {
-            let op = Opcode::from_u8(out[pc])?;
-            let ilen = crate::opcode::instruction_len(&out, pc)?;
-            if op.size() == 0 {
-                let id = u16::from_le_bytes([*out.get(pc + 1)?, *out.get(pc + 2)?]);
-                // Id 0 is XS's reserved `XS_NO_ID` (an anonymous function
-                // name, an absent file): it names nothing, so it is left as-is.
-                if id != 0 {
-                    // Fail CLOSED on an id beyond the unit's own symbol
-                    // atom: `relink_crank` refuses the
-                    // same condition as MalformedBytecode; left in
-                    // place it would denote whatever realm name holds
-                    // that position.
-                    let name = eval_names.get((id - 1) as usize)?.clone();
-                    let host_id = self.intern_program_symbol(&name);
-                    let bytes = host_id.to_le_bytes();
-                    out[pc + 1] = bytes[0];
-                    out[pc + 2] = bytes[1];
+    ) -> Result<Vec<u8>, Step> {
+        let (site_order, accesses) = Self::template_site_accesses(code)
+            .map_err(|_| Step::Host(Halt::EngineInvariant("eval:relink")))?;
+        let novel: std::collections::HashSet<_> = eval_names
+            .iter()
+            .filter(|name| !self.symbol_ids.contains_key(*name))
+            .collect();
+        self.admit_guest_key_count(novel.len().saturating_add(site_order.len()))?;
+        let remapped = (|| {
+            let mut out = code.to_vec();
+            let mut pc = 0usize;
+            while pc < out.len() {
+                let op = Opcode::from_u8(out[pc])?;
+                let ilen = crate::opcode::instruction_len(&out, pc)?;
+                if op.size() == 0 {
+                    let id = u16::from_le_bytes([*out.get(pc + 1)?, *out.get(pc + 2)?]);
+                    // Id 0 is XS's reserved `XS_NO_ID` (an anonymous function
+                    // name, an absent file): it names nothing, so it is left as-is.
+                    if id != 0 {
+                        // Fail CLOSED on an id beyond the unit's own symbol
+                        // atom: `relink_crank` refuses the
+                        // same condition as MalformedBytecode; left in
+                        // place it would denote whatever realm name holds
+                        // that position.
+                        let name = eval_names.get((id - 1) as usize)?.clone();
+                        let host_id = self.intern_program_symbol(&name);
+                        let bytes = host_id.to_le_bytes();
+                        out[pc + 1] = bytes[0];
+                        out[pc + 2] = bytes[1];
+                    }
                 }
+                pc += ilen;
             }
-            pc += ilen;
+            Some(out)
+        })();
+        let mut out = remapped.ok_or(Step::Host(Halt::EngineInvariant("eval:relink")))?;
+        match self.apply_template_site_ids(&mut out, site_order, accesses) {
+            Ok(()) => Ok(out),
+            Err(RelinkError::TableFull) => {
+                Err(self.catchable_range_error_msg("property key space exhausted".into()))
+            }
+            Err(RelinkError::MalformedBytecode) => {
+                Err(Step::Host(Halt::EngineInvariant("eval:relink")))
+            }
         }
-        self.rewrite_template_site_ids(&mut out).ok()?;
-        Some(out)
     }
 
     /// Give every newly compiled tagged-template site a fresh realm key.
@@ -1028,7 +1040,7 @@ impl Interp {
     /// `GET_PROPERTY` immediately after `TEMPLATE_CACHE` and its paired
     /// `SET_PROPERTY` immediately after `TEMPLATE` — so a user property whose
     /// spelling happens to be `"#0"` keeps its normal string-key identity.
-    pub(super) fn rewrite_template_site_ids(&mut self, code: &mut [u8]) -> Result<(), RelinkError> {
+    fn template_site_accesses(code: &[u8]) -> Result<(Vec<u16>, Vec<(usize, u16)>), RelinkError> {
         let mut site_order = Vec::<u16>::new();
         let mut seen = std::collections::HashSet::<u16>::new();
         let mut accesses = Vec::<(usize, u16)>::new();
@@ -1058,6 +1070,15 @@ impl Interp {
             pc += ilen;
         }
 
+        Ok((site_order, accesses))
+    }
+
+    fn apply_template_site_ids(
+        &mut self,
+        code: &mut [u8],
+        site_order: Vec<u16>,
+        accesses: Vec<(usize, u16)>,
+    ) -> Result<(), RelinkError> {
         if self.symbol_names.len().saturating_add(site_order.len())
             >= self.next_symbol_key_id as usize
         {
@@ -1115,9 +1136,13 @@ impl Interp {
         bytecode: &[u8],
         crank_names: &[SymbolName],
     ) -> Result<Vec<u8>, RelinkError> {
+        let (site_order, accesses) = Self::template_site_accesses(bytecode)?;
         if crank_names == self.symbol_names.as_slice() {
             let mut remapped = bytecode.to_vec();
-            self.rewrite_template_site_ids(&mut remapped)?;
+            if !self.has_guest_key_capacity(site_order.len()) {
+                return Err(RelinkError::TableFull);
+            }
+            self.apply_template_site_ids(&mut remapped, site_order, accesses)?;
             self.install_pending_intrinsics();
             return Ok(remapped);
         }
@@ -1128,7 +1153,9 @@ impl Interp {
             let id = match extended.iter().position(|n| n == name) {
                 Some(k) => (k + 1) as u16,
                 None => {
-                    if extended.len().saturating_add(1) >= self.next_symbol_key_id as usize {
+                    if extended.len().saturating_add(1 + PROPERTY_KEY_RESERVE)
+                        >= self.next_symbol_key_id as usize
+                    {
                         return Err(RelinkError::TableFull);
                     }
                     extended.push(name.clone());
@@ -1155,6 +1182,10 @@ impl Interp {
             map.get(id as usize - 1).copied()
         })
         .ok_or(RelinkError::MalformedBytecode)?;
+        let novel_count = extended.len() - old_len;
+        if !self.has_guest_key_capacity(novel_count.saturating_add(site_order.len())) {
+            return Err(RelinkError::TableFull);
+        }
         if extended.len() != old_len {
             // The table grew: re-derive the inverse table, the intern
             // counter, and every name-keyed lookup-id cache. The
@@ -1172,7 +1203,7 @@ impl Interp {
                 self.bind_program_symbols(&extended);
             }
         }
-        self.rewrite_template_site_ids(&mut remapped)?;
+        self.apply_template_site_ids(&mut remapped, site_order, accesses)?;
         self.install_pending_intrinsics();
         Ok(remapped)
     }
@@ -1271,13 +1302,13 @@ impl Interp {
             })
             .collect();
         for descriptor in descriptors {
-            self.intern_symbol_key(descriptor);
+            self.intern_symbol_key_reserved(descriptor);
         }
         member_names.sort_unstable();
         member_names.dedup();
         let floor = self.installed_names_len;
         for name in member_names {
-            self.intern_key_unmetered(name);
+            self.intern_static_key_unmetered(name);
         }
         if self.symbol_names.len() > floor {
             let names = self.symbol_names[floor..].to_vec();

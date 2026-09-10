@@ -108,7 +108,7 @@ impl Interp {
         };
         let id = match key.value {
             Payload::At(id, index) if id == crate::value::XS_NO_ID => {
-                self.intern_key(index.to_string())
+                self.intern_key(index.to_string())?
             }
             Payload::At(id, _) => id,
             _ => return Err(Step::Host(Halt::EngineInvariant("set_super_at:key"))),
