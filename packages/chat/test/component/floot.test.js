@@ -31,6 +31,150 @@ testWindow.confirm = () => true;
 const waitFor = predicate => waitForDOM(predicate, 10, 2000);
 
 test.serial(
+  'sandbox network changes require explicit operator actions and escape request reasons',
+  async t => {
+    t.timeout(5000);
+    const parent = testDocument.createElement('div');
+    testDocument.body.appendChild(parent);
+    const sets = [];
+    const decisions = [];
+    /** @type {{ policy: string | null, pendingPolicy?: string, error?: string, supportedPolicies: string[], applies: string, request?: { id: string, policy: string, reason: string } }} */
+    let value = {
+      policy: 'off',
+      supportedPolicies: ['off', 'public-internet'],
+      applies: 'next-turn',
+      request: {
+        id: 'r1',
+        policy: 'public-internet',
+        reason: '<img src=x onerror="alert(1)">',
+      },
+    };
+    const facet = Far('NetworkUiSession', {
+      __getMethodNames__: () =>
+        harden([
+          'getNetworkPolicy',
+          'getCurrentTurn',
+          'setNetworkPolicy',
+          'resolveNetworkPolicyRequest',
+        ]),
+      getNetworkPolicy: () => harden({ ...value }),
+      getCurrentTurn: () => null,
+      getHistory: () => harden([]),
+      getUsage: () => harden({ inputTokens: 0, outputTokens: 0 }),
+      setNetworkPolicy: policy => {
+        sets.push(policy);
+        value = {
+          ...value,
+          policy,
+          request: undefined,
+          pendingPolicy: undefined,
+          error: undefined,
+        };
+      },
+      resolveNetworkPolicyRequest: (id, approve, note) => {
+        decisions.push([id, approve, note]);
+        value = {
+          ...value,
+          policy: approve
+            ? value.request?.policy || value.policy
+            : value.policy,
+          request: undefined,
+        };
+      },
+    });
+    const unsupported = Far('UnsupportedNetworkUiSession', {
+      __getMethodNames__: () => harden(['getNetworkPolicy', 'getCurrentTurn']),
+      getNetworkPolicy: () =>
+        harden({ policy: null, supportedPolicies: [], applies: 'next-turn' }),
+      getCurrentTurn: () => null,
+      getHistory: () => harden([]),
+      getUsage: () => harden({ inputTokens: 0, outputTokens: 0 }),
+    });
+    const factory = Far('NetworkUiFactory', {
+      listSessions: () =>
+        harden([
+          { id: 'network', title: 'Network session', createdAt: 2 },
+          { id: 'old', title: 'Unsupported session', createdAt: 1 },
+        ]),
+      listPresets: () => harden([]),
+      listModels: () => harden([]),
+      getSession: id => (id === 'network' ? facet : unsupported),
+    });
+    const cleanup = flootComponent(parent, factory, [], () => {}, [], []);
+    t.teardown(() => {
+      cleanup();
+      parent.remove();
+    });
+    const button = text =>
+      /** @type {HTMLButtonElement | undefined} */ (
+        [...parent.querySelectorAll('button')].find(
+          candidate => candidate.textContent === text,
+        )
+      );
+    const click = text =>
+      button(text)?.dispatchEvent(
+        new testWindow.Event('click', { bubbles: true }),
+      );
+    await waitFor(() => button('Network approval requested'));
+    click('Network approval requested');
+    await waitFor(() => parent.querySelector('.floot-network-request'));
+    t.true(parent.textContent.includes('<img src=x onerror="alert(1)">'));
+    t.falsy(parent.querySelector('img'));
+    t.true(button('Deny request')?.disabled);
+    const note = textareaIn(parent, '.floot-network-request textarea');
+    note.value = 'No network needed for this task';
+    note.dispatchEvent(new testWindow.Event('input', { bubbles: true }));
+    await waitFor(() => button('Deny request')?.disabled === false);
+    click('Deny request');
+    await waitFor(
+      () =>
+        decisions.length === 1 &&
+        !parent.querySelector('.floot-network-request'),
+    );
+    t.deepEqual(decisions[0], ['r1', false, 'No network needed for this task']);
+    const select = /** @type {HTMLSelectElement} */ (
+      parent.querySelector('.floot-network-policy select')
+    );
+    await waitFor(() => !select.disabled);
+    select.value = 'public-internet';
+    select.dispatchEvent(new testWindow.Event('change', { bubbles: true }));
+    await waitFor(
+      () => button('Apply Public internet (HTTP/HTTPS)')?.disabled === false,
+    );
+    t.deepEqual(sets, [], 'selection alone is not authorization');
+    click('Apply Public internet (HTTP/HTTPS)');
+    await waitFor(() =>
+      parent.textContent.includes('Configured policy: Public internet'),
+    );
+    t.deepEqual(sets, ['public-internet']);
+    value = {
+      ...value,
+      policy: null,
+      pendingPolicy: 'off',
+      error: 'Sandbox stop incomplete',
+    };
+    click('Refresh network policy');
+    await waitFor(() => button('Retry Off')?.disabled === false);
+    t.true(parent.textContent.includes('No policy is verified'));
+    t.true(parent.textContent.includes('Sandbox stop incomplete'));
+    t.true(textareaIn(parent, '.floot-input').disabled);
+    t.false(parent.textContent.includes('Configured policy: Off'));
+    t.is(parent.querySelectorAll('.floot-network-policy option').length, 1);
+    click('Retry Off');
+    await waitFor(() => parent.textContent.includes('Configured policy: Off'));
+    t.deepEqual(sets, ['public-internet', 'off']);
+    parent
+      .querySelectorAll('.floot-session-item')[1]
+      .dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+    await waitFor(() =>
+      parent.textContent.includes('No off policy is implied'),
+    );
+    t.falsy(parent.querySelector('.floot-network-policy select'));
+    t.false(parent.textContent.includes('Configured policy: Off'));
+  },
+);
+
+test.serial(
   'journal recovery renders evidence safely and keeps unavailable sessions visible',
   async t => {
     t.timeout(5000);

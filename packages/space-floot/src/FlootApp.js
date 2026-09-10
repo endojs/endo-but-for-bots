@@ -276,10 +276,28 @@ export const FlootApp = ({ controller }) => {
         type: 'button',
         class: `floot-header-btn${state.settingsOpen ? ' on' : ''}`,
         'aria-label': 'Settings & transcription',
-        onClick: () => controller.toggleSettings(),
+        onClick: () => {
+          setRecoveryOpen(false);
+          controller.toggleSettings();
+        },
       },
       '⚙',
     ),
+    state.network?.request
+      ? h(
+          'button',
+          {
+            type: 'button',
+            class: 'floot-header-btn',
+            onClick: () => {
+              setRecoveryOpen(false);
+              if (!state.settingsOpen) controller.toggleSettings();
+              controller.refreshNetworkPolicy?.();
+            },
+          },
+          'Network approval requested',
+        )
+      : null,
   );
 
   const statusBar = h(
