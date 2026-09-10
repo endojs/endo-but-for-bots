@@ -26,8 +26,8 @@ macro_rules! interp_state {
         $consumer! {
             ($($arg),*)
 pub struct Interp {
-    #[boot_new(classes.clone())]
-    #[boot_template(classes.clone())]
+    #[boot_new(snapshot_dirt.clone())]
+    #[boot_template(snapshot_dirt.clone())]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -37,8 +37,8 @@ pub struct Interp {
     #[gc_slots(none, none)]
     #[gc_weak(none)]
     #[snapshot_table(none)]
-    /// Derived membership; never persisted or traced as a guest root.
-    classes: ClassIndex,
+    /// Snapshot mutation bits shared by tracked fields; not guest state.
+    snapshot_dirt: SnapshotDirt,
     #[boot_new(std::rc::Rc::new(()))]
     #[boot_template(std::rc::Rc::new(()))]
     #[gc_root(none)]
@@ -405,10 +405,10 @@ pub struct Interp {
     source_compiler: Option<std::rc::Rc<dyn SourceCompiler>>,
     #[boot_new(Tracked::new(
         Vec::new(),
-        classes.1.clone(),
+        snapshot_dirt.clone(),
         SnapshotSection::Functions.mask(),
     ))]
-    #[boot_template(state.code_segments.copy_to(classes.1.clone()))]
+    #[boot_template(state.code_segments.copy_to(snapshot_dirt.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -465,10 +465,10 @@ pub struct Interp {
     top_level_code: Option<std::rc::Rc<[u8]>>,
     #[boot_new(Tracked::new(
         std::collections::HashMap::new(),
-        classes.1.clone(),
+        snapshot_dirt.clone(),
         SnapshotSection::Functions.mask(),
     ))]
-    #[boot_template(state.func_segments.copy_to(classes.1.clone()))]
+    #[boot_template(state.func_segments.copy_to(snapshot_dirt.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -499,25 +499,8 @@ pub struct Interp {
     /// always the realm global). A direct eval retains the caller's published
     /// environment chain and `this`.
     eval_direct: bool,
-    #[boot_new(ClassMap::new_refined(
-        ExoticKind::FUNCTIONS,
-        ExoticKind::NATIVE.union(ExoticKind::METHOD),
-        |info: &FuncInfo| {
-            let native = if info.native.is_some() {
-                ExoticKind::NATIVE
-            } else {
-                ExoticKind::default()
-            };
-            let method = if info.method.is_some() {
-                ExoticKind::METHOD
-            } else {
-                ExoticKind::default()
-            };
-            native.union(method)
-        },
-        classes.clone(),
-    ))]
-    #[boot_template(state.functions.copy_to(classes.clone()))]
+    #[boot_new(Tracked::new(std::collections::HashMap::new(), snapshot_dirt.clone(), SnapshotSection::Functions.mask() | SnapshotSection::IntlBoundFunctions.mask() | SnapshotSection::Promises.mask()))]
+    #[boot_template(state.functions.copy_to(snapshot_dirt.clone()))]
     #[gc_root(lazy_getters)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -530,9 +513,9 @@ pub struct Interp {
     /// Side table of user-function metadata (body range + captured
     /// closures), keyed by the function instance's slot index. See
     /// [`FuncInfo`].
-    functions: ClassMap<FuncInfo>,
-    #[boot_new(ClassMap::new(ExoticKind::BOUND_FUNCTIONS, classes.clone()))]
-    #[boot_template(state.bound_functions.copy_to(classes.clone()))]
+    functions: Tracked<std::collections::HashMap<crate::value::SlotIndex, FuncInfo>>,
+    #[boot_new(Tracked::new(std::collections::HashMap::new(), snapshot_dirt.clone(), SnapshotSection::Functions.mask()))]
+    #[boot_template(state.bound_functions.copy_to(snapshot_dirt.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(bound)]
@@ -547,9 +530,9 @@ pub struct Interp {
     /// bound `this`, and the bound leading arguments. A callee found here in
     /// the `run` dispatch trampolines into the target (XS's
     /// `fx_Function_prototype_bound`).
-    bound_functions: ClassMap<BoundData>,
-    #[boot_new(ClassMap::new(ExoticKind::PROXIES, classes.clone()))]
-    #[boot_template(state.proxies.copy_to(classes.clone()))]
+    bound_functions: Tracked<std::collections::HashMap<crate::value::SlotIndex, BoundData>>,
+    #[boot_new(Tracked::new(std::collections::HashMap::new(), snapshot_dirt.clone(), SnapshotSection::Proxies.mask()))]
+    #[boot_template(state.proxies.copy_to(snapshot_dirt.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(proxies)]
@@ -563,7 +546,7 @@ pub struct Interp {
     /// keyed by the proxy instance slot (see [`ProxyData`]). Membership here is
     /// what makes an instance a proxy: [`Interp::is_ordinary_object`] excludes
     /// it and every internal-method dispatch site routes it to the trap logic.
-    proxies: ClassMap<ProxyData>,
+    proxies: Tracked<std::collections::HashMap<crate::value::SlotIndex, ProxyData>>,
     #[boot_new(None)]
     #[boot_template(state.array_iterator_proxy_get_context)]
     #[gc_root(none)]
@@ -579,10 +562,10 @@ pub struct Interp {
     array_iterator_proxy_get_context: Option<ArrayIteratorProxyGetContext>,
     #[boot_new(Tracked::new(
         std::collections::HashMap::new(),
-        classes.1.clone(),
+        snapshot_dirt.clone(),
         SnapshotSection::Proxies.mask(),
     ))]
-    #[boot_template(state.proxy_revokers.copy_to(classes.1.clone()))]
+    #[boot_template(state.proxy_revokers.copy_to(snapshot_dirt.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -955,8 +938,8 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     number_format_proto: crate::value::SlotIndex,
-    #[boot_new(ClassMap::new(ExoticKind::LOCALES, classes.clone()))]
-    #[boot_template(state.locales.copy_to(classes.clone()))]
+    #[boot_new(Tracked::new(std::collections::HashMap::new(), snapshot_dirt.clone(), SnapshotSection::Intl.mask()))]
+    #[boot_template(state.locales.copy_to(snapshot_dirt.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -966,9 +949,9 @@ pub struct Interp {
     #[gc_slots(none, none)]
     #[gc_weak(none)]
     #[snapshot_table(IntlRecords, 30, 31, Serialized, "locales/collators/…/date_time_formats")]
-    locales: ClassMap<LocaleData>,
-    #[boot_new(ClassMap::new(ExoticKind::COLLATORS, classes.clone()))]
-    #[boot_template(state.collators.copy_to(classes.clone()))]
+    locales: Tracked<std::collections::HashMap<crate::value::SlotIndex, LocaleData>>,
+    #[boot_new(Tracked::new(std::collections::HashMap::new(), snapshot_dirt.clone(), SnapshotSection::Intl.mask()))]
+    #[boot_template(state.collators.copy_to(snapshot_dirt.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -978,13 +961,13 @@ pub struct Interp {
     #[gc_slots(none, none)]
     #[gc_weak(none)]
     #[snapshot_table(none)]
-    collators: ClassMap<CollatorData>,
+    collators: Tracked<std::collections::HashMap<crate::value::SlotIndex, CollatorData>>,
     #[boot_new(Tracked::new(
         std::collections::HashMap::new(),
-        classes.1.clone(),
+        snapshot_dirt.clone(),
         SnapshotSection::Intl.mask(),
     ))]
-    #[boot_template(state.list_formats.copy_to(classes.1.clone()))]
+    #[boot_template(state.list_formats.copy_to(snapshot_dirt.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -997,10 +980,10 @@ pub struct Interp {
     list_formats: Tracked<std::collections::HashMap<crate::value::SlotIndex, ListFormatData>>,
     #[boot_new(Tracked::new(
         std::collections::HashMap::new(),
-        classes.1.clone(),
+        snapshot_dirt.clone(),
         SnapshotSection::Intl.mask(),
     ))]
-    #[boot_template(state.plural_rules.copy_to(classes.1.clone()))]
+    #[boot_template(state.plural_rules.copy_to(snapshot_dirt.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1013,10 +996,10 @@ pub struct Interp {
     plural_rules: Tracked<std::collections::HashMap<crate::value::SlotIndex, PluralRulesData>>,
     #[boot_new(Tracked::new(
         std::collections::HashMap::new(),
-        classes.1.clone(),
+        snapshot_dirt.clone(),
         SnapshotSection::Intl.mask(),
     ))]
-    #[boot_template(state.number_formats.copy_to(classes.1.clone()))]
+    #[boot_template(state.number_formats.copy_to(snapshot_dirt.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1029,10 +1012,10 @@ pub struct Interp {
     number_formats: Tracked<std::collections::HashMap<crate::value::SlotIndex, NumberFormatData>>,
     #[boot_new(Tracked::new(
         std::collections::HashMap::new(),
-        classes.1.clone(),
+        snapshot_dirt.clone(),
         SnapshotSection::Intl.mask(),
     ))]
-    #[boot_template(state.segmenters.copy_to(classes.1.clone()))]
+    #[boot_template(state.segmenters.copy_to(snapshot_dirt.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1045,10 +1028,10 @@ pub struct Interp {
     segmenters: Tracked<std::collections::HashMap<crate::value::SlotIndex, SegmenterData>>,
     #[boot_new(Tracked::new(
         std::collections::HashMap::new(),
-        classes.1.clone(),
+        snapshot_dirt.clone(),
         SnapshotSection::Intl.mask(),
     ))]
-    #[boot_template(state.segments.copy_to(classes.1.clone()))]
+    #[boot_template(state.segments.copy_to(snapshot_dirt.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1061,10 +1044,10 @@ pub struct Interp {
     segments: Tracked<std::collections::HashMap<crate::value::SlotIndex, SegmentsData>>,
     #[boot_new(Tracked::new(
         std::collections::HashMap::new(),
-        classes.1.clone(),
+        snapshot_dirt.clone(),
         SnapshotSection::Intl.mask(),
     ))]
-    #[boot_template(state.segment_iterators.copy_to(classes.1.clone()))]
+    #[boot_template(state.segment_iterators.copy_to(snapshot_dirt.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1078,10 +1061,10 @@ pub struct Interp {
         Tracked<std::collections::HashMap<crate::value::SlotIndex, SegmentIteratorData>>,
     #[boot_new(Tracked::new(
         std::collections::HashMap::new(),
-        classes.1.clone(),
+        snapshot_dirt.clone(),
         SnapshotSection::Intl.mask(),
     ))]
-    #[boot_template(state.date_time_formats.copy_to(classes.1.clone()))]
+    #[boot_template(state.date_time_formats.copy_to(snapshot_dirt.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1166,8 +1149,8 @@ pub struct Interp {
     #[snapshot_table(none)]
     /// The `Temporal.Now` namespace object (a boot object, not a constructor).
     temporal_now_object: crate::value::SlotIndex,
-    #[boot_new(ClassMap::new(ExoticKind::TEMPORAL_INSTANTS, classes.clone()))]
-    #[boot_template(state.temporal_instants.copy_to(classes.clone()))]
+    #[boot_new(Tracked::new(std::collections::HashMap::new(), snapshot_dirt.clone(), SnapshotSection::Temporal.mask()))]
+    #[boot_template(state.temporal_instants.copy_to(snapshot_dirt.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1177,9 +1160,9 @@ pub struct Interp {
     #[gc_slots(none, none)]
     #[gc_weak(none)]
     #[snapshot_table(TemporalRecords, 26, 26, Serialized, "temporal_instants/temporal_durations/temporal_plains/temporal_zoneds")]
-    temporal_instants: ClassMap<TemporalInstantRecord>,
-    #[boot_new(ClassMap::new(ExoticKind::TEMPORAL_DURATIONS, classes.clone()))]
-    #[boot_template(state.temporal_durations.copy_to(classes.clone()))]
+    temporal_instants: Tracked<std::collections::HashMap<crate::value::SlotIndex, TemporalInstantRecord>>,
+    #[boot_new(Tracked::new(std::collections::HashMap::new(), snapshot_dirt.clone(), SnapshotSection::Temporal.mask()))]
+    #[boot_template(state.temporal_durations.copy_to(snapshot_dirt.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1189,9 +1172,9 @@ pub struct Interp {
     #[gc_slots(none, none)]
     #[gc_weak(none)]
     #[snapshot_table(none)]
-    temporal_durations: ClassMap<TemporalDurationRecord>,
-    #[boot_new(ClassMap::new(ExoticKind::TEMPORAL_PLAINS, classes.clone()))]
-    #[boot_template(state.temporal_plains.copy_to(classes.clone()))]
+    temporal_durations: Tracked<std::collections::HashMap<crate::value::SlotIndex, TemporalDurationRecord>>,
+    #[boot_new(Tracked::new(std::collections::HashMap::new(), snapshot_dirt.clone(), SnapshotSection::Temporal.mask()))]
+    #[boot_template(state.temporal_plains.copy_to(snapshot_dirt.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1201,9 +1184,9 @@ pub struct Interp {
     #[gc_slots(none, none)]
     #[gc_weak(none)]
     #[snapshot_table(none)]
-    temporal_plains: ClassMap<TemporalPlainRecord>,
-    #[boot_new(ClassMap::new(ExoticKind::TEMPORAL_ZONEDS, classes.clone()))]
-    #[boot_template(state.temporal_zoneds.copy_to(classes.clone()))]
+    temporal_plains: Tracked<std::collections::HashMap<crate::value::SlotIndex, TemporalPlainRecord>>,
+    #[boot_new(Tracked::new(std::collections::HashMap::new(), snapshot_dirt.clone(), SnapshotSection::Temporal.mask()))]
+    #[boot_template(state.temporal_zoneds.copy_to(snapshot_dirt.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1213,13 +1196,13 @@ pub struct Interp {
     #[gc_slots(none, none)]
     #[gc_weak(none)]
     #[snapshot_table(none)]
-    temporal_zoneds: ClassMap<TemporalZonedRecord>,
+    temporal_zoneds: Tracked<std::collections::HashMap<crate::value::SlotIndex, TemporalZonedRecord>>,
     #[boot_new(Tracked::new(
         std::collections::HashMap::new(),
-        classes.1.clone(),
+        snapshot_dirt.clone(),
         SnapshotSection::IntlBoundFunctions.mask(),
     ))]
-    #[boot_template(state.collator_compare_functions.copy_to(classes.1.clone()))]
+    #[boot_template(state.collator_compare_functions.copy_to(snapshot_dirt.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1233,12 +1216,12 @@ pub struct Interp {
         Tracked<std::collections::HashMap<crate::value::SlotIndex, crate::value::SlotIndex>>,
     #[boot_new(Tracked::new(
         std::collections::HashMap::new(),
-        classes.1.clone(),
+        snapshot_dirt.clone(),
         SnapshotSection::IntlBoundFunctions.mask(),
     ))]
     #[boot_template(state
         .number_format_bound_functions
-        .copy_to(classes.1.clone()))]
+        .copy_to(snapshot_dirt.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1259,10 +1242,10 @@ pub struct Interp {
         Tracked<std::collections::HashMap<crate::value::SlotIndex, crate::value::SlotIndex>>,
     #[boot_new(Tracked::new(
         std::collections::HashSet::new(),
-        classes.1.clone(),
+        snapshot_dirt.clone(),
         SnapshotSection::Functions.mask(),
     ))]
-    #[boot_template(state.deleted_fn_meta.copy_to(classes.1.clone()))]
+    #[boot_template(state.deleted_fn_meta.copy_to(snapshot_dirt.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1349,10 +1332,10 @@ pub struct Interp {
     template_cache: crate::value::SlotIndex,
     #[boot_new(Tracked::new(
         std::collections::HashMap::new(),
-        classes.1.clone(),
+        snapshot_dirt.clone(),
         SnapshotSection::Functions.mask(),
     ))]
-    #[boot_template(state.ctor_prototype.copy_to(classes.1.clone()))]
+    #[boot_template(state.ctor_prototype.copy_to(snapshot_dirt.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1373,10 +1356,10 @@ pub struct Interp {
         Tracked<std::collections::HashMap<crate::value::SlotIndex, crate::value::SlotIndex>>,
     #[boot_new(Tracked::new(
         std::collections::HashMap::new(),
-        classes.1.clone(),
+        snapshot_dirt.clone(),
         SnapshotSection::PrivateElements.mask(),
     ))]
-    #[boot_template(state.private_values.copy_to(classes.1.clone()))]
+    #[boot_template(state.private_values.copy_to(snapshot_dirt.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(values)]
@@ -1395,10 +1378,10 @@ pub struct Interp {
     >,
     #[boot_new(Tracked::new(
         std::collections::HashMap::new(),
-        classes.1.clone(),
+        snapshot_dirt.clone(),
         SnapshotSection::PrivateElements.mask(),
     ))]
-    #[boot_template(state.private_accessors.copy_to(classes.1.clone()))]
+    #[boot_template(state.private_accessors.copy_to(snapshot_dirt.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(accessors)]
@@ -1656,12 +1639,12 @@ pub struct Interp {
     gc_failed: bool,
     #[boot_new(Tracked::new(
         Vec::new(),
-        classes.1.clone(),
+        snapshot_dirt.clone(),
         SnapshotSection::Names.mask()
             | SnapshotSection::NameFloor.mask()
             | SnapshotSection::Accessors.mask(),
     ))]
-    #[boot_template(state.symbol_names.copy_to(classes.1.clone()))]
+    #[boot_template(state.symbol_names.copy_to(snapshot_dirt.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1677,10 +1660,10 @@ pub struct Interp {
     symbol_names: Tracked<Vec<SymbolName>>,
     #[boot_new(Tracked::new(
         std::collections::HashMap::new(),
-        classes.1.clone(),
+        snapshot_dirt.clone(),
         SnapshotSection::Errors.mask() | SnapshotSection::ErrorFrames.mask(),
     ))]
-    #[boot_template(state.error_data.copy_to(classes.1.clone()))]
+    #[boot_template(state.error_data.copy_to(snapshot_dirt.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1694,8 +1677,8 @@ pub struct Interp {
     /// Name/message remain serialized for format compatibility. Host rendering
     /// and guest Error.prototype.toString both read live properties instead.
     error_data: Tracked<std::collections::HashMap<crate::value::SlotIndex, ErrorInfo>>,
-    #[boot_new(ClassMap::new(ExoticKind::WRAPPER_DATA, classes.clone()))]
-    #[boot_template(state.wrapper_data.copy_to(classes.clone()))]
+    #[boot_new(Tracked::new(std::collections::HashMap::new(), snapshot_dirt.clone(), SnapshotSection::Wrappers.mask()))]
+    #[boot_template(state.wrapper_data.copy_to(snapshot_dirt.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(values)]
@@ -1710,7 +1693,7 @@ pub struct Interp {
     /// (XS's `[[BooleanData]]`/`[[NumberData]]`/`[[StringData]]`). A wrapper's
     /// completion/`String()` stringifies as its wrapped primitive, so
     /// [`Self::render`] reads it here.
-    wrapper_data: ClassMap<Slot>,
+    wrapper_data: Tracked<std::collections::HashMap<crate::value::SlotIndex, Slot>>,
     #[boot_new(crate::value::SlotIndex::NULL)]
     #[boot_template(state.array_proto)]
     #[gc_root(index)]
@@ -1726,8 +1709,8 @@ pub struct Interp {
     /// and `new Array` instance chains to it, so `arr.push`/`arr.join`/… (the
     /// native methods bound on it) resolve up the prototype chain.
     array_proto: crate::value::SlotIndex,
-    #[boot_new(ClassMap::new(ExoticKind::ARRAYS, classes.clone()))]
-    #[boot_template(ClassMap::from_rows(arrays, ExoticKind::ARRAYS, classes.clone()))]
+    #[boot_new(Tracked::new(std::collections::HashMap::new(), snapshot_dirt.clone(), SnapshotSection::Arrays.mask()))]
+    #[boot_template(Tracked::new(arrays, snapshot_dirt.clone(), SnapshotSection::Arrays.mask()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(indexed)]
@@ -1745,15 +1728,15 @@ pub struct Interp {
     /// [`Self::error_data`]/[`Self::wrapper_data`]. Full GC traces item values
     /// from a live owner. Counted page edges retain them during partial GC;
     /// both sweep paths release those counts when their owner dies.
-    arrays: ClassMap<ArrayData>,
+    arrays: Tracked<std::collections::HashMap<crate::value::SlotIndex, ArrayData>>,
     #[boot_new(Tracked::new(
         std::collections::HashMap::new(),
-        classes.1.clone(),
+        snapshot_dirt.clone(),
         SnapshotSection::IndexProperties.mask(),
     ))]
     #[boot_template(Tracked::new(
         index_props,
-        classes.1.clone(),
+        snapshot_dirt.clone(),
         SnapshotSection::IndexProperties.mask(),
     ))]
     #[gc_root(none)]
@@ -1790,10 +1773,10 @@ pub struct Interp {
     index_props: Tracked<std::collections::HashMap<crate::value::SlotIndex, ArrayData>>,
     #[boot_new(Tracked::new(
         std::collections::HashSet::new(),
-        classes.1.clone(),
+        snapshot_dirt.clone(),
         SnapshotSection::ArgumentsBrands.mask(),
     ))]
-    #[boot_template(state.arguments_objects.copy_to(classes.1.clone()))]
+    #[boot_template(state.arguments_objects.copy_to(snapshot_dirt.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1813,8 +1796,8 @@ pub struct Interp {
     /// two without changing the element storage (the `.length`/indexed reads
     /// stay the array side table).
     arguments_objects: Tracked<std::collections::HashSet<crate::value::SlotIndex>>,
-    #[boot_new(ClassMap::new(ExoticKind::DISPOSABLE_STACKS, classes.clone()))]
-    #[boot_template(state.disposable_stacks.copy_to(classes.clone()))]
+    #[boot_new(Tracked::new(std::collections::HashMap::new(), snapshot_dirt.clone(), SnapshotSection::DisposableStacks.mask()))]
+    #[boot_template(state.disposable_stacks.copy_to(snapshot_dirt.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(disposable)]
@@ -1827,9 +1810,9 @@ pub struct Interp {
     /// Explicit-resource-management internal slots. Records are registered in
     /// source order and consumed from the tail, implementing the proposal's
     /// mandatory LIFO cleanup order.
-    disposable_stacks: ClassMap<DisposableStackData>,
-    #[boot_new(ClassMap::new(ExoticKind::COLLECTIONS, classes.clone()))]
-    #[boot_template(ClassMap::from_rows(collections, ExoticKind::COLLECTIONS, classes.clone()))]
+    disposable_stacks: Tracked<std::collections::HashMap<crate::value::SlotIndex, DisposableStackData>>,
+    #[boot_new(Tracked::new(std::collections::HashMap::new(), snapshot_dirt.clone(), SnapshotSection::Collections.mask() | SnapshotSection::Iterators.mask()))]
+    #[boot_template(Tracked::new(collections, snapshot_dirt.clone(), SnapshotSection::Collections.mask() | SnapshotSection::Iterators.mask()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(collections)]
@@ -1842,7 +1825,7 @@ pub struct Interp {
     /// Per-instance Map/Set/WeakMap/WeakSet data (XS's exotic collection
     /// internal slots). Keyed by the collection instance's slot, like
     /// [`Self::arrays`]. See [`CollectionData`].
-    collections: ClassMap<CollectionData>,
+    collections: Tracked<std::collections::HashMap<crate::value::SlotIndex, CollectionData>>,
     #[boot_new(SideRefCounts::new())]
     #[boot_template(side_refs)]
     #[gc_root(none)]
@@ -1911,8 +1894,8 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     weakset_proto: crate::value::SlotIndex,
-    #[boot_new(ClassMap::new(ExoticKind::ARRAY_BUFFERS, classes.clone()))]
-    #[boot_template(state.array_buffers.copy_to(classes.clone()))]
+    #[boot_new(Tracked::new(std::collections::HashMap::new(), snapshot_dirt.clone(), SnapshotSection::Buffers.mask()))]
+    #[boot_template(state.array_buffers.copy_to(snapshot_dirt.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1925,13 +1908,13 @@ pub struct Interp {
     /// Per-instance `ArrayBuffer` backing store (XS's `XS_ARRAY_BUFFER_KIND`
     /// internal slot). Keyed by the buffer instance's slot, like
     /// [`Self::collections`]. See [`ArrayBufferData`].
-    array_buffers: ClassMap<ArrayBufferData>,
+    array_buffers: Tracked<std::collections::HashMap<crate::value::SlotIndex, ArrayBufferData>>,
     #[boot_new(Tracked::new(
         std::collections::HashSet::new(),
-        classes.1.clone(),
+        snapshot_dirt.clone(),
         SnapshotSection::Buffers.mask(),
     ))]
-    #[boot_template(state.detached_buffers.copy_to(classes.1.clone()))]
+    #[boot_template(state.detached_buffers.copy_to(snapshot_dirt.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1948,10 +1931,10 @@ pub struct Interp {
     detached_buffers: Tracked<std::collections::HashSet<crate::value::SlotIndex>>,
     #[boot_new(Tracked::new(
         std::collections::HashSet::new(),
-        classes.1.clone(),
+        snapshot_dirt.clone(),
         SnapshotSection::Buffers.mask(),
     ))]
-    #[boot_template(state.shared_buffers.copy_to(classes.1.clone()))]
+    #[boot_template(state.shared_buffers.copy_to(snapshot_dirt.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -1997,8 +1980,8 @@ pub struct Interp {
     /// `buffer.byteLength` get routes to the buffer byte-length accessor.
     /// `None` when the program never references `byteLength`.
     byte_length_id: Option<u16>,
-    #[boot_new(ClassMap::new(ExoticKind::TYPED_ARRAYS, classes.clone()))]
-    #[boot_template(state.typed_arrays.copy_to(classes.clone()))]
+    #[boot_new(Tracked::new(std::collections::HashMap::new(), snapshot_dirt.clone(), SnapshotSection::TypedArrays.mask()))]
+    #[boot_template(state.typed_arrays.copy_to(snapshot_dirt.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -2012,7 +1995,7 @@ pub struct Interp {
     /// `XS_DATA_VIEW_KIND` internal slots + buffer reference). Keyed by the
     /// view instance's slot, like [`Self::array_buffers`]. See
     /// [`TypedArrayData`].
-    typed_arrays: ClassMap<TypedArrayData>,
+    typed_arrays: Tracked<std::collections::HashMap<crate::value::SlotIndex, TypedArrayData>>,
     #[boot_new(None)]
     #[boot_template(state.byte_offset_id)]
     #[gc_root(none)]
@@ -2041,8 +2024,8 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     buffer_id: Option<u16>,
-    #[boot_new(ClassMap::new(ExoticKind::DATA_VIEWS, classes.clone()))]
-    #[boot_template(state.data_views.copy_to(classes.clone()))]
+    #[boot_new(Tracked::new(std::collections::HashMap::new(), snapshot_dirt.clone(), SnapshotSection::DataViews.mask()))]
+    #[boot_template(state.data_views.copy_to(snapshot_dirt.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -2055,7 +2038,7 @@ pub struct Interp {
     /// Per-instance `DataView` view state (XS's `XS_DATA_VIEW_KIND` internal
     /// slot + buffer reference). Keyed by the view instance's slot. See
     /// [`DataViewData`].
-    data_views: ClassMap<DataViewData>,
+    data_views: Tracked<std::collections::HashMap<crate::value::SlotIndex, DataViewData>>,
     #[boot_new(crate::value::SlotIndex::NULL)]
     #[boot_template(state.dataview_proto)]
     #[gc_root(index)]
@@ -2301,10 +2284,10 @@ pub struct Interp {
     date_to_primitive_method: crate::value::SlotIndex,
     #[boot_new(Tracked::new(
         std::collections::HashMap::new(),
-        classes.1.clone(),
+        snapshot_dirt.clone(),
         SnapshotSection::Dates.mask(),
     ))]
-    #[boot_template(state.dates.copy_to(classes.1.clone()))]
+    #[boot_template(state.dates.copy_to(snapshot_dirt.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -2359,10 +2342,10 @@ pub struct Interp {
     bigint_proto: crate::value::SlotIndex,
     #[boot_new(Tracked::new(
         std::collections::HashMap::new(),
-        classes.1.clone(),
+        snapshot_dirt.clone(),
         SnapshotSection::Registry.mask(),
     ))]
-    #[boot_template(state.symbol_registry.copy_to(classes.1.clone()))]
+    #[boot_template(state.symbol_registry.copy_to(snapshot_dirt.clone()))]
     #[gc_root(values)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -2392,10 +2375,10 @@ pub struct Interp {
     symbol_registry_keys: std::collections::HashMap<crate::value::SlotIndex, Vec<u8>>,
     #[boot_new(Tracked::new(
         std::collections::HashMap::new(),
-        classes.1.clone(),
+        snapshot_dirt.clone(),
         SnapshotSection::Symbols.mask() | SnapshotSection::Accessors.mask(),
     ))]
-    #[boot_template(state.symbol_key_ids.copy_to(classes.1.clone()))]
+    #[boot_template(state.symbol_key_ids.copy_to(snapshot_dirt.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -2419,10 +2402,10 @@ pub struct Interp {
     symbol_key_ids: Tracked<std::collections::HashMap<crate::value::SlotIndex, u16>>,
     #[boot_new(Tracked::new(
         std::collections::HashMap::new(),
-        classes.1.clone(),
+        snapshot_dirt.clone(),
         SnapshotSection::Accessors.mask(),
     ))]
-    #[boot_template(state.accessors.copy_to(classes.1.clone()))]
+    #[boot_template(state.accessors.copy_to(snapshot_dirt.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(accessors)]
@@ -2454,10 +2437,10 @@ pub struct Interp {
     proto_value_data: Vec<(crate::value::SlotIndex, &'static str, Slot)>,
     #[boot_new(Tracked::new(
         std::collections::HashMap::new(),
-        classes.1.clone(),
+        snapshot_dirt.clone(),
         SnapshotSection::Iterators.mask(),
     ))]
-    #[boot_template(state.iterators.copy_to(classes.1.clone()))]
+    #[boot_template(state.iterators.copy_to(snapshot_dirt.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -2502,10 +2485,10 @@ pub struct Interp {
     done_id: Option<u16>,
     #[boot_new(Tracked::new(
         std::collections::HashMap::new(),
-        classes.1.clone(),
+        snapshot_dirt.clone(),
         SnapshotSection::Promises.mask() | SnapshotSection::AsyncInstances.mask(),
     ))]
-    #[boot_template(state.promises.copy_to(classes.1.clone()))]
+    #[boot_template(state.promises.copy_to(snapshot_dirt.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(promises)]
@@ -2535,12 +2518,12 @@ pub struct Interp {
     promise_proto: crate::value::SlotIndex,
     #[boot_new(Tracked::new(
         std::collections::HashMap::new(),
-        classes.1.clone(),
+        snapshot_dirt.clone(),
         SnapshotSection::Generators.mask(),
     ))]
     #[boot_template(Tracked::new(
         std::collections::HashMap::new(),
-        classes.1.clone(),
+        snapshot_dirt.clone(),
         SnapshotSection::Generators.mask(),
     ))]
     #[gc_root(none)]
@@ -2609,12 +2592,12 @@ pub struct Interp {
     gen_run_stack: Vec<GenRunFrame>,
     #[boot_new(Tracked::new(
         std::collections::HashMap::new(),
-        classes.1.clone(),
+        snapshot_dirt.clone(),
         SnapshotSection::Promises.mask() | SnapshotSection::AsyncInstances.mask(),
     ))]
     #[boot_template(Tracked::new(
         std::collections::HashMap::new(),
-        classes.1.clone(),
+        snapshot_dirt.clone(),
         SnapshotSection::Promises.mask() | SnapshotSection::AsyncInstances.mask(),
     ))]
     #[gc_root(none)]
@@ -2759,8 +2742,8 @@ pub struct Interp {
     /// `NoStatus` outside a `step_async` resume, so the generator `BRANCH_STATUS`
     /// path (which only ever resumes `NoStatus`) is unchanged.
     resume_status: ResumeStatus,
-    #[boot_new(ClassMap::new(ExoticKind::PROMISE_FUNCTIONS, classes.clone()))]
-    #[boot_template(state.promise_functions.copy_to(classes.clone()))]
+    #[boot_new(Tracked::new(std::collections::HashMap::new(), snapshot_dirt.clone(), SnapshotSection::Promises.mask() | SnapshotSection::AsyncInstances.mask()))]
+    #[boot_template(state.promise_functions.copy_to(snapshot_dirt.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -2774,13 +2757,13 @@ pub struct Interp {
     /// function instance's slot and consulted in `RUN` when guest code calls a
     /// resolver, capability executor, or `finally` closure it was handed. See
     /// [`PromiseFnData`].
-    promise_functions: ClassMap<PromiseFnData>,
+    promise_functions: Tracked<std::collections::HashMap<crate::value::SlotIndex, PromiseFnData>>,
     #[boot_new(Tracked::new(
         Vec::new(),
-        classes.1.clone(),
+        snapshot_dirt.clone(),
         SnapshotSection::Promises.mask() | SnapshotSection::AsyncInstances.mask(),
     ))]
-    #[boot_template(state.promise_guards.copy_to(classes.1.clone()))]
+    #[boot_template(state.promise_guards.copy_to(snapshot_dirt.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -2815,10 +2798,10 @@ pub struct Interp {
     promise_jobs: std::collections::VecDeque<PromiseJob>,
     #[boot_new(Tracked::new(
         Vec::new(),
-        classes.1.clone(),
+        snapshot_dirt.clone(),
         SnapshotSection::Promises.mask() | SnapshotSection::AsyncInstances.mask(),
     ))]
-    #[boot_template(state.combinators.copy_to(classes.1.clone()))]
+    #[boot_template(state.combinators.copy_to(snapshot_dirt.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(combinators)]
@@ -2922,8 +2905,8 @@ pub struct Interp {
     /// (unobservable otherwise), exactly like [`Self::constructor_id`] gates
     /// the `prototype.constructor` back-reference.
     prototype_key_id: Option<u16>,
-    #[boot_new(ClassMap::new(ExoticKind::REGEXPS, classes.clone()))]
-    #[boot_template(state.regexps.copy_to(classes.clone()))]
+    #[boot_new(Tracked::new(std::collections::HashMap::new(), snapshot_dirt.clone(), SnapshotSection::Regexps.mask()))]
+    #[boot_template(state.regexps.copy_to(snapshot_dirt.clone()))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -2938,7 +2921,7 @@ pub struct Interp {
     /// instance's slot, like [`Self::promises`]. `lastIndex` is an ordinary
     /// own data property of the instance; [`RegExpData::last_index`] exists
     /// only as the legacy schema-11 snapshot fallback.
-    regexps: ClassMap<RegExpData>,
+    regexps: Tracked<std::collections::HashMap<crate::value::SlotIndex, RegExpData>>,
     #[boot_new(crate::value::SlotIndex::NULL)]
     #[boot_template(state.regexp_proto)]
     #[gc_root(index)]
@@ -3087,8 +3070,8 @@ pub struct Interp {
     jumps: Vec<CatchJump>,
 }
 boot_context {
-    fresh(classes, slots, chunks, global_obj, static_str);
-    template(state, classes, side_refs, arrays, index_props, collections);
+    fresh(snapshot_dirt, slots, chunks, global_obj, static_str);
+    template(state, snapshot_dirt, side_refs, arrays, index_props, collections);
 }
 external_tables {
     Modules, 39, 39, Pending, "module::ModuleGraph";

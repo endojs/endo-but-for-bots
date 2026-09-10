@@ -19,12 +19,12 @@ macro_rules! define_boot_initializers {
           #[snapshot_table($($snapshot:tt)*)]
           $(#[$attr:meta])* $field_vis:vis $field:ident: $ty:ty,)*
     } boot_context {
-        fresh($new_classes:ident, $slots:ident, $chunks:ident, $global:ident, $static:ident);
-        template($state:ident, $classes:ident, $refs:ident, $arrays:ident, $indexed:ident, $collections:ident);
+        fresh($new_dirt:ident, $slots:ident, $chunks:ident, $global:ident, $static:ident);
+        template($state:ident, $snapshot_dirt:ident, $refs:ident, $arrays:ident, $indexed:ident, $collections:ident);
     } external_tables { $($external:tt)* }) => {
         macro_rules! boot_fresh {
-            ($d classes:expr, $d slots:expr, $d chunks:expr, $d global:expr, $d strings:expr) => {{
-                let $new_classes = $d classes;
+            ($d snapshot_dirt:expr, $d slots:expr, $d chunks:expr, $d global:expr, $d strings:expr) => {{
+                let $new_dirt = $d snapshot_dirt;
                 let $slots = $d slots;
                 let $chunks = $d chunks;
                 let $global = $d global;
@@ -33,9 +33,9 @@ macro_rules! define_boot_initializers {
             }};
         }
         macro_rules! boot_template {
-            ($d state:expr, $d classes:expr, $d refs:expr, $d arrays:expr, $d indexed:expr, $d collections:expr) => {{
+            ($d state:expr, $d snapshot_dirt:expr, $d refs:expr, $d arrays:expr, $d indexed:expr, $d collections:expr) => {{
                 let $state = $d state;
-                let $classes = $d classes;
+                let $snapshot_dirt = $d snapshot_dirt;
                 let $refs = $d refs;
                 let $arrays = $d arrays;
                 let $indexed = $d indexed;
@@ -105,7 +105,7 @@ impl BootTemplate {
 
     pub(crate) fn instantiate(&self) -> Interp {
         let state = &self.inner;
-        let classes = state.classes.fork();
+        let snapshot_dirt = SnapshotDirt::default();
         // Copy BULK through its counted mutators: the new arenas own these
         // references independently, and no bare Clone can bypass accounting.
         let mut side_refs = SideRefCounts::new();
@@ -122,7 +122,14 @@ impl BootTemplate {
                 (owner, copy)
             })
             .collect();
-        boot_template!(state, classes, side_refs, arrays, index_props, collections)
+        boot_template!(
+            state,
+            snapshot_dirt,
+            side_refs,
+            arrays,
+            index_props,
+            collections
+        )
     }
 }
 
@@ -170,8 +177,8 @@ impl Interp {
             symbol: chunks.alloc(&str_to_be16("symbol")),
             bigint: chunks.alloc(&str_to_be16("bigint")),
         };
-        let classes = ClassIndex::default();
-        let mut interp = boot_fresh!(classes, slots, chunks, global_obj, static_str);
+        let snapshot_dirt = SnapshotDirt::default();
+        let mut interp = boot_fresh!(snapshot_dirt, slots, chunks, global_obj, static_str);
         interp.create_intrinsics();
         interp.boot_slot_count = interp.slots.capacity();
         interp

@@ -2669,7 +2669,7 @@ impl Interp {
             self.symbol_key_ids
                 .insert(crate::value::SlotIndex(desc), id);
         }
-        self.classes.1.mark(SnapshotSection::Symbols.mask());
+        self.snapshot_dirt.mark(SnapshotSection::Symbols.mask());
         self.next_symbol_key_id = next;
         // `restore_snapshot_state` can rebuild only string-keyed boot
         // accessors because this table is restored afterwards. Re-run the
@@ -2851,13 +2851,13 @@ impl Interp {
             return crate::SnapshotDirty::all();
         }
         let same = std::rc::Rc::ptr_eq(&baseline.arena, &self.slots.snapshot_dirt);
-        self.classes.1.mark(
+        self.snapshot_dirt.mark(
             self.slots.snapshot_dirt.sections(same)
                 | SnapshotSection::Stack.mask()
                 | SnapshotSection::Meter.mask()
                 | SnapshotSection::NameFloor.mask(),
         );
-        self.classes.1.snapshot()
+        self.snapshot_dirt.snapshot()
     }
 
     /// Observe the current identity without acknowledging restore-time changes.
@@ -2872,7 +2872,7 @@ impl Interp {
     /// so an unrelated caller cannot clear another session's outstanding dirt.
     pub fn acknowledge_snapshot(&mut self) -> crate::SnapshotBaseline {
         self.snapshot_baseline_identity = std::rc::Rc::new(());
-        self.classes.1.clear();
+        self.snapshot_dirt.clear();
         self.slots.snapshot_dirt.clear();
         crate::SnapshotBaseline {
             identity: self.snapshot_baseline_identity.clone(),
