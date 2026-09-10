@@ -240,8 +240,14 @@ export const makePublicEgressListener = async ({
           await writeRemote(chunk);
           if (!connect) await writeRemote(new TextEncoder().encode('\r\n'));
         }
-        if (!connect) await writeRemote(new TextEncoder().encode('0\r\n\r\n'));
-        await bounded(E(tunnel).end());
+        if (connect) {
+          await bounded(E(tunnel).end());
+        } else {
+          // HTTP framing completes the upload. A TCP FIN here can cause an
+          // origin to discard its pending response as a disconnected client.
+          // Connection: close asks the origin to close after that response.
+          await writeRemote(new TextEncoder().encode('0\r\n\r\n'));
+        }
       };
       const download = async () => {
         for (;;) {
