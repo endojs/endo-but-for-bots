@@ -6,10 +6,12 @@ The branch starts at `26bbe71b6` on the bots repository's `llm` branch.
 
 ## Incremental changes
 
-- F146: diagnostic guest coercion propagates host failures and retains a refused
-  meter receipt. Successful rendering and guest-throw fallback retain the existing
-  rollback convention. Guest mutations during diagnostic coercion remain an
-  existing cost of that convention; this is not structural rendering.
+- F146: upstream 2F now closes this path structurally: host diagnostics use a
+  read-only renderer and never resume guest code. On rebase onto `219f3b9d9`,
+  the original propagation/rollback fix became budget-boundary regression tests
+  proving that diagnostic hooks neither trigger a meter refusal nor allocate
+  guest data. The former guest-coercion/rollback maintenance cost is removed by
+  that explicit upstream change, not retained by this branch.
 - F135/F188: a symbol identity table owns both lookup directions, with mutation
   methods preserving its inverse through GC pruning, boot cloning and restore.
   Reflective string keys use the existing name table, and default-key membership
