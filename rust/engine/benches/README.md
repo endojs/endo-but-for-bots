@@ -1494,3 +1494,55 @@ pass for these increments.
 The local VM test run disables debug symbols to fit disk capacity while retaining
 debug assertions.
 The historical architecture review and its status lines remain unchanged.
+
+## 2F: final performance and error-surface follow-up
+
+[results/2f-final.json](results/2f-final.json) records the combined branch at
+`9bf005e38`, including failed controls and the follow-up investigation.
+The code addresses F044, F029, F093, F099, F119, F120, F162, F169, and F171.
+The architecture review remains a historical re-verification record and is unchanged.
+
+F119 removes the derived classification index and its refinement guards.
+Dispatch reads the authoritative side tables in the same precedence order, including
+restored objects with overlapping roles.
+Those tables now use the existing `Tracked<HashMap<...>>` wrapper with the same
+snapshot-section masks.
+GC key retention still marks only actual removals and records removals before unwind.
+Other mutable map access conservatively marks its sections, including a failed remove.
+A fixed before/after/after/before comparison against `4ca30586a` measures 0.7–16.4%
+slowdowns across eight property/call controls, with identical charges and dispatches.
+Every focused ratio remains below 1.25x; the simplification is not a speedup claim.
+
+The final general run measures all 48 controls against a fresh same-host build of
+`b2b78ad0`, the revision pinned by `linux-reference-controls.json`.
+It passes 44 and fails four compaction/checkpoint controls at 1.38–1.67x.
+The threshold is unchanged and this report is not a passing general gate.
+A subsequent fixed before/after/after/before investigation compares all six
+compaction shapes with `a65686fda`, before this work unit's performance changes.
+The final branch measures 0.83–0.99x that revision, finding no new compaction regression
+from this work, while the difference from the older pinned reference remains visible.
+The artifact retains every run and the failed comparison rather than replacing it.
+
+The final serial slice repeat takes about 0.605 ms (`slice`) and 0.602 ms (`substring`)
+for 1,000 one-unit results from a 1,048,576-unit receiver.
+All three receiver lengths have identical charges and dispatches.
+Compared with the historical before samples, final try loops with 50–400 locals improve
+16–20%; the two-local loop is 5.3% slower.
+These final/historical samples are not an ABBA pair.
+The first final-repeat invocation accidentally ran its two timing tests concurrently;
+its log is retained but excluded, and the recorded final repeat uses `--test-threads=1`.
+
+Host diagnostics now read live error data properties without running guest coercion.
+Accessors, proxies, and object-valued name/message fields use explicit placeholders.
+Guest `String(error)` remains observable.
+Construction metadata and stack frames remain serialized for snapshot compatibility;
+new native diagnostics use the existing unmetered message-allocation path.
+The shared catch maps retain the previously documented copy-on-write and empty-`Rc` costs.
+
+Validation passes 762 VM tests and 559 snapshot tests (15 and 18 timing tests ignored),
+strict all-target VM Clippy, and strict snapshot-library Clippy.
+A broader snapshot all-target Clippy attempt reports the pre-existing
+`manual_is_multiple_of` warning in `tests/gc_machine.rs` under rustc 1.91.1.
+Local tests omit debug symbols for disk capacity while retaining debug assertions.
+XS was unavailable locally; the oracle-test follow-up pins both diagnostic texts
+explicitly and still requires the oracle CI lane.
