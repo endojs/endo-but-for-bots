@@ -3,6 +3,7 @@
 import '@endo/init/debug.js';
 
 import test from 'ava';
+import { options } from 'preact';
 import { createInlineDefine } from '@endo/spaces-util/inline-define.js';
 import { createDOM, tick, waitFor } from '../helpers/dom-setup.js';
 
@@ -11,7 +12,7 @@ const { document: testDocument } = createDOM();
 // Mount inline-define into a bare container, matching how inline-command-form.js
 // uses it: createInlineDefine({ $container, onSubmit, onExpand, onCancel,
 // onValidityChange }) then focus()/isValid()/setDisabled()/dispose().
-const setupDefine = async (overrides = {}) => {
+const setupDefine = async (t, overrides = {}) => {
   const $container = testDocument.createElement('div');
   $container.className = 'inline-eval-container';
   testDocument.body.appendChild($container);
@@ -29,10 +30,10 @@ const setupDefine = async (overrides = {}) => {
     ...overrides,
   });
 
-  // Let the root component's mount effect (which wires the controller) settle.
-  // The controller-wiring effect has no DOM signal to poll, so this stays a
-  // fixed settle; wait for the source input to render before returning.
-  await tick(80);
+  t.teardown(() => {
+    api.dispose();
+    $container.remove();
+  });
   await waitFor(() => !!$container.querySelector('.inline-eval-input'));
   return { $container, api, events };
 };
@@ -54,7 +55,7 @@ const fireKeyDown = ($el, key, init = {}) => {
 };
 
 test.serial('renders the source input and no slots initially', async t => {
-  const { $container, api } = await setupDefine();
+  const { $container, api } = await setupDefine(t);
 
   const $source = $container.querySelector('.inline-eval-input');
   t.truthy($source, 'source input rendered');
@@ -64,12 +65,10 @@ test.serial('renders the source input and no slots initially', async t => {
     'no slot rows initially',
   );
   t.false(api.isValid(), 'empty source is invalid');
-
-  t.teardown(() => api.dispose());
 });
 
 test.serial('typing into the source updates getData and validity', async t => {
-  const { $container, api, events } = await setupDefine();
+  const { $container, api, events } = await setupDefine(t);
 
   const $source = $container.querySelector('.inline-eval-input');
   fireInput($source, '1 + 1');
@@ -82,12 +81,10 @@ test.serial('typing into the source updates getData and validity', async t => {
   );
   t.true(api.isValid(), 'non-empty source is valid');
   t.true(events.validity.includes(true), 'onValidityChange fired with true');
-
-  t.teardown(() => api.dispose());
 });
 
 test.serial('typing @ at the start spawns a slot row', async t => {
-  const { $container, api } = await setupDefine();
+  const { $container } = await setupDefine(t);
 
   const $source = $container.querySelector('.inline-eval-input');
   fireInput($source, '@');
@@ -104,12 +101,10 @@ test.serial('typing @ at the start spawns a slot row', async t => {
   // The @ is stripped from the source.
   const $source2 = $container.querySelector('.inline-eval-input');
   t.is($source2.value, '', 'leading @ stripped from source');
-
-  t.teardown(() => api.dispose());
 });
 
 test.serial('slot codeName and label feed getData', async t => {
-  const { $container, api } = await setupDefine();
+  const { $container, api } = await setupDefine(t);
 
   const $source = $container.querySelector('.inline-eval-input');
   fireInput($source, '@');
@@ -133,12 +128,10 @@ test.serial('slot codeName and label feed getData', async t => {
     'getData includes the slot',
   );
   t.true(api.isValid());
-
-  t.teardown(() => api.dispose());
 });
 
 test.serial('Enter on the source submits parsed data', async t => {
-  const { $container, api, events } = await setupDefine();
+  const { $container, api, events } = await setupDefine(t);
 
   const $source = $container.querySelector('.inline-eval-input');
   fireInput($source, 'doThing()');
@@ -148,12 +141,10 @@ test.serial('Enter on the source submits parsed data', async t => {
 
   t.is(events.submit.length, 1, 'onSubmit fired once');
   t.deepEqual(events.submit[0], { source: 'doThing()', slots: [] });
-
-  t.teardown(() => api.dispose());
 });
 
 test.serial('Enter on empty source does not submit', async t => {
-  const { $container, api, events } = await setupDefine();
+  const { $container, events } = await setupDefine(t);
 
   const $source = $container.querySelector('.inline-eval-input');
   fireKeyDown($source, 'Enter');
@@ -162,12 +153,10 @@ test.serial('Enter on empty source does not submit', async t => {
   await tick(20);
 
   t.is(events.submit.length, 0, 'no submit on empty source');
-
-  t.teardown(() => api.dispose());
 });
 
 test.serial('Cmd-Enter expands with a cursor position', async t => {
-  const { $container, api, events } = await setupDefine();
+  const { $container, api, events } = await setupDefine(t);
 
   const $source = $container.querySelector('.inline-eval-input');
   fireInput($source, 'expr');
@@ -182,24 +171,20 @@ test.serial('Cmd-Enter expands with a cursor position', async t => {
     'number',
     'cursorPosition present',
   );
-
-  t.teardown(() => api.dispose());
 });
 
 test.serial('Escape on the source cancels', async t => {
-  const { $container, api, events } = await setupDefine();
+  const { $container, events } = await setupDefine(t);
 
   const $source = $container.querySelector('.inline-eval-input');
   fireKeyDown($source, 'Escape');
   await waitFor(() => events.cancel === 1);
 
   t.is(events.cancel, 1, 'onCancel fired');
-
-  t.teardown(() => api.dispose());
 });
 
 test.serial('setData populates source and slots', async t => {
-  const { $container, api } = await setupDefine();
+  const { $container, api } = await setupDefine(t);
 
   api.setData({
     source: 'compose(a, b)',
@@ -227,12 +212,10 @@ test.serial('setData populates source and slots', async t => {
       { codeName: 'b', label: 'second' },
     ],
   });
-
-  t.teardown(() => api.dispose());
 });
 
 test.serial('clear empties source and slots', async t => {
-  const { $container, api } = await setupDefine();
+  const { $container, api } = await setupDefine(t);
 
   api.setData({ source: 'x', slots: [{ codeName: 'a', label: 'first' }] });
   await waitFor(
@@ -256,12 +239,10 @@ test.serial('clear empties source and slots', async t => {
   t.is($source.value, '', 'source cleared');
   t.deepEqual(api.getData(), { source: '', slots: [] });
   t.false(api.isValid());
-
-  t.teardown(() => api.dispose());
 });
 
 test.serial('setDisabled disables the source and slot inputs', async t => {
-  const { $container, api } = await setupDefine();
+  const { $container, api } = await setupDefine(t);
 
   api.setData({ source: 'x', slots: [{ codeName: 'a', label: 'l' }] });
   await waitFor(() => !!$container.querySelector('.inline-eval-petname'));
@@ -284,12 +265,10 @@ test.serial('setDisabled disables the source and slot inputs', async t => {
   );
   const $source2 = $container.querySelector('.inline-eval-input');
   t.false($source2.disabled, 're-enabled');
-
-  t.teardown(() => api.dispose());
 });
 
 test.serial('label defaults to codeName when blank', async t => {
-  const { $container, api } = await setupDefine();
+  const { $container, api } = await setupDefine(t);
 
   const $source = $container.querySelector('.inline-eval-input');
   fireInput($source, '@');
@@ -302,12 +281,10 @@ test.serial('label defaults to codeName when blank', async t => {
   await waitFor(() => api.getData().slots.length === 1);
 
   t.deepEqual(api.getData().slots, [{ codeName: 'bar', label: 'bar' }]);
-
-  t.teardown(() => api.dispose());
 });
 
 test.serial('dispose unmounts the view', async t => {
-  const { $container, api } = await setupDefine();
+  const { $container, api } = await setupDefine(t);
 
   const $source = $container.querySelector('.inline-eval-input');
   fireInput($source, 'x');
@@ -321,3 +298,39 @@ test.serial('dispose unmounts the view', async t => {
     'view removed after dispose',
   );
 });
+
+// Keep passive effects pending until after interaction, without relying on the
+// relative speed of the runner and Preact's animation-frame scheduler.
+for (const interaction of ['input', 'setData']) {
+  test.serial(
+    `mount replays ${interaction} before passive effects`,
+    async t => {
+      const previousRaf = options.requestAnimationFrame;
+      const pending = [];
+      options.requestAnimationFrame = callback => pending.push(callback);
+      t.teardown(() => {
+        options.requestAnimationFrame = previousRaf;
+        for (const callback of pending.splice(0)) callback();
+      });
+      const { $container, api } = await setupDefine(t);
+      t.true(pending.length > 0, 'mount effect has not flushed');
+
+      if (interaction === 'input') {
+        fireInput($container.querySelector('.inline-eval-input'), '@');
+      } else {
+        api.setData({
+          source: 'thing',
+          slots: [{ codeName: 'thing', label: 'Thing' }],
+        });
+        api.setDisabled(true);
+      }
+      for (const callback of pending.splice(0)) callback();
+      await waitFor(
+        () => !!$container.querySelector('.inline-eval-endowment-group'),
+      );
+      const source = $container.querySelector('.inline-eval-input');
+      t.is(source.value, interaction === 'input' ? '' : 'thing');
+      t.is(source.disabled, interaction === 'setData');
+    },
+  );
+}
