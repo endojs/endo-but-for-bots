@@ -369,3 +369,45 @@ test.serial(
     t.is(dials, 1, 'redirect never bypasses destination validation');
   },
 );
+
+test.serial(
+  'early upstream response completes without waiting for unfinished client upload',
+  async t => {
+    const closed = future();
+    let responseSent = false;
+    let uploadEnded = false;
+    const endpoint = Far('EarlyResponseEndpoint', {
+      open: () =>
+        Far('EarlyResponseTunnel', {
+          write() {},
+          end() {
+            uploadEnded = true;
+          },
+          read() {
+            if (responseSent) return null;
+            responseSent = true;
+            return btoa(
+              'HTTP/1.1 413 Payload Too Large\r\nConnection: close\r\nContent-Length: 0\r\n\r\n',
+            );
+          },
+          close() {
+            closed.resolve(undefined);
+          },
+        }),
+    });
+    const proxy = await listener(t, endpoint);
+    // The client sends only one of the promised 9999 bytes and never ends its
+    // write side. An early origin response must still finish and close both ends.
+    const response = await exchange(
+      t,
+      proxy.url,
+      'POST http://public.example/upload HTTP/1.1\r\nHost: public.example\r\nContent-Length: 9999\r\n\r\nx',
+    );
+    t.regex(response, /^HTTP\/1\.1 413 Payload Too Large/);
+    await closed.promise;
+    t.false(
+      uploadEnded,
+      'the proxy did not pretend the incomplete upload finished',
+    );
+  },
+);
