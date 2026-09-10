@@ -536,7 +536,7 @@ fn historical_rejection_report_survives_gc_blob_eager_and_lazy_restore() {
         let first = vm.run(&code);
         assert!(first.completed);
         let owner = first.unhandled_rejection.unwrap().0;
-        assert!(crank(&mut vm, "var p; p.then(0, function () {}); p = null;").0);
+        assert!(crank(&mut vm, "var p; p.catch(function () {}); p = null;").0);
         assert!(!vm.has_unhandled_rejection());
         vm.collect_garbage().unwrap();
         let bytes = vm.write_snapshot(&sig()).unwrap();

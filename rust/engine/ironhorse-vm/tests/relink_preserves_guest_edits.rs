@@ -207,3 +207,35 @@ fn relink_preserves_guest_intrinsic_edits() {
         }
     }
 }
+
+#[test]
+fn growing_links_install_implicit_dependencies_without_reviving_deleted_properties() {
+    for (first, second, completed) in [
+        (
+            "var p = Promise.reject(1);",
+            "var p; p.catch(function () {});",
+            true,
+        ),
+        (
+            "var p = Promise.reject(1);",
+            "var p; p.finally(function () {});",
+            true,
+        ),
+        ("0", "Promise.all([]);", true),
+        ("0", "Promise.resolve({});", true),
+        (
+            "var p = Promise.reject(1); delete Promise.prototype.then;",
+            "var p; p.catch(function () {});",
+            false,
+        ),
+    ] {
+        let (code, names) = compile(first);
+        let mut vm = Interp::new();
+        vm.link_intrinsics(&names);
+        assert!(vm.run(&code).completed);
+        let (code, names) = compile(second);
+        let code = vm.relink_crank(&code, &names).unwrap();
+        let outcome = vm.run(&code);
+        assert_eq!(outcome.completed, completed, "{second}: {:?}", outcome.halt);
+    }
+}

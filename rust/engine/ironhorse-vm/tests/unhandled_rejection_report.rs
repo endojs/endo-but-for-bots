@@ -60,7 +60,7 @@ fn later_handlers_do_not_erase_the_first_report_and_gc_keeps_its_reason() {
     );
     let (owner, reason) = first.unhandled_rejection.unwrap();
     assert_eq!(reason.kind, Kind::Reference);
-    let later = crank(&mut vm, "var p; p.then(0, function () {}); p = null;");
+    let later = crank(&mut vm, "var p; p.catch(function () {}); p = null;");
     assert_eq!(later.unhandled_rejection, first.unhandled_rejection);
     assert!(!vm.has_unhandled_rejection());
     vm.collect_garbage().unwrap();
