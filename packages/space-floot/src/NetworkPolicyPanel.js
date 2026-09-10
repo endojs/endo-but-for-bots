@@ -96,7 +96,7 @@ export const NetworkPolicyPanel = ({ network, controller }) => {
           h(
             'p',
             null,
-            'Off blocks external sandbox network access. Inference service access and authority granted through Endo capabilities/tools are separate. Public internet permits public HTTP/HTTPS only; private, link-local, and metadata addresses are denied. SSH and UDP are not enabled.',
+            'Off blocks external sandbox network access. Inference service access and authority granted through Endo capabilities/tools are separate. Public internet provides an HTTP/HTTPS proxy to public ports 80 and 443; private, link-local, and metadata addresses are denied. Direct connections, UDP, and standard SSH port 22 are not enabled. HTTPS tunnels do not inspect application traffic.',
           ),
           h(
             'p',

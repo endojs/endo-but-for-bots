@@ -314,8 +314,11 @@ To revoke access during a turn, Stop it first and wait for it to settle.
 
 Off blocks external sandbox networking, not inference service access or authority
 already granted through Endo capability tools.
-Public internet initially permits only public HTTP/HTTPS; private, link-local,
-metadata, SSH, and UDP access are not enabled.
+Public internet initially provides an HTTP/HTTPS proxy to public ports 80 and 443.
+Private, link-local, metadata, direct network, UDP, and standard SSH port 22 access
+are not enabled.
+HTTPS CONNECT tunnels are opaque: the proxy does not inspect their application
+protocol or payload, and public servers may receive uploads from the workspace.
 Older or unsupported backends are explicitly unavailable, never shown as enforcing
 Off by default.
 An incomplete transition displays no verified policy and permits only an explicit
