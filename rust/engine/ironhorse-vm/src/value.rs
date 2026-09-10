@@ -2179,6 +2179,29 @@ impl ChunkArena {
         length
     }
 
+    /// Check one restored payload's header and bounds without walking the
+    /// arena's entire allocation chain. This does not prove that an arbitrary
+    /// in-bounds offset is an allocation boundary; full chain validation uses
+    /// `validate_references`. Backing-source failures still fault normally.
+    pub(crate) fn restored_payload_len(&self, off: ChunkOffset) -> Result<usize, &'static str> {
+        let start = off.0 as usize;
+        let header = start
+            .checked_sub(CHUNK_HEADER)
+            .ok_or("chunk offset below header")?;
+        if off.is_null() || start > self.byte_size() {
+            return Err("chunk offset outside arena");
+        }
+        let bytes = self.view(header, start);
+        let length = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
+        if length == FREE_CHUNK {
+            return Err("chunk offset references a free block");
+        }
+        if length > self.byte_size() - start {
+            return Err("chunk payload outside arena");
+        }
+        Ok(length)
+    }
+
     /// A shared view of `len` bytes of the block whose payload begins
     /// at `off`, faulting the covering extents in on a lazy arena. The
     /// guard derefs to `[u8]`; callers must not hold it across a
