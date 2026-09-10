@@ -415,7 +415,14 @@ impl HeapStore for InterleavingStore {
 fn interleaving_store(fire_on: Interleave) -> InterleavingStore {
     let mut inner = MemoryStore::new();
     let mut m = Interp::new();
-    assert!(m.run(&PROG_A).completed);
+    // Restore validates boot metadata eagerly. Keep a guest object graph on
+    // additional pages so the row-read race targets a genuinely cold page.
+    let (code, names) = ironhorse_compile::compile_atoms(
+        "var cold = {}; for (var i = 0; i < 2048; i++) cold = { previous: cold }; 1",
+    )
+    .unwrap();
+    m.link_intrinsics(&ironhorse_vm::parse_symbols(&names));
+    assert!(m.run(&code).completed);
     let session = begin(m, &mut inner);
     let seal1 = inner.manifest().unwrap().seal;
     let batch2 = image_to_batch_unchecked(

@@ -867,46 +867,80 @@ impl Interp {
     /// the restored chunk arena). Validates every row — an unknown
     /// element kind, a flags byte outside the two brand bits, a NULL
     /// or out-of-arena backing extent, a view naming a buffer with no
-    /// row, or live view geometry past its buffer's length — and returns
-    /// `false` without completing on a violation (the caller fails its
-    /// decode closed). Detached buffers retain their views' former geometry
+    /// row, or live view geometry past its buffer's length — before any
+    /// family table changes. Detached buffers retain their views' former geometry
     /// because the observable accessors project those views as zero-length.
     pub(super) fn restore_typed_array_family(
         &mut self,
         buffers: Vec<(u32, u32, u32, u8)>,
         views: Vec<(u32, u8, u32, u32, u32)>,
         data_views: Vec<(u32, u32, u32, u32)>,
-    ) -> bool {
-        let chunk_len = self.chunks.byte_size() as u64;
-        for (owner, data, length, flags) in &buffers {
-            let data = crate::value::ChunkOffset(*data);
-            // Every honest buffer owns a real chunk allocation (a
-            // zero-length buffer still allocates its header), whose
-            // payload begins past the 4-byte header and ends inside
-            // the arena.
-            if data.is_null()
-                || (data.0 as u64) < crate::value::CHUNK_HEADER as u64
-                || data.0 as u64 + *length as u64 > chunk_len
-                || *flags > 0b11
-            {
-                return false;
+    ) -> Result<(), RestoreError> {
+        const ROW: &str = "TypedArrayFamily";
+        let refuse = |reason| RestoreError { row: ROW, reason };
+        self.validate_restore_owners(buffers.iter().map(|row| row.0), ROW)?;
+        self.validate_restore_owners(views.iter().map(|row| row.0), ROW)?;
+        self.validate_restore_owners(data_views.iter().map(|row| row.0), ROW)?;
+        let mut owners = std::collections::HashSet::new();
+        for owner in buffers
+            .iter()
+            .map(|row| row.0)
+            .chain(views.iter().map(|row| row.0))
+            .chain(data_views.iter().map(|row| row.0))
+        {
+            if !owners.insert(owner) {
+                return Err(refuse("owner has multiple buffer-family brands"));
             }
-            let stored_length = self.chunks.len_of(data);
-            if stored_length as u64 > chunk_len - data.0 as u64
-                || if flags & 1 != 0 {
-                    *length != 0
-                } else {
-                    *length as usize != stored_length
-                }
-            {
-                return false;
+        }
+        for &(_, data, length, flags) in &buffers {
+            if flags > 0b11 {
+                return Err(refuse("unknown buffer flags"));
             }
-            let owner = crate::value::SlotIndex(*owner);
+            let stored_length = self
+                .chunks
+                .restored_payload_len(crate::value::ChunkOffset(data))
+                .map_err(refuse)?;
+            if if flags & 1 != 0 {
+                length != 0
+            } else {
+                length as usize != stored_length
+            } {
+                return Err(refuse("buffer length disagrees with backing state"));
+            }
+        }
+        let buffer_state = |owner| {
+            buffers
+                .binary_search_by_key(&owner, |row| row.0)
+                .ok()
+                .map(|index| (buffers[index].2, buffers[index].3))
+                .ok_or_else(|| refuse("view has no buffer row"))
+        };
+        for &(_, kind, buffer, offset, length) in &views {
+            let ty = TYPED_ARRAY_TYPES
+                .get(kind as usize)
+                .ok_or_else(|| refuse("unknown typed-array kind"))?;
+            let (buffer_length, flags) = buffer_state(buffer)?;
+            if offset % (1u32 << ty.shift) != 0 {
+                return Err(refuse("typed-array offset is not aligned"));
+            }
+            let end = u64::from(offset) + (u64::from(length) << ty.shift);
+            if flags & 1 == 0 && end > u64::from(buffer_length) {
+                return Err(refuse("typed-array range exceeds buffer"));
+            }
+        }
+        for &(_, buffer, offset, size) in &data_views {
+            let (buffer_length, flags) = buffer_state(buffer)?;
+            if flags & 1 == 0 && u64::from(offset) + u64::from(size) > u64::from(buffer_length) {
+                return Err(refuse("data-view range exceeds buffer"));
+            }
+        }
+        for (owner, data, length, flags) in buffers {
+            let owner = crate::value::SlotIndex(owner);
             self.array_buffers.insert(
                 owner,
                 ArrayBufferData {
-                    data,
-                    length: *length,
+                    data: crate::value::ChunkOffset(data),
+                    length,
                 },
             );
             if flags & 1 != 0 {
@@ -917,47 +951,27 @@ impl Interp {
             }
         }
         for (owner, kind, buffer, offset, length) in views {
-            let Some(ty) = TYPED_ARRAY_TYPES.get(kind as usize) else {
-                return false;
-            };
-            let buffer = crate::value::SlotIndex(buffer);
-            let Some(buf) = self.array_buffers.get(&buffer) else {
-                return false;
-            };
-            let end = offset as u64 + ((length as u64) << ty.shift);
-            if !self.detached_buffers.contains(&buffer) && end > buf.length as u64 {
-                return false;
-            }
             self.typed_arrays.insert(
                 crate::value::SlotIndex(owner),
                 TypedArrayData {
                     kind,
-                    buffer,
+                    buffer: crate::value::SlotIndex(buffer),
                     offset,
                     length,
                 },
             );
         }
         for (owner, buffer, offset, size) in data_views {
-            let buffer = crate::value::SlotIndex(buffer);
-            let Some(buf) = self.array_buffers.get(&buffer) else {
-                return false;
-            };
-            if !self.detached_buffers.contains(&buffer)
-                && offset as u64 + size as u64 > buf.length as u64
-            {
-                return false;
-            }
             self.data_views.insert(
                 crate::value::SlotIndex(owner),
                 DataViewData {
-                    buffer,
+                    buffer: crate::value::SlotIndex(buffer),
                     offset,
                     size,
                 },
             );
         }
-        true
+        Ok(())
     }
 
     /// Quiescent snapshot of the `wrapper_data` side table (ledger

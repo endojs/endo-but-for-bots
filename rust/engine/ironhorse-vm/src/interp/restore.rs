@@ -242,17 +242,9 @@ impl RestoreSession {
         data_views: Vec<(u32, u32, u32, u32)>,
     ) -> Result<(), RestoreError> {
         self.admit("typed_array_family")?;
-        let result = if self
+        let result = self
             .interp
-            .restore_typed_array_family(buffers, views, data_views)
-        {
-            Ok(())
-        } else {
-            Err(RestoreError {
-                row: "typed_array_family",
-                reason: "malformed row set",
-            })
-        };
+            .restore_typed_array_family(buffers, views, data_views);
         self.failed = result.err();
         result
     }
@@ -604,6 +596,115 @@ mod tests {
             assert_eq!(error.reason, expected);
             assert!(session.finish().is_err());
         }
+    }
+
+    #[test]
+    fn typed_array_family_is_validated_before_any_buffer_or_view_is_installed() {
+        for case in 0..12 {
+            let mut interp = Interp::new();
+            let buffer = interp.new_object().0;
+            let view = interp.new_object().0;
+            let data_view = interp.new_object().0;
+            let data = interp.chunks.alloc(&[0; 8]).0;
+            let kind = TYPED_ARRAY_TYPES
+                .iter()
+                .position(|ty| ty.shift == 1)
+                .unwrap() as u8;
+            let mut buffers = vec![(buffer, data, 8, 0)];
+            let mut views = vec![(view, kind, buffer, 0, 4)];
+            let mut data_views = vec![(data_view, buffer, 1, 3)];
+            let expected = match case {
+                0 => {
+                    buffers.push(buffers[0]);
+                    "owners are not strictly ascending"
+                }
+                1 => {
+                    views[0].0 = buffer;
+                    "owner has multiple buffer-family brands"
+                }
+                2 => {
+                    buffers[0].3 = 4;
+                    "unknown buffer flags"
+                }
+                3 => {
+                    buffers[0].2 = 7;
+                    "buffer length disagrees with backing state"
+                }
+                4 => {
+                    views[0].1 = u8::MAX;
+                    "unknown typed-array kind"
+                }
+                5 => {
+                    views[0].2 = u32::MAX;
+                    "view has no buffer row"
+                }
+                6 => {
+                    views[0].3 = 1;
+                    "typed-array offset is not aligned"
+                }
+                7 => {
+                    views[0].4 = 5;
+                    "typed-array range exceeds buffer"
+                }
+                8 => {
+                    data_views[0].3 = 8;
+                    "data-view range exceeds buffer"
+                }
+                9 => {
+                    buffers[0].1 = 1;
+                    "chunk offset below header"
+                }
+                10 => {
+                    interp.chunks = ChunkArena::from_image(vec![255; 4]);
+                    buffers[0].1 = 4;
+                    "chunk offset references a free block"
+                }
+                _ => {
+                    interp.chunks = ChunkArena::from_image(vec![8, 0, 0, 0]);
+                    buffers[0].1 = 4;
+                    "chunk payload outside arena"
+                }
+            };
+            let error = interp
+                .restore_typed_array_family(buffers, views, data_views)
+                .unwrap_err();
+            assert_eq!(error.row, "TypedArrayFamily");
+            assert_eq!(error.reason, expected, "case {case}");
+            assert!(interp.array_buffers.is_empty());
+            assert!(interp.typed_arrays.is_empty());
+            assert!(interp.data_views.is_empty());
+        }
+    }
+
+    #[test]
+    fn typed_restore_preserves_detached_geometry_and_empty_end_allocations() {
+        let mut interp = Interp::new();
+        let buffer = interp.new_object().0;
+        let empty_buffer = interp.new_object().0;
+        let view = interp.new_object().0;
+        let data_view = interp.new_object().0;
+        let data = interp.chunks.alloc(&[0; 8]).0;
+        let empty = interp.chunks.alloc(&[]).0;
+        assert_eq!(empty as usize, interp.chunks.byte_size());
+        interp
+            .restore_typed_array_family(
+                vec![(buffer, data, 0, 1), (empty_buffer, empty, 0, 0)],
+                vec![(view, 0, buffer, 16, 4)],
+                vec![(data_view, buffer, 16, 4)],
+            )
+            .unwrap();
+        assert_eq!(
+            interp.typed_arrays[&crate::value::SlotIndex(view)].offset,
+            16
+        );
+        assert_eq!(
+            interp.data_views[&crate::value::SlotIndex(data_view)].offset,
+            16
+        );
+        assert_eq!(
+            interp.array_buffers[&crate::value::SlotIndex(empty_buffer)].length,
+            0
+        );
     }
 
     #[test]
