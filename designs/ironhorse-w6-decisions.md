@@ -298,18 +298,18 @@ application requires.
 Phase 1G changes no runtime code and does not touch `interp.rs`, which belongs
 exclusively to 1A during the freeze.
 
-### Planned invocation restriction (2026-09-10; not implemented)
+### Implemented invocation restriction (2026-09-10; Phase 2B)
 
 [Collection only at quiescence](ironhorse-quiescent-gc.md) records the accepted
-next implementation direction and its motivation, API admission rules, and test migration.
-When implemented, quiescence will be the only supported whole-machine collection boundary,
-including for explicit consumer requests; collection during dispatch or after a halted crank
-will be refused before mutation.
-This narrows the invocation latitude in the Phase 2B contract below, including its statement
-against a universal engine gate, but does not transfer scheduling policy to the engine.
-Pressure, idle, time, and delivery-based policies still belong to consumers; their requests
-must be serviced at a supported boundary.
-No runtime gate is introduced by this documentation amendment.
+restriction and its motivation, admission rules, and test migration.
+Quiescence is now the only supported whole-machine collection boundary.
+Collection during dispatch or after a halted crank is refused before mutation.
+This narrows invocation latitude in the contract below without transferring scheduling
+policy to the engine.
+Pressure, idle, time, and delivery-based policies remain consumer choices;
+their requests must be serviced at a supported boundary.
+The exact production collector and managed rewind are implemented;
+cross-platform CI and final performance analysis are still in progress.
 
 ### Current behavior and the determinism boundary
 
