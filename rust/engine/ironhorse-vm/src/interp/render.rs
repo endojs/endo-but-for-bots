@@ -2,20 +2,12 @@
 use super::*;
 
 impl Interp {
-    /// Render a completion/thrown value the way the oracle shim does:
-    /// `fxToString` then a lossy decode of the string's code units
-    /// (`String::from_utf16_lossy`), the display/debug boundary the design's
-    /// § Value and heap model routes through UTF-16. Non-string kinds defer to
-    /// [`slot_to_ecma_string`].
-    ///
-    /// The array arm recurses over the elements (the `join` XS's `fxToString`
-    /// runs), so a self-containing or deeply nested array is bounded by the
-    /// native-recursion budget: past [`NATIVE_DEPTH_LIMIT`] the render fails
-    /// with [`Halt::ReentryLimit`], the abort XS reaches for the same value
-    /// through its C stack, rather than overflowing the host's. The budget is
-    /// threaded as a parameter because this renderer is `&self`; it starts at
-    /// whatever native depth the caller is at, so a diagnostic render from
-    /// inside a native shares the one ceiling.
+    /// Render a host diagnostic without guest calls or guest heap writes.
+    /// Primitive values and supported built-in data use their ordinary display
+    /// form. This is not observable ECMAScript ToString: getters, proxies and
+    /// custom coercion hooks never execute here. Nested arrays and wrappers
+    /// share the native-depth ceiling; a refused completion is reported through
+    /// the host-render channel, while a thrown value uses a reference stub.
     pub(super) fn render(&self, s: &Slot) -> Result<String, Step> {
         self.render_at(s, self.native_depth)
     }
@@ -44,10 +36,6 @@ impl Interp {
                 bi_to_decimal(neg, &mag)
             }
             Payload::Reference(r) => {
-                // An Error instance stringifies through `Error.prototype.
-                // toString`: `name` with an empty/absent message, else
-                // `name: message` — the abort/completion value parity the
-                // Error hierarchy graduates.
                 if self.arguments_objects.contains(&r) {
                     // An `arguments` object's `Object.prototype.toString`
                     // builtinTag is `Arguments` (its prototype is
@@ -75,9 +63,8 @@ impl Interp {
                         } else if let Some(id) = self.symbol_ids.get(i.to_string()).copied() {
                             // A restrictive `defineProperty` descriptor moves
                             // the index out of the compact item table and into
-                            // the ordinary property chain. Completion rendering
-                            // is the host's `String(result)`/array join boundary;
-                            // include a materialized data index just as the
+                            // the ordinary property chain. Include a
+                            // materialized data index in the diagnostic as the
                             // guest `join` path's MOP read does. (An accessor
                             // would require re-entering guest code after the
                             // run and remains outside this read-only renderer.)
@@ -155,10 +142,15 @@ impl Interp {
                     // its `(?:)` source).
                     let (source, _alloc) = self.regexp_source_bytes(r);
                     format!("/{}/{}", String::from_utf8_lossy(&source), d.flags)
-                } else if let Some(info) = self.error_data.get(&r) {
-                    match &info.message {
-                        Some(m) if !m.is_empty() => format!("{}: {}", info.name, m),
-                        _ => info.name.to_string(),
+                } else if self.error_data.contains_key(&r) {
+                    let name = self.render_error_property(r, "name", "Error");
+                    let message = self.render_error_property(r, "message", "");
+                    if name.is_empty() {
+                        message
+                    } else if message.is_empty() {
+                        name
+                    } else {
+                        format!("{name}: {message}")
                     }
                 } else if let Some(prim) = self.wrapper_data.get(&r).copied() {
                     // A primitive wrapper (`new Boolean`/`Number`/`String`)
@@ -209,69 +201,50 @@ impl Interp {
         })
     }
 
-    /// Render an uncaught thrown value the way the oracle shim's host
-    /// boundary does (`String(exception)` after `fxRunScript`): a thrown user
-    /// object runs its guest `toString` (sta.js's `Test262Error` carries
-    /// one), so the abort value matches the oracle's rendering of the same
-    /// failure. Native errors also use their observable `name`, `message`,
-    /// and coercion hooks: the guest may have changed them since construction.
-    /// Any failure inside guest coercion falls back to the static rendering.
-    ///
-    /// Called from [`Self::run`] only, once the halt has actually reached the
-    /// host. An escape out of a nested dispatch is not yet uncaught — a
-    /// native `mxTry` (a promise executor, a reaction, a disposer) may still
-    /// catch it, and XS's `mxCatch` copies `mxException` without running any
-    /// guest code — so the escape sites carry the static render and the
-    /// guest `toString` runs here or never. See
-    /// `tests/engine_throws_are_catchable.rs` for the once-at-host-boundary lock. The shim's
-    /// stringification is post-run, so its metering is discarded too: the
-    /// oracle records the run-only count at the throw.
-    ///
-    /// The text is a diagnostic and never decides the crank's outcome: the
-    /// guest coercion running past the native-recursion budget (a thrown
-    /// self-containing array's `join`) is discarded like any other failure,
-    /// and a value the static renderer refuses for the same reason gets the
-    /// reference stub ([`Self::render_or_stub`]). XS's host does abort
-    /// rendering such a value; ironhorse reports the throw with the stub
-    /// text instead — a divergence confined to the text of a throw nothing
-    /// could have caught.
-    pub(super) fn render_uncaught(&mut self, code: &[u8], v: Slot) -> String {
-        // Rendering is a host diagnostic boundary, not a second guest throw:
-        // if the diagnostic ToPrimitive itself fails, discard that attempt
-        // completely so it cannot replace the original value (or leave an
-        // extra callback frame behind).
-        let saved_exception = self.exception;
-        let saved_meter = self.meter.clone();
-        let stack_base = self.stack.len();
-        let call_depth = self.call_stack.len();
-        let jump_depth = self.jumps.len();
-        if let Payload::Reference(_) = v.value {
-            if v.kind == Kind::Reference {
-                match self.to_primitive(code, v, true) {
-                    Ok(prim) => {
-                        self.exception = saved_exception;
-                        self.meter = saved_meter;
-                        if prim.kind == Kind::String {
-                            if let Payload::String(off) = prim.value {
-                                return self.str_text(off);
-                            }
-                        }
-                        if prim.kind != Kind::Reference {
-                            return self.render_or_stub(&prim);
-                        }
-                    }
-                    Err(_) => {
-                        while self.call_stack.len() > call_depth {
-                            let _ = self.leave_call();
-                        }
-                        self.stack.truncate(stack_base);
-                        self.jumps.truncate(jump_depth);
-                        self.meter = saved_meter;
-                    }
-                }
+    /// Read a live error field without invoking accessors, proxies or object
+    /// coercion. Explicit placeholders distinguish unavailable data from an
+    /// absent property. Construction-time ErrorInfo remains snapshot metadata,
+    /// not the authority for the error's current display text.
+    fn render_error_property(
+        &self,
+        mut object: crate::value::SlotIndex,
+        name: &str,
+        default: &str,
+    ) -> String {
+        let Some(&id) = self.symbol_ids.get(name) else {
+            return default.to_string();
+        };
+        // Even a corrupt prototype chain cannot make a host diagnostic loop.
+        for _ in 0..self.slots.capacity() {
+            if object.is_null() {
+                return default.to_string();
             }
+            if self.proxies.contains_key(&object) {
+                return "<proxy>".to_string();
+            }
+            if let Some(property) = self.find_property(object, id) {
+                let value = self.slots.get(property);
+                if value.flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) != 0 {
+                    return "<accessor>".to_string();
+                }
+                return match value.kind {
+                    Kind::Undefined => default.to_string(),
+                    Kind::Reference => "<object>".to_string(),
+                    Kind::Symbol => {
+                        String::from_utf8_lossy(&self.symbol_descriptive_bytes(value)).into_owned()
+                    }
+                    _ => self.render_or_stub(&value),
+                };
+            }
+            object = self.instance_prototype(object);
         }
-        self.exception = saved_exception;
+        "<prototype cycle>".to_string()
+    }
+
+    /// Once a throw reaches the host, rendering must not resume the guest or
+    /// change its decided outcome. In particular it cannot allocate guest
+    /// objects, enqueue jobs, call a meter host, or swallow a second halt.
+    pub(super) fn render_uncaught(&self, v: Slot) -> String {
         self.render_or_stub(&v)
     }
 

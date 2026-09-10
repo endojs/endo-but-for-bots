@@ -114,8 +114,9 @@ fn a_throwing_then_getter_during_resolution_rejects_instead_of_reaching_the_call
 
 #[test]
 fn a_natively_caught_throw_never_runs_the_thrown_objects_tostring() {
-    // XS's `mxCatch` copies `mxException`; only the host boundary's
-    // `String(exception)` runs a thrown object's `toString`. Rendering the
+    // XS's `mxCatch` copies `mxException`; its oracle host shim's
+    // `String(exception)` runs a thrown object's `toString`. Ironhorse host
+    // diagnostics never invoke guest coercion. Previously, rendering the
     // value at the escape site ran it for every throw a native try was
     // about to catch (review round 3; XS answers `0` for each).
     for source in [

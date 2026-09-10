@@ -846,7 +846,7 @@ fn char_code_at_does_not_decode_the_receiver_100000_times() {
 
 #[test]
 fn internal_transfers_cannot_be_reported_as_host_completions() {
-    let mut interp = Interp::new();
+    let interp = Interp::new();
     for step in [
         Step::Yielded(Slot::undefined()),
         Step::Awaited(Slot::undefined()),
@@ -857,18 +857,18 @@ fn internal_transfers_cannot_be_reported_as_host_completions() {
         }),
     ] {
         assert_eq!(
-            interp.finish_step(&[], step),
+            interp.finish_step(step),
             Halt::EngineInvariant("dispatch:control-transfer-escaped")
         );
     }
-    assert_eq!(interp.finish_step(&[], Step::Returned), Halt::Return);
+    assert_eq!(interp.finish_step(Step::Returned), Halt::Return);
     assert_eq!(
-        interp.finish_step(&[], Step::Host(Halt::MeterAbort)),
+        interp.finish_step(Step::Host(Halt::MeterAbort)),
         Halt::MeterAbort
     );
     let value = Slot::number(42.0);
     assert_eq!(
-        interp.finish_step(&[], Step::Threw { value }),
+        interp.finish_step(Step::Threw { value }),
         Halt::Throw {
             value,
             rendered: "42".into()

@@ -52,8 +52,8 @@ impl Interp {
     /// set lives in the slot-arena property chain, with no exotic side table
     /// (array/typed-array/collection/buffer/view/wrapper). Error instances are
     /// ordinary objects for MOP purposes: their `message`/`cause` properties
-    /// live entirely in this same slot chain; `error_data` only accelerates
-    /// Error.prototype.toString.
+    /// live entirely in this same slot chain; `error_data` retains construction
+    /// metadata and captured stack frames.
     /// Callers use this only when they specifically require a slot-chain-only
     /// receiver; reflection and integrity operations instead route through the
     /// complete `mop_*` dispatchers.

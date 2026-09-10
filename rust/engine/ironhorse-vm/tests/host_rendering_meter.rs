@@ -15,7 +15,9 @@ fn exception_rendering_work_does_not_change_run_cost() {
         let mut vm = Interp::new();
         vm.link_intrinsics(&parse_symbols(&symbols));
         let outcome = vm.run(&code);
-        assert!(matches!(&outcome.halt, Halt::Throw { rendered, .. } if rendered == "done"));
+        assert!(
+            matches!(&outcome.halt, Halt::Throw { rendered, .. } if rendered == "[object Object]")
+        );
         costs.push((vm.meter_index(), outcome.computrons));
     }
     assert_eq!(costs[0], costs[1]);
