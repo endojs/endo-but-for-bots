@@ -1094,7 +1094,8 @@ impl SlotArena {
         if index.is_null() {
             return false;
         }
-        debug_assert!(!self.is_free(index.0), "mark of free slot");
+        assert!(index.0 < self.capacity(), "mark of out-of-arena slot");
+        assert!(!self.is_free(index.0), "mark of free slot");
         let i = index.0 as usize;
         if self.marks[i] {
             false
@@ -1426,32 +1427,39 @@ impl ChunkReader<'_> {
 
     /// Validate a whole chain block before using either its end or free tag.
     fn block_at(&mut self, header: usize, total: usize) -> (usize, bool) {
+        self.checked_block_at(header, total)
+            .unwrap_or_else(|error| panic!("{error}"))
+    }
+
+    fn checked_block_at(
+        &mut self,
+        header: usize,
+        total: usize,
+    ) -> Result<(usize, bool), &'static str> {
         let payload = header
             .checked_add(CHUNK_HEADER)
             .filter(|&end| end <= total)
-            .expect("chunk chain header out of range (corrupt heap)");
+            .ok_or("chunk chain header out of range (corrupt heap)")?;
         let length = self.length_at(header);
         if length == FREE_CHUNK {
-            assert!(
-                total - header >= FREE_CHUNK_HEADER,
-                "free chunk header out of range (corrupt heap)"
-            );
+            if total - header < FREE_CHUNK_HEADER {
+                return Err("free chunk header out of range (corrupt heap)");
+            }
             let span = self.length_at(payload);
-            assert!(
-                span >= FREE_CHUNK_HEADER,
-                "free chunk span too short (corrupt heap)"
-            );
+            if span < FREE_CHUNK_HEADER {
+                return Err("free chunk span too short (corrupt heap)");
+            }
             let end = header
                 .checked_add(span)
                 .filter(|&end| end <= total)
-                .expect("free chunk span out of range (corrupt heap)");
-            (end, true)
+                .ok_or("free chunk span out of range (corrupt heap)")?;
+            Ok((end, true))
         } else {
             let end = payload
                 .checked_add(length)
                 .filter(|&end| end <= total)
-                .expect("chunk chain payload out of range (corrupt heap)");
-            (end, false)
+                .ok_or("chunk chain payload out of range (corrupt heap)")?;
+            Ok((end, false))
         }
     }
 
@@ -1462,41 +1470,52 @@ impl ChunkReader<'_> {
         &mut self,
         total: usize,
         live: &[ChunkOffset],
-        mut visit: impl FnMut(usize, usize, bool),
+        visit: impl FnMut(usize, usize, bool),
     ) {
+        self.checked_visit_blocks(total, live, true, visit)
+            .unwrap_or_else(|error| panic!("{error}"));
+    }
+
+    fn checked_visit_blocks(
+        &mut self,
+        total: usize,
+        live: &[ChunkOffset],
+        check_tail: bool,
+        mut visit: impl FnMut(usize, usize, bool),
+    ) -> Result<(), &'static str> {
         let mut roots: Vec<_> = live.iter().copied().filter(|off| !off.is_null()).collect();
         roots.sort_unstable_by_key(|off| off.0);
         roots.dedup();
         let mut matched = 0;
         let mut header = 0;
         while header < total {
-            let (end, reusable) = self.block_at(header, total);
+            if !check_tail && matched == roots.len() {
+                return Ok(());
+            }
+            let (end, reusable) = self.checked_block_at(header, total)?;
             // block_at proved that the complete header fits.
             let payload = header + CHUNK_HEADER;
             if let Some(off) = roots.get(matched) {
-                assert!(
-                    off.0 as usize >= payload,
-                    "chunk offset is not a payload boundary (corrupt heap)"
-                );
+                if (off.0 as usize) < payload {
+                    return Err("chunk offset is not a payload boundary (corrupt heap)");
+                }
             }
             let marked = roots
                 .get(matched)
                 .is_some_and(|off| off.0 as usize == payload);
             if marked {
-                assert!(
-                    !reusable,
-                    "chunk offset references a free block (corrupt heap)"
-                );
+                if reusable {
+                    return Err("chunk offset references a free block (corrupt heap)");
+                }
                 matched += 1;
             }
             visit(header, end, marked);
             header = end;
         }
-        assert_eq!(
-            matched,
-            roots.len(),
-            "chunk offset is not a payload boundary (corrupt heap)"
-        );
+        if matched != roots.len() {
+            return Err("chunk offset is not a payload boundary (corrupt heap)");
+        }
+        Ok(())
     }
 
     fn prepare_write(
@@ -2156,6 +2175,18 @@ impl ChunkArena {
         self.ensure_range_resident(start, start + len);
         self.mark_dirty_range(start, start + len);
         &mut self.bytes_mut()[start..start + len]
+    }
+
+    /// Check that non-null references name allocated payload boundaries with
+    /// complete blocks. Walk only through the last referenced block; lazy
+    /// headers are read without changing residency, backing, or dirty state.
+    /// Malformed bytes return an error; backing-source failures still propagate.
+    pub fn validate_references(&self, live: &[ChunkOffset]) -> Result<(), &'static str> {
+        let mut reader = ChunkReader {
+            bytes: &self.bytes,
+            cached: None,
+        };
+        reader.checked_visit_blocks(self.len(), live, false, |_, _, _| {})
     }
 
     /// Reclaim chunks without relocating across extent boundaries. Complete

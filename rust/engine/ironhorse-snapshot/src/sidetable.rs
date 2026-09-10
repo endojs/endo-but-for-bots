@@ -719,6 +719,8 @@ mod tests {
             // persistable boundary; a restore lands on a fresh machine,
             // which starts true.
             "last_crank_completed",
+            // A failed collection is never a persistable state.
+            "gc_failed",
         ];
         const HOST_WIRING: &[&str] = &[
             // Embedding policy configured outside each activation.
@@ -1102,6 +1104,7 @@ mod tests {
             "side_refs",
             // The crank-lifecycle latch.
             "last_crank_completed",
+            "gc_failed",
             // The Proxy-trap context, refused if leaked.
             "array_iterator_proxy_get_context",
             // Hidden control latches may survive a halted activation (F025).

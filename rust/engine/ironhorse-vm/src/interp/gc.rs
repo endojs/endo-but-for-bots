@@ -35,6 +35,11 @@ impl Interp {
     /// worklist order from a fixed (sorted) root sequence, sweep is
     /// index order.
     pub fn collect_garbage(&mut self) -> crate::gc::GcStats {
+        assert!(
+            !self.gc_failed,
+            "collection after failed garbage collection"
+        );
+        self.gc_failed = true;
         self.classes.1.mark_all();
         use crate::value::SlotIndex;
 
@@ -50,6 +55,7 @@ impl Interp {
         self.compact_code_segments();
         self.compact_reaction_arenas();
 
+        self.gc_failed = false;
         stats
     }
 
@@ -96,6 +102,25 @@ impl Interp {
             .values()
             .filter_map(|d| is_promise_resolving_guard(d.guard).then_some(d.guard))
             .collect();
+
+        // Cardinality alone does not establish that an index set covers its
+        // arena: an out-of-range index can replace a missing valid one.
+        assert!(
+            live_comb
+                .iter()
+                .all(|&i| (i as usize) < self.combinators.len()),
+            "gc:combinator-index-out-of-arena"
+        );
+        assert!(
+            live_fa
+                .iter()
+                .all(|&i| (i as usize) < self.from_async.len()),
+            "gc:from-async-index-out-of-arena"
+        );
+        assert!(
+            live_guards.iter().all(|&i| i < self.promise_guards.len()),
+            "gc:promise-guard-index-out-of-arena"
+        );
 
         // Fully-live arenas need no rewrite (every index below the
         // length is referenced, so every remap would be the identity).
@@ -181,6 +206,10 @@ impl Interp {
         }
         let live: std::collections::BTreeSet<usize> =
             self.func_segments.values().copied().collect();
+        assert!(
+            live.iter().all(|&i| i < self.code_segments.len()),
+            "gc:code-segment-index-out-of-arena"
+        );
         if live.len() == self.code_segments.len()
             && live.iter().copied().eq(0..self.code_segments.len())
         {
@@ -220,11 +249,16 @@ impl Interp {
     /// manifest's `free_len`), exactly like a sweep.
     pub fn free_pages(&mut self, pages: &[u32]) -> u32 {
         use crate::value::{SlotIndex, SLOTS_PER_PAGE};
+        assert!(
+            !self.gc_failed,
+            "page freeing after failed garbage collection"
+        );
         // A counted-reference failure is permanent for this machine.
         // No caller may free from a projection known to be corrupt.
         if self.side_refs.is_poisoned() {
             return 0;
         }
+        self.gc_failed = true;
         let mut freed: Vec<SlotIndex> = Vec::new();
         let mut sorted: Vec<u32> = pages.to_vec();
         sorted.sort_unstable();
@@ -249,6 +283,7 @@ impl Interp {
         self.prune_dead_tables(&dead);
         self.compact_code_segments();
         self.compact_reaction_arenas();
+        self.gc_failed = false;
         freed.len() as u32
     }
 

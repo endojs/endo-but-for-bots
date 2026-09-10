@@ -1638,6 +1638,22 @@ pub struct Interp {
     /// alone cannot admit it to persistence while its boundary
     /// registers remain rooted. Snapshot `tests/persist_gates.rs` checks this.
     last_crank_completed: bool,
+    #[boot_new(false)]
+    #[boot_template(state.gc_failed)]
+    #[gc_root(none)]
+    #[quiescent(false)]
+    #[persist_refs(none)]
+    #[runtime_keys(none)]
+    #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
+    #[gc_slots(none, none)]
+    #[gc_weak(none)]
+    #[snapshot_table(none)]
+    /// Set before collection can mutate the heap and cleared only on success.
+    /// An unwound collection may have swept slots or rewritten only some
+    /// holders. Such a machine cannot execute, collect again, or checkpoint;
+    /// the supervisor must discard it and restore the last committed state.
+    gc_failed: bool,
     #[boot_new(Tracked::new(
         Vec::new(),
         classes.1.clone(),
