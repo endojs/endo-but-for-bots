@@ -198,7 +198,10 @@ checksum = "e4a2c462a4d927d512f5f882a033ddd62f33a05bb9f230d98f736ac3dc85938f"
 name = "ironhorse-compile"
 version = "0.0.1"
 dependencies = [
+ "ironhorse-meter",
  "ironhorse-regexp",
+ "ironhorse-text",
+ "ironhorse-unicode",
 ]
 
 [[package]]
@@ -223,8 +226,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ironhorse-meter"
+version = "0.0.1"
+
+[[package]]
 name = "ironhorse-regexp"
 version = "0.0.1"
+dependencies = [
+ "ironhorse-meter",
+ "ironhorse-unicode",
+]
 
 [[package]]
 name = "ironhorse-snapshot"
@@ -234,12 +245,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "ironhorse-text"
+version = "0.0.1"
+
+[[package]]
+name = "ironhorse-unicode"
+version = "0.0.1"
+
+[[package]]
 name = "ironhorse-vm"
 version = "0.0.1"
 dependencies = [
  "icu_normalizer",
  "icu_segmenter",
+ "ironhorse-meter",
  "ironhorse-regexp",
+ "ironhorse-text",
 ]
 
 [[package]]
