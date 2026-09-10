@@ -35,6 +35,25 @@ impl Interp {
         Ok(())
     }
 
+    fn validate_restore_owners(
+        &self,
+        owners: impl IntoIterator<Item = u32>,
+        row: &'static str,
+    ) -> Result<(), RestoreError> {
+        let mut previous = None;
+        for owner in owners {
+            self.validate_restore_owner(owner, row)?;
+            if previous.is_some_and(|prior| owner <= prior) {
+                return Err(RestoreError {
+                    row,
+                    reason: "owners are not strictly ascending",
+                });
+            }
+            previous = Some(owner);
+        }
+        Ok(())
+    }
+
     // --- Snapshot surface -----------------------------------------------
     //
     // The narrow, engine-side conversion primitives the `ironhorse-snapshot`
@@ -888,11 +907,13 @@ impl Interp {
     }
 
     /// Reinstate the arguments-exotic brand set.
-    pub fn restore_arguments_brands(&mut self, owners: Vec<u32>) {
+    pub fn restore_arguments_brands(&mut self, owners: Vec<u32>) -> Result<(), RestoreError> {
+        self.validate_restore_owners(owners.iter().copied(), "ArgumentsBrands")?;
         for owner in owners {
             self.arguments_objects
                 .insert(crate::value::SlotIndex(owner));
         }
+        Ok(())
     }
 
     /// Upgrade semantic boot dependencies and object layouts that changed
@@ -1041,16 +1062,8 @@ impl Interp {
     /// Reject non-live/non-instance owners, nonascending owners, and values
     /// outside TimeClip's output domain before changing any table entry.
     pub fn restore_dates(&mut self, rows: Vec<(u32, u64)>) -> Result<(), RestoreError> {
-        let mut previous = None;
-        for &(owner, value_bits) in &rows {
-            self.validate_restore_owner(owner, "Dates")?;
-            if previous.is_some_and(|prior| owner <= prior) {
-                return Err(RestoreError {
-                    row: "Dates",
-                    reason: "owners are not strictly ascending",
-                });
-            }
-            previous = Some(owner);
+        self.validate_restore_owners(rows.iter().map(|&(owner, _)| owner), "Dates")?;
+        for &(_, value_bits) in &rows {
             let value = f64::from_bits(value_bits);
             if !value.is_nan() && value_bits != time_clip(value).to_bits() {
                 return Err(RestoreError {

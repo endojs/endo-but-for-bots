@@ -1020,7 +1020,8 @@ macro_rules! snapshot_payloads {
                     }
                 }],
                 restore: [Temporal, [arguments_brands], (interp) {
-                    interp.restore_arguments_brands(arguments_brands);
+                    interp.restore_arguments_brands(arguments_brands)
+                        .map_err(|_| SnapshotError::Corrupt("side-table restore: malformed ArgumentsBrands row"))?;
                 }],
                 initialize: [Temporal;
                     #[doc = " The arguments-exotic brand owners (schema 11; the `ARGB` encoding)."]
