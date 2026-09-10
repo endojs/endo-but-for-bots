@@ -1005,7 +1005,13 @@ impl Interp {
         reject: Slot,
     ) -> Result<(), Step> {
         self.meter.tick_raw(PROMISE_THENABLE_JOB_FRAME_METERING);
-        match self.run_callback_catching_throw(code, then, thenable, &[resolve, reject])? {
+        // The dequeued job still owns these functions when a callable proxy
+        // discards its arguments. In particular, reject must survive a throw.
+        let root_sp = self.stack.len();
+        self.stack.extend([resolve, reject]);
+        let called = self.run_callback_catching_throw(code, then, thenable, &[resolve, reject]);
+        self.stack.truncate(root_sp);
+        match called? {
             Ok(_) => Ok(()),
             Err(thrown) => self.reject_via_function(reject, thrown),
         }
@@ -1192,17 +1198,41 @@ impl Interp {
         value: Slot,
         rejected: bool,
     ) -> Result<(), Step> {
-        let on_finally = reaction.on_fulfilled;
-        if self.is_callable_value(on_finally) {
-            match self.call_any_catching_throw(code, on_finally, Slot::undefined(), &[])? {
-                Ok(r) => self.await_finally_result(code, reaction, r, value, rejected),
-                Err(thrown) => {
-                    self.settle_capability(code, reaction.resolve, reaction.reject, thrown, true)
+        // The active job is no longer in the queue. Keep its capability,
+        // constructor and original settlement live across the callback. Read
+        // the settlement back from the stack because a string/BigInt may move.
+        let root_sp = self.stack.len();
+        self.stack.extend([
+            reaction.resolve,
+            reaction.reject,
+            reaction.on_rejected,
+            value,
+        ]);
+        let outcome = (|| {
+            let on_finally = reaction.on_fulfilled;
+            if self.is_callable_value(on_finally) {
+                match self.call_any_catching_throw(code, on_finally, Slot::undefined(), &[])? {
+                    Ok(r) => self.await_finally_result(
+                        code,
+                        reaction,
+                        r,
+                        self.stack[root_sp + 3],
+                        rejected,
+                    ),
+                    Err(thrown) => self.settle_capability(
+                        code,
+                        reaction.resolve,
+                        reaction.reject,
+                        thrown,
+                        true,
+                    ),
                 }
+            } else {
+                self.settle_capability(code, reaction.resolve, reaction.reject, value, rejected)
             }
-        } else {
-            self.settle_capability(code, reaction.resolve, reaction.reject, value, rejected)
-        }
+        })();
+        self.stack.truncate(root_sp);
+        outcome
     }
 
     /// Perform the default-native `PromiseResolve(C, result)` and
@@ -1219,17 +1249,65 @@ impl Interp {
         original: Slot,
         original_rejected: bool,
     ) -> Result<(), Step> {
-        let constructor = reaction.on_rejected;
+        // PromiseResolve and the observable constructor/then lookups can all
+        // call guest code. Keep both values and the eventual promise in traced
+        // storage until the original settlement reaches its await reaction.
+        let root_sp = self.stack.len();
+        self.stack.extend([result, original, Slot::undefined()]);
+        let outcome = (|| {
+            let constructor = reaction.on_rejected;
 
-        // PromiseResolve returns an already-native promise unchanged only when
-        // its observable constructor is the selected constructor.
-        let identity = if let Payload::Reference(inst) = result.value {
-            if result.kind == Kind::Reference && self.promises.contains_key(&inst) {
-                let constructor_id = self.intern_key("constructor");
-                match self
-                    .array_from_try(|this| this.mop_get(code, inst, constructor_id, result))?
+            // PromiseResolve returns an already-native promise unchanged only when
+            // its observable constructor is the selected constructor.
+            let identity = if let Payload::Reference(inst) = result.value {
+                if result.kind == Kind::Reference && self.promises.contains_key(&inst) {
+                    let constructor_id = self.intern_key("constructor");
+                    match self
+                        .array_from_try(|this| this.mop_get(code, inst, constructor_id, result))?
+                    {
+                        Ok(observed) => self.same_value(observed, constructor),
+                        Err(error) => {
+                            return self.settle_capability(
+                                code,
+                                reaction.resolve,
+                                reaction.reject,
+                                error,
+                                true,
+                            );
+                        }
+                    }
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+
+            let awaited_slot = if identity {
+                self.stack[root_sp]
+            } else {
+                let capability = match self
+                    .array_from_try(|this| this.new_promise_capability_for(code, constructor))?
                 {
-                    Ok(observed) => self.same_value(observed, constructor),
+                    Ok(capability) => capability,
+                    Err(error) => {
+                        return self.settle_capability(
+                            code,
+                            reaction.resolve,
+                            reaction.reject,
+                            error,
+                            true,
+                        );
+                    }
+                };
+                self.stack[root_sp + 2] = capability.promise;
+                match self.call_any_catching_throw(
+                    code,
+                    capability.resolve,
+                    Slot::undefined(),
+                    &[self.stack[root_sp]],
+                )? {
+                    Ok(_) => self.stack[root_sp + 2],
                     Err(error) => {
                         return self.settle_capability(
                             code,
@@ -1240,21 +1318,12 @@ impl Interp {
                         );
                     }
                 }
-            } else {
-                false
-            }
-        } else {
-            false
-        };
-
-        let awaited_slot = if identity {
-            result
-        } else {
-            let capability = match self
-                .array_from_try(|this| this.new_promise_capability_for(code, constructor))?
-            {
-                Ok(capability) => capability,
-                Err(error) => {
+            };
+            self.stack[root_sp + 2] = awaited_slot;
+            let awaited = match awaited_slot.value {
+                Payload::Reference(inst) if awaited_slot.kind == Kind::Reference => inst,
+                _ => {
+                    let error = self.internal_error("TypeError", "call: not a function".into());
                     return self.settle_capability(
                         code,
                         reaction.resolve,
@@ -1264,14 +1333,15 @@ impl Interp {
                     );
                 }
             };
-            match self.call_any_catching_throw(
-                code,
-                capability.resolve,
-                Slot::undefined(),
-                &[result],
-            )? {
-                Ok(_) => capability.promise,
-                Err(error) => {
+            let then_id = self.intern_key("then");
+            self.install_pending_intrinsics();
+            self.then_id = Some(then_id);
+            let then = match self
+                .array_from_try(|this| this.mop_get(code, awaited, then_id, awaited_slot))?
+            {
+                Ok(method) if self.is_callable_value(method) => method,
+                Ok(_) => {
+                    let error = self.internal_error("TypeError", "call: not a function".into());
                     return self.settle_capability(
                         code,
                         reaction.resolve,
@@ -1280,69 +1350,50 @@ impl Interp {
                         true,
                     );
                 }
-            }
-        };
-        let awaited = match awaited_slot.value {
-            Payload::Reference(inst) if awaited_slot.kind == Kind::Reference => inst,
-            _ => {
-                let error = self.internal_error("TypeError", "call: not a function".into());
-                return self.settle_capability(
-                    code,
-                    reaction.resolve,
-                    reaction.reject,
-                    error,
-                    true,
-                );
-            }
-        };
-        let then_id = self.intern_key("then");
-        self.install_pending_intrinsics();
-        self.then_id = Some(then_id);
-        let then = match self
-            .array_from_try(|this| this.mop_get(code, awaited, then_id, awaited_slot))?
-        {
-            Ok(method) if self.is_callable_value(method) => method,
-            Ok(_) => {
-                let error = self.internal_error("TypeError", "call: not a function".into());
-                return self.settle_capability(
-                    code,
-                    reaction.resolve,
-                    reaction.reject,
-                    error,
-                    true,
-                );
-            }
-            Err(error) => {
-                return self.settle_capability(code, reaction.resolve, reaction.reject, error, true)
-            }
-        };
-        let await_reaction = PromiseReaction {
-            on_fulfilled: original,
-            on_rejected: Slot::undefined(),
-            resolve: reaction.resolve,
-            reject: reaction.reject,
-            kind: ReactionKind::FinallyAwait(original_rejected),
-        };
-        if self.promises.contains_key(&awaited)
-            && matches!(then.value,
+                Err(error) => {
+                    return self.settle_capability(
+                        code,
+                        reaction.resolve,
+                        reaction.reject,
+                        error,
+                        true,
+                    )
+                }
+            };
+            let await_reaction = PromiseReaction {
+                on_fulfilled: self.stack[root_sp + 1],
+                on_rejected: Slot::undefined(),
+                resolve: reaction.resolve,
+                reject: reaction.reject,
+                kind: ReactionKind::FinallyAwait(original_rejected),
+            };
+            if self.promises.contains_key(&awaited)
+                && matches!(then.value,
                 Payload::Reference(function)
                     if self.method_of(function) == Some(NativeMethod::PromiseThen))
-        {
-            self.register_native_reaction(awaited, await_reaction);
-            return Ok(());
-        }
+            {
+                self.register_native_reaction(awaited, await_reaction);
+                return Ok(());
+            }
 
-        let (bridge, bridge_resolve, bridge_reject) = self.new_promise_capability();
-        self.register_native_reaction(bridge, await_reaction);
-        match self.call_any_catching_throw(
-            code,
-            then,
-            awaited_slot,
-            &[bridge_resolve, bridge_reject],
-        )? {
-            Ok(_) => Ok(()),
-            Err(error) => self.reject_via_function(bridge_reject, error),
-        }
+            let (bridge, bridge_resolve, bridge_reject) = self.new_promise_capability();
+            self.register_native_reaction(bridge, await_reaction);
+            // A callable proxy can discard its argument array before throwing.
+            // The argument list alone therefore cannot keep the bridge alive
+            // until we use its reject function after the call.
+            self.stack.extend([bridge_resolve, bridge_reject]);
+            match self.call_any_catching_throw(
+                code,
+                then,
+                awaited_slot,
+                &[bridge_resolve, bridge_reject],
+            )? {
+                Ok(_) => Ok(()),
+                Err(error) => self.reject_via_function(bridge_reject, error),
+            }
+        })();
+        self.stack.truncate(root_sp);
+        outcome
     }
 
     /// `Promise.all`/`allSettled`/`race`/`any` (`fx_Promise_all` …): build the

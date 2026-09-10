@@ -106,3 +106,55 @@ fn mixed_live_state_survives_alternating_collectors_and_lazy_resume() {
     assert_same_crank(session.machine_mut(), &mut baseline, "result");
     assert_eq!(run(session.machine_mut(), "result").result, "99");
 }
+
+#[test]
+fn lazy_collection_relocates_suspended_async_generator_handlers() {
+    let sig = Signature::new("gc-async-generator-handlers");
+    let mut baseline = Interp::new();
+    let mut machine = Interp::new();
+    // Allocate a dead earlier segment so the saved handler's segment must move.
+    let discarded = "var discarded = function() {}; discarded = null; 0";
+    assert_same_crank(&mut machine, &mut baseline, discarded);
+    let store = Rc::new(RefCell::new(MemoryStore::new()));
+    let initial = begin_store_session(machine, &sig, &mut *store.borrow_mut())
+        .map_err(|(_, error)| error)
+        .unwrap();
+    drop(initial);
+    let mut session = resume_from_store_lazy(store.clone(), &sig).unwrap();
+    let suspend = r#"
+        var trace = '';
+        var iterator = (async function*() {
+            try { yield 'ready'; }
+            catch (e) { trace += 'catch:' + e + ';'; yield 'handled'; }
+            finally { trace += 'finally;'; }
+        })();
+        iterator.next().then(r => trace += 'start:' + r.value + ';');
+        0
+    "#;
+    assert_same_crank(session.machine_mut(), &mut baseline, suspend);
+    assert_eq!(session.machine().retained_code_segment_count(), 2);
+    session.machine_mut().collect_garbage();
+    assert_eq!(session.machine().retained_code_segment_count(), 1);
+    session.machine_mut().collect_garbage();
+    assert_same_crank(
+        session.machine_mut(),
+        &mut baseline,
+        "iterator.throw('boom').then(r => trace += 'caught:' + r.value + ';'); 0",
+    );
+    assert_same_crank(
+        session.machine_mut(),
+        &mut baseline,
+        "iterator.next().then(r => trace += 'done:' + r.done + ';'); 0",
+    );
+    // Live async generators deliberately cannot persist yet. After exercising
+    // the saved catch/finally targets, drop the completed generator and commit.
+    assert_same_crank(session.machine_mut(), &mut baseline, "iterator = null; 0");
+    session.machine_mut().collect_garbage();
+    checkpoint_to_store(&mut session, &sig, &mut *store.borrow_mut()).unwrap();
+    let mut restored = resume_from_store_lazy(store, &sig).unwrap();
+    assert_same_crank(restored.machine_mut(), &mut baseline, "trace");
+    assert_eq!(
+        run(restored.machine_mut(), "trace").result,
+        "start:ready;catch:boom;caught:handled;finally;done:true;"
+    );
+}
