@@ -283,14 +283,7 @@ impl RestoreSession {
     }
     pub fn restore_proxy_state(&mut self, state: ProxyStateSnapshot) -> Result<(), RestoreError> {
         self.admit(1 << 10, "proxy_state")?;
-        let result = if self.interp.restore_proxy_state(state) {
-            Ok(())
-        } else {
-            Err(RestoreError {
-                row: "proxy_state",
-                reason: "malformed row set",
-            })
-        };
+        let result = self.interp.restore_proxy_state(state);
         self.failed = result.err();
         result
     }
@@ -631,6 +624,83 @@ mod tests {
     }
 
     #[test]
+    fn proxy_rows_are_validated_as_a_batch() {
+        for case in 0..8 {
+            let mut interp = Interp::new();
+            let first = interp.new_object();
+            let second = interp.new_object();
+            let revoker = interp.new_object();
+            let mut state = ProxyStateSnapshot {
+                proxies: vec![ProxyRow {
+                    owner: first.0,
+                    target: second.0,
+                    handler: second.0,
+                    revoked: false,
+                }],
+                revokers: vec![ProxyRevokerRow {
+                    owner: revoker.0,
+                    proxy: first.0,
+                    name_chunk: u32::MAX,
+                }],
+            };
+            let expected = match case {
+                0 => {
+                    state.proxies.push(state.proxies[0].clone());
+                    "owners are not strictly ascending"
+                }
+                1 => {
+                    interp.slots.free(first);
+                    "owner is not a live slot"
+                }
+                2 => {
+                    state.proxies[0].target = u32::MAX;
+                    "owner is not a live slot"
+                }
+                3 => {
+                    interp.slots.get_mut(second).value = Payload::Integer(0);
+                    "owner is not an instance"
+                }
+                4 => {
+                    state.proxies[0].revoked = true;
+                    "revoked proxy retains target or handler"
+                }
+                5 => {
+                    state.revokers[0].proxy = second.0;
+                    "revoker names no proxy row"
+                }
+                6 => {
+                    state.revokers[0].owner = first.0;
+                    "revoker owner already has callable metadata"
+                }
+                _ => {
+                    state.revokers[0].name_chunk = 1;
+                    "invalid guest value"
+                }
+            };
+            let error = interp.restore_proxy_state(state).unwrap_err();
+            assert_eq!(error.row, "Proxies");
+            assert_eq!(error.reason, expected);
+            assert!(interp.proxies.is_empty());
+            assert!(interp.proxy_revokers.is_empty());
+            assert!(!interp.functions.contains_key(&revoker));
+        }
+        let mut interp = Interp::new();
+        let owner = interp.new_object();
+        interp
+            .restore_proxy_state(ProxyStateSnapshot {
+                proxies: vec![ProxyRow {
+                    owner: owner.0,
+                    target: u32::MAX,
+                    handler: u32::MAX,
+                    revoked: true,
+                }],
+                revokers: vec![],
+            })
+            .unwrap();
+        assert!(interp.proxies[&owner].revoked);
+    }
+
+    #[test]
     fn reconstruction_refuses_malformed_property_chains() {
         for case in 0..4 {
             let mut source = Interp::new();
@@ -674,7 +744,7 @@ mod tests {
         let ProtoAccessorKey::String(name) = key else {
             panic!("fixture needs a string-keyed seed");
         };
-        let id = interp.intern_key_unmetered(name);
+        let id = interp.intern_static_key_unmetered(name);
         let mut property = Slot::undefined();
         property.id = id;
         let property = interp.slots.alloc(property);

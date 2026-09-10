@@ -640,15 +640,17 @@ fn restored_proxy_metadata_takes_precedence_over_a_runnable_body() {
     else {
         panic!("fixture handler is an object");
     };
-    assert!(interp.restore_proxy_state(ProxyStateSnapshot {
-        proxies: vec![ProxyRow {
-            owner: candidate,
-            target,
-            handler: handler.0,
-            revoked: false,
-        }],
-        revokers: Vec::new(),
-    }));
+    interp
+        .restore_proxy_state(ProxyStateSnapshot {
+            proxies: vec![ProxyRow {
+                owner: candidate,
+                target,
+                handler: handler.0,
+                revoked: false,
+            }],
+            revokers: Vec::new(),
+        })
+        .unwrap();
     assert_side_tables_have_live_owners(&interp);
     assert_restored_overlap_calls_target(&mut interp);
 }
