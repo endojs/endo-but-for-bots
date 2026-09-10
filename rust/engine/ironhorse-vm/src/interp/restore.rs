@@ -472,17 +472,8 @@ impl RestoreSession {
     ) -> Result<(), RestoreError> {
         self.admit("bulk_side_tables")?;
         let result =
-            if self
-                .interp
-                .restore_bulk_side_tables(arrays, index_props, collections, registry)
-            {
-                Ok(())
-            } else {
-                Err(RestoreError {
-                    row: "bulk_side_tables",
-                    reason: "malformed row set",
-                })
-            };
+            self.interp
+                .restore_bulk_side_tables(arrays, index_props, collections, registry);
         self.failed = result.err();
         result
     }
@@ -648,6 +639,122 @@ mod tests {
             assert_eq!(error.row, "snapshot_state");
             assert_eq!(error.reason, expected);
             assert!(session.finish().is_err());
+        }
+    }
+
+    #[test]
+    fn bulk_restore_preserves_lazy_content_keys_duplicates_and_high_water_marks() {
+        struct NoChunkReads;
+        impl crate::PageSource for NoChunkReads {
+            fn slot_page(&self, _: u32) -> Vec<Slot> {
+                panic!("fixture slot read");
+            }
+            fn chunk_extent(&self, _: u32) -> Vec<u8> {
+                panic!("bulk restore must not read content-key chunks");
+            }
+        }
+        let mut interp = Interp::new();
+        let array = interp.new_object();
+        let indexed = interp.new_object();
+        let map = interp.new_object();
+        let text = Slot::of(
+            Kind::String,
+            Payload::String(interp.chunks.alloc(&[b'a', 0])),
+        );
+        let bigint = Slot::of(
+            Kind::BigInt,
+            Payload::BigInt(interp.chunks.alloc(&[0, 1, 0, 0, 0])),
+        );
+        let descriptor = interp.slots.alloc(text);
+        interp.chunks =
+            ChunkArena::lazy_from_parts(interp.chunks.byte_size(), std::rc::Rc::new(NoChunkReads));
+        interp
+            .restore_bulk_side_tables(
+                vec![(array.0, 1, vec![(0, text)])],
+                vec![(indexed.0, 73, vec![(0, bigint)])],
+                vec![(
+                    map.0,
+                    0,
+                    4,
+                    vec![
+                        (text, Slot::integer(1)),
+                        (text, Slot::integer(2)),
+                        (bigint, text),
+                    ],
+                )],
+                vec![(vec![b'a', 0], descriptor.0)],
+            )
+            .unwrap();
+        assert_eq!(interp.collections_snapshot()[0].3.len(), 3);
+        assert_eq!(interp.index_props_snapshot()[0].1, 73);
+        assert_eq!(
+            interp.symbol_registry_snapshot(),
+            vec![(vec![b'a', 0], descriptor.0)]
+        );
+    }
+
+    #[test]
+    fn bulk_rows_are_checked_before_any_counted_table_changes() {
+        for case in 0..10 {
+            let mut interp = Interp::new();
+            let owner = interp.new_object();
+            let descriptor = interp.slots.alloc(Slot::undefined());
+            let mut arrays = vec![(owner.0, 1, vec![(0, Slot::integer(1))])];
+            let mut indices = vec![];
+            let mut collections = vec![];
+            let mut registry = vec![];
+            let expected = match case {
+                0 => {
+                    arrays.push(arrays[0].clone());
+                    "owners are not strictly ascending"
+                }
+                1 => {
+                    indices.push((owner.0, 1, vec![(1, Slot::integer(1))]));
+                    "length or high-water mark does not cover items"
+                }
+                2 => {
+                    arrays[0].2.push((0, Slot::integer(2)));
+                    "item indices are not strictly ascending"
+                }
+                3 => {
+                    collections.push((owner.0, 4, 0, vec![]));
+                    "unknown collection kind"
+                }
+                4 => {
+                    collections.push((owner.0, 2, 1, vec![]));
+                    "weak collection carries a hash table"
+                }
+                5 => {
+                    collections.push((owner.0, 0, 3, vec![]));
+                    "unreachable collection table geometry"
+                }
+                6 => {
+                    registry.push((vec![b'a', 0], descriptor.0));
+                    "registry descriptor has no string description"
+                }
+                7 => {
+                    registry.push((vec![b'a'], descriptor.0));
+                    "registry key is not UTF-16 bytes"
+                }
+                8 => {
+                    arrays[0].2[0].1 = Slot::of(Kind::String, Payload::Integer(0));
+                    "invalid guest value"
+                }
+                _ => {
+                    arrays[0].2[0].1 =
+                        Slot::of(Kind::BigInt, Payload::BigInt(crate::value::ChunkOffset(1)));
+                    "invalid guest value"
+                }
+            };
+            let error = interp
+                .restore_bulk_side_tables(arrays, indices, collections, registry)
+                .unwrap_err();
+            assert_eq!(error.row, "BulkSideTables");
+            assert_eq!(error.reason, expected, "case {case}");
+            assert!(interp.arrays_snapshot().is_empty());
+            assert!(interp.index_props_snapshot().is_empty());
+            assert!(interp.collections_snapshot().is_empty());
+            assert!(interp.symbol_registry_snapshot().is_empty());
         }
     }
 
