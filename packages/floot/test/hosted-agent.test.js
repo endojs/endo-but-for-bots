@@ -57,9 +57,11 @@ test('a hosted backend persists completed turns and scopes reused tool IDs', asy
   t.timeout(5000);
   const sent = makeSendSignal();
   const turns = [];
+  const sendOptions = [];
   const powers = makeFakePowers();
   const hostedClient = harden({
-    async send() {
+    async send(_text, options) {
+      sendOptions.push(options);
       const channel = makeBufferedReader();
       turns.push(channel);
       sent.notify();
@@ -80,6 +82,11 @@ test('a hosted backend persists completed turns and scopes reused tool IDs', asy
   })();
   const turnP = agent.converse('build it', writer);
   await sent.waitFor(1);
+  t.is(
+    sendOptions[0].continuityContext,
+    '',
+    'current input is not replayed as history',
+  );
   turns[0].push({ type: 'text-delta', text: 'Built.' });
   turns[0].push({ type: 'tool-call', id: 'tool-1', name: 'shell', args: '{}' });
   turns[0].push({
@@ -107,6 +114,15 @@ test('a hosted backend persists completed turns and scopes reused tool IDs', asy
   const secondReply = makeReplyChannel();
   const secondTurn = agent.converse('again', secondReply.writer);
   await sent.waitFor(2);
+  t.deepEqual(
+    JSON.parse(sendOptions[1].continuityContext),
+    [
+      { role: 'user', content: 'build it' },
+      { role: 'tool', name: 'shell', args: '{}', result: 'ok' },
+      { role: 'assistant', content: 'Built.' },
+    ],
+    'the next turn gets complete prior dialogue, not its own prompt',
+  );
   turns[1].push({
     type: 'tool-call',
     id: 'tool-1',

@@ -441,8 +441,8 @@ harden(assertHostedAgentPolicyV1);
  * @param {() => Promise<void>} [powers.retrySliceCleanup]
  *   Reap slices retained by a failed makeSlice before releasing workspace leases.
  * @param {(options: any) => Promise<any>} powers.startTransport
- * @param {(sessionId: string) => Promise<{ threadId?: string, toolSetId?: string, recovery?: { baseTurnId: string | null, turnId?: string, status?: string } }>} powers.loadThreadState
- * @param {(sessionId: string, state: { threadId: string, toolSetId?: string, recovery?: { baseTurnId: string | null, turnId?: string, status?: string } }) => Promise<void>} powers.saveThreadState
+ * @param {(sessionId: string) => Promise<{ threadId?: string, toolSetId?: string, recovery?: { baseTurnId: string | null, turnId?: string, status?: string, previousCheckpoint?: string } }>} powers.loadThreadState
+ * @param {(sessionId: string, state: { threadId: string, toolSetId?: string, recovery?: { baseTurnId: string | null, turnId?: string, status?: string, previousCheckpoint?: string } }) => Promise<void>} powers.saveThreadState
  * @param {string} powers.imageDigest
  * @param {string} powers.providerOrigin operator-approved HTTPS origin
  * @param {string} powers.accountRef operator-selected provider account
@@ -776,8 +776,8 @@ harden(normalizeCodexModelDescriptor);
  *   auditWriter: any,
  *   threadId?: string,
  *   savedToolSetId?: string,
- *   savedRecovery?: { baseTurnId: string | null, turnId?: string, status?: string },
- *   saveThreadState?: (state: { threadId: string, toolSetId?: string, recovery?: { baseTurnId: string | null, turnId?: string, status?: string } }) => Promise<void>,
+ *   savedRecovery?: { baseTurnId: string | null, turnId?: string, status?: string, previousCheckpoint?: string },
+ *   saveThreadState?: (state: { threadId: string, toolSetId?: string, recovery?: { baseTurnId: string | null, turnId?: string, status?: string, previousCheckpoint?: string } }) => Promise<void>,
  * }>} options.provision
  * @param {() => Promise<readonly any[]>} options.listModels
  * @param {string} options.imageDigest
