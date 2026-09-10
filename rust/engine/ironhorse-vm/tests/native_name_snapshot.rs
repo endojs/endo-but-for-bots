@@ -48,6 +48,6 @@ fn pruning_followed_by_invalid_guest_metadata_cannot_publish_a_machine() {
     let mut invalid = ironhorse_vm::FunctionStateSnapshot::default();
     invalid.ctor_prototypes.push((0, 0));
     let error = restored.restore_function_state(invalid).unwrap_err();
-    assert_eq!(error.row, "function_state");
+    assert_eq!(error.row, "Functions");
     assert_eq!(restored.finish().err().unwrap(), error);
 }
