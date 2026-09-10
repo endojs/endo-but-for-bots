@@ -59,3 +59,16 @@ fn native_only_jobs_cannot_drain_past_the_host_ceiling() {
     assert!(pump.meter_raw_this_run > 0);
     assert!(vm.has_pending_jobs());
 }
+
+#[test]
+fn empty_drain_does_not_add_a_return_to_host_meter_checkpoint() {
+    let mut vm = Interp::new();
+    vm.arm_meter(1, Box::new(|_| false));
+    let out = run(&mut vm, "1 + 2 * 3");
+    assert!(out.completed, "straight-line return: {:?}", out.halt);
+    assert!(out.computrons > 1, "the host interval was crossed");
+    assert!(!vm.has_pending_jobs());
+    let empty = vm.run_promise_jobs();
+    assert!(empty.completed, "empty pump: {:?}", empty.halt);
+    assert_eq!(empty.meter_raw_this_run, 0);
+}
