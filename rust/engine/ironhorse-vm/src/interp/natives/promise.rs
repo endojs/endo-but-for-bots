@@ -1884,7 +1884,7 @@ impl Interp {
 
     /// Build an `AggregateError` instance over `errors` (no message) — the
     /// rejection reason `Promise.any` produces when every element rejects.
-    /// Shares the instance/`errors`-Array construction with
+    /// Shares the `errors`-Array installation with
     /// [`Self::build_aggregate_error`].
     fn new_aggregate_error(&mut self, errors: Vec<Slot>) -> Slot {
         self.meter.tick_builtin();
@@ -1909,21 +1909,7 @@ impl Interp {
         let n = errors.len() as u64;
         self.meter
             .tick_raw(AGGREGATE_ERROR_EXTRA + n * AGGREGATE_ERROR_PER_ELEMENT);
-        let arr_inst = self.slots.alloc(Slot::instance(self.array_proto));
-        let mut arr_data = ArrayData::default();
-        for (i, mut v) in errors.into_iter().enumerate() {
-            v.id = 0;
-            v.next = crate::value::SlotIndex::NULL;
-            arr_data.insert_item(i as u32, v, &mut self.side_refs);
-        }
-        arr_data.length = n as u32;
-        self.arrays.insert(arr_inst, arr_data);
-        let eid = self.intern_static_key_unmetered("errors");
-        self.set_own_unmetered(
-            inst,
-            eid,
-            Slot::of(Kind::Reference, Payload::Reference(arr_inst)),
-        );
+        self.install_aggregate_errors(inst, errors);
         Slot::of(Kind::Reference, Payload::Reference(inst))
     }
 }

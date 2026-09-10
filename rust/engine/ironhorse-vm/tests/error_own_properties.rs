@@ -81,3 +81,35 @@ fn same_crank_message_still_reads() {
     assert!(o.completed, "crank: {:?}", o.halt);
     assert_eq!(o.result, "r");
 }
+
+#[test]
+fn aggregate_error_errors_shape_matches_on_constructor_and_promise_any_paths() {
+    for expression in [
+        "new AggregateError([1, 2])",
+        "new AggregateError([])",
+        "Promise.any([Promise.reject(1), Promise.reject(2)])",
+        "Promise.any([])",
+    ] {
+        let setup = if expression.starts_with("Promise") {
+            format!("var e; {expression}.catch(function(reason){{e=reason}})")
+        } else {
+            format!("var e = {expression}")
+        };
+        assert_eq!(
+            cross_crank(
+                &setup,
+                "var e; var d=Object.getOwnPropertyDescriptor(e,'errors'); \
+                 [e instanceof AggregateError, Object.keys(e).length, JSON.stringify(e), \
+                  d.enumerable, d.writable, d.configurable, Array.isArray(d.value)].join('|')",
+            ),
+            "true|0|{}|false|true|true|true",
+            "{expression}",
+        );
+        let expected = if expression.contains("[]") { "" } else { "1,2" };
+        assert_eq!(cross_crank(&setup, "var e; e.errors.join(',')"), expected);
+        assert_eq!(
+            cross_crank(&setup, "var e; e.errors=42; var v=e.errors; delete e.errors; v+':'+e.hasOwnProperty('errors')"),
+            "42:false",
+        );
+    }
+}
