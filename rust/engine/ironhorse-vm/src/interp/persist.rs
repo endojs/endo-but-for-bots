@@ -693,29 +693,30 @@ impl Interp {
 
     /// Reinstate the `error_data` side table from a snapshot (the exact
     /// inverse of [`Self::errors_snapshot`]). Runs on a freshly
-    /// restored machine whose table is empty. Each decoded name must be
-    /// one of the engine's error constructor names
-    /// ([`error_name_static`]) — the decoder already refused anything
-    /// else, so the `false` return is a belt-and-braces corrupt signal
-    /// (the caller fails its decode closed).
+    /// restored machine whose table is empty. Every owner and constructor
+    /// name is validated before any table entry changes.
     pub fn restore_error_data(
         &mut self,
         rows: Vec<(u32, String, Option<SymbolName>, Vec<String>)>,
-    ) -> bool {
+    ) -> Result<(), RestoreError> {
+        self.validate_restore_owners(rows.iter().map(|row| row.0), "Errors")?;
+        let mut prepared = Vec::with_capacity(rows.len());
         for (owner, name, message, frames) in rows {
-            let Some(name) = error_name_static(&name) else {
-                return false;
-            };
-            self.error_data.insert(
+            let name = error_name_static(&name).ok_or(RestoreError {
+                row: "Errors",
+                reason: "unknown error constructor name",
+            })?;
+            prepared.push((
                 crate::value::SlotIndex(owner),
                 ErrorInfo {
                     name,
                     message: message.map(|text| text.to_units()),
                     frames,
                 },
-            );
+            ));
         }
-        true
+        self.error_data.extend(prepared);
+        Ok(())
     }
 
     /// Quiescent snapshot of the `array_buffers` side table (ledger

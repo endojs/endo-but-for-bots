@@ -952,6 +952,44 @@ fn side_ref_tail_masked_undercount_poisons_during_page_pruning() {
 }
 
 #[test]
+fn error_restore_rejects_invalid_batches_without_partial_installation() {
+    let mut interp = Interp::new();
+    let first = interp.new_object();
+    let second = interp.new_object();
+    let primitive = interp.slots.alloc(Slot::integer(1));
+    let freed = interp.new_object();
+    interp.slots.free(freed);
+    let row = |owner, name: &str| (owner, name.to_owned(), None, Vec::new());
+    interp
+        .restore_error_data(vec![row(first.0, "Error")])
+        .unwrap();
+    let before = interp.errors_snapshot();
+    for rows in [
+        vec![row(u32::MAX, "Error")],
+        vec![row(primitive.0, "Error")],
+        vec![row(freed.0, "Error")],
+        vec![row(first.0, "TypeError"), row(first.0, "Error")],
+        vec![row(second.0, "TypeError"), row(first.0, "Error")],
+        vec![row(first.0, "TypeError"), row(second.0, "UnknownError")],
+    ] {
+        assert_eq!(interp.restore_error_data(rows).unwrap_err().row, "Errors");
+        assert_eq!(interp.errors_snapshot(), before);
+    }
+    let message = SymbolName::from_units(&[0xd800]);
+    interp
+        .restore_error_data(vec![(
+            second.0,
+            "TypeError".into(),
+            Some(message.clone()),
+            vec!["frame".into()],
+        )])
+        .unwrap();
+    let restored = interp.errors_snapshot();
+    assert_eq!(restored.last().unwrap().2, Some(message));
+    assert_eq!(restored.last().unwrap().3, vec!["frame"]);
+}
+
+#[test]
 fn disposable_restore_rejects_invalid_records_before_mutation() {
     let mut interp = Interp::new();
     let first = interp.new_object();
