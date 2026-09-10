@@ -33,7 +33,7 @@ impl Interp {
         // the boot names once before constructing their first error. Linked
         // realms already have this key, so guest deletions remain authoritative.
         if !self.symbol_ids.contains_key("name") {
-            let id = self.intern_key_unmetered("name");
+            let id = self.intern_static_key_unmetered("name");
             let data = std::mem::take(&mut self.proto_data);
             for (proto, property, value) in &data {
                 if *property == "name" {
