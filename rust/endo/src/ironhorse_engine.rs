@@ -225,7 +225,8 @@ pub mod engine {
         /// The VM's retained first unhandled rejection, without guest coercion.
         /// Coordinates belong to the current interpreter and may move after
         /// a later collection; this is not an independently owned guest value.
-        pub unhandled_rejection: Option<(ironhorse_vm::value::SlotIndex, ironhorse_vm::value::Slot)>,
+        pub unhandled_rejection:
+            Option<(ironhorse_vm::value::SlotIndex, ironhorse_vm::value::Slot)>,
         /// Completion value under ECMAScript `String()` semantics, or
         /// the engine's display rendering when `String()` cannot coerce
         /// the value (see `coercion_error`).
@@ -1214,7 +1215,9 @@ pub mod engine {
                     }
                     // Scheduled collection (or its recovery) may relocate reason
                     // chunks after run_shared produced the original outcome.
-                    outcome.unhandled_rejection = self.session.as_ref()
+                    outcome.unhandled_rejection = self
+                        .session
+                        .as_ref()
                         .and_then(|session| session.machine().unhandled_rejection());
                     Ok(outcome.into())
                 }
@@ -1451,7 +1454,9 @@ pub mod engine {
             // Deliberately bypass the host checkpoint path. The collector's
             // dirty-boundary assertion must be caught and rewind this state.
             let (code, names) = ironhorse_compile::compile_atoms("committed=99").unwrap();
-            let code = vm.relink_crank(&code, &ironhorse_vm::parse_symbols(&names)).unwrap();
+            let code = vm
+                .relink_crank(&code, &ironhorse_vm::parse_symbols(&names))
+                .unwrap();
             assert!(vm.run(&code).completed);
             assert!(vm.is_quiescent());
             assert!(
@@ -1471,7 +1476,10 @@ pub mod engine {
             let options = HeapStoreOptions {
                 path: dir.path().join("rejection.sqlite"),
                 signature: "rejection-report-test".to_owned(),
-                cadence: CadencePolicy { checkpoint_every: 1, collect_every: 1 },
+                cadence: CadencePolicy {
+                    checkpoint_every: 1,
+                    collect_every: 1,
+                },
                 meter: MeterBounds::default(),
             };
             let mut machine = PersistentMachine::open(&options).unwrap();
