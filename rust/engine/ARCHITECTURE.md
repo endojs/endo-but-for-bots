@@ -230,11 +230,12 @@ not reclamation or an unlimited lifetime key budget.
 The hard poison latch remains the backstop for invalid host-provided state.
 
 The frozen table and default keys have a canonical platform-independent SHA-256 identity.
-Execution determinism is **scoped per release binary per platform**, with identical
-initial state, input and host policy.
-Platform transcendental results can affect guest branches and therefore computrons.
-A matching digest or passing limited golden corpus does not extend that execution scope.
-W6 §4 selects a future provider feature subject to coverage; it is not implemented here.
+The `deterministic-math` configuration (enabled by `consensus`) uses versioned
+software libm for transcendentals and numeric exponentiation.
+With matching release, input, state and host policy, this is the cross-host
+configuration; the ordinary platform-provider default remains per binary/platform.
+Provider identity participates in the boot fingerprint, independently of the weights.
+See [the implementation record](DETERMINISM-METERING.md) for coverage and scope.
 Canonical NaNs are enforced on slot construction and independently by the snapshot codec.
 
 The current meter release is `ironhorse-meter-5`.
@@ -260,14 +261,15 @@ These are the five identifiers named by the review, audited at `96db92e23`.
 | `PARSE_METER_RELEASE` | `ironhorse-compile/src/meter.rs`: alias of `COST_TABLE_VERSION` | No independent bump. Compiler charge/admission changes follow the shared meter release procedure; do not recreate a second version namespace. |
 | `IRONHORSE_FORMAT_VERSION` | Snapshot `format.rs`: 16 | Change the container encoding/interpretation with a format bump and explicit decoder support/refusal. `MIN_READ` is 1, but decoding an old container is not permission to execute it: boot and meter identity gates still apply. |
 | `STORE_SCHEMA_VERSION` | Snapshot `store.rs`: 28 | Change paged-store/manifest/small-state representation with a schema bump and verified migration step or explicit refusal. `migrate_store` authenticates old state and advances monotonically; it does not translate old meter semantics. |
-| `INTL_DATA_VERSION` | VM `interp.rs`: `ironhorse-intl-2026a` | Identifies built-in Intl data and is exposed as `Intl.__ironhorseDataVersion`. Data changes need deliberate release review and a data identifier update. No independent persisted equality gate ties this label to all ICU data/dependency versions today; changing it alone does not make resume safe. |
+| `INTL_DATA_VERSION` | Generated VM `src/intl_profile.rs` | Identifies the in-tree Intl profile plus the locked ICU dependency graph, including data checksums and dependency edges. CI rejects stale generation and root/engine disagreement. The label participates in the boot fingerprint and therefore the persisted SIGN gate. Current dependencies retain an immutable legacy alias; upgrades produce a new identity. |
 
 The derived table digest versions weight/default-key encoding, not every charging point.
 Never overwrite an old release pin; releases with equal weights can have different names.
 The derived `Interp::boot_fingerprint()` replaces the retired `BOOT_LAYOUT_VERSION`.
 It hashes ordered intrinsic layout and participates in execution compatibility;
 changes to debug representations can conservatively invalidate old snapshots.
-Neither this fingerprint nor the Intl label is a substitute for locking ICU dependencies.
+Supported builds use both checked lockfiles and the generated ICU profile.
+Custom ICU data and downstream feature overrides are outside that supported profile.
 
 A meter upgrade needs an explicit worker-state transition plan before deployment:
 retain the old executable to drain/export state, or reboot workers from an approved

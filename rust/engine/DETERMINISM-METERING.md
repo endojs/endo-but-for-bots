@@ -104,3 +104,25 @@ Separate snapshot golden pins preserve both identities; the runtime golden corpu
 and meter schedule do not change.
 The release remains responsible for reviewing provider upgrades and their result,
 receipt and state effects; a feature name alone is not a version promise.
+
+## Intl and Temporal scope and identity
+
+F035/F164: design decision 10 explicitly retains both globals in the consensus
+engine, including their deterministic data and persisted records.
+The amendment states the fixed epoch/UTC clock, engine-owned zone behavior,
+no host locale/database access, oracle omissions and positive oracle-free evidence.
+This accepts the maintenance cost without treating oracle skips as conformance.
+
+F083: `scripts/intl-profile.py` generates the data profile from both checked
+lockfiles and the VM's ICU dependency declarations.
+It hashes the transitive registry versions, sources, checksums and dependency
+edges, including bundled data crates and requested root features.
+CI requires matching workspace graphs and a current generated Rust constant.
+Tests mutate data version/checksum, an edge and requested features to prove drift.
+The original `ironhorse-intl-2026a` alias denotes exactly the immutable baseline
+graph; future graphs receive a digest suffix, never a reassigned alias.
+The boot fingerprint already includes this guest-visible profile, so the
+existing SIGN gate rejects a changed profile before execution.
+In-tree locale/calendar/zone algorithm changes still require a deliberate
+profile release, and custom ICU data or downstream feature overrides are outside
+the supported locked build profile.

@@ -24,6 +24,7 @@
 #[cfg(all(feature = "consensus", feature = "cost-calibration"))]
 compile_error!("consensus and cost-calibration are mutually exclusive");
 
+mod intl_profile;
 mod math;
 pub use math::MATH_PROVIDER;
 mod bulk;

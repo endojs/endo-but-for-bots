@@ -25,7 +25,7 @@ Baseline: `1b130df7`; decision 5 updated for Phase 1G at `96db92e23`.
 | 1 | Realm | **Decided** 2026-09-08 — extract a `Realm` | F059, F054, F159, F144 |
 | 2 | Engine trait | **Deferred** 2026-09-08, with a stated trigger | F068, F157 |
 | 3 | Integrity model | **Decided and implemented** before `f109e8f4` | F058, F015, F057 |
-| 4 | Determinism scope | **Decided** 2026-09-08 — vendor `libm`; blocked on coverage | F080, F081 |
+| 4 | Determinism scope | **Implemented** 2026-09-10 — software `libm` feature after C1–C4 | F080, F081 |
 | 5 | GC schedule | **Decided** 2026-09-09 — engine-consumer policy; reclamation remains Phase 2B | F091, F010, F076, F090 |
 
 ## 1. Realm — decided: extract it
@@ -124,8 +124,12 @@ slot mutated in place still encodes canonically.
 
 **Decision: add a Cargo feature selecting the transcendental provider**, pure-Rust
 `libm` against the platform's, and treat pure-Rust as the determinism-carrying
-configuration. **This is not yet implemented**, and it must not land without the
-coverage below.
+configuration.
+**Implemented 2026-09-10:** `deterministic-math` selects libm 0.2.16 with
+`force-soft-floats`; `consensus` enables it and the ordinary default stays platform.
+C1–C3 preceded this work, and C4 landed in `b7ad82dab` before the runtime feature.
+The selected provider also covers `**` and enters snapshot compatibility.
+See [the implementation record](../rust/engine/DETERMINISM-METERING.md).
 
 Three facts make this cheaper than it reads, all verified at `1b130df7`:
 
@@ -249,26 +253,22 @@ correct behaviour and the reason to add it deliberately rather than discover it.
 
 #### C7. Oracle expectations under a swap
 
-Before flipping the default, state what happens to the 30 corpus files: whether
-the XS oracle is rebuilt against the same `libm` (the seam ledger's
-"heterogeneous-fleet upgrade path"), or whether those cases move to an expected
-divergence list. This is the piece still to scope, and it is tracked above under
-[The part still to scope](#the-part-still-to-scope) rather than here.
+The ordinary default stays platform and the XS oracle is not rebuilt.
+All 30 original provider-sensitive specimens retain their platform assertions.
+The oracle-free `math_corpus_profile` test checks their exact inventory under both
+providers, accepting only two pinned libm differences (`055.js` and `057.js`).
+The other 28 must still pass their original assertions.
+The cross-host pure-provider vector allows no Linux/macOS or debug/release differences.
+A local 72-file stage3-math XS run with `--repeat 3` confirms exactly those two failures.
+See [the C7 record](../rust/engine/DETERMINISM-METERING.md#c7-scope-before-any-default-change).
 
 ### The part still to scope
 
-"Rebuild the oracle against it" is the real work and its shape is not settled.
-The seam ledger records the swap as "the heterogeneous-fleet upgrade path (a
-unilateral swap would break the differential pin and any last-ulp divergence
-transitively diverges computrons)" — results feed guest branches, so a last-ulp
-difference is a full determinism break, not a rounding nit. Scope that before
-committing to a landing date.
-
-**A cheaper intermediate step, available now and not exclusive with the above:**
-run those 30 transcendental cases oracle-free on Linux *and* macOS and fail on
-divergence. That does not make the engine deterministic; it converts an assumed
-risk into a measured one, on the platforms actually shipped. The macOS lane that
-makes this possible only started existing at `c14706d3`.
+C7's original 30-file question is now scoped as above.
+A fleet migration is still a consumer deployment decision: provider changes can
+alter guest branches, receipts and durable state, and snapshots reject profiles
+with different boot identities.
+This feature does not define a heterogeneous-fleet rollout protocol.
 
 ### Documentation debt this decision settles
 

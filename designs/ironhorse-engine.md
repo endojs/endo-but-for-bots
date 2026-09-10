@@ -33,7 +33,7 @@ extraction, engine-trait deferral, transcendental providers and consumer-owned G
 |---|---|---|
 | 1. Thin slice | Landed | Interpreter, meter and oracle harness exist. The early corpus passed historically; present release costs are pinned by oracle-free golden tests. Shared frozen intrinsics remain a stage-4 gap. |
 | 2. Object model and control flow | Partial | Broad opcode, object, closure and exception support exists. Exact GC exists but is not the production collection path; chunk reclamation remains open. W6 decision 5 assigns GC scheduling to the engine consumer. |
-| 3. Built-ins | Partial | RegExp, promises, BigInt, collections, Intl and Temporal exist. Covered cases are not full built-ins conformance; provider-sensitive Math results are scoped per binary/platform. |
+| 3. Built-ins | Partial | RegExp, promises, BigInt, collections, Intl and Temporal exist. Covered cases are not full built-ins conformance; platform Math is per binary/platform; `deterministic-math` carries cross-host execution. |
 | 4. Hardened JavaScript | Partial — bar not met | Object integrity operations exist. Shared Realm extraction, complete daemon SES boot and SES parity acceptance remain open; named skips are not passing acceptance. |
 | 5. Compiler port | Landed; full bar not reverified | Lexer, parser, scoper and coder are the default compiler. Historical byte-identity measurements cover named corpora; budgeted compilation and golden costs now share the runtime release identity. No fresh full-conformance oracle run is claimed here. |
 | 6. Snapshots | Partial | Container/store persistence, checked restore and supervisor tests exist. Historically accepted subset expanded substantially; live activations and unsupported side-table states still fail closed. Complete daemon worker protocol integration remains open. |
@@ -43,16 +43,15 @@ extraction, engine-trait deferral, transcendental providers and consumer-owned G
 
 ### Determinism scope
 
-**Execution determinism is scoped per release binary per platform.**
-The same binary, platform, initial state, inputs and host policy are required;
-the release label alone is not a promise that different platform math libraries
-produce bit-identical results or follow identical guest branches.
-The canonical cost-table SHA-256 identity is platform-independent data encoding;
-it does not establish cross-platform execution determinism.
+**`deterministic-math` carries cross-host execution determinism.**
+It selects the versioned software libm provider and is enabled by `consensus`.
+Matching release, initial state, inputs and host policy are still required.
+The ordinary platform-provider default remains scoped per binary/platform.
+The canonical cost-table SHA-256 identity describes weights, while the boot
+fingerprint also distinguishes provider and locked ICU data profiles.
 This qualification applies to every “deterministic per release” claim below.
-W6 §4 records the planned provider feature and its required coverage; that feature
-is not implemented at this audited base and is not an existing guarantee.
-The store-seam decision uses the same scope.
+W6 §4 and [the implementation record](../rust/engine/DETERMINISM-METERING.md)
+record C1–C4 prerequisites, C7 oracle scope, and independent cross-host vectors.
 
 ## Feasibility Verdict
 
@@ -1333,12 +1332,37 @@ annotations inline mark exactly what changed.
    the oracle build pin.
    Populate it with `git submodule update --init --depth 1 c/moddable` from
    the repository root; see the engine README for a full-fetch fallback.
-10. **Intl extends beyond the oracle's surface.**
-    The original omission decision has been superseded by implemented Intl data,
-    ICU-backed normalization/segmentation and persisted Intl records.
-    The oracle's missing Intl globals are not evidence of IronHorse conformance.
-    `INTL_DATA_VERSION` is a guest-visible label, not a comprehensive dependency
-    or resume compatibility gate; see the architecture compatibility index.
+10. **Intl and Temporal are retained in the consensus engine (amended 2026-09-10).**
+    This supersedes the original omission decision for both globals.
+    They already supply deterministic language behavior, retained instance records,
+    and snapshot state; removing them would retract shipped guest capabilities.
+    Intl uses in-tree locale tables and pinned ICU normalization/segmentation data,
+    with no host locale or dynamic database lookup.
+    Temporal uses engine-owned calendar/zone rules; `Temporal.Now` returns the Unix
+    epoch and its system zone is UTC, with no host clock or zone database.
+    This choice accepts maintenance of those tables, algorithms and persisted records.
+    It does not claim full ECMA-402 or Temporal conformance.
+
+    The pinned XS oracle omits both globals.
+    Only its exact missing-global failures qualify for the corresponding harness
+    carveouts; unrelated exceptions must remain failures.
+    Oracle-free semantic, carry/resume and fixed-clock tests provide positive evidence;
+    an oracle skip is never counted as differential agreement.
+
+    Supported releases use checked lockfiles and bundled ICU data.
+    `scripts/intl-profile.py` generates the guest-visible data identity from the
+    resolved ICU closure (versions, checksums, edges and requested root features).
+    CI checks both workspaces and rejects stale generation.
+    Today's dependency graph keeps a fixed legacy alias; that alias must never be
+    reassigned to an upgraded graph.
+    The identity enters the boot fingerprint, making incompatible snapshot resume fail.
+    In-tree locale/calendar/zone changes still need an explicit profile release;
+    custom ICU data or downstream feature overrides are outside this supported profile.
+    Review provider/data upgrades against semantic tests, state/receipt goldens and
+    compatibility fixtures; do not silently regenerate pins to accept drift.
+    Meter weights need a new release when charging semantics change, while a provider
+    identity changes independently even when the weight table does not.
+    See [the implementation record](../rust/engine/DETERMINISM-METERING.md).
 
 ## Prompt
 

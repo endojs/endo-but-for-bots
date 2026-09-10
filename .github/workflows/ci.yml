@@ -706,6 +706,8 @@ jobs:
           python3 rust/engine/scripts/test-math-vectors.py
           python3 rust/engine/scripts/test-lockfile-agreement.py
           python3 rust/engine/scripts/check-lockfile-agreement.py
+          python3 rust/engine/scripts/test-intl-profile.py
+          python3 rust/engine/scripts/intl-profile.py
 
       - name: Check generated engine crate diagram and library safety declarations
         run: |

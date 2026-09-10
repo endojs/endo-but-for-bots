@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-08-06 |
-| **Updated** | 2026-09-09 |
+| **Updated** | 2026-09-10 |
 | **Author** | Aaron Kumavis (prompted) |
 | **Status** | In Progress |
 | **Builds on** | designs/ironhorse-engine.md (§ Snapshots, requirement 1c) |
@@ -59,6 +59,18 @@ Per the naming doctrine (ironhorse-engine resolved question 7, as
 amended 2026-07-29): the trait and the arena hooks are **Ironhorse**
 (language execution); the SQLite backend and its file lifecycle are
 **Endor** (platform binding).
+
+## Interpreter follow-up (2026-09-10)
+
+The historical notes below describe the private/dead pending-job probe at review time.
+`Interp::has_pending_jobs` and `Interp::run_promise_jobs` are now public per-machine APIs.
+Draining uses the normal halt channel and invocation receipts, including native-only jobs.
+The common engine trait remains deferred under W6 decision 2.
+`RunOutcome` retains lifetime counters and adds explicit per-invocation fields;
+Endo evaluation receipts cover this evaluation's compilation, linking and execution.
+The deterministic Math feature and generated ICU profile enter boot compatibility;
+ordinary platform Math still has per-binary/per-platform scope.
+See [the implementation record](../rust/engine/DETERMINISM-METERING.md).
 
 ## Status
 
