@@ -8,6 +8,10 @@ use ironhorse_vm::source_scan::{
 
 const SRC: &str = concat!(
     include_str!("../src/interp.rs"),
+    include_str!("../src/interp/metering.rs"),
+    include_str!("../src/interp/native_ids.rs"),
+    include_str!("../src/interp/snapshot_rows.rs"),
+    include_str!("../src/interp/intl_data.rs"),
     include_str!("../src/interp/admission.rs"),
     include_str!("../src/interp/apply.rs"),
     include_str!("../src/interp/code.rs"),
