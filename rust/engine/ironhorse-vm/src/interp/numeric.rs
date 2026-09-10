@@ -388,7 +388,7 @@ pub(super) fn fx_pow(x: f64, y: f64) -> f64 {
     if !y.is_finite() && x.abs() == 1.0 {
         return f64::NAN;
     }
-    x.powf(y)
+    crate::math::pow(x, y)
 }
 
 /// The `f64` value of a primitive numeric slot (integer or number), or
