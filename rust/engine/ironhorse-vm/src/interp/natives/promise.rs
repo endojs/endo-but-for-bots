@@ -856,11 +856,22 @@ impl Interp {
     /// settles the derived promise, which may queue further jobs; the drain
     /// continues until the queue empties. Metering accumulates through the
     /// reactions, matching the oracle shim's post-`fxRunScript` drain.
-    pub(in crate::interp) fn run_promise_jobs(&mut self, code: &[u8]) -> Result<(), Step> {
-        while let Some(job) = self.promise_jobs.pop_front() {
+    pub(in crate::interp) fn drain_promise_jobs(&mut self, code: &[u8]) -> Result<(), Step> {
+        loop {
+            // Pass-through jobs can do only native work, with no bytecode
+            // checkpoint. Consult between jobs and after the last one, before
+            // removing another queued root, without changing their charges.
+            if self.check_meter() == MeterCheck::Abort {
+                return Err(Step::Host(Halt::MeterAbort));
+            }
+            if self.id_space_exhausted {
+                return Err(Step::Host(Halt::Refused("property-key:id-space-exhausted")));
+            }
+            let Some(job) = self.promise_jobs.pop_front() else {
+                return Ok(());
+            };
             self.run_promise_job(code, job)?;
         }
-        Ok(())
     }
 
     /// Run one queued promise job. A **reaction** job is XS's

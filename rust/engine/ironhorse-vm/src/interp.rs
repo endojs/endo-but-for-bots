@@ -2296,16 +2296,47 @@ impl Interp {
     /// Execute caller-owned immutable bytecode without copying its bytes.
     /// Escaping functions retain this same allocation across later cranks.
     pub fn run_shared(&mut self, shared: std::rc::Rc<[u8]>) -> RunOutcome {
+        self.run_operation(shared, true)
+    }
+
+    /// Whether this machine has queued promise jobs. This is distinct from
+    /// quiescence: a halted activation may have no queued jobs.
+    pub fn has_pending_jobs(&self) -> bool {
+        !self.promise_jobs.is_empty()
+    }
+
+    /// Drain this machine's promise jobs without evaluating another script.
+    /// Retains the meter and configured host; failures use the same `Halt`
+    /// channel and invocation receipts as `run`. Jobs can enqueue more jobs,
+    /// which are drained FIFO in this invocation.
+    ///
+    /// Like starting a new `run`, this abandons a previous halted activation
+    /// and keeps its heap effects. A transactional consumer must rewind a
+    /// failed delivery instead if its contract requires atomic delivery.
+    /// A successful drain returns `undefined` and establishes quiescence.
+    pub fn run_promise_jobs(&mut self) -> RunOutcome {
+        let code = self
+            .top_level_code
+            .clone()
+            .unwrap_or_else(|| std::rc::Rc::from([]));
+        self.run_operation(code, false)
+    }
+
+    fn run_operation(&mut self, shared: std::rc::Rc<[u8]>, execute_script: bool) -> RunOutcome {
         let start_raw = self.meter.raw();
         let start_dispatched = self.n_dispatched;
-        let mut outcome = self.run_shared_outcome(shared);
+        let mut outcome = self.run_shared_outcome(shared, execute_script);
         outcome.meter_raw_this_run = outcome.meter_raw.saturating_sub(start_raw);
         outcome.computrons_this_run = outcome.meter_raw_this_run >> 16;
         outcome.dispatched_this_run = outcome.dispatched.saturating_sub(start_dispatched);
         outcome
     }
 
-    fn run_shared_outcome(&mut self, shared: std::rc::Rc<[u8]>) -> RunOutcome {
+    fn run_shared_outcome(
+        &mut self,
+        shared: std::rc::Rc<[u8]>,
+        execute_script: bool,
+    ) -> RunOutcome {
         if self.gc_failed {
             return RunOutcome {
                 unhandled_rejection: None,
@@ -2322,7 +2353,9 @@ impl Interp {
                 host_render_halt: None,
             };
         }
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.run_inner(shared))) {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.run_inner(shared, execute_script)
+        })) {
             Ok(outcome) => outcome,
             Err(payload) if payload.is::<crate::value::HeapExhausted>() => {
                 // All native activations have unwound. The interrupted heap
@@ -2348,7 +2381,7 @@ impl Interp {
         }
     }
 
-    fn run_inner(&mut self, shared: std::rc::Rc<[u8]>) -> RunOutcome {
+    fn run_inner(&mut self, shared: std::rc::Rc<[u8]>, execute_script: bool) -> RunOutcome {
         let code: &[u8] = &shared;
         if self.slots.capacity() > self.slots.ceiling()
             || self.chunks.byte_size() > self.chunks.ceiling()
@@ -2404,7 +2437,15 @@ impl Interp {
         // `is_quiescent` (a re-entrant host, a panic-recovery path) is
         // told so. It is re-established from the engine's own halt.
         self.last_crank_completed = false;
-        let mut step = self.dispatch(code);
+        let mut step = if execute_script {
+            self.dispatch(code)
+        } else if self.id_space_exhausted {
+            Step::Host(Halt::Refused("property-key:id-space-exhausted"))
+        } else if self.check_meter() == MeterCheck::Abort {
+            Step::Host(Halt::MeterAbort)
+        } else {
+            Step::Returned
+        };
         // Pump-loop latch: after the script settles, drain the promise job
         // queue with metering still accumulating — the host-driven microtask
         // drain the ironhorse embedding performs after a crank (design § promises).
@@ -2416,7 +2457,7 @@ impl Interp {
         // whole run into an honest `Halt::NotImplemented`.
         if step == Step::Returned {
             let script_result = self.result;
-            if let Err(h) = self.run_promise_jobs(code) {
+            if let Err(h) = self.drain_promise_jobs(code) {
                 step = h;
             }
             self.result = script_result;
