@@ -126,4 +126,24 @@ All other Linux scaling instruments passed: elapsed/computron, unchanged checkpo
 property update, compiler, shared-bytecode lifecycle, and property/call classification.
 The bounded WeakMap test262 sweep also passed.
 Source: [Linux measurement run](https://github.com/endojs/endo-but-for-bots/actions/runs/34460668824).
-Final cross-platform CI validation remains outstanding.
+
+## Validation record
+
+The implementation head `c73ac252e` passes Linux debug/release and macOS engine CI,
+including the SQLite backend and surgery example harness.
+The oracle-linked suite, complete IronHorse corpus, ASAN/UBSAN workflow, formatting,
+Thixotrope integration, and calibration also pass.
+See [the implementation CI run](https://github.com/endojs/endo-but-for-bots/actions/runs/34461934776)
+and [the sanitizer run](https://github.com/endojs/endo-but-for-bots/actions/runs/34461934709).
+The first sanitizer run found a synthetic-image generator still using the old symbol range;
+that fixture was corrected without relaxing decoding, and all six snapshot-fuzz tests pass.
+
+Local full debug runs passed 757 VM tests and 565 snapshot tests with store-integrity.
+The full release VM/snapshot run passed 1,321 tests with no failures.
+Persistent-worker tests passed all ten cases; surgery examples passed all 20 in debug,
+release, and store-integrity configurations.
+Root documentation generation passed, as did targeted Clippy and formatting checks.
+Each implementation increment received adversarial subagent review before commit.
+
+This record does not claim that the benchmark gate passed or that all repository CI is done.
+The ten-minute PR monitor continues to check failures and branch conflicts.

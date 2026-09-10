@@ -308,8 +308,10 @@ This narrows invocation latitude in the contract below without transferring sche
 policy to the engine.
 Pressure, idle, time, and delivery-based policies remain consumer choices;
 their requests must be serviced at a supported boundary.
-The exact production collector and managed rewind are implemented;
-cross-platform CI and final performance analysis are still in progress.
+The exact production collector and managed rewind are implemented.
+Linux release and macOS engine CI pass at `c73ac252e`; the
+[reclamation report](../rust/engine/RECLAMATION.md) records verification, compatibility,
+and measured costs, including failed benchmark thresholds.
 
 ### Current behavior and the determinism boundary
 

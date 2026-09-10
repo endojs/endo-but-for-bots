@@ -5,7 +5,7 @@
 | **Created** | 2026-09-10 |
 | **Updated** | 2026-09-10 |
 | **Author** | kumavis (prompted) |
-| **Status** | In Progress |
+| **Status** | **Complete** |
 | **Source** | GC correctness follow-up to PRs #1250–#1253 |
 
 ## Status and scope
@@ -16,7 +16,11 @@ The admission and production collection implementation has landed on the Phase 2
 `PersistentMachine::collect` now uses the exact collector, reclaiming weak entries and
 chunk garbage before checkpointing; failure rewinds to the last durable delivery.
 MacOS debug/release admission, root, persistence, and recovery tests pass.
-Cross-platform CI and final performance analysis remain in progress.
+At `c73ac252e`, Linux debug/release and macOS engine CI, oracle-linked tests,
+sanitizers, Thixotrope integration, formatting, and calibration pass.
+The measured costs and compatibility limits are recorded in
+[the reclamation report](../rust/engine/RECLAMATION.md).
+Remaining repository CI and PR conflicts continue to be monitored independently.
 The historical architecture review is unchanged.
 
 The promise temporary-root ranges remain in place after review.
