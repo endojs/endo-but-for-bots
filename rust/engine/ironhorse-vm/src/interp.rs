@@ -1975,22 +1975,31 @@ impl Interp {
         &self.cost
     }
 
-    /// Read the top-level binding named `name`, rendered with ECMAScript
-    /// `String()` semantics — the post-run inspection the async test262
+    /// Inspect a top-level data binding named `name`, using diagnostic
+    /// rendering — the post-run inspection the async test262
     /// harness uses to read the `$DONE` completion sentinel a pure-JS async
     /// prelude records into a global (design § Part 2, the async row). Resolves
-    /// through the same read path the interpreter uses (a declared frame local
-    /// first, then the global object's property) and the program-local symbol
+    /// a declared frame local first, then an own global data property, using
+    /// the program-local symbol
     /// table [`Self::link_intrinsics`] built, so it must be called after
     /// [`Self::run`], when the top-level frame's scope is restored. Returns
     /// `None` when the program never assigned that name (its slot is absent or
     /// still the hoisted `undefined`): the did-not-run latch — `$DONE`/`print`
     /// was never called — and when the renderer refuses the value (a
     /// self-containing array past the native-recursion budget), which no
-    /// harness sentinel is.
+    /// harness sentinel is. An accessor is not a data sentinel and returns
+    /// `None`; this read-only inspection never invokes guest code.
     pub fn global_string(&self, name: &str) -> Option<String> {
         let id = *self.symbol_ids.get(name)?;
-        let slot = self.resolve_get(id)?;
+        let slot = if self.id_map.contains_key(&id) {
+            self.resolve_frame_get(id)?
+        } else {
+            let property = self.slots.get(*self.global_props.get(&id)?);
+            if property.flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) != 0 {
+                return None;
+            }
+            Slot::of(property.kind, property.value)
+        };
         if slot.kind == Kind::Undefined {
             return None;
         }

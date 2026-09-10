@@ -968,9 +968,9 @@ impl Interp {
         }
     }
 
-    /// Resolve a name for reading: a frame local when declared (unless
-    /// uninitialized), else the global object's property.
-    pub(super) fn resolve_get(&self, name: u16) -> Option<Slot> {
+    /// Read a declared frame local (including captured cells and TDZ).
+    /// Object environment and global reads belong to the MOP dispatchers.
+    pub(super) fn resolve_frame_get(&self, name: u16) -> Option<Slot> {
         if let Some(&i) = self.id_map.get(&name) {
             let s = self.locals[i];
             // A closure-captured local holds a `Kind::Closure` cell indirection
@@ -993,9 +993,6 @@ impl Interp {
             } else {
                 Some(s)
             }
-        } else if let Some(&idx) = self.global_props.get(&name) {
-            let p = self.slots.get(idx);
-            Some(Slot::of(p.kind, p.value))
         } else {
             None
         }
@@ -1020,7 +1017,7 @@ impl Interp {
         if let Some(&i) = self.id_map.get(&name) {
             // A closure-captured local writes through its shared `Kind::Closure`
             // cell (so the mutation is visible to every capturer), mirroring
-            // `resolve_get`'s dereference. Reached by name only through the
+            // `resolve_frame_get`'s dereference. Reached by name only through the
             // `with`/eval path; a plain write uses `SET_CLOSURE` by index.
             if self.locals[i].kind == Kind::Closure {
                 if let Payload::Reference(cell) = self.locals[i].value {
