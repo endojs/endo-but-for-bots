@@ -7,7 +7,10 @@ import { E } from '@endo/eventual-send';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { Far } from '@endo/far';
 
-import { makeBrokerAppServerArgv } from '../src/broker-launch.js';
+import {
+  makeBrokerAppServerArgv,
+  makeBrokerEnvironment,
+} from '../src/broker-launch.js';
 import { makeCodexRuntimeVerifier } from '../src/runtime-verifier.js';
 
 // Controlled process doubles test admission and cleanup, not Linux enforcement.
@@ -83,6 +86,43 @@ const fixture = ({
     proc,
   };
 };
+
+test('public preflight binds exact proxy evidence and retains native broker denial probes', async t => {
+  const f = fixture();
+  const network = harden({
+    policy: 'public-internet',
+    proxyUrl: 'http://207.148.100.198:23457',
+    dnsHost: '127.0.0.53',
+    resolverConfigPath: '/private/provider/public-resolv.conf',
+  });
+  const context = harden({
+    ...f.context,
+    network,
+    launchEnvironment: makeBrokerEnvironment(network),
+    launchArgv: makeBrokerAppServerArgv(
+      f.context.brokerEndpoint,
+      'codex',
+      network,
+    ),
+  });
+  const result = await E(f.verifier).attest(context);
+  t.is(result.toolBrokerAccess, 'denied');
+  t.is(result.environment, 'credential-free-managed-proxy');
+  t.deepEqual(result.network, network);
+  const payload = JSON.parse(f.call().argv[4]);
+  t.deepEqual(payload.network, network);
+  t.regex(payload.inner, /managed proxy admitted broker/);
+  // Compiling both Python programs catches escaping bugs without executing any
+  // host operation or pretending this is a kernel-isolation test.
+  const encoded = JSON.stringify([f.call().argv[3], payload.inner]);
+  execFileSync('python3', [
+    '-I',
+    '-c',
+    'import json,sys; [compile(source,"probe","exec") for source in json.loads(sys.argv[1])]',
+    encoded,
+  ]);
+  t.false(payload.inner.includes('\\\\r\\\\n'));
+});
 
 test('controlled probe success binds evidence and launches exact bounded preflight', async t => {
   const f = fixture();

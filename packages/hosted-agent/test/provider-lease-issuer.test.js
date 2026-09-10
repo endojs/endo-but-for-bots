@@ -115,6 +115,7 @@ const fixture = ({
 
 test('public egress is lease-bound and revoked before cleanup retries', async t => {
   let disposed = 0;
+  /** @type {Record<string, any> | undefined} */
   let requested;
   const endpoint = Far('Test public egress', {});
   const f = fixture({
@@ -132,7 +133,7 @@ test('public egress is lease-bound and revoked before cleanup retries', async t 
   });
   t.teardown(f.issuer.dispose);
   const lease = await f.issuer({ ...spec, networkPolicy: 'public-internet' });
-  t.is(requested.networkPolicy, 'public-internet');
+  t.is(requested?.networkPolicy, 'public-internet');
   t.deepEqual(f.listenerNetwork(), { endpoint, address: '93.184.216.34' });
   t.deepEqual((await E(lease).attestation()).network, networkEvidence);
   t.deepEqual((await E(lease).sandboxEvidence()).network, networkEvidence);

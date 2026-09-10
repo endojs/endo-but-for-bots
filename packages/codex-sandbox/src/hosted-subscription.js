@@ -16,6 +16,7 @@ import { makeCodexBackendFactory } from './backend-factory.js';
 import { makeHostVolumeProvider } from './host-volume-provider.js';
 import { whenHostStops } from './host-lifecycle.js';
 import { makeRenewingCodexBackend } from './renewing-backend.js';
+import { makePublicEgress } from './public-egress.js';
 import { makeAttestedCodexResourceProvisioner } from './sandbox-policy.js';
 import { makeCodexSubscriptionCredential } from './subscription-auth.js';
 
@@ -59,6 +60,9 @@ export const makeHostedCodexSubscription = async options => {
     ownerId,
     stateDirectory: join(directory, 'listener'),
     maxListeners: options.maxSessions,
+    ...(options.publicInternet
+      ? { publicInternet: options.publicInternet }
+      : {}),
   });
   let issuer;
   let provision;
@@ -97,6 +101,17 @@ export const makeHostedCodexSubscription = async options => {
       requestTimeoutMs: 600_000,
       onDiagnostic: options.onDiagnostic,
       audit: options.audit,
+      ...(options.publicInternet
+        ? {
+            makePublicNetwork: () => {
+              const network = makePublicEgress({ policy: 'public-internet' });
+              return harden({
+                ...network,
+                address: options.publicInternet.address,
+              });
+            },
+          }
+        : {}),
       policy: {
         origin: 'https://chatgpt.com',
         authMode: 'subscription',
@@ -145,6 +160,7 @@ export const makeHostedCodexSubscription = async options => {
     // alone cannot prove that old privileged host operations have stopped.
     const recovered = new Set();
     provision = makeAttestedCodexResourceProvisioner({
+      publicInternetEnabled: Boolean(options.publicInternet),
       sandbox,
       volumeProvider: storage.provider.volumeProvider,
       makeWorkspace: async spec => {
@@ -168,6 +184,7 @@ export const makeHostedCodexSubscription = async options => {
       startTransport: startAppServerTransport,
     });
     const backend = makeCodexBackendFactory({
+      publicInternetEnabled: Boolean(options.publicInternet),
       registerShutdown: stop => {
         shutdown = stop;
       },

@@ -370,6 +370,7 @@ const makeQueue = () => {
  *   modelListResult?: any,
  *   accountReadResult?: any,
  *   brokerEndpoint?: string,
+ *   network?: any,
  *   configReadResult?: any,
  *   existingTurnIds?: string[],
  *   announceTurns?: boolean,
@@ -387,6 +388,7 @@ const makeFixture = ({
   modelListResult,
   accountReadResult,
   brokerEndpoint,
+  network,
   configReadResult,
   existingTurnIds = [],
   announceTurns = true,
@@ -527,6 +529,7 @@ const makeFixture = ({
   };
   const transport = {
     brokerEndpoint,
+    network,
     messages: queue.messages,
     send,
     close: async () => {
@@ -2753,4 +2756,69 @@ test('broker config admission permits a credential-free provider', async t => {
     fixture.sent.findIndex(message => message.method === 'config/read') <
       fixture.sent.findIndex(message => message.method === 'model/list'),
   );
+});
+
+test('an admitted managed proxy policy survives actual turn/start', async t => {
+  const network = harden({
+    policy: 'public-internet',
+    proxyUrl: 'http://207.148.100.198:23457',
+    dnsHost: '127.0.0.53',
+    resolverConfigPath: '/private/provider/public-resolv.conf',
+  });
+  const fixture = makeFixture({
+    brokerEndpoint: 'http://127.0.0.1:23456',
+    network,
+    accountReadResult: { account: null, requiresOpenaiAuth: false },
+    configReadResult: {
+      config: {
+        model_provider: 'endo_broker',
+        sandbox_mode: 'workspace-write',
+        approval_policy: 'never',
+        sandbox_workspace_write: {
+          network_access: true,
+          writable_roots: ['/workspace', '/tmp', '/run', '/scratch'],
+          exclude_slash_tmp: true,
+          exclude_tmpdir_env_var: true,
+        },
+        features: {
+          network_proxy: {
+            enabled: true,
+            allow_upstream_proxy: true,
+            allow_local_binding: false,
+            enable_socks5: false,
+            enable_socks5_udp: false,
+            domains: { '*': 'allow' },
+          },
+        },
+        model_providers: {
+          endo_broker: {
+            name: 'Endo broker',
+            base_url: 'http://127.0.0.1:23456/v1',
+            wire_api: 'responses',
+            requires_openai_auth: false,
+          },
+        },
+      },
+    },
+  });
+  const reader = await fixture.client.send('inspect');
+  t.true(
+    fixture.sent.find(message => message.method === 'turn/start').params
+      .sandboxPolicy.networkAccess,
+  );
+  await fixture.client.interrupt();
+  await drain(reader);
+  await fixture.client.terminate();
+});
+
+test('transport metadata alone cannot enable native networking without broker config admission', async t => {
+  const fixture = makeFixture({ network: { policy: 'public-internet' } });
+  const reader = await fixture.client.send('inspect');
+  t.false(
+    fixture.sent.find(message => message.method === 'turn/start').params
+      .sandboxPolicy.networkAccess,
+  );
+  await fixture.client.interrupt();
+  await drain(reader);
+  await fixture.client.terminate();
 });

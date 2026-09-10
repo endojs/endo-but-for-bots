@@ -15,9 +15,17 @@ import { makeProviderPipe } from './provider-pipe.js';
  * @param {object} options
  * @param {import('node:stream').Readable} options.input
  * @param {import('node:stream').Writable} options.output
+ * @param {(configuration: any) => Promise<any>} [options.makeNetworkListeners] Trusted image-selected implementation.
  */
-export const startProviderListenerWorker = async ({ input, output }) => {
+export const startProviderListenerWorker = async ({
+  input,
+  output,
+  makeNetworkListeners,
+}) => {
   let listener;
+  let networkListeners;
+  let networkConfiguration;
+  let networkFlight;
   let stopped = false;
   let ready;
   const bootstrap = makeExo(
@@ -25,14 +33,35 @@ export const startProviderListenerWorker = async ({ input, output }) => {
     M.interface('ProviderListenerControl', {
       ready: M.call().returns(M.promise()),
       stop: M.call().returns(M.promise()),
+      activateNetwork: M.call().returns(M.promise()),
     }),
     {
       async ready() {
         return ready;
       },
+      async activateNetwork() {
+        await ready;
+        (!stopped && networkConfiguration) ||
+          Fail`Provider worker network unavailable`;
+        if (!makeNetworkListeners)
+          throw Error('Provider worker network unavailable');
+        networkFlight ??= makeNetworkListeners(networkConfiguration).then(
+          async result => {
+            networkListeners = result;
+            if (stopped) {
+              await result.dispose();
+              throw Error('Provider worker stopped');
+            }
+            return result.evidence;
+          },
+        );
+        return networkFlight;
+      },
       async stop() {
         stopped = true;
         await ready?.catch(() => {});
+        await networkFlight?.catch(() => {});
+        if (networkListeners) await networkListeners.dispose();
         if (listener) await listener.dispose();
       },
     },
@@ -40,10 +69,18 @@ export const startProviderListenerWorker = async ({ input, output }) => {
   const pipe = makeProviderPipe({ input, output, bootstrap });
   ready = (async () => {
     const configuration = await pipe.getBootstrap();
-    const allowed = ['endpoint', 'limits'];
+    const allowed = [
+      'endpoint',
+      'limits',
+      ...(Object.hasOwn(configuration, 'network') ? ['network'] : []),
+    ];
     (Object.keys(configuration).length === allowed.length &&
       allowed.every(key => Object.hasOwn(configuration, key))) ||
       Fail`Invalid provider worker bootstrap`;
+    if (configuration.network !== undefined) {
+      makeNetworkListeners || Fail`Provider worker does not support networking`;
+      networkConfiguration = configuration.network;
+    }
     let diagnosticCount = 0;
     listener = await makeProviderHttpListener({
       endpoint: configuration.endpoint,
@@ -86,6 +123,8 @@ export const startProviderListenerWorker = async ({ input, output }) => {
   void pipe.closed.then(async () => {
     stopped = true;
     try {
+      await networkFlight?.catch(() => {});
+      if (networkListeners) await networkListeners.dispose();
       if (listener) await listener.dispose();
     } catch (_error) {
       /* No secret-bearing diagnostics leave the worker. */
