@@ -7,7 +7,9 @@
 //! `toString`/`valueOf`/setter reached from a native, member access on a
 //! nullish base, a non-callable call with a second code segment live. Each
 //! must COMPLETE or ABORT exactly as XS does (result string, or the thrown
-//! value's rendering). Computrons are deliberately not compared: these
+//! value's rendering). The host-diagnostic probes separately pin the deliberate
+//! F093 text difference without weakening guest outcome checks.
+//! Computrons are deliberately not compared: these
 //! paths produced wrong answers before, so their metering has never been
 //! calibrated against the oracle — that is the review's W4 work, and the
 //! per-path constants belong with it.
@@ -52,19 +54,35 @@ const KNOWN_DIVERGENCES: &[(&str, &str)] = &[
     ),
 ];
 
-/// Oracle semantic probes for host rendering. Its metering independence is
-/// covered without XS by ironhorse-vm/tests/host_rendering_meter.rs.
-const HOST_RENDERING: &[&str] = &[
-    "throw { toString(){ return 'custom' } }",
-    "var n=0; throw { toString(){ n++; return 'n=' + n } }",
-    "throw {a:1}",
+/// The oracle shim executes String(exception); Ironhorse uses a read-only
+/// diagnostic (F093). Pin both results explicitly rather than accepting an
+/// arbitrary divergence. Side-effect and metering locks also run without XS
+/// in the VM tests.
+const HOST_RENDERING: &[(&str, &str)] = &[
+    ("throw { toString(){ return 'custom' } }", "custom"),
+    (
+        "var n=0; throw { toString(){ n++; return 'n=' + n } }",
+        "n=1",
+    ),
+    ("throw {a:1}", "[object Object]"),
+    ("throw {toString(){ return 'obj' }}", "obj"),
+    (
+        "eval(\"throw { toString: function(){ return 'custom'; } }\")",
+        "custom",
+    ),
+    (
+        "function f(){ throw { toString(){ return 'deep' } } } [1].forEach(f)",
+        "deep",
+    ),
 ];
 
 #[test]
-fn an_uncaught_throws_host_rendering_agrees() {
-    for src in HOST_RENDERING {
+fn uncaught_throw_text_respects_the_host_diagnostic_boundary() {
+    for (src, oracle_text) in HOST_RENDERING {
         let run = dual_run(src).expect("the pinned XS oracle machine must start");
-        assert!(run.error_agrees, "{src}: {run:?}");
+        assert_eq!(run.agreement, Agreement::BothAbort, "{src}: {run:?}");
+        assert_eq!(run.oracle_error, *oracle_text, "{src}: {run:?}");
+        assert_eq!(run.ironhorse_error, "[object Object]", "{src}: {run:?}");
     }
 }
 
@@ -187,15 +205,11 @@ fn error_model_agrees_with_the_oracle() {
         "null.f",
         "function f(){ [1].forEach(function(){ nosuchvar }) } f()",
         "new Promise(function(){ throw 1 }); 'done'",
-        "throw {toString(){ return 'obj' }}",
-        // --- the host boundary renders once, and only for a true escape ---
+        // --- caught values never invoke host diagnostic coercion ---
         "var n=0; new Promise(function(){ throw { toString(){ n++; return 'x' } } }); n",
         "var n=0; Promise.resolve({ get then(){ throw { toString(){ n++; return 'x' } } } }); n",
         "var n=0; try { Array.from([1], function(){ throw { toString(){ n++; return 'x' } } }) } catch(e) { n += 100 } n",
         "var n=0; try { throw { toString(){ n++; return 'x' } } } catch(e) {} n",
-        "throw { toString(){ return 'custom' } }",
-        "eval(\"throw { toString: function(){ return 'custom'; } }\")",
-        "function f(){ throw { toString(){ return 'deep' } } } [1].forEach(f)",
         // --- fence edge cases, disposers, eval and generator value carrying ---
         // handlers left behind on a native try (debug_assert hunting)
         "var r=0; new Promise(function(){ try { return 1 } catch(e) {} }); r='ok'; r",
