@@ -2136,42 +2136,126 @@ impl Interp {
         }
     }
 
-    pub(super) fn restore_saved_frame(row: SavedFrameRow) -> Option<SavedFrame> {
-        let map = |rows: Vec<(u16, u64)>| -> Option<std::collections::HashMap<u16, usize>> {
-            rows.into_iter()
-                .map(|(id, index)| Some((id, usize::try_from(index).ok()?)))
-                .collect()
-        };
-        Some(SavedFrame {
-            locals: row.locals,
-            id_map: std::rc::Rc::new(map(row.id_map)?),
-            args: row.args,
-            this_val: row.this_val,
-            env: row.env,
-            cur_func: crate::value::SlotIndex(row.cur_func),
-            cur_target: row.cur_target,
-            target_func: crate::value::SlotIndex(row.target_func),
-            strict: row.strict,
-            result: row.result,
-            stack_slice: row.stack_slice,
-            jumps: row
-                .jumps
-                .into_iter()
-                .map(|jump| {
-                    Some(SavedJump {
-                        target_pc: usize::try_from(jump.target_pc).ok()?,
-                        // Legacy rows still resolve through cur_func at resume.
-                        segment: jump.segment.map(|segment| segment as usize),
-                        stack_offset: usize::try_from(jump.stack_offset).ok()?,
-                        locals_len: usize::try_from(jump.locals_len).ok()?,
-                        id_map: std::rc::Rc::new(map(jump.id_map)?),
-                        call_depth_offset: usize::try_from(jump.call_depth_offset).ok()?,
-                        env: jump.env,
-                        flag: jump.flag,
-                    })
+    fn validate_restore_frame(&self, frame: &SavedFrameRow) -> Result<(), RestoreError> {
+        const ROW: &str = "SavedFrame";
+        let refuse = |reason| RestoreError { row: ROW, reason };
+        self.validate_restore_owner(frame.cur_func, ROW)?;
+        if frame.target_func != u32::MAX {
+            self.validate_restore_owner(frame.target_func, ROW)?;
+        }
+        let scope = |entries: &[(u16, u64)], length: u64| -> Result<(), RestoreError> {
+            if entries.windows(2).any(|pair| pair[0].0 >= pair[1].0)
+                || entries.iter().any(|&(id, index)| {
+                    id == 0 || usize::from(id) > self.symbol_names.len() || index >= length
                 })
-                .collect::<Option<Vec<_>>>()?,
-            resume_pc: usize::try_from(row.resume_pc).ok()?,
+            {
+                return Err(refuse("invalid scope map"));
+            }
+            Ok(())
+        };
+        scope(&frame.id_map, frame.locals.len() as u64)?;
+        for jump in &frame.jumps {
+            if jump.flag != 1
+                || jump.call_depth_offset != 0
+                || jump.stack_offset > frame.stack_slice.len() as u64
+                || jump.locals_len > frame.locals.len() as u64
+            {
+                return Err(refuse("invalid saved handler shape"));
+            }
+            scope(&jump.id_map, jump.locals_len)?;
+        }
+        for value in frame
+            .locals
+            .iter()
+            .chain(&frame.args)
+            .chain(&frame.stack_slice)
+            .copied()
+            .chain([frame.this_val, frame.result])
+        {
+            match (value.kind, value.value) {
+                (Kind::Uninitialized, Payload::None) => {}
+                (Kind::Closure, Payload::Reference(cell)) => {
+                    if cell.is_null()
+                        || cell.0 >= self.slots.capacity()
+                        || self.slots.is_free_index(cell)
+                    {
+                        return Err(refuse("closure cell is not live"));
+                    }
+                }
+                _ => {
+                    self.validate_restore_value_shape(value, ROW)?;
+                }
+            }
+        }
+        for env in std::iter::once(frame.env).chain(frame.jumps.iter().map(|jump| jump.env)) {
+            match (env.kind, env.value) {
+                (Kind::Undefined, Payload::None) => {}
+                (Kind::Reference, Payload::Reference(owner)) => {
+                    if owner.is_null()
+                        || owner.0 >= self.slots.capacity()
+                        || self.slots.is_free_index(owner)
+                    {
+                        return Err(refuse("environment is not live"));
+                    }
+                    let instance = self.slots.get(owner);
+                    if instance.kind != Kind::Instance
+                        || !matches!(instance.value, Payload::None | Payload::Reference(_))
+                    {
+                        return Err(refuse("environment is not an instance"));
+                    }
+                }
+                _ => return Err(refuse("invalid environment value")),
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn restore_saved_frame(
+        &self,
+        row: SavedFrameRow,
+    ) -> Result<SavedFrame, RestoreError> {
+        self.validate_restore_frame(&row)?;
+        let convert = || {
+            let map = |rows: Vec<(u16, u64)>| -> Option<std::collections::HashMap<u16, usize>> {
+                rows.into_iter()
+                    .map(|(id, index)| Some((id, usize::try_from(index).ok()?)))
+                    .collect()
+            };
+            Some(SavedFrame {
+                locals: row.locals,
+                id_map: std::rc::Rc::new(map(row.id_map)?),
+                args: row.args,
+                this_val: row.this_val,
+                env: row.env,
+                cur_func: crate::value::SlotIndex(row.cur_func),
+                cur_target: row.cur_target,
+                target_func: crate::value::SlotIndex(row.target_func),
+                strict: row.strict,
+                result: row.result,
+                stack_slice: row.stack_slice,
+                jumps: row
+                    .jumps
+                    .into_iter()
+                    .map(|jump| {
+                        Some(SavedJump {
+                            target_pc: usize::try_from(jump.target_pc).ok()?,
+                            // Legacy rows still resolve through cur_func at resume.
+                            segment: jump.segment.map(|segment| segment as usize),
+                            stack_offset: usize::try_from(jump.stack_offset).ok()?,
+                            locals_len: usize::try_from(jump.locals_len).ok()?,
+                            id_map: std::rc::Rc::new(map(jump.id_map)?),
+                            call_depth_offset: usize::try_from(jump.call_depth_offset).ok()?,
+                            env: jump.env,
+                            flag: jump.flag,
+                        })
+                    })
+                    .collect::<Option<Vec<_>>>()?,
+                resume_pc: usize::try_from(row.resume_pc).ok()?,
+            })
+        };
+        convert().ok_or(RestoreError {
+            row: "SavedFrame",
+            reason: "frame coordinates exceed the host index range",
         })
     }
 
@@ -2206,30 +2290,44 @@ impl Interp {
         rows
     }
 
-    pub(super) fn restore_generators(&mut self, rows: Vec<GeneratorRow>) -> bool {
+    pub(super) fn restore_generators(
+        &mut self,
+        rows: Vec<GeneratorRow>,
+    ) -> Result<(), RestoreError> {
+        const ROW: &str = "Generators";
+        self.validate_restore_owners(rows.iter().map(|row| row.owner), ROW)?;
+        let mut prepared = Vec::with_capacity(rows.len());
         for row in rows {
             let state = match row.state {
                 0 => GeneratorState::SuspendedStart,
                 1 => GeneratorState::SuspendedYield,
                 2 => GeneratorState::Completed,
-                _ => return false,
+                _ => {
+                    return Err(RestoreError {
+                        row: ROW,
+                        reason: "invalid generator state",
+                    })
+                }
             };
-            let frame = match row.frame {
-                Some(frame) => match Self::restore_saved_frame(frame) {
-                    Some(frame) => Some(frame),
-                    None => return false,
-                },
-                None => None,
-            };
-            if (state == GeneratorState::Completed) != frame.is_none() {
-                return false;
+            if (state == GeneratorState::Completed) != row.frame.is_none() {
+                return Err(RestoreError {
+                    row: ROW,
+                    reason: "state and frame disagree",
+                });
             }
-            self.generators.insert(
+            let frame = row
+                .frame
+                .map(|frame| self.restore_saved_frame(frame))
+                .transpose()?;
+            prepared.push((
                 crate::value::SlotIndex(row.owner),
                 GeneratorData { state, frame },
-            );
+            ));
         }
-        true
+        for (owner, data) in prepared {
+            self.generators.insert(owner, data);
+        }
+        Ok(())
     }
 
     /// Quiescent snapshot of the promise cluster (ledger rows
@@ -2711,7 +2809,7 @@ impl Interp {
             {
                 return false;
             }
-            let Some(frame) = Self::restore_saved_frame(row.frame) else {
+            let Ok(frame) = self.restore_saved_frame(row.frame) else {
                 return false;
             };
             self.async_instances.insert(

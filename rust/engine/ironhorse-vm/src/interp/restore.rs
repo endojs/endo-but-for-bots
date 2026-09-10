@@ -75,6 +75,7 @@ impl RestoreSession {
             });
         }
         self.validate_callable_graph()?;
+        self.validate_suspended_cursors()?;
         self.validate_accessor_backing()?;
         if !self.interp.restored_promise_capabilities_are_valid() {
             return Err(RestoreError {
@@ -96,6 +97,97 @@ impl RestoreSession {
             });
         }
         Ok(self.interp)
+    }
+
+    fn validate_suspended_cursors(&self) -> Result<(), RestoreError> {
+        let refuse = |reason| RestoreError {
+            row: "SavedFrame",
+            reason,
+        };
+        let mut bodies = std::collections::HashMap::new();
+        let frames = self
+            .interp
+            .generators
+            .values()
+            .filter_map(|data| data.frame.as_ref())
+            .chain(
+                self.interp
+                    .async_instances
+                    .values()
+                    .filter_map(|data| data.frame.as_ref()),
+            );
+        for frame in frames {
+            let (segment, starts) = match bodies.entry(frame.cur_func) {
+                std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    let function = self
+                        .interp
+                        .functions
+                        .get(&frame.cur_func)
+                        .ok_or_else(|| refuse("current function has no metadata"))?;
+                    let segment = *self
+                        .interp
+                        .func_segments
+                        .get(&frame.cur_func)
+                        .ok_or_else(|| refuse("current function has no segment"))?;
+                    let code = self
+                        .interp
+                        .code_segments
+                        .get(segment)
+                        .ok_or_else(|| refuse("current function has no segment"))?;
+                    let begin = function
+                        .body_start
+                        .ok_or_else(|| refuse("current function has no body"))?;
+                    let end = begin
+                        .checked_add(function.body_len)
+                        .filter(|end| *end <= code.len())
+                        .ok_or_else(|| refuse("current function has an invalid body range"))?;
+                    let mut starts = std::collections::BTreeSet::new();
+                    let mut pc = begin;
+                    while pc < end {
+                        starts.insert(pc);
+                        pc += crate::instruction_len(code, pc)
+                            .ok_or_else(|| refuse("current function has malformed bytecode"))?;
+                    }
+                    if pc != end {
+                        return Err(refuse("instruction crosses the function body"));
+                    }
+                    // A nested function's physical bytecode is inside its
+                    // parent's interval. Equal intervals are distinct closures
+                    // of the same body and must not erase each other's cursors.
+                    for (owner, other) in &self.interp.functions {
+                        if self.interp.func_segments.get(owner) != Some(&segment) {
+                            continue;
+                        }
+                        let Some(start) = other.body_start else {
+                            continue;
+                        };
+                        let Some(stop) = start.checked_add(other.body_len) else {
+                            continue;
+                        };
+                        if start >= begin && stop <= end && (start != begin || stop != end) {
+                            starts.retain(|pc| *pc < start || *pc >= stop);
+                        }
+                    }
+                    entry.insert((segment, starts))
+                }
+            };
+            if !starts.contains(&frame.resume_pc) {
+                return Err(refuse(
+                    "resume cursor is outside the current function's instruction starts",
+                ));
+            }
+            for jump in &frame.jumps {
+                if jump.segment.is_some_and(|saved| saved != *segment)
+                    || !starts.contains(&jump.target_pc)
+                {
+                    return Err(refuse(
+                        "handler cursor is outside the current function's instruction starts",
+                    ));
+                }
+            }
+        }
+        Ok(())
     }
 
     fn validate_callable_graph(&self) -> Result<(), RestoreError> {
@@ -349,14 +441,7 @@ impl RestoreSession {
     }
     pub fn restore_generators(&mut self, rows: Vec<GeneratorRow>) -> Result<(), RestoreError> {
         self.admit("generators")?;
-        let result = if self.interp.restore_generators(rows) {
-            Ok(())
-        } else {
-            Err(RestoreError {
-                row: "generators",
-                reason: "malformed row set",
-            })
-        };
+        let result = self.interp.restore_generators(rows);
         self.failed = result.err();
         result
     }
@@ -598,6 +683,98 @@ mod tests {
         }
     }
 
+    fn suspended_generators() -> Interp {
+        let (code, names) = ironhorse_compile::compile_atoms(
+            r#"
+            function make() { return function* same() {
+                var inner = function nested() { return 99; };
+                try { yield 1; yield inner(); } finally { }
+            }; }
+            var g = make(), h = make();
+            var a = g(), b = h(); a.next(); b.next();
+        "#,
+        )
+        .unwrap();
+        let mut interp = Interp::new();
+        interp.link_intrinsics(&crate::parse_symbols(&names));
+        assert!(interp.run(&code).completed);
+        interp
+    }
+
+    #[test]
+    fn generator_batches_validate_saved_frames_before_replacing_any_row() {
+        for case in 0..10 {
+            let mut interp = suspended_generators();
+            let before = interp.generators_snapshot();
+            assert_eq!(before.len(), 2);
+            let mut rows = before.clone();
+            rows[0].state = 2;
+            rows[0].frame = None;
+            match case {
+                0 => rows.insert(1, rows[0].clone()),
+                1 => rows[1].state = 3,
+                2 => rows[1].frame = None,
+                _ => {
+                    let frame = rows[1].frame.as_mut().unwrap();
+                    match case {
+                        3 => frame
+                            .locals
+                            .push(Slot::of(Kind::Uninitialized, Payload::Integer(1))),
+                        4 => frame.id_map.push((0, 0)),
+                        5 => frame.cur_func = u32::MAX,
+                        6 => frame.target_func = u32::MAX - 1,
+                        7 => frame.jumps[0].call_depth_offset = 1,
+                        8 => frame.env = Slot::integer(1),
+                        _ => frame.locals.push(Slot::of(
+                            Kind::Closure,
+                            Payload::Reference(crate::value::SlotIndex::NULL),
+                        )),
+                    }
+                }
+            }
+            assert!(interp.restore_generators(rows).is_err(), "case {case}");
+            assert_eq!(interp.generators_snapshot(), before, "case {case}");
+        }
+    }
+
+    #[test]
+    fn suspended_cursors_resolve_to_their_own_body_after_function_restore() {
+        for case in 0..4 {
+            let mut session = Interp::begin_restore();
+            session.interp = suspended_generators();
+            // Distinct closures of an equal body must not subtract one
+            // another from the memoized instruction-start set.
+            session.validate_suspended_cursors().unwrap();
+            let nested_start = session
+                .interp
+                .functions
+                .values()
+                .find(|function| function.name == "nested")
+                .unwrap()
+                .body_start
+                .unwrap();
+            let frame = session
+                .interp
+                .generators
+                .values_mut()
+                .next()
+                .unwrap()
+                .frame
+                .as_mut()
+                .unwrap();
+            match case {
+                0 => frame.resume_pc = usize::MAX,
+                1 => frame.resume_pc = nested_start,
+                2 => frame.jumps[0].target_pc = nested_start,
+                _ => frame.jumps[0].segment = Some(usize::MAX),
+            }
+            assert_eq!(
+                session.validate_suspended_cursors().unwrap_err().row,
+                "SavedFrame"
+            );
+        }
+    }
+
     #[test]
     fn typed_array_family_is_validated_before_any_buffer_or_view_is_installed() {
         for case in 0..12 {
@@ -816,12 +993,12 @@ mod tests {
                 _ => descriptor = interp.new_object(),
             }
             let before = interp.symbol_key_table();
-            assert!(!interp.restore_symbol_key_table(u16::MAX - 1, &[(u16::MAX, descriptor.0)]));
+            assert!(!interp.restore_symbol_key_table(u16::MAX - 2, &[(u16::MAX - 1, descriptor.0)]));
             assert_eq!(interp.symbol_key_table(), before);
         }
         let mut interp = Interp::new();
         let cache = interp.template_cache.0;
-        assert!(interp.restore_symbol_key_table(u16::MAX - 1, &[(u16::MAX, cache)]));
+        assert!(interp.restore_symbol_key_table(u16::MAX - 2, &[(u16::MAX - 1, cache)]));
     }
 
     #[test]
