@@ -741,25 +741,9 @@ macro_rules! gc_weak {
             // descriptor (and its description chunk) alive — the
             // precise replacement for rooting every intern.
             //
-            // Conservative on two axes, both retention-only — this pass can only keep
-            // a descriptor alive, never free one, so neither can
-            // cause a use-after-free or a wrong answer:
-            //
-            //  - it walks the whole arena per fixpoint round rather
-            //    than an index of property records, so the cost is
-            //    O(capacity) × rounds even when `wanted` is tiny;
-            //  - it compares `slot.id` on every marked slot without
-            //    filtering by kind, and `id` doubles as the argument
-            //    count on frame slots, so a frame with N arguments
-            //    where N equals a wanted key's id retains that
-            //    descriptor spuriously.
-            //
-            // Both want the same thing to fix properly: a reverse
-            // index from key id to the property records using it,
-            // maintained where properties are written. Until the
-            // ledger's KEYS row makes that index durable anyway,
-            // over-retaining a handful of descriptors is the cheaper
-            // trade.
+            // The scan remains O(capacity) per fixpoint round. Use the shared
+            // stored-key projection so internal environment markers and
+            // non-keyed records cannot retain a symbol descriptor.
             let wanted: std::collections::HashMap<u16, SlotIndex> = $vm.$field
                 .iter()
                 .filter(|(d, _)| !$slots.is_marked(**d))
@@ -769,8 +753,10 @@ macro_rules! gc_weak {
                 for i in 0..$slots.capacity() {
                     let idx = SlotIndex(i);
                     if $slots.is_marked(idx) {
-                        if let Some(&d) = wanted.get(&$slots.get(idx).id) {
-                            $visit(d);
+                        if let Some(id) = $slots.get(idx).stored_key_id() {
+                            if let Some(&d) = wanted.get(&id) {
+                                $visit(d);
+                            }
                         }
                     }
                 }

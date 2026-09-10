@@ -37,6 +37,7 @@ fn carried_state_has_frozen_bytes_seals_costs_and_continuations() {
     assert!(corpus.starts_with("# ironhorse-meter-5 "));
     let prior_corpus = include_str!("fixtures/state_golden_meter_4.tsv");
     let format_16_corpus = include_str!("fixtures/state_golden_format_16.tsv");
+    let controls = include_str!("fixtures/state_golden_reserved_ids.tsv");
     let sig = Signature::new("w4-determinism-corpus");
     let mut labels = BTreeSet::new();
     for line in corpus.lines().skip(1) {
@@ -60,11 +61,18 @@ fn carried_state_has_frozen_bytes_seals_costs_and_continuations() {
             (prior[7], prior[8]),
             "execution-only charges stay fixed"
         );
+        assert_eq!((f[7], f[8]), (format_16[7], format_16[8]));
+        let control: Vec<_> = controls
+            .lines()
+            .skip(1)
+            .map(|line| line.split('\t').collect::<Vec<_>>())
+            .find(|row| row[0] == label)
+            .unwrap();
         assert!(labels.insert(label));
         for repeat in 0..2 {
             let machine = fresh(f[1]);
-            assert_previous_bytes(&machine, &sig, prior[5]);
-            assert_format_16_bytes(&machine, &sig, format_16[5]);
+            assert_previous_bytes(&machine, &sig, control[1]);
+            assert_format_16_bytes(&machine, &sig, control[2]);
             let bytes = machine.write_snapshot(&sig).unwrap();
             assert_eq!(
                 hex_sha256(&bytes),
@@ -116,8 +124,8 @@ fn carried_state_has_frozen_bytes_seals_costs_and_continuations() {
                     f[8].parse::<u64>().unwrap(),
                     "{label}/{path}: final raw cost"
                 );
-                assert_previous_bytes(&machine, &sig, prior[9]);
-                assert_format_16_bytes(&machine, &sig, format_16[9]);
+                assert_previous_bytes(&machine, &sig, control[3]);
+                assert_format_16_bytes(&machine, &sig, control[4]);
                 assert_eq!(
                     hex_sha256(&machine.write_snapshot(&sig).unwrap()),
                     f[9],
@@ -146,12 +154,20 @@ fn regenerate_persistence_identities() {
     let corpus = include_str!("fixtures/state_golden.tsv");
     let mut lines = corpus.lines();
     let mut output = format!("{}\n", lines.next().unwrap());
+    let mut controls = String::from("# reserved symbol ids: label\tinitial-meter4\tinitial-meter5\tfinal-meter4\tfinal-meter5 (format16)\n");
     let sig = Signature::new("w4-determinism-corpus");
     for line in lines {
         let mut f: Vec<String> = line.split('\t').map(str::to_owned).collect();
         assert_eq!(f.len(), 10);
         let machine = fresh(&f[1]);
         assert_eq!(machine.meter_index(), f[7].parse::<u64>().unwrap());
+        let mut image = machine.snapshot_image(&sig).unwrap().into_image();
+        image.version.format_version = 16;
+        image.function_state.native_names = None;
+        let format16 = hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&image));
+        image.meter.cost_table_version = "ironhorse-meter-4".into();
+        let meter4 = hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&image));
+        controls.push_str(&format!("{}\t{meter4}\t{format16}", f[0]));
         f[5] = hex_sha256(&machine.write_snapshot(&sig).unwrap());
         let mut store = MemoryStore::new();
         let session = begin_store_session(machine, &sig, &mut store)
@@ -162,10 +178,25 @@ fn regenerate_persistence_identities() {
         crank(&mut machine, &f[2]);
         assert_eq!(crank(&mut machine, &f[3]), f[4]);
         assert_eq!(machine.meter_index(), f[8].parse::<u64>().unwrap());
+        let mut image = machine.snapshot_image(&sig).unwrap().into_image();
+        image.version.format_version = 16;
+        image.function_state.native_names = None;
+        let format16 = hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&image));
+        image.meter.cost_table_version = "ironhorse-meter-4".into();
+        let meter4 = hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&image));
+        controls.push_str(&format!("\t{meter4}\t{format16}\n"));
         f[9] = hex_sha256(&machine.write_snapshot(&sig).unwrap());
         output.push_str(&f.join("\t"));
         output.push('\n');
     }
+    std::fs::write(
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/state_golden_reserved_ids.tsv"
+        ),
+        controls,
+    )
+    .unwrap();
     std::fs::write(
         concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -176,7 +207,7 @@ fn regenerate_persistence_identities() {
     .unwrap();
 }
 
-// Retain the format16 vectors as independent proof: omit both the later
+// Format-marker control in the current namespace: omit both the later
 // format stamp and the format18 boot-native name table from these comparisons.
 fn assert_format_16_bytes(machine: &Interp, sig: &Signature, expected: &str) {
     let mut image = machine.snapshot_image(sig).unwrap().into_image();
@@ -188,8 +219,8 @@ fn assert_format_16_bytes(machine: &Interp, sig: &Signature, expected: &str) {
     );
 }
 
-// Execution-only state bytes remain identical to the meter-4, format-16 vectors
-// after restoring those two markers. The metering digest is unchanged.
+// Meter/version-marker control in the current reserved-id namespace.
+// Historical corpora independently pin unchanged execution costs.
 fn assert_previous_bytes(machine: &Interp, sig: &Signature, expected: &str) {
     let mut image = machine.snapshot_image(sig).unwrap().into_image();
     image.meter.cost_table_version = "ironhorse-meter-4".into();

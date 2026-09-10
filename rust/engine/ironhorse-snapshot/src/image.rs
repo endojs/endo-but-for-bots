@@ -349,14 +349,14 @@ impl TemporalImage {
 /// The symbol-key property-id table (the `SYMB` atom / small-state
 /// symbols section): the machine's top-down mint counter and every
 /// `(id, descriptor slot)` pair, ascending by id. Symbol keys mint
-/// DOWNWARD from `u16::MAX` (string keys — program symbols and
+/// DOWNWARD from `u16::MAX - 1` (string keys — program symbols and
 /// runtime-interned names alike — live in the NAME table, growing up
 /// from 1), so persisting this table is what lets a heap holding
 /// symbol-KEYED properties round-trip: the restored machine re-binds
 /// each stored id to the same descriptor slot instead of re-minting
 /// the number for a different symbol.
 ///
-/// Wire form: the canonical EMPTY table (`next_id == u16::MAX`, no
+/// Wire form: the canonical EMPTY table (`next_id == u16::MAX - 1`, no
 /// pairs) encodes as the legacy 4-zero-byte empty list, byte-stable
 /// with every blob and store written before the table traveled;
 /// anything else encodes as `u16 next_id`, `u32 count`, then the
@@ -370,7 +370,7 @@ pub struct SymbolKeyImage {
 impl Default for SymbolKeyImage {
     fn default() -> SymbolKeyImage {
         SymbolKeyImage {
-            next_id: u16::MAX,
+            next_id: u16::MAX - 1,
             pairs: Vec::new(),
         }
     }
@@ -1322,7 +1322,7 @@ pub(crate) fn decode_collections(p: &[u8]) -> Result<Vec<CollectionImage>, Snaps
 /// symbols section). See [`SymbolKeyImage`] for the wire form and the
 /// legacy-empty byte-stability rule.
 pub(crate) fn encode_symbol_keys(symbols: &SymbolKeyImage) -> Vec<u8> {
-    if symbols.next_id == u16::MAX && symbols.pairs.is_empty() {
+    if symbols.next_id == u16::MAX - 1 && symbols.pairs.is_empty() {
         // Canonical empty: the legacy empty-u32-list bytes, so every
         // pre-table blob and store stays byte-identical.
         return vec![0, 0, 0, 0];
@@ -1343,19 +1343,19 @@ pub(crate) fn decode_symbol_keys(p: &[u8]) -> Result<SymbolKeyImage, SnapshotErr
     }
     let mut c = Cursor::new(p, "symbol-key table");
     let next_id = c.u16()?;
-    // `next_id == u16::MAX` means nothing was ever minted, and that
-    // state has exactly one canonical encoding — the 4-byte legacy
-    // empty accepted above (every pair would fail `id <= next_id`, so
-    // a new-format payload claiming it can only be the redundant
-    // empty). Accepting it would break the import∘export byte
-    // identity the sibling decoders enforce by rejecting their
-    // non-canonical forms.
+    // The historical virgin counter also had only the four-zero spelling.
+    // Reject its redundant explicit representation rather than normalizing it.
     if next_id == u16::MAX {
         return Err(SnapshotError::Corrupt(
             "symbol-key table: non-canonical empty (legacy encoding required)",
         ));
     }
     let count = c.u32()? as usize;
+    if next_id == u16::MAX - 1 && count == 0 {
+        return Err(SnapshotError::Corrupt(
+            "symbol-key table: non-canonical empty (legacy encoding required)",
+        ));
+    }
     let mut pairs = Vec::with_capacity(count.min(p.len() / 6));
     let mut prev: Option<u16> = None;
     let mut descs = std::collections::BTreeSet::new();
@@ -1368,6 +1368,11 @@ pub(crate) fn decode_symbol_keys(p: &[u8]) -> Result<SymbolKeyImage, SnapshotErr
         // canonical — a crafted duplicate would displace a binding at
         // restore and break import∘export identity, the same class the
         // sibling decoders refuse.
+        if id == u16::MAX {
+            return Err(SnapshotError::Corrupt(
+                "symbol-key table: reserved environment id (legacy symbol namespace unsupported)",
+            ));
+        }
         if id <= next_id || prev.is_some_and(|prev_id| id <= prev_id) {
             return Err(SnapshotError::Corrupt(
                 "symbol-key table: ids not strictly ascending above the counter",
@@ -5632,8 +5637,8 @@ mod tests {
         .is_err());
         // A symbol-key descriptor beyond the arena is refused the same way.
         let bad_sym = SymbolKeyImage {
-            next_id: u16::MAX - 1,
-            pairs: vec![(u16::MAX, 4)],
+            next_id: u16::MAX - 2,
+            pairs: vec![(u16::MAX - 1, 4)],
         };
         assert!(check_image_slot_bounds(
             &[],
@@ -6324,8 +6329,8 @@ mod tests {
             vec!["length".into(), "name".into()],
             vec!["dynKey".to_string()],
             SymbolKeyImage {
-                next_id: u16::MAX - 2,
-                pairs: vec![(u16::MAX - 1, 0), (u16::MAX, 1)],
+                next_id: u16::MAX - 3,
+                pairs: vec![(u16::MAX - 2, 0), (u16::MAX - 1, 1)],
             },
         );
 
@@ -6764,8 +6769,8 @@ mod tests {
             keys: vec!["k1".to_string(), "k2".to_string(), "".to_string()],
             names: vec!["Object".into(), "length".into()],
             symbols: SymbolKeyImage {
-                next_id: u16::MAX - 1,
-                pairs: vec![(u16::MAX, 0)],
+                next_id: u16::MAX - 2,
+                pairs: vec![(u16::MAX - 1, 0)],
             },
             meter: MeterImage::current(),
             arrays: Vec::new(),
@@ -6890,6 +6895,24 @@ mod tests {
             read_machine(&bytes, &sig()),
             Err(SnapshotError::Corrupt("string list entry header"))
         );
+    }
+
+    #[test]
+    fn reserved_symbol_namespace_is_refused_without_reinterpreting_legacy_keys() {
+        let legacy = SymbolKeyImage {
+            next_id: u16::MAX - 1,
+            pairs: vec![(u16::MAX, 4)],
+        };
+        assert_eq!(
+            decode_symbol_keys(&encode_symbol_keys(&legacy)),
+            Err(SnapshotError::Corrupt(
+                "symbol-key table: reserved environment id (legacy symbol namespace unsupported)"
+            ))
+        );
+        let virgin = decode_symbol_keys(&[0, 0, 0, 0]).unwrap();
+        assert_eq!(virgin.next_id, u16::MAX - 1);
+        assert_eq!(encode_symbol_keys(&virgin), [0, 0, 0, 0]);
+        assert!(decode_symbol_keys(&[0xFF, 0xFE, 0, 0, 0, 0]).is_err());
     }
 
     #[test]

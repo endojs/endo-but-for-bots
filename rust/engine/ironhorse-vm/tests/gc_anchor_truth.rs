@@ -65,7 +65,10 @@ fn intl_proto_caches_survive_construction_after_a_collection() {
                  + '|' + new Intl.Collator('en').compare('a', 'b') \
                  + '|' + new Intl.PluralRules('en').select(1) \
                  + '|' + new Intl.ListFormat('en').format(['x', 'y']) \
-                 + '|' + new Intl.Segmenter('en').segment('ab').containing(0).segment; t"
+                 + '|' + new Intl.Segmenter('en').segment('ab').containing(0).segment \
+                 + '|' + new Intl.Segmenter('en').segment('ab')[Symbol.iterator]().next().value.segment \
+                 + '|' + new Intl.Locale('en-US').language \
+                 + '|' + new Intl.DateTimeFormat('en', {{timeZone:'UTC', year:'numeric'}}).format(0); t"
         ),
     );
 }
@@ -77,7 +80,14 @@ fn temporal_proto_caches_survive_construction_after_a_collection() {
         &format!(
             "var churn; var t; {CHURN} \
              t = Temporal.Duration.from({{ hours: 2 }}).total('minutes') \
-                 + '|' + Temporal.Instant.fromEpochMilliseconds(86400000).epochMilliseconds; t"
+                 + '|' + Temporal.Instant.fromEpochMilliseconds(86400000).epochMilliseconds \
+                 + '|' + new Temporal.PlainDate(2026,9,10).day \
+                 + '|' + new Temporal.PlainTime(12,34).minute \
+                 + '|' + new Temporal.PlainDateTime(2026,9,10,12,34).hour \
+                 + '|' + new Temporal.PlainYearMonth(2026,9).month \
+                 + '|' + new Temporal.PlainMonthDay(9,10).day \
+                 + '|' + new Temporal.ZonedDateTime(0n,'UTC').hour \
+                 + '|' + typeof Temporal.Now.instant; t"
         ),
     );
 }
@@ -92,7 +102,9 @@ fn generator_function_protos_survive_definition_after_a_collection() {
         &format!(
             "var churn; var t; {CHURN} \
              function* g() {{ yield 5; }} \
-             t = g().next().value + ':' + (typeof g.bind); t"
+             async function* ag() {{ yield 7; }} \
+             t = g().next().value + ':' + (typeof g.bind) \
+                 + ':' + typeof ag.bind + ':' + typeof ag().next; t"
         ),
     );
 }
@@ -121,4 +133,11 @@ fn iterator_identity_caches_survive_iteration_after_a_collection() {
              acc = ''; for (c of 'xyz') {{ acc = acc + c; }} t = acc; t"
         ),
     );
+}
+
+#[test]
+fn error_stack_accessors_survive_collection_before_first_error_use() {
+    let source = "var e=new Error('message'); typeof e.stack";
+    assert_eq!(run("var untouched=1; untouched", source, true).0, "string");
+    assert_gc_invariant("var untouched=1; untouched", source);
 }

@@ -125,7 +125,7 @@ impl Interp {
     /// The first id past this machine's name table. Since the id-space
     /// unification a runtime-interned STRING key appends INTO the table
     /// (`append_name_key`), so every id at or above this floor is a
-    /// SYMBOL-key id (minted top-down from `u16::MAX` by `o[sym]` /
+    /// SYMBOL-key id (minted top-down from `u16::MAX - 1` by `o[sym]` /
     /// `Object.defineProperty(o, sym, …)`).
     pub fn first_runtime_intern_id(&self) -> u16 {
         (self.symbol_names.len() as u16).saturating_add(1)
@@ -146,7 +146,7 @@ impl Interp {
     /// test witness that a fixture minted a key. Minting can happen on a
     /// lookup; only [`Self::stored_runtime_intern`] proves an id was stored.
     pub fn may_hold_runtime_interns(&self) -> bool {
-        self.next_symbol_key_id != u16::MAX
+        self.next_symbol_key_id != u16::MAX - 1
     }
 
     /// The first SYMBOL-KEY property id this machine actually STORES —
@@ -2650,13 +2650,17 @@ impl Interp {
         // class every sibling decoder refuses. Runs after
         // `bind_program_symbols`, so the table is
         // the persisted one.
-        if (next as usize) <= self.symbol_names.len() {
+        if next == u16::MAX || (next as usize) <= self.symbol_names.len() {
             return false;
         }
         let mut prev: Option<u16> = None;
         let mut descs = std::collections::HashSet::new();
         for &(id, desc) in pairs {
-            if id <= next || prev.is_some_and(|prev_id| id <= prev_id) || !descs.insert(desc) {
+            if id == u16::MAX
+                || id <= next
+                || prev.is_some_and(|prev_id| id <= prev_id)
+                || !descs.insert(desc)
+            {
                 return false;
             }
             prev = Some(id);

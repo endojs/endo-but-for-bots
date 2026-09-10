@@ -33,6 +33,16 @@ pub(super) fn refusal_state(vm: &Interp) -> String {
 }
 
 #[test]
+fn an_environment_marker_does_not_supply_a_stored_key_witness() {
+    let mut vm = Interp::new();
+    vm.new_environment_instance(Slot::undefined());
+    // A lookup may mint without storing a property. Force the scan so its
+    // monotone prefilter cannot hide a marker incorrectly treated as a key.
+    vm.next_symbol_key_id = u16::MAX - 2;
+    assert_eq!(vm.stored_runtime_intern(), None);
+}
+
+#[test]
 fn failed_collection_permanently_disqualifies_the_machine() {
     use std::panic::{catch_unwind, AssertUnwindSafe};
     let mut machine = Interp::new();
@@ -338,6 +348,14 @@ fn every_dispatch_boundary_refuses_collection_without_changing_execution() {
 fn each_activation_register_independently_refuses_quiescence() {
     let checks: &[fn(&mut Interp)] = &[
         |m| m.args.push(Slot::undefined()),
+        |m| {
+            m.array_iterator_proxy_get_context = Some(ArrayIteratorProxyGetContext {
+                target: crate::value::SlotIndex::NULL,
+                key: ReadKey::Index(0),
+                trap_metering: 0,
+                meter_terminal_wrapper: false,
+            })
+        },
         |m| m.this_captures.push(crate::value::SlotIndex::NULL),
         |m| m.locals.push(Slot::undefined()),
         |m| {
@@ -361,6 +379,8 @@ fn each_activation_register_independently_refuses_quiescence() {
         assert!(machine.is_quiescent());
         dirty(&mut machine);
         assert!(!machine.is_quiescent(), "register case {index}");
+        assert_eq!(machine.collect_garbage(), Err(NotQuiescent));
+        assert_eq!(machine.free_pages(&[]), Err(NotQuiescent));
     }
 }
 
@@ -2405,7 +2425,7 @@ fn runtime_key_scan_keeps_arena_precedence_and_tail_minimum() {
     vm.index_props.clear();
     vm.collections.retain_keys(|_| false);
     vm.wrapper_data.retain_keys(|_| false);
-    vm.next_symbol_key_id = u16::MAX - 1;
+    vm.next_symbol_key_id = u16::MAX - 2;
     let floor = vm.first_runtime_intern_id();
     let key = |offset| {
         let mut slot = Slot::undefined();

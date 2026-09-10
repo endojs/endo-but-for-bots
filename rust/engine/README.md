@@ -38,6 +38,15 @@ standalone consumers can discard the machine.
 Direct public-arena mutation and `gc::collect_full` are low-level capabilities, not alternate
 supported whole-machine collection APIs.
 
+Symbol-property IDs now start at `u16::MAX - 1`; the maximum ID is reserved for
+internal environment records and is excluded from key tracing.
+The canonical empty symbol-table bytes remain unchanged.
+Snapshots and stores whose symbol table assigns `u16::MAX` to a symbol are refused
+explicitly as an unsupported legacy namespace, before restoration; no IDs or seals
+are silently rewritten on open.
+Such populated legacy tables require a separately validated migration before use
+with this release.
+
 ## Crates
 
 The workspace has **nine members**.

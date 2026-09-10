@@ -1542,7 +1542,7 @@ pub struct Interp {
     /// outside this set (and not a program symbol / not previously seen) is
     /// genuinely novel and meters one `fxNewSlot`. See [`Self::intern_key`].
     default_keys: std::collections::HashSet<&'static str>,
-    #[boot_new(u16::MAX)]
+    #[boot_new(u16::MAX - 1)]
     #[boot_template(state.next_symbol_key_id)]
     #[gc_root(none)]
     #[quiescent(retained)]
@@ -1554,7 +1554,7 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     /// The next id [`Self::intern_symbol_key`] hands out for a symbol used
-    /// as a property key, allocated DOWNWARD from `u16::MAX` so the symbol
+    /// as a property key, allocated DOWNWARD from `u16::MAX - 1` (the maximum is the reserved environment marker) so the symbol
     /// id space can never collide with the append-only name table growing
     /// up from 1 (string keys — program symbols and runtime-interned names
     /// alike — live in [`Self::symbol_names`], where they persist via the
