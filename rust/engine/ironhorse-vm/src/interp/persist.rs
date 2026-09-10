@@ -1415,7 +1415,9 @@ impl Interp {
         let Some(rows) = rows else {
             return true;
         };
-        if rows.windows(2).any(|pair| pair[0].0 >= pair[1].0)
+        if self
+            .validate_restore_owners(rows.iter().map(|row| row.0), "NativeNames")
+            .is_err()
             || rows.iter().any(|(owner, offset)| {
                 *owner >= self.boot_slot_count
                     || !self
@@ -1434,6 +1436,9 @@ impl Interp {
             .map(|&(_, offset)| crate::value::ChunkOffset(offset))
             .collect();
         self.chunks.validate_references(&offsets).is_ok()
+            && offsets
+                .iter()
+                .all(|&offset| self.chunks.payload(offset).len().is_multiple_of(2))
     }
 
     /// Restore the authoritative surviving boot-native name table before
@@ -1751,16 +1756,38 @@ impl Interp {
         rows
     }
 
-    pub(super) fn restore_accessors(&mut self, rows: Vec<AccessorRow>) -> bool {
-        for row in rows {
+    pub(super) fn restore_accessors(&mut self, rows: Vec<AccessorRow>) -> Result<(), RestoreError> {
+        const ROW: &str = "Accessors";
+        if rows
+            .windows(2)
+            .any(|pair| (pair[0].owner, pair[0].id) >= (pair[1].owner, pair[1].id))
+        {
+            return Err(RestoreError {
+                row: ROW,
+                reason: "keys are not strictly ascending",
+            });
+        }
+        for row in &rows {
+            self.validate_restore_owner(row.owner, ROW)?;
+            if row.id == 0 {
+                return Err(RestoreError {
+                    row: ROW,
+                    reason: "property key is not registered",
+                });
+            }
             for value in [row.get, row.set].into_iter().flatten() {
-                let Payload::Reference(function) = value.value else {
-                    return false;
-                };
-                if !self.functions.contains_key(&function) {
-                    return false;
+                self.validate_restore_value_shape(value, ROW)?;
+                if value.kind != Kind::Reference
+                    || !matches!(value.value, Payload::Reference(function) if self.functions.contains_key(&function))
+                {
+                    return Err(RestoreError {
+                        row: ROW,
+                        reason: "getter or setter is not callable",
+                    });
                 }
             }
+        }
+        for row in rows {
             self.accessors.insert(
                 (crate::value::SlotIndex(row.owner), row.id),
                 AccessorData {
@@ -1769,7 +1796,7 @@ impl Interp {
                 },
             );
         }
-        true
+        Ok(())
     }
 
     pub fn intl_bound_functions_snapshot(&self) -> Vec<IntlBoundFunctionRow> {
@@ -1800,19 +1827,49 @@ impl Interp {
         rows
     }
 
-    pub(super) fn restore_intl_bound_functions(&mut self, rows: Vec<IntlBoundFunctionRow>) -> bool {
+    pub(super) fn restore_intl_bound_functions(
+        &mut self,
+        rows: Vec<IntlBoundFunctionRow>,
+    ) -> Result<(), RestoreError> {
+        const ROW: &str = "IntlBoundFunctions";
+        let refuse = |reason| RestoreError { row: ROW, reason };
+        self.validate_restore_owners(rows.iter().map(|row| row.function), ROW)?;
+        for row in &rows {
+            self.validate_restore_owner(row.owner, ROW)?;
+            if self
+                .functions
+                .contains_key(&crate::value::SlotIndex(row.function))
+            {
+                return Err(refuse("function owner already has metadata"));
+            }
+            let owner = crate::value::SlotIndex(row.owner);
+            match row.kind {
+                0 if self.collators.contains_key(&owner) => {}
+                1 if self.number_formats.contains_key(&owner) => {}
+                _ => return Err(refuse("owner has no matching Intl row")),
+            }
+        }
+        self.validate_restore_values(
+            rows.iter()
+                .filter(|row| row.name_chunk != u32::MAX)
+                .map(|row| {
+                    Slot::of(
+                        Kind::String,
+                        Payload::String(crate::value::ChunkOffset(row.name_chunk)),
+                    )
+                }),
+            ROW,
+        )?;
+
         for row in rows {
             let function = crate::value::SlotIndex(row.function);
             let owner = crate::value::SlotIndex(row.owner);
-            if self.functions.contains_key(&function) {
-                return false;
-            }
             let method = match row.kind {
                 0 if self.collators.contains_key(&owner) => NativeMethod::CollatorCompare,
                 1 if self.number_formats.contains_key(&owner) => {
                     NativeMethod::NumberFormatBoundFormat
                 }
-                _ => return false,
+                _ => unreachable!("Intl owner was validated before restore"),
             };
             self.functions.insert(
                 function,
@@ -1831,7 +1888,7 @@ impl Interp {
                 self.number_formats.get_mut(&owner).unwrap().bound_format = Some(function);
             }
         }
-        true
+        Ok(())
     }
 
     pub fn private_elements_snapshot(&self) -> PrivateElementSnapshot {
@@ -3213,6 +3270,21 @@ impl Interp {
                 || prev.is_some_and(|prev_id| id <= prev_id)
                 || !descs.insert(desc)
             {
+                return false;
+            }
+            // The template cache reserves an internal key using its rooted
+            // instance identity. Every other entry is a guest Symbol descriptor.
+            let valid = if desc == self.template_cache.0 {
+                self.validate_restore_owner(desc, "SymbolKeys")
+            } else {
+                let symbol = Slot::of(
+                    Kind::Symbol,
+                    Payload::Reference(crate::value::SlotIndex(desc)),
+                );
+                self.validate_restore_value_shape(symbol, "SymbolKeys")
+                    .map(|_| ())
+            };
+            if valid.is_err() {
                 return false;
             }
             prev = Some(id);
