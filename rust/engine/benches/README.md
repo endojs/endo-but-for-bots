@@ -1407,3 +1407,25 @@ from 1.006x to 1.118x; results and raw charges match across every run.
 Before aggregate measurements and source locks reuse the preceding Collection
 candidate after source-hash equality checks.
 Earlier failures and rejected experiments remain unchanged.
+
+## Further interpreter and property factoring
+
+[`results/1a-final-factoring.json`](results/1a-final-factoring.json) records the
+subsequent three-commit decomposition of property algorithms, interpreter
+execution helpers, and shared declarations.
+The parent files shrink from 12,162 to 2,739 lines and from 6,690 to 1,794 lines,
+respectively.
+All 1,508 engine tests and 116 SQLite tests pass, together with strict VM library
+Clippy and formatting; VM documentation builds with warnings.
+
+The pinned check passes 47 of 48 controls.
+`placeholder_500000_ms` measures 0.042834 ms versus 0.029542 ms (1.450x), exceeding
+the unchanged 1.25x threshold.
+Its arena implementation and fixture are byte-identical to pre-factoring
+`0bf180e98`.
+One fixed before/after/after/before comparison against that predecessor measures
+0.943x for this control and 1.028–1.153x for the other three allocation sizes.
+The diagnostic helps assess the isolated timing flag; it does not replace the
+failed pinned check or justify changing its threshold.
+The record retains both observations, binary hashes, measured-source hashes,
+and the candidate working-tree source hashes.
