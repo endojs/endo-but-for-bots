@@ -95,7 +95,7 @@ impl Interp {
     /// SyntaxError` and `assert.throws(SyntaxError, …)` hold) rather than an
     /// uncatchable host `Unsupported` halt.
     pub(super) fn catchable_syntax_error(&mut self) -> Step {
-        let error = self.build_error("SyntaxError", 0, 0);
+        let error = self.build_error("SyntaxError");
         self.raise_js(error)
     }
 

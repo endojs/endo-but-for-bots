@@ -24,7 +24,7 @@ impl Interp {
             );
             return Err(self.raise_js(error));
         }
-        let value = (self.ordinary_get(code, base, id, receiver))?;
+        let value = (self.mop_get(code, base, id, receiver))?;
         self.push(value);
         Ok(())
     }
@@ -59,7 +59,7 @@ impl Interp {
             return Err(self.raise_js(error));
         }
         let value = (match read_key {
-            ReadKey::Id(id) => self.ordinary_get(code, super_ref.next, id, receiver),
+            ReadKey::Id(id) => self.mop_get(code, super_ref.next, id, receiver),
             ReadKey::Index(index) => {
                 self.uninterned_index_get(code, super_ref.next, index, receiver)
             }
@@ -90,7 +90,7 @@ impl Interp {
             );
             return Err(self.raise_js(error));
         }
-        let accepted = (self.ordinary_set(code, base, id, value, receiver))?;
+        let accepted = (self.mop_set(code, base, id, value, receiver))?;
         if !accepted {
             return Err(self.failed_super_set_error(base, id, receiver));
         }
@@ -123,7 +123,7 @@ impl Interp {
             let error = self.internal_error("TypeError", "set super: base is null".into());
             return Err(self.raise_js(error));
         }
-        let accepted = (self.ordinary_set(code, super_ref.next, id, value, receiver))?;
+        let accepted = (self.mop_set(code, super_ref.next, id, value, receiver))?;
         if !accepted {
             return Err(self.failed_super_set_error(super_ref.next, id, receiver));
         }

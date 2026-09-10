@@ -633,7 +633,8 @@ fn restored_proxy_metadata_takes_precedence_over_a_runnable_body() {
     let (mut interp, state, candidate, target) = callable_overlap_fixture();
     assert!(interp.restore_function_state(state));
     let handler = *interp.symbol_ids.get("handler").unwrap();
-    let Payload::Reference(handler) = interp.instance_get(interp.global_obj, handler).value else {
+    let Payload::Reference(handler) = interp.boot_chain_get(interp.global_obj, handler).value
+    else {
         panic!("fixture handler is an object");
     };
     assert!(interp.restore_proxy_state(ProxyStateSnapshot {
@@ -1803,12 +1804,12 @@ fn build_harden_graph() -> (
     let proto = interp.object_proto;
     let inner = interp.slots.alloc(Slot::instance(proto));
     let id_c = interp.intern_static_key("c");
-    interp.instance_put(inner, id_c, Slot::number(2.0));
+    interp.set_own_unmetered(inner, id_c, Slot::number(2.0));
     let outer = interp.slots.alloc(Slot::instance(proto));
     let id_a = interp.intern_static_key("a");
-    interp.instance_put(outer, id_a, Slot::number(1.0));
+    interp.set_own_unmetered(outer, id_a, Slot::number(1.0));
     let id_b = interp.intern_static_key("b");
-    interp.instance_put(
+    interp.set_own_unmetered(
         outer,
         id_b,
         Slot::of(Kind::Reference, Payload::Reference(inner)),
@@ -2687,7 +2688,7 @@ fn promise_native_roots_preserve_halted_operand_stack() {
         let key = vm.intern_static_key("haltOnlyOperand");
         let retained = vm.stack.iter().find_map(|slot| match slot.value {
             Payload::Reference(object) if slot.kind == Kind::Reference
-                && vm.instance_get(object, key) == Slot::integer(314159) => Some(object),
+                && vm.boot_chain_get(object, key) == Slot::integer(314159) => Some(object),
             _ => None,
         });
         assert!(retained.is_some(), "callee remains installed but its live caller operand disappeared: {source}; stack={}, frames={}", vm.stack.len(), vm.call_stack.len());
@@ -2696,7 +2697,7 @@ fn promise_native_roots_preserve_halted_operand_stack() {
         assert_eq!(vm.collect_garbage(), Err(NotQuiescent));
         assert_eq!(vm.free_pages(&[]), Err(NotQuiescent));
         assert_eq!(refusal_state(&vm), before);
-        assert_eq!(vm.instance_get(object, key), Slot::integer(314159));
+        assert_eq!(vm.boot_chain_get(object, key), Slot::integer(314159));
         let (next, names) = ironhorse_compile::compile_atoms("42").unwrap();
         let next = vm.relink_crank(&next, &crate::parse_symbols(&names)).unwrap();
         let out = vm.run(&next);
@@ -2723,7 +2724,7 @@ fn promise_native_roots_preserve_stack_overflow_operands() {
         let key = vm.intern_static_key("haltOnlyOperand");
         let retained = vm.stack.iter().find_map(|slot| match slot.value {
             Payload::Reference(object) if slot.kind == Kind::Reference
-                && vm.instance_get(object, key) == Slot::integer(314159) => Some(object),
+                && vm.boot_chain_get(object, key) == Slot::integer(314159) => Some(object),
             _ => None,
         });
         assert!(retained.is_some(), "callee remains installed but its live caller operand disappeared: {source}; stack={}, frames={}", vm.stack.len(), vm.call_stack.len());
@@ -2732,7 +2733,7 @@ fn promise_native_roots_preserve_stack_overflow_operands() {
         assert_eq!(vm.collect_garbage(), Err(NotQuiescent));
         assert_eq!(vm.free_pages(&[]), Err(NotQuiescent));
         assert_eq!(refusal_state(&vm), before);
-        assert_eq!(vm.instance_get(object, key), Slot::integer(314159));
+        assert_eq!(vm.boot_chain_get(object, key), Slot::integer(314159));
         let (next, names) = ironhorse_compile::compile_atoms("42").unwrap();
         let next = vm.relink_crank(&next, &crate::parse_symbols(&names)).unwrap();
         let out = vm.run(&next);
@@ -2919,7 +2920,7 @@ fn call_entry_failures_retire_the_pending_frame_tuple() {
         let mut vm = Interp::new();
         vm.link_intrinsics(&crate::parse_symbols(&symbols));
         assert!(vm.run(&code).completed);
-        let callable = vm.instance_get(vm.global_obj, *vm.symbol_ids.get("f").unwrap());
+        let callable = vm.boot_chain_get(vm.global_obj, *vm.symbol_ids.get("f").unwrap());
         let function = match failure {
             "noncallable" => Slot::integer(7),
             "bodyless" => Slot::of(Kind::Reference, Payload::Reference(vm.intrinsics["Object"])),
@@ -2974,7 +2975,7 @@ fn native_type_and_range_messages_do_not_add_guest_meter_charges() {
         let mut messaged = Interp::new();
         let before_bare = bare.meter_index();
         let before_message = messaged.meter_index();
-        let _ = bare.build_error(name, 0, 0);
+        let _ = bare.build_error(name);
         let _ = messaged.internal_error(name, "specific validation failure".into());
         assert_eq!(
             bare.meter_index() - before_bare,

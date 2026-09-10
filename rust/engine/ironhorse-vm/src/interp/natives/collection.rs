@@ -218,7 +218,7 @@ impl Interp {
             CollKind::WeakMap => NativeMethod::WeakMapSet,
             CollKind::WeakSet => NativeMethod::WeakSetAdd,
         };
-        let mut adder = self.ordinary_get(code, inst, method_id, receiver)?;
+        let mut adder = self.mop_get(code, inst, method_id, receiver)?;
         // Intrinsics are linked sparsely by program atom. The constructor's
         // implicit Get(adder) still sees the boot method when source never
         // spells its name, so recover that already-allocated method identity.
@@ -393,12 +393,12 @@ impl Interp {
         let receiver = Slot::of(Kind::Reference, Payload::Reference(inst));
         let mut adder = match prefetched_adder {
             Some(adder) => adder,
-            None => match self
-                .array_from_try(|this| this.ordinary_get(code, inst, method_id, receiver))?
-            {
-                Ok(adder) => adder,
-                Err(error) => return Ok(Err(error)),
-            },
+            None => {
+                match self.array_from_try(|this| this.mop_get(code, inst, method_id, receiver))? {
+                    Ok(adder) => adder,
+                    Err(error) => return Ok(Err(error)),
+                }
+            }
         };
         // Sparse intrinsic installation means an implicitly used `add`/`set`
         // can be absent from the prototype until this constructor reaches it.
@@ -1258,11 +1258,7 @@ impl Interp {
             .unwrap_or_default()
     }
 
-    /// `Get(obj, id)` walking the ordinary prototype chain, but resolving the
-    /// native `Map`/`Set` `size` accessor (which XS/ironhorse handle inline in
-    /// GET_PROPERTY rather than as a stored accessor) when the chain carries no
-    /// own/inherited `size` property. A user `get size()` override IS a stored
-    /// accessor and is found by the chain walk first, so it still wins.
+    /// Read the set-like record's size through its complete `[[Get]]`.
     fn set_record_get_size(
         &mut self,
         code: &[u8],
@@ -1270,22 +1266,7 @@ impl Interp {
         obj_slot: Slot,
     ) -> Result<Slot, Step> {
         let size_id = self.intern_static_key("size");
-        let mut owner = obj;
-        while !owner.is_null() {
-            if owner != obj && self.proxies.contains_key(&owner) {
-                return self.ordinary_get(code, obj, size_id, obj_slot);
-            }
-            if self.ordinary_get_own_descriptor(owner, size_id).is_some() {
-                return self.ordinary_get(code, obj, size_id, obj_slot);
-            }
-            owner = self.instance_prototype(owner);
-        }
-        if let Some(c) = self.collections.get(&obj) {
-            if matches!(c.kind, CollKind::Map | CollKind::Set) {
-                return Ok(Slot::integer(self.collection_live_len(obj) as i32));
-            }
-        }
-        Ok(Slot::undefined())
+        self.mop_get(code, obj, size_id, obj_slot)
     }
 
     /// `GetSetRecord(obj)` (set-methods proposal): returns `(obj, size, has,
@@ -1308,12 +1289,12 @@ impl Interp {
             return Err(self.catchable_range_error_msg("other.size < 0".into()));
         }
         let has_id = self.intern_static_key("has");
-        let has = self.ordinary_get(code, obj, has_id, arg)?;
+        let has = self.mop_get(code, obj, has_id, arg)?;
         if !self.value_is_callable(has) {
             return Err(self.catchable_type_error_msg("other.has is no function".into()));
         }
         let keys_id = self.intern_static_key("keys");
-        let keys = self.ordinary_get(code, obj, keys_id, arg)?;
+        let keys = self.mop_get(code, obj, keys_id, arg)?;
         if !self.value_is_callable(keys) {
             return Err(self.catchable_type_error_msg("other.keys is no function".into()));
         }
@@ -1353,7 +1334,7 @@ impl Interp {
             }
         };
         let next_id = self.intern_static_key("next");
-        let next = self.ordinary_get(code, iter_inst, next_id, iter)?;
+        let next = self.mop_get(code, iter_inst, next_id, iter)?;
         Ok((iter, next))
     }
 
@@ -1371,12 +1352,12 @@ impl Interp {
             _ => return Err(self.catchable_type_error_msg("iterator result: not an object".into())),
         };
         let done_id = self.intern_static_key("done");
-        let done = self.ordinary_get(code, result_inst, done_id, result)?;
+        let done = self.mop_get(code, result_inst, done_id, result)?;
         if self.truthy(&done) {
             return Ok(None);
         }
         let value_id = self.intern_static_key("value");
-        let value = self.ordinary_get(code, result_inst, value_id, result)?;
+        let value = self.mop_get(code, result_inst, value_id, result)?;
         Ok(Some(value))
     }
 
@@ -1389,7 +1370,7 @@ impl Interp {
             _ => return Ok(()),
         };
         let return_id = self.intern_static_key("return");
-        let ret = self.ordinary_get(code, iter_inst, return_id, iter)?;
+        let ret = self.mop_get(code, iter_inst, return_id, iter)?;
         if ret.kind == Kind::Undefined || ret.kind == Kind::Null {
             return Ok(());
         }
@@ -1772,7 +1753,7 @@ impl Interp {
                 None => self.intern_static_key("value"),
             }
         };
-        self.ordinary_get(code, inst, id, result)
+        self.mop_get(code, inst, id, result)
     }
 
     pub(in crate::interp) fn call_group_by(
@@ -1898,7 +1879,7 @@ impl Interp {
                 let method = if iter_id == crate::value::XS_NO_ID {
                     Slot::undefined()
                 } else {
-                    self.ordinary_get(code, obj, iter_id, items)?
+                    self.mop_get(code, obj, iter_id, items)?
                 };
                 if method.kind == Kind::Undefined || method.kind == Kind::Null {
                     return Err(self.catchable_type_error_msg("call: not a function".into()));
@@ -1911,7 +1892,7 @@ impl Interp {
                     }
                 };
                 let next_id = self.intern_static_key("next");
-                let next = self.ordinary_get(code, iter_inst, next_id, iterator)?;
+                let next = self.mop_get(code, iter_inst, next_id, iterator)?;
                 // A defensive bound against a pathological non-terminating guest
                 // iterator; the tested iterables are short.
                 for _ in 0..1_000_000 {

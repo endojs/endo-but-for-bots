@@ -83,7 +83,7 @@ impl Interp {
             // exposing the accessor's backing placeholder slot.
             let global = Slot::of(Kind::Reference, Payload::Reference(self.global_obj));
             Some((self.mop_get(code, self.global_obj, name, global))?)
-        } else if self.instance_has(self.object_proto, name).0 {
+        } else if self.mop_has(code, self.object_proto, name)? {
             // `global_props` is the OWN-property index of the
             // global object, but a bare name resolves through
             // `HasProperty`, which walks the prototype chain: every
@@ -285,7 +285,7 @@ impl Interp {
             // this arm's measured cost, and both forms stay
             // bit-exact against the pin.
             let own_global = self.global_props.contains_key(&name);
-            let resolvable = own_global || self.instance_has(self.object_proto, name).0;
+            let resolvable = own_global || self.mop_has(code, self.object_proto, name)?;
             if !resolvable && self.strict {
                 // XS's `SET_VARIABLE` strict arm:
                 // `mxRunDebugID(XS_REFERENCE_ERROR, "set %s:
@@ -325,7 +325,7 @@ impl Interp {
                 self.meter.tick_code();
             }
             let global = Slot::of(Kind::Reference, Payload::Reference(self.global_obj));
-            let accepted = (self.ordinary_set(code, self.global_obj, name, value, global))?;
+            let accepted = (self.mop_set(code, self.global_obj, name, value, global))?;
             if !accepted && self.strict {
                 return Err(self.failed_set_error(self.global_obj, name, "set"));
             }

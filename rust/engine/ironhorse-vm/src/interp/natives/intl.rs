@@ -98,10 +98,13 @@ impl Interp {
         options: crate::value::SlotIndex,
         name: &str,
     ) -> Result<Option<String>, Step> {
-        let Some(&id) = self.symbol_ids.get(name) else {
-            return Ok(None);
-        };
-        let value = self.instance_get(options, id);
+        let id = self.intern_key(name)?;
+        let value = self.mop_get(
+            code,
+            options,
+            id,
+            Slot::of(Kind::Reference, Payload::Reference(options)),
+        )?;
         if value.kind == Kind::Undefined {
             return Ok(None);
         }
@@ -114,10 +117,20 @@ impl Interp {
         Ok(Some(String::from_utf8_lossy(&bytes).into_owned()))
     }
 
-    fn intl_option_bool(&self, options: crate::value::SlotIndex, name: &str) -> Option<bool> {
-        let id = *self.symbol_ids.get(name)?;
-        let value = self.instance_get(options, id);
-        (value.kind != Kind::Undefined).then(|| self.truthy(&value))
+    fn intl_option_bool(
+        &mut self,
+        code: &[u8],
+        options: crate::value::SlotIndex,
+        name: &str,
+    ) -> Result<Option<bool>, Step> {
+        let id = self.intern_key(name)?;
+        let value = self.mop_get(
+            code,
+            options,
+            id,
+            Slot::of(Kind::Reference, Payload::Reference(options)),
+        )?;
+        Ok((value.kind != Kind::Undefined).then(|| self.truthy(&value)))
     }
 
     pub(in crate::interp) fn apply_locale_options(
@@ -174,7 +187,7 @@ impl Interp {
                 locale.unicode.insert(key.to_string(), value);
             }
         }
-        if let Some(numeric) = self.intl_option_bool(options, "numeric") {
+        if let Some(numeric) = self.intl_option_bool(code, options, "numeric")? {
             locale.unicode.insert(
                 "kn".to_string(),
                 if numeric { "true" } else { "false" }.to_string(),
@@ -215,10 +228,10 @@ impl Interp {
                 *target = value;
             }
         }
-        if let Some(v) = self.intl_option_bool(options, "numeric") {
+        if let Some(v) = self.intl_option_bool(code, options, "numeric")? {
             data.numeric = v;
         }
-        if let Some(v) = self.intl_option_bool(options, "ignorePunctuation") {
+        if let Some(v) = self.intl_option_bool(code, options, "ignorePunctuation")? {
             data.ignore_punctuation = v;
         }
         Ok(())
@@ -253,11 +266,9 @@ impl Interp {
         allowed: &[&str],
         default: &str,
     ) -> Result<String, Step> {
-        let Some(&id) = self.symbol_ids.get(name) else {
-            return Ok(default.to_string());
-        };
+        let id = self.intern_key(name)?;
         let receiver = Slot::of(Kind::Reference, Payload::Reference(options));
-        let value = self.ordinary_get(code, options, id, receiver)?;
+        let value = self.mop_get(code, options, id, receiver)?;
         if value.kind == Kind::Undefined {
             return Ok(default.to_string());
         }
@@ -283,11 +294,9 @@ impl Interp {
         maximum: f64,
         default: Option<u32>,
     ) -> Result<Option<u32>, Step> {
-        let Some(&id) = self.symbol_ids.get(name) else {
-            return Ok(default);
-        };
+        let id = self.intern_key(name)?;
         let receiver = Slot::of(Kind::Reference, Payload::Reference(options));
-        let value = self.ordinary_get(code, options, id, receiver)?;
+        let value = self.mop_get(code, options, id, receiver)?;
         if value.kind == Kind::Undefined {
             return Ok(default);
         }
@@ -361,11 +370,9 @@ impl Interp {
         name: &str,
         allowed: &[&str],
     ) -> Result<Option<String>, Step> {
-        let Some(&id) = self.symbol_ids.get(name) else {
-            return Ok(None);
-        };
+        let id = self.intern_key(name)?;
         let receiver = Slot::of(Kind::Reference, Payload::Reference(options));
-        let value = self.ordinary_get(code, options, id, receiver)?;
+        let value = self.mop_get(code, options, id, receiver)?;
         if value.kind == Kind::Undefined {
             return Ok(None);
         }
@@ -435,7 +442,7 @@ impl Interp {
         let mut hour12 = None;
         let mut hour_cycle = ext.get("hc").cloned();
         if let Some(opts) = options {
-            hour12 = self.intl_option_bool(opts, "hour12");
+            hour12 = self.intl_option_bool(code, opts, "hour12")?;
             if let Some(hc) = self.intl_get_option_enum_opt(
                 code,
                 opts,
@@ -799,7 +806,7 @@ impl Interp {
         let custom = if iterator_id == crate::value::XS_NO_ID || intrinsic_array_iterator {
             Slot::undefined()
         } else {
-            self.ordinary_get(code, obj, iterator_id, iterable)?
+            self.mop_get(code, obj, iterator_id, iterable)?
         };
         if custom.kind == Kind::Undefined {
             // Dense array: iterate its elements in index order.
@@ -872,7 +879,7 @@ impl Interp {
         // A defensive bound: the tested iterables are short; this only guards a
         // pathological non-terminating guest iterator from wedging the host.
         for _ in 0..1_000_000 {
-            let next_method = self.ordinary_get(code, iterator_inst, next_id, iterator)?;
+            let next_method = self.mop_get(code, iterator_inst, next_id, iterator)?;
             let step = self.call_primitive_method(code, next_method, iterator, &[])?;
             let step_inst = match step.value {
                 Payload::Reference(r) => r,
@@ -882,11 +889,11 @@ impl Interp {
                     ))
                 }
             };
-            let done = self.ordinary_get(code, step_inst, done_id, step)?;
+            let done = self.mop_get(code, step_inst, done_id, step)?;
             if self.truthy(&done) {
                 return Ok(result);
             }
-            let value = self.ordinary_get(code, step_inst, value_id, step)?;
+            let value = self.mop_get(code, step_inst, value_id, step)?;
             if value.kind != Kind::String {
                 // The specification calls IteratorClose here; a plain guest
                 // iterator has no `return` method, so closing is a no-op, and
@@ -1281,11 +1288,9 @@ impl Interp {
         name: &str,
         fallback: &str,
     ) -> Result<String, Step> {
-        let Some(&id) = self.symbol_ids.get(name) else {
-            return Ok(fallback.to_string());
-        };
+        let id = self.intern_key(name)?;
         let receiver = Slot::of(Kind::Reference, Payload::Reference(options));
-        let value = self.ordinary_get(code, options, id, receiver)?;
+        let value = self.mop_get(code, options, id, receiver)?;
         if value.kind == Kind::Undefined {
             return Ok(fallback.to_string());
         }

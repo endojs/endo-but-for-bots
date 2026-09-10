@@ -24,7 +24,7 @@ impl Interp {
                 if symbol_id == crate::value::XS_NO_ID {
                     None
                 } else {
-                    let method = (self.ordinary_get(code, instance, symbol_id, iterable))?;
+                    let method = (self.mop_get(code, instance, symbol_id, iterable))?;
                     (method.kind != Kind::Undefined).then_some(method)
                 }
             }
@@ -64,7 +64,7 @@ impl Interp {
                 let sync_method = if sync_id == crate::value::XS_NO_ID {
                     Slot::undefined()
                 } else {
-                    (self.ordinary_get(code, instance, sync_id, iterable))?
+                    (self.mop_get(code, instance, sync_id, iterable))?
                 };
                 if matches!(sync_method.kind, Kind::Undefined | Kind::Null) {
                     return Err(self.catchable_type_error_msg("call: not a function".into()));

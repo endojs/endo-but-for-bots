@@ -2105,8 +2105,8 @@ impl Interp {
                 }
                 // A fresh executor has two internal never-called sentinels;
                 // a called executor has neither. A mixed pair is not reachable.
-                let resolve = self.instance_get(home, resolve_id.expect("checked field"));
-                let reject = self.instance_get(home, reject_id.expect("checked field"));
+                let resolve = self.boot_chain_get(home, resolve_id.expect("checked field"));
+                let reject = self.boot_chain_get(home, reject_id.expect("checked field"));
                 if (resolve.kind == Kind::Uninitialized) != (reject.kind == Kind::Uninitialized) {
                     return false;
                 }
@@ -2271,8 +2271,8 @@ impl Interp {
             let Some(&constructor_id) = self.symbol_ids.get("[[PromiseFinallyConstructor]]") else {
                 return false;
             };
-            self.is_callable_value(self.instance_get(data.promise, handler_id))
-                && self.is_constructor_value(self.instance_get(data.promise, constructor_id))
+            self.is_callable_value(self.boot_chain_get(data.promise, handler_id))
+                && self.is_constructor_value(self.boot_chain_get(data.promise, constructor_id))
         })
     }
 
