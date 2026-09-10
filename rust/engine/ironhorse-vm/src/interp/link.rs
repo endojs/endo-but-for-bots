@@ -155,52 +155,36 @@ impl Interp {
         // cannot be pre-interned or spoofed by guest JavaScript; no property
         // uses the minted id. Reusing the table avoids a schema-only atom.
         self.intern_symbol_key_reserved(self.template_cache);
-        // ArraySpeciesCreate performs an implicit `Get(original,
-        // "constructor")` for Array receivers. Reify the boot-default key
-        // before fixing the installed-name floor whenever an allocating
-        // method is linked, so intrinsic prototype constructor properties are
-        // present from realm creation and a later relink cannot resurrect a
-        // guest deletion.
-        if ["slice", "concat", "map", "filter"]
-            .iter()
-            .any(|name| self.symbol_ids.contains_key(*name))
-        {
-            self.intern_static_key("constructor");
-        }
-        // Promise combinators perform these property operations implicitly:
-        // GetPromiseResolve(C), GetIterator, IteratorStepValue, and Invoke of
-        // the returned promise's `then`. Reify their boot-default string keys
-        // before the installed-name floor is fixed, exactly like Array species'
-        // implicit `constructor` lookup above. Otherwise a source that names
-        // only `Promise.all` can observe a hollow `%Promise%.resolve` or
-        // iterator prototype even though the guest never deleted it.
-        if ["all", "allSettled", "race", "any"]
-            .iter()
-            .any(|name| self.symbol_ids.contains_key(*name))
-        {
-            for name in ["resolve", "then", "next", "value", "done"] {
-                self.intern_static_key(name);
-            }
-        }
-        // `catch` performs Invoke(this, "then", ...), while `finally` first
-        // performs SpeciesConstructor(this, %Promise%) and then the same
-        // observable Invoke. These are implicit boot-default property reads.
-        if ["catch", "finally"]
-            .iter()
-            .any(|name| self.symbol_ids.contains_key(*name))
-        {
-            self.intern_static_key("then");
-            self.intern_static_key("constructor");
-        }
-        // `Promise.resolve` performs both the branded-promise constructor
-        // identity read and thenable assimilation even when neither property
-        // name appears in source text.
-        if self.symbol_ids.contains_key("resolve") {
-            self.intern_static_key("constructor");
-            self.intern_static_key("then");
-        }
         let names = self.symbol_names.clone();
         self.install_intrinsic_bindings(&names, 0, true, |_| true);
+    }
+
+    /// Reify boot-default properties used implicitly by newly linked natives.
+    /// Inspect only the pending suffix so aligned relinks remain constant-time.
+    fn intern_intrinsic_dependencies(&mut self, names: &[SymbolName]) {
+        let names_method = |method: &str| names.iter().any(|name| name.as_str() == Some(method));
+        if ["slice", "concat", "map", "filter"]
+            .iter()
+            .any(|name| names_method(name))
+        {
+            self.intern_static_key_unmetered("constructor");
+        }
+        if ["all", "allSettled", "race", "any"]
+            .iter()
+            .any(|name| names_method(name))
+        {
+            for name in ["resolve", "then", "next", "value", "done", "constructor"] {
+                self.intern_static_key_unmetered(name);
+            }
+        }
+        if ["catch", "finally"].iter().any(|name| names_method(name)) {
+            self.intern_static_key_unmetered("then");
+            self.intern_static_key_unmetered("constructor");
+        }
+        if names_method("resolve") {
+            self.intern_static_key_unmetered("constructor");
+            self.intern_static_key_unmetered("then");
+        }
     }
 
     /// Install the global bindings, prototype methods/data, native
@@ -244,6 +228,23 @@ impl Interp {
     ) {
         let was_installing = self.installing_intrinsics;
         self.installing_intrinsics = true;
+        // Include dependencies in this same installation pass. A later crank
+        // can introduce catch/finally without ever spelling their implicit
+        // `then` lookup, just as a fresh realm can.
+        let before = self.symbol_names.len();
+        self.intern_intrinsic_dependencies(names);
+        let expanded;
+        let names = if self.symbol_names.len() == before {
+            names
+        } else {
+            expanded = names
+                .iter()
+                .chain(self.symbol_names[before..].iter())
+                .cloned()
+                .collect::<Vec<_>>();
+            &expanded
+        };
+
         // Consider exactly this suffix, retaining its absolute realm offset.
         // Names interned during installation remain above the new floor.
         // Copying/scanning the preceding names per runtime key was quadratic.
