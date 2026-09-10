@@ -283,7 +283,7 @@ impl Interp {
                 // exists to avoid materializing.
                 let id = self.index_read_key_id(index);
                 return self.with_native_frame(LIGHT_FRAME_COST, |vm| {
-                    Ok(vm.array_define_index(inst, id, index, desc))
+                    Ok(vm.array_define_index(inst, id, index, desc)?)
                 });
             }
             // A String wrapper's in-range index is an immutable own property.
@@ -316,7 +316,7 @@ impl Interp {
                 }
             }
         }
-        let id = self.intern_key_unmetered(index.to_string());
+        let id = self.intern_key_unmetered(index.to_string())?;
         self.mop_define_own_property(code, inst, id, desc)
     }
 
@@ -434,7 +434,7 @@ impl Interp {
             // `p[k] = v` (or a computed define) routes through the proxy's
             // `[[Set]]`/`[[DefineOwnProperty]]` trap.
             let key_id = if id == crate::value::XS_NO_ID {
-                self.intern_key(index.to_string())
+                self.intern_key(index.to_string())?
             } else {
                 id
             };
@@ -469,7 +469,7 @@ impl Interp {
                 return self.ta_indexed_element_set(code, ta, n, value);
             }
             let id = if id == crate::value::XS_NO_ID {
-                self.intern_key(index.to_string())
+                self.intern_key(index.to_string())?
             } else {
                 id
             };
@@ -505,7 +505,7 @@ impl Interp {
                             configurable: Some(true),
                             ..OrdinaryDescriptor::default()
                         };
-                        let _ = self.array_define_index(inst, Some(key_id), index, descriptor);
+                        let _ = self.array_define_index(inst, Some(key_id), index, descriptor)?;
                         self.meter.tick_builtin();
                     } else {
                         let accepted = self.ordinary_set(code, inst, key_id, value, obj)?;
@@ -568,7 +568,7 @@ impl Interp {
                     // TypedArray prototype whose behaviour must observe the
                     // key) resolve a name and take the path below.
                 }
-                let id = self.intern_key(index.to_string());
+                let id = self.intern_key(index.to_string())?;
                 if define {
                     let descriptor = OrdinaryDescriptor {
                         value: Some(value),
@@ -1584,7 +1584,7 @@ impl Interp {
                 let key = self.read_key_slot(ReadKey::Index(i))?;
                 self.push_prepaid_scratch(&mut out, key)?;
             }
-            let length_id = self.intern_key("length");
+            let length_id = self.intern_static_key("length");
             if !is_arguments {
                 self.charge_builtin_work(1)?;
                 let key = self.property_key_slot(length_id)?;
@@ -1674,7 +1674,7 @@ impl Interp {
                 let key = self.property_key_slot(id)?;
                 self.push_prepaid_scratch(&mut out, key)?;
             }
-            let length_id = self.intern_key("length");
+            let length_id = self.intern_static_key("length");
             self.charge_builtin_work(1)?;
             let key = self.property_key_slot(length_id)?;
             self.push_prepaid_scratch(&mut out, key)?;
@@ -1699,9 +1699,9 @@ impl Interp {
         // ownKeys invariants require a proxy trap result to preserve them.
         if self.functions.contains_key(&inst) {
             let mut out = Vec::new();
-            let length_id = self.intern_key("length");
-            let name_id = self.intern_key("name");
-            let prototype_id = self.intern_key("prototype");
+            let length_id = self.intern_static_key("length");
+            let name_id = self.intern_static_key("name");
+            let prototype_id = self.intern_static_key("prototype");
             let has_proto = self.ctor_prototype.contains_key(&inst);
             let ordinary_ids = self.ordered_own_key_ids(inst);
             for &id in &ordinary_ids {

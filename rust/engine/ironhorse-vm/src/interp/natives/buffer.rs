@@ -40,7 +40,7 @@ impl Interp {
             .get("ArrayBuffer")
             .expect("ArrayBuffer intrinsic is linked");
         let default = Slot::of(Kind::Reference, Payload::Reference(default_ref));
-        let constructor_id = self.intern_key("constructor");
+        let constructor_id = self.intern_static_key("constructor");
         let constructor = self.mop_get(code, buffer_ref, constructor_id, buffer)?;
         if constructor.kind == Kind::Undefined {
             return Ok(default);
@@ -454,9 +454,9 @@ impl Interp {
                         return Err(self.catchable_type_error_msg("iterator: not an object".into()))
                     }
                 };
-                let next_id = self.intern_key("next");
-                let value_id = self.intern_key("value");
-                let done_id = self.intern_key("done");
+                let next_id = self.intern_static_key("next");
+                let value_id = self.intern_static_key("value");
+                let done_id = self.intern_static_key("done");
                 self.value_id = Some(value_id);
                 self.done_id = Some(done_id);
                 let next = self.mop_get(code, iterator_inst, next_id, iterator)?;
@@ -609,7 +609,7 @@ impl Interp {
         let default_constructor =
             Slot::of(Kind::Reference, Payload::Reference(default_constructor));
         let exemplar_slot = Slot::of(Kind::Reference, Payload::Reference(exemplar));
-        let constructor_id = self.intern_key("constructor");
+        let constructor_id = self.intern_static_key("constructor");
         let mut constructor = self.mop_get(code, exemplar, constructor_id, exemplar_slot)?;
         if constructor.kind == Kind::Undefined {
             constructor = default_constructor;

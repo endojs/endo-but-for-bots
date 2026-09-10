@@ -813,14 +813,14 @@ impl Interp {
             Payload::Reference(r) => r,
             _ => return Err(self.catchable_type_error()),
         };
-        let next_id = self.intern_key("next");
+        let next_id = self.intern_static_key("next");
         let value_id = match self.value_id {
             Some(v) => v,
-            None => self.intern_key("value"),
+            None => self.intern_static_key("value"),
         };
         let done_id = match self.done_id {
             Some(v) => v,
-            None => self.intern_key("done"),
+            None => self.intern_static_key("done"),
         };
         let mut result = Vec::new();
         // A defensive bound: the tested iterables are short; this only guards a

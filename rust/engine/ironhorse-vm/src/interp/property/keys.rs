@@ -19,8 +19,8 @@ impl Interp {
     /// * A genuinely-novel name allocates one key slot (`fxFindKey` →
     ///   `fxNewSlot`), metered as one slot allocation (`XS_SLOT_ALLOCATION_
     ///   METERING`), exactly as XS charges when the name misses the table.
-    pub(in crate::interp) fn intern_key(&mut self, name: impl Into<SymbolName>) -> u16 {
-        let name = name.into();
+    pub(in crate::interp) fn intern_key_reserved(&mut self, name: impl Into<SymbolName>) -> u16 {
+        let name: SymbolName = name.into();
         if let Some(&id) = self.symbol_ids.get(&name) {
             return id;
         }
@@ -36,6 +36,56 @@ impl Interp {
         id
     }
 
+    /// Keep 1,024 ids for bounded engine bookkeeping and error construction.
+    /// Guest-driven novel names must stop before the irreversible hard latch;
+    /// already-interned names remain usable at the soft ceiling.
+    pub(in crate::interp) fn admit_guest_key_count(&mut self, count: usize) -> Result<(), Step> {
+        if !self.has_guest_key_capacity(count) {
+            return Err(self.catchable_range_error_msg("property key space exhausted".into()));
+        }
+        Ok(())
+    }
+
+    pub(in crate::interp) fn has_guest_key_capacity(&self, count: usize) -> bool {
+        count == 0
+            || self
+                .symbol_names
+                .len()
+                .saturating_add(count)
+                .saturating_add(PROPERTY_KEY_RESERVE)
+                < self.next_symbol_key_id as usize
+    }
+
+    fn admit_guest_key(&mut self, name: &SymbolName) -> Result<(), Step> {
+        self.admit_guest_key_count(usize::from(!self.symbol_ids.contains_key(name)))
+    }
+
+    pub(in crate::interp) fn intern_key(
+        &mut self,
+        name: impl Into<SymbolName>,
+    ) -> Result<u16, Step> {
+        let name: SymbolName = name.into();
+        self.admit_guest_key(&name)?;
+        Ok(self.intern_key_reserved(name))
+    }
+
+    pub(in crate::interp) fn intern_key_unmetered(
+        &mut self,
+        name: impl Into<SymbolName>,
+    ) -> Result<u16, Step> {
+        let name: SymbolName = name.into();
+        self.admit_guest_key(&name)?;
+        if let Some(&id) = self.symbol_ids.get(&name) {
+            return Ok(id);
+        }
+        Ok(self.append_name_key(name))
+    }
+
+    /// Only the engine's bounded, static vocabulary may use reserved ids.
+    pub(in crate::interp) fn intern_static_key(&mut self, name: &'static str) -> u16 {
+        self.intern_key_reserved(name)
+    }
+
     /// Append a novel string key to the name table and hand out its id (the
     /// new table position). The table IS the persisted id→name map (the NAME
     /// row), so a key interned here round-trips a snapshot with its id — the
@@ -44,7 +94,7 @@ impl Interp {
     /// spaces meet (the exhaustion hazard documented on
     /// [`Self::next_symbol_key_id`]).
     pub(in crate::interp) fn append_name_key(&mut self, name: impl Into<SymbolName>) -> u16 {
-        let name = name.into();
+        let name: SymbolName = name.into();
         let next = self.symbol_names.len().saturating_add(1);
         if next >= self.next_symbol_key_id as usize {
             // The id spaces met: poison the machine and hand the CURRENT
@@ -81,8 +131,8 @@ impl Interp {
     /// array-index walk). Returns the existing id if the name is already
     /// interned, so a program that also names the key keeps the compiler's atom
     /// id.
-    pub(in crate::interp) fn intern_key_unmetered(&mut self, name: impl Into<SymbolName>) -> u16 {
-        let name = name.into();
+    pub(in crate::interp) fn intern_static_key_unmetered(&mut self, name: &'static str) -> u16 {
+        let name: SymbolName = name.into();
         if let Some(&id) = self.symbol_ids.get(&name) {
             return id;
         }
@@ -98,7 +148,10 @@ impl Interp {
     /// key allocates no new name slot in XS (`mxID` is a field read). The id is
     /// drawn from the top-down [`Self::next_symbol_key_id`] counter, so it never
     /// collides with a string key or a program symbol.
-    pub(in crate::interp) fn intern_symbol_key(&mut self, desc: crate::value::SlotIndex) -> u16 {
+    pub(in crate::interp) fn intern_symbol_key_reserved(
+        &mut self,
+        desc: crate::value::SlotIndex,
+    ) -> u16 {
         let (id, newly_interned) = if let Some(&id) = self.symbol_key_ids.get(&desc) {
             (id, false)
         } else if (self.next_symbol_key_id as usize) <= self.symbol_names.len().saturating_add(1) {
@@ -127,6 +180,14 @@ impl Interp {
         id
     }
 
+    pub(in crate::interp) fn intern_symbol_key(
+        &mut self,
+        desc: crate::value::SlotIndex,
+    ) -> Result<u16, Step> {
+        self.admit_guest_key_count(usize::from(!self.symbol_key_ids.contains_key(&desc)))?;
+        Ok(self.intern_symbol_key_reserved(desc))
+    }
+
     /// Resolve a realm well-known symbol to the property id used by ordinary
     /// object lookup. The descriptor identity, rather than its description,
     /// is the key, so a guest-created `Symbol("iterator")` remains distinct
@@ -137,7 +198,7 @@ impl Interp {
             .iter()
             .find_map(|(symbol_name, value)| (*symbol_name == name).then_some(value.value))?;
         match descriptor {
-            Payload::Reference(descriptor) => Some(self.intern_symbol_key(descriptor)),
+            Payload::Reference(descriptor) => Some(self.intern_symbol_key_reserved(descriptor)),
             _ => None,
         }
     }
@@ -169,7 +230,7 @@ impl Interp {
                 .slots
                 .alloc(Slot::instance(crate::value::SlotIndex::NULL));
             for name in ARRAY_UNSCOPABLES {
-                let key = self.intern_key_unmetered(name);
+                let key = self.intern_static_key_unmetered(name);
                 // `CreateDataPropertyOrThrow`: writable, enumerable and
                 // configurable all true — flag 0.
                 self.set_own_unmetered_with_flag(list, key, Slot::boolean(true), 0);
@@ -300,27 +361,27 @@ impl Interp {
         &mut self,
         key: Slot,
         gate_default: bool,
-    ) -> Option<u16> {
-        match key.kind {
+    ) -> Result<Option<u16>, Step> {
+        Ok(match key.kind {
             Kind::Symbol => match key.value {
-                Payload::Reference(desc) => Some(self.intern_symbol_key(desc)),
+                Payload::Reference(desc) => Some(self.intern_symbol_key(desc)?),
                 _ => None,
             },
             Kind::String => {
                 let s = match key.value {
                     Payload::String(off) => SymbolName::from_units(&self.str_units(off)),
-                    _ => return None,
+                    _ => return Ok(None),
                 };
                 if gate_default
                     && !self.symbol_ids.contains_key(&s)
                     && s.as_str().is_some_and(|s| self.default_keys.contains(s))
                 {
-                    return None;
+                    return Ok(None);
                 }
-                Some(self.intern_key(&s))
+                Some(self.intern_key(&s)?)
             }
             _ => None,
-        }
+        })
     }
 
     /// Resolve a computed key at an `AT`/`AT_2` opcode, **interning** a
@@ -338,13 +399,13 @@ impl Interp {
     /// `fxNewName` path) are handled identically. The remaining primitive
     /// values use their `ToString` spelling; references have already passed
     /// through `ToPrimitive` in the opcode dispatch above this helper.
-    pub(in crate::interp) fn resolve_at_key(&mut self, key: Slot) -> Option<Slot> {
-        match key.kind {
+    pub(in crate::interp) fn resolve_at_key(&mut self, key: Slot) -> Result<Option<Slot>, Step> {
+        Ok(match key.kind {
             Kind::At => Some(key),
             Kind::Integer => {
                 let i = match key.value {
                     Payload::Integer(i) => i,
-                    _ => return None,
+                    _ => return Ok(None),
                 };
                 if i >= 0 {
                     Some(Slot::of(
@@ -355,14 +416,14 @@ impl Interp {
                     // A negative integer names a string key ("-1"): XS's
                     // `mxToString` + `fxNewName` interns it (no index branch).
                     let name = number_to_ecma_string(i as f64);
-                    let id = self.intern_key(&name);
+                    let id = self.intern_key(&name)?;
                     Some(Slot::of(Kind::At, Payload::At(id, 0)))
                 }
             }
             Kind::Number => {
                 let n = match key.value {
                     Payload::Number(n) => n,
-                    _ => return None,
+                    _ => return Ok(None),
                 };
                 if n >= 0.0 && n.fract() == 0.0 && n < 4294967295.0 {
                     Some(Slot::of(
@@ -371,7 +432,7 @@ impl Interp {
                     ))
                 } else {
                     let name = number_to_ecma_string(n);
-                    let id = self.intern_key(&name);
+                    let id = self.intern_key(&name)?;
                     Some(Slot::of(Kind::At, Payload::At(id, 0)))
                 }
             }
@@ -382,14 +443,14 @@ impl Interp {
                     Kind::Boolean => match key.value {
                         Payload::Boolean(true) => "true".to_owned(),
                         Payload::Boolean(false) => "false".to_owned(),
-                        _ => return None,
+                        _ => return Ok(None),
                     },
                     Kind::BigInt => match key.value {
                         Payload::BigInt(off) => {
                             let (negative, magnitude) = self.read_bigint(off);
                             bi_to_decimal(negative, &magnitude)
                         }
-                        _ => return None,
+                        _ => return Ok(None),
                     },
                     _ => unreachable!(),
                 };
@@ -398,7 +459,7 @@ impl Interp {
                 // property, not an `%Object.prototype%` property, so the broad
                 // boot-default ambiguity gate used for arbitrary strings does
                 // not apply here.
-                let id = self.intern_key(&name);
+                let id = self.intern_key(&name)?;
                 Some(Slot::of(Kind::At, Payload::At(id, 0)))
             }
             // A symbol key (`o[sym]`): resolve its descriptor-slot identity to
@@ -406,7 +467,7 @@ impl Interp {
             // a symbol never string-coerces to an array index.
             Kind::Symbol => match key.value {
                 Payload::Reference(desc) => {
-                    let id = self.intern_symbol_key(desc);
+                    let id = self.intern_symbol_key(desc)?;
                     Some(Slot::of(Kind::At, Payload::At(id, 0)))
                 }
                 _ => None,
@@ -414,7 +475,7 @@ impl Interp {
             Kind::String => {
                 let content = match key.value {
                     Payload::String(off) => SymbolName::from_units(&self.str_units(off)),
-                    _ => return None,
+                    _ => return Ok(None),
                 };
                 let s = content;
                 if let Some(idx) = s.as_str().and_then(string_to_index) {
@@ -423,7 +484,7 @@ impl Interp {
                     self.meter.tick_code_n(2);
                     Some(Slot::of(Kind::At, Payload::At(crate::value::XS_NO_ID, idx)))
                 } else {
-                    let id = self.intern_key(&s);
+                    let id = self.intern_key(&s)?;
                     // A runtime-computed name can be the first reference to a
                     // standard global, method, or accessor. Complete the same
                     // create-only lazy install used by reflective ToPropertyKey
@@ -435,7 +496,7 @@ impl Interp {
                 }
             }
             _ => None,
-        }
+        })
     }
 
     /// The id an index key is **already** interned under, if any.
@@ -497,11 +558,11 @@ impl Interp {
     /// representation genuinely requires a name — an ordinary object's index
     /// property is a named slot in this engine, where in XS it is a slot in an
     /// internal array chunk.
-    pub(in crate::interp) fn read_key_intern(&mut self, key: ReadKey) -> u16 {
-        match key {
+    pub(in crate::interp) fn read_key_intern(&mut self, key: ReadKey) -> Result<u16, Step> {
+        Ok(match key {
             ReadKey::Id(id) => id,
-            ReadKey::Index(index) => self.intern_key_unmetered(index.to_string()),
-        }
+            ReadKey::Index(index) => self.intern_key_unmetered(index.to_string())?,
+        })
     }
 
     /// Resolve a key slot for a READ-side operation, minting nothing for an
@@ -531,7 +592,7 @@ impl Interp {
         if property_key.kind == Kind::Symbol {
             return match property_key.value {
                 Payload::Reference(descriptor) => {
-                    Ok(ReadKey::Id(self.intern_symbol_key(descriptor)))
+                    Ok(ReadKey::Id(self.intern_symbol_key(descriptor)?))
                 }
                 _ => Err(Step::Host(Halt::EngineInvariant(
                     "to_read_key:symbol-without-descriptor",
@@ -554,7 +615,7 @@ impl Interp {
             }
             return Ok(ReadKey::Index(index));
         }
-        let id = self.intern_key(&name);
+        let id = self.intern_key(&name)?;
         self.install_pending_intrinsics();
         Ok(ReadKey::Id(id))
     }
@@ -599,7 +660,7 @@ impl Interp {
     ) -> Result<u16, Step> {
         if let Payload::At(id, index) = key.value {
             return Ok(if id == crate::value::XS_NO_ID {
-                self.intern_key(index.to_string())
+                self.intern_key(index.to_string())?
             } else {
                 id
             });
@@ -607,7 +668,7 @@ impl Interp {
         let property_key = self.to_property_key(code, key)?;
         if property_key.kind == Kind::Symbol {
             return match property_key.value {
-                Payload::Reference(descriptor) => Ok(self.intern_symbol_key(descriptor)),
+                Payload::Reference(descriptor) => Ok(self.intern_symbol_key(descriptor)?),
                 // A `Kind::Symbol` slot always carries its descriptor
                 // reference; anything else is a port invariant break, not
                 // guest behavior.
@@ -626,7 +687,7 @@ impl Interp {
                 )))
             }
         };
-        let id = self.intern_key(&name);
+        let id = self.intern_key(&name)?;
         // A runtime-computed key can be the first observation of a standard
         // global or intrinsic member. `intern_key` makes the global itself
         // visible immediately; complete the ordinary create-only install pass

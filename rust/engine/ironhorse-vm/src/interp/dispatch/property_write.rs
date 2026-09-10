@@ -389,7 +389,7 @@ impl Interp {
                 if property_flag & (XS_METHOD_FLAG | XS_GETTER_FLAG | XS_SETTER_FLAG) != 0 =>
             {
                 let id = if raw_id == crate::value::XS_NO_ID {
-                    self.intern_key(index.to_string())
+                    self.intern_key(index.to_string())?
                 } else {
                     raw_id
                 };

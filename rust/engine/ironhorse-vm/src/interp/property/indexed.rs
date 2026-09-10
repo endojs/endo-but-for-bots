@@ -352,10 +352,10 @@ impl Interp {
         id: Option<u16>,
         index: u32,
         descriptor: OrdinaryDescriptor,
-    ) -> bool {
+    ) -> Result<bool, Step> {
         let old_len = self.arrays[&inst].length;
         if index >= old_len && !self.array_length_writable(inst) {
-            return false;
+            return Ok(false);
         }
 
         if let Some(id) = id {
@@ -365,13 +365,13 @@ impl Interp {
                     &descriptor,
                     Some(&current),
                 ) {
-                    return false;
+                    return Ok(false);
                 }
                 let accepted = self.ordinary_define_own_property(inst, id, descriptor);
                 if accepted && index >= old_len {
                     self.arrays.get_mut(&inst).unwrap().length = index + 1;
                 }
-                return accepted;
+                return Ok(accepted);
             }
         }
 
@@ -385,7 +385,7 @@ impl Interp {
                 ..OrdinaryDescriptor::default()
             };
             if !self.is_compatible_descriptor(true, &descriptor, Some(&current)) {
-                return false;
+                return Ok(false);
             }
             let mapped_cell = match (value.kind, value.value) {
                 (Kind::Closure, Payload::Reference(cell))
@@ -439,7 +439,7 @@ impl Interp {
                             .unwrap()
                             .set_item_flag(index, flag);
                     }
-                    return true;
+                    return Ok(true);
                 }
             }
             // XS stamps the ITEM SLOT in place. `fxArrayDefineOwnProperty`
@@ -508,28 +508,28 @@ impl Interp {
                             .set_item_flag(index, flag);
                     }
                 }
-                return true;
+                return Ok(true);
             }
             // An accessor on an index: `self.accessors` is keyed by
             // `(instance, id)`, so this one genuinely needs a name.
-            let id = self.array_index_promotion_id(id, index);
+            let id = self.array_index_promotion_id(id, index)?;
             self.arrays
                 .get_mut(&inst)
                 .unwrap()
                 .remove_item(&index, &mut self.side_refs);
             self.set_own_unmetered_with_flag(inst, id, current.value.unwrap(), value.flag);
-            return self.ordinary_define_own_property(inst, id, descriptor);
+            return Ok(self.ordinary_define_own_property(inst, id, descriptor));
         }
 
         if !self.instance_extensible(inst) {
-            return false;
+            return Ok(false);
         }
-        let id = self.array_index_promotion_id(id, index);
+        let id = self.array_index_promotion_id(id, index)?;
         let accepted = self.ordinary_define_own_property(inst, id, descriptor);
         if accepted && index >= old_len {
             self.arrays.get_mut(&inst).unwrap().length = index + 1;
         }
-        accepted
+        Ok(accepted)
     }
 
     /// The name id for an array index that is about to become a real ordinary
@@ -543,11 +543,11 @@ impl Interp {
         &mut self,
         id: Option<u16>,
         index: u32,
-    ) -> u16 {
-        match id {
+    ) -> Result<u16, Step> {
+        Ok(match id {
             Some(id) => id,
-            None => self.intern_key_unmetered(index.to_string()),
-        }
+            None => self.intern_key_unmetered(index.to_string())?,
+        })
     }
 
     /// Array exotic `[[DefineOwnProperty]]` (ECMA-262 10.4.2.1): dispatch
@@ -565,7 +565,7 @@ impl Interp {
             return self.array_define_length(code, inst, descriptor);
         }
         if let Some(index) = name.as_deref().and_then(string_to_index) {
-            return Ok(self.array_define_index(inst, Some(id), index, descriptor));
+            return Ok(self.array_define_index(inst, Some(id), index, descriptor)?);
         }
         Ok(self.ordinary_define_own_property(inst, id, descriptor))
     }

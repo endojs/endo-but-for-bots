@@ -90,7 +90,7 @@ impl Interp {
             };
             let present = (match index {
                 Some(index) => self.uninterned_index_proxy_has(code, objref, index),
-                None => match self.property_key_id(key, false) {
+                None => match self.property_key_id(key, false)? {
                     Some(id) => self.proxy_has(code, objref, id),
                     None => return Err(Step::Host(Halt::EngineInvariant("in:proxy-key"))),
                 },

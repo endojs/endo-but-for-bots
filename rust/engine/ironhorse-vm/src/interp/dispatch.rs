@@ -392,7 +392,7 @@ impl Interp {
                         // enumerable. Keep it in the ordinary slot chain so
                         // assignment, definition, deletion, ownKeys, snapshots,
                         // and proxy forwarding all observe those attributes.
-                        let length_id = self.intern_key_unmetered("length");
+                        let length_id = self.intern_static_key_unmetered("length");
                         self.set_own_unmetered_with_flag(
                             array,
                             length_id,
@@ -771,7 +771,13 @@ impl Interp {
                     } else {
                         key
                     };
-                    let at = match self.resolve_at_key(key) {
+                    let at = match dispatch_result!(
+                        self.resolve_at_key(key),
+                        pc,
+                        self,
+                        return_depth,
+                        code
+                    ) {
                         Some(at) => at,
                         // Every primitive kind resolves; `None` is a payload that does
                         // not match its kind, the engine's own value being malformed.
@@ -1252,8 +1258,8 @@ impl Interp {
                             self.slots.get_mut(ctor).value = Payload::Reference(parent);
                         }
                     }
-                    let prototype_id = self.intern_key("prototype");
-                    let constructor_id = self.intern_key("constructor");
+                    let prototype_id = self.intern_static_key("prototype");
+                    let constructor_id = self.intern_static_key("constructor");
                     self.set_own_unmetered_with_flag(
                         ctor,
                         prototype_id,
@@ -1905,7 +1911,7 @@ impl Interp {
                         .get(&self.cur_func)
                         .map(|info| info.closures)
                         .unwrap_or(crate::value::SlotIndex::NULL);
-                    let id = self.intern_key_unmetered("new.target");
+                    let id = self.intern_static_key_unmetered("new.target");
                     if !closures.is_null() {
                         if let Some(property) = self.find_property(closures, id) {
                             let target = self.slots.get(property);
@@ -1924,7 +1930,7 @@ impl Interp {
                         .get(&self.cur_func)
                         .map(|info| info.closures)
                         .unwrap_or(crate::value::SlotIndex::NULL);
-                    let id = self.intern_key_unmetered("this");
+                    let id = self.intern_static_key_unmetered("this");
                     if !closures.is_null() {
                         if let Some(property) = self.find_property(closures, id) {
                             let captured = self.slots.get(property);
@@ -1963,12 +1969,12 @@ impl Interp {
                     self.functions
                         .update_or_default(arrow, |info| info.home = home);
                     if self.cur_target {
-                        let id = self.intern_key_unmetered("new.target");
+                        let id = self.intern_static_key_unmetered("new.target");
                         let target =
                             Slot::of(Kind::Reference, Payload::Reference(self.target_func));
                         self.append_environment_capture(env, id, target);
                     }
-                    let id = self.intern_key_unmetered("this");
+                    let id = self.intern_static_key_unmetered("this");
                     let capture = self.append_environment_capture(env, id, self.this_val);
                     if self.this_val.kind == Kind::Uninitialized {
                         self.this_captures.push(capture);
@@ -2457,7 +2463,13 @@ impl Interp {
                         return Step::Host(Halt::NotImplemented("super_at:no-home"));
                     }
                     let base = self.instance_prototype(home);
-                    let key = match self.resolve_at_key(self.stack[key_pos]) {
+                    let key = match dispatch_result!(
+                        self.resolve_at_key(self.stack[key_pos]),
+                        pc,
+                        self,
+                        return_depth,
+                        code
+                    ) {
                         Some(key) => key,
                         None => return Step::Host(Halt::NotImplemented("super_at:key")),
                     };

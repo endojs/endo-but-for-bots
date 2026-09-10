@@ -90,7 +90,7 @@ fn descriptor_paths_use_the_same_five_slot_allocation_price() {
         "enumerable",
         "configurable",
     ] {
-        machine.intern_key(name);
+        machine.intern_key(name).unwrap();
     }
     for descriptor in [
         OrdinaryDescriptor {

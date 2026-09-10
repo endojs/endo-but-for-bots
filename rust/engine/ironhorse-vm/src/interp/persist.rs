@@ -940,9 +940,9 @@ impl Interp {
         }
 
         if !join_was_considered {
-            self.intern_key_unmetered("join");
+            self.intern_static_key_unmetered("join");
         }
-        self.intern_symbol_key(self.template_cache);
+        self.intern_symbol_key_reserved(self.template_cache);
         if !join_was_considered {
             // The appended name id is above the restored floor. The ordinary
             // create-only pending pass installs `join` and advances the floor

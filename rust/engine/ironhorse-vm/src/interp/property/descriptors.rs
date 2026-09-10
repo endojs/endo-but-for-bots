@@ -10,11 +10,11 @@ impl Interp {
     pub(in crate::interp) fn define_descriptor_field(
         &mut self,
         inst: crate::value::SlotIndex,
-        name: &str,
+        name: &'static str,
         value: Slot,
     ) {
         self.meter.tick_slot_alloc();
-        let id = self.intern_key(name);
+        let id = self.intern_static_key(name);
         let head = self.slots.get(inst).next;
         let mut prop = value;
         prop.id = id;
@@ -117,7 +117,7 @@ impl Interp {
             // names even when the current program has never mentioned one.
             // Intern each key here rather than letting the symbol table's
             // incidental contents suppress observable Proxy traps.
-            let id = self.intern_key(name);
+            let id = self.intern_static_key(name);
             if !self.mop_has(code, descriptor, id)? {
                 continue;
             }

@@ -212,7 +212,7 @@ impl Interp {
                 // metering (exclusive of the result chunk); a top-level
                 // reference pays [`JSON_STRINGIFY_TOP_REFERENCE_METERING`] once.
                 let mut cost: u64 = 0;
-                let empty_id = self.intern_key("");
+                let empty_id = self.intern_static_key("");
                 let empty_key = self.property_key_slot(empty_id)?;
                 let root_name = JsonPropertyName {
                     key_id: ReadKey::Id(empty_id),
@@ -289,7 +289,7 @@ impl Interp {
                 // walk performs mutation-sensitive Get/Delete/Define operations
                 // and calls the reviver post-order.
                 let holder = self.slots.alloc(Slot::instance(self.object_proto));
-                let root_id = self.intern_key("");
+                let root_id = self.intern_static_key("");
                 self.set_own_unmetered(holder, root_id, value);
                 self.json_internalize_property(
                     code,
@@ -478,7 +478,7 @@ impl Interp {
         cost: &mut u64,
     ) -> Result<Option<Vec<u16>>, Step> {
         if value.kind == Kind::Reference || value.kind == Kind::BigInt {
-            let to_json_id = self.intern_key("toJSON");
+            let to_json_id = self.intern_static_key("toJSON");
             let to_json = self.json_stringify_get_v(code, value, to_json_id)?;
             if self.is_callable_value(to_json) {
                 value = self.run_callback(code, to_json, value, &[name.key])?;
@@ -1168,7 +1168,7 @@ impl Interp {
                 Some(index) if self.indexes_by_index(inst) => ReadKey::Index(index),
                 // A novel name allocates one key slot (metered directly by
                 // `intern_key`), a known name none.
-                _ => ReadKey::Id(self.intern_key(&key)),
+                _ => ReadKey::Id(self.intern_key(&key)?),
             };
             self.json_parse_whitespace(input, pos);
             if *pos >= input.len() || input[*pos] != b':' {
@@ -1269,7 +1269,7 @@ impl Interp {
                         // `u16` id space, so `JSON.parse(json, function (k,
                         // v) { return v })` — an identity reviver, the most
                         // common one there is — poisoned the machine.
-                        let key = self.array_index_read_key(index);
+                        let key = self.array_index_read_key(index)?;
                         let child_source = match source.as_ref() {
                             Some(JsonSource::Array(children)) => usize::try_from(index)
                                 .ok()
@@ -1412,7 +1412,7 @@ impl Interp {
         {
             if self.same_value(*original, value) && *start <= *end && *end <= input.len() {
                 let source_value = self.new_string_metered(&input[*start..*end]);
-                let source_id = self.intern_key("source");
+                let source_id = self.intern_static_key("source");
                 self.set_own_unmetered(context, source_id, source_value);
             }
         }

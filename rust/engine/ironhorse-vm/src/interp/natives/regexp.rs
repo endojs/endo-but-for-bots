@@ -45,7 +45,7 @@ impl Interp {
         if let Some(id) = self.last_index_id {
             return id;
         }
-        let id = self.intern_key_unmetered("lastIndex");
+        let id = self.intern_static_key_unmetered("lastIndex");
         self.last_index_id = Some(id);
         id
     }
@@ -115,7 +115,7 @@ impl Interp {
             .get("RegExp")
             .expect("RegExp intrinsic is linked");
         let default = Slot::of(Kind::Reference, Payload::Reference(default_ref));
-        let constructor_id = self.intern_key("constructor");
+        let constructor_id = self.intern_static_key("constructor");
         let constructor = self.mop_get(code, regexp_inst, constructor_id, regexp)?;
         if constructor.kind == Kind::Undefined {
             return Ok(default);
@@ -164,7 +164,7 @@ impl Interp {
         receiver: Slot,
         reject_nullish: bool,
     ) -> Result<Vec<u16>, Step> {
-        let flags_id = self.intern_key("flags");
+        let flags_id = self.intern_static_key("flags");
         if !self.regexps.contains_key(&inst) || !self.regexp_getter_uses_default(inst, flags_id) {
             let flags = self.mop_get(code, inst, flags_id, receiver)?;
             if reject_nullish && matches!(flags.kind, Kind::Undefined | Kind::Null) {
@@ -190,7 +190,7 @@ impl Interp {
             ("unicodeSets", XS_REGEXP_V, b'v' as u16),
             ("sticky", XS_REGEXP_Y, b'y' as u16),
         ] {
-            let id = self.intern_key(name);
+            let id = self.intern_static_key(name);
             let value = if self.regexp_getter_uses_default(inst, id) {
                 Slot::boolean(self.regexps[&inst].program.flags() & flag != 0)
             } else {
@@ -574,7 +574,7 @@ impl Interp {
         receiver: Slot,
         subject: Slot,
     ) -> Result<Slot, Step> {
-        let exec_id = self.intern_key("exec");
+        let exec_id = self.intern_static_key("exec");
         let exec = self.mop_get(code, inst, exec_id, receiver)?;
         if self.is_callable_value(exec) {
             let result = self.invoke_value(code, exec, receiver, &[subject])?;
@@ -643,7 +643,7 @@ impl Interp {
             let Payload::Reference(result_inst) = result.value else {
                 unreachable!("RegExpExec returns an object or null")
             };
-            let zero_id = self.array_generic_index_id(0);
+            let zero_id = self.array_generic_index_id(0)?;
             let whole = self.mop_get(code, result_inst, zero_id, result)?;
             let match_string = self.to_string_slot(code, whole)?;
             self.array_generic_create_data_property(code, matches, count, match_string)?;
@@ -693,7 +693,7 @@ impl Interp {
         // `RegExpBuiltinExec` creates the result's own `index` property. Its
         // key must be interned before invoking `exec`, even when guest source
         // never spells the name and `@@search` is the only consumer.
-        let index_id = self.intern_key("index");
+        let index_id = self.intern_static_key("index");
         self.regexp_result_ids.index = Some(index_id);
         let result = self.regexp_exec_abstract(code, regexp_inst, regexp, subject)?;
         let current = self.regexp_get_last_index(code, regexp_inst)?;
@@ -801,12 +801,12 @@ impl Interp {
                 Payload::Reference(inst) if result.kind == Kind::Reference => inst,
                 _ => unreachable!("RegExpExec returns an object or null"),
             };
-            let length_id = self.intern_key("length");
+            let length_id = self.intern_static_key("length");
             let result_length = self.mop_get(code, result_inst, length_id, result)?;
             let capture_count = self.to_length_value(code, result_length)?.saturating_sub(1);
             for capture_index in 1..=capture_count {
                 self.meter.tick_raw(REGEXP_SPLIT_PER_CAPTURE_METERING);
-                let capture_id = self.array_generic_index_id(capture_index);
+                let capture_id = self.array_generic_index_id(capture_index)?;
                 let capture = self.mop_get(code, result_inst, capture_id, result)?;
                 self.array_generic_create_data_property(code, array, count, capture)?;
                 count += 1;
@@ -882,8 +882,8 @@ impl Interp {
         global: bool,
         full_unicode: bool,
     ) -> Slot {
-        let value_id = self.intern_key("value");
-        let done_id = self.intern_key("done");
+        let value_id = self.intern_static_key("value");
+        let done_id = self.intern_static_key("done");
         self.value_id = Some(value_id);
         self.done_id = Some(done_id);
         let anchor = self.slots.alloc(Slot::instance(self.object_proto));
@@ -912,8 +912,12 @@ impl Interp {
         value: Slot,
         done: bool,
     ) -> Slot {
-        let value_id = self.value_id.unwrap_or_else(|| self.intern_key("value"));
-        let done_id = self.done_id.unwrap_or_else(|| self.intern_key("done"));
+        let value_id = self
+            .value_id
+            .unwrap_or_else(|| self.intern_static_key("value"));
+        let done_id = self
+            .done_id
+            .unwrap_or_else(|| self.intern_static_key("done"));
         self.value_id = Some(value_id);
         self.done_id = Some(done_id);
         let result = self.slots.alloc(Slot::instance(self.object_proto));
@@ -964,7 +968,7 @@ impl Interp {
             let Payload::Reference(result_inst) = result.value else {
                 unreachable!("RegExpExec returns an object or null")
             };
-            let zero_id = self.array_generic_index_id(0);
+            let zero_id = self.array_generic_index_id(0)?;
             let match_value = self.mop_get(code, result_inst, zero_id, result)?;
             let match_string = self.to_string_units(code, match_value)?;
             if match_string.is_empty() {
@@ -1105,7 +1109,7 @@ impl Interp {
                 // instance payload exactly as `Object.create(null)` does.
                 self.slots.get_mut(obj).value = Payload::Reference(crate::value::SlotIndex::NULL);
                 for (slot, (name, _)) in group_names.iter().enumerate() {
-                    let key = self.intern_key(name);
+                    let key = self.intern_key(name)?;
                     // `captureIndex = data[2*captureCount + nameIndex]`: the
                     // capture the name's group last participated in (a duplicate
                     // name resolves to whichever alternative matched), or `-1`
@@ -1205,7 +1209,7 @@ impl Interp {
                 let obj = self.new_object();
                 self.slots.get_mut(obj).value = Payload::Reference(crate::value::SlotIndex::NULL);
                 for (slot, (name, _)) in group_names.iter().enumerate() {
-                    let key = self.intern_key(name);
+                    let key = self.intern_key(name)?;
                     let cap = names.get(slot).copied().unwrap_or(-1);
                     let val = if cap >= 0 {
                         pair_slots
@@ -1455,7 +1459,7 @@ impl Interp {
             // `groups` can be observable even when the source never names the
             // result-array property. Interning the boot key also makes every
             // collected exec result retain its own duplicate-name resolution.
-            self.intern_key("groups");
+            self.intern_static_key("groups");
         }
         self.meter.tick_raw(STRING_REPLACE_FRAME_METERING);
         // `mxGetID(_flags)` (the `globalFlag` test) — the eight-property
@@ -1578,8 +1582,8 @@ impl Interp {
         // when the sparse realm has an id for them. The algorithm references
         // them regardless of guest source spelling, so seed the same ids here
         // before the first exec result is built.
-        let index_id = self.intern_key("index");
-        let groups_id = self.intern_key("groups");
+        let index_id = self.intern_static_key("index");
+        let groups_id = self.intern_static_key("groups");
         if self.regexp_result_ids.index.is_none() {
             self.regexp_result_ids.index = Some(index_id);
         }
@@ -1597,7 +1601,7 @@ impl Interp {
         }
 
         let full_unicode = flags.contains(&(b'u' as u16)) || flags.contains(&(b'v' as u16));
-        let zero_id = self.intern_key("0");
+        let zero_id = self.intern_static_key("0");
         let mut results = Vec::new();
         loop {
             let result = self.regexp_exec_abstract(code, inst, receiver, subject)?;
@@ -1662,7 +1666,7 @@ impl Interp {
 
             let mut captures = self.reserve_work_scratch(captures_count as usize)?;
             for capture_number in 1..=captures_count {
-                let id = self.array_generic_index_id(capture_number);
+                let id = self.array_generic_index_id(capture_number)?;
                 let capture = self.mop_get(code, result_inst, id, result)?;
                 if capture.kind == Kind::Undefined {
                     captures.push(capture);
@@ -1796,7 +1800,7 @@ impl Interp {
                     {
                         let end = i + 2 + relative;
                         let name = String::from_utf16_lossy(&replacement[i + 2..end]);
-                        let id = self.intern_key(&name);
+                        let id = self.intern_key(&name)?;
                         let (object_inst, object) = named_captures.unwrap();
                         let capture = self.mop_get(code, object_inst, id, object)?;
                         if capture.kind != Kind::Undefined {
@@ -2289,7 +2293,7 @@ impl Interp {
         receiver: Slot,
     ) -> Result<Slot, Step> {
         self.meter.tick_raw(REGEXP_TOSTRING_METERING);
-        let source_id = self.intern_key("source");
+        let source_id = self.intern_static_key("source");
         let source = if self.regexps.contains_key(&inst)
             && self.regexp_getter_uses_default(inst, source_id)
         {
@@ -2306,7 +2310,7 @@ impl Interp {
         };
         let source = self.to_string_units(code, source)?;
 
-        let flags_id = self.intern_key("flags");
+        let flags_id = self.intern_static_key("flags");
         let flags = if self.regexps.contains_key(&inst)
             && self.regexp_getter_uses_default(inst, flags_id)
         {

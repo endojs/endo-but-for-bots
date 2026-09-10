@@ -2623,6 +2623,17 @@ mod tests {
         assert!(ironhorse_negative_ok("RangeError", &run));
         assert!(!ironhorse_negative_ok("TypeError", &run));
 
+        // An implementation recursion budget is not evidence that the
+        // guest threw the expected RangeError or hit XS value-stack geometry.
+        let native = synthetic_abort(
+            Halt::ReentryLimit {
+                depth: 2064,
+                limit: 2048,
+            },
+            "",
+        );
+        assert!(!ironhorse_negative_ok("RangeError", &native));
+
         let meter = synthetic_abort(Halt::MeterAbort, "");
         assert!(ironhorse_negative_ok("RangeError", &meter));
 

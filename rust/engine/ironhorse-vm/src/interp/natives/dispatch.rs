@@ -1440,7 +1440,7 @@ impl Interp {
                         // `RegExp(pattern)` returns `pattern` only when its
                         // observable `constructor` is the active intrinsic.
                         if let Payload::Reference(r) = pattern_arg.value {
-                            let id = self.intern_key("constructor");
+                            let id = self.intern_static_key("constructor");
                             let active = self
                                 .stack
                                 .get(base + 1)
@@ -1467,7 +1467,7 @@ impl Interp {
                     pattern_arg
                 } else {
                     let pattern = if pattern_is_regexp {
-                        let source_id = self.intern_key("source");
+                        let source_id = self.intern_static_key("source");
                         if let Some(r) = pattern_regexp {
                             // The ordinary Get is observable through own and
                             // inherited overrides, including Proxy prototypes.
@@ -1499,7 +1499,7 @@ impl Interp {
                     };
                     let flags = if flags_arg.kind == Kind::Undefined {
                         if pattern_is_regexp {
-                            let flags_id = self.intern_key("flags");
+                            let flags_id = self.intern_static_key("flags");
                             if let Some(r) = pattern_regexp {
                                 if !self.regexp_getter_uses_default(r, flags_id) {
                                     let value = self.mop_get(code, r, flags_id, pattern_arg)?;
@@ -3393,7 +3393,7 @@ impl Interp {
                     // it cannot be keyed soundly).
                     let key_id = match arg1.kind {
                         Kind::Symbol => match arg1.value {
-                            Payload::Reference(desc) => self.intern_symbol_key(desc),
+                            Payload::Reference(desc) => self.intern_symbol_key(desc)?,
                             _ => {
                                 return Err(Step::Host(Halt::NotImplemented(
                                     "defineProperty:bad-symbol-key",
@@ -3423,7 +3423,7 @@ impl Interp {
                                     "defineProperty:ambiguous-default-key",
                                 )));
                             }
-                            self.intern_key(&key)
+                            self.intern_key(&key)?
                         }
                         _ => {
                             return Err(Step::Host(Halt::NotImplemented(
@@ -5306,7 +5306,7 @@ impl Interp {
                     _ => None,
                 };
                 if let Some(reference) = typed_reference {
-                    let join_id = self.intern_key("join");
+                    let join_id = self.intern_static_key("join");
                     if self.chain_resolves_native_data_method(
                         reference,
                         join_id,
@@ -5886,7 +5886,7 @@ impl Interp {
                 let intrinsic = self.intrinsics.get("Promise").copied();
                 let same_constructor = if let Payload::Reference(promise) = arg0.value {
                     if arg0.kind == Kind::Reference && self.promises.contains_key(&promise) {
-                        let constructor_id = self.intern_key("constructor");
+                        let constructor_id = self.intern_static_key("constructor");
                         let constructor = self.mop_get(code, promise, constructor_id, arg0)?;
                         self.same_value(constructor, this)
                     } else {
@@ -6072,7 +6072,7 @@ impl Interp {
                 if argc < 1 {
                     return Err(self.catchable_type_error_msg("no value".into()));
                 }
-                let id = self.intern_key("stack");
+                let id = self.intern_static_key("stack");
                 let desc = OrdinaryDescriptor {
                     value: Some(arg0),
                     writable: Some(true),
@@ -6143,8 +6143,8 @@ impl Interp {
                     // can complete, so this guard has no XS error counterpart.
                     _ => return Err(self.catchable_type_error()),
                 };
-                let source_id = self.intern_key("source");
-                let flags_id = self.intern_key("flags");
+                let source_id = self.intern_static_key("source");
+                let flags_id = self.intern_static_key("flags");
                 let default_source = self.regexps.contains_key(&inst)
                     && self.regexp_getter_uses_default(inst, source_id);
                 let default_flags = self.regexps.contains_key(&inst)

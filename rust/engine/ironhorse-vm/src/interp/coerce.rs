@@ -773,7 +773,7 @@ impl Interp {
             .copied()
         {
             if let Payload::Reference(desc) = symbol.value {
-                let id = self.intern_symbol_key(desc);
+                let id = self.intern_symbol_key(desc)?;
                 // GetMethod begins with the object's full [[Get]], including
                 // accessor invocation and proxy traps. A raw slot lookup would
                 // return an accessor's placeholder value and lose an abrupt

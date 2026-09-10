@@ -193,8 +193,8 @@ impl Interp {
             .well_known_symbol_property_id("iterator")
             .expect("well-known iterator symbol");
         let kind = self.collections[&inst].kind;
-        let next_id = self.intern_key("next");
-        let return_id = self.intern_key("return");
+        let next_id = self.intern_static_key("next");
+        let return_id = self.intern_static_key("return");
         if !self.chain_resolves_native_data_method(array, iterator_id, NativeMethod::ArrayValues)
             || !self.chain_resolves_native_data_method(
                 self.array_iterator_proto,
@@ -210,7 +210,7 @@ impl Interp {
         } else {
             "add"
         };
-        let method_id = self.intern_key(method_name);
+        let method_id = self.intern_static_key(method_name);
         let receiver = Slot::of(Kind::Reference, Payload::Reference(inst));
         let expected = match kind {
             CollKind::Map => NativeMethod::MapSet,
@@ -389,7 +389,7 @@ impl Interp {
             CollKind::WeakMap => NativeMethod::WeakMapSet,
             CollKind::WeakSet => NativeMethod::WeakSetAdd,
         };
-        let method_id = self.intern_key(method_name);
+        let method_id = self.intern_static_key(method_name);
         let receiver = Slot::of(Kind::Reference, Payload::Reference(inst));
         let mut adder = match prefetched_adder {
             Some(adder) => adder,
@@ -476,7 +476,7 @@ impl Interp {
                 ))
             }
         };
-        let next_id = self.intern_key("next");
+        let next_id = self.intern_static_key("next");
         let next = match self
             .array_from_try(|this| this.mop_get(code, iterator_inst, next_id, iterator))?
         {
@@ -488,8 +488,8 @@ impl Interp {
             }
             Err(error) => return Ok(Err(error)),
         };
-        let done_id = self.intern_key("done");
-        let value_id = self.intern_key("value");
+        let done_id = self.intern_static_key("done");
+        let value_id = self.intern_static_key("value");
 
         for _ in 0..1_000_000u64 {
             let step = match self.array_from_try(|this| this.call_any(code, next, iterator, &[]))? {
@@ -526,7 +526,7 @@ impl Interp {
                         return Ok(Err(self.array_from_close(code, iterator, error)?));
                     }
                 };
-                let key_id = self.intern_key("0");
+                let key_id = self.intern_static_key("0");
                 let key =
                     match self.array_from_try(|this| this.mop_get(code, entry, key_id, element))? {
                         Ok(key) => key,
@@ -534,7 +534,7 @@ impl Interp {
                             return Ok(Err(self.array_from_close(code, iterator, error)?));
                         }
                     };
-                let value_id = self.intern_key("1");
+                let value_id = self.intern_static_key("1");
                 let value = match self
                     .array_from_try(|this| this.mop_get(code, entry, value_id, element))?
                 {
@@ -679,7 +679,7 @@ impl Interp {
         let Payload::Reference(iterator_inst) = iterator.value else {
             return Err(self.catchable_type_error_msg("iterator: not an object".into()));
         };
-        let next_id = self.intern_key("next");
+        let next_id = self.intern_static_key("next");
         let next_method = self.mop_get(code, iterator_inst, next_id, iterator)?;
 
         let iterator_ctor =
@@ -765,11 +765,11 @@ impl Interp {
             return Err(self.catchable_type_error_msg("this: not an iterator".into()));
         };
         let iterator = Slot::of(Kind::Reference, Payload::Reference(state.iterable));
-        let return_id = self.intern_key("return");
+        let return_id = self.intern_static_key("return");
         let return_method = self.mop_get(code, state.iterable, return_id, iterator)?;
         if matches!(return_method.kind, Kind::Undefined | Kind::Null) {
-            let value_id = self.intern_key("value");
-            let done_id = self.intern_key("done");
+            let value_id = self.intern_static_key("value");
+            let done_id = self.intern_static_key("done");
             let result = self.slots.alloc(Slot::instance(self.object_proto));
             self.set_own_unmetered(result, value_id, Slot::undefined());
             self.set_own_unmetered(result, done_id, Slot::boolean(true));
@@ -819,7 +819,7 @@ impl Interp {
                 self.internal_error("TypeError", "this: not an object".into())
             ));
         };
-        let return_id = self.intern_key("return");
+        let return_id = self.intern_static_key("return");
         let return_method =
             match self.array_from_try(|this| this.mop_get(code, inst, return_id, iterator))? {
                 Ok(method) => method,
@@ -887,11 +887,11 @@ impl Interp {
             return Ok(Err(self.array_from_close(code, iterator, error)?));
         }
 
-        let value_id = self.intern_key("value");
-        let done_id = self.intern_key("done");
+        let value_id = self.intern_static_key("value");
+        let done_id = self.intern_static_key("done");
         self.value_id = Some(value_id);
         self.done_id = Some(done_id);
-        let next_id = self.intern_key("next");
+        let next_id = self.intern_static_key("next");
         let next_method =
             match self.array_from_try(|this| this.mop_get(code, inst, next_id, iterator))? {
                 Ok(method) if self.is_callable_value(method) => method,
@@ -1269,7 +1269,7 @@ impl Interp {
         obj: crate::value::SlotIndex,
         obj_slot: Slot,
     ) -> Result<Slot, Step> {
-        let size_id = self.intern_key("size");
+        let size_id = self.intern_static_key("size");
         let mut owner = obj;
         while !owner.is_null() {
             if owner != obj && self.proxies.contains_key(&owner) {
@@ -1307,12 +1307,12 @@ impl Interp {
         if int_size < 0.0 {
             return Err(self.catchable_range_error_msg("other.size < 0".into()));
         }
-        let has_id = self.intern_key("has");
+        let has_id = self.intern_static_key("has");
         let has = self.ordinary_get(code, obj, has_id, arg)?;
         if !self.value_is_callable(has) {
             return Err(self.catchable_type_error_msg("other.has is no function".into()));
         }
-        let keys_id = self.intern_key("keys");
+        let keys_id = self.intern_static_key("keys");
         let keys = self.ordinary_get(code, obj, keys_id, arg)?;
         if !self.value_is_callable(keys) {
             return Err(self.catchable_type_error_msg("other.keys is no function".into()));
@@ -1349,7 +1349,7 @@ impl Interp {
             // their prototypes. Keep the spec-only object guard distinct.
             _ => return Err(self.catchable_type_error()),
         };
-        let next_id = self.intern_key("next");
+        let next_id = self.intern_static_key("next");
         let next = self.ordinary_get(code, iter_inst, next_id, iter)?;
         Ok((iter, next))
     }
@@ -1367,12 +1367,12 @@ impl Interp {
             Payload::Reference(i) if result.kind == Kind::Reference => i,
             _ => return Err(self.catchable_type_error_msg("iterator result: not an object".into())),
         };
-        let done_id = self.intern_key("done");
+        let done_id = self.intern_static_key("done");
         let done = self.ordinary_get(code, result_inst, done_id, result)?;
         if self.truthy(&done) {
             return Ok(None);
         }
-        let value_id = self.intern_key("value");
+        let value_id = self.intern_static_key("value");
         let value = self.ordinary_get(code, result_inst, value_id, result)?;
         Ok(Some(value))
     }
@@ -1385,7 +1385,7 @@ impl Interp {
             Payload::Reference(i) if iter.kind == Kind::Reference => i,
             _ => return Ok(()),
         };
-        let return_id = self.intern_key("return");
+        let return_id = self.intern_static_key("return");
         let ret = self.ordinary_get(code, iter_inst, return_id, iter)?;
         if ret.kind == Kind::Undefined || ret.kind == Kind::Null {
             return Ok(());
@@ -1761,12 +1761,12 @@ impl Interp {
         let id = if done {
             match self.done_id {
                 Some(v) => v,
-                None => self.intern_key("done"),
+                None => self.intern_static_key("done"),
             }
         } else {
             match self.value_id {
                 Some(v) => v,
-                None => self.intern_key("value"),
+                None => self.intern_static_key("value"),
             }
         };
         self.ordinary_get(code, inst, id, result)
@@ -1826,7 +1826,7 @@ impl Interp {
                     }
                 } else {
                     let key = self.to_property_key_slot(code, key)?;
-                    let repr = self.property_key_repr(key);
+                    let repr = self.property_key_repr(key)?;
                     match reprs.iter().position(|r| *r == repr) {
                         Some(p) => buckets[p].1.push(value),
                         None => {
@@ -1907,7 +1907,7 @@ impl Interp {
                         return Err(self.catchable_type_error_msg("iterator: not an object".into()))
                     }
                 };
-                let next_id = self.intern_key("next");
+                let next_id = self.intern_static_key("next");
                 let next = self.ordinary_get(code, iter_inst, next_id, iterator)?;
                 // A defensive bound against a pathological non-terminating guest
                 // iterator; the tested iterables are short.
@@ -1935,14 +1935,14 @@ impl Interp {
     }
 
     /// Disjoint identities for string and symbol property keys.
-    fn property_key_repr(&mut self, key: Slot) -> (Option<u16>, Vec<u16>) {
-        match key.value {
+    fn property_key_repr(&mut self, key: Slot) -> Result<(Option<u16>, Vec<u16>), Step> {
+        Ok(match key.value {
             Payload::Reference(desc) if key.kind == Kind::Symbol => {
-                (Some(self.intern_symbol_key(desc)), Vec::new())
+                (Some(self.intern_symbol_key(desc)?), Vec::new())
             }
             Payload::String(off) if key.kind == Kind::String => (None, self.str_units(off)),
             _ => unreachable!("ToPropertyKey must produce a string or symbol"),
-        }
+        })
     }
 
     /// Build a fresh `%Map.prototype%` Map whose entries are the group-by
@@ -1990,7 +1990,7 @@ impl Interp {
             let at = match key.kind {
                 Kind::Symbol => {
                     let id = match key.value {
-                        Payload::Reference(desc) => self.intern_symbol_key(desc),
+                        Payload::Reference(desc) => self.intern_symbol_key(desc)?,
                         _ => {
                             return Err(Step::Host(Halt::EngineInvariant(
                                 "group-by:invalid-symbol-key",
@@ -2011,7 +2011,7 @@ impl Interp {
                     if let Some(idx) = s.as_str().and_then(string_to_index) {
                         Slot::of(Kind::At, Payload::At(crate::value::XS_NO_ID, idx))
                     } else {
-                        let id = self.intern_key(&s);
+                        let id = self.intern_key(&s)?;
                         Slot::of(Kind::At, Payload::At(id, 0))
                     }
                 }
@@ -2139,7 +2139,9 @@ impl Interp {
             return Err(self.catchable_type_error_msg(format!("set {name}: not writable")));
         }
         let id = match method {
-            NativeMethod::IteratorConstructorSetter => self.intern_key_unmetered("constructor"),
+            NativeMethod::IteratorConstructorSetter => {
+                self.intern_static_key_unmetered("constructor")
+            }
             NativeMethod::IteratorToStringTagSetter => self
                 .well_known_symbol_property_id("toStringTag")
                 .ok_or(Step::Host(Halt::EngineInvariant(
