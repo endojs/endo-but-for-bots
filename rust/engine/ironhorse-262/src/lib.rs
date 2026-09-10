@@ -500,6 +500,9 @@ pub fn dual_run_with(source: &str, compiler: Compiler) -> Option<DualRun> {
     // compares two rejections rather than a crash.
     let ironhorse: RunOutcome = match &compile {
         IronhorseCompile::Rejected(_) => RunOutcome {
+            meter_raw_this_run: 0,
+            computrons_this_run: 0,
+            dispatched_this_run: 0,
             completed: false,
             result: String::new(),
             coercion_error: None,
@@ -542,7 +545,6 @@ pub fn dual_run_with(source: &str, compiler: Compiler) -> Option<DualRun> {
 pub fn dual_run_cranks(sources: &[&str]) -> Option<Vec<DualRun>> {
     let oracle_outcomes = xs_oracle::run_cranks(sources)?;
     let mut interp: Option<ironhorse_vm::Interp> = None;
-    let mut prev_raw: u64 = 0;
     let mut out = Vec::new();
     for (source, oracle) in sources.iter().zip(oracle_outcomes) {
         let bytecode = oracle.bytecode.clone();
@@ -552,6 +554,9 @@ pub fn dual_run_cranks(sources: &[&str]) -> Option<Vec<DualRun>> {
             // prior crank aborted the run): present ironhorse's side as
             // the same non-run.
             RunOutcome {
+                meter_raw_this_run: 0,
+                computrons_this_run: 0,
+                dispatched_this_run: 0,
                 completed: false,
                 result: String::new(),
                 coercion_error: None,
@@ -573,6 +578,9 @@ pub fn dual_run_cranks(sources: &[&str]) -> Option<Vec<DualRun>> {
                 Some(m) => match m.relink_crank(&bytecode, &names) {
                     Ok(relinked) => m.run(&relinked).host_coerced(),
                     Err(e) => RunOutcome {
+                        meter_raw_this_run: 0,
+                        computrons_this_run: 0,
+                        dispatched_this_run: 0,
                         completed: false,
                         result: String::new(),
                         coercion_error: None,
@@ -586,13 +594,9 @@ pub fn dual_run_cranks(sources: &[&str]) -> Option<Vec<DualRun>> {
                 },
             }
         };
-        // Per-crank metering: the raw delta across this crank, shifted
-        // exactly as the shim shifts its per-crank reset index.
-        let raw_now = interp.as_ref().map(|m| m.meter_index()).unwrap_or(0);
-        let crank_raw = raw_now.saturating_sub(prev_raw);
-        prev_raw = raw_now;
-        ironhorse.computrons = crank_raw >> 16;
-        ironhorse.meter_raw = crank_raw;
+        ironhorse.computrons = ironhorse.computrons_this_run;
+        ironhorse.meter_raw = ironhorse.meter_raw_this_run;
+        ironhorse.dispatched = ironhorse.dispatched_this_run;
         let stop = !(oracle.completed && ironhorse.completed);
         let symbols = oracle.symbols.clone();
         out.push(build_dual_run(

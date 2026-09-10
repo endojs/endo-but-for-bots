@@ -251,9 +251,8 @@ fn a_refusal_depends_on_the_crank_and_the_policy_not_on_history() {
     let mut m =
         PersistentMachine::open(&options(calib.path(), MeterBounds::Unbounded)).expect("open");
     let prelude = m.eval(PRELUDE).expect("prelude").computrons;
-    let after = m.eval(PROBE).expect("probe").computrons;
+    let cost = m.eval(PROBE).expect("probe").computrons;
     m.close().expect("close");
-    let cost = after - prelude;
     // The second consultation lands within one loop iteration (well
     // under 500 computrons) past 20,000; the crank must end after it
     // and before the third, for the slop-zone case below to be exact.
@@ -478,5 +477,31 @@ fn regexp_compilation_heap_refusal_preserves_the_persistent_checkpoint() {
     let mut resumed = PersistentMachine::open(&opts).unwrap();
     assert_refusal(resumed.eval(&source));
     assert_eq!(resumed.eval("saved").unwrap().result, "7");
+    resumed.close().unwrap();
+}
+
+#[test]
+fn evaluation_receipts_are_per_crank_before_and_after_resume() {
+    let dir = tempfile::tempdir().unwrap();
+    let opts = options(dir.path(), MeterBounds::Unbounded);
+    let mut machine = PersistentMachine::open(&opts).unwrap();
+    let first = machine.eval("1 + 2").unwrap();
+    let second = machine.eval("1 + 2").unwrap();
+    assert_eq!(
+        second.meter_raw,
+        second.meter_raw_total - first.meter_raw_total
+    );
+    assert_eq!(second.computrons, second.meter_raw >> 16);
+    assert!(second.meter_raw > 0);
+    assert_eq!(second.dispatched, first.dispatched);
+    machine.close().unwrap();
+    let mut resumed = PersistentMachine::open(&opts).unwrap();
+    let third = resumed.eval("1 + 2").unwrap();
+    assert_eq!(
+        third.meter_raw,
+        third.meter_raw_total - second.meter_raw_total
+    );
+    assert_eq!(third.meter_raw, second.meter_raw);
+    assert_eq!(third.dispatched, second.dispatched);
     resumed.close().unwrap();
 }
