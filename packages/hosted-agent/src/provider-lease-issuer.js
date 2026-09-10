@@ -40,6 +40,8 @@ import { makeProviderFetchTransport } from './provider-transport.js';
  * @param {any} [options.credential] The record's shared refreshing credential,
  * from `makeBrokerOAuthCredential`. One per secret record, shared by every
  * issuer and lease over it.
+ * @param {(spec:any)=>{endpoint:any,address:string,dispose:()=>void}} [options.makePublicNetwork]
+ * Host-only factory for a separately revocable public-egress capability.
  */
 export const makeProviderBrokerLeaseIssuer = ({
   runtime,
@@ -54,6 +56,7 @@ export const makeProviderBrokerLeaseIssuer = ({
   audit,
   onDiagnostic,
   credential,
+  makePublicNetwork,
 }) => {
   (Number.isInteger(leaseDurationMs) &&
     leaseDurationMs > 0 &&
@@ -121,6 +124,9 @@ export const makeProviderBrokerLeaseIssuer = ({
       spec.accountRef === accountRef &&
       (!spec.model || configuredPolicy.models.includes(spec.model))) ||
       Fail`Provider lease request denied`;
+    spec.networkPolicy === 'off' ||
+      (spec.networkPolicy === 'public-internet' && makePublicNetwork) ||
+      Fail`Unsupported provider lease network policy`;
     const expiresAt = now() + leaseDurationMs;
     const leaseId = `lease-${randomUUID()}`;
     // Both sides of the private pipe use the same host-selected ceiling.
@@ -146,6 +152,7 @@ export const makeProviderBrokerLeaseIssuer = ({
       },
     );
     let worker;
+    let network;
     let inactive = false;
     let cleaned = false;
     let cleanup;
@@ -160,6 +167,7 @@ export const makeProviderBrokerLeaseIssuer = ({
       pending.add(revoke);
       globalThis.clearTimeout(timer);
       transport.dispose();
+      network?.dispose();
       const revoking = E(core.admin).revoke();
       if (!cleanup) {
         cleanup = (async () => {
@@ -177,8 +185,17 @@ export const makeProviderBrokerLeaseIssuer = ({
     };
     leases.add(revoke);
     try {
+      if (spec.networkPolicy === 'public-internet') {
+        if (!makePublicNetwork) throw Fail`Public network factory unavailable`;
+        network = makePublicNetwork(spec);
+      }
       worker = await runtime.start({
         endpoint: core.endpoint,
+        ...(network
+          ? {
+              network: { endpoint: network.endpoint, address: network.address },
+            }
+          : {}),
         limits: harden({
           diagnostics: Boolean(onDiagnostic),
           maxConnections: 4,
@@ -188,6 +205,9 @@ export const makeProviderBrokerLeaseIssuer = ({
         }),
       });
       const initial = await worker.observe();
+      (!!initial.network === !!network &&
+        (!network || initial.network.policy === 'public-internet')) ||
+        Fail`Provider listener network policy mismatch`;
       checkLive();
       timer = globalThis.setTimeout(
         () => {
@@ -203,7 +223,9 @@ export const makeProviderBrokerLeaseIssuer = ({
           (current.containerName === initial.containerName &&
             current.networkNamespaceId === initial.networkNamespaceId &&
             current.endpoint === initial.endpoint &&
-            current.listenerImageDigest === initial.listenerImageDigest) ||
+            current.listenerImageDigest === initial.listenerImageDigest &&
+            JSON.stringify(current.network) ===
+              JSON.stringify(initial.network)) ||
             Fail`Provider listener identity changed`;
           checkLive();
           return current;
@@ -235,6 +257,7 @@ export const makeProviderBrokerLeaseIssuer = ({
               // holders share that record.
               authMode,
               networkNamespaceId: current.networkNamespaceId,
+              ...(current.network ? { network: current.network } : {}),
               endpoint: current.endpoint,
               providerOrigin: configuredPolicy.origin,
               expiresAt: new Date(expiresAt).toISOString(),
@@ -254,6 +277,7 @@ export const makeProviderBrokerLeaseIssuer = ({
               imageDigest,
               leaseId,
               networkNamespaceId: current.networkNamespaceId,
+              ...(current.network ? { network: current.network } : {}),
               brokerSidecar: { container: current.containerName },
               credentialInjection: 'broker-only',
               brokerTransport: 'loopback-sidecar',
@@ -291,6 +315,8 @@ export const makeProviderBrokerLeaseIssuer = ({
           providerOrigin: spec.providerOrigin,
           accountRef: spec.accountRef,
           model: spec.model,
+          networkPolicy:
+            spec.networkPolicy === undefined ? 'off' : spec.networkPolicy,
         });
         return serialize(() => issue(request));
       },
