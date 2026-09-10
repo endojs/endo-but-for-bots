@@ -212,7 +212,8 @@ pub const IRONHORSE_MAGIC: [u8; 4] = *b"IRON";
 // followed by its total u32 span. Earlier readers cannot walk these BLOC bytes.
 // Version 18 persists relocated boot-native name chunks in the FUNC suffix.
 // Version 19 records code-segment identities in saved exception handlers.
-pub const IRONHORSE_FORMAT_VERSION: u32 = 19;
+// Version 20 carries the first reported unhandled rejection in PRMS.
+pub const IRONHORSE_FORMAT_VERSION: u32 = 20;
 
 /// The oldest format version this reader still decodes. Version-1
 /// containers predate the version-2 stamp; every version-1 writer in

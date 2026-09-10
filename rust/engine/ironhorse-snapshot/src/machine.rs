@@ -1947,15 +1947,15 @@ mod tests {
                 owner: 1,
                 state: 0,
                 result: Slot::undefined(),
-                ever_handled: false,
+                ever_handled: true,
                 reactions: vec![PromiseReactionRow {
                     kind: 0,
                     a: 0,
                     b: 0,
                     on_fulfilled: Slot::undefined(),
                     on_rejected: Slot::undefined(),
-                    resolve: Slot::of(Kind::Reference, Payload::Reference(SlotIndex::NULL)),
-                    reject: Slot::of(Kind::Reference, Payload::Reference(SlotIndex::NULL)),
+                    resolve: Slot::of(Kind::Reference, Payload::Reference(SlotIndex(1))),
+                    reject: Slot::of(Kind::Reference, Payload::Reference(SlotIndex(1))),
                 }],
             })),
             Err(SnapshotError::Corrupt(

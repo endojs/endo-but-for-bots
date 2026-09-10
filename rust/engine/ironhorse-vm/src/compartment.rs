@@ -423,6 +423,7 @@ impl Compartment {
     /// the counters are zero and the halt names the skip.
     fn refused(skip: CompartmentSkip) -> RunOutcome {
         RunOutcome {
+            unhandled_rejection: None,
             completed: false,
             result: String::new(),
             coercion_error: None,
@@ -577,6 +578,7 @@ impl Compartment {
         // The callback runs outside the cache borrow, including on a cache hit.
         if !interp.charge_compilation(link_charge) {
             return RunOutcome {
+                unhandled_rejection: interp.unhandled_rejection(),
                 completed: false,
                 result: String::new(),
                 coercion_error: None,

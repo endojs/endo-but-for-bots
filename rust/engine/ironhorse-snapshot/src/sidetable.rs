@@ -665,6 +665,8 @@ mod tests {
         ];
         const ARENAS: &[&str] = &["slots", "chunks", "stack"];
         const SATELLITES: &[&str] = &[
+            // The PRMS suffix roots a promise whose row already carries its reason.
+            "unhandled_rejection",
             "detached_buffers",
             "shared_buffers",
             "deleted_fn_meta",
@@ -677,6 +679,7 @@ mod tests {
             "snapshot_baseline_identity",
         ];
         const TRANSIENTS: &[&str] = &[
+            "pending_rejections",
             // Intrinsic linking is synchronous and restores this guard before
             // control can reach a persistence boundary.
             "installing_intrinsics",
@@ -1086,7 +1089,13 @@ mod tests {
         /// The conjuncts of `is_quiescent` that are not `is_empty()`
         /// tests on a ledger row: each is a transient the module docs
         /// classify, and each must stay in the predicate.
-        const EMPTY_TRANSIENTS: &[&str] = &["args", "this_captures", "locals", "id_map"];
+        const EMPTY_TRANSIENTS: &[&str] = &[
+            "args",
+            "this_captures",
+            "locals",
+            "id_map",
+            "pending_rejections",
+        ];
         const NON_EMPTINESS_CONJUNCTS: &[&str] = &[
             "this_val",
             "env",

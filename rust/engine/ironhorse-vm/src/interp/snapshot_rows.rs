@@ -277,7 +277,7 @@ pub struct PromiseReactionRow {
 
 /// One promise instance's settlement state (the serialized
 /// [`PromiseData`]): status, result, pending reactions, and the
-/// unhandled-rejection latch [`Interp::has_unhandled_rejection`] reads.
+/// handled-state flag [`Interp::has_unhandled_rejection`] reads.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PromiseRow {
     pub owner: u32,
@@ -340,6 +340,8 @@ pub struct CombinatorRow {
 /// byte-identical clusters even before the continued one's next sweep.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PromiseClusterSnapshot {
+    /// Rooted first reported rejection; its PromiseRow carries the reason.
+    pub unhandled_rejection: Option<u32>,
     pub async_instances: Vec<AsyncRow>,
     pub promises: Vec<PromiseRow>,
     pub functions: Vec<PromiseFnRow>,
@@ -349,7 +351,8 @@ pub struct PromiseClusterSnapshot {
 
 impl PromiseClusterSnapshot {
     pub fn is_empty(&self) -> bool {
-        self.promises.is_empty()
+        self.unhandled_rejection.is_none()
+            && self.promises.is_empty()
             && self.async_instances.is_empty()
             && self.functions.is_empty()
             && self.guards.is_empty()

@@ -697,7 +697,7 @@ mod tests {
         }
         positive.restore_promise_cluster(rows.clone()).unwrap();
         assert_eq!(positive.promise_cluster_snapshot(), rows);
-        for case in 0..9 {
+        for case in 0..10 {
             let mut interp = carried_promises();
             let before = interp.promise_cluster_snapshot();
             assert_eq!(before.promises.len(), 2);
@@ -715,6 +715,7 @@ mod tests {
                 6 => rows.functions[0].name_chunk = 0,
                 7 => rows.functions[0].guard = 12345,
                 8 => rows.functions.push(rows.functions[0]),
+                9 => rows.unhandled_rejection = Some(rows.promises[1].owner),
                 _ => unreachable!(),
             }
             let functions: Vec<_> = before

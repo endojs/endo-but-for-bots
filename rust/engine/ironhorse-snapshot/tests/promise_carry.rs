@@ -398,9 +398,9 @@ fn a_finally_await_reaction_restores_the_original_value_after_resume() {
     );
 }
 
-/// The unhandled-rejection latch (`ever_handled`) travels: a rejection
+/// The live handled-state predicate (`ever_handled`) travels: a rejection
 /// nothing observed stays reportable after the split, and a late
-/// `.catch` both reads the stored reason and clears the report — on
+/// `.catch` both reads the stored reason and clears the live predicate — on
 /// the resumed machine exactly as on the uninterrupted one.
 #[test]
 fn the_unhandled_rejection_latch_survives_resume() {
@@ -443,7 +443,7 @@ fn the_unhandled_rejection_latch_survives_resume() {
         crank(session.machine_mut(), read),
     );
     assert_eq!(cont_obs, res_obs, "twin observations agree");
-    assert!(!cont_obs.1, "the late catch clears the report");
+    assert!(!cont_obs.1, "the late catch clears the live predicate");
     assert_eq!(
         cont_obs.2 .2, "caught:boom",
         "the stored reason reaches the handler"
@@ -521,4 +521,48 @@ fn blob_snapshot_carries_the_promise_cluster_too() {
     let resumed: Vec<_> = obs.iter().map(|s| crank(&mut r, s)).collect();
     assert_eq!(resumed, continuous, "blob twin agrees");
     assert_eq!(continuous[1].2, "42");
+}
+
+#[test]
+fn historical_rejection_report_survives_gc_blob_eager_and_lazy_restore() {
+    use ironhorse_snapshot::machine::resume_from_store_lazy;
+    use ironhorse_vm::value::{Kind, Payload};
+    use std::{cell::RefCell, rc::Rc};
+
+    for expression in ["'\\ud800'", "({ toString: function () { throw 99; } })"] {
+        let (code, names) = compile(&format!("var p = Promise.reject({expression});"));
+        let mut vm = Interp::new();
+        vm.link_intrinsics(&names);
+        let first = vm.run(&code);
+        assert!(first.completed);
+        let owner = first.unhandled_rejection.unwrap().0;
+        assert!(crank(&mut vm, "var p; p.then(0, function () {}); p = null;").0);
+        assert!(!vm.has_unhandled_rejection());
+        vm.collect_garbage().unwrap();
+        let bytes = vm.write_snapshot(&sig()).unwrap();
+        let mut blob = from_snapshot_bytes(&bytes, &sig()).unwrap();
+        let mut store = MemoryStore::new();
+        drop(
+            begin_store_session(vm, &sig(), &mut store)
+                .map_err(|(_, e)| e)
+                .unwrap(),
+        );
+        let mut eager = resume_from_store(&store, &sig()).unwrap();
+        let mut lazy = resume_from_store_lazy(Rc::new(RefCell::new(store)), &sig()).unwrap();
+        for resumed in [&mut blob, eager.machine_mut(), lazy.machine_mut()] {
+            resumed.collect_garbage().unwrap();
+            assert!(!resumed.has_unhandled_rejection());
+            let (reported, reason) = resumed.unhandled_rejection().unwrap();
+            assert_eq!(reported, owner);
+            assert!(resumed.gc_roots().contains(&owner));
+            if expression.starts_with("\'") {
+                let Payload::String(chunk) = reason.value else {
+                    panic!("string reason");
+                };
+                assert_eq!(resumed.chunks().slice(chunk, 2)[..], [0xd8, 0x00]);
+            } else {
+                assert_eq!(reason.kind, Kind::Reference);
+            }
+        }
+    }
 }

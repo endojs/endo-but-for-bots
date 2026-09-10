@@ -40,6 +40,9 @@ macro_rules! gc_root {
     ($emit:ident, $vm:ident, $field:ident, $roots:ident, optional) => {
         $emit! { $roots.extend($vm.$field); }
     };
+    ($emit:ident, $vm:ident, $field:ident, $roots:ident, indices) => {
+        $emit! { $roots.extend($vm.$field.iter().copied()); }
+    };
     ($emit:ident, $vm:ident, $field:ident, $roots:ident, keys) => {
         $emit! { $roots.extend($vm.$field.keys().copied()); }
     };
