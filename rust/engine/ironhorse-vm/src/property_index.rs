@@ -307,6 +307,104 @@ mod tests {
     }
 
     #[test]
+    fn randomized_mutations_match_authoritative_shared_chains() {
+        fn linear(arena: &SlotArena, owner: SlotIndex, id: u16) -> Option<SlotIndex> {
+            let mut node = arena.get(owner).next;
+            while !node.is_null() {
+                let slot = arena.get(node);
+                if slot.id == id {
+                    return Some(node);
+                }
+                node = slot.next;
+            }
+            None
+        }
+
+        for seed in 1..=8u32 {
+            let (mut arena, owner, nodes) = fixture();
+            let owners = [
+                owner,
+                arena.alloc(arena.get(owner)),
+                arena.alloc(arena.get(owner)),
+            ];
+            let mut random = seed;
+            let mut draw = |bound: usize| {
+                random ^= random << 13;
+                random ^= random >> 17;
+                random ^= random << 5;
+                random as usize % bound
+            };
+            for step in 0..256 {
+                // Rebuild long shared tails periodically so random truncation
+                // does not leave the rest of the test exercising short chains.
+                if step % 16 == 0 {
+                    for (i, &node) in nodes.iter().enumerate() {
+                        arena.get_mut(node).next = if i == 0 {
+                            SlotIndex::NULL
+                        } else {
+                            nodes[i - 1]
+                        };
+                    }
+                    for object in owners {
+                        arena.get_mut(object).next = nodes[nodes.len() - 1];
+                        assert_eq!(arena.find_property(object, 0), None);
+                    }
+                }
+                let i = draw(nodes.len());
+                let node = nodes[i];
+                match draw(6) {
+                    0 => arena.get_mut(node).id = (draw(80) + 1) as u16,
+                    1 => arena.get_mut(node).value = Slot::integer(step).value,
+                    2 => {
+                        arena.get_mut(node).next = if i == 0 {
+                            SlotIndex::NULL
+                        } else {
+                            nodes[draw(i)]
+                        }
+                    }
+                    3 => arena.get_mut(owners[draw(owners.len())]).next = node,
+                    4 => {
+                        // Detach all incoming links before recycling a property.
+                        let successor = arena.get(node).next;
+                        for &other in nodes.iter().chain(owners.iter()) {
+                            if arena.get(other).next == node {
+                                arena.get_mut(other).next = successor;
+                            }
+                        }
+                        arena.free(node);
+                        let mut replacement = Slot::integer(step);
+                        replacement.id = (draw(80) + 1) as u16;
+                        replacement.next = successor;
+                        assert_eq!(arena.alloc(replacement), node);
+                        // A later node may prepend the recycled slot safely.
+                        if i + 1 < nodes.len() {
+                            arena.get_mut(nodes[i + 1]).next = node;
+                        }
+                    }
+                    _ => {
+                        let object = owners[draw(owners.len())];
+                        arena.free(object);
+                        let mut replacement = Slot::undefined();
+                        replacement.next = node;
+                        assert_eq!(arena.alloc(replacement), object);
+                    }
+                }
+                for object in owners {
+                    // Misses warm the index; duplicates must resolve to the
+                    // first node encountered, including after slot reuse.
+                    for id in 0..=81 {
+                        assert_eq!(
+                            arena.find_property(object, id),
+                            linear(&arena, object, id),
+                            "seed={seed}, step={step}, owner={object:?}, id={id}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn cyclic_suffix_does_not_hide_a_name_beyond_the_linear_prefix() {
         let (mut arena, owner, nodes) = fixture();
         // The sought name (20) is 45 nodes from the head; the cycle is

@@ -146,7 +146,7 @@ fn raw_property_reads_are_confined_to_boot_restore_and_mop() {
         let code = code_only(&source);
         for token in tokens(&code) {
             let allowed = match token.text {
-                "instance_get" | "instance_has" | "instance_put" => false,
+                "instance_get" | "instance_has" | "instance_put" | "resolve_get" => false,
                 "mop_get_option_field" => matches!(
                     relative,
                     "interp/property.rs" | "interp/natives/intl.rs" | "interp/natives/temporal.rs"
@@ -286,4 +286,31 @@ fn absent_option_names_still_reach_inherited_proxy_gets() {
     "#,
         "true",
     );
+}
+
+#[test]
+fn host_sentinel_inspection_does_not_treat_an_accessor_as_data() {
+    for declaration in ["globalThis.signal = 3;", "var signal = 3;"] {
+        let (code, atoms) = ironhorse_compile::compile_atoms(&format!(
+            r#"
+        {declaration}
+        Object.defineProperty(globalThis, 'signal', {{get() {{ throw 4; }}}});
+        0
+    "#
+        ))
+        .unwrap();
+        let mut vm = Interp::new();
+        // A newly declared global var is nonconfigurable. Seed a configurable
+        // property in an earlier crank so replacing the declared alias is legal.
+        let (setup, setup_atoms) =
+            ironhorse_compile::compile_atoms("globalThis.signal = 1;").unwrap();
+        vm.link_intrinsics(&ironhorse_vm::parse_symbols(&setup_atoms));
+        assert!(vm.run(&setup).completed);
+        let code = vm
+            .relink_crank(&code, &ironhorse_vm::parse_symbols(&atoms))
+            .unwrap();
+        let outcome = vm.run(&code);
+        assert!(outcome.completed, "{declaration}: {:?}", outcome.halt);
+        assert_eq!(vm.global_string("signal"), None);
+    }
 }

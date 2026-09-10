@@ -73,7 +73,7 @@ impl Interp {
             }
         }
         let v = if self.id_map.contains_key(&name) {
-            self.resolve_get(name)
+            self.resolve_frame_get(name)
         } else if self.global_props.contains_key(&name) {
             // A global object binding is an Object Environment
             // Record binding. Read it through the object's full
