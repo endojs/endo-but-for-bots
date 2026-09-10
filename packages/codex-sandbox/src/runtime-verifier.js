@@ -9,21 +9,25 @@ import { M } from '@endo/patterns';
 import {
   assertBrokerEndpoint,
   makeBrokerAppServerArgv,
+  makeBrokerEnvironment,
 } from './broker-launch.js';
 
 const INNER = String.raw`
 import errno,json,os,socket,subprocess,sys
 p=json.loads(sys.argv[1])
-def denied(action):
+def denied(action,network=False):
     try:
         action()
     except OSError as e:
-        assert e.errno in (errno.EPERM,errno.EACCES,errno.EROFS), "wrong denial"
+        allowed=(errno.EPERM,errno.EACCES,errno.EROFS)
+        if network and p.get("network"): allowed += (errno.ECONNREFUSED,errno.ENETUNREACH)
+        assert e.errno in allowed, "wrong denial"
     else:
         raise AssertionError("operation allowed")
 status=dict(line.split(":",1) for line in open("/proc/self/status") if ":" in line)
 assert status["NoNewPrivs"].strip()=="1"
 assert status["Seccomp"].strip()=="2"
+assert all(int(status[key].strip(),16)==0 for key in ("CapEff","CapPrm","CapBnd"))
 with open(p["workspace"]+"/allowed","w") as f: f.write("ok")
 with open(p["tmp"]+"/allowed","w") as f: f.write("ok")
 with open(p["run"]+"/allowed","w") as f: f.write("ok")
@@ -33,7 +37,21 @@ denied(lambda: open(p["workspace"]+"/alias","w"))
 denied(lambda: os.rename(p["home"]+"/rename-source",p["home"]+"/sentinel"))
 denied(lambda: open(p["home"]+"/hardlink","w"))
 denied(lambda: os.link(p["home"]+"/sentinel",p["home"]+"/linked"))
-denied(lambda: socket.create_connection((p["host"],p["port"]),timeout=2))
+denied(lambda: socket.create_connection((p["host"],p["port"]),timeout=2),network=True)
+if p.get("network"):
+    from urllib.parse import urlparse
+    upstream=urlparse(p["network"]["proxyUrl"])
+    denied(lambda:socket.create_connection((upstream.hostname,upstream.port),timeout=2),network=True)
+    proxy=urlparse(os.environ["HTTP_PROXY"])
+    assert proxy.hostname=="127.0.0.1" and proxy.port!=p["port"]
+    for host in ("127.0.0.1","127.1","2130706433","0x7f000001","[::ffff:127.0.0.1]","[::1]"):
+        for method in ("GET","CONNECT"):
+            with socket.create_connection((proxy.hostname,proxy.port),timeout=2) as connection:
+                target="http://"+host+":"+str(p["port"])+"/" if method=="GET" else host+":"+str(p["port"])
+                connection.sendall((method+" "+target+" HTTP/1.1\r\nHost: "+host+":"+str(p["port"])+"\r\nConnection: close\r\n\r\n").encode())
+                response=connection.recv(1024)
+                permitted=(b"HTTP/1.1 403",) if host=="127.0.0.1" else (b"HTTP/1.1 403",b"HTTP/1.1 400")
+                assert response.startswith(permitted),"managed proxy admitted broker"
 child=subprocess.run([sys.executable,"-I","-c",
     "import os; open("+repr(p["home"]+"/sentinel")+",'w').write('bad')"],
     stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=3)
@@ -85,6 +103,10 @@ assert run(["codex","--version"],5).strip()=="codex-cli 0.152.0"
 for name in ("auth.json","auth.json.lock"):
     assert not os.path.exists("/codex-home/"+name), "codex home holds "+name
 with socket.create_connection((p["host"],p["port"]),timeout=2): pass
+if p.get("network"):
+    assert open('/etc/resolv.conf').read()=='nameserver 127.0.0.53\noptions attempts:1 timeout:2\n'
+    status=dict(line.split(':',1) for line in open('/proc/self/status') if ':' in line)
+    assert all(int(status[key].strip(),16)==0 for key in ('CapEff','CapPrm','CapBnd'))
 created=[]
 try:
     for root in ("/workspace","/codex-home","/tmp","/run","/scratch"):
@@ -95,6 +117,7 @@ try:
     os.symlink(home+"/sentinel",workspace+"/alias")
     os.link(home+"/sentinel",home+"/hardlink")
     inner=dict(workspace=workspace,home=home,tmp=tmp,run=run_dir,scratch=scratch,host=p["host"],port=p["port"])
+    if p.get("network"): inner["network"]=p["network"]
     result=run(p["sandboxArgv"]+["--",sys.executable,"-I","-c",p["inner"],json.dumps(inner)],15)
     assert result.strip()=="INNER_OK"
     assert open(home+"/sentinel").read()=="sentinel"
@@ -139,16 +162,6 @@ export const makeCodexRuntimeVerifier = ({
     (Object.hasOwn(knownImageEnv, key) && knownImageEnv[key] === value) ||
       Fail`Unapproved image environment`;
   }
-  const approvedEnvironment = harden({
-    CODEX_HOME: '/codex-home',
-    HOME: '/home/node',
-    LANG: 'C.UTF-8',
-    LC_ALL: 'C.UTF-8',
-    TEMP: '/tmp',
-    TMP: '/tmp',
-    TMPDIR: '/tmp',
-    TZ: 'UTC',
-  });
   return makeExo(
     'CodexRuntimeVerifier',
     M.interface('CodexRuntimeVerifier', {
@@ -157,14 +170,19 @@ export const makeCodexRuntimeVerifier = ({
     {
       /** @param {any} context */
       async attest(context) {
+        const expectedEnvironment = makeBrokerEnvironment(context.network);
         (Object.keys(context.launchEnvironment).length ===
-          Object.keys(approvedEnvironment).length &&
-          Object.entries(approvedEnvironment).every(
+          Object.keys(expectedEnvironment).length &&
+          Object.entries(expectedEnvironment).every(
             ([key, value]) => context.launchEnvironment[key] === value,
           )) ||
           Fail`Runtime environment mismatch`;
         const endpoint = new URL(assertBrokerEndpoint(context.brokerEndpoint));
-        const expectedArgv = makeBrokerAppServerArgv(endpoint.origin);
+        const expectedArgv = makeBrokerAppServerArgv(
+          endpoint.origin,
+          'codex',
+          context.network,
+        );
         (Array.isArray(context.launchArgv) &&
           JSON.stringify(context.launchArgv) ===
             JSON.stringify(expectedArgv)) ||
@@ -175,6 +193,7 @@ export const makeCodexRuntimeVerifier = ({
           port: Number(endpoint.port || 80),
           sandboxArgv: [...expectedArgv.slice(0, -3), 'sandbox'],
           inner: INNER,
+          ...(context.network ? { network: context.network } : {}),
         });
         /** @type {any} */
         let proc;
@@ -246,7 +265,10 @@ export const makeCodexRuntimeVerifier = ({
             toolSandbox: 'codex-workspace-write',
             toolCodexHomeAccess: 'read-only',
             toolBrokerAccess: 'denied',
-            environment: 'credential-and-proxy-free',
+            environment: context.network
+              ? 'credential-free-managed-proxy'
+              : 'credential-and-proxy-free',
+            ...(context.network ? { network: context.network } : {}),
             // Named for exactly what ran: the probe looked in the session's
             // actual `CODEX_HOME` for `auth.json` and did not find it. That is
             // where the pinned CLI caches a ChatGPT login under the

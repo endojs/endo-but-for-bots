@@ -10,6 +10,7 @@ import { FlootApp } from '@endo/space-floot';
 import { h, renderConfined, unmount } from './setup-preact-container.js';
 import { makeScreenWakeLock } from './wake-lock.js';
 import { makeFlootRecovery } from './floot-recovery.js';
+import { makeFlootNetwork } from './floot-network.js';
 
 // The view's controller/state/message shapes are defined (and enforced at the
 // `h(FlootApp, …)` boundary) by `@endo/space-floot`'s own types; like the other
@@ -666,6 +667,16 @@ export const flootComponent = (
           queuedSends.some(q => q.sessionId === activeSessionId)),
       ),
   });
+  const network = makeFlootNetwork({
+    notify,
+    isBusy: () =>
+      Boolean(
+        recovery.getState().resolving ||
+        (activeSessionId &&
+          (liveTurnFor(activeSessionId) ||
+            queuedSends.some(q => q.sessionId === activeSessionId))),
+      ),
+  });
 
   /** @param {any[]} history
    * @returns {HistoryMessage[]} */
@@ -836,6 +847,7 @@ export const flootComponent = (
       input: inputText,
       settingsOpen,
       recovery: recovery.getState(),
+      network: network.getState(),
       unavailable: Boolean(session?.lifecycle && session.lifecycle !== 'ready'),
       usage: usage
         ? { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens }
@@ -1013,6 +1025,7 @@ export const flootComponent = (
           notify();
         } else if (ev.type === 'done') {
           void recovery.refresh();
+          void network.refresh();
           const stopped = turnCancelled;
           if (turn.error) {
             sessionStatus.set(turn.sessionId, 'error');
@@ -1081,6 +1094,12 @@ export const flootComponent = (
   // Serialize submissions so an auto-sent voice utterance can't overlap a typed
   // message: each turn waits for the previous.
   const submit = (/** @type {string} */ raw) => {
+    if (network.getState().changing || network.getState().blocked) {
+      setStatus(
+        'Finish or retry the sandbox network policy change before sending.',
+      );
+      return submitChain;
+    }
     const selected = getActiveSession();
     if (selected?.lifecycle && selected.lifecycle !== 'ready') {
       setStatus(
@@ -1141,6 +1160,12 @@ export const flootComponent = (
           )
             return;
           if (ready === viewReady && previous === turnPromise) break;
+        }
+        if (network.getState().changing || network.getState().blocked) {
+          setStatus(
+            'Queued message not sent: finish the sandbox network policy change in Settings before retrying.',
+          );
+          return;
         }
         if (recovery.getState().resolving || recovery.getState().blocked) {
           setStatus(
@@ -1214,6 +1239,14 @@ export const flootComponent = (
         : null,
       session?.lifecycle && session.lifecycle !== 'ready'
         ? `Session unavailable (${session.lifecycle}). Inspect the service; no recovery action is safe here.`
+        : '',
+    );
+    void network.select(
+      session && (!session.lifecycle || session.lifecycle === 'ready')
+        ? facetFor(session)
+        : null,
+      session?.lifecycle && session.lifecycle !== 'ready'
+        ? 'Session unavailable. Network policy changes are disabled.'
         : '',
     );
     if (!session) {
@@ -2104,6 +2137,19 @@ export const flootComponent = (
   // ── Controller (the view's only handle on the host engine) ───────────────────
   const controller = harden({
     getState,
+    refreshNetworkPolicy() {
+      void network.refresh();
+    },
+    setNetworkPolicy(/** @type {string} */ policy) {
+      void network.set(policy);
+    },
+    resolveNetworkPolicyRequest(
+      /** @type {string} */ id,
+      /** @type {boolean} */ approve,
+      /** @type {string} */ note,
+    ) {
+      void network.resolve(id, approve, note);
+    },
     refreshRecovery() {
       void recovery.refresh();
     },
@@ -2112,6 +2158,7 @@ export const flootComponent = (
       /** @type {string} */ note,
       /** @type {boolean} */ confirmed,
     ) {
+      if (network.getState().changing) return;
       void recovery.resolve(turnId, note, confirmed);
     },
     subscribe(/** @type {() => void} */ listener) {
@@ -2178,6 +2225,7 @@ export const flootComponent = (
     },
     toggleSettings() {
       settingsOpen = !settingsOpen;
+      if (settingsOpen) void network.refresh();
       notify();
     },
     setInput(/** @type {string} */ text) {
@@ -2381,6 +2429,7 @@ export const flootComponent = (
   // Never overwrite an optimistic/in-flight user turn with an older snapshot.
   let historyTimer;
   const refreshMailHistory = async () => {
+    void network.refresh();
     const session = getActiveSession();
     if (
       session &&
@@ -2409,6 +2458,7 @@ export const flootComponent = (
   return () => {
     cancelled = true;
     void recovery.select(null);
+    void network.select(null);
     wakeLockDoc.removeEventListener('visibilitychange', onVisibilityChange);
     // `cancelled` is set, so this releases rather than re-requests.
     updateWakeLock();

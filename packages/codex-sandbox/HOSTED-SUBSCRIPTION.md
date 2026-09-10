@@ -62,6 +62,20 @@ Floot resolves configured backend bindings at selection time; existing sessions
 retain their current backend until their normal lifecycle ends.
 Codex exposes Floot's guest JavaScript as `endo_exec`, distinct from native `exec`.
 Tool-catalog identity changes force an explicit thread rotation.
+Floot supplies complete historical conversation text in `send`'s
+`continuityContext` option, bounded to 262144 UTF-16 characters and the adapter's
+combined prompt byte limit.
+Only an empty/new native thread consumes it, as labelled historical data in a
+text input: previous tool calls are never dispatched as replayed tool calls.
+An existing native conversation ignores the continuity copy.
+If the full history cannot fit, Floot supplies `continuityContextUnavailable`;
+rotation then fails visibly before altering the old thread, rather than silently
+discarding context.
+The user can explicitly start a new Floot session in that case.
+The adapter first acknowledges or reconciles any old-thread recovery marker
+under its original catalog identity before starting the replacement thread.
+New-thread creation persists an empty-thread marker so a crash before first
+dispatch still restores conversation context on retry.
 
 ## Evidence and limits
 

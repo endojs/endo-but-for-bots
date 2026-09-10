@@ -7,9 +7,17 @@ import {
   assertBrokerEndpoint,
   assertBrokerRuntimeConfig,
   makeBrokerAppServerArgv,
+  makeBrokerEnvironment,
+  assertCodexNetworkEvidence,
 } from '../src/broker-launch.js';
 
 const endpoint = 'http://127.0.0.1:23456';
+const network = harden({
+  policy: 'public-internet',
+  proxyUrl: 'http://207.148.100.198:23457',
+  dnsHost: '127.0.0.53',
+  resolverConfigPath: '/private/provider/public-resolv.conf',
+});
 const config = harden({
   model_provider: 'endo_broker',
   approval_policy: 'never',
@@ -59,6 +67,85 @@ for (const bad of [
     t.throws(() => assertBrokerEndpoint(bad), { message: /broker endpoint/ });
   });
 }
+
+test('public networking pins a managed proxy while retaining private-address denial', t => {
+  const argv = makeBrokerAppServerArgv(endpoint, 'codex', network);
+  t.true(argv.includes('features.network_proxy.allow_local_binding=false'));
+  t.true(argv.includes('features.network_proxy.allow_upstream_proxy=true'));
+  t.true(argv.includes('features.network_proxy.enable_socks5=false'));
+  const env = makeBrokerEnvironment(network);
+  t.is(env.HTTP_PROXY, network.proxyUrl);
+  t.is(env.http_proxy, env.HTTP_PROXY);
+  t.is(env.NO_PROXY, '127.0.0.1');
+  const observed = {
+    ...config,
+    sandbox_workspace_write: {
+      ...config.sandbox_workspace_write,
+      network_access: true,
+    },
+    features: {
+      network_proxy: {
+        enabled: true,
+        allow_upstream_proxy: true,
+        allow_local_binding: false,
+        enable_socks5: false,
+        enable_socks5_udp: false,
+        domains: { '*': 'allow' },
+      },
+    },
+  };
+  t.notThrows(() => assertBrokerRuntimeConfig(observed, endpoint, network));
+  for (const [key, value] of Object.entries({
+    allow_local_binding: true,
+    enable_socks5: true,
+    allow_upstream_proxy: false,
+    proxy_url: 'http://0.0.0.0:9999',
+    dangerously_allow_all_unix_sockets: true,
+    unix_sockets: ['/run/private.sock'],
+    dangerously_allow_non_loopback_proxy: true,
+    unknown_future: true,
+  })) {
+    t.throws(
+      () =>
+        assertBrokerRuntimeConfig(
+          {
+            ...observed,
+            features: {
+              network_proxy: {
+                ...observed.features.network_proxy,
+                [key]: value,
+              },
+            },
+          },
+          endpoint,
+          network,
+        ),
+      { message: /managed proxy/ },
+    );
+  }
+  t.throws(() => assertBrokerRuntimeConfig(observed, endpoint), {
+    message: /configuration mismatch/,
+  });
+});
+
+test('public proxy evidence rejects loopback, credentials, and noncanonical URLs', t => {
+  for (const proxyUrl of [
+    'http://127.0.0.1:23457',
+    'http://2130706433:23457',
+    'http://[::ffff:127.0.0.1]:23457',
+    'http://user@207.148.100.198:23457',
+    'http://207.148.100.198:23457/path',
+    'http://207.148.100.198:23457/',
+  ]) {
+    t.throws(() => assertCodexNetworkEvidence({ ...network, proxyUrl }), {
+      message: /network evidence/,
+    });
+  }
+  t.throws(
+    () => makeBrokerAppServerArgv('http://[::1]:23456', 'codex', network),
+    { message: /IPv4 loopback/ },
+  );
+});
 
 for (const [key, value] of Object.entries({
   env_key: 'OPENAI_API_KEY',

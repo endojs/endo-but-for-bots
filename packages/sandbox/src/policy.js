@@ -260,6 +260,32 @@ const assertPolicyMount = candidate => {
     typeof candidate === 'object' && candidate !== null ? candidate : {}
   );
   const kind = record.kind;
+  if (kind === 'resolver') {
+    assertExactKeys(
+      record,
+      ['role', 'kind', 'source', 'destination', 'mode'],
+      'resolver mount',
+    );
+    if (
+      record.role !== 'resolver' ||
+      record.destination !== '/etc/resolv.conf' ||
+      record.mode !== 'ro' ||
+      typeof record.source !== 'string' ||
+      !INNER_PATH_PATTERN.test(record.source) ||
+      !record.source.endsWith('/public-resolv.conf')
+    ) {
+      throw makeError(
+        X`slice policy resolver must be a fixed read-only generated public-resolv.conf mount`,
+      );
+    }
+    return harden({
+      role: 'resolver',
+      kind,
+      source: record.source,
+      destination: '/etc/resolv.conf',
+      mode: 'ro',
+    });
+  }
   if (kind !== 'volume' && kind !== 'tmpfs' && kind !== 'attach') {
     throw makeError(
       X`slice policy mount kind must be "volume", "tmpfs", or "attach"; got ${q(kind)}`,
@@ -494,10 +520,9 @@ export const assertSlicePolicyRequest = request => {
       }
       sources.add(mount.source);
       sharedWritable += mount.sizeBytes;
-    } else if (mount.kind === 'attach') {
-      // Not host storage: an attach is served through a capability, and
-      // its bytes live wherever that capability keeps them. It adds
-      // nothing to the writable ceiling this table bounds.
+    } else if (mount.kind === 'attach' || mount.kind === 'resolver') {
+      // Attaches are capability-backed storage. The generated resolver is
+      // immutable configuration. Neither adds local writable storage.
       if (sources.has(mount.source)) {
         throw makeError(
           X`slice policy attach ${q(mount.source)} is mounted twice`,
@@ -626,8 +651,8 @@ export const assemblePolicyArgv = policy => {
         '--mount',
         `type=tmpfs,destination=${mount.destination},rw,nosuid,nodev,tmpfs-size=${mount.sizeBytes},tmpfs-mode=0700,U=true,notmpcopyup`,
       );
-    } else if (mount.kind === 'attach') {
-      // The one bind the table admits, and only because the attestation
+    } else if (mount.kind === 'attach' || mount.kind === 'resolver') {
+      // These binds are admitted only because the attestation
       // then proves what it was bound from. `rprivate` is the runtime's
       // default, stated because a policy states everything: a shared
       // propagation would let a mount event inside the slice reach the
@@ -770,7 +795,12 @@ const findEffectiveMount = (inspect, tmpfs, mount) => {
       // eslint-disable-next-line no-continue
       continue;
     }
-    if (candidate.Type !== (mount.kind === 'attach' ? 'bind' : mount.kind)) {
+    if (
+      candidate.Type !==
+      (mount.kind === 'attach' || mount.kind === 'resolver'
+        ? 'bind'
+        : mount.kind)
+    ) {
       return null;
     }
     const options = harden(effectiveMountOptions(candidate.Options));
@@ -818,7 +848,7 @@ const attestMounts = (policy, state) => {
   );
   const attachDestinations = new Set(
     policy.mounts
-      .filter(mount => mount.kind === 'attach')
+      .filter(mount => mount.kind === 'attach' || mount.kind === 'resolver')
       .map(mount => mount.destination),
   );
   // An undeclared mount is the failure this table exists to exclude, so
@@ -847,8 +877,8 @@ const attestMounts = (policy, state) => {
     ) {
       // A bind is the only mount shape that can reach host state — a
       // home directory, a credential store, a runtime socket. The only
-      // binds the table admits are its declared attaches, each of which
-      // is proved below to be a 9P projection rather than host data, so
+      // binds are declared 9P projections or the fixed, read-only generated
+      // resolver whose exact effective contents are checked below, so
       // `hostHome` and `hostSockets` still follow from the absence of any
       // other bind rather than from a path blocklist.
       return unproved('mount table', `host bind mount at ${destination}`);
@@ -869,6 +899,37 @@ const attestMounts = (policy, state) => {
       );
       if (effective === null) {
         return unproved(`mount ${mount.role}`, 'not attached');
+      }
+      if (mount.kind === 'resolver') {
+        const kernel = state.attachMounts?.get(mount.destination);
+        if (
+          effective.source !== mount.source ||
+          !effective.readOnly ||
+          !kernel?.options.includes('ro') ||
+          REQUIRED_MOUNT_OPTIONS.some(
+            option =>
+              !effective.options.includes(option) ||
+              !kernel.options.includes(option),
+          ) ||
+          state.resolverContents !==
+            'nameserver 127.0.0.53\noptions attempts:1 timeout:2\n'
+        ) {
+          return unproved(
+            'resolver mount',
+            'fixed read-only contents are not proved',
+          );
+        }
+        return harden({
+          role: mount.role,
+          source: `resolver:${mount.source}`,
+          destination: mount.destination,
+          mode: /** @type {const} */ ('ro'),
+          options: harden(
+            ATTESTED_MOUNT_OPTIONS.filter(option =>
+              kernel.options.includes(option),
+            ),
+          ),
+        });
       }
       if (mount.kind === 'attach') {
         // The runtime's half: the bind is of the declared host mountpoint,

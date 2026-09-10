@@ -233,6 +233,7 @@ const makeEngineStub = ({ calls, responses = {}, holdAttached = false }) => {
     if (args[0] === 'start') return 'start';
     if (args[0] === 'rm') return 'rm';
     if (args[0] === 'kill') return 'kill';
+    if (args[0] === 'exec') return 'resolver-read';
     return 'other';
   };
 
@@ -331,6 +332,63 @@ const makeDriverUnderTest = (options = {}) => {
   });
   return { driver, calls };
 };
+
+for (const contents of [
+  'nameserver 127.0.0.53\noptions attempts:1 timeout:2\n',
+  'unexpected resolver\n',
+]) {
+  test(`resolver attestation reads the bounded effective container file: ${contents.startsWith('nameserver') ? 'accepted' : 'denied'}`, async t => {
+    const resolver = harden({
+      role: 'resolver',
+      kind: 'resolver',
+      source: '/private/provider/public-resolv.conf',
+      destination: '/etc/resolv.conf',
+      mode: 'ro',
+    });
+    const spec = makeSpec({
+      policy: { ...POLICY, mounts: [...POLICY.mounts, resolver] },
+    });
+    const inspect = {
+      ...ANCHOR_INSPECT,
+      Mounts: [
+        ...ANCHOR_INSPECT.Mounts,
+        {
+          Type: 'bind',
+          Source: resolver.source,
+          Destination: resolver.destination,
+          Options: ['ro', 'nodev', 'nosuid'],
+          RW: false,
+        },
+      ],
+    };
+    const { driver, calls } = makeDriverUnderTest({
+      responses: {
+        'container-inspect': { stdout: JSON.stringify([inspect]) },
+        'resolver-read': { stdout: contents },
+      },
+      procfs: makeProcfs({
+        [`/proc/${ANCHOR_PID}/mountinfo`]:
+          '37 24 8:1 /public-resolv.conf /etc/resolv.conf ro,nosuid,nodev - ext4 /dev/sda1 rw\n',
+      }),
+    });
+    if (contents.startsWith('nameserver')) {
+      const slice = await driver.prepareSlice(/** @type {any} */ (spec));
+      t.teardown(() => driver.teardown(slice));
+    } else {
+      await t.throwsAsync(driver.prepareSlice(/** @type {any} */ (spec)), {
+        message: /resolver mount/,
+      });
+    }
+    const read = calls.find(call => call.args[0] === 'exec');
+    t.deepEqual(read?.args.slice(-4), [
+      '/bin/head',
+      '-c',
+      '1025',
+      '/etc/resolv.conf',
+    ]);
+    t.false(calls.some(call => call.args.includes(resolver.source)));
+  });
+}
 
 /** @param {Array<{ command: string, args: string[] }>} calls */
 const createCalls = calls => calls.filter(call => call.args[0] === 'create');
