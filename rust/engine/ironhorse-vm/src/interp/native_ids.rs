@@ -749,6 +749,9 @@ pub enum NativeMethod {
     /// entry and shrink the address table back toward `mxTableMinLength`,
     /// returning `undefined`. WeakMap/WeakSet have no `clear`.
     CollClear,
+    /// Brand-checked Map/Set prototype size accessors.
+    MapSizeGetter,
+    SetSizeGetter,
     /// `ArrayBuffer.prototype.slice(begin, end)`
     /// (`fx_ArrayBuffer_prototype_slice`): a fresh ArrayBuffer holding the
     /// `[begin, end)` byte range (relative-index clamped like

@@ -195,21 +195,6 @@ impl Interp {
                 Slot::boolean(self.disposable_stacks[&inst].disposed)
             }
             Payload::Reference(inst)
-                if Some(id) == self.size_id
-                    && (obj.kind == Kind::Reference && self.collections.contains_key(&inst))
-                    && self
-                        .collections
-                        .get(&inst)
-                        .map(|c| matches!(c.kind, CollKind::Map | CollKind::Set))
-                        .unwrap_or(false) =>
-            {
-                // `map.size` / `set.size`: the collection size
-                // accessor getter (`fx_Map_prototype_size`), reading
-                // the size slot. WeakMap/WeakSet have no `size`.
-                self.meter.tick_raw(COLLECTION_SIZE_GET_METERING);
-                Slot::integer(self.collections[&inst].live_len() as i32)
-            }
-            Payload::Reference(inst)
                 if ((obj.kind == Kind::Reference && self.array_buffers.contains_key(&inst))
                     && !self.shared_buffers.contains(&inst))
                     || (obj.kind == Kind::Reference && self.typed_arrays.contains_key(&inst))

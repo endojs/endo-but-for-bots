@@ -155,14 +155,15 @@ fn unsupported_async_generator_state_remains_an_explicit_refusal() {
     );
 }
 
-/// Explicit format/schema migration tool. Runtime costs and continuation
+/// Explicit format/schema/boot-layout identity regeneration tool. Runtime costs and continuation
 /// results must remain unchanged; only persisted byte/seal identities move.
 #[test]
-#[ignore = "regenerates persisted identities after a reviewed format/schema change"]
+#[ignore = "regenerates persisted identities after a reviewed format/schema/boot change"]
 fn regenerate_persistence_identities() {
     let corpus = include_str!("fixtures/state_golden.tsv");
     let mut lines = corpus.lines();
     let mut output = format!("{}\n", lines.next().unwrap());
+    let mut format19_output = String::from("# current boot heap with format19 marker\n");
     let mut controls = String::from("# reserved symbol ids: label\tinitial-meter4\tinitial-meter5\tfinal-meter4\tfinal-meter5 (format16)\n");
     let sig = Signature::new("w4-determinism-corpus");
     for line in lines {
@@ -171,6 +172,8 @@ fn regenerate_persistence_identities() {
         let machine = fresh(&f[1]);
         assert_eq!(machine.meter_index(), f[7].parse::<u64>().unwrap());
         let mut image = machine.snapshot_image(&sig).unwrap().into_image();
+        image.version.format_version = 19;
+        let format19_hash = hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&image));
         image.version.format_version = 16;
         image.function_state.native_names = None;
         let format16 = hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&image));
@@ -183,11 +186,17 @@ fn regenerate_persistence_identities() {
             .map_err(|(_, e)| e)
             .unwrap();
         f[6] = store.manifest().unwrap().seal;
+        let mut format19_fields = f.clone();
+        format19_fields[5] = format19_hash;
         let mut machine = session.into_machine();
         crank(&mut machine, &f[2]);
         assert_eq!(crank(&mut machine, &f[3]), f[4]);
         assert_eq!(machine.meter_index(), f[8].parse::<u64>().unwrap());
         let mut image = machine.snapshot_image(&sig).unwrap().into_image();
+        image.version.format_version = 19;
+        format19_fields[9] = hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&image));
+        format19_output.push_str(&format19_fields.join("\t"));
+        format19_output.push('\n');
         image.version.format_version = 16;
         image.function_state.native_names = None;
         let format16 = hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&image));
@@ -198,6 +207,14 @@ fn regenerate_persistence_identities() {
         output.push_str(&f.join("\t"));
         output.push('\n');
     }
+    std::fs::write(
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/state_golden_format_19.tsv"
+        ),
+        format19_output,
+    )
+    .unwrap();
     std::fs::write(
         concat!(
             env!("CARGO_MANIFEST_DIR"),
