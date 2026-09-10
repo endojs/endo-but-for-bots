@@ -302,6 +302,40 @@ grow-to-fit purely in CSS (restored in the post-review cleanup, commit
 
 ## Verification and gaps
 
+### Turn journal and recovery
+
+The header's Journal panel displays durable turn dispositions, errors, and the
+operator's acknowledgment notes.
+Endo write-ahead tool records and observed native/backend activity are shown
+separately; neither an observed native result nor acknowledgment proves external
+effects succeeded or undoes them.
+Journal payloads are rendered as plain text through the confined renderer, not
+interpreted as HTML or executable links.
+The panel mounts at most 50 turn summaries per page and renders evidence only
+after a turn is expanded.
+Evidence is paged one item and 8192 text characters at a time, with navigation
+to inspect the full contents rather than silently truncating them.
+Where supported, capacity and a near-capacity warning are displayed as well.
+
+Only an unresolved `outcome-unknown` turn offers acknowledgment.
+The operator must confirm that external effects were checked and supply a
+nonempty recovery note before allowing another turn.
+Acknowledgment never retries a turn.
+Known unresolved outcomes disable sending before optimistic transcript entries
+are added, while an active turn's Stop control remains available.
+The host disables this action for active or queued turns, rechecks daemon
+liveness before calling `resolveTurn`, and relies on the session's own atomic
+admission checks for cross-browser races.
+Switching sessions invalidates pending reads and undispatched actions; notes
+and confirmations are reset with the selected session.
+
+The host discovers optional journal methods with CapTP introspection.
+Older sessions without those methods retain chat support and show journal
+unavailability; failed reads never manufacture an empty, healthy journal.
+Sessions with lifecycle errors remain visible in the sidebar with sending and
+recovery disabled instead of being silently filtered out.
+Fix service/storage failures outside this UI before retrying or reloading.
+
 - CI covers lint, type-check, and the chat `vite build` (the integration smoke
   for "Floot mounts in the Preact shell").
 - Mic / Web-Audio / VAD paths are **not** runtime-verifiable in this environment;
