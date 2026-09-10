@@ -363,14 +363,7 @@ impl RestoreSession {
         state: PrivateElementSnapshot,
     ) -> Result<(), RestoreError> {
         self.admit("private_elements")?;
-        let result = if self.interp.restore_private_elements(state) {
-            Ok(())
-        } else {
-            Err(RestoreError {
-                row: "private_elements",
-                reason: "malformed row set",
-            })
-        };
+        let result = self.interp.restore_private_elements(state);
         self.failed = result.err();
         result
     }
@@ -663,6 +656,82 @@ mod tests {
             assert_eq!(error.reason, expected);
             assert!(session.finish().is_err());
         }
+    }
+
+    #[test]
+    fn private_rows_validate_live_cells_values_and_disjoint_keys_before_mutation() {
+        for case in 0..8 {
+            let mut interp = Interp::new();
+            let receiver = interp.new_object();
+            let value_brand = interp.slots.alloc(Slot::undefined());
+            let accessor_brand = interp.slots.alloc(Slot::undefined());
+            let mut state = PrivateElementSnapshot {
+                values: vec![PrivateValueRow {
+                    receiver: receiver.0,
+                    brand: value_brand.0,
+                    value: Slot::integer(7),
+                }],
+                accessors: vec![PrivateAccessorRow {
+                    receiver: receiver.0,
+                    brand: accessor_brand.0,
+                    get: None,
+                    set: None,
+                }],
+            };
+            let expected = match case {
+                0 => {
+                    state.values.push(state.values[0].clone());
+                    "keys are not strictly ascending"
+                }
+                1 => {
+                    state.accessors.push(state.accessors[0].clone());
+                    "keys are not strictly ascending"
+                }
+                2 => {
+                    state.values[0].receiver = value_brand.0;
+                    "owner is not an instance"
+                }
+                3 => {
+                    interp.slots.free(accessor_brand);
+                    "brand is not a live slot"
+                }
+                4 => {
+                    state.accessors[0].brand = u32::MAX;
+                    "brand is not a live slot"
+                }
+                5 => {
+                    state.accessors[0].brand = value_brand.0;
+                    "key has both value and accessor rows"
+                }
+                6 => {
+                    state.values[0].value = Slot::of(Kind::String, Payload::Integer(0));
+                    "invalid guest value"
+                }
+                _ => {
+                    state.accessors[0].get = Some(Slot::integer(1));
+                    "getter or setter is not callable"
+                }
+            };
+            let error = interp.restore_private_elements(state).unwrap_err();
+            assert_eq!(error.row, "PrivateElements");
+            assert_eq!(error.reason, expected);
+            assert!(interp.private_values.is_empty());
+            assert!(interp.private_accessors.is_empty());
+        }
+        let mut interp = Interp::new();
+        let receiver = interp.new_object();
+        let brand = interp.slots.alloc(Slot::undefined());
+        interp
+            .restore_private_elements(PrivateElementSnapshot {
+                values: vec![PrivateValueRow {
+                    receiver: receiver.0,
+                    brand: brand.0,
+                    value: Slot::integer(7),
+                }],
+                accessors: vec![],
+            })
+            .unwrap();
+        assert_eq!(interp.private_values[&(receiver, brand)], Slot::integer(7));
     }
 
     #[test]
