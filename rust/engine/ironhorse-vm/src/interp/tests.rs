@@ -2565,3 +2565,50 @@ fn segment_indices_stay_stable_until_a_halted_activation_is_abandoned() {
     assert_eq!(vm.retained_code_segment_count(), 1);
     assert!(std::rc::Rc::ptr_eq(&retained, &vm.code_segments[0]));
 }
+
+#[test]
+fn promise_handler_collection_preserves_the_derived_capability() {
+    for throws in [false, true] {
+        let handler = if throws { "throw x" } else { "return x + '!'" };
+        let source = format!(
+            "var out; Promise.resolve('abcdefgh').then(function(x){{ {handler}; }}).then(function(x){{out=x;}},function(e){{out='caught:'+e;}});"
+        );
+        let (code, symbols) = ironhorse_compile::compile_atoms(&source).unwrap();
+        let names = crate::parse_symbols(&symbols);
+        let mut baseline = Interp::new();
+        baseline.link_intrinsics(&names);
+        let expected = baseline.run_bounded(&code, 20_000);
+        assert!(expected.completed, "{:?}", expected.halt);
+        // Deterministically place one collection at each instruction of this
+        // small promise chain, including inside the handler after dequeue.
+        for at in 0..baseline.n_dispatched {
+            let mut machine = Interp::new();
+            machine.link_intrinsics(&names);
+            GC_AT_STEP.with(|step| step.set(Some(at)));
+            GC_HITS.with(|hits| hits.set(0));
+            let actual = machine.run_bounded(&code, 20_000);
+            GC_AT_STEP.with(|step| step.set(None));
+            GC_HITS.with(|hits| assert_eq!(hits.get(), 1));
+            assert!(actual.completed, "step {at}: {:?}", actual.halt);
+            assert_eq!(actual.meter_raw, expected.meter_raw, "step {at}");
+            assert!(
+                machine.is_quiescent(),
+                "temporary roots leaked at step {at}"
+            );
+            let (read, symbols) = ironhorse_compile::compile_atoms("out").unwrap();
+            let read = machine
+                .relink_crank(&read, &crate::parse_symbols(&symbols))
+                .unwrap();
+            let observed = machine.run(&read);
+            assert!(observed.completed);
+            assert_eq!(
+                observed.result,
+                if throws {
+                    "caught:abcdefgh"
+                } else {
+                    "abcdefgh!"
+                }
+            );
+        }
+    }
+}

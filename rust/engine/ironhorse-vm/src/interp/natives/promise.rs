@@ -965,7 +965,16 @@ impl Interp {
             // `promise.then(resolveFn, rejectFn)` installs, e.g. test262's
             // `assert.throwsAsync`). Dispatch through `call_any` so a native
             // reaction handler settles correctly rather than self-naming.
-            match self.call_any_catching_throw(code, handler, Slot::undefined(), &[value])? {
+            // The job has been dequeued. Its capability must remain reachable
+            // while the guest handler runs, even when nothing else retains the
+            // derived promise. Both functions are needed until we know whether
+            // the handler returned or threw. Callable slots contain stable slot
+            // identities; their function metadata is relocated by the collector.
+            let root_sp = self.stack.len();
+            self.stack.extend([reaction.resolve, reaction.reject]);
+            let handled = self.call_any_catching_throw(code, handler, Slot::undefined(), &[value]);
+            self.stack.truncate(root_sp);
+            match handled? {
                 Ok(r) => (r, false),
                 Err(thrown) => (thrown, true),
             }
