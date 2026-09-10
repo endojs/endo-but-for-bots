@@ -119,11 +119,13 @@ export const makePublicEgressListener = async ({
     let accepted = false;
     let uploaded = 0n;
     let downloaded = 0n;
+    let responseDrainTimer;
     /** @type {Set<() => void>} */
     const stopWaiters = new Set();
     const close = () => {
       if (stopped) return;
       stopped = true;
+      globalThis.clearTimeout(responseDrainTimer);
       for (const stop of [...stopWaiters]) stop();
       socket.destroy();
       if (tunnel)
@@ -265,7 +267,17 @@ export const makePublicEgressListener = async ({
       const uploading = upload();
       // A server can answer before reading a whole request. Let the response
       // complete without waiting forever for a client upload; close both ends.
-      void uploading.catch(close);
+      void uploading.catch(() => {
+        if (connect || stopped) {
+          close();
+          return;
+        }
+        // An HTTP origin may stop reading the upload after sending an early
+        // response. Preserve that response instead of destroying the client
+        // on a failed remaining write. Bound the drain even if the origin
+        // never responds; no further upload bytes are sent after rejection.
+        responseDrainTimer = globalThis.setTimeout(close, 1000);
+      });
       await download();
       await new Promise(resolve => socket.end(() => resolve(undefined)));
     } catch (_error) {

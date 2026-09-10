@@ -50,15 +50,17 @@ test.serial(
     const finished = future();
     let read = false;
     let closed = 0;
+    let halfClosed = 0;
     const endpoint = Far('PublicEndpoint', {
       open(host, port) {
         opens.push({ host, port });
         return Far('Tunnel', {
           write: text => {
             writes.push(atob(text));
+            if (atob(text) === '0\r\n\r\n') finished.resolve(undefined);
           },
           end: () => {
-            finished.resolve(undefined);
+            halfClosed += 1;
           },
           async read() {
             await finished.promise;
@@ -107,6 +109,7 @@ test.serial(
       request.end('payload');
     });
     t.deepEqual(response, { status: 200, body: 'OK' });
+    t.is(halfClosed, 0, 'HTTP framing, not a TCP FIN, completes the request');
     t.deepEqual(opens, [{ host: 'public.example', port: 80 }]);
     const forwarded = writes.join('');
     t.regex(
@@ -409,5 +412,67 @@ test.serial(
       uploadEnded,
       'the proxy did not pretend the incomplete upload finished',
     );
+  },
+);
+
+test.serial(
+  'early HTTP response survives a rejected remaining upload write',
+  async t => {
+    let writes = 0;
+    let reads = 0;
+    const endpoint = Far('EarlyRejectedUploadEndpoint', {
+      open: () =>
+        Far('EarlyRejectedUploadTunnel', {
+          write() {
+            writes += 1;
+            if (writes > 1) throw Error('origin stopped reading upload');
+          },
+          end() {},
+          async read() {
+            reads += 1;
+            if (reads > 1) return null;
+            await new Promise(resolve => setTimeout(resolve, 20));
+            return btoa(
+              'HTTP/1.1 413 Payload Too Large\r\nConnection: close\r\nContent-Length: 0\r\n\r\n',
+            );
+          },
+          close() {},
+        }),
+    });
+    const proxy = await listener(t, endpoint);
+    const response = await exchange(
+      t,
+      proxy.url,
+      'POST http://public.example/upload HTTP/1.1\r\nHost: public.example\r\nContent-Length: 9999\r\n\r\nx',
+    );
+    t.regex(response, /^HTTP\/1\.1 413 Payload Too Large/);
+  },
+);
+
+test.serial(
+  'rejected HTTP upload cannot retain a silent response indefinitely',
+  async t => {
+    let writes = 0;
+    const closed = future();
+    const endpoint = Far('SilentRejectedUploadEndpoint', {
+      open: () =>
+        Far('SilentRejectedUploadTunnel', {
+          write() {
+            writes += 1;
+            if (writes > 1) throw Error('origin stopped reading upload');
+          },
+          end() {},
+          read: () => new Promise(() => {}),
+          close: () => closed.resolve(undefined),
+        }),
+    });
+    const proxy = await listener(t, endpoint);
+    const response = await exchange(
+      t,
+      proxy.url,
+      'POST http://public.example/upload HTTP/1.1\r\nHost: public.example\r\nContent-Length: 9999\r\n\r\nx',
+    );
+    t.is(response, '');
+    await closed.promise;
   },
 );
