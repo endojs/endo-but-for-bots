@@ -227,6 +227,13 @@ export type SandboxMakeOpts = {
  */
 export type SlicePolicyMount =
   | {
+      role: 'resolver';
+      kind: 'resolver';
+      source: string;
+      destination: '/etc/resolv.conf';
+      mode: 'ro';
+    }
+  | {
       role: string;
       kind: 'tmpfs';
       destination: string;
@@ -396,6 +403,7 @@ export type ObservedSliceState = {
    * `null` when nothing is mounted at it. May be absent when the policy
    * declares no attaches; an attach with no entry here is not proved.
    */
+  resolverContents?: string;
   attachMounts?: ReadonlyMap<
     string,
     { fstype: string; root: string; options: readonly string[] } | null

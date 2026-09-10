@@ -110,6 +110,7 @@ const CODEX_SANDBOX_MODE = 'workspace-write';
 /**
  * @typedef {object} AppServerTransport
  * @property {string} [brokerEndpoint]
+ * @property {any} [network]
  * @property {AsyncIterable<any>} messages
  * @property {(message: object) => Promise<void>} send
  * @property {() => Promise<void>} close
@@ -217,6 +218,7 @@ export const makeCodexClient = ({
   let closeDeferredAudited = false;
   let closeRequestedAudited = false;
   let initialized = false;
+  let publicNetworkAdmitted = false;
   /** @type {string[]} */
   const cleanupFailures = [];
   /** @type {Set<Promise<unknown>>} */
@@ -1266,7 +1268,9 @@ export const makeCodexClient = ({
             assertBrokerRuntimeConfig(
               observed?.config,
               transport.brokerEndpoint,
+              transport.network,
             );
+            publicNetworkAdmitted = transport.network !== undefined;
           }
           // A signed-out app-server accepts `initialize` and `thread/start`
           // alike and fails only when the first turn opens its model
@@ -1664,7 +1668,7 @@ export const makeCodexClient = ({
           sandboxPolicy: {
             type: 'workspaceWrite',
             writableRoots: ['/workspace', '/tmp', '/run', '/scratch'],
-            networkAccess: false,
+            networkAccess: publicNetworkAdmitted,
             excludeSlashTmp: true,
             excludeTmpdirEnvVar: true,
           },

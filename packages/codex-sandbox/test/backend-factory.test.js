@@ -528,6 +528,59 @@ test('direct resource provisioning refuses public networking before cleanup or a
   t.deepEqual(effects, []);
 });
 
+test('only an operator-enabled factory advertises and retains public policy', async t => {
+  const specs = [];
+  const factory = makeCodexBackendFactory({
+    imageDigest,
+    publicInternetEnabled: true,
+    listModels: async () => [],
+    destroy: async () => {},
+    provision: async spec => {
+      specs.push(spec);
+      throw Error('provision');
+    },
+  });
+  t.deepEqual((await E(factory).describe()).supportedNetworkPolicies, [
+    'off',
+    'public-internet',
+  ]);
+  await t.throwsAsync(
+    E(factory).create(
+      { sessionId: 'session-1', networkPolicy: 'public-internet' },
+      makeToolSet(),
+    ),
+    { message: /provision/ },
+  );
+  t.is(specs[0].networkPolicy, 'public-internet');
+  const policy = harden({
+    ...validPolicy(),
+    networkPolicy: 'public-internet',
+    mounts: [
+      ...validPolicy().mounts,
+      {
+        role: 'resolver',
+        source: 'resolver:public',
+        destination: '/etc/resolv.conf',
+        mode: 'ro',
+        options: ['nosuid', 'nodev'],
+      },
+    ],
+  });
+  t.notThrows(() =>
+    assertHostedAgentPolicyV1(policy, { networkPolicy: 'public-internet' }),
+  );
+  t.throws(() => assertHostedAgentPolicyV1(policy), {
+    message: /unknown or missing/,
+  });
+  t.throws(
+    () =>
+      assertHostedAgentPolicyV1(validPolicy(), {
+        networkPolicy: 'public-internet',
+      }),
+    { message: /public network policy/ },
+  );
+});
+
 test('failed attestation disposes provisioned resources', async t => {
   let disposed = 0;
   const factory = makeCodexBackendFactory({
