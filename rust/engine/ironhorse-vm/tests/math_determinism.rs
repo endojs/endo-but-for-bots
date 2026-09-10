@@ -63,7 +63,15 @@ fn known_answers_are_bit_exact_and_neighbour_distinct() {
             row[0], FUNCTIONS[i],
             "every provider-sensitive function has one probe"
         );
-        let expected = u64::from_str_radix(row[2], 16).unwrap();
+        let expected = u64::from_str_radix(
+            row[if cfg!(feature = "deterministic-math") {
+                3
+            } else {
+                2
+            }],
+            16,
+        )
+        .unwrap();
         assert!(
             expected_values.insert(expected),
             "coincident known answers: {}",
@@ -100,13 +108,19 @@ fn special_values_and_domain_boundary_observations_are_bit_exact() {
     // https://tc39.es/ecma262/multipage/numbers-and-dates.html#sec-math-object
     let mut covered = std::collections::BTreeSet::new();
     for row in fixture_cases(include_str!("fixtures/math-boundaries.tsv")) {
-        assert_eq!(row.len(), 4);
+        assert_eq!(row.len(), 5);
         let args = argument_bits(row[1]);
         assert!(
             covered.insert((row[0], args.clone())),
             "duplicate boundary case"
         );
-        let expected = row[if cfg!(target_os = "macos") { 3 } else { 2 }];
+        let expected = row[if cfg!(feature = "deterministic-math") {
+            4
+        } else if cfg!(target_os = "macos") {
+            3
+        } else {
+            2
+        }];
         assert_eq!(
             guest_bits(row[0], &args),
             u64::from_str_radix(expected, 16).unwrap(),
@@ -176,17 +190,19 @@ fn special_values_and_domain_boundary_observations_are_bit_exact() {
     assert_eq!(guest_bits("hypot", &[]), 0.0f64.to_bits());
 }
 
-// Phase 2 must replace the overflowing provider in frozen interp.rs. Keep a
-// runnable correctness test beside the observational pins, and remove those
-// two Infinity pins when enabling it. Both exact results round to these bits.
+// Pure libm is one ULP below the correctly rounded high-precision reference
+// (408633ce8fb9f87e); pin the finite provider result, not correct rounding that
+// ECMA-262 does not require for these functions.
 #[test]
-#[ignore = "Phase 2: acosh/asinh(MAX) overflow in the current provider; interp.rs is frozen"]
-fn large_inverse_hyperbolics_have_finite_known_answers() {
+#[cfg_attr(
+    not(feature = "deterministic-math"),
+    ignore = "platform provider overflows at MAX"
+)]
+fn large_inverse_hyperbolics_have_finite_provider_pins() {
     for function in ["acosh", "asinh"] {
         assert_eq!(
             guest_bits(function, &[f64::MAX.to_bits()]),
-            0x4086_33ce_8fb9_f87e,
-            "{function}(MAX)"
+            0x4086_33ce_8fb9_f87d
         );
     }
 }

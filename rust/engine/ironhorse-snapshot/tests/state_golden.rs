@@ -12,6 +12,23 @@ use ironhorse_snapshot::{
 use ironhorse_vm::{parse_symbols, Interp};
 use std::{cell::RefCell, collections::BTreeSet, rc::Rc};
 
+fn corpus() -> &'static str {
+    if ironhorse_vm::MATH_PROVIDER == "platform" {
+        include_str!("fixtures/state_golden.tsv")
+    } else {
+        include_str!("fixtures/state_golden_libm.tsv")
+    }
+}
+
+// Older fixture hashes describe the platform signature. Normalize only the
+// provider fingerprint for their byte-level comparison, preserving all state,
+// cost and format checks under both providers.
+fn platform_signature(sig: &Signature) -> Signature {
+    let mut encoded = sig.encode();
+    encoded[4..36].copy_from_slice(include_bytes!("fixtures/math-platform-boot.bin"));
+    Signature::decode(&encoded).unwrap()
+}
+
 fn fresh(source: &str) -> Interp {
     let (code, names) = ironhorse_compile::compile_atoms(source).unwrap();
     let mut m = Interp::new();
@@ -33,7 +50,7 @@ fn crank(m: &mut Interp, source: &str) -> String {
 #[test]
 fn carried_state_has_frozen_bytes_seals_costs_and_continuations() {
     assert_eq!(ironhorse_vm::COST_TABLE_VERSION, "ironhorse-meter-5");
-    let corpus = include_str!("fixtures/state_golden.tsv");
+    let corpus = corpus();
     assert!(corpus.starts_with("# ironhorse-meter-5 "));
     let format_19_corpus = include_str!("fixtures/state_golden_format_19.tsv");
     let prior_corpus = include_str!("fixtures/state_golden_meter_4.tsv");
@@ -160,7 +177,7 @@ fn unsupported_async_generator_state_remains_an_explicit_refusal() {
 #[test]
 #[ignore = "regenerates persisted identities after a reviewed format/schema/boot change"]
 fn regenerate_persistence_identities() {
-    let corpus = include_str!("fixtures/state_golden.tsv");
+    let corpus = corpus();
     let mut lines = corpus.lines();
     let mut output = format!("{}\n", lines.next().unwrap());
     let mut format19_output = String::from("# current boot heap with format19 marker\n");
@@ -172,6 +189,7 @@ fn regenerate_persistence_identities() {
         let machine = fresh(&f[1]);
         assert_eq!(machine.meter_index(), f[7].parse::<u64>().unwrap());
         let mut image = machine.snapshot_image(&sig).unwrap().into_image();
+        image.signature = platform_signature(&sig);
         image.version.format_version = 19;
         let format19_hash = hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&image));
         image.version.format_version = 16;
@@ -193,6 +211,7 @@ fn regenerate_persistence_identities() {
         assert_eq!(crank(&mut machine, &f[3]), f[4]);
         assert_eq!(machine.meter_index(), f[8].parse::<u64>().unwrap());
         let mut image = machine.snapshot_image(&sig).unwrap().into_image();
+        image.signature = platform_signature(&sig);
         image.version.format_version = 19;
         format19_fields[9] = hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&image));
         format19_output.push_str(&format19_fields.join("\t"));
@@ -207,6 +226,11 @@ fn regenerate_persistence_identities() {
         output.push_str(&f.join("\t"));
         output.push('\n');
     }
+    let file = if ironhorse_vm::MATH_PROVIDER == "platform" {
+        "state_golden.tsv"
+    } else {
+        "state_golden_libm.tsv"
+    };
     std::fs::write(
         concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -224,10 +248,9 @@ fn regenerate_persistence_identities() {
     )
     .unwrap();
     std::fs::write(
-        concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/fixtures/state_golden.tsv"
-        ),
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures")
+            .join(file),
         output,
     )
     .unwrap();
@@ -237,6 +260,7 @@ fn regenerate_persistence_identities() {
 // format stamp and the format18 boot-native name table from these comparisons.
 fn assert_format_16_bytes(machine: &Interp, sig: &Signature, expected: &str) {
     let mut image = machine.snapshot_image(sig).unwrap().into_image();
+    image.signature = platform_signature(sig);
     image.version.format_version = 16;
     image.function_state.native_names = None;
     assert_eq!(
@@ -249,6 +273,7 @@ fn assert_format_16_bytes(machine: &Interp, sig: &Signature, expected: &str) {
 // Historical corpora independently pin unchanged execution costs.
 fn assert_previous_bytes(machine: &Interp, sig: &Signature, expected: &str) {
     let mut image = machine.snapshot_image(sig).unwrap().into_image();
+    image.signature = platform_signature(sig);
     image.meter.cost_table_version = "ironhorse-meter-4".into();
     image.version.format_version = 16;
     image.function_state.native_names = None;
@@ -260,9 +285,29 @@ fn assert_previous_bytes(machine: &Interp, sig: &Signature, expected: &str) {
 
 fn assert_format_19_bytes(machine: &Interp, sig: &Signature, expected: &str) {
     let mut image = machine.snapshot_image(sig).unwrap().into_image();
+    image.signature = platform_signature(sig);
     image.version.format_version = 19;
     assert_eq!(
         hex_sha256(&ironhorse_snapshot::image::write_machine_unchecked(&image)),
         expected
     );
+}
+
+#[test]
+fn math_profile_refuses_a_platform_snapshot_in_deterministic_configuration() {
+    let machine = fresh("1");
+    let signature = Signature::new("math-profile");
+    let platform = platform_signature(&signature);
+    if ironhorse_vm::MATH_PROVIDER == "platform" {
+        assert_eq!(signature.encode(), platform.encode());
+    } else {
+        assert_ne!(signature.encode(), platform.encode());
+        let mut image = machine.snapshot_image(&signature).unwrap().into_image();
+        image.signature = platform.clone();
+        let bytes = ironhorse_snapshot::image::write_machine_unchecked(&image);
+        assert!(matches!(
+            from_snapshot_bytes(&bytes, &platform),
+            Err(ironhorse_snapshot::SnapshotError::BootLayoutMismatch { .. })
+        ));
+    }
 }

@@ -34,7 +34,8 @@ follow-up review of findings and fixes.
 The C1–C3/C5 coverage landed in `e28315bd6` and `3e6c429a0`.
 This increment adds the missing candidate-provider comparison before enabling any
 runtime provider feature.
-`libm` 0.2.16 is test-only here, with software floating-point routines selected.
+`libm` 0.2.16 was test-only in the prerequisite commit `b7ad82dab`, with
+software floating-point routines selected.
 The existing shared vector covers 859 cases over 22 provider-sensitive functions
 and four exact controls.
 The comparison requires exact bits for special values, zero results and controls,
@@ -78,11 +79,28 @@ The XS oracle will continue to use its platform provider; rebuilding XS against
 the Rust provider is not part of this work.
 The 30 `built-ins/stage3-math` corpus files containing provider-sensitive Math
 calls retain their existing platform-oracle expectations.
-A pure-Rust configuration needs a separate, explicit expected-divergence inventory
-for those expressions, with exact result bits, rather than an unconditional Math
-skip or relaxed equality rule.
-The ordinary VM default will remain the platform provider while that inventory is
-being established; deterministic consumers will select the pure-Rust feature.
-The same selection must cover numeric exponentiation as well as `Math.pow`.
-Snapshot compatibility must distinguish provider configurations, since guest
-branches can turn a final-bit change into different receipts and durable state.
+The oracle-free `math_corpus_profile` test executes the original assertions and
+checks all 30 files against an exact inventory.
+Only `055.js` (`acosh(2.3)`) and `057.js` (`exp(1)`) differ under libm.
+Their exact actual/expected bits are in `tests/fixtures/math-corpus-libm.tsv`.
+A local macOS XS run over all 72 stage3-math specimens with `--repeat 3` produced
+70 covered cases and exactly those two failures; the oracle lane stays platform.
+No Math-wide skip or tolerance was introduced.
+
+## Deterministic provider
+
+`deterministic-math` selects exactly libm 0.2.16 with `force-soft-floats` for all
+22 provider-sensitive Math operations and numeric exponentiation.
+`consensus` enables that feature; the ordinary VM default remains platform.
+C1–C4 preceded this feature, and C7 was scoped before changing consensus selection.
+CI executes both configurations on Linux and macOS, exports both vectors, and
+requires exact cross-host and debug/release equality for the pure-Rust vector.
+The platform comparison retains its narrowly reviewed existing divergences.
+
+`MATH_PROVIDER` identifies the selected configuration.
+The pure provider adds its identity to the boot fingerprint, so snapshot readers
+reject images from the other configuration before execution.
+Separate snapshot golden pins preserve both identities; the runtime golden corpus
+and meter schedule do not change.
+The release remains responsible for reviewing provider upgrades and their result,
+receipt and state effects; a feature name alone is not a version promise.

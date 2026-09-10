@@ -11,11 +11,12 @@ impl Interp {
     /// `mxMeterSome` and no chunk — the pin's bodies carry neither. A NaN
     /// result is the canonical `f64::NAN`.
     ///
-    /// Provider-sensitive operations currently use platform `f64` math.
+    /// Provider-sensitive operations use the selected `crate::math` provider.
     /// Cross-platform bit identity is not established by same-host oracle
     /// agreement: a last-bit difference can affect guest branches and receipts.
     /// `math_determinism.rs` checks known answers and exports platform vectors.
-    /// The decision to vendor libm and its required coverage are recorded in
+    /// `deterministic-math` selects software libm; default platform builds
+    /// retain their narrower guarantee. The decision and coverage are recorded in
     /// `designs/ironhorse-w6-decisions.md`, section 4.
     pub(in crate::interp) fn call_math(
         &mut self,
@@ -28,36 +29,36 @@ impl Interp {
         self.meter.tick_raw(MATH_FRAME_METERING);
         let r = match id {
             Abs => self.math_unary(code, base, argc, f64::abs)?,
-            Acos => self.math_unary(code, base, argc, f64::acos)?,
-            Acosh => self.math_unary(code, base, argc, f64::acosh)?,
-            Asin => self.math_unary(code, base, argc, f64::asin)?,
-            Asinh => self.math_unary(code, base, argc, f64::asinh)?,
-            Atan => self.math_unary(code, base, argc, f64::atan)?,
-            Atanh => self.math_unary(code, base, argc, f64::atanh)?,
-            Cbrt => self.math_unary(code, base, argc, f64::cbrt)?,
+            Acos => self.math_unary(code, base, argc, crate::math::acos)?,
+            Acosh => self.math_unary(code, base, argc, crate::math::acosh)?,
+            Asin => self.math_unary(code, base, argc, crate::math::asin)?,
+            Asinh => self.math_unary(code, base, argc, crate::math::asinh)?,
+            Atan => self.math_unary(code, base, argc, crate::math::atan)?,
+            Atanh => self.math_unary(code, base, argc, crate::math::atanh)?,
+            Cbrt => self.math_unary(code, base, argc, crate::math::cbrt)?,
             Ceil => self.math_unary(code, base, argc, f64::ceil)?,
-            Cos => self.math_unary(code, base, argc, f64::cos)?,
-            Cosh => self.math_unary(code, base, argc, f64::cosh)?,
-            Exp => self.math_unary(code, base, argc, f64::exp)?,
-            Expm1 => self.math_unary(code, base, argc, f64::exp_m1)?,
+            Cos => self.math_unary(code, base, argc, crate::math::cos)?,
+            Cosh => self.math_unary(code, base, argc, crate::math::cosh)?,
+            Exp => self.math_unary(code, base, argc, crate::math::exp)?,
+            Expm1 => self.math_unary(code, base, argc, crate::math::expm1)?,
             Floor => self.math_unary(code, base, argc, f64::floor)?,
-            Log => self.math_unary(code, base, argc, f64::ln)?,
-            Log1p => self.math_unary(code, base, argc, f64::ln_1p)?,
-            Log10 => self.math_unary(code, base, argc, f64::log10)?,
+            Log => self.math_unary(code, base, argc, crate::math::log)?,
+            Log1p => self.math_unary(code, base, argc, crate::math::log1p)?,
+            Log10 => self.math_unary(code, base, argc, crate::math::log10)?,
             // The pin computes `log2` as `c_log(x) / c_log(2)` only under
             // `mxNoFunctionLength`-style configs it does not enable here; the
             // default build calls `c_log2`, so ironhorse uses `f64::log2`.
-            Log2 => self.math_unary(code, base, argc, f64::log2)?,
-            Sin => self.math_unary(code, base, argc, f64::sin)?,
-            Sinh => self.math_unary(code, base, argc, f64::sinh)?,
+            Log2 => self.math_unary(code, base, argc, crate::math::log2)?,
+            Sin => self.math_unary(code, base, argc, crate::math::sin)?,
+            Sinh => self.math_unary(code, base, argc, crate::math::sinh)?,
             Sqrt => self.math_unary(code, base, argc, f64::sqrt)?,
-            Tan => self.math_unary(code, base, argc, f64::tan)?,
-            Tanh => self.math_unary(code, base, argc, f64::tanh)?,
+            Tan => self.math_unary(code, base, argc, crate::math::tan)?,
+            Tanh => self.math_unary(code, base, argc, crate::math::tanh)?,
             Atan2 => match (self.math_arg(base, argc, 0), self.math_arg(base, argc, 1)) {
                 (Some(y), Some(x)) => {
                     let y = self.to_number_f64(code, y)?;
                     let x = self.to_number_f64(code, x)?;
-                    Slot::number(y.atan2(x))
+                    Slot::number(crate::math::atan2(y, x))
                 }
                 _ => Slot::number(f64::NAN),
             },
@@ -70,7 +71,7 @@ impl Interp {
                     let v = if !y.is_finite() && x.abs() == 1.0 {
                         f64::NAN
                     } else {
-                        x.powf(y)
+                        crate::math::pow(x, y)
                     };
                     Slot::number(v)
                 }
@@ -86,7 +87,7 @@ impl Interp {
                 }
                 let v = match vals.len() {
                     0 => 0.0,
-                    2 => vals[0].hypot(vals[1]),
+                    2 => crate::math::hypot(vals[0], vals[1]),
                     _ => vals.iter().map(|x| x * x).sum::<f64>().sqrt(),
                 };
                 Slot::number(v)

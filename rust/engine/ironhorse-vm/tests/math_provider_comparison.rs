@@ -53,6 +53,55 @@ fn candidate(function: &str, args: &[u64]) -> u64 {
     }
 }
 
+fn platform_reference(function: &str, args: &[u64]) -> u64 {
+    let x = args.first().map(|x| f64::from_bits(*x)).unwrap_or(f64::NAN);
+    let y = args.get(1).map(|y| f64::from_bits(*y)).unwrap_or(f64::NAN);
+    let result = match function {
+        "acos" => f64::acos(x),
+        "acosh" => f64::acosh(x),
+        "asin" => f64::asin(x),
+        "asinh" => f64::asinh(x),
+        "atan" => f64::atan(x),
+        "atanh" => f64::atanh(x),
+        "cbrt" => f64::cbrt(x),
+        "cos" => f64::cos(x),
+        "cosh" => f64::cosh(x),
+        "exp" => f64::exp(x),
+        "expm1" => f64::exp_m1(x),
+        "log" => f64::ln(x),
+        "log1p" => f64::ln_1p(x),
+        "log10" => f64::log10(x),
+        "log2" => f64::log2(x),
+        "sin" => f64::sin(x),
+        "sinh" => f64::sinh(x),
+        "tan" => f64::tan(x),
+        "tanh" => f64::tanh(x),
+        "atan2" => f64::atan2(x, y),
+        "pow" if !y.is_finite() && x.abs() == 1.0 => f64::NAN,
+        "pow" => f64::powf(x, y),
+        "hypot" if args.is_empty() => 0.0,
+        "hypot" if args.len() == 2 => f64::hypot(x, y),
+        "hypot" => args
+            .iter()
+            .map(|x| {
+                let value = f64::from_bits(*x);
+                value * value
+            })
+            .sum::<f64>()
+            .sqrt(),
+        "abs" => x.abs(),
+        "ceil" => x.ceil(),
+        "floor" => x.floor(),
+        "sqrt" => x.sqrt(),
+        _ => panic!("uncovered provider function {function}"),
+    };
+    if result.is_nan() {
+        0x7ff8_0000_0000_0000
+    } else {
+        result.to_bits()
+    }
+}
+
 fn ordered(bits: u64) -> u64 {
     if bits >> 63 == 0 {
         bits | (1 << 63)
@@ -71,8 +120,19 @@ fn shared_vector_compares_candidate_provider_with_checked_ulp_bound() {
         String::from("function\targuments\tplatform\tpure_rust\tulp\tclassification\n");
     let mut failures = Vec::new();
     for (function, args) in vector() {
-        let platform = guest_bits(function, &args);
+        let platform = platform_reference(function, &args);
         let pure = candidate(function, &args);
+        let selected = if cfg!(feature = "deterministic-math") {
+            pure
+        } else {
+            platform
+        };
+        let actual = guest_bits(function, &args);
+        if actual != selected {
+            failures.push(format!(
+                "selected guest provider {function}({args:x?}): {actual:016x} != {selected:016x}"
+            ));
+        }
         let distance = ordered(platform).abs_diff(ordered(pure));
         let known_overflow = matches!(function, "acosh" | "asinh")
             && args == [f64::MAX.to_bits()]

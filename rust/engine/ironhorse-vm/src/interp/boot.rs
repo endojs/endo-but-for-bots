@@ -201,6 +201,11 @@ impl Interp {
             hash.update(&(bytes.len() as u64).to_be_bytes());
             hash.update(bytes);
         };
+        // Preserve platform-profile compatibility; a deterministic provider
+        // is a distinct execution release even when its boot slots are equal.
+        if cfg!(feature = "deterministic-math") {
+            term(crate::MATH_PROVIDER.as_bytes());
+        }
         term(&self.boot_slot_count.to_be_bytes());
         for slot in self
             .slots
