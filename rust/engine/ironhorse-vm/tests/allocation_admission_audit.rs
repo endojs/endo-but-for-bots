@@ -58,6 +58,14 @@ const SOURCE: &str = concat!(
     include_str!("../src/interp/natives/json.rs"),
     "\n",
     include_str!("../src/interp/property.rs"),
+    include_str!("../src/interp/property/descriptors.rs"),
+    include_str!("../src/interp/property/indexed.rs"),
+    include_str!("../src/interp/property/integrity.rs"),
+    include_str!("../src/interp/property/keys.rs"),
+    include_str!("../src/interp/property/object.rs"),
+    include_str!("../src/interp/property/ordinary.rs"),
+    include_str!("../src/interp/property/proxy.rs"),
+    include_str!("../src/interp/property/read_index.rs"),
     "\n",
     include_str!("../src/interp/link.rs"),
     "\n",
@@ -152,6 +160,14 @@ fn native_builtins_do_not_reserve_raw_guest_capacities() {
             include_str!("../src/interp/natives/dispatch.rs"),
             include_str!("../src/interp/natives/json.rs"),
             include_str!("../src/interp/property.rs"),
+            include_str!("../src/interp/property/descriptors.rs"),
+            include_str!("../src/interp/property/indexed.rs"),
+            include_str!("../src/interp/property/integrity.rs"),
+            include_str!("../src/interp/property/keys.rs"),
+            include_str!("../src/interp/property/object.rs"),
+            include_str!("../src/interp/property/ordinary.rs"),
+            include_str!("../src/interp/property/proxy.rs"),
+            include_str!("../src/interp/property/read_index.rs"),
         ],
     );
 }
@@ -428,17 +444,30 @@ fn moved_json_methods_cannot_bypass_allocation_admission() {
 
 #[test]
 fn moved_property_methods_cannot_bypass_allocation_admission() {
-    let original = include_str!("../src/interp/property.rs");
-    let anchor = "let name = name.into();";
-    assert!(original.contains(anchor));
-    for allocation in [
-        "let raw = Vec::with_capacity(guest);",
-        "let raw = vec![0; guest];",
+    for original in [
+        include_str!("../src/interp/property/descriptors.rs"),
+        include_str!("../src/interp/property/indexed.rs"),
+        include_str!("../src/interp/property/integrity.rs"),
+        include_str!("../src/interp/property/keys.rs"),
+        include_str!("../src/interp/property/object.rs"),
+        include_str!("../src/interp/property/ordinary.rs"),
+        include_str!("../src/interp/property/proxy.rs"),
+        include_str!("../src/interp/property/read_index.rs"),
     ] {
-        let mutated = original.replacen(anchor, allocation, 1);
-        assert!(
-            std::panic::catch_unwind(|| check_builtin_capacities(SOURCE, &[&mutated])).is_err()
-        );
+        let anchor = "impl Interp {";
+        assert!(original.contains(anchor));
+        check_builtin_capacities(SOURCE, &[original]);
+        for allocation in [
+            "let raw = Vec::with_capacity(guest);",
+            "let raw = vec![0; guest];",
+        ] {
+            let injected = format!("{anchor} fn allocation_probe(guest: usize) {{ {allocation} let _: Vec<u8> = raw; }}");
+            let mutated = original.replacen(anchor, &injected, 1);
+            assert_ne!(original, mutated);
+            assert!(
+                std::panic::catch_unwind(|| check_builtin_capacities(SOURCE, &[&mutated])).is_err()
+            );
+        }
     }
 }
 
