@@ -1429,3 +1429,29 @@ The diagnostic helps assess the isolated timing flag; it does not replace the
 failed pinned check or justify changing its threshold.
 The record retains both observations, binary hashes, measured-source hashes,
 and the candidate working-tree source hashes.
+
+## Dispatch opcode factoring (1A)
+
+Three reviewed increments reduce `interp/dispatch.rs` from 5,693 to 3,664 lines.
+Twenty-four opcode handlers now live in seven children of 133–464 lines.
+The loop retains decoding, instruction advancement, control-transfer ownership,
+catch-landing metering, calls, and suspension.
+The short `TO_NUMERIC` and increment/decrement arms remain in the loop.
+Oracle-free tests pin fourteen pre-extraction meter receipts and a getter unwind
+across crank bytecode buffers; source locks require every extracted handler to use
+`dispatch_result!` with the owning loop's routing arguments.
+
+[results/1a-dispatch-factoring.json](results/1a-dispatch-factoring.json) retains the
+incremental measurements and the final source hashes.
+The initial all-handler candidate passed 46/48 pinned controls, failing a slide
+control at 1.253x and a placeholder control at 1.812x.
+The revised candidate passes 47/48, with `gc_20000_enum_ms` at 1.273x
+(28 versus 22 microseconds).
+The fixed short-workload comparison retains substantial slowdowns and variation
+between the two runs of each candidate; restoring the hot arms did not establish
+a causal performance improvement.
+A separate fixed ABBA diagnostic with 20,000 iterations measures 1.005–1.016x,
+with identical results and raw charges and all warmup/measured samples retained.
+That longer workload changes pressure and cadence and does not disprove the short
+observations or replace the pinned failure.
+No original fixture, baseline, threshold, or release profile was changed.

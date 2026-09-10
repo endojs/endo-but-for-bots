@@ -1,13 +1,21 @@
 //! Bytecode dispatch and ownership-aware control-transfer handling.
+//!
+//! The loop owns decoding, instruction advancement, budgets, branches, calls,
+//! suspension, and catch resumption. Property, environment, iterator, private,
+//! super-property, and larger operator semantics live in the child modules.
+//! Their handlers return `Result<(), Step>` without consuming a transfer: an
+//! error reaches `dispatch_result!` before any instruction advancement, while
+//! success advances exactly once. These are ordinary Rust helper calls, not
+//! additional guest/native entries, and do not add a metering frame.
+//! `tests/dispatch_loop_control_transfer.rs` locks this boundary and its roster.
 use super::{
     branch_target, cannot_coerce_to_object, canonicalize_nan, cesu8_to_units, count_new_locals,
-    fx_pow, string_to_index, to_int32, to_number, unary_minus, units_to_be16, AccessorData,
-    ArithOp, AsyncGeneratorState, BitOp, CatchJump, ExoticKind, GeneratorState, Halt, Interp, Kind,
-    MeterCheck, Native, NativeMethod, Opcode, Payload, ReadKey, RelOp, ResumeStatus, Slot, Step,
-    Suspension, BIGINT_LITERAL_METERING, BIGINT_NEG_FRAME_METERING, BOUNDED_RUN_SLOT_CEILING,
-    FUNCTION_LOCAL_METERING, HEAVY_FRAME_COST, IN_METERING, ORDINARY_HAS_PROPERTY_FRAME_METERING,
+    to_int32, to_number, unary_minus, units_to_be16, ArithOp, AsyncGeneratorState, BitOp,
+    CatchJump, ExoticKind, GeneratorState, Halt, Interp, Kind, MeterCheck, Native, NativeMethod,
+    Opcode, Payload, RelOp, ResumeStatus, Slot, Step, Suspension, BIGINT_LITERAL_METERING,
+    BIGINT_NEG_FRAME_METERING, BOUNDED_RUN_SLOT_CEILING, FUNCTION_LOCAL_METERING, HEAVY_FRAME_COST,
     USING_DECL_METERING, USING_RESOURCE_METERING, WITH_ENV_SETUP_METERING, XS_DONT_DELETE_FLAG,
-    XS_DONT_ENUM_FLAG, XS_DONT_SET_FLAG, XS_GETTER_FLAG, XS_METHOD_FLAG, XS_SETTER_FLAG,
+    XS_DONT_ENUM_FLAG, XS_DONT_SET_FLAG,
 };
 
 /// Consume a [`Step`] inside the bytecode dispatch loop. This is the ONLY
@@ -59,8 +67,11 @@ macro_rules! dispatch_result {
 
 mod environment;
 mod iteration;
+mod operators;
+mod private;
 mod property_read;
 mod property_write;
+mod super_property;
 
 impl Interp {
     pub(super) fn dispatch(&mut self, code: &[u8]) -> Step {
@@ -906,186 +917,47 @@ impl Interp {
                         )));
                     }
                     let index = self.closure_index(op, code, pc);
-                    let brand = match self.closure_cell(index) {
-                        Some(cell) => cell,
-                        None => return Step::Host(Halt::NotImplemented("private:missing-brand")),
-                    };
-                    let value = self.pop();
-                    let receiver = self.pop();
-                    let object = match receiver.value {
-                        Payload::Reference(object) if receiver.kind == Kind::Reference => object,
-                        _ => {
-                            // Valid compiled private initialization always has an
-                            // instance receiver; this guards malformed VM input.
-                            let error = self.build_error("TypeError", 0, 0);
-                            dispatch_halt!(self.raise_js(error), pc, self, return_depth, code);
-                        }
-                    };
                     let flag = code[pc + ilen + 1];
-                    let key = (object, brand);
-                    if flag & XS_METHOD_FLAG != 0 {
-                        let home = self
-                            .functions
-                            .get(&self.cur_func)
-                            .map(|info| info.home)
-                            .unwrap_or(crate::value::SlotIndex::NULL);
-                        if let Payload::Reference(f) = value.value {
-                            self.functions.update(&f, |info| {
-                                info.home = home;
-                            });
-                        }
-                    }
-                    if flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) != 0 {
-                        let current = self
-                            .private_accessors
-                            .get(&key)
-                            .copied()
-                            .unwrap_or_default();
-                        self.private_accessors.insert(
-                            key,
-                            AccessorData {
-                                get: if flag & XS_GETTER_FLAG != 0 {
-                                    Some(value)
-                                } else {
-                                    current.get
-                                },
-                                set: if flag & XS_SETTER_FLAG != 0 {
-                                    Some(value)
-                                } else {
-                                    current.set
-                                },
-                            },
-                        );
-                    } else {
-                        self.private_values.insert(key, value);
-                    }
+                    dispatch_result!(
+                        self.dispatch_new_private(index, flag),
+                        pc,
+                        self,
+                        return_depth,
+                        code
+                    );
                     pc += ilen + 2;
                 }
                 XS_CODE_GET_PRIVATE_1 | XS_CODE_GET_PRIVATE_2 => {
                     let index = self.closure_index(op, code, pc);
-                    let brand = match self.closure_cell(index) {
-                        Some(cell) => cell,
-                        None => return Step::Host(Halt::NotImplemented("private:missing-brand")),
-                    };
-                    let private_name = self.property_debug_name(
-                        self.locals[self.local_index(index).expect("private name binding")].id,
+                    dispatch_result!(
+                        self.dispatch_get_private(code, index),
+                        pc,
+                        self,
+                        return_depth,
+                        code
                     );
-                    let receiver = self.pop();
-                    let object = match receiver.value {
-                        Payload::Reference(object) if receiver.kind == Kind::Reference => object,
-                        _ => {
-                            let error = self.internal_error(
-                                "TypeError",
-                                if matches!(receiver.kind, Kind::Null | Kind::Undefined) {
-                                    cannot_coerce_to_object(receiver.kind)
-                                } else {
-                                    format!("get {private_name}: undefined private property")
-                                },
-                            );
-                            dispatch_halt!(self.raise_js(error), pc, self, return_depth, code);
-                        }
-                    };
-                    let key = (object, brand);
-                    let value = if let Some(value) = self.private_values.get(&key).copied() {
-                        value
-                    } else if let Some(accessor) = self.private_accessors.get(&key).copied() {
-                        match accessor.get {
-                            Some(getter) => dispatch_result!(
-                                self.run_callback(code, getter, receiver, &[]),
-                                pc,
-                                self,
-                                return_depth,
-                                code
-                            ),
-                            None => Slot::undefined(),
-                        }
-                    } else {
-                        let error = self.internal_error(
-                            "TypeError",
-                            format!("get {private_name}: undefined private property"),
-                        );
-                        dispatch_halt!(self.raise_js(error), pc, self, return_depth, code);
-                    };
-                    self.push(value);
                     pc += ilen;
                 }
                 XS_CODE_SET_PRIVATE_1 | XS_CODE_SET_PRIVATE_2 => {
                     let index = self.closure_index(op, code, pc);
-                    let brand = match self.closure_cell(index) {
-                        Some(cell) => cell,
-                        None => return Step::Host(Halt::NotImplemented("private:missing-brand")),
-                    };
-                    let value = self.pop();
-                    let private_name = self.property_debug_name(
-                        self.locals[self.local_index(index).expect("private name binding")].id,
+                    dispatch_result!(
+                        self.dispatch_set_private(code, index),
+                        pc,
+                        self,
+                        return_depth,
+                        code
                     );
-                    let receiver = self.pop();
-                    let object = match receiver.value {
-                        Payload::Reference(object) if receiver.kind == Kind::Reference => object,
-                        _ => {
-                            let error = self.internal_error(
-                                "TypeError",
-                                if matches!(receiver.kind, Kind::Null | Kind::Undefined) {
-                                    cannot_coerce_to_object(receiver.kind)
-                                } else {
-                                    format!("set {private_name}: undefined private property")
-                                },
-                            );
-                            dispatch_halt!(self.raise_js(error), pc, self, return_depth, code);
-                        }
-                    };
-                    let key = (object, brand);
-                    if self.private_values.contains_key(&key) {
-                        self.private_values.insert(key, value);
-                    } else if let Some(accessor) = self.private_accessors.get(&key).copied() {
-                        match accessor.set {
-                            Some(setter) => {
-                                let _ = dispatch_result!(
-                                    self.run_callback(code, setter, receiver, &[value]),
-                                    pc,
-                                    self,
-                                    return_depth,
-                                    code
-                                );
-                            }
-                            None => {
-                                let error = self.internal_error(
-                                    "TypeError",
-                                    format!("set {private_name}: undefined private property"),
-                                );
-                                dispatch_halt!(self.raise_js(error), pc, self, return_depth, code);
-                            }
-                        }
-                    } else {
-                        let error = self.internal_error(
-                            "TypeError",
-                            format!("set {private_name}: undefined private property"),
-                        );
-                        dispatch_halt!(self.raise_js(error), pc, self, return_depth, code);
-                    }
-                    self.push(value);
                     pc += ilen;
                 }
                 XS_CODE_HAS_PRIVATE_1 | XS_CODE_HAS_PRIVATE_2 => {
                     let index = self.closure_index(op, code, pc);
-                    let brand = match self.closure_cell(index) {
-                        Some(cell) => cell,
-                        None => return Step::Host(Halt::NotImplemented("private:missing-brand")),
-                    };
-                    let receiver = self.pop();
-                    let present = match receiver.value {
-                        Payload::Reference(object) if receiver.kind == Kind::Reference => {
-                            let key = (object, brand);
-                            self.private_values.contains_key(&key)
-                                || self.private_accessors.contains_key(&key)
-                        }
-                        _ => {
-                            let error =
-                                self.internal_error("TypeError", "in: not an object".into());
-                            dispatch_halt!(self.raise_js(error), pc, self, return_depth, code);
-                        }
-                    };
-                    self.push(Slot::boolean(present));
+                    dispatch_result!(
+                        self.dispatch_has_private(index),
+                        pc,
+                        self,
+                        return_depth,
+                        code
+                    );
                     pc += ilen;
                 }
                 // `o.k = v`. Stack: [.., objectRef, value] → [.., value].
@@ -2611,168 +2483,44 @@ impl Interp {
                 // receiver for getter/setter `this`.
                 XS_CODE_GET_SUPER => {
                     let id = id!(1);
-                    let receiver = self.pop();
-                    let home = self
-                        .functions
-                        .get(&self.cur_func)
-                        .map(|info| info.home)
-                        .unwrap_or(crate::value::SlotIndex::NULL);
-                    if home.is_null() {
-                        return Step::Host(Halt::NotImplemented("get_super:no-home"));
-                    }
-                    let base = self.instance_prototype(home);
-                    // GetValue on a super reference performs ToObject on the
-                    // home prototype; a null [[Prototype]] is a TypeError
-                    // (ECMA-262 6.2.5.5), raised at use, after key evaluation.
-                    if base.is_null() {
-                        let error = self.internal_error(
-                            "TypeError",
-                            format!("get super.{}: no prototype", self.property_debug_name(id)),
-                        );
-                        dispatch_halt!(self.raise_js(error), pc, self, return_depth, code);
-                    }
-                    let value = dispatch_result!(
-                        self.ordinary_get(code, base, id, receiver),
+                    dispatch_result!(
+                        self.dispatch_get_super(code, id),
                         pc,
                         self,
                         return_depth,
                         code
                     );
-                    self.push(value);
                     pc += ilen;
                 }
                 XS_CODE_GET_SUPER_AT => {
-                    let key = self.pop();
-                    let super_ref = self.pop();
-                    let receiver_ref = match super_ref.value {
-                        Payload::Reference(receiver) if super_ref.kind == Kind::EnvReference => {
-                            receiver
-                        }
-                        _ => return Step::Host(Halt::EngineInvariant("get_super_at:reference")),
-                    };
-                    // A read mints nothing: an index the key table has never
-                    // held stays an index (`ReadKey`).
-                    let read_key = match key.value {
-                        Payload::At(id, index) if id == crate::value::XS_NO_ID => {
-                            match self.index_read_key_id(index) {
-                                Some(id) => ReadKey::Id(id),
-                                None => ReadKey::Index(index),
-                            }
-                        }
-                        Payload::At(id, _) => ReadKey::Id(id),
-                        _ => return Step::Host(Halt::EngineInvariant("get_super_at:key")),
-                    };
-                    let receiver = Slot::of(Kind::Reference, Payload::Reference(receiver_ref));
-                    // A computed super reference defers the null-base
-                    // TypeError to GetValue (ECMA-262 6.2.5.5 via ToObject).
-                    // XS rejects earlier in SUPER_AT, before coercing the key,
-                    // and formats the prior opcode's ID. Keep this spec-ordered
-                    // guard bare rather than invent a corresponding XS text.
-                    if super_ref.next.is_null() {
-                        let error = self.build_error("TypeError", 0, 0);
-                        dispatch_halt!(self.raise_js(error), pc, self, return_depth, code);
-                    }
-                    let value = dispatch_result!(
-                        match read_key {
-                            ReadKey::Id(id) =>
-                                self.ordinary_get(code, super_ref.next, id, receiver),
-                            ReadKey::Index(index) =>
-                                self.uninterned_index_get(code, super_ref.next, index, receiver),
-                        },
+                    dispatch_result!(
+                        self.dispatch_get_super_at(code),
                         pc,
                         self,
                         return_depth,
                         code
                     );
-                    self.push(value);
                     pc += size as usize;
                 }
                 XS_CODE_SET_SUPER => {
                     let id = id!(1);
-                    let value = self.pop();
-                    let receiver = self.pop();
-                    let home = self
-                        .functions
-                        .get(&self.cur_func)
-                        .map(|info| info.home)
-                        .unwrap_or(crate::value::SlotIndex::NULL);
-                    if home.is_null() {
-                        return Step::Host(Halt::NotImplemented("set_super:no-home"));
-                    }
-                    let base = self.instance_prototype(home);
-                    // PutValue on a super reference performs ToObject on the
-                    // home prototype; a null [[Prototype]] is a TypeError
-                    // (ECMA-262 6.2.5.6), raised after the RHS has evaluated.
-                    if base.is_null() {
-                        let error = self.internal_error(
-                            "TypeError",
-                            format!("set super.{}: no prototype", self.property_debug_name(id)),
-                        );
-                        dispatch_halt!(self.raise_js(error), pc, self, return_depth, code);
-                    }
-                    let accepted = dispatch_result!(
-                        self.ordinary_set(code, base, id, value, receiver),
+                    dispatch_result!(
+                        self.dispatch_set_super(code, id),
                         pc,
                         self,
                         return_depth,
                         code
                     );
-                    if !accepted {
-                        dispatch_halt!(
-                            self.failed_super_set_error(base, id, receiver),
-                            pc,
-                            self,
-                            return_depth,
-                            code
-                        );
-                    }
-                    self.push(value);
                     pc += ilen;
                 }
                 XS_CODE_SET_SUPER_AT => {
-                    let value = self.pop();
-                    let key = self.pop();
-                    let super_ref = self.pop();
-                    let receiver_ref = match super_ref.value {
-                        Payload::Reference(receiver) if super_ref.kind == Kind::EnvReference => {
-                            receiver
-                        }
-                        _ => return Step::Host(Halt::EngineInvariant("set_super_at:reference")),
-                    };
-                    let id = match key.value {
-                        Payload::At(id, index) if id == crate::value::XS_NO_ID => {
-                            self.intern_key(index.to_string())
-                        }
-                        Payload::At(id, _) => id,
-                        _ => return Step::Host(Halt::EngineInvariant("set_super_at:key")),
-                    };
-                    let receiver = Slot::of(Kind::Reference, Payload::Reference(receiver_ref));
-                    // A computed super reference defers the null-base
-                    // TypeError to PutValue (ECMA-262 6.2.5.6 via ToObject),
-                    // after both the key and the RHS have evaluated.
-                    // XS rejects earlier in SUPER_AT using the prior opcode's
-                    // ID; there is no corresponding stable diagnostic here.
-                    if super_ref.next.is_null() {
-                        let error = self.build_error("TypeError", 0, 0);
-                        dispatch_halt!(self.raise_js(error), pc, self, return_depth, code);
-                    }
-                    let accepted = dispatch_result!(
-                        self.ordinary_set(code, super_ref.next, id, value, receiver),
+                    dispatch_result!(
+                        self.dispatch_set_super_at(code),
                         pc,
                         self,
                         return_depth,
                         code
                     );
-                    if !accepted {
-                        dispatch_halt!(
-                            self.failed_super_set_error(super_ref.next, id, receiver),
-                            pc,
-                            self,
-                            return_depth,
-                            code
-                        );
-                    }
-                    self.push(value);
                     pc += size as usize;
                 }
                 // The current realm's hidden template registry. The following
@@ -2875,29 +2623,15 @@ impl Interp {
                 // `to_string`: the shared abstract operation used by template
                 // substitutions and other compiler-emitted string contexts.
                 XS_CODE_TO_STRING => {
-                    let top = *self.stack.last().unwrap_or(&Slot::undefined());
-                    let primitive = dispatch_result!(
-                        self.to_primitive(code, top, true),
-                        pc,
-                        self,
-                        return_depth,
-                        code
-                    );
-                    if primitive.kind == Kind::Symbol {
-                        return Step::Host(Halt::NotImplemented("to_string:symbol"));
-                    }
-                    let value = self.to_string_slot_metered(primitive);
-                    if let Some(top) = self.stack.last_mut() {
-                        *top = value;
-                    }
+                    dispatch_result!(self.dispatch_to_string(code), pc, self, return_depth, code);
                     pc += size as usize;
                 }
                 // `increment`/`decrement` (XS_CODE_INCREMENT/DECREMENT,
                 // xsRun.c:3391/3366): ±1 on the numeric stack top, with XS's
                 // exact int-boundary promotion to number (INT_MAX for
                 // increment, -(INT_MAX) for decrement). XS performs ToNumeric
-                // inside this opcode; the compiler does not emit a separate
-                // `to_numeric` for update expressions. BigInt uses XS's
+                // inside this opcode. A postfix expression that preserves its
+                // old value also emits `TO_NUMERIC` first. BigInt uses XS's
                 // `_inc`/`_dec`, which add/subtract the static BigInt one.
                 XS_CODE_INCREMENT | XS_CODE_DECREMENT => {
                     let inc = op == XS_CODE_INCREMENT;
@@ -2970,52 +2704,13 @@ impl Interp {
                 // projected result size so an untrusted exponent cannot make
                 // the host allocate without limit.
                 XS_CODE_EXPONENTIATION => {
-                    let n = self.stack.len();
-                    if n < 2 {
-                        return Step::Host(Halt::EngineInvariant("exponentiation:stack-underflow"));
-                    }
-                    let left = self.stack[n - 2];
-                    let right = self.stack[n - 1];
-                    let a = dispatch_result!(
-                        self.to_number_value(code, left),
+                    dispatch_result!(
+                        self.dispatch_exponentiation(code),
                         pc,
                         self,
                         return_depth,
                         code
                     );
-                    let b = dispatch_result!(
-                        self.to_number_value(code, right),
-                        pc,
-                        self,
-                        return_depth,
-                        code
-                    );
-                    self.stack.truncate(n - 2);
-                    match (a.kind, b.kind) {
-                        (Kind::BigInt, Kind::BigInt) => {
-                            let result = dispatch_result!(
-                                self.bigint_pow(a, b),
-                                pc,
-                                self,
-                                return_depth,
-                                code
-                            );
-                            self.push(result);
-                        }
-                        (Kind::BigInt, _) | (_, Kind::BigInt) => {
-                            let error = self.internal_error(
-                                "TypeError",
-                                if a.kind == Kind::BigInt {
-                                    "cannot coerce right operand to bigint"
-                                } else {
-                                    "cannot coerce left operand to bigint"
-                                }
-                                .into(),
-                            );
-                            dispatch_halt!(self.raise_js(error), pc, self, return_depth, code);
-                        }
-                        _ => self.push(Slot::number(fx_pow(to_number(&a), to_number(&b)))),
-                    }
                     pc += size as usize;
                 }
 
@@ -3024,16 +2719,7 @@ impl Interp {
                 // custom method when present, otherwise require a callable and
                 // apply `OrdinaryHasInstance`. Stack: [.., left, right].
                 XS_CODE_INSTANCEOF => {
-                    let right = self.pop();
-                    let left = self.pop();
-                    let result = dispatch_result!(
-                        self.instanceof_operator(code, left, right),
-                        pc,
-                        self,
-                        return_depth,
-                        code
-                    );
-                    self.push(Slot::boolean(result));
+                    dispatch_result!(self.dispatch_instanceof(code), pc, self, return_depth, code);
                     pc += size as usize;
                 }
 
@@ -3050,129 +2736,7 @@ impl Interp {
                 // behavior. A non-object RHS throws a catchable TypeError
                 // before coercing the left operand.
                 XS_CODE_IN => {
-                    let obj = self.pop();
-                    let key = self.pop();
-                    let objref = match obj.value {
-                        // A primitive symbol is NOT an object, however much its
-                        // `Payload::Reference(desc)` looks like one: the target
-                        // would be the description slot, so `k in sym` answered
-                        // over an object handed to `Symbol()`. It joins the
-                        // other primitives below.
-                        Payload::Reference(r) if obj.kind != Kind::Symbol => r,
-                        // `k in 5` / `k in null` / `k in Symbol()`:
-                        // `mxRunDebug(XS_TYPE_ERROR, "in: not an object")`.
-                        _ => dispatch_halt!(
-                            self.catchable_type_error_msg("in: not an object".into()),
-                            pc,
-                            self,
-                            return_depth,
-                            code
-                        ),
-                    };
-                    // The spec checks that the RHS is an object before
-                    // coercing the LHS. In particular, an object key's
-                    // `@@toPrimitive` must not run for `key in null`.
-                    let key = dispatch_result!(
-                        self.to_property_key(code, key),
-                        pc,
-                        self,
-                        return_depth,
-                        code
-                    );
-                    // `k in p`: the proxy `has` trap (ECMA-262 10.5.7). No index /
-                    // boot-default gate applies — a proxy honors any string key.
-                    if self.proxies.contains_key(&objref) {
-                        // An uninterned canonical index reaches the trap with a
-                        // key spelled from the index, minting nothing.
-                        let index = match (key.kind, key.value) {
-                            (Kind::String, Payload::String(off)) => {
-                                let name = self.str_text(off);
-                                string_to_index(&name)
-                                    .filter(|_| !self.symbol_ids.contains_key(&name))
-                            }
-                            _ => None,
-                        };
-                        let present = dispatch_result!(
-                            match index {
-                                Some(index) => self.uninterned_index_proxy_has(code, objref, index),
-                                None => match self.property_key_id(key, false) {
-                                    Some(id) => self.proxy_has(code, objref, id),
-                                    None =>
-                                        return Step::Host(Halt::EngineInvariant("in:proxy-key")),
-                                },
-                            },
-                            pc,
-                            self,
-                            return_depth,
-                            code
-                        );
-                        self.meter.tick_raw(IN_METERING);
-                        self.push(Slot::boolean(present));
-                        pc += size as usize;
-                        continue;
-                    }
-                    // `k in sample`: the integer-indexed exotic `[[HasProperty]]`
-                    // (10.4.5.3). A canonical numeric index is present iff it is
-                    // a valid integer index; any other key walks the chain.
-                    if let Some(&ta) = self.typed_arrays.get(&objref) {
-                        if let Some(n) = self.ta_numeric_index(key) {
-                            self.meter.tick_raw(IN_METERING);
-                            self.push(Slot::boolean(self.ta_valid_index(ta, n).is_some()));
-                            pc += size as usize;
-                            continue;
-                        }
-                    }
-                    // Computed non-index keys also need the create-only intrinsic
-                    // linking seam used by Reflect.has (including SES permits).
-                    // A canonical index string is what XS's `fxAt` turns into
-                    // `(XS_NO_ID, index)`; uninterned, it stays an index here
-                    // and mints nothing, so `for (i…) i in o` cannot walk the
-                    // id space into its saturation guard.
-                    let read_key =
-                        if let (Kind::String, Payload::String(off)) = (key.kind, key.value) {
-                            let name = self.str_text(off);
-                            match string_to_index(&name)
-                                .filter(|_| !self.symbol_ids.contains_key(&name))
-                            {
-                                Some(index) => ReadKey::Index(index),
-                                None => ReadKey::Id(dispatch_result!(
-                                    self.to_property_id(code, key),
-                                    pc,
-                                    self,
-                                    return_depth,
-                                    code
-                                )),
-                            }
-                        } else {
-                            ReadKey::Id(dispatch_result!(
-                                self.to_property_id(code, key),
-                                pc,
-                                self,
-                                return_depth,
-                                code
-                            ))
-                        };
-                    // Answer with the metered chain walk: `fxRunIn` calls
-                    // `fxHasAt` once and does not re-enter per level, so the
-                    // per-level cost is the same `fxOrdinaryHasProperty` frame
-                    // the `with` scopable walk pays — half a code unit, not the
-                    // whole one this site charged per prototype *hop* before.
-                    // That ran long by `1<<15` per level on a deep chain and
-                    // short by the same on a null-prototype receiver; the
-                    // shallow objects the tests used descend no level, so
-                    // nothing caught either. `IN_METERING` is unchanged: it was
-                    // fixed by the own-hit case, which runs no frame.
-                    let (present, frames) = dispatch_result!(
-                        self.mop_has_read_with_recursions(code, objref, read_key),
-                        pc,
-                        self,
-                        return_depth,
-                        code
-                    );
-                    self.meter.tick_raw(IN_METERING);
-                    self.meter
-                        .tick_raw(frames * ORDINARY_HAS_PROPERTY_FRAME_METERING);
-                    self.push(Slot::boolean(present));
+                    dispatch_result!(self.dispatch_in(code), pc, self, return_depth, code);
                     pc += size as usize;
                 }
 
