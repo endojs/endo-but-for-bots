@@ -2504,7 +2504,72 @@ impl Interp {
     /// a guest function's slot, is refused by `restore_function_state`
     /// running after this verb). The cross-checks the decoder already
     /// proved are re-validated belt-and-braces, as everywhere.
-    pub(super) fn restore_promise_cluster(&mut self, snap: PromiseClusterSnapshot) -> bool {
+    pub(super) fn restore_promise_cluster(
+        &mut self,
+        snap: PromiseClusterSnapshot,
+    ) -> Result<(), RestoreError> {
+        const ROW: &str = "promise_cluster";
+        let refuse = |reason| RestoreError { row: ROW, reason };
+        self.validate_restore_owners(snap.promises.iter().map(|row| row.owner), ROW)?;
+        self.validate_restore_owners(snap.functions.iter().map(|row| row.function), ROW)?;
+        self.validate_restore_owners(snap.async_instances.iter().map(|row| row.owner), ROW)?;
+        let mut complete = std::collections::HashSet::new();
+        for row in &snap.functions {
+            self.validate_restore_owner(row.promise, ROW)?;
+            if row.guard >= u32::MAX - 2 {
+                validate_restore_chain(
+                    &self.slots,
+                    crate::value::SlotIndex(row.promise),
+                    &mut complete,
+                )?;
+            }
+        }
+        self.validate_restore_values(
+            snap.functions
+                .iter()
+                .filter(|row| row.name_chunk != u32::MAX)
+                .map(|row| {
+                    Slot::of(
+                        Kind::String,
+                        Payload::String(crate::value::ChunkOffset(row.name_chunk)),
+                    )
+                }),
+            ROW,
+        )?;
+        for row in &snap.promises {
+            self.validate_restore_value_shape(row.result, ROW)?;
+            if (row.state == 0
+                && (row.result.kind != Kind::Undefined || row.result.value != Payload::None))
+                || (!row.reactions.is_empty() && !row.ever_handled)
+            {
+                return Err(refuse("promise settlement and reaction state disagree"));
+            }
+            for reaction in &row.reactions {
+                for value in [
+                    reaction.on_fulfilled,
+                    reaction.on_rejected,
+                    reaction.resolve,
+                    reaction.reject,
+                ] {
+                    self.validate_restore_value_shape(value, ROW)?;
+                }
+            }
+        }
+        for row in &snap.async_instances {
+            self.validate_restore_value_shape(row.resolve, ROW)?;
+            self.validate_restore_value_shape(row.reject, ROW)?;
+            self.validate_restore_frame(&row.frame)?;
+        }
+        for row in &snap.combinators {
+            self.validate_restore_value_shape(row.resolve, ROW)?;
+            self.validate_restore_value_shape(row.reject, ROW)?;
+        }
+        // Prepare the whole cluster before publishing any table. Later checks
+        // deliberately depend on retained functions installed by a separate row.
+        let mut promises = Vec::new();
+        let mut functions = Vec::new();
+        let mut promise_functions = Vec::new();
+        let mut async_instances = Vec::new();
         let owners: std::collections::BTreeSet<u32> =
             snap.promises.iter().map(|row| row.owner).collect();
         // Per-combinator results-Array length, for the element-index
@@ -2514,7 +2579,7 @@ impl Interp {
         let mut results_lengths = Vec::with_capacity(snap.combinators.len());
         for c in &snap.combinators {
             if c.kind > 3 || c.resolve.kind != Kind::Reference || c.reject.kind != Kind::Reference {
-                return false;
+                return Err(refuse("malformed promise cluster"));
             }
             match self.arrays.get(&crate::value::SlotIndex(c.results)) {
                 // `remaining` starts at the element count (the results
@@ -2526,7 +2591,7 @@ impl Interp {
                 {
                     results_lengths.push(data.length)
                 }
-                _ => return false,
+                _ => return Err(refuse("malformed promise cluster")),
             }
         }
         let mut elem_seen = std::collections::BTreeSet::<(u32, u32)>::new();
@@ -2559,13 +2624,13 @@ impl Interp {
                 0 => PromiseState::Pending,
                 1 => PromiseState::Fulfilled,
                 2 => PromiseState::Rejected,
-                _ => return false,
+                _ => return Err(refuse("malformed promise cluster")),
             };
             // Settlement drains reactions into the job queue, and the
             // quiescence gate requires that queue empty — a settled row
             // that still holds reactions cannot be honest.
             if state != PromiseState::Pending && !row.reactions.is_empty() {
-                return false;
+                return Err(refuse("malformed promise cluster"));
             }
             let reactions: Option<Vec<PromiseReaction>> = row
                 .reactions
@@ -2642,9 +2707,9 @@ impl Interp {
                 })
                 .collect();
             let Some(reactions) = reactions else {
-                return false;
+                return Err(refuse("malformed promise cluster"));
             };
-            self.promises.insert(
+            promises.push((
                 crate::value::SlotIndex(row.owner),
                 PromiseData {
                     state,
@@ -2652,7 +2717,7 @@ impl Interp {
                     reactions,
                     ever_handled: row.ever_handled,
                 },
-            );
+            ));
         }
         if snap
             .combinators
@@ -2660,7 +2725,7 @@ impl Interp {
             .zip(comb_pending)
             .any(|(c, pending)| c.kind != 2 && c.remaining < pending)
         {
-            return false;
+            return Err(refuse("malformed promise cluster"));
         }
         // Guard coherence, the decoder's rule re-proved: one resolving
         // pair (or its surviving half) per guard, one promise per pair.
@@ -2669,7 +2734,7 @@ impl Interp {
         for row in &snap.functions {
             let function = crate::value::SlotIndex(row.function);
             if self.functions.contains_key(&function) {
-                return false;
+                return Err(refuse("malformed promise cluster"));
             }
             if row.guard == u32::MAX - 1 || row.guard == u32::MAX - 2 {
                 let home = crate::value::SlotIndex(row.promise);
@@ -2687,7 +2752,7 @@ impl Interp {
                             .is_none()
                     })
                 {
-                    return false;
+                    return Err(refuse("malformed promise cluster"));
                 }
                 let (method, guard, arity) = if row.guard == u32::MAX - 1 {
                     (
@@ -2702,7 +2767,7 @@ impl Interp {
                         0,
                     )
                 };
-                self.functions.insert(
+                functions.push((
                     function,
                     FuncInfo {
                         method: Some(method),
@@ -2710,15 +2775,15 @@ impl Interp {
                         arity,
                         ..FuncInfo::default()
                     },
-                );
-                self.promise_functions.insert(
+                ));
+                promise_functions.push((
                     function,
                     PromiseFnData {
                         promise: home,
                         reject: row.reject,
                         guard,
                     },
-                );
+                ));
                 continue;
             }
             if row.guard == u32::MAX {
@@ -2735,16 +2800,16 @@ impl Interp {
                         .and_then(|id| self.find_property(home, id))
                         .is_none()
                 {
-                    return false;
+                    return Err(refuse("malformed promise cluster"));
                 }
                 // A fresh executor has two internal never-called sentinels;
                 // a called executor has neither. A mixed pair is not reachable.
                 let resolve = self.boot_chain_get(home, resolve_id.expect("checked field"));
                 let reject = self.boot_chain_get(home, reject_id.expect("checked field"));
                 if (resolve.kind == Kind::Uninitialized) != (reject.kind == Kind::Uninitialized) {
-                    return false;
+                    return Err(refuse("malformed promise cluster"));
                 }
-                self.functions.insert(
+                functions.push((
                     function,
                     FuncInfo {
                         method: Some(NativeMethod::PromiseCapabilityExecutor),
@@ -2752,34 +2817,34 @@ impl Interp {
                         arity: 2,
                         ..FuncInfo::default()
                     },
-                );
-                self.promise_functions.insert(
+                ));
+                promise_functions.push((
                     function,
                     PromiseFnData {
                         promise: crate::value::SlotIndex(row.promise),
                         reject: false,
                         guard: PROMISE_CAPABILITY_EXECUTOR_GUARD,
                     },
-                );
+                ));
                 continue;
             }
             if !owners.contains(&row.promise) {
-                return false;
+                return Err(refuse("malformed promise cluster"));
             }
             let Some(entry) = guard_rows.get_mut(row.guard as usize) else {
-                return false;
+                return Err(refuse("malformed promise cluster"));
             };
             let polarity = 1u8 << (row.reject as u8);
             match entry {
                 None => *entry = Some((row.promise, polarity)),
                 Some((promise, mask)) => {
                     if *promise != row.promise || *mask & polarity != 0 {
-                        return false;
+                        return Err(refuse("malformed promise cluster"));
                     }
                     *mask |= polarity;
                 }
             }
-            self.functions.insert(
+            functions.push((
                 function,
                 FuncInfo {
                     method: Some(if row.reject {
@@ -2791,15 +2856,15 @@ impl Interp {
                     arity: 1,
                     ..FuncInfo::default()
                 },
-            );
-            self.promise_functions.insert(
+            ));
+            promise_functions.push((
                 function,
                 PromiseFnData {
                     promise: crate::value::SlotIndex(row.promise),
                     reject: row.reject,
                     guard: row.guard as usize,
                 },
-            );
+            ));
         }
         for row in snap.async_instances {
             if self
@@ -2807,12 +2872,12 @@ impl Interp {
                 .contains_key(&crate::value::SlotIndex(row.owner))
                 || !owners.contains(&row.result_promise)
             {
-                return false;
+                return Err(refuse("malformed promise cluster"));
             }
             let Ok(frame) = self.restore_saved_frame(row.frame) else {
-                return false;
+                return Err(refuse("malformed promise cluster"));
             };
-            self.async_instances.insert(
+            async_instances.push((
                 crate::value::SlotIndex(row.owner),
                 AsyncData {
                     frame: Some(frame),
@@ -2821,8 +2886,16 @@ impl Interp {
                     reject_fn: row.reject,
                     done: false,
                 },
-            );
+            ));
         }
+        self.promises.extend(promises);
+        for (owner, data) in functions {
+            self.functions.insert(owner, data);
+        }
+        for (owner, data) in promise_functions {
+            self.promise_functions.insert(owner, data);
+        }
+        self.async_instances.extend(async_instances);
         *self.promise_guards = snap.guards;
         *self.combinators = snap
             .combinators
@@ -2840,7 +2913,7 @@ impl Interp {
                 results: crate::value::SlotIndex(c.results),
             })
             .collect();
-        true
+        Ok(())
     }
 
     /// Validate capability callbacks after all persisted function populations
