@@ -334,12 +334,9 @@ fn a_self_containing_completion_value_is_refused_at_the_render_boundary() {
 
 #[test]
 fn a_thrown_value_the_renderer_refuses_is_reported_with_the_stub_text() {
-    // The throw-site render is a diagnostic. `render_uncaught` tries the
-    // guest `toString` (bounded as a built-in re-entry), then the static
-    // renderer (bounded by depth), and when both refuse a self-containing
-    // array it reports the throw with the reference stub. It must never halt
-    // the crank: the same render runs before a native driver catches the
-    // `Halt::Throw`, as the driver-caught forms below pin.
+    // The host diagnostic bounds structural recursion. A self-containing
+    // array falls back to the reference stub without executing guest code or
+    // replacing the original throw. Native drivers still catch the raw value.
     let out = on_contract_stack("var a = []; a[0] = a; throw a".into());
     assert!(
         matches!(&out.halt, Halt::Throw { rendered, .. } if rendered == "[object Object]"),

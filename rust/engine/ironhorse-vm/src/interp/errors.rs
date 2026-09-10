@@ -7,11 +7,8 @@ impl Interp {
     /// (the native `Object` object cost plus [`ERROR_CONSTRUCT_EXTRA`]) and,
     /// when a message argument is present, ToString's it into an own
     /// `message` property ([`ERROR_MESSAGE_METERING`]). Records the
-    /// `(name, message)` in [`Self::error_data`] so the value stringifies as
-    /// `name` / `name: message`, and sets own `name`/`message` properties
-    /// (under the program's relinked ids) so guest reads resolve — both
-    /// unmetered, mirroring XS where `name` is the inherited prototype value
-    /// and the property slot cost is folded into the measured constants.
+    /// construction metadata in [`Self::error_data`] for snapshot compatibility;
+    /// live properties, not that original metadata, determine display text.
     /// The frame-name chain an error captures at construction (XS's
     /// `fxCaptureErrorStack` recording): the current activation's function
     /// name, each suspended caller's, then the empty program frame. A
@@ -212,8 +209,7 @@ impl Interp {
     /// (the `mxRunDebug`/`mxRunDebugID` diagnostics the pinned oracle emits,
     /// e.g. `"get f: undefined variable"`). Built exactly like
     /// `build_error(name, 0, 0)` — same object geometry, prototype chain, and
-    /// meter charge — then augmented with the message on both the render side
-    /// (`error_data`, so `String(err)` matches the oracle's `String(exception)`)
+    /// meter charge — then augmented with the message in construction metadata
     /// and as a real own non-enumerable `message` property (so `err.message`
     /// is observable exactly as XS's thrown error's is). The message is set
     /// **unmetered** — no `ERROR_MESSAGE_METERING` charge — so a program that

@@ -1197,8 +1197,9 @@ struct IterState {
     str_bytes: std::rc::Rc<Vec<u8>>,
 }
 
-/// An Error instance's stringification data (XS's `Error.prototype.toString`
-/// inputs): the constructor's `name` and the optional own `message`.
+/// Construction metadata retained in the existing snapshot format, plus the
+/// captured frames used by Error.stack. Live properties determine display text;
+/// these original name/message fields are not a second display authority.
 #[derive(Clone, Debug)]
 struct ErrorInfo {
     name: &'static str,
@@ -2293,7 +2294,7 @@ impl Interp {
             }
             self.result = script_result;
         }
-        let halt = self.finish_step(code, step);
+        let halt = self.finish_step(step);
         // The ENGINE's verdict on this crank: the dispatch reached `END`
         // and the job queue drained, so the machine stands at a crank
         // boundary. `completed`, the boundary-register clear and the
@@ -2365,7 +2366,7 @@ impl Interp {
             match self.render(&completion) {
                 Ok(text) => text,
                 Err(render_halt) => {
-                    host_render_halt = Some(self.finish_step(code, render_halt));
+                    host_render_halt = Some(self.finish_step(render_halt));
                     String::new()
                 }
             }
@@ -2395,12 +2396,12 @@ impl Interp {
 
     /// Translate an activation result at the host boundary. Suspension and
     /// catch transfers must have been consumed by their owning activation.
-    fn finish_step(&mut self, code: &[u8], step: Step) -> Halt {
+    fn finish_step(&self, step: Step) -> Halt {
         match step {
             Step::Returned => Halt::Return,
             Step::Threw { value, .. } => Halt::Throw {
                 value,
-                rendered: self.render_uncaught(code, value),
+                rendered: self.render_uncaught(value),
             },
             Step::Host(halt) => halt,
             Step::Yielded(_) | Step::Awaited(_) | Step::AsyncYielded(_) | Step::Unwound(_) => {

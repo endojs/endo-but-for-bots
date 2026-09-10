@@ -1690,12 +1690,9 @@ pub struct Interp {
     #[gc_slots(none, none)]
     #[gc_weak(none)]
     #[snapshot_table(ErrorData, 6, 6, Serialized, "error_data")]
-    /// Per-instance Error metadata (name + message), keyed by the error
-    /// instance's slot index. An Error object's completion/abort value
-    /// stringifies as `name` (no/empty message) or `name: message` — XS's
-    /// `Error.prototype.toString`. Kept here so [`Self::render`] produces the
-    /// exact abort value without a symbol-id lookup, graduating abort-value
-    /// parity from primitive throws to real Error objects.
+    /// Error identity, construction metadata, and captured stack frames.
+    /// Name/message remain serialized for format compatibility. Host rendering
+    /// and guest Error.prototype.toString both read live properties instead.
     error_data: Tracked<std::collections::HashMap<crate::value::SlotIndex, ErrorInfo>>,
     #[boot_new(ClassMap::new(ExoticKind::WRAPPER_DATA, classes.clone()))]
     #[boot_template(state.wrapper_data.copy_to(classes.clone()))]

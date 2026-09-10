@@ -168,24 +168,21 @@ fn an_uncaught_engine_error_still_escapes_to_the_host_with_its_rendering() {
 }
 
 #[test]
-fn an_uncaught_throw_renders_with_its_guest_tostring_once_at_the_host_boundary() {
-    // The oracle's abort value is `String(exception)`: a thrown object's own
-    // `toString`, run once, after the crank. That includes a throw that
-    // crossed an `eval` unit's re-raise — which used to arrive with the
-    // inner unit's static `[object Object]` text.
+fn an_uncaught_throw_does_not_invoke_guest_tostring() {
+    // Direct and nested throws use the same read-only host diagnostic.
     for (source, rendered) in [
-        ("throw { toString(){ return 'custom' } }", "custom"),
+        ("throw { toString(){ return 'custom' } }", "[object Object]"),
         (
             "eval(\"throw { toString: function(){ return 'custom'; } }\")",
-            "custom",
+            "[object Object]",
         ),
         (
             "function f(){ throw { toString(){ return 'deep' } } } [1].forEach(f)",
-            "deep",
+            "[object Object]",
         ),
         (
             "var n=0; throw { toString(){ n++; return 'n=' + n } }",
-            "n=1",
+            "[object Object]",
         ),
     ] {
         let out = run(source);
