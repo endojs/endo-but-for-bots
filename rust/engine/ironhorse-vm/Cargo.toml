@@ -25,6 +25,8 @@ icu_normalizer = "=2.2.0"
 icu_segmenter = "=2.2.0"
 
 [dev-dependencies]
+# W6 C4 compares the candidate provider before runtime selection is enabled.
+libm = { version = "=0.2.16", default-features = false, features = ["force-soft-floats"] }
 # Source-level regression locks (`tests/`) need guest JS turned into
 # bytecode + a symbols atom, and the portable fuzz regressions compile
 # their generated source the same way. `ironhorse-compile` is the

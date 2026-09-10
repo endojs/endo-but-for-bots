@@ -822,6 +822,7 @@ jobs:
           cargo test --locked "${flags[@]}" -p ironhorse-meter -p ironhorse-unicode -p ironhorse-vm -p ironhorse-snapshot -p ironhorse-compile -p ironhorse-regexp --features ironhorse-vm/store-integrity
 
       - name: Export platform Math vector (oracle-free)
+        if: ${{ !cancelled() }}
         working-directory: rust/engine
         env:
           RUST_MIN_STACK: '33554432'
@@ -832,11 +833,25 @@ jobs:
           if [ "$PROFILE" = release ]; then flags+=(--release); fi
           cargo test --locked "${flags[@]}" -p ironhorse-vm --test math_determinism platform_math_vector
 
+      - name: Export candidate Math provider comparison (oracle-free)
+        if: ${{ !cancelled() }}
+        working-directory: rust/engine
+        env:
+          PROFILE: ${{ matrix.profile }}
+          IRONHORSE_PROVIDER_VECTOR: ${{ github.workspace }}/math-provider-vector.tsv
+        run: |
+          flags=()
+          if [ "$PROFILE" = release ]; then flags+=(--release); fi
+          cargo test --locked "${flags[@]}" -p ironhorse-vm --test math_provider_comparison
+
       - name: Retain platform Math bits
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: math-${{ matrix.check }}
-          path: math-vector.tsv
+          path: |
+            math-vector.tsv
+            math-provider-vector.tsv
           if-no-files-found: error
 
       - name: Test SQLite heap-store backend (root workspace)
