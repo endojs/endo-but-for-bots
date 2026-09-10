@@ -406,43 +406,21 @@ impl RestoreSession {
         zoneds: Vec<(u32, i128, String, i64)>,
     ) -> Result<(), RestoreError> {
         self.admit("temporal_records")?;
-        let result = if self
+        let result = self
             .interp
-            .restore_temporal_records(instants, durations, plains, zoneds)
-        {
-            Ok(())
-        } else {
-            Err(RestoreError {
-                row: "temporal_records",
-                reason: "malformed row set",
-            })
-        };
+            .restore_temporal_records(instants, durations, plains, zoneds);
         self.failed = result.err();
         result
     }
     pub fn restore_intl(&mut self, t: IntlTables) -> Result<(), RestoreError> {
         self.admit("intl")?;
-        let result = if self.interp.restore_intl(t) {
-            Ok(())
-        } else {
-            Err(RestoreError {
-                row: "intl",
-                reason: "malformed row set",
-            })
-        };
+        let result = self.interp.restore_intl(t);
         self.failed = result.err();
         result
     }
     pub fn restore_iterators(&mut self, rows: Vec<IteratorRow>) -> Result<(), RestoreError> {
         self.admit("iterators")?;
-        let result = if self.interp.restore_iterators(rows) {
-            Ok(())
-        } else {
-            Err(RestoreError {
-                row: "iterators",
-                reason: "malformed row set",
-            })
-        };
+        let result = self.interp.restore_iterators(rows);
         self.failed = result.err();
         result
     }
@@ -640,6 +618,139 @@ mod tests {
             assert_eq!(error.reason, expected);
             assert!(session.finish().is_err());
         }
+    }
+
+    #[test]
+    fn every_intl_data_table_requires_ordered_live_owners() {
+        for field in 0..9 {
+            for duplicate in [false, true] {
+                let (code, names) = ironhorse_compile::compile_atoms(
+                    r#"
+                    var kept = [new Intl.Locale('en'), new Intl.Collator('en'),
+                        new Intl.ListFormat('en'), new Intl.PluralRules('en'),
+                        new Intl.NumberFormat('en'), new Intl.DateTimeFormat('en')];
+                    var segments = new Intl.Segmenter('en').segment('a b');
+                    kept.push(segments, segments[Symbol.iterator]());
+                "#,
+                )
+                .unwrap();
+                let mut interp = Interp::new();
+                interp.link_intrinsics(&crate::parse_symbols(&names));
+                assert!(interp.run(&code).completed);
+                let before = interp.intl_snapshot();
+                let mut rows = before.clone();
+                macro_rules! corrupt {
+                    ($field:ident) => {
+                        if duplicate {
+                            rows.$field.insert(1, rows.$field[0].clone());
+                        } else {
+                            rows.$field[0].0 = u32::MAX;
+                        }
+                    };
+                }
+                match field {
+                    0 => corrupt!(locales),
+                    1 => corrupt!(collators),
+                    2 => corrupt!(list_formats),
+                    3 => corrupt!(plural_rules),
+                    4 => corrupt!(number_formats),
+                    5 => corrupt!(segmenters),
+                    6 => corrupt!(segments),
+                    7 => corrupt!(segment_iterators),
+                    _ => corrupt!(date_time_formats),
+                }
+                assert_eq!(interp.restore_intl(rows).unwrap_err().row, "Intl");
+                assert_eq!(interp.intl_snapshot(), before);
+                if field == 4 && !duplicate {
+                    let mut cached = before.clone();
+                    cached.number_formats[0].1.bound_format =
+                        Some(crate::value::SlotIndex(cached.number_formats[0].0));
+                    assert_eq!(
+                        interp.restore_intl(cached).unwrap_err().reason,
+                        "bound-format links must use the dedicated row set"
+                    );
+                    assert_eq!(interp.intl_snapshot(), before);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn temporal_owners_and_kind_tags_are_checked_before_insertion() {
+        for case in 0..5 {
+            let mut interp = Interp::new();
+            let mut instants = vec![(interp.new_object().0, 0)];
+            let mut durations = vec![(interp.new_object().0, [0; 10])];
+            let mut plains = vec![(interp.new_object().0, 0, 1970, [1, 1, 0, 0, 0, 0, 0, 0])];
+            let mut zoneds = vec![(interp.new_object().0, 0, "UTC".into(), 0)];
+            match case {
+                0 => instants[0].0 = u32::MAX,
+                1 => durations[0].0 = u32::MAX,
+                2 => plains[0].0 = u32::MAX,
+                3 => zoneds[0].0 = u32::MAX,
+                _ => plains[0].1 = 5,
+            }
+            let before = interp.temporal_snapshot();
+            assert_eq!(
+                interp
+                    .restore_temporal_records(instants, durations, plains, zoneds)
+                    .unwrap_err()
+                    .row,
+                "TemporalRecords"
+            );
+            assert_eq!(interp.temporal_snapshot(), before);
+        }
+    }
+
+    #[test]
+    fn iterator_owners_and_optional_object_references_are_validated() {
+        for case in 0..4 {
+            let mut interp = Interp::new();
+            let owner = interp.new_object().0;
+            let result = interp.new_object().0;
+            let mut rows = vec![IteratorRow {
+                owner,
+                result,
+                iterable: u32::MAX,
+                kind: 4,
+                index: 0,
+                done: false,
+                enum_keys: vec![],
+                str_bytes: vec![0, b'a'],
+            }];
+            match case {
+                0 => rows[0].owner = u32::MAX,
+                1 => rows.push(rows[0].clone()),
+                2 => rows[0].iterable = interp.slots.capacity(),
+                _ => rows[0].result = interp.slots.alloc(Slot::integer(0)).0,
+            }
+            assert_eq!(interp.restore_iterators(rows).unwrap_err().row, "Iterators");
+            assert!(interp.iterators_snapshot().is_empty());
+        }
+    }
+
+    #[test]
+    fn iterator_from_restore_accepts_a_cached_next_value_holder() {
+        let mut interp = Interp::new();
+        let function = *interp.functions.keys().next().unwrap();
+        let holder = interp
+            .slots
+            .alloc(Slot::of(Kind::Reference, Payload::Reference(function)));
+        let owner = interp.new_object().0;
+        let iterable = interp.new_object().0;
+        interp
+            .restore_iterators(vec![IteratorRow {
+                owner,
+                iterable,
+                result: holder.0,
+                kind: 8,
+                index: 0,
+                done: false,
+                enum_keys: vec![],
+                str_bytes: vec![],
+            }])
+            .unwrap();
+        assert_eq!(interp.iterators_snapshot()[0].result, holder.0);
     }
 
     #[test]

@@ -2802,7 +2802,7 @@ impl Interp {
     /// Reinstate the four Temporal record tables. A plain record's
     /// `kind` outside the engine's discriminants (0..=4) can only be
     /// crafted bytes — the consuming natives match on it — so the
-    /// `false` return fails the caller's decode closed.
+    /// Every row is checked before any record table changes.
     #[allow(clippy::type_complexity)]
     pub(super) fn restore_temporal_records(
         &mut self,
@@ -2810,7 +2810,19 @@ impl Interp {
         durations: Vec<(u32, [i64; 10])>,
         plains: Vec<(u32, u8, i64, [u32; 8])>,
         zoneds: Vec<(u32, i128, String, i64)>,
-    ) -> bool {
+    ) -> Result<(), RestoreError> {
+        const ROW: &str = "TemporalRecords";
+        self.validate_restore_owners(instants.iter().map(|row| row.0), ROW)?;
+        self.validate_restore_owners(durations.iter().map(|row| row.0), ROW)?;
+        self.validate_restore_owners(plains.iter().map(|row| row.0), ROW)?;
+        self.validate_restore_owners(zoneds.iter().map(|row| row.0), ROW)?;
+        if plains.iter().any(|row| row.1 > 4) {
+            return Err(RestoreError {
+                row: ROW,
+                reason: "unknown plain-record kind",
+            });
+        }
+
         for (owner, epoch_nanoseconds) in instants {
             self.temporal_instants.insert(
                 crate::value::SlotIndex(owner),
@@ -2835,9 +2847,6 @@ impl Interp {
             );
         }
         for (owner, kind, year, f) in plains {
-            if kind > 4 {
-                return false;
-            }
             self.temporal_plains.insert(
                 crate::value::SlotIndex(owner),
                 TemporalPlainRecord {
@@ -2864,7 +2873,7 @@ impl Interp {
                 },
             );
         }
-        true
+        Ok(())
     }
 
     /// Quiescent snapshot of the nine Intl DATA record tables (ledger
@@ -2901,20 +2910,42 @@ impl Interp {
         }
     }
 
-    /// Reinstate the nine Intl record tables. Returns `false` —
-    /// failing the caller's decode closed — for structure only crafted
+    /// Reinstate the nine Intl record tables. Refuse structure only crafted
     /// bytes can hold: a segments record whose boundaries lie outside
     /// its input (or out of order), or a segment iterator naming an
     /// instance with no segments record or a cursor past its list.
     /// Unrecognized option STRINGS are not refused: every consuming
     /// match has a fallback arm, so the worst a forged string yields
     /// is a wrong rendering, never unsafety (`forbid(unsafe_code)`).
-    pub(super) fn restore_intl(&mut self, t: IntlTables) -> bool {
+    pub(super) fn restore_intl(&mut self, t: IntlTables) -> Result<(), RestoreError> {
+        const ROW: &str = "Intl";
+        self.validate_restore_owners(t.locales.iter().map(|row| row.0), ROW)?;
+        self.validate_restore_owners(t.collators.iter().map(|row| row.0), ROW)?;
+        self.validate_restore_owners(t.list_formats.iter().map(|row| row.0), ROW)?;
+        self.validate_restore_owners(t.plural_rules.iter().map(|row| row.0), ROW)?;
+        self.validate_restore_owners(t.number_formats.iter().map(|row| row.0), ROW)?;
+        self.validate_restore_owners(t.segmenters.iter().map(|row| row.0), ROW)?;
+        self.validate_restore_owners(t.segments.iter().map(|row| row.0), ROW)?;
+        self.validate_restore_owners(t.segment_iterators.iter().map(|row| row.0), ROW)?;
+        self.validate_restore_owners(t.date_time_formats.iter().map(|row| row.0), ROW)?;
+        if t.number_formats
+            .iter()
+            .any(|(_, row)| row.bound_format.is_some())
+        {
+            return Err(RestoreError {
+                row: ROW,
+                reason: "bound-format links must use the dedicated row set",
+            });
+        }
+
         for (_, r) in &t.segments {
             let mut prev = 0usize;
             for &(start, end, _) in &r.segments {
                 if start < prev || end < start || end > r.units.len() {
-                    return false;
+                    return Err(RestoreError {
+                        row: ROW,
+                        reason: "invalid segment boundaries or cursor",
+                    });
                 }
                 prev = start;
             }
@@ -2926,10 +2957,18 @@ impl Interp {
             {
                 Ok(k) => {
                     if r.pos > t.segments[k].1.segments.len() {
-                        return false;
+                        return Err(RestoreError {
+                            row: ROW,
+                            reason: "invalid segment boundaries or cursor",
+                        });
                     }
                 }
-                Err(_) => return false,
+                Err(_) => {
+                    return Err(RestoreError {
+                        row: ROW,
+                        reason: "iterator has no segments row",
+                    })
+                }
             }
         }
         fn install<T>(
@@ -2953,7 +2992,7 @@ impl Interp {
         install(&mut self.segments, t.segments);
         install(&mut self.segment_iterators, t.segment_iterators);
         install(&mut self.date_time_formats, t.date_time_formats);
-        true
+        Ok(())
     }
 
     /// Quiescent snapshot of the built-in iterator cursors (ledger
@@ -2999,8 +3038,7 @@ impl Interp {
         out
     }
 
-    /// Reinstate the built-in iterator cursors. Returns `false` —
-    /// failing the caller's decode closed — for structure only crafted
+    /// Reinstate the built-in iterator cursors. Refuse structure only crafted
     /// bytes can hold: an unknown kind, a collection cursor naming an
     /// instance with no restored collection (its `next()` indexes the
     /// table unconditionally) or a cursor past the live-entry list, a
@@ -3008,33 +3046,76 @@ impl Interp {
     /// RegExp String Iterator with invalid mode bits or malformed UTF-16, or
     /// a for-in cursor past its key list or holding a key id outside the
     /// restored name table.
-    pub(super) fn restore_iterators(&mut self, rows: Vec<IteratorRow>) -> bool {
+    pub(super) fn restore_iterators(&mut self, rows: Vec<IteratorRow>) -> Result<(), RestoreError> {
+        const ROW: &str = "Iterators";
+        self.validate_restore_owners(rows.iter().map(|row| row.owner), ROW)?;
+        for row in &rows {
+            if row.iterable != u32::MAX {
+                self.validate_restore_owner(row.iterable, ROW)?;
+            }
+            if row.kind == 8 {
+                // Iterator.from caches the next value in an ordinary value
+                // holder; unlike the other kinds, this is no result object.
+                let holder = crate::value::SlotIndex(row.result);
+                if holder.is_null()
+                    || holder.0 >= self.slots.capacity()
+                    || self.slots.is_free_index(holder)
+                {
+                    return Err(RestoreError {
+                        row: ROW,
+                        reason: "cached next holder is not live",
+                    });
+                }
+                self.validate_restore_value_shape(self.slots.get(holder), ROW)?;
+            } else if row.result != u32::MAX {
+                self.validate_restore_owner(row.result, ROW)?;
+            }
+        }
+
         for r in &rows {
             if r.kind > 9 {
-                return false;
+                return Err(RestoreError {
+                    row: ROW,
+                    reason: "malformed iterator state",
+                });
             }
             match r.kind {
                 5..=7 => {
                     let Some(c) = self.collections.get(&crate::value::SlotIndex(r.iterable)) else {
-                        return false;
+                        return Err(RestoreError {
+                            row: ROW,
+                            reason: "malformed iterator state",
+                        });
                     };
                     if r.index as usize > c.entries().len() {
-                        return false;
+                        return Err(RestoreError {
+                            row: ROW,
+                            reason: "malformed iterator state",
+                        });
                     }
                 }
                 4 => {
                     if r.index as usize > r.str_bytes.len() || r.index % 2 != 0 {
-                        return false;
+                        return Err(RestoreError {
+                            row: ROW,
+                            reason: "malformed iterator state",
+                        });
                     }
                 }
                 3 => {
                     if r.index as usize > r.enum_keys.len() {
-                        return false;
+                        return Err(RestoreError {
+                            row: ROW,
+                            reason: "malformed iterator state",
+                        });
                     }
                     if r.enum_keys.iter().any(|&(id, _)| {
                         id != crate::value::XS_NO_ID && id as usize > self.symbol_names.len()
                     }) {
-                        return false;
+                        return Err(RestoreError {
+                            row: ROW,
+                            reason: "malformed iterator state",
+                        });
                     }
                 }
                 8 => {
@@ -3045,7 +3126,10 @@ impl Interp {
                         || !r.enum_keys.is_empty()
                         || !r.str_bytes.is_empty()
                     {
-                        return false;
+                        return Err(RestoreError {
+                            row: ROW,
+                            reason: "malformed iterator state",
+                        });
                     }
                 }
                 9 => {
@@ -3055,7 +3139,10 @@ impl Interp {
                         || !r.enum_keys.is_empty()
                         || r.str_bytes.len() % 2 != 0
                     {
-                        return false;
+                        return Err(RestoreError {
+                            row: ROW,
+                            reason: "malformed iterator state",
+                        });
                     }
                 }
                 _ => {}
@@ -3080,7 +3167,7 @@ impl Interp {
                 },
             );
         }
-        true
+        Ok(())
     }
 
     /// The symbol-key property-id table (ledger `SYMB` row): the
