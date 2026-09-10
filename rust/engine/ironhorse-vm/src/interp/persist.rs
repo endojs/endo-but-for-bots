@@ -64,7 +64,8 @@ impl Interp {
                 reason: "owner is not a live slot",
             });
         }
-        if self.slots.get(index).kind != Kind::Instance {
+        let instance = self.slots.get(index);
+        if instance.kind != Kind::Instance || !matches!(instance.value, Payload::Reference(_)) {
             return Err(RestoreError {
                 row,
                 reason: "owner is not an instance",
@@ -1576,16 +1577,46 @@ impl Interp {
         ProxyStateSnapshot { proxies, revokers }
     }
 
-    pub(super) fn restore_proxy_state(&mut self, state: ProxyStateSnapshot) -> bool {
+    pub(super) fn restore_proxy_state(
+        &mut self,
+        state: ProxyStateSnapshot,
+    ) -> Result<(), RestoreError> {
+        const ROW: &str = "Proxies";
+        let refuse = |reason| RestoreError { row: ROW, reason };
+        self.validate_restore_owners(state.proxies.iter().map(|row| row.owner), ROW)?;
+        self.validate_restore_owners(state.revokers.iter().map(|row| row.owner), ROW)?;
         let proxy_owners: std::collections::BTreeSet<u32> =
             state.proxies.iter().map(|row| row.owner).collect();
-        if state
-            .revokers
-            .iter()
-            .any(|row| !proxy_owners.contains(&row.proxy))
-        {
-            return false;
+        for row in &state.proxies {
+            if row.revoked {
+                if row.target != u32::MAX || row.handler != u32::MAX {
+                    return Err(refuse("revoked proxy retains target or handler"));
+                }
+            } else {
+                self.validate_restore_owner(row.target, ROW)?;
+                self.validate_restore_owner(row.handler, ROW)?;
+            }
         }
+        let mut names = Vec::new();
+        for row in &state.revokers {
+            if !proxy_owners.contains(&row.proxy) {
+                return Err(refuse("revoker names no proxy row"));
+            }
+            if proxy_owners.contains(&row.owner)
+                || self
+                    .functions
+                    .contains_key(&crate::value::SlotIndex(row.owner))
+            {
+                return Err(refuse("revoker owner already has callable metadata"));
+            }
+            if row.name_chunk != u32::MAX {
+                names.push(Slot::of(
+                    Kind::String,
+                    Payload::String(crate::value::ChunkOffset(row.name_chunk)),
+                ));
+            }
+        }
+        self.validate_restore_values(names, ROW)?;
         for row in state.proxies {
             self.proxies.insert(
                 crate::value::SlotIndex(row.owner),
@@ -1598,9 +1629,6 @@ impl Interp {
         }
         for row in state.revokers {
             let owner = crate::value::SlotIndex(row.owner);
-            if self.functions.contains_key(&owner) {
-                return false;
-            }
             self.functions.insert(
                 owner,
                 FuncInfo {
@@ -1612,7 +1640,7 @@ impl Interp {
             self.proxy_revokers
                 .insert(owner, crate::value::SlotIndex(row.proxy));
         }
-        true
+        Ok(())
     }
 
     /// Snapshot guest accessor getter/setter mappings. Exact boot seeds are
