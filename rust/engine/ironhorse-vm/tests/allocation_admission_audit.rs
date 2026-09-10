@@ -2,6 +2,21 @@
 //! The anchors exclude bootstrap/restore and the standalone representation math.
 const SOURCE: &str = concat!(
     include_str!("../src/interp.rs"),
+    include_str!("../src/interp/admission.rs"),
+    include_str!("../src/interp/apply.rs"),
+    include_str!("../src/interp/code.rs"),
+    include_str!("../src/interp/coerce.rs"),
+    include_str!("../src/interp/enumerate.rs"),
+    include_str!("../src/interp/environment.rs"),
+    include_str!("../src/interp/errors.rs"),
+    include_str!("../src/interp/eval.rs"),
+    include_str!("../src/interp/frames.rs"),
+    include_str!("../src/interp/function.rs"),
+    include_str!("../src/interp/invoke.rs"),
+    include_str!("../src/interp/iterable.rs"),
+    include_str!("../src/interp/render.rs"),
+    include_str!("../src/interp/strings.rs"),
+    include_str!("../src/interp/unwind.rs"),
     "\n",
     include_str!("../src/interp/dispatch.rs"),
     "\n",
@@ -75,7 +90,7 @@ const SOURCE: &str = concat!(
 fn method_in(source: &str, name: &str) -> String {
     let source = code_only(source);
     let code = tokens(&source);
-    let body = token_body(&code, &format!("fn {name}("));
+    let body = token_body(&code, &format!("fn {name}"));
     let start = code[body.start].start;
     let end = code[body.end - 1].start + 1;
     source[start..end].to_owned()
@@ -105,10 +120,139 @@ fn method_anchors_survive_visibility_and_nested_bodies() {
     }
 }
 
-fn check_builtin_capacities(source: &str, moved_modules: &[&str]) {
-    let start = source.find("    fn call_native(").unwrap();
-    let end = source.find("    fn concat_add(").unwrap();
-    for builtins in std::iter::once(&source[start..end]).chain(moved_modules.iter().copied()) {
+fn check_builtin_capacities(moved_modules: &[&str]) {
+    // Exact method enrollment from the former call_native..concat_add span.
+    // Follow declarations across modules rather than relying on file order.
+    // Only immutable baseline text is cached; every mutation snippet below
+    // is checked afresh. This keeps the expanded source audit inexpensive.
+    static ORIGINAL_METHODS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    let original_methods = ORIGINAL_METHODS.get_or_init(|| {
+        let source_code = code_only(SOURCE);
+        let source_tokens = tokens(&source_code);
+        [
+            "call_native",
+            "slot_from_number",
+            "instance_put_raw",
+            "is_callable_value",
+            "is_constructor_value",
+            "slot_is_constructor",
+            "slot_is_callable",
+            "array_from_try",
+            "call_any",
+            "call_any_catching_throw",
+            "invoke_value_method",
+            "to_length_value",
+            "capture_error_frames",
+            "build_error",
+            "build_native_error",
+            "install_error_cause",
+            "internal_error",
+            "id_name",
+            "build_suppressed_error",
+            "build_aggregate_error",
+            "aggregate_error_elements",
+            "make_bound_function",
+            "box_primitive_to_instance",
+            "box_primitive_wrapper",
+            "box_object_primitive",
+            "build_wrapper",
+            "set_own_unmetered",
+            "set_own_unmetered_with_flag",
+            "set_own_accessor_unmetered",
+            "needs_abstract_call",
+            "call_dot_call_native",
+            "call_dot_apply_native",
+            "enter_call_dot_call",
+            "enter_call_dot_apply",
+            "enter_construct_bound",
+            "error_to_string",
+            "value_to_string",
+            "call_native_method",
+            "arraylike_to_vec",
+            "apply_arraylike_metering",
+            "iterable_to_list",
+            "iterable_to_list_inner",
+            "new_string_metered",
+            "new_string_units",
+            "to_string_units",
+            "to_string_slot",
+            "catchable_range_error_msg",
+            "catchable_range_error",
+            "to_property_key_slot",
+            "make_enumerator",
+            "enumerable_keys",
+            "enumerator_next",
+            "chain_resolves_native_data_method",
+            "strict_equal",
+            "same_value_zero",
+            "set_data_on_receiver",
+            "arg_to_byte_length",
+            "to_index_arg",
+            "arg_to_index",
+            "end_completion",
+            "leave_call",
+            "unwind_to_jump",
+            "raise_js",
+            "catchable_type_error_msg",
+            "catchable_type_error",
+            "catchable_syntax_error",
+            "catchable_syntax_error_with_message",
+            "meter_host_escape",
+            "unmeter_host_escape",
+            "closure_index",
+            "closure_cell",
+            "sloppy_argument_cells",
+            "repoint_closure",
+            "write_closure_cell",
+            "retrieve_closures",
+            "store_closure",
+            "append_environment_capture",
+            "append_module_closure",
+            "bind_program_this",
+            "run_constructor",
+            "bind_this_sloppy",
+            "invoke_value",
+            "construct_value",
+            "run_callback_construct",
+            "new_environment_instance",
+            "is_scopable_slot",
+            "is_environment_instance",
+            "environment_property",
+            "environment_get",
+            "environment_set",
+            "resolve_env_reference",
+            "has_lexical_env_binding",
+            "local_operand",
+            "local_index",
+            "get_local",
+            "set_local",
+            "resolve_get",
+            "resolve_set",
+            "truthy",
+            "binary_arith",
+            "binary_bit",
+            "relational",
+            "equality",
+            "call_primitive_method",
+            "to_primitive",
+            "to_primitive_default",
+            "to_primitive_with_hint",
+            "ordinary_to_primitive",
+            "to_number_value",
+            "to_numeric_integer_value",
+            "to_number_f64",
+            "op_add",
+        ]
+        .map(|name| {
+            let body = token_body(&source_tokens, &format!("fn {name}"));
+            let start = source_tokens[body.start].start;
+            let end = source_tokens[body.end - 1].start + 1;
+            &source_code[start..end]
+        })
+        .join("\n")
+    });
+    for builtins in std::iter::once(original_methods.as_str()).chain(moved_modules.iter().copied())
+    {
         for (line, text) in builtins.lines().enumerate() {
             if text.contains("Vec::with_capacity") {
                 assert_eq!(
@@ -139,37 +283,94 @@ fn bigint_builtin_coercions(source: &str) -> String {
         .join("\n")
 }
 
+// concat_add was outside the original audited interval. Keep its existing
+// reservation exemption narrow while covering every other string helper.
+fn strings_without_concat(source: &str) -> String {
+    let mut source = code_only(source);
+    let code = tokens(&source);
+    let body = token_body(&code, "fn concat_add");
+    let range = code[body.start].start..code[body.end - 1].start + 1;
+    source.replace_range(range, "{}");
+    source
+}
+
+#[test]
+fn execution_children_keep_allocation_admission() {
+    for original in [
+        include_str!("../src/interp/admission.rs"),
+        include_str!("../src/interp/apply.rs"),
+        include_str!("../src/interp/code.rs"),
+        include_str!("../src/interp/coerce.rs"),
+        include_str!("../src/interp/enumerate.rs"),
+        include_str!("../src/interp/environment.rs"),
+        include_str!("../src/interp/errors.rs"),
+        include_str!("../src/interp/eval.rs"),
+        include_str!("../src/interp/frames.rs"),
+        include_str!("../src/interp/function.rs"),
+        include_str!("../src/interp/invoke.rs"),
+        include_str!("../src/interp/iterable.rs"),
+        include_str!("../src/interp/render.rs"),
+        include_str!("../src/interp/unwind.rs"),
+        &strings_without_concat(include_str!("../src/interp/strings.rs")),
+    ] {
+        check_builtin_capacities(&[original]);
+        let anchor = "impl Interp {";
+        assert!(original.contains(anchor));
+        for allocation in [
+            "let raw = Vec::with_capacity(guest);",
+            "let raw = vec![0; guest];",
+        ] {
+            let injected = format!("{anchor} fn allocation_probe(guest: usize) {{ {allocation} }}");
+            let mutated = original.replacen(anchor, &injected, 1);
+            assert_ne!(original, mutated);
+            assert!(std::panic::catch_unwind(|| check_builtin_capacities(&[&mutated])).is_err());
+        }
+    }
+}
+
 #[test]
 fn native_builtins_do_not_reserve_raw_guest_capacities() {
-    check_builtin_capacities(
-        SOURCE,
-        &[
-            include_str!("../src/interp/natives/regexp.rs"),
-            include_str!("../src/interp/natives/resource.rs"),
-            include_str!("../src/interp/natives/reflect.rs"),
-            &bigint_builtin_coercions(include_str!("../src/interp/natives/bigint.rs")),
-            include_str!("../src/interp/natives/number.rs"),
-            include_str!("../src/interp/natives/string.rs"),
-            include_str!("../src/interp/natives/collection.rs"),
-            include_str!("../src/interp/natives/date.rs"),
-            include_str!("../src/interp/natives/temporal.rs"),
-            include_str!("../src/interp/natives/intl.rs"),
-            include_str!("../src/interp/natives/promise.rs"),
-            include_str!("../src/interp/natives/buffer.rs"),
-            include_str!("../src/interp/natives/array.rs"),
-            include_str!("../src/interp/natives/dispatch.rs"),
-            include_str!("../src/interp/natives/json.rs"),
-            include_str!("../src/interp/property.rs"),
-            include_str!("../src/interp/property/descriptors.rs"),
-            include_str!("../src/interp/property/indexed.rs"),
-            include_str!("../src/interp/property/integrity.rs"),
-            include_str!("../src/interp/property/keys.rs"),
-            include_str!("../src/interp/property/object.rs"),
-            include_str!("../src/interp/property/ordinary.rs"),
-            include_str!("../src/interp/property/proxy.rs"),
-            include_str!("../src/interp/property/read_index.rs"),
-        ],
-    );
+    check_builtin_capacities(&[
+        include_str!("../src/interp/natives/regexp.rs"),
+        include_str!("../src/interp/admission.rs"),
+        include_str!("../src/interp/apply.rs"),
+        include_str!("../src/interp/code.rs"),
+        include_str!("../src/interp/coerce.rs"),
+        include_str!("../src/interp/enumerate.rs"),
+        include_str!("../src/interp/environment.rs"),
+        include_str!("../src/interp/errors.rs"),
+        include_str!("../src/interp/eval.rs"),
+        include_str!("../src/interp/frames.rs"),
+        include_str!("../src/interp/function.rs"),
+        include_str!("../src/interp/invoke.rs"),
+        include_str!("../src/interp/iterable.rs"),
+        include_str!("../src/interp/render.rs"),
+        include_str!("../src/interp/unwind.rs"),
+        &strings_without_concat(include_str!("../src/interp/strings.rs")),
+        include_str!("../src/interp/natives/resource.rs"),
+        include_str!("../src/interp/natives/reflect.rs"),
+        &bigint_builtin_coercions(include_str!("../src/interp/natives/bigint.rs")),
+        include_str!("../src/interp/natives/number.rs"),
+        include_str!("../src/interp/natives/string.rs"),
+        include_str!("../src/interp/natives/collection.rs"),
+        include_str!("../src/interp/natives/date.rs"),
+        include_str!("../src/interp/natives/temporal.rs"),
+        include_str!("../src/interp/natives/intl.rs"),
+        include_str!("../src/interp/natives/promise.rs"),
+        include_str!("../src/interp/natives/buffer.rs"),
+        include_str!("../src/interp/natives/array.rs"),
+        include_str!("../src/interp/natives/dispatch.rs"),
+        include_str!("../src/interp/natives/json.rs"),
+        include_str!("../src/interp/property.rs"),
+        include_str!("../src/interp/property/descriptors.rs"),
+        include_str!("../src/interp/property/indexed.rs"),
+        include_str!("../src/interp/property/integrity.rs"),
+        include_str!("../src/interp/property/keys.rs"),
+        include_str!("../src/interp/property/object.rs"),
+        include_str!("../src/interp/property/ordinary.rs"),
+        include_str!("../src/interp/property/proxy.rs"),
+        include_str!("../src/interp/property/read_index.rs"),
+    ]);
 }
 
 #[test]
@@ -182,9 +383,7 @@ fn moved_regexp_methods_cannot_bypass_allocation_admission() {
         "let raw = vec![0; guest];",
     ] {
         let mutated = original.replacen(anchor, allocation, 1);
-        assert!(
-            std::panic::catch_unwind(|| check_builtin_capacities(SOURCE, &[&mutated])).is_err()
-        );
+        assert!(std::panic::catch_unwind(|| check_builtin_capacities(&[&mutated])).is_err());
     }
 }
 
@@ -201,9 +400,7 @@ fn moved_resource_methods_cannot_bypass_allocation_admission() {
             "{anchor} fn allocation_probe(guest: usize) {{ {allocation} let _: Vec<u8> = raw; }}"
         );
         let mutated = original.replacen(anchor, &injected, 1);
-        assert!(
-            std::panic::catch_unwind(|| check_builtin_capacities(SOURCE, &[&mutated])).is_err()
-        );
+        assert!(std::panic::catch_unwind(|| check_builtin_capacities(&[&mutated])).is_err());
     }
 }
 
@@ -220,16 +417,14 @@ fn moved_reflect_methods_cannot_bypass_allocation_admission() {
             "{anchor} fn allocation_probe(guest: usize) {{ {allocation} let _: Vec<u8> = raw; }}"
         );
         let mutated = original.replacen(anchor, &injected, 1);
-        assert!(
-            std::panic::catch_unwind(|| check_builtin_capacities(SOURCE, &[&mutated])).is_err()
-        );
+        assert!(std::panic::catch_unwind(|| check_builtin_capacities(&[&mutated])).is_err());
     }
 }
 
 #[test]
 fn moved_bigint_methods_cannot_bypass_allocation_admission() {
     let original = code_only(include_str!("../src/interp/natives/bigint.rs"));
-    check_builtin_capacities(SOURCE, &[&bigint_builtin_coercions(&original)]);
+    check_builtin_capacities(&[&bigint_builtin_coercions(&original)]);
     for name in ["to_bigint_low64", "slot_to_bigint_u64"] {
         let body = method_in(&original, name);
         for allocation in [
@@ -239,10 +434,9 @@ fn moved_bigint_methods_cannot_bypass_allocation_admission() {
             let injected = body.replacen('{', &format!("{{ {allocation}"), 1);
             let mutated = original.replacen(&body, &injected, 1);
             assert_ne!(mutated, original);
-            assert!(std::panic::catch_unwind(|| check_builtin_capacities(
-                SOURCE,
-                &[&bigint_builtin_coercions(&mutated)]
-            ))
+            assert!(std::panic::catch_unwind(|| check_builtin_capacities(&[
+                &bigint_builtin_coercions(&mutated)
+            ]))
             .is_err());
         }
     }
@@ -261,9 +455,7 @@ fn moved_number_methods_cannot_bypass_allocation_admission() {
             "{anchor} fn allocation_probe(guest: usize) {{ {allocation} let _: Vec<u8> = raw; }}"
         );
         let mutated = original.replacen(anchor, &injected, 1);
-        assert!(
-            std::panic::catch_unwind(|| check_builtin_capacities(SOURCE, &[&mutated])).is_err()
-        );
+        assert!(std::panic::catch_unwind(|| check_builtin_capacities(&[&mutated])).is_err());
     }
 }
 
@@ -280,9 +472,7 @@ fn moved_string_methods_cannot_bypass_allocation_admission() {
             "{anchor} fn allocation_probe(guest: usize) {{ {allocation} let _: Vec<u8> = raw; }}"
         );
         let mutated = original.replacen(anchor, &injected, 1);
-        assert!(
-            std::panic::catch_unwind(|| check_builtin_capacities(SOURCE, &[&mutated])).is_err()
-        );
+        assert!(std::panic::catch_unwind(|| check_builtin_capacities(&[&mutated])).is_err());
     }
 }
 
@@ -299,9 +489,7 @@ fn moved_collection_methods_cannot_bypass_allocation_admission() {
             "{anchor} fn allocation_probe(guest: usize) {{ {allocation} let _: Vec<u8> = raw; }}"
         );
         let mutated = original.replacen(anchor, &injected, 1);
-        assert!(
-            std::panic::catch_unwind(|| check_builtin_capacities(SOURCE, &[&mutated])).is_err()
-        );
+        assert!(std::panic::catch_unwind(|| check_builtin_capacities(&[&mutated])).is_err());
     }
 }
 
@@ -318,9 +506,7 @@ fn moved_date_methods_cannot_bypass_allocation_admission() {
             "{anchor} fn allocation_probe(guest: usize) {{ {allocation} let _: Vec<u8> = raw; }}"
         );
         let mutated = original.replacen(anchor, &injected, 1);
-        assert!(
-            std::panic::catch_unwind(|| check_builtin_capacities(SOURCE, &[&mutated])).is_err()
-        );
+        assert!(std::panic::catch_unwind(|| check_builtin_capacities(&[&mutated])).is_err());
     }
 }
 
@@ -337,9 +523,7 @@ fn moved_temporal_methods_cannot_bypass_allocation_admission() {
             "{anchor} fn allocation_probe(guest: usize) {{ {allocation} let _: Vec<u8> = raw; }}"
         );
         let mutated = original.replacen(anchor, &injected, 1);
-        assert!(
-            std::panic::catch_unwind(|| check_builtin_capacities(SOURCE, &[&mutated])).is_err()
-        );
+        assert!(std::panic::catch_unwind(|| check_builtin_capacities(&[&mutated])).is_err());
     }
 }
 
@@ -356,9 +540,7 @@ fn moved_intl_methods_cannot_bypass_allocation_admission() {
             "{anchor} fn allocation_probe(guest: usize) {{ {allocation} let _: Vec<u8> = raw; }}"
         );
         let mutated = original.replacen(anchor, &injected, 1);
-        assert!(
-            std::panic::catch_unwind(|| check_builtin_capacities(SOURCE, &[&mutated])).is_err()
-        );
+        assert!(std::panic::catch_unwind(|| check_builtin_capacities(&[&mutated])).is_err());
     }
 }
 
@@ -372,9 +554,7 @@ fn moved_promise_methods_cannot_bypass_allocation_admission() {
         "let raw = vec![0; guest];",
     ] {
         let mutated = original.replacen(anchor, allocation, 1);
-        assert!(
-            std::panic::catch_unwind(|| check_builtin_capacities(SOURCE, &[&mutated])).is_err()
-        );
+        assert!(std::panic::catch_unwind(|| check_builtin_capacities(&[&mutated])).is_err());
     }
 }
 
@@ -388,9 +568,7 @@ fn moved_buffer_methods_cannot_bypass_allocation_admission() {
         "let raw = vec![0; guest];",
     ] {
         let mutated = original.replacen(anchor, allocation, 1);
-        assert!(
-            std::panic::catch_unwind(|| check_builtin_capacities(SOURCE, &[&mutated])).is_err()
-        );
+        assert!(std::panic::catch_unwind(|| check_builtin_capacities(&[&mutated])).is_err());
     }
 }
 
@@ -404,9 +582,7 @@ fn moved_array_methods_cannot_bypass_allocation_admission() {
         "let raw = vec![0; guest];",
     ] {
         let mutated = original.replacen(anchor, allocation, 1);
-        assert!(
-            std::panic::catch_unwind(|| check_builtin_capacities(SOURCE, &[&mutated])).is_err()
-        );
+        assert!(std::panic::catch_unwind(|| check_builtin_capacities(&[&mutated])).is_err());
     }
 }
 
@@ -420,9 +596,7 @@ fn moved_native_dispatch_methods_cannot_bypass_allocation_admission() {
         "let raw = vec![0; guest];",
     ] {
         let mutated = original.replacen(anchor, allocation, 1);
-        assert!(
-            std::panic::catch_unwind(|| check_builtin_capacities(SOURCE, &[&mutated])).is_err()
-        );
+        assert!(std::panic::catch_unwind(|| check_builtin_capacities(&[&mutated])).is_err());
     }
 }
 
@@ -436,9 +610,7 @@ fn moved_json_methods_cannot_bypass_allocation_admission() {
         "let raw = vec![0; guest];",
     ] {
         let mutated = original.replacen(anchor, allocation, 1);
-        assert!(
-            std::panic::catch_unwind(|| check_builtin_capacities(SOURCE, &[&mutated])).is_err()
-        );
+        assert!(std::panic::catch_unwind(|| check_builtin_capacities(&[&mutated])).is_err());
     }
 }
 
@@ -456,7 +628,7 @@ fn moved_property_methods_cannot_bypass_allocation_admission() {
     ] {
         let anchor = "impl Interp {";
         assert!(original.contains(anchor));
-        check_builtin_capacities(SOURCE, &[original]);
+        check_builtin_capacities(&[original]);
         for allocation in [
             "let raw = Vec::with_capacity(guest);",
             "let raw = vec![0; guest];",
@@ -464,9 +636,7 @@ fn moved_property_methods_cannot_bypass_allocation_admission() {
             let injected = format!("{anchor} fn allocation_probe(guest: usize) {{ {allocation} let _: Vec<u8> = raw; }}");
             let mutated = original.replacen(anchor, &injected, 1);
             assert_ne!(original, mutated);
-            assert!(
-                std::panic::catch_unwind(|| check_builtin_capacities(SOURCE, &[&mutated])).is_err()
-            );
+            assert!(std::panic::catch_unwind(|| check_builtin_capacities(&[&mutated])).is_err());
         }
     }
 }
@@ -548,7 +718,7 @@ fn conversion_helpers_keep_output_admission() {
         ("unicode_normalize_utf16", "extend_reserved_units("),
         ("unicode_locale_case_convert_utf16", "reserve_scratch("),
     ] {
-        let body = &code[token_body(&code, &format!("fn {name}("))];
+        let body = &code[token_body(&code, &format!("fn {name}"))];
         assert!(
             !token_positions(body, seam).is_empty(),
             "{name} lost admission"
