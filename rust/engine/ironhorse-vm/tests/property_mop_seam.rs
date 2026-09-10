@@ -178,6 +178,74 @@ fn raw_property_reads_are_confined_to_boot_restore_and_mop() {
     );
 }
 
+fn public_restore_bypasses(source: &str, session_module: bool) -> Vec<String> {
+    use ironhorse_vm::source_scan::{code_only, literal_end, matching_delimiter, tokens};
+    let code = code_only(source);
+    let scanned = tokens(&code);
+    let session_impls: Vec<_> = scanned
+        .windows(3)
+        .enumerate()
+        .filter(|(_, window)| {
+            session_module
+                && window[0].text == "impl"
+                && window[1].text == "RestoreSession"
+                && window[2].text == "{"
+        })
+        .map(|(i, _)| i + 2..matching_delimiter(&scanned, i + 2) + 1)
+        .collect();
+    let mut violations = Vec::new();
+    for (i, pair) in scanned.windows(2).enumerate() {
+        if pair[0].text != "fn" || !pair[1].text.starts_with("restore_") {
+            continue;
+        }
+        let visibility = scanned[..i].iter().rev().find(|token| {
+            !matches!(token.text, "async" | "unsafe" | "const" | "extern")
+                && literal_end(token.text, 0).is_none()
+        });
+        if visibility.is_some_and(|token| token.text == "pub")
+            && !session_impls.iter().any(|body| body.contains(&i))
+        {
+            violations.push(pair[1].text.to_owned());
+        }
+    }
+    violations
+}
+
+#[test]
+fn public_restore_guard_checks_the_receiver_and_abi_modifiers() {
+    for declaration in [
+        "pub fn restore_bad",
+        "pub extern \"C\" fn restore_bad",
+        "pub unsafe extern \"C\" fn restore_bad",
+    ] {
+        let source = format!("impl RestoreSession {{ pub fn restore_good(&mut self) {{}} }} impl Interp {{ {declaration}(&mut self) {{}} }}");
+        assert_eq!(public_restore_bypasses(&source, true), vec!["restore_bad"]);
+    }
+    assert!(public_restore_bypasses(
+        "impl Interp { pub(super) fn restore_private(&mut self) {} }",
+        false
+    )
+    .is_empty());
+}
+
+#[test]
+fn public_restore_verbs_are_confined_to_the_owned_session() {
+    use ironhorse_vm::source_scan::rs_files;
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut violations = Vec::new();
+    for path in rs_files(&root) {
+        let relative = path.strip_prefix(&root).unwrap().to_str().unwrap();
+        let source = std::fs::read_to_string(&path).unwrap();
+        for name in public_restore_bypasses(&source, relative == "interp/restore.rs") {
+            violations.push(format!("{relative}: {name}"));
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "public restore bypasses: {violations:?}"
+    );
+}
+
 #[test]
 fn additional_option_readers_do_not_gate_on_atom_presence() {
     check(

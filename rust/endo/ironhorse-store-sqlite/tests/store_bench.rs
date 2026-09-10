@@ -281,7 +281,7 @@ fn generational_indexed_steady_state() {
             checkpoint_to_store(&mut session, &sig(), &mut store).expect("ckpt");
             assert!(session.machine_mut().run(&bc).completed);
             checkpoint_to_store(&mut session, &sig(), &mut store).expect("ckpt");
-            slots_total = session.machine().slots.capacity();
+            slots_total = session.machine().slots().capacity();
 
             let t0 = Instant::now();
             freed_gen = generational_collect(&mut session, &store).expect("gen");

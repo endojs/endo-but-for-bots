@@ -101,10 +101,10 @@ fn attached_vs_detached_hot_crank() {
     {
         let m = resident.machine();
         for page in 0..slot_page_count(manifest.slot_count) {
-            m.slots.touch_page(page);
+            m.slots().touch_page(page);
         }
         for ext in 0..chunk_extent_count(manifest.chunk_len) {
-            m.chunks.touch_extent(ext);
+            m.chunks().touch_extent(ext);
         }
     }
     let resident_ms: Vec<f64> = (0..ROUNDS)

@@ -61,9 +61,9 @@ pub use interp::{
     ListFormatData, LocaleData, Native, NumberFormatData, PanicKind, PluralRulesData,
     PrivateAccessorRow, PrivateElementSnapshot, PrivateValueRow, PromiseClusterSnapshot,
     PromiseFnRow, PromiseReactionRow, PromiseRow, ProxyRevokerRow, ProxyRow, ProxyStateSnapshot,
-    RelinkError, RestoreError, RunOutcome, SavedFrameRow, SavedJumpRow, SegmentIteratorData,
-    SegmenterData, SegmentsData, SourceCompileError, SourceCompiler, PROGRAM_INVOCATION_COMPUTRONS,
-    TYPED_ARRAY_TYPES,
+    RelinkError, RestoreError, RestoreSession, RunOutcome, SavedFrameRow, SavedJumpRow,
+    SegmentIteratorData, SegmenterData, SegmentsData, SourceCompileError, SourceCompiler,
+    PROGRAM_INVOCATION_COMPUTRONS, TYPED_ARRAY_TYPES,
 };
 pub use interp::{HEAVY_FRAME_COST, LIGHT_FRAME_COST, NATIVE_DEPTH_LIMIT};
 pub use meter::{Meter, MeterCheck, MeterState, COST_TABLE_VERSION};
@@ -76,8 +76,8 @@ pub use opcode::{instruction_len, Opcode};
 pub use side_tables::TableDesc;
 pub use symbols::{parse_symbols, parse_symbols_checked, SymbolName};
 pub use value::{
-    ChunkArena, ChunkOffset, ChunkSlice, Kind, PageSource, Payload, Slot, SlotArena, SlotIndex,
-    CHUNK_EXTENT_BYTES, SLOTS_PER_PAGE,
+    BackingCommitAuthority, ChunkArena, ChunkOffset, ChunkSlice, Kind, PageSource, Payload, Slot,
+    SlotArena, SlotIndex, CHUNK_EXTENT_BYTES, SLOTS_PER_PAGE,
 };
 
 /// The native (thread) stack, in bytes, the engine requires for its

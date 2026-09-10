@@ -237,21 +237,21 @@ fn run_store_scheduled<S: HeapStore + 'static>(
             // re-faults must reinstall identical content.
             let manifest = store.borrow().manifest().unwrap();
             for page in 0..slot_page_count(manifest.slot_count) {
-                session.machine().slots.touch_page(page);
+                session.machine().slots().touch_page(page);
             }
             for ext in 0..chunk_extent_count(manifest.chunk_len) {
-                session.machine().chunks.touch_extent(ext);
+                session.machine().chunks().touch_extent(ext);
             }
             for page in 0..slot_page_count(manifest.slot_count) {
-                evictions += session.machine().slots.evict_page(page) as u32;
+                evictions += session.machine().slots().evict_page(page) as u32;
             }
             for ext in 0..chunk_extent_count(manifest.chunk_len) {
-                evictions += session.machine().chunks.evict_extent(ext) as u32;
+                evictions += session.machine().chunks().evict_extent(ext) as u32;
             }
             // A freshly resumed session is wholly clean, so the evict
             // sweep must have emptied residency — the arm's premise.
             assert_eq!(
-                session.machine().slots.resident_page_count(),
+                session.machine().slots().resident_page_count(),
                 0,
                 "post-resume evict sweep empties slot residency"
             );
@@ -262,10 +262,10 @@ fn run_store_scheduled<S: HeapStore + 'static>(
             // be observably irrelevant.
             let manifest = store.borrow().manifest().unwrap();
             for page in (0..slot_page_count(manifest.slot_count)).rev() {
-                session.machine().slots.touch_page(page);
+                session.machine().slots().touch_page(page);
             }
             for ext in (0..chunk_extent_count(manifest.chunk_len)).rev() {
-                session.machine().chunks.touch_extent(ext);
+                session.machine().chunks().touch_extent(ext);
             }
         }
         let code = session
@@ -287,10 +287,10 @@ fn run_store_scheduled<S: HeapStore + 'static>(
             // here.
             let manifest = store.borrow().manifest().unwrap();
             for page in 0..slot_page_count(manifest.slot_count) {
-                evictions += session.machine().slots.evict_page(page) as u32;
+                evictions += session.machine().slots().evict_page(page) as u32;
             }
             for ext in 0..chunk_extent_count(manifest.chunk_len) {
-                evictions += session.machine().chunks.evict_extent(ext) as u32;
+                evictions += session.machine().chunks().evict_extent(ext) as u32;
             }
         }
     }
@@ -820,12 +820,12 @@ pub fn lazy_working_set_bound<S: HeapStore + 'static>(fresh: impl FnOnce() -> S)
     let o = s2.machine_mut().run(&compiled[1].0);
     assert!(o.completed);
     assert_eq!(o.result, "8");
-    let resident = s2.machine().slots.resident_page_count();
+    let resident = s2.machine().slots().resident_page_count();
     assert!(
         resident * 4 <= total_pages,
         "working-set crank faulted {resident} of {total_pages} pages"
     );
-    assert!(!s2.machine().slots.is_fully_resident());
+    assert!(!s2.machine().slots().is_fully_resident());
 }
 
 /// The central checkpoint invariant against an EMPTY backend: after
@@ -961,9 +961,11 @@ pub fn commit_contract<S: HeapStore>(mut store: S, mut reopen: impl FnMut(S) -> 
 
     // Grow through a page boundary so the missing-row case is mandatory,
     // even when the backend would otherwise retain every old row.
-    for _ in 0..SLOTS_PER_PAGE {
-        machine.slots.alloc(ironhorse_vm::Slot::undefined());
-    }
+    let (code, symbols) = compile(&format!(
+        "var grown = []; for (var i = 0; i < {SLOTS_PER_PAGE}; i++) grown.push({{}});"
+    ));
+    machine.link_intrinsics(&symbols);
+    assert!(machine.run(&code).completed);
     let grown = machine.snapshot_image(&sig()).unwrap();
     let successor = image_to_batch(&grown, 2, &genesis.manifest.seal);
     let mut wrong_parent = successor.clone();

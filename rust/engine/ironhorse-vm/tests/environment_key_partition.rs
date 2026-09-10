@@ -30,27 +30,3 @@ fn boot_has_no_runtime_key_witness_and_environment_markers_stay_reserved() {
     assert_ne!(vm.stored_runtime_intern(), Some(u16::MAX));
     assert!(vm.symbol_key_table().1.iter().all(|(id, _)| *id < u16::MAX));
 }
-
-#[test]
-fn reserved_symbol_ids_are_refused_without_mutating_the_table() {
-    let mut vm = Interp::new();
-    let before = vm.symbol_key_table();
-    assert!(!vm.restore_symbol_key_table(u16::MAX, &[]));
-    assert!(!vm.restore_symbol_key_table(u16::MAX - 2, &[(u16::MAX, 1)]));
-    assert_eq!(vm.symbol_key_table(), before);
-    let (code, names) =
-        ironhorse_compile::compile_atoms("var key=Symbol('kept'), o={}; o[key]=42; key=null;")
-            .unwrap();
-    vm.link_intrinsics(&ironhorse_vm::parse_symbols(&names));
-    assert!(vm.run(&code).completed);
-    assert!(vm.stored_runtime_intern().is_some());
-    vm.collect_garbage().unwrap();
-    let (code, names) =
-        ironhorse_compile::compile_atoms("o[Object.getOwnPropertySymbols(o)[0]]").unwrap();
-    let code = vm
-        .relink_crank(&code, &ironhorse_vm::parse_symbols(&names))
-        .unwrap();
-    let out = vm.run(&code);
-    assert!(out.completed, "{:?}", out.halt);
-    assert_eq!(out.result, "42");
-}

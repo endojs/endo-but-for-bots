@@ -1,7 +1,7 @@
 use super::*;
 
+use ironhorse_snapshot::export_to_container;
 use ironhorse_snapshot::machine::{begin_store_session, checkpoint_to_store, resume_from_store};
-use ironhorse_snapshot::{export_to_container, MachineSnapshot};
 use ironhorse_store_sqlite::SqliteHeapStore;
 use ironhorse_vm::{parse_symbols, Interp};
 
@@ -166,10 +166,11 @@ fn integer_limits_and_tampered_sql_schema() {
 
 #[test]
 fn refuses_free_slots_and_wrong_runtime_profile() {
-    let mut machine = from_snapshot_bytes(&source(), &sig()).unwrap();
-    let index = machine.slots.alloc(ironhorse_vm::Slot::integer(42));
-    machine.slots.free(index);
-    let source = machine.write_snapshot(&sig()).unwrap();
+    let mut image = validated_source(&source(), &sig()).unwrap();
+    let index = ironhorse_vm::SlotIndex(image.slots.len() as u32);
+    image.slots.push(ironhorse_vm::Slot::integer(42));
+    image.slot_free.push(index.0);
+    let source = write_machine_unchecked(&image);
     let db = inspect(&source, &sig()).unwrap();
     assert_eq!(db.execute("INSERT INTO integer_edits SELECT slot, record, 1 FROM heap_slots WHERE slot = ?1 AND is_free = 1", [index.0]).unwrap(), 1);
     assert!(apply(&source, &sig(), &db)

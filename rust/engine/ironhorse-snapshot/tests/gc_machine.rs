@@ -142,7 +142,7 @@ fn partial_collect_is_conservative_and_exact() {
         .map_err(|(_, e)| e)
         .expect("begin");
 
-    let live_before = session.machine().slots.live_count();
+    let live_before = session.machine().slots().live_count();
     let freed = partial_collect(&mut session, &store).expect("partial collect");
     // Dead records keep their edges until their page is rewritten, so every
     // page still summary-linked from live pages is retained. Intrinsic boot
@@ -154,7 +154,7 @@ fn partial_collect_is_conservative_and_exact() {
         "partial collection cannot free more than the arena holds"
     );
     assert_eq!(
-        session.machine().slots.live_count(),
+        session.machine().slots().live_count(),
         live_before - freed,
         "accounting tracks the frees exactly"
     );
@@ -295,18 +295,24 @@ fn partial_collect_reclaims_page_isolated_garbage() {
     // 2-slot objects straddles page boundaries, and a straddling run
     // chains every page (the conservatism case above) — the reclaim
     // lock must not hinge on that parity.
-    while m.slots.capacity() % SLOTS_PER_PAGE != 0 {
-        m.slots.alloc(Slot::integer(0));
-    }
-    for _ in 0..(4 * SLOTS_PER_PAGE) {
-        m.slots.alloc(Slot::integer(7));
-    }
+    let mut image = m.snapshot_image_for_testing(&sig()).unwrap();
+    let aligned = image.slots.len().div_ceil(SLOTS_PER_PAGE as usize) * SLOTS_PER_PAGE as usize;
+    image.slots.resize(aligned, Slot::integer(0));
+    image
+        .slots
+        .resize(aligned + 4 * SLOTS_PER_PAGE as usize, Slot::integer(7));
+    image.slot_live = image.slots.len() as u32 - image.slot_free.len() as u32;
+    let m = ironhorse_snapshot::machine::from_snapshot_bytes(
+        &ironhorse_snapshot::image::write_machine_unchecked(&image),
+        &sig(),
+    )
+    .unwrap();
 
     let mut session = begin_store_session(m, &sig(), &mut store)
         .map_err(|(_, e)| e)
         .expect("begin");
 
-    let live_before = session.machine().slots.live_count();
+    let live_before = session.machine().slots().live_count();
     let freed = partial_collect(&mut session, &store).expect("partial collect");
     // The four planted pages are exactly page-isolated garbage; the
     // alignment filler shares its page with live records and is
@@ -316,7 +322,7 @@ fn partial_collect_reclaims_page_isolated_garbage() {
         "page-isolated garbage reclaimed without content reads, got {freed}"
     );
     assert_eq!(
-        session.machine().slots.live_count(),
+        session.machine().slots().live_count(),
         live_before - freed,
         "accounting tracks the frees exactly"
     );
@@ -405,7 +411,7 @@ fn small_state_stays_small_with_a_large_free_list() {
     // And the round-trip carries it exactly.
     let resumed = resume_from_store(&store, &sig()).expect("resume");
     assert_eq!(
-        resumed.machine().slots.free_list().len() as u32,
+        resumed.machine().slots().free_list().len() as u32,
         manifest.free_len
     );
 }

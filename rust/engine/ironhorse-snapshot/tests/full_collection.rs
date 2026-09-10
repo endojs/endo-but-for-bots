@@ -32,11 +32,11 @@ fn production_full_collection_releases_weak_entries_and_chunk_garbage() {
     let mut session = begin_store_session(vm, &signature, &mut store)
         .map_err(|(_, e)| e)
         .unwrap();
-    let before_chunks = session.machine().chunks.byte_size();
+    let before_chunks = session.machine().chunks().byte_size();
     let stats = full_collect(&mut session, &store).unwrap();
     assert!(stats.slots_reclaimed >= 100, "{stats:?}");
     assert!(entries(session.machine()) + 190 < before_entries);
-    assert!(session.machine().chunks.byte_size() < before_chunks / 2);
+    assert!(session.machine().chunks().byte_size() < before_chunks / 2);
     checkpoint_to_store(&mut session, &signature, &mut store).unwrap();
     let mut restored = resume_from_store(&store, &signature).unwrap();
     assert_eq!(
@@ -76,13 +76,13 @@ fn full_collection_refuses_unsafe_or_stale_boundaries_before_mutation() {
         session.machine().write_snapshot(&signature).unwrap(),
         before
     );
-    assert!(session.machine().slots.dirty_pages().is_empty());
-    assert!(session.machine().chunks.dirty_extents().is_empty());
+    assert!(session.machine().slots().dirty_pages().is_empty());
+    assert!(session.machine().chunks().dirty_extents().is_empty());
 
     let mut session = resume_from_store(&store, &signature).unwrap();
     run(session.machine_mut(), "different=2");
     let before = session.machine().write_snapshot(&signature).unwrap();
-    let dirty = session.machine().slots.dirty_pages();
+    let dirty = session.machine().slots().dirty_pages();
     assert!(
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| full_collect(
             &mut session,
@@ -94,7 +94,7 @@ fn full_collection_refuses_unsafe_or_stale_boundaries_before_mutation() {
         session.machine().write_snapshot(&signature).unwrap(),
         before
     );
-    assert_eq!(session.machine().slots.dirty_pages(), dirty);
+    assert_eq!(session.machine().slots().dirty_pages(), dirty);
     assert!(session.machine().is_quiescent());
 
     let mut session = resume_from_store(&store, &signature).unwrap();
@@ -104,15 +104,15 @@ fn full_collection_refuses_unsafe_or_stale_boundaries_before_mutation() {
         .relink_crank(&code, &ironhorse_vm::parse_symbols(&names))
         .unwrap();
     assert!(!session.machine_mut().run(&code).completed);
-    let before_free = session.machine().slots.free_list().to_vec();
+    let before_free = session.machine().slots().free_list().to_vec();
     let before_stack = session.machine().stack_slots().to_vec();
-    let before_chunks = session.machine().chunks.raw_vec();
+    let before_chunks = session.machine().chunks().raw_vec();
     assert_eq!(
         full_collect(&mut session, &store),
         Err(StoreError::MachineNotQuiescent)
     );
-    assert_eq!(session.machine().slots.free_list(), before_free);
+    assert_eq!(session.machine().slots().free_list(), before_free);
     assert_eq!(session.machine().stack_slots(), before_stack);
-    assert_eq!(session.machine().chunks.raw_vec(), before_chunks);
+    assert_eq!(session.machine().chunks().raw_vec(), before_chunks);
     assert_eq!(session.collections(), 0);
 }

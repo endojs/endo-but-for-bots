@@ -34,8 +34,8 @@ fn full_gc_drops_dead_index_rows_before_compacting_chunks() {
 
     crank(&mut vm, "var owner; owner = null; 0;");
     let stats = vm.collect_garbage().unwrap();
-    assert!(vm.slots.is_free_index(owner));
-    assert!(vm.slots.is_free_index(target));
+    assert!(vm.slots().is_free_index(owner));
+    assert!(vm.slots().is_free_index(target));
     assert!(
         vm.index_props_snapshot()
             .iter()

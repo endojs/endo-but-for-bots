@@ -57,13 +57,18 @@ fn vm_restore_checks_buffer_header_and_mutable_slices_stop_at_block_end() {
     let buffer = &image.buffers[0];
     for length in [7, 9] {
         let (slots, chunks) = image.to_arenas();
-        let mut restored = Interp::new();
-        restored.restore_snapshot_state(slots, chunks, vec![], vec![], image.meter.to_state());
-        assert!(!restored.restore_typed_array_family(
-            vec![(buffer.owner, buffer.data, length, 0)],
-            vec![],
-            vec![]
-        ));
+        let mut restored = Interp::begin_restore();
+        restored
+            .restore_snapshot_state(slots, chunks, vec![], vec![], image.meter.to_state())
+            .unwrap();
+        restored.restore_native_names(None).unwrap();
+        assert!(restored
+            .restore_typed_array_family(
+                vec![(buffer.owner, buffer.data, length, 0)],
+                vec![],
+                vec![]
+            )
+            .is_err());
     }
     let (_, mut chunks) = image.to_arenas();
     assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

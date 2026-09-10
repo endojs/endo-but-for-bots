@@ -152,18 +152,12 @@ fn string_receiver_indexing_is_independent_of_receiver_length() {
 #[test]
 #[ignore = "lazy receiver-length benchmark: nightly release lane"]
 fn lazy_string_indexing_spans_many_extents() {
-    use ironhorse_vm::{ChunkArena, PageSource, Slot, CHUNK_EXTENT_BYTES};
-    use std::rc::Rc;
-    struct Source(Vec<u8>);
-    impl PageSource for Source {
-        fn slot_page(&self, _page: u32) -> Vec<Slot> {
-            panic!("slots remain detached");
-        }
-        fn chunk_extent(&self, ext: u32) -> Vec<u8> {
-            let start = ext as usize * CHUNK_EXTENT_BYTES as usize;
-            self.0[start..(start + CHUNK_EXTENT_BYTES as usize).min(self.0.len())].to_vec()
-        }
-    }
+    use ironhorse_snapshot::{
+        machine::{begin_store_session, resume_from_store_lazy},
+        store::MemoryStore,
+        Signature,
+    };
+    use std::{cell::RefCell, rc::Rc};
     assert!(!cfg!(debug_assertions));
     let mut failures = Vec::new();
     for (name, expression) in [
@@ -187,8 +181,14 @@ fn lazy_string_indexing_spans_many_extents() {
                 machine.link_intrinsics(&parse_symbols(&symbols));
                 assert!(machine.run(&build).completed);
                 let code = machine.relink_crank(&hot_code, &names).unwrap();
-                let image = machine.chunks.raw_vec();
-                machine.chunks = ChunkArena::lazy_from_parts(image.len(), Rc::new(Source(image)));
+                let signature = Signature::new("lazy-string-indexing");
+                let mut store = MemoryStore::new();
+                begin_store_session(machine, &signature, &mut store)
+                    .map_err(|(_, error)| error)
+                    .unwrap();
+                let mut machine = resume_from_store_lazy(Rc::new(RefCell::new(store)), &signature)
+                    .unwrap()
+                    .into_machine();
                 for (arm, readings) in times.iter_mut().enumerate() {
                     let before = machine.meter_index();
                     let start = Instant::now();

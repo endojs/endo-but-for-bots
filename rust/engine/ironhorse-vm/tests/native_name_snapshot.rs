@@ -1,42 +1,53 @@
-use ironhorse_vm::Interp;
+use ironhorse_vm::{Interp, RestoreSession};
+
+fn session() -> RestoreSession {
+    let source = Interp::new();
+    let meter = source.meter_state();
+    let (slots, chunks) = source.into_arenas();
+    let mut restored = Interp::begin_restore();
+    restored
+        .restore_snapshot_state(slots, chunks, vec![], vec![], meter)
+        .unwrap();
+    restored
+}
 
 #[test]
 fn native_name_restore_rejects_non_native_owners_and_invalid_offsets() {
-    let source = Interp::new();
-    let valid = source.function_state_snapshot();
-    assert!(!valid.native_names.as_ref().unwrap().is_empty());
-
+    let valid = Interp::new()
+        .function_state_snapshot()
+        .native_names
+        .unwrap();
+    assert!(!valid.is_empty());
+    let mut invalid_sets = Vec::new();
     let mut duplicate = valid.clone();
-    let rows = duplicate.native_names.as_mut().unwrap();
-    rows.insert(1, rows[0]);
-    let mut restored = Interp::new();
-    assert!(!restored.restore_function_state(duplicate));
-    assert_eq!(restored.function_state_snapshot(), valid);
-
-    // A valid authoritative empty native subset must not be applied before
-    // unrelated malformed guest-function metadata is rejected.
-    let mut invalid_guest = valid.clone();
-    invalid_guest.native_names = Some(vec![]);
-    invalid_guest.ctor_prototypes.push((0, 0));
-    let mut restored = Interp::new();
-    assert!(!restored.restore_function_state(invalid_guest));
-    assert_eq!(restored.function_state_snapshot(), valid);
-
-    for invalid_owner in [0, u32::MAX] {
-        let mut state = valid.clone();
-        state.native_names.as_mut().unwrap()[0].0 = invalid_owner;
-        let mut restored = Interp::new();
-        let before = restored.function_state_snapshot();
-        assert!(!restored.restore_function_state(state));
-        assert_eq!(restored.function_state_snapshot(), before);
+    duplicate.insert(1, duplicate[0]);
+    invalid_sets.push(duplicate);
+    for owner in [0, u32::MAX] {
+        let mut rows = valid.clone();
+        rows[0].0 = owner;
+        invalid_sets.push(rows);
     }
-
-    for invalid_offset in [0, 3, u32::MAX - 1] {
-        let mut state = valid.clone();
-        state.native_names.as_mut().unwrap()[0].1 = invalid_offset;
-        let mut restored = Interp::new();
-        let before = restored.function_state_snapshot();
-        assert!(!restored.restore_function_state(state));
-        assert_eq!(restored.function_state_snapshot(), before);
+    for offset in [0, 3, u32::MAX - 1] {
+        let mut rows = valid.clone();
+        rows[0].1 = offset;
+        invalid_sets.push(rows);
     }
+    for rows in invalid_sets {
+        let mut restored = session();
+        let error = restored.restore_native_names(Some(&rows)).unwrap_err();
+        assert_eq!(error.row, "native_names");
+        assert_eq!(restored.restore_dates(vec![]).unwrap_err(), error);
+        assert_eq!(restored.finish().err().unwrap(), error);
+    }
+}
+
+#[test]
+fn pruning_followed_by_invalid_guest_metadata_cannot_publish_a_machine() {
+    let mut restored = session();
+    restored.restore_native_names(Some(&[])).unwrap();
+    let mut invalid = ironhorse_vm::FunctionStateSnapshot::default();
+    invalid.ctor_prototypes.push((0, 0));
+    let error = restored.restore_function_state(invalid).unwrap_err();
+    assert_eq!(error.row, "function_state");
+    assert_eq!(restored.finish().err().unwrap(), error);
 }

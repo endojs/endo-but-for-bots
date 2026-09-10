@@ -18,7 +18,11 @@ impl std::fmt::Display for RestoreError {
 impl std::error::Error for RestoreError {}
 
 impl Interp {
-    fn validate_restore_owner(&self, owner: u32, row: &'static str) -> Result<(), RestoreError> {
+    pub(super) fn validate_restore_owner(
+        &self,
+        owner: u32,
+        row: &'static str,
+    ) -> Result<(), RestoreError> {
         let index = crate::value::SlotIndex(owner);
         if index.is_null() || owner >= self.slots.capacity() || self.slots.is_free_index(index) {
             return Err(RestoreError {
@@ -166,7 +170,7 @@ impl Interp {
     /// rides in the restored [`crate::meter::MeterState`]. A machine
     /// restored this way continues a following crank identically to one
     /// that never suspended, for the covered (arena + meter) surface.
-    pub fn restore_snapshot_state(
+    pub(super) fn restore_snapshot_state(
         &mut self,
         slots: SlotArena,
         chunks: ChunkArena,
@@ -232,7 +236,7 @@ impl Interp {
     /// small-state section). `false` — failing the caller's decode
     /// closed — for a floor past the restored name table, which honest
     /// suspension cannot produce.
-    pub fn restore_installed_names_floor(&mut self, floor: u32) -> bool {
+    pub(super) fn restore_installed_names_floor(&mut self, floor: u32) -> bool {
         if floor as usize > self.symbol_names.len() {
             return false;
         }
@@ -695,7 +699,7 @@ impl Interp {
     /// inverse of [`Self::errors_snapshot`]). Runs on a freshly
     /// restored machine whose table is empty. Every owner and constructor
     /// name is validated before any table entry changes.
-    pub fn restore_error_data(
+    pub(super) fn restore_error_data(
         &mut self,
         rows: Vec<(u32, String, Option<SymbolName>, Vec<String>)>,
     ) -> Result<(), RestoreError> {
@@ -779,7 +783,7 @@ impl Interp {
     /// `false` without completing on a violation (the caller fails its
     /// decode closed). Detached buffers retain their views' former geometry
     /// because the observable accessors project those views as zero-length.
-    pub fn restore_typed_array_family(
+    pub(super) fn restore_typed_array_family(
         &mut self,
         buffers: Vec<(u32, u32, u32, u8)>,
         views: Vec<(u32, u8, u32, u32, u32)>,
@@ -886,7 +890,10 @@ impl Interp {
     /// Reinstate the `wrapper_data` side table from a snapshot (the
     /// exact inverse of [`Self::wrappers_snapshot`]). Validate owners and
     /// primitive representations before installing any row.
-    pub fn restore_wrapper_data(&mut self, rows: Vec<(u32, Slot)>) -> Result<(), RestoreError> {
+    pub(super) fn restore_wrapper_data(
+        &mut self,
+        rows: Vec<(u32, Slot)>,
+    ) -> Result<(), RestoreError> {
         self.validate_restore_owners(rows.iter().map(|&(owner, _)| owner), "Wrappers")?;
         if rows.iter().any(|(_, value)| {
             !matches!(
@@ -945,7 +952,7 @@ impl Interp {
     /// no heap `lastIndex` property, so materialize it from the legacy numeric
     /// field. A newer snapshot must carry the standard non-enumerable,
     /// non-configurable data descriptor; reject any other shape.
-    pub fn restore_regexps(
+    pub(super) fn restore_regexps(
         &mut self,
         rows: Vec<(u32, SymbolName, String, u64)>,
     ) -> Result<(), RestoreError> {
@@ -1022,7 +1029,10 @@ impl Interp {
     }
 
     /// Reinstate the arguments-exotic brand set.
-    pub fn restore_arguments_brands(&mut self, owners: Vec<u32>) -> Result<(), RestoreError> {
+    pub(super) fn restore_arguments_brands(
+        &mut self,
+        owners: Vec<u32>,
+    ) -> Result<(), RestoreError> {
         self.validate_restore_owners(owners.iter().copied(), "ArgumentsBrands")?;
         for owner in owners {
             self.arguments_objects
@@ -1176,7 +1186,7 @@ impl Interp {
     /// the legacy representation cannot reintroduce the obsolete brand.
     /// Reject non-live/non-instance owners, nonascending owners, and values
     /// outside TimeClip's output domain before changing any table entry.
-    pub fn restore_dates(&mut self, rows: Vec<(u32, u64)>) -> Result<(), RestoreError> {
+    pub(super) fn restore_dates(&mut self, rows: Vec<(u32, u64)>) -> Result<(), RestoreError> {
         self.validate_restore_owners(rows.iter().map(|&(owner, _)| owner), "Dates")?;
         for &(_, value_bits) in &rows {
             let value = f64::from_bits(value_bits);
@@ -1341,7 +1351,7 @@ impl Interp {
     /// Restore the authoritative surviving boot-native name table before
     /// runtime function clusters, which may reuse collected boot slot indices.
     /// The native implementation stays boot-derived; only chunk locations travel.
-    pub fn restore_native_names(&mut self, rows: Option<&[(u32, u32)]>) -> bool {
+    pub(super) fn restore_native_names(&mut self, rows: Option<&[(u32, u32)]>) -> bool {
         if !self.native_names_are_valid(rows) {
             return false;
         }
@@ -1365,7 +1375,7 @@ impl Interp {
     }
 
     /// Restore a validated atomic guest-callability cluster.
-    pub fn restore_function_state(&mut self, state: FunctionStateSnapshot) -> bool {
+    pub(super) fn restore_function_state(&mut self, state: FunctionStateSnapshot) -> bool {
         if !self.native_names_are_valid(state.native_names.as_deref()) {
             return false;
         }
@@ -1500,7 +1510,7 @@ impl Interp {
         ProxyStateSnapshot { proxies, revokers }
     }
 
-    pub fn restore_proxy_state(&mut self, state: ProxyStateSnapshot) -> bool {
+    pub(super) fn restore_proxy_state(&mut self, state: ProxyStateSnapshot) -> bool {
         let proxy_owners: std::collections::BTreeSet<u32> =
             state.proxies.iter().map(|row| row.owner).collect();
         if state
@@ -1557,7 +1567,7 @@ impl Interp {
         rows
     }
 
-    pub fn restore_accessors(&mut self, rows: Vec<AccessorRow>) -> bool {
+    pub(super) fn restore_accessors(&mut self, rows: Vec<AccessorRow>) -> bool {
         for row in rows {
             for value in [row.get, row.set].into_iter().flatten() {
                 let Payload::Reference(function) = value.value else {
@@ -1606,7 +1616,7 @@ impl Interp {
         rows
     }
 
-    pub fn restore_intl_bound_functions(&mut self, rows: Vec<IntlBoundFunctionRow>) -> bool {
+    pub(super) fn restore_intl_bound_functions(&mut self, rows: Vec<IntlBoundFunctionRow>) -> bool {
         for row in rows {
             let function = crate::value::SlotIndex(row.function);
             let owner = crate::value::SlotIndex(row.owner);
@@ -1665,7 +1675,7 @@ impl Interp {
         PrivateElementSnapshot { values, accessors }
     }
 
-    pub fn restore_private_elements(&mut self, state: PrivateElementSnapshot) -> bool {
+    pub(super) fn restore_private_elements(&mut self, state: PrivateElementSnapshot) -> bool {
         for row in state.values {
             self.private_values.insert(
                 (
@@ -1724,7 +1734,7 @@ impl Interp {
     /// Validate and restore retained disposal records as one batch.
     /// Method references must name live instances; their callable identity is
     /// a cross-table obligation involving restored functions and proxies.
-    pub fn restore_disposable_stacks(
+    pub(super) fn restore_disposable_stacks(
         &mut self,
         rows: Vec<DisposableStackRow>,
     ) -> Result<(), RestoreError> {
@@ -1888,7 +1898,7 @@ impl Interp {
         rows
     }
 
-    pub fn restore_generators(&mut self, rows: Vec<GeneratorRow>) -> bool {
+    pub(super) fn restore_generators(&mut self, rows: Vec<GeneratorRow>) -> bool {
         for row in rows {
             let state = match row.state {
                 0 => GeneratorState::SuspendedStart,
@@ -2088,7 +2098,7 @@ impl Interp {
     /// a guest function's slot, is refused by `restore_function_state`
     /// running after this verb). The cross-checks the decoder already
     /// proved are re-validated belt-and-braces, as everywhere.
-    pub fn restore_promise_cluster(&mut self, snap: PromiseClusterSnapshot) -> bool {
+    pub(super) fn restore_promise_cluster(&mut self, snap: PromiseClusterSnapshot) -> bool {
         let owners: std::collections::BTreeSet<u32> =
             snap.promises.iter().map(|row| row.owner).collect();
         // Per-combinator results-Array length, for the element-index
@@ -2557,7 +2567,7 @@ impl Interp {
     /// crafted bytes — the consuming natives match on it — so the
     /// `false` return fails the caller's decode closed.
     #[allow(clippy::type_complexity)]
-    pub fn restore_temporal_records(
+    pub(super) fn restore_temporal_records(
         &mut self,
         instants: Vec<(u32, i128)>,
         durations: Vec<(u32, [i64; 10])>,
@@ -2662,7 +2672,7 @@ impl Interp {
     /// Unrecognized option STRINGS are not refused: every consuming
     /// match has a fallback arm, so the worst a forged string yields
     /// is a wrong rendering, never unsafety (`forbid(unsafe_code)`).
-    pub fn restore_intl(&mut self, t: IntlTables) -> bool {
+    pub(super) fn restore_intl(&mut self, t: IntlTables) -> bool {
         for (_, r) in &t.segments {
             let mut prev = 0usize;
             for &(start, end, _) in &r.segments {
@@ -2761,7 +2771,7 @@ impl Interp {
     /// RegExp String Iterator with invalid mode bits or malformed UTF-16, or
     /// a for-in cursor past its key list or holding a key id outside the
     /// restored name table.
-    pub fn restore_iterators(&mut self, rows: Vec<IteratorRow>) -> bool {
+    pub(super) fn restore_iterators(&mut self, rows: Vec<IteratorRow>) -> bool {
         for r in &rows {
             if r.kind > 9 {
                 return false;
@@ -2859,7 +2869,7 @@ impl Interp {
     /// descriptors pairwise distinct — and returns `false` without
     /// mutating anything on a violation (the caller fails its decode
     /// closed); a well-formed table always restores fully.
-    pub fn restore_symbol_key_table(&mut self, next: u16, pairs: &[(u16, u32)]) -> bool {
+    pub(super) fn restore_symbol_key_table(&mut self, next: u16, pairs: &[(u16, u32)]) -> bool {
         // The counter (and so every pair id above it) must clear the
         // name table: a symbol id equal to a table position would make
         // one id simultaneously a string key and a symbol key, and
@@ -2945,7 +2955,7 @@ impl Interp {
     /// kind code is a corrupt image and returns `false` (the caller
     /// fails its decode closed); a well-formed snapshot always
     /// restores fully.
-    pub fn restore_bulk_side_tables(
+    pub(super) fn restore_bulk_side_tables(
         &mut self,
         arrays: Vec<ArraySnapshot>,
         index_props: Vec<IndexPropsSnapshot>,
@@ -3084,6 +3094,41 @@ impl Interp {
             identity: self.snapshot_baseline_identity.clone(),
             arena: self.slots.snapshot_dirt.clone(),
         }
+    }
+
+    /// Acknowledge a detached or twin-store commit conservatively: pages
+    /// whose lazy backing is stale remain resident and unevictable.
+    pub fn acknowledge_arena_commit(&mut self) {
+        self.slots.clear_dirty_after_commit(false);
+        self.chunks.clear_dirty_after_commit(false);
+    }
+
+    /// Check the store session's backing authority before committing bytes.
+    /// This exposes no authority and does not read or mutate any heap page.
+    pub fn check_backing_authority(
+        &self,
+        authority: &crate::BackingCommitAuthority,
+    ) -> Result<(), &'static str> {
+        if !authority.authorizes(&self.slots, &self.chunks) {
+            return Err("commit authority does not match the machine's backing");
+        }
+        Ok(())
+    }
+
+    /// Acknowledge a commit to the pinned backing and advance its geometry.
+    /// The store adapter must update its page source to the committed state
+    /// first. Only the authority minted with these arenas can authorize this.
+    /// A capability for any other pair is refused before changing metadata.
+    pub fn acknowledge_backing_commit(
+        &mut self,
+        authority: &mut crate::BackingCommitAuthority,
+    ) -> Result<(), &'static str> {
+        self.check_backing_authority(authority)?;
+        self.slots.clear_dirty_after_commit(true);
+        self.chunks.clear_dirty_after_commit(true);
+        self.slots.advance_backing(self.chunks.byte_size() as u64);
+        self.chunks.advance_backing();
+        Ok(())
     }
 
     /// Call after durable commit. Invalidates older tokens

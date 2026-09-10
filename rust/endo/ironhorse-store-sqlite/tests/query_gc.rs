@@ -142,7 +142,7 @@ fn partial_collect_equivalent_across_backends() {
             .map_err(|(_, e)| e)
             .expect("begin");
         let freed = partial_collect(&mut session, store).expect("partial collect");
-        (freed, session.machine().slots.free_list().len())
+        (freed, session.machine().slots().free_list().len())
     };
 
     let mut mem = MemoryStore::new();
@@ -317,7 +317,7 @@ fn generational_collect_equivalent_across_backends() {
         assert!(o.completed, "halt: {:?}", o.halt);
         checkpoint_to_store(&mut session, &sig(), store).expect("checkpoint");
         let freed = generational_collect(&mut session, store).expect("generational");
-        (freed, session.machine().slots.free_list().len())
+        (freed, session.machine().slots().free_list().len())
     };
 
     let dir = common::TempDir::new(&format!("ironhorse-query-gc-gen-{}", std::process::id()));

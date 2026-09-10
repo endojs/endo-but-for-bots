@@ -1,5 +1,7 @@
 //! Generated bulk-table chunk walks preserve values and counted slot edges.
-use ironhorse_vm::{parse_symbols, Interp, CHUNK_EXTENT_BYTES};
+#![cfg(test)]
+
+use crate::{parse_symbols, Interp, CHUNK_EXTENT_BYTES};
 
 #[test]
 fn bulk_strings_relocate_without_changing_counted_object_edges() {

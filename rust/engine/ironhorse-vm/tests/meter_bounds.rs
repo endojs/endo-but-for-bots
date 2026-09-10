@@ -131,11 +131,11 @@ fn builtin_allocation_admission_interrupts_before_the_temporary_buffer() {
         let mut armed = Interp::new();
         armed.link_intrinsics(&names);
         armed.arm_meter(1, Box::new(move |spent| spent <= limit));
-        let before = armed.chunks.byte_size();
+        let before = armed.chunks().byte_size();
         let out = armed.run(&code);
         assert_eq!(out.halt, Halt::MeterAbort, "{source}");
         assert!(
-            armed.chunks.byte_size() < before + 10000,
+            armed.chunks().byte_size() < before + 10000,
             "result was allocated: {source}"
         );
     }

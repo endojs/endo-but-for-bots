@@ -74,20 +74,25 @@ fn mixed_live_state_survives_alternating_collectors_and_lazy_resume() {
                 .slots_reclaimed;
         }
         checkpoint_to_store(&mut session, &sig, &mut *store.borrow_mut()).unwrap();
-        for p in 0..session.machine().slots.capacity().div_ceil(SLOTS_PER_PAGE) {
-            let _ = session.machine().slots.evict_page(p);
+        for p in 0..session
+            .machine()
+            .slots()
+            .capacity()
+            .div_ceil(SLOTS_PER_PAGE)
+        {
+            let _ = session.machine().slots().evict_page(p);
         }
         for e in 0..session
             .machine()
-            .chunks
+            .chunks()
             .byte_size()
             .div_ceil(CHUNK_EXTENT_BYTES as usize)
         {
-            let _ = session.machine().chunks.evict_extent(e as u32);
+            let _ = session.machine().chunks().evict_extent(e as u32);
         }
         if round > 0 {
-            assert_eq!(session.machine().slots.resident_page_count(), 0);
-            assert_eq!(session.machine().chunks.resident_extent_count(), 0);
+            assert_eq!(session.machine().slots().resident_page_count(), 0);
+            assert_eq!(session.machine().chunks().resident_extent_count(), 0);
         }
         // Reading the evicted machine checks its advanced backing after GC.
         let bytes = session.machine().write_snapshot(&sig).unwrap();

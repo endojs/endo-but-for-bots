@@ -68,6 +68,8 @@ mod native_try;
 mod natives;
 mod persist;
 pub use persist::RestoreError;
+mod restore;
+pub use restore::RestoreSession;
 mod property;
 use native_try::CallerHandlers;
 
@@ -1966,6 +1968,51 @@ impl Default for Interp {
 }
 
 impl Interp {
+    /// Inspect slot records and persistence geometry without mutable heap access.
+    ///
+    /// ```compile_fail
+    /// let mut machine = ironhorse_vm::Interp::new();
+    /// machine.slots.alloc(ironhorse_vm::Slot::undefined());
+    /// ```
+    /// ```compile_fail
+    /// let mut machine = ironhorse_vm::Interp::new();
+    /// machine.slots().alloc(ironhorse_vm::Slot::undefined());
+    /// ```
+    pub fn slots(&self) -> &SlotArena {
+        &self.slots
+    }
+
+    /// Inspect chunk contents and persistence geometry without mutable heap access.
+    ///
+    /// ```compile_fail
+    /// let mut machine = ironhorse_vm::Interp::new();
+    /// machine.chunks.alloc(&[]);
+    /// ```
+    /// ```compile_fail
+    /// let mut machine = ironhorse_vm::Interp::new();
+    /// machine.chunks().alloc(&[]);
+    /// ```
+    pub fn chunks(&self) -> &ChunkArena {
+        &self.chunks
+    }
+
+    /// Consume the machine and take its arenas for offline inspection.
+    /// The remaining interpreter state is discarded; these arenas cannot be
+    /// installed into a runnable machine except through a restore session.
+    pub fn into_arenas(self) -> (SlotArena, ChunkArena) {
+        (self.slots, self.chunks)
+    }
+
+    /// Set the host's slot-allocation ceiling for subsequent execution.
+    pub fn set_slot_ceiling(&mut self, ceiling: u32) {
+        self.slots.set_ceiling(ceiling);
+    }
+
+    /// Set the host's chunk-allocation ceiling for subsequent execution.
+    pub fn set_chunk_ceiling(&mut self, ceiling: usize) {
+        self.chunks.set_ceiling(ceiling);
+    }
+
     /// The cost-calibration histogram recorder, present only under the
     /// `cost-calibration` feature. Calibration drivers and histogram tests
     /// read it after a run. Returns a
