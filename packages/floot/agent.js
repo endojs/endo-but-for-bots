@@ -57,6 +57,7 @@ import { makeEndoToolSet, makeFlootToolRegistry } from './src/tool-registry.js';
 import { makeTurnJournal } from './src/turn-journal.js';
 import { makeHostedContinuityOptions } from './src/hosted-continuity.js';
 import { providePrivateTurnStorage } from './src/private-turn-storage.js';
+import { makeSessionNetworkPolicy } from './src/network-policy.js';
 import { makeContainerMountRegistrar } from './src/container-mounts.js';
 
 // Cap the tool-call loop so a misbehaving model can't spin forever before it
@@ -179,6 +180,13 @@ const FlootSessionInterface = M.interface('FlootSession', {
   getHistory: M.callWhen().returns(M.any()),
   getTurns: M.callWhen().returns(M.any()),
   getJournalStatus: M.callWhen().returns(M.any()),
+  getNetworkPolicy: M.callWhen().returns(M.any()),
+  setNetworkPolicy: M.callWhen(M.string()).returns(M.any()),
+  resolveNetworkPolicyRequest: M.callWhen(
+    M.string(),
+    M.boolean(),
+    M.string(),
+  ).returns(M.any()),
   resolveTurn: M.callWhen(M.string(), M.string()).returns(M.undefined()),
   getUsage: M.callWhen().returns(M.any()),
   getAccount: M.callWhen().optional(M.boolean()).returns(M.record()),
@@ -2402,6 +2410,19 @@ export const makeStreamingAgent = async (
     getUsage,
     startInbox,
     shutdown: shutdownAgent,
+    assertNetworkPolicyIdle: () => {
+      if (turnControllers.size || executingTools.size || activeJournalTurn)
+        throw Error(
+          'Cannot decide network policy while session work is active',
+        );
+    },
+    stopForNetworkChange: () => {
+      if (turnControllers.size || executingTools.size || activeJournalTurn)
+        throw Error(
+          'Cannot change network policy while session work is active',
+        );
+      return shutdownAgent();
+    },
   });
 };
 harden(makeStreamingAgent);
@@ -3299,11 +3320,71 @@ export const make = (hostPowers, _context, { env } = {}) => {
   // session guest and revives an existing one after a restart.
   /** @type {Map<string, Promise<any>>} */
   const agents = new Map();
+  const networkControllers = new Map();
+  const networkChanges = new Set();
+  const networkController = id => {
+    if (!networkControllers.has(id)) {
+      networkControllers.set(
+        id,
+        makeSessionNetworkPolicy({
+          host: getHost(),
+          id,
+          supported: async () => {
+            const entry = (await loadRegistry()).find(item => item.id === id);
+            if (!entry) throw Error('Unknown Floot session');
+            if (!entry.backendId) return [];
+            return (
+              (await getHostedBackends()).get(entry.backendId)?.descriptor
+                .supportedNetworkPolicies || []
+            );
+          },
+          prepare: async () => {
+            const pending = agents.get(id);
+            if (pending) await (await pending).stopForNetworkChange();
+          },
+          change: async () => {
+            const mount = hostedMountClients.get(id);
+            if (mount) {
+              await mount.close();
+              hostedMountClients.delete(id);
+            }
+            const admin = backendAdmins.get(id);
+            if (admin) {
+              await E(admin).terminate();
+              backendAdmins.delete(id);
+            }
+            agents.delete(id);
+          },
+        }),
+      );
+    }
+    return networkControllers.get(id);
+  };
+  const changeNetwork = async (id, operation) => {
+    if (networkChanges.has(id))
+      throw Error('Network policy change already in progress');
+    networkChanges.add(id);
+    let result;
+    try {
+      const pending = agents.get(id);
+      if (pending) (await pending).assertNetworkPolicyIdle();
+      result = await operation(networkController(id));
+    } finally {
+      networkChanges.delete(id);
+    }
+    // Mail-only sessions must resume without depending on a UI history read.
+    if (!agents.has(id)) await getAgent(id);
+    return result;
+  };
   const getAgent = id => {
+    if (networkChanges.has(id))
+      throw Error('Network policy change in progress');
     let agentP = agents.get(id);
     if (!agentP) {
       agentP = (async () => {
         const host = getHost();
+        const network = networkController(id);
+        const networkPolicy = await network.forTurn();
         const handleName = `session-${id}`;
         const agentName = `session-agent-${id}`;
         // provideGuest is idempotent (create-or-revive). The petname we pass
@@ -3365,6 +3446,72 @@ export const make = (hostPowers, _context, { env } = {}) => {
         let extraTools = new Map();
         try {
           extraTools = await buildExtraTools(id, sessionGuest, preset);
+          if (networkPolicy !== undefined) {
+            extraTools.set(
+              'getSandboxNetworkPolicy',
+              harden({
+                schema: () =>
+                  harden({
+                    type: 'function',
+                    function: {
+                      name: 'getSandboxNetworkPolicy',
+                      description:
+                        'Read the sandbox network policy and pending operator request. Does not change permissions.',
+                      parameters: {
+                        type: 'object',
+                        properties: {},
+                        additionalProperties: false,
+                      },
+                    },
+                  }),
+                execute: async args => {
+                  if (!args || Object.keys(args).length)
+                    throw Error('Expected empty arguments');
+                  return JSON.stringify(await network.get());
+                },
+                help: () =>
+                  'getSandboxNetworkPolicy({}) reads configured network policy and any pending approval request.',
+              }),
+            );
+            extraTools.set(
+              'requestNetworkPolicyChange',
+              harden({
+                schema: () =>
+                  harden({
+                    type: 'function',
+                    function: {
+                      name: 'requestNetworkPolicyChange',
+                      description:
+                        'Request operator approval to change sandbox network access. This does not grant access. Finish your turn and wait for approval; never bypass the current policy. Public internet means HTTP/HTTPS only; Endo capability authority is separate.',
+                      parameters: {
+                        type: 'object',
+                        properties: {
+                          policy: {
+                            type: 'string',
+                            enum: ['off', 'public-internet'],
+                          },
+                          reason: { type: 'string' },
+                        },
+                        required: ['policy', 'reason'],
+                        additionalProperties: false,
+                      },
+                    },
+                  }),
+                execute: async args => {
+                  if (
+                    !args ||
+                    Object.keys(args).sort().join(',') !== 'policy,reason'
+                  )
+                    throw Error('Provide exactly policy and reason');
+                  return JSON.stringify(
+                    await network.request(args.policy, args.reason),
+                  );
+                },
+                help: () =>
+                  'requestNetworkPolicyChange({policy:"public-internet",reason:"Download Rust dependencies"}) requests approval only. Finish the turn; an operator approves or denies while idle.',
+              }),
+            );
+          }
         } catch (error) {
           console.error(
             `[floot-factory] could not build extra tools for session ${id}:`,
@@ -3422,6 +3569,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
                   model: entry.modelId || '',
                   reasoningEffort: entry.reasoningEffort || '',
                   systemPrompt: sessionPrompt,
+                  ...(networkPolicy === undefined ? {} : { networkPolicy }),
                   ...(workspaceHostPath ? { workspaceHostPath } : {}),
                 }),
                 getToolSet: () => toolSet,
@@ -3603,6 +3751,28 @@ export const make = (hostPowers, _context, { env } = {}) => {
           await assertSessionReady(id);
           return (await getAgent(id)).getJournalStatus();
         },
+        async getNetworkPolicy() {
+          await assertSessionReady(id);
+          return networkController(id).get();
+        },
+        async setNetworkPolicy(policy) {
+          await assertSessionReady(id);
+          if (turns.getCurrent())
+            throw Error(
+              'Cancel or finish the active turn before changing network policy',
+            );
+          return changeNetwork(id, controller => controller.set(policy));
+        },
+        async resolveNetworkPolicyRequest(requestId, approve, note) {
+          await assertSessionReady(id);
+          if (turns.getCurrent())
+            throw Error(
+              'Cancel or finish the active turn before deciding a network request',
+            );
+          return changeNetwork(id, controller =>
+            controller.resolve(requestId, approve, note),
+          );
+        },
         async resolveTurn(turnId, note) {
           await assertSessionReady(id);
           if (turns.getCurrent())
@@ -3663,6 +3833,12 @@ export const make = (hostPowers, _context, { env } = {}) => {
           });
         },
         help(methodName) {
+          if (methodName === 'getNetworkPolicy')
+            return 'getNetworkPolicy() — Report enforced backend support, configured off/public-internet policy, and pending requests. Null policy is not proof of off enforcement.';
+          if (methodName === 'setNetworkPolicy')
+            return 'setNetworkPolicy(policy) — Operator-only idle-session policy change. Stops old sandbox before the next generation. Public mode permits public HTTP/HTTPS uploads and downloads.';
+          if (methodName === 'resolveNetworkPolicyRequest')
+            return 'resolveNetworkPolicyRequest(id, approve, note) — Operator-only idle decision for an exact pending request. A model request alone grants nothing.';
           if (methodName === 'getTurns')
             return 'getTurns() — Durable turn records, including state, Endo tool intents/results, observed native activity, partial usage, errors, and explicit resolutions.';
           if (methodName === 'getJournalStatus')

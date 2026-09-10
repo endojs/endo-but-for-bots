@@ -113,6 +113,7 @@ export {};
  *   input: string,
  *   settingsOpen: boolean,
  *   recovery?: FlootRecovery,
+ *   network?: FlootNetwork,
  *   unavailable?: boolean,
  *   usage: { inputTokens: number, outputTokens: number } | null,
  *   voice: FlootVoiceState,
@@ -142,6 +143,17 @@ export {};
  * @property {(text: string) => void} setInput
  * @property {() => void} [refreshRecovery]
  * @property {(turnId: string, note: string, confirmed: boolean) => void} [resolveTurn]
+ * @property {() => void} [refreshNetworkPolicy]
+ * @property {(policy: string) => void} [setNetworkPolicy]
+ * @property {(id: string, approve: boolean, note: string) => void} [resolveNetworkPolicyRequest]
+ */
+
+/**
+ * @typedef {{ status: string, message: string, policy: string | null,
+ *   supportedPolicies: string[], changing: boolean, canSet: boolean,
+ *   pendingPolicy?: string, blocked?: boolean,
+ *   canResolve: boolean, current?: boolean,
+ *   request?: { id: string, policy: string, reason: string } }} FlootNetwork
  */
 
 /**

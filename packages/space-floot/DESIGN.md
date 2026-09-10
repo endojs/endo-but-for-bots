@@ -302,6 +302,27 @@ grow-to-fit purely in CSS (restored in the post-review cleanup, commit
 
 ## Verification and gaps
 
+### Sandbox network policy
+
+The settings panel displays the selected session's supported sandbox network
+policies and requires an explicit Apply action after selecting a policy.
+Agent requests appear as a header indicator and an approve/deny panel; request
+reasons are untrusted plain text, and operator decisions require a nonempty note.
+The host rechecks liveness before writes and the session enforces request-ID CAS.
+Changing a policy supersedes pending requests and affects the next turn only.
+To revoke access during a turn, Stop it first and wait for it to settle.
+
+Off blocks external sandbox networking, not inference service access or authority
+already granted through Endo capability tools.
+Public internet initially permits only public HTTP/HTTPS; private, link-local,
+metadata, SSH, and UDP access are not enabled.
+Older or unsupported backends are explicitly unavailable, never shown as enforcing
+Off by default.
+An incomplete transition displays no verified policy and permits only an explicit
+retry of its pending policy; sending stays disabled until the transition finishes.
+Reads and mutations are fenced against stale selected sessions, duplicate actions,
+active/queued turns, and unavailable session lifecycles.
+
 ### Turn journal and recovery
 
 The header's Journal panel displays durable turn dispositions, errors, and the
