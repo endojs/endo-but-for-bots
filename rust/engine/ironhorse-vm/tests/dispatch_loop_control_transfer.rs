@@ -6,6 +6,21 @@ use ironhorse_vm::source_scan::{code_only, token_body, token_positions, tokens, 
 
 const SRC: &str = concat!(
     include_str!("../src/interp.rs"),
+    include_str!("../src/interp/admission.rs"),
+    include_str!("../src/interp/apply.rs"),
+    include_str!("../src/interp/code.rs"),
+    include_str!("../src/interp/coerce.rs"),
+    include_str!("../src/interp/enumerate.rs"),
+    include_str!("../src/interp/environment.rs"),
+    include_str!("../src/interp/errors.rs"),
+    include_str!("../src/interp/eval.rs"),
+    include_str!("../src/interp/frames.rs"),
+    include_str!("../src/interp/function.rs"),
+    include_str!("../src/interp/invoke.rs"),
+    include_str!("../src/interp/iterable.rs"),
+    include_str!("../src/interp/render.rs"),
+    include_str!("../src/interp/strings.rs"),
+    include_str!("../src/interp/unwind.rs"),
     "\n",
     include_str!("../src/interp/dispatch.rs")
 );

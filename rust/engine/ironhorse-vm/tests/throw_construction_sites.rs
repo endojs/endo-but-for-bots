@@ -6,7 +6,24 @@ use ironhorse_vm::source_scan::{
     code_only, matching_delimiter, rs_files, token_body, token_positions, tokens, Token,
 };
 
-const SRC: &str = include_str!("../src/interp.rs");
+const SRC: &str = concat!(
+    include_str!("../src/interp.rs"),
+    include_str!("../src/interp/admission.rs"),
+    include_str!("../src/interp/apply.rs"),
+    include_str!("../src/interp/code.rs"),
+    include_str!("../src/interp/coerce.rs"),
+    include_str!("../src/interp/enumerate.rs"),
+    include_str!("../src/interp/environment.rs"),
+    include_str!("../src/interp/errors.rs"),
+    include_str!("../src/interp/eval.rs"),
+    include_str!("../src/interp/frames.rs"),
+    include_str!("../src/interp/function.rs"),
+    include_str!("../src/interp/invoke.rs"),
+    include_str!("../src/interp/iterable.rs"),
+    include_str!("../src/interp/render.rs"),
+    include_str!("../src/interp/strings.rs"),
+    include_str!("../src/interp/unwind.rs")
+);
 
 /// Match both `Halt::member` and `<crate::Halt>::member`. Qualified
 /// inherent-method paths are stable Rust and must not bypass the allowlist.
@@ -250,7 +267,7 @@ fn cross_file_violations(path: &str, source: &str) -> Vec<String> {
     // and opcode reads only in their current owning module; all child modules
     // are covered by this same recursive lock.
     let allowed_reads: &[&str] = match path {
-        "ironhorse-vm/src/interp.rs" => &["let saved_exception = self.exception;"],
+        "ironhorse-vm/src/interp/render.rs" => &["let saved_exception = self.exception;"],
         "ironhorse-vm/src/interp/dispatch.rs" => &[
             "let ex = self.exception;",
             "let v = self.exception;",
@@ -295,7 +312,7 @@ fn cross_file_violations(path: &str, source: &str) -> Vec<String> {
             throw_constructions(&code, variant)
         };
         let allowed: &[(&str, usize)] = match (path, variant) {
-            ("ironhorse-vm/src/interp.rs", "Step::Threw") => &[("fn raise_js(", 1)],
+            ("ironhorse-vm/src/interp/unwind.rs", "Step::Threw") => &[("fn raise_js(", 1)],
             ("ironhorse-vm/src/interp.rs", "Halt::Throw") => {
                 &[("fn finish_step(", 1), ("pub fn synthetic_throw(", 1)]
             }
