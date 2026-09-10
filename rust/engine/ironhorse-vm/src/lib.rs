@@ -61,8 +61,8 @@ pub use interp::{
     ListFormatData, LocaleData, Native, NumberFormatData, PanicKind, PluralRulesData,
     PrivateAccessorRow, PrivateElementSnapshot, PrivateValueRow, PromiseClusterSnapshot,
     PromiseFnRow, PromiseReactionRow, PromiseRow, ProxyRevokerRow, ProxyRow, ProxyStateSnapshot,
-    RelinkError, RunOutcome, SavedFrameRow, SavedJumpRow, SegmentIteratorData, SegmenterData,
-    SegmentsData, SourceCompileError, SourceCompiler, PROGRAM_INVOCATION_COMPUTRONS,
+    RelinkError, RestoreError, RunOutcome, SavedFrameRow, SavedJumpRow, SegmentIteratorData,
+    SegmenterData, SegmentsData, SourceCompileError, SourceCompiler, PROGRAM_INVOCATION_COMPUTRONS,
     TYPED_ARRAY_TYPES,
 };
 pub use interp::{HEAVY_FRAME_COST, LIGHT_FRAME_COST, NATIVE_DEPTH_LIMIT};

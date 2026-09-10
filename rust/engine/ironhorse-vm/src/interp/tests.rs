@@ -952,14 +952,60 @@ fn side_ref_tail_masked_undercount_poisons_during_page_pruning() {
 }
 
 #[test]
+fn date_restore_validates_rows_before_mutating_the_table() {
+    let mut interp = Interp::new();
+    let first = interp.slots.alloc(Slot::instance(interp.date_proto));
+    let second = interp.slots.alloc(Slot::instance(interp.date_proto));
+    let primitive = interp.slots.alloc(Slot::integer(1));
+    let freed = interp.slots.alloc(Slot::instance(interp.date_proto));
+    interp.slots.free(freed);
+    interp
+        .restore_dates(vec![(first.0, 123.0f64.to_bits())])
+        .unwrap();
+    let before = interp.dates_snapshot();
+    for rows in [
+        vec![(u32::MAX, 0)],
+        vec![(u32::MAX - 1, 0)],
+        vec![(primitive.0, 0)],
+        vec![(freed.0, 0)],
+        vec![(first.0, 0), (first.0, 0)],
+        vec![(second.0, 0), (first.0, 0)],
+        vec![(first.0, 0), (second.0, f64::INFINITY.to_bits())],
+        vec![(first.0, 0), (second.0, 1.5f64.to_bits())],
+        vec![(first.0, 0), (second.0, (-0.0f64).to_bits())],
+        vec![
+            (first.0, 0),
+            (second.0, 8_640_000_000_000_001.0f64.to_bits()),
+        ],
+    ] {
+        let error = interp.restore_dates(rows).unwrap_err();
+        assert_eq!(error.row, "Dates");
+        assert!(!error.reason.is_empty());
+        assert_eq!(
+            interp.dates_snapshot(),
+            before,
+            "a rejected batch changed live state"
+        );
+    }
+    for value in [f64::NAN, -8_640_000_000_000_000.0, 8_640_000_000_000_000.0] {
+        interp
+            .restore_dates(vec![(second.0, value.to_bits())])
+            .unwrap();
+        assert_eq!(interp.dates_snapshot().last().unwrap().1, value.to_bits());
+    }
+}
+
+#[test]
 fn legacy_date_prototype_snapshot_row_is_migrated_away() {
     let mut interp = Interp::new();
     let date_proto = interp.date_proto;
     let instance = interp.slots.alloc(Slot::instance(date_proto));
-    interp.restore_dates(vec![
-        (date_proto.0, 1234.0f64.to_bits()),
-        (instance.0, 5678.0f64.to_bits()),
-    ]);
+    interp
+        .restore_dates(vec![
+            (date_proto.0, 1234.0f64.to_bits()),
+            (instance.0, 5678.0f64.to_bits()),
+        ])
+        .unwrap();
     assert!(
         !interp.dates.contains_key(&date_proto),
         "a legacy row must not re-brand %Date.prototype%"

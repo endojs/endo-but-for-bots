@@ -1374,7 +1374,7 @@ macro_rules! snapshot_payloads {
                             .into_iter()
                             .map(|d| (d.owner, d.value_bits))
                             .collect(),
-                    );
+                    ).map_err(|_| SnapshotError::Corrupt("side-table restore: malformed Dates row"))?;
                 }],
                 initialize: [Functions;
                     #[doc = " Date `[[DateValue]]` records (schema 14; the `DATE` encoding)."]

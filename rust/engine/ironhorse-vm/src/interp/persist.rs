@@ -2,7 +2,39 @@
 //! The snapshot crate owns wire formats and store orchestration.
 use super::*;
 
+/// A VM restore refusal, identifying the persisted row and violated invariant.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RestoreError {
+    pub row: &'static str,
+    pub reason: &'static str,
+}
+
+impl std::fmt::Display for RestoreError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.row, self.reason)
+    }
+}
+
+impl std::error::Error for RestoreError {}
+
 impl Interp {
+    fn validate_restore_owner(&self, owner: u32, row: &'static str) -> Result<(), RestoreError> {
+        let index = crate::value::SlotIndex(owner);
+        if index.is_null() || owner >= self.slots.capacity() || self.slots.is_free_index(index) {
+            return Err(RestoreError {
+                row,
+                reason: "owner is not a live slot",
+            });
+        }
+        if self.slots.get(index).kind != Kind::Instance {
+            return Err(RestoreError {
+                row,
+                reason: "owner is not an instance",
+            });
+        }
+        Ok(())
+    }
+
     // --- Snapshot surface -----------------------------------------------
     //
     // The narrow, engine-side conversion primitives the `ironhorse-snapshot`
@@ -1006,13 +1038,34 @@ impl Interp {
     /// before `%Date.prototype%` lost its incorrect Date brand can contain a
     /// row for that boot object; drop it as a semantic migration so restoring
     /// the legacy representation cannot reintroduce the obsolete brand.
-    pub fn restore_dates(&mut self, rows: Vec<(u32, u64)>) {
+    /// Reject non-live/non-instance owners, nonascending owners, and values
+    /// outside TimeClip's output domain before changing any table entry.
+    pub fn restore_dates(&mut self, rows: Vec<(u32, u64)>) -> Result<(), RestoreError> {
+        let mut previous = None;
+        for &(owner, value_bits) in &rows {
+            self.validate_restore_owner(owner, "Dates")?;
+            if previous.is_some_and(|prior| owner <= prior) {
+                return Err(RestoreError {
+                    row: "Dates",
+                    reason: "owners are not strictly ascending",
+                });
+            }
+            previous = Some(owner);
+            let value = f64::from_bits(value_bits);
+            if !value.is_nan() && value_bits != time_clip(value).to_bits() {
+                return Err(RestoreError {
+                    row: "Dates",
+                    reason: "value is outside the TimeClip domain",
+                });
+            }
+        }
         for (owner, value_bits) in rows {
             let owner = crate::value::SlotIndex(owner);
             if owner != self.date_proto {
                 self.dates.insert(owner, f64::from_bits(value_bits));
             }
         }
+        Ok(())
     }
 
     /// The shared canonical mapping for function rows and saved-handler rows.
