@@ -12,7 +12,6 @@ fn converted_corpus_runs_as_crank_sequences() {
     let mut failures = Vec::new();
     let mut comparisons = 0;
     let mut continued = 0;
-    let mut known_late_catch = 0;
     for (id, source) in &programs {
         assert!(!source.contains(marker), "witness name collides: {id}");
         let sources = [&*setup, source.as_str(), source.as_str(), &*observation];
@@ -20,24 +19,6 @@ fn converted_corpus_runs_as_crank_sequences() {
         assert!(runs.len() >= 2, "corpus crank must run: {id}");
         comparisons += runs.len();
         for (i, run) in runs.iter().enumerate() {
-            // Phase 1 leaves interp.rs frozen. Keep executing this case and
-            // pin the exact observed discrepancy, rather than omitting it.
-            // A fix must remove this expectation; a different failure fails.
-            if id == "built-ins/stage3b-promises/024.js" && i == 1 {
-                assert_eq!(
-                    source,
-                    "var x = 0; Promise.reject(7).catch(function(e){ x = e; }); x"
-                );
-                assert_eq!(runs.len(), 2, "known failure must stop its sequence");
-                assert_eq!(run.agreement, Agreement::OracleOnlyComplete, "{run:?}");
-                assert_eq!(run.oracle_result, "0", "{run:?}");
-                assert_eq!(
-                    run.ironhorse_error, "TypeError: call: not a function",
-                    "{run:?}"
-                );
-                known_late_catch += 1;
-                continue;
-            }
             if !run.observables_agree() {
                 failures.push(format!("{id} crank {i}: {run:?}"));
             }
@@ -48,10 +29,6 @@ fn converted_corpus_runs_as_crank_sequences() {
             continued += 1;
         }
     }
-    assert_eq!(
-        known_late_catch, 1,
-        "known discrepancy must still be exercised"
-    );
     eprintln!(
         "{} programs, {comparisons} comparisons, {continued} final observations",
         programs.len()
