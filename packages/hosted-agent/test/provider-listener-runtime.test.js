@@ -142,25 +142,36 @@ test('runtime recovers a dead owner and sweeps only its exactly labelled orphan'
 test.serial(
   'controlled namespace admission preserves live workers until explicit disposal',
   async t => {
-    t.timeout(5000);
+    // Two workers each permit two 10s startup handshakes and up to 6s
+    // shutdown. Keep one finite deadline above that combined 52s budget,
+    // including some headroom for scheduling and filesystem work in CI.
+    t.timeout(60_000);
+    t.log('creating runtime fixture');
     const f = await fixture(t);
+    t.log('acquiring runtime');
     const runtime = await makePodmanProviderListenerRuntime(f.options);
     t.teardown(runtime.dispose);
+    t.log('starting first worker');
     const first = await runtime.start({
       endpoint: Far('inference', {}),
       limits,
     });
+    t.log('retrying cleanup with first worker live');
     await runtime.retryCleanup();
     t.is(f.removals.length, 0);
+    t.log('starting second worker');
     const second = await runtime.start({
       endpoint: Far('inference', {}),
       limits,
     });
+    t.log('observing both workers');
     t.not(
       (await first.observe()).containerName,
       (await second.observe()).containerName,
     );
+    t.log('disposing both workers');
     await runtime.dispose();
+    t.log('disposal completed');
     t.is(f.removals.length, 2);
   },
 );

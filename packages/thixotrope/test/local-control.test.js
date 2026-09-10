@@ -39,16 +39,26 @@ const fixture = async t => {
 test.serial(
   'local control frames large messages across socket chunks and supports independent clients',
   async t => {
-    t.timeout(10_000);
+    // This integration test includes two handshakes and a 500 KB echo.
+    // Busy macOS CI has reported successful runs taking 13s. Allow 30s
+    // overall, without resetting the deadline between protocol phases.
+    t.timeout(30_000);
+    t.log('starting local-control server');
     const path = await fixture(t);
+    t.log('connecting first client');
     const first = await connectLocalControl(path);
     t.teardown(first.close);
+    t.log('connecting second client');
     const second = await connectLocalControl(path);
     t.teardown(second.close);
     const payload = 'hello'.repeat(100_000);
+    t.log('echoing 500 KB through first client');
     t.is(await first.call('echo', payload), payload);
+    t.log('closing first client');
     first.close();
+    t.log('echoing through independent second client');
     t.is(await second.call('echo', 42), 42);
+    t.log('both echoes completed');
   },
 );
 
