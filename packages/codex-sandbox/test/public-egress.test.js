@@ -267,6 +267,36 @@ test('absolute deadlines close idle tunnels and connection count is bounded', as
   t.true(kit.sockets[0].socket.destroyed);
 });
 
+test('revocation rejects a stalled write even if its socket callback never returns', async t => {
+  t.timeout(2000);
+  /** @type {() => void} */
+  let entered = () => {
+    throw Error('Uninitialized write latch');
+  };
+  const started = new Promise(resolve => {
+    entered = () => resolve(undefined);
+  });
+  const socket = new Duplex({
+    read() {},
+    write() {
+      entered();
+    },
+  });
+  const kit = setup(t, {
+    connect: () => {
+      queueMicrotask(() => socket.emit('connect'));
+      return /** @type {any} */ (socket);
+    },
+  });
+  const tunnel = await E(kit.endpoint).open('public.example', 443);
+  const writing = E(tunnel).write(btoa('pending upload'));
+  const rejected = t.throwsAsync(writing, { message: /operation stopped/ });
+  await started;
+  kit.dispose();
+  await rejected;
+  t.true(socket.destroyed);
+});
+
 test('public resolver and duplex capabilities cross the existing bounded private pipe', async t => {
   t.timeout(2000);
   const kit = setup(t);
