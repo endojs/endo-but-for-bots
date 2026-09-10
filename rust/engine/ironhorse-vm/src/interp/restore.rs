@@ -324,14 +324,7 @@ impl RestoreSession {
     }
     pub fn restore_accessors(&mut self, rows: Vec<AccessorRow>) -> Result<(), RestoreError> {
         self.admit("accessors")?;
-        let result = if self.interp.restore_accessors(rows) {
-            Ok(())
-        } else {
-            Err(RestoreError {
-                row: "accessors",
-                reason: "malformed row set",
-            })
-        };
+        let result = self.interp.restore_accessors(rows);
         self.failed = result.err();
         result
     }
@@ -340,14 +333,7 @@ impl RestoreSession {
         rows: Vec<IntlBoundFunctionRow>,
     ) -> Result<(), RestoreError> {
         self.admit("intl_bound_functions")?;
-        let result = if self.interp.restore_intl_bound_functions(rows) {
-            Ok(())
-        } else {
-            Err(RestoreError {
-                row: "intl_bound_functions",
-                reason: "malformed row set",
-            })
-        };
+        let result = self.interp.restore_intl_bound_functions(rows);
         self.failed = result.err();
         result
     }
@@ -618,6 +604,123 @@ mod tests {
             assert_eq!(error.reason, expected);
             assert!(session.finish().is_err());
         }
+    }
+
+    #[test]
+    fn accessor_batches_validate_keys_and_callable_values_before_insertion() {
+        for case in 0..5 {
+            let mut interp = Interp::new();
+            let owner = interp.new_object();
+            let function = *interp.functions.keys().next().unwrap();
+            let mut rows = vec![
+                AccessorRow {
+                    owner: owner.0,
+                    id: 1,
+                    get: None,
+                    set: None,
+                },
+                AccessorRow {
+                    owner: owner.0,
+                    id: 2,
+                    get: None,
+                    set: None,
+                },
+            ];
+            match case {
+                0 => rows[1].id = 1,
+                1 => rows[1].owner = u32::MAX,
+                2 => rows[0].id = 0,
+                3 => rows[1].get = Some(Slot::of(Kind::Integer, Payload::Reference(function))),
+                _ => rows[1].set = Some(Slot::of(Kind::Reference, Payload::Reference(owner))),
+            }
+            let before = interp.accessors.len();
+            assert_eq!(interp.restore_accessors(rows).unwrap_err().row, "Accessors");
+            assert_eq!(interp.accessors.len(), before);
+            assert!(!interp.accessors.contains_key(&(owner, 1)));
+        }
+    }
+
+    #[test]
+    fn bound_intl_rows_are_prevalidated_before_function_installation() {
+        for case in 0..4 {
+            let (code, names) =
+                ironhorse_compile::compile_atoms("var c = new Intl.Collator('en');").unwrap();
+            let mut interp = Interp::new();
+            interp.link_intrinsics(&crate::parse_symbols(&names));
+            assert!(interp.run(&code).completed);
+            let owner = interp.intl_snapshot().collators[0].0;
+            let first = interp.new_object();
+            let second = interp.new_object();
+            let mut rows = vec![
+                IntlBoundFunctionRow {
+                    kind: 0,
+                    function: first.0,
+                    owner,
+                    name: "compare".into(),
+                    name_chunk: u32::MAX,
+                    arity: 2,
+                },
+                IntlBoundFunctionRow {
+                    kind: 0,
+                    function: second.0,
+                    owner,
+                    name: "compare".into(),
+                    name_chunk: u32::MAX,
+                    arity: 2,
+                },
+            ];
+            match case {
+                0 => rows[1].function = first.0,
+                1 => rows[1].owner = second.0,
+                2 => rows[1].name_chunk = 1,
+                _ => rows[1].kind = 2,
+            }
+            let before = interp.functions.len();
+            assert_eq!(
+                interp.restore_intl_bound_functions(rows).unwrap_err().row,
+                "IntlBoundFunctions"
+            );
+            assert_eq!(interp.functions.len(), before);
+            assert!(!interp.functions.contains_key(&first));
+        }
+    }
+
+    #[test]
+    fn native_names_and_symbol_keys_require_valid_owners_and_descriptors() {
+        for case in 0..3 {
+            let mut interp = Interp::new();
+            let mut rows = interp.function_state_snapshot().native_names.unwrap();
+            let owner = crate::value::SlotIndex(rows[0].0);
+            match case {
+                0 => interp.slots.free(owner),
+                1 => interp.slots.get_mut(owner).value = Payload::Integer(0),
+                _ => rows[0].1 = interp.chunks.alloc(&[1]).0,
+            }
+            let before = interp.functions.len();
+            assert!(!interp.restore_native_names(Some(&rows)));
+            assert_eq!(interp.functions.len(), before);
+            assert!(interp.functions.contains_key(&owner));
+        }
+        for case in 0..5 {
+            let mut interp = Interp::new();
+            let mut descriptor = interp.slots.alloc(Slot::integer(1));
+            match case {
+                0 => {}
+                1 => interp.slots.free(descriptor),
+                2 => descriptor = crate::value::SlotIndex(interp.slots.capacity()),
+                3 => {
+                    *interp.slots.get_mut(descriptor) =
+                        Slot::of(Kind::String, Payload::String(crate::value::ChunkOffset(1)))
+                }
+                _ => descriptor = interp.new_object(),
+            }
+            let before = interp.symbol_key_table();
+            assert!(!interp.restore_symbol_key_table(u16::MAX - 1, &[(u16::MAX, descriptor.0)]));
+            assert_eq!(interp.symbol_key_table(), before);
+        }
+        let mut interp = Interp::new();
+        let cache = interp.template_cache.0;
+        assert!(interp.restore_symbol_key_table(u16::MAX - 1, &[(u16::MAX, cache)]));
     }
 
     #[test]
