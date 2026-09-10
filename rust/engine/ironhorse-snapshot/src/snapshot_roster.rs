@@ -521,17 +521,12 @@ macro_rules! snapshot_payloads {
                     // The error-data rows (name validated at decode against the
                     // engine's closed error-name set, so this cannot fail on a
                     // validated image either).
-                    let ok = interp.restore_error_data(
+                    interp.restore_error_data(
                         errors
                             .into_iter()
                             .map(|e| (e.owner, e.name, e.message, e.frames))
                             .collect(),
-                    );
-                    if !ok {
-                        return Err(SnapshotError::Corrupt(
-                            "side-table restore: unknown error name",
-                        ));
-                    }
+                    ).map_err(|_| SnapshotError::Corrupt("side-table restore: malformed Errors row"))?;
                 }],
                 initialize: [Buffers;
                     #[doc = " The error-data side table (schema 9; the `ERRD` encoding)."]
