@@ -626,7 +626,7 @@ fn restored_bound_metadata_takes_precedence_over_a_runnable_body() {
         this_arg: Slot::undefined(),
         args: Vec::new(),
     });
-    assert!(interp.restore_function_state(state));
+    interp.restore_function_state(state).unwrap();
     assert_side_tables_have_live_owners(&interp);
     assert_restored_overlap_calls_target(&mut interp);
 }
@@ -634,7 +634,7 @@ fn restored_bound_metadata_takes_precedence_over_a_runnable_body() {
 #[test]
 fn restored_proxy_metadata_takes_precedence_over_a_runnable_body() {
     let (mut interp, state, candidate, target) = callable_overlap_fixture();
-    assert!(interp.restore_function_state(state));
+    interp.restore_function_state(state).unwrap();
     let handler = *interp.symbol_ids.get("handler").unwrap();
     let Payload::Reference(handler) = interp.boot_chain_get(interp.global_obj, handler).value
     else {
@@ -3115,6 +3115,85 @@ fn generator_resume_admission_counts_sent_value_and_retains_refused_frame() {
 }
 
 #[test]
+fn retained_function_rows_validate_before_metadata_or_native_pruning_changes() {
+    for case in 0..11 {
+        let (mut interp, mut state, candidate, target) = callable_overlap_fixture();
+        // Every failure must also leave the authoritative native subset intact.
+        state.native_names = Some(vec![]);
+        let expected = match case {
+            0 => {
+                state.functions.insert(1, state.functions[0].clone());
+                "owners are not strictly ascending"
+            }
+            1 => {
+                interp
+                    .slots
+                    .free(crate::SlotIndex(state.functions[0].owner));
+                "owner is not a live slot"
+            }
+            2 => {
+                state.functions[0].home = interp.slots.capacity();
+                "owner is not a live slot"
+            }
+            3 => {
+                state.functions[0].closures = interp.slots.alloc(Slot::integer(0)).0;
+                "closures is not an environment instance"
+            }
+            4 => {
+                state.functions[0].name_chunk = 1;
+                "invalid guest value"
+            }
+            5 => {
+                let segment = state.functions[0].segment.unwrap() as usize;
+                state.segments[segment] = vec![0xff];
+                state.functions[0].body_start = Some(0);
+                state.functions[0].body_len = 1;
+                "malformed body bytecode"
+            }
+            6 => {
+                state.segments.push(vec![]);
+                "segments are not densely referenced"
+            }
+            7 => {
+                state.bound_functions.push(BoundFunctionRow {
+                    owner: candidate,
+                    target,
+                    this_arg: Slot::of(Kind::String, Payload::Integer(0)),
+                    args: vec![],
+                });
+                "invalid guest value"
+            }
+            8 => {
+                state.ctor_prototypes = vec![(candidate, u32::MAX)];
+                "owner is not a live slot"
+            }
+            9 => {
+                state.deleted_meta = vec![(candidate, 0)];
+                "deleted metadata key is outside the name table"
+            }
+            _ => {
+                let row = &mut state.functions[0];
+                row.segment = None;
+                row.body_start = None;
+                row.body_len = u64::MAX;
+                state.bound_functions = vec![BoundFunctionRow {
+                    owner: row.owner,
+                    target,
+                    this_arg: Slot::undefined(),
+                    args: vec![],
+                }];
+                "bound function has a nonzero body length"
+            }
+        };
+        let before = interp.function_state_snapshot();
+        let error = interp.restore_function_state(state).unwrap_err();
+        assert_eq!(error.row, "Functions");
+        assert_eq!(error.reason, expected, "case {case}");
+        assert_eq!(interp.function_state_snapshot(), before, "case {case}");
+    }
+}
+
+#[test]
 fn internal_native_name_restore_rejects_before_mutation() {
     let source = Interp::new();
     let valid = source.function_state_snapshot();
@@ -3124,7 +3203,7 @@ fn internal_native_name_restore_rejects_before_mutation() {
     let rows = duplicate.native_names.as_mut().unwrap();
     rows.insert(1, rows[0]);
     let mut restored = Interp::new();
-    assert!(!restored.restore_function_state(duplicate));
+    assert!(restored.restore_function_state(duplicate).is_err());
     assert_eq!(restored.function_state_snapshot(), valid);
 
     // A valid authoritative empty native subset must not be applied before
@@ -3133,7 +3212,7 @@ fn internal_native_name_restore_rejects_before_mutation() {
     invalid_guest.native_names = Some(vec![]);
     invalid_guest.ctor_prototypes.push((0, 0));
     let mut restored = Interp::new();
-    assert!(!restored.restore_function_state(invalid_guest));
+    assert!(restored.restore_function_state(invalid_guest).is_err());
     assert_eq!(restored.function_state_snapshot(), valid);
 
     for invalid_owner in [0, u32::MAX] {
@@ -3141,7 +3220,7 @@ fn internal_native_name_restore_rejects_before_mutation() {
         state.native_names.as_mut().unwrap()[0].0 = invalid_owner;
         let mut restored = Interp::new();
         let before = restored.function_state_snapshot();
-        assert!(!restored.restore_function_state(state));
+        assert!(restored.restore_function_state(state).is_err());
         assert_eq!(restored.function_state_snapshot(), before);
     }
 
@@ -3150,7 +3229,7 @@ fn internal_native_name_restore_rejects_before_mutation() {
         state.native_names.as_mut().unwrap()[0].1 = invalid_offset;
         let mut restored = Interp::new();
         let before = restored.function_state_snapshot();
-        assert!(!restored.restore_function_state(state));
+        assert!(restored.restore_function_state(state).is_err());
         assert_eq!(restored.function_state_snapshot(), before);
     }
 }

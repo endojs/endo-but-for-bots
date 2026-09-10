@@ -1442,9 +1442,60 @@ impl Interp {
     }
 
     /// Restore a validated atomic guest-callability cluster.
-    pub(super) fn restore_function_state(&mut self, state: FunctionStateSnapshot) -> bool {
+    pub(super) fn restore_function_state(
+        &mut self,
+        state: FunctionStateSnapshot,
+    ) -> Result<(), RestoreError> {
+        const ROW: &str = "Functions";
+        let refuse = |reason| RestoreError { row: ROW, reason };
+        self.validate_restore_owners(state.functions.iter().map(|row| row.owner), ROW)?;
+        self.validate_restore_owners(state.bound_functions.iter().map(|row| row.owner), ROW)?;
+        self.validate_restore_owners(state.ctor_prototypes.iter().map(|row| row.0), ROW)?;
+        if state.deleted_meta.windows(2).any(|pair| pair[0] >= pair[1]) {
+            return Err(refuse("deleted metadata keys are not strictly ascending"));
+        }
+        for &(owner, id) in &state.deleted_meta {
+            self.validate_restore_owner(owner, ROW)?;
+            if id == 0 || usize::from(id) > self.symbol_names.len() {
+                return Err(refuse("deleted metadata key is outside the name table"));
+            }
+        }
+        let mut values = Vec::new();
+        for row in &state.functions {
+            if row.home != u32::MAX {
+                self.validate_restore_owner(row.home, ROW)?;
+            }
+            if row.closures != u32::MAX {
+                let closures = crate::value::SlotIndex(row.closures);
+                if closures.0 >= self.slots.capacity() || self.slots.is_free_index(closures) {
+                    return Err(refuse("closures is not a live slot"));
+                }
+                let env = self.slots.get(closures);
+                // Environment instances use None for a null enclosing scope.
+                if env.kind != Kind::Instance
+                    || !matches!(env.value, Payload::None | Payload::Reference(_))
+                {
+                    return Err(refuse("closures is not an environment instance"));
+                }
+            }
+            if row.name_chunk != u32::MAX {
+                values.push(Slot::of(
+                    Kind::String,
+                    Payload::String(crate::value::ChunkOffset(row.name_chunk)),
+                ));
+            }
+        }
+        for row in &state.bound_functions {
+            self.validate_restore_owner(row.target, ROW)?;
+            values.push(row.this_arg);
+            values.extend_from_slice(&row.args);
+        }
+        for &(_, prototype) in &state.ctor_prototypes {
+            self.validate_restore_owner(prototype, ROW)?;
+        }
+        self.validate_restore_values(values, ROW)?;
         if !self.native_names_are_valid(state.native_names.as_deref()) {
-            return false;
+            return Err(refuse("invalid native name rows"));
         }
         // Validate against the metadata that will remain after native pruning.
         let existing_function = |owner: crate::value::SlotIndex| {
@@ -1461,33 +1512,51 @@ impl Interp {
         let bound_owners: std::collections::BTreeSet<u32> =
             state.bound_functions.iter().map(|row| row.owner).collect();
 
+        let mut referenced_segments = std::collections::BTreeSet::new();
         for row in &state.functions {
             let owner = crate::value::SlotIndex(row.owner);
             if existing_function(owner) {
-                return false;
+                return Err(refuse("function owner already has metadata"));
             }
             match (row.segment, row.body_start) {
                 (Some(segment), Some(start)) => {
                     let Some(code) = state.segments.get(segment as usize) else {
-                        return false;
+                        return Err(refuse("body names no segment"));
                     };
                     let Some(end) = start.checked_add(row.body_len) else {
-                        return false;
+                        return Err(refuse("body range overflow"));
                     };
                     if end > code.len() as u64 {
-                        return false;
+                        return Err(refuse("body range outside segment"));
+                    }
+                    let mut pc = start as usize;
+                    while pc < end as usize {
+                        let len = crate::instruction_len(code, pc)
+                            .ok_or_else(|| refuse("malformed body bytecode"))?;
+                        pc += len;
+                    }
+                    if pc != end as usize {
+                        return Err(refuse("body instruction crosses its range"));
+                    }
+                    referenced_segments.insert(segment);
+                }
+                (None, None) if bound_owners.contains(&row.owner) => {
+                    if row.body_len != 0 {
+                        return Err(refuse("bound function has a nonzero body length"));
                     }
                 }
-                (None, None) if bound_owners.contains(&row.owner) => {}
-                _ => return false,
+                _ => return Err(refuse("body and segment disagree")),
             }
+        }
+        if referenced_segments.len() != state.segments.len() {
+            return Err(refuse("segments are not densely referenced"));
         }
         for row in &state.bound_functions {
             if !function_owners.contains(&row.owner)
                 || (!function_owners.contains(&row.target)
                     && !existing_function(crate::value::SlotIndex(row.target)))
             {
-                return false;
+                return Err(refuse("bound target has no function metadata"));
             }
         }
         if state
@@ -1495,11 +1564,11 @@ impl Interp {
             .iter()
             .any(|(owner, _)| !function_owners.contains(owner))
         {
-            return false;
+            return Err(refuse("constructor owner has no function row"));
         }
 
         if !self.restore_native_names(state.native_names.as_deref()) {
-            return false;
+            return Err(refuse("invalid native name rows"));
         }
         *self.code_segments = state.segments.into_iter().map(std::rc::Rc::from).collect();
         self.func_segments.clear();
@@ -1545,7 +1614,7 @@ impl Interp {
             self.deleted_fn_meta
                 .insert((crate::value::SlotIndex(owner), id));
         }
-        true
+        Ok(())
     }
 
     pub fn proxy_state_snapshot(&self) -> ProxyStateSnapshot {
