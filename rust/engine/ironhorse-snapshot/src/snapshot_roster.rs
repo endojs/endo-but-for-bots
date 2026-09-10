@@ -894,7 +894,7 @@ macro_rules! snapshot_payloads {
                             .into_iter()
                             .map(|w| (w.owner, w.value))
                             .collect(),
-                    );
+                    ).map_err(|_| SnapshotError::Corrupt("side-table restore: malformed Wrappers row"))?;
                 }],
                 initialize: [Regexps;
                     #[doc = " The primitive-wrapper side table (schema 11; the `WRAP` encoding)."]

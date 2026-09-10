@@ -952,6 +952,60 @@ fn side_ref_tail_masked_undercount_poisons_during_page_pruning() {
 }
 
 #[test]
+fn wrapper_restore_rejects_malformed_primitives_atomically() {
+    let mut interp = Interp::new();
+    let first = interp.new_object();
+    let second = interp.new_object();
+    let odd_string = interp.chunks.alloc(&[0]);
+    let bad_bigint = interp.chunks.alloc(&[2, 0, 0, 0, 0]);
+    let negative_zero = interp.chunks.alloc(&[1, 0, 0, 0, 0]);
+    let untrimmed = interp.chunks.alloc(&[0, 1, 0, 0, 0, 0, 0, 0, 0]);
+    let descriptor = interp.slots.alloc(Slot::integer(5));
+    interp
+        .restore_wrapper_data(vec![(first.0, Slot::integer(7))])
+        .unwrap();
+    let before = interp.wrappers_snapshot();
+    for value in [
+        Slot::undefined(),
+        Slot::of(Kind::Boolean, Payload::Integer(1)),
+        Slot::of(Kind::Reference, Payload::Reference(first)),
+        Slot::of(Kind::String, Payload::String(odd_string)),
+        Slot::of(
+            Kind::String,
+            Payload::String(crate::value::ChunkOffset(u32::MAX)),
+        ),
+        Slot::of(Kind::BigInt, Payload::BigInt(bad_bigint)),
+        Slot::of(Kind::BigInt, Payload::BigInt(negative_zero)),
+        Slot::of(Kind::BigInt, Payload::BigInt(untrimmed)),
+        Slot::of(Kind::Symbol, Payload::Reference(descriptor)),
+        Slot::of(
+            Kind::Symbol,
+            Payload::Reference(crate::value::SlotIndex::NULL),
+        ),
+    ] {
+        let error = interp
+            .restore_wrapper_data(vec![(first.0, Slot::integer(9)), (second.0, value)])
+            .unwrap_err();
+        assert_eq!(error.row, "Wrappers");
+        assert_eq!(interp.wrappers_snapshot(), before);
+    }
+    // Lone surrogates are valid String contents, including Symbol descriptions.
+    let text = interp.chunks.alloc(&[0xd8, 0x00]);
+    let description = interp
+        .slots
+        .alloc(Slot::of(Kind::String, Payload::String(text)));
+    interp
+        .restore_wrapper_data(vec![
+            (first.0, Slot::of(Kind::String, Payload::String(text))),
+            (
+                second.0,
+                Slot::of(Kind::Symbol, Payload::Reference(description)),
+            ),
+        ])
+        .unwrap();
+}
+
+#[test]
 fn arguments_restore_rejects_invalid_owners_without_partial_branding() {
     let mut interp = Interp::new();
     let first = interp.new_array_unmetered();
