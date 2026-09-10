@@ -234,6 +234,14 @@ impl Interp {
         // (a truly unbound intrinsic); a user who cleared `add` to `undefined`
         // leaves a descriptor, so that case still throws per specification.
         if adder.kind == Kind::Undefined && !self.chain_has_descriptor(inst, method_id) {
+            debug_assert!(
+                self.functions
+                    .values()
+                    .filter(|info| info.method == Some(expected))
+                    .count()
+                    <= 1,
+                "collection adder identity must be unique"
+            );
             if let Some((&function, _)) = self
                 .functions
                 .iter()
@@ -405,6 +413,14 @@ impl Interp {
         // Recover only genuine absence; an explicit guest `undefined` remains
         // observable and fails the callable check.
         if adder.kind == Kind::Undefined && !self.chain_has_descriptor(inst, method_id) {
+            debug_assert!(
+                self.functions
+                    .values()
+                    .filter(|info| info.method == Some(expected))
+                    .count()
+                    <= 1,
+                "collection adder identity must be unique"
+            );
             if let Some((&function, _)) = self
                 .functions
                 .iter()

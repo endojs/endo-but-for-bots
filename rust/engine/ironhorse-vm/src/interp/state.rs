@@ -2374,7 +2374,7 @@ pub struct Interp {
     /// identity slot → its registry key, so `Symbol.keyFor(sym)` recovers it.
     symbol_registry_keys: std::collections::HashMap<crate::value::SlotIndex, Vec<u8>>,
     #[boot_new(Tracked::new(
-        std::collections::HashMap::new(),
+        SymbolKeys::default(),
         snapshot_dirt.clone(),
         SnapshotSection::Symbols.mask() | SnapshotSection::Accessors.mask(),
     ))]
@@ -2399,7 +2399,7 @@ pub struct Interp {
     /// program-symbol-name range, so `Object.keys`/`Reflect.ownKeys` (the
     /// string-key enumerations) skip it — matching the spec's string/symbol key
     /// partition (and the boot-key soundness gate).
-    symbol_key_ids: Tracked<std::collections::HashMap<crate::value::SlotIndex, u16>>,
+    symbol_key_ids: Tracked<SymbolKeys>,
     #[boot_new(Tracked::new(
         std::collections::HashMap::new(),
         snapshot_dirt.clone(),

@@ -3461,7 +3461,10 @@ impl Interp {
         // class every sibling decoder refuses. Runs after
         // `bind_program_symbols`, so the table is
         // the persisted one.
-        if next == u16::MAX || (next as usize) <= self.symbol_names.len() {
+        if next == u16::MAX
+            || (next as usize) <= self.symbol_names.len()
+            || self.symbol_key_ids.values().any(|id| *id <= next)
+        {
             return false;
         }
         let mut prev: Option<u16> = None;
@@ -3471,6 +3474,14 @@ impl Interp {
                 || id <= next
                 || prev.is_some_and(|prev_id| id <= prev_id)
                 || !descs.insert(desc)
+                || self
+                    .symbol_key_ids
+                    .descriptor(id)
+                    .is_some_and(|old| old.0 != desc)
+                || self
+                    .symbol_key_ids
+                    .get(&crate::value::SlotIndex(desc))
+                    .is_some_and(|old| *old != id)
             {
                 return false;
             }

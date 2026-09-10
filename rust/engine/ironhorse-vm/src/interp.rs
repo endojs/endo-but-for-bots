@@ -44,6 +44,8 @@ pub use snapshot_rows::{
     PromiseReactionRow, PromiseRow, ProxyRevokerRow, ProxyRow, ProxyStateSnapshot, SavedFrameRow,
     SavedJumpRow,
 };
+mod symbol_keys;
+use symbol_keys::SymbolKeys;
 mod intl_data;
 use intl_data::INTL_DATA_VERSION;
 pub use intl_data::{

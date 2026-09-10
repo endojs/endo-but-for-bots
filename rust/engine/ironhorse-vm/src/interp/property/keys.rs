@@ -160,8 +160,7 @@ impl Interp {
             // instruction, so it never leaks to a completed crank.
             self.id_space_exhausted = true;
             let id = self.next_symbol_key_id;
-            self.symbol_key_ids.insert(desc, id);
-            (id, true)
+            (id, false)
         } else {
             let id = self.next_symbol_key_id;
             self.snapshot_dirt.mark(SnapshotSection::Symbols.mask());
@@ -320,7 +319,7 @@ impl Interp {
     /// set is empty until a symbol is first used as a key, so this is a no-op
     /// (always `false`) for a program that never keys by symbol.
     pub(in crate::interp) fn is_symbol_key_id(&self, id: u16) -> bool {
-        !self.symbol_key_ids.is_empty() && self.symbol_key_ids.values().any(|&v| v == id)
+        self.symbol_key_ids.descriptor(id).is_some()
     }
 
     /// Scalar-only dispatch for array indices and built-in names.
@@ -700,17 +699,13 @@ impl Interp {
     }
 
     pub(in crate::interp) fn property_key_slot(&mut self, id: u16) -> Result<Slot, Step> {
-        if let Some((&descriptor, _)) = self
-            .symbol_key_ids
-            .iter()
-            .find(|(_, property_id)| **property_id == id)
-        {
+        if let Some(descriptor) = self.symbol_key_ids.descriptor(id) {
             return Ok(Slot::of(Kind::Symbol, Payload::Reference(descriptor)));
         }
         let name = self
-            .symbol_ids
-            .iter()
-            .find_map(|(name, property_id)| (*property_id == id).then_some(name))
+            .symbol_names
+            .get(usize::from(id).wrapping_sub(1))
+            .filter(|name| self.symbol_ids.get(*name) == Some(&id))
             .ok_or(Step::Host(Halt::EngineInvariant(
                 "ordinary-ownKeys:unknown-key",
             )))?;
@@ -722,11 +717,9 @@ impl Interp {
             .count();
         self.charge_and_check(string_chunk_cost(count as u64))?;
         self.admit_scratch::<u16>(count)?;
-        let units = self
-            .symbol_ids
-            .iter()
-            .find_map(|(name, property_id)| (*property_id == id).then(|| name.to_units()))
-            .expect("admission does not change symbol identities");
+        // Admission cannot change interned identities. Resolve the same
+        // forward-table position again without allocating before admission.
+        let units = self.symbol_names[usize::from(id) - 1].to_units();
         let offset = self.chunks.alloc(&units_to_be16(&units));
         Ok(Slot::of(Kind::String, Payload::String(offset)))
     }

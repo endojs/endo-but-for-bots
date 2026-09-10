@@ -37,6 +37,7 @@ const SRC: &str = concat!(
     include_str!("../src/interp/native_ids.rs"),
     include_str!("../src/interp/snapshot_rows.rs"),
     include_str!("../src/interp/intl_data.rs"),
+    include_str!("../src/interp/symbol_keys.rs"),
     include_str!("../src/interp/admission.rs"),
     include_str!("../src/interp/apply.rs"),
     include_str!("../src/interp/code.rs"),

@@ -37,9 +37,6 @@ impl SymbolIds {
     ) -> std::collections::hash_map::Entry<'_, SymbolName, u16> {
         self.0.entry(name)
     }
-    pub fn iter(&self) -> impl Iterator<Item = (&SymbolName, &u16)> {
-        self.0.iter()
-    }
 }
 
 /// Decode trusted symbols for tooling. Malformed atoms produce no names.
