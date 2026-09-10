@@ -474,7 +474,7 @@ impl Interp {
                     // Reads/writes of a top-level var resolve to its global
                     // property from here (`resolve_get`/`resolve_set`).
                     self.locals.clear();
-                    self.id_map.clear();
+                    std::rc::Rc::make_mut(&mut self.id_map).clear();
                     pc += size as usize;
                 }
                 XS_CODE_EVAL_REFERENCE | XS_CODE_PROGRAM_REFERENCE => {
@@ -546,7 +546,7 @@ impl Interp {
                     let mut local = Slot::uninitialized();
                     local.id = name;
                     self.locals.push(local);
-                    self.id_map.insert(name, self.locals.len() - 1);
+                    std::rc::Rc::make_mut(&mut self.id_map).insert(name, self.locals.len() - 1);
                     pc += ilen;
                 }
                 XS_CODE_NEW_TEMPORARY => {
@@ -655,7 +655,7 @@ impl Interp {
                     // (XS advances mxScope past them); prune their names.
                     let keep = self.locals.len().saturating_sub(n);
                     self.locals.truncate(keep);
-                    self.id_map.retain(|_, &mut idx| idx < keep);
+                    std::rc::Rc::make_mut(&mut self.id_map).retain(|_, &mut idx| idx < keep);
                     pc += size as usize;
                 }
 
@@ -1773,7 +1773,7 @@ impl Interp {
                     let mut slot = Slot::of(Kind::Closure, Payload::Reference(cell));
                     slot.id = name;
                     self.locals.push(slot);
-                    self.id_map.insert(name, self.locals.len() - 1);
+                    std::rc::Rc::make_mut(&mut self.id_map).insert(name, self.locals.len() - 1);
                     pc += ilen;
                 }
                 // `get_closure #k`: read the shared cell of scope closure k.

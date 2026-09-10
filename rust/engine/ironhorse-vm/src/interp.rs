@@ -1695,7 +1695,8 @@ pub fn dtf_component_key_static(name: &str) -> Option<&'static str> {
 #[cfg_attr(test, derive(Debug))]
 struct CallerState {
     locals: Vec<Slot>,
-    id_map: std::collections::HashMap<u16, usize>,
+    // Shared with catch/suspend checkpoints; binding changes copy on write.
+    id_map: std::rc::Rc<std::collections::HashMap<u16, usize>>,
     result: Slot,
     strict: bool,
     args: Vec<Slot>,
@@ -1729,7 +1730,8 @@ struct CatchJump {
     segment: Option<usize>,
     stack_len: usize,
     locals_len: usize,
-    id_map: std::collections::HashMap<u16, usize>,
+    // Shared with catch/suspend checkpoints; binding changes copy on write.
+    id_map: std::rc::Rc<std::collections::HashMap<u16, usize>>,
     call_depth: usize,
     /// The `with`/eval environment head active when the catch was
     /// established (XS restores `mxEnvironment` from `jump->scope` on a
@@ -1778,7 +1780,8 @@ enum GeneratorState {
 /// (`resume_pc`).
 struct SavedFrame {
     locals: Vec<Slot>,
-    id_map: std::collections::HashMap<u16, usize>,
+    // Shared with catch/suspend checkpoints; binding changes copy on write.
+    id_map: std::rc::Rc<std::collections::HashMap<u16, usize>>,
     args: Vec<Slot>,
     this_val: Slot,
     /// The generator's `with`/eval environment head at the suspend point,
@@ -1809,7 +1812,8 @@ struct SavedJump {
     segment: Option<usize>,
     stack_offset: usize,
     locals_len: usize,
-    id_map: std::collections::HashMap<u16, usize>,
+    // Shared with catch/suspend checkpoints; binding changes copy on write.
+    id_map: std::rc::Rc<std::collections::HashMap<u16, usize>>,
     call_depth_offset: usize,
     /// The environment head active when this handler was established (see
     /// [`CatchJump::env`]).
@@ -2237,7 +2241,7 @@ impl Interp {
         self.stack.clear();
         self.jumps.clear();
         self.locals.clear();
-        self.id_map.clear();
+        std::rc::Rc::make_mut(&mut self.id_map).clear();
         self.args.clear();
         self.this_captures.clear();
         self.frame_slots = 0;
@@ -2306,7 +2310,7 @@ impl Interp {
             self.result = Slot::undefined();
             self.exception = Slot::undefined();
             self.locals.clear();
-            self.id_map.clear();
+            std::rc::Rc::make_mut(&mut self.id_map).clear();
             self.args.clear();
             self.this_captures.clear();
             self.this_val = Slot::undefined();

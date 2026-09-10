@@ -78,7 +78,7 @@ pub struct Interp {
     /// append (XS's `--mxScope`); a `*_LOCAL` opcode's 1-based index `k`
     /// addresses `locals[k - 1]` (XS's `mxEnvironment - index`).
     locals: Vec<Slot>,
-    #[boot_new(std::collections::HashMap::new())]
+    #[boot_new(Default::default())]
     #[boot_template(state.id_map.clone())]
     #[gc_root(none)]
     #[quiescent(empty)]
@@ -93,7 +93,7 @@ pub struct Interp {
     /// bindings, so the environment opcodes resolve a name to its scope
     /// slot (XS aliases the frame locals through the environment
     /// instance; this map is the behavioral equivalent).
-    id_map: std::collections::HashMap<u16, usize>,
+    id_map: std::rc::Rc<std::collections::HashMap<u16, usize>>,
     #[boot_new(global_obj)]
     #[boot_template(state.global_obj)]
     #[gc_root(index)]

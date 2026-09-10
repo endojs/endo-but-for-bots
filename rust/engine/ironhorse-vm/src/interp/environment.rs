@@ -519,7 +519,7 @@ impl Interp {
             copy.flag = s.flag;
             self.locals.push(copy);
             if s.id != 0 {
-                self.id_map.insert(s.id, self.locals.len() - 1);
+                std::rc::Rc::make_mut(&mut self.id_map).insert(s.id, self.locals.len() - 1);
             }
             cur = s.next;
         }
