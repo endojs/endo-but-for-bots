@@ -103,4 +103,27 @@ reach 1.314×, exceeding the unchanged 1.25× threshold.
 Placeholder ratios near 1× against the starting revision indicate that the larger
 older-reference placeholder differences do not isolate Phase 2B.
 These are measured regressions/variation, not an overall benchmark pass.
-Linux CI measurements and final cross-platform validation remain outstanding.
+The Linux run at `99d734d8` is retained in `linux-2b-reference-comparison.json`.
+It remeasured the original `51b99651` reference on its own runner with matching fixtures.
+Its sole failed baseline metric is the 80,000-slot page-free phase, at 1.258× against the
+unchanged 1.25× threshold.
+The historical Linux report had already failed that metric at 1.254×.
+The ratios below compare each candidate to its own same-host measurement of that reference;
+they are not a direct same-host measurement of Phase 2B against `b2b78ad0`.
+
+| Slots | Historical partial / free | Phase 2B partial / free | Historical sweep / Phase 2B sweep |
+|---:|---:|---:|---:|
+| 5,000 | 1.095× / 1.110× | 1.146× / 1.175× | 0.933× / 0.908× |
+| 20,000 | 1.170× / 1.193× | 1.153× / 1.164× | 0.983× / 0.963× |
+| 80,000 | 1.239× / 1.254× | 1.246× / 1.258× | 1.042× / 0.947× |
+
+The measured large-heap page-free cost persists, while the sweep loop itself is faster than
+the reference in this run.
+Full-first collection is 1.046×, 1.059×, and 1.058× at the three sizes.
+Linux checkpoint-slide metrics did not exceed the threshold; the macOS failures remain
+part of the evidence rather than being discarded because another platform passed.
+All other Linux scaling instruments passed: elapsed/computron, unchanged checkpoint,
+property update, compiler, shared-bytecode lifecycle, and property/call classification.
+The bounded WeakMap test262 sweep also passed.
+Source: [Linux measurement run](https://github.com/endojs/endo-but-for-bots/actions/runs/34460668824).
+Final cross-platform CI validation remains outstanding.
