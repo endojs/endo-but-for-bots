@@ -1064,6 +1064,14 @@ pub const ID_SIZE: usize = 2;
 /// `a_truncated_trailing_payload_refuses_to_walk`. This function never
 /// panics on malformed input; the bytecode-decoder fuzz target relies on it.
 pub fn instruction_len(code: &[u8], pc: usize) -> Option<usize> {
+    let len = encoded_instruction_len(code, pc)?;
+    (pc.checked_add(len)? <= code.len()).then_some(len)
+}
+
+/// Resolve the encoded width before checking payload availability. Dispatch
+/// uses this to report known required lengths separately from missing prefixes;
+/// execution still checks the full span before reading any operands.
+pub(crate) fn encoded_instruction_len(code: &[u8], pc: usize) -> Option<usize> {
     let byte = *code.get(pc)?;
     let op = Opcode::from_u8(byte)?;
     let size = op.size();
@@ -1093,10 +1101,7 @@ pub fn instruction_len(code: &[u8], pc: usize) -> Option<usize> {
             _ => return None,
         }
     };
-    // The whole instruction — operands and payload included — must lie
-    // inside the stream; an instruction ending exactly at the end is
-    // complete, one running past it is truncation.
-    (pc.checked_add(len)? <= code.len()).then_some(len)
+    Some(len)
 }
 
 /// Rewrite every 2-byte little-endian ID operand through `map`,

@@ -1598,7 +1598,8 @@ fn every_opcode_decodes_and_dispatches_without_panic_or_decode_error() {
             | Halt::NotImplemented(_)
             | Halt::Refused(_)
             | Halt::EngineInvariant(_)
-            | Halt::StackOverflow(_) => {}
+            | Halt::StackOverflow(_)
+            | Halt::ReentryLimit { .. } => {}
             Halt::Decode(_) => unreachable!("handled above"),
             Halt::Panic(_) => unreachable!("engine-fault panic escaped the FFI/Machine seam"),
         }
@@ -2776,5 +2777,53 @@ fn promise_native_roots_preserve_stack_overflow_operands() {
         assert!(out.completed, "{:?}", out.halt);
         assert_eq!(out.result, "42");
         assert!(vm.is_quiescent());
+    }
+}
+
+#[test]
+fn generator_resume_admission_counts_sent_value_and_retains_refused_frame() {
+    for excess in [0, 1] {
+        let (code, symbols) = ironhorse_compile::compile_atoms(
+            "function* g(a) { var b=2; return a + (yield b); } var it=g(3); it.next();",
+        )
+        .unwrap();
+        let mut vm = Interp::new();
+        vm.link_intrinsics(&crate::parse_symbols(&symbols));
+        assert!(vm.run(&code).completed);
+        let gen = *vm.generators.keys().next().unwrap();
+        let saved = vm.generators.get(&gen).unwrap().frame.as_ref().unwrap();
+        let footprint = saved.locals.len()
+            + saved.args.len()
+            + saved.stack_slice.len()
+            + FRAME_OVERHEAD_SLOTS
+            + 1;
+        let pc = saved.resume_pc;
+        let current = vm.stack_slots_in_use();
+        let target = STACK_SLOT_COUNT - STACK_SLOT_RESERVED - footprint + excess;
+        vm.stack
+            .resize(vm.stack.len() + target - current, Slot::undefined());
+        let stack_len = vm.stack.len();
+        let result = vm.resume_generator(&code, gen, Slot::integer(4), GenStatus::Next);
+        if excess == 0 {
+            assert!(result.is_ok(), "{result:?}");
+        } else {
+            assert!(matches!(result, Err(Step::Host(Halt::StackOverflow(_)))));
+            assert_eq!(vm.stack.len(), stack_len);
+            assert_eq!(
+                vm.generators
+                    .get(&gen)
+                    .unwrap()
+                    .frame
+                    .as_ref()
+                    .unwrap()
+                    .resume_pc,
+                pc
+            );
+            assert_eq!(
+                vm.generators.get(&gen).unwrap().state,
+                GeneratorState::SuspendedYield
+            );
+            assert!(vm.call_stack.is_empty());
+        }
     }
 }

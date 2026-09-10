@@ -11,7 +11,7 @@ impl Interp {
     /// The array arm recurses over the elements (the `join` XS's `fxToString`
     /// runs), so a self-containing or deeply nested array is bounded by the
     /// native-recursion budget: past [`NATIVE_DEPTH_LIMIT`] the render fails
-    /// with [`Halt::StackOverflow`], the abort XS reaches for the same value
+    /// with [`Halt::ReentryLimit`], the abort XS reaches for the same value
     /// through its C stack, rather than overflowing the host's. The budget is
     /// threaded as a parameter because this renderer is `&self`; it starts at
     /// whatever native depth the caller is at, so a diagnostic render from
@@ -26,7 +26,10 @@ impl Interp {
     /// diagnostic render at the very ceiling — and only nesting is refused.
     pub(super) fn render_descend(&self, depth: usize) -> Result<usize, Step> {
         if depth + LIGHT_FRAME_COST > NATIVE_DEPTH_LIMIT {
-            return Err(Step::Host(Halt::StackOverflow(self.stack_slots_in_use())));
+            return Err(Step::Host(Halt::ReentryLimit {
+                depth: depth + LIGHT_FRAME_COST,
+                limit: NATIVE_DEPTH_LIMIT,
+            }));
         }
         Ok(depth + LIGHT_FRAME_COST)
     }

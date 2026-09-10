@@ -375,7 +375,7 @@ pub struct Interp {
     /// or recurses without a bound of its own over guest-controlled structure
     /// on the host stack charges its frame class here
     /// ([`Self::enter_native_frame`]) and releases it on return, so a
-    /// degenerate nest halts with [`Halt::StackOverflow`] instead of
+    /// degenerate nest halts with [`Halt::ReentryLimit`] instead of
     /// overflowing the real thread stack. (A recursion with its own small node
     /// budget — the compact `flat` path's 1,024-node pre-check — and a
     /// redispatch that loops instead, such as the bound-function fold and the

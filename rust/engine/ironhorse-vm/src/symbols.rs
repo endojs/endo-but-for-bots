@@ -50,7 +50,7 @@ pub fn parse_symbols(atom: &[u8]) -> Vec<SymbolName> {
 
 /// Decode a complete XS symbol atom without replacing any code unit.
 pub fn parse_symbols_checked(atom: &[u8]) -> Result<Vec<SymbolName>, crate::Halt> {
-    let invalid = || crate::Halt::Decode("invalid CESU-8 symbols atom".into());
+    let invalid = || crate::Halt::Decode(crate::DecodeError::InvalidSymbols);
     if atom.is_empty() {
         return Ok(Vec::new());
     }

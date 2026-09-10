@@ -238,6 +238,20 @@ impl Interp {
             .get_mut(&gen)
             .and_then(|g| g.frame.take())
             .ok_or(Step::Host(Halt::EngineInvariant("generator:no-frame")))?;
+        // Admit the complete restored activation before changing the driver.
+        // A resumed expression also receives the sent value on its stack.
+        let extra = saved.stack_slice.len()
+            + saved.locals.len()
+            + saved.args.len()
+            + FRAME_OVERHEAD_SLOTS
+            + usize::from(!was_start);
+        if self.would_overflow(extra) {
+            self.generators
+                .get_mut(&gen)
+                .expect("instance exists")
+                .frame = Some(saved);
+            return Err(Step::Host(Halt::StackOverflow(self.stack_slots_in_use())));
+        }
         // The per-resume native-frame residual (`fx_Generator_prototype_aux` +
         // `fxRunID` re-entry) over the `RUN` trampoline already metered.
         self.meter.tick_raw(GENERATOR_RESUME_METERING);
@@ -559,6 +573,20 @@ impl Interp {
             .ok_or(Step::Host(Halt::EngineInvariant(
                 "async-generator:no-frame",
             )))?;
+        // Admit the complete restored activation before changing the driver.
+        // A resumed expression also receives the sent value on its stack.
+        let extra = saved.stack_slice.len()
+            + saved.locals.len()
+            + saved.args.len()
+            + FRAME_OVERHEAD_SLOTS
+            + usize::from(!is_start);
+        if self.would_overflow(extra) {
+            self.async_generators
+                .get_mut(&gen)
+                .expect("instance exists")
+                .frame = Some(saved);
+            return Err(Step::Host(Halt::StackOverflow(self.stack_slots_in_use())));
+        }
         if !is_start {
             self.meter.tick_raw(GENERATOR_RESUME_METERING);
         }
@@ -747,6 +775,20 @@ impl Interp {
             .get_mut(&inst)
             .and_then(|a| a.frame.take())
             .ok_or(Step::Host(Halt::EngineInvariant("async:no-frame")))?;
+        // Admit the complete restored activation before changing the driver.
+        // A resumed expression also receives the sent value on its stack.
+        let extra = saved.stack_slice.len()
+            + saved.locals.len()
+            + saved.args.len()
+            + FRAME_OVERHEAD_SLOTS
+            + usize::from(!is_start);
+        if self.would_overflow(extra) {
+            self.async_instances
+                .get_mut(&inst)
+                .expect("instance exists")
+                .frame = Some(saved);
+            return Err(Step::Host(Halt::StackOverflow(self.stack_slots_in_use())));
+        }
         if !is_start {
             // The per-resume native-frame residual (`fxResolveAwait`/
             // `fxRejectAwait` → `fxStepAsync` → `fxRunID` re-entry), the async

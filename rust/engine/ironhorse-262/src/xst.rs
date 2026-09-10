@@ -3635,7 +3635,10 @@ mod tests {
         oracle_parsed: bool,
         compile: IronhorseCompile,
     ) -> DualRun {
-        let mut run = synthetic_abort(Halt::Decode("empty".into()), "");
+        let mut run = synthetic_abort(
+            Halt::Decode(ironhorse_vm::DecodeError::ProgramCounterOutOfBounds { pc: 0, len: 0 }),
+            "",
+        );
         run.agreement = agreement;
         run.oracle_parsed = oracle_parsed;
         run.ironhorse_compile = compile;

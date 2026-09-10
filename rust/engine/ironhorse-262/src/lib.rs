@@ -522,7 +522,7 @@ pub fn dual_run_cranks(sources: &[&str]) -> Option<Vec<DualRun>> {
                         computrons: 0,
                         dispatched: 0,
                         meter_raw: 0,
-                        halt: ironhorse_vm::Halt::Decode(format!("relink refused: {e:?}")),
+                        halt: ironhorse_vm::Halt::Decode(ironhorse_vm::DecodeError::Relink(e)),
                     },
                 },
             }
@@ -686,7 +686,7 @@ pub fn ironhorse_only_run(source: &str) -> Halt {
         // A structured reject or a coder panic: ironhorse produced no bytecode,
         // a terminal (non-hanging) outcome — ironhorse did not fail to
         // terminate, so the hang, if any, was not on the ironhorse side.
-        _ => return Halt::Decode("ironhorse-only: compile produced no bytecode".into()),
+        _ => return Halt::Decode(ironhorse_vm::DecodeError::MissingBytecode),
     };
     let names = ironhorse_vm::parse_symbols(&symbols);
     interp_with_source_bridge(&names)
@@ -1321,7 +1321,10 @@ mod tests {
 
         // A `Decode` bail (truncated/invalid bytecode) is likewise not
         // agreement.
-        let decode = abort_run(Agreement::BothAbort, Halt::Decode("truncated".into()));
+        let decode = abort_run(
+            Agreement::BothAbort,
+            Halt::Decode(ironhorse_vm::DecodeError::ProgramCounterOutOfBounds { pc: 0, len: 0 }),
+        );
         assert!(
             !decode.is_bit_exact(),
             "BothAbort with a Decode halt is not bit-exact"
@@ -1362,7 +1365,13 @@ mod tests {
         // `unsupported`) rather than let it slip through as bit-exact.
         let runs = [
             abort_run(Agreement::BothAbort, Halt::NotImplemented("XS_CODE_CALL")),
-            abort_run(Agreement::BothAbort, Halt::Decode("truncated".into())),
+            abort_run(
+                Agreement::BothAbort,
+                Halt::Decode(ironhorse_vm::DecodeError::ProgramCounterOutOfBounds {
+                    pc: 0,
+                    len: 0,
+                }),
+            ),
         ];
         let mut s = Summary::default();
         for r in &runs {

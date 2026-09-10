@@ -17,6 +17,7 @@ use super::{
     USING_DECL_METERING, USING_RESOURCE_METERING, WITH_ENV_SETUP_METERING, XS_DONT_DELETE_FLAG,
     XS_DONT_ENUM_FLAG, XS_DONT_SET_FLAG,
 };
+use crate::DecodeError;
 
 /// Consume a [`Step`] inside the bytecode dispatch loop. This is the ONLY
 /// way a `Step::Unwound` may be acted on: a handler that lives in a frame
@@ -90,7 +91,7 @@ impl Interp {
     ///
     /// This thin wrapper charges the **native-recursion budget** for the
     /// (very large) `dispatch_at_inner` activation and aborts with
-    /// [`Halt::StackOverflow`] once [`super::NATIVE_DEPTH_LIMIT`] is exceeded, so a
+    /// [`Halt::ReentryLimit`] once [`super::NATIVE_DEPTH_LIMIT`] is exceeded, so a
     /// degenerate callback/async/generator nest cannot overflow the real thread
     /// stack (endojs/endo-but-for-bots#1046). It manages the counter across the
     /// inner loop's many early returns; every re-entry site
@@ -203,17 +204,15 @@ impl Interp {
                 return Step::Host(Halt::Refused("property-key:id-space-exhausted"));
             }
             if pc >= len {
-                return Step::Host(Halt::Decode(format!("pc {} past end {}", pc, len)));
+                return Step::Host(Halt::Decode(DecodeError::ProgramCounterOutOfBounds {
+                    pc,
+                    len,
+                }));
             }
             let byte = code[pc];
             let op = match Opcode::from_u8(byte) {
                 Some(o) => o,
-                None => {
-                    return Step::Host(Halt::Decode(format!(
-                        "invalid opcode byte {:#04x} at {}",
-                        byte, pc
-                    )))
-                }
+                None => return Step::Host(Halt::Decode(DecodeError::InvalidOpcode { pc, byte })),
             };
             // Every dispatched opcode meters one code unit (mxBreak /
             // the switch-path `meterIndex += XS_CODE_METERING`).
@@ -230,25 +229,23 @@ impl Interp {
             // opcodes). ID-operand opcodes have `size == 0`, so they
             // must advance by `ilen`, never by `size` (a zero-advance
             // infinite loop).
-            let ilen = match crate::opcode::instruction_len(code, pc) {
+            let ilen = match crate::opcode::encoded_instruction_len(code, pc) {
                 Some(l) if l > 0 => l,
                 _ => {
-                    return Step::Host(Halt::Decode(format!(
-                        "opcode {} at {} has unresolvable length",
-                        op.name(),
-                        pc
-                    )))
+                    return Step::Host(Halt::Decode(DecodeError::UnresolvableInstructionLength {
+                        pc,
+                        opcode: byte,
+                    }))
                 }
             };
             // Bounds-check the operands before reading.
             if pc + ilen > len {
-                return Step::Host(Halt::Decode(format!(
-                    "opcode {} at {} needs {} bytes, {} left",
-                    op.name(),
+                return Step::Host(Halt::Decode(DecodeError::TruncatedInstruction {
                     pc,
-                    ilen,
-                    len - pc
-                )));
+                    opcode: byte,
+                    needed: ilen,
+                    remaining: len - pc,
+                }));
             }
 
             use Opcode::*;
@@ -837,10 +834,12 @@ impl Interp {
                 // literal keeps below.
                 XS_CODE_NEW_PROPERTY_AT => {
                     if pc + 3 > len {
-                        return Step::Host(Halt::Decode(format!(
-                            "new_property_at at {} needs 3 bytes",
-                            pc
-                        )));
+                        return Step::Host(Halt::Decode(DecodeError::TruncatedInstruction {
+                            pc,
+                            opcode: byte,
+                            needed: 3,
+                            remaining: len - pc,
+                        }));
                     }
                     let property_flag = code[pc + 2];
                     dispatch_result!(
@@ -900,10 +899,12 @@ impl Interp {
                 // so the flag pair is NOT a separate dispatched opcode.
                 XS_CODE_NEW_PROPERTY => {
                     if pc + 5 > len {
-                        return Step::Host(Halt::Decode(format!(
-                            "new_property at {} needs 5 bytes",
-                            pc
-                        )));
+                        return Step::Host(Halt::Decode(DecodeError::TruncatedInstruction {
+                            pc,
+                            opcode: byte,
+                            needed: 5,
+                            remaining: len - pc,
+                        }));
                     }
                     let id = id!(1);
                     let property_flag = code[pc + 4];
@@ -922,9 +923,12 @@ impl Interp {
                 // the ordinary public-property MOP untouched.
                 XS_CODE_NEW_PRIVATE_1 | XS_CODE_NEW_PRIVATE_2 => {
                     if pc + ilen + 2 > len {
-                        return Step::Host(Halt::Decode(format!(
-                            "new_private at {pc} needs flag operand"
-                        )));
+                        return Step::Host(Halt::Decode(DecodeError::TruncatedInstruction {
+                            pc,
+                            opcode: byte,
+                            needed: ilen + 2,
+                            remaining: len - pc,
+                        }));
                     }
                     let index = self.closure_index(op, code, pc);
                     let flag = code[pc + ilen + 1];
@@ -3381,10 +3385,11 @@ impl Interp {
                     // untrusted offset before retaining it, so a later throw
                     // cannot reach the resume-target invariant with bad input.
                     if target >= len {
-                        return Step::Host(Halt::Decode(format!(
-                            "catch target {} past end {} at {}",
-                            target, len, pc
-                        )));
+                        return Step::Host(Halt::Decode(DecodeError::InvalidCatchTarget {
+                            pc,
+                            target,
+                            len,
+                        }));
                     }
                     self.jumps.push(CatchJump {
                         target_pc: target,
