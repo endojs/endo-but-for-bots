@@ -57,6 +57,7 @@ pub const NOT_IMPLEMENTED_LABELS: &[&str] = &[
     "callback:non-user-function",
     "compartment:dynamic-import",
     "compartment:heap-endowment",
+    "compartment:permit-after-link",
     "concat:isConcatSpreadable-symbol",
     "concat:sparse-arg",
     "current:program-level",

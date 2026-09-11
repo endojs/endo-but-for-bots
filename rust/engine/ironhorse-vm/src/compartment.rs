@@ -218,6 +218,11 @@ pub enum CompartmentSkip {
     /// runs in a fresh arena, so such a payload names nothing there;
     /// seeding it would install a dangling slot on the new global.
     HeapEndowment,
+    /// A compartment permit was applied to an interpreter that has already
+    /// linked intrinsic bindings. Binding is create-only, so the narrower
+    /// policy could not be enforced; the request is refused fail-closed
+    /// rather than silently no-op'd.
+    PermitAfterLink,
 }
 
 impl CompartmentSkip {
@@ -226,6 +231,7 @@ impl CompartmentSkip {
         match self {
             CompartmentSkip::DynamicImport => "compartment:dynamic-import",
             CompartmentSkip::HeapEndowment => "compartment:heap-endowment",
+            CompartmentSkip::PermitAfterLink => "compartment:permit-after-link",
         }
     }
 }
@@ -507,6 +513,9 @@ impl Compartment {
                 CompartmentSkip::HeapEndowment => {
                     Halt::NotImplemented("compartment:heap-endowment")
                 }
+                CompartmentSkip::PermitAfterLink => {
+                    Halt::NotImplemented("compartment:permit-after-link")
+                }
             },
         }
     }
@@ -622,12 +631,25 @@ impl Compartment {
             Err(halt) => return crate::symbols::decode_refusal(halt),
         };
         // A compartment permit overrides; a compartment without one leaves
-        // the caller's policy on the supplied interpreter intact.
+        // the caller's policy on the supplied interpreter intact. Binding is
+        // create-only, so a permit applied to an already-linked interpreter
+        // cannot be enforced: refuse fail-closed rather than no-op.
         if let Some(permit) = &self.intrinsic_permit {
+            if interp.intrinsics_linked() {
+                return Self::refused(CompartmentSkip::PermitAfterLink);
+            }
             let refs: Vec<&str> = permit.iter().map(String::as_str).collect();
             interp.set_intrinsic_permit(Some(&refs));
         }
-        self.intrinsics.install_source_compiler(&mut interp);
+        // Precedence, stated for both host-configuration fields on this
+        // public entry: the caller's interpreter may already carry its own
+        // compiler, and that explicit choice wins; otherwise the machine's
+        // compiler is installed. (For the permit above, the compartment's
+        // non-`None` policy wins; a `None` compartment policy defers to the
+        // interpreter.)
+        if !interp.has_source_compiler() {
+            self.intrinsics.install_source_compiler(&mut interp);
+        }
         interp.link_intrinsics(&names);
         self.evaluate_linked_shared(interp, Rc::from(bytecode))
     }

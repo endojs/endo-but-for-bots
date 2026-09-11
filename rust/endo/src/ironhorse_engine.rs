@@ -562,24 +562,49 @@ pub mod engine {
     /// same way the 262 harness does: resource limits and meter stops are
     /// host stops, an unported-but-valid construct is a coverage gap, and any
     /// other reject is the bare, realm-local `SyntaxError` diagnostic.
+    /// Map a structured parse reject to the VM's source-compile error,
+    /// exhaustively: every [`ironhorse_compile::ParseErrorKind`] and every
+    /// [`ironhorse_compile::LexErrorKind`] is named, so a newly added variant
+    /// is a compile error here rather than silently crossing the host-stop /
+    /// guest-throw boundary as a catchable `SyntaxError`.
     fn map_source_compile_error(
         error: ironhorse_compile::ParseError,
     ) -> ironhorse_vm::SourceCompileError {
         use ironhorse_compile::{LexError, LexErrorKind, ParseErrorKind};
-        match error.kind {
-            ParseErrorKind::Lex(LexError {
-                kind: LexErrorKind::RegExpResourceLimit,
-                ..
-            }) => ironhorse_vm::SourceCompileError::HeapExhausted,
-            ParseErrorKind::Lex(LexError {
-                kind: LexErrorKind::RegExpBudgetExceeded,
-                ..
-            }) => ironhorse_vm::SourceCompileError::MeterAbort,
-            ParseErrorKind::MeterLimit => ironhorse_vm::SourceCompileError::MeterAbort,
+        use ironhorse_vm::SourceCompileError;
+        let ironhorse_compile::ParseError {
+            line,
+            kind,
+            message,
+        } = error;
+        match kind {
+            ParseErrorKind::MeterLimit => SourceCompileError::MeterAbort,
             ParseErrorKind::Unsupported => {
-                ironhorse_vm::SourceCompileError::Unsupported(error.to_string())
+                SourceCompileError::Unsupported(format!("line {line}: {message}"))
             }
-            _ => ironhorse_vm::SourceCompileError::Syntax(error.message),
+            ParseErrorKind::Syntax => SourceCompileError::Syntax(message),
+            ParseErrorKind::Lex(LexError { kind, .. }) => match kind {
+                // Host stops, never guest-throwable.
+                LexErrorKind::MeterLimit | LexErrorKind::RegExpBudgetExceeded => {
+                    SourceCompileError::MeterAbort
+                }
+                LexErrorKind::RegExpResourceLimit | LexErrorKind::Overflow => {
+                    SourceCompileError::HeapExhausted
+                }
+                // Guest-visible syntax errors.
+                LexErrorKind::InvalidCharacter(_)
+                | LexErrorKind::InvalidEscape
+                | LexErrorKind::InvalidNumber
+                | LexErrorKind::StrictOctal
+                | LexErrorKind::UnterminatedString
+                | LexErrorKind::LineTerminatorInString
+                | LexErrorKind::UnterminatedComment
+                | LexErrorKind::UnterminatedRegExp
+                | LexErrorKind::LineTerminatorInRegExp
+                | LexErrorKind::InvalidRegExp
+                | LexErrorKind::InvalidAtSign
+                | LexErrorKind::UnexpectedCharacter(_) => SourceCompileError::Syntax(message),
+            },
         }
     }
 
@@ -937,6 +962,16 @@ pub mod engine {
         /// lifetime, some `10^14`; a ceiling left stranded above a
         /// restarted index is not a reachable state.)
         crank_ceiling: std::rc::Rc<std::cell::Cell<u64>>,
+        /// The intrinsic-global permit this EMBEDDER chose (F144), if any.
+        /// Host configuration does not ride the snapshot, so this is
+        /// retained on the machine and re-applied to the resumed heap after
+        /// every rewind — otherwise the engine's own relink could bind an
+        /// intrinsic the owner had denied once the restored floor falls
+        /// below a name interned before suspend. `None` keeps the full realm,
+        /// matching the default of an unconfigured machine. `open` does not
+        /// carry a policy across processes; a consumer that needs one calls
+        /// [`Self::set_intrinsic_permit`] after every `open`.
+        intrinsic_permit: Option<Vec<String>>,
     }
 
     fn store_err(e: ironhorse_snapshot::store::StoreError) -> MachineError {
@@ -1013,6 +1048,7 @@ pub mod engine {
                         last_collect_error: None,
                         meter: options.meter.clone(),
                         crank_ceiling,
+                        intrinsic_permit: None,
                     })
                 }
                 Ok(_) => {
@@ -1048,6 +1084,7 @@ pub mod engine {
                         last_collect_error: None,
                         meter: options.meter.clone(),
                         crank_ceiling,
+                        intrinsic_permit: None,
                     })
                 }
                 Err(e) => Err(store_err(e)),
@@ -1093,6 +1130,38 @@ pub mod engine {
             &self.meter
         }
 
+        /// Set the intrinsic-global permit (F144) for this machine's heap and
+        /// retain it across rewind. Host configuration does not ride the
+        /// snapshot, so a consumer calls this after every `open`; `None`
+        /// restores the full realm. The policy is applied to the live
+        /// interpreter immediately, before any crank can relink an intrinsic.
+        pub fn set_intrinsic_permit(&mut self, permit: Option<&[&str]>) {
+            self.intrinsic_permit =
+                permit.map(|names| names.iter().map(|name| (*name).to_string()).collect());
+            if let Some(session) = self.session.as_mut() {
+                Self::apply_intrinsic_permit(&self.intrinsic_permit, session.machine_mut());
+            }
+        }
+
+        /// The intrinsic-global permit currently in force, if any (F144).
+        pub fn intrinsic_permit(&self) -> Option<&[String]> {
+            self.intrinsic_permit.as_deref()
+        }
+
+        /// Apply a retained permit to a (re)opened interpreter.
+        fn apply_intrinsic_permit(
+            permit: &Option<Vec<String>>,
+            machine: &mut ironhorse_vm::Interp,
+        ) {
+            match permit {
+                Some(names) => {
+                    let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+                    machine.set_intrinsic_permit(Some(&refs));
+                }
+                None => machine.set_intrinsic_permit(None),
+            }
+        }
+
         /// Discard the in-memory machine and resume from the store's
         /// last committed epoch — the crashed-crank/failed-checkpoint
         /// discipline. The store's commit is atomic, so a failed
@@ -1116,12 +1185,13 @@ pub mod engine {
                 resume_from_store_lazy(self.store.clone(), &self.signature).map_err(store_err)?;
             // The rewound machine is a resume like any other: its host
             // callback must be reattached or its next crank fails
-            // closed, and the source compiler does not ride the snapshot
-            // either (F160).
+            // closed, and the source compiler and intrinsic permit do not
+            // ride the snapshot either (F160, F144).
             Self::attach_meter(&self.meter, &self.crank_ceiling, fresh.machine_mut());
             fresh
                 .machine_mut()
                 .set_source_compiler(std::rc::Rc::new(IronhorseSourceCompiler));
+            Self::apply_intrinsic_permit(&self.intrinsic_permit, fresh.machine_mut());
             self.linked = !fresh.machine().program_symbol_names().is_empty();
             self.session = Some(fresh);
             Ok(())
@@ -1894,6 +1964,91 @@ pub mod engine {
         fn non_panic_throw_is_not_panic() {
             assert!(!Halt::synthetic_throw("catchable".to_string()).is_panic());
             assert!(!Halt::Return.is_panic());
+        }
+
+        /// Every parse/lex variant maps to the host-stop or guest-throw arm
+        /// deliberately; a new variant must be a compile error here rather
+        /// than silently crossing the boundary as a catchable `SyntaxError`.
+        #[test]
+        fn source_compile_error_mapping_is_exhaustive() {
+            use ironhorse_compile::{LexError, LexErrorKind, ParseError, ParseErrorKind};
+            use ironhorse_vm::SourceCompileError;
+
+            let lex = |kind: LexErrorKind| ParseError {
+                line: 7,
+                kind: ParseErrorKind::Lex(LexError { line: 7, kind }),
+                message: "bad lex".to_string(),
+            };
+            let syntax = |error: ParseError| match map_source_compile_error(error) {
+                SourceCompileError::Syntax(message) => message,
+                SourceCompileError::MeterAbort => panic!("expected Syntax, got MeterAbort"),
+                SourceCompileError::Unsupported(_) => {
+                    panic!("expected Syntax, got Unsupported")
+                }
+                SourceCompileError::HeapExhausted => panic!("expected Syntax, got HeapExhausted"),
+            };
+
+            // Host stops, never guest-throwable.
+            for error in [
+                ParseError {
+                    line: 1,
+                    kind: ParseErrorKind::MeterLimit,
+                    message: "budget".to_string(),
+                },
+                lex(LexErrorKind::MeterLimit),
+                lex(LexErrorKind::RegExpBudgetExceeded),
+            ] {
+                assert!(matches!(
+                    map_source_compile_error(error),
+                    SourceCompileError::MeterAbort
+                ));
+            }
+            for error in [
+                lex(LexErrorKind::RegExpResourceLimit),
+                lex(LexErrorKind::Overflow),
+            ] {
+                assert!(matches!(
+                    map_source_compile_error(error),
+                    SourceCompileError::HeapExhausted
+                ));
+            }
+
+            // Guest-visible rejects stay realm-local SyntaxErrors.
+            for kind in [
+                LexErrorKind::InvalidCharacter(0x7f),
+                LexErrorKind::InvalidEscape,
+                LexErrorKind::InvalidNumber,
+                LexErrorKind::StrictOctal,
+                LexErrorKind::UnterminatedString,
+                LexErrorKind::LineTerminatorInString,
+                LexErrorKind::UnterminatedComment,
+                LexErrorKind::UnterminatedRegExp,
+                LexErrorKind::LineTerminatorInRegExp,
+                LexErrorKind::InvalidRegExp,
+                LexErrorKind::InvalidAtSign,
+                LexErrorKind::UnexpectedCharacter(0x40),
+            ] {
+                assert_eq!(syntax(lex(kind)), "bad lex");
+            }
+            assert_eq!(
+                syntax(ParseError {
+                    line: 7,
+                    kind: ParseErrorKind::Syntax,
+                    message: "unexpected token".to_string(),
+                }),
+                "unexpected token"
+            );
+
+            // An unported-but-valid construct is a named coverage gap.
+            let unsupported = map_source_compile_error(ParseError {
+                line: 9,
+                kind: ParseErrorKind::Unsupported,
+                message: "class fields".to_string(),
+            });
+            assert!(matches!(
+                unsupported,
+                SourceCompileError::Unsupported(message) if message == "line 9: class fields"
+            ));
         }
     }
 }

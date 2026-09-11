@@ -2141,22 +2141,46 @@ impl Interp {
         self.source_compiler = Some(compiler);
     }
 
+    /// Whether a runtime source compiler is installed ([`Self::set_source_compiler`]).
+    pub fn has_source_compiler(&self) -> bool {
+        self.source_compiler.is_some()
+    }
+
+    /// Whether any intrinsic bindings have been installed for this realm.
+    ///
+    /// Used by the compartment evaluator to refuse a permit narrowed *after*
+    /// linking (F144): binding is create-only, so an already-linked
+    /// interpreter cannot be un-bound and applying a stricter policy to it
+    /// would silently no-op.
+    pub fn intrinsics_linked(&self) -> bool {
+        self.installed_names_len > 0
+    }
+
     /// Attenuate which intrinsic **globals** this realm binds (F144).
     /// Must be called before [`Self::link_intrinsics`], because that is when
     /// the bindings are created. `None` (the default) keeps the legacy full
     /// realm: every intrinsic the program names is bound. `Some(names)`
     /// admits only the listed intrinsic globals — an empty slice is the
     /// "no intrinsic globals" mode an embedder hosting untrusted code wants
-    /// when it must deny `eval`, `Function`, `Intl`, and the like.
+    /// when it must deny the `eval`, `Function`, and `Intl` **global
+    /// bindings**.
     ///
-    /// This is a global-binding permit, not an intrinsic-graph
-    /// replacement: prototype behavior, the primitive value globals
+    /// **This is a global-binding permit, not a confinement boundary.**
+    /// Prototype behavior, the primitive value globals
     /// (`undefined`/`NaN`/`Infinity`), and the `globalThis` self-binding are
-    /// unaffected, so a denied constructor can still be reached through a
-    /// prototype's `.constructor` (`function(){}.constructor`). It removes
-    /// the named globals, not the objects. The permit is host configuration,
-    /// not guest state, so it is not snapshotted; a restored realm's owner is
-    /// expected to reapply it before the next link.
+    /// unaffected, so a denied constructor remains reachable through a
+    /// prototype's `.constructor` (`function(){}.constructor('return 42')()`
+    /// still compiles and runs once a source compiler is installed).
+    /// Confinement needs the shared frozen intrinsic graph of the realm split
+    /// (F059), not this permit.
+    ///
+    /// Applying a permit to an interpreter that has already linked intrinsic
+    /// bindings is refused rather than silently ignored
+    /// ([`crate::compartment::CompartmentSkip`]). The permit is host
+    /// configuration, not guest state, so it is not snapshotted; a restored
+    /// realm's owner is expected to reapply it before the next link, and
+    /// [`crate::Machine`] users can hold a policy across restore by setting
+    /// it again.
     pub fn set_intrinsic_permit(&mut self, permit: Option<&[&str]>) {
         self.intrinsic_permit =
             permit.map(|names| names.iter().map(|name| (*name).to_string()).collect());

@@ -13,7 +13,31 @@
 //! Removing that access needs a shared frozen intrinsic graph and is the
 //! realm-split work F059 records, not this permit.
 
-use ironhorse_vm::{CompartmentOptions, Machine};
+use ironhorse_vm::{CompartmentOptions, CompartmentSkip, Machine};
+
+/// A minimal evaluative source compiler for the boundary test: enough to show
+/// that a denied constructor reached through `.constructor` can still compile
+/// and run.
+struct TestCompiler;
+
+impl ironhorse_vm::SourceCompiler for TestCompiler {
+    fn compile_source(
+        &self,
+        source: &str,
+        strict: bool,
+        _raw_budget: u64,
+        _charge: &mut dyn FnMut(u64) -> bool,
+    ) -> Result<ironhorse_vm::CompiledSource, ironhorse_vm::SourceCompileError> {
+        let (bytecode, symbols) = ironhorse_compile::compile_atoms_with(source, strict)
+            .map_err(|e| ironhorse_vm::SourceCompileError::Syntax(e.message))?;
+        Ok(ironhorse_vm::CompiledSource {
+            bytecode,
+            symbols,
+            parse_meter_raw: 0,
+            parse_computrons: 0,
+        })
+    }
+}
 
 /// A program whose completion names the resolution of four intrinsic globals
 /// plus the realm scaffolding. It is compiled once per test, not per realm.
@@ -162,20 +186,85 @@ fn evaluate_on_resolves_permit_precedence_both_ways() {
 #[test]
 fn permit_is_a_global_binding_policy_not_confinement() {
     // Documented boundary: prototype behavior is unchanged, so a denied
-    // constructor remains reachable through `.constructor`. Confinement is
+    // constructor remains reachable through `.constructor`, and with a source
+    // compiler installed it still compiles and runs guest code. Confinement is
     // the shared-frozen-intrinsics realm split (F059), not this permit; this
     // test pins the current contract so a reader does not mistake it for a
     // membrane.
-    let (code, symbols) =
-        ironhorse_compile::compile_atoms("typeof (function(){}).constructor").expect("compiles");
+    let (code, symbols) = ironhorse_compile::compile_atoms(
+        "typeof (function(){}).constructor + ',' + (function(){}).constructor('return 42')()",
+    )
+    .expect("compiles");
     let machine = Machine::new();
+    machine.set_source_compiler(std::rc::Rc::new(TestCompiler));
     let restricted = machine.compartment(CompartmentOptions {
         intrinsic_permit: Some(vec![]),
         ..Default::default()
     });
     let outcome = restricted.evaluate_with_symbols(&code, &symbols);
     assert!(outcome.completed, "{:?}", outcome.halt);
-    assert_eq!(outcome.result, "function");
+    assert_eq!(outcome.result, "function,42");
+}
+
+#[test]
+fn continuing_meter_path_honors_the_permit() {
+    // The production daemon evaluator reaches this entry point; mutating its
+    // permit argument to `None` must not leave the suite green.
+    let (code, symbols) = ironhorse_compile::compile_atoms(PROBE).expect("compiles");
+    let machine = Machine::new();
+    let restricted = machine.compartment(CompartmentOptions {
+        intrinsic_permit: Some(vec![]),
+        ..Default::default()
+    });
+    let outcome = restricted.evaluate_with_symbols_continuing_meter_shared(
+        code.into(),
+        &symbols,
+        ironhorse_vm::Meter::new(),
+        None,
+    );
+    assert!(outcome.completed, "{:?}", outcome.halt);
+    assert_eq!(
+        outcome.result,
+        "undefined,undefined,undefined,undefined,object"
+    );
+}
+
+#[test]
+fn a_permit_on_an_already_linked_interpreter_is_refused() {
+    // An interpreter linked under a wider policy cannot be un-bound
+    // create-only, so applying a narrower permit after linking must fail
+    // closed rather than silently no-op.
+    use ironhorse_vm::{parse_symbols, Interp};
+    let (code, symbols) = ironhorse_compile::compile_atoms(PROBE).expect("compiles");
+    let names = parse_symbols(&symbols);
+    let mut prelinked = Interp::new();
+    prelinked.link_intrinsics(&names);
+    assert!(prelinked.intrinsics_linked());
+
+    let machine = Machine::new();
+    let restricted = machine.compartment(CompartmentOptions {
+        intrinsic_permit: Some(vec![]),
+        ..Default::default()
+    });
+    let outcome = restricted.evaluate_with_symbols_on(prelinked, &code, &symbols);
+    assert!(!outcome.completed);
+    assert_eq!(
+        outcome.halt,
+        ironhorse_vm::Halt::NotImplemented("compartment:permit-after-link")
+    );
+    assert_eq!(
+        CompartmentSkip::PermitAfterLink.name(),
+        "compartment:permit-after-link"
+    );
+
+    // A fresh, unlinked interpreter still accepts the compartment's permit.
+    let fresh = Interp::new();
+    let outcome = restricted.evaluate_with_symbols_on(fresh, &code, &symbols);
+    assert!(outcome.completed, "{:?}", outcome.halt);
+    assert_eq!(
+        outcome.result,
+        "undefined,undefined,undefined,undefined,object"
+    );
 }
 
 #[test]
