@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.eslint-base.json",
+  "include": [
+    "*.js",
+    "src/*.js",
+    "test",
+    "claude.types.d.ts"
+  ]
+}
