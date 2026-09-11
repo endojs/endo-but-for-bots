@@ -70,8 +70,11 @@ impl BootTemplate {
         (interp, self.link_charge)
     }
 
-    pub(crate) fn new(names: &[SymbolName]) -> Self {
+    pub(crate) fn new(names: &[SymbolName], permit: Option<&[String]>) -> Self {
         let mut inner = Interp::new();
+        // The permit must be in place before linking, because linking is when
+        // the intrinsic globals are created (F144).
+        inner.intrinsic_permit = permit.map(|names| names.to_vec());
         let before = inner.meter_index();
         inner.link_intrinsics(names);
         let link_charge = inner.meter_index() - before;

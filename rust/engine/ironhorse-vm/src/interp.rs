@@ -2141,6 +2141,32 @@ impl Interp {
         self.source_compiler = Some(compiler);
     }
 
+    /// Attenuate which intrinsic **globals** this realm binds (F144).
+    /// Must be called before [`Self::link_intrinsics`], because that is when
+    /// the bindings are created. `None` (the default) keeps the legacy full
+    /// realm: every intrinsic the program names is bound. `Some(names)`
+    /// admits only the listed intrinsic globals — an empty slice is the
+    /// "no intrinsic globals" mode an embedder hosting untrusted code wants
+    /// when it must deny `eval`, `Function`, `Intl`, and the like.
+    ///
+    /// This is a global-binding permit, not an intrinsic-graph
+    /// replacement: prototype behavior, the primitive value globals
+    /// (`undefined`/`NaN`/`Infinity`), and the `globalThis` self-binding are
+    /// unaffected, so a denied constructor can still be reached through a
+    /// prototype's `.constructor` (`function(){}.constructor`). It removes
+    /// the named globals, not the objects. The permit is host configuration,
+    /// not guest state, so it is not snapshotted; a restored realm's owner is
+    /// expected to reapply it before the next link.
+    pub fn set_intrinsic_permit(&mut self, permit: Option<&[&str]>) {
+        self.intrinsic_permit =
+            permit.map(|names| names.iter().map(|name| (*name).to_string()).collect());
+    }
+
+    /// The intrinsic-global permit currently installed, if any (F144).
+    pub fn intrinsic_permit(&self) -> Option<&[String]> {
+        self.intrinsic_permit.as_deref()
+    }
+
     /// Seed a global binding by id, so a program that reads an
     /// undeclared name (`EVAL_REFERENCE`/`GET_VARIABLE` falling through
     /// to the global object) observes it. Used by

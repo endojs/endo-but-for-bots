@@ -730,6 +730,7 @@ mod tests {
             "eval_program_hoist",
             "meter_host",
             "source_compiler",
+            "intrinsic_permit",
             "cost",
             "step_limit",
             "n_dispatched",

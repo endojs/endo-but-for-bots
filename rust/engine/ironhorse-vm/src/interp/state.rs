@@ -403,6 +403,29 @@ pub struct Interp {
     /// un-armed VM answers a string `eval` with an honest
     /// [`Halt::NotImplemented`] rather than a source-text guess.
     source_compiler: Option<std::rc::Rc<dyn SourceCompiler>>,
+    #[boot_new(None)]
+    #[boot_template(state.intrinsic_permit.clone())]
+    #[gc_root(none)]
+    #[quiescent(retained)]
+    #[persist_refs(none)]
+    #[runtime_keys(none)]
+    #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
+    #[gc_slots(none, none)]
+    #[gc_weak(none)]
+    #[snapshot_table(none)]
+    /// Host attenuation policy for this realm's intrinsic **global**
+    /// bindings, set by [`Self::set_intrinsic_permit`] before
+    /// [`Self::link_intrinsics`]. `None` keeps the legacy full realm (every
+    /// intrinsic this program names is bound). `Some(list)` admits only the
+    /// named intrinsic globals, so an embedder hosting untrusted code can
+    /// express "this realm gets no `eval`, no `Function`, no `Intl`". The
+    /// primitive value globals (`undefined`/`NaN`/`Infinity`), the
+    /// `globalThis` self-binding, and prototype behavior are unaffected:
+    /// this is a global-binding permit, not an intrinsic-graph replacement.
+    /// Host configuration, not guest state, so it is never snapshotted; a
+    /// restored realm is expected to reapply its owner's permit.
+    intrinsic_permit: Option<Vec<String>>,
     #[boot_new(Tracked::new(
         Vec::new(),
         snapshot_dirt.clone(),

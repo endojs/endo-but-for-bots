@@ -47,6 +47,7 @@ const TEMPLATE_ORDER: &[&str] = &[
     "boot_slot_count",
     "native_depth",
     "source_compiler",
+    "intrinsic_permit",
     "code_segments",
     "active_segment",
     "top_level_code",
@@ -238,6 +239,7 @@ const FRESH_ORDER: &[&str] = &[
     "boot_slot_count",
     "native_depth",
     "source_compiler",
+    "intrinsic_permit",
     "eval_direct",
     "code_segments",
     "active_segment",
@@ -506,7 +508,7 @@ fn constructor_emitter_forwards_policies_and_owned_contexts() {
 
 #[test]
 fn template_instances_keep_independent_trackers_and_baselines() {
-    let template = BootTemplate::new(&[]);
+    let template = BootTemplate::new(&[], None);
     let mut first = template.instantiate();
     let mut second = template.instantiate();
     assert_eq!(

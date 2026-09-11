@@ -444,17 +444,10 @@ pub mod engine {
                 message: error.to_string(),
                 meter_raw: meter.raw(),
             }),
-            Err(payload) => {
-                let message = payload
-                    .downcast_ref::<String>()
-                    .cloned()
-                    .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
-                    .unwrap_or_else(|| "non-string compiler panic".to_string());
-                Err(MachineError::Halt(Halt::Panic(PanicKind::EngineFault {
-                    message,
-                    location: None,
-                })))
-            }
+            Err(payload) => Err(MachineError::Halt(Halt::Panic(PanicKind::EngineFault {
+                message: panic_message(payload.as_ref()),
+                location: None,
+            }))),
         }
     }
 
@@ -472,6 +465,121 @@ pub mod engine {
             dispatched: 0,
             meter_raw,
             halt,
+        }
+    }
+
+    /// Best-effort one-line render of a caught compiler panic payload, the
+    /// compiler-gap label the source bridge reports as `Unsupported`. Like the
+    /// 262 harness's copy, it is one line AND length-bounded so a panic payload
+    /// embedding a minified source cannot land unbounded in a diagnostic.
+    fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+        let message = if let Some(s) = payload.downcast_ref::<&str>() {
+            (*s).to_string()
+        } else if let Some(s) = payload.downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "panic".to_string()
+        };
+        let line = message.lines().next().unwrap_or("panic").trim();
+        line.chars().take(200).collect()
+    }
+
+    /// The daemon's production [`ironhorse_vm::SourceCompiler`] (F160): the
+    /// runtime source-execution bridge (`eval` of a string, the `Function`
+    /// constructor) compiles through the same `ironhorse_compile` pipeline the
+    /// top-level program rides, charging the live crank meter. A coder panic
+    /// becomes a named `Unsupported` gap rather than aborting the process.
+    ///
+    /// This mirrors `ironhorse_262::IronhorseSourceCompiler`; `rust/endo`
+    /// cannot depend on the 262 harness (it links the XS oracle), and there is
+    /// no shared bridge crate, so the production seam owns its copy.
+    struct IronhorseSourceCompiler;
+
+    impl ironhorse_vm::SourceCompiler for IronhorseSourceCompiler {
+        fn compile_source(
+            &self,
+            source: &str,
+            strict: bool,
+            raw_budget: u64,
+            charge: &mut dyn FnMut(u64) -> bool,
+        ) -> Result<ironhorse_vm::CompiledSource, ironhorse_vm::SourceCompileError> {
+            let meter = ironhorse_compile::ParseMeter::with_charge_callback(raw_budget, charge);
+            let compiled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                ironhorse_compile::compile_atoms_with_meter(source, strict, meter.clone())
+            }));
+            if meter.exhausted() {
+                return Err(ironhorse_vm::SourceCompileError::MeterAbort);
+            }
+            match compiled {
+                Ok(Ok((bytecode, symbols))) => Ok(ironhorse_vm::CompiledSource {
+                    bytecode,
+                    symbols,
+                    parse_meter_raw: meter.raw(),
+                    parse_computrons: meter.computrons(),
+                }),
+                Ok(Err(error)) => Err(map_source_compile_error(error)),
+                Err(payload) => Err(ironhorse_vm::SourceCompileError::Unsupported(
+                    panic_message(payload.as_ref()),
+                )),
+            }
+        }
+
+        fn compile_source_units(
+            &self,
+            source: &[u16],
+            strict: bool,
+            raw_budget: u64,
+            charge: &mut dyn FnMut(u64) -> bool,
+        ) -> Result<ironhorse_vm::CompiledSource, ironhorse_vm::SourceCompileError> {
+            let meter = ironhorse_compile::ParseMeter::with_charge_callback(raw_budget, charge);
+            let compiled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                ironhorse_compile::compile_atoms_units_with_meter(
+                    source,
+                    ironhorse_compile::Goal::Eval,
+                    strict,
+                    meter.clone(),
+                )
+            }));
+            if meter.exhausted() {
+                return Err(ironhorse_vm::SourceCompileError::MeterAbort);
+            }
+            match compiled {
+                Ok(Ok((bytecode, symbols))) => Ok(ironhorse_vm::CompiledSource {
+                    bytecode,
+                    symbols,
+                    parse_meter_raw: meter.raw(),
+                    parse_computrons: meter.computrons(),
+                }),
+                Ok(Err(error)) => Err(map_source_compile_error(error)),
+                Err(payload) => Err(ironhorse_vm::SourceCompileError::Unsupported(
+                    panic_message(payload.as_ref()),
+                )),
+            }
+        }
+    }
+
+    /// Map a structured parse reject to the VM's source-compile error the
+    /// same way the 262 harness does: resource limits and meter stops are
+    /// host stops, an unported-but-valid construct is a coverage gap, and any
+    /// other reject is the bare, realm-local `SyntaxError` diagnostic.
+    fn map_source_compile_error(
+        error: ironhorse_compile::ParseError,
+    ) -> ironhorse_vm::SourceCompileError {
+        use ironhorse_compile::{LexError, LexErrorKind, ParseErrorKind};
+        match error.kind {
+            ParseErrorKind::Lex(LexError {
+                kind: LexErrorKind::RegExpResourceLimit,
+                ..
+            }) => ironhorse_vm::SourceCompileError::HeapExhausted,
+            ParseErrorKind::Lex(LexError {
+                kind: LexErrorKind::RegExpBudgetExceeded,
+                ..
+            }) => ironhorse_vm::SourceCompileError::MeterAbort,
+            ParseErrorKind::MeterLimit => ironhorse_vm::SourceCompileError::MeterAbort,
+            ParseErrorKind::Unsupported => {
+                ironhorse_vm::SourceCompileError::Unsupported(error.to_string())
+            }
+            _ => ironhorse_vm::SourceCompileError::Syntax(error.message),
         }
     }
 
@@ -517,10 +625,14 @@ pub mod engine {
 
         /// Create a fresh machine under an explicit metering policy.
         pub fn with_bounds(bounds: MeterBounds) -> Machine {
-            Machine {
-                inner: VmMachine::new(),
-                bounds,
-            }
+            let inner = VmMachine::new();
+            // The production source bridge (F160): a guest `eval("…")` or
+            // `new Function(…)` compiles through `ironhorse_compile` instead
+            // of halting on the un-armed `eval:no-compiler` gap. The compiler
+            // is machine-wide, so every fresh realm this machine evaluates in
+            // receives it.
+            inner.set_source_compiler(std::rc::Rc::new(IronhorseSourceCompiler));
+            Machine { inner, bounds }
         }
 
         /// The metering policy every evaluation runs under.
@@ -872,6 +984,10 @@ pub mod engine {
                     // bounded and epoch 1 already carries the armed
                     // meter state.
                     let mut boot = ironhorse_vm::Interp::new();
+                    // The source bridge is host configuration: install it on
+                    // the boot machine before the store session adopts it, so
+                    // every later resume re-installs it on the resumed heap.
+                    boot.set_source_compiler(std::rc::Rc::new(IronhorseSourceCompiler));
                     if let Some(interval) = options.meter.check_interval() {
                         boot.arm_meter(interval, meter_host(&crank_ceiling));
                     }
@@ -904,6 +1020,11 @@ pub mod engine {
                     let mut session =
                         resume_from_store_lazy(store.clone(), &signature).map_err(store_err)?;
                     Self::attach_meter(&options.meter, &crank_ceiling, session.machine_mut());
+                    // The compiler is host configuration and does not ride the
+                    // snapshot, so every resume re-installs it (F160).
+                    session
+                        .machine_mut()
+                        .set_source_compiler(std::rc::Rc::new(IronhorseSourceCompiler));
                     // A resumed machine carries its program symbol
                     // names in the small state; an empty table means
                     // no crank ever linked (e.g. the first crank
@@ -995,8 +1116,12 @@ pub mod engine {
                 resume_from_store_lazy(self.store.clone(), &self.signature).map_err(store_err)?;
             // The rewound machine is a resume like any other: its host
             // callback must be reattached or its next crank fails
-            // closed.
+            // closed, and the source compiler does not ride the snapshot
+            // either (F160).
             Self::attach_meter(&self.meter, &self.crank_ceiling, fresh.machine_mut());
+            fresh
+                .machine_mut()
+                .set_source_compiler(std::rc::Rc::new(IronhorseSourceCompiler));
             self.linked = !fresh.machine().program_symbol_names().is_empty();
             self.session = Some(fresh);
             Ok(())
@@ -1277,12 +1402,10 @@ pub mod engine {
                 Ok(stats.slots_reclaimed)
             }))
             .unwrap_or_else(|payload| {
-                let message = payload
-                    .downcast_ref::<String>()
-                    .cloned()
-                    .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
-                    .unwrap_or_else(|| "non-string collection panic".to_string());
-                Err(MachineError::Store(format!("collection failed: {message}")))
+                Err(MachineError::Store(format!(
+                    "collection failed: {}",
+                    panic_message(payload.as_ref())
+                )))
             });
             if let Err(error) = &result {
                 if let Err(rewind_err) = self.rewind_to_last_checkpoint() {

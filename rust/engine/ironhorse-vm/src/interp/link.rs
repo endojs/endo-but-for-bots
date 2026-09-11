@@ -159,6 +159,18 @@ impl Interp {
         self.install_intrinsic_bindings(&names, 0, true, |_| true);
     }
 
+    /// Whether the realm's permit admits this intrinsic-global name (F144).
+    /// `None` (the default) admits every intrinsic; `Some(list)` admits only
+    /// the listed names. Only the intrinsic-global arm consults this: the
+    /// primitive value globals and the `globalThis` self-binding are realm
+    /// scaffolding and stay.
+    fn intrinsic_global_allowed(&self, name: &str) -> bool {
+        match &self.intrinsic_permit {
+            None => true,
+            Some(permit) => permit.iter().any(|allowed| allowed == name),
+        }
+    }
+
     /// Reify boot-default properties used implicitly by newly linked natives.
     /// Inspect only the pending suffix so aligned relinks remain constant-time.
     fn intern_intrinsic_dependencies(&mut self, names: &[SymbolName]) {
@@ -279,7 +291,11 @@ impl Interp {
             {
                 continue;
             }
-            if let Some(&func) = name.as_str().and_then(|name| self.intrinsics.get(name)) {
+            if let Some(&func) = name
+                .as_str()
+                .filter(|name| self.intrinsic_global_allowed(name))
+                .and_then(|name| self.intrinsics.get(name))
+            {
                 // The global binding is an own property whose value is a
                 // **reference** to the intrinsic function instance, exactly
                 // like any other global property (so `get_variable` /
@@ -1434,7 +1450,12 @@ impl Interp {
         {
             return;
         }
-        let value = if let Some(function) = self.intrinsics.get(name).copied() {
+        let value = if let Some(function) = self
+            .intrinsics
+            .get(name)
+            .copied()
+            .filter(|_| self.intrinsic_global_allowed(name))
+        {
             Some(Slot::of(Kind::Reference, Payload::Reference(function)))
         } else if let Some(value) = value_global(name) {
             Some(value)

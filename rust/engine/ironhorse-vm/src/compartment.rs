@@ -96,7 +96,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::interp::{Halt, Interp, RunOutcome};
+use crate::interp::{Halt, Interp, RunOutcome, SourceCompiler};
 use crate::module::{ModuleError, ModuleGraph, ModuleId};
 use crate::value::{Kind, Payload, Slot};
 
@@ -111,33 +111,74 @@ use crate::value::{Kind, Payload, Slot};
 /// with the shared graph once the realm split lands.
 #[derive(Default)]
 pub struct Intrinsics {
-    // One exact-symbol-table template bounds cache growth even when a caller
-    // supplies a different set of names on every evaluation.
-    boot: RefCell<Option<(Vec<crate::symbols::SymbolName>, crate::interp::BootTemplate)>>,
+    // One exact-symbol-table, exact-permit template bounds cache growth even
+    // when a caller supplies a different set of names or a different
+    // intrinsic permit on every evaluation.
+    boot: RefCell<
+        Option<(
+            Vec<crate::symbols::SymbolName>,
+            Option<Vec<String>>,
+            crate::interp::BootTemplate,
+        )>,
+    >,
+    // The machine's host-installed runtime source compiler (F160), cloned
+    // into every realm this machine mints. Host configuration, not guest
+    // state: the pristine template stays compiler-free and the compiler is
+    // attached to each fresh interpreter after instantiation.
+    compiler: RefCell<Option<Rc<dyn SourceCompiler>>>,
 }
 
 impl Intrinsics {
+    /// Install the runtime source compiler every realm of this machine should
+    /// carry (F160). The compiler is host configuration, so it lives on the
+    /// per-machine `Intrinsics` rather than on any pristine boot template.
+    pub fn set_source_compiler(&self, compiler: Rc<dyn SourceCompiler>) {
+        *self.compiler.borrow_mut() = Some(compiler);
+    }
+
+    /// Attach the machine's compiler (if any) to a freshly instantiated
+    /// realm. Called after `BootTemplate::instantiate`; the pristine
+    /// template itself stays compiler-free (asserted in `BootTemplate::new`).
+    fn install_source_compiler(&self, interp: &mut Interp) {
+        if let Some(compiler) = self.compiler.borrow().as_ref() {
+            interp.set_source_compiler(Rc::clone(compiler));
+        }
+    }
+
     fn with_template<R>(
         &self,
         names: &[crate::symbols::SymbolName],
+        permit: Option<&[String]>,
         use_template: impl FnOnce(&crate::interp::BootTemplate) -> R,
     ) -> R {
         let mut cache = self.boot.borrow_mut();
-        if cache.as_ref().is_none_or(|(cached, _)| cached != names) {
-            *cache = Some((names.to_vec(), crate::interp::BootTemplate::new(names)));
+        let matches = cache
+            .as_ref()
+            .is_some_and(|(cached_names, cached_permit, _)| {
+                cached_names == names && cached_permit.as_deref() == permit
+            });
+        if !matches {
+            *cache = Some((
+                names.to_vec(),
+                permit.map(<[String]>::to_vec),
+                crate::interp::BootTemplate::new(names, permit),
+            ));
         }
-        use_template(&cache.as_ref().unwrap().1)
+        use_template(&cache.as_ref().unwrap().2)
     }
 
     fn fresh_linked(
         &self,
         names: &[crate::symbols::SymbolName],
+        permit: Option<&[String]>,
         meter: Option<(u64, Box<dyn FnMut(u64) -> bool>)>,
     ) -> Interp {
-        self.with_template(names, |template| match meter {
+        let mut interp = self.with_template(names, permit, |template| match meter {
             Some((interval, host)) => template.instantiate_metered(interval, host),
             None => template.instantiate(),
-        })
+        });
+        self.install_source_compiler(&mut interp);
+        interp
     }
 
     pub fn new() -> Rc<Intrinsics> {
@@ -215,6 +256,10 @@ pub struct CompartmentOptions {
     /// Whether an `importHook` was supplied. The async loader it drives
     /// is a named skip (`compartment:dynamic-import`).
     pub has_import_hook: bool,
+    /// The intrinsic-global permit (F144): `None` binds every intrinsic the
+    /// program names, `Some(names)` binds only those. Applied by
+    /// [`Compartment::evaluate_with_symbols`] before linking.
+    pub intrinsic_permit: Option<Vec<String>>,
 }
 
 /// A compartment: its own globals, module map, and evaluator, over a
@@ -244,6 +289,8 @@ pub struct Compartment {
     has_resolve_hook: bool,
     /// Whether an `importHook` was supplied at construction.
     has_import_hook: bool,
+    /// The intrinsic-global permit (F144); `None` is the full realm.
+    intrinsic_permit: Option<Vec<String>>,
 }
 
 impl Compartment {
@@ -267,6 +314,7 @@ impl Compartment {
             modules: options.modules,
             has_resolve_hook: options.has_resolve_hook,
             has_import_hook: options.has_import_hook,
+            intrinsic_permit: options.intrinsic_permit,
         }
     }
 
@@ -348,6 +396,11 @@ impl Compartment {
         self.has_import_hook
     }
 
+    /// This compartment's intrinsic-global permit (F144), if any.
+    pub fn intrinsic_permit(&self) -> Option<&[String]> {
+        self.intrinsic_permit.as_deref()
+    }
+
     /// **Static** import through the compartment's module map: resolve
     /// the specifier (the static resolve hook — the map's own
     /// specifier→id resolution), link, and evaluate the module graph
@@ -376,16 +429,24 @@ impl Compartment {
     /// Mint a **nested** compartment on the same machine with fresh
     /// globals and a fresh globalThis identity — a Compartment created
     /// inside a compartment chains correctly (one machine marker,
-    /// isolated globals).
+    /// isolated globals). A nested compartment INHERITS the parent's
+    /// intrinsic-global permit (F144): attenuation is not something a
+    /// child may silently widen. Use [`Self::new_compartment_with`] to
+    /// choose the child's permit explicitly.
     pub fn new_compartment(&self) -> Compartment {
         Compartment::from_options(
             Rc::clone(&self.intrinsics),
             Rc::clone(&self.counter),
-            CompartmentOptions::default(),
+            CompartmentOptions {
+                intrinsic_permit: self.intrinsic_permit.clone(),
+                ..CompartmentOptions::default()
+            },
         )
     }
 
-    /// Mint a nested compartment with explicit options.
+    /// Mint a nested compartment with explicit options. The options are
+    /// used as given; this form is the explicit-policy escape from
+    /// [`Self::new_compartment`]'s permit inheritance.
     pub fn new_compartment_with(&self, options: CompartmentOptions) -> Compartment {
         Compartment::from_options(
             Rc::clone(&self.intrinsics),
@@ -471,6 +532,7 @@ impl Compartment {
             Err(skip) => return Self::refused(skip),
         };
         let mut interp = Interp::new();
+        self.intrinsics.install_source_compiler(&mut interp);
         for (id, value) in seeded {
             interp.define_global_id(id, value);
         }
@@ -502,7 +564,11 @@ impl Compartment {
             Ok(names) => names,
             Err(halt) => return crate::symbols::decode_refusal(halt),
         };
-        self.evaluate_linked_shared(self.intrinsics.fresh_linked(&names, None), bytecode)
+        self.evaluate_linked_shared(
+            self.intrinsics
+                .fresh_linked(&names, self.intrinsic_permit.as_deref(), None),
+            bytecode,
+        )
     }
 
     /// [`Compartment::evaluate_with_symbols`] under an ARMED meter
@@ -534,7 +600,11 @@ impl Compartment {
             Ok(names) => names,
             Err(halt) => return crate::symbols::decode_refusal(halt),
         };
-        let interp = self.intrinsics.fresh_linked(&names, Some((interval, host)));
+        let interp = self.intrinsics.fresh_linked(
+            &names,
+            self.intrinsic_permit.as_deref(),
+            Some((interval, host)),
+        );
         self.evaluate_linked_shared(interp, bytecode)
     }
 
@@ -551,6 +621,13 @@ impl Compartment {
             Ok(names) => names,
             Err(halt) => return crate::symbols::decode_refusal(halt),
         };
+        // A compartment permit overrides; a compartment without one leaves
+        // the caller's policy on the supplied interpreter intact.
+        if let Some(permit) = &self.intrinsic_permit {
+            let refs: Vec<&str> = permit.iter().map(String::as_str).collect();
+            interp.set_intrinsic_permit(Some(&refs));
+        }
+        self.intrinsics.install_source_compiler(&mut interp);
         interp.link_intrinsics(&names);
         self.evaluate_linked_shared(interp, Rc::from(bytecode))
     }
@@ -575,9 +652,12 @@ impl Compartment {
                 return outcome;
             }
         };
-        let (mut interp, link_charge) = self.intrinsics.with_template(&names, |template| {
-            template.instantiate_continuing_meter(meter, host)
-        });
+        let (mut interp, link_charge) =
+            self.intrinsics
+                .with_template(&names, self.intrinsic_permit.as_deref(), |template| {
+                    template.instantiate_continuing_meter(meter, host)
+                });
+        self.intrinsics.install_source_compiler(&mut interp);
         // The callback runs outside the cache borrow, including on a cache hit.
         if !interp.charge_compilation(link_charge) {
             return RunOutcome {
@@ -645,6 +725,16 @@ impl Machine {
     /// The machine's intrinsics marker (see [`Intrinsics`]).
     pub fn intrinsics(&self) -> &Rc<Intrinsics> {
         &self.intrinsics
+    }
+
+    /// Install the runtime source compiler every realm this machine mints
+    /// should carry (F160): with one installed, a guest `eval("…")` or
+    /// `new Function(…)` compiles through it instead of halting on the
+    /// un-armed `eval:no-compiler` gap. The compiler is machine-wide host
+    /// configuration and is attached to each fresh interpreter as it is
+    /// instantiated, so it survives the pristine-template cache.
+    pub fn set_source_compiler(&self, compiler: Rc<dyn SourceCompiler>) {
+        self.intrinsics.set_source_compiler(compiler);
     }
 
     /// A fresh compartment on this machine, with empty globals and module
