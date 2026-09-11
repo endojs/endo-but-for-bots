@@ -3044,6 +3044,29 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@endo/opencode-sandbox@workspace:packages/opencode-sandbox":
+  version: 0.0.0-use.local
+  resolution: "@endo/opencode-sandbox@workspace:packages/opencode-sandbox"
+  dependencies:
+    "@endo/9p-server": "workspace:^"
+    "@endo/cli": "workspace:^"
+    "@endo/daemon": "workspace:^"
+    "@endo/errors": "workspace:^"
+    "@endo/eventual-send": "workspace:^"
+    "@endo/exo": "workspace:^"
+    "@endo/exo-stream": "workspace:^"
+    "@endo/far": "workspace:^"
+    "@endo/hosted-agent": "workspace:^"
+    "@endo/init": "workspace:^"
+    "@endo/patterns": "workspace:^"
+    "@endo/platform": "workspace:^"
+    "@endo/sandbox": "workspace:^"
+    "@endo/stream": "workspace:^"
+    ava: "catalog:dev"
+    eslint: "catalog:dev"
+  languageName: unknown
+  linkType: soft
+
 "@endo/panic@workspace:^, @endo/panic@workspace:packages/panic":
   version: 0.0.0-use.local
   resolution: "@endo/panic@workspace:packages/panic"
