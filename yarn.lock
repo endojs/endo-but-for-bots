@@ -1367,6 +1367,7 @@ __metadata:
     "@endo/eventual-send": "workspace:^"
     "@endo/exo-git": "workspace:^"
     "@endo/exo-http-client": "workspace:^"
+    "@endo/exo-package-manager": "workspace:^"
     "@endo/exo-shell": "workspace:^"
     "@endo/far": "workspace:^"
     "@endo/git": "workspace:^"
@@ -2190,7 +2191,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@endo/exo-package-manager@workspace:packages/exo-package-manager":
+"@endo/exo-package-manager@workspace:^, @endo/exo-package-manager@workspace:packages/exo-package-manager":
   version: 0.0.0-use.local
   resolution: "@endo/exo-package-manager@workspace:packages/exo-package-manager"
   dependencies:
