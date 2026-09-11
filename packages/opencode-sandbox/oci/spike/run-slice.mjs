@@ -21,14 +21,20 @@ import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
 const RELEASE = process.env.ENDO_RELEASE || '/var/lib/endo/current';
-const MODEL = process.env.SPIKE_MODEL || 'openrouter/deepseek/deepseek-v4.1-flash';
+const MODEL =
+  process.env.SPIKE_MODEL || 'openrouter/deepseek/deepseek-v4.1-flash';
 const IMAGE = process.env.SPIKE_IMAGE;
-const WORKDIR = process.env.SPIKE_WORKDIR || '/var/lib/endo/opencode-spike/work';
+const WORKDIR =
+  process.env.SPIKE_WORKDIR || '/var/lib/endo/opencode-spike/work';
 const TIMEOUT_MS = Number(process.env.SPIKE_TIMEOUT_MS || 240000);
 
 export const main = async host => {
-  if (!IMAGE) throw Error('SPIKE_IMAGE is required, e.g. localhost/opencode-sandbox:<commit>');
-  if (!Number.isFinite(TIMEOUT_MS) || TIMEOUT_MS <= 0) throw Error('invalid SPIKE_TIMEOUT_MS');
+  if (!IMAGE)
+    throw Error(
+      'SPIKE_IMAGE is required, e.g. localhost/opencode-sandbox:<commit>',
+    );
+  if (!Number.isFinite(TIMEOUT_MS) || TIMEOUT_MS <= 0)
+    throw Error('invalid SPIKE_TIMEOUT_MS');
 
   const { E } = await import(
     pathToFileURL(`${RELEASE}/packages/eventual-send/src/no-shim.js`).href
@@ -37,7 +43,8 @@ export const main = async host => {
   const blob = await E(host).lookup(['secrets', 'openrouter-auth']);
   const base64 = await E(blob).readBase64();
   const token = Buffer.from(base64, 'base64').toString('utf8');
-  if (!token || token.length < 10) throw Error('OpenRouter secret came back empty');
+  if (!token || token.length < 10)
+    throw Error('OpenRouter secret came back empty');
 
   if (process.env.SPIKE_CHECK === '1') {
     console.log(JSON.stringify({ secretBytes: token.length, image: IMAGE }));
@@ -57,11 +64,17 @@ export const main = async host => {
     provider: {
       openrouter: {
         env: ['OPENROUTER_API_KEY'],
-        options: { baseURL: process.env.SPIKE_OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1' },
+        options: {
+          baseURL:
+            process.env.SPIKE_OPENROUTER_BASE_URL ||
+            'https://openrouter.ai/api/v1',
+        },
         whitelist: [providerModel],
         models: {
           [providerModel]: {
-            name: process.env.SPIKE_MODEL_NAME || 'DeepSeek V4.1 Flash (OpenRouter)',
+            name:
+              process.env.SPIKE_MODEL_NAME ||
+              'DeepSeek V4.1 Flash (OpenRouter)',
             limit:
               mode === 'compact'
                 ? { context: 8000, output: 1024 }
@@ -122,14 +135,18 @@ export const main = async host => {
       }
     });
   const counts = {};
-  for (const event of events) counts[event.type] = (counts[event.type] || 0) + 1;
+  for (const event of events)
+    counts[event.type] = (counts[event.type] || 0) + 1;
   const deltas = events
     .filter(event => event.type === 'part_delta')
     .map(event => [event.partType, event.delta]);
-  const texts = events.filter(event => event.type === 'text').map(event => event.part?.text);
+  const texts = events
+    .filter(event => event.type === 'text')
+    .map(event => event.part?.text);
   const stdout = result.stdout || '';
   const compactionLeak =
-    stdout.includes('Continue if you have next steps') || stdout.toLowerCase().includes('## objective');
+    stdout.includes('Continue if you have next steps') ||
+    stdout.toLowerCase().includes('## objective');
 
   console.log(
     JSON.stringify(
