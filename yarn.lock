@@ -2468,6 +2468,24 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@endo/git-object-store@workspace:packages/git-object-store":
+  version: 0.0.0-use.local
+  resolution: "@endo/git-object-store@workspace:packages/git-object-store"
+  dependencies:
+    "@endo/bytes": "workspace:^"
+    "@endo/errors": "workspace:^"
+    "@endo/harden": "workspace:^"
+    "@endo/hex": "workspace:^"
+    "@endo/init": "workspace:^"
+    "@endo/ses-ava": "workspace:^"
+    ava: "catalog:dev"
+    better-sqlite3: "npm:^11.0.0"
+    c8: "catalog:dev"
+    eslint: "catalog:dev"
+    typescript: "catalog:dev"
+  languageName: unknown
+  linkType: soft
+
 "@endo/git@workspace:^, @endo/git@workspace:packages/git":
   version: 0.0.0-use.local
   resolution: "@endo/git@workspace:packages/git"
