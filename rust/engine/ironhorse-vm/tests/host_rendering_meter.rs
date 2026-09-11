@@ -66,7 +66,7 @@ fn diagnostic_rendering_does_not_execute_guest_allocations() {
         ironhorse_compile::compile_atoms("throw {toString(){return 'x'.repeat(1000000)}}").unwrap();
     let mut vm = Interp::new();
     vm.link_intrinsics(&parse_symbols(&symbols));
-    vm.chunks.set_ceiling(vm.chunks.byte_size() + 4096);
+    vm.set_chunk_ceiling(vm.chunks().byte_size() + 4096);
     let outcome = vm.run(&code);
     assert_eq!(outcome.halt.thrown_rendering(), Some("[object Object]"));
     assert!(!outcome.completed);

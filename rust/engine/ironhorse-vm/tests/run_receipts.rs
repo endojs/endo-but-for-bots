@@ -43,7 +43,7 @@ fn halted_runs_report_only_work_incurred_after_entry() {
         let mut vm = Interp::new();
         vm.link_intrinsics(&parse_symbols(&symbols));
         assert!(vm.charge_compilation(1 << 24));
-        vm.chunks.set_ceiling(vm.chunks.byte_size() + 4096);
+        vm.set_chunk_ceiling(vm.chunks().byte_size() + 4096);
         let before = vm.meter_index();
         let out = vm.run(&code);
         assert!(!out.completed);
