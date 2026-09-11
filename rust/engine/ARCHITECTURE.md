@@ -252,15 +252,16 @@ object-code firewall proof and calibration loop remain planned work.
 
 The source documentation in [`versions.rs`](ironhorse-snapshot/src/versions.rs)
 names the bump rules and upgrade consequences.
-These are the five identifiers named by the review, audited at `96db92e23`.
+These are the five identifiers named by the review, with current values verified
+against the tree.
 `PARSE_METER_RELEASE` is now an alias, so they are not five independent counters.
 
 | Identifier | Owner and current value | Bump rule and compatibility cost |
 |---|---|---|
 | `COST_TABLE_VERSION` | `ironhorse-meter/src/lib.rs`: `ironhorse-meter-5` | Change weights, charging points or admission policy by appending to `releases::PINNED`, changing the release literal and deliberately updating golden vectors together. `METR` requires both matching name and digest; old-meter persisted heaps cannot resume on the new engine. |
 | `PARSE_METER_RELEASE` | `ironhorse-compile/src/meter.rs`: alias of `COST_TABLE_VERSION` | No independent bump. Compiler charge/admission changes follow the shared meter release procedure; do not recreate a second version namespace. |
-| `IRONHORSE_FORMAT_VERSION` | Snapshot `format.rs`: 16 | Change the container encoding/interpretation with a format bump and explicit decoder support/refusal. `MIN_READ` is 1, but decoding an old container is not permission to execute it: boot and meter identity gates still apply. |
-| `STORE_SCHEMA_VERSION` | Snapshot `store.rs`: 28 | Change paged-store/manifest/small-state representation with a schema bump and verified migration step or explicit refusal. `migrate_store` authenticates old state and advances monotonically; it does not translate old meter semantics. |
+| `IRONHORSE_FORMAT_VERSION` | Snapshot `format.rs`: 20 | Change the container encoding/interpretation with a format bump and explicit decoder support/refusal. `MIN_READ` is 1, but decoding an old container is not permission to execute it: boot and meter identity gates still apply. |
+| `STORE_SCHEMA_VERSION` | Snapshot `store.rs`: 31 | Change paged-store/manifest/small-state representation with a schema bump and verified migration step or explicit refusal. `migrate_store` authenticates old state and advances monotonically; it does not translate old meter semantics. |
 | `INTL_DATA_VERSION` | Generated VM `src/intl_profile.rs` | Identifies the in-tree Intl profile plus the locked ICU dependency graph, including data checksums and dependency edges. CI rejects stale generation and root/engine disagreement. The label participates in the boot fingerprint and therefore the persisted SIGN gate. Current dependencies retain an immutable legacy alias; upgrades produce a new identity. |
 
 The derived table digest versions weight/default-key encoding, not every charging point.
