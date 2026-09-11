@@ -192,12 +192,14 @@ Rules the bridge must implement:
   (`{diffs: []}`), so only the boolean `true` on an assistant message matches;
   `session.updated` also has a summary object — only the message registry is
   keyed on it.
-- **Permissions.** `opencode serve` has no `--auto` flag. Bake
-  `permission: {"*":"allow"}` into the host config (or
-  `OPENCODE_PERMISSION='{"*":"allow"}'`) and still answer any
+- **Permissions.** `opencode serve` has no `--auto` flag. The host config sets
+  only `permission: { doom_loop: "allow" }` — enough to keep the generic
+  build/plan agent loop from stalling — and the bridge answers every
   `permission.asked` with `{response:'once'}` via
-  `POST /session/:sessionID/permissions/:permissionID`; `doom_loop` defaults to
-  `ask` and would otherwise hang the turn.
+  `POST /session/:sessionID/permissions/:permissionID`. Do **not** use a
+  `"*": "allow"` wildcard: it overrides the built-in `ask`/`deny` rules
+  (`external_directory`, `.env` reads, plan denies, doom_loop) and makes the
+  answer path dead; the slice is the boundary, but the in-CLI rails stay on.
 - **Stream lifecycle.** Every request, including `GET /event`, carries the
   directory (`?directory=/workspace` or `x-opencode-directory`) or the server
   uses its own cwd and the bridge sees nothing. The SSE stream has no replay
@@ -278,11 +280,11 @@ reuse its config generator — that emits Claude's `mcpServers`/`type: 'stdio'`
 - opencode tool names are sanitized `endo_<tool>`; the bridge's pinned catalog
   (`mcp-bridge.js:180-199`) still refuses unknown tools.
 - The default `build` agent's permission rules begin `"*": "allow"`, but
-  `doom_loop` defaults to `ask` and `serve` has no `--auto` flag. Bake
-  `permission: {"*":"allow"}` into the host config (or
-  `OPENCODE_PERMISSION='{"*":"allow"}'`) and have the bridge answer any
-  `permission.asked` with `{response:'once'}`; the outer slice is the
-  enforcement boundary, matching the codex stance.
+  `doom_loop` defaults to `ask` and `serve` has no `--auto` flag. The host
+  config sets `permission: { doom_loop: "allow" }` and the bridge answers any
+  `permission.asked` with `{response:'once'}`; a `"*": "allow"` wildcard would
+  override the built-in `ask`/`deny` rules and is deliberately not used. The
+  outer slice is the enforcement boundary, matching the codex stance.
 - **Unsettled-call barrier:** `terminate()`/`destroy()` must refuse while
   `bridge.pendingCalls() > 0`, with the exact message substring
   `unsettled Endo tool call` that Floot retries on
@@ -452,15 +454,22 @@ that is still open here):
   and expect the global-project fallback.)
 - **Hard-coded model list for the OpenRouter endpoint.** The provider block in
   the host config (`OPENCODE_CONFIG_CONTENT`) pins
-  `provider.openrouter.env`, `options.baseURL = https://openrouter.ai/api/v1`
-  and an explicit `models` map plus `whitelist`, so the effective list is what
-  we write — not what the OpenCode catalog (`models.opencode.ai`) or the
-  binary's embedded models.dev snapshot happen to list. Those lists can differ
-  from what OpenRouter serves. `OPENCODE_DISABLE_MODELS_FETCH=1` stops any
-  runtime fetch.
-  Refresh entries from `https://openrouter.ai/api/v1/models` when a model
-  changes. Pinning the build-time models.dev snapshot is not required for this
-  path and stays on the open list as a general reproducibility item.
+  `provider.openrouter.npm = @openrouter/ai-sdk-provider`,
+  `env = [OPENROUTER_API_KEY]`,
+  `options.baseURL = https://openrouter.ai/api/v1`, and an explicit `models`
+  map whose keys are canonical provider-scoped ids; `whitelist` is built from
+  that catalog, so the effective list is exactly what we write — not what the
+  OpenCode catalog (`models.opencode.ai`) or the binary's embedded models.dev
+  snapshot happen to list. Those lists can differ from what OpenRouter serves;
+  stealth aliases with a leading `~` are accepted.
+  `OPENCODE_DISABLE_MODELS_FETCH=1` stops any runtime fetch. Refresh entries
+  from `https://openrouter.ai/api/v1/models` when a model changes. Pinning the
+  build-time models.dev snapshot is not required for this path and stays on
+  the open list as a general reproducibility item.
+  Caveat: a deep merge means the block cannot remove an `options.apiKey`,
+  `options.headers`, or alternate SDK package added by a lower config layer,
+  so the session must also run with project config disabled, a read-only
+  `OPENCODE_CONFIG_DIR`, and `OPENCODE_AUTH_CONTENT='{}'` (see Security).
 - Runtime env: `OPENCODE_DISABLE_PROJECT_CONFIG=1`, `OPENCODE_PURE=1`,
   `OPENCODE_DISABLE_DEFAULT_PLUGINS=1`, `OPENCODE_AUTH_CONTENT='{}'`,
   `OPENCODE_DISABLE_AUTOUPDATE=1` (inert for `run` but harmless),
