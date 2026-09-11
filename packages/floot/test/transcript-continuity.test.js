@@ -13,6 +13,7 @@ import {
   makeStreamingAgent,
   resolveSharedWorkspaceHostPath,
 } from '../agent.js';
+import { UNSETTLED_TOOL_RESULT } from '../src/hosted-turn.js';
 import { makeReplyChannel } from '../src/stream.js';
 import { makeFlootToolRegistry } from '../src/tool-registry.js';
 
@@ -242,7 +243,9 @@ test('a failed turn keeps the tool activity and text that streamed before it', a
           role: 'tool',
           name: 'Read',
           args: '{}',
-          result: 'Tool outcome unknown; do not automatically retry.',
+          // The mirrored partial names its own reason for the missing result
+          // rather than the journal's generic placeholder.
+          result: UNSETTLED_TOOL_RESULT,
         },
         { role: 'assistant', content: 'almost' },
       ],

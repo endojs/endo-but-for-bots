@@ -1,0 +1,66 @@
+# Containerfile.source — @endo/opencode-sandbox, in-image source build.
+#
+# Use where the host has ~10-15 GB of scratch space and network access; Tokyo's
+# 49 GB disk does not (the bun install layer alone exceeds the free space), so
+# Tokyo deploys the prebuilt Containerfile instead.
+#
+# Build via ./build-reproducible.sh --source, which pins the fork commit and
+# records the image id, in-image CLI digest, and version. The model catalog is
+# embedded at build time (script/build.ts fetches a models.dev snapshot) and
+# the runtime fetch is disabled. The image runs as root inside the slice;
+# privilege separation is the sandbox driver's responsibility. Base digests
+# are not pinned yet; see DESIGN.md open questions.
+
+FROM docker.io/oven/bun:1.3.14 AS build
+
+ARG OPENCODE_REPO=https://github.com/kumavis/opencode.git
+ARG OPENCODE_REF=build/v1.18.30-opencode-patched
+ARG OPENCODE_COMMIT
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    git \
+    python3 \
+    build-essential \
+    pkg-config \
+  && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+RUN git clone --filter=blob:none --branch "${OPENCODE_REF}" "${OPENCODE_REPO}" . \
+  && if [ -n "${OPENCODE_COMMIT}" ]; then git checkout "${OPENCODE_COMMIT}"; fi \
+  && git rev-parse HEAD
+
+# --frozen-lockfile keeps the checked-in bun.lock authoritative. The build
+# also embeds a models.dev snapshot fetched at build time; pinning that fetch
+# is an open reproducibility item.
+RUN bun install --frozen-lockfile
+RUN ./packages/opencode/script/build.ts --single
+
+FROM docker.io/library/node:22-bookworm-slim
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    git \
+    ripgrep \
+  && rm -rf /var/lib/apt/lists/*
+
+# --single emits exactly one target for the build platform; the wildcard keeps
+# the image buildable on linux/amd64 and linux/arm64.
+COPY --from=build /src/packages/opencode/dist/opencode-linux-*/bin/opencode /usr/local/bin/opencode
+RUN chmod 0755 /usr/local/bin/opencode && opencode --version
+
+# The session bridge the client spawns. Copied from the build context (the
+# fork clone has no packages/opencode-sandbox); build-reproducible.sh places
+# src/opencode-bridge.mjs beside this Containerfile.
+COPY opencode-bridge.mjs /opt/opencode-bridge/bridge.mjs
+
+WORKDIR /workspace
+
+ENV OPENCODE_DISABLE_AUTOUPDATE=1 \
+    OPENCODE_DISABLE_PROJECT_CONFIG=1 \
+    OPENCODE_PURE=1 \
+    OPENCODE_DISABLE_DEFAULT_PLUGINS=1 \
+    OPENCODE_DISABLE_MODELS_FETCH=1 \
+    OPENCODE_AUTH_CONTENT={}

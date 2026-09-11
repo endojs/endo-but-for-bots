@@ -19,6 +19,7 @@ const NetworkProfileShape = M.or(
   'host-loopback',
   'host-lan',
   'host-net',
+  'join',
 );
 
 const BackendNameShape = M.or(
@@ -135,6 +136,7 @@ const SandboxMakeOptsShape = M.splitRecord(
   {
     mounts: M.arrayOf(MountSpecShape),
     network: NetworkProfileShape,
+    networkRef: M.string(),
     backend: BackendSelectorShape,
     seccomp: SeccompPolicyShape,
     env: EnvShape,

@@ -127,7 +127,7 @@ export const PINNED_IMAGE_REFERENCE_PATTERN =
 harden(PINNED_IMAGE_REFERENCE_PATTERN);
 
 /** Portable, bounded name for a volume, container, or mount role. */
-const PORTABLE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
+export const PORTABLE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 
 /** Absolute, normal, non-traversing destination path inside the slice. */
 const INNER_PATH_PATTERN = /^(\/[A-Za-z0-9][A-Za-z0-9_.-]*)+$/;
