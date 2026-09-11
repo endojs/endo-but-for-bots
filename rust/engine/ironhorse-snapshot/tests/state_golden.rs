@@ -231,14 +231,16 @@ fn regenerate_persistence_identities() {
     } else {
         "state_golden_libm.tsv"
     };
-    std::fs::write(
-        concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/fixtures/state_golden_format_19.tsv"
-        ),
-        format19_output,
-    )
-    .unwrap();
+    if ironhorse_vm::MATH_PROVIDER == "platform" {
+        std::fs::write(
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/state_golden_format_19.tsv"
+            ),
+            format19_output,
+        )
+        .unwrap();
+    }
     std::fs::write(
         concat!(
             env!("CARGO_MANIFEST_DIR"),

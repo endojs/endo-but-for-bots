@@ -129,6 +129,7 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
     );
 
     let mut format19 = session.machine().snapshot_image(&sig).unwrap().into_image();
+    format19.signature = Signature::decode(&platform_signature).unwrap();
     format19.version.format_version = 19;
     assert_eq!(
         hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&format19)),
@@ -358,7 +359,7 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
             "e129c2191459e2f228d5fd84f78ca28873c16f36786396ab19ce95db7ec90fce"
         } else {
             // F189 reserved IDs, with the deterministic provider SIGN.
-            "00feb6bb23ffa6dd0c29a3ffaefcba33a888646b3024f2e0e68820106d77827c"
+            "2fd8758022816889ec2870a839b6ea36c2260b0b9752a111e500beec5724a710"
         },
         "canonical final blob hash"
     );
@@ -576,7 +577,7 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         if ironhorse_vm::MATH_PROVIDER == "platform" {
             "601fece7ad269cb87dab53afa8d9d79af97f185fd0b43c3c0589578412c3f007"
         } else {
-            "4330487be44e97feef0e706757d957cd040082bcc1577a15deca80665192abb2"
+            "69479e004c7014a252c6e9ff0f701d11ec28564826986c02d82de653e4945834"
         },
         "epoch-3 seal chain"
     );
