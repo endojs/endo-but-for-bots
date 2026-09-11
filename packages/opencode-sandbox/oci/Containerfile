@@ -1,0 +1,37 @@
+# Containerfile — @endo/opencode-sandbox runtime image (prebuilt binary).
+#
+# The deployment path, validated in a Tokyo podman slice on 2026-09-11. The
+# image carries a CLI cross-built from the pinned fork commit with bun@1.3.14
+# (see build-reproducible.sh). Tokyo's root disk cannot host the source build's
+# scratch layers; Containerfile.source is the in-image variant for hosts with
+# ~10-15 GB of headroom.
+#
+# Build via ./build-reproducible.sh, which records the image id, in-image CLI
+# digest, and version. The model catalog is embedded in the binary at build
+# time and the runtime fetch is disabled. The image runs as root inside the
+# slice; privilege separation is the sandbox driver's responsibility.
+
+FROM docker.io/library/node:22-bookworm-slim
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    git \
+    ripgrep \
+  && rm -rf /var/lib/apt/lists/*
+
+COPY opencode /usr/local/bin/opencode
+RUN chmod 0755 /usr/local/bin/opencode && opencode --version
+
+WORKDIR /workspace
+
+ENV OPENCODE_DISABLE_AUTOUPDATE=1 \
+    OPENCODE_DISABLE_PROJECT_CONFIG=1 \
+    OPENCODE_PURE=1 \
+    OPENCODE_DISABLE_DEFAULT_PLUGINS=1 \
+    OPENCODE_DISABLE_MODELS_FETCH=1 \
+    OPENCODE_AUTH_CONTENT={}
+
+# The session bridge is baked here once packages/opencode-sandbox/src lands, so
+# it ships with the same pinned build:
+# COPY opencode-bridge.mjs /opt/opencode-bridge/bridge.mjs
