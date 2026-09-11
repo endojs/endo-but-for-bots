@@ -19,6 +19,7 @@ test('agentry subpaths resolve through package exports', async t => {
     import('@endo/agentry/harness'),
     import('@endo/agentry/define-agent'),
     import('@endo/agentry/code-mode'),
+    // eslint-disable-next-line import/no-unresolved, import/no-extraneous-dependencies
     import('@endo/agentry/code-mode-provisioning'),
     import('@endo/agentry/harness/types.js'),
     import('@endo/agentry/code-mode/types.js'),
@@ -123,7 +124,32 @@ test('agentry subpaths resolve through package exports', async t => {
   t.is(typeof evalModule.runGitScenario, 'function');
   t.deepEqual(
     Object.keys(evalModule).sort(),
-    ['makeRunMetricsRecorder', 'resolveEvalModelFromEnv', 'runGitScenario'],
+    [
+      'aggregateEvalMatrixRows',
+      'assertGitCommitOutcome',
+      'assertGitConflictRebaseOutcome',
+      'codeModeCondition',
+      'conflictRebasePrompt',
+      'defaultEvalConditions',
+      'evalConditionsByName',
+      'initRepo',
+      'makeConflictRebaseScenario',
+      'makeDefaultGitScenarioSpecs',
+      'makePowersOver',
+      'makeRunMetricsRecorder',
+      'makeStageAndCommitScenario',
+      'parseEvalModelSpecs',
+      'provisionStageAndCommitRepo',
+      'readText',
+      'renderEvalMatrixMarkdownTable',
+      'resolveEvalModelFromEnv',
+      'resolveEvalModelsFromEnv',
+      'runEvalMatrix',
+      'runGitScenario',
+      'runGitScenarioUnder',
+      'shellCondition',
+      'toolCallsCondition',
+    ],
     '@endo/agentry/eval export surface',
   );
 

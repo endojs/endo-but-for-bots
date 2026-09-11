@@ -17,61 +17,23 @@
 // provider failure, so the no-LLM tests prove the deterministic harness path
 // while the event artifacts explain live failures.
 //
-// The test is table-driven over a registry of eval rows, one per scenario, so
-// the credential-gating logic lives in one place and adding an eval adds one
-// row rather than one more gated file.
+// The test is table-driven over the matrix registry, so the credential-gating
+// logic lives in one place and adding an eval adds one scenario spec rather than
+// one more gated file.
 
 import fs from 'node:fs';
 import path from 'node:path';
 
 import test from '@endo/ses-ava/prepare-endo.js';
 
-import { runGitScenario, resolveEvalModelFromEnv } from '../src/eval/index.js';
-import { makeConflictRebaseScenario } from '../src/eval/scenarios/conflict-rebase/index.js';
-import { makeStageAndCommitScenario } from '../src/eval/scenarios/stage-and-commit/index.js';
+import {
+  defaultEvalConditions,
+  makeDefaultGitScenarioSpecs,
+  renderEvalMatrixMarkdownTable,
+  runEvalMatrix,
+  resolveEvalModelFromEnv,
+} from '../src/eval/index.js';
 import { readText } from './_eval-fixture.js';
-import { provisionConflictRebaseRepo } from './eval/_conflict-rebase-repo.js';
-import { provisionStageAndCommitRepo } from './eval/_stage-and-commit-repo.js';
-
-/** @import { CodeModePower } from '@endo/agent-tools/code-mode/types.js' */
-
-/**
- * @typedef {object} EvalRow One live-eval scenario.
- * @property {string} title The test title for this row.
- * @property {(t: import('ava').ExecutionContext) => Promise<{
- *   repoRoot: string,
- *   workspace: CodeModePower,
- *   git: CodeModePower,
- * }>} provisionRepo
- *   Provision the scenario's repository and return its powers.
- * @property {(repo: any) => import('../src/eval/types.js').GitScenario} makeScenario
- *   Build the scenario from the provisioned repository.
- */
-
-/**
- * The registered scenarios. Each eval folder contributes one row; the live test
- * iterates them all under the single credential gate.
- *
- * @type {EvalRow[]}
- */
-const evalRows = [
-  {
-    title: 'a live model stages and commits the file (outcome assertion)',
-    provisionRepo: t => {
-      const scenario = makeStageAndCommitScenario();
-      return provisionStageAndCommitRepo(t, {
-        path: scenario.expected.path,
-        content: scenario.expected.content,
-      });
-    },
-    makeScenario: () => makeStageAndCommitScenario(),
-  },
-  {
-    title: 'a live model resolves a conflict rebase (outcome assertion)',
-    provisionRepo: t => provisionConflictRebaseRepo(t),
-    makeScenario: repo => makeConflictRebaseScenario(repo),
-  },
-];
 
 const env =
   /** @type {{ process?: { env?: Record<string, string | undefined> } }} */ (
@@ -231,75 +193,48 @@ const summarizeEvent = event => {
   }
 };
 
-/**
- * @param {object} args
- * @param {any} args.model
- * @param {any} args.scenario
- * @param {any} [args.result]
- * @param {unknown} [args.error]
- */
-const appendScenarioResult = ({ model, scenario, result, error }) => {
-  const errorValue = error instanceof Error ? error.message : error;
-  appendArtifact('results.jsonl', {
-    scenario: scenario.name,
-    model: model.id,
-    referenceSourcePath: scenario.referenceSourcePath,
-    referenceSourceExport: scenario.referenceSourceExport,
-    status:
-      error === undefined
-        ? result.outcome.pass
-          ? 'passed'
-          : 'failed'
-        : 'error',
-    ...(error === undefined
-      ? { outcome: result.outcome, metrics: result.metrics }
-      : { error: safeText(errorValue) }),
-  });
-};
-
-for (const row of evalRows) {
-  liveTest(row.title, async t => {
+liveTest(
+  'a live model runs every git eval scenario across every condition',
+  async t => {
     // `live` is defined here (otherwise this test was skipped at registration).
     const { model, getApiKey } = /** @type {NonNullable<typeof live>} */ (live);
-    const repo = await row.provisionRepo(t);
-    const scenario = row.makeScenario(repo);
-    // AVA runs eval rows concurrently within one artifact directory, so every
-    // event must be self-attributing rather than relying on file-level isolation.
-    const onEvent =
-      artifactDir === undefined
-        ? undefined
-        : event =>
-            appendArtifact('events.jsonl', {
-              scenario: scenario.name,
-              model: model.id,
-              ...summarizeEvent(event),
-            });
+    const result = await runEvalMatrix({
+      scenarios: makeDefaultGitScenarioSpecs(),
+      conditions: defaultEvalConditions,
+      models: [{ model, getApiKey }],
+      repeats: 1,
+      readText,
+      onEvent:
+        artifactDir === undefined
+          ? undefined
+          : (event, context) =>
+              appendArtifact('events.jsonl', {
+                ...context,
+                model: model.id,
+                ...summarizeEvent(event),
+              }),
+    });
 
-    let result;
-    try {
-      result = await runGitScenario({
-        model,
-        workspace: repo.workspace,
-        git: repo.git,
-        scenario,
-        readText,
-        getApiKey,
-        onEvent,
-      });
-    } catch (error) {
-      appendScenarioResult({ model, scenario, error });
-      throw error;
+    if (artifactDir !== undefined) {
+      for (const row of result.rows) {
+        appendArtifact('results.jsonl', {
+          scenario: row.scenario,
+          condition: row.condition,
+          model: row.model,
+          repeat: row.repeat,
+          status: row.pass ? 'passed' : 'failed',
+          outcome: row.outcome,
+          metrics: row.metrics,
+        });
+      }
     }
-    appendScenarioResult({ model, scenario, result });
-    const { outcome } = result;
-
-    t.true(
-      outcome.pass,
-      `live run did not reach target end-state in ${repo.repoRoot}; checks: ${JSON.stringify(
-        outcome.checks,
-        null,
-        2,
-      )}`,
+    const failures = result.rows.filter(row => !row.pass);
+    t.deepEqual(
+      failures,
+      [],
+      `live matrix did not reach every target end-state:\n${renderEvalMatrixMarkdownTable(
+        result.aggregates,
+      )}\n${JSON.stringify(failures, null, 2)}`,
     );
-  });
-}
+  },
+);
