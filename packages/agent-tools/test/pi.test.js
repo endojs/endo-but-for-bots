@@ -26,6 +26,36 @@ const toolReturning = result =>
     execute: async () => result,
   });
 
+/**
+ * @param {unknown} result
+ * @param {number} maxBytes
+ * @returns {import('../src/types.js').ToolRecord}
+ */
+const boundedToolReturning = (result, maxBytes) =>
+  makeTool({
+    name: 'bounded',
+    description: 'A bounded result.',
+    parameters: harden({
+      type: 'object',
+      properties: {},
+      required: [],
+      additionalProperties: false,
+    }),
+    resultPolicy: { maxBytes },
+    execute: async () => result,
+  });
+
+/**
+ * @param {{ type: string, text?: string }} content
+ * @returns {string}
+ */
+const textOf = content => {
+  if (typeof content.text !== 'string') {
+    throw new Error('expected text content');
+  }
+  return content.text;
+};
+
 test('toPiAgentTool copies the model-facing surface verbatim', t => {
   const tool = toolReturning('ok');
   const agentTool = toPiAgentTool(tool);
@@ -44,6 +74,39 @@ test('default render passes strings through and JSON-stringifies the rest', asyn
   const objectTool = toPiAgentTool(toolReturning(harden({ a: 1 })));
   const objectResult = await objectTool.execute('id-2', {});
   t.deepEqual(objectResult.content, [{ type: 'text', text: '{"a":1}' }]);
+});
+
+test('result policy preserves exact fills and marks over-limit strings', async t => {
+  const exact = toPiAgentTool(boundedToolReturning('12345', 5));
+  const exactResult = await exact.execute('id-exact', {});
+  t.deepEqual(exactResult.content, [{ type: 'text', text: '12345' }]);
+
+  const overText = '1234567890'.repeat(20);
+  const over = toPiAgentTool(boundedToolReturning(overText, 100));
+  const overResult = await over.execute('id-over', {});
+  const text = textOf(overResult.content[0]);
+  t.true(text.includes('[truncated:'));
+  t.is(new TextEncoder().encode(text).length, 100);
+  t.true(text.includes('total 200 bytes'));
+  t.is(overResult.details, overText);
+});
+
+test('result policy reserves marker space and respects UTF-8 boundaries', async t => {
+  const tool = toPiAgentTool(boundedToolReturning('😀'.repeat(100), 100));
+  const result = await tool.execute('id-unicode', {});
+  const text = textOf(result.content[0]);
+  t.true(text.includes('[truncated:'));
+  t.true(new TextEncoder().encode(text).length <= 100);
+  t.is(text, [...text].join(''), 'never leave a partial surrogate');
+  t.is(result.details, '😀'.repeat(100));
+});
+
+test('a structured result is clipped only after rendering', async t => {
+  const value = { value: 'abcdefghij'.repeat(20) };
+  const tool = toPiAgentTool(boundedToolReturning(value, 64));
+  const result = await tool.execute('id-structured', {});
+  t.true(textOf(result.content[0]).includes('[truncated'));
+  t.deepEqual(result.details, value);
 });
 
 test('the renderToolResult hook controls the rendered text', async t => {

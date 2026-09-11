@@ -243,9 +243,10 @@ const positionalArgGuards = method => {
  *
  * @param {ERef<GitRemoteToolCapability>} remoteCap A live `GitRemote`
  *   capability, pre-scoped by the host. Its bounds are the tool's bounds.
+ * @param {{ resultPolicy?: import('../types.js').ToolResultPolicy }} [options]
  * @returns {ToolRecord[]}
  */
-export const makeGitRemoteTool = remoteCap => {
+export const makeGitRemoteTool = (remoteCap, { resultPolicy } = {}) => {
   const records = gitRemoteToolMethods.map(method => {
     const schema = gitRemoteToolSchemas[method];
     const argGuards = positionalArgGuards(method);
@@ -260,6 +261,7 @@ export const makeGitRemoteTool = remoteCap => {
       name: method,
       description: schema.description,
       parameters: schema.parameters,
+      resultPolicy,
       argGuards,
       execute: async argsRecord => {
         // Marshal named args back to positional order by declared name and drop

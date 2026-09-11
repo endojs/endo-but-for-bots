@@ -209,8 +209,14 @@ import { makeHttpTool } from '@endo/agent-tools/json-tools/http.js';
 
 `makeTool` produces a `ToolRecord` with a JSON-schema `parameters`, the same
 schema as `inputSchema`, and an `invoke(args)` function.
+It may also carry a `resultPolicy` with a UTF-8 `maxBytes` limit for the
+model-visible rendering of its completion.
+The policy never changes the exact value returned by `invoke`.
 `toPiAgentTool` maps that record to the optional Pi `AgentTool` contract and
-accepts a result renderer.
+accepts a result renderer, applies the record's result policy after rendering,
+and retains the exact completion in `details`.
+Tool makers and `makeWorkspaceTools` accept and forward the same policy, while
+filesystem reads and code-mode evaluation keep their raw completion values.
 
 The SmallCaps renderer is supplied by `adapters/smallcaps.js` so plain-data
 completion values preserve BigInts, `undefined`, and sigil-prefixed strings.
