@@ -9,8 +9,8 @@ import {
   HostedTurnBackendInterface,
   normalizeHostedModelDescriptor,
 } from '@endo/hosted-agent';
-
 import { makeCleanupScope } from '@endo/hosted-agent/cleanup-scope.js';
+import { makeSessionRegistry } from '@endo/hosted-agent/session-registry.js';
 
 import { assertCodexNetworkEvidence } from './broker-launch.js';
 import { makeCodexClient } from './codex-client.js';
@@ -774,7 +774,6 @@ export const makeCodexBackendFactory = ({
   registerShutdown,
   publicInternetEnabled = false,
 }) => {
-  let shuttingDown = false;
   /^sha256:[0-9a-f]{64}$/.test(imageDigest) ||
     Fail`Codex backend factory requires an operator-approved image digest`;
   const listHostedModels = async () => {
@@ -783,50 +782,13 @@ export const makeCodexBackendFactory = ({
     return harden(models.map(normalizeCodexModelDescriptor));
   };
 
-  // One live instance per session. `create` and `destroy` for one session id
-  // run in order, and either stops an instance this factory still runs before
-  // acting. A second `create` for a live session is the session's new owner —
-  // a Floot factory rebuilt without a daemon restart revives every session it
-  // records, while the old instance's admin facet died with the old factory —
-  // not a request for a duplicate that would share the workspace, the Codex
-  // state, and the audit journal with the first and leak its slice and lease.
-  /** @type {Map<string, { terminate: () => Promise<void> }>} */
-  const live = new Map();
-  /** @type {Map<string, Promise<void>>} */
-  const sessionChains = new Map();
-  /**
-   * @template T
-   * @param {string} sessionId
-   * @param {() => Promise<T>} operation
-   * @returns {Promise<T>}
-   */
-  const inSessionOrder = (sessionId, operation) => {
-    const previous = sessionChains.get(sessionId) || Promise.resolve();
-    const result = previous.then(operation);
-    const settled = result.then(
-      () => undefined,
-      () => undefined,
-    );
-    sessionChains.set(sessionId, settled);
-    void settled.then(() => {
-      if (sessionChains.get(sessionId) === settled) {
-        sessionChains.delete(sessionId);
-      }
-    });
-    return result;
-  };
-  /** @param {string} sessionId */
-  const stopLive = async sessionId => {
-    const current = live.get(sessionId);
-    if (current) await current.terminate();
-  };
+  const sessions = makeSessionRegistry();
 
   /**
    * @param {Record<string, any>} spec
    * @param {any} toolSet
    */
   const createSession = async (spec, toolSet) => {
-    !shuttingDown || Fail`Codex backend is shutting down`;
     spec.cwd === undefined ||
       spec.cwd === '/workspace' ||
       Fail`Codex session cwd must be /workspace`;
@@ -834,7 +796,7 @@ export const makeCodexBackendFactory = ({
     const containerMounts = assertContainerMounts(spec.containerMounts);
     // A predecessor that cannot stop — an unsettled Endo tool call — refuses
     // the successor rather than running beside it.
-    await stopLive(spec.sessionId);
+    await sessions.stop(spec.sessionId);
     const resources = await provision(spec);
     let client;
     let terminated = false;
@@ -966,9 +928,7 @@ export const makeCodexBackendFactory = ({
         }
         await auditEvent('session-closed', { sessionId: spec.sessionId });
         terminated = true;
-        if (live.get(spec.sessionId)?.terminate === terminate) {
-          live.delete(spec.sessionId);
-        }
+        sessions.release(spec.sessionId, terminate);
       })().finally(() => {
         if (!terminated) cleanupInFlight = undefined;
       });
@@ -1001,7 +961,7 @@ export const makeCodexBackendFactory = ({
         help: () => 'Factory-only Codex lifecycle administration: terminate.',
       },
     );
-    live.set(spec.sessionId, harden({ terminate }));
+    sessions.retain(spec.sessionId, terminate);
     return harden({ run, admin });
   };
 
@@ -1010,14 +970,13 @@ export const makeCodexBackendFactory = ({
    * @param {any} toolSet
    */
   const create = async (spec, toolSet) => {
-    !shuttingDown || Fail`Codex backend is shutting down`;
     assertSessionId(spec?.sessionId);
     spec.networkPolicy === undefined ||
       spec.networkPolicy === 'off' ||
       (publicInternetEnabled === true &&
         spec.networkPolicy === 'public-internet') ||
       Fail`Codex supports only the off network policy`;
-    return inSessionOrder(spec.sessionId, () =>
+    return sessions.inOrder(spec.sessionId, () =>
       createSession(
         harden({ ...spec, networkPolicy: spec.networkPolicy ?? 'off' }),
         toolSet,
@@ -1026,25 +985,15 @@ export const makeCodexBackendFactory = ({
   };
 
   const destroySession = async spec => {
-    !shuttingDown || Fail`Codex backend is shutting down`;
     assertSessionId(spec?.sessionId);
-    return inSessionOrder(spec.sessionId, async () => {
+    return sessions.inOrder(spec.sessionId, async () => {
       // Never underneath a running app-server.
-      await stopLive(spec.sessionId);
+      await sessions.stop(spec.sessionId);
       await destroy(spec);
     });
   };
 
-  registerShutdown?.(async () => {
-    shuttingDown = true;
-    await Promise.all([...sessionChains.values()]);
-    const results = await Promise.allSettled([...live.keys()].map(stopLive));
-    const failures = results
-      .filter(result => result.status === 'rejected')
-      .map(result => result.reason);
-    if (failures.length)
-      throw new AggregateError(failures, 'Codex backend shutdown pending');
-  });
+  registerShutdown?.(sessions.shutdown);
   return makeExo('CodexBackendFactory', HostedBackendFactoryInterface, {
     async describe() {
       return harden({
