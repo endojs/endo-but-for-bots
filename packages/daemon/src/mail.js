@@ -121,11 +121,19 @@ export const reincarnateMailboxPins = async ({
     );
   }
 
-  await Promise.all(
+  // Reincarnation is best-effort: a single retained formula that fails to
+  // incarnate (a stale pin, a worker that cannot respawn, a directory entry
+  // reaped out from under the pin) must not reject the delivery on whose crank
+  // this runs, because the message is already durably persisted by the time we
+  // reach here and the caller would otherwise observe an already-committed
+  // delivery as a failure while the live message-received notification is
+  // silently dropped. Tolerate per-pin failures with Promise.allSettled,
+  // matching the established revivePins/reviveNetworks idiom in manager.js.
+  await Promise.allSettled(
     pinDirectoryIds.map(async pinDirectoryId => {
       const pins = await provide(pinDirectoryId, 'directory');
       const retainedIds = await E(pins).listIdentifiers();
-      await Promise.all(
+      await Promise.allSettled(
         retainedIds.map(id => provide(/** @type {FormulaIdentifier} */ (id))),
       );
     }),
