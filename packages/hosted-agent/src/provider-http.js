@@ -4,6 +4,8 @@ import { Fail } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import { createServer } from 'node:http';
 
+import { INFERENCE_PATHS } from './provider-paths.js';
+
 /** @import { Socket } from 'node:net' */
 /** @import { IncomingMessage, ServerResponse } from 'node:http' */
 
@@ -31,6 +33,13 @@ import { createServer } from 'node:http';
  * @param {bigint} options.maxRequestBytes
  * @param {bigint} options.maxResponseBytes
  * @param {number} options.timeoutMs - Signed 32-bit host timer duration
+ * @param {readonly string[]} [options.allowedPaths] Exact POST paths admitted;
+ *   defaults to the shared inference-path set.
+ * @param {'reject' | 'strip'} [options.clientAuthorization] `reject` refuses a
+ *   client Authorization header outright; `strip` admits it and never
+ *   forwards it. Callers that must send a placeholder key (an OpenAI-compatible
+ *   SDK that refuses to start without one) use `strip`; the broker injects the
+ *   real credential upstream either way.
  * @param {(diagnostic: ProviderHttpDiagnostic) => void | Promise<void>} [options.onDiagnostic] Host-only fixed metadata; never request values.
  */
 export const makeProviderHttpListener = async ({
@@ -40,6 +49,8 @@ export const makeProviderHttpListener = async ({
   maxRequestBytes,
   maxResponseBytes,
   timeoutMs,
+  allowedPaths = INFERENCE_PATHS,
+  clientAuthorization = 'reject',
   onDiagnostic = () => {},
 }) => {
   (Number.isInteger(port) && port >= 0 && port <= 65_535) || Fail`Invalid port`;
@@ -54,6 +65,21 @@ export const makeProviderHttpListener = async ({
     Fail`Invalid HTTP byte limits`;
   (Number.isInteger(timeoutMs) && timeoutMs > 0 && timeoutMs <= 0x7fff_ffff) ||
     Fail`Invalid HTTP deadline`;
+  (Array.isArray(allowedPaths) && allowedPaths.length > 0) ||
+    Fail`Invalid inference paths`;
+  // Copy and re-validate: the admission decision must not follow a caller's
+  // later mutation of the array, and only exact canonical paths are admitted.
+  const paths = harden(
+    allowedPaths.map(path => {
+      (typeof path === 'string' &&
+        /^\/[a-zA-Z0-9_-]+(?:\/[a-zA-Z0-9_-]+)*$/.test(path)) ||
+        Fail`Invalid inference path`;
+      return path;
+    }),
+  );
+  clientAuthorization === 'reject' ||
+    clientAuthorization === 'strip' ||
+    Fail`Invalid client authorization mode`;
   /** @type {Set<Socket>} */
   const sockets = new Set();
   /** @type {Set<() => void>} */
@@ -112,13 +138,13 @@ export const makeProviderHttpListener = async ({
     let stage = 'headers';
     const checks = harden({
       method: request.method === 'POST',
-      path: ['/v1/responses', '/v1/messages', '/v1/chat/completions'].includes(
-        request.url || '',
-      ),
+      path: paths.includes(request.url || ''),
       host: request.headers.host === authority,
       origin: request.headers.origin === undefined,
       cookie: request.headers.cookie === undefined,
-      authorization: request.headers.authorization === undefined,
+      authorization:
+        clientAuthorization === 'strip' ||
+        request.headers.authorization === undefined,
       encoding: request.headers['content-encoding'] === undefined,
       contentType: /^application\/json(?:;\s*charset=utf-8)?$/i.test(
         request.headers['content-type'] || '',
