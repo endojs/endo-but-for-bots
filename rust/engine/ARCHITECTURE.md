@@ -89,6 +89,9 @@ including refusal and panic; compiler configuration remains on the compartment h
 
 `Machine::collect()` is an explicit host decision and retains live Realm globals and
 rooted `ObjectIdentity` handles.
+Endo's ephemeral wrapper collects the prior dropped Realm before the next compilation.
+The latest heap remains allocated until a later collection or machine drop, keeping
+returned raw diagnostics valid; the persistent worker has a separate policy.
 Dropping a compartment permits its unreachable heap objects to be collected, but the
 canonical name table and tagged-template registry remain machine-owned allocations.
 Novel names and template sites consume the finite key namespace over the machine's
