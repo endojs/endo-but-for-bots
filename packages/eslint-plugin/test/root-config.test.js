@@ -91,7 +91,7 @@ describe('root flat config', () => {
       // Each probe verifies the effective root configuration, not a copied rule.
       // eslint-disable-next-line no-await-in-loop
       const [result] = await eslint.lintText(`// @ts-check\n${source}\n`, {
-        filePath: 'packages/thixotrope/src/mailbox.js',
+        filePath: 'packages/thixotrope/src/mail/mailbox.js',
       });
       assert.ok(
         result.messages.some(message => message.ruleId === ruleId),
@@ -100,7 +100,7 @@ describe('root flat config', () => {
     }
     const [allowed] = await eslint.lintText(
       '// @ts-check\nconst read = powers => powers.fs.readFileSync("state");\n',
-      { filePath: 'packages/thixotrope/src/mailbox.js' },
+      { filePath: 'packages/thixotrope/src/mail/mailbox.js' },
     );
     assert.ok(
       !allowed.messages.some(

@@ -16,7 +16,7 @@ import { setImmediate } from 'node:timers/promises';
 import {
   assertUnixPeerLocation,
   makeUnixNetLayer,
-} from '../src/unix-netlayer.js';
+} from '../src/net/unix-netlayer.js';
 
 import { makeNodePowers } from '../src/platform/node-powers.js';
 

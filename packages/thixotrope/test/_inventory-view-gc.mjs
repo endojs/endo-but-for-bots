@@ -7,7 +7,7 @@ const nodePowers = makeNodePowers();
 const { Far } = await import('@endo/far');
 const { setImmediate } = await import('node:timers/promises');
 const { makeInventoryViewLifetime } =
-  await import('../src/inventory-view-lifetime.js');
+  await import('../src/inventory/inventory-view-lifetime.js');
 
 /** @type {(value: any) => void} */
 let resolveSubscription = () => {

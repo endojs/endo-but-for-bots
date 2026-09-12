@@ -5,11 +5,11 @@ import test from '@endo/ses-ava/test.js';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { makeThixotropeDaemon } from '../src/daemon.js';
-import { makeDurableNetLayer } from '../src/durable-netlayer.js';
-import { makePeerJournalReplayEngine } from '../src/peer-replay-engine.js';
-import { makeMemoryStore } from '../src/store-memory.js';
-import { makeUnixNetLayer } from '../src/unix-netlayer.js';
+import { makeThixotropeDaemon } from '../src/core/daemon.js';
+import { makeDurableNetLayer } from '../src/net/durable-netlayer.js';
+import { makePeerJournalReplayEngine } from '../src/core/peer-replay-engine.js';
+import { makeMemoryStore } from '../src/store/store-memory.js';
+import { makeUnixNetLayer } from '../src/net/unix-netlayer.js';
 
 import { makeNodePowers } from '../src/platform/node-powers.js';
 

@@ -9,9 +9,9 @@ import { makeCryptography } from '@endo/ocapn/cryptography';
 import { writeOcapnHandshakeMessage } from '@endo/ocapn/operations';
 import { decodeBase64, encodeBase64 } from '@endo/base64';
 
-import { makeThixotropeDaemon } from '../src/daemon.js';
-import { makePeerJournalReplayEngine } from '../src/peer-replay-engine.js';
-import { makeFsStore } from '../src/store-fs.js';
+import { makeThixotropeDaemon } from '../src/core/daemon.js';
+import { makePeerJournalReplayEngine } from '../src/core/peer-replay-engine.js';
+import { makeFsStore } from '../src/store/store-fs.js';
 
 import { makeNodePowers } from '../src/platform/node-powers.js';
 

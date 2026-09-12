@@ -4,9 +4,9 @@ import { E } from '@endo/far';
 import { frozenBytes } from '@endo/immutable-arraybuffer';
 import { syrupCodec } from '@endo/ocapn/syrup';
 
-import { makeEphemeralHubClient } from '../src/ephemeral-hub-client.js';
-import { makeOcapnHub } from '../src/hub.js';
-import { makeWorkerPeer } from '../src/worker-peer.js';
+import { makeEphemeralHubClient } from '../src/net/ephemeral-hub-client.js';
+import { makeOcapnHub } from '../src/net/hub.js';
+import { makeWorkerPeer } from '../src/core/worker-peer.js';
 
 import { makeNodePowers } from '../src/platform/node-powers.js';
 

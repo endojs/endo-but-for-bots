@@ -1,10 +1,10 @@
 // @ts-check
-/** @import { NodePowers } from './platform/node-powers.js' */
+/** @import { NodePowers } from '../platform/node-powers.js' */
 import { E, Far } from '@endo/far';
 import { Fail } from '@endo/errors';
 import harden from '@endo/harden';
 
-/** @import { SyncStringAtom } from './sync-string-atom.js' */
+/** @import { SyncStringAtom } from '../store/sync-string-atom.js' */
 
 /** @import { Server, IncomingMessage, ServerResponse } from 'node:http' */
 /** @import { Socket } from 'node:net' */

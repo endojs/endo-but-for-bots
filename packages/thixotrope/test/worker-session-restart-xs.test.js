@@ -23,9 +23,9 @@ import { Far } from '@endo/far';
 import { makeTcpNetLayer } from '@endo/ocapn/netlayer/tcp-testing';
 import { syrupCodec } from '@endo/ocapn/syrup';
 
-import { makeThixotropeDaemon } from '../src/daemon.js';
-import { makeFsStore } from '../src/store-fs.js';
-import { makeXsEngine } from '../src/xs-engine.js';
+import { makeThixotropeDaemon } from '../src/core/daemon.js';
+import { makeFsStore } from '../src/store/store-fs.js';
+import { makeXsEngine } from '../src/ironhorse/xs-engine.js';
 
 import { makeNodePowers } from '../src/platform/node-powers.js';
 
