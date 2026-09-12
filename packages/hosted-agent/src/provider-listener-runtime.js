@@ -21,11 +21,9 @@ import {
 } from 'node:fs/promises';
 import { join } from 'node:path';
 import process from 'node:process';
-import { networkInterfaces } from 'node:os';
 import { promisify } from 'node:util';
 
 import { makeProviderPipe } from './provider-pipe.js';
-import { providerNetworkBootstrap } from './provider-network-bootstrap.js';
 
 const execute = promisify(execFile);
 const LABEL = 'io.endo.provider.owner';
@@ -74,7 +72,7 @@ const readStart = async pid => {
  * @param {string} options.stateDirectory Private directory for a process lock.
  * @param {number} [options.maxListeners]
  * @param {any} [options.host] Trusted host powers, never session inputs.
- * @param {{address: string, bootstrapImageRef: string}} [options.publicInternet] Operator-owned synthetic IPv4 address and pinned helper image.
+ * @param {boolean} [options.publicInternet] Operator enables optional public listeners.
  */
 export const makePodmanProviderListenerRuntime = async ({
   imageRef,
@@ -82,7 +80,7 @@ export const makePodmanProviderListenerRuntime = async ({
   stateDirectory,
   host = {},
   maxListeners = 16,
-  publicInternet,
+  publicInternet = false,
 }) => {
   (/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(ownerId) &&
     /^[a-z0-9][a-z0-9._:/-]*@sha256:[a-f0-9]{64}$/.test(imageRef)) ||
@@ -90,19 +88,8 @@ export const makePodmanProviderListenerRuntime = async ({
   (Number.isInteger(maxListeners) && maxListeners > 0 && maxListeners <= 256) ||
     Fail`Invalid listener capacity`;
   const imageDigest = imageRef.slice(imageRef.indexOf('@') + 1);
-  if (publicInternet !== undefined) {
-    (/^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(publicInternet.address) &&
-      /^[a-z0-9][a-z0-9._:/-]*@sha256:[a-f0-9]{64}$/.test(
-        publicInternet.bootstrapImageRef,
-      )) ||
-      Fail`Invalid public network bootstrap configuration`;
-    const assigned = (host.networkInterfaces ?? networkInterfaces)();
-    Object.values(assigned)
-      .flatMap(items => /** @type {any[]} */ (items || []))
-      .some(item => item.address === publicInternet.address) ||
-      Fail`Synthetic proxy address must be assigned to this operator host`;
-    harden(publicInternet);
-  }
+  typeof publicInternet === 'boolean' ||
+    Fail`Invalid public network configuration`;
   // Host-side rootless Podman configuration, never container environment.
   // Proxy and credential variables are deliberately excluded.
   const hostEnvironment = Object.fromEntries(
@@ -244,13 +231,11 @@ export const makePodmanProviderListenerRuntime = async ({
     await unlink(lockPath);
     throw error;
   }
-  /** @param {{endpoint:any,limits:any,network?:{endpoint:any,address:string}}} configuration */
+  /** @param {{endpoint:any,limits:any,network?:{endpoint:any}}} configuration */
   const startListener = ({ endpoint, limits, network = undefined }) =>
     serialize(async () => {
       if (network !== undefined) {
-        (publicInternet &&
-          network.address === publicInternet.address &&
-          network.endpoint) ||
+        (publicInternet && network.endpoint) ||
           Fail`Public network is not configured by the operator`;
       }
       !disposed || Fail`Provider runtime disposed`;
@@ -265,7 +250,6 @@ export const makePodmanProviderListenerRuntime = async ({
       let channelClosed = false;
       let namespaceId;
       let networkEvidence;
-      let helperName;
       const stop = () => {
         if (stopping) return stopping;
         live = false;
@@ -276,7 +260,6 @@ export const makePodmanProviderListenerRuntime = async ({
           // Container removal, not killing only the attached podman CLI, reaps
           // the isolated worker. Failure retains this closure for a retry.
           await remove(name);
-          if (helperName) await remove(helperName);
           if (child) await deadline(child.finished, 5000);
           cleanup.delete(stop);
           pendingCleanup.delete(stop);
@@ -419,45 +402,6 @@ export const makePodmanProviderListenerRuntime = async ({
         live = true;
         await observe();
         if (network) {
-          if (!publicInternet) throw Error('Public network unavailable');
-          helperName = `endo-provider-${randomUUID()}`;
-          const result = await run([
-            'run',
-            '--rm',
-            '--pull=never',
-            '--name',
-            helperName,
-            '--label',
-            `${LABEL}=${ownerId}`,
-            '--network',
-            `container:${name}`,
-            '--pid=private',
-            '--ipc=private',
-            '--user=0',
-            '--read-only',
-            '--read-only-tmpfs=false',
-            '--cap-drop=ALL',
-            '--cap-add=NET_ADMIN',
-            '--security-opt=no-new-privileges',
-            '--memory=64m',
-            '--memory-swap=64m',
-            '--pids-limit=16',
-            '--cpus=1',
-            '--ulimit',
-            'nofile=64:64',
-            '--ulimit',
-            'core=0:0',
-            '--entrypoint=python3',
-            publicInternet.bootstrapImageRef,
-            '-I',
-            '-c',
-            providerNetworkBootstrap,
-            publicInternet.address,
-          ]);
-          result.stdout.trim() === 'EndoPublicProxyAddressV1' ||
-            Fail`Public network bootstrap failed`;
-          await remove(helperName);
-          helperName = undefined;
           const activated = await deadline(
             E(control).activateNetwork(),
             10_000,
@@ -466,7 +410,7 @@ export const makePodmanProviderListenerRuntime = async ({
           (activated.policy === 'public-internet' &&
             activated.dnsHost === '127.0.0.53' &&
             proxy.protocol === 'http:' &&
-            proxy.hostname === publicInternet.address &&
+            proxy.hostname === '127.0.0.1' &&
             proxy.port !== '' &&
             proxy.username === '' &&
             proxy.password === '' &&

@@ -31,7 +31,7 @@ const excludedHeaders = harden(
 /**
  * Credential-free HTTP forward/HTTPS CONNECT proxy. Its only outbound power
  * is the bounded public-egress capability received over private pipes. The
- * trusted bind address can be a namespace-local synthetic address; it is not
+ * trusted bind address defaults to loopback inside the guest namespace; it is not
  * a routing grant. The caller must prove process and namespace confinement.
  * HTTP targets use port 80; CONNECT is limited to 443. CONNECT transparently
  * carries bytes and does not inspect TLS or prove the application protocol.

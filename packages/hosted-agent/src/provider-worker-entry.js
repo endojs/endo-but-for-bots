@@ -1,7 +1,6 @@
 // @ts-check
 import '@endo/init';
 
-import { Fail } from '@endo/errors';
 import { hostname } from 'node:os';
 import process from 'node:process';
 
@@ -39,12 +38,11 @@ if (
 startProviderListenerWorker({
   input: process.stdin,
   output: process.stdout,
-  async makeNetworkListeners({ endpoint, address }) {
-    typeof address === 'string' || Fail`Missing public proxy address`;
+  async makeNetworkListeners({ endpoint }) {
     const dns = await makePublicDnsListener({ endpoint });
     let proxy;
     try {
-      proxy = await makePublicEgressListener({ endpoint, host: address });
+      proxy = await makePublicEgressListener({ endpoint, host: '127.0.0.1' });
     } catch (error) {
       await dns.dispose();
       throw error;

@@ -23,7 +23,7 @@ const policy = harden({
 
 const networkEvidence = harden({
   policy: 'public-internet',
-  proxyUrl: 'http://93.184.216.34:3456',
+  proxyUrl: 'http://127.0.0.1:3456',
   dnsHost: '127.0.0.53',
   resolverConfigPath: '/private-runtime/public-resolv.conf',
 });
@@ -116,7 +116,6 @@ test('public egress is lease-bound and revoked before cleanup retries', async t 
       requested = request;
       return {
         endpoint,
-        address: '93.184.216.34',
         dispose: () => {
           disposed += 1;
         },
@@ -127,7 +126,7 @@ test('public egress is lease-bound and revoked before cleanup retries', async t 
   t.teardown(f.issuer.dispose);
   const lease = await f.issuer({ ...spec, networkPolicy: 'public-internet' });
   t.is(requested?.networkPolicy, 'public-internet');
-  t.deepEqual(f.listenerNetwork(), { endpoint, address: '93.184.216.34' });
+  t.deepEqual(f.listenerNetwork(), { endpoint });
   t.deepEqual((await E(lease).attestation()).network, networkEvidence);
   t.deepEqual((await E(lease).sandboxEvidence()).network, networkEvidence);
   f.failCleanup();
@@ -145,7 +144,6 @@ test('network mismatch or drift revokes public egress', async t => {
     const f = fixture({
       makePublicNetwork: () => ({
         endpoint: Far('Unused egress', {}),
-        address: '93.184.216.34',
         dispose: () => {
           disposed += 1;
         },

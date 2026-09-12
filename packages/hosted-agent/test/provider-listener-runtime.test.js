@@ -30,14 +30,13 @@ const fixture = async (t, publicNetwork = false) => {
   let inspections = 0;
   let racePid = false;
   const calls = [];
+  const launches = [];
   const host = {
-    networkInterfaces: () => ({ operator: [{ address: '207.148.100.198' }] }),
     async readStart(pid) {
       return pid === process.pid ? '123' : null;
     },
     async run(args) {
       calls.push(args);
-      if (args[0] === 'run') return { stdout: 'EndoPublicProxyAddressV1\n' };
       if (args[0] === 'ps') return { stdout: orphan };
       if (args[0] === 'rm') {
         if (removeFails) throw Error('removal failed');
@@ -63,12 +62,13 @@ const fixture = async (t, publicNetwork = false) => {
       throw Error('unexpected host operation');
     },
     launch(args) {
+      launches.push(args);
       const child = spawn(
         process.execPath,
         [
           '--input-type=module',
           '-e',
-          `import {startProviderListenerWorker} from ${JSON.stringify(new URL('../src/provider-worker.js', import.meta.url).href)}; await startProviderListenerWorker({input:process.stdin,output:process.stdout,makeNetworkListeners:async()=>harden({evidence:{policy:'public-internet',proxyUrl:'http://207.148.100.198:23457',dnsHost:'127.0.0.53'},dispose:async()=>{}})});`,
+          `import {startProviderListenerWorker} from ${JSON.stringify(new URL('../src/provider-worker.js', import.meta.url).href)}; await startProviderListenerWorker({input:process.stdin,output:process.stdout,makeNetworkListeners:async()=>harden({evidence:{policy:'public-internet',proxyUrl:'http://127.0.0.1:23457',dnsHost:'127.0.0.53'},dispose:async()=>{}})});`,
         ],
         { stdio: ['pipe', 'pipe', 'pipe'] },
       );
@@ -92,14 +92,7 @@ const fixture = async (t, publicNetwork = false) => {
     },
   };
   const options = {
-    ...(publicNetwork
-      ? {
-          publicInternet: {
-            address: '207.148.100.198',
-            bootstrapImageRef: `localhost/codex@${digest}`,
-          },
-        }
-      : {}),
+    publicInternet: publicNetwork,
     imageRef: `localhost/listener@${digest}`,
     ownerId: 'test-owner',
     stateDirectory,
@@ -110,6 +103,7 @@ const fixture = async (t, publicNetwork = false) => {
   });
   return {
     calls,
+    launches,
     options,
     removals,
     racePid: () => {
@@ -144,7 +138,7 @@ test('runtime excludes a second live owner and permits reacquisition after dispo
 });
 
 test.serial(
-  'public runtime uses only a separate bounded namespace helper and exports fixed resolver evidence',
+  'public runtime uses loopback without a privileged helper and exports fixed resolver evidence',
   async t => {
     t.timeout(5000);
     const f = await fixture(t, true);
@@ -153,43 +147,45 @@ test.serial(
     const listener = await runtime.start({
       endpoint: Far('unused inference', {}),
       limits,
-      network: { address: '207.148.100.198', endpoint: Far('test egress', {}) },
+      network: { endpoint: Far('test egress', {}) },
     });
     const observed = await listener.observe();
     t.deepEqual(observed.network, {
       policy: 'public-internet',
-      proxyUrl: 'http://207.148.100.198:23457',
+      proxyUrl: 'http://127.0.0.1:23457',
       dnsHost: '127.0.0.53',
       resolverConfigPath: join(f.options.stateDirectory, 'public-resolv.conf'),
     });
-    const helper = f.calls.find(args => args[0] === 'run');
-    t.true(helper.includes('--cap-drop=ALL'));
-    t.true(helper.includes('--cap-add=NET_ADMIN'));
-    t.true(helper.includes('--memory=64m'));
-    t.true(helper.includes('--pids-limit=16'));
-    t.is(
-      helper[helper.indexOf('--network') + 1],
-      `container:${observed.containerName}`,
+    t.false(f.calls.some(args => args[0] === 'run'));
+    t.is(f.launches.length, 1);
+    t.true(f.launches[0].includes('--cap-drop=ALL'));
+    t.false(
+      [...f.calls, ...f.launches].some(args =>
+        args.some(
+          arg =>
+            arg.startsWith('--cap-add') ||
+            arg === '--privileged' ||
+            arg.startsWith('--privileged='),
+        ),
+      ),
     );
-    t.is(
-      helper[helper.indexOf('--entrypoint=python3') + 1],
-      `localhost/codex@${digest}`,
-    );
-    t.false(helper.some(arg => arg.includes('privileged')));
-    const helperName = helper[helper.indexOf('--name') + 1];
-    t.true(f.removals.includes(helperName));
     await listener.stop();
   },
 );
 
-test('runtime refuses an unowned synthetic address before making an owner lock', async t => {
-  const f = await fixture(t, true);
-  if (!f.options.publicInternet) throw Error('Fixture missing public config');
-  f.options.publicInternet.address = '8.8.8.8';
-  await t.throwsAsync(() => makePodmanProviderListenerRuntime(f.options), {
-    message: /assigned to this operator host/,
-  });
-  t.is(f.calls.length, 0);
+test('runtime requires explicit operator public network enablement', async t => {
+  const f = await fixture(t);
+  const runtime = await makePodmanProviderListenerRuntime(f.options);
+  t.teardown(runtime.dispose);
+  await t.throwsAsync(
+    () =>
+      runtime.start({
+        endpoint: Far('unused inference', {}),
+        limits,
+        network: { endpoint: Far('test egress', {}) },
+      }),
+    { message: /not configured by the operator/ },
+  );
 });
 
 test('runtime recovers a dead owner and sweeps only its exactly labelled orphan', async t => {

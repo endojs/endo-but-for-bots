@@ -2,8 +2,6 @@
 
 import { Fail, makeError, X } from '@endo/errors';
 
-import { isPublicEgressAddress } from '@endo/hosted-agent/public-egress.js';
-
 /**
  * Validate evidence from the operator-owned listener, never session input.
  * @param {any} network
@@ -21,8 +19,7 @@ export const assertCodexNetworkEvidence = network => {
     network.policy === 'public-internet' &&
     network.dnsHost === '127.0.0.53' &&
     proxy.protocol === 'http:' &&
-    /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(proxy.hostname) &&
-    isPublicEgressAddress(proxy.hostname) &&
+    proxy.hostname === '127.0.0.1' &&
     proxy.port !== '' &&
     proxy.username === '' &&
     proxy.password === '' &&

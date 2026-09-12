@@ -39,7 +39,10 @@ export const makeHostedCodexSubscription = async options => {
     saveThreadState,
     removeSessionState,
     context,
+    publicInternet = false,
   } = options;
+  typeof publicInternet === 'boolean' ||
+    Fail`Invalid public network configuration`;
   const imageDigest = imageRef.slice(imageRef.indexOf('@') + 1);
   const credential = makeCodexSubscriptionCredential({
     secret,
@@ -59,9 +62,7 @@ export const makeHostedCodexSubscription = async options => {
     ownerId,
     stateDirectory: join(directory, 'listener'),
     maxListeners: options.maxSessions,
-    ...(options.publicInternet
-      ? { publicInternet: options.publicInternet }
-      : {}),
+    publicInternet,
   });
   let issuer;
   let provision;
@@ -99,15 +100,10 @@ export const makeHostedCodexSubscription = async options => {
       requestTimeoutMs: 600_000,
       onDiagnostic: options.onDiagnostic,
       audit: options.audit,
-      ...(options.publicInternet
+      ...(publicInternet
         ? {
-            makePublicNetwork: () => {
-              const network = makePublicEgress({ policy: 'public-internet' });
-              return harden({
-                ...network,
-                address: options.publicInternet.address,
-              });
-            },
+            makePublicNetwork: () =>
+              makePublicEgress({ policy: 'public-internet' }),
           }
         : {}),
       policy: {
@@ -152,7 +148,7 @@ export const makeHostedCodexSubscription = async options => {
     // alone cannot prove that old privileged host operations have stopped.
     const recovered = new Set();
     provision = makeAttestedCodexResourceProvisioner({
-      publicInternetEnabled: Boolean(options.publicInternet),
+      publicInternetEnabled: publicInternet,
       sandbox,
       volumeProvider: storage.provider.volumeProvider,
       makeWorkspace: async spec => {
@@ -176,7 +172,7 @@ export const makeHostedCodexSubscription = async options => {
       startTransport: startAppServerTransport,
     });
     const backend = makeCodexBackendFactory({
-      publicInternetEnabled: Boolean(options.publicInternet),
+      publicInternetEnabled: publicInternet,
       registerShutdown: stop => {
         shutdown = stop;
       },

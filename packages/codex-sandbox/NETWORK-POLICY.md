@@ -49,9 +49,9 @@ after the caller's deadline expires.
 ## Broker separation
 
 The outer listener namespace has only loopback and no external route.
-The inference listener binds loopback, while the command proxy binds an
-operator-owned public IPv4 address assigned as an isolated loopback `/32`.
-That address does not create a route to the host or the public network.
+The inference listener and public proxy bind `127.0.0.1` on separate ports.
+The public DNS adapter binds `127.0.0.53`.
+These listeners do not create a route to the host or the public network.
 Public traffic crosses the private capability pipe to the host-side filtered
 transport; subscription credentials never enter the listener or model container.
 
@@ -64,13 +64,8 @@ admitted public networking or `restricted` otherwise.
 Codex's managed proxy is disabled; the outer namespace and host egress service
 apply the network policy.
 These settings are appropriate only inside the verified outer sandbox.
-The synthetic proxy address and setup helper below remain temporarily and are
-scheduled for removal now that the inner proxy boundary is gone.
-
-A separate, bounded, one-shot helper configures the isolated namespace using
-`NET_ADMIN` and then exits.
 The listener and model containers retain dropped capabilities, including later
-exec operations.
+exec operations; public networking needs no privileged setup helper.
 A generated, read-only `/etc/resolv.conf` contains only the isolated DNS listener
 address and bounded resolver timeouts, not the host's resolver configuration.
 The DNS adapter forwards validated A/AAAA hostname requests through a constrained
@@ -89,8 +84,11 @@ native commands remains outstanding.
 
 ## Operator configuration
 
-The subscription configuration accepts `publicInternet` with an operator-owned
-IPv4 `address` and immutable `bootstrapImageRef`.
+The subscription configuration accepts `publicInternet: true` to make the
+public policy available; it defaults to false.
+Each session must still receive a separate public-egress capability to activate
+its listeners.
+No public bind address or helper image is configured.
 The `listenerImageRef` uses the shared hosted-agent worker, which combines the
 inference listener with optional public proxy and DNS adapters.
 The host must explicitly supply and activate public network authority; the same

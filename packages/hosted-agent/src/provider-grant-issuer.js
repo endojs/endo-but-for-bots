@@ -38,7 +38,7 @@ import { makeProviderFetchTransport } from './provider-transport.js';
  * @param {any} [options.credential] The record's shared refreshing credential,
  * from `makeBrokerOAuthCredential`. One per secret record, shared by every
  * issuer and grant over it.
- * @param {(spec:any)=>{endpoint:any,address:string,dispose:()=>void}} [options.makePublicNetwork]
+ * @param {(spec:any)=>{endpoint:any,dispose:()=>void}} [options.makePublicNetwork]
  * Host-only factory for a separately revocable public-egress capability.
  */
 export const makeProviderBrokerGrantIssuer = ({
@@ -176,7 +176,7 @@ export const makeProviderBrokerGrantIssuer = ({
         endpoint: core.endpoint,
         ...(network
           ? {
-              network: { endpoint: network.endpoint, address: network.address },
+              network: { endpoint: network.endpoint },
             }
           : {}),
         limits: harden({
