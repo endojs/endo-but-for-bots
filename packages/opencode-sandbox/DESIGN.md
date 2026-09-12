@@ -11,6 +11,36 @@ Host setup uses the shared owned Podman runtime described in
 The remaining sections preserve the original design context; the unification plan
 tracks current lifecycle, credential, networking, and acceptance gaps.
 
+### Stop failure ownership
+
+The client fences new turns immediately when termination begins and reports
+`stopped` only after resource cleanup and admitted startup acquisition have settled.
+Termination does not wait for a guest shutdown command, command-writer closure,
+or the bridge's readiness message before requesting slice disposal.
+Successful slice disposal is the containment barrier before unmounting storage.
+Failed disposal, unmount, credential revocation, or mount-name removal retains its
+cleanup owner for retry; completed stages are not repeated.
+State deletion begins only after successful termination, and a failed deletion remains
+retryable rather than marking the client destroyed.
+Callers propagate stop failures before cancelling/replacing a client formula or
+deleting its storage; independent provider/MCP cleanup still runs where permitted.
+
+Lazy provisioning supplies a cleanup owner independently of its result promise.
+Partial acquisitions remain owned even when provisioning rejects, and a later attempt
+must drain predecessor rollback before acquiring replacements.
+Public mount and slice acquisition APIs can reject after retaining native resources
+without returning a cleanup handle.
+Such rejections remain uncertain: ordinary retries cannot release dependent storage
+or acquire replacements, although credential revocation is still attempted.
+They require host reconciliation; no error-message heuristic supplies a release proof.
+
+This ownership is local to a client incarnation.
+The shared supervisor must still retain it across formula cancellation/reconstruction,
+wire the durable session records, reconcile unknown acquisitions, and revoke authority
+without waiting for hung control operations.
+The missing-client deletion backstop still requires the existing stable-provider-binding
+precondition until record-backed adoption and cleanup are integrated.
+
 ### Owned runtime provisioning
 
 The deployment must create a private runtime parent owned by the daemon user, then

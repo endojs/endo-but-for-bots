@@ -50,10 +50,8 @@ const makeFakeBridge = () => {
   });
   /** @type {string[]} */
   const commands = [];
-  let killed = false;
   const proc = harden({
     async kill() {
-      killed = true;
       ended = true;
       wake();
     },
@@ -74,7 +72,7 @@ const makeFakeBridge = () => {
       ended = true;
       wake();
     },
-    isKilled: () => killed,
+    isEnded: () => ended,
   };
 };
 
@@ -89,6 +87,7 @@ const makeFakeSlice = bridge => {
     },
     async dispose() {
       disposed = true;
+      bridge.end();
     },
   };
   return { slice, spawnCalls, isDisposed: () => disposed };
@@ -129,6 +128,15 @@ const baseArgs = (fake, extra = {}) => ({
 });
 
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
+
+const makeGate = t => {
+  let release = () => {};
+  const promise = new Promise(resolve => {
+    release = () => resolve(undefined);
+  });
+  t.teardown(release);
+  return { promise, release };
+};
 
 const drain = async reader => {
   const events = [];
@@ -303,7 +311,7 @@ test('a turn cannot change the session persona', async t => {
   t.is((await drain(reader)).pop()?.type, 'end');
 });
 
-test('terminate disposes the slice, kills the bridge, and keeps state', async t => {
+test('terminate disposes the slice and keeps state', async t => {
   const bridge = makeFakeBridge();
   const fake = makeFakeSlice(bridge);
   const stateRemovals = [];
@@ -321,7 +329,7 @@ test('terminate disposes the slice, kills the bridge, and keeps state', async t 
   await client.terminate();
 
   t.true(fake.isDisposed());
-  t.true(bridge.isKilled());
+  t.true(bridge.isEnded());
   t.is((await client.status()).terminated, true);
   // A plain terminate/cancel must NOT delete durable state.
   t.deepEqual(stateRemovals, []);
@@ -348,6 +356,235 @@ test('destroy terminates and then deletes durable state once', async t => {
   await client.destroy();
   t.deepEqual(stateRemovals, ['removed']);
   t.true(fake.isDisposed());
+});
+
+test('failed disposal fences turns and retains mounts and state for retry', async t => {
+  const bridge = makeFakeBridge();
+  const fake = makeFakeSlice(bridge);
+  let disposals = 0;
+  let unmounts = 0;
+  let deletions = 0;
+  const client = makeOpencodeClient(
+    baseArgs(fake, {
+      slice: harden({
+        dispose: async () => {
+          disposals += 1;
+          if (disposals === 1) throw Error('Slice still alive');
+          bridge.end();
+        },
+      }),
+      mountHandle: harden({
+        unmount: async () => {
+          unmounts += 1;
+        },
+      }),
+      removeState: async () => {
+        deletions += 1;
+      },
+    }),
+  );
+  await t.throwsAsync(client.destroy(), { message: /Slice still alive/ });
+  t.is(unmounts, 0);
+  t.is(deletions, 0);
+  t.like(await client.status(), { terminated: true, stopped: false });
+  await t.throwsAsync(client.send('cannot restart'), {
+    message: /is terminated/,
+  });
+  await Promise.all([client.destroy(), client.destroy(), client.terminate()]);
+  t.is(disposals, 2);
+  t.is(unmounts, 1);
+  t.is(deletions, 1);
+  t.is((await client.status()).stopped, true);
+});
+
+test('failed unmount retries without repeating disposal or deleting state early', async t => {
+  const fake = makeFakeSlice(makeFakeBridge());
+  let disposals = 0;
+  let unmounts = 0;
+  let deletions = 0;
+  const client = makeOpencodeClient(
+    baseArgs(fake, {
+      slice: harden({
+        dispose: async () => {
+          disposals += 1;
+        },
+      }),
+      mountHandle: harden({
+        unmount: async () => {
+          unmounts += 1;
+          if (unmounts === 1) throw Error('Mount still busy');
+        },
+      }),
+      removeState: async () => {
+        deletions += 1;
+      },
+    }),
+  );
+  await t.throwsAsync(client.destroy(), { instanceOf: AggregateError });
+  t.is(disposals, 1);
+  t.is(deletions, 0);
+  await client.destroy();
+  t.is(disposals, 1);
+  t.is(unmounts, 2);
+  t.is(deletions, 1);
+});
+
+test('failed state deletion remains retryable after successful termination', async t => {
+  const fake = makeFakeSlice(makeFakeBridge());
+  let attempts = 0;
+  const client = makeOpencodeClient(
+    baseArgs(fake, {
+      removeState: async () => {
+        attempts += 1;
+        if (attempts === 1) throw Error('State removal failed');
+      },
+    }),
+  );
+  await t.throwsAsync(client.destroy(), { message: /State removal failed/ });
+  t.is((await client.status()).stopped, true);
+  await Promise.all([client.destroy(), client.destroy()]);
+  t.is(attempts, 2);
+});
+
+test('termination drains late provisioning without spawning or awaiting readiness', async t => {
+  t.timeout(5000);
+  const acquired = makeGate(t);
+  const finish = makeGate(t);
+  const fake = makeFakeSlice(makeFakeBridge());
+  let closed = false;
+  const client = makeOpencodeClient(
+    baseArgs(fake, {
+      provision: async () => {
+        acquired.release();
+        await finish.promise;
+        return { slice: fake.slice };
+      },
+      cleanupProvision: async () => {
+        closed = true;
+        await finish.promise;
+        await fake.slice.dispose();
+      },
+    }),
+  );
+  const reader = await client.send('start');
+  await acquired.promise;
+  const stopping = client.terminate();
+  await tick();
+  t.true(closed);
+  t.is((await client.status()).stopped, false);
+  finish.release();
+  await stopping;
+  t.deepEqual(fake.spawnCalls, []);
+  t.true(fake.isDisposed());
+  t.is((await drain(reader)).pop()?.type, 'abort');
+});
+
+test('termination retains an admitted spawn until disposal and acquisition settle', async t => {
+  t.timeout(5000);
+  const entered = makeGate(t);
+  const finish = makeGate(t);
+  const disposal = makeGate(t);
+  const bridge = makeFakeBridge();
+  let writers = 0;
+  const slice = harden({
+    spawn: async () => {
+      entered.release();
+      await finish.promise;
+      return bridge.proc;
+    },
+    dispose: async () => {
+      disposal.release();
+      await finish.promise;
+      bridge.end();
+    },
+  });
+  const client = makeOpencodeClient(
+    baseArgs(
+      { slice },
+      {
+        makeStdinWriter: async () => {
+          writers += 1;
+          return {};
+        },
+      },
+    ),
+  );
+  const reader = await client.send('start');
+  await entered.promise;
+  const stopping = client.terminate();
+  await disposal.promise;
+  t.is((await client.status()).stopped, false);
+  finish.release();
+  await stopping;
+  t.is(writers, 0);
+  t.true(bridge.isEnded());
+  t.is((await drain(reader)).pop()?.type, 'abort');
+});
+
+test('termination does not wait for a missing guest ready event', async t => {
+  t.timeout(5000);
+  const fake = makeFakeSlice(makeFakeBridge());
+  const client = makeOpencodeClient(baseArgs(fake));
+  const reader = await client.send('start');
+  await tick();
+  t.is(fake.spawnCalls.length, 1);
+  await client.terminate();
+  t.true(fake.isDisposed());
+  t.is((await drain(reader)).pop()?.type, 'abort');
+});
+
+test('termination bypasses a blocked guest command writer', async t => {
+  t.timeout(5000);
+  const entered = makeGate(t);
+  const finish = makeGate(t);
+  const bridge = makeFakeBridge();
+  const fake = makeFakeSlice(bridge);
+  const client = makeOpencodeClient(
+    baseArgs(fake, {
+      makeStdinWriter: async () => ({
+        next: async () => {
+          entered.release();
+          await finish.promise;
+          return { done: false };
+        },
+        return: async () => {
+          t.fail('Guest writer return must not precede host disposal');
+        },
+      }),
+    }),
+  );
+  bridge.push(readyLine('ses_1'));
+  const reader = await client.send('start');
+  await entered.promise;
+  await client.terminate();
+  t.true(fake.isDisposed());
+  t.is((await drain(reader)).pop()?.type, 'abort');
+  finish.release();
+});
+
+test('rejected provisioning still has a cleanup owner whose failures are retried', async t => {
+  const fake = makeFakeSlice(makeFakeBridge());
+  let cleanupAttempts = 0;
+  const client = makeOpencodeClient(
+    baseArgs(fake, {
+      provision: async () => {
+        throw Error('Acquisition failed');
+      },
+      cleanupProvision: async () => {
+        cleanupAttempts += 1;
+        if (cleanupAttempts === 1) throw Error('Rollback still pending');
+      },
+    }),
+  );
+  const reader = await client.send('start');
+  t.is((await drain(reader)).pop()?.type, 'abort');
+  await t.throwsAsync(client.terminate(), {
+    message: /Rollback still pending/,
+  });
+  t.is((await client.status()).stopped, false);
+  await client.terminate();
+  t.is(cleanupAttempts, 2);
+  t.is((await client.status()).stopped, true);
 });
 
 test('initialPrompt is fired and drained at construction', async t => {

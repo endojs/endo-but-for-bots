@@ -45,6 +45,7 @@ import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { iterateBytesWriter } from '@endo/exo-stream/iterate-bytes-writer.js';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
+import { makeCleanupScope } from '@endo/hosted-agent/cleanup-scope.js';
 
 import { assertBridgeEvent, parseJsonLines } from './opencode-protocol.js';
 
@@ -156,6 +157,10 @@ const defaultMakeStdinWriter = async proc =>
  * @property {(extraMounts?: readonly any[]) => Promise<{ slice: SandboxHandle, mountHandle?: { unmount: () => Promise<void> }, configMountHandle?: { unmount: () => Promise<void> }, revoke?: () => Promise<void>, removeMount?: () => Promise<void> }>} [provision]
  *   - Lazy provisioner.  Runs once on first use and is memoized; a failed
  *   attempt is dropped so a later turn can retry.
+ * @property {() => Promise<void>} [cleanupProvision] - Required with `provision`.
+ *   Permanently fences provisioning and releases all successful and partial
+ *   acquisitions, including after provision rejects. Failed cleanup stays
+ *   owned and retryable. This callback, not the result promise, owns resources.
  * @property {string} workspaceMountPoint - Host path of the workspace 9P
  *   mount (diagnostic; surfaced in `status()`).
  * @property {string} [workspacePath] - Slice-internal workspace path used as
@@ -202,6 +207,7 @@ export const makeOpencodeClient = ({
   slice,
   mountHandle,
   provision,
+  cleanupProvision,
   workspaceMountPoint,
   workspacePath = '/workspace',
   statePath = '/opencode-state',
@@ -222,6 +228,7 @@ export const makeOpencodeClient = ({
   stderrTailLength = 2000,
 }) => {
   let terminated = false;
+  let cleanupComplete = false;
   let destroyed = false;
   // The captured opencode session id (`ready` event).  Kept in memory and
   // reported by `status()` so the backend factory can record it for resume.
@@ -232,6 +239,8 @@ export const makeOpencodeClient = ({
   let stdin = null;
   /** @type {Promise<void> | undefined} */
   let startPromise;
+  /** @type {Promise<void> | undefined} */
+  let startupAcquisition;
   let bridgeExited = false;
   let bridgeExitReason = '';
   let stderrTail = '';
@@ -263,6 +272,26 @@ export const makeOpencodeClient = ({
         ),
       );
 
+  if (provision && !cleanupProvision) {
+    throw makeError(X`Lazy OpenCode provisioning requires a cleanup owner`);
+  }
+  // Eager clients already own their slice. The lazy module supplies its own
+  // acquisition owner, available even if its result promise rejects.
+  const mountCleanup = makeCleanupScope();
+  if (mountHandle) mountCleanup.add(() => E(mountHandle).unmount());
+  let sliceStopped = false;
+  const releaseResources =
+    cleanupProvision ||
+    (async () => {
+      await null;
+      if (!sliceStopped) {
+        await E(/** @type {SandboxHandle} */ (slice)).dispose();
+        sliceStopped = true;
+      }
+      // A failed disposal is not permission to unmount guest storage.
+      await mountCleanup.run();
+    });
+
   const guardLive = () => {
     if (terminated) {
       throw makeError(X`OpencodeClient(${q(sessionId)}) is terminated.`);
@@ -280,9 +309,8 @@ export const makeOpencodeClient = ({
         provision
       )().then(value => harden(value));
       provisioned = pending;
-      // A transient provisioning failure (image pull, 9P mount EPERM, slice
-      // mint) must not permanently brick the session: drop the memoized
-      // rejection so a later turn can retry.
+      // The provisioning owner retains partial acquisitions separately and
+      // must finish predecessor cleanup before admitting a later attempt.
       pending.catch(() => {
         if (provisioned === pending) {
           provisioned = undefined;
@@ -423,14 +451,17 @@ export const makeOpencodeClient = ({
       );
     }
     if (!startPromise) {
-      const start = (async () => {
+      const ready = new Promise((resolve, reject) => {
+        resolveReady = () => resolve(undefined);
+        rejectReady = reject;
+      });
+      // Cancellation may reject readiness before acquisition has settled.
+      void ready.catch(() => {});
+      const acquisition = (async () => {
         await null;
         guardLive();
         const { slice: activeSlice } = await ensureProvisioned();
-        const ready = new Promise((resolve, reject) => {
-          resolveReady = () => resolve(undefined);
-          rejectReady = reject;
-        });
+        guardLive();
         const activeProc = /** @type {ProcessHandle} */ (
           await E(activeSlice).spawn(
             harden([...bridgeArgv]),
@@ -442,12 +473,16 @@ export const makeOpencodeClient = ({
             }),
           )
         );
+        // Retain an already-admitted spawn result before honoring the fence.
         proc = activeProc;
+        guardLive();
         stdin = await makeStdinWriter(activeProc);
+        guardLive();
         drainStderr(activeProc);
         consumeStdout(activeProc);
-        await ready;
       })();
+      startupAcquisition = acquisition;
+      const start = acquisition.then(() => ready);
       startPromise = start;
       start.catch(() => {
         if (startPromise === start) {
@@ -464,6 +499,7 @@ export const makeOpencodeClient = ({
    */
   const writeCommand = command => {
     writeChain = writeChain.then(async () => {
+      guardLive();
       if (!stdin) {
         throw makeError(
           X`OpencodeClient(${q(sessionId)}): bridge stdin is not available`,
@@ -593,91 +629,48 @@ export const makeOpencodeClient = ({
       })().catch(() => {});
     }
 
-    const terminate = async () => {
-      if (terminated) return;
-      terminated = true;
-      // Fail every live turn with a single terminal so consumers parked in
-      // `next()` are not left hanging.
-      const turns = [active, ...pendingTurns].filter(Boolean);
-      active = null;
-      pendingTurns.length = 0;
-      for (const turn of turns) {
-        /** @type {Turn} */ (turn).push({
-          type: 'abort',
-          reason: 'session terminated',
+    /** @type {Promise<void> | undefined} */
+    let terminationFlight;
+    /** @type {Promise<void> | undefined} */
+    let destructionFlight;
+    const terminate = () => {
+      if (!terminated) {
+        // Fence new turns immediately, independently of cleanup success.
+        terminated = true;
+        rejectReady?.(
+          makeError(X`OpencodeClient(${q(sessionId)}) is terminated.`),
+        );
+        const turns = [active, ...pendingTurns].filter(Boolean);
+        active = null;
+        pendingTurns.length = 0;
+        for (const turn of turns) {
+          /** @type {Turn} */ (turn).push({
+            type: 'abort',
+            reason: 'session terminated',
+          });
+          /** @type {Turn} */ (turn).settle();
+        }
+      }
+      if (!terminationFlight) {
+        terminationFlight = (async () => {
+          await null;
+          // Slice disposal is the containment barrier. Never put guest stdin
+          // shutdown or its ready handshake ahead of host-side disposal.
+          await releaseResources();
+          // Disposal fences admitted spawns; retain their returned handles
+          // until acquisition settles, without waiting for guest readiness.
+          await startupAcquisition?.catch(() => {});
+          proc = null;
+          stdin = null;
+          resolveReady = undefined;
+          rejectReady = undefined;
+          cleanupComplete = true;
+        })().catch(error => {
+          terminationFlight = undefined;
+          throw error;
         });
-        /** @type {Turn} */ (turn).settle();
       }
-      // Ask the bridge to stop its server child, then reap it.  Both are
-      // best-effort: teardown must complete even if the process is gone.
-      if (stdin) {
-        try {
-          await writeCommand({ op: 'shutdown' });
-        } catch {
-          // bridge already gone
-        }
-      }
-      if (stdin && typeof stdin.return === 'function') {
-        try {
-          await stdin.return();
-        } catch {
-          // best-effort
-        }
-      }
-      if (proc) {
-        const activeProc = proc;
-        proc = null;
-        try {
-          await E(activeProc).kill();
-        } catch {
-          // best-effort
-        }
-      }
-      // Only tear down what was actually provisioned.
-      if (provisioned === undefined) return;
-      /** @type {Awaited<typeof provisioned> | undefined} */
-      let resolved;
-      try {
-        resolved = await provisioned;
-      } catch {
-        // Provisioning failed; nothing was created to tear down.
-        return;
-      }
-      try {
-        await E(resolved.slice).dispose();
-      } catch {
-        // best-effort; dispose may already have run on cancellation
-      }
-      if (resolved.mountHandle) {
-        try {
-          await E(resolved.mountHandle).unmount();
-        } catch {
-          // best-effort; the mount caplet also unmounts on teardown
-        }
-      }
-      if (resolved.configMountHandle) {
-        try {
-          await E(resolved.configMountHandle).unmount();
-        } catch {
-          // best-effort; the mount caplet also unmounts on teardown
-        }
-      }
-      // Reclaim the Mount pet names registered at the host root so a
-      // torn-down session leaves no live Mount formula behind.
-      if (resolved.removeMount) {
-        try {
-          await resolved.removeMount();
-        } catch {
-          // best-effort; the name may already be gone
-        }
-      }
-      if (resolved.revoke) {
-        try {
-          await resolved.revoke();
-        } catch {
-          // best-effort; the credential cap may already be gone
-        }
-      }
+      return terminationFlight;
     };
 
     return makeExo('OpencodeClient', OpencodeClientInterface, {
@@ -769,12 +762,19 @@ export const makeOpencodeClient = ({
        * a plain terminate/cancel must not.
        */
       async destroy() {
-        await terminate();
         if (destroyed) return;
-        destroyed = true;
-        if (removeState) {
-          await removeState();
+        if (!destructionFlight) {
+          destructionFlight = (async () => {
+            await null;
+            await terminate();
+            if (removeState) await removeState();
+            destroyed = true;
+          })().catch(error => {
+            destructionFlight = undefined;
+            throw error;
+          });
         }
+        await destructionFlight;
       },
 
       async status() {
@@ -789,6 +789,7 @@ export const makeOpencodeClient = ({
           network: env.NETWORK || 'private',
           opencodeSessionId,
           terminated,
+          stopped: cleanupComplete,
           bridgeRunning: Boolean(proc) && !bridgeExited,
           bridgeExited,
           pendingPrompts: pendingTurns.length,
@@ -811,8 +812,9 @@ export const makeOpencodeClient = ({
             '                        terminal (barrier).',
             '  terminate()         → stop bridge + slice + mounts; keeps state.',
             '  destroy()           → terminate() + delete durable state.',
-            '  status()            → { sessionId, opencodeSessionId, terminated,',
+            '  status()            → { sessionId, opencodeSessionId, terminated, stopped,',
             '                          bridgeRunning, pendingPrompts, ... }',
+            '    terminated fences turns; stopped means resource cleanup completed.',
           ].join('\n');
         }
         return `No documentation for method "${q(methodName)}".`;

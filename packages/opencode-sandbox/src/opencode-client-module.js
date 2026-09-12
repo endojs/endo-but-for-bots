@@ -69,6 +69,8 @@ import { randomBytes } from 'node:crypto';
 
 import { E } from '@endo/eventual-send';
 import { Fail, makeError, q, X } from '@endo/errors';
+import { makeCleanupScope } from '@endo/hosted-agent/cleanup-scope.js';
+import { makeSessionRegistry } from '@endo/hosted-agent/session-registry.js';
 
 import { makeOpencodeClient } from './opencode-client.js';
 import { parseRootfs, rootfsLabel } from './parse-rootfs.js';
@@ -329,45 +331,115 @@ export const make = (powers, context, contextWrapper = {}) => {
     }),
   );
 
+  const provisionOrder = makeSessionRegistry();
+  let stopping = false;
+  /** @type {ReturnType<typeof makeCleanupScope> | undefined} */
+  let retainedCleanup;
+  /** @type {Promise<void> | undefined} */
+  let acquiring;
+  /** @type {Promise<void> | undefined} */
+  let cleanupFlight;
+  const assertProvisionLive = () => {
+    !stopping || Fail`OpenCode provisioning is stopping`;
+  };
+  /** @param {ReturnType<typeof makeCleanupScope>} cleanup */
+  const releaseAttempt = async cleanup => {
+    await cleanup.run();
+    if (retainedCleanup === cleanup) retainedCleanup = undefined;
+  };
+  // A rejected provision result does not prove its partial acquisitions ended.
+  const cleanupProvision = () => {
+    stopping = true;
+    cleanupFlight ??= (async () => {
+      await acquiring;
+      if (retainedCleanup) await releaseAttempt(retainedCleanup);
+    })().catch(error => {
+      cleanupFlight = undefined;
+      throw error;
+    });
+    return cleanupFlight;
+  };
+
   /**
    * Lazily mount the workspace + state + optional config/MCP dirs and mint
    * the slice.  Run once on first use and memoized by `makeOpencodeClient`.
    *
    * @returns {Promise<{ slice: any, mountHandle?: { unmount: () => Promise<void> }, configMountHandle?: { unmount: () => Promise<void> }, revoke: () => Promise<void>, removeMount: () => Promise<any> }>}
    */
-  const provision = async () => {
-    // Pull the caps from the per-session powers by reference (no name
-    // lookup).  The provisioner bundled exactly these when it built the
-    // powers cap.
-    const sandboxFactory = await E(sessionPowers).sandboxFactory();
-    const fsMounter = await E(sessionPowers).fsMounter();
-    const stateProvider = await E(sessionPowers).stateProvider();
-    if (!stateProvider) {
-      throw makeError(X`opencode-sandbox: no state provider cap was provided`);
-    }
-    const fs = await E(sessionPowers).filesystem();
-    if (!fs) {
-      throw makeError(X`opencode-sandbox: no Filesystem cap was provided`);
-    }
-
-    // The credentials cap (or null when the session has none).  Resolved up
-    // front so a failure (or terminate) can revoke the per-session grant
-    // rather than leak it in the credentials cap's outstanding set.
+  const acquireProvision = async () => {
+    await null;
+    assertProvisionLive();
+    if (retainedCleanup) await releaseAttempt(retainedCleanup);
+    assertProvisionLive();
+    const cleanup = makeCleanupScope();
+    const unmounts = makeCleanupScope();
+    retainedCleanup = cleanup;
     /** @type {any} */
-    const credCap = brokerPlan.useCredentialCap
-      ? (await E(sessionPowers).credentials()) || null
-      : null;
-    const revokeCredential = async () => {
-      if (credCap) {
-        await E(credCap).revoke(sessionId);
+    let ownedSlice;
+    let uncertainMount = false;
+    let uncertainSlice = false;
+    let mountNames = false;
+    cleanup.add(async () => {
+      await null;
+      // Rejected public acquisitions can leave native work without returning a
+      // cleanup handle. Only host reconciliation can resolve that uncertainty;
+      // neither error text nor a rejected result is evidence of release.
+      (!uncertainMount && !uncertainSlice) ||
+        Fail`OpenCode acquisition cleanup remains uncertain; host reconciliation is required`;
+      if (ownedSlice) {
+        await E(ownedSlice).dispose();
+        ownedSlice = undefined;
       }
-    };
-
-    /** @type {any} */
-    let mountHandle = null;
-    /** @type {any} */
-    let configMountHandle = null;
+      await unmounts.run();
+      if (mountNames) {
+        const results = await E(sessionPowers).removeMount();
+        // The session powers currently return allSettled removal results.
+        // Await all removals before exposing any failure or allowing a retry.
+        const failures = Array.isArray(results)
+          ? results
+              .filter(result => result.status === 'rejected')
+              .map(result => result.reason)
+          : [];
+        if (failures.length)
+          throw new AggregateError(
+            failures,
+            'OpenCode mount name cleanup pending',
+          );
+        mountNames = false;
+      }
+    });
     try {
+      // Pull the caps from the per-session powers by reference (no name
+      // lookup).  The provisioner bundled exactly these when it built the
+      // powers cap.
+      const sandboxFactory = await E(sessionPowers).sandboxFactory();
+      const fsMounter = await E(sessionPowers).fsMounter();
+      const stateProvider = await E(sessionPowers).stateProvider();
+      if (!stateProvider) {
+        throw makeError(
+          X`opencode-sandbox: no state provider cap was provided`,
+        );
+      }
+      const fs = await E(sessionPowers).filesystem();
+      if (!fs) {
+        throw makeError(X`opencode-sandbox: no Filesystem cap was provided`);
+      }
+
+      // The credentials cap (or null when the session has none).  Resolved up
+      // front so a failure (or terminate) can revoke the per-session grant
+      // rather than leak it in the credentials cap's outstanding set.
+      /** @type {any} */
+      const credCap = brokerPlan.useCredentialCap
+        ? (await E(sessionPowers).credentials()) || null
+        : null;
+      const revokeCredential = () =>
+        credCap ? E(credCap).revoke(sessionId) : Promise.resolve();
+
+      if (credCap) cleanup.add(revokeCredential);
+      /** @type {any} */
+      let mountHandle = null;
+      /** @type {any} */
+      let configMountHandle = null;
       // Materialise the credential immediately before it flows into the
       // slice env.  The cap may live on a remote peer; the host only ever
       // receives the short-lived secret it mints here.  It is materialised
@@ -396,15 +468,23 @@ export const make = (powers, context, contextWrapper = {}) => {
             )}`,
           );
         }
+        assertProvisionLive();
         const issuedCred = await E(credCap).issue(sessionId);
+        assertProvisionLive();
         credentialEnv[envVar] = await E(issuedCred).materialise();
       }
 
+      assertProvisionLive();
+      uncertainMount = true;
       mountHandle = await E(fsMounter).mount(
         fs,
         workspaceMountPoint,
         harden({ lazyUnmount: true }),
       );
+      uncertainMount = false;
+      unmounts.add(() => E(mountHandle).unmount());
+      assertProvisionLive();
+      mountNames = true;
       const workspaceCap = await E(sessionPowers).provideMount(
         workspaceMountPoint,
         workspacePetName,
@@ -422,11 +502,16 @@ export const make = (powers, context, contextWrapper = {}) => {
         // Read-only: OPENCODE_CONFIG_DIR is a config source, never a writable
         // workspace.  A planted opencode.json in the workspace cannot reach
         // it because project config is disabled outright.
+        assertProvisionLive();
+        uncertainMount = true;
         configMountHandle = await E(fsMounter).mount(
           configFs,
           configMountPoint,
           harden({ lazyUnmount: true, readOnly: true }),
         );
+        uncertainMount = false;
+        unmounts.add(() => E(configMountHandle).unmount());
+        assertProvisionLive();
         configCap = await E(sessionPowers).provideMount(
           configMountPoint,
           configPetName,
@@ -449,6 +534,7 @@ export const make = (powers, context, contextWrapper = {}) => {
       // needs same-host shared memory. The state provider creates the host
       // directory and returns a daemon mount, which the sandbox factory
       // resolves through @agent.provideHostPath.
+      assertProvisionLive();
       const stateMountCap =
         await E(stateProvider).provideSessionMount(sessionId);
 
@@ -503,6 +589,8 @@ export const make = (powers, context, contextWrapper = {}) => {
           : {}),
       };
 
+      assertProvisionLive();
+      uncertainSlice = true;
       const slice = await E(sandboxFactory).make(
         harden({
           rootfs: parsedRootfs,
@@ -519,6 +607,9 @@ export const make = (powers, context, contextWrapper = {}) => {
           backend,
         }),
       );
+      ownedSlice = slice;
+      uncertainSlice = false;
+      assertProvisionLive();
       return harden({
         slice,
         ...(mountHandle ? { mountHandle } : {}),
@@ -527,34 +618,26 @@ export const make = (powers, context, contextWrapper = {}) => {
         removeMount: () => E(sessionPowers).removeMount(),
       });
     } catch (error) {
-      if (mountHandle) {
-        try {
-          await E(mountHandle).unmount();
-        } catch {
-          // best-effort
-        }
-      }
-      if (configMountHandle) {
-        try {
-          await E(configMountHandle).unmount();
-        } catch {
-          // best-effort
-        }
-      }
-      // If `provideMount` had already registered a Mount name before this
-      // failure, drop it so a failed provision leaks nothing.
       try {
-        await E(sessionPowers).removeMount();
-      } catch {
-        // best-effort; the name may not have been registered yet
-      }
-      try {
-        await revokeCredential();
-      } catch {
-        // best-effort; the credential cap may be gone
+        await releaseAttempt(cleanup);
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [error, cleanupError],
+          'OpenCode provisioning failed; cleanup remains pending',
+          { cause: cleanupError },
+        );
       }
       throw error;
     }
+  };
+  const provision = () => {
+    assertProvisionLive();
+    const result = provisionOrder.inOrder('slice', acquireProvision);
+    acquiring = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
   };
 
   /**
@@ -573,6 +656,7 @@ export const make = (powers, context, contextWrapper = {}) => {
     sessionId,
     createdAt,
     provision,
+    cleanupProvision,
     workspaceMountPoint,
     workspacePath,
     statePath,

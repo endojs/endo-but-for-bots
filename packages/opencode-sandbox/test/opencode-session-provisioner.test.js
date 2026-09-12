@@ -5,6 +5,7 @@ import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
 
 import { makeOpencodeSessionProvisioner } from '../src/opencode-session-provisioner.js';
+import { makeOpencodeBackendFactory } from '../src/opencode-backend-factory.js';
 
 const keyFor = names => names.join('/');
 
@@ -186,6 +187,9 @@ const makeFakeProvisionSession =
     names.set(
       keyFor(resultName),
       Far('FakeOpencodeClient', {
+        async terminate() {
+          await null;
+        },
         async destroy() {
           await null;
         },
@@ -452,4 +456,209 @@ test('re-provisions the client when the network policy changes', async t => {
   t.is(terminated, 1);
   t.is(provisionCalls.length, 2);
   t.is(provisionCalls[1].network, 'private');
+});
+
+test('failed destroy preserves the client, filesystem names, and state for retry', async t => {
+  const { hostAgent, names } = makeRecordingHost();
+  const removedDirectories = [];
+  const removedSessions = [];
+  let destroys = 0;
+  let destroyFails = true;
+  names.set('opencode-sandbox/sessions', harden({ kind: 'directory' }));
+  const clientPath = 'opencode-sandbox/sessions/opencode-client-stop-retry';
+  const client = Far('RetryDestroyClient', {
+    async destroy() {
+      destroys += 1;
+      if (destroyFails) throw Error('slice stop incomplete');
+    },
+  });
+  names.set(clientPath, client);
+  names.set('opencode-workspace-stop-retry', harden({}));
+  names.set('opencode-config-stop-retry', harden({}));
+  names.set(
+    'opencode-sandbox/state-provider',
+    Far('StateProvider', {
+      async removeSession(sessionId) {
+        removedSessions.push(sessionId);
+      },
+    }),
+  );
+  const provisioner = makeOpencodeSessionProvisioner(hostAgent, baseConfig, {
+    async removeDirectory(directory) {
+      removedDirectories.push(directory);
+    },
+  });
+  await t.throwsAsync(() => E(provisioner).remove('stop-retry'), {
+    message: /slice stop incomplete/,
+  });
+  t.is(names.get(clientPath), client);
+  t.true(names.has('opencode-workspace-stop-retry'));
+  t.true(names.has('opencode-config-stop-retry'));
+  t.deepEqual(removedDirectories, []);
+  t.deepEqual(removedSessions, []);
+  destroyFails = false;
+  await E(provisioner).remove('stop-retry');
+  t.is(destroys, 2);
+  t.false(names.has(clientPath));
+  t.false(names.has('opencode-workspace-stop-retry'));
+  t.false(names.has('opencode-config-stop-retry'));
+  t.deepEqual(removedDirectories, [
+    '/workspaces/stop-retry',
+    '/opencode-configs/stop-retry',
+  ]);
+  t.is(removedSessions.length, 1);
+});
+
+test('a network change retains its predecessor until direct stop succeeds', async t => {
+  const { hostAgent, names } = makeRecordingHost();
+  const filesystemCalls = [];
+  const provisionCalls = [];
+  let stopFails = true;
+  let stops = 0;
+  names.set('opencode-sandbox/sessions', harden({ kind: 'directory' }));
+  const clientPath = 'opencode-sandbox/sessions/opencode-client-network-retry';
+  const client = Far('RetryStopClient', {
+    async status() {
+      return harden({ network: 'none' });
+    },
+    async terminate() {
+      stops += 1;
+      if (stopFails) throw Error('slice stop incomplete');
+    },
+  });
+  names.set(clientPath, client);
+  const provisioner = makeOpencodeSessionProvisioner(hostAgent, baseConfig, {
+    async makeFilesystem(name) {
+      filesystemCalls.push(name);
+      names.set(name, harden({}));
+    },
+    provisionSession: makeFakeProvisionSession(names, provisionCalls),
+  });
+  await t.throwsAsync(
+    () =>
+      E(provisioner).provision('network-retry', harden({ network: 'private' })),
+    { message: /slice stop incomplete/ },
+  );
+  t.is(names.get(clientPath), client);
+  t.deepEqual(filesystemCalls, []);
+  t.deepEqual(provisionCalls, []);
+  stopFails = false;
+  await E(provisioner).provision(
+    'network-retry',
+    harden({ network: 'private' }),
+  );
+  t.is(stops, 2);
+  t.is(provisionCalls.length, 1);
+  t.is(provisionCalls[0].spec.network, 'private');
+  t.not(names.get(clientPath), client);
+});
+
+test('factory rollback preserves a predecessor whose policy-change stop failed', async t => {
+  t.timeout(2000);
+  const { hostAgent, names, cancelled } = makeRecordingHost();
+  const filesystemCalls = [];
+  const provisionCalls = [];
+  const removedDirectories = [];
+  let stopFails = true;
+  let stops = 0;
+  let bridges = 0;
+  let closedBridges = 0;
+  let grants = 0;
+  let revocations = 0;
+  names.set('opencode-sandbox/sessions', harden({ kind: 'directory' }));
+  const clientPath = 'opencode-sandbox/sessions/opencode-client-policy-retry';
+  const predecessor = Far('RetainedPredecessor', {
+    async status() {
+      return harden({ network: 'none' });
+    },
+    async terminate() {
+      stops += 1;
+      if (stopFails) throw Error('predecessor still live');
+    },
+  });
+  names.set(clientPath, predecessor);
+  const provisioner = makeOpencodeSessionProvisioner(hostAgent, baseConfig, {
+    async makeFilesystem(name) {
+      filesystemCalls.push(name);
+      names.set(name, harden({}));
+    },
+    provisionSession: makeFakeProvisionSession(names, provisionCalls),
+    async removeDirectory(directory) {
+      removedDirectories.push(directory);
+    },
+  });
+  const factory = makeOpencodeBackendFactory({
+    async provisionClient(sessionId, options) {
+      await E(provisioner).provision(sessionId, harden(options));
+      return E(provisioner).lookup(sessionId);
+    },
+    cancelClient: sessionId => E(provisioner).cancel(sessionId),
+    removeSession: sessionId => E(provisioner).remove(sessionId),
+    async startToolBridge() {
+      bridges += 1;
+      return harden({
+        socketDir: '/tmp/fake-policy-mcp',
+        innerDir: '/endo-mcp',
+        configPath: '/endo-mcp/mcp.json',
+        pendingCalls: () => 0,
+        async close() {
+          closedBridges += 1;
+        },
+      });
+    },
+    async removeToolBridge() {
+      throw Error('must not delete bridge storage before stop proof');
+    },
+    async broker() {
+      grants += 1;
+      return harden({
+        async attestation() {
+          return harden({ endpoint: 'http://127.0.0.1:41337' });
+        },
+        async sandboxEvidence() {
+          return harden({ brokerSidecar: { container: 'provider-policy' } });
+        },
+        async revoke() {
+          revocations += 1;
+        },
+      });
+    },
+  });
+  const spec = harden({ sessionId: 'policy-retry' });
+  const toolSet = Far('HostedToolSet', { help: () => 'test tool set' });
+  await t.throwsAsync(() => E(factory).create(spec, toolSet), {
+    instanceOf: AggregateError,
+    message: /provisioning and rollback failed/,
+  });
+  t.is(stops, 2, 'both policy replacement and rollback require direct stop');
+  t.is(names.get(clientPath), predecessor);
+  t.deepEqual(cancelled, []);
+  t.is(revocations, 1);
+  t.is(closedBridges, 1);
+  await t.throwsAsync(() => E(factory).create(spec, toolSet), {
+    instanceOf: AggregateError,
+    message: /cleanup remains pending/,
+  });
+  await t.throwsAsync(() => E(factory).destroy(spec), {
+    instanceOf: AggregateError,
+    message: /cleanup remains pending/,
+  });
+  t.is(stops, 4);
+  t.is(bridges, 1);
+  t.is(grants, 1);
+  t.is(names.get(clientPath), predecessor);
+  t.deepEqual(cancelled, []);
+  t.deepEqual(filesystemCalls, []);
+  t.deepEqual(provisionCalls, []);
+  t.deepEqual(removedDirectories, []);
+
+  stopFails = false;
+  await E(factory).create(spec, toolSet);
+  t.is(cancelled.length, 1);
+  t.is(provisionCalls.length, 1);
+  t.is(provisionCalls[0].spec.network, 'join');
+  t.not(names.get(clientPath), predecessor);
+  t.is(bridges, 2);
+  t.is(grants, 2);
+  t.is(revocations, 1, 'successful rollback releases are not repeated');
 });

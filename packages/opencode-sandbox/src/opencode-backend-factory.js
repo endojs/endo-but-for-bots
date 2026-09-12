@@ -127,10 +127,10 @@ const isIdleInterrupt = error =>
  *   bridge mount, the pinned model, and the session persona baked into the
  *   opencode agent config, and return the client capability.
  * @param {(sessionId: string) => Promise<void>} powers.cancelClient
- *   Tear down the client's live incarnation — its slice, mounts, and
- *   credential grant — so the formula reincarnates fresh on the next
- *   `provisionClient`. Durable state (workspace, opencode session store)
- *   survives.
+ *   Capture and await the current client's stop before cancelling its
+ *   formula, including rollback after a failed provision attempt. Rejection
+ *   retains that client's cleanup ownership; formula cancellation alone is
+ *   not stop proof. Durable workspace and opencode session state survive.
  * @param {(sessionId: string) => Promise<void>} powers.removeSession
  *   Idempotently destroy the session's durable state: the client formula, its
  *   filesystems, the state directory, and their backing directories.
@@ -197,8 +197,20 @@ export const makeOpencodeBackendFactory = ({
     // the successor rather than running beside it.
     await sessions.stop(sessionId);
     const bridge = await startToolBridge(sessionId, toolSet);
+    /** @param {number} pending */
+    const refuseUnsettled = pending => {
+      pending === 0 ||
+        Fail`OpenCode session has ${q(pending)} unsettled Endo tool call(s)`;
+    };
+    // Provider revocation and an idle MCP listener can be released even if
+    // direct client stop fails. Formula cancellation depends on stop proof.
+    const authorityResources = makeCleanupScope();
+    authorityResources.add(async () => {
+      refuseUnsettled(bridge.pendingCalls());
+      await bridge.close();
+    });
     const resources = makeCleanupScope();
-    resources.add(() => bridge.close());
+    resources.add(() => authorityResources.run());
     const releaseResources = async () => {
       await resources.run();
       sessions.release(sessionId, releaseResources);
@@ -221,7 +233,7 @@ export const makeOpencodeBackendFactory = ({
             networkPolicy: 'off',
           }),
         );
-        resources.add(() => E(grant).revoke());
+        authorityResources.add(() => E(grant).revoke());
         const [attestation, evidence] = await Promise.all([
           E(grant).attestation(),
           E(grant).sandboxEvidence(),
@@ -266,11 +278,6 @@ export const makeOpencodeBackendFactory = ({
     let clientStopped = false;
     /** @type {Promise<void> | undefined} */
     let cleanupInFlight;
-    /** @param {number} pending */
-    const refuseUnsettled = pending => {
-      pending === 0 ||
-        Fail`OpenCode session has ${q(pending)} unsettled Endo tool call(s)`;
-    };
     const terminate = () => {
       if (terminated) return Promise.resolve();
       if (cleanupInFlight) return cleanupInFlight;
@@ -291,13 +298,19 @@ export const makeOpencodeBackendFactory = ({
           try {
             await E(client).terminate();
           } catch (error) {
-            // An unreachable worker: the formula cancellation below is the
-            // durable teardown, so a failed direct stop is no reason to keep
-            // the session alive.
-            console.error(
-              `[opencode-sandbox] direct stop of session ${sessionId} failed; relying on cancellation:`,
-              error instanceof Error ? error.message : String(error),
-            );
+            // Cancellation is not evidence that the worker reaped its
+            // processes. Keep this client owner for retry, while withdrawing
+            // independent authority without cancelling its formula.
+            try {
+              await authorityResources.run();
+            } catch (cleanupError) {
+              throw new AggregateError(
+                [error, cleanupError],
+                'OpenCode client stop and authority cleanup remain pending',
+                { cause: cleanupError },
+              );
+            }
+            throw error;
           }
           clientStopped = true;
         }
@@ -411,11 +424,8 @@ export const makeOpencodeBackendFactory = ({
     return sessions.inOrder(sessionId, async () => {
       // Never underneath a running client.
       await sessions.stop(sessionId);
-      try {
-        await removeSession(sessionId);
-      } finally {
-        await removeToolBridge(sessionId);
-      }
+      await removeSession(sessionId);
+      await removeToolBridge(sessionId);
     });
   };
 
