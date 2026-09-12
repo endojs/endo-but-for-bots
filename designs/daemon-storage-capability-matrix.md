@@ -45,7 +45,7 @@ reconciles the names with the existing `readable-blob` / `readable-tree`
 snapshot formulas (and with the in-flight `readable-directory` live-view formula
 on endojs/endo-but-for-bots#1125), and gives an implementable migration path.
 
-## The matrix
+## The Matrix
 
 Two axes. **Shape** across the top (leaf bytes vs. named collection); **mutation
 guarantee** down the side.
@@ -98,7 +98,7 @@ The guarantees, stated so a caller knows what it holds:
   migration step; the next subsection states it precisely. Today these views are
   **transient** exos, not persisted formulas. (One in-flight exception for
   collections, the `readable-directory` formula on endojs/endo-but-for-bots#1125,
-  is reconciled in § "Reconciliation with the existing names".)
+  is reconciled in § "Reconciliation with the Existing Names".)
 
 - **Snapshot.** Content captured at an instant and frozen. Content-addressed by
   SHA-256; byte-identical on every read for all time; freely dedupable; the
@@ -109,7 +109,7 @@ The guarantees, stated so a caller knows what it holds:
   `EndoReadableTree`, carrying `sha256`). These are the `readable-blob` /
   `readable-tree` formulas.
 
-### Why the read surface is shared but the guarantee is not
+### Why the Read Surface Is Shared but the Guarantee Is Not
 
 The two read-only rows deliberately share the **structural read interface**:
 `readableBlobMethodGuards` (`help` / `streamBase64` / `text` / `json`) for
@@ -157,7 +157,7 @@ therefore requires an explicit change, called out as a step in Phase 2 below;
 until it lands, the byte-column split is semantic (permanent identity vs.
 current-state fingerprint) rather than type-level.
 
-## Reconciliation with the existing names
+## Reconciliation with the Existing Names
 
 The good news: the **type layer already models the matrix correctly.**
 `@endo/platform/fs` (`packages/platform/src/fs/interfaces.js`) documents each
@@ -194,8 +194,20 @@ vocabulary:
   not a snapshot (it is content-address-free and delegates to mutable backing),
   so it belongs in the **Readable view** row of the Collection column, as the
   **persisted** counterpart of the transient `mount.readOnly()` view (exactly the
-  "persistable live read-only handle" this design's Open questions contemplates,
-  already being built for collections). Two consequences for this design:
+  "persistable live read-only handle" this design's Open Questions contemplates,
+  already being built for collections). One naming wrinkle worth surfacing, since
+  unifying this vocabulary is exactly what this design is for: the Readable-view /
+  Collection cell is now spelled **three** different ways across its tiers: the
+  shared read *interface* is `ReadableTree`, the *transient* `mount.readOnly()`
+  view is also tagged `ReadableTree`, but the *persisted* `readable-directory`
+  formula incarnates to `makeExo('ReadableNameHub', ...)` (a name inherited from
+  the pre-existing name-hub exo it wraps, not coined by #1125). This design does
+  **not** propose renaming `ReadableNameHub` (it is #1125's surface and out of
+  this rename's blast radius, which is confined to the two *snapshot* formulas),
+  but it records the divergence here so a reader who learns "Readable-view tree =
+  `ReadableTree`" is not surprised that the persisted view's exo tag reads
+  differently; aligning that tag is a candidate follow-up, tracked in Open
+  Questions. Two consequences for this design:
   - It does **not** collide with the `readable-* -> snapshot-*` rename: that
     rename touches only the two *snapshot* formulas (`readable-blob`,
     `readable-tree`); `readable-directory` is a distinct guarantee (live view, not
@@ -208,7 +220,7 @@ vocabulary:
     `readable-directory` name and shape against #1125's then-current head before
     editing `formula-type.js`.
 
-### Target naming
+### Target Naming
 
 - Snapshot (immutable, content-addressed) formulas: **`snapshot-blob`**,
   **`snapshot-tree`** (renamed from `readable-blob`, `readable-tree`).
@@ -228,12 +240,27 @@ the guarantee rows: `snapshot-*` for the immutable row, `file` / `directory` /
 `mount` for the mutable row, and `readable-*` (interface, transient view, and the
 `readable-directory` formula) for the live read-only row.
 
-Renaming frees the `readable-blob` / `readable-tree` names specifically, so if a
+Renaming stops *writing* the `readable-blob` / `readable-tree` names, so if a
 *persistable* read-only-but-live **blob** or **tree** handle is ever wanted (the
 bytes/collection analogs of #1125's `readable-directory`, a durable attenuation a
-holder can store and pass on, distinct from today's transient view), those names
-become available for it cleanly. That is a possible future formula, not part of
-this change (see Open questions).
+holder can store and pass on, distinct from today's transient view), the words
+themselves become semantically available for it. **But there is a hard
+constraint the reader must not miss:** reusing the literal `readable-blob` /
+`readable-tree` *strings* for a new live-view formula is **mutually exclusive**
+with the permanent read-time alias this design recommends in Phase 3 and Design
+decision 4. While that alias is live, any record written `type: 'readable-blob'`
+is rewritten to `snapshot-blob` before both incarnation and record-formation, so
+a new live-view formula that tried to claim the old string would be silently
+incarnated as a *snapshot* and collide in the maker table: the string is not
+actually free while the alias exists. The two are therefore genuinely
+alternatives, not both-costless recommendations: either (a) keep the permanent
+alias (recommended) and give any future live-view blob/tree formula a **new,
+distinct name** (e.g. `readable-blob-view` / `readable-tree-view`, or the
+`readable-directory`-style spelling extended to the other shapes), never the
+retired string; or (b) if the old strings must be *literally* reused, make
+retiring the alias (the one-time migration-pass branch of Phase 3, which stops
+rewriting old records) a hard precondition first. This design recommends (a).
+That future formula is not part of this change (see Open Questions).
 
 **A note on the shape-axis root names.** The three-tier family spells its root
 differently across the two columns: `File` -> `ReadableBlob` -> `SnapshotBlob`
@@ -249,14 +276,26 @@ for no guarantee-clarity gain. It is recorded here so a reader is not surprised
 that sibling `readOnly()` calls across the two shapes return types that are not
 spelled alike.
 
-## Migration path
+## Migration Path
 
 A formula's `type` string is persisted verbatim: `makeFormulaRecord`
 (`formula-record.js`) writes `type: formula.type` into the public
 `FormulaRecord`. Its own `switch (formula.type)` does **not** validate the type:
 its `default` case is an explicit, commented forward-compatibility fallthrough
 that renders an unknown type as an empty-properties record rather than rejecting
-it. The actual validation gate is `assertValidFormulaType` against the
+it. But the switch is **not** inert on the renamed types: it carries a
+`case 'readable-blob':` (`formula-record.js`) that copies `formula.content` into
+`properties.content` (the `ReadableBlobFormula.content` field surfaced on the
+public record, `types.d.ts`). This is a **third** `formula.type`-keyed dispatch
+site inside `makeFormulaRecord` itself, in addition to the two incarnation sites
+in `manager.js` below. If new records begin writing `type: 'snapshot-blob'` while
+this `case` still reads `'readable-blob'`, the case stops matching and the
+`content` property is silently dropped to the empty-record `default`, so Phase 1
+step 2 must alias `formula.type` *before* this switch (not only where the record's
+own `type` field is computed) and Phase 2 step 3 rekeys the case to
+`'snapshot-blob'` in lockstep. (There is no matching `readable-tree` case: the
+tree column carries no per-record `content` property, so this site is
+blob-specific.) The actual validation gate is `assertValidFormulaType` against the
 `formulaTypes` set in `formula-type.js`, which Phase 1 step 1 targets.
 Incarnation then switches on the persisted string in two places. First, the maker
 table `makers` (typed `FormulaMakerTable`, in `manager.js`), whose
@@ -296,10 +335,16 @@ across the rename: a holder's persisted reference keeps resolving.
    - before the `makers` lookup in `manager.js` (and the direct
      `formula.type ===` branches), so an old on-disk record incarnates as the new
      type; and
-   - where `makeFormulaRecord` computes `FormulaRecord.type`, so the public
-     record always surfaces the canonical `snapshot-*` name regardless of the
-     on-disk vintage, and every external consumer (the view registry, the CLI
-     listing) sees exactly one name.
+   - at the **top of `makeFormulaRecord`**, aliasing `formula.type` once before
+     it is used, so both the computed `FormulaRecord.type` field *and* the
+     function's internal `switch (formula.type)` (whose `case 'readable-blob':`
+     populates `properties.content`) see the canonical `snapshot-*` name. Aliasing
+     at this single entry point (rather than only where `FormulaRecord.type` is
+     assigned) is what keeps the `content` property from being dropped for old
+     on-disk `readable-blob` records once the case is rekeyed in Phase 2 step 3;
+     the public record then always surfaces the canonical `snapshot-*` name
+     regardless of on-disk vintage, and every external consumer (the view
+     registry, the CLI listing) sees exactly one name.
    Backward compatibility then rides on this one alias map plus the retained
    validation keys. The `makers` table needs only the new `snapshot-*` keys,
    because the alias rewrites an old on-disk string to the new type *before* the
@@ -315,16 +360,20 @@ across the rename: a holder's persisted reference keeps resolving.
    still presents a recognized `FormulaRecord.type`, through the alias.
 
 **Phase 2: write the new name.**
-3. Forming a new snapshot writes `type: 'snapshot-blob'` /
-   `'snapshot-tree'`. Old on-disk records keep their old string and are read
-   through the alias, so **no bulk rewrite is required**.
+3. Write new snapshots with `type: 'snapshot-blob'` / `'snapshot-tree'`, and
+   rekey the `makeFormulaRecord` `case 'readable-blob':` to `case
+   'snapshot-blob':` so the record's `content` property keeps being populated
+   under the canonical name (the Phase 1 step 2 entry-point alias already rewrites
+   an old on-disk `readable-blob` record to `snapshot-blob` before this switch, so
+   the rekeyed case still matches it). Old on-disk records keep their old string
+   and are read through the alias, so **no bulk rewrite is required**.
 4. Rename the daemon snapshot exo tag `EndoReadableTree` -> `EndoSnapshotTree`.
    This tag is the guard-tag string on the daemon-local `ReadableTreeInterface`
    exported from `packages/daemon/src/interfaces.js` (the snapshot-tree exo's
-   interface); it is **not** the same-named `ReadableTreeInterface` exported from
-   `@endo/platform/fs` (`packages/platform/src/fs/interfaces.js`, guard tag
-   `ReadableTree`), which names the shared read-surface type tier and is **not**
-   renamed here. Name the module path at each reference so an implementer does not
+   interface). That daemon-local interface is **not** the same-named
+   `ReadableTreeInterface` exported from `@endo/platform/fs`
+   (`packages/platform/src/fs/interfaces.js`, guard tag `ReadableTree`), which
+   names the shared read-surface type tier and is **not** renamed here. Name the module path at each reference so an implementer does not
    rename the platform tier by mistake. Give the blob snapshot the matching
    `EndoSnapshotBlob` tag. Give that
    `EndoSnapshotBlob` exo a `sha256()` method as well: its guarding `BlobInterface`
@@ -332,7 +381,7 @@ across the rename: a holder's persisted reference keeps resolving.
    only through `getInfo().hash`, so without this the byte column has no type-level
    snapshot witness. Adding it makes `sha256()` the uniform snapshot witness across
    both shape columns at the daemon exo layer, closing the gap named in § "Why the
-   read surface is shared but the guarantee is not", not just at the platform type
+   Read Surface Is Shared but the Guarantee Is Not", not just at the platform type
    tiers. This makes
    the two read-only forms distinguishable by exo tag: `mount.readOnly()` keeps
    returning `M.remotable('ReadableTree')` (a live view), while `snapshot()`
@@ -341,7 +390,7 @@ across the rename: a holder's persisted reference keeps resolving.
    capability" in lockstep (for example the `EndoRegistry.fetch` / `lookup`
    comments in `interfaces.js`, and `help.md`). Whether the exo-tag string is
    itself a compatibility surface an external consumer matches on is deferred to
-   Open questions; if so, this step stays behind the alias and keeps the old tag
+   Open Questions; if so, this step stays behind the alias and keeps the old tag
    reachable rather than renaming in place.
 5. Re-key the literal-string consumers of `FormulaRecord.type` to the canonical
    `snapshot-*` names. A repo-wide grep for the literal `'readable-blob'` /
@@ -389,6 +438,28 @@ checks (and exercise the record surface via
 `packages/daemon/test/formula-record.test.js`) rather than leaving it to the
 general convention; the alias has no value that a test does not pin.
 
+The four external literal-string consumers rekeyed in Phase 2 step 5 each need a
+pinning test too, because a missed or mistyped key silently mis-groups or
+mis-colors a snapshot in the UI with no failing test to catch it, and none is
+covered by the daemon round-trip above:
+
+- `packages/spaces-util` (or its nearest test package): assert
+  `formula-view-registry.js` resolves a `snapshot-blob` / `snapshot-tree` record
+  to the same view it resolved a `readable-blob` / `readable-tree` record to
+  before the rename.
+- `packages/cli`: assert `endo list` groups a `snapshot-tree` record under
+  "Directories" (the grouping set in `commands/list.js`).
+- `packages/space-chat`: assert `inventory/tree-source.js` classifies a
+  `snapshot-blob` / `snapshot-tree` record into the same inventory bucket as the
+  old names.
+- `packages/space-inventory-graph`: assert `graph.js` maps `snapshot-blob` to the
+  node color previously keyed on `readable-blob`.
+
+Where a package has no runtime test harness for these tables, at minimum keep the
+old keys alongside the new (the belt-and-suspenders noted in step 5) and add a
+type-level assertion that the `snapshot-*` members exist in the `types.d.ts`
+`type` union, so the compiler pins the rename.
+
 ## Dependencies
 
 | Design | Relationship |
@@ -398,7 +469,7 @@ general convention; the alias has no value that a test does not pin.
 | [daemon-mount.md](daemon-mount.md), [daemon-mount-capabilities.md](daemon-mount-capabilities.md) | Define `EndoMount` / `EndoMountFile`, `readOnly()`, and `snapshot()`: the live and snapshot producers this matrix names. |
 | [readableblob-range-attenuation.md](readableblob-range-attenuation.md) | The range-I/O attenuation of the readable-blob surface; consumer of the blob naming. |
 | [npm-registry-as-directory-tree.md](npm-registry-as-directory-tree.md) | Consumes `readable-tree` (SnapshotTree) fixtures; a downstream user of the renamed formula. |
-| endojs/endo-but-for-bots#1125 (the Source PR) | Ships the persisted `readable-directory` live-view formula (commit `4743e382b`); an ordering dependency for the migration plan, reconciled in § "Reconciliation with the existing names". |
+| endojs/endo-but-for-bots#1125 (the Source PR) | Ships the persisted `readable-directory` live-view formula (commit `4743e382b`); an ordering dependency for the migration plan, reconciled in § "Reconciliation with the Existing Names". |
 
 ## Design Decisions
 
@@ -433,15 +504,21 @@ general convention; the alias has no value that a test does not pin.
    content-keyed, an alias is free and permanent; a destructive rewrite of
    persisted records is neither necessary nor worth its risk.
 
-## Open questions
+## Open Questions
 
-- Should a **persistable live read-only handle** exist for *bytes*, reusing the
-  freed `readable-blob` name as a live-view formula, or does the transient
-  `file.readOnly()` view suffice? For collections this is no longer open: #1125's
+- Should a **persistable live read-only handle** exist for *bytes* (and for
+  collections beyond #1125's directory case), or does the transient
+  `file.readOnly()` view suffice? For directories this is no longer open: #1125's
   `readable-directory` formula *is* exactly such a persisted live read-only view.
-  The symmetry question is whether a persisted `readable-blob` live view should
-  follow. Recommendation: keep the blob view transient and add the persisted form
-  only when a concrete need appears, mirroring `readable-directory` if it does.
+  The symmetry question is whether a persisted live-read blob/tree view should
+  follow. Note the naming constraint from § "Target Naming": because this design
+  recommends a permanent read-time alias, such a formula must take a **new** name
+  (e.g. `readable-blob-view`, or the `readable-directory` spelling extended to the
+  other shapes), **not** the retired `readable-blob` / `readable-tree` strings,
+  which the alias keeps bound to the snapshot forms. Recommendation: keep the blob
+  view transient and add the persisted form only when a concrete need appears,
+  mirroring `readable-directory`'s *shape* (a live view wrapping a mutable cap)
+  under a fresh name if it does.
 - Permanent read-time **alias** vs. a one-time **migration pass** for old
   persisted records? Recommendation: permanent alias (identity is content-keyed,
   so there is no functional cost).
@@ -461,6 +538,24 @@ general convention; the alias has no value that a test does not pin.
   snapshot identity, or the collision returns under a new name. Recommendation:
   keep `sha256()` (stable identity) snapshot-only; name any current-state
   fingerprint separately.
+- The **mutable** Collection cell carries two capability spellings
+  (`EndoDirectory` and `EndoMount`, backing-store variants of the same
+  guarantee/shape). The **Readable-view** Collection cell's only *persisted*
+  formula, #1125's `readable-directory`, wraps just the `directory` capability. Is
+  a mount-backed *persisted* live-read-only-view formula (the read-only analog of
+  `EndoMount`) anticipated (and if so, what is it named), or is it deliberately
+  out of scope because a mount is host-filesystem-backed and the transient
+  `mount.readOnly()` view already suffices there? Recommendation: treat it as out
+  of scope for now (the transient view covers the mount case, and backing store is
+  the orthogonal third variable this matrix deliberately excludes; see § "The
+  Matrix", Mutable bullet), and add a persisted mount-view formula only under the
+  same "when a concrete need appears" bar as the blob/tree views above, again
+  under a fresh name.
+- Should the persisted directory view's exo tag `ReadableNameHub` be aligned with
+  the `ReadableTree` interface/transient-view spelling of the same cell (see
+  § "Reconciliation with the Existing Names"), or does it stay as inherited from
+  #1125? This is out of the current rename's scope but is the one remaining
+  spelling divergence in the Readable-view row.
 - Is `EndoSnapshotBlob` / `EndoSnapshotTree` the desired exo-tag spelling, or
   should the tags stay `EndoReadable*` for compatibility with any external
   consumer that matches on the tag string?
