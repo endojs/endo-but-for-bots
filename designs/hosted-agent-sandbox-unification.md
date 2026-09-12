@@ -61,6 +61,13 @@ process's historical failure, and a rejected process wait is never a reap proof.
 The process reap wait remains bounded after an accepted SIGKILL, and late arrivals use
 the same termination path.
 Scratch acquisition checks admission again after its provider returns.
+A host-only factory kit now fences factory admission, tracks pending slice construction
+and backend probes, and retains every returned driver context before publishing its handle.
+Close stops existing handles without waiting for unrelated pending construction, drains
+late acquisitions, and retains cleanup failures for the host owner to retry.
+Context cancellation uses this same close path; the public factory has no close authority.
+The native runtime must retain this kit and close it before shared storage is released;
+that storage-owner composition and crash reconciliation remain pending.
 Recovery from hung driver control calls and the complete session emergency-stop path
 remain pending.
 
