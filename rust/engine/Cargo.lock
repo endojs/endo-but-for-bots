@@ -204,6 +204,7 @@ name = "ironhorse-262"
 version = "0.0.1"
 dependencies = [
  "ironhorse-compile",
+ "ironhorse-runtime",
  "ironhorse-vm",
  "xs-oracle",
  "yaml-rust2",
@@ -242,6 +243,14 @@ dependencies = [
  "ironhorse-meter",
  "ironhorse-unicode",
  "xs-oracle",
+]
+
+[[package]]
+name = "ironhorse-runtime"
+version = "0.0.1"
+dependencies = [
+ "ironhorse-compile",
+ "ironhorse-vm",
 ]
 
 [[package]]
