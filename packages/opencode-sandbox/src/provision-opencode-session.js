@@ -255,6 +255,7 @@ export const provisionOpencodeSession = async (
     stateProviderName: specStateProviderName,
     formulaEnv = {},
     mcp = null,
+    brokerEnv = undefined,
   } = spec;
 
   const {
@@ -383,6 +384,18 @@ export const provisionOpencodeSession = async (
     );
 
     /** @type {Record<string, any>} */
+    if (brokerEnv !== undefined) {
+      const { OPENCODE_BROKER_BASE_URL, OPENCODE_BROKER_CONTAINER } = brokerEnv;
+      (typeof OPENCODE_BROKER_BASE_URL === 'string' &&
+        OPENCODE_BROKER_BASE_URL.length > 0 &&
+        OPENCODE_BROKER_BASE_URL.length <= 512 &&
+        typeof OPENCODE_BROKER_CONTAINER === 'string' &&
+        OPENCODE_BROKER_CONTAINER.length > 0 &&
+        OPENCODE_BROKER_CONTAINER.length <= 128) ||
+        Fail`Invalid broker transport for the OpenCode client`;
+    }
+
+    /** @type {Record<string, any>} */
     const options = {
       powersName,
       env: harden({
@@ -399,6 +412,12 @@ export const provisionOpencodeSession = async (
         MODEL: model,
         SYSTEM_PROMPT: systemPrompt,
         INITIAL_PROMPT: initialPrompt,
+        ...(brokerEnv === undefined
+          ? {}
+          : {
+              OPENCODE_BROKER_BASE_URL: brokerEnv.OPENCODE_BROKER_BASE_URL,
+              OPENCODE_BROKER_CONTAINER: brokerEnv.OPENCODE_BROKER_CONTAINER,
+            }),
         ...(opencodeSessionId
           ? { OPENCODE_SESSION_ID: opencodeSessionId }
           : {}),
