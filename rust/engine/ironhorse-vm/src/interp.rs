@@ -2151,10 +2151,24 @@ impl Interp {
     /// to the global object) observes it. Used by
     /// [`crate::compartment::Compartment::evaluate`] to bind the
     /// compartment's own globals before running.
-    pub fn define_global_id(&mut self, id: u16, value: Slot) {
+    pub fn define_global_id(&mut self, id: u16, value: Slot) -> bool {
         // Seeding a compartment global happens before the run, so it is
         // not metered (it is not a guest allocation the meter counts).
+        if self.find_property(self.realm.global_obj, id).is_some() {
+            return self.ordinary_define_own_property(
+                self.realm.global_obj,
+                id,
+                OrdinaryDescriptor {
+                    value: Some(value),
+                    ..Default::default()
+                },
+            );
+        }
+        if !self.instance_extensible(self.realm.global_obj) {
+            return false;
+        }
         self.create_global_property(id, (value.kind, value.value));
+        true
     }
 
     /// Arm metering (`fxBeginMetering`): install a check `interval` — a
@@ -2382,7 +2396,15 @@ impl Interp {
                     host_render_halt: None,
                 }
             }
-            Err(payload) => std::panic::resume_unwind(payload),
+            Err(payload) => {
+                // The Rust stack has unwound every native activation. Keep
+                // the failed crank and poison latches for inspection, but do
+                // not retain native recursion charges for frames that no
+                // longer exist. A later explicit run resets guest activation.
+                self.native_depth = 0;
+                self.last_crank_completed = false;
+                std::panic::resume_unwind(payload)
+            }
         }
     }
 

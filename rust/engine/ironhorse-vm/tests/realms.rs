@@ -74,6 +74,83 @@ fn named_endowments_bind_once_and_explicit_updates_rebind() {
 }
 
 #[test]
+fn endowment_rebinding_preserves_one_property_and_deletion() {
+    let machine = Machine::new();
+    let mut a = machine.new_compartment();
+    a.define_global("answer", Slot::integer(1));
+    assert_eq!(eval(&a, "answer"), "1");
+    a.define_global("answer", Slot::integer(2));
+    assert_eq!(eval(&a, "answer"), "2");
+    assert_eq!(
+        eval(
+            &a,
+            "Object.keys(globalThis).filter(k => k === 'answer').length"
+        ),
+        "1"
+    );
+    assert_eq!(
+        eval(&a, "delete globalThis.answer; typeof answer"),
+        "undefined"
+    );
+    a.define_global("answer", Slot::integer(3));
+    assert_eq!(eval(&a, "answer"), "3");
+}
+
+#[test]
+fn endowment_rebinding_respects_global_descriptors_and_integrity() {
+    for restriction in [
+        "Object.freeze(globalThis)",
+        "Object.defineProperty(globalThis, 'answer', {writable: false, configurable: false})",
+    ] {
+        let machine = Machine::new();
+        let mut a = machine.new_compartment();
+        a.define_global("answer", Slot::integer(1));
+        eval(&a, restriction);
+        a.define_global("answer", Slot::integer(2));
+        assert!(matches!(
+            evaluate(&a, "answer").halt,
+            Halt::Refused("compartment:global-definition-rejected")
+        ));
+        a.define_global("answer", Slot::integer(1));
+        assert_eq!(eval(&a, "answer"), "1");
+    }
+    let machine = Machine::new();
+    let mut a = machine.new_compartment();
+    eval(&a, "Object.preventExtensions(globalThis)");
+    a.define_global("missing", Slot::integer(1));
+    assert!(matches!(
+        evaluate(&a, "1").halt,
+        Halt::Refused("compartment:global-definition-rejected")
+    ));
+}
+
+#[test]
+fn caught_native_callback_panics_do_not_strand_siblings() {
+    for source in [
+        "[1,2,3].map(x => x + 1).join(',')",
+        "[1,2,3].forEach(x => { for (var i=0; i<10; i++) {} }); 1",
+        "Promise.resolve().then(() => [1,2,3].map(x => x + 1)); 1",
+    ] {
+        let machine = Machine::new();
+        let sibling = machine.new_compartment();
+        let a = machine.new_compartment();
+        let (code, symbols) = ironhorse_compile::compile_atoms(source).unwrap();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            a.evaluate_with_symbols_metered(
+                &code,
+                &symbols,
+                1,
+                Box::new(|_| panic!("host panic probe")),
+            )
+        }));
+        assert!(result.is_err(), "{source}");
+        drop(a);
+        assert_eq!(eval(&sibling, "42"), "42");
+        machine.collect().unwrap();
+    }
+}
+
+#[test]
 fn realm_permit_applies_at_creation_and_later_relinking() {
     let machine = Machine::new();
     let empty = machine.compartment(CompartmentOptions {
