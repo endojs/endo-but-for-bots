@@ -561,3 +561,124 @@ test('native hosted activity without result fences a later turn despite a provid
   );
   t.is(sends, 1);
 });
+
+test('interrupt closes hosted tool admission before backend acknowledgement and preserves admitted context', async t => {
+  t.timeout(5000);
+  const f = fixture();
+  const barrier = () => {
+    let resolve = () => {};
+    const promise = new Promise(done => {
+      resolve = () => done(undefined);
+    });
+    return harden({ promise, resolve });
+  };
+  const sent = barrier();
+  const effectStarted = barrier();
+  const finishEffect = barrier();
+  const interruptStarted = barrier();
+  const finishInterrupt = barrier();
+  const events = makeBufferedReader();
+  const controller = new AbortController();
+  let turn = Promise.resolve();
+  t.teardown(async () => {
+    controller.abort();
+    finishEffect.resolve();
+    finishInterrupt.resolve();
+    events.close();
+    await turn;
+  });
+  /** @type {{ execute(name: string, args: object): Promise<string> } | undefined} */
+  let tools;
+  let effects = 0;
+  let sends = 0;
+  const agent = await makeStreamingAgent(
+    f.powers,
+    undefined,
+    {
+      provideHostedClient: async snapshot => {
+        tools = snapshot;
+        return harden({
+          async send() {
+            sends += 1;
+            if (sends === 1) {
+              sent.resolve();
+              return events.reader;
+            }
+            await snapshot.execute('effect', harden({}));
+            const completedEvents = makeBufferedReader();
+            completedEvents.push({ type: 'text-delta', text: 'Done' });
+            completedEvents.push({ type: 'end' });
+            t.teardown(() => completedEvents.close());
+            return completedEvents.reader;
+          },
+          async interrupt() {
+            interruptStarted.resolve();
+            await finishInterrupt.promise;
+            events.close();
+          },
+        });
+      },
+    },
+    'Test',
+    {
+      extraTools: new Map([
+        [
+          'effect',
+          effectTool(async () => {
+            effects += 1;
+            effectStarted.resolve();
+            await finishEffect.promise;
+            return 'Effect completed';
+          }),
+        ],
+      ]),
+    },
+  );
+  if (!tools) throw Error('Hosted tool snapshot was not provisioned');
+  const hostedTools = tools;
+  await t.throwsAsync(() => hostedTools.execute('effect', harden({})), {
+    message: /outside an active Floot turn/,
+  });
+  turn = agent.converse(
+    'First turn',
+    makeReplyChannel().writer,
+    undefined,
+    controller.signal,
+  );
+  await sent.promise;
+  const admitted = hostedTools.execute('effect', harden({}));
+  await effectStarted.promise;
+  const firstTurnId = (await agent.getTurns())[0].turnId;
+
+  controller.abort();
+  // Assert before waiting for the backend interrupt callback as well as while
+  // its acknowledgement is withheld. Neither window permits another effect.
+  await t.throwsAsync(() => hostedTools.execute('effect', harden({})), {
+    message: /outside an active Floot turn/,
+  });
+  await interruptStarted.promise;
+  await t.throwsAsync(() => hostedTools.execute('effect', harden({})), {
+    message: /outside an active Floot turn/,
+  });
+  t.is(effects, 1);
+  t.is(f.events().filter(event => event.type === 'tool-intent').length, 1);
+  finishEffect.resolve();
+  t.is(await admitted, 'Effect completed');
+  const result = f.events().find(event => event.type === 'tool-result');
+  t.is(result.turnId, firstTurnId);
+  finishInterrupt.resolve();
+  await turn;
+  t.is((await agent.getTurns())[0].tools[0].result, 'Effect completed');
+  await t.throwsAsync(() => hostedTools.execute('effect', harden({})), {
+    message: /outside an active Floot turn/,
+  });
+
+  // The same runtime/tool capability can admit calls for a subsequent turn.
+  await agent.converse('Second turn', makeReplyChannel().writer);
+  t.is(sends, 2);
+  t.is(effects, 2);
+  const [first, second] = await agent.getTurns();
+  t.not(second.turnId, first.turnId);
+  t.is(first.tools.length, 1);
+  t.is(second.tools.length, 1);
+});

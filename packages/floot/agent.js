@@ -982,6 +982,8 @@ export const makeStreamingAgent = async (
   // Validate persisted evidence before installing a backend or starting inbox work.
   await turnJournal.list();
   let activeJournalTurn;
+  /** @type {AbortSignal | undefined} */
+  let activeJournalSignal;
   let completedJournalTurn;
   let activeJournalUsage;
   let activeJournalOutcomeUnknown = false;
@@ -1040,7 +1042,12 @@ export const makeStreamingAgent = async (
       ...snapshot,
       async execute(name, args) {
         const turnId = activeJournalTurn;
-        if (!turnId) throw Error('Endo tool call outside an active Floot turn');
+        // Interruption closes admission immediately, even while the backend
+        // and already-admitted operations are still unwinding. The captured
+        // turnId remains the context for any operation admitted before abort.
+        if (!turnId || activeJournalSignal?.aborted) {
+          throw Error('Endo tool call outside an active Floot turn');
+        }
         journalToolSequence += 1n;
         const callId = `floot-tool-${journalToolSequence}`;
         await turnJournal.append(turnId, {
@@ -1761,6 +1768,7 @@ export const makeStreamingAgent = async (
       ...(reasoningEffort ? { reasoningEffort } : {}),
     });
     activeJournalTurn = turnId;
+    activeJournalSignal = signal;
     activeJournalUsage = undefined;
     activeJournalOutcomeUnknown = false;
     journalToolSequence = 0n;
@@ -1820,6 +1828,7 @@ export const makeStreamingAgent = async (
       throw error;
     } finally {
       activeJournalTurn = undefined;
+      activeJournalSignal = undefined;
     }
   };
 

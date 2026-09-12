@@ -22,7 +22,12 @@ The shared bridge admits at most 32 simultaneous host tool executions, reusing t
 existing OpenCode envelope; completion releases capacity without a lifetime counter.
 Admission is synchronous and excludes control messages from the execution count.
 This bounds operation count, not aggregate bytes: connection, transport dispatch,
-and output queue bounds remain pending, as do shared active-turn admission and journal semantics.
+and output queue bounds remain pending, as does journal consolidation.
+
+Floot's shared hosted tool executor closes admission immediately when a turn is
+interrupted, including while backend cancellation is awaiting acknowledgement.
+Previously admitted operations retain their original turn ID for result recording.
+A subsequent turn reuses the same hosted tool capability with its own active context.
 
 Runtime unification across all three adapters, Claude credential migration, public
 network convergence, tool/journal consolidation, emergency stop UI, and the remaining
