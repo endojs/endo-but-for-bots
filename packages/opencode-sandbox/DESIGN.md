@@ -265,9 +265,9 @@ burdensome.
 
 ## Tool bridge
 
-Reuse the claude-sandbox **protocol core and stdio relay**
-(`packages/claude-sandbox/src/mcp-bridge.js`, `mcp-stdio-bridge.mjs`); do not
-reuse its config generator — that emits Claude's `mcpServers`/`type: 'stdio'`
+Use the shared **protocol core and stdio relay**
+(`packages/hosted-agent/src/mcp-bridge.js`, `mcp-stdio-bridge.js`); do not
+reuse the Claude config generator — that emits Claude's `mcpServers`/`type: 'stdio'`
 `mcp.json`, while opencode needs:
 
 ```json
@@ -522,7 +522,7 @@ New package `packages/opencode-sandbox/`.
 | `src/opencode-bridge.mjs` | In-slice: start `opencode serve`, parse listening line, subscribe SSE, nd-JSON commands/events, summary filtering, terminal derivation, turn bounds | new; baked into the image |
 | `src/opencode-protocol.js` | SSE + nd-JSON framing, event normalization, message registry | `codex-protocol.js` |
 | `src/opencode-hosted-events.js` | Translation to hosted vocabulary, ordering guarantees | `claude-hosted-events.js` |
-| `src/mcp-bridge.js`, `src/mcp-stdio-bridge.mjs`, `src/mcp-socket-server.js` | Reuse protocol core + relay; new opencode config generator | claude-sandbox |
+| `@endo/hosted-agent/mcp-bridge.js`, `@endo/hosted-agent/mcp-stdio-bridge.js`, `src/mcp-socket-server.js` | Shared protocol core + relay; opencode config generator | hosted-agent |
 | `src/managed-credentials*.js` | SecretBlob-backed cap; **ported from `f13c7cbd9`** | `f13c7cbd9:…/managed-credentials.js` |
 | `src/opencode-agent-config.js` | Host-side `OPENCODE_CONFIG_CONTENT` builder: hard-coded `provider.openrouter` block (baseURL, `models`, `whitelist`), agent `prompt`/`disable:false`/`mode`, MCP, permissions | new |
 | `src/parse-rootfs.js`, `src/current-specifier.js`, `src/container-mounts.js` (`assertContainerMounts`) | small shared helpers | claude/codex-sandbox |
