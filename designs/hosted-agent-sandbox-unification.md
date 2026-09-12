@@ -54,8 +54,15 @@ failed cleanup attempts until their stdio closes; process errors do not release 
 Its existing bounded close wait applies on each retry, and group signalling still refuses
 a process group whose leader Node already reaped.
 Unused pasta and seccomp-file cleanup placeholders are removed.
-Factory disposal and bounded recovery from a hung host process still need work before
-emergency-stop claims.
+Factory disposal now permanently fences admission, shares concurrent attempts, and
+retains failed handles for retry, including an owner-cancellation cleanup sweep.
+One disposal path owns driver teardown; successful current release does not rewrite a
+process's historical failure, and a rejected process wait is never a reap proof.
+The process reap wait remains bounded after an accepted SIGKILL, and late arrivals use
+the same termination path.
+Scratch acquisition checks admission again after its provider returns.
+Recovery from hung driver control calls and the complete session emergency-stop path
+remain pending.
 
 Generic public TCP egress, HTTP/CONNECT proxying, and constrained DNS now live in
 `@endo/hosted-agent`; Codex uses those shared services.
