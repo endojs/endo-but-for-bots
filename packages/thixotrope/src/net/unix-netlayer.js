@@ -1,11 +1,13 @@
 // @ts-check
-/** @import { NodePowers } from '../platform/node-powers.js' */
+/** @import { UserPowers } from '../platform/environment.js' */
+/** @import { PathPowers } from '../platform/paths.js' */
+/** @import { SocketConnection, SocketListener, SocketPowers } from '../platform/sockets.js' */
+/** @import { SyncFilePowers } from '../platform/sync-files.js' */
 import { Fail } from '@endo/errors';
 import harden from '@endo/harden';
 import { locationToLocationId } from '@endo/ocapn/client/util';
 import { writeOcapnHandshakeMessage } from '@endo/ocapn/operations';
 
-/** @import { Socket } from 'node:net' */
 /** @import { Connection, NetlayerHandlers, Logger, NetLayer, SelfIdentity } from '@endo/ocapn/client/types' */
 
 // Bound each physical fragment, not the already-admitted logical message.
@@ -17,27 +19,30 @@ const networkId = 'thix-unix';
  * Validate before importing a reference or recording session intent. The path
  * profile fits macOS and Linux sockaddr_un, including the terminal NUL byte.
  * Parent ownership protects durable-session bearer tokens from other users.
- * @param {NodePowers} powers
+ * @param {object} powers
+ * @param {SyncFilePowers} powers.syncFiles
+ * @param {PathPowers} powers.paths
+ * @param {UserPowers} powers.user
  * @param {any} location
  */
-export const assertUnixPeerLocation = (powers, location) => {
-  const { statSync } = powers.fs;
-  const { dirname, isAbsolute } = powers.path;
-  const { getuid } = powers.process;
+export const assertUnixPeerLocation = (
+  { syncFiles, paths, user },
+  location,
+) => {
   (location !== null &&
     typeof location === 'object' &&
     location.type === 'ocapn-peer' &&
     (location.network ?? location.transport) === networkId &&
     (location.transport === undefined || location.transport === networkId) &&
     typeof location.designator === 'string' &&
-    isAbsolute(location.designator) &&
+    paths.isAbsolute(location.designator) &&
     !location.designator.includes('\0') &&
     new TextEncoder().encode(location.designator).length <= 103) ||
     Fail`Invalid Unix peer location`;
-  const parent = statSync(dirname(location.designator));
-  (parent.isDirectory() &&
+  const parent = syncFiles.stat(paths.dirname(location.designator));
+  (parent.kind === 'directory' &&
     parent.mode % 0o100 === 0 &&
-    parent.uid === getuid?.()) ||
+    parent.uid === user.getUserId()) ||
     Fail`Unix socket directory must be private and owned by this user`;
   return harden({
     type: /** @type {const} */ ('ocapn-peer'),
@@ -59,30 +64,33 @@ harden(assertUnixPeerLocation);
  * never unlinks a preexisting path or asynchronously unlinks a successor.
  * After shutdown(), await closed before releasing directory ownership.
  *
- * @param {NodePowers} powers
+ * @param {object} powers
+ * @param {SocketPowers} powers.sockets
+ * @param {SyncFilePowers} powers.syncFiles
+ * @param {PathPowers} powers.paths
+ * @param {UserPowers} powers.user
  * @param {object} options
  * @param {string} options.socketPath
  * @param {NetlayerHandlers} options.handlers
  * @param {Logger} options.logger
  */
 export const makeUnixNetLayer = async (
-  powers,
+  { sockets, syncFiles, paths, user },
   { socketPath, handlers, logger },
 ) => {
-  const { chmod } = powers.fsPromises;
-  const { createConnection, createServer } = powers.net;
-  assertUnixPeerLocation(powers, {
-    type: 'ocapn-peer',
-    network: networkId,
-    designator: socketPath,
-  });
-  /** @type {Set<Socket>} */
-  const sockets = new Set();
-  let stopped = false;
-  const server = createServer();
-  const closed = new Promise(resolve =>
-    server.once('close', () => resolve(undefined)),
+  assertUnixPeerLocation(
+    { syncFiles, paths, user },
+    {
+      type: 'ocapn-peer',
+      network: networkId,
+      designator: socketPath,
+    },
   );
+  /** @type {Set<SocketConnection>} */
+  const connections = new Set();
+  let stopped = false;
+  /** @type {SocketListener} */
+  let listener;
   const location = harden({
     type: /** @type {const} */ ('ocapn-peer'),
     network: networkId,
@@ -92,14 +100,14 @@ export const makeUnixNetLayer = async (
   });
 
   /**
-   * @param {Socket} socket
+   * @param {SocketConnection} socket
    * @param {boolean} originator
    */
   const attach = (socket, originator) => {
-    sockets.add(socket);
+    connections.add(socket);
     const connection = handlers.makeConnection(netlayer, originator, {
       write(bytes) {
-        (!stopped && !socket.destroyed) || Fail`Unix connection is closed`;
+        (!stopped && !socket.isDestroyed()) || Fail`Unix connection is closed`;
         bytes.length > 0 || Fail`Invalid Unix frame length`;
         for (let offset = 0; offset < bytes.length; offset += maxFrameLength) {
           const payload = bytes.subarray(offset, offset + maxFrameLength);
@@ -125,14 +133,14 @@ export const makeUnixNetLayer = async (
     /** @type {Uint8Array[]} */
     let fragments = [];
     let messageLength = 0;
-    socket.on('data', data => {
+    socket.onData(data => {
       if (typeof data === 'string') {
         socket.destroy();
         return;
       }
       let offset = 0;
       try {
-        while (offset < data.length && !socket.destroyed) {
+        while (offset < data.length && !socket.isDestroyed()) {
           if (headerUsed < 4) {
             const count = Math.min(4 - headerUsed, data.length - offset);
             header.set(data.subarray(offset, offset + count), headerUsed);
@@ -182,38 +190,41 @@ export const makeUnixNetLayer = async (
         socket.destroy();
       }
     });
-    socket.on('error', error => {
+    socket.onError(error => {
       logger.error('Unix socket failed', error);
       socket.destroy();
     });
-    socket.on('close', () => {
-      sockets.delete(socket);
+    socket.onClose(() => {
+      connections.delete(socket);
       connection.end();
       handlers.handleConnectionClose(connection);
     });
     return connection;
   };
 
-  /** @type {NetLayer & { closed: Promise<undefined>, networkId: string, sendSessionHandshake: (connection: Connection, version: string, identity: SelfIdentity, codec: any) => void }} */
+  /** @type {NetLayer & { closed: Promise<void>, networkId: string, sendSessionHandshake: (connection: Connection, version: string, identity: SelfIdentity, codec: any) => void }} */
   const netlayer = harden({
     networkId,
-    closed,
+    get closed() {
+      return listener.closed;
+    },
     location,
     locationId: locationToLocationId(location),
     connect(remote) {
       !stopped || Fail`Unix netlayer is shut down`;
-      assertUnixPeerLocation(powers, remote);
+      assertUnixPeerLocation({ syncFiles, paths, user }, remote);
       // The durable layer owns logical session reuse. Sharing a physical
       // stream here would mix envelopes from distinct session tokens.
-      return attach(createConnection(remote.designator), true);
+      return attach(sockets.connectPath(remote.designator), true);
     },
     shutdown() {
       if (stopped) return;
       stopped = true;
-      // Node closes its listening handle (and unlinks its own socket) here.
-      // Never perform a later unlink in the asynchronous close callback.
-      server.close();
-      for (const socket of sockets) socket.destroy();
+      // The listener power closes its listening handle (and unlinks its own
+      // socket) here. Never perform a later unlink in the asynchronous close
+      // callback.
+      listener.close();
+      for (const socket of connections) socket.destroy();
     },
     sendSessionHandshake(connection, captpVersion, identity, codec) {
       const { keyPair, location: peerLocation, locationSignature } = identity;
@@ -231,25 +242,15 @@ export const makeUnixNetLayer = async (
       );
     },
   });
-  server.on('connection', socket => {
-    if (stopped) socket.destroy();
-    else attach(socket, false);
+  listener = await sockets.listenPath({
+    path: socketPath,
+    mode: 0o600,
+    onConnection: connection => {
+      if (stopped) connection.destroy();
+      else attach(connection, false);
+    },
+    onError: error => logger.error('Unix listener failed', error),
   });
-  await new Promise((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(socketPath, () => {
-      server.removeListener('error', reject);
-      resolve(undefined);
-    });
-  });
-  server.on('error', error => logger.error('Unix listener failed', error));
-  try {
-    await chmod(socketPath, 0o600);
-  } catch (error) {
-    netlayer.shutdown();
-    await closed;
-    throw error;
-  }
   return netlayer;
 };
 harden(makeUnixNetLayer);

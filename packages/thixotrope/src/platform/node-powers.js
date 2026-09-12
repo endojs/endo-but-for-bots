@@ -4,113 +4,118 @@ import harden from '@endo/harden';
 import * as childProcess from 'node:child_process';
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
-import * as fsPromises from 'node:fs/promises';
+import * as fsp from 'node:fs/promises';
 import * as http from 'node:http';
 import * as net from 'node:net';
 import * as path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import process from 'node:process';
 import * as readline from 'node:readline';
-import * as timers from 'node:timers';
+import * as nodeTimers from 'node:timers';
 import * as url from 'node:url';
 import * as util from 'node:util';
 
-/**
- * Wrap host functions so hardening the capability record never traverses Node's
- * mutable prototypes or constructor properties.
- * @template {(...args: any[]) => any} F
- * @param {F} fn
- * @returns {F}
- */
-const wrap = fn =>
-  /** @type {F} */ ((...args) => Reflect.apply(fn, undefined, args));
+import { makeBundlerPowers } from './bundler.js';
+import { makeDisplayPowers } from './display.js';
+import { makeEnvironmentPowers, makeUserPowers } from './environment.js';
+import { makeFilePowers } from './files.js';
+import { makeHashPowers } from './hashes.js';
+import { makeHttpListenerPowers } from './http-listeners.js';
+import { makeLogPowers } from './logging.js';
+import { makePathPowers } from './paths.js';
+import { makeProcessPowers } from './processes.js';
+import { makeRandomPowers } from './random.js';
+import { makeSocketPowers } from './sockets.js';
+import { makeSyncFilePowers } from './sync-files.js';
+import { makeTerminalPowers } from './terminal.js';
+import { makeTimerPowers } from './timers.js';
+
+/** @typedef {import('./timers.js').TimerHandle} TimerHandle */
 
 /**
  * Construct the Node host's platform authority at its composition boundary.
- * Core factories receive this record explicitly; importing core grants no I/O.
- * Accessors expose mutable streams without recursively freezing Node internals.
+ * Every member is a minimal capability object with plain return values, and
+ * core factories receive only the members they name; the record itself is a
+ * convenience for entry points, never a parameter to core.
  */
-export const makeNodePowers = () =>
-  harden({
-    childProcess: { spawn: wrap(childProcess.spawn) },
-    crypto: {
-      createHash: wrap(crypto.createHash),
-      randomBytes: wrap(crypto.randomBytes),
-      randomFillSync: wrap(crypto.randomFillSync),
-    },
-    fs: {
-      appendFileSync: wrap(fs.appendFileSync),
-      closeSync: wrap(fs.closeSync),
-      existsSync: wrap(fs.existsSync),
-      fsyncSync: wrap(fs.fsyncSync),
-      mkdirSync: wrap(fs.mkdirSync),
-      openSync: wrap(fs.openSync),
-      readdirSync: wrap(fs.readdirSync),
-      readFileSync: wrap(fs.readFileSync),
-      renameSync: wrap(fs.renameSync),
-      rmSync: wrap(fs.rmSync),
-      writeFileSync: wrap(fs.writeFileSync),
-      statSync: wrap(fs.statSync),
-      createReadStream: wrap(fs.createReadStream),
-    },
-    fsPromises: {
-      chmod: wrap(fsPromises.chmod),
-      mkdtemp: wrap(fsPromises.mkdtemp),
-      realpath: wrap(fsPromises.realpath),
-      lstat: wrap(fsPromises.lstat),
-      mkdir: wrap(fsPromises.mkdir),
-      open: wrap(fsPromises.open),
-      readFile: wrap(fsPromises.readFile),
-      readdir: wrap(fsPromises.readdir),
-      rename: wrap(fsPromises.rename),
-      rm: wrap(fsPromises.rm),
-      copyFile: wrap(fsPromises.copyFile),
-    },
-    http: { createServer: wrap(http.createServer) },
-    net: {
-      createServer: wrap(net.createServer),
-      createConnection: wrap(net.createConnection),
-    },
-    path: {
-      join: wrap(path.join),
-      resolve: wrap(path.resolve),
-      dirname: wrap(path.dirname),
-      isAbsolute: wrap(path.isAbsolute),
-    },
-    readline: { createInterface: wrap(readline.createInterface) },
-    timers: {
-      setTimeout: wrap(timers.setTimeout),
-      clearTimeout: wrap(timers.clearTimeout),
-      setImmediate: wrap(timers.setImmediate),
-    },
-    url: {
-      fileURLToPath: wrap(url.fileURLToPath),
-      pathToFileURL: wrap(url.pathToFileURL),
-    },
-    util: { inspect: wrap(util.inspect) },
-    performance: { now: () => performance.now() },
+export const makeNodePowers = () => {
+  const timerPowers = makeTimerPowers({
     now: () => Date.now(),
-    randomBytes: (/** @type {number} */ length) =>
-      new Uint8Array(crypto.randomBytes(length)),
-    console: {
-      log: (...args) => console.log(...args),
-      error: (...args) => console.error(...args),
-    },
-    process: {
-      getuid: process.getuid?.bind(process),
-      get env() {
-        return process.env;
-      },
-      get stdin() {
-        return process.stdin;
-      },
-      get stdout() {
-        return process.stdout;
-      },
-      once: process.once.bind(process),
-      removeListener: process.removeListener.bind(process),
-    },
-    readPowers: makeReadPowers({ fs, path, url, crypto }),
+    monotonicNow: () => performance.now(),
+    setTimer: (callback, delayMs) => nodeTimers.setTimeout(callback, delayMs),
+    clearTimer: handle =>
+      nodeTimers.clearTimeout(/** @type {NodeJS.Timeout} */ (handle)),
+    unrefTimer: handle => /** @type {NodeJS.Timeout} */ (handle).unref?.(),
   });
+  const random = makeRandomPowers({
+    randomBytes: length => new Uint8Array(crypto.randomBytes(length)),
+  });
+  const logging = makeLogPowers({
+    log: (...args) => console.log(...args),
+    error: (...args) => console.error(...args),
+  });
+  const paths = makePathPowers({
+    join: (...parts) => path.join(...parts),
+    dirname: p => path.dirname(p),
+    resolve: (...parts) => path.resolve(...parts),
+    isAbsolute: p => path.isAbsolute(p),
+    fileURLToPath: u => url.fileURLToPath(u),
+    pathToFileURL: p => url.pathToFileURL(p),
+  });
+  const files = makeFilePowers({
+    fsp,
+    createReadStream: p => fs.createReadStream(p),
+    dirname: p => path.dirname(p),
+  });
+  const syncFiles = makeSyncFilePowers({
+    fs,
+    dirname: p => path.dirname(p),
+  });
+  const processes = makeProcessPowers({ childProcess, readline });
+  const sockets = makeSocketPowers({
+    net,
+    chmod: (p, mode) => fsp.chmod(p, mode),
+  });
+  const httpListeners = makeHttpListenerPowers({
+    http,
+    setTimeout: (callback, delayMs) => nodeTimers.setTimeout(callback, delayMs),
+    clearTimeout: handle =>
+      nodeTimers.clearTimeout(/** @type {NodeJS.Timeout} */ (handle)),
+  });
+  const terminal = makeTerminalPowers({ readline, process });
+  const hashes = makeHashPowers({ files });
+  const environment = makeEnvironmentPowers({
+    get: name => process.env[name],
+  });
+  const user = makeUserPowers({ getUserId: () => process.getuid?.() });
+  const display = makeDisplayPowers({
+    describe: value =>
+      util.inspect(value, { customInspect: false, getters: false, depth: 3 }),
+  });
+  const bundler = makeBundlerPowers({
+    readPowers: makeReadPowers({ fs, path, url, crypto }),
+    pathToFileURL: p => url.pathToFileURL(p),
+    resolve: (...parts) => path.resolve(...parts),
+    sha256Hex: hashes.sha256Hex,
+  });
+  return harden({
+    timers: timerPowers,
+    random,
+    logging,
+    paths,
+    files,
+    syncFiles,
+    processes,
+    sockets,
+    httpListeners,
+    terminal,
+    hashes,
+    environment,
+    user,
+    display,
+    bundler,
+  });
+};
 harden(makeNodePowers);
+
 /** @typedef {ReturnType<typeof makeNodePowers>} NodePowers */

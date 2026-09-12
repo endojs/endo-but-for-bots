@@ -27,7 +27,7 @@ const registrations = new Map();
 const swallow = () => {};
 function connect(socket) {
   const weak = new HostWeakRef(socket);
-  const lifetime = makeInventoryViewLifetime(nodePowers, inventory, 0);
+  const lifetime = makeInventoryViewLifetime(nodePowers.timers, inventory, 0);
   const observer = Far('Observer', { changed: () => socket.name });
   void lifetime.watch(observer).catch(swallow);
   const disconnect = () => {

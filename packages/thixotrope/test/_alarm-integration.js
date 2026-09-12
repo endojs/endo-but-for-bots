@@ -61,7 +61,7 @@ export const registerAlarmIntegration = (test, kind) => {
         'false',
       );
       const { bundle } = await bundleApplication(
-        nodePowers,
+        nodePowers.bundler,
         fileURLToPath(new URL('../examples/reminder.js', import.meta.url)),
       );
       await host.client.call('install', 'reminders', bundle, [

@@ -1,5 +1,6 @@
 // @ts-check
 /** @import { NodePowers } from '../platform/node-powers.js' */
+/** @import { FilePowers } from '../platform/files.js' */
 import { E, Far } from '@endo/far';
 import harden from '@endo/harden';
 import { syrupCodec } from '@endo/ocapn/syrup';
@@ -21,82 +22,77 @@ import { makeFsStore } from '../store/store-fs.js';
 import { assertUnixPeerLocation, makeUnixNetLayer } from '../net/unix-netlayer.js';
 
 /** @import { WorkerEngine } from '../core/worker-engine.js' */
-/** @import { Socket } from 'node:net' */
+/** @import { SocketConnection } from '../platform/sockets.js' */
 
 /**
- * @param {NodePowers} powers
+ * @param {FilePowers} files
  * @param {string} path
  * @param {unknown} value
  */
-const save = async (powers, path, value) => {
-  const { open, rename } = powers.fsPromises;
-  const { resolve } = powers.path;
-  const file = await open(`${path}.tmp`, 'w', 0o600);
-  try {
-    await file.writeFile(`${JSON.stringify(value)}\n`);
-    await file.sync();
-  } finally {
-    await file.close();
-  }
-  await rename(`${path}.tmp`, path);
-  const directory = await open(resolve(path, '..'), 'r');
-  try {
-    await directory.sync();
-  } finally {
-    await directory.close();
-  }
+const save = async (files, path, value) => {
+  await files.writeTextAtomic(path, `${JSON.stringify(value)}\n`);
 };
 
 /**
  * Run a single local supervisor. The engine lease encloses socket lifetime.
- * @param {NodePowers} powers
+ * @param {NodePowers} platform
  * @param {string} statePath
  * @param {{engine?: WorkerEngine, idleSleepMs?: number, alarmNow?: () => bigint}} [options]
  */
 export const serveThixotrope = async (
-  powers,
+  platform,
   statePath,
   { engine, idleSleepMs = 30_000, alarmNow } = {},
 ) => {
-  const { chmod, lstat, mkdir, readFile, rm } = powers.fsPromises;
-  const { join, resolve } = powers.path;
-  const { createServer } = powers.net;
-  const { createHash } = powers.crypto;
-  const { process, performance, console } = powers;
-  const { inspect } = powers.util;
-  const { fileURLToPath } = powers.url;
-  const { setTimeout, clearTimeout, setImmediate } = powers.timers;
-  statePath = resolve(statePath);
-  await mkdir(statePath, { recursive: true, mode: 0o700 });
-  const stat = await lstat(statePath);
+  const {
+    timers,
+    random,
+    logging,
+    paths,
+    files,
+    syncFiles,
+    processes,
+    sockets,
+    httpListeners,
+    hashes,
+    environment,
+    user,
+    display,
+  } = platform;
+  statePath = paths.resolve(statePath);
+  await files.makeDirectory(statePath, { mode: 0o700 });
+  const stat = await files.stat(statePath);
   if (
-    !stat.isDirectory() ||
+    stat.kind !== 'directory' ||
     // Unix permission bits.
     // eslint-disable-next-line no-bitwise
     (stat.mode & 0o077) !== 0 ||
-    stat.uid !== process.getuid?.()
+    stat.uid !== user.getUserId()
   ) {
     throw Error(
       'The state directory must be a private directory owned by this user (mode 0700).',
     );
   }
-  const socketPath = join(statePath, 'control.sock');
-  const peerPath = join(statePath, 'peers.sock');
-  const packagePath = fileURLToPath(new URL('../', import.meta.url));
+  const socketPath = paths.join(statePath, 'control.sock');
+  const peerPath = paths.join(statePath, 'peers.sock');
+  const packagePath = paths.fileURLToPath(new URL('../../', import.meta.url));
   const rawEngine =
     engine ??
-    makeIronhorseEngine(powers, {
-      workerBinary:
-        process.env.THIXOTROPE_IRONHORSE_WORKER ??
-        resolve(
-          packagePath,
-          '../../target/release/thixotrope-ironhorse-worker',
+    makeIronhorseEngine(
+      { processes, files, paths, timers, hashes },
+      {
+        workerBinary:
+          environment.get('THIXOTROPE_IRONHORSE_WORKER') ??
+          paths.resolve(
+            packagePath,
+            '../../target/release/thixotrope-ironhorse-worker',
+          ),
+        bootPaths: ['boot.js', 'worker-peer.js'].map(name =>
+          paths.join(packagePath, 'dist-ironhorse', name),
         ),
-      bootPaths: ['boot.js', 'worker-peer.js'].map(name =>
-        join(packagePath, 'dist-ironhorse', name),
-      ),
-      storePath: join(statePath, 'heaps'),
-    });
+        storePath: paths.join(statePath, 'heaps'),
+      },
+    );
   if (!rawEngine.acquireStore)
     throw Error('Supervisor requires exclusive store ownership support');
   const metrics = {
@@ -110,12 +106,12 @@ export const serveThixotrope = async (
    * @param {() => Promise<T>} operation
    */
   const timed = async (name, operation) => {
-    const start = performance.now();
+    const start = timers.monotonicNow();
     try {
       return await operation();
     } finally {
       metrics[name].count += 1n;
-      metrics[name].milliseconds += performance.now() - start;
+      metrics[name].milliseconds += timers.monotonicNow() - start;
     }
   };
   const measured = harden({
@@ -129,12 +125,13 @@ export const serveThixotrope = async (
       });
     },
   });
-  const sockets = new Set();
+  const controlConnections = new Set();
   /** @type {Set<Promise<void>>} */
   const pendingDisconnects = new Set();
-  /** @type {Map<Socket, () => Promise<void>>} */
+  /** @type {Map<SocketConnection, () => Promise<void>>} */
   const disconnectViews = new Map();
-  const server = createServer();
+  /** @type {import('../platform/sockets.js').SocketListener | undefined} */
+  let controlListener;
   let listening = false;
   let requested = false;
   let requestStop;
@@ -145,25 +142,34 @@ export const serveThixotrope = async (
   /** @type {ReturnType<typeof makeHttpServices> | undefined} */
   let httpServices;
   const provideHttpServices = () => {
-    httpServices ??= makeHttpServices(powers, {
-      storage: makeFileSyncStringAtom(
-        powers,
-        join(statePath, 'http-services.json'),
-      ),
-      publish: (handler, secret) => daemon.publish(handler, secret),
-      unpublish: secret => daemon.unpublish(secret),
-      openClient: () => daemon.openEphemeralClient(),
-    });
+    httpServices ??= makeHttpServices(
+      { httpListeners, random },
+      {
+        storage: makeFileSyncStringAtom(
+          syncFiles,
+          paths.join(statePath, 'http-services.json'),
+        ),
+        publish: (handler, secret) => daemon.publish(handler, secret),
+        unpublish: secret => daemon.unpublish(secret),
+        openClient: () => daemon.openEphemeralClient(),
+      },
+    );
     return httpServices;
   };
   /** @type {ReturnType<typeof makeClockService> | undefined} */
   let clockService;
   const provideClockService = () => {
-    clockService ??= makeClockService(powers, {
-      storage: makeFileSyncStringAtom(powers, join(statePath, 'clock.json')),
-      getDaemon: () => daemon,
-      ...(alarmNow === undefined ? {} : { now: alarmNow }),
-    });
+    clockService ??= makeClockService(
+      { timers, random },
+      {
+        storage: makeFileSyncStringAtom(
+          syncFiles,
+          paths.join(statePath, 'clock.json'),
+        ),
+        getDaemon: () => daemon,
+        ...(alarmNow === undefined ? {} : { now: alarmNow }),
+      },
+    );
     return clockService;
   };
   /** @type {Awaited<ReturnType<typeof makeUnixNetLayer>> | undefined} */
@@ -173,24 +179,23 @@ export const serveThixotrope = async (
     await peerNetlayer?.closed;
   };
   const closeSocket = () => {
-    for (const socket of sockets) socket.destroy();
+    for (const connection of controlConnections) connection.destroy();
   };
   const closeControl = async () => {
-    if (!listening) return;
+    if (!listening || !controlListener) return;
     listening = false;
-    const closed = new Promise(resolveClose =>
-      server.close(() => resolveClose(undefined)),
-    );
+    const { closed } = controlListener;
+    controlListener.close();
     const viewCleanup = Promise.allSettled(
       [...disconnectViews.values()].map(disconnect => disconnect()),
     );
     // Flush the stop acknowledgement, then bound the wait for clients to close.
-    for (const socket of sockets) socket.end();
-    const timer = setTimeout(closeSocket, 1000);
+    for (const connection of controlConnections) connection.end();
+    const timer = timers.setTimer(closeSocket, 1000);
     try {
       await closed;
     } finally {
-      clearTimeout(timer);
+      timers.clearTimer(timer);
     }
     // A failed guest may never settle subscription setup or cancellation.
     // Continue to daemon shutdown after a grace period; startup discards any
@@ -200,50 +205,62 @@ export const serveThixotrope = async (
       await Promise.race([
         Promise.all([viewCleanup, ...pendingDisconnects]),
         new Promise(resolveCleanup => {
-          cleanupTimer = setTimeout(resolveCleanup, 1000);
+          cleanupTimer = timers.setTimer(
+            () => resolveCleanup(undefined),
+            1000,
+          );
         }),
       ]);
     } finally {
-      clearTimeout(cleanupTimer);
+      if (cleanupTimer !== undefined) timers.clearTimer(cleanupTimer);
     }
-    await rm(socketPath, { force: true });
+    await files.remove(socketPath, { force: true });
   };
 
   try {
-    daemon = await makeThixotropeDaemon(powers, {
-      store: makeFsStore(powers, statePath),
-      engine: measured,
-      codec: syrupCodec,
-      idleSleepMs,
-      resources: {
-        'alarm-scheduler': description =>
-          provideClockService().resource(description),
-        'http-listener': description =>
-          provideHttpServices().resource(description),
+    daemon = await makeThixotropeDaemon(
+      { timers, random, logging },
+      {
+        store: makeFsStore({ syncFiles, paths }, statePath),
+        engine: measured,
+        codec: syrupCodec,
+        idleSleepMs,
+        resources: {
+          'alarm-scheduler': description =>
+            provideClockService().resource(description),
+          'http-listener': description =>
+            provideHttpServices().resource(description),
+        },
+        makeNetlayer: async ({ handlers, logger, resumption }) => {
+          // makeThixotropeDaemon already holds the exclusive engine lease.
+          await files.remove(peerPath, { force: true });
+          return makeDurableNetLayer(
+            { timers, random },
+            {
+              handlers,
+              logger,
+              resumption,
+              makeBaseNetlayer: async networkPowers => {
+                peerNetlayer = await makeUnixNetLayer(
+                  { sockets, syncFiles, paths, user },
+                  {
+                    ...networkPowers,
+                    socketPath: peerPath,
+                  },
+                );
+                return peerNetlayer;
+              },
+            },
+          );
+        },
       },
-      makeNetlayer: async ({ handlers, logger, resumption }) => {
-        // makeThixotropeDaemon already holds the exclusive engine lease.
-        await rm(peerPath, { force: true });
-        return makeDurableNetLayer(powers, {
-          handlers,
-          logger,
-          resumption,
-          makeBaseNetlayer: async networkPowers => {
-            peerNetlayer = await makeUnixNetLayer(powers, {
-              ...networkPowers,
-              socketPath: peerPath,
-            });
-            return peerNetlayer;
-          },
-        });
-      },
-    });
+    );
     await provideHttpServices().start();
     await provideClockService().start();
-    const configPath = join(statePath, 'workspace.json');
+    const configPath = paths.join(statePath, 'workspace.json');
     let config;
     try {
-      config = JSON.parse(await readFile(configPath, 'utf8'));
+      config = JSON.parse(await files.readText(configPath));
     } catch (error) {
       if (/** @type {NodeJS.ErrnoException} */ (error).code !== 'ENOENT')
         throw error;
@@ -266,7 +283,7 @@ export const serveThixotrope = async (
         publication: `workspace-${workerId}`,
         initialized: false,
       };
-      await save(powers, configPath, config);
+      await save(files, configPath, config);
     }
     if (
       config?.version !== 1 ||
@@ -286,7 +303,7 @@ export const serveThixotrope = async (
       daemon.publish(root, config.publication);
       await workspace.sleep();
       config.initialized = true;
-      await save(powers, configPath, config);
+      await save(files, configPath, config);
     }
     let inventory;
     let applications;
@@ -304,7 +321,7 @@ export const serveThixotrope = async (
       );
     }
     // Only the lock owner may reclaim the socket left by a dead supervisor.
-    await rm(socketPath, { force: true });
+    await files.remove(socketPath, { force: true });
     // The workspace owns the durable root. Reuse its presence during this host
     // lifetime instead of journaling another evaluator call for every command.
     /** @type {Promise<any> | undefined} */
@@ -350,7 +367,7 @@ export const serveThixotrope = async (
         throw Error('Invalid invitation');
       return {
         ...invitation,
-        location: assertUnixPeerLocation(powers, invitation.location),
+        location: assertUnixPeerLocation({ syncFiles, paths, user }, invitation.location),
       };
     };
     const adminMethods = {
@@ -360,11 +377,7 @@ export const serveThixotrope = async (
         if (typeof source !== 'string')
           throw Error('Expected JavaScript source');
         const value = await workspace.evaluate(source);
-        return inspect(value, {
-          customInspect: false,
-          getters: false,
-          depth: 3,
-        });
+        return display.describe(value);
       },
       status: () =>
         harden({
@@ -381,7 +394,7 @@ export const serveThixotrope = async (
           ),
         }),
       stop: () => {
-        setImmediate(requestStop);
+        timers.setTimer(requestStop, 0);
         return 'Stopping supervisor';
       },
       install: async (name, bundle, grants) => {
@@ -397,7 +410,7 @@ export const serveThixotrope = async (
           throw Error(
             'Installation payload exceeds the current 16 KiB profile',
           );
-        const digest = createHash('sha256').update(bundle).digest('hex');
+        const digest = hashes.sha256Hex(new TextEncoder().encode(bundle));
         await E(applications).install(name, bundle, digest, grants);
         return (await E(applications).list()).find(
           entry => entry.name === name,
@@ -505,48 +518,52 @@ export const serveThixotrope = async (
       },
       discardOffer: id => E(getMailbox()).discard(id),
     };
-    server.on('connection', socket => {
-      if (requested) {
-        socket.destroy();
-        return;
-      }
-      sockets.add(socket);
-      const view = makeInventoryViewLifetime(powers, inventory);
-      const disconnect = () => {
-        disconnectViews.delete(socket);
-        return view.disconnect();
-      };
-      disconnectViews.set(socket, disconnect);
-      socket.once('close', () => {
-        sockets.delete(socket);
-        const cleanup = disconnect().catch(error => {
-          // A quarantined vat cannot run cancellation; its ephemeral listeners
-          // will be discarded if it is ever recovered in a new supervisor.
-          if (!requested) console.error('Inventory disconnect:', error.message);
+    controlListener = await sockets.listenPath({
+      path: socketPath,
+      mode: 0o600,
+      onConnection: connection => {
+        if (requested) {
+          connection.destroy();
+          return;
+        }
+        controlConnections.add(connection);
+        const view = makeInventoryViewLifetime(timers, inventory);
+        const disconnect = () => {
+          disconnectViews.delete(connection);
+          return view.disconnect();
+        };
+        disconnectViews.set(connection, disconnect);
+        connection.onClose(() => {
+          controlConnections.delete(connection);
+          const cleanup = disconnect().catch(error => {
+            // A quarantined vat cannot run cancellation; its ephemeral
+            // listeners will be discarded if it is ever recovered in a new
+            // supervisor.
+            if (!requested)
+              logging.error('Inventory disconnect:', error.message);
+          });
+          pendingDisconnects.add(cleanup);
+          void cleanup.finally(() => pendingDisconnects.delete(cleanup));
         });
-        pendingDisconnects.add(cleanup);
-        void cleanup.finally(() => pendingDisconnects.delete(cleanup));
-      });
-      const admin = Far('ThixotropeLocalAdmin', {
-        ...adminMethods,
-        watchInventory: listener => {
-          if (requested) throw Error('Connection is closing');
-          return view.watch(listener);
-        },
-      });
-      void makeLocalControl(powers, socket, 'worker', admin).catch(() =>
-        socket.destroy(),
-      );
-    });
-    await new Promise((resolveListen, reject) => {
-      server.once('error', reject);
-      server.listen(socketPath, () => {
-        server.removeListener('error', reject);
-        resolveListen(undefined);
-      });
+        const admin = Far('ThixotropeLocalAdmin', {
+          ...adminMethods,
+          watchInventory: listener => {
+            if (requested) throw Error('Connection is closing');
+            return view.watch(listener);
+          },
+        });
+        void makeLocalControl(
+          { sockets, random },
+          connection,
+          'worker',
+          admin,
+        ).catch(() => connection.destroy());
+      },
+      onError: error => {
+        logging.error('Control listener failed:', error);
+      },
     });
     listening = true;
-    await chmod(socketPath, 0o600);
     let closing;
     const close = () => {
       closing ??= (async () => {

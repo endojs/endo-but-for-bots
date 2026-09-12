@@ -1,5 +1,6 @@
 // @ts-check
-/** @import { NodePowers } from '../platform/node-powers.js' */
+/** @import { RandomPowers } from '../platform/random.js' */
+/** @import { TimerHandle, TimerPowers } from '../platform/timers.js' */
 import { Fail } from '@endo/errors';
 import harden from '@endo/harden';
 
@@ -56,7 +57,7 @@ import harden from '@endo/harden';
  * @property {bigint} hubDelivery
  * @property {Frame[]} outbox
  * @property {Frame[]} inbox
- * @property {ReturnType<NodePowers['timers']['setTimeout']> | undefined} timer
+ * @property {TimerHandle | undefined} timer
  * @property {number} delay
  */
 
@@ -81,7 +82,9 @@ const encode = (header, payload = new Uint8Array()) => {
   return bytes;
 };
 /**
- * @param {Pick<NodePowers, 'randomBytes' | 'timers'>} powers
+ * @param {object} powers
+ * @param {TimerPowers} powers.timers
+ * @param {RandomPowers} powers.random
  * @param {object} options
  * @param {any} options.handlers
  * @param {any} options.logger
@@ -91,7 +94,7 @@ const encode = (header, payload = new Uint8Array()) => {
  * @param {number} [options.maxReconnectDelayMs]
  */
 export const makeDurableNetLayer = async (
-  powers,
+  { timers, random },
   {
     handlers,
     logger,
@@ -101,9 +104,8 @@ export const makeDurableNetLayer = async (
     maxReconnectDelayMs = 1000,
   },
 ) => {
-  const { setTimeout, clearTimeout } = powers.timers;
   const makeToken = () => {
-    const bytes = powers.randomBytes(16);
+    const bytes = random.randomBytes(16);
     return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join(
       '',
     );
@@ -212,12 +214,12 @@ export const makeDurableNetLayer = async (
       return;
     const delay = logical.delay;
     logical.delay = Math.min(delay * 2, maxReconnectDelayMs);
-    logical.timer = setTimeout(() => {
+    logical.timer = timers.setTimer(() => {
       logical.timer = undefined;
 
       dial(logical);
     }, delay);
-    if (typeof logical.timer === 'object') logical.timer.unref?.();
+    timers.unrefTimer?.(logical.timer);
   };
 
   /** @param {LogicalConnection} logical */
@@ -258,7 +260,7 @@ export const makeDurableNetLayer = async (
     retired.add(logical.token);
     logical.destroyed = true;
     logical.retirementConfirmed ||= confirmed;
-    if (logical.timer) clearTimeout(logical.timer);
+    if (logical.timer) timers.clearTimer(logical.timer);
     logical.timer = undefined;
     if (!confirmed && logical.flowing) writeWire(logical, { t: 'bye' });
     const physical = logical.transport;
@@ -559,7 +561,7 @@ export const makeDurableNetLayer = async (
       if (stopped) return;
       stopped = true;
       for (const logical of sessions.values()) {
-        if (logical.timer) clearTimeout(logical.timer);
+        if (logical.timer) timers.clearTimer(logical.timer);
         if (logical.durable) logical.transport?.end();
         else retire(logical);
       }

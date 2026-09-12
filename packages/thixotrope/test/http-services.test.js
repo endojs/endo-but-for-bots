@@ -71,7 +71,7 @@ const setup = async t => {
   const allOpened = deferred();
   const options = {
     storage: makeFileSyncStringAtom(
-      nodePowers,
+      nodePowers.syncFiles,
       join(statePath, 'http-services.json'),
     ),
     /**
@@ -519,9 +519,8 @@ test('HTTP recipes use an injected string atom without filesystem powers', async
     },
   };
   const powers = {
-    http: nodePowers.http,
-    timers: nodePowers.timers,
-    randomBytes: nodePowers.randomBytes,
+    httpListeners: nodePowers.httpListeners,
+    random: nodePowers.random,
   };
   const options = {
     storage,

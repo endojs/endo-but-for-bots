@@ -29,7 +29,7 @@ const setup = t => {
   let failClose = false;
   const delivered = [];
   let control;
-  const scheduler = makeAlarmScheduler(nodePowers, {
+  const scheduler = makeAlarmScheduler(nodePowers.timers, {
     secret: 'private-clock',
     now: () => current,
     retryMs: 10,
@@ -182,7 +182,7 @@ test('shutdown rejects startup and closes a client that opens late', async t => 
   const opening = new Promise(resolve => {
     open = resolve;
   });
-  const scheduler = makeAlarmScheduler(nodePowers, {
+  const scheduler = makeAlarmScheduler(nodePowers.timers, {
     openClient: () => opening,
     secret: 'clock',
   });
@@ -252,7 +252,7 @@ test('shutdown surfaces cleanup failure instead of releasing ownership silently'
   const entered = new Promise(resolve => {
     enter = () => resolve(undefined);
   });
-  const scheduler = makeAlarmScheduler(nodePowers, {
+  const scheduler = makeAlarmScheduler(nodePowers.timers, {
     secret: 'clock',
     openClient: async () => ({
       lookup: async () =>

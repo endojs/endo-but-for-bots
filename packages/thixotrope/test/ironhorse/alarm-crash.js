@@ -103,7 +103,7 @@ test.serial(
     const first = await start(t, path, 1000n);
     await first.client.call('clockGrant', 'clock');
     const { bundle } = await bundleApplication(
-      nodePowers,
+      nodePowers.bundler,
       fileURLToPath(new URL('../../examples/reminder.js', import.meta.url)),
     );
     await first.client.call('install', 'reminders', bundle, [
