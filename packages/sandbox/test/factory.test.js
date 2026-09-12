@@ -33,6 +33,22 @@ test('listBackends returns an empty array when no drivers are registered', async
   t.true(Array.isArray(backends));
 });
 
+test('make() enforces the join/networkRef biconditional before any backend', async t => {
+  const factory = makeSandboxFactory({
+    drivers: harden([]),
+    scratchProvider: /** @type {any} */ (stubScratchProvider),
+  });
+  const rootfs = harden({ kind: 'host-bind' });
+  await t.throwsAsync(
+    () => E(factory).make(harden({ rootfs, network: 'join' })),
+    { message: /requires a networkRef container/ },
+  );
+  await t.throwsAsync(
+    () => E(factory).make(harden({ rootfs, network: 'none', networkRef: 'x' })),
+    { message: /no other profile accepts one/ },
+  );
+});
+
 test('make() throws a structured "no backend available" error in Phase 0', async t => {
   const factory = makeSandboxFactory({
     drivers: harden([]),
