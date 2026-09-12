@@ -48,8 +48,14 @@ removals and their admission slots for retry.
 Successful cleanup requires both checked container removal and host attach-process
 settlement; configuration remains until all owners are released.
 Independent operation and policy-anchor removal failures are collected without losing owners.
-Controlled driver regressions cover these races; factory disposal, bwrap reaping, and
-bounded recovery from a hung host process still need work before emergency-stop claims.
+Controlled driver regressions cover these races.
+Bwrap now shares the registry, fences delayed admissions, and retains children through
+failed cleanup attempts until their stdio closes; process errors do not release ownership.
+Its existing bounded close wait applies on each retry, and group signalling still refuses
+a process group whose leader Node already reaped.
+Unused pasta and seccomp-file cleanup placeholders are removed.
+Factory disposal and bounded recovery from a hung host process still need work before
+emergency-stop claims.
 
 Generic public TCP egress, HTTP/CONNECT proxying, and constrained DNS now live in
 `@endo/hosted-agent`; Codex uses those shared services.

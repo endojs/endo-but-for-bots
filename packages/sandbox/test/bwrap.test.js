@@ -1723,7 +1723,7 @@ test('PATH synthesis: ambient PATH undefined is not an error', async t => {
 // driver's `'close'`-based liveness tracking exists to detect: the slice
 // child has exited, but a descendant that escaped the process group
 // still holds the inherited pipe, so `'close'` never arrives and the
-// child never leaves `slice.live`.
+// driver must retain cleanup ownership.
 
 /**
  * Build a `child_process`-shaped stub whose `spawn` returns a fake child
@@ -1767,21 +1767,22 @@ const makeStubChildProcess = ({ closeOnKill }) => {
  * Drive `prepareSlice` + one `spawn` against a stubbed child process.
  *
  * @param {any} childProcess
+ * @param {boolean} [spawn]
  * @returns {Promise<{ driver: any, slice: any }>}
  */
-const prepareStubbedSlice = async childProcess => {
+const prepareStubbedSlice = async (childProcess, spawn = true) => {
   const driver = /** @type {any} */ (
     makeBwrapDriver({ env: {}, childProcess })
   );
   const slice = await driver.prepareSlice(
     makeStubSpec({ rootfs: { kind: 'host-bind' } }),
   );
-  await driver.spawn(slice, ['/bin/true'], {});
+  if (spawn) await driver.spawn(slice, ['/bin/true'], {});
   return { driver, slice };
 };
 
-test('teardown gives up on a child whose stdio never closes', async t => {
-  // Guards the hang: `slice.live` drops a child only on `'close'`, so
+test('failed teardown retains its child until a later close permits cleanup', async t => {
+  // Guards the hang: ownership ends only on 'close', so
   // without a bound this teardown never settles and `dispose()` wedges
   // the whole shutdown path.
   t.timeout(10_000);
@@ -1790,27 +1791,36 @@ test('teardown gives up on a child whose stdio never closes', async t => {
   });
   const { driver, slice } = await prepareStubbedSlice(childProcess);
   t.is(children.length, 1, 'the stub should have produced one child');
-  t.is(slice.live.size, 1, 'the child should still be live at teardown');
+  t.teardown(() => children[0].emit('close', 0, null));
   // `spawn` leaves its own liveness listener attached; the assertion
   // below is that teardown's bounded wait adds none of its own on top.
   const listenersBefore = children[0].listenerCount('close');
 
   const started = Date.now();
-  await t.throwsAsync(driver.teardown(slice), {
-    message: /could not prove containment/,
+  const first = driver.teardown(slice);
+  t.is(driver.teardown(slice), first);
+  const error = await t.throwsAsync(first, {
+    instanceOf: AggregateError,
+    message: /shutdown pending/,
   });
+  t.regex(error.errors[0].message, /could not prove containment/);
   const elapsed = Date.now() - started;
   t.true(
     elapsed < 5000,
     `teardown must settle within its own bound, took ${elapsed}ms`,
   );
 
-  t.is(slice.live.size, 0, 'teardown must not keep the straggler live');
+  await t.throwsAsync(driver.teardown(slice), { message: /shutdown pending/ });
   t.is(
     children[0].listenerCount('close'),
     listenersBefore,
     "a bounded-out child must not retain teardown's close listener",
   );
+  await t.throwsAsync(async () => driver.spawn(slice, ['/bin/true'], {}), {
+    message: /shutting down/,
+  });
+  children[0].emit('close', 0, null);
+  await driver.teardown(slice);
 });
 
 test('teardown resolves as soon as the child stdio closes', async t => {
@@ -1829,10 +1839,89 @@ test('teardown resolves as soon as the child stdio closes', async t => {
     elapsed < 500,
     `teardown should settle on 'close', not on the bound; took ${elapsed}ms`,
   );
-  t.is(slice.live.size, 0);
   t.is(
     children[0].listenerCount('close'),
     0,
     'a closed child must not retain a close listener',
   );
+});
+
+for (const duringAcquisition of [false, true]) {
+  test(`teardown fences ${duringAcquisition ? 'running' : 'queued'} acquisition`, async t => {
+    t.timeout(3000);
+    const { childProcess, children } = makeStubChildProcess({
+      closeOnKill: false,
+    });
+    t.teardown(() => children.forEach(child => child.emit('close', 0, null)));
+    const { driver, slice } = await prepareStubbedSlice(childProcess, false);
+    const starting = driver.spawn(slice, ['/bin/true'], {});
+    const rejected = t.throwsAsync(starting, { message: /shutting down/ });
+    // inOrder starts the acquisition, which then yields in getCp().
+    if (duringAcquisition) await Promise.resolve();
+    await driver.teardown(slice);
+    await rejected;
+    t.is(children.length, 0);
+  });
+}
+
+test('bwrap refuses cancelled admission before creating a child', async t => {
+  const { childProcess, children } = makeStubChildProcess({
+    closeOnKill: false,
+  });
+  const { driver, slice } = await prepareStubbedSlice(childProcess, false);
+  t.teardown(() => driver.teardown(slice));
+  await t.throwsAsync(
+    driver.spawn(
+      slice,
+      ['/bin/true'],
+      {},
+      {
+        isCancelled: () => true,
+      },
+    ),
+    { message: /admission aborted/ },
+  );
+  t.is(children.length, 0);
+});
+
+test('process error does not release ownership before close', async t => {
+  t.timeout(3000);
+  const { childProcess, children } = makeStubChildProcess({
+    closeOnKill: false,
+  });
+  const { driver, slice } = await prepareStubbedSlice(childProcess, false);
+  t.teardown(() => children.forEach(child => child.emit('close', 0, null)));
+  const proc = await driver.spawn(slice, ['/bin/true'], {});
+  const failed = t.throwsAsync(proc.wait(), { message: /spawn failed/ });
+  children[0].emit('error', Error('spawn failed'));
+  await failed;
+  await t.throwsAsync(driver.teardown(slice), { message: /shutdown pending/ });
+  children[0].emit('close', 0, null);
+  await driver.teardown(slice);
+  await t.throwsAsync(proc.wait(), { message: /spawn failed/ });
+});
+
+test('teardown cleans siblings independently and waits for retained child close', async t => {
+  t.timeout(3000);
+  const { childProcess, children } = makeStubChildProcess({
+    closeOnKill: false,
+  });
+  const { driver, slice } = await prepareStubbedSlice(childProcess);
+  t.teardown(() => children.forEach(child => child.emit('close', 0, null)));
+  await driver.spawn(slice, ['/bin/true'], {});
+  const stopping = driver.teardown(slice);
+  children[0].emit('close', 0, null);
+  const error = await t.throwsAsync(stopping, { instanceOf: AggregateError });
+  t.is(error.errors.length, 1);
+  t.is(children[0].listenerCount('close'), 0);
+  let stopped = false;
+  const retry = driver.teardown(slice).then(() => {
+    stopped = true;
+  });
+  await new Promise(resolve => setImmediate(resolve));
+  t.false(stopped);
+  children[1].emit('close', 0, null);
+  await retry;
+  t.true(stopped);
+  t.is(children[1].listenerCount('close'), 0);
 });
