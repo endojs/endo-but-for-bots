@@ -728,6 +728,7 @@ mod tests {
         const HOST_WIRING: &[&str] = &[
             // Embedding policy configured outside each activation.
             "eval_program_hoist",
+            "realm_roots",
             "meter_host",
             "source_compiler",
             "intrinsic_permit",

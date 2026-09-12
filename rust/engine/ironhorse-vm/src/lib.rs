@@ -64,8 +64,8 @@ pub use interp::DecodeError;
 pub use interp::SIDE_TABLES;
 pub use interp::{
     dtf_component_key_static, error_name_static, CompiledSource, Halt, Interp, Native, PanicKind,
-    RelinkError, RestoreError, RestoreSession, RunOutcome, SourceCompileError, SourceCompiler,
-    PROGRAM_INVOCATION_COMPUTRONS, TYPED_ARRAY_TYPES,
+    Realm, RelinkError, RestoreError, RestoreSession, RunOutcome, SourceCompileError,
+    SourceCompiler, PROGRAM_INVOCATION_COMPUTRONS, TYPED_ARRAY_TYPES,
 };
 pub use interp::{HEAVY_FRAME_COST, LIGHT_FRAME_COST, NATIVE_DEPTH_LIMIT};
 // Structural tests outside the interpreter module reconcile the field

@@ -356,6 +356,7 @@ const REGISTRY: &[(&str, &[Req], &str)] = &[
     ("jumps", &[Req::GcRoots], "catch-jump chain (env restore)"),
     ("global_obj", &[Req::GcRoots], "the global object"),
     ("global_props", &[Req::GcRoots], "global own-property fast index"),
+    ("realm_roots", &[Req::GcRoots], "parked realm global objects (F059)"),
     ("intrinsics", &[Req::GcRoots], "every boot constructor — the anchor that transitively keeps boot structure alive"),
     ("well_known_symbols", &[Req::GcRoots], "realm well-known symbol descriptors"),
     ("symbol_registry", &[Req::GcRoots], "Symbol.for registry (strong per spec)"),

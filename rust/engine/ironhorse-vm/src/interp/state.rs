@@ -132,6 +132,26 @@ pub struct Interp {
     /// value. The global property slot remains materialized for allocation
     /// accounting and for tracing the global object's property chain.
     global_props: std::collections::HashMap<u16, crate::value::SlotIndex>,
+    #[boot_new(Vec::new())]
+    #[boot_template(state.realm_roots.clone())]
+    #[gc_root(indices)]
+    #[quiescent(retained)]
+    #[persist_refs(none)]
+    #[runtime_keys(none)]
+    #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
+    #[gc_slots(none, none)]
+    #[gc_weak(none)]
+    #[snapshot_table(none)]
+    /// Global objects of the machine's **inactive** realms (F059). A machine
+    /// owns one slot/chunk arena and its primordial intrinsic graph; each
+    /// [`crate::Realm`] is a namespace that is swapped into the machine's
+    /// active realm fields while it runs. A parked realm's global object is
+    /// referenced by no active field, so the machine roots it here for as
+    /// long as the realm exists. Host bookkeeping, not guest state: it is not
+    /// snapshotted, and the single-realm persistent path keeps at most the
+    /// boot global in the list.
+    realm_roots: Vec<crate::value::SlotIndex>,
     #[boot_new(false)]
     #[boot_template(state.direct_eval_hoist)]
     #[gc_root(none)]

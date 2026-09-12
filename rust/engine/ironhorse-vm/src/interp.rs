@@ -25,6 +25,8 @@
 
 #[macro_use]
 mod state;
+mod realm;
+pub use realm::Realm;
 
 mod admission;
 mod apply;
