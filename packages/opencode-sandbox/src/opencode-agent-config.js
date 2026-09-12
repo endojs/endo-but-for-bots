@@ -377,6 +377,7 @@ export const makeOpencodeConfig = ({
     share: 'disabled',
     model,
     small_model: smallModel,
+    default_agent: resolvedAgentName,
     // Let the bridge answer ordinary permission asks; only the doom-loop
     // continuation needs a standing allow so a turn cannot hang.
     permission: { doom_loop: 'allow' },
