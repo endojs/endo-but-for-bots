@@ -19,7 +19,10 @@ import { makeMailContact } from '../mail/mail-contact.js';
 import { makeMailAddressBook } from '../mail/mail-address-book.js';
 import { makeFileSyncStringAtom } from '../store/file-sync-string-atom.js';
 import { makeFsStore } from '../store/store-fs.js';
-import { assertUnixPeerLocation, makeUnixNetLayer } from '../net/unix-netlayer.js';
+import {
+  assertUnixPeerLocation,
+  makeUnixNetLayer,
+} from '../net/unix-netlayer.js';
 
 /** @import { WorkerEngine } from '../core/worker-engine.js' */
 /** @import { SocketConnection } from '../platform/sockets.js' */
@@ -205,10 +208,7 @@ export const serveThixotrope = async (
       await Promise.race([
         Promise.all([viewCleanup, ...pendingDisconnects]),
         new Promise(resolveCleanup => {
-          cleanupTimer = timers.setTimer(
-            () => resolveCleanup(undefined),
-            1000,
-          );
+          cleanupTimer = timers.setTimer(() => resolveCleanup(undefined), 1000);
         }),
       ]);
     } finally {
@@ -367,7 +367,10 @@ export const serveThixotrope = async (
         throw Error('Invalid invitation');
       return {
         ...invitation,
-        location: assertUnixPeerLocation({ syncFiles, paths, user }, invitation.location),
+        location: assertUnixPeerLocation(
+          { syncFiles, paths, user },
+          invitation.location,
+        ),
       };
     };
     const adminMethods = {
