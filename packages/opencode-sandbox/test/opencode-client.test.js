@@ -5,7 +5,11 @@ import test from 'ava';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 
 import { makeOpencodeClient } from '../src/opencode-client.js';
-import { resolveBridgeTurnTimeout } from '../src/opencode-client-module.js';
+import {
+  planBrokerClient,
+  resolveBridgeTurnTimeout,
+  resolveBrokerTransport,
+} from '../src/opencode-client-module.js';
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
@@ -395,3 +399,83 @@ test.serial(
     t.is(resolveBridgeTurnTimeout({}), '');
   },
 );
+
+test('resolveBrokerTransport requires the loopback URL and listener together', t => {
+  t.deepEqual(resolveBrokerTransport({}), { broker: false });
+  t.deepEqual(
+    resolveBrokerTransport({
+      OPENCODE_BROKER_BASE_URL: 'http://127.0.0.1:41337/api/v1',
+      OPENCODE_BROKER_CONTAINER: 'endo-provider-abc',
+    }),
+    {
+      broker: true,
+      baseUrl: 'http://127.0.0.1:41337/api/v1',
+      container: 'endo-provider-abc',
+      apiKey: 'opencode-broker-placeholder',
+    },
+  );
+  // The placeholder is synthesized: an environment value is ignored, so a
+  // deployment cannot park a real key in the slice under this name.
+  t.is(
+    resolveBrokerTransport({
+      OPENCODE_BROKER_BASE_URL: 'http://127.0.0.1:41337/api/v1',
+      OPENCODE_BROKER_CONTAINER: 'endo-provider-abc',
+      OPENCODE_BROKER_API_KEY: 'sk-or-real-key',
+    }).apiKey,
+    'opencode-broker-placeholder',
+  );
+  t.throws(
+    () =>
+      resolveBrokerTransport({
+        OPENCODE_BROKER_BASE_URL: 'http://127.0.0.1:41337/api/v1',
+      }),
+    { message: /both the loopback base URL and the listener container/ },
+  );
+  t.throws(
+    () =>
+      resolveBrokerTransport({
+        OPENCODE_BROKER_CONTAINER: '../escape',
+      }),
+    { message: /both the loopback base URL and the listener container/ },
+  );
+  t.throws(
+    () =>
+      resolveBrokerTransport({
+        OPENCODE_BROKER_BASE_URL: 'http://127.0.0.1:41337/api/v1',
+        OPENCODE_BROKER_CONTAINER: '../escape',
+      }),
+    { message: /container name is invalid/ },
+  );
+});
+
+test('planBrokerClient maps a broker lease to join/placeholder and direct to passthrough', t => {
+  const broker = planBrokerClient({
+    transport: resolveBrokerTransport({
+      OPENCODE_BROKER_BASE_URL: 'http://127.0.0.1:41337/api/v1',
+      OPENCODE_BROKER_CONTAINER: 'endo-provider-abc',
+    }),
+    network: 'private',
+  });
+  t.true(broker.broker);
+  t.is(broker.network, 'join');
+  t.is(broker.networkRef, 'endo-provider-abc');
+  t.deepEqual(broker.configOptions, {
+    baseUrl: 'http://127.0.0.1:41337/api/v1',
+    allowLoopbackHttp: true,
+  });
+  t.deepEqual(broker.credentialEnv, {
+    OPENROUTER_API_KEY: 'opencode-broker-placeholder',
+  });
+  t.false(broker.useCredentialCap);
+
+  const direct = planBrokerClient({
+    transport: resolveBrokerTransport({}),
+    network: 'private',
+  });
+  t.false(direct.broker);
+  t.is(direct.network, 'private');
+  t.is(direct.networkRef, undefined);
+  t.deepEqual(direct.configOptions, {});
+  t.deepEqual(direct.credentialEnv, {});
+  t.true(direct.useCredentialCap);
+});
