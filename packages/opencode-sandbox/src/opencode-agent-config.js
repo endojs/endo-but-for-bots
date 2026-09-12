@@ -141,8 +141,13 @@ const normalizeCatalogModelId = (key, label) => {
 /**
  * @param {unknown} baseUrl
  * @param {string} label
+ * @param {{ allowLoopbackHttp?: boolean }} [options]
  */
-const normalizeBaseUrl = (baseUrl, label) => {
+const normalizeBaseUrl = (
+  baseUrl,
+  label,
+  { allowLoopbackHttp = false } = {},
+) => {
   if (typeof baseUrl !== 'string') {
     Fail`${q(label)} must be a string`;
   }
@@ -153,10 +158,6 @@ const normalizeBaseUrl = (baseUrl, label) => {
   } catch (error) {
     throw makeError(X`${q(label)} must be a valid URL: ${q(`${error}`)}`);
   }
-  url.protocol === 'https:' || Fail`${q(label)} must use https`;
-  url.hostname === 'openrouter.ai' ||
-    Fail`${q(label)} must point at openrouter.ai`;
-  url.port === '' || Fail`${q(label)} must use the default https port`;
   (url.username === '' && url.password === '') ||
     Fail`${q(label)} must not carry credentials`;
   url.pathname === '/api/v1' ||
@@ -164,7 +165,30 @@ const normalizeBaseUrl = (baseUrl, label) => {
     Fail`${q(label)} must be the /api/v1 endpoint`;
   (url.search === '' && url.hash === '') ||
     Fail`${q(label)} must not carry a query or fragment`;
-  return `${url.origin}/api/v1`;
+  if (url.protocol === 'https:') {
+    url.hostname === 'openrouter.ai' ||
+      Fail`${q(label)} must point at openrouter.ai`;
+    url.port === '' || Fail`${q(label)} must use the default https port`;
+    return `${url.origin}/api/v1`;
+  }
+  // The broker-only path reaches a provider listener on the slice's own
+  // loopback; plaintext is acceptable only there, and only with an explicit
+  // port so the endpoint cannot silently move. `allowLoopbackHttp` is set by
+  // the caller that actually holds a broker lease, never by default: a caller
+  // still carrying a real credential must not be steerable to a loopback
+  // listener.
+  if (allowLoopbackHttp && url.protocol === 'http:') {
+    url.hostname === '127.0.0.1' ||
+      url.hostname === '[::1]' ||
+      Fail`${q(label)} may use http only on loopback`;
+    /^\d{1,5}$/.test(url.port) ||
+      Fail`${q(label)} must name an explicit loopback port`;
+    const port = Number(url.port);
+    (Number.isInteger(port) && port > 0 && port <= 65_535) ||
+      Fail`${q(label)} has an invalid port`;
+    return `${url.origin}/api/v1`;
+  }
+  Fail`${q(label)} must use https`;
 };
 
 /**
@@ -327,6 +351,8 @@ const normalizeMcpServers = (servers, label) => {
  * @param {string} [options.systemPrompt]
  * @param {Record<string, { name?: string, limit?: { context: number, output: number } }>} [options.models]
  * @param {string} [options.baseUrl]
+ * @param {boolean} [options.allowLoopbackHttp] - Permit the broker-only
+ *   loopback endpoint form. Only the broker transport sets this.
  * @param {Record<string, unknown>} [options.mcpServers]
  */
 export const makeOpencodeConfig = ({
@@ -336,6 +362,7 @@ export const makeOpencodeConfig = ({
   systemPrompt,
   models,
   baseUrl = OPENROUTER_BASE_URL,
+  allowLoopbackHttp = false,
   mcpServers,
 } = {}) => {
   const providerModel = parseModelRef(model, 'model');
@@ -347,7 +374,9 @@ export const makeOpencodeConfig = ({
     utf8Bytes(systemPrompt) <= MAX_PROMPT_BYTES ||
       Fail`systemPrompt is too large for the config env var`;
   }
-  const resolvedBaseUrl = normalizeBaseUrl(baseUrl, 'baseUrl');
+  const resolvedBaseUrl = normalizeBaseUrl(baseUrl, 'baseUrl', {
+    allowLoopbackHttp,
+  });
   const resolvedMcp = normalizeMcpServers(mcpServers, 'mcpServers');
 
   /** @type {Record<string, ReturnType<typeof normalizeModelEntry>>} */

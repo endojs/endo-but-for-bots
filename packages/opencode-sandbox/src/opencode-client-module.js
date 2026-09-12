@@ -68,7 +68,7 @@
 import { randomBytes } from 'node:crypto';
 
 import { E } from '@endo/eventual-send';
-import { makeError, q, X } from '@endo/errors';
+import { Fail, makeError, q, X } from '@endo/errors';
 
 import { makeOpencodeClient } from './opencode-client.js';
 import { parseRootfs, rootfsLabel } from './parse-rootfs.js';
@@ -81,6 +81,65 @@ import {
 } from './mcp-socket-server.js';
 
 /** @import { FarRef } from '@endo/eventual-send' */
+
+/**
+ * The broker-only transport, when the provisioner supplied one. Both the
+ * loopback base URL (where the provider listener answers inside the shared
+ * namespace) and the listener container (the namespace this slice joins) are
+ * required together; the API key is a non-secret placeholder because the
+ * broker injects the real credential upstream and never forwards this one.
+ *
+ * @param {Record<string, string | undefined>} env
+ * @returns {{ broker: false } | { broker: true, baseUrl: string, container: string, apiKey: string }}
+ */
+export const resolveBrokerTransport = env => {
+  const baseUrl = env.OPENCODE_BROKER_BASE_URL || '';
+  const container = env.OPENCODE_BROKER_CONTAINER || '';
+  if (!baseUrl && !container) return harden({ broker: false });
+  (baseUrl !== '' && container !== '') ||
+    Fail`OpenCode broker transport requires both the loopback base URL and the listener container`;
+  /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(container) ||
+    Fail`OpenCode broker listener container name is invalid`;
+  // Synthesized, never taken from the environment: a deployment must not be
+  // able to park a real provider key in the slice under the placeholder's
+  // name while still routing through the broker.
+  return harden({
+    broker: true,
+    baseUrl,
+    container,
+    apiKey: 'opencode-broker-placeholder',
+  });
+};
+harden(resolveBrokerTransport);
+
+/**
+ * Everything the broker decision changes, in one place so it can be tested
+ * without a slice: the config options, the placeholder env, whether the real
+ * credential cap may be used, and the sandbox network to request.
+ *
+ * @param {{ transport: ReturnType<typeof resolveBrokerTransport>, network: string }} options
+ */
+export const planBrokerClient = ({ transport, network }) =>
+  transport.broker
+    ? harden({
+        broker: true,
+        configOptions: harden({
+          baseUrl: transport.baseUrl,
+          allowLoopbackHttp: true,
+        }),
+        credentialEnv: harden({ OPENROUTER_API_KEY: transport.apiKey }),
+        useCredentialCap: false,
+        network: 'join',
+        networkRef: transport.container,
+      })
+    : harden({
+        broker: false,
+        configOptions: harden({}),
+        credentialEnv: harden({}),
+        useCredentialCap: true,
+        network,
+      });
+harden(planBrokerClient);
 
 /**
  * The per-turn wall-clock budget handed to the in-slice bridge. The backend's
@@ -204,6 +263,10 @@ export const make = (powers, context, contextWrapper = {}) => {
   const statePath = env.STATE_INNER_PATH || '/opencode-state';
   const backend = env.BACKEND || 'podman';
   const network = env.NETWORK || 'private';
+  const brokerPlan = planBrokerClient({
+    transport: resolveBrokerTransport(env),
+    network,
+  });
   const model = env.MODEL || undefined;
   const systemPrompt = env.SYSTEM_PROMPT || undefined;
   const initialPrompt = env.INITIAL_PROMPT || undefined;
@@ -262,6 +325,7 @@ export const make = (powers, context, contextWrapper = {}) => {
       ...(model ? { model } : {}),
       ...(systemPrompt ? { systemPrompt } : {}),
       ...(mcpServers ? { mcpServers } : {}),
+      ...brokerPlan.configOptions,
     }),
   );
 
@@ -290,7 +354,9 @@ export const make = (powers, context, contextWrapper = {}) => {
     // front so a failure (or terminate) can revoke the per-session grant
     // rather than leak it in the credentials cap's outstanding set.
     /** @type {any} */
-    const credCap = (await E(sessionPowers).credentials()) || null;
+    const credCap = brokerPlan.useCredentialCap
+      ? (await E(sessionPowers).credentials()) || null
+      : null;
     const revokeCredential = async () => {
       if (credCap) {
         await E(credCap).revoke(sessionId);
@@ -307,7 +373,7 @@ export const make = (powers, context, contextWrapper = {}) => {
       // receives the short-lived secret it mints here.  It is materialised
       // once per provision — formulas reincarnate, so a revival re-issues.
       /** @type {Record<string, string>} */
-      const credentialEnv = {};
+      const credentialEnv = { ...brokerPlan.credentialEnv };
       if (credCap) {
         // Only default to a raw API key when the cap provably lacks `kind()`.
         // A failing `kind()` call must fail closed: silently routing an OAuth
@@ -441,7 +507,13 @@ export const make = (powers, context, contextWrapper = {}) => {
         harden({
           rootfs: parsedRootfs,
           mounts,
-          network,
+          // A broker session joins the listener's networkless namespace and
+          // reaches the provider on its loopback. Everything else keeps the
+          // caller's profile.
+          network: brokerPlan.network,
+          ...(brokerPlan.networkRef !== undefined
+            ? { networkRef: brokerPlan.networkRef }
+            : {}),
           env: sliceEnv,
           cwd: workspacePath,
           backend,
@@ -508,7 +580,7 @@ export const make = (powers, context, contextWrapper = {}) => {
     rootfsLabel: rootfsLabel(parsedRootfs),
     model,
     systemPrompt,
-    env: harden({ NETWORK: network }),
+    env: harden({ NETWORK: brokerPlan.network }),
     opencodeSessionId: resumeOpencodeSessionId,
     resumePriorConversation: Boolean(resumeOpencodeSessionId),
     initialPrompt,
