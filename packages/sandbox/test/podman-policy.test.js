@@ -225,14 +225,15 @@ const makeEngineStub = ({ calls, responses = {}, holdAttached = false }) => {
     if (args.includes('{{.Digest}}')) return 'image-digest';
     if (args[0] === 'volume') return `volume-${args[args.length - 1]}`;
     if (args[0] === 'container' && args[1] === 'inspect') {
-      return args.includes('{{.State.Pid}}')
-        ? 'sidecar-pid'
-        : 'container-inspect';
+      if (args.includes('{{.State.Pid}}')) return 'sidecar-pid';
+      if (args.includes('{{.Id}}')) return 'container-id';
+      return 'container-inspect';
     }
     if (args[0] === 'create') return 'create';
     if (args[0] === 'start') return 'start';
     if (args[0] === 'rm') return 'rm';
     if (args[0] === 'kill') return 'kill';
+    if (args[0] === 'exec') return 'resolver-read';
     return 'other';
   };
 
@@ -255,6 +256,7 @@ const makeEngineStub = ({ calls, responses = {}, holdAttached = false }) => {
     },
     'container-inspect': { stdout: `${JSON.stringify([ANCHOR_INSPECT])}\n` },
     'sidecar-pid': { stdout: `${SIDECAR_PID}\n` },
+    'container-id': { stdout: 'a1b2c3d4e5f6a7b8\n' },
     create: {},
     start: {},
     rm: {},
@@ -331,6 +333,63 @@ const makeDriverUnderTest = (options = {}) => {
   });
   return { driver, calls };
 };
+
+for (const contents of [
+  'nameserver 127.0.0.53\noptions attempts:1 timeout:2\n',
+  'unexpected resolver\n',
+]) {
+  test(`resolver attestation reads the bounded effective container file: ${contents.startsWith('nameserver') ? 'accepted' : 'denied'}`, async t => {
+    const resolver = harden({
+      role: 'resolver',
+      kind: 'resolver',
+      source: '/private/provider/public-resolv.conf',
+      destination: '/etc/resolv.conf',
+      mode: 'ro',
+    });
+    const spec = makeSpec({
+      policy: { ...POLICY, mounts: [...POLICY.mounts, resolver] },
+    });
+    const inspect = {
+      ...ANCHOR_INSPECT,
+      Mounts: [
+        ...ANCHOR_INSPECT.Mounts,
+        {
+          Type: 'bind',
+          Source: resolver.source,
+          Destination: resolver.destination,
+          Options: ['ro', 'nodev', 'nosuid'],
+          RW: false,
+        },
+      ],
+    };
+    const { driver, calls } = makeDriverUnderTest({
+      responses: {
+        'container-inspect': { stdout: JSON.stringify([inspect]) },
+        'resolver-read': { stdout: contents },
+      },
+      procfs: makeProcfs({
+        [`/proc/${ANCHOR_PID}/mountinfo`]:
+          '37 24 8:1 /public-resolv.conf /etc/resolv.conf ro,nosuid,nodev - ext4 /dev/sda1 rw\n',
+      }),
+    });
+    if (contents.startsWith('nameserver')) {
+      const slice = await driver.prepareSlice(/** @type {any} */ (spec));
+      t.teardown(() => driver.teardown(slice));
+    } else {
+      await t.throwsAsync(driver.prepareSlice(/** @type {any} */ (spec)), {
+        message: /resolver mount/,
+      });
+    }
+    const read = calls.find(call => call.args[0] === 'exec');
+    t.deepEqual(read?.args.slice(-4), [
+      '/bin/head',
+      '-c',
+      '1025',
+      '/etc/resolv.conf',
+    ]);
+    t.false(calls.some(call => call.args.includes(resolver.source)));
+  });
+}
 
 /** @param {Array<{ command: string, args: string[] }>} calls */
 const createCalls = calls => calls.filter(call => call.args[0] === 'create');
@@ -453,6 +512,118 @@ test('a policy on any other network profile is refused', async t => {
     driver.prepareSlice(/** @type {any} */ (makeSpec({ network: 'private' }))),
     { message: /must be requested together/ },
   );
+});
+
+const makeJoinSpec = (overrides = {}) =>
+  makeSpec({
+    network: 'join',
+    networkRef: 'broker-sidecar-s1',
+    policy: undefined,
+    cwd: undefined,
+    ...overrides,
+  });
+
+test('network join admits a loopback-only target and wires --network container:', async t => {
+  const { driver, calls } = makeDriverUnderTest();
+  const slice = await driver.prepareSlice(/** @type {any} */ (makeJoinSpec()));
+  await driver.spawn(slice, ['/bin/echo', 'hi'], {});
+  const [operation] = createCalls(calls);
+  t.truthy(operation);
+  const argv = operation.args;
+  const network = argv.flatMap((arg, index) =>
+    arg === '--network' ? [argv[index + 1]] : [],
+  );
+  // The immutable id, not the caller's name: the name cannot be swapped
+  // between the namespace check and podman resolving the reference.
+  t.deepEqual(network, ['container:a1b2c3d4e5f6a7b8']);
+  t.is(
+    slice.runtimeDetails.rootlessNet.reason,
+    'network join shares the named container namespace',
+  );
+});
+
+for (const [label, fileOverrides, message] of [
+  [
+    'a target exposing a non-loopback interface is refused',
+    {
+      [`/proc/${SIDECAR_PID}/net/dev`]:
+        'Inter-|   Receive |  Transmit\n face |bytes\n    lo:  0 0 0 0\n  eth0: 0 0 0 0\n',
+    },
+    /must expose only loopback/,
+  ],
+  [
+    'a target with a routable route is refused',
+    {
+      [`/proc/${SIDECAR_PID}/net/route`]:
+        'Iface\tDestination\tGateway\tFlags\neth0\t00000000\t0100000A\t0003\n',
+    },
+    /must not have routable routes/,
+  ],
+]) {
+  test(label, async t => {
+    const { driver } = makeDriverUnderTest({
+      procfs: makeProcfs(fileOverrides),
+    });
+    await t.throwsAsync(
+      driver.prepareSlice(/** @type {any} */ (makeJoinSpec())),
+      { message },
+    );
+  });
+}
+
+test('network join refuses an absent or misused container reference', async t => {
+  const { driver, calls } = makeDriverUnderTest();
+  await t.throwsAsync(
+    driver.prepareSlice(
+      /** @type {any} */ (makeJoinSpec({ networkRef: undefined })),
+    ),
+    { message: /requires a networkRef container/ },
+  );
+  t.is(calls.length, 0, 'rejected before the engine is touched');
+  await t.throwsAsync(
+    driver.prepareSlice(
+      /** @type {any} */ (makeSpec({ network: 'none', networkRef: 'x' })),
+    ),
+    { message: /no other profile accepts one/ },
+  );
+  await t.throwsAsync(
+    driver.prepareSlice(
+      /** @type {any} */ (makeSpec({ network: 'join', networkRef: 'x' })),
+    ),
+    { message: /cannot be combined with a slice policy/ },
+  );
+});
+
+test('network join refuses a target that is not running', async t => {
+  const { driver } = makeDriverUnderTest({
+    responses: { 'sidecar-pid': { code: 1, stdout: '' } },
+  });
+  await t.throwsAsync(
+    driver.prepareSlice(/** @type {any} */ (makeJoinSpec())),
+    { message: /is not a running container/ },
+  );
+});
+
+test('network join refuses a target replaced after admission', async t => {
+  const otherPid = 4143;
+  const responses = { 'sidecar-pid': { stdout: `${SIDECAR_PID}\n` } };
+  const { driver } = makeDriverUnderTest({
+    responses,
+    procfs: makeProcfs(
+      {
+        [`/proc/${otherPid}/net/dev`]:
+          'Inter-|   Receive |  Transmit\n face |bytes\n    lo:  0 0 0 0\n',
+        [`/proc/${otherPid}/net/route`]: 'Iface\tDestination\tGateway\n',
+        [`/proc/${otherPid}/net/ipv6_route`]: '',
+      },
+      { [`/proc/${otherPid}/ns/net`]: 'net:[4026539999]' },
+    ),
+  });
+  const slice = await driver.prepareSlice(/** @type {any} */ (makeJoinSpec()));
+  responses['sidecar-pid'] = { stdout: `${otherPid}\n` };
+  await t.throwsAsync(driver.spawn(slice, ['/bin/echo', 'hi'], {}), {
+    message: /was replaced after the slice was admitted/,
+  });
 });
 
 test('a policy refuses a granted mount alongside its own table', async t => {

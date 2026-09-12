@@ -1039,3 +1039,40 @@
     width: 100%;
   }
 }
+.floot-recovery {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 1rem;
+}
+
+.floot-recovery pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 20rem;
+  overflow: auto;
+}
+
+.floot-recovery textarea {
+  display: block;
+  width: 100%;
+}
+
+.floot-recovery-turn {
+  margin-block: 1rem;
+}
+.floot-network-policy {
+  padding-block: 1rem;
+}
+
+.floot-network-policy pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 12rem;
+  overflow: auto;
+}
+
+.floot-network-policy textarea {
+  display: block;
+  width: 100%;
+}

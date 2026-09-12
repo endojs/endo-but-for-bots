@@ -63,6 +63,12 @@ test('subagent tools appear only when the session was given a spawner', async t 
   });
   const plain = await makeFlootToolRegistry(powers).snapshot();
   t.false(plain.names.includes('askSubagent'));
+  t.true(plain.names.includes('describeCapability'));
+  t.true(plain.names.includes('readSources'));
+  await t.throwsAsync(
+    () => plain.execute('list', harden({ path: 'invented' })),
+    { message: /Unexpected argument/ },
+  );
 
   const delegated = await makeFlootToolRegistry(powers, {
     spawner: Far('SubagentSpawner', {}),
@@ -228,4 +234,95 @@ test('extra tools join the pinned catalog and cannot shadow a built-in', async t
       }),
     { message: /"exec" is already defined/ },
   );
+});
+
+test('all built-in argument envelopes are closed and validated before effects', async t => {
+  const effects = [];
+  const powers = Far('Powers', {
+    list: () => harden([]),
+    storeValue: (...args) => {
+      effects.push(['storeValue', args]);
+    },
+    remove: (...args) => {
+      effects.push(['remove', args]);
+    },
+    listMessages: () => {
+      effects.push(['listMessages']);
+      return harden([]);
+    },
+  });
+  const snapshot = await makeFlootToolRegistry(powers).snapshot();
+  for (const name of ['store', 'remove', 'listMessages']) {
+    const descriptor = snapshot.dynamicTools.find(tool => tool.name === name);
+    if (!descriptor) throw Error(`Missing tool ${name}`);
+    t.is(descriptor.inputSchema.additionalProperties, false);
+  }
+  await t.throwsAsync(
+    () =>
+      snapshot.execute(
+        'store',
+        harden({ petName: 'note', value: 1, method: 'ignored' }),
+      ),
+    { message: /Unexpected argument "method"/ },
+  );
+  await t.throwsAsync(
+    () =>
+      snapshot.execute('remove', harden({ petName: 'note', path: 'ignored' })),
+    { message: /Unexpected argument "path"/ },
+  );
+  await t.throwsAsync(
+    () => snapshot.execute('listMessages', harden({ limit: 1 })),
+    { message: /Unexpected argument "limit"/ },
+  );
+  t.deepEqual(effects, []);
+  await snapshot.execute(
+    'store',
+    harden({ petName: 'note', value: { arbitraryValueKey: 1 } }),
+  );
+  t.deepEqual(effects, [['storeValue', [{ arbitraryValueKey: 1 }, 'note']]]);
+});
+
+test('open stored tool and factory-extra schemas remain open without re-reading schemas at dispatch', async t => {
+  let schemaReads = 0;
+  const makeOpenTool = name =>
+    harden({
+      schema: () => {
+        schemaReads += 1;
+        return harden({
+          type: 'function',
+          function: {
+            name,
+            description: 'Accept arbitrary JSON keys',
+            parameters: {
+              type: 'object',
+              properties: {},
+              additionalProperties: true,
+            },
+          },
+        });
+      },
+      execute: async args => JSON.stringify(args),
+      help: () => 'open',
+    });
+  const stored = makeOpenTool('stored');
+  const powers = Far('Powers', {
+    list: directory => harden(directory === 'tools' ? ['stored'] : []),
+    lookup: () => stored,
+    locate: () => 'stored-locator',
+  });
+  const snapshot = await makeFlootToolRegistry(powers, {
+    extraTools: new Map([['extra', makeOpenTool('extra')]]),
+  }).snapshot();
+  const readsAtSnapshot = schemaReads;
+  for (const name of ['stored', 'extra']) {
+    const descriptor = snapshot.dynamicTools.find(tool => tool.name === name);
+    if (!descriptor) throw Error(`Missing tool ${name}`);
+    t.is(descriptor.inputSchema.additionalProperties, true);
+    t.is(
+      // eslint-disable-next-line no-await-in-loop
+      await snapshot.execute(name, harden({ arbitrary: 'accepted' })),
+      '{"arbitrary":"accepted"}',
+    );
+  }
+  t.is(schemaReads, readsAtSnapshot);
 });

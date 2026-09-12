@@ -8,6 +8,7 @@ import {
   makeBrokerOAuthCredential,
   makeProviderBrokerLease,
 } from '../src/provider-broker.js';
+import { makeProviderFetchTransport } from '../src/provider-transport.js';
 
 /** @import { BrokerPolicy } from '../src/provider-broker.js' */
 
@@ -31,6 +32,74 @@ const request = harden({
 const credential = 'canary-secret';
 const accessToken = 'canary-access';
 const refreshToken = 'canary-refresh';
+
+for (const streaming of [false, true]) {
+  test(`large legitimate prompt crosses broker and fetch transport (streaming=${streaming})`, async t => {
+    let dispatched = 0;
+    let secretReads = 0;
+    const largeBody = JSON.stringify({
+      model: 'allowed',
+      input: 'x'.repeat(100_100),
+    });
+    const transport = makeProviderFetchTransport({
+      fetch: async (_url, options) => {
+        dispatched += 1;
+        t.is(options?.body, largeBody);
+        return new Response('ok');
+      },
+      timeoutMs: 1000,
+      maxRequestBytes: 200_000n,
+      maxResponseBytes: 100n,
+    });
+    t.teardown(transport.dispose);
+    const broker = makeProviderBrokerLease(
+      { ...policy, maxRequestBytes: 200_000n, maxTotalBytes: 1_000_000n },
+      {
+        transport: transport.transport,
+        secret: Far('secret', {
+          async readBase64() {
+            secretReads += 1;
+            return globalThis.btoa(credential);
+          },
+        }),
+        now: () => 0,
+      },
+    );
+    t.teardown(() => E(broker.admin).revoke());
+    const result = streaming
+      ? await E(broker.endpoint).requestStream(
+          harden({ ...request, body: largeBody }),
+        )
+      : await E(broker.endpoint).request(
+          harden({ ...request, body: largeBody }),
+        );
+    t.is(result.status, 200);
+    if ('reader' in result) {
+      const parts = [];
+      for (;;) {
+        // eslint-disable-next-line no-await-in-loop
+        const chunk = await E(result.reader).next();
+        if (chunk.done) break;
+        parts.push(chunk.value);
+      }
+      t.is(parts.join(''), 'ok');
+    } else t.is(result.body, 'ok');
+    for (const input of ['x'.repeat(200_001), '€'.repeat(80_000)]) {
+      const excessive = harden({
+        ...request,
+        body: JSON.stringify({ model: 'allowed', input }),
+      });
+      // eslint-disable-next-line no-await-in-loop
+      await t.throwsAsync(
+        streaming
+          ? E(broker.endpoint).requestStream(excessive)
+          : E(broker.endpoint).request(excessive),
+      );
+    }
+    t.is(dispatched, 1);
+    t.is(secretReads, 1);
+  });
+}
 
 /** @param {Partial<import('../src/provider-broker.js').BrokerOAuthState>} [overrides] */
 const oauthState = (overrides = {}) =>
@@ -228,6 +297,62 @@ const setup = ({
     },
   };
 };
+
+const subscriptionLimits = harden({
+  authMode: /** @type {const} */ ('subscription'),
+  origin: 'https://chatgpt.com',
+  accountRef: 'account-1',
+});
+
+test('subscription profile fixes the upstream route and account header', async t => {
+  const subject = setup({ limits: subscriptionLimits, oauth: true });
+  await E(subject.endpoint).request({
+    ...request,
+    body: JSON.stringify({ model: 'allowed', stream: true, store: false }),
+  });
+  t.is(subject.calls.length, 1);
+  t.is(subject.calls[0].url, 'https://chatgpt.com/backend-api/codex/responses');
+  t.is(subject.calls[0].headers['chatgpt-account-id'], 'account-1');
+  t.is(subject.calls[0].headers.authorization, `Bearer ${accessToken}`);
+  t.false(JSON.stringify(subject.calls[0].headers).includes(refreshToken));
+  t.false(subject.calls[0].body.includes(refreshToken));
+});
+
+test('subscription profile refuses alternate origins, routes, and API credentials', t => {
+  for (const limits of [
+    { origin: 'https://api.openai.com' },
+    { routes: [{ method: 'POST', path: '/v1/messages' }] },
+    { anthropicVersion: '2023-06-01' },
+    { credentialHeader: 'x-api-key' },
+  ]) {
+    t.throws(() =>
+      setup({
+        limits: {
+          ...subscriptionLimits,
+          .../** @type {Partial<BrokerPolicy>} */ (limits),
+        },
+        oauth: true,
+      }),
+    );
+  }
+  t.throws(() => setup({ limits: subscriptionLimits }));
+});
+
+test('subscription profile refuses storage, nonstreaming, and account routes before dispatch', async t => {
+  const subject = setup({ limits: subscriptionLimits, oauth: true });
+  await t.throwsAsync(() => E(subject.endpoint).request(request), {
+    message: /non-stored streaming/,
+  });
+  await t.throwsAsync(
+    () =>
+      E(subject.endpoint).request({
+        ...request,
+        path: '/backend-api/accounts',
+      }),
+    { message: /route denied/ },
+  );
+  t.is(subject.calls.length, 0);
+});
 
 test('broker injects credentials only into fixed transport and canonicalizes JSON', async t => {
   const { endpoint, calls, audit } = setup();
@@ -463,7 +588,24 @@ test('operator chooses Anthropic authorization without caller headers', async t 
   );
 });
 
-test('operator configuration cannot enable administrative routes or subscription auth', t => {
+test('broker admits the OpenRouter OpenAI-compatible route and validates client auth mode', async t => {
+  const { endpoint, calls } = setup({
+    limits: {
+      origin: 'https://openrouter.ai',
+      routes: [{ method: 'POST', path: '/api/v1/chat/completions' }],
+      clientAuthorization: 'strip',
+    },
+  });
+  await E(endpoint).request(
+    harden({ ...request, path: '/api/v1/chat/completions' }),
+  );
+  t.is(calls[0].url, 'https://openrouter.ai/api/v1/chat/completions');
+  t.throws(() =>
+    setup({ limits: /** @type {any} */ ({ clientAuthorization: 'forward' }) }),
+  );
+});
+
+test('operator configuration cannot enable administrative routes or unprovisioned subscription auth', t => {
   t.throws(
     () =>
       setup({
@@ -471,13 +613,10 @@ test('operator configuration cannot enable administrative routes or subscription
       }),
     { message: /Invalid inference route/ },
   );
-  // Still refused, now for a recorded reason rather than for want of an
-  // implementation: neither vendor documents a configuration in which the
-  // broker holds an individual subscription credential and the slice holds
-  // none. See packages/codex-sandbox/SUBSCRIPTION-AUTH.md.
+  // Naming subscription mode alone cannot conjure renewal authority.
   t.throws(
     () => setup({ limits: /** @type {any} */ ({ authMode: 'subscription' }) }),
-    { message: /Unsupported broker authentication mode/ },
+    { message: /Unprovisioned broker OAuth mode/ },
   );
   // The mode that *is* implemented is refused until it is provisioned, so a
   // policy naming `oauth` without the capabilities that make refresh and

@@ -242,6 +242,62 @@ The capability that mints subagents is endowed per agent, so withholding it
 withholds the tools.
 See [SUBAGENTS.md](./SUBAGENTS.md).
 
+## Capability discovery and source reading
+
+`list` takes no arguments and lists petnames, not filesystem entries.
+`lookup({ petName })` retrieves a value; it does not accept `method` or `args`.
+These tools and `exec` reject unknown named arguments before dispatch.
+Floot additionally advertises and validates closed top-level argument envelopes
+for every built-in tool, including `store`, `remove`, and `listMessages`.
+This does not close nested JSON values or change stored/extra tools' own schemas.
+`describeCapability({ petName, method? })` uses CapTP method introspection and
+the capability's existing `help(method)` documentation for signatures/examples.
+It never invents signatures for undocumented methods.
+If a capability only accepts zero-argument `help()`, discovery falls back to its
+overview and labels that scope; if documentation fails, callable names remain
+available with an explicit unavailable notice.
+Invoke a discovered method using `exec` (`endo_exec` in Codex), for example:
+
+```js
+const source = await E(powers).lookup('review-source');
+return await E(source).help('glob');
+```
+
+Prefer `readSources` for bounded source-file reads and literal searches:
+
+```json
+{
+  "petName": "review-source",
+  "items": [
+    { "path": ["README.md"], "startLine": 1, "lineCount": 40 },
+    { "path": ["src", "agent.js"], "search": "checkpoint" }
+  ]
+}
+```
+
+The petname must already name a mount with `lookup(pathSegments)` returning a
+streamable blob; no ambient filesystem or new read/write authority is granted.
+Mount confinement, read-only enforcement, and revocation remain authoritative.
+Each of at most eight items independently returns `{ index, ok, lines }` or
+`{ index, ok: false, error }`, preserving successful reads when another fails.
+Lines have 1-based `line` numbers and `text`.
+Search is case-sensitive literal substring matching, not a regex or recursive
+filesystem scan; use the mount's documented `glob` to discover candidate paths.
+
+Each file scans at most 1 MiB through flow-controlled blob streaming, closing the
+reader at the ceiling; a compliant mount supplies bounded chunks.
+It returns at most 200 lines and 8,000 text characters per item (defaults: line 1,
+80 lines), with `scanTruncated` and `outputTruncated` flags.
+The entire serialized response is additionally capped at 48,000 characters,
+including JSON escaping, divided evenly across requested items.
+This leaves headroom for a second serialization layer in Floot's durable journal;
+quote/backslash-heavy sources may therefore return fewer text characters.
+A truncated scan is not evidence that a requested range or match does not exist.
+Files beyond the scan prefix require another endowed navigation capability;
+this tool does not silently fall back to an unbounded whole-file read.
+Remote I/O errors are deliberately generic rather than exposing paths, locators,
+or arbitrary exception data; invalid arguments retain actionable validation errors.
+
 ## Provider credentials
 
 The LLM auth token is held by the daemon's secret manager, not by a pet-store

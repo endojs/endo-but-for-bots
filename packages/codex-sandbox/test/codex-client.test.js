@@ -14,6 +14,314 @@ const INITIALIZE_RESULT = harden({
   userAgent: 'codex-test',
 });
 
+test('catalog rotation restores dialogue as inert input once and reconciles the old catalog first', async t => {
+  t.timeout(5000);
+  const saved = [];
+  const fixture = makeFixture({
+    threadId: 'thread-saved',
+    existingTurnIds: ['turn-1'],
+    clientOptions: {
+      savedToolSetId: 'old-tools',
+      toolSetId: 'new-tools',
+      savedRecovery: { baseTurnId: null, turnId: 'turn-1' },
+      saveThreadState: async state => {
+        saved.push(state);
+      },
+    },
+  });
+  const context = JSON.stringify([
+    { role: 'assistant', text: 'Previously wrote the report.' },
+  ]);
+  const reader = await fixture.client.send('continue', {
+    continuityContext: context,
+  });
+  const methods = fixture.sent.map(message => message.method);
+  t.true(methods.indexOf('thread/resume') < methods.indexOf('thread/revert'));
+  t.true(methods.indexOf('thread/revert') < methods.indexOf('thread/start'));
+  t.like(saved[0], { threadId: 'thread-saved', toolSetId: 'old-tools' });
+  const first = fixture.sent.find(message => message.method === 'turn/start');
+  t.is(first.params.threadId, 'thread-new');
+  t.is(first.params.input.length, 2);
+  t.true(first.params.input[0].text.includes(context));
+  t.true(first.params.input[0].text.includes('do not replay'));
+  t.is(first.params.input[1].text, 'continue');
+  fixture.push({
+    method: 'turn/completed',
+    params: {
+      threadId: 'thread-new',
+      turn: { id: 'turn-2', status: 'completed' },
+    },
+  });
+  await drain(reader);
+  await fixture.client.acknowledge('turn-2');
+  const second = await fixture.client.send('next', {
+    continuityContextUnavailable: 'history exceeds replay limit',
+  });
+  t.is(
+    fixture.sent.filter(message => message.method === 'turn/start').at(-1)
+      .params.input.length,
+    1,
+  );
+  await fixture.client.interrupt();
+  await drain(second);
+});
+
+test('rotation with missing, invalid, or oversized history fails before altering the old thread', async t => {
+  for (const opts of [
+    {},
+    { continuityContext: 42 },
+    { continuityContext: 'x'.repeat(256 * 1024 + 1) },
+    { continuityContextUnavailable: 'history exceeds replay limit' },
+  ]) {
+    const fixture = makeFixture({
+      threadId: 'thread-saved',
+      clientOptions: { savedToolSetId: 'old-tools', toolSetId: 'new-tools' },
+    });
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(() => fixture.client.send('continue', opts), {
+      message: /continuityContext|context rotation/,
+    });
+    t.false(
+      fixture.sent.some(message => message.method?.startsWith('thread/')),
+    );
+  }
+});
+
+test('normal resumed threads do not replay context or reject unavailable context', async t => {
+  const fixture = makeFixture({
+    threadId: 'thread-saved',
+    clientOptions: { savedToolSetId: 'same', toolSetId: 'same' },
+  });
+  const reader = await fixture.client.send('continue', {
+    continuityContextUnavailable: 'history exceeds replay limit',
+  });
+  t.deepEqual(
+    fixture.sent.find(message => message.method === 'turn/start').params.input,
+    [{ type: 'text', text: 'continue', text_elements: [] }],
+  );
+  t.false(fixture.sent.some(message => message.method === 'thread/start'));
+  await fixture.client.interrupt();
+  await drain(reader);
+});
+
+test('an empty saved thread restores continuity again after a failed first turn is reverted', async t => {
+  t.timeout(5000);
+  const fixture = makeFixture({
+    threadId: 'thread-saved',
+    clientOptions: { savedRecovery: { baseTurnId: null } },
+  });
+  const first = await fixture.client.send('first', {
+    continuityContext: 'completed dialogue',
+  });
+  await fixture.client.interrupt();
+  await drain(first);
+  const second = await fixture.client.send('retry', {
+    continuityContext: 'completed dialogue',
+  });
+  const requests = fixture.sent.filter(
+    message => message.method === 'turn/start',
+  );
+  t.is(requests.length, 2);
+  t.true(requests.every(message => message.params.input.length === 2));
+  await fixture.client.interrupt();
+  await drain(second);
+});
+
+test('a committed checkpoint is acknowledged under its original catalog before rotation', async t => {
+  const saved = [];
+  const fixture = makeFixture({
+    threadId: 'thread-saved',
+    existingTurnIds: ['turn-1'],
+    clientOptions: {
+      savedToolSetId: 'old-tools',
+      toolSetId: 'new-tools',
+      savedRecovery: {
+        baseTurnId: null,
+        turnId: 'turn-1',
+        status: 'completed',
+      },
+      saveThreadState: async state => {
+        saved.push(state);
+      },
+    },
+  });
+  const reader = await fixture.client.send('continue', {
+    continuityContext: 'completed dialogue',
+    acknowledgedCheckpoint: 'turn-1',
+  });
+  t.false(fixture.sent.some(message => message.method === 'thread/revert'));
+  t.is(
+    fixture.sent.find(message => message.method === 'turn/start').params
+      .threadId,
+    'thread-new',
+  );
+  t.like(
+    saved.find(state => state.threadId === 'thread-new'),
+    {
+      recovery: { baseTurnId: null, previousCheckpoint: 'turn-1' },
+    },
+  );
+  fixture.push({
+    method: 'turn/completed',
+    params: {
+      threadId: 'thread-new',
+      turn: { id: 'turn-2', status: 'completed' },
+    },
+  });
+  await drain(reader);
+  await fixture.client.acknowledge('turn-2');
+  t.is(
+    saved.at(-1).recovery,
+    undefined,
+    'native commit clears old checkpoint lineage',
+  );
+});
+
+test('combined UTF-8 prompt and restoration bounds reject before rotation', async t => {
+  const fixture = makeFixture({
+    threadId: 'thread-saved',
+    clientOptions: {
+      savedToolSetId: 'old-tools',
+      toolSetId: 'new-tools',
+      maxPromptBytes: 500,
+    },
+  });
+  await t.throwsAsync(
+    () =>
+      fixture.client.send('continue', { continuityContext: '界'.repeat(100) }),
+    { message: /prompt byte limit/ },
+  );
+  t.is(fixture.sent.length, 0);
+});
+
+test('replacement revival preserves only its exact old-thread acknowledgement lineage', async t => {
+  for (const turnId of [undefined, 'failed-first']) {
+    const saved = [];
+    const fixture = makeFixture({
+      threadId: 'thread-saved',
+      existingTurnIds: turnId ? [turnId] : [],
+      clientOptions: {
+        savedRecovery: {
+          baseTurnId: null,
+          ...(turnId ? { turnId } : {}),
+          previousCheckpoint: 'old-committed',
+        },
+        saveThreadState: async state => {
+          saved.push(state);
+        },
+      },
+    });
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(
+      () =>
+        fixture.client.send('wrong', {
+          continuityContext: 'history',
+          acknowledgedCheckpoint: 'unrelated',
+        }),
+      { message: /not awaiting acknowledgement/ },
+    );
+    // eslint-disable-next-line no-await-in-loop
+    const reader = await fixture.client.send('retry', {
+      continuityContext: 'history',
+      acknowledgedCheckpoint: 'old-committed',
+    });
+    t.is(
+      fixture.sent.find(message => message.method === 'turn/start').params.input
+        .length,
+      2,
+    );
+    t.true(
+      saved.every(
+        state => state.recovery.previousCheckpoint === 'old-committed',
+      ),
+    );
+    // eslint-disable-next-line no-await-in-loop
+    await fixture.client.interrupt();
+    // eslint-disable-next-line no-await-in-loop
+    await drain(reader);
+  }
+});
+
+test('a crash after empty reconciliation retains the durable empty marker and lineage', async t => {
+  /** @type {any} */
+  let captured;
+  const fixture = makeFixture({
+    threadId: 'thread-saved',
+    clientOptions: {
+      savedRecovery: { baseTurnId: null, previousCheckpoint: 'old-committed' },
+      saveThreadState: async state => {
+        captured = state;
+        throw Error('Lost empty reconciliation acknowledgement');
+      },
+    },
+  });
+  await t.throwsAsync(
+    () =>
+      fixture.client.send('retry', {
+        continuityContext: 'history',
+        acknowledgedCheckpoint: 'old-committed',
+      }),
+    { message: /Lost empty reconciliation acknowledgement/ },
+  );
+  t.like(captured, {
+    recovery: { baseTurnId: null, previousCheckpoint: 'old-committed' },
+  });
+  const revived = makeFixture({
+    threadId: captured.threadId,
+    clientOptions: { savedRecovery: captured.recovery },
+  });
+  const reader = await revived.client.send('retry', {
+    continuityContext: 'history',
+    acknowledgedCheckpoint: 'old-committed',
+  });
+  t.is(
+    revived.sent.find(message => message.method === 'turn/start').params.input
+      .length,
+    2,
+  );
+  t.false(revived.sent.some(message => message.method === 'thread/turns/list'));
+  await revived.client.interrupt();
+  await drain(reader);
+});
+
+test('revival after acknowledged history reads the native base checkpoint', async t => {
+  const saved = [];
+  const fixture = makeFixture({
+    threadId: 'thread-saved',
+    existingTurnIds: ['turn-1'],
+    clientOptions: {
+      saveThreadState: async state => {
+        saved.push(state);
+      },
+    },
+  });
+  const reader = await fixture.client.send('next');
+  t.like(saved[0], { recovery: { baseTurnId: 'turn-1' } });
+  await fixture.client.interrupt();
+  await drain(reader);
+});
+
+test('rotation refuses divergent old checkpoint history without forgetting the marker', async t => {
+  const saved = [];
+  const fixture = makeFixture({
+    threadId: 'thread-saved',
+    existingTurnIds: ['unrelated'],
+    clientOptions: {
+      savedToolSetId: 'old-tools',
+      toolSetId: 'new-tools',
+      savedRecovery: { baseTurnId: null, turnId: 'expected' },
+      saveThreadState: async state => {
+        saved.push(state);
+      },
+    },
+  });
+  await t.throwsAsync(() =>
+    fixture.client.send('continue', { continuityContext: 'prior dialogue' }),
+  );
+  t.false(fixture.sent.some(message => message.method === 'thread/start'));
+  t.deepEqual(saved, []);
+});
+
 // What app-server 0.152.0 answers to `account/read` with an API key
 // configured. `account` is null when signed out; `requiresOpenaiAuth` is false
 // only for a provider configured to bring its own credentials.
@@ -62,6 +370,7 @@ const makeQueue = () => {
  *   modelListResult?: any,
  *   accountReadResult?: any,
  *   brokerEndpoint?: string,
+ *   network?: any,
  *   configReadResult?: any,
  *   existingTurnIds?: string[],
  *   announceTurns?: boolean,
@@ -79,6 +388,7 @@ const makeFixture = ({
   modelListResult,
   accountReadResult,
   brokerEndpoint,
+  network,
   configReadResult,
   existingTurnIds = [],
   announceTurns = true,
@@ -219,6 +529,7 @@ const makeFixture = ({
   };
   const transport = {
     brokerEndpoint,
+    network,
     messages: queue.messages,
     send,
     close: async () => {
@@ -755,6 +1066,70 @@ test('replaying an already durable checkpoint is idempotent', async t => {
   await fixture.client.terminate();
 });
 
+test('Floot retry after revival acknowledges the durable base then reconciles the failed turn', async t => {
+  t.timeout(1000);
+  let state;
+  const failed = makeFixture({
+    threadId: 'thread-saved',
+    existingTurnIds: ['turn-1'],
+    clientOptions: {
+      savedRecovery: {
+        baseTurnId: null,
+        turnId: 'turn-1',
+        status: 'completed',
+      },
+      saveThreadState: async next => {
+        state = next;
+      },
+    },
+  });
+  t.teardown(() => failed.client.terminate());
+  const reader = await failed.client.send('fails', {
+    acknowledgedCheckpoint: 'turn-1',
+  });
+  failed.push({
+    method: 'turn/completed',
+    params: {
+      threadId: 'thread-saved',
+      turn: { id: 'turn-2', status: 'failed' },
+    },
+  });
+  t.is((await drain(reader)).at(-1).type, 'abort');
+  await failed.client.terminate();
+  const revived = makeFixture({
+    threadId: 'thread-saved',
+    existingTurnIds: ['turn-1', 'turn-2'],
+    clientOptions: {
+      savedRecovery: /** @type {any} */ (state).recovery,
+      saveThreadState: async next => {
+        state = next;
+      },
+    },
+  });
+  t.teardown(() => revived.client.terminate());
+  const retry = await revived.client.send('retry', {
+    acknowledgedCheckpoint: 'turn-1',
+  });
+  const revert = revived.sent.find(
+    message => message.method === 'thread/revert',
+  );
+  t.is(revert.params.beforeTurnId, 'turn-2');
+  const methods = revived.sent.map(message => message.method);
+  t.true(methods.indexOf('thread/revert') < methods.indexOf('turn/start'));
+  revived.push({
+    method: 'turn/completed',
+    params: {
+      threadId: 'thread-saved',
+      turn: { id: 'turn-3', status: 'completed' },
+    },
+  });
+  t.deepEqual((await drain(retry)).at(-1), {
+    type: 'end',
+    checkpoint: 'turn-3',
+  });
+  await revived.client.acknowledge('turn-3');
+});
+
 test('a failed thread-binding audit is retried before dispatch', async t => {
   let bindingAttempts = 0;
   const fixture = makeFixture({
@@ -849,7 +1224,12 @@ test('reconciliation marker survives a failed completion audit', async t => {
   });
   await drain(reader);
   t.is(reconciliationAudits, 2);
-  t.true(persisted.some(state => state.recovery === undefined));
+  t.like(persisted[0], { recovery: { baseTurnId: null } });
+  t.is(
+    persisted[0].recovery.turnId,
+    undefined,
+    'the reconciled empty thread retains no abandoned turn',
+  );
   await fixture.client.terminate();
 });
 
@@ -2376,4 +2756,69 @@ test('broker config admission permits a credential-free provider', async t => {
     fixture.sent.findIndex(message => message.method === 'config/read') <
       fixture.sent.findIndex(message => message.method === 'model/list'),
   );
+});
+
+test('an admitted managed proxy policy survives actual turn/start', async t => {
+  const network = harden({
+    policy: 'public-internet',
+    proxyUrl: 'http://207.148.100.198:23457',
+    dnsHost: '127.0.0.53',
+    resolverConfigPath: '/private/provider/public-resolv.conf',
+  });
+  const fixture = makeFixture({
+    brokerEndpoint: 'http://127.0.0.1:23456',
+    network,
+    accountReadResult: { account: null, requiresOpenaiAuth: false },
+    configReadResult: {
+      config: {
+        model_provider: 'endo_broker',
+        sandbox_mode: 'workspace-write',
+        approval_policy: 'never',
+        sandbox_workspace_write: {
+          network_access: true,
+          writable_roots: ['/workspace', '/tmp', '/run', '/scratch'],
+          exclude_slash_tmp: true,
+          exclude_tmpdir_env_var: true,
+        },
+        features: {
+          network_proxy: {
+            enabled: true,
+            allow_upstream_proxy: true,
+            allow_local_binding: false,
+            enable_socks5: false,
+            enable_socks5_udp: false,
+            domains: { '*': 'allow' },
+          },
+        },
+        model_providers: {
+          endo_broker: {
+            name: 'Endo broker',
+            base_url: 'http://127.0.0.1:23456/v1',
+            wire_api: 'responses',
+            requires_openai_auth: false,
+          },
+        },
+      },
+    },
+  });
+  const reader = await fixture.client.send('inspect');
+  t.true(
+    fixture.sent.find(message => message.method === 'turn/start').params
+      .sandboxPolicy.networkAccess,
+  );
+  await fixture.client.interrupt();
+  await drain(reader);
+  await fixture.client.terminate();
+});
+
+test('transport metadata alone cannot enable native networking without broker config admission', async t => {
+  const fixture = makeFixture({ network: { policy: 'public-internet' } });
+  const reader = await fixture.client.send('inspect');
+  t.false(
+    fixture.sent.find(message => message.method === 'turn/start').params
+      .sandboxPolicy.networkAccess,
+  );
+  await fixture.client.interrupt();
+  await drain(reader);
+  await fixture.client.terminate();
 });

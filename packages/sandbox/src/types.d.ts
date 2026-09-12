@@ -41,7 +41,8 @@ export type NetworkProfile =
   | 'private'
   | 'host-loopback'
   | 'host-lan'
-  | 'host-net';
+  | 'host-net'
+  | 'join';
 
 // ---------------------------------------------------------------------------
 // Backend driver names and probe results
@@ -191,6 +192,14 @@ export type SandboxMakeOpts = {
   rootfs: RootfsSpec;
   mounts?: readonly MountSpec[];
   network?: NetworkProfile;
+  /**
+   * Container whose network namespace this slice joins. Required with
+   * `network: 'join'` and rejected for every other profile. The driver
+   * observes the shared namespace is loopback-only (interfaces exactly
+   * `lo`, zero routable routes) before admitting the slice, so a networkless
+   * provider broker can front the slice without giving it egress.
+   */
+  networkRef?: string;
   backend?: BackendSelector;
   seccomp?: SeccompPolicy;
   env?: Record<string, string>;
@@ -226,6 +235,13 @@ export type SandboxMakeOpts = {
  * already have recorded because nothing can impose one afterwards.
  */
 export type SlicePolicyMount =
+  | {
+      role: 'resolver';
+      kind: 'resolver';
+      source: string;
+      destination: '/etc/resolv.conf';
+      mode: 'ro';
+    }
   | {
       role: string;
       kind: 'tmpfs';
@@ -396,6 +412,7 @@ export type ObservedSliceState = {
    * `null` when nothing is mounted at it. May be absent when the policy
    * declares no attaches; an attach with no entry here is not proved.
    */
+  resolverContents?: string;
   attachMounts?: ReadonlyMap<
     string,
     { fstype: string; root: string; options: readonly string[] } | null
@@ -493,6 +510,8 @@ export type SliceSpec = {
   scratchHostPath: string;
   /** Network policy. */
   network: NetworkProfile;
+  /** Container to join for `network: 'join'`; absent otherwise. */
+  networkRef?: string;
   /** Seccomp policy. */
   seccomp: SeccompPolicy;
   /**

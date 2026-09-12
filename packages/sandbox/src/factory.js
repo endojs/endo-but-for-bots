@@ -492,6 +492,17 @@ export const makeSandboxFactory = (
    */
   const make = async opts => {
     if (ownerLost !== undefined) throw ownerCancelledError(ownerLost);
+    if ((opts.network === 'join') !== (opts.networkRef !== undefined)) {
+      // Backend-independent: every driver must agree the container ref is
+      // exactly what `network: 'join'` names, so a driver that ignores the
+      // field cannot silently run the slice somewhere else.
+      throw makeError(
+        X`network 'join' requires a networkRef container and no other profile accepts one`,
+      );
+    }
+    if (opts.network === 'join' && opts.policy !== undefined) {
+      throw makeError(X`network 'join' cannot be combined with a slice policy`);
+    }
     const selector = opts.backend ?? 'auto';
     const needsPolicy = opts.policy !== undefined;
     const selected = await pickDriver(selector, needsPolicy);
@@ -545,6 +556,7 @@ export const makeSandboxFactory = (
       mounts: harden(resolvedMounts),
       scratchHostPath,
       network: opts.network ?? 'none',
+      ...(opts.networkRef !== undefined ? { networkRef: opts.networkRef } : {}),
       seccomp: opts.seccomp ?? 'default',
       env: harden({ ...(opts.env ?? {}) }),
       cwd: opts.cwd,

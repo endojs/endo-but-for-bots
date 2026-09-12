@@ -106,7 +106,6 @@ test('factory facets retain disconnected turns, commit history, and provision de
   const lookups = [];
   hostStore.set('session-agent-legacy', guest);
   hostStore.set('codex-backend', backend);
-  hostStore.set('session-agent-one', guest);
   const host = Far('TestHost', {
     list: () => harden([...hostStore.keys()]),
     has: name => hostStore.has(name),
@@ -114,7 +113,9 @@ test('factory facets retain disconnected turns, commit history, and provision de
       lookups.push(name);
       return hostStore.get(name);
     },
-    provideGuest: () => undefined,
+    provideGuest: (_name, { agentName }) => {
+      hostStore.set(agentName, guest);
+    },
     storeValue: (value, name) => {
       hostStore.set(name, value);
     },
@@ -123,6 +124,11 @@ test('factory facets retain disconnected turns, commit history, and provision de
     },
   });
   const factory = make(host);
+  t.true((await E(factory).listBackends()).some(item => item.id === 'test'));
+  hostStore.delete('codex-backend');
+  t.false((await E(factory).listBackends()).some(item => item.id === 'test'));
+  hostStore.set('codex-backend', backend);
+  t.true((await E(factory).listBackends()).some(item => item.id === 'test'));
   t.teardown(async () => {
     backendEvents.push(harden({ type: 'end' }));
     inbox.close();
@@ -179,7 +185,7 @@ test('factory facets retain disconnected turns, commit history, and provision de
   backendEvents.push(harden({ type: 'end', checkpoint: 'committed' }));
   await ackStarted;
   t.false((await E(turn).getStatus()).done);
-  t.is((await E(session).getHistory()).length, 2);
+  t.is((await E(session).getHistory()).length, 3);
   t.deepEqual(await (await E(session).getCurrentTurn()).history, []);
   releaseAck();
   await E(turn).whenFinished();
@@ -194,6 +200,18 @@ test('factory facets retain disconnected turns, commit history, and provision de
   );
   t.deepEqual(await E(session).getHistory(), [
     { role: 'user', content: 'hello' },
+    {
+      role: 'tool',
+      name: 'handoffDesign',
+      args: JSON.stringify({
+        name: 'design',
+        title: 'Design',
+        design: 'Agreed acceptance criteria',
+        base: 'main',
+        rounds: '2',
+      }),
+      result: handoff,
+    },
     { role: 'assistant', content: 'hello back' },
   ]);
 });

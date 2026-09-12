@@ -1,0 +1,74 @@
+{
+  "name": "@endo/opencode-sandbox",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Run the opencode CLI inside an @endo/sandbox podman slice, exposed to Floot as a hosted backend with a hard-coded OpenRouter provider.",
+  "keywords": [],
+  "author": "Endo contributors",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endojs/endo.git",
+    "directory": "packages/opencode-sandbox"
+  },
+  "bugs": {
+    "url": "https://github.com/endojs/endo/issues"
+  },
+  "type": "module",
+  "exports": {
+    "./setup-host.js": "./setup-host.js",
+    "./setup-hosted.js": "./setup-hosted.js",
+    "./src/opencode-agent-config.js": "./src/opencode-agent-config.js",
+    "./src/opencode-protocol.js": "./src/opencode-protocol.js",
+    "./src/managed-credentials.js": "./src/managed-credentials.js",
+    "./src/managed-credentials-module.js": "./src/managed-credentials-module.js",
+    "./src/opencode-client-module.js": "./src/opencode-client-module.js",
+    "./src/opencode-client.js": "./src/opencode-client.js",
+    "./src/opencode-broker.js": "./src/opencode-broker.js",
+    "./src/opencode-state-provider.js": "./src/opencode-state-provider.js",
+    "./src/opencode-state-provider-module.js": "./src/opencode-state-provider-module.js",
+    "./src/opencode-backend-factory.js": "./src/opencode-backend-factory.js",
+    "./src/opencode-backend-module.js": "./src/opencode-backend-module.js",
+    "./src/opencode-session-provisioner.js": "./src/opencode-session-provisioner.js",
+    "./src/provision-opencode-session.js": "./src/provision-opencode-session.js",
+    "./src/parse-rootfs.js": "./src/parse-rootfs.js",
+    "./src/mcp-bridge.js": "./src/mcp-bridge.js",
+    "./src/mcp-socket-server.js": "./src/mcp-socket-server.js",
+    "./src/container-mount-bridge.js": "./src/container-mount-bridge.js",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "exit 0",
+    "test": "ava",
+    "setup:host": "endo run --UNCONFINED setup-host.js --powers @agent",
+    "setup:hosted": "endo run --UNCONFINED setup-hosted.js --powers @agent",
+    "lint": "eslint '**/*.js'",
+    "lint-fix": "eslint '**/*.js' --fix"
+  },
+  "dependencies": {
+    "@endo/9p-server": "workspace:^",
+    "@endo/daemon": "workspace:^",
+    "@endo/errors": "workspace:^",
+    "@endo/eventual-send": "workspace:^",
+    "@endo/exo": "workspace:^",
+    "@endo/exo-stream": "workspace:^",
+    "@endo/far": "workspace:^",
+    "@endo/hosted-agent": "workspace:^",
+    "@endo/init": "workspace:^",
+    "@endo/patterns": "workspace:^",
+    "@endo/platform": "workspace:^",
+    "@endo/sandbox": "workspace:^",
+    "@endo/stream": "workspace:^"
+  },
+  "devDependencies": {
+    "@endo/cli": "workspace:^",
+    "ava": "catalog:dev",
+    "eslint": "catalog:dev"
+  },
+  "ava": {
+    "files": [
+      "test/**/*.test.js"
+    ],
+    "timeout": "60s"
+  }
+}

@@ -10,7 +10,9 @@ import {
   normalizeHostedModelDescriptor,
 } from '@endo/hosted-agent';
 
+import { assertCodexNetworkEvidence } from './broker-launch.js';
 import { makeCodexClient } from './codex-client.js';
+import { adaptEndoTools, withEndoToolInstructions } from './endo-tools.js';
 
 const assertSessionId = sessionId => {
   (typeof sessionId === 'string' &&
@@ -59,7 +61,7 @@ harden(HOSTED_AGENT_POLICY_V1);
  * Validate the concrete provider lease before it enters a slice.
  *
  * @param {any} lease
- * @param {{ sessionId: string, imageDigest: string, networkNamespaceId: string, providerOrigin: string, accountRef: string, model?: string, authMode?: 'api-key' | 'oauth' }} requirements
+ * @param {{ sessionId: string, imageDigest: string, networkNamespaceId: string, providerOrigin: string, accountRef: string, model?: string, authMode?: 'api-key' | 'oauth' | 'subscription', networkPolicy?: string }} requirements
  */
 export const assertBrokerLeaseV1 = (lease, requirements) => {
   const keys = [
@@ -76,6 +78,13 @@ export const assertBrokerLeaseV1 = (lease, requirements) => {
     'sessionId',
     'version',
   ];
+  if (requirements.networkPolicy === 'public-internet') keys.push('network');
+  keys.sort();
+  if (requirements.networkPolicy === 'public-internet') {
+    lease?.network !== undefined ||
+      Fail`Broker public network evidence missing`;
+    assertCodexNetworkEvidence(lease.network);
+  }
   if (
     Object.keys(lease || {})
       .sort()
@@ -98,14 +107,12 @@ export const assertBrokerLeaseV1 = (lease, requirements) => {
   ) {
     throw makeError(X`broker lease identity does not match the session`);
   }
-  // How the broker authenticates upstream is a property of the lease, not of
-  // the slice, and the slice never learns it. `subscription` is absent because
-  // no vendor-supported configuration lets the broker hold an individual
-  // subscription credential while the slice holds none; see
-  // ../SUBSCRIPTION-AUTH.md. An operator that requires one mode says so, and a
-  // lease issued in the other is refused rather than quietly downgraded.
+  // Authentication mode is a property of the host-held broker, never a token
+  // delivered to the slice. Refuse a silent API-billing downgrade.
   if (
-    !['api-key', 'oauth'].includes(lease.authMode) ||
+    !['api-key', 'oauth', 'subscription'].includes(lease.authMode) ||
+    (lease.authMode === 'subscription' &&
+      lease.providerOrigin !== 'https://chatgpt.com') ||
     (requirements.authMode && lease.authMode !== requirements.authMode)
   ) {
     throw makeError(X`broker lease authentication mode is not supported`);
@@ -258,10 +265,14 @@ harden(assertContainerMounts);
  * check exists to refuse.
  *
  * @param {any} policy
- * @param {{ imageDigest?: string, sessionId?: string, containerMounts?: unknown }} [requirements]
+ * @param {{ imageDigest?: string, sessionId?: string, containerMounts?: unknown, networkPolicy?: string }} [requirements]
  */
 export const assertHostedAgentPolicyV1 = (policy, requirements = {}) => {
   const expected = HOSTED_AGENT_POLICY_V1;
+  const publicNetwork = requirements.networkPolicy === 'public-internet';
+  !publicNetwork ||
+    policy?.networkPolicy === 'public-internet' ||
+    Fail`Sandbox public network policy missing`;
   const containerMounts = assertContainerMounts(requirements.containerMounts);
   const imageDigest = policy?.imageDigest;
   if (!/^sha256:[0-9a-f]{64}$/.test(imageDigest || '')) {
@@ -307,7 +318,17 @@ export const assertHostedAgentPolicyV1 = (policy, requirements = {}) => {
     }
   }
   for (const [key, value] of Object.entries(expected.limits)) {
-    if (policy?.limits?.[key] !== value) {
+    if (key === 'writableBytes') {
+      const actual = policy?.limits?.writableBytes;
+      if (
+        typeof actual !== 'number' ||
+        !Number.isInteger(actual) ||
+        actual <= 0 ||
+        actual > value
+      ) {
+        throw makeError(X`sandbox writable byte ceiling is not enforced`);
+      }
+    } else if (policy?.limits?.[key] !== value) {
       throw makeError(X`sandbox limit ${q(key)} is not enforced`);
     }
   }
@@ -317,6 +338,7 @@ export const assertHostedAgentPolicyV1 = (policy, requirements = {}) => {
     'mounts',
     'networkNamespaceId',
     'sessionId',
+    ...(publicNetwork ? ['networkPolicy'] : []),
   ].sort();
   if (
     Object.keys(policy || {})
@@ -361,6 +383,15 @@ export const assertHostedAgentPolicyV1 = (policy, requirements = {}) => {
     tmp: harden({ source: 'tmpfs', destination: '/tmp', mode: 'rw' }),
     run: harden({ source: 'tmpfs', destination: '/run', mode: 'rw' }),
     scratch: harden({ source: 'tmpfs', destination: '/scratch', mode: 'rw' }),
+    ...(publicNetwork
+      ? {
+          resolver: harden({
+            source: 'resolver:public',
+            destination: '/etc/resolv.conf',
+            mode: 'ro',
+          }),
+        }
+      : {}),
     ...Object.fromEntries(
       containerMounts.map(attach => [
         `attach-${attach.key}`,
@@ -431,13 +462,14 @@ harden(assertHostedAgentPolicyV1);
  * @param {(options: any) => Promise<{ policy: () => Promise<any>, dispose: () => Promise<void> }>} powers.makeSlice
  * @param {() => Promise<void>} [powers.retrySliceCleanup]
  *   Reap slices retained by a failed makeSlice before releasing workspace leases.
+ * @param {boolean} [powers.publicInternetEnabled] Trusted operator capability availability.
  * @param {(options: any) => Promise<any>} powers.startTransport
- * @param {(sessionId: string) => Promise<{ threadId?: string, toolSetId?: string, recovery?: { baseTurnId: string | null, turnId?: string, status?: string } }>} powers.loadThreadState
- * @param {(sessionId: string, state: { threadId: string, toolSetId?: string, recovery?: { baseTurnId: string | null, turnId?: string, status?: string } }) => Promise<void>} powers.saveThreadState
+ * @param {(sessionId: string) => Promise<{ threadId?: string, toolSetId?: string, recovery?: { baseTurnId: string | null, turnId?: string, status?: string, previousCheckpoint?: string } }>} powers.loadThreadState
+ * @param {(sessionId: string, state: { threadId: string, toolSetId?: string, recovery?: { baseTurnId: string | null, turnId?: string, status?: string, previousCheckpoint?: string } }) => Promise<void>} powers.saveThreadState
  * @param {string} powers.imageDigest
  * @param {string} powers.providerOrigin operator-approved HTTPS origin
  * @param {string} powers.accountRef operator-selected provider account
- * @param {'api-key' | 'oauth'} [powers.brokerAuthMode] required upstream
+ * @param {'api-key' | 'oauth' | 'subscription'} [powers.brokerAuthMode] required upstream
  * authentication mode; a lease issued in the other mode is refused rather than
  * silently accepted
  */
@@ -637,6 +669,7 @@ export const makeCodexResourceProvisioner = powers => {
         imageDigest: powers.imageDigest,
         sessionId: spec.sessionId,
         containerMounts,
+        networkPolicy: spec.networkPolicy,
       });
       assertBrokerLeaseV1(brokerAttestation, {
         sessionId: spec.sessionId,
@@ -644,6 +677,7 @@ export const makeCodexResourceProvisioner = powers => {
         networkNamespaceId: policy.networkNamespaceId,
         providerOrigin: powers.providerOrigin,
         accountRef: powers.accountRef,
+        networkPolicy: spec.networkPolicy,
         ...(spec.model ? { model: spec.model } : {}),
         ...(powers.brokerAuthMode ? { authMode: powers.brokerAuthMode } : {}),
       });
@@ -710,11 +744,19 @@ export const makeCodexResourceProvisioner = powers => {
   };
   return harden(
     Object.assign(
-      spec =>
-        enqueue(async () => {
+      async spec => {
+        spec?.networkPolicy === undefined ||
+          spec.networkPolicy === 'off' ||
+          (powers.publicInternetEnabled === true &&
+            spec.networkPolicy === 'public-internet') ||
+          Fail`Codex supports only the off network policy`;
+        return enqueue(async () => {
           await retryPending();
-          return provision(spec);
-        }),
+          return provision(
+            harden({ ...spec, networkPolicy: spec.networkPolicy ?? 'off' }),
+          );
+        });
+      },
       { retryCleanup: () => enqueue(retryPending) },
     ),
   );
@@ -767,11 +809,14 @@ harden(normalizeCodexModelDescriptor);
  *   auditWriter: any,
  *   threadId?: string,
  *   savedToolSetId?: string,
- *   savedRecovery?: { baseTurnId: string | null, turnId?: string, status?: string },
- *   saveThreadState?: (state: { threadId: string, toolSetId?: string, recovery?: { baseTurnId: string | null, turnId?: string, status?: string } }) => Promise<void>,
+ *   savedRecovery?: { baseTurnId: string | null, turnId?: string, status?: string, previousCheckpoint?: string },
+ *   saveThreadState?: (state: { threadId: string, toolSetId?: string, recovery?: { baseTurnId: string | null, turnId?: string, status?: string, previousCheckpoint?: string } }) => Promise<void>,
  * }>} options.provision
  * @param {() => Promise<readonly any[]>} options.listModels
  * @param {string} options.imageDigest
+ * @param {boolean} [options.publicInternetEnabled] Trusted operator capability availability.
+ * @param {(shutdown: () => Promise<void>) => void} [options.registerShutdown]
+ *   Host-only shutdown authority; stops live clients without deleting sessions.
  * @param {(spec: Record<string, any>) => Promise<void>} options.destroy
  *   Idempotently destroys a session's durable resources: its workspace, Codex
  *   state, thread state, and journal. The factory stops any instance of the
@@ -784,7 +829,10 @@ export const makeCodexBackendFactory = ({
   listModels,
   imageDigest,
   destroy,
+  registerShutdown,
+  publicInternetEnabled = false,
 }) => {
+  let shuttingDown = false;
   /^sha256:[0-9a-f]{64}$/.test(imageDigest) ||
     Fail`Codex backend factory requires an operator-approved image digest`;
   const listHostedModels = async () => {
@@ -836,10 +884,11 @@ export const makeCodexBackendFactory = ({
    * @param {any} toolSet
    */
   const createSession = async (spec, toolSet) => {
+    !shuttingDown || Fail`Codex backend is shutting down`;
     spec.cwd === undefined ||
       spec.cwd === '/workspace' ||
       Fail`Codex session cwd must be /workspace`;
-    const tools = await E(toolSet).describe();
+    const tools = adaptEndoTools(await E(toolSet).describe());
     const containerMounts = assertContainerMounts(spec.containerMounts);
     // A predecessor that cannot stop — an unsettled Endo tool call — refuses
     // the successor rather than running beside it.
@@ -855,6 +904,7 @@ export const makeCodexBackendFactory = ({
     try {
       const policy = assertHostedAgentPolicyV1(resources.policy, {
         imageDigest,
+        networkPolicy: spec.networkPolicy,
         sessionId: spec.sessionId,
         containerMounts,
       });
@@ -882,7 +932,8 @@ export const makeCodexBackendFactory = ({
         developerInstructions: spec.systemPrompt,
         dynamicTools: tools.dynamicTools,
         toolSetId: tools.toolSetId,
-        callTool: (name, args) => E(toolSet).execute(name, args),
+        callTool: (name, args) =>
+          E(toolSet).execute(tools.originalName(name), args),
         auditEvent,
       });
     } catch (error) {
@@ -983,7 +1034,11 @@ export const makeCodexBackendFactory = ({
     };
 
     const run = makeExo('HostedTurnBackend', HostedTurnBackendInterface, {
-      send: (prompt, options) => E(client).send(prompt, options),
+      send: (prompt, options) =>
+        E(client).send(
+          prompt,
+          withEndoToolInstructions(options, spec.systemPrompt),
+        ),
       models: async () => {
         const models = await E(client).models();
         return harden(models.map(normalizeCodexModelDescriptor));
@@ -1013,11 +1068,23 @@ export const makeCodexBackendFactory = ({
    * @param {any} toolSet
    */
   const create = async (spec, toolSet) => {
+    !shuttingDown || Fail`Codex backend is shutting down`;
     assertSessionId(spec?.sessionId);
-    return inSessionOrder(spec.sessionId, () => createSession(spec, toolSet));
+    spec.networkPolicy === undefined ||
+      spec.networkPolicy === 'off' ||
+      (publicInternetEnabled === true &&
+        spec.networkPolicy === 'public-internet') ||
+      Fail`Codex supports only the off network policy`;
+    return inSessionOrder(spec.sessionId, () =>
+      createSession(
+        harden({ ...spec, networkPolicy: spec.networkPolicy ?? 'off' }),
+        toolSet,
+      ),
+    );
   };
 
   const destroySession = async spec => {
+    !shuttingDown || Fail`Codex backend is shutting down`;
     assertSessionId(spec?.sessionId);
     return inSessionOrder(spec.sessionId, async () => {
       // Never underneath a running app-server.
@@ -1026,6 +1093,16 @@ export const makeCodexBackendFactory = ({
     });
   };
 
+  registerShutdown?.(async () => {
+    shuttingDown = true;
+    await Promise.all([...sessionChains.values()]);
+    const results = await Promise.allSettled([...live.keys()].map(stopLive));
+    const failures = results
+      .filter(result => result.status === 'rejected')
+      .map(result => result.reason);
+    if (failures.length)
+      throw new AggregateError(failures, 'Codex backend shutdown pending');
+  });
   return makeExo('CodexBackendFactory', HostedBackendFactoryInterface, {
     async describe() {
       return harden({
@@ -1034,6 +1111,8 @@ export const makeCodexBackendFactory = ({
         kind: 'hosted',
         continuity: 'opaque-reconciled',
         toolOwnership: 'endo',
+        supportedNetworkPolicies:
+          publicInternetEnabled === true ? ['off', 'public-internet'] : ['off'],
       });
     },
     listModels: listHostedModels,

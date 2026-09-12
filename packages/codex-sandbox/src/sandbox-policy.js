@@ -11,14 +11,19 @@ import {
   assertHostedAgentPolicyV1,
   makeCodexResourceProvisioner,
 } from './backend-factory.js';
-import { makeBrokerAppServerArgv } from './broker-launch.js';
+import {
+  makeBrokerAppServerArgv,
+  makeBrokerEnvironment,
+  assertCodexNetworkEvidence,
+} from './broker-launch.js';
 import { makeCodexRuntimeVerifier } from './runtime-verifier.js';
+import { normalizeCodexVolumeLimits } from './volume-limits.js';
 
 const GiB = 1024n ** 3n;
 const MiB = 1024n ** 2n;
 // One policy anchor and one admitted operation have independent cgroups.
 // Reserve half the aggregate memory, PID, and CPU budget for each.
-const resources = harden({
+const standardResources = harden({
   memoryBytes: 2n * GiB,
   pids: 256,
   cpuCores: 2,
@@ -27,16 +32,6 @@ const resources = harden({
   shmBytes: 64n * MiB,
   maxConcurrentOperations: 1,
   writableBytes: 16n * GiB,
-});
-const approvedEnvironment = harden({
-  CODEX_HOME: '/codex-home',
-  HOME: '/home/node',
-  LANG: 'C.UTF-8',
-  LC_ALL: 'C.UTF-8',
-  TEMP: '/tmp',
-  TMP: '/tmp',
-  TMPDIR: '/tmp',
-  TZ: 'UTC',
 });
 const keys = record =>
   Object.keys(record || {})
@@ -74,10 +69,20 @@ const assertExact = (actual, expected, label) => {
  *
  * @param {{sandbox: any, volumeProvider: any, runtimeVerifier?: any,
  * imageRef: string, imageDigest: string, providerOrigin: string,
- * accountRef: string, brokerAuthMode?: 'api-key' | 'oauth'}} powers
+ * accountRef: string, brokerAuthMode?: 'api-key' | 'oauth' | 'subscription',
+ * volumeLimits?: {workspaceBytes:bigint,stateBytes:bigint}}} powers
  */
 export const makeAttestedCodexSliceFactory = powers => {
   const { imageDigest, imageRef } = powers;
+  const volumeLimits = normalizeCodexVolumeLimits(powers.volumeLimits);
+  // Writable accounting includes both tmpfs copies and shm plus the two
+  // shared durable volumes. Attestation must report the actual sum, not the
+  // standard profile's larger ceiling when the operator reduces disk quotas.
+  const resources = harden({
+    ...standardResources,
+    writableBytes:
+      4n * GiB + volumeLimits.workspaceBytes + volumeLimits.stateBytes,
+  });
   const runtimeVerifier = powers.runtimeVerifier ?? makeCodexRuntimeVerifier();
   /^sha256:[0-9a-f]{64}$/.test(imageDigest) ||
     Fail`Image digest must be pinned`;
@@ -138,10 +143,17 @@ export const makeAttestedCodexSliceFactory = powers => {
       networkNamespaceId: lease?.networkNamespaceId,
       providerOrigin: powers.providerOrigin,
       accountRef: powers.accountRef,
+      networkPolicy: spec.networkPolicy,
       ...(spec.model ? { model: spec.model } : {}),
       ...(powers.brokerAuthMode ? { authMode: powers.brokerAuthMode } : {}),
     });
-    const launchArgv = makeBrokerAppServerArgv(lease.endpoint);
+    const network = assertCodexNetworkEvidence(lease.network);
+    const approvedEnvironment = makeBrokerEnvironment(network);
+    const launchArgv = makeBrokerAppServerArgv(
+      lease.endpoint,
+      'codex',
+      network,
+    );
     const broker = await E(brokerLease).sandboxEvidence();
     const brokerSidecar = broker?.brokerSidecar;
     const selector = keys(brokerSidecar);
@@ -163,24 +175,36 @@ export const makeAttestedCodexSliceFactory = powers => {
         brokerSidecar,
         credentialInjection: 'broker-only',
         brokerTransport: 'loopback-sidecar',
+        ...(network ? { network } : {}),
       },
       'broker evidence',
     );
     /** @type {readonly import('@endo/sandbox/types.js').SlicePolicyMount[]} */
     const mounts = harden([
+      ...(network
+        ? [
+            {
+              role: /** @type {const} */ ('resolver'),
+              kind: /** @type {const} */ ('resolver'),
+              source: network.resolverConfigPath,
+              destination: /** @type {const} */ ('/etc/resolv.conf'),
+              mode: /** @type {const} */ ('ro'),
+            },
+          ]
+        : []),
       {
         role: 'workspace',
         kind: 'volume',
         source: volumes.workspaceVolume,
         destination: '/workspace',
-        sizeBytes: 8n * GiB,
+        sizeBytes: volumeLimits.workspaceBytes,
       },
       {
         role: 'codex-state',
         kind: 'volume',
         source: volumes.stateVolume,
         destination: '/codex-home',
-        sizeBytes: 4n * GiB,
+        sizeBytes: volumeLimits.stateBytes,
       },
       { role: 'tmp', kind: 'tmpfs', destination: '/tmp', sizeBytes: GiB },
       {
@@ -261,9 +285,14 @@ export const makeAttestedCodexSliceFactory = powers => {
             ? `volume:${mount.source}`
             : mount.kind === 'attach'
               ? `attach:${mount.source}`
-              : 'tmpfs',
+              : mount.kind === 'resolver'
+                ? `resolver:${mount.source}`
+                : 'tmpfs',
         destination: mount.destination,
-        mode: mount.kind === 'attach' ? mount.mode : 'rw',
+        mode:
+          mount.kind === 'attach' || mount.kind === 'resolver'
+            ? mount.mode
+            : 'rw',
         options: ['nodev', 'nosuid'],
       }));
       assertExact(
@@ -306,6 +335,7 @@ export const makeAttestedCodexSliceFactory = powers => {
           launchArgv,
           launchEnvironment: approvedEnvironment,
           brokerEndpoint: lease.endpoint,
+          ...(network ? { network } : {}),
         }),
       );
       assertExact(
@@ -319,7 +349,10 @@ export const makeAttestedCodexSliceFactory = powers => {
           toolSandbox: 'codex-workspace-write',
           toolCodexHomeAccess: 'read-only',
           toolBrokerAccess: 'denied',
-          environment: 'credential-and-proxy-free',
+          environment: network
+            ? 'credential-free-managed-proxy'
+            : 'credential-and-proxy-free',
+          ...(network ? { network } : {}),
           codexHomeAuthFile: 'absent',
         },
         'runtime evidence',
@@ -337,6 +370,7 @@ export const makeAttestedCodexSliceFactory = powers => {
           ...controls,
           version: 'HostedAgentPolicyV1',
           sessionId,
+          ...(network ? { networkPolicy: 'public-internet' } : {}),
           credentialInjection: broker.credentialInjection,
           brokerTransport: broker.brokerTransport,
           toolSandbox: runtime.toolSandbox,
@@ -359,12 +393,19 @@ export const makeAttestedCodexSliceFactory = powers => {
             source:
               mount.role === 'workspace' || mount.role === 'codex-state'
                 ? `${mount.role}:${sessionId}`
-                : mount.role.startsWith('attach-')
-                  ? `attach:${mount.role.slice('attach-'.length)}`
-                  : mount.source,
+                : mount.role === 'resolver'
+                  ? 'resolver:public'
+                  : mount.role.startsWith('attach-')
+                    ? `attach:${mount.role.slice('attach-'.length)}`
+                    : mount.source,
           })),
         }),
-        { sessionId, imageDigest, containerMounts },
+        {
+          sessionId,
+          imageDigest,
+          containerMounts,
+          networkPolicy: spec.networkPolicy,
+        },
       );
       return makeExo(
         'AttestedCodexSlice',

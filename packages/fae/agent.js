@@ -15,6 +15,8 @@ import { makeRotatingProvider } from './src/provider-cache.js';
 import { discoverTools, executeTool } from './src/tools.js';
 import {
   makeListPetnamesTool,
+  makeDescribeCapabilityTool,
+  makeReadSourcesTool,
   makeLookupTool,
   makeStoreTool,
   makeRemoveTool,
@@ -294,6 +296,8 @@ export const spawnWorkerLoop = async (
   const localTools = new Map();
   localTools.set('list', makeListPetnamesTool(powers));
   localTools.set('lookup', makeLookupTool(powers));
+  localTools.set('describeCapability', makeDescribeCapabilityTool(powers));
+  localTools.set('readSources', makeReadSourcesTool(powers));
   localTools.set('store', makeStoreTool(powers));
   localTools.set('remove', makeRemoveTool(powers));
   localTools.set('adopt', makeAdoptTool(powers));

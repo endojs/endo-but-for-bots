@@ -31,13 +31,17 @@ import { makeProviderFetchTransport } from './provider-transport.js';
  * @param {typeof globalThis.fetch} options.fetch Explicit outbound authority.
  * @param {Omit<BrokerPolicy,'expiresAt'>} options.policy
  * @param {number} options.leaseDurationMs
+ * @param {number} [options.requestTimeoutMs] Host-only request deadline, at most ten minutes; lease expiry remains authoritative.
  * @param {string} options.imageDigest Target Codex image, not listener image.
  * @param {string} options.accountRef
  * @param {() => number} [options.now]
  * @param {(event: any) => void} [options.audit]
+ * @param {Parameters<typeof makeProviderFetchTransport>[0]['onDiagnostic']} [options.onDiagnostic]
  * @param {any} [options.credential] The record's shared refreshing credential,
  * from `makeBrokerOAuthCredential`. One per secret record, shared by every
  * issuer and lease over it.
+ * @param {(spec:any)=>{endpoint:any,address:string,dispose:()=>void}} [options.makePublicNetwork]
+ * Host-only factory for a separately revocable public-egress capability.
  */
 export const makeProviderBrokerLeaseIssuer = ({
   runtime,
@@ -45,11 +49,14 @@ export const makeProviderBrokerLeaseIssuer = ({
   fetch,
   policy,
   leaseDurationMs,
+  requestTimeoutMs = 120_000,
   imageDigest,
   accountRef,
   now = Date.now,
   audit,
+  onDiagnostic,
   credential,
+  makePublicNetwork,
 }) => {
   (Number.isInteger(leaseDurationMs) &&
     leaseDurationMs > 0 &&
@@ -61,6 +68,10 @@ export const makeProviderBrokerLeaseIssuer = ({
     policy.maxRequests > 0n &&
     policy.maxRequests <= 0xffff_ffffn) ||
     Fail`Invalid provider lease issuer policy`;
+  (Number.isInteger(requestTimeoutMs) &&
+    requestTimeoutMs > 0 &&
+    requestTimeoutMs <= 600_000) ||
+    Fail`Invalid provider request deadline`;
   // The issuer's selected account is the binding, so an operator policy may
   // agree with it but never name a different one. The broker then refuses any
   // credential — including a refreshed one — that belongs elsewhere.
@@ -73,7 +84,7 @@ export const makeProviderBrokerLeaseIssuer = ({
   // the selected account, and able to refresh. Without the second half an
   // object that cannot refresh is admitted here, reports `authMode: 'oauth'`
   // in its attestation, and only fails on the first turn.
-  if (authMode === 'oauth') {
+  if (authMode === 'oauth' || authMode === 'subscription') {
     credential !== undefined || Fail`Invalid provider lease issuer policy`;
     credential.accountRef === accountRef ||
       Fail`Invalid provider lease issuer policy`;
@@ -113,13 +124,22 @@ export const makeProviderBrokerLeaseIssuer = ({
       spec.accountRef === accountRef &&
       (!spec.model || configuredPolicy.models.includes(spec.model))) ||
       Fail`Provider lease request denied`;
+    spec.networkPolicy === 'off' ||
+      (spec.networkPolicy === 'public-internet' && makePublicNetwork) ||
+      Fail`Unsupported provider lease network policy`;
     const expiresAt = now() + leaseDurationMs;
     const leaseId = `lease-${randomUUID()}`;
+    // Both sides of the private pipe use the same host-selected ceiling.
+    // The lease's independent expiry timer also revokes requests started late.
+    const timeoutMs = Math.min(requestTimeoutMs, expiresAt - now());
+    (Number.isInteger(timeoutMs) && timeoutMs > 0) ||
+      Fail`Provider lease expired before admission`;
     const transport = makeProviderFetchTransport({
       fetch,
-      timeoutMs: Math.min(leaseDurationMs, 120_000),
+      timeoutMs,
       maxRequestBytes: configuredPolicy.maxRequestBytes,
       maxResponseBytes: configuredPolicy.maxResponseBytes,
+      onDiagnostic,
     });
     const core = makeProviderBrokerLease(
       { ...configuredPolicy, expiresAt },
@@ -132,6 +152,7 @@ export const makeProviderBrokerLeaseIssuer = ({
       },
     );
     let worker;
+    let network;
     let inactive = false;
     let cleaned = false;
     let cleanup;
@@ -146,6 +167,7 @@ export const makeProviderBrokerLeaseIssuer = ({
       pending.add(revoke);
       globalThis.clearTimeout(timer);
       transport.dispose();
+      network?.dispose();
       const revoking = E(core.admin).revoke();
       if (!cleanup) {
         cleanup = (async () => {
@@ -163,16 +185,33 @@ export const makeProviderBrokerLeaseIssuer = ({
     };
     leases.add(revoke);
     try {
+      if (spec.networkPolicy === 'public-internet') {
+        if (!makePublicNetwork) throw Fail`Public network factory unavailable`;
+        network = makePublicNetwork(spec);
+      }
       worker = await runtime.start({
         endpoint: core.endpoint,
+        ...(network
+          ? {
+              network: { endpoint: network.endpoint, address: network.address },
+            }
+          : {}),
         limits: harden({
+          diagnostics: Boolean(onDiagnostic),
           maxConnections: 4,
           maxRequestBytes: configuredPolicy.maxRequestBytes,
           maxResponseBytes: configuredPolicy.maxResponseBytes,
-          timeoutMs: Math.min(leaseDurationMs, 120_000),
+          timeoutMs,
+          allowedPaths: [
+            ...new Set(configuredPolicy.routes.map(route => route.path)),
+          ],
+          clientAuthorization: configuredPolicy.clientAuthorization ?? 'reject',
         }),
       });
       const initial = await worker.observe();
+      (!!initial.network === !!network &&
+        (!network || initial.network.policy === 'public-internet')) ||
+        Fail`Provider listener network policy mismatch`;
       checkLive();
       timer = globalThis.setTimeout(
         () => {
@@ -188,7 +227,9 @@ export const makeProviderBrokerLeaseIssuer = ({
           (current.containerName === initial.containerName &&
             current.networkNamespaceId === initial.networkNamespaceId &&
             current.endpoint === initial.endpoint &&
-            current.listenerImageDigest === initial.listenerImageDigest) ||
+            current.listenerImageDigest === initial.listenerImageDigest &&
+            JSON.stringify(current.network) ===
+              JSON.stringify(initial.network)) ||
             Fail`Provider listener identity changed`;
           checkLive();
           return current;
@@ -220,6 +261,7 @@ export const makeProviderBrokerLeaseIssuer = ({
               // holders share that record.
               authMode,
               networkNamespaceId: current.networkNamespaceId,
+              ...(current.network ? { network: current.network } : {}),
               endpoint: current.endpoint,
               providerOrigin: configuredPolicy.origin,
               expiresAt: new Date(expiresAt).toISOString(),
@@ -239,6 +281,7 @@ export const makeProviderBrokerLeaseIssuer = ({
               imageDigest,
               leaseId,
               networkNamespaceId: current.networkNamespaceId,
+              ...(current.network ? { network: current.network } : {}),
               brokerSidecar: { container: current.containerName },
               credentialInjection: 'broker-only',
               brokerTransport: 'loopback-sidecar',
@@ -276,6 +319,8 @@ export const makeProviderBrokerLeaseIssuer = ({
           providerOrigin: spec.providerOrigin,
           accountRef: spec.accountRef,
           model: spec.model,
+          networkPolicy:
+            spec.networkPolicy === undefined ? 'off' : spec.networkPolicy,
         });
         return serialize(() => issue(request));
       },

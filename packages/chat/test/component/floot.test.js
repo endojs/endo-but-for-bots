@@ -30,6 +30,320 @@ globalThis.cancelAnimationFrame = id => clearTimeout(id);
 testWindow.confirm = () => true;
 const waitFor = predicate => waitForDOM(predicate, 10, 2000);
 
+test.serial(
+  'sandbox network changes require explicit operator actions and escape request reasons',
+  async t => {
+    t.timeout(5000);
+    const parent = testDocument.createElement('div');
+    testDocument.body.appendChild(parent);
+    const sets = [];
+    const decisions = [];
+    /** @type {{ policy: string | null, pendingPolicy?: string, error?: string, supportedPolicies: string[], applies: string, request?: { id: string, policy: string, reason: string } }} */
+    let value = {
+      policy: 'off',
+      supportedPolicies: ['off', 'public-internet'],
+      applies: 'next-turn',
+      request: {
+        id: 'r1',
+        policy: 'public-internet',
+        reason: '<img src=x onerror="alert(1)">',
+      },
+    };
+    const facet = Far('NetworkUiSession', {
+      __getMethodNames__: () =>
+        harden([
+          'getNetworkPolicy',
+          'getCurrentTurn',
+          'setNetworkPolicy',
+          'resolveNetworkPolicyRequest',
+        ]),
+      getNetworkPolicy: () => harden({ ...value }),
+      getCurrentTurn: () => null,
+      getHistory: () => harden([]),
+      getUsage: () => harden({ inputTokens: 0, outputTokens: 0 }),
+      setNetworkPolicy: policy => {
+        sets.push(policy);
+        value = {
+          ...value,
+          policy,
+          request: undefined,
+          pendingPolicy: undefined,
+          error: undefined,
+        };
+      },
+      resolveNetworkPolicyRequest: (id, approve, note) => {
+        decisions.push([id, approve, note]);
+        value = {
+          ...value,
+          policy: approve
+            ? value.request?.policy || value.policy
+            : value.policy,
+          request: undefined,
+        };
+      },
+    });
+    const unsupported = Far('UnsupportedNetworkUiSession', {
+      __getMethodNames__: () => harden(['getNetworkPolicy', 'getCurrentTurn']),
+      getNetworkPolicy: () =>
+        harden({ policy: null, supportedPolicies: [], applies: 'next-turn' }),
+      getCurrentTurn: () => null,
+      getHistory: () => harden([]),
+      getUsage: () => harden({ inputTokens: 0, outputTokens: 0 }),
+    });
+    const factory = Far('NetworkUiFactory', {
+      listSessions: () =>
+        harden([
+          { id: 'network', title: 'Network session', createdAt: 2 },
+          { id: 'old', title: 'Unsupported session', createdAt: 1 },
+        ]),
+      listPresets: () => harden([]),
+      listModels: () => harden([]),
+      getSession: id => (id === 'network' ? facet : unsupported),
+    });
+    const cleanup = flootComponent(parent, factory, [], () => {}, [], []);
+    t.teardown(() => {
+      cleanup();
+      parent.remove();
+    });
+    const button = text =>
+      /** @type {HTMLButtonElement | undefined} */ (
+        [...parent.querySelectorAll('button')].find(
+          candidate => candidate.textContent === text,
+        )
+      );
+    const click = text =>
+      button(text)?.dispatchEvent(
+        new testWindow.Event('click', { bubbles: true }),
+      );
+    await waitFor(() => button('Network approval requested'));
+    click('Network approval requested');
+    await waitFor(() => parent.querySelector('.floot-network-request'));
+    t.true(parent.textContent.includes('<img src=x onerror="alert(1)">'));
+    t.falsy(parent.querySelector('img'));
+    t.true(button('Deny request')?.disabled);
+    const note = textareaIn(parent, '.floot-network-request textarea');
+    note.value = 'No network needed for this task';
+    note.dispatchEvent(new testWindow.Event('input', { bubbles: true }));
+    await waitFor(() => button('Deny request')?.disabled === false);
+    click('Deny request');
+    await waitFor(
+      () =>
+        decisions.length === 1 &&
+        !parent.querySelector('.floot-network-request'),
+    );
+    t.deepEqual(decisions[0], ['r1', false, 'No network needed for this task']);
+    const select = /** @type {HTMLSelectElement} */ (
+      parent.querySelector('.floot-network-policy select')
+    );
+    await waitFor(() => !select.disabled);
+    select.value = 'public-internet';
+    select.dispatchEvent(new testWindow.Event('change', { bubbles: true }));
+    await waitFor(
+      () => button('Apply Public internet (HTTP/HTTPS)')?.disabled === false,
+    );
+    t.deepEqual(sets, [], 'selection alone is not authorization');
+    click('Apply Public internet (HTTP/HTTPS)');
+    await waitFor(() =>
+      parent.textContent.includes('Configured policy: Public internet'),
+    );
+    t.deepEqual(sets, ['public-internet']);
+    value = {
+      ...value,
+      policy: null,
+      pendingPolicy: 'off',
+      error: 'Sandbox stop incomplete',
+    };
+    click('Refresh network policy');
+    await waitFor(() => button('Retry Off')?.disabled === false);
+    t.true(parent.textContent.includes('No policy is verified'));
+    t.true(parent.textContent.includes('Sandbox stop incomplete'));
+    t.true(textareaIn(parent, '.floot-input').disabled);
+    t.false(parent.textContent.includes('Configured policy: Off'));
+    t.is(parent.querySelectorAll('.floot-network-policy option').length, 1);
+    click('Retry Off');
+    await waitFor(() => parent.textContent.includes('Configured policy: Off'));
+    t.deepEqual(sets, ['public-internet', 'off']);
+    parent
+      .querySelectorAll('.floot-session-item')[1]
+      .dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+    await waitFor(() =>
+      parent.textContent.includes('No off policy is implied'),
+    );
+    t.falsy(parent.querySelector('.floot-network-policy select'));
+    t.false(parent.textContent.includes('Configured policy: Off'));
+  },
+);
+
+test.serial(
+  'journal recovery renders evidence safely and keeps unavailable sessions visible',
+  async t => {
+    t.timeout(5000);
+    const parent = testDocument.createElement('div');
+    testDocument.body.appendChild(parent);
+    const calls = [];
+    let starts = 0;
+    const hostile = '<img src=x onerror="alert(1)">';
+    const facet = Far('JournalSession', {
+      __getMethodNames__: () =>
+        harden([
+          'getTurns',
+          'getCurrentTurn',
+          'resolveTurn',
+          'getJournalStatus',
+        ]),
+      getTurns: () =>
+        harden([
+          ...Array.from({ length: 100 }, (_, index) => ({
+            turnId: `${index + 2}`,
+            state: 'completed',
+            tools: [{ result: 'hidden'.repeat(20_000) }],
+          })),
+          {
+            turnId: '1',
+            state: 'outcome-unknown',
+            error: hostile,
+            tools: [
+              { name: 'exec', result: `${'a'.repeat(20_000)}TAIL` },
+              { name: 'second', result: 'SECOND ITEM' },
+            ],
+            activity: [{ name: 'native' }],
+          },
+        ]),
+      getJournalStatus: () =>
+        harden({
+          usedEvents: '9990',
+          eventLimit: '10000',
+          remainingEvents: '10',
+          nearCapacity: true,
+          storage: 'private',
+        }),
+      getCurrentTurn: () => null,
+      startTurn: () => {
+        starts += 1;
+        return null;
+      },
+      getHistory: () => harden([]),
+      getUsage: () => harden({ inputTokens: 0, outputTokens: 0 }),
+      resolveTurn: (...args) => {
+        calls.push(args);
+      },
+    });
+    const factory = Far('JournalFactory', {
+      listSessions: () =>
+        harden([
+          {
+            id: 'broken',
+            title: 'Broken session',
+            lifecycle: 'error',
+            createdAt: 2,
+          },
+          {
+            id: 'good',
+            title: 'Review session',
+            lifecycle: 'ready',
+            createdAt: 1,
+          },
+        ]),
+      listPresets: () => harden([]),
+      listModels: () => harden([]),
+      getSession: id => {
+        if (id !== 'good') throw Error('unavailable');
+        return facet;
+      },
+    });
+    const cleanup = flootComponent(parent, factory, [], () => {}, [], []);
+    t.teardown(() => {
+      cleanup();
+      parent.remove();
+    });
+    await waitFor(
+      () => parent.querySelectorAll('.floot-session-item').length === 2,
+    );
+    parent
+      .querySelector('button[aria-label="Turn journal and recovery"]')
+      ?.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+    await waitFor(
+      () => parent.querySelectorAll('.floot-recovery-turn').length === 50,
+    );
+    t.is(
+      parent.querySelectorAll('.floot-recovery pre').length,
+      0,
+      'collapsed evidence is not rendered',
+    );
+    t.true(textareaIn(parent, '.floot-input').disabled);
+    const compose = textareaIn(parent, '.floot-input');
+    compose.value = 'must not produce phantom history';
+    compose.dispatchEvent(new testWindow.Event('input', { bubbles: true }));
+    compose.dispatchEvent(
+      new testWindow.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
+    );
+    await tick();
+    t.is(starts, 0);
+    t.is(parent.querySelectorAll('.floot-msg-row').length, 0);
+    parent
+      .querySelector('.floot-recovery-turn summary')
+      ?.dispatchEvent(
+        new testWindow.Event('click', { bubbles: true, cancelable: true }),
+      );
+    await waitFor(() => parent.textContent.includes('Endo tool evidence'));
+    t.true(parent.textContent.includes(hostile));
+    t.falsy(parent.querySelector('img'));
+    t.true(parent.textContent.includes('Observed native/backend activity'));
+    t.true(parent.textContent.includes('Near capacity'));
+    const buttons = () => [...parent.querySelectorAll('button')];
+    t.true(
+      [...parent.querySelectorAll('.floot-recovery pre')].every(
+        pre => pre.textContent.length <= 8192,
+      ),
+    );
+    t.false(parent.textContent.includes('TAIL'));
+    for (let chunk = 0; chunk < 2; chunk += 1) {
+      buttons()
+        .find(button => button.textContent === 'Next chunk')
+        ?.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+      // eslint-disable-next-line no-await-in-loop
+      await tick();
+    }
+    t.true(
+      parent.textContent.includes('TAIL'),
+      'paged tail remains inspectable',
+    );
+    buttons()
+      .find(button => button.textContent === 'Next item')
+      ?.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+    await waitFor(() => parent.textContent.includes('SECOND ITEM'));
+    const acknowledge = () =>
+      /** @type {HTMLButtonElement} */ (
+        buttons().find(
+          button => button.textContent === 'Acknowledge and allow a new turn',
+        )
+      );
+    t.true(acknowledge().disabled);
+    const note = textareaIn(parent, '.floot-recovery textarea');
+    note.value = 'Verified remote effects and retained the result';
+    note.dispatchEvent(new testWindow.Event('input', { bubbles: true }));
+    buttons()
+      .find(
+        button => button.textContent === 'Confirm: I checked external effects',
+      )
+      ?.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+    await waitFor(() => !acknowledge().disabled);
+    acknowledge().dispatchEvent(
+      new testWindow.Event('click', { bubbles: true }),
+    );
+    await waitFor(() => calls.length === 1);
+    t.deepEqual(calls[0], ['1', note.value]);
+    parent
+      .querySelector('.floot-session-item')
+      ?.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+    await waitFor(() =>
+      parent.textContent.includes('Session unavailable (error)'),
+    );
+    t.true(textareaIn(parent, '.floot-input').disabled);
+    t.false(parent.textContent.includes('Endo tool evidence'));
+  },
+);
+
 /**
  * A queried element that must be there, so an assertion about it fails on what
  * it says rather than on a null dereference.

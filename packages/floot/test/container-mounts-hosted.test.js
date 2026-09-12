@@ -26,6 +26,19 @@ import { make } from '../agent.js';
  * @param {{ refuseTerminateOnce?: boolean }} [options]
  */
 const makeWorld = ({ refuseTerminateOnce = false } = {}) => {
+  let factory;
+  let toolTurn;
+  let toolTurnStarting = false;
+  let toolEvents;
+  let toolAdmission;
+  const finishTools = async () => {
+    if (toolAdmission) await toolAdmission;
+    if (!toolTurn) return;
+    toolEvents.push(harden({ type: 'end' }));
+    await E(toolTurn).whenFinished();
+    toolTurn = undefined;
+    toolEvents = undefined;
+  };
   // One inbox per factory that follows the guest: a buffered reader streams
   // at most once, and the restart test builds two factories over one guest.
   /** @type {ReturnType<typeof makeBufferedReader>[]} */
@@ -39,17 +52,18 @@ const makeWorld = ({ refuseTerminateOnce = false } = {}) => {
   // The capabilities the session holds and may attach: the fake host
   // resolves each by pet name to a formula id.
   const capNames = ['project', 'notes', 'archive', 'scratch'];
+  const petKey = name => (Array.isArray(name) ? name.join('/') : name);
   for (const name of capNames) {
     guestStore.set(name, harden({ kind: 'mount-cap' }));
   }
   const guest = Far('TestGuest', {
-    has: name => guestStore.has(name),
-    lookup: name => guestStore.get(name),
+    has: name => guestStore.has(petKey(name)),
+    lookup: name => guestStore.get(petKey(name)),
     storeValue: (value, name) => {
-      guestStore.set(name, value);
+      guestStore.set(petKey(name), value);
     },
     remove: name => {
-      guestStore.delete(name);
+      guestStore.delete(petKey(name));
     },
     list: prefix => harden(prefix === 'tools' ? [] : [...guestStore.keys()]),
     locate: () => 'test-locator',
@@ -123,13 +137,20 @@ const makeWorld = ({ refuseTerminateOnce = false } = {}) => {
       return harden({
         run: Far('TestRun', {
           send: () => {
-            sends.push(index);
             const events = makeBufferedReader();
+            if (toolTurnStarting) {
+              toolEvents = events;
+              return events.reader;
+            }
+            sends.push(index);
             events.push(harden({ type: 'end' }));
-            events.close();
             return events.reader;
           },
-          interrupt: () => undefined,
+          interrupt: () => {
+            if (toolEvents) {
+              toolEvents.push(harden({ type: 'abort', reason: 'stopped' }));
+            }
+          },
           acknowledge: () => undefined,
         }),
         admin,
@@ -202,7 +223,40 @@ const makeWorld = ({ refuseTerminateOnce = false } = {}) => {
     terminated,
     bridged,
     released,
-    hostedTools: () => hostedTools,
+    // Test-only model driver: retain a real active Floot turn while stressing
+    // registrar interleavings. Never invoke the dispatch capability idle.
+    hostedTools: () =>
+      Far('ActiveTurnToolDriver', {
+        describe: () => E(hostedTools).describe(),
+        execute: async (name, args) => {
+          if (!toolTurn && !toolAdmission) {
+            toolAdmission = (async () => {
+              toolTurnStarting = true;
+              const session = await E(factory).getSession('one');
+              toolTurn = await E(session).startTurn('exercise mount tools');
+              try {
+                await until(
+                  () => Boolean(toolEvents),
+                  () => 'active tool turn',
+                );
+              } catch (error) {
+                throw Error(
+                  `${error instanceof Error ? error.message : String(error)}: ${JSON.stringify(await E(toolTurn).getStatus())}`,
+                );
+              }
+              toolTurnStarting = false;
+            })().finally(() => {
+              toolAdmission = undefined;
+            });
+          }
+          if (toolAdmission) await toolAdmission;
+          return E(hostedTools).execute(name, args);
+        },
+      }),
+    setFactory: value => {
+      factory = value;
+    },
+    finishTools,
     /**
      * Hold every backend create until the returned function is called.
      */
@@ -265,15 +319,30 @@ const makeWorld = ({ refuseTerminateOnce = false } = {}) => {
  * backend once.
  *
  * @param {any} factory
+ * @param {ReturnType<typeof makeWorld>} world
  */
-const runTurn = async factory => {
+const runTurn = async (factory, world) => {
+  await world.finishTools();
+  world.setFactory(factory);
   const session = await E(factory).getSession('one');
+  // These mount fixtures predate private journals. Acknowledge their imported
+  // empty history explicitly; this suite exercises mounts, not migration UX.
+  const imported = (await E(session).getTurns()).find(
+    turn => turn.turnId === 'legacy-import' && !turn.resolution,
+  );
+  if (imported)
+    await E(session).resolveTurn(
+      'legacy-import',
+      'Fixture has no prior external effects',
+    );
   const turn = await E(session).startTurn('hello');
   /** @type {any[]} */
   const events = [];
   for await (const event of iterateReader(await E(turn).watch())) {
     events.push(event);
   }
+  const status = await E(turn).getStatus();
+  if (status.error) throw Error(status.error);
   return events;
 };
 
@@ -319,7 +388,7 @@ test('the mount tools reach a hosted session and an attach recreates it with the
     world.closeInboxes();
     await E(factory).deleteSession('one');
   });
-  await runTurn(factory);
+  await runTurn(factory, world);
   t.is(world.creates.length, 1);
   t.deepEqual(world.lastDeclared(), []);
 
@@ -378,7 +447,7 @@ test('a bind declared during a recreate is applied by one more, and a turn sent 
     world.closeInboxes();
     await E(factory).deleteSession('one');
   });
-  await runTurn(factory);
+  await runTurn(factory, world);
   t.deepEqual(world.sends, [0]);
 
   const release = world.holdCreates();
@@ -398,7 +467,7 @@ test('a bind declared during a recreate is applied by one more, and a turn sent 
     innerPath: '/mnt/notes',
     mode: 'ro',
   });
-  const turn = runTurn(factory);
+  const turn = runTurn(factory, world);
   await delay(50);
   t.deepEqual(world.sends, [0], 'the turn waits instead of failing');
   t.is(world.creates.length, 2);
@@ -420,7 +489,7 @@ test('a persisted bind is declared on the first create after a restart, without 
   t.timeout(10_000);
   const world = makeWorld();
   const first = make(world.host);
-  await runTurn(first);
+  await runTurn(first, world);
   await E(world.hostedTools()).execute('attachContainerMount', {
     petName: 'project',
     innerPath: '/mnt/project',
@@ -434,13 +503,16 @@ test('a persisted bind is declared on the first create after a restart, without 
   // "Daemon restart": a fresh factory over the same host petstore. The
   // registrar replays its journal into the adapter BEFORE the first create,
   // so that create already declares the bind — no terminate, no recreate.
+  // Finish the old writer before reviving the replacement. A real daemon
+  // restart never leaves both incarnations writing the same private journal.
+  await world.finishTools();
   const restarted = make(world.host);
   t.teardown(async () => {
     world.closeInboxes();
     await E(restarted).deleteSession('one');
   });
   const before = world.terminated.length;
-  await runTurn(restarted);
+  await runTurn(restarted, world);
   t.is(world.creates.length, 3);
   t.deepEqual(world.lastDeclared(), [
     { destination: '/mnt/project', mode: 'ro' },
@@ -455,7 +527,7 @@ test('deleting the session releases its bridges after the backend is gone', asyn
   t.timeout(10_000);
   const world = makeWorld();
   const factory = make(world.host);
-  await runTurn(factory);
+  await runTurn(factory, world);
   await E(world.hostedTools()).execute('attachContainerMount', {
     petName: 'project',
     innerPath: '/mnt/project',
@@ -485,7 +557,7 @@ test('a recreate the sandbox refuses drops the bind, releases its bridge, and re
     world.closeInboxes();
     await E(factory).deleteSession('one');
   });
-  await runTurn(factory);
+  await runTurn(factory, world);
   world.rejectDeclaredCreates();
 
   // The attach itself succeeds — possession is proved and the bridge is
@@ -512,7 +584,7 @@ test('a recreate the sandbox refuses drops the bind, releases its bridge, and re
 
   // The next turn carries the report, once; the one after runs normally on
   // the fallback session.
-  const outcome = await runTurn(factory).then(
+  const outcome = await runTurn(factory, world).then(
     events => ({ events }),
     error => ({ error: error.message }),
   );
@@ -520,7 +592,17 @@ test('a recreate the sandbox refuses drops the bind, releases its bridge, and re
     JSON.stringify(outcome),
     /could not be recreated with \/mnt\/project and the bind\(s\) were dropped/,
   );
-  await runTurn(factory);
+  // A rejected send is conservatively unknown: inspect and explicitly resolve
+  // the no-dispatch fixture outcome before testing another user turn.
+  const session = await E(factory).getSession('one');
+  const journal = await E(session).getTurns();
+  const refused = journal.at(-1);
+  t.is(refused.state, 'outcome-unknown');
+  await E(session).resolveTurn(
+    refused.turnId,
+    'The fake backend did not dispatch this turn; its mount refusal was inspected.',
+  );
+  await runTurn(factory, world);
   t.is(world.sends.at(-1), 2);
 });
 
@@ -532,7 +614,7 @@ test('a bind that lands while a refused recreate sheds is applied, not stranded'
     world.closeInboxes();
     await E(factory).deleteSession('one');
   });
-  await runTurn(factory);
+  await runTurn(factory, world);
   /**
    * @param {string} petName
    * @param {string} innerPath
@@ -601,7 +683,7 @@ test('a backend that fails for its own reasons is not reported as a mount refusa
     world.closeInboxes();
     await E(factory).deleteSession('one');
   });
-  await runTurn(factory);
+  await runTurn(factory, world);
   await E(world.hostedTools()).execute('attachContainerMount', {
     petName: 'project',
     innerPath: '/mnt/project',
@@ -624,7 +706,7 @@ test('a backend that fails for its own reasons is not reported as a mount refusa
     createsBefore + 1,
     'one create attempt, not a shed and a second try',
   );
-  const events = await runTurn(factory).then(
+  const events = await runTurn(factory, world).then(
     turnEvents => JSON.stringify(turnEvents),
     error => error.message,
   );

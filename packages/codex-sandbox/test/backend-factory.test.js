@@ -4,6 +4,7 @@ import '@endo/init';
 import test from 'ava';
 import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
+import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import {
   HostedToolSetInterface,
   assertHostedBackendDescriptor,
@@ -19,6 +20,7 @@ import {
   makeCodexResourceProvisioner,
   normalizeCodexModelDescriptor,
 } from '../src/backend-factory.js';
+import { makeRenewingCodexBackend } from '../src/renewing-backend.js';
 
 const validPolicy = () =>
   harden({
@@ -109,6 +111,140 @@ const makeToolSet = () =>
       return 'Test hosted tool set.';
     },
   });
+
+test('renewal with the real factory reaps before provisioning and resumes acknowledged state', async t => {
+  t.timeout(5000);
+  const lifecycle = [];
+  const protocol = [];
+  let saved = {};
+  let generation = 0;
+  let turnCount = 0;
+  const factory = makeRenewingCodexBackend(
+    makeCodexBackendFactory({
+      imageDigest,
+      listModels: async () => [],
+      destroy: async () => undefined,
+      provision: async spec => {
+        generation += 1;
+        const number = generation;
+        lifecycle.push(`provision-${number}`);
+        const inbound = [];
+        const waiters = [];
+        let closed = false;
+        const push = value => {
+          inbound.push(value);
+          while (waiters.length) waiters.shift()();
+        };
+        const transport = {
+          messages: {
+            async *[Symbol.asyncIterator]() {
+              for (;;) {
+                if (inbound.length) yield inbound.shift();
+                else if (closed) return;
+                // eslint-disable-next-line no-await-in-loop
+                else await new Promise(resolve => waiters.push(resolve));
+              }
+            },
+          },
+          send: async message => {
+            if (!('id' in message) || !('method' in message)) return;
+            protocol.push(message);
+            let result;
+            if (message.method === 'initialize') {
+              result = {
+                codexHome: '/codex-home',
+                platformFamily: 'unix',
+                platformOs: 'linux',
+                userAgent: 'test',
+              };
+            } else if (message.method === 'account/read') {
+              result = {
+                account: { type: 'apiKey' },
+                requiresOpenaiAuth: true,
+              };
+            } else if (
+              ['thread/start', 'thread/resume'].includes(message.method)
+            ) {
+              result = { thread: { id: 'durable-thread' } };
+            } else if (message.method === 'thread/turns/list') {
+              result = {
+                data: turnCount ? [{ id: `turn-${turnCount}` }] : [],
+                nextCursor: null,
+              };
+            } else if (message.method === 'turn/start') {
+              turnCount += 1;
+              const id = `turn-${turnCount}`;
+              push({
+                id: message.id,
+                result: { turn: { id, status: 'inProgress' } },
+              });
+              push({
+                method: 'turn/started',
+                params: {
+                  threadId: 'durable-thread',
+                  turn: { id, status: 'inProgress' },
+                },
+              });
+              push({
+                method: 'turn/completed',
+                params: {
+                  threadId: 'durable-thread',
+                  turn: { id, status: 'completed' },
+                },
+              });
+              return;
+            } else {
+              throw Error(`Unexpected request ${message.method}`);
+            }
+            push({ id: message.id, result });
+          },
+          close: async () => {
+            lifecycle.push(`close-${number}`);
+            closed = true;
+            while (waiters.length) waiters.shift()();
+          },
+        };
+        return {
+          policy: validPolicy(),
+          auditWriter: harden({ append: async () => undefined }),
+          threadId: saved.threadId,
+          savedToolSetId: saved.toolSetId,
+          savedRecovery: saved.recovery,
+          saveThreadState: async value => {
+            saved = value;
+          },
+          start: async () => transport,
+          dispose: async () => {
+            lifecycle.push(`dispose-${number}`);
+          },
+        };
+      },
+    }),
+  );
+  const session = await E(factory).create(
+    harden({ sessionId: 'session-1' }),
+    makeToolSet(),
+  );
+  t.teardown(() => E(session.admin).terminate());
+  const drain = async reader => {
+    const events = [];
+    for await (const event of iterateReader(reader)) events.push(event);
+    return events;
+  };
+  const first = await drain(await E(session.run).send('first'));
+  t.deepEqual(first.at(-1), { type: 'end', checkpoint: 'turn-1' });
+  await E(session.run).acknowledge('turn-1');
+  const second = await drain(await E(session.run).send('second'));
+  t.deepEqual(second.at(-1), { type: 'end', checkpoint: 'turn-2' });
+  t.true(lifecycle.indexOf('close-2') < lifecycle.indexOf('dispose-2'));
+  t.true(lifecycle.indexOf('dispose-2') < lifecycle.indexOf('provision-3'));
+  t.is(protocol.filter(message => message.method === 'thread/start').length, 1);
+  t.is(
+    protocol.filter(message => message.method === 'thread/resume').length,
+    1,
+  );
+  t.false(protocol.some(message => message.method === 'thread/revert'));
+});
 
 test('sandbox contract rejects a tag and an unenforced resource limit', t => {
   t.throws(
@@ -320,6 +456,129 @@ test('backend factory requires an approved image and exact workspace cwd', async
       message: /bounded portable path component/,
     });
   }
+});
+
+test('Codex advertises only proved off networking and refuses others before effects', async t => {
+  const specs = [];
+  const factory = makeCodexBackendFactory({
+    imageDigest,
+    destroy: async () => t.fail('must not destroy'),
+    listModels: async () => [],
+    provision: async spec => {
+      specs.push(spec);
+      throw Error('reached safe provisioning');
+    },
+  });
+  t.deepEqual((await E(factory).describe()).supportedNetworkPolicies, ['off']);
+  const toolSet = makeToolSet();
+  for (const networkPolicy of ['public-internet', 'private', '', null, true]) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(
+      E(factory).create(
+        harden({ sessionId: 'session-1', networkPolicy }),
+        toolSet,
+      ),
+      { message: /only the off network policy/ },
+    );
+  }
+  t.deepEqual(specs, []);
+  for (const spec of [
+    { sessionId: 'session-1' },
+    { sessionId: 'session-1', networkPolicy: 'off' },
+  ]) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(E(factory).create(harden(spec), toolSet), {
+      message: /safe provisioning/,
+    });
+  }
+  t.is(specs.length, 2);
+  t.true(specs.every(spec => spec.networkPolicy === 'off'));
+});
+
+test('direct resource provisioning refuses public networking before cleanup or acquisition', async t => {
+  const effects = [];
+  const unexpected = async () => {
+    effects.push('unexpected');
+    throw Error('must not acquire');
+  };
+  const provision = makeCodexResourceProvisioner({
+    imageDigest,
+    providerOrigin,
+    accountRef,
+    makeWorkspace: unexpected,
+    mountWorkspace: unexpected,
+    issueBrokerLease: unexpected,
+    makeSlice: unexpected,
+    startTransport: unexpected,
+    loadThreadState: unexpected,
+    saveThreadState: unexpected,
+    retrySliceCleanup: async () => {
+      effects.push('cleanup');
+    },
+    makeAuditJournal: async () => {
+      effects.push('audit');
+      throw Error('must not acquire');
+    },
+  });
+  await t.throwsAsync(
+    () =>
+      provision({ sessionId: 'session-1', networkPolicy: 'public-internet' }),
+    { message: /only the off network policy/ },
+  );
+  t.deepEqual(effects, []);
+});
+
+test('only an operator-enabled factory advertises and retains public policy', async t => {
+  const specs = [];
+  const factory = makeCodexBackendFactory({
+    imageDigest,
+    publicInternetEnabled: true,
+    listModels: async () => [],
+    destroy: async () => {},
+    provision: async spec => {
+      specs.push(spec);
+      throw Error('provision');
+    },
+  });
+  t.deepEqual((await E(factory).describe()).supportedNetworkPolicies, [
+    'off',
+    'public-internet',
+  ]);
+  await t.throwsAsync(
+    E(factory).create(
+      { sessionId: 'session-1', networkPolicy: 'public-internet' },
+      makeToolSet(),
+    ),
+    { message: /provision/ },
+  );
+  t.is(specs[0].networkPolicy, 'public-internet');
+  const policy = harden({
+    ...validPolicy(),
+    networkPolicy: 'public-internet',
+    mounts: [
+      ...validPolicy().mounts,
+      {
+        role: 'resolver',
+        source: 'resolver:public',
+        destination: '/etc/resolv.conf',
+        mode: 'ro',
+        options: ['nosuid', 'nodev'],
+      },
+    ],
+  });
+  t.notThrows(() =>
+    assertHostedAgentPolicyV1(policy, { networkPolicy: 'public-internet' }),
+  );
+  t.throws(() => assertHostedAgentPolicyV1(policy), {
+    message: /unknown or missing/,
+  });
+  t.throws(
+    () =>
+      assertHostedAgentPolicyV1(validPolicy(), {
+        networkPolicy: 'public-internet',
+      }),
+    { message: /public network policy/ },
+  );
 });
 
 test('failed attestation disposes provisioned resources', async t => {
@@ -750,6 +1009,11 @@ test('resource disposal retries only unfinished cleanup stages', async t => {
 });
 
 test('an unsettled tool call blocks teardown without destroying the session', async t => {
+  t.timeout(10_000);
+  /** @type {() => Promise<void>} */
+  let shutdown = async () => {
+    throw Error('shutdown not registered');
+  };
   let disposed = 0;
   /** @type {(value: string) => void} */
   let releaseTool = () => {};
@@ -847,6 +1111,9 @@ test('an unsettled tool call blocks teardown without destroying the session', as
 
   const factory = makeCodexBackendFactory({
     imageDigest,
+    registerShutdown: stop => {
+      shutdown = stop;
+    },
     destroy: async () => undefined,
     listModels: async () => [],
     provision: async () => ({
@@ -886,6 +1153,14 @@ test('an unsettled tool call blocks teardown without destroying the session', as
     /unsettled Endo tool call/,
   );
   t.is(disposed, 0, 'the session was left intact for a lifecycle retry');
+  await t.throwsAsync(() => shutdown(), { message: /shutdown pending/ });
+  t.is(disposed, 0, 'host shutdown also honors the pending tool barrier');
+  await t.throwsAsync(
+    () => E(factory).create({ sessionId: 'other' }, toolSet),
+    {
+      message: /shutting down/,
+    },
+  );
 
   releaseTool('done');
   for (let tries = 0; tries < 200; tries += 1) {
@@ -895,7 +1170,7 @@ test('an unsettled tool call blocks teardown without destroying the session', as
     // eslint-disable-next-line no-await-in-loop
     await Promise.resolve();
   }
-  await session.admin.terminate();
+  await shutdown();
   t.is(disposed, 1, 'and the retry tears it down');
 });
 

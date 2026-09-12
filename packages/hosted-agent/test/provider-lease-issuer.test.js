@@ -24,18 +24,30 @@ const policy = harden({
   maxCostMicrounitsPerRequest: 10n,
 });
 
+const networkEvidence = harden({
+  policy: 'public-internet',
+  proxyUrl: 'http://93.184.216.34:3456',
+  dnsHost: '127.0.0.53',
+  resolverConfigPath: '/private-runtime/public-resolv.conf',
+});
+
 /** @param {any} [options] */
 const fixture = ({
   leaseDurationMs = 60_000,
+  requestTimeoutMs,
   startBarrier,
   now,
   policy: policyOverride,
   credential,
+  makePublicNetwork,
+  observeNetwork,
 } = {}) => {
   let stops = 0;
   let fails = false;
   let drift = false;
   let endpoint;
+  let listenerLimits;
+  let listenerNetwork;
   let disconnect = () => {};
   const closed = new Promise(resolve => {
     disconnect = () => resolve(undefined);
@@ -44,6 +56,8 @@ const fixture = ({
     runtime: {
       async start(input) {
         endpoint = input.endpoint;
+        listenerLimits = input.limits;
+        listenerNetwork = input.network;
         if (startBarrier) await startBarrier;
         return {
           async observe() {
@@ -52,6 +66,7 @@ const fixture = ({
               containerName: 'listener',
               networkNamespaceId: drift ? 'net-2' : 'net-1',
               listenerImageDigest: digest,
+              ...(observeNetwork ? { network: observeNetwork() } : {}),
             });
           },
           async stop() {
@@ -71,7 +86,9 @@ const fixture = ({
     fetch: async () => new Response('ok'),
     policy: policyOverride ?? policy,
     ...(credential === undefined ? {} : { credential }),
+    ...(makePublicNetwork ? { makePublicNetwork } : {}),
     leaseDurationMs,
+    requestTimeoutMs,
     now,
     imageDigest: digest,
     accountRef: 'account',
@@ -79,6 +96,8 @@ const fixture = ({
   return {
     issuer,
     endpoint: () => endpoint,
+    listenerLimits: () => listenerLimits,
+    listenerNetwork: () => listenerNetwork,
     stops: () => stops,
     failCleanup: () => {
       fails = true;
@@ -93,6 +112,155 @@ const fixture = ({
     closed,
   };
 };
+
+test('public egress is lease-bound and revoked before cleanup retries', async t => {
+  let disposed = 0;
+  /** @type {Record<string, any> | undefined} */
+  let requested;
+  const endpoint = Far('Test public egress', {});
+  const f = fixture({
+    makePublicNetwork: request => {
+      requested = request;
+      return {
+        endpoint,
+        address: '93.184.216.34',
+        dispose: () => {
+          disposed += 1;
+        },
+      };
+    },
+    observeNetwork: () => networkEvidence,
+  });
+  t.teardown(f.issuer.dispose);
+  const lease = await f.issuer({ ...spec, networkPolicy: 'public-internet' });
+  t.is(requested?.networkPolicy, 'public-internet');
+  t.deepEqual(f.listenerNetwork(), { endpoint, address: '93.184.216.34' });
+  t.deepEqual((await E(lease).attestation()).network, networkEvidence);
+  t.deepEqual((await E(lease).sandboxEvidence()).network, networkEvidence);
+  f.failCleanup();
+  await t.throwsAsync(E(lease).revoke(), { message: /cleanup unavailable/ });
+  t.true(disposed > 0);
+  f.allowCleanup();
+  await f.issuer.retryCleanup();
+  await t.throwsAsync(E(lease).attestation(), { message: /inactive/ });
+});
+
+test('network mismatch or drift revokes public egress', async t => {
+  for (const mismatch of [true, false]) {
+    let disposed = 0;
+    let drift = mismatch;
+    const f = fixture({
+      makePublicNetwork: () => ({
+        endpoint: Far('Unused egress', {}),
+        address: '93.184.216.34',
+        dispose: () => {
+          disposed += 1;
+        },
+      }),
+      observeNetwork: () => (drift ? undefined : networkEvidence),
+    });
+    t.teardown(f.issuer.dispose);
+    if (mismatch) {
+      // eslint-disable-next-line no-await-in-loop
+      await t.throwsAsync(
+        f.issuer({ ...spec, networkPolicy: 'public-internet' }),
+        { message: /admission failed/ },
+      );
+    } else {
+      // eslint-disable-next-line no-await-in-loop
+      const lease = await f.issuer({
+        ...spec,
+        networkPolicy: 'public-internet',
+      });
+      drift = true;
+      // eslint-disable-next-line no-await-in-loop
+      await t.throwsAsync(E(lease).attestation(), {
+        message: /identity changed/,
+      });
+    }
+    t.true(disposed > 0);
+    t.is(f.stops(), 1);
+  }
+});
+
+test('unsupported public policy and unexpected off egress fail closed', async t => {
+  const f = fixture();
+  t.teardown(f.issuer.dispose);
+  await t.throwsAsync(f.issuer({ ...spec, networkPolicy: 'public-internet' }), {
+    message: /Unsupported.*network policy/,
+  });
+  await t.throwsAsync(f.issuer({ ...spec, networkPolicy: 'private' }), {
+    message: /Unsupported.*network policy/,
+  });
+  await t.throwsAsync(f.issuer({ ...spec, networkPolicy: null }), {
+    message: /Unsupported.*network policy/,
+  });
+  t.is(f.listenerLimits(), undefined);
+  const unexpected = fixture({ observeNetwork: () => networkEvidence });
+  t.teardown(unexpected.issuer.dispose);
+  await t.throwsAsync(unexpected.issuer(spec), { message: /admission failed/ });
+  t.is(unexpected.stops(), 1);
+});
+
+test('request deadlines default to two minutes and allow bounded host opt-in', async t => {
+  for (const [leaseDurationMs, requestTimeoutMs, expected] of [
+    [3_600_000, undefined, 120_000],
+    [3_600_000, 600_000, 600_000],
+    [60_000, 600_000, 60_000],
+  ]) {
+    const f = fixture({ leaseDurationMs, requestTimeoutMs, now: () => 0 });
+    t.teardown(f.issuer.dispose);
+    // eslint-disable-next-line no-await-in-loop
+    await f.issuer(spec);
+    t.is(f.listenerLimits().timeoutMs, expected);
+  }
+});
+
+test('request deadlines clamp to remaining lease time before admission', async t => {
+  let reads = 0;
+  const f = fixture({
+    leaseDurationMs: 60_000,
+    requestTimeoutMs: 600_000,
+    now: () => {
+      reads += 1;
+      return reads === 1 ? 0 : 1000;
+    },
+  });
+  t.teardown(f.issuer.dispose);
+  await f.issuer(spec);
+  t.is(f.listenerLimits().timeoutMs, 59_000);
+});
+
+test('listener limits mirror the lease routes and client authorization mode', async t => {
+  const f = fixture({
+    policy: {
+      ...policy,
+      routes: [{ method: 'POST', path: '/api/v1/chat/completions' }],
+      clientAuthorization: 'strip',
+    },
+  });
+  t.teardown(f.issuer.dispose);
+  const lease = await f.issuer(spec);
+  t.deepEqual(f.listenerLimits().allowedPaths, ['/api/v1/chat/completions']);
+  t.is(f.listenerLimits().clientAuthorization, 'strip');
+  await E(lease).revoke();
+});
+
+test('invalid host request deadlines are refused', t => {
+  for (const requestTimeoutMs of [
+    0,
+    -1,
+    1.5,
+    NaN,
+    Infinity,
+    600_001,
+    '600000',
+  ]) {
+    t.throws(() => fixture({ requestTimeoutMs }), {
+      message: 'Invalid provider request deadline',
+    });
+  }
+});
 
 test('lease binds observations and only delegates inference; retry preserves live lease', async t => {
   const f = fixture();

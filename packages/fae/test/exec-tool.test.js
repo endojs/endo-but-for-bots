@@ -17,6 +17,22 @@ import { makeExecTool } from '../src/tool-makers.js';
 // the tool still endows it, so a bare object is enough.
 const powers = {};
 
+test('exec explains missing returns without inviting effect replay', async t => {
+  const tool = makeExecTool(powers);
+  for (const code of [
+    '21 * 2;',
+    'await (async () => 42)();',
+    'return undefined;',
+  ]) {
+    // eslint-disable-next-line no-await-in-loop
+    const result = await tool.execute({ code });
+    t.regex(result, /top-level return/);
+    t.regex(result, /console output goes to daemon logs/);
+    t.regex(result, /do not repeat/);
+  }
+  t.is(await tool.execute({ code: 'return await (async () => 42)();' }), '42');
+});
+
 test('exec runs a plain multiline snippet', async t => {
   const tool = makeExecTool(powers);
   const result = await tool.execute({

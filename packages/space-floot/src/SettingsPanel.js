@@ -2,6 +2,7 @@
 
 import harden from '@endo/harden';
 import { h } from 'preact';
+import { NetworkPolicyPanel } from './NetworkPolicyPanel.js';
 
 /** @import { VNode } from 'preact' */
 /** @import { FlootController, FlootSafeEvent, FlootState } from './types.js' */
@@ -153,6 +154,13 @@ export const SettingsPanel = ({ state, controller }) => {
       'div',
       { class: 'floot-settings' },
       h('div', { class: 'floot-modal-title' }, 'Transcription & settings'),
+      state.network
+        ? h(NetworkPolicyPanel, {
+            key: state.activeSessionId || '',
+            network: state.network,
+            controller,
+          })
+        : null,
       ...transcription,
       ...speech,
       tokens,
