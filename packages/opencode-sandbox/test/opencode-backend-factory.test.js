@@ -12,6 +12,10 @@ import {
   makeOpencodeBackendFactory,
 } from '../src/opencode-backend-factory.js';
 
+// Share a test-only conformance driver across sibling packages.
+// eslint-disable-next-line import/no-relative-packages
+import { testCliCleanup } from '../../hosted-agent/test/cli-cleanup-conformance.js';
+
 const drain = async reader => {
   const events = [];
   for await (const value of iterateReader(reader)) {
@@ -301,7 +305,7 @@ test('interrupt() is a barrier that tolerates an idle client; acknowledge() is a
   await t.notThrowsAsync(() => E(run).acknowledge('whatever'));
 });
 
-test('terminate() stops the client, closes the bridge, then cancels; it refuses under a live tool call', async t => {
+test('terminate() stops the client, cancels its incarnation, then closes the bridge; it refuses under a live tool call', async t => {
   const { factory, log, setPending, bridgeClosed } = makeHarness();
   const { admin } = await E(factory).create(
     harden({ sessionId: 'session-a' }),
@@ -504,9 +508,11 @@ test('a failed lease revoke is retried on the next terminate attempt', async t =
     harden({ sessionId: 'session-a' }),
     makeToolSet(),
   );
-  await t.throwsAsync(() => E(admin).terminate(), {
-    message: /listener busy/,
+  const error = await t.throwsAsync(() => E(admin).terminate(), {
+    instanceOf: AggregateError,
+    message: /cleanup remains pending/,
   });
+  t.regex(error.errors[0].message, /listener busy/);
   // The failed teardown keeps ownership and the retry releases the lease.
   await E(admin).terminate();
   t.is(revoked, 2);
@@ -572,5 +578,24 @@ test('create() rejects an unknown policy, container mounts, and bad workspace pa
         makeToolSet(),
       ),
     { message: /workspaceHostPath/ },
+  );
+});
+
+testCliCleanup(makeOpencodeBackendFactory, makeToolSet, true);
+
+test('grant refusal closes the bridge without cancelling an unattempted client', async t => {
+  const { factory, bridgeClosed, log } = makeHarness({
+    broker: async () => {
+      throw Error('grant refused');
+    },
+  });
+  await t.throwsAsync(
+    () => E(factory).create(harden({ sessionId: 'session-a' }), makeToolSet()),
+    { message: /grant refused/ },
+  );
+  t.is(bridgeClosed(), 1);
+  t.deepEqual(
+    log.map(entry => entry[0]),
+    ['bridge'],
   );
 });

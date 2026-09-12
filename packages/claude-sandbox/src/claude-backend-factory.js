@@ -28,6 +28,7 @@
 // retains — a delivered prompt survives an aborted or failed turn there.
 
 import { Fail, q } from '@endo/errors';
+import { makeCleanupScope } from '@endo/hosted-agent/cleanup-scope.js';
 import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import {
@@ -210,8 +211,17 @@ export const makeClaudeBackendFactory = ({
     // the successor rather than running beside it.
     await stopLive(sessionId);
     const bridge = await startToolBridge(sessionId, toolSet);
+    const resources = makeCleanupScope();
+    resources.add(() => bridge.close());
+    const releaseResources = async () => {
+      await resources.run();
+      if (live.get(sessionId)?.terminate === releaseResources) {
+        live.delete(sessionId);
+      }
+    };
     let client;
     try {
+      resources.add(() => cancelClient(sessionId));
       client = await provisionClient(sessionId, {
         mcp: {
           socketDir: bridge.socketDir,
@@ -224,7 +234,18 @@ export const makeClaudeBackendFactory = ({
           : {}),
       });
     } catch (error) {
-      await bridge.close().catch(() => {});
+      // Keep partial acquisition ownership even when rollback fails. Both
+      // create and destroy retry this owner before touching the same session.
+      live.set(sessionId, harden({ terminate: releaseResources }));
+      try {
+        await releaseResources();
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [error, cleanupError],
+          'Claude session provisioning and rollback failed',
+          { cause: error },
+        );
+      }
       throw error;
     }
 
@@ -272,10 +293,10 @@ export const makeClaudeBackendFactory = ({
         // A call that raced the check above is still running host-side; it has
         // to settle before the session is declared stopped.
         refuseUnsettled(bridge.pendingCalls());
-        await bridge.close();
-        // A stop, not a deletion: the workspace and the transcript stay for
-        // the next revival.
-        await cancelClient(sessionId);
+        // Failed stages retain ownership; independent releases are still
+        // attempted, so cancellation failure cannot suppress grant revocation.
+        // Durable workspace and native state are retained.
+        await releaseResources();
         terminated = true;
         if (live.get(sessionId)?.terminate === terminate) {
           live.delete(sessionId);

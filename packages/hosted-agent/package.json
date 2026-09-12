@@ -30,6 +30,7 @@
     "./provider-worker.js": "./src/provider-worker.js",
     "./provider-listener-runtime.js": "./src/provider-listener-runtime.js",
     "./provider-grant-issuer.js": "./src/provider-grant-issuer.js",
+    "./cleanup-scope.js": "./src/cleanup-scope.js",
     "./mcp-bridge.js": "./src/mcp-bridge.js",
     "./mcp-socket.js": "./src/mcp-socket.js",
     "./mcp-stdio-bridge.js": "./src/mcp-stdio-bridge.js",

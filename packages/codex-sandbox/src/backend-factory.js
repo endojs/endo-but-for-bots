@@ -10,6 +10,8 @@ import {
   normalizeHostedModelDescriptor,
 } from '@endo/hosted-agent';
 
+import { makeCleanupScope } from '@endo/hosted-agent/cleanup-scope.js';
+
 import { assertCodexNetworkEvidence } from './broker-launch.js';
 import { makeCodexClient } from './codex-client.js';
 import { adaptEndoTools, withEndoToolInstructions } from './endo-tools.js';
@@ -521,41 +523,10 @@ export const makeCodexResourceProvisioner = powers => {
     const leaseSpec = Object.fromEntries(
       Object.entries(spec).filter(([key]) => key !== 'containerMounts'),
     );
-    /** @type {Array<{ run: () => Promise<void>, done: boolean }>} */
-    const undo = [];
+    const cleanupScope = makeCleanupScope();
+    const cleanupStages = cleanupScope.run;
     let auditJournal;
     let sliceReleased = true;
-    const runCleanup = async () => {
-      await null;
-      const failures = [];
-      for (const cleanup of [...undo].reverse()) {
-        if (!cleanup.done) {
-          try {
-            // eslint-disable-next-line no-await-in-loop
-            await cleanup.run();
-            cleanup.done = true;
-          } catch (error) {
-            failures.push(error);
-          }
-        }
-      }
-      if (failures.length > 0) {
-        throw new AggregateError(
-          failures,
-          'Provisioning cleanup remains pending',
-        );
-      }
-    };
-    /** @type {Promise<void> | undefined} */
-    let cleanupFlight;
-    const cleanupStages = () => {
-      if (!cleanupFlight) {
-        cleanupFlight = runCleanup().finally(() => {
-          cleanupFlight = undefined;
-        });
-      }
-      return cleanupFlight;
-    };
     const unwind = async primaryError => {
       await null;
       const failures = [primaryError];
@@ -609,13 +580,10 @@ export const makeCodexResourceProvisioner = powers => {
       // `makeWorkspace` contract above.
       const workspace = await powers.makeWorkspace(spec);
       const workspaceMount = await powers.mountWorkspace(workspace, spec);
-      undo.push({
-        run: async () => {
-          await powers.retrySliceCleanup?.();
-          sliceReleased || Fail`Workspace remains leased until slice is reaped`;
-          await E(workspaceMount).unmount();
-        },
-        done: false,
+      cleanupScope.add(async () => {
+        await powers.retrySliceCleanup?.();
+        sliceReleased || Fail`Workspace remains leased until slice is reaped`;
+        await E(workspaceMount).unmount();
       });
       const brokerLease = await powers.issueProviderGrant(
         harden({
@@ -624,7 +592,7 @@ export const makeCodexResourceProvisioner = powers => {
           accountRef: powers.accountRef,
         }),
       );
-      undo.push({ run: () => E(brokerLease).revoke(), done: false });
+      cleanupScope.add(() => E(brokerLease).revoke());
       const brokerAttestation = await E(brokerLease).attestation();
       const slice = await powers.makeSlice({
         spec,
@@ -632,12 +600,9 @@ export const makeCodexResourceProvisioner = powers => {
         brokerLease,
       });
       sliceReleased = false;
-      undo.push({
-        run: async () => {
-          await E(slice).dispose();
-          sliceReleased = true;
-        },
-        done: false,
+      cleanupScope.add(async () => {
+        await E(slice).dispose();
+        sliceReleased = true;
       });
       const policy = await E(slice).policy();
       // Validate here, before app-server can start, and again in the backend

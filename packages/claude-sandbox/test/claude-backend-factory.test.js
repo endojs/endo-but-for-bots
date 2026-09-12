@@ -12,6 +12,10 @@ import {
   makeClaudeBackendFactory,
 } from '../src/claude-backend-factory.js';
 
+// Share a test-only conformance driver across sibling packages.
+// eslint-disable-next-line import/no-relative-packages
+import { testCliCleanup } from '../../hosted-agent/test/cli-cleanup-conformance.js';
+
 const drain = async reader => {
   const events = [];
   for await (const value of iterateReader(reader)) {
@@ -308,7 +312,7 @@ test('interrupt() is a barrier that tolerates an idle client; acknowledge() is a
   await t.notThrowsAsync(() => E(run).acknowledge('whatever'));
 });
 
-test('terminate() stops the client, closes the bridge, then cancels; it refuses under a live tool call', async t => {
+test('terminate() stops the client, cancels its incarnation, then closes the bridge; it refuses under a live tool call', async t => {
   const { factory, log, setPending, bridgeClosed } = makeHarness();
   const { admin } = await E(factory).create(
     harden({ sessionId: 'session-a' }),
@@ -417,3 +421,5 @@ test('a provisioning failure releases the bridge it started', async t => {
   );
   t.is(bridgeClosed, 1);
 });
+
+testCliCleanup(makeClaudeBackendFactory, makeToolSet);
