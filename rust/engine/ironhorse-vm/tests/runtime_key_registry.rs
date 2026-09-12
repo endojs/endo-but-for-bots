@@ -1,5 +1,5 @@
 //! The stored-key diagnostic keeps its historical, narrower holder set.
-use ironhorse_vm::interp::persistence::RUNTIME_KEY_HOLDER_SOURCE;
+use ironhorse_vm::persistence::RUNTIME_KEY_HOLDER_SOURCE;
 use ironhorse_vm::source_scan::{code_only, token_body, tokens};
 
 fn compact(source: &str) -> String {
