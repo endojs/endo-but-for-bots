@@ -54,6 +54,38 @@ import { makeOpencodeSessionProvisioner } from './opencode-session-provisioner.j
 import { makeMcpBridgeForToolSet } from './mcp-bridge.js';
 import { startMcpSocketServer } from './mcp-socket-server.js';
 
+// One provider-listener runtime per daemon worker, shared by every backend
+// incarnation. The backend caplet is both revived (an existing formula) and
+// re-minted (setup-hosted) in the same process; composing a second runtime for
+// the same owner would fail its exclusive owner lock. The runtime's stale-owner
+// recovery sweeps containers left by a previous daemon process.
+/** @type {Map<string, Promise<any>>} */
+const brokerCompositions = new Map();
+
+/**
+ * Share one in-flight composition per key, and let a failed composition be
+ * retried instead of poisoning every later attempt.
+ *
+ * @template T
+ * @param {Map<string, Promise<T>>} cache
+ * @param {string} key
+ * @param {() => Promise<T>} factory
+ * @returns {Promise<T>}
+ */
+export const memoizeBrokerComposition = (cache, key, factory) => {
+  if (!cache.has(key)) {
+    cache.set(
+      key,
+      factory().catch(error => {
+        cache.delete(key);
+        throw error;
+      }),
+    );
+  }
+  return /** @type {Promise<T>} */ (cache.get(key));
+};
+harden(memoizeBrokerComposition);
+
 /**
  * Resolve the provisioner configuration from the formula env and the daemon's
  * environment.
@@ -170,7 +202,6 @@ export const make = async (hostAgent, _context, { env = {} } = {}) => {
   let broker = null;
   let sliceRootfs = rootfs;
   if (brokerConfig.listenerImageRef !== '') {
-    const secret = await E(hostAgent).lookup(['secrets', credentialsName]);
     const { imageRef, imageDigest } = await resolvePinnedImageRef(rootfs);
     sliceRootfs = `oci:${imageRef}`;
     let ownerId = brokerConfig.ownerId;
@@ -180,32 +211,38 @@ export const make = async (hostAgent, _context, { env = {} } = {}) => {
         Fail`Cannot identify the OpenCode broker host`;
       ownerId = `opencode-${createHash('sha256').update(hostId).digest('hex').slice(0, 48)}`;
     }
-    const composed = await makeOpencodeBroker({
-      secret,
+    const compositionKey = JSON.stringify({
       ownerId,
       directory: brokerConfig.directory,
+      listenerImageRef: brokerConfig.listenerImageRef,
       imageRef,
       imageDigest,
-      listenerImageRef: brokerConfig.listenerImageRef,
-      // The broker admits the provider-scoped ids opencode's request bodies
-      // carry, not Floot's `openrouter/...` selection refs.
-      models: OPENCODE_MODELS.map(model => parseModelRef(model.id)),
     });
-    broker = composed.issuer;
-    if (_context) {
-      // Listener containers belong to this backend incarnation; releasing
-      // them on cancellation keeps a stopped daemon from leaving podman
-      // records behind (the runtime also sweeps stale owner labels).
-      void E(_context)
-        .whenCancelled()
-        .then(() => composed.dispose())
-        .catch(error => {
-          console.error(
-            '[opencode-sandbox] broker dispose failed on cancellation; listener cleanup remains pending:',
-            error instanceof Error ? error.message : String(error),
-          );
+    const composed = await memoizeBrokerComposition(
+      brokerCompositions,
+      compositionKey,
+      async () => {
+        // Resolved only on a cache miss: a shared composition must not depend
+        // on a secret lookup that a later make would otherwise repeat.
+        const secret = await E(hostAgent).lookup(['secrets', credentialsName]);
+        return makeOpencodeBroker({
+          secret,
+          ownerId,
+          directory: brokerConfig.directory,
+          imageRef,
+          imageDigest,
+          listenerImageRef: brokerConfig.listenerImageRef,
+          // The broker admits the provider-scoped ids opencode's request
+          // bodies carry, not Floot's `openrouter/...` selection refs.
+          models: OPENCODE_MODELS.map(model => parseModelRef(model.id)),
         });
-    }
+      },
+    );
+    broker = composed.issuer;
+    // Deliberately no dispose on formula cancellation: the composition is
+    // process-scoped and shared, and a cancelled formula may be immediately
+    // re-minted. Containers left by a dead daemon are swept by the runtime's
+    // stale-owner recovery on the next start.
   }
 
   const provisioner = makeOpencodeSessionProvisioner(hostAgent, {
