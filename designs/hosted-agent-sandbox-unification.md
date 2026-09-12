@@ -85,6 +85,12 @@ The network evidence and proxy environment contract now lives in `@endo/hosted-a
 OpenCode's broker can issue separately revocable public-egress grants; its hosted
 factory still uses the previous public path until resolver/runtime integration lands.
 
+The shared sandbox request now carries literal generated-file records and validates
+canonical destinations, overlapping mounts, and exact-policy exclusions before acquisition.
+Backend selection requires explicit support; both production drivers currently refuse
+generated-file requests until private staging, storage accounting, and cleanup are wired.
+This contract is implemented; generated-file execution and resolver integration are pending.
+
 Runtime unification across all three adapters, Claude credential migration, OpenCode
 public network convergence, tool/journal consolidation, emergency stop UI, and the remaining
 limit removals are still pending.

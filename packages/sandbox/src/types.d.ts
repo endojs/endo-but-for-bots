@@ -13,6 +13,12 @@ import type {
   PassableBytesWriter,
 } from '@endo/exo-stream';
 
+import type {
+  GeneratedFile,
+  ValidatedGeneratedFile,
+} from './generated-file-types.js';
+export type { GeneratedFile } from './generated-file-types.js';
+
 // ---------------------------------------------------------------------------
 // Network policy
 // ---------------------------------------------------------------------------
@@ -191,6 +197,8 @@ export type SeccompPolicy = 'default' | 'unconfined' | { profile: unknown };
 export type SandboxMakeOpts = {
   rootfs: RootfsSpec;
   mounts?: readonly MountSpec[];
+  /** Literal read-only files; requires explicit driver support. */
+  generatedFiles?: readonly GeneratedFile[];
   network?: NetworkProfile;
   /**
    * Container whose network namespace this slice joins. Required with
@@ -506,6 +514,8 @@ export type SliceSpec = {
     | { kind: 'oci'; ref: string };
   /** Resolved bind-mount triples. */
   mounts: Array<{ hostPath: string; innerPath: string; mode: MountMode }>;
+  /** Validated literal configuration, staged privately by a supporting driver. */
+  generatedFiles?: readonly ValidatedGeneratedFile[];
   /** Writable scratch host path provided by the daemon's scratch service. */
   scratchHostPath: string;
   /** Network policy. */
@@ -742,6 +752,8 @@ export type DriverSpawnControls = {
 export type SandboxDriver = {
   /** Stable name (matches `BackendName`). */
   name: BackendName;
+  /** Advertised only when private staging, bounds, and cleanup are enforced. */
+  supportsGeneratedFiles?: true;
   /** Best-effort availability check. */
   probe(): Promise<Omit<BackendProbe, 'name'>>;
   /** Materialise a slice from a fully-resolved `SliceSpec`. */
