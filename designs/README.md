@@ -8,13 +8,14 @@ layer new groom notes at the top of this file.*
 *Recently added or revised:
 [daemon-storage-capability-matrix](daemon-storage-capability-matrix.md) (added
 2026-09-12; names every cell of the storage-capability matrix across the two
-axes shape (bytes vs. collection) and mutation guarantee (mutable, live
+axes: shape (bytes vs. collection) and mutation guarantee (mutable, live
 read-only view, immutable snapshot), makes `readOnly` != `snapshot` a
 type-level fact via the content-address accessor, finds that the daemon formula
-types `readable-blob` / `readable-tree` are really SnapshotBlob / SnapshotTree
-and that `readable-directory` never existed, and gives a backward-compatible
-`readable-* -> snapshot-*` rename with a read-time alias over the persisted
-formula records),
+types `readable-blob` / `readable-tree` are really SnapshotBlob / SnapshotTree,
+reconciles the in-flight `readable-directory` formula (endojs/endo-but-for-bots#1125)
+as a persisted live read-only directory view rather than a snapshot, and gives a
+backward-compatible `readable-* -> snapshot-*` rename with a read-time alias over
+the persisted formula records),
 [hosted-agent-broker-oauth](hosted-agent-broker-oauth.md) (added 2026-09-08 and
 revised 2026-09-09; credential custody for hosted agent sessions — a broker-held
 refreshing OAuth credential with expiry tracking, single-flight exchange, a
