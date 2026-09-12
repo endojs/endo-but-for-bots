@@ -31,8 +31,6 @@
 // checkout — is re-created on every run and re-bound into the Floot profile.
 
 import { chmod, lstat, mkdir, stat } from 'node:fs/promises';
-import os from 'node:os';
-import path from 'node:path';
 
 import { E } from '@endo/eventual-send';
 import { Fail } from '@endo/errors';
@@ -42,6 +40,12 @@ import {
   toCurrentSpecifier,
 } from './src/current-specifier.js';
 import { provideManagedCredentials } from './src/managed-credentials.js';
+import {
+  assertRuntimePlacement,
+  getHostedStorageRoots,
+  readSandboxRuntime,
+  readStateProvider,
+} from './src/hosted-runtime-setup.js';
 
 /** @import { EndoHost } from '@endo/daemon' */
 
@@ -67,16 +71,9 @@ export const main = async hostAgent => {
       `OpenCode backend name is "${backendName}"; Floot's factory only discovers "opencode-backend" unless its own configuration is changed to match.`,
     );
   }
-  const workspaceDir =
-    env.ENDO_OPENCODE_WORKSPACE_DIR ||
-    path.join(os.homedir(), 'opencode-workspaces');
-  const configDir =
-    env.ENDO_OPENCODE_CONFIG_DIR ||
-    path.join(path.dirname(workspaceDir), 'opencode-configs');
+  const { workspaceDir, configDir, mcpDir } = getHostedStorageRoots(env);
   // Private base for per-session MCP Unix sockets; never a world-writable
   // shared tmp (predictable paths there invite socket hijack).
-  const mcpDir =
-    env.ENDO_OPENCODE_MCP_DIR || path.join(os.homedir(), 'opencode-mcp');
   const rootfs =
     env.ENDO_OPENCODE_SANDBOX_IMAGE || 'oci:localhost/opencode-sandbox:latest';
 
@@ -97,6 +94,14 @@ export const main = async hostAgent => {
   if (!(await E(hostAgent).has(SANDBOX_DIR, 'fs-mounter'))) {
     throw Fail`${SANDBOX_DIR}/fs-mounter is missing — run setup-host.js first.`;
   }
+  const runtime = await readSandboxRuntime(hostAgent);
+  const state = await readStateProvider(hostAgent);
+  await assertRuntimePlacement(runtime.config.directory, {
+    stateDir: state.stateDir,
+    workspaceDir,
+    configDir,
+    mcpDir,
+  });
 
   // Assert before the first mint so a failure cannot leave a half-bound
   // profile behind (the credential mint would otherwise commit first).

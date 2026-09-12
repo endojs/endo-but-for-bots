@@ -4,12 +4,15 @@
 //   [-E NINEP_SUDO=1]
 //   [-E ENDO_OPENCODE_SANDBOX_OWNER_ID=operator-chosen-stable-id]
 //   [-E ENDO_OPENCODE_STATE_DIR=/var/lib/endo/opencode-state]
+//   -E ENDO_SANDBOX_RUNTIME_DIR=<existing-private-host-directory>
+//   -E ENDO_SANDBOX_GENERATED_MAX_BYTES=<decimal-byte-budget>
+//   -E ENDO_SANDBOX_GENERATED_MAX_ENTRIES=<positive-decimal-entry-budget>
 //
 // HOST-side provisioning for the opencode sandbox stack. Run this on the
 // machine that runs the containers (Linux + podman). Idempotent. Mints,
 // nested under `opencode-sandbox/` so the host root stays clean:
 //
-//   sandbox-factory  — the `@endo/sandbox` plugin (podman/bwrap).
+//   sandbox-factory  — the owned `@endo/sandbox` Podman runtime.
 //   fs-mounter       — the `@endo/9p-server` mount caplet. `mount(2)` needs
 //                      `CAP_SYS_ADMIN`; pass `-E NINEP_SUDO=1` to route
 //                      mount/umount through `sudo` on an unprivileged daemon.
@@ -34,32 +37,29 @@ import {
   assertCurrentSpecifier,
   toCurrentSpecifier,
 } from './src/current-specifier.js';
+import {
+  assertRuntimePlacement,
+  getHostedStorageRoots,
+  prepareRuntimeEnv,
+  readSandboxRuntime,
+  readStateProvider,
+  sandboxSpecifier,
+  stateProviderSpecifier,
+} from './src/hosted-runtime-setup.js';
 
 /** @import { EndoHost } from '@endo/daemon' */
 
-const sandboxSpecifier = toCurrentSpecifier(
-  new URL('../sandbox/src/agent.js', import.meta.url).href,
-);
 const mountCapletSpecifier = toCurrentSpecifier(
   new URL('../9p-server/mount-caplet.js', import.meta.url).href,
-);
-const stateProviderSpecifier = toCurrentSpecifier(
-  new URL('./src/opencode-state-provider-module.js', import.meta.url).href,
 );
 
 // Fail closed before minting anything if a release-pinned path could not be
 // rerouted through <stateDir>/current: a formula stored with a
 // `releases/<id>/` specifier dangles as soon as that release is pruned.
-assertCurrentSpecifier(sandboxSpecifier, 'sandbox');
 assertCurrentSpecifier(mountCapletSpecifier, '9p mount caplet');
-assertCurrentSpecifier(stateProviderSpecifier, 'state provider');
 
 // Kept in sync with the backend's provisioner defaults and setup-hosted.js.
 const SANDBOX_DIR = 'opencode-sandbox';
-
-// A HOME-independent root: the daemon's install layout owns `/var/lib/endo`,
-// and NixOS provisioning creates (and owns) this directory for the Endo user.
-const DEFAULT_STATE_DIR = '/var/lib/endo/opencode-state';
 
 /**
  * The state root holds per-session SQLite databases and ownership markers and
@@ -90,18 +90,31 @@ export const main = async hostAgent => {
 
   // Validate the state root before any mint, so a bad value cannot strand a
   // profile that later writes through it.
+  const existingState = await E(hostAgent).has(SANDBOX_DIR, 'state-provider');
+  const requestedRoots = getHostedStorageRoots(env);
   const stateDir = assertStateDir(
-    env.ENDO_OPENCODE_STATE_DIR || DEFAULT_STATE_DIR,
+    existingState
+      ? (await readStateProvider(hostAgent)).stateDir
+      : requestedRoots.stateDir,
   );
-
-  if (!(await E(hostAgent).has(SANDBOX_DIR))) {
-    await E(hostAgent).makeDirectory([SANDBOX_DIR]);
-  }
+  const roots = harden({ ...requestedRoots, stateDir });
+  const existingFactory = await E(hostAgent).has(
+    SANDBOX_DIR,
+    'sandbox-factory',
+  );
+  /** @type {Record<string, string> | undefined} */
+  let runtimeEnv;
 
   // 1. Sandbox factory — `@agent` powers grant the privileged
   //    `provideHostPath` / `provideScratchMount` surface the factory needs
   //    to bridge granted Mount caps into the kernel's bind-mount surface.
-  if (!(await E(hostAgent).has(SANDBOX_DIR, 'sandbox-factory'))) {
+  if (existingFactory) {
+    const runtime = await readSandboxRuntime(hostAgent);
+    await assertRuntimePlacement(runtime.config.directory, roots);
+    console.log(
+      'Retaining owned sandbox factory with its persisted configuration; current runtime environment is not reapplied.',
+    );
+  } else {
     // Podman crash reconciliation must only touch this host's opencode
     // slices. Persist the identity with the factory so every incarnation uses
     // the same exact owner label, independently of release paths and process
@@ -117,10 +130,17 @@ export const main = async hostAgent => {
       }
       ownerId = `opencode-${createHash('sha256').update(hostId).digest('hex')}`;
     }
+    runtimeEnv = await prepareRuntimeEnv(env, ownerId, roots);
+  }
+
+  if (!(await E(hostAgent).has(SANDBOX_DIR))) {
+    await E(hostAgent).makeDirectory([SANDBOX_DIR]);
+  }
+  if (runtimeEnv) {
     await E(hostAgent).makeUnconfined('@main', sandboxSpecifier, {
       powersName: '@agent',
       resultName: [SANDBOX_DIR, 'sandbox-factory'],
-      env: harden({ ENDO_SANDBOX_OWNER_ID: ownerId }),
+      env: runtimeEnv,
     });
     console.log(`Minted ${SANDBOX_DIR}/sandbox-factory`);
   }
@@ -171,7 +191,7 @@ export const main = async hostAgent => {
 
   // 3. State provider — `@agent` powers grant `provideMount`, which is the
   //    only way a Mount cap the sandbox factory will accept is minted.
-  if (!(await E(hostAgent).has(SANDBOX_DIR, 'state-provider'))) {
+  if (!existingState) {
     // Prepare the root only when this run actually mints the provider: an
     // already-minted provider keeps the root baked into its formula, so
     // creating (or chmodding) a new one from a changed env would be a stray

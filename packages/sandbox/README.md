@@ -189,7 +189,15 @@ The persisted formula must supply `ENDO_SANDBOX_RUNTIME_DIR`, `ENDO_SANDBOX_OWNE
 Budgets are explicit decimal bigint quantities, with nonnegative bytes and positive
 entries; the entrypoint invents no default quota or spending policy.
 The runtime parent must already exist and remain outside guest write authority.
-Hosted provisioning has not yet switched to this entrypoint.
+OpenCode host provisioning now uses this entrypoint and persists explicit runtime
+configuration; standalone hosted setup also refuses a generic factory.
+Setup reads the effective runtime and state-provider roots through the host-only
+persisted-environment reader, checking both against prospective guest storage roots.
+Ordinary diagnostics remain environment-blind; retained settings are not reapplied.
+Host provisioning must be serialized, and factory/provider bindings must remain stable
+while their dependent backends and sessions persist.
+Durable identity pinning for session powers remains pending.
+Resolver integration and live Linux acceptance remain pending.
 
 [podman-engine-selection]: https://github.com/containers/podman/blob/v5.8.0/cmd/podman/registry/config.go
 [podman-local-flags]: https://github.com/containers/podman/blob/v5.8.0/cmd/podman/root.go
