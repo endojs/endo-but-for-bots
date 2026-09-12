@@ -24,13 +24,13 @@ already authored. Withholding introspection of those formulas buys no security
 guest the same "pop the bonnet" affordance the host enjoys. A guest debugging its
 own caplet has to ask the host to inspect on its behalf.
 
-The obstacle is that the daemon has no record of *which agent created a given
-formula*. Agent formulas (`guest`, `host`) carry their own node number by way of
-their keypair, and a few relationship formulas carry an agent reference
-(`channel.creatorAgent`, `invitation.hostAgent`), but the general formula types a
-guest produces (`eval`, `marshal`, `readable-blob`, and the `worker` and `lookup`
-formulas created as their subsidiaries) record no creator. A guest-scoped
-diagnostics facet therefore has nothing to filter on.
+The obstacle is that, apart from a few special cases, the daemon has no record of
+*which agent created a given formula*. Agent formulas (`guest`, `host`) carry their
+own node number by way of their keypair, and a few relationship formulas carry an
+agent reference (`channel.creatorAgent`, `invitation.hostAgent`). But the general
+formula types a guest produces (`eval`, `marshal`, `readable-blob`, and the
+`worker` and `lookup` formulas created as their subsidiaries) record no creator. A
+guest-scoped diagnostics facet therefore has nothing to filter on.
 
 This design adds creator attribution to the formula store and a
 creator-attenuated `diagnostics` facet on the guest, so a guest obtains a
@@ -75,20 +75,46 @@ The rest of this design specifies the creator-mark mechanism.
 
 ### Daemon: record the creator at the formulate chokepoint
 
-Add a `creator` column to the `formula` table, mirroring the earlier `node`
-column addition exactly:
+Add a `creator` column to the `formula` table:
 
 ```
 creator TEXT NOT NULL DEFAULT ''
 ```
 
-with an index `idx_formula_creator ON formula(creator)` and a `schema_version`
-bump plus the corresponding migration in `packages/daemon/src/manager-database.js`
-(the `formula` table lives there; `writeFormula(formulaNumber, nodeNumber,
-formula)` becomes `writeFormula(formulaNumber, nodeNumber, creator, formula)`, and
-`readFormula` / `listFormulas` surface the new field). The empty-string default is
-the grandfathering value: it means "unattributed," and every row that predates the
-migration carries it.
+declared in the `SCHEMA_SQL` `CREATE TABLE IF NOT EXISTS formula (...)` block with
+an index `idx_formula_creator ON formula(creator)`. That `CREATE TABLE IF NOT
+EXISTS` is a no-op against an already-provisioned daemon whose `formula` table
+already exists, so the change also needs an explicit column-add for existing
+databases. There is no version-gated migration runner in `packages/daemon/src/manager-database.js`:
+`SCHEMA_VERSION` is written once at table creation and never read back to drive an
+upgrade, and every table is declared `CREATE TABLE IF NOT EXISTS`, which cannot add
+a column to a table that already exists. The `node` column carries a `DEFAULT ''`
+too, but it is *not* a migration precedent: it was present in the `formula` table's
+original `CREATE TABLE` from the SQLite layer's first commit, never added to a
+pre-existing table. The one genuine precedent for evolving an existing table is the
+`secret_audit_event` rebuild in `openDatabase` (a `pragma_table_info` probe, then a
+rename-recreate-copy dance, run *before* `db.exec(SCHEMA_SQL)`). Mirror that
+precedent's shape, but with the simpler additive form SQLite supports directly:
+before `db.exec(SCHEMA_SQL)`, probe `pragma_table_info('formula')` and, if the
+`formula` table exists but lacks a `creator` column, run
+
+```
+ALTER TABLE formula ADD COLUMN creator TEXT NOT NULL DEFAULT ''
+```
+
+so an already-provisioned daemon gains the column (back-filled to `''` on every
+existing row) rather than silently continuing on a `formula` table that never gains
+it. The probe makes the add idempotent: a fresh database gets the column from
+`SCHEMA_SQL` and skips the `ALTER`, while an existing one gets it from the `ALTER`.
+Bump
+`SCHEMA_VERSION` alongside so the constant tracks the shipped shape even though it
+does not itself gate the add. With the column present on every database,
+`writeFormula(formulaNumber, nodeNumber, formula)` becomes
+`writeFormula(formulaNumber, nodeNumber, creator, formula)` (the `stmtWriteFormula`
+`INSERT OR REPLACE INTO formula (number, node, type, body)` column list gains
+`creator`), and `readFormula` / `listFormulas` surface the new field. The
+empty-string default is the grandfathering value: it means "unattributed," and
+every row that predates the column-add carries it.
 
 The creating agent is known at the agent-facet boundary but not at the low-level
 `formulate`. The guest facet method that produces a formula knows "I am
@@ -162,12 +188,17 @@ creator** (unattributed, host-scope-only), the same value bootstrap formulas car
 `mail.js`'s cross-agent form-reply path (`submit`) is *not* such a site. It has the
 submitting agent's own identifier in scope as `selfId` (the `makeMailbox`
 `localSelfId` parameter), used two lines below the `formulateMarshalValue` call to
-address the reply envelope's `from`. `submit` is a guest-callable method
-(`GuestInterface.submit`), so walling its marshalled reply values off from the
-submitting guest's own diagnostics (`creator = ''`, host-only) would undercut this
-design's motivation on a routine guest-initiated path. `submit` therefore passes
-`creator = selfId` (the submitting agent), like any other agent-facet operation.
-Only a call with genuinely no agent in scope records the empty creator.
+address the reply envelope's `from`. `submit` is declared identically on **both**
+`GuestInterface` and `HostInterface` in `interfaces.js`, and is exercised in both
+directions: a guest submitting to itself, and (the more common path in the test
+suite) the **host** answering a guest-initiated `form` (`E(guest).form(...)` then
+`E(host).submit(...)`). Walling its marshalled reply values off from the submitting
+agent's own diagnostics (`creator = ''`, host-only) would undercut this design's
+motivation on a routine agent-initiated path. `submit` therefore passes
+`creator = selfId`, which is correct for both directions because `mail.js`'s shared
+`makeMailboxMaker` binds `selfId` per mailbox instance, so whichever agent's mailbox
+executes the submit is recorded as the creator. Only a call with genuinely no agent
+in scope records the empty creator.
 
 Daemon-bootstrap formulas (`endo`, `least-authority`, `main` worker, the special
 names) are created before any agent exists; they keep the empty-string creator
@@ -217,12 +248,14 @@ subset (see `traces()` below and Design Decision 5):
   [formula-inspector](formula-inspector.md) applies to cycles, reused here as the
   attenuation boundary.
 
-- **`traces()`** returns a trace facet scoped to the guest's own workers: those
-  whose `creator` is the guest, plus the default `worker` from its provisioning
-  chain (host-created but the guest's own, via the same carve-out `getFormula`
-  applies). The underlying aggregator is the daemon's shared one; the guest-scoped
-  facet filters `lookup` / `recent` to that worker-id set and omits `clear` (a
-  guest must not drop another agent's traces). If per-worker creator filtering on
+- **`traces()`** (a trace records a diagnostic event: an execution or lifecycle
+  entry the daemon's aggregator keys against the worker that produced it) returns a
+  trace facet scoped to the guest's own workers: those whose `creator` is the guest,
+  plus the default `worker` from its provisioning chain (host-created but the
+  guest's own, via the same carve-out `getFormula` applies). The underlying
+  aggregator is the daemon's shared one; the guest-scoped facet filters
+  `lookup` / `recent` to that worker-id set and omits `clear` (a guest must not drop
+  another agent's traces). If per-worker creator filtering on
   the aggregator proves awkward, `traces()` may be omitted from the guest facet in
   the first cut and the guest facet may expose only `getFormula` and
   `getFormulaGraph`; see Open Questions.
@@ -243,7 +276,7 @@ Attribution records the *initiator*, so a guest's own `guest`, `handle`, `worker
 `pet-store`, and `mailbox-store` formulas (minted by the host during
 `provideGuest`) carry `creator = hostId`. Left at that, cut 1 would reject
 `E(guest).diagnostics().getFormula(myOwnWorkerId)` on the very worker the guest
-uses every day, and, per the anti-oracle rule above, reject it with the
+uses every day. Per the anti-oracle rule above, that rejection would carry the
 "unknown identifier" text, telling the guest its own worker does not exist. That is
 precisely the scenario this design exists to serve (a guest debugging its own
 caplet), so it is resolved here rather than deferred to an open question.
@@ -302,12 +335,19 @@ structure. The host facet remains the unfiltered superset for the operator.
 
 ## Persistence and Migration
 
-- **Schema.** One additive column (`creator`) plus one index, a `schema_version`
-  bump, and a migration that adds the column with the empty-string default. This
-  is the same shape as the migration that introduced the `node` column, so it
-  reuses a proven path in `manager-database.js`.
-- **Existing formulas.** Every formula written before the migration carries
-  `creator = ''`. Grandfathering rule: an empty creator is host-scope-only. No
+- **Schema.** One additive column (`creator`) plus one index in `SCHEMA_SQL`, a
+  `SCHEMA_VERSION` bump, and (because `CREATE TABLE IF NOT EXISTS` cannot alter an
+  existing table and there is no version-gated migration runner) a
+  `pragma_table_info('formula')`-gated `ALTER TABLE formula ADD COLUMN creator TEXT
+  NOT NULL DEFAULT ''` for already-provisioned databases, run before
+  `db.exec(SCHEMA_SQL)`. This mirrors the sole existing table-evolution precedent,
+  the `secret_audit_event` rebuild in `openDatabase` (which likewise probes
+  `pragma_table_info` before restructuring), not the `node` column, which was
+  original to the `formula` table and never migrated. See "Daemon: record the
+  creator at the formulate chokepoint" for the mechanism.
+- **Existing formulas.** Every formula written before the column-add carries
+  `creator = ''` (the `ALTER TABLE` back-fills the default on every existing row).
+  Grandfathering rule: an empty creator is host-scope-only. No
   guest diagnostics facet returns such a formula; the host facet returns all of
   them. There is no lossy backfill (see Open Questions on whether best-effort
   backfill is wanted).
@@ -336,15 +376,19 @@ structure. The host facet remains the unfiltered superset for the operator.
 
 ## Phased Implementation
 
-1. **Attribution.** Add the `creator` column, migration, and `writeFormula` /
-   `readFormula` / `listFormulas` changes; thread the declared creator through the
+1. **Attribution.** Add the `creator` column (in `SCHEMA_SQL` plus the
+   `pragma_table_info`-gated `ALTER TABLE formula ADD COLUMN` for existing
+   databases) and the `writeFormula` / `readFormula` / `listFormulas` changes;
+   thread the declared creator through the
    `formulate*` helpers (as an explicit parameter distinct from `nameHubId`) into
    `formulate` / `formulateLazy`. Land with daemon tests asserting each formula
    type records the expected creator: guest-created `eval` / `marshal` /
    `readable-blob` carry the guest; host-created `guest` and its deps carry the
    host; an `endow`-minted eval **and its endowment `lookup` formulas** carry the
    host (not the `nameHubId` guest); the `mail.js` form-reply `submit` carries the
-   submitting agent (via `selfId`); and the genuinely identity-less internal paths
+   submitting agent (via `selfId`) in **both** directions (assert the
+   guest-submits case *and* the host-submits-in-reply-to-a-guest-`form` case); and
+   the genuinely identity-less internal paths
    (`makeResolver` / `writeStatus`) and bootstrap formulas carry the empty creator.
 2. **Guest facet.** Add `diagnostics` to `GuestInterface`, implement the
    self-attenuated facet in `guest.js`, and enforce the creator gate in the daemon
@@ -387,7 +431,7 @@ structure. The host facet remains the unfiltered superset for the operator.
    change.** The guest resolves its own `@self` / `@agent`, `handle`, `pet-store`,
    `mailbox-store`, and default `worker` even though the host created them, because
    those exist solely for the guest's use. The judgment lives in the resolution
-   gate (a structurally-computed ownership set), leaving the `creator` column a
+   gate (a structurally computed ownership set), leaving the `creator` column a
    pure initiator/audit fact; this serves the motivating worked example in cut 1
    rather than deferring it.
 
@@ -404,7 +448,20 @@ structure. The host facet remains the unfiltered superset for the operator.
   mint a guest-owned formula outside that agent-formula dependency closure that the
   carve-out would then miss? The design assumes the agent-formula dependency set is
   the canonical enumeration; a divergence would be a provisioning-code bug to fix at
-  the mint site, not a reason to widen the gate.
+  the mint site, not a reason to widen the gate. The considered alternative is to
+  stop *deriving* ownership by walking a dependency graph shaped for provisioning
+  and execution wiring, and instead mint an **explicit ownership fact** alongside
+  the agent formula (a small `owner`/`grants` list, recording durable ownership the
+  way `creator` records initiation), making the security-relevant boundary a
+  first-class, directly-testable value rather than an emergent property of whatever
+  the provisioning code happens to wire. That would decouple the gate from
+  `provideGuest`'s dependency shape (a future refactor there could not silently
+  change what a guest's `diagnostics()` can see) at the cost of a second minted
+  fact to keep in sync with provisioning. This design chooses the derived set for
+  cut 1 to avoid adding persisted state and to keep `provideGuest` unchanged, but
+  the explicit-ownership-fact form is the preferred evolution if the dependency
+  closure proves unstable; it is called out here so a later revision reaches for it
+  deliberately rather than rediscovering the coupling.
 - Is grandfathering (empty creator equals host-only) sufficient for existing
   deployments, or is a best-effort backfill wanted (for example, attribute a
   formula reachable only from a single guest's pet store to that guest)? Backfill
