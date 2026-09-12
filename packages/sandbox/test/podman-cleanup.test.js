@@ -1,6 +1,8 @@
 // @ts-check
 import test from '@endo/ses-ava/prepare-endo.js';
+import { makeCancelKit } from '@endo/cancel';
 import { makePromiseKit } from '@endo/promise-kit';
+import { deepStrictEqual, rejects } from 'node:assert';
 import { EventEmitter } from 'node:events';
 import {
   mkdtemp,
@@ -22,6 +24,16 @@ import { makeResourceRegistry } from '../src/resource-registry.js';
 /** @import { SeccompFilePowers } from '../src/drivers/podman.js' */
 
 /**
+ * @param {unknown} error
+ * @returns {boolean}
+ */
+const hasUncertainProducer = error =>
+  error instanceof AggregateError
+    ? error.errors.some(hasUncertainProducer)
+    : error instanceof Error &&
+      error.message === 'Podman operation producer effects remain uncertain';
+
+/**
  * @param {any} t
  * @param {import('../src/generated-file-storage-types.js').GeneratedFileStorage} [storage]
  * @param {SeccompFilePowers} [fs]
@@ -30,8 +42,12 @@ const fixture = (t, storage, fs) => {
   const active = new Set();
   const attached = new Map();
   const calls = [];
+  const podmanPrefixes = [];
   const failures = new Set();
   let createCode = 0;
+  let refuseCreate = false;
+  let expectedUncertainty = false;
+  const kills = [];
   let deferCreate = false;
   let deferProxyExit = false;
   let completeCreate;
@@ -52,7 +68,7 @@ const fixture = (t, storage, fs) => {
   const childProcess = {
     spawn(command, args) {
       if (command === 'podman') {
-        t.deepEqual(args.slice(0, 2), ['--remote=false', '--syslog=false']);
+        podmanPrefixes.push(args.slice(0, 2));
         args = args.slice(2);
       }
       calls.push([...args]);
@@ -62,6 +78,10 @@ const fixture = (t, storage, fs) => {
         stdin: new PassThrough(),
         stdout: new PassThrough(),
         stderr: new PassThrough(),
+        kill: signal => {
+          kills.push(signal);
+          return true;
+        },
       });
       let sent = false;
       const send = (code, message = '') => {
@@ -72,6 +92,7 @@ const fixture = (t, storage, fs) => {
         child.emit('close', code, null);
       };
       if (args[0] === 'create') {
+        if (refuseCreate) throw Error('create spawn refused');
         const name = args[args.indexOf('--name') + 1];
         active.add(name); // Even a failing create may leave its container.
         completeCreate = () =>
@@ -129,12 +150,26 @@ const fixture = (t, storage, fs) => {
     runtimeDetails: { path: { value: '/usr/bin:/bin', source: 'fallback' } },
   };
   t.teardown(async () => {
-    failures.clear();
-    deferProxyExit = false;
-    for (const name of attached.keys()) finish(name);
-    completeCreate?.();
-    await driver.teardown(slice);
-    await driver.closeSlices();
+    try {
+      failures.clear();
+      deferProxyExit = false;
+      for (const name of attached.keys()) finish(name);
+      completeCreate?.();
+      if (expectedUncertainty) {
+        // These are synthetic processes, all closed above. Assert that the
+        // production owner still retains uncertainty; do not fabricate success.
+        await rejects(driver.teardown(slice), hasUncertainProducer);
+        return;
+      }
+      await driver.teardown(slice);
+      await driver.closeSlices();
+    } finally {
+      // Assert outside production catches, including calls made by teardown.
+      // AVA assertions cannot run after the test body has finished.
+      for (const prefix of podmanPrefixes) {
+        deepStrictEqual(prefix, ['--remote=false', '--syslog=false']);
+      }
+    }
   });
   return {
     driver,
@@ -147,8 +182,10 @@ const fixture = (t, storage, fs) => {
     },
     active,
     calls,
+    kills,
     failures,
     finish,
+    exit: name => attached.get(name)?.emit('exit', 0, null),
     creating,
     deferProxyExit: () => {
       deferProxyExit = true;
@@ -160,15 +197,25 @@ const fixture = (t, storage, fs) => {
     failCreate: () => {
       createCode = 1;
     },
+    succeedCreate: () => {
+      createCode = 0;
+    },
+    refuseCreate: () => {
+      refuseCreate = true;
+    },
+    expectUncertainty: () => {
+      expectedUncertainty = true;
+    },
   };
 };
 
-test('successful removal retains ownership until the attached host process exits', async t => {
+test('successful removal and attach exit retain ownership until native stdio closes', async t => {
   t.timeout(3000);
   const f = fixture(t);
   const proc = await f.driver.spawn(f.slice, ['/bin/true'], {});
   const [name] = f.active;
   f.deferProxyExit();
+  f.exit(name);
   let stopped = false;
   const stopping = f.driver.teardown(f.slice).then(() => {
     stopped = true;
@@ -230,7 +277,7 @@ test('teardown coalesces and waits for a pending create before removing its cont
   t.false(f.calls.some(args => args[0] === 'start'));
 });
 
-test('a failing create and removal retain an admission slot until retry succeeds', async t => {
+test('cancelled admission after successful create retains its slot until removal succeeds', async t => {
   t.timeout(3000);
   const f = fixture(t);
   f.slice.policy = {
@@ -239,13 +286,21 @@ test('a failing create and removal retain an admission slot until retry succeeds
     anchorName: 'anchor',
   };
   f.defer();
-  f.failCreate();
-  const acquired = f.driver.spawn(f.slice, ['/bin/true'], {});
+  let cancelled = false;
+  const acquired = f.driver.spawn(
+    f.slice,
+    ['/bin/true'],
+    {},
+    {
+      isCancelled: () => cancelled,
+    },
+  );
   const rejected = t.throwsAsync(acquired, {
     message: /admission cleanup pending/,
   });
   const name = await f.creating;
   f.failures.add(name);
+  cancelled = true;
   f.complete();
   await rejected;
   t.is(f.slice.reserved.size, 1);
@@ -568,4 +623,109 @@ test('closing slices drains a late preparation while cleaning existing contexts 
   await rejected;
   await stopping;
   t.deepEqual(await readdir(directory), []);
+});
+
+/** @param {ReturnType<typeof fixture>} f */
+const limitToOneOperation = f => {
+  f.slice.policy = {
+    request: { resources: { maxConcurrentOperations: 1 } },
+    argv: [],
+    anchorName: 'anchor',
+  };
+};
+
+test('cancelled create retains its slot and configuration across native closure and successful rm', async t => {
+  t.timeout(5000);
+  const f = fixture(t);
+  limitToOneOperation(f);
+  f.defer();
+  f.expectUncertainty();
+  let released = false;
+  f.slice.generatedStage = {
+    prepare: async () => [],
+    release: async () => {
+      released = true;
+    },
+  };
+  const { cancelled, cancel } = makeCancelKit();
+  const acquired = f.driver.spawn(f.slice, ['/bin/true'], {}, { cancelled });
+  const rejected = t.throwsAsync(acquired, {
+    message: /admission cleanup pending/,
+  });
+  const name = await f.creating;
+  cancel();
+  await rejected;
+  t.deepEqual(f.kills, ['SIGKILL']);
+  t.false(f.calls.some(args => args[0] === 'rm'));
+  t.true(f.active.has(name));
+  t.is(f.slice.reserved.size, 1);
+  t.false(released);
+  // Even a later code 0 cannot rewrite the interrupted command's outcome.
+  f.complete();
+  await Promise.resolve();
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    const failure = await t.throwsAsync(f.driver.teardown(f.slice), {
+      instanceOf: AggregateError,
+      message: /teardown pending/,
+    });
+    t.true(hasUncertainProducer(failure));
+    t.is(f.slice.reserved.size, 1);
+    t.false(released);
+  }
+  t.false(f.active.has(name));
+});
+
+test('failed create removal cannot turn uncertain effects into a free admission slot', async t => {
+  const f = fixture(t);
+  limitToOneOperation(f);
+  f.failCreate();
+  f.expectUncertainty();
+  await t.throwsAsync(f.driver.spawn(f.slice, ['/bin/true'], {}), {
+    message: /admission cleanup pending/,
+  });
+  t.is(f.active.size, 0, 'best-effort removal ran');
+  t.is(f.slice.reserved.size, 1);
+  await t.throwsAsync(async () => f.driver.spawn(f.slice, ['/bin/true'], {}), {
+    message: /concurrent operations/,
+  });
+  f.succeedCreate();
+  // A different slice on the same driver remains usable.
+  const sibling = {
+    ...f.slice,
+    policy: null,
+    operations: makeResourceRegistry(),
+    reserved: new Set(),
+    live: new Map(),
+  };
+  t.teardown(() => f.driver.teardown(sibling));
+  const proc = await f.driver.spawn(sibling, ['/bin/true'], {});
+  const [name] = f.active;
+  f.finish(name);
+  await proc.wait();
+  await f.driver.teardown(sibling);
+  t.is(f.slice.reserved.size, 1);
+});
+
+test('create spawn with no acquired child releases its slot without operation removal', async t => {
+  const f = fixture(t);
+  limitToOneOperation(f);
+  f.refuseCreate();
+  await t.throwsAsync(f.driver.spawn(f.slice, ['/bin/true'], {}), {
+    message: /create spawn refused/,
+  });
+  t.is(f.slice.reserved.size, 0);
+  t.is(f.active.size, 0);
+  t.false(f.calls.some(args => args[0] === 'rm'));
+  await f.driver.teardown(f.slice);
+});
+
+test('generic operations disable automatic restart and inherited healthchecks', async t => {
+  const f = fixture(t);
+  const proc = await f.driver.spawn(f.slice, ['/bin/true'], {});
+  const create = f.calls.find(args => args[0] === 'create');
+  t.true(create?.includes('--restart=no'));
+  t.true(create?.includes('--no-healthcheck'));
+  await f.driver.teardown(f.slice);
+  await proc.wait();
 });
