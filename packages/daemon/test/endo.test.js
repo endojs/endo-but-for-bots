@@ -856,6 +856,75 @@ test('move renames value, for a single guest', async t => {
   t.true(await E(guest).has('zehn'));
 });
 
+test('provideGuest accepts a caller-selected guest pins directory', async t => {
+  const { host } = await prepareHost(t);
+  const pins = await E(host).makeDirectory('retained-guest-pins');
+  const guest = await E(host).provideGuest('guest', {
+    agentName: 'guest-agent',
+    pins,
+  });
+
+  await E(host).storeValue(10, 'ten');
+  const tenId = await E(host).identify('ten');
+  await E(guest).storeIdentifier(['@pins', 'ten'], tenId);
+
+  t.is(await E(pins).identify('ten'), tenId);
+  t.deepEqual(await E(guest).list('@pins'), ['ten']);
+
+  const guestId = await E(host).identify('guest-agent');
+  const guestRecord = await E(E(host).diagnostics()).getFormula(guestId);
+  const pinsId = await E(host).identify('retained-guest-pins');
+  t.is(guestRecord.properties.guestPins.identifier, pinsId);
+});
+
+test('provideGuest accepts a caller-selected networks directory', async t => {
+  const { host } = await prepareHost(t);
+  const nets = await E(host).makeDirectory('delegated-nets');
+  const guest = await E(host).provideGuest('guest', {
+    agentName: 'guest-agent',
+    nets,
+  });
+
+  await E(host).storeValue(10, 'network-marker');
+  const markerId = await E(host).identify('network-marker');
+  await E(nets).storeIdentifier(['loopback'], markerId);
+
+  t.deepEqual(await E(guest).list('@nets'), ['loopback']);
+
+  const guestId = await E(host).identify('guest-agent');
+  const guestRecord = await E(E(host).diagnostics()).getFormula(guestId);
+  const netsId = await E(host).identify('delegated-nets');
+  t.is(guestRecord.properties.networks.identifier, netsId);
+});
+
+test('provideGuest preserves a read-only networks attenuation', async t => {
+  const { host } = await prepareHost(t);
+  const nets = await E(host).makeDirectory('delegated-nets');
+  const readOnlyNets = await E(nets).readOnly();
+  const guest = await E(host).provideGuest('guest', {
+    agentName: 'guest-agent',
+    nets: readOnlyNets,
+  });
+
+  await E(host).storeValue(10, 'network-marker');
+  const markerId = await E(host).identify('network-marker');
+  await E(nets).storeIdentifier(['loopback'], markerId);
+
+  t.deepEqual(await E(guest).list('@nets'), ['loopback']);
+  await t.throwsAsync(E(guest).storeIdentifier(['@nets', 'other'], markerId), {
+    message: /storeIdentifier/u,
+  });
+
+  const guestId = await E(host).identify('guest-agent');
+  const guestRecord = await E(E(host).diagnostics()).getFormula(guestId);
+  const readOnlyNetsRecord = await E(E(host).diagnostics()).getFormula(
+    guestRecord.properties.networks.identifier,
+  );
+  const netsId = await E(host).identify('delegated-nets');
+  t.is(readOnlyNetsRecord.type, 'readable-directory');
+  t.is(readOnlyNetsRecord.properties.directory.identifier, netsId);
+});
+
 test('move moves value, between different guests', async t => {
   const { host } = await prepareHost(t);
 
@@ -3596,6 +3665,57 @@ testNeedsNodeWorker('invite, accept, and send mail', async t => {
   const actualParsed = parseLocator(salutationsLocator);
   t.is(actualParsed.number, expectedParsed.number);
   t.is(actualParsed.node, expectedParsed.node);
+});
+
+testNeedsNodeWorker('guest invites a guest and they exchange mail', async t => {
+  const hostA = await prepareHostWithTestNetwork(t);
+  const hostB = await prepareHostWithTestNetwork(t);
+
+  const guestA = await E(hostA).provideGuest('guest-a-handle', {
+    agentName: 'guest-a',
+  });
+  const invitation = await E(guestA).invite('guest-b');
+  const invitationLocator = await E(invitation).locate();
+  await E(hostB).accept(invitationLocator, 'guest-a');
+
+  // Accepting an invitation owned by a guest retains the local guest in the
+  // inviting guest formula's host pin directory, not in its mutable @pins.
+  // The host can inspect the formula edge, but the guest has no special name
+  // through which it or its connected agent could remove the pin.
+  t.is(await E(guestA).identify('@pins', 'guest-guest-b'), undefined);
+  t.is(await E(hostA).identify('@pins', 'guest-guest-b'), undefined);
+  await t.throwsAsync(() => E(guestA).identify('@hostPins'), {
+    message: /Invalid name "@hostPins"/u,
+  });
+
+  const guestAId = await E(hostA).identify('guest-a');
+  const guestARecord = await E(E(hostA).diagnostics()).getFormula(guestAId);
+  const guestPinsId = guestARecord.properties.guestPins.identifier;
+  const hostPinsId = guestARecord.properties.hostPins.identifier;
+  t.not(guestPinsId, hostPinsId);
+  const hostPins = await E(hostA).lookupById(hostPinsId);
+  t.truthy(await E(hostPins).identify('guest-guest-b'));
+
+  await E(guestA).send('guest-b', ['Hello from guest A'], [], []);
+  await E(hostB).send('guest-a', ['Hello from guest B'], [], []);
+
+  const messagesForGuestB = await E(hostB).listMessages();
+  t.true(
+    messagesForGuestB.some(
+      message =>
+        message.type === 'package' &&
+        message.strings?.[0] === 'Hello from guest A',
+    ),
+  );
+
+  const messagesForGuestA = await E(guestA).listMessages();
+  t.true(
+    messagesForGuestA.some(
+      message =>
+        message.type === 'package' &&
+        message.strings?.[0] === 'Hello from guest B',
+    ),
+  );
 });
 
 test('reverse locate local value', async t => {

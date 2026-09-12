@@ -417,6 +417,141 @@ export const runMultiplayerSuite = ({ test, network }) => {
     t.true(bobNames.includes('bob'), 'bob persists across restart');
   });
 
+  // Guest-owned invitation primitive (designs/remote-guest-endo-cli.md sect 3):
+  // an EndoGuest — not the top host — mints the invitation. Its locator `from`
+  // names the guest's own handle, network mediation stays internal to the
+  // daemon (the guest never gains getPeerInfo/addPeerInfo), both pet stores end
+  // up with the opposite handle, neither bound handle carries host-only methods,
+  // and a replayed invitation is rejected (single-use).
+  test.serial('EndoGuest (not the top host) mints an invitation', async t => {
+    const { host: hostA } = await prepareHostWithGcAndNetwork(t);
+    const { host: hostB } = await prepareHostWithGcAndNetwork(t);
+
+    // The inviter is a guest on A, driven only through its guest facet.
+    const guestA = await E(hostA).provideGuest('guest-handle', {
+      agentName: 'guest-agent',
+    });
+
+    // Guest-safety: the guest can invite but holds no network administration.
+    await t.throwsAsync(
+      () => E(guestA).getPeerInfo(),
+      undefined,
+      'guest has no getPeerInfo',
+    );
+    await t.throwsAsync(
+      () => E(guestA).addPeerInfo({ node: 'x', addresses: [] }),
+      undefined,
+      'guest has no addPeerInfo',
+    );
+
+    // The guest mints and locates the invitation.
+    const invitation = await E(guestA).invite('bob');
+    const invitationLocator = await E(invitation).locate();
+
+    // The locator `from` names the inviting guest's handle, not the top host's.
+    const guestHandleId = await E(hostA).identify('guest-handle');
+    const hostHandleId = await E(hostA).identify('@self');
+    const fromNumber = new URL(invitationLocator).searchParams.get('from');
+    t.is(
+      fromNumber,
+      parseId(guestHandleId).number,
+      'invitation `from` names the inviting guest handle',
+    );
+    t.not(
+      fromNumber,
+      parseId(hostHandleId).number,
+      'invitation `from` is NOT the top host handle',
+    );
+
+    // The top host on B accepts.
+    await E(hostB).accept(invitationLocator, 'alice');
+
+    // Both pet stores received the opposite handle.
+    const bobId = await E(guestA).identify('bob');
+    t.truthy(bobId, "inviting guest bound the acceptor's handle under 'bob'");
+    const aliceId = await E(hostB).identify('alice');
+    t.truthy(
+      aliceId,
+      "acceptor bound the inviting guest's handle under 'alice'",
+    );
+    t.is(
+      parseId(aliceId).number,
+      parseId(guestHandleId).number,
+      "acceptor's 'alice' is the inviting guest handle, not the top host",
+    );
+
+    // Neither bound handle carries host-only methods.
+    const boundOnB = await E(hostB).lookup('alice');
+    await t.throwsAsync(
+      () => E(boundOnB).addPeerInfo({ node: 'x', addresses: [] }),
+      undefined,
+      "acceptor's handle has no addPeerInfo",
+    );
+    await t.throwsAsync(
+      () => E(boundOnB).invite('x'),
+      undefined,
+      "acceptor's handle has no invite",
+    );
+    const boundOnA = await E(guestA).lookup('bob');
+    await t.throwsAsync(
+      () => E(boundOnA).addPeerInfo({ node: 'x', addresses: [] }),
+      undefined,
+      "inviter's handle has no addPeerInfo",
+    );
+
+    // A replayed invitation fails cleanly (single-use).
+    await t.throwsAsync(
+      () => E(hostB).accept(invitationLocator, 'alice-again'),
+      undefined,
+      'replayed invitation is rejected',
+    );
+  });
+
+  // The invitation object's own cancel() revokes exactly that pending
+  // invitation, leaving a sibling invitation for the same guest redeemable.
+  test.serial(
+    'invitation cancel() revokes exactly one pending invitation',
+    async t => {
+      const { host: hostA } = await prepareHostWithGcAndNetwork(t);
+      const { host: hostB } = await prepareHostWithGcAndNetwork(t);
+      const { host: hostC } = await prepareHostWithGcAndNetwork(t);
+
+      const guestA = await E(hostA).provideGuest('guest-handle', {
+        agentName: 'guest-agent',
+      });
+
+      // Two independent pending invitations from the same guest.
+      const inv1 = await E(guestA).invite('peer1');
+      const inv2 = await E(guestA).invite('peer2');
+      const locator1 = await E(inv1).locate();
+      const locator2 = await E(inv2).locate();
+
+      // Cancel exactly the first.
+      await E(inv1).cancel();
+
+      // The cancelled invitation can no longer be redeemed.
+      await t.throwsAsync(
+        () => E(hostB).accept(locator1, 'from-peer1'),
+        undefined,
+        'cancelled invitation is not redeemable',
+      );
+
+      // The sibling invitation is untouched and still redeemable.
+      await E(hostC).accept(locator2, 'from-peer2');
+      t.truthy(
+        await E(guestA).identify('peer2'),
+        'sibling invitation still redeemed and bound',
+      );
+
+      // The cancelled invitation left its pet name unbound.
+      t.is(
+        await E(guestA).identify('peer1'),
+        undefined,
+        'cancelled invitation left its name unbound',
+      );
+    },
+  );
+
   test.serial('three-party invite with partition and recovery', async t => {
     const { host: hostA } = await prepareHostWithGcAndNetwork(t);
     const { host: hostB, config: configB } =

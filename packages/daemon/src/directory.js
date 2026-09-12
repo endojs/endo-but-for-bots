@@ -44,6 +44,7 @@ import { DirectoryInterface } from './interfaces.js';
  * @param {DaemonCore['formulateReadableBlob']} args.formulateReadableBlob
  * @param {DaemonCore['pinTransient']} args.pinTransient
  * @param {DaemonCore['unpinTransient']} args.unpinTransient
+ * @param {DaemonCore['formulateReadOnlyDirectory']} args.formulateReadOnlyDirectory
  */
 export const makeDirectoryMaker = ({
   provide,
@@ -55,6 +56,7 @@ export const makeDirectoryMaker = ({
   formulateReadableBlob,
   pinTransient,
   unpinTransient,
+  formulateReadOnlyDirectory,
 }) => {
   /** @type {MakeDirectoryNode} */
   const makeDirectoryNode = (
@@ -611,12 +613,14 @@ export const makeDirectoryMaker = ({
    * @param {Context} args.context
    * @param {NodeNumber} args.agentNodeNumber
    * @param {(node: string) => boolean} args.isLocalKey
+   * @param {FormulaIdentifier} args.directoryId
    */
   const makeIdentifiedDirectory = async ({
     petStoreId,
     context,
     agentNodeNumber,
     isLocalKey,
+    directoryId,
   }) => {
     // TODO thread context
 
@@ -681,6 +685,11 @@ export const makeDirectoryMaker = ({
         readText: directory.readText,
         maybeReadText: directory.maybeReadText,
         writeText: directory.writeText,
+        readOnly: async () => {
+          await null;
+          const { value } = await formulateReadOnlyDirectory(directoryId);
+          return value;
+        },
       }),
     );
   };

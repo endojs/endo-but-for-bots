@@ -221,6 +221,10 @@ export type GuestFormula = {
   worker: FormulaIdentifier;
   networks: FormulaIdentifier;
   planes: FormulaIdentifier;
+  /** The guest-visible and guest-mutable pin directory (`@pins`). */
+  guestPins?: FormulaIdentifier;
+  /** The host-only pin directory retained by the guest formula. */
+  hostPins?: FormulaIdentifier;
 };
 
 export type LeastAuthorityFormula = {
@@ -616,6 +620,11 @@ export type DirectoryFormula = {
   petStore: FormulaIdentifier;
 };
 
+export type ReadableDirectoryFormula = {
+  type: 'readable-directory';
+  directory: FormulaIdentifier;
+};
+
 export type ChannelFormula = {
   type: 'channel';
   handle: FormulaIdentifier;
@@ -644,9 +653,29 @@ export type ChannelMessage = {
 
 export type InvitationFormula = {
   type: 'invitation';
-  hostAgent: FormulaIdentifier;
-  hostHandle: FormulaIdentifier;
+  /**
+   * The inviting `EndoAgent` — an `EndoHost` (via `EndoHost.invite`) or an
+   * `EndoGuest` (via `EndoGuest.invite`). Network mediation is not drawn from
+   * this agent; the daemon supplies it internally (see `makeInvitation`), so a
+   * guest inviter gains no network authority.
+   */
+  invitingAgent: FormulaIdentifier;
+  /** The inviting agent's handle, which the locator's `from` names. */
+  invitingHandle: FormulaIdentifier;
   guestName: NameOrPath;
+  /**
+   * @deprecated Legacy field name for {@link invitingAgent}, persisted by
+   * records minted before the `hostAgent`/`hostHandle` →
+   * `invitingAgent`/`invitingHandle` rename. Read-only: newly minted
+   * invitations never set it, but reads coerce it so existing production
+   * databases need not be purged.
+   */
+  hostAgent?: FormulaIdentifier;
+  /**
+   * @deprecated Legacy field name for {@link invitingHandle}. See
+   * {@link hostAgent}.
+   */
+  hostHandle?: FormulaIdentifier;
 };
 
 export type InvitationDeferredTaskParams = {
@@ -666,6 +695,7 @@ export type Formula =
   | WorkerFormula
   | HostFormula
   | GuestFormula
+  | ReadableDirectoryFormula
   | LeastAuthorityFormula
   | MarshalFormula
   | EvalFormula
@@ -798,6 +828,12 @@ export interface Invitation {
     hostNameFromGuest?: string,
   ): Promise<{ syncedStoreNumber: FormulaNumber }>;
   locate(): Promise<string>;
+  /**
+   * Revoke this pending, unaccepted invitation through the object itself.
+   * Single-use: a no-op once the invitation has been accepted, and it revokes
+   * exactly this invitation, leaving any sibling invitation redeemable.
+   */
+  cancel(reason?: Error): Promise<void>;
 }
 
 export interface Topic<
@@ -974,11 +1010,20 @@ export interface NameHub {
   copy(fromPetName: string[], toPetName: string[]): Promise<void>;
 }
 
+export interface ReadableNameHub {
+  help(method?: string): string;
+  has(...petNamePath: string[]): Promise<boolean>;
+  list(...petNamePath: string[]): Promise<Array<Name>>;
+  lookup(petNamePath: string | readonly string[]): Promise<unknown>;
+  maybeLookup(petNamePath: string | readonly string[]): unknown;
+}
+
 export interface EndoDirectory extends NameHub {
   makeDirectory(petNamePath: string | string[]): Promise<EndoDirectory>;
   readText(petNamePath: string | string[]): Promise<string>;
   maybeReadText(petNamePath: string | string[]): Promise<string | undefined>;
   writeText(petNamePath: string | string[], content: string): Promise<void>;
+  readOnly?(): Promise<ReadableNameHub>;
 }
 
 /**
@@ -1472,6 +1517,10 @@ export interface EndoWorker {}
 export type MakeHostOrGuestOptions = {
   agentName?: string | string[];
   introducedNames?: Record<string, string>;
+  /** A caller-selected directory to expose to a new guest as `@pins`. */
+  pins?: EndoDirectory;
+  /** A caller-selected directory or read-only view to expose as `@nets`. */
+  nets?: EndoDirectory | ReadableNameHub;
 };
 
 export type MakeCapletOptions = {
@@ -1582,6 +1631,16 @@ export interface EndoGuest extends EndoAgent {
   ): Promise<void>;
   submit(messageNumber: bigint, values: Record<string, unknown>): Promise<void>;
   sendValue: Mail['sendValue'];
+  /**
+   * Mint a single-use invitation whose locator's `from` names this guest's
+   * handle, so an acceptor binds this guest (not the top host) under its chosen
+   * pet name. Acceptance stores the acceptor's handle in this guest's pet store
+   * under `guestName`. Network mediation runs through an internal daemon broker;
+   * this call confers no `getPeerInfo`/`addPeerInfo`, host facet, peer
+   * enumeration, or outbound-dialing surface. Shares `EndoHost.invite`'s
+   * implementation.
+   */
+  invite(guestName: string | string[]): Promise<Invitation>;
 }
 
 export type SecretState = 'active' | 'revoked';
@@ -2606,6 +2665,8 @@ type FormulateNumberedGuestParams = {
   workerId: FormulaIdentifier;
   networksDirectoryId: FormulaIdentifier;
   planesDirectoryId: FormulaIdentifier;
+  guestPinsDirectoryId: FormulaIdentifier;
+  hostPinsDirectoryId: FormulaIdentifier;
   pinned: FormulaIdentifier[];
 };
 
@@ -2712,6 +2773,11 @@ export interface DaemonCore {
     storeId: FormulaIdentifier,
   ) => FormulateResult<EndoDirectory>;
 
+  formulateReadOnlyDirectory: (
+    directoryId: FormulaIdentifier,
+    nodeNumber?: NodeNumber,
+  ) => FormulateResult<ReadableNameHub>;
+
   getPeerIdForNodeIdentifier: (
     nodeNumber: NodeNumber,
   ) => Promise<FormulaIdentifier>;
@@ -2757,6 +2823,8 @@ export interface DaemonCore {
     hostHandleId: FormulaIdentifier,
     deferredTasks: DeferredTasks<AgentDeferredTaskParams>,
     workerLabel?: string,
+    guestPinsDirectoryId?: FormulaIdentifier,
+    networksDirectoryId?: FormulaIdentifier,
   ) => FormulateResult<EndoGuest>;
 
   /**
@@ -2770,6 +2838,8 @@ export interface DaemonCore {
     hostAgentId: FormulaIdentifier,
     hostHandleId: FormulaIdentifier,
     workerLabel?: string,
+    guestPinsDirectoryId?: FormulaIdentifier,
+    networksDirectoryId?: FormulaIdentifier,
   ) => Promise<Readonly<FormulateNumberedGuestParams>>;
 
   formulateChannel: (
@@ -2888,8 +2958,8 @@ export interface DaemonCore {
   ) => FormulateResult<GitRemote>;
 
   formulateInvitation: (
-    hostAgentId: FormulaIdentifier,
-    hostHandleId: FormulaIdentifier,
+    invitingAgentId: FormulaIdentifier,
+    invitingHandleId: FormulaIdentifier,
     guestName: NameOrPath,
     deferredTasks: DeferredTasks<InvitationDeferredTaskParams>,
   ) => FormulateResult<Invitation>;

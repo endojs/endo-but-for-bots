@@ -87,6 +87,51 @@ const coerceMessageNumber = value => {
   return undefined;
 };
 
+/**
+ * Incarnate every formula retained by the pin directories of the mailbox's
+ * agent. Hosts have one pin directory. Guests have a guest-visible directory
+ * and a host-only directory.
+ *
+ * @param {object} args
+ * @param {FormulaIdentifier} args.selfId
+ * @param {DaemonCore['getFormulaForId']} args.getFormulaForId
+ * @param {Provide} args.provide
+ */
+export const reincarnateMailboxPins = async ({
+  selfId,
+  getFormulaForId,
+  provide,
+}) => {
+  const handleFormula = await getFormulaForId(selfId);
+  if (handleFormula.type !== 'handle') {
+    throw new Error(`Mailbox self identifier is not a handle: ${q(selfId)}`);
+  }
+  const agentFormula = await getFormulaForId(handleFormula.agent);
+  /** @type {FormulaIdentifier[]} */
+  let pinDirectoryIds;
+  if (agentFormula.type === 'host') {
+    pinDirectoryIds = [agentFormula.pins];
+  } else if (agentFormula.type === 'guest') {
+    pinDirectoryIds = [agentFormula.guestPins, agentFormula.hostPins].filter(
+      id => id !== undefined,
+    );
+  } else {
+    throw new Error(
+      `Mailbox handle does not belong to an agent: ${q(handleFormula.agent)}`,
+    );
+  }
+
+  await Promise.all(
+    pinDirectoryIds.map(async pinDirectoryId => {
+      const pins = await provide(pinDirectoryId, 'directory');
+      const retainedIds = await E(pins).listIdentifiers();
+      await Promise.all(
+        retainedIds.map(id => provide(/** @type {FormulaIdentifier} */ (id))),
+      );
+    }),
+  );
+};
+
 const MESSAGE_SPECIAL_NAMES = new Set([
   '@from',
   '@to',
@@ -821,6 +866,11 @@ export const makeMailboxMaker = ({
           messageNumber,
           harden([{ envelope: harden({ ...envelope, done }), done, date }]),
         );
+        await reincarnateMailboxPins({
+          selfId,
+          getFormulaForId,
+          provide,
+        });
         messagesTopic.publisher.next(message);
       });
     };
