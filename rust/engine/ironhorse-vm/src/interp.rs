@@ -1680,6 +1680,13 @@ pub enum RelinkError {
 
 interp_state!(define_interp_state);
 
+/// The next machine identity, minted once per [`Interp`]. Realm ownership is
+/// checked by comparing this value; see `Interp::machine_id`.
+fn next_machine_id() -> u64 {
+    static NEXT_MACHINE_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT_MACHINE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
 /// The interned `typeof`-result strings, held as chunk offsets into the
 /// machine chunk heap. Allocated once at [`Interp::new`], before any run,
 /// so `typeof` names a preexisting string (XS's `XS_STRING_X_KIND`
@@ -2413,9 +2420,27 @@ impl Interp {
     /// discards a realm must discard its jobs with it, or every later
     /// realm's evaluation refuses (`compartment:pending-jobs`). The halted
     /// run's heap effects remain; the dropped reaction state is reclaimed by
-    /// the next collection's liveness pass.
+    /// the next collection's liveness pass. Also drops the machine's
+    /// rejection report, which was that run's.
     pub fn discard_pending_jobs(&mut self) {
         self.promise_jobs.clear();
+        self.clear_rejection_report();
+    }
+
+    /// Drop the machine's rejection report — the published
+    /// `unhandled_rejection` and the pending-rejection list — without
+    /// touching queued jobs. The report is machine-scoped, so a compartment
+    /// evaluator clears it when installing a realm: an outcome must report
+    /// only its own run, never a prior realm's rejection. Mark the
+    /// `Promises` section dirty when a report was present, or an incremental
+    /// checkpoint would reuse the last leaf and resurrect the cleared
+    /// rejection.
+    pub(crate) fn clear_rejection_report(&mut self) {
+        if self.unhandled_rejection.is_some() || !self.pending_rejections.is_empty() {
+            self.snapshot_dirt.mark(SnapshotSection::Promises.mask());
+        }
+        self.unhandled_rejection = None;
+        self.pending_rejections.clear();
     }
 
     fn run_operation(&mut self, shared: std::rc::Rc<[u8]>, execute_script: bool) -> RunOutcome {

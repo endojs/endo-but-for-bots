@@ -51,6 +51,23 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     snapshot_baseline_identity: std::rc::Rc<()>,
+    #[boot_new(super::next_machine_id())]
+    #[boot_template(super::next_machine_id())]
+    #[gc_root(none)]
+    #[quiescent(retained)]
+    #[persist_refs(none)]
+    #[runtime_keys(none)]
+    #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
+    #[gc_slots(none, none)]
+    #[gc_weak(none)]
+    #[snapshot_table(none)]
+    /// Monotonic identity of the machine whose arenas this interpreter owns.
+    /// A [`crate::Realm`] records it at mint and [`Interp::swap_realm`]
+    /// refuses a realm minted on another machine, whose slot indices would
+    /// otherwise be silently installed into this arena. Runtime host
+    /// bookkeeping, never snapshotted (realms do not persist).
+    machine_id: u64,
     #[boot_new(Vec::with_capacity(64))]
     #[boot_template(state.stack.clone())]
     #[gc_root(slots)]

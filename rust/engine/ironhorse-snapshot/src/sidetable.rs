@@ -726,9 +726,11 @@ mod tests {
             "gc_failed",
         ];
         const HOST_WIRING: &[&str] = &[
-            // Embedding policy configured outside each activation.
+            // Host policy, identity, and embedding state wired outside each
+            // activation.
             "eval_program_hoist",
             "realm_roots",
+            "machine_id",
             "meter_host",
             "source_compiler",
             "intrinsic_permit",

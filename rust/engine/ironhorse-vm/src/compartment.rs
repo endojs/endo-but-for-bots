@@ -463,6 +463,11 @@ impl Compartment {
         if !allow_pending_jobs && machine.has_pending_jobs() {
             return Err(Self::pending_jobs_refused(machine));
         }
+        if !allow_pending_jobs {
+            // The rejection report is machine-scoped; a new evaluation
+            // reports only its own run.
+            machine.clear_rejection_report();
+        }
         if self.realm.is_none() {
             self.realm = Some(machine.new_realm());
         }
@@ -488,11 +493,13 @@ impl Compartment {
         machine.swap_realm(self.realm.as_mut().expect("installed by `install`"));
     }
 
-    /// Drop this compartment's realm from the machine's parked-realm roots.
-    /// The namespace becomes unreachable and the next collection may reclaim
-    /// it; a later evaluation lazily mints a fresh realm, so the compartment
-    /// starts over with empty globals. Releasing a compartment whose realm
-    /// was never created is a no-op.
+    /// Drop this compartment's realm from the machine's root set. The
+    /// namespace becomes unreachable and the next collection may reclaim it;
+    /// a later evaluation lazily mints a fresh realm, so the compartment
+    /// starts over empty of guest-declared globals. Id-keyed endowments
+    /// recorded on this compartment are kept and re-seed into the fresh
+    /// realm, and the seeded-id set is cleared with the realm. Releasing a
+    /// compartment whose realm was never created is a no-op.
     pub fn release(&mut self, machine: &mut Interp) {
         if let Some(realm) = self.realm.take() {
             machine.release_realm(&realm);
@@ -1121,6 +1128,42 @@ mod tests {
         let outcome = b.evaluate(machine.interp_mut(), &read_global_program(7));
         assert!(outcome.completed, "{:?}", outcome.halt);
         assert_eq!(outcome.result, "1");
+    }
+
+    #[test]
+    #[should_panic(expected = "minted it")]
+    fn a_realm_cannot_be_installed_into_a_foreign_machine() {
+        // A realm's indices address its minting machine's arenas; installing
+        // it into another machine must fail loudly rather than alias slots.
+        let mut first = Machine::new();
+        let mut second = Machine::new();
+        let mut realm = first.interp_mut().new_realm();
+        second.interp_mut().swap_realm(&mut realm);
+    }
+
+    #[test]
+    fn a_realms_rejection_report_does_not_bleed_into_a_sibling() {
+        // The rejection report is machine-scoped, so installing a realm
+        // clears it: an outcome reports only its own run.
+        let mut machine = Machine::new();
+        let mut a = machine.new_compartment();
+        let (rejecting, rejecting_symbols) =
+            ironhorse_compile::compile_atoms("Promise.reject(1); 0").unwrap();
+        let ra = a.evaluate_with_symbols(machine.interp_mut(), &rejecting, &rejecting_symbols);
+        assert!(ra.completed, "{:?}", ra.halt);
+        assert!(
+            ra.unhandled_rejection.is_some(),
+            "the rejecting run reports its own rejection"
+        );
+
+        let mut b = machine.new_compartment();
+        let (probe, probe_symbols) = ironhorse_compile::compile_atoms("1").unwrap();
+        let rb = b.evaluate_with_symbols(machine.interp_mut(), &probe, &probe_symbols);
+        assert!(rb.completed, "{:?}", rb.halt);
+        assert!(
+            rb.unhandled_rejection.is_none(),
+            "a sibling must not inherit the report"
+        );
     }
 
     #[test]

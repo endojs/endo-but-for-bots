@@ -17,6 +17,10 @@ use crate::value::SlotIndex;
 
 /// The realm-scoped namespace of a machine.
 pub struct Realm {
+    /// Identity of the machine whose arenas minted this realm. Every index
+    /// the realm carries (`global_obj`, `global_props`, symbol ids) is an
+    /// index into that machine, so installing it anywhere else is refused.
+    machine_id: u64,
     global_obj: SlotIndex,
     global_props: std::collections::HashMap<u16, SlotIndex>,
     symbol_ids: SymbolIds,
@@ -62,6 +66,7 @@ impl Realm {
         interp.realm_roots.push(global_obj);
         let snapshot_dirt = interp.snapshot_dirt.clone();
         Realm {
+            machine_id: interp.machine_id,
             global_obj,
             global_props: std::collections::HashMap::new(),
             symbol_ids: SymbolIds::default(),
@@ -122,6 +127,11 @@ impl Interp {
     /// the root set) and is removed from `realm_roots`; the outgoing global
     /// is parked and added.
     pub fn swap_realm(&mut self, realm: &mut Realm) {
+        assert_eq!(
+            realm.machine_id, self.machine_id,
+            "a realm may only be installed into the machine that minted it: \
+             its slot and symbol indices belong to that machine's arenas"
+        );
         std::mem::swap(&mut self.global_obj, &mut realm.global_obj);
         self.realm_roots.retain(|root| *root != self.global_obj);
         if !self.realm_roots.contains(&realm.global_obj) {
@@ -159,10 +169,17 @@ impl Interp {
 
     /// Drop `realm` from this machine's root set. The realm must not be used
     /// afterwards; its namespace becomes unreachable and the next collection
-    /// may reclaim it. Releasing twice is harmless, and releasing the active
-    /// realm is a no-op for the root set (the active global is rooted through
-    /// `global_obj`), though the handle itself is then unusable for a swap.
+    /// may reclaim it. Releasing twice is harmless. A realm handle always
+    /// holds the namespace it parked, so releasing the currently installed
+    /// realm unroots that parked namespace (for the first install, the
+    /// machine's boot default), not the active one — the active global is
+    /// rooted through `global_obj`.
     pub fn release_realm(&mut self, realm: &Realm) {
+        assert_eq!(
+            realm.machine_id, self.machine_id,
+            "a realm may only be released on the machine that minted it: \
+             its slot and symbol indices belong to that machine's arenas"
+        );
         self.realm_roots.retain(|root| *root != realm.global_obj);
     }
 
@@ -216,6 +233,7 @@ mod tests {
     const MACHINE_SCOPED: &[&str] = &[
         "snapshot_dirt",
         "snapshot_baseline_identity",
+        "machine_id",
         "stack",
         "locals",
         "id_map",

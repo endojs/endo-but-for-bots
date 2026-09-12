@@ -27,6 +27,7 @@ fn compact(source: &str) -> String {
 const TEMPLATE_ORDER: &[&str] = &[
     "snapshot_dirt",
     "snapshot_baseline_identity",
+    "machine_id",
     "stack",
     "locals",
     "id_map",
@@ -220,6 +221,7 @@ const TEMPLATE_ORDER: &[&str] = &[
 const FRESH_ORDER: &[&str] = &[
     "snapshot_dirt",
     "snapshot_baseline_identity",
+    "machine_id",
     "stack",
     "locals",
     "id_map",
