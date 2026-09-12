@@ -174,18 +174,21 @@ const buildDaemon = async (
       const workerStore = store.provideWorkerStore(workerId);
       /** @type {any} */
       const holder = {};
-      const transport = makeDurableWorkerTransport({ timers, logging }, {
-        workerId,
-        store: workerStore,
-        engine,
-        idleSleepMs,
-        debugLabel: workerStore.getMeta().debugLabel,
-        onFatal: () => hub.retireSession(workerId),
-        onFrame: (
-          /** @type {Uint8Array} */ bytes,
-          /** @type {number} */ sequenceNumber,
-        ) => holder.sink.deliver(bytes, sequenceNumber),
-      });
+      const transport = makeDurableWorkerTransport(
+        { timers, logging },
+        {
+          workerId,
+          store: workerStore,
+          engine,
+          idleSleepMs,
+          debugLabel: workerStore.getMeta().debugLabel,
+          onFatal: () => hub.retireSession(workerId),
+          onFrame: (
+            /** @type {Uint8Array} */ bytes,
+            /** @type {number} */ sequenceNumber,
+          ) => holder.sink.deliver(bytes, sequenceNumber),
+        },
+      );
       holder.sink = hub.attachSession(workerId, {
         send: (
           /** @type {Uint8Array} */ bytes,
@@ -214,8 +217,7 @@ const buildDaemon = async (
   const records = makeWorkerSessionRecords({
     store,
     resources: resourceMakers,
-    reportError: error =>
-      logging.error('thixotrope worker sessions:', error),
+    reportError: error => logging.error('thixotrope worker sessions:', error),
   });
 
   /**

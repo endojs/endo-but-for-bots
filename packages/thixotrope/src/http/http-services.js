@@ -305,7 +305,8 @@ export const makeHttpServices = (
           put({ ...recipe, state: 'preparing', secret });
           publish(handler, secret);
           put({ ...recipe, state: 'open', secret });
-          if (lifecycle === 'running') await bind(runtimeFor(id), recipeFor(id));
+          if (lifecycle === 'running')
+            await bind(runtimeFor(id), recipeFor(id));
           return status(id);
         },
         status: () => status(id),
