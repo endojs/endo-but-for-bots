@@ -170,6 +170,7 @@ export const assertBridgeEvent = candidate => {
       type,
       id: candidate.id,
       ok: candidate.ok,
+      ...(candidate.name === undefined ? {} : { name: `${candidate.name}` }),
       ...(candidate.error === undefined ? {} : { error: `${candidate.error}` }),
       ...(candidate.result === undefined ? {} : { result: candidate.result }),
     });

@@ -786,6 +786,7 @@ export const makeOpencodeClient = ({
           backend,
           rootfs: rootfsLabel,
           model,
+          network: env.NETWORK || 'private',
           opencodeSessionId,
           terminated,
           bridgeRunning: Boolean(proc) && !bridgeExited,

@@ -407,3 +407,49 @@ test('rejects session ids that could escape its namespace', async t => {
     message: /Invalid Floot session id/,
   });
 });
+
+test('re-provisions the client when the network policy changes', async t => {
+  const { hostAgent, names } = makeRecordingHost();
+  const provisionCalls = [];
+  let terminated = 0;
+  const provisioner = makeOpencodeSessionProvisioner(hostAgent, baseConfig, {
+    async makeFilesystem(name) {
+      names.set(name, harden({}));
+    },
+    async provisionSession(_host, spec, options = {}) {
+      provisionCalls.push(spec);
+      const resultName = /** @type {string[]} */ (options.resultName);
+      names.set(
+        keyFor(resultName),
+        Far('FakeOpencodeClient', {
+          async status() {
+            return harden({ network: spec.network });
+          },
+          async terminate() {
+            terminated += 1;
+          },
+          async destroy() {
+            await null;
+          },
+          help: () => 'fake client',
+        }),
+      );
+      for (const name of options.removeNames || []) {
+        names.delete(keyFor(Array.isArray(name) ? name : [name]));
+      }
+      return harden({
+        client: names.get(keyFor(resultName)),
+        sessionId: 'sandbox-session',
+        hostMountPoint: '/mount',
+        rootfsLabel: 'test',
+      });
+    },
+  });
+  await E(provisioner).provision('session-state', { network: 'none' });
+  await E(provisioner).provision('session-state', { network: 'none' });
+  t.is(provisionCalls.length, 1);
+  await E(provisioner).provision('session-state', { network: 'private' });
+  t.is(terminated, 1);
+  t.is(provisionCalls.length, 2);
+  t.is(provisionCalls[1].network, 'private');
+});
