@@ -14,7 +14,7 @@ import {
 const endpoint = 'http://127.0.0.1:23456';
 const network = harden({
   policy: 'public-internet',
-  proxyUrl: 'http://207.148.100.198:23457',
+  proxyUrl: 'http://127.0.0.1:23457',
   dnsHost: '127.0.0.53',
   resolverConfigPath: '/private/provider/public-resolv.conf',
 });
@@ -74,14 +74,14 @@ test('public networking uses the host proxy without a second Codex proxy', t => 
   t.notThrows(() => assertBrokerRuntimeConfig(config, endpoint, network));
 });
 
-test('public proxy evidence rejects loopback, credentials, and noncanonical URLs', t => {
+test('public proxy evidence requires canonical loopback without credentials', t => {
   for (const proxyUrl of [
-    'http://127.0.0.1:23457',
+    'http://8.8.8.8:23457',
     'http://2130706433:23457',
     'http://[::ffff:127.0.0.1]:23457',
-    'http://user@207.148.100.198:23457',
-    'http://207.148.100.198:23457/path',
-    'http://207.148.100.198:23457/',
+    'http://user@127.0.0.1:23457',
+    'http://127.0.0.1:23457/path',
+    'http://127.0.0.1:23457/',
   ]) {
     t.throws(() => assertCodexNetworkEvidence({ ...network, proxyUrl }), {
       message: /network evidence/,

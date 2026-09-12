@@ -2766,7 +2766,7 @@ test('broker config admission permits a credential-free provider', async t => {
 test('admitted public networking is passed to the external turn policy', async t => {
   const network = harden({
     policy: 'public-internet',
-    proxyUrl: 'http://207.148.100.198:23457',
+    proxyUrl: 'http://127.0.0.1:23457',
     dnsHost: '127.0.0.53',
     resolverConfigPath: '/private/provider/public-resolv.conf',
   });

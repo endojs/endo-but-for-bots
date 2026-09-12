@@ -210,7 +210,7 @@ test('operator disk reductions reach the actual slice mount request', async t =>
 test('public slice binds resolver, proxy environment, and unchanged broker denial to its lease', async t => {
   const network = harden({
     policy: 'public-internet',
-    proxyUrl: 'http://207.148.100.198:23457',
+    proxyUrl: 'http://127.0.0.1:23457',
     dnsHost: '127.0.0.53',
     resolverConfigPath: '/private/provider/public-resolv.conf',
   });

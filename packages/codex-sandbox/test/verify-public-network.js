@@ -18,9 +18,9 @@ import { makeBrokerEnvironment } from '../src/broker-launch.js';
 
 // Explicit operator acceptance command. Uses no credentials or real provider
 // account; public HTTP(S) requests carry only a synthetic read-only test.
-const [imageRef, bootstrapImageRef, address] = process.argv.slice(2);
-if (!imageRef || !bootstrapImageRef || !address)
-  throw Error('listener image, Codex image, and operator IPv4 required');
+const [imageRef, guestImageRef, ...extra] = process.argv.slice(2);
+if (!imageRef || !guestImageRef || extra.length)
+  throw Error('listener image and guest image required');
 const directory = await mkdtemp(join(tmpdir(), 'endo-public-runtime-'));
 const name = `endo-public-probe-${randomUUID()}`;
 const execute = promisify(execFile);
@@ -86,7 +86,7 @@ try {
     imageRef,
     ownerId: `public-test-${randomUUID()}`,
     stateDirectory: directory,
-    publicInternet: { address, bootstrapImageRef },
+    publicInternet: true,
   });
   const listener = await runtime.start({
     endpoint: Far('No provider credentials', {
@@ -113,7 +113,7 @@ try {
       maxResponseBytes: 1024n,
       timeoutMs: 5000,
     },
-    network: { address, endpoint: diagnosticEndpoint },
+    network: { endpoint: diagnosticEndpoint },
   });
   const evidence = await listener.observe();
   const env = makeBrokerEnvironment(evidence.network);
@@ -195,7 +195,7 @@ print('OUTER_EGRESS_AND_GUEST_LISTENERS_OK')
     `PROBE=${JSON.stringify({ brokerHost: broker.hostname, brokerPort: Number(broker.port), proxyHost: proxy.hostname, proxyPort: Number(proxy.port) })}`,
     '--workdir=/workspace',
     '--entrypoint=python3',
-    bootstrapImageRef,
+    guestImageRef,
     '-I',
     '-c',
     probe,

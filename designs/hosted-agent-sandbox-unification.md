@@ -53,8 +53,11 @@ and disables its managed proxy, using the outer container as the execution bound
 Process/thread configuration uses `danger-full-access`, the supported baseline for
 that API; guest commands may reach inference and write granted native state.
 Runtime preflight checks guest child access rather than asserting an inner boundary.
-Pinned app-server native-command acceptance remains outstanding, and the temporary
-synthetic public proxy address and its setup helper have not yet been removed.
+The public proxy now binds fixed loopback alongside inference; the synthetic
+public address, NET_ADMIN helper, and helper image configuration are removed.
+An operator boolean enables public networking availability, and each session
+still requires its own separately revocable public-egress capability.
+Pinned app-server native-command acceptance remains outstanding.
 
 Runtime unification across all three adapters, Claude credential migration, OpenCode
 public network convergence, tool/journal consolidation, emergency stop UI, and the remaining

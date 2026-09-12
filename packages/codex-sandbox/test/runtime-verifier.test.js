@@ -91,7 +91,7 @@ test('public preflight binds proxy evidence without asserting an inner tool boun
   const f = fixture();
   const network = harden({
     policy: 'public-internet',
-    proxyUrl: 'http://207.148.100.198:23457',
+    proxyUrl: 'http://127.0.0.1:23457',
     dnsHost: '127.0.0.53',
     resolverConfigPath: '/private/provider/public-resolv.conf',
   });
