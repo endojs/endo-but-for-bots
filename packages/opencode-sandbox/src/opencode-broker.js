@@ -1,6 +1,6 @@
 // @ts-check
 
-// Broker-only provider egress for the OpenCode sandbox.
+// Provider broker and optional shared public egress for the OpenCode sandbox.
 //
 // Phase 1 injected the OpenRouter key into the slice and let it reach
 // https://openrouter.ai directly, which meant a session with network policy
@@ -17,6 +17,7 @@ import { join } from 'node:path';
 
 import { Fail, q } from '@endo/errors';
 import { makeProviderBrokerGrantIssuer } from '@endo/hosted-agent/provider-grant-issuer.js';
+import { makePublicEgress } from '@endo/hosted-agent/public-egress.js';
 import { makePodmanProviderListenerRuntime } from '@endo/hosted-agent/provider-listener-runtime.js';
 
 /** @import { BrokerPolicy } from '@endo/hosted-agent/provider-broker.js' */
@@ -92,6 +93,7 @@ export const buildOpencodeBrokerPolicy = ({
  * @param {string} options.imageDigest - Slice image digest (`sha256:...`)
  * @param {string} options.listenerImageRef - Pinned listener image ref
  * @param {string[]} options.models - Model ids this broker admits
+ * @param {boolean} [options.publicInternet] Operator permits public egress grants.
  * @param {number} [options.maxSessions]
  * @param {any} [options.audit]
  * @param {(diagnostic: any) => void} [options.onDiagnostic]
@@ -108,11 +110,14 @@ export const makeOpencodeBroker = async ({
   listenerImageRef,
   models,
   maxSessions,
+  publicInternet = false,
   audit,
   onDiagnostic,
   fetch: fetchAuthority = globalThis.fetch,
   runtime,
 }) => {
+  typeof publicInternet === 'boolean' ||
+    Fail`Invalid public network configuration`;
   DIGEST_PATTERN.test(imageDigest) ||
     Fail`OpenCode broker image digest must be pinned, got ${q(imageDigest)}`;
   (typeof imageRef === 'string' && imageRef.endsWith(`@${imageDigest}`)) ||
@@ -147,6 +152,7 @@ export const makeOpencodeBroker = async ({
       imageRef: listenerImageRef,
       ownerId,
       stateDirectory: join(directory, 'listener'),
+      publicInternet,
       ...(maxSessions === undefined ? {} : { maxListeners: maxSessions }),
     }));
   let issuer;
@@ -159,6 +165,12 @@ export const makeOpencodeBroker = async ({
       accountRef: OPENCODE_BROKER_ACCOUNT,
       requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
       policy,
+      ...(publicInternet
+        ? {
+            makePublicNetwork: () =>
+              makePublicEgress({ policy: 'public-internet' }),
+          }
+        : {}),
       ...(audit === undefined ? {} : { audit }),
       ...(onDiagnostic === undefined ? {} : { onDiagnostic }),
     });

@@ -58,6 +58,9 @@ public address, NET_ADMIN helper, and helper image configuration are removed.
 An operator boolean enables public networking availability, and each session
 still requires its own separately revocable public-egress capability.
 Pinned app-server native-command acceptance remains outstanding.
+The network evidence and proxy environment contract now lives in `@endo/hosted-agent`.
+OpenCode's broker can issue separately revocable public-egress grants; its hosted
+factory still uses the previous public path until resolver/runtime integration lands.
 
 Runtime unification across all three adapters, Claude credential migration, OpenCode
 public network convergence, tool/journal consolidation, emergency stop UI, and the remaining
@@ -290,6 +293,25 @@ session-local endpoints.
 If an adapter cannot run that way, document a narrow compatibility extension or
 withhold that mode; never silently broaden general egress or disclose credentials.
 
+### Generated runtime configuration
+
+Represent generated resolver and CLI configuration as literal
+`{ innerPath, contents }` records in the common runtime plan.
+The supporting runtime stages these files in a private host directory and mounts
+them read-only, with cleanup retained until every using container has been removed.
+Do not put this staging beneath a directory also exposed writable to the guest.
+Check destination collisions and refuse unsupported drivers.
+This conveys configuration bytes without introducing host-path authority or a
+new daemon file-mount capability merely for resolver configuration.
+Storage bounds and retryable staging ownership belong to the shared runtime.
+
+Podman resolver inheritance does not replace this step: in both the recorded
+4.9.3 deployment and 5.8.0 source, joining a network-disabled namespace skips
+resolver generation/inheritance; ordinary inheritance also excludes explicit user binds.
+See [Podman 5.8.0 resolver handling](https://github.com/containers/podman/blob/v5.8.0/libpod/container_internal_common.go#L1940)
+and [generated bind mounts](https://github.com/containers/podman/blob/v5.8.0/libpod/container.go#L1017).
+Live Linux acceptance remains necessary for the generated resolver mount.
+
 ### Runtime and storage
 
 `@endo/sandbox` owns Podman invocation, explicit process identity, namespace and
@@ -340,6 +362,7 @@ provider requirements, or an explicit user budget, rather than copied between la
 | Container renewal each turn | Fresh runtime/grant generation | Stale runtime state | Explicit incarnation change on policy changes, failures, and restart | Remove ordinary per-turn replacement. |
 | CLI/tool separation inside guest | Inference endpoint and native state from shell tools | Other code in the same guest | Host protects credentials, routes, administration, and effects records | Remove baseline guarantee; optional stronger profile only. |
 | Synthetic public IP/NET_ADMIN helper | Inner proxy's exclusion of inference addresses | Guest tools reaching the broker | Such access is allowed in the new authority domain | Remove requirement; verify CLI compatibility first. |
+| Generated configuration staging | Host file authority and temporary host storage | Configuration callers and guest mutations | Declared mount destinations restrict exposure; host storage budget is still required because guest cgroups do not cover staging | Stage literal bytes privately, mount read-only, and retain cleanup ownership; implement with shared runtime storage. |
 | Public destination/DNS filtering | Host/LAN services and ungranted external access | Guest requests and hostile DNS answers | Container isolation alone does not constrain a host proxy's sockets | Keep in shared egress service. |
 | Frame/header size cap | Allocation and parse work for one message | Guest/listener/provider input | Guest memory caps do not bound host parser allocation | Keep at each parsing boundary; derive compatible envelopes. |
 | Queue/inflight/connection caps | Aggregate host memory, FDs, pending work | Flooding or slow peers | One frame cap does not bound many queued frames | Keep with backpressure in shared transport/services. |
