@@ -173,7 +173,9 @@ must be passed independently of `nameHubId`. Concretely:
   host-scoped.)
 - Agent creation attributes by the same rule. When the host calls `provideGuest`,
   the host declares itself the creator, so the new `guest` formula and its
-  dependency formulas (`handle`, `pet-store`, `mailbox-store`, `worker`) carry
+  dependency formulas (every identifier field of the `GuestFormula` other than
+  `hostHandle` / `hostAgent`, which point back at the host: `handle`, `pet-store`,
+  `mailbox-store`, `mail-hub`, `worker`, `networks`, and `planes`) carry
   `creator = hostId`. The guest did not create itself. These formulas nonetheless
   exist for that guest's exclusive use, so the guest's diagnostics facet resolves
   them through an ownership carve-out; see "The guest's own provisioning chain"
@@ -222,9 +224,10 @@ subset (see `traces()` below and Design Decision 5):
   shape, `isLocalKey`, cross-peer rejection, unknown-identifier normalization) and
   then one additional gate: the persisted `creator` of the formula must equal the
   bound `guestId`, **or** the identifier must be one of the guest's own
-  provisioning-chain formulas (its own agent identity plus the `handle`,
-  `pet-store`, `mailbox-store`, and default `worker` minted for it, all
-  host-created; see "The guest's own provisioning chain" below). A mismatch must
+  provisioning-chain formulas (its own agent identity plus every dependency the
+  `GuestFormula` names for it other than `hostHandle` / `hostAgent` — the `handle`,
+  `pet-store`, `mailbox-store`, `mail-hub`, default `worker`, `networks`, and
+  `planes`, all host-created; see "The guest's own provisioning chain" below). A mismatch must
   reject with an error **textually indistinguishable from the existing
   unknown-identifier rejection**: same message shape, no "not created by this
   guest" wording that would let a caller tell "exists but isn't yours" apart from
@@ -273,8 +276,9 @@ flowchart TD
 ### The guest's own provisioning chain
 
 Attribution records the *initiator*, so a guest's own `guest`, `handle`, `worker`,
-`pet-store`, and `mailbox-store` formulas (minted by the host during
-`provideGuest`) carry `creator = hostId`. Left at that, cut 1 would reject
+`pet-store`, `mailbox-store`, `mail-hub`, `networks`, and `planes` formulas (minted
+by the host during `provideGuest`) carry `creator = hostId`. If attribution stopped
+there, cut 1 would reject
 `E(guest).diagnostics().getFormula(myOwnWorkerId)` on the very worker the guest
 uses every day. Per the anti-oracle rule above, that rejection would carry the
 "unknown identifier" text, telling the guest its own worker does not exist. That is
@@ -287,12 +291,19 @@ row to come into existence, place- and time-bound); *ownership* (whose resource 
 row durably is) is a separate judgment the gate makes on top of it. The gate's test
 becomes two-part: resolve a formula when `creator === guestId` **or** the identifier
 is in the guest's own provisioning set. That set is computed structurally, not from
-the creator column: at facet-construction time the facet resolves the guest's own
-agent formula (its `@self` / `@agent`) and reads its dependency identifiers (the
-`handle`, `pet-store`, `mailbox-store`, and default `worker` named by that agent
-formula), yielding a small fixed set of host-created identifiers the guest owns. A
-formula in that set resolves under the guest's facet; every other host-created
-formula stays rejected with the unknown-identifier text.
+the creator column, and is defined **data-driven over the formula shape rather than
+as a hand-written subset**: at facet-construction time the facet resolves the
+guest's own agent formula (its `@self` / `@agent`) and reads *every* dependency
+identifier that formula names, excluding only `hostHandle` and `hostAgent` (which
+name the *host's* identity, not the guest's own resources). For the current
+`GuestFormula` shape that admits the `handle`, `pet-store`, `mailbox-store`,
+`mail-hub`, default `worker`, `networks`, and `planes` — the full set of
+infrastructure the host mints per guest for that guest's exclusive use, all of it
+structurally identical in kind. Enumerating "every field but `hostHandle` /
+`hostAgent`" rather than a fixed list keeps the carve-out from silently drifting
+from the formula shape as new per-guest dependencies are added: a formula in that
+set resolves under the guest's facet; every other host-created formula stays
+rejected with the unknown-identifier text.
 
 This keeps Design Decision 2 intact (the column still attributes to the initiator,
 so the audit trail is unforged and additive) while making the *facet* (not the
@@ -311,9 +322,10 @@ relationships, and cross-guest roots. Creator attenuation keeps that intact: a
 guest sees only records it authored (plus its own identity and provisioning chain),
 so it learns nothing about the host's namespace, other guests, or peers it was not
 already party to. The provisioning-chain carve-out stays within that bar: the
-`handle`, `pet-store`, `mailbox-store`, and default `worker` it admits are the
-guest's own dedicated infrastructure, whose bodies name only the guest's own node
-and store, never host-selected authority or another agent's roots.
+`handle`, `pet-store`, `mailbox-store`, `mail-hub`, default `worker`, `networks`,
+and `planes` it admits are the guest's own dedicated infrastructure, minted per
+guest and whose bodies name only the guest's own node and store, never
+host-selected authority or another agent's roots.
 The dependency identifiers inside a guest-created record name capabilities the
 guest already holds (its endowments, its worker), so surfacing those identifier
 strings leaks no new authority; and because the referenced records do not expand
@@ -398,8 +410,11 @@ structure. The host facet remains the unfiltered superset for the operator.
    (guest reads a formula it created), the negative case (guest is rejected on a
    formula the host created), the `endow` case (guest is rejected on the
    host-attributed eval it proposed via `define`), the self-identity carve-out, the
-   provisioning-chain carve-out (guest resolves its own host-created `worker` /
-   `pet-store` / `mailbox-store` / `handle`), the existence-oracle case (the "not
+   provisioning-chain carve-out (guest resolves each host-created dependency its own
+   agent formula names other than `hostHandle` / `hostAgent` — `worker`,
+   `pet-store`, `mailbox-store`, `handle`, `mail-hub`, `networks`, and `planes` —
+   with one assertion per admitted field so the test list tracks the formula shape),
+   the existence-oracle case (the "not
    yours" rejection is byte-for-byte the same as the "unknown identifier"
    rejection), and continued cross-peer rejection.
 3. **Add guest-scoped `traces()`** filtered to guest-created workers, or defer per
@@ -428,10 +443,14 @@ structure. The host facet remains the unfiltered superset for the operator.
    an identical set; a method that *is* present behaves identically, only the
    authority behind it differs.
 6. **Own the provisioning chain via a facet-side carve-out, not an attribution
-   change.** The guest resolves its own `@self` / `@agent`, `handle`, `pet-store`,
-   `mailbox-store`, and default `worker` even though the host created them, because
-   those exist solely for the guest's use. The judgment lives in the resolution
-   gate (a structurally computed ownership set), leaving the `creator` column a
+   change.** The guest resolves its own `@self` / `@agent` plus every dependency its
+   agent formula names other than `hostHandle` / `hostAgent` (`handle`, `pet-store`,
+   `mailbox-store`, `mail-hub`, default `worker`, `networks`, `planes`) even though
+   the host created them, because those exist solely for the guest's use. The set is
+   stated data-driven over the formula shape, not as a fixed list, so it cannot drift
+   from `GuestFormula` as new per-guest dependencies are added. The judgment lives in
+   the resolution gate (a structurally computed ownership set), leaving the `creator`
+   column a
    pure initiator/audit fact; this serves the motivating worked example in cut 1
    rather than deferring it.
 
@@ -442,8 +461,12 @@ structure. The host facet remains the unfiltered superset for the operator.
   ship `getFormula` + `getFormulaGraph` alone and add `traces()` later without a
   surface change.
 - The provisioning-chain ownership set is computed from the guest's *own* agent
-  formula's declared dependencies (`handle`, `pet-store`, `mailbox-store`, default
-  `worker`). Is that dependency list a stable, complete enumeration of the "guest's
+  formula's declared dependencies (every field but `hostHandle` / `hostAgent`:
+  `handle`, `pet-store`, `mailbox-store`, `mail-hub`, default `worker`, `networks`,
+  `planes`). Because the set is derived data-driven from the formula shape rather
+  than hand-listed, a new per-guest dependency added to `GuestFormula` is admitted
+  automatically. The residual question is the *converse*: is that dependency list a
+  stable, complete enumeration of the "guest's
   own infrastructure" across daemon versions, or could a future provisioning step
   mint a guest-owned formula outside that agent-formula dependency closure that the
   carve-out would then miss? The design assumes the agent-formula dependency set is
