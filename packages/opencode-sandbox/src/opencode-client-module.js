@@ -401,7 +401,12 @@ export const make = (powers, context, contextWrapper = {}) => {
         OPENCODE_DISABLE_MODELS_FETCH: '1',
         OPENCODE_BRIDGE_DIRECTORY: workspacePath,
         OPENCODE_SERVER_PASSWORD: serverPassword,
-        ...(persistConfig ? { OPENCODE_CONFIG_DIR: configInnerDir } : {}),
+        // Deliberately NOT OPENCODE_CONFIG_DIR=configInnerDir: that mount is
+        // read-only, and opencode bootstraps its config dir by writing
+        // `.gitignore` into it, so pointing it at the RO mount fails every
+        // instance with EROFS (observed as POST /session -> 500). The
+        // authoritative config travels in OPENCODE_CONFIG_CONTENT; opencode's
+        // own config home stays the writable, ephemeral XDG_CONFIG_HOME.
         ...(resumeOpencodeSessionId
           ? { OPENCODE_SESSION_ID: resumeOpencodeSessionId }
           : {}),
