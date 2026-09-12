@@ -508,7 +508,9 @@ pub mod engine {
         /// Create a fresh machine, metered under [`MeterBounds::default`].
         ///
         /// Each `evaluate` creates a fresh Realm on the VM machine's shared
-        /// heap and frozen primordial graph. Persistent workers below use a
+        /// heap and frozen primordial graph. Its unreachable guest objects are
+        /// collected at the next evaluation or machine drop, keeping raw
+        /// diagnostics valid until a later collection. Persistent workers use a
         /// standalone `Interp`; shared-Realm snapshots are not yet supported.
         pub fn new() -> Machine {
             Machine::with_bounds(MeterBounds::default())
@@ -538,6 +540,10 @@ pub mod engine {
         /// and `halt: Halt::MeterAbort`; [`Machine::eval`] maps that to
         /// [`MachineError::MeterAbort`].
         pub fn evaluate(&self, source: &str, strict: bool) -> Result<EvalOutcome, MachineError> {
+            // The prior Realm was dropped on return. Reclaim it before the
+            // next compilation, preserving its raw diagnostics until this
+            // later VM operation. The last evaluation lives until machine drop.
+            self.inner.collect().map_err(MachineError::Halt)?;
             let mut meter = VMeter::new();
             let mut host = match (self.bounds.check_interval(), self.bounds.crank_limit()) {
                 (Some(interval), Some(limit)) => {
@@ -560,15 +566,13 @@ pub mod engine {
             };
             let mut comp = self.inner.new_compartment();
             comp.set_source_compiler(std::rc::Rc::new(ironhorse_runtime::IronhorseSourceCompiler));
-            Ok(eval_outcome(
-                comp.evaluate_with_symbols_continuing_meter_shared(
-                    bytecode.into(),
-                    &symbols,
-                    meter,
-                    host,
-                ),
-                0,
-            ))
+            let outcome = comp.evaluate_with_symbols_continuing_meter_shared(
+                bytecode.into(),
+                &symbols,
+                meter,
+                host,
+            );
+            Ok(eval_outcome(outcome, 0))
         }
 
         /// Evaluate and return only the completion value, failing when
@@ -1548,6 +1552,65 @@ pub mod engine {
                 }
                 other => panic!("expected charged compile error: {other:?}"),
             }
+        }
+
+        #[test]
+        fn ephemeral_evaluation_reclaims_prior_heap_before_the_next_compilation() {
+            let source = "var heap = []; for (var i=0; i<1024; i++) heap.push({i}); heap.length";
+            let single = Machine::with_bounds(MeterBounds::Unbounded);
+            single.evaluate(source, false).unwrap();
+            let single_heap = single.vm_machine().collect().unwrap();
+            let machine = Machine::with_bounds(MeterBounds::Unbounded);
+            for _ in 0..8 {
+                let out = machine.evaluate(source, false).unwrap();
+                assert!(out.completed);
+                assert_eq!(out.result, "1024");
+            }
+            let repeated_heap = machine.vm_machine().collect().unwrap();
+            assert_eq!(repeated_heap.slots_reclaimed, single_heap.slots_reclaimed);
+            assert_eq!(repeated_heap.slots_live, single_heap.slots_live);
+            machine.evaluate(source, false).unwrap();
+            assert!(machine.evaluate("var = ;", false).is_err());
+            assert_eq!(
+                machine.vm_machine().collect().unwrap().slots_reclaimed,
+                0,
+                "prior heap is collected even if next compilation fails"
+            );
+        }
+
+        #[test]
+        fn ephemeral_throw_and_rejection_diagnostics_live_until_later_collection() {
+            let machine = Machine::with_bounds(MeterBounds::Unbounded);
+            for (source, kind) in [
+                (
+                    "Promise.reject({diagnostic: 7}); 0",
+                    ironhorse_vm::Kind::Reference,
+                ),
+                (
+                    "Promise.reject('retained rejection text'); 0",
+                    ironhorse_vm::Kind::String,
+                ),
+            ] {
+                let outcome = machine.evaluate(source, false).unwrap();
+                assert!(outcome.completed);
+                assert_eq!(outcome.unhandled_rejection.unwrap().1.kind, kind);
+                // The returned raw values still belong to an allocated heap;
+                // this explicit later collection is what invalidates them.
+                assert!(machine.vm_machine().collect().unwrap().slots_reclaimed > 0);
+            }
+            let outcome = machine.evaluate("throw {diagnostic: 8}", false).unwrap();
+            assert!(matches!(
+                outcome.halt,
+                Halt::Throw {
+                    value: Slot {
+                        kind: ironhorse_vm::Kind::Reference,
+                        ..
+                    },
+                    ..
+                }
+            ));
+            assert!(machine.vm_machine().collect().unwrap().slots_reclaimed > 0);
+            assert_eq!(machine.eval("1").unwrap(), "1");
         }
 
         #[test]

@@ -4,8 +4,8 @@ use super::*;
 use ironhorse_snapshot::machine::{begin_store_session, checkpoint_to_store, resume_from_store};
 use ironhorse_snapshot::MachineSnapshot;
 use ironhorse_store_sqlite::SqliteHeapStore;
+use ironhorse_vm::snapshot_api::FunctionRow;
 use ironhorse_vm::{parse_symbols, Interp, Slot};
-use ironhorse_vm::snapshot_api::{FunctionRow};
 
 #[path = "../../tests/common/mod.rs"]
 mod common;
