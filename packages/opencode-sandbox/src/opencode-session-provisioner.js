@@ -165,6 +165,7 @@ export const makeOpencodeSessionProvisioner = (
    *     serverName?: string,
    *   },
    *   workspaceDir?: string,
+   *   network?: 'none' | 'private',
    *   model?: string,
    *   systemPrompt?: string,
    *   opencodeSessionId?: string,
@@ -180,8 +181,35 @@ export const makeOpencodeSessionProvisioner = (
       configFilesystemName,
       configDir,
     } = namesFor(sessionId);
+    const { network: requestedNetwork } = options;
+    if (requestedNetwork !== undefined) {
+      ['none', 'private'].includes(requestedNetwork) ||
+        Fail`Unknown network profile ${q(requestedNetwork)}`;
+    }
     await ensureSessionsDirectory();
-    if (await E(hostAgent).has(...clientPath)) return clientName;
+    if (await E(hostAgent).has(...clientPath)) {
+      if (requestedNetwork === undefined) return clientName;
+      const client = await E(hostAgent).lookup(clientPath);
+      const status = await E(client)
+        .status()
+        .catch(() => ({}));
+      if (status.network === undefined || status.network === requestedNetwork) {
+        return clientName;
+      }
+      // A policy change must reincarnate the slice with the new profile.
+      // Stop the live incarnation first so the successor cannot race its
+      // mounts, then drop the formula; durable state and the recorded
+      // opencode session survive (terminate keeps them).
+      await E(client)
+        .terminate()
+        .catch(error => {
+          console.error(
+            `[opencode-sandbox] stop before network change failed for ${sessionId}:`,
+            error instanceof Error ? error.message : String(error),
+          );
+        });
+      await E(hostAgent).remove(...clientPath);
+    }
 
     // A prior interrupted attempt may have left only the temporary pet names.
     if (await E(hostAgent).has(filesystemName)) {
@@ -210,7 +238,7 @@ export const makeOpencodeSessionProvisioner = (
         configHostDir: configDir,
         credentialsName,
         rootfs,
-        network,
+        network: requestedNetwork || network,
         sandboxNamespace,
         stateProviderName,
         sandboxSessionId,
