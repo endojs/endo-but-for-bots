@@ -12,12 +12,12 @@ test('file string atom preserves raw contents across reopening', async t => {
   t.teardown(() => rm(directory, { recursive: true, force: true }));
   const powers = makeNodePowers();
   const path = join(directory, 'state');
-  const atom = makeFileSyncStringAtom(powers, path);
+  const atom = makeFileSyncStringAtom(powers.syncFiles, path);
   t.is(atom.read(), undefined);
   atom.write('');
   t.is(atom.read(), '');
   const text = 'not JSON: inventory\n雪\n';
   atom.write(text);
   t.is(await readFile(path, 'utf8'), text);
-  t.is(makeFileSyncStringAtom(powers, path).read(), text);
+  t.is(makeFileSyncStringAtom(powers.syncFiles, path).read(), text);
 });

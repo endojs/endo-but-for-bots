@@ -1,5 +1,6 @@
 // @ts-check
-/** @import { NodePowers } from '../platform/node-powers.js' */
+/** @import { SyncFilePowers } from '../platform/sync-files.js' */
+/** @import { PathPowers } from '../platform/paths.js' */
 import harden from '@endo/harden';
 
 import { Fail, q } from '@endo/errors';
@@ -93,78 +94,33 @@ export { assertWorkerId, isSessionToken } from './store-validators.js';
  * - `sessions/<token>/meta.json`
  * - `sessions/<token>/frames.jsonl`
  *
- * @param {NodePowers} powers
+ * @param {{ syncFiles: SyncFilePowers, paths: PathPowers }} powers
  * @param {string} statePath
  * @returns {ThixotropeStore}
  */
-export const makeFsStore = (powers, statePath) => {
-  const {
-    appendFileSync,
-    closeSync,
-    existsSync,
-    fsyncSync,
-    mkdirSync,
-    openSync,
-    readdirSync,
-    readFileSync,
-    renameSync,
-    rmSync,
-    writeFileSync,
-  } = powers.fs;
-  const { dirname, join } = powers.path;
+export const makeFsStore = ({ syncFiles, paths }, statePath) => {
+  const { join } = paths;
   /**
    * @param {string} path
    * @returns {any}
    */
   const readJsonMaybe = path => {
-    if (!existsSync(path)) {
+    if (!syncFiles.exists(path)) {
       return undefined;
     }
-    return JSON.parse(readFileSync(path, 'utf8'));
-  };
-
-  /**
-   * @param {string} path
-   */
-  const syncPath = path => {
-    const fd = openSync(path, 'r');
-    try {
-      fsyncSync(fd);
-    } finally {
-      closeSync(fd);
-    }
-  };
-
-  /** @param {string} path */
-  const makeDirectory = path => {
-    if (existsSync(path)) return;
-    makeDirectory(dirname(path));
-    mkdirSync(path, { recursive: true });
-    syncPath(dirname(path));
-  };
-
-  /**
-   * @param {string} path
-   * @param {string} text
-   */
-  const writeFileAtomic = (path, text) => {
-    const tempPath = `${path}.tmp`;
-    writeFileSync(tempPath, text);
-    syncPath(tempPath);
-    renameSync(tempPath, path);
-    syncPath(dirname(path));
+    return JSON.parse(syncFiles.readText(path));
   };
 
   const workersPath = join(statePath, 'workers');
   const sessionsPath = join(statePath, 'sessions');
-  makeDirectory(workersPath);
-  makeDirectory(sessionsPath);
+  syncFiles.makeDirectory(workersPath);
+  syncFiles.makeDirectory(sessionsPath);
 
   /** @param {string} token */
   const makeSessionStore = token => {
     assertSessionToken(token);
     const sessionPath = join(sessionsPath, token);
-    makeDirectory(sessionPath);
+    syncFiles.makeDirectory(sessionPath);
     const metaPath = join(sessionPath, 'meta.json');
     const framesPath = join(sessionPath, 'frames.jsonl');
 
@@ -175,16 +131,17 @@ export const makeFsStore = (powers, statePath) => {
       const text = [...entries.map(entry => JSON.stringify(entry)), ''].join(
         '\n',
       );
-      writeFileAtomic(framesPath, text);
+      syncFiles.writeTextAtomic(framesPath, text);
       framesRepaired = true;
     };
 
     /** @returns {Array<{ n: number, b64: string, hubSequence?: string }>} */
     const readFramesFile = () => {
-      if (!existsSync(framesPath)) {
+      if (!syncFiles.exists(framesPath)) {
         return [];
       }
-      const lines = readFileSync(framesPath, 'utf8')
+      const lines = syncFiles
+        .readText(framesPath)
         .split('\n')
         .filter(line => line !== '');
       /** @type {Array<{ n: number, b64: string, hubSequence?: string }>} */
@@ -211,16 +168,16 @@ export const makeFsStore = (powers, statePath) => {
     /** @type {SessionStore} */
     const sessionStore = {
       getMeta: () => readJsonMaybe(metaPath) ?? {},
-      setMeta: meta => writeFileAtomic(metaPath, `${JSON.stringify(meta)}\n`),
+      setMeta: meta =>
+        syncFiles.writeTextAtomic(metaPath, `${JSON.stringify(meta)}\n`),
       appendFrame: entry => {
-        if (!existsSync(framesPath)) {
+        if (!syncFiles.exists(framesPath)) {
           writeFramesFile([]);
         } else if (!framesRepaired) {
           readFramesFile();
           framesRepaired = true;
         }
-        appendFileSync(framesPath, `${JSON.stringify(entry)}\n`);
-        syncPath(framesPath);
+        syncFiles.appendTextDurable(framesPath, `${JSON.stringify(entry)}\n`);
       },
       readFrames: readFramesFile,
       truncateFramesUpTo: upToN => {
@@ -234,7 +191,7 @@ export const makeFsStore = (powers, statePath) => {
   const makeWorkerStore = workerId => {
     assertWorkerId(workerId);
     const workerPath = join(workersPath, workerId);
-    makeDirectory(workerPath);
+    syncFiles.makeDirectory(workerPath);
     const tablesPath = join(workerPath, 'tables.json');
     const metaPath = join(workerPath, 'meta.json');
     const journalPath = join(workerPath, 'journal.jsonl');
@@ -263,10 +220,10 @@ export const makeFsStore = (powers, statePath) => {
 
     /** @returns {{ base: number, lines: Array<string> }} */
     const readJournalFile = () => {
-      if (!existsSync(journalPath)) {
+      if (!syncFiles.exists(journalPath)) {
         return { base: 0, lines: [] };
       }
-      const text = readFileSync(journalPath, 'utf8');
+      const text = syncFiles.readText(journalPath);
       const lines = text.split('\n').filter(line => line !== '');
       const header = JSON.parse(lines[0] ?? '{}');
       typeof header.base === 'number' ||
@@ -287,7 +244,7 @@ export const makeFsStore = (powers, statePath) => {
      */
     const writeJournalFile = (base, lines) => {
       const text = [JSON.stringify({ base }), ...lines, ''].join('\n');
-      writeFileAtomic(journalPath, text);
+      syncFiles.writeTextAtomic(journalPath, text);
       journalRepaired = true;
     };
 
@@ -304,16 +261,16 @@ export const makeFsStore = (powers, statePath) => {
     const workerStore = {
       getTablesRecord: () => readJsonMaybe(tablesPath),
       setTablesRecord: record =>
-        writeFileAtomic(tablesPath, `${JSON.stringify(record)}\n`),
+        syncFiles.writeTextAtomic(tablesPath, `${JSON.stringify(record)}\n`),
       getMeta: () => readJsonMaybe(metaPath) ?? {},
-      setMeta: meta => writeFileAtomic(metaPath, `${JSON.stringify(meta)}\n`),
+      setMeta: meta =>
+        syncFiles.writeTextAtomic(metaPath, `${JSON.stringify(meta)}\n`),
       appendJournal: entry => {
-        if (!existsSync(journalPath)) {
+        if (!syncFiles.exists(journalPath)) {
           writeJournalFile(0, []);
         }
         ensureJournalRepaired();
-        appendFileSync(journalPath, `${JSON.stringify(entry)}\n`);
-        syncPath(journalPath);
+        syncFiles.appendTextDurable(journalPath, `${JSON.stringify(entry)}\n`);
       },
       readJournal: (from = 0) => {
         const { base, lines } = readJournalFile();
@@ -342,26 +299,34 @@ export const makeFsStore = (powers, statePath) => {
   const store = {
     statePath,
     listWorkerIds: () =>
-      existsSync(workersPath) ? readdirSync(workersPath).sort() : [],
+      syncFiles.exists(workersPath)
+        ? syncFiles.listDirectory(workersPath).sort()
+        : [],
     provideWorkerStore: makeWorkerStore,
     deleteWorker: workerId => {
       assertWorkerId(workerId);
-      rmSync(join(workersPath, workerId), { recursive: true, force: true });
-      syncPath(workersPath);
+      syncFiles.remove(join(workersPath, workerId), {
+        recursive: true,
+        force: true,
+      });
     },
     getHubState: () => readJsonMaybe(join(statePath, 'hub.json')),
     setHubState: state =>
-      writeFileAtomic(
+      syncFiles.writeTextAtomic(
         join(statePath, 'hub.json'),
         `${JSON.stringify(state)}\n`,
       ),
     listSessionTokens: () =>
-      existsSync(sessionsPath) ? readdirSync(sessionsPath).sort() : [],
+      syncFiles.exists(sessionsPath)
+        ? syncFiles.listDirectory(sessionsPath).sort()
+        : [],
     provideSessionStore: makeSessionStore,
     deleteSession: token => {
       assertSessionToken(token);
-      rmSync(join(sessionsPath, token), { recursive: true, force: true });
-      syncPath(sessionsPath);
+      syncFiles.remove(join(sessionsPath, token), {
+        recursive: true,
+        force: true,
+      });
     },
   };
   return harden(store);

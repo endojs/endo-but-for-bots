@@ -1,21 +1,22 @@
 // @ts-check
-/** @import { NodePowers } from '../platform/node-powers.js' */
+/** @import { FilePowers } from '../platform/files.js' */
+/** @import { PathPowers } from '../platform/paths.js' */
 import harden from '@endo/harden';
 
 /**
  * Read-only recovery information, even when the executable is incompatible or
  * a guest is quarantined. Atomic metadata files are read independently; this
  * is an inspection report, not a transactional backup of a running daemon.
- * @param {NodePowers} powers
+ * @param {{ files: FilePowers, paths: PathPowers }} powers
  * @param {string} statePath
  */
-export const inspectIronhorseStore = async (powers, statePath) => {
-  const { readFile, readdir } = powers.fsPromises;
-  const { join } = powers.path;
+export const inspectIronhorseStore = async ({ files, paths }, statePath) => {
+  const { readText, listDirectory } = files;
+  const { join } = paths;
   /** @param {string} path */
   const read = async path => {
     try {
-      return JSON.parse(await readFile(path, 'utf8'));
+      return JSON.parse(await readText(path));
     } catch (error) {
       if (/** @type {NodeJS.ErrnoException} */ (error).code === 'ENOENT')
         return null;
@@ -23,7 +24,7 @@ export const inspectIronhorseStore = async (powers, statePath) => {
     }
   };
   const runtime = await read(join(statePath, 'runtime.json'));
-  const ids = await readdir(join(statePath, 'workers'));
+  const ids = await listDirectory(join(statePath, 'workers'));
   const workers = await Promise.all(
     ids
       .filter(id => /^[a-f0-9]{32}$/.test(id))

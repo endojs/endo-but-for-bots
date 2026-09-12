@@ -1,5 +1,5 @@
 // @ts-check
-/** @import { NodePowers } from '../platform/node-powers.js' */
+/** @import { TimerHandle, TimerPowers } from '../platform/timers.js' */
 import { E, Far } from '@endo/far';
 import harden from '@endo/harden';
 
@@ -7,16 +7,15 @@ import harden from '@endo/harden';
  * Keep pending guest operations in a scope that never contains a socket.
  * Merely omitting socket references from a nested callback is insufficient:
  * V8 shares captured bindings between closures created in the same scope.
- * @param {Pick<NodePowers, 'timers'>} powers
+ * @param {TimerPowers} timers
  * @param {any} inventory
  * @param {number} [cleanupGraceMs] local timer delay
  */
 export const makeInventoryViewLifetime = (
-  powers,
+  timers,
   inventory,
   cleanupGraceMs = 1000,
 ) => {
-  const { setTimeout, clearTimeout } = powers.timers;
   let closed = false;
   let watching = false;
   /** @type {any} */
@@ -77,14 +76,14 @@ export const makeInventoryViewLifetime = (
         observer = undefined;
         rejectDelivery?.(Error('Inventory view disconnected'));
         rejectDelivery = undefined;
-        /** @type {ReturnType<typeof setTimeout> | undefined} */
+        /** @type {TimerHandle | undefined} */
         let timer;
         disconnecting = Promise.race([
           cancelSubscription(),
           new Promise(resolve => {
-            timer = setTimeout(() => resolve(undefined), cleanupGraceMs);
+            timer = timers.setTimer(() => resolve(undefined), cleanupGraceMs);
           }),
-        ]).finally(() => clearTimeout(timer));
+        ]).finally(() => timers.clearTimer(timer));
       }
       return disconnecting;
     },

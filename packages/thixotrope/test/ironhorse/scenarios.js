@@ -4,7 +4,10 @@ import test from '@endo/ses-ava/test.js';
 import { appendFile, readdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { listenerSource, producerSource } from '../../src/ironhorse/demo-promise-vats.js';
+import {
+  listenerSource,
+  producerSource,
+} from '../../src/ironhorse/demo-promise-vats.js';
 import { makeFixture, settled } from './_fixture.js';
 
 // Every scenario owns a daemon and two Ironhorse processes. These are serial

@@ -61,7 +61,7 @@ const makeDaemon = async (t, { onDeleteWorker = () => {} } = {}) => {
     engine: makePeerJournalReplayEngine(nodePowers),
     codec: syrupCodec,
     resources: {
-      timer: description => makeTimerResource(nodePowers, description),
+      timer: description => makeTimerResource(nodePowers.timers, description),
     },
     makeNetlayer: ({ handlers, logger }) =>
       makeTcpNetLayer({ handlers, logger }),

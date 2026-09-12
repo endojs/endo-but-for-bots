@@ -1,5 +1,5 @@
 // @ts-check
-/** @import { NodePowers } from '../platform/node-powers.js' */
+/** @import { TimerPowers } from '../platform/timers.js' */
 import harden from '@endo/harden';
 import { Fail, q } from '@endo/errors';
 import { Far } from '@endo/far';
@@ -28,15 +28,15 @@ const MAX_DELAY_MS = 2 ** 31 - 1;
  * worker without inbound traffic: the resolution message routes through
  * the worker's session and triggers the ordinary wake path.
  *
- * @param {Pick<NodePowers, 'now' | 'timers'>} powers
+ * @param {TimerPowers} timers
  * @param {unknown} [_description]
  * @returns {object}
  */
-export const makeTimerResource = (powers, _description = null) =>
+export const makeTimerResource = (timers, _description = null) =>
   Far('ThixotropeTimer', {
     help: () =>
       'ThixotropeTimer: now() returns milliseconds since epoch; delay(ms) resolves with now() no sooner than ms from the call (0 <= ms <= 2**31 - 1).',
-    now: () => powers.now(),
+    now: () => timers.now(),
     /** @param {number} ms */
     delay: async ms => {
       const delayMs = Number(ms);
@@ -45,7 +45,7 @@ export const makeTimerResource = (powers, _description = null) =>
           MAX_DELAY_MS,
         )}`;
       return new Promise(resolve =>
-        powers.timers.setTimeout(() => resolve(powers.now()), delayMs),
+        timers.setTimer(() => resolve(timers.now()), delayMs),
       );
     },
   });

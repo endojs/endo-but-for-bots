@@ -1,25 +1,31 @@
 // @ts-check
-/** @import { NodePowers } from '../platform/node-powers.js' */
 import { E, Far } from '@endo/far';
 import { Fail } from '@endo/errors';
 import harden from '@endo/harden';
 
 /** @import { SyncStringAtom } from '../store/sync-string-atom.js' */
+/** @import { HttpAbortSignal, HttpListener, HttpListenerPowers, HttpRequest, HttpRequestDescription } from '../platform/http-listeners.js' */
+/** @import { RandomPowers } from '../platform/random.js' */
 
-/** @import { Server, IncomingMessage, ServerResponse } from 'node:http' */
-/** @import { Socket } from 'node:net' */
 /** @typedef {{id: string, port: number, state: 'allocated'|'preparing'|'open'|'closed', secret?: string}} Recipe */
 /** @typedef {{lookup: (secret: string) => any, close: () => void | Promise<void>}} RequestClient */
-/** @typedef {{server?: Server, sockets: Set<Socket>, aborts: Set<() => void>, chain: Promise<void>, status: string, error?: string}} Runtime */
+/** @typedef {{listener?: HttpListener, chain: Promise<void>, status: string, error?: string}} Runtime */
 const limit = 64 * 1024;
 const maxRequests = 16;
 const deadlineMs = 5000;
+
+/** @param {Uint8Array} bytes */
+const toHex = bytes =>
+  [...bytes].map(byte => byte.toString(16).padStart(2, '0')).join('');
+
 /**
  * Persistent HTTP listener recipes; all sockets, request clients and deadlines
  * are ephemeral. The caller owns the engine lease for this manager's lifetime.
  * Ports are explicit, loopback-only, and each allocation is a single-use lease.
  * Repeated listen rejects; inspect status after an uncertain configuration call.
- * @param {Pick<NodePowers, 'http' | 'timers' | 'randomBytes'>} powers
+ * @param {object} powers
+ * @param {HttpListenerPowers} powers.httpListeners
+ * @param {RandomPowers} powers.random
  * @param {object} options
  * @param {SyncStringAtom} options.storage
  * @param {(handler: any, secret: string) => void} options.publish
@@ -27,15 +33,10 @@ const deadlineMs = 5000;
  * @param {() => Promise<RequestClient>} options.openClient
  */
 export const makeHttpServices = (
-  powers,
+  { httpListeners, random },
   { storage, publish, unpublish, openClient },
 ) => {
-  const { createServer } = powers.http;
-  const { setTimeout, clearTimeout } = powers.timers;
-  const randomId = () =>
-    Array.from(powers.randomBytes(16), byte =>
-      byte.toString(16).padStart(2, '0'),
-    ).join('');
+  const randomId = () => toHex(random.randomBytes(16));
   /** @type {{version: number, listeners: Recipe[]}} */
   let state = { version: 1, listeners: [] };
   const saved = storage.read();
@@ -111,12 +112,7 @@ export const makeHttpServices = (
   const runtimeFor = id => {
     let runtime = runtimes.get(id);
     if (!runtime) {
-      runtime = {
-        sockets: new Set(),
-        aborts: new Set(),
-        chain: Promise.resolve(),
-        status: 'inactive',
-      };
+      runtime = { chain: Promise.resolve(), status: 'inactive' };
       runtimes.set(id, runtime);
     }
     return runtime;
@@ -148,26 +144,12 @@ export const makeHttpServices = (
   };
 
   /**
-   * @param {Runtime} runtime
+   * Loopback is reachable by browsers too. Require the intended authority
+   * and deny cross-site browser requests before opening any guest capability.
    * @param {Recipe} recipe
-   * @param {IncomingMessage} request
-   * @param {ServerResponse} response
+   * @param {HttpRequestDescription} request
    */
-  const handle = (runtime, recipe, request, response) => {
-    /**
-     * @param {number} code
-     * @param {string} body
-     */
-    const reject = (code, body) => {
-      response.writeHead(code, {
-        'content-type': 'text/plain; charset=utf-8',
-        connection: 'close',
-      });
-      response.end(body);
-      request.resume();
-    };
-    // Loopback is reachable by browsers too. Require the intended authority
-    // and deny cross-site browser requests before opening any guest capability.
+  const admit = (recipe, request) => {
     const authority = `127.0.0.1:${recipe.port}`;
     const origin = request.headers.origin;
     const site = request.headers['sec-fetch-site'];
@@ -176,182 +158,109 @@ export const makeHttpServices = (
       (origin !== undefined && origin !== `http://${authority}`) ||
       (site !== undefined && site !== 'same-origin' && site !== 'none')
     ) {
-      reject(403, 'Request origin is not permitted');
-      return;
+      return /** @type {const} */ ({
+        allowed: false,
+        status: 403,
+        body: 'Request origin is not permitted',
+      });
     }
-    if (runtime.aborts.size >= maxRequests) {
-      reject(503, 'Too many requests');
-      return;
-    }
-    let finished = false;
-    /** @type {RequestClient | undefined} */
-    let client;
-    /** @type {Uint8Array[]} */
-    let chunks = [];
-    let length = 0;
-    /**
-     * @param {number} [code]
-     * @param {string} [body]
-     */
-    const finish = (code, body = '') => {
-      if (finished) return;
-      finished = true;
-      clearTimeout(timer);
-      runtime.aborts.delete(abort);
-      chunks = [];
-      if (client) {
-        const closing = client;
-        client = undefined;
-        void closeClient(closing);
-      }
-      if (code !== undefined && !response.destroyed) reject(code, body);
-    };
-    const abort = () => finish();
-    const timer = setTimeout(
-      () => finish(504, 'Request deadline exceeded'),
-      deadlineMs,
-    );
-    runtime.aborts.add(abort);
-    response.once('close', abort);
-    request.once('error', abort);
-    request.on('data', chunk => {
-      if (finished) return;
-      if (typeof chunk === 'string') {
-        finish(400, 'Expected UTF-8 bytes');
-        return;
-      }
-      length += chunk.length;
-      if (length > limit) {
-        finish(413, 'Request body too large');
-        return;
-      }
-      chunks.push(new Uint8Array(chunk));
-    });
-    const dispatch = async () => {
-      await null;
-      if (finished) return;
-      const bytes = new Uint8Array(length);
-      let offset = 0;
-      for (const chunk of chunks) {
-        bytes.set(chunk, offset);
-        offset += chunk.length;
-      }
-      chunks = [];
-      let body;
-      try {
-        body = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-      } catch (_error) {
-        finish(400, 'Invalid UTF-8 body');
-        return;
-      }
-      try {
-        const opening = openClient();
-        openingClients.add(opening);
-        let opened;
-        try {
-          opened = await opening;
-        } finally {
-          openingClients.delete(opening);
-        }
-        if (finished) {
-          await closeClient(opened);
-          return;
-        }
-        client = opened;
-        const handler = await opened.lookup(
-          /** @type {string} */ (recipe.secret),
-        );
-        if (finished) return;
-        /** @type {{status?: unknown, body?: unknown}} */
-        const result = await E(handler).handle(
-          harden({
-            method: request.method ?? 'GET',
-            path: request.url ?? '/',
-            body,
-          }),
-        );
-        if (finished) return;
-        if (
-          !result ||
-          typeof result.status !== 'number' ||
-          !Number.isInteger(result.status) ||
-          result.status < 200 ||
-          result.status > 599 ||
-          typeof result.body !== 'string'
-        ) {
-          throw Fail`Invalid HTTP handler response`;
-        }
-        (result.body.length <= limit &&
-          new TextEncoder().encode(result.body).length <= limit) ||
-          Fail`HTTP response body too large`;
-        finish(result.status, result.body);
-      } catch (_error) {
-        finish(500, 'Handler failed');
-      }
-    };
-    request.once('end', () => {
-      void dispatch();
-    });
+    return /** @type {const} */ ({ allowed: true });
   };
 
-  /** @param {Runtime} runtime */
-  const stop = async runtime => {
-    for (const abort of runtime.aborts) abort();
-    const server = runtime.server;
-    runtime.server = undefined;
-    runtime.status = 'inactive';
-    if (!server) return;
-    const closed = new Promise(resolve =>
-      server.close(() => resolve(undefined)),
-    );
-    for (const socket of runtime.sockets) socket.destroy();
-    await closed;
-  };
-  /** @param {string} id */
-  const bind = id => {
-    const runtime = runtimeFor(id);
-    return enqueue(runtime, async () => {
-      await null;
-      const recipe = recipeFor(id);
-      if (lifecycle !== 'running' || recipe.state !== 'open' || runtime.server)
-        return;
-      const server = createServer(
-        { maxHeaderSize: 16 * 1024 },
-        (request, response) => handle(runtime, recipe, request, response),
+  /**
+   * @param {Recipe} recipe
+   * @param {HttpRequest} request
+   * @param {HttpAbortSignal} abort
+   */
+  const dispatch = async (recipe, request, abort) => {
+    const opening = openClient();
+    openingClients.add(opening);
+    let opened;
+    try {
+      opened = await opening;
+    } finally {
+      openingClients.delete(opening);
+    }
+    /** @type {RequestClient | undefined} */
+    let client = opened;
+    const release = () => {
+      if (client === undefined) return;
+      const closing = client;
+      client = undefined;
+      void closeClient(closing);
+    };
+    abort.onAbort(release);
+    try {
+      // The request may have been abandoned while the client was opening;
+      // in that case the guest is never consulted.
+      !abort.aborted() || Fail`HTTP request was aborted`;
+      const handler = await opened.lookup(
+        /** @type {string} */ (recipe.secret),
       );
-      runtime.server = server;
-      server.headersTimeout = deadlineMs;
-      server.requestTimeout = deadlineMs;
-      server.keepAliveTimeout = 1;
-      server.timeout = deadlineMs * 2;
-      server.maxHeadersCount = 100;
-      server.on('connection', socket => {
-        runtime.sockets.add(socket);
-        socket.once('close', () => runtime.sockets.delete(socket));
+      /** @type {{status?: unknown, body?: unknown}} */
+      const result = await E(handler).handle(
+        harden({
+          method: request.method,
+          path: request.path,
+          body: request.body,
+        }),
+      );
+      return harden({
+        status: /** @type {number} */ (result.status),
+        body: /** @type {string} */ (result.body),
       });
-      server.on('upgrade', (_request, socket) => socket.destroy());
-      server.on('connect', (_request, socket) => socket.destroy());
+    } finally {
+      release();
+    }
+  };
+
+  /**
+   * @param {Runtime} runtime
+   * @param {Recipe} recipe
+   */
+  const bind = (runtime, recipe) =>
+    enqueue(runtime, async () => {
+      await null;
+      if (
+        lifecycle !== 'running' ||
+        recipe.state !== 'open' ||
+        runtime.listener
+      )
+        return;
       try {
-        await new Promise((resolve, reject) => {
-          server.once('error', reject);
-          server.listen(recipe.port, '127.0.0.1', () => {
-            server.removeListener('error', reject);
-            resolve(undefined);
-          });
+        const listener = await httpListeners.listen({
+          port: recipe.port,
+          host: '127.0.0.1',
+          maxBodyBytes: limit,
+          maxResponseBytes: limit,
+          maxHeaderBytes: 16 * 1024,
+          maxRequests,
+          requestDeadlineMs: deadlineMs,
+          keepAliveTimeoutMs: 1,
+          admit: request => admit(recipe, request),
+          handle: (request, abort) => dispatch(recipe, request, abort),
+          onError: error => {
+            runtime.status = 'failed';
+            runtime.error = String(error);
+          },
         });
-        server.on('error', error => {
-          runtime.status = 'failed';
-          runtime.error = String(error);
-        });
+        runtime.listener = listener;
         runtime.status = 'listening';
         runtime.error = undefined;
       } catch (error) {
-        runtime.server = undefined;
+        runtime.listener = undefined;
         runtime.status = 'failed';
         runtime.error = String(error);
-        server.close();
       }
     });
+
+  /** @param {Runtime} runtime */
+  const stop = async runtime => {
+    const listener = runtime.listener;
+    runtime.listener = undefined;
+    runtime.status = 'inactive';
+    if (!listener) return;
+    await listener.close();
   };
 
   return harden({
@@ -396,7 +305,7 @@ export const makeHttpServices = (
           put({ ...recipe, state: 'preparing', secret });
           publish(handler, secret);
           put({ ...recipe, state: 'open', secret });
-          if (lifecycle === 'running') await bind(id);
+          if (lifecycle === 'running') await bind(runtimeFor(id), recipeFor(id));
           return status(id);
         },
         status: () => status(id),
@@ -428,7 +337,7 @@ export const makeHttpServices = (
         await Promise.all(
           state.listeners
             .filter(item => item.state === 'open')
-            .map(item => bind(item.id)),
+            .map(item => bind(runtimeFor(item.id), item)),
         );
         resolveReady();
       } catch (error) {

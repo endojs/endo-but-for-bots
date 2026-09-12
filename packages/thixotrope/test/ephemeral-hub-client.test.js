@@ -35,7 +35,7 @@ const setup = async t => {
   });
   for (const bytes of outbound) sink.deliver(bytes);
   hub.publish('worker', { session: workerId, position: 0n });
-  const client = await makeEphemeralHubClient(nodePowers, {
+  const client = await makeEphemeralHubClient(nodePowers.random, {
     codec: syrupCodec,
     hub,
     sessionKey: 'transient:first',
@@ -83,7 +83,7 @@ test('one transient close leaves another client and guest effects intact', async
   t.timeout(10_000);
   const { hub, client, shell } = await setup(t);
   await E(shell).evaluate(`globalThis.count = 0`);
-  const second = await makeEphemeralHubClient(nodePowers, {
+  const second = await makeEphemeralHubClient(nodePowers.random, {
     codec: syrupCodec,
     hub,
     sessionKey: 'transient:second',
@@ -114,7 +114,7 @@ test('failed hub cleanup remains retryable after the client is aborted', async t
   t.timeout(10_000);
   const { hub } = await setup(t);
   let fail = true;
-  const client = await makeEphemeralHubClient(nodePowers, {
+  const client = await makeEphemeralHubClient(nodePowers.random, {
     codec: syrupCodec,
     sessionKey: 'transient:retry',
     hub: {
