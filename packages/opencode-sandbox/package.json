@@ -20,6 +20,8 @@
     "./setup-hosted.js": "./setup-hosted.js",
     "./src/opencode-agent-config.js": "./src/opencode-agent-config.js",
     "./src/opencode-protocol.js": "./src/opencode-protocol.js",
+    "./src/managed-credentials.js": "./src/managed-credentials.js",
+    "./src/managed-credentials-module.js": "./src/managed-credentials-module.js",
     "./src/opencode-client-module.js": "./src/opencode-client-module.js",
     "./src/container-mount-bridge.js": "./src/container-mount-bridge.js",
     "./package.json": "./package.json"
