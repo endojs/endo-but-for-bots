@@ -274,8 +274,17 @@ impl Interp {
             if !keep(id) {
                 continue;
             }
-            if self.global_props.contains_key(&id)
-                || self.slots.get(self.global_obj).flag & XS_DONT_PATCH_FLAG != 0
+            if self.realm.global_props.contains_key(&id)
+                || self.slots.get(self.realm.global_obj).flag & XS_DONT_PATCH_FLAG != 0
+            {
+                continue;
+            }
+            if name != "globalThis"
+                && self
+                    .realm
+                    .intrinsic_permit
+                    .as_ref()
+                    .is_some_and(|permit| !permit.contains(name))
             {
                 continue;
             }
@@ -321,11 +330,15 @@ impl Interp {
                 // property of `global_obj`. The self-reference
                 // (`globalThis.globalThis === globalThis`) is exact — the
                 // property's value slot points back at `global_obj`.
-                let g = self.global_obj;
+                let g = self.realm.global_obj;
                 let property =
                     self.create_global_property(id, (Kind::Reference, Payload::Reference(g)));
                 self.slots.get_mut(property).flag |= XS_DONT_ENUM_FLAG;
             }
+        }
+        if self.intrinsics_frozen {
+            self.installing_intrinsics = was_installing;
+            return;
         }
         // The seven ES2025 "new Set methods" reach the ARGUMENT's `has`/`keys`
         // members and (through the returned iterator) `next` via `GetSetRecord`,
@@ -1077,7 +1090,9 @@ impl Interp {
     /// `GET_PROPERTY` immediately after `TEMPLATE_CACHE` and its paired
     /// `SET_PROPERTY` immediately after `TEMPLATE` — so a user property whose
     /// spelling happens to be `"#0"` keeps its normal string-key identity.
-    fn template_site_accesses(code: &[u8]) -> Result<(Vec<u16>, Vec<(usize, u16)>), RelinkError> {
+    pub(super) fn template_site_accesses(
+        code: &[u8],
+    ) -> Result<(Vec<u16>, Vec<(usize, u16)>), RelinkError> {
         let mut site_order = Vec::<u16>::new();
         let mut seen = std::collections::HashSet::<u16>::new();
         let mut accesses = Vec::<(usize, u16)>::new();
@@ -1110,7 +1125,7 @@ impl Interp {
         Ok((site_order, accesses))
     }
 
-    fn apply_template_site_ids(
+    pub(super) fn apply_template_site_ids(
         &mut self,
         code: &mut [u8],
         site_order: Vec<u16>,
@@ -1318,7 +1333,7 @@ impl Interp {
         {
             member_names.push("stack");
         }
-        if inst == self.global_obj {
+        if inst == self.realm.global_obj {
             member_names.extend(self.intrinsics.keys().copied());
             member_names.extend(["undefined", "NaN", "Infinity", "globalThis"]);
         }
@@ -1428,9 +1443,9 @@ impl Interp {
     /// later lookup from resurrecting it. The name and property (or its
     /// deletion) then travel through the ordinary snapshot tables.
     pub(super) fn materialize_runtime_global(&mut self, id: u16, name: &str) {
-        if self.global_obj.is_null()
-            || self.global_props.contains_key(&id)
-            || self.slots.get(self.global_obj).flag & XS_DONT_PATCH_FLAG != 0
+        if self.realm.global_obj.is_null()
+            || self.realm.global_props.contains_key(&id)
+            || self.slots.get(self.realm.global_obj).flag & XS_DONT_PATCH_FLAG != 0
         {
             return;
         }
@@ -1441,7 +1456,7 @@ impl Interp {
         } else if name == "globalThis" {
             Some(Slot::of(
                 Kind::Reference,
-                Payload::Reference(self.global_obj),
+                Payload::Reference(self.realm.global_obj),
             ))
         } else {
             None

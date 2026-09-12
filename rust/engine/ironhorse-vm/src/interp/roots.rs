@@ -7,6 +7,28 @@ use super::*;
 use crate::value::SlotIndex;
 
 macro_rules! gc_root {
+    ($emit:ident, $vm:ident, $field:ident, $roots:ident, leases) => {
+        $emit! {
+            $roots.extend($vm.$field.iter().filter_map(|(owner, lease)|
+                (lease.strong_count() != 0).then_some(*owner)));
+        }
+    };
+    ($emit:ident, $vm:ident, $field:ident, $roots:ident, realms) => {
+        $emit! {
+            for realm in $vm.$field.values() {
+                $roots.push(realm.global_obj);
+                $roots.extend(realm.global_props.values().copied());
+                $roots.extend(realm.unhandled_rejection);
+            }
+        }
+    };
+    ($emit:ident, $vm:ident, $field:ident, $roots:ident, realm) => {
+        $emit! {
+            $roots.push($vm.$field.global_obj);
+            $roots.extend($vm.$field.unhandled_rejection);
+            $roots.extend($vm.$field.global_props.values().copied());
+        }
+    };
     ($emit:ident, $vm:ident, $field:ident, $roots:ident, none) => {
         $emit! {}
     };
@@ -197,7 +219,6 @@ macro_rules! gc_root {
 macro_rules! define_root_walk {
     (() $vis:vis struct $name:ident {
         $(#[boot_new($boot_new:expr)]
-          #[boot_template($boot_template:expr)]
           #[gc_root($root:ident)]
           #[quiescent($boundary:ident)]
           #[persist_refs($persist:ident)]

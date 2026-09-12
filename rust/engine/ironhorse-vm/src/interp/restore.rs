@@ -643,7 +643,7 @@ mod tests {
     #[test]
     fn malformed_initial_state_is_refused_before_boot_reconstruction() {
         let mut session = Interp::begin_restore();
-        let old_root = session.interp.slots.get(session.interp.global_obj);
+        let old_root = session.interp.slots.get(session.interp.realm.global_obj);
         let error = session
             .restore_snapshot_state(
                 SlotArena::new(),
@@ -661,7 +661,7 @@ mod tests {
             }
         );
         assert_eq!(
-            session.interp.slots.get(session.interp.global_obj),
+            session.interp.slots.get(session.interp.realm.global_obj),
             old_root
         );
         assert_eq!(session.restore_native_names(None).unwrap_err(), error);
@@ -672,11 +672,11 @@ mod tests {
             let mut names = vec![];
             let expected = match case {
                 0 => {
-                    source.slots.free(source.global_obj);
+                    source.slots.free(source.realm.global_obj);
                     "global root is a free slot"
                 }
                 1 => {
-                    source.slots.get_mut(source.global_obj).value = Payload::Integer(0);
+                    source.slots.get_mut(source.realm.global_obj).value = Payload::Integer(0);
                     "global root is not an instance"
                 }
                 2 => {
@@ -1529,7 +1529,7 @@ mod tests {
     fn reconstruction_refuses_malformed_property_chains() {
         for case in 0..4 {
             let mut source = Interp::new();
-            let owner = source.global_obj;
+            let owner = source.realm.global_obj;
             let property = source.slots.alloc(Slot::undefined());
             source.slots.get_mut(owner).next = property;
             let expected = match case {

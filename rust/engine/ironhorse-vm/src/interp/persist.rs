@@ -254,16 +254,16 @@ impl Interp {
         if symbol_names.len() > usize::from(u16::MAX) {
             return Err(refuse("name table exceeds the property ID space"));
         }
-        if slots.is_free_index(self.global_obj) {
+        if slots.is_free_index(self.realm.global_obj) {
             return Err(refuse("global root is a free slot"));
         }
-        let global = slots.get(self.global_obj);
+        let global = slots.get(self.realm.global_obj);
         if global.kind != Kind::Instance
             || !matches!(global.value, Payload::None | Payload::Reference(_))
         {
             return Err(refuse("global root is not an instance"));
         }
-        validate_restore_chain(&slots, self.global_obj, &mut Default::default())?;
+        validate_restore_chain(&slots, self.realm.global_obj, &mut Default::default())?;
         self.slots = slots;
         self.chunks = chunks;
         self.stack = stack;
@@ -506,6 +506,11 @@ impl Interp {
         &self,
         dirty_heap_only: bool,
     ) -> Option<&'static str> {
+        // The existing image/store schema restores a standalone interpreter.
+        // It cannot carry the shared frozen boot profile or multiple Realms.
+        if self.intrinsics_frozen {
+            return Some("a shared Realm machine, which no snapshot carries");
+        }
         // The test262 `$262` host ([`Self::install_test262_host`]):
         // harness-only, minted above `boot_slot_count`, carried by no
         // atom, and re-derived by nothing on the resume path — restore
@@ -1207,7 +1212,7 @@ impl Interp {
             })
             .collect();
         for (id, intrinsic) in legacy_globals {
-            let Some(&property) = self.global_props.get(&id) else {
+            let Some(&property) = self.realm.global_props.get(&id) else {
                 continue;
             };
             let slot = self.slots.get_mut(property);
@@ -1219,11 +1224,11 @@ impl Interp {
             }
         }
         if let Some(&id) = self.symbol_ids.get("globalThis") {
-            if let Some(&property) = self.global_props.get(&id) {
+            if let Some(&property) = self.realm.global_props.get(&id) {
                 let slot = self.slots.get_mut(property);
                 if slot.flag == 0
                     && slot.kind == Kind::Reference
-                    && slot.value == Payload::Reference(self.global_obj)
+                    && slot.value == Payload::Reference(self.realm.global_obj)
                 {
                     slot.flag |= XS_DONT_ENUM_FLAG;
                 }
@@ -2417,7 +2422,7 @@ impl Interp {
             .collect();
         async_instances.sort_unstable_by_key(|row| row.owner);
         PromiseClusterSnapshot {
-            unhandled_rejection: self.unhandled_rejection.map(|owner| owner.0),
+            unhandled_rejection: self.realm.unhandled_rejection.map(|owner| owner.0),
             async_instances,
             promises: promises
                 .into_iter()
@@ -2904,7 +2909,7 @@ impl Interp {
                 },
             ));
         }
-        self.unhandled_rejection = snap.unhandled_rejection.map(crate::value::SlotIndex);
+        self.realm.unhandled_rejection = snap.unhandled_rejection.map(crate::value::SlotIndex);
         self.promises.extend(promises);
         for (owner, data) in functions {
             self.functions.insert(owner, data);
@@ -3694,7 +3699,7 @@ impl Interp {
         Ok(())
     }
 
-    /// Rebuild the [`Self::global_props`] id→slot fast index by walking the
+    /// Rebuild the [`Realm`] id→slot fast index by walking the
     /// restored global object's own-property list. `create_global_property`
     /// is the *only* writer of `global_props` (a runtime `globalThis.x = 1`
     /// create and a `delete globalThis.x` route their fast-index mutation
@@ -3706,11 +3711,11 @@ impl Interp {
     ///
     /// Initial adoption validates this chain before installing the arenas.
     pub(super) fn rebuild_global_props(&mut self) {
-        self.global_props.clear();
-        let mut cur = self.slots.get(self.global_obj).next;
+        self.realm.global_props.clear();
+        let mut cur = self.slots.get(self.realm.global_obj).next;
         while !cur.is_null() {
             let s = self.slots.get(cur);
-            self.global_props.insert(s.id, cur);
+            self.realm.global_props.insert(s.id, cur);
             cur = s.next;
         }
     }

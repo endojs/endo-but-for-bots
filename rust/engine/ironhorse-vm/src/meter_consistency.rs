@@ -122,7 +122,7 @@ fn proxy_own_keys_duplicate_scan_checks_before_quadratic_work_finishes() {
         machine.link_intrinsics(&crate::parse_symbols(&names));
         assert!(machine.run(&code).completed);
         let id = *machine.symbol_ids.get("p").unwrap();
-        let prop = machine.find_property(machine.global_obj, id).unwrap();
+        let prop = machine.find_property(machine.realm.global_obj, id).unwrap();
         let Payload::Reference(proxy) = machine.slots.get(prop).value else {
             panic!("proxy")
         };

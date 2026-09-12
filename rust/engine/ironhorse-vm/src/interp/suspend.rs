@@ -1069,7 +1069,6 @@ macro_rules! remap_frame_table {
 macro_rules! define_frame_segment_remap {
     (() $vis:vis struct $name:ident {
         $(#[boot_new($boot_new:expr)]
-          #[boot_template($boot_template:expr)]
           #[gc_root($root:ident)]
           #[quiescent($boundary:ident)]
           #[persist_refs($persist:ident)]

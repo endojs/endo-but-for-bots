@@ -2425,7 +2425,7 @@ impl Interp {
                 // reference to the realm's global object. Dispatch-metered
                 // (no allocation).
                 XS_CODE_GLOBAL => {
-                    let g = self.global_obj;
+                    let g = self.realm.global_obj;
                     self.push(Slot::of(Kind::Reference, Payload::Reference(g)));
                     pc += size as usize;
                 }

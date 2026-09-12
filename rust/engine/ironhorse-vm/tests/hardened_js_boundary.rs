@@ -306,11 +306,9 @@ fn two_compartment_evaluations_do_not_share_a_heap() {
 }
 
 #[test]
-fn a_name_keyed_endowment_is_not_a_binding() {
-    // `define_global` records a name-keyed endowment that no evaluation reads:
-    // the evaluators seed only the id-keyed map, because the bytecode addresses
-    // a global by interned symbol id. Pinned so the documented inertness cannot
-    // drift back into an implied binding.
+fn a_name_keyed_endowment_is_an_evaluator_binding() {
+    // Names now resolve into the machine's canonical symbol namespace and
+    // seed this Realm rather than remaining an inert host-side map.
     let machine = Machine::new();
     let mut c = machine.new_compartment();
     c.define_global("endowed", ironhorse_vm::Slot::integer(7));
@@ -322,8 +320,8 @@ fn a_name_keyed_endowment_is_not_a_binding() {
     let outcome = c.evaluate_with_symbols(&bytecode, &symbols);
     assert!(outcome.completed, "{:?}", outcome.halt);
     assert_eq!(
-        outcome.result, "undefined",
-        "name-keyed endowments are inert"
+        outcome.result, "number",
+        "name-keyed endowments are real bindings"
     );
 }
 

@@ -1270,6 +1270,8 @@ pub fn error_name_static(name: &str) -> Option<&'static str> {
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum Halt {
+    /// Another Realm or a reentrant host call tried to enter an active machine.
+    RealmBusy,
     /// Reached RETURN/END: the completion value is in `result`.
     Return,
     /// The meter host refused more computation.
@@ -1972,7 +1974,8 @@ enum ResumeStatus {
 }
 
 mod boot;
-pub(crate) use boot::BootTemplate;
+mod realm;
+pub use realm::Realm;
 
 impl Default for Interp {
     fn default() -> Self {
@@ -2055,7 +2058,7 @@ impl Interp {
         let slot = if self.id_map.contains_key(&id) {
             self.resolve_frame_get(id)?
         } else {
-            let property = self.slots.get(*self.global_props.get(&id)?);
+            let property = self.slots.get(*self.realm.global_props.get(&id)?);
             if property.flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) != 0 {
                 return None;
             }
@@ -2086,18 +2089,20 @@ impl Interp {
     /// not erase a report already delivered. The promise and its reason remain
     /// rooted and travel with snapshots. No guest conversion runs here.
     pub fn unhandled_rejection(&self) -> Option<(crate::value::SlotIndex, Slot)> {
-        self.unhandled_rejection
+        self.realm
+            .unhandled_rejection
             .map(|owner| (owner, self.promises[&owner].result))
     }
 
     fn publish_unhandled_rejection(&mut self) {
-        if self.unhandled_rejection.is_none() {
-            self.unhandled_rejection = self.pending_rejections.iter().copied().find(|owner| {
-                self.promises
-                    .get(owner)
-                    .is_some_and(|promise| !promise.ever_handled)
-            });
-            if self.unhandled_rejection.is_some() {
+        if self.realm.unhandled_rejection.is_none() {
+            self.realm.unhandled_rejection =
+                self.pending_rejections.iter().copied().find(|owner| {
+                    self.promises
+                        .get(owner)
+                        .is_some_and(|promise| !promise.ever_handled)
+                });
+            if self.realm.unhandled_rejection.is_some() {
                 self.snapshot_dirt.mark(SnapshotSection::Promises.mask());
             }
         }
@@ -2138,7 +2143,7 @@ impl Interp {
     /// [`Self::link_intrinsics`]; a string `eval` or the `Function`
     /// constructor is an honest [`Halt::NotImplemented`] until it is armed.
     pub fn set_source_compiler(&mut self, compiler: std::rc::Rc<dyn SourceCompiler>) {
-        self.source_compiler = Some(compiler);
+        self.realm.source_compiler = Some(compiler);
     }
 
     /// Seed a global binding by id, so a program that reads an

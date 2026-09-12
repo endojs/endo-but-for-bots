@@ -49,7 +49,6 @@ macro_rules! boundary_predicate {
 macro_rules! define_boundary {
     (() $vis:vis struct $name:ident {
         $(#[boot_new($boot_new:expr)]
-          #[boot_template($boot_template:expr)]
           #[gc_root($root:ident)]
           #[quiescent($boundary:ident)]
           #[persist_refs($persist:ident)]
