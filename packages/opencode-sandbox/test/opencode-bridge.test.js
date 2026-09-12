@@ -450,3 +450,51 @@ test('deduplicates repeated running updates for one tool call', t => {
     },
   );
 });
+
+test('canonicalizes MCP-aliased tool names to their Endo names', t => {
+  const registry = makeMessageRegistry({ mcpServerName: 'endo' });
+  t.is(registry.canonicalToolName('endo_list'), 'list');
+  t.is(registry.canonicalToolName('endo_listMessages'), 'listMessages');
+  t.is(registry.canonicalToolName('bash'), 'bash');
+  t.is(
+    registry.canonicalToolName('endothermic_read'),
+    'endothermic_read',
+    'only the exact server prefix is stripped',
+  );
+  t.deepEqual(
+    mapSseEvent(
+      partUpdated({
+        id: 'prt_mcp',
+        messageID: 'msg_answer',
+        type: 'tool',
+        callID: 'call_mcp',
+        tool: 'endo_list',
+        state: { status: 'running', input: {} },
+      }),
+      registry,
+      SESSION,
+    ),
+    { type: 'tool-call', id: 'call_mcp', name: 'list', args: '{}' },
+  );
+  t.deepEqual(
+    mapSseEvent(
+      partUpdated({
+        id: 'prt_mcp',
+        messageID: 'msg_answer',
+        type: 'tool',
+        callID: 'call_mcp',
+        tool: 'endo_list',
+        state: { status: 'completed', output: '[]' },
+      }),
+      registry,
+      SESSION,
+    ),
+    {
+      type: 'tool-result',
+      id: 'call_mcp',
+      name: 'list',
+      ok: true,
+      result: '[]',
+    },
+  );
+});

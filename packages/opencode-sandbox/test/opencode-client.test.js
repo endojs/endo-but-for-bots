@@ -5,6 +5,7 @@ import test from 'ava';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 
 import { makeOpencodeClient } from '../src/opencode-client.js';
+import { resolveBridgeTurnTimeout } from '../src/opencode-client-module.js';
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
@@ -366,3 +367,31 @@ test('initialPrompt is fired and drained at construction', async t => {
   bridge.push(JSON.stringify({ type: 'end' }));
   t.is((await drain(reader)).pop()?.type, 'end');
 });
+
+test.serial(
+  'resolveBridgeTurnTimeout prefers the backend value, then the daemon env',
+  t => {
+    const previous = process.env.ENDO_OPENCODE_BRIDGE_TURN_TIMEOUT_MS;
+    delete process.env.ENDO_OPENCODE_BRIDGE_TURN_TIMEOUT_MS;
+    t.teardown(() => {
+      if (previous === undefined) {
+        delete process.env.ENDO_OPENCODE_BRIDGE_TURN_TIMEOUT_MS;
+      } else {
+        process.env.ENDO_OPENCODE_BRIDGE_TURN_TIMEOUT_MS = previous;
+      }
+    });
+    t.is(
+      resolveBridgeTurnTimeout({ OPENCODE_BRIDGE_TURN_TIMEOUT_MS: '60000' }),
+      '60000',
+    );
+    process.env.ENDO_OPENCODE_BRIDGE_TURN_TIMEOUT_MS = '1200000';
+    t.is(resolveBridgeTurnTimeout({}), '1200000');
+    t.is(
+      resolveBridgeTurnTimeout({ OPENCODE_BRIDGE_TURN_TIMEOUT_MS: '60000' }),
+      '60000',
+      'the backend value still wins over the daemon env',
+    );
+    delete process.env.ENDO_OPENCODE_BRIDGE_TURN_TIMEOUT_MS;
+    t.is(resolveBridgeTurnTimeout({}), '');
+  },
+);

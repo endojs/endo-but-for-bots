@@ -101,13 +101,23 @@ test('a hosted backend persists completed turns and scopes reused tool IDs', asy
 
   const events = await replyP;
   t.deepEqual(events.at(-1), { type: 'end' });
-  t.deepEqual(events.at(-2), { type: 'final', text: 'Built.' });
+  t.deepEqual(events.at(-2), {
+    type: 'usage',
+    inputTokens: 9,
+    outputTokens: 2,
+    turns: 1,
+  });
+  // 'Built.' preceded a tool call, so it was flushed as its own message at
+  // tool_call time; a final would re-merge it with any later text.
+  t.false(events.some(event => event.type === 'final'));
   t.deepEqual(
     (await agent.getHistory()).map(message => [message.role, message.content]),
     [
       ['user', 'build it'],
-      ['tool', undefined],
+      // 'Built.' streamed before the tool call; the transcript keeps that
+      // order instead of moving the text after the tool round.
       ['assistant', 'Built.'],
+      ['tool', undefined],
     ],
   );
 
@@ -118,8 +128,8 @@ test('a hosted backend persists completed turns and scopes reused tool IDs', asy
     JSON.parse(sendOptions[1].continuityContext),
     [
       { role: 'user', content: 'build it' },
-      { role: 'tool', name: 'shell', args: '{}', result: 'ok' },
       { role: 'assistant', content: 'Built.' },
+      { role: 'tool', name: 'shell', args: '{}', result: 'ok' },
     ],
     'the next turn gets complete prior dialogue, not its own prompt',
   );
@@ -209,6 +219,53 @@ test('failed hosted turns revive before later successful history', async t => {
       ['assistant', 'Clean.'],
     ],
   );
+});
+
+test('failed transcript-backed turns keep text/tool interleaving in history', async t => {
+  const powers = makeFakePowers();
+  const failedClient = harden({
+    async send() {
+      const channel = makeBufferedReader();
+      queueMicrotask(() => {
+        channel.push({ type: 'text-delta', text: 'Looking.' });
+        channel.push({ type: 'tool-call', id: 't1', name: 'read', args: '{}' });
+        channel.push({
+          type: 'tool-result',
+          id: 't1',
+          name: 'read',
+          result: 'file',
+        });
+        channel.push({ type: 'text-delta', text: 'Stopped here.' });
+        channel.push({ type: 'abort', reason: 'provider declined' });
+      });
+      return channel.reader;
+    },
+  });
+  const agent = await makeStreamingAgent(
+    powers,
+    undefined,
+    { hostedClient: failedClient },
+    'test prompt',
+    { hostedContinuity: 'transcript' },
+  );
+  const reply = makeReplyChannel();
+  await t.throwsAsync(() => agent.converse('review it', reply.writer), {
+    message: /provider declined/,
+  });
+  const history = await agent.getHistory();
+  t.deepEqual(
+    history.map(message => [message.role, message.content]),
+    [
+      ['user', 'review it'],
+      ['assistant', 'Looking.'],
+      ['tool', undefined],
+      ['assistant', 'Stopped here.'],
+      ['assistant', 'Turn failed: provider declined'],
+    ],
+    'the mirrored partial keeps its stream order instead of tools-then-joined-text',
+  );
+  t.is(history[2].name, 'read');
+  t.is(history[2].result, 'file');
 });
 
 test('agent shutdown interrupts and awaits an active hosted turn', async t => {

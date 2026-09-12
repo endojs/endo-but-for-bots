@@ -51,9 +51,12 @@ const redactSecrets = (text, secrets) => {
   return out.replace(/sk-[A-Za-z0-9_-]{8,}/g, '[redacted]');
 };
 
+// 30 minutes: a real review turn can run ~12 minutes of model time plus
+// compaction and dozens of tool calls. The client passes an explicit value
+// from ENDO_OPENCODE_BRIDGE_TURN_TIMEOUT_MS when the operator wants one.
 const TURN_TIMEOUT_MS = positiveEnvNumber(
   process.env.OPENCODE_BRIDGE_TURN_TIMEOUT_MS,
-  900_000,
+  1_800_000,
 );
 
 // ---- pure helpers ----------------------------------------------------------
@@ -83,10 +86,15 @@ export const parseListeningLine = line => {
  * Message registry: tracks role and summary flags, part types, and which
  * deltas were seen so a completed part without deltas can still be emitted.
  */
-export const makeMessageRegistry = () => {
+export const makeMessageRegistry = ({ mcpServerName = '' } = {}) => {
   const messages = new Map(); // messageID -> { role, summary }
   const parts = new Map(); // partID -> { messageID, type, sawDelta }
   const summaryIDs = new Set();
+  // opencode names MCP tools `<server>_<tool>` (e.g. `endo_list`), while the
+  // durable Endo execution evidence is recorded under the tool's own name
+  // (`list`). Report the canonical name so the two records dedupe instead of
+  // showing the same execution twice in the transcript.
+  const mcpPrefix = mcpServerName ? `${mcpServerName}_` : '';
   // opencode re-emits `message.part.updated` with status 'running' as a tool
   // part's input streams, and may repeat the terminal update. Floot requires
   // each hosted tool call to have a unique id and each result a single
@@ -117,6 +125,11 @@ export const makeMessageRegistry = () => {
     noteDelta(partID) {
       const part = parts.get(partID);
       if (part) part.sawDelta = true;
+    },
+    canonicalToolName(name) {
+      return mcpPrefix && name.startsWith(mcpPrefix)
+        ? name.slice(mcpPrefix.length)
+        : name;
     },
     markToolCall(callID) {
       if (startedToolCalls.has(callID)) return false;
@@ -182,6 +195,7 @@ export const mapSseEvent = (event, registry, sessionID) => {
       if (typeof part.callID !== 'string' || typeof part.tool !== 'string') {
         return undefined;
       }
+      const toolName = registry.canonicalToolName(part.tool);
       if (state.status === 'running') {
         // Only the first running update announces the call; later input
         // updates repeat the same callID.
@@ -189,7 +203,7 @@ export const mapSseEvent = (event, registry, sessionID) => {
         return Object.freeze({
           type: 'tool-call',
           id: part.callID,
-          name: part.tool,
+          name: toolName,
           // Floot renders args as text; a raw object becomes '[object Object]'.
           args:
             typeof state.input === 'string'
@@ -206,7 +220,7 @@ export const mapSseEvent = (event, registry, sessionID) => {
         return Object.freeze({
           type: 'tool-result',
           id: part.callID,
-          name: part.tool,
+          name: toolName,
           ok: true,
           result: rendered,
         });
@@ -217,7 +231,7 @@ export const mapSseEvent = (event, registry, sessionID) => {
         return Object.freeze({
           type: 'tool-result',
           id: part.callID,
-          name: part.tool,
+          name: toolName,
           ok: false,
           // Floot reads `result` (and treats an absent one as an empty
           // success), so a failure must carry its message there too.
@@ -531,7 +545,9 @@ const main = async () => {
     port: Number(new URL(baseUrl).port),
   });
 
-  const registry = makeMessageRegistry();
+  const registry = makeMessageRegistry({
+    mcpServerName: process.env.OPENCODE_MCP_SERVER_NAME || '',
+  });
   const pendingPrompts = [];
   let inFlight = false;
   let sawBusy = false;
