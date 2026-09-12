@@ -246,11 +246,13 @@ test('failed or cancelled spawning has no acquired child to retain', async t => 
     },
   });
   const failed = startControlCommand(noSpawn, 'command', []);
+  t.false(failed.hasChild());
   await t.throwsAsync(failed.result, { message: 'spawn failed' });
   await failed.closed;
   const cancelled = startControlCommand(noSpawn, 'command', [], {
     isCancelled: () => true,
   });
+  t.false(cancelled.hasChild());
   await t.throwsAsync(cancelled.result, { message: /aborted/ });
   await cancelled.closed;
   t.false(cancelled.wasInterrupted());
@@ -269,6 +271,7 @@ test('control lifetime observes real Node process closure', async t => {
   });
   const result = await control.result;
   await control.closed;
+  t.true(control.hasChild());
   t.is(result.code, 0);
   t.is(result.stdout, 'hello');
   t.false(control.wasInterrupted());

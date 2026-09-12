@@ -19,11 +19,14 @@ import { makePodmanDriver } from '../src/drivers/podman.js';
 import { makeGeneratedFileStorage } from '../src/generated-file-storage.js';
 import { makeResourceRegistry } from '../src/resource-registry.js';
 
+/** @import { SeccompFilePowers } from '../src/drivers/podman.js' */
+
 /**
  * @param {any} t
  * @param {import('../src/generated-file-storage-types.js').GeneratedFileStorage} [storage]
+ * @param {SeccompFilePowers} [fs]
  */
-const fixture = (t, storage) => {
+const fixture = (t, storage, fs) => {
   const active = new Set();
   const attached = new Map();
   const calls = [];
@@ -100,6 +103,7 @@ const fixture = (t, storage) => {
     env: {},
     ownerId: 'cleanup-test',
     generatedFileStorage: storage,
+    fs,
   });
   /** @type {any} */
   let slice = {
@@ -130,6 +134,7 @@ const fixture = (t, storage) => {
     for (const name of attached.keys()) finish(name);
     completeCreate?.();
     await driver.teardown(slice);
+    await driver.closeSlices();
   });
   return {
     driver,
@@ -460,4 +465,107 @@ test('Podman quotes complete bind fields for caller mounts and scratch', async t
   );
   await f.driver.teardown(f.slice);
   await proc.wait();
+});
+
+for (const failure of ['serialization', 'write', 'validation']) {
+  test(`failed seccomp ${failure} retains the directory until deletion succeeds`, async t => {
+    const directory = await mkdtemp(join(tmpdir(), 'podman-prepare-files-'));
+    t.teardown(() => rm(directory, { recursive: true, force: true }));
+    let denyRemoval = true;
+    const fs = await import('node:fs/promises');
+    const f = fixture(t, undefined, {
+      ...fs,
+      mkdtemp: () => mkdtemp(join(directory, 'profile-')),
+      writeFile: async (...args) => {
+        if (failure === 'write') throw Error('profile write failed');
+        await writeFile(...args);
+      },
+      rm: async (...args) => {
+        if (denyRemoval) throw Error('profile directory removal failed');
+        await rm(...args);
+      },
+    });
+    t.teardown(() => {
+      denyRemoval = false;
+    });
+    /** @type {any} */
+    const profile = {};
+    if (failure === 'serialization') profile.self = profile;
+    const error = await t.throwsAsync(
+      f.prepare({
+        seccomp: { profile },
+        // Validation happens after materialization, before any policy anchor.
+        ...(failure === 'validation'
+          ? { policy: {}, network: 'broker-only' }
+          : {}),
+      }),
+      { instanceOf: AggregateError, message: /preparation cleanup pending/ },
+    );
+    t.regex(String(error?.errors[1]), /profile directory removal failed/);
+    const [name] = await readdir(directory);
+    t.truthy(name);
+    await t.throwsAsync(f.driver.closeSlices(), {
+      message: /slice cleanup pending/,
+    });
+    await access(join(directory, name));
+    denyRemoval = false;
+    await f.driver.closeSlices();
+    t.deepEqual(await readdir(directory), []);
+    await t.throwsAsync(async () => f.prepare({}), {
+      message: /shutting down/,
+    });
+  });
+}
+
+test('closing slices drains a late preparation while cleaning existing contexts immediately', async t => {
+  t.timeout(5000);
+  const fs = await import('node:fs/promises');
+  const directory = await mkdtemp(join(tmpdir(), 'podman-prepare-drain-'));
+  t.teardown(() => rm(directory, { recursive: true, force: true }));
+  const { promise: entered, resolve: began } = makePromiseKit();
+  const { promise: waiting, resolve: resume } = makePromiseKit();
+  const { promise: removed, resolve: didRemove } = makePromiseKit();
+  let firstDirectory;
+  let defer = false;
+  const f = fixture(t, undefined, {
+    ...fs,
+    mkdtemp: () => mkdtemp(join(directory, 'profile-')),
+    writeFile: async (...args) => {
+      if (defer) {
+        began(undefined);
+        await waiting;
+      }
+      await writeFile(...args);
+    },
+    rm: async (...args) => {
+      await rm(...args);
+      if (args[0] === firstDirectory) didRemove(undefined);
+    },
+  });
+  t.teardown(() => resume(undefined));
+  await f.prepare({ seccomp: { profile: {} } });
+  const [first] = await readdir(directory);
+  firstDirectory = join(directory, first);
+  defer = true;
+  const acquired = f.prepare({ seccomp: { profile: {} } });
+  const rejected = t.throwsAsync(acquired, { message: /shutting down/ });
+  await entered;
+  const stopping = f.driver.closeSlices();
+  t.is(f.driver.closeSlices(), stopping);
+  // The first directory's cleanup must not wait for the second writer.
+  await removed;
+  t.like(await t.throwsAsync(access(join(directory, first))), {
+    code: 'ENOENT',
+  });
+  t.is((await readdir(directory)).length, 1);
+  await t.throwsAsync(async () => f.driver.probe(), {
+    message: /shutting down/,
+  });
+  await t.throwsAsync(async () => f.driver.spawn(f.slice, ['/bin/true'], {}), {
+    message: /shutting down/,
+  });
+  resume(undefined);
+  await rejected;
+  await stopping;
+  t.deepEqual(await readdir(directory), []);
 });
