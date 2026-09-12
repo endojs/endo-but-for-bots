@@ -346,11 +346,9 @@ export const makeAttestedCodexSliceFactory = powers => {
           imageDigest,
           grantId: lease.grantId,
           networkNamespaceId: outer.networkNamespaceId,
-          toolSandbox: 'codex-workspace-write',
-          toolCodexHomeAccess: 'read-only',
-          toolBrokerAccess: 'denied',
+          executionDomain: 'guest',
           environment: network
-            ? 'credential-free-managed-proxy'
+            ? 'credential-free-proxy'
             : 'credential-and-proxy-free',
           ...(network ? { network } : {}),
           codexHomeAuthFile: 'absent',
@@ -373,9 +371,7 @@ export const makeAttestedCodexSliceFactory = powers => {
           ...(network ? { networkPolicy: 'public-internet' } : {}),
           credentialInjection: broker.credentialInjection,
           brokerTransport: broker.brokerTransport,
-          toolSandbox: runtime.toolSandbox,
-          toolCodexHomeAccess: runtime.toolCodexHomeAccess,
-          toolBrokerAccess: runtime.toolBrokerAccess,
+          executionDomain: runtime.executionDomain,
           limits: {
             memoryBytes: Number(limits.memoryBytes * 2n),
             pids: limits.pids * 2,

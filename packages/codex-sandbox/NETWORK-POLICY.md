@@ -55,13 +55,17 @@ That address does not create a route to the host or the public network.
 Public traffic crosses the private capability pipe to the host-side filtered
 transport; subscription credentials never enter the listener or model container.
 
-Codex's managed proxy keeps local-address access disabled.
-Its tool commands run in an inner network namespace with only the managed proxy
-relay reachable; they cannot directly reach either outer listener.
-Using a loopback upstream with local-address access enabled is unsafe: testing
-found that an IPv4-mapped IPv6 target could bypass the intended upstream and
-reach the inference listener.
-The public profile must not reintroduce that exception.
+Codex and its native commands share the outer container's authority, including
+access to the inference listener, public proxy, and writable native state.
+The pinned 0.152.0 process/thread configuration uses `danger-full-access` because
+those interfaces have no external-sandbox mode.
+Every turn supplies `externalSandbox` with `networkAccess` set to `enabled` for
+admitted public networking or `restricted` otherwise.
+Codex's managed proxy is disabled; the outer namespace and host egress service
+apply the network policy.
+These settings are appropriate only inside the verified outer sandbox.
+The synthetic proxy address and setup helper below remain temporarily and are
+scheduled for removal now that the inner proxy boundary is gone.
 
 A separate, bounded, one-shot helper configures the isolated namespace using
 `NET_ADMIN` and then exits.
@@ -73,9 +77,15 @@ The DNS adapter forwards validated A/AAAA hostname requests through a constraine
 host capability rather than forwarding arbitrary DNS packets.
 
 Runtime admission must verify the pinned images, namespace ownership and routes,
-effective mounts, capabilities, exact merged Codex configuration, and live tool
-isolation before advertising a usable session.
+effective mounts, capabilities, exact merged Codex configuration, and guest child
+access to the granted writable mounts before advertising a usable session.
 Unit fixtures are not evidence that a kernel applied these boundaries.
+The runtime preflight executes Python children; it does not establish how the
+pinned Codex app-server executes native commands.
+The public-network acceptance command similarly probes the outer container,
+including direct guest listener access and proxy rejection of private destinations.
+Live app-server acceptance covering thread start, resume, and multiple turns with
+native commands remains outstanding.
 
 ## Operator configuration
 

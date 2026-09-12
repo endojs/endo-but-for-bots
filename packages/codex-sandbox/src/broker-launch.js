@@ -87,7 +87,10 @@ export const assertBrokerEndpoint = endpoint => {
 harden(assertBrokerEndpoint);
 
 /**
- * This is configuration, not evidence that the OS applied an inner sandbox.
+ * The outer container confines the CLI and all of its commands as one domain.
+ * Codex 0.152.0 has no external-sandbox configuration/thread mode; use its
+ * unrestricted baseline inside that container and explicit externalSandbox
+ * policies for turns. Configuration alone is not evidence of containment.
  * CLI overrides merge home configuration; admission must also call
  * assertBrokerRuntimeConfig against the pinned runtime's config/read response.
  * @param {string} endpoint
@@ -111,33 +114,11 @@ export const makeBrokerAppServerArgv = (
     '-c',
     `model_providers.endo_broker={name="Endo broker",base_url="${origin}/v1",wire_api="responses",requires_openai_auth=false}`,
     '-c',
-    'sandbox_mode="workspace-write"',
+    'sandbox_mode="danger-full-access"',
     '-c',
     'approval_policy="never"',
     '-c',
-    'sandbox_workspace_write.writable_roots=["/workspace","/tmp","/run","/scratch"]',
-    '-c',
-    'sandbox_workspace_write.exclude_slash_tmp=true',
-    '-c',
-    'sandbox_workspace_write.exclude_tmpdir_env_var=true',
-    '-c',
-    `sandbox_workspace_write.network_access=${network ? 'true' : 'false'}`,
-    ...(network
-      ? [
-          '-c',
-          'features.network_proxy.enabled=true',
-          '-c',
-          'features.network_proxy.domains={"*"="allow"}',
-          '-c',
-          'features.network_proxy.allow_upstream_proxy=true',
-          '-c',
-          'features.network_proxy.allow_local_binding=false',
-          '-c',
-          'features.network_proxy.enable_socks5=false',
-          '-c',
-          'features.network_proxy.enable_socks5_udp=false',
-        ]
-      : []),
+    'features.network_proxy.enabled=false',
     'app-server',
     '--listen',
     'stdio://',
@@ -147,7 +128,7 @@ harden(makeBrokerAppServerArgv);
 
 /**
  * Reject inherited provider credentials and alternate routes after CLI merges.
- * This attests configuration only, not the provider listener or tool isolation.
+ * This checks configuration only; the outer sandbox confines all guest processes.
  * @param {any} config
  * @param {string} endpoint
  * @param {any} [network]
@@ -161,26 +142,9 @@ export const assertBrokerRuntimeConfig = (
   assertCodexNetworkEvidence(network);
   (config?.model_provider === 'endo_broker' &&
     config.approval_policy === 'never' &&
-    config.sandbox_mode === 'workspace-write' &&
-    config.sandbox_workspace_write?.network_access === Boolean(network) &&
-    config.sandbox_workspace_write?.exclude_slash_tmp === true &&
-    config.sandbox_workspace_write?.exclude_tmpdir_env_var === true &&
-    JSON.stringify(config.sandbox_workspace_write?.writable_roots) ===
-      JSON.stringify(['/workspace', '/tmp', '/run', '/scratch'])) ||
+    config.sandbox_mode === 'danger-full-access' &&
+    config.features?.network_proxy?.enabled === false) ||
     Fail`Codex broker runtime configuration mismatch`;
-  if (network) {
-    const proxy = config.features?.network_proxy;
-    (proxy &&
-      Object.keys(proxy).sort().join(',') ===
-        'allow_local_binding,allow_upstream_proxy,domains,enable_socks5,enable_socks5_udp,enabled' &&
-      proxy.enabled === true &&
-      proxy.allow_upstream_proxy === true &&
-      proxy.allow_local_binding === false &&
-      proxy.enable_socks5 === false &&
-      proxy.enable_socks5_udp === false &&
-      JSON.stringify(proxy.domains) === JSON.stringify({ '*': 'allow' })) ||
-      Fail`Codex managed proxy configuration mismatch`;
-  }
   const provider = config.model_providers?.endo_broker;
   const expected = {
     name: 'Endo broker',

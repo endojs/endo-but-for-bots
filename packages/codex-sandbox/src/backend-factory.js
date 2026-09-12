@@ -38,9 +38,7 @@ export const HOSTED_AGENT_POLICY_V1 = harden({
   hostHome: 'none',
   credentialInjection: 'broker-only',
   brokerTransport: 'loopback-sidecar',
-  toolSandbox: 'codex-workspace-write',
-  toolCodexHomeAccess: 'read-only',
-  toolBrokerAccess: 'denied',
+  executionDomain: 'guest',
   descendantReaping: true,
   namespaces: harden({
     user: 'private',
@@ -282,9 +280,7 @@ export const assertHostedAgentPolicyV1 = (policy, requirements = {}) => {
     'hostHome',
     'credentialInjection',
     'brokerTransport',
-    'toolSandbox',
-    'toolCodexHomeAccess',
-    'toolBrokerAccess',
+    'executionDomain',
     'descendantReaping',
   ]) {
     if (policy?.[key] !== expected[key]) {

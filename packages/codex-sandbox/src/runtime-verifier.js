@@ -12,54 +12,6 @@ import {
   makeBrokerEnvironment,
 } from './broker-launch.js';
 
-const INNER = String.raw`
-import errno,json,os,socket,subprocess,sys
-p=json.loads(sys.argv[1])
-def denied(action,network=False):
-    try:
-        action()
-    except OSError as e:
-        allowed=(errno.EPERM,errno.EACCES,errno.EROFS)
-        if network and p.get("network"): allowed += (errno.ECONNREFUSED,errno.ENETUNREACH)
-        assert e.errno in allowed, "wrong denial"
-    else:
-        raise AssertionError("operation allowed")
-status=dict(line.split(":",1) for line in open("/proc/self/status") if ":" in line)
-assert status["NoNewPrivs"].strip()=="1"
-assert status["Seccomp"].strip()=="2"
-assert all(int(status[key].strip(),16)==0 for key in ("CapEff","CapPrm","CapBnd"))
-with open(p["workspace"]+"/allowed","w") as f: f.write("ok")
-with open(p["tmp"]+"/allowed","w") as f: f.write("ok")
-with open(p["run"]+"/allowed","w") as f: f.write("ok")
-with open(p["scratch"]+"/allowed","w") as f: f.write("ok")
-denied(lambda: open(p["home"]+"/sentinel","w"))
-denied(lambda: open(p["workspace"]+"/alias","w"))
-denied(lambda: os.rename(p["home"]+"/rename-source",p["home"]+"/sentinel"))
-denied(lambda: open(p["home"]+"/hardlink","w"))
-denied(lambda: os.link(p["home"]+"/sentinel",p["home"]+"/linked"))
-denied(lambda: socket.create_connection((p["host"],p["port"]),timeout=2),network=True)
-if p.get("network"):
-    from urllib.parse import urlparse
-    upstream=urlparse(p["network"]["proxyUrl"])
-    denied(lambda:socket.create_connection((upstream.hostname,upstream.port),timeout=2),network=True)
-    proxy=urlparse(os.environ["HTTP_PROXY"])
-    assert proxy.hostname=="127.0.0.1" and proxy.port!=p["port"]
-    for host in ("127.0.0.1","127.1","2130706433","0x7f000001","[::ffff:127.0.0.1]","[::1]"):
-        for method in ("GET","CONNECT"):
-            with socket.create_connection((proxy.hostname,proxy.port),timeout=2) as connection:
-                target="http://"+host+":"+str(p["port"])+"/" if method=="GET" else host+":"+str(p["port"])
-                connection.sendall((method+" "+target+" HTTP/1.1\r\nHost: "+host+":"+str(p["port"])+"\r\nConnection: close\r\n\r\n").encode())
-                response=connection.recv(1024)
-                permitted=(b"HTTP/1.1 403",) if host=="127.0.0.1" else (b"HTTP/1.1 403",b"HTTP/1.1 400")
-                assert response.startswith(permitted),"managed proxy admitted broker"
-child=subprocess.run([sys.executable,"-I","-c",
-    "import os; open("+repr(p["home"]+"/sentinel")+",'w').write('bad')"],
-    stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=3)
-assert child.returncode != 0
-assert open(p["home"]+"/sentinel").read()=="sentinel"
-print("INNER_OK")
-`;
-
 const PROBE = String.raw`
 import json,os,re,select,shutil,socket,subprocess,sys,tempfile,time
 def run(argv,timeout):
@@ -112,15 +64,12 @@ try:
     for root in ("/workspace","/codex-home","/tmp","/run","/scratch"):
         created.append(tempfile.mkdtemp(prefix=".endo-runtime-probe-",dir=root))
     workspace,home,tmp,run_dir,scratch=created
-    with open(home+"/sentinel","w") as f: f.write("sentinel")
-    with open(home+"/rename-source","w") as f: f.write("replacement")
-    os.symlink(home+"/sentinel",workspace+"/alias")
-    os.link(home+"/sentinel",home+"/hardlink")
-    inner=dict(workspace=workspace,home=home,tmp=tmp,run=run_dir,scratch=scratch,host=p["host"],port=p["port"])
-    if p.get("network"): inner["network"]=p["network"]
-    result=run(p["sandboxArgv"]+["--",sys.executable,"-I","-c",p["inner"],json.dumps(inner)],15)
-    assert result.strip()=="INNER_OK"
-    assert open(home+"/sentinel").read()=="sentinel"
+    # All granted writable state belongs to the guest, including its native
+    # conversation state. A child inherits the same outer container boundary.
+    for directory in created:
+        assert run([sys.executable,"-I","-c",
+            "import sys; open(sys.argv[1], 'w').write('ok')",directory+"/allowed"],3)==""
+        assert open(directory+"/allowed").read()=="ok"
 finally:
     for directory in reversed(created): shutil.rmtree(directory)
 print("CODEX_RUNTIME_PROBE_V1_OK")
@@ -128,7 +77,7 @@ print("CODEX_RUNTIME_PROBE_V1_OK")
 
 /**
  * Probe the exact slice before admitting its pinned runtime. This is a live
- * preflight of the trusted image's sandbox implementation, not continuous
+ * preflight of the trusted image inside the outer sandbox, not continuous
  * observation of the later app-server. The caller must bind that process to the
  * same launch argv/environment and validate its merged configuration.
  * Known image metadata is exact; Podman container metadata is fixed, and
@@ -191,8 +140,6 @@ export const makeCodexRuntimeVerifier = ({
           environment: { ...imageEnv, ...context.launchEnvironment },
           host: endpoint.hostname === '[::1]' ? '::1' : endpoint.hostname,
           port: Number(endpoint.port || 80),
-          sandboxArgv: [...expectedArgv.slice(0, -3), 'sandbox'],
-          inner: INNER,
           ...(context.network ? { network: context.network } : {}),
         });
         /** @type {any} */
@@ -262,11 +209,9 @@ export const makeCodexRuntimeVerifier = ({
             imageDigest: context.imageDigest,
             grantId: context.grantId,
             networkNamespaceId: context.networkNamespaceId,
-            toolSandbox: 'codex-workspace-write',
-            toolCodexHomeAccess: 'read-only',
-            toolBrokerAccess: 'denied',
+            executionDomain: 'guest',
             environment: context.network
-              ? 'credential-free-managed-proxy'
+              ? 'credential-free-proxy'
               : 'credential-and-proxy-free',
             ...(context.network ? { network: context.network } : {}),
             // Named for exactly what ran: the probe looked in the session's

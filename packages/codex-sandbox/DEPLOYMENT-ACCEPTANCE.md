@@ -42,7 +42,7 @@ The concrete volume provider supplies `volumeProvider.describe`, and the lease
 issuer supplies `brokerLease.sandboxEvidence`.
 These authorities remain outside the model-facing capability graph.
 The slice adapter defaults to `makeCodexRuntimeVerifier`, which performs bounded
-live probes of the pinned image's environment and inner sandbox.
+live probes of the pinned image's environment and guest child mount access.
 `makeXfsVolumeQuotaObserver` reads actual host project-quota enforcement;
 the storage provisioner must assign and retain those quotas before use.
 Returning expected constants from replacement implementations is not verification.
@@ -65,6 +65,10 @@ that remains in force for all of its descendants.
 [Linux acceptance evidence](./ACCEPTANCE-2026-09-07.md) records a successful
 strict outer-policy gate, actual pinned-CLI inner sandbox and environment
 preflight, and independent XFS quota enforcement/readback.
+That historical inner-sandbox acceptance does not validate the current
+`externalSandbox` turn policy, which deliberately removes that boundary.
+Repeat native-command acceptance with the pinned app-server across thread start,
+resume, and multiple turns before treating the new composition as accepted.
 Subsequent live tests also exercised the actual provider worker's private pipe,
 HTTP streaming, revocation, crash, and cleanup, and the durable volume provider's
 quota assignment, UID-1000 writes, reopen, and destruction.
