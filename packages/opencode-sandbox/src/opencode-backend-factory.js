@@ -30,7 +30,6 @@
 // retains — a delivered prompt survives an aborted or failed turn there.
 
 import { Fail, q } from '@endo/errors';
-import { makeCleanupScope } from '@endo/hosted-agent/cleanup-scope.js';
 import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
@@ -41,6 +40,8 @@ import {
   HostedTurnBackendInterface,
   normalizeHostedModelDescriptor,
 } from '@endo/hosted-agent';
+import { makeCleanupScope } from '@endo/hosted-agent/cleanup-scope.js';
+import { makeSessionRegistry } from '@endo/hosted-agent/session-registry.js';
 
 import { DEFAULT_MODEL, parseModelRef } from './opencode-agent-config.js';
 import {
@@ -153,43 +154,7 @@ export const makeOpencodeBackendFactory = ({
   const catalog = harden(models.map(normalizeHostedModelDescriptor));
   const listModels = async () => catalog;
 
-  // One live instance per session. `create` and `destroy` for one session id
-  // run in order, and either stops an instance this factory still runs before
-  // acting: a second `create` for a live session is the session's new owner (a
-  // Floot factory rebuilt without a daemon restart revives every session it
-  // records, while the old instance's admin facet died with the old factory),
-  // not a request for a duplicate that would race the same opencode session
-  // store.
-  /** @type {Map<string, { terminate: () => Promise<void> }>} */
-  const live = new Map();
-  /** @type {Map<string, Promise<void>>} */
-  const sessionChains = new Map();
-  /**
-   * @template T
-   * @param {string} sessionId
-   * @param {() => Promise<T>} operation
-   * @returns {Promise<T>}
-   */
-  const inSessionOrder = (sessionId, operation) => {
-    const previous = sessionChains.get(sessionId) || Promise.resolve();
-    const result = previous.then(operation);
-    const settled = result.then(
-      () => undefined,
-      () => undefined,
-    );
-    sessionChains.set(sessionId, settled);
-    void settled.then(() => {
-      if (sessionChains.get(sessionId) === settled) {
-        sessionChains.delete(sessionId);
-      }
-    });
-    return result;
-  };
-  /** @param {string} sessionId */
-  const stopLive = async sessionId => {
-    const current = live.get(sessionId);
-    if (current) await current.terminate();
-  };
+  const sessions = makeSessionRegistry();
 
   /**
    * @param {Record<string, any>} spec
@@ -230,15 +195,13 @@ export const makeOpencodeBackendFactory = ({
     }
     // A predecessor that cannot stop — an unsettled Endo tool call — refuses
     // the successor rather than running beside it.
-    await stopLive(sessionId);
+    await sessions.stop(sessionId);
     const bridge = await startToolBridge(sessionId, toolSet);
     const resources = makeCleanupScope();
     resources.add(() => bridge.close());
     const releaseResources = async () => {
       await resources.run();
-      if (live.get(sessionId)?.terminate === releaseResources) {
-        live.delete(sessionId);
-      }
+      sessions.release(sessionId, releaseResources);
     };
     let client;
     try {
@@ -284,7 +247,7 @@ export const makeOpencodeBackendFactory = ({
     } catch (error) {
       // Keep partial acquisition ownership even when rollback fails. Both
       // create and destroy retry this owner before touching the same session.
-      live.set(sessionId, harden({ terminate: releaseResources }));
+      sessions.retain(sessionId, releaseResources);
       try {
         await releaseResources();
       } catch (cleanupError) {
@@ -346,9 +309,7 @@ export const makeOpencodeBackendFactory = ({
         // Durable workspace and native state are retained.
         await releaseResources();
         terminated = true;
-        if (live.get(sessionId)?.terminate === terminate) {
-          live.delete(sessionId);
-        }
+        sessions.release(sessionId, terminate);
       })().finally(() => {
         if (!terminated) cleanupInFlight = undefined;
       });
@@ -431,7 +392,7 @@ export const makeOpencodeBackendFactory = ({
           'Factory-only OpenCode lifecycle administration: terminate (stops the client and the tool bridge; keeps the workspace and session store).',
       },
     );
-    live.set(sessionId, harden({ terminate }));
+    sessions.retain(sessionId, terminate);
     return harden({ run, admin });
   };
 
@@ -441,15 +402,15 @@ export const makeOpencodeBackendFactory = ({
    */
   const create = async (spec, toolSet) => {
     const sessionId = assertSessionId(spec?.sessionId);
-    return inSessionOrder(sessionId, () => createSession(spec, toolSet));
+    return sessions.inOrder(sessionId, () => createSession(spec, toolSet));
   };
 
   /** @param {Record<string, any>} spec */
   const destroy = async spec => {
     const sessionId = assertSessionId(spec?.sessionId);
-    return inSessionOrder(sessionId, async () => {
+    return sessions.inOrder(sessionId, async () => {
       // Never underneath a running client.
-      await stopLive(sessionId);
+      await sessions.stop(sessionId);
       try {
         await removeSession(sessionId);
       } finally {
