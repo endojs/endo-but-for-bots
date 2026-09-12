@@ -15,6 +15,7 @@ import { HostedToolSetInterface } from '@endo/hosted-agent';
 
 import {
   make,
+  memoizeBrokerComposition,
   resolveBackendConfig,
   resolvePinnedImageRef,
 } from '../src/opencode-backend-module.js';
@@ -369,4 +370,34 @@ test('resolveBackendConfig exposes broker settings', t => {
     ownerId: 'owner-1',
   });
   t.is(resolveBackendConfig({}).broker.listenerImageRef, '');
+});
+
+test('memoizeBrokerComposition shares one composition and retries after failure', async t => {
+  const cache = new Map();
+  let calls = 0;
+  const factory = async () => {
+    calls += 1;
+    return harden({ calls });
+  };
+  const first = memoizeBrokerComposition(cache, 'k1', factory);
+  const second = memoizeBrokerComposition(cache, 'k1', factory);
+  t.is(calls, 1);
+  t.is(await first, await second);
+
+  let failures = 0;
+  const flaky = async () => {
+    failures += 1;
+    if (failures === 1) throw Error('listener busy');
+    return harden({ failures });
+  };
+  await t.throwsAsync(memoizeBrokerComposition(cache, 'k2', flaky), {
+    message: /listener busy/,
+  });
+  t.deepEqual(await memoizeBrokerComposition(cache, 'k2', flaky), {
+    failures: 2,
+  });
+
+  t.deepEqual(await memoizeBrokerComposition(cache, 'k3', factory), {
+    calls: 2,
+  });
 });
