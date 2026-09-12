@@ -13,7 +13,11 @@ import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { HostedToolSetInterface } from '@endo/hosted-agent';
 
-import { make, resolveBackendConfig } from '../src/opencode-backend-module.js';
+import {
+  make,
+  resolveBackendConfig,
+  resolvePinnedImageRef,
+} from '../src/opencode-backend-module.js';
 
 const keyFor = names => (Array.isArray(names) ? names.join('/') : names);
 
@@ -193,6 +197,11 @@ test('resolveBackendConfig prefers the formula env over process env', t => {
     configBaseDir: '/cfg',
     rootfs: 'oci:test',
     mcpBaseDir: '/mcp',
+    broker: {
+      listenerImageRef: '',
+      directory: path.join(os.homedir(), 'opencode-broker'),
+      ownerId: '',
+    },
   });
 });
 
@@ -312,4 +321,52 @@ test('make() wires the provisioner and tool bridge into a working factory', asyn
   t.true(rec.destroyed());
   t.false(rec.names.has('opencode-sandbox/sessions/opencode-client-session-a'));
   t.false(existsSync(path.join(tmp, 'mcp', 'session-a')));
+});
+
+test('resolvePinnedImageRef pins tags and accepts already-pinned digests', async t => {
+  const digest = `sha256:${'a'.repeat(64)}`;
+  const exec = async (file, args) => {
+    t.is(file, 'podman');
+    t.deepEqual(args.slice(0, 3), ['image', 'inspect', '--format']);
+    return { stdout: `${digest}\n` };
+  };
+  t.deepEqual(
+    await resolvePinnedImageRef('oci:localhost/opencode-sandbox:tag', exec),
+    {
+      imageRef: `localhost/opencode-sandbox:tag@${digest}`,
+      imageDigest: digest,
+    },
+  );
+  t.deepEqual(
+    await resolvePinnedImageRef(
+      `oci:localhost/opencode-sandbox@${digest}`,
+      exec,
+    ),
+    {
+      imageRef: `localhost/opencode-sandbox@${digest}`,
+      imageDigest: digest,
+    },
+  );
+  await t.throwsAsync(
+    () => resolvePinnedImageRef('oci:x', async () => ({ stdout: 'nope' })),
+    { message: /Cannot resolve a digest/ },
+  );
+  await t.throwsAsync(() => resolvePinnedImageRef('oci:--privileged', exec), {
+    message: /Invalid OpenCode sandbox image/,
+  });
+});
+
+test('resolveBackendConfig exposes broker settings', t => {
+  const listenerImageRef = `localhost/endo-provider@sha256:${'b'.repeat(64)}`;
+  const config = resolveBackendConfig({
+    OPENCODE_BROKER_LISTENER_IMAGE: listenerImageRef,
+    OPENCODE_BROKER_DIR: '/var/lib/endo/opencode-broker',
+    OPENCODE_BROKER_OWNER_ID: 'owner-1',
+  });
+  t.deepEqual(config.broker, {
+    listenerImageRef,
+    directory: '/var/lib/endo/opencode-broker',
+    ownerId: 'owner-1',
+  });
+  t.is(resolveBackendConfig({}).broker.listenerImageRef, '');
 });

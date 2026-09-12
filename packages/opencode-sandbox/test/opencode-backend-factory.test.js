@@ -86,7 +86,7 @@ const makeToolSet = (execute = async () => 'ok') =>
  * Wire a factory over recording powers. `bridge` stands in for the MCP socket
  * server; `pending` lets a test simulate an in-flight Endo tool call.
  */
-const makeHarness = () => {
+const makeHarness = (options = {}) => {
   const log = [];
   const { client, turns, interrupts } = makeFakeClient(() => {
     log.push(['stop-client']);
@@ -94,8 +94,9 @@ const makeHarness = () => {
   let pending = 0;
   let bridgeClosed = 0;
   const factory = makeOpencodeBackendFactory({
-    provisionClient: async (sessionId, options) => {
-      log.push(['provision', sessionId, options]);
+    ...(options.broker ? { broker: options.broker } : {}),
+    provisionClient: async (sessionId, clientOptions) => {
+      log.push(['provision', sessionId, clientOptions]);
       return client;
     },
     cancelClient: async sessionId => {
@@ -430,6 +431,103 @@ test('network policy is threaded; off refuses sends and maps to the none profile
         'OpenCode session network policy is "off"; set the session policy to public-internet before sending a turn',
     },
   ]);
+});
+
+test('a broker lease carries off-policy traffic and is revoked on stop', async t => {
+  const brokerCalls = [];
+  let revoked = 0;
+  const broker = async spec => {
+    brokerCalls.push(spec);
+    return harden({
+      async attestation() {
+        return harden({ endpoint: 'http://127.0.0.1:41337' });
+      },
+      async sandboxEvidence() {
+        return harden({ brokerSidecar: { container: 'endo-provider-abc' } });
+      },
+      async revoke() {
+        revoked += 1;
+      },
+    });
+  };
+  const { factory, log, turns } = makeHarness({ broker });
+  const { run, admin } = await E(factory).create(
+    harden({
+      sessionId: 'session-a',
+      model: 'openrouter/deepseek/deepseek-v4.1-flash',
+    }),
+    makeToolSet(),
+  );
+  t.deepEqual(brokerCalls, [
+    {
+      sessionId: 'session-a',
+      providerOrigin: 'https://openrouter.ai',
+      accountRef: 'openrouter',
+      model: 'deepseek/deepseek-v4.1-flash',
+      networkPolicy: 'off',
+    },
+  ]);
+  const provision = log.find(entry => entry[0] === 'provision');
+  t.is(provision[2].network, 'join');
+  t.deepEqual(provision[2].brokerEnv, {
+    OPENCODE_BROKER_BASE_URL: 'http://127.0.0.1:41337/api/v1',
+    OPENCODE_BROKER_CONTAINER: 'endo-provider-abc',
+  });
+  // A turn dispatches through the client instead of being refused.
+  await E(run).send('hello');
+  t.is(turns.length, 1);
+  await E(admin).terminate();
+  t.is(revoked, 1, 'the listener lease is released with the client');
+});
+
+test('a failed lease revoke is retried on the next terminate attempt', async t => {
+  let revoked = 0;
+  let failNext = true;
+  const broker = async () =>
+    harden({
+      async attestation() {
+        return harden({ endpoint: 'http://127.0.0.1:41337' });
+      },
+      async sandboxEvidence() {
+        return harden({ brokerSidecar: { container: 'endo-provider-abc' } });
+      },
+      async revoke() {
+        revoked += 1;
+        if (failNext) {
+          failNext = false;
+          throw Error('listener busy');
+        }
+      },
+    });
+  const { factory } = makeHarness({ broker });
+  const { admin } = await E(factory).create(
+    harden({ sessionId: 'session-a' }),
+    makeToolSet(),
+  );
+  await t.throwsAsync(() => E(admin).terminate(), {
+    message: /listener busy/,
+  });
+  // The failed teardown keeps ownership and the retry releases the lease.
+  await E(admin).terminate();
+  t.is(revoked, 2);
+});
+
+test('an unknown model is refused before any broker lease is issued', async t => {
+  let leases = 0;
+  const broker = async () => {
+    leases += 1;
+    throw Error('must not be reached');
+  };
+  const { factory } = makeHarness({ broker });
+  await t.throwsAsync(
+    () =>
+      E(factory).create(
+        harden({ sessionId: 'session-a', model: 'openrouter/nope/nope' }),
+        makeToolSet(),
+      ),
+    { message: /Unknown OpenCode model/ },
+  );
+  t.is(leases, 0);
 });
 
 test('public-internet maps to the private slice profile', async t => {

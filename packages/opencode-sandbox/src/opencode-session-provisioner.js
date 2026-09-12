@@ -244,6 +244,9 @@ export const makeOpencodeSessionProvisioner = (
         sandboxSessionId,
         // Forward the Endo tool bridge socket mount when the caller supplied one.
         ...(options.mcp ? { mcp: options.mcp } : {}),
+        // Broker-only transport: the loopback endpoint and listener container
+        // the client formula joins. Never includes a credential.
+        ...(options.brokerEnv ? { brokerEnv: options.brokerEnv } : {}),
         // Pin the CLI to the session's selected OpenRouter model.
         ...(options.model ? { model: options.model } : {}),
         ...(options.systemPrompt ? { systemPrompt: options.systemPrompt } : {}),
