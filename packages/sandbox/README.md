@@ -126,6 +126,11 @@ Removal waits for their native closure; failed or interrupted producers retain
 uncertain effects and operation admission slots even if removal succeeds.
 Proven no-child acquisition failures can release without operation removal.
 Repeated removal is not evidence that detached OCI/conmon work has finished.
+After successful creation, a narrow inspection resolves the full container ID;
+policy inspection, startup, signaling, and removal then use that identity.
+Cleanup uses the reserved unique name only until identity resolution succeeds.
+This supports create output suppressed by passthrough logging and prevents later
+name rebinding from retargeting an operation; the initial lookup trusts the host.
 Admission observes cancellation through policy checks and immediately before
 attached start, including when only an asynchronous cancellation token is provided.
 The attached host process remains owned until native stdio closes, not just until

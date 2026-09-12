@@ -28,6 +28,7 @@ const ANCHOR_PID = 4242;
 const GIB = 1024n * 1024n * 1024n;
 const MIB = 1024n * 1024n;
 const SIDECAR_PID = 4141;
+const OPERATION_CONTAINER_ID = 'c1'.repeat(32);
 
 const POLICY = harden({
   profile: 'hosted-agent-v1',
@@ -218,6 +219,7 @@ const makeEngineStub = (
   t,
   { calls, responses = {}, holdAttached = false, intercept },
 ) => {
+  const createdNames = new Set();
   /**
    * @param {string[]} args
    * @returns {string}
@@ -233,7 +235,11 @@ const makeEngineStub = (
     if (args[0] === 'volume') return `volume-${args[args.length - 1]}`;
     if (args[0] === 'container' && args[1] === 'inspect') {
       if (args.includes('{{.State.Pid}}')) return 'sidecar-pid';
-      if (args.includes('{{.Id}}')) return 'container-id';
+      if (args.includes('{{.Id}}')) {
+        return createdNames.has(args.at(-1))
+          ? 'operation-container-id'
+          : 'container-id';
+      }
       return 'container-inspect';
     }
     if (args[0] === 'create') return 'create';
@@ -264,6 +270,7 @@ const makeEngineStub = (
     'container-inspect': { stdout: `${JSON.stringify([ANCHOR_INSPECT])}\n` },
     'sidecar-pid': { stdout: `${SIDECAR_PID}\n` },
     'container-id': { stdout: 'a1b2c3d4e5f6a7b8\n' },
+    'operation-container-id': { stdout: `${OPERATION_CONTAINER_ID}\n` },
     create: {},
     start: {},
     rm: {},
@@ -282,6 +289,9 @@ const makeEngineStub = (
         args = args.slice(2);
       }
       calls.push({ command, args: [...args] });
+      if (args[0] === 'create') {
+        createdNames.add(args[args.indexOf('--name') + 1]);
+      }
       const kind = command === 'podman' ? classify(args) : 'other';
       const answer = responses[kind] ?? defaults[kind] ?? { code: 1 };
       const child = new EventEmitter();
@@ -501,6 +511,13 @@ test('an operation runs under the same prefix the anchor was attested at', async
   };
   t.deepEqual(policyPortion(operation.args), policyPortion(anchor.args));
   t.deepEqual(operation.args.slice(-3), [IMAGE, '/bin/echo', 'hi']);
+  t.true(
+    calls.some(
+      call =>
+        call.args.includes('{{json .}}') &&
+        call.args.at(-1) === OPERATION_CONTAINER_ID,
+    ),
+  );
 });
 
 test('a slice with no policy has no attestation to report', async t => {

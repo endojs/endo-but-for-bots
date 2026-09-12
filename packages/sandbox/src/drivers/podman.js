@@ -2412,6 +2412,9 @@ export const makePodmanDriver = ({
       // cached so a delayed exit cannot remove a successor with the same name.
       /** @type {Promise<void> | undefined} */
       let removal;
+      // Before identity resolution, cleanup still owns the reserved unique
+      // name. Once observed, every operation command uses the full engine ID.
+      let containerReference = containerName;
       let proxyClosed = Promise.resolve();
       const producers = makeProducerScope(cp, 'operation');
       const removeOperation = () => {
@@ -2422,7 +2425,7 @@ export const makePodmanDriver = ({
             const removed = await removeContainer(
               cp,
               slice.runtime,
-              containerName,
+              containerReference,
             );
             if (removed.code !== 0 && !reportsContainerGone(removed)) {
               throw makeError(
@@ -2458,6 +2461,31 @@ export const makePodmanDriver = ({
       }
       assertAdmissionOpen();
 
+      // Supported passthrough log drivers suppress create's ID on stdout.
+      // Query it explicitly before any guest startup, independently of logging.
+      const identity = await spawnAndCollect(
+        cp,
+        'podman',
+        podmanArgs(slice.runtime, [
+          'container',
+          'inspect',
+          '--format',
+          '{{.Id}}',
+          containerName,
+        ]),
+        { timeoutMs: CONTROL_COMMAND_TIMEOUT_MS },
+      );
+      const containerId = identity.stdout.trim();
+      if (
+        identity.code !== 0 ||
+        identity.signal !== null ||
+        !/^[0-9a-f]{64}$/.test(containerId)
+      ) {
+        throw makeError(X`podman operation has no full container id`);
+      }
+      containerReference = containerId;
+      assertAdmissionOpen();
+
       if (slice.policy !== null) {
         // The operation shares the anchor's frozen policy argv, but "the
         // same flags" is the inference this whole module refuses to make.
@@ -2471,7 +2499,7 @@ export const makePodmanDriver = ({
         // the same resolved configuration on the same host — a smaller
         // step than trusting argv, and not the same as proving it again.
         const operationConfig = sliceConfigFingerprint(
-          await inspectContainer(cp, slice.runtime, containerName),
+          await inspectContainer(cp, slice.runtime, containerReference),
         );
         if (operationConfig !== slice.policy.fingerprint) {
           throw makeError(
@@ -2499,7 +2527,7 @@ export const makePodmanDriver = ({
         'start',
         '--attach',
         '--interactive',
-        containerName,
+        containerReference,
       ]);
 
       /** @type {import('child_process').ChildProcess} */
@@ -2589,7 +2617,7 @@ export const makePodmanDriver = ({
               'kill',
               '--signal',
               String(signal ?? 'SIGTERM'),
-              containerName,
+              containerReference,
             ]),
             { timeoutMs: CONTROL_COMMAND_TIMEOUT_MS },
           );

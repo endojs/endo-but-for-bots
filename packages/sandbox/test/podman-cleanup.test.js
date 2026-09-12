@@ -44,6 +44,11 @@ const fixture = (t, storage, fs) => {
   const calls = [];
   const podmanPrefixes = [];
   const failures = new Set();
+  const containerIds = new Map();
+  const containerNames = new Map();
+  let nextContainerId = 0n;
+  let identityResult;
+  let beforeIdentity;
   let createCode = 0;
   let refuseCreate = false;
   let expectedUncertainty = false;
@@ -84,10 +89,10 @@ const fixture = (t, storage, fs) => {
         },
       });
       let sent = false;
-      const send = (code, message = '') => {
+      const send = (code, message = '', stdout = '') => {
         if (sent) return;
         sent = true;
-        child.stdout.end();
+        child.stdout.end(stdout);
         child.stderr.end(message);
         child.emit('close', code, null);
       };
@@ -95,14 +100,20 @@ const fixture = (t, storage, fs) => {
         if (refuseCreate) throw Error('create spawn refused');
         const name = args[args.indexOf('--name') + 1];
         active.add(name); // Even a failing create may leave its container.
+        nextContainerId += 1n;
+        const id = nextContainerId.toString(16).padStart(64, '0');
+        containerIds.set(name, id);
+        containerNames.set(id, name);
         completeCreate = () =>
           send(createCode, createCode ? 'create failed' : '');
         created(name);
         if (!deferCreate) queueMicrotask(completeCreate);
       } else if (args[0] === 'start') {
-        attached.set(args.at(-1), child);
+        const reference = args.at(-1);
+        attached.set(containerNames.get(reference) ?? reference, child);
       } else if (args[0] === 'rm') {
-        const name = args.at(-1);
+        const reference = args.at(-1);
+        const name = containerNames.get(reference) ?? reference;
         queueMicrotask(() => {
           if (failures.has(name)) send(1, 'removal failed');
           else {
@@ -111,6 +122,17 @@ const fixture = (t, storage, fs) => {
             send(0);
           }
         });
+      } else if (args.includes('{{.Id}}')) {
+        queueMicrotask(() => {
+          beforeIdentity?.();
+          send(
+            identityResult?.code ?? 0,
+            '',
+            identityResult?.stdout ?? `${containerIds.get(args.at(-1))}\n`,
+          );
+        });
+      } else if (args[0] === 'kill') {
+        queueMicrotask(() => send(0));
       } else if (command !== 'podman') {
         queueMicrotask(() => send(1));
       } else if (args[0] === 'image' || args[0] === 'info') {
@@ -183,6 +205,13 @@ const fixture = (t, storage, fs) => {
     active,
     calls,
     kills,
+    containerIds,
+    setIdentity: result => {
+      identityResult = result;
+    },
+    beforeIdentity: callback => {
+      beforeIdentity = callback;
+    },
     failures,
     finish,
     exit: name => attached.get(name)?.emit('exit', 0, null),
@@ -728,4 +757,71 @@ test('generic operations disable automatic restart and inherited healthchecks', 
   t.true(create?.includes('--no-healthcheck'));
   await f.driver.teardown(f.slice);
   await proc.wait();
+});
+
+test('operation controls keep the resolved full ID across name replacement and removal retry', async t => {
+  const f = fixture(t);
+  const proc = await f.driver.spawn(f.slice, ['/bin/true'], {});
+  const [name] = f.active;
+  const id = f.containerIds.get(name);
+  const identity = f.calls.find(args => args.includes('{{.Id}}'));
+  t.is(identity?.at(-1), name);
+  t.is(f.calls.find(args => args[0] === 'start')?.at(-1), id);
+  // create stdout is empty in this fixture, as permitted by passthrough logs.
+  // A later name lookup would now resolve a different container.
+  f.containerIds.set(name, 'f'.repeat(64));
+  await proc.kill('SIGTERM');
+  t.is(f.calls.find(args => args[0] === 'kill')?.at(-1), id);
+  f.failures.add(name);
+  await t.throwsAsync(f.driver.teardown(f.slice), {
+    instanceOf: AggregateError,
+  });
+  f.failures.clear();
+  await f.driver.teardown(f.slice);
+  await proc.wait();
+  const removals = f.calls.filter(args => args[0] === 'rm');
+  t.true(removals.length >= 2);
+  t.true(removals.every(args => args.at(-1) === id));
+});
+
+for (const identity of [
+  { stdout: '' },
+  { stdout: 'a'.repeat(12) },
+  { stdout: `${'a'.repeat(64)}\n${'b'.repeat(64)}` },
+  { code: 125, stdout: 'a'.repeat(64) },
+]) {
+  test(`unresolved operation identity cleans by reserved name: ${JSON.stringify(identity)}`, async t => {
+    const f = fixture(t);
+    limitToOneOperation(f);
+    f.setIdentity(identity);
+    await t.throwsAsync(f.driver.spawn(f.slice, ['/bin/true'], {}), {
+      message: /no full container id/,
+    });
+    const create = f.calls.find(args => args[0] === 'create');
+    const name = create[create.indexOf('--name') + 1];
+    t.false(f.calls.some(args => args[0] === 'start'));
+    t.deepEqual(
+      f.calls.filter(args => args[0] === 'rm').map(args => args.at(-1)),
+      [name],
+    );
+    t.is(f.slice.reserved.size, 0);
+  });
+}
+
+test('cancellation during identity inspection retains the resolved ID for cleanup', async t => {
+  const f = fixture(t);
+  limitToOneOperation(f);
+  const kit = makeCancelKit();
+  f.beforeIdentity(kit.cancel);
+  await t.throwsAsync(
+    f.driver.spawn(f.slice, ['/bin/true'], {}, { cancelled: kit.cancelled }),
+    { message: /admission aborted/ },
+  );
+  const [id] = f.containerIds.values();
+  t.false(f.calls.some(args => args[0] === 'start'));
+  t.deepEqual(
+    f.calls.filter(args => args[0] === 'rm').map(args => args.at(-1)),
+    [id],
+  );
+  t.is(f.slice.reserved.size, 0);
 });
