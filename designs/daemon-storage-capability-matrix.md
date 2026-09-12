@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-09-12 |
-| **Author** | kriskowal (prompted) |
+| **Author** | Kris Kowal (prompted) |
 | **Status** | Not Started |
 | **Source** | Review comment on endojs/endo-but-for-bots#1125 (`packages/daemon/src/manager.js` line 6804) |
 
@@ -48,7 +48,15 @@ on endojs/endo-but-for-bots#1125), and gives an implementable migration path.
 ## The Matrix
 
 Two axes. **Shape** across the top (leaf bytes vs. named collection); **mutation
-guarantee** down the side.
+guarantee** down the side. The matrix names guarantee x shape at the
+`@endo/platform/fs` **type-tier** layer; two further layers (the daemon's
+concrete exos and the persisted formula-type strings) sometimes lag it, and are
+called out where they diverge (this third *abstraction-layer* dimension is
+load-bearing for the migration; § "Why the Read Surface Is Shared but the
+Guarantee Is Not" and § "Migration Path" trace each divergence). Two of the cells
+also carry a naming asymmetry across the shape columns (`ReadableBlob` vs.
+`ReadableTree`, not `ReadableFile`/`ReadableDirectory`); it is deliberate and
+inherited, explained in § "A note on the shape-axis root names" below.
 
 | Guarantee \ Shape | Bytes (leaf) | Collection (container) |
 |---|---|---|
@@ -84,8 +92,8 @@ The guarantees, stated so a caller knows what it holds:
   `mount.readOnly()` returns the analogous `ReadableTree`
   (`makeReadableTreeView`). No *stable* content identity is offered. The two
   shape columns differ in how that shows up, and the difference is worth stating
-  precisely (the mechanism, and an important daemon-vs-type-layer caveat, is
-  spelled out in the next subsection): the blob view is built on
+  precisely here (the next subsection develops the same mechanism further, and
+  adds an important daemon-vs-type-layer caveat): the blob view is built on
   `ReadableBlobRangeInterface` and so *does* expose `getInfo()`, but it hashes
   whatever the backing holds at the moment of the call, a current-state
   fingerprint rather than a fixed address, and carries no `sha256()`; the plain
@@ -186,9 +194,9 @@ vocabulary:
   (`packages/daemon/src/formula-type.js`), and the live read-only view of a
   directory or mount is the **transient** `ReadableTree` returned by
   `mount.readOnly()`. But #1125 (the review thread this design cites as its own
-  **Source**) renames `read-only-directory` to `readable-directory` (commit
-  `4743e382b`, "name readable directory formula consistently") and ships it as a
-  *real, persisted* formula: `manager.js`'s maker table gains
+  **Source**, still open and DRAFT at the time of writing) renames
+  `read-only-directory` to `readable-directory` and ships it as a *real,
+  persisted* formula: `manager.js`'s maker table gains
   `'readable-directory': async ({ directory }, ...) => makeExo('ReadableNameHub',
   ...)`, a write-disabled view wrapping a *live* `directory` capability. That is
   not a snapshot (it is content-address-free and delegates to mutable backing),
@@ -336,18 +344,25 @@ them exhaustively is what an earlier round of this design got wrong:
   discussed above) that populates `properties.content`.
 
 The lesson the earlier round missed is that these are not two boundaries to be
-patched independently but one invariant to be established once: **the in-memory
-`formula.type` must be canonical (`snapshot-*`) for every object in
-`formulaForId`, whatever its on-disk vintage.** Aliasing only "before the `makers`
+patched independently but one invariant to be established once, **scoped to the
+deserialization path**: every object entering `formulaForId` *via `readFormula`*
+(that is, deserialized from persistence) carries the canonical `snapshot-*` type,
+whatever its on-disk vintage. A freshly-*formulated* record is a separate,
+narrower case: during Phase 1 it enters `formulaForId` directly (not through the
+`readFormula` alias) still carrying `readable-*`, and is handled by the transitional
+dual-accept below until Phase 2 step 3 flips the writer. The invariant is therefore
+"canonical off the deserialization alias, dual-accepted for fresh Phase-1 mints",
+not a blanket "every object in `formulaForId` is `snapshot-*`" that the Phase-1
+writer would immediately violate. Aliasing only "before the `makers`
 lookup" and "at the top of `makeFormulaRecord`" leaves `getTypeForId` /
 `getFormulaType`, `collectFormulaHashes`, and `getContentIdentityForId` reading
 the raw on-disk string, so once records carry `snapshot-*` those sites would
 mis-group a directory snapshot into the `endo list --grouped` fallback bucket,
 drop a new snapshot's content hash from the GC survivor set (a data-loss window
 if a legacy sibling shares that hash), and return `undefined` content-identity
-for every new snapshot. [proposed-rule, from the panel (critic/skeptic): a rename
-of a persisted discriminant string must normalize at the single point the value
-is deserialized from persistence, not at each individual dispatch site.]
+for every new snapshot. The design rule this establishes: a rename of a persisted
+discriminant string must normalize at the single point the value is deserialized
+from persistence, not at each individual dispatch site.
 
 A rename is therefore a persisted-data-format change and must stay backward
 compatible with records already on disk. Because `makeFormulaRecord`'s sole caller
@@ -377,12 +392,16 @@ across the rename: a holder's persisted reference keeps resolving.
    the map on the `persistencePowers.readFormula` result *before* it is stored in
    the `formulaForId` map (at `manager.js:1274`, and identically on the
    eager-populate path that also calls `readFormula` at `manager.js:1399`/`1410`).
-   This establishes the invariant that **every object in `formulaForId` carries
-   the canonical `snapshot-*` type**, so every reader enumerated above (the
-   `makers` lookup, `getTypeForId` / `getFormulaType`, `collectFormulaHashes`,
+   This establishes the invariant that **every object entering `formulaForId` via
+   `readFormula` (i.e. deserialized from persistence) carries the canonical
+   `snapshot-*` type**, so every reader enumerated above (the `makers` lookup,
+   `getTypeForId` / `getFormulaType`, `collectFormulaHashes`,
    `getContentIdentityForId`, `extractLabeledDeps`, and, via its sole caller,
-   `makeFormulaRecord`) reads the canonical string off the normalized object with
-   no per-site alias of its own. Crucially, the alias and the sites' recognition of
+   `makeFormulaRecord`) reads the canonical string off a *deserialized* object with
+   no per-site alias of its own. Freshly-minted Phase-1 records are the carve-out:
+   they enter `formulaForId` directly, still carrying `readable-*`, so the readers
+   must dual-accept both spellings until Phase 2 step 3 flips the writer (the
+   "Two keys-retention consequences" bullet below traces exactly this exception). Crucially, the alias and the sites' recognition of
    the name it produces must land **together, in Phase 1**: the moment the alias
    rewrites a deserialized old record to `snapshot-*`, every literal
    `'readable-blob'` / `'readable-tree'` comparison and `case` label that reads it
@@ -423,22 +442,42 @@ across the rename: a holder's persisted reference keeps resolving.
      (Design decision 4).
 
 **Phase 2: write the new name.**
-3. Write new snapshots with `type: 'snapshot-blob'` / `'snapshot-tree'`, and
-   rekey the `makeFormulaRecord` `case 'readable-blob':` to `case
+3. Write new snapshots with `type: 'snapshot-blob'` / `'snapshot-tree'`. There
+   are **three** literal formula-write sites in `manager.js` that mint these
+   records, and all three must flip (they are the third grep group enumerated in
+   step 5 below):
+   - `formulateReadableBlob` (`manager.js:4532`, `type: 'readable-blob'`): the sole
+     blob-snapshot writer, backing `file.snapshot()` and the content store.
+   - `checkinTree` (`manager.js:4939`, `type: 'readable-tree'`): the tree-snapshot
+     writer backing `mount.snapshot()`.
+   - `loadContent` (`manager.js:6346`, `type: 'readable-tree'`): a **second,
+     structurally duplicated** tree-`formulate()` call on the content-locator
+     import path, easy to miss because it is not the obvious "the `snapshot()`
+     writer" (`checkinTree`) yet mints the same record type. Name it explicitly so
+     an implementer rekeying the obvious writer does not leave this path forever
+     minting the deprecated string.
+
+   Then rekey the `makeFormulaRecord` `case 'readable-blob':` to `case
    'snapshot-blob':` so the record's `content` property keeps being populated
    under the canonical name (the Phase 1 step 2 entry-point alias already rewrites
    an old on-disk `readable-blob` record to `snapshot-blob` before this switch, so
    the rekeyed case still matches it). Old on-disk records keep their old string
-   and are read through the alias, so **no bulk rewrite is required**.
+   and are read through the alias, so **no bulk rewrite is required**. The alias
+   also means a *stray* `readable-*` write that slips past this step still
+   round-trips correctly (it is normalized on the next read), so a missed write
+   site is not a shipped correctness flaw, but it silently defeats this phase's
+   own goal that **no `readable-*` record is written** and leaves that path minting
+   the deprecated string, which is why all three are named here.
 4. Rename the daemon snapshot exo tag `EndoReadableTree` -> `EndoSnapshotTree`.
    This tag is the guard-tag string on the daemon-local `ReadableTreeInterface`
    exported from `packages/daemon/src/interfaces.js` (the snapshot-tree exo's
    interface). That daemon-local interface is **not** the same-named
    `ReadableTreeInterface` exported from `@endo/platform/fs`
    (`packages/platform/src/fs/interfaces.js`, guard tag `ReadableTree`), which
-   names the shared read-surface type tier and is **not** renamed here. Name the module path at each reference so an implementer does not
-   rename the platform tier by mistake. Give the blob snapshot the matching
-   `EndoSnapshotBlob` tag. Give that
+   names the shared read-surface type tier and is **not** renamed here; call
+   out the module path explicitly wherever this rename is discussed, so an
+   implementer does not rename the platform tier by mistake. Give the blob snapshot the
+   matching `EndoSnapshotBlob` tag. Give that
    `EndoSnapshotBlob` exo a `sha256()` method as well: its guarding `BlobInterface`
    (`packages/daemon/src/interfaces.js`) carries none today, reporting the hash
    only through `getInfo().hash`, so without this the byte column has no type-level
@@ -460,7 +499,12 @@ across the rename: a holder's persisted reference keeps resolving.
    Phase 1 step 2 alias (the alias presents `snapshot-*` to all of them, so any
    site left testing `readable-*` would stop matching a deserialized old record the
    moment the alias lands). A repo-wide grep for the literal `'readable-blob'` /
-   `'readable-tree'` strings across `packages/` (excluding tests) finds two groups.
+   `'readable-tree'` strings across `packages/` (excluding tests) finds **three**
+   groups: the in-daemon read/dispatch sites, the external literal consumers, and
+   the literal write sites (object-literal `type:` assignments of the string). The
+   third group is the one a "rekey the writer" prose instruction folds silently
+   and an earlier draft omitted; it is enumerated in step 3 above and repeated in
+   the write-sites group below so the checklist is exhaustive.
 
    The **in-daemon read sites** in `manager.js`, which read `formula.type` off the
    now-canonical `formulaForId` object and so must test `snapshot-*` (these are the
@@ -490,7 +534,22 @@ across the rename: a holder's persisted reference keeps resolving.
      but must be renamed (or widened to accept both) so the published types match
      the canonical `snapshot-*` records.
 
-   Every rekeyed site above (in-daemon and external) must accept **both** spellings
+   The **literal write sites** in `manager.js` (the object-literal `type:`
+   assignments, flipped in step 3 above and listed again here so this grep-gated
+   checklist is exhaustive rather than folding them into "rekey the writer" prose):
+   - `formulateReadableBlob` (`manager.js:4532`): `type: 'readable-blob'` -> `'snapshot-blob'`.
+   - `checkinTree` (`manager.js:4939`): `type: 'readable-tree'` -> `'snapshot-tree'` (the `mount.snapshot()` writer).
+   - `loadContent` (`manager.js:6346`): `type: 'readable-tree'` -> `'snapshot-tree'` (the duplicate content-locator-import tree writer).
+
+   Two further grep hits are **not** dispatch or write sites and have zero runtime
+   effect, but are rekeyed for hygiene so the grep-gate stays clean: the
+   `provide(id, 'readable-blob')` calls at `manager.js:2110` and `:7359` pass the
+   old string as `provide`'s `expectedType` parameter, which is named
+   `_expectedType` and is entirely unused (`manager.js:1377`). Rekey them to
+   `'snapshot-blob'` for the same consistency reason `extractLabeledDeps`'s harmless
+   case is rekeyed, so the string does not silently drift out of sync.
+
+   Every rekeyed *read* site above (in-daemon and external) must accept **both** spellings
    for the duration of Phases 1-2, not the new one alone: the deserialization alias
    presents `snapshot-*` for old on-disk records, but a freshly-minted Phase-1
    record still carries `readable-*` (it enters `formulaForId` at formulation, not
@@ -521,6 +580,20 @@ alongside the existing `packages/daemon/test/formula-type.test.js` registered-ty
 checks (and exercise the record surface via
 `packages/daemon/test/formula-record.test.js`) rather than leaving it to the
 general convention; the alias has no value that a test does not pin.
+
+The design's own named worst-case failure mode gets its own pinning test, not just
+the round-trip above. § "Migration Path" states that a miss in
+`collectFormulaHashes` (`manager.js:1084`) "can sweep a hash a live snapshot still
+needs" (silent data loss), and calls the deserialization-point invariant the thing
+"an earlier round of this design got wrong". So add a **GC-survivor regression
+test**: a legacy on-disk `readable-blob` / `readable-tree` record, once aliased to
+`snapshot-*`, must still be counted as a survivor by `collectFormulaHashes` (its
+content hash registered as reachable in the `reclaimCollectedStorage` accounting),
+exactly as its pre-rename form was. This is a distinct read site from the
+round-trip test's incarnation / `FormulaRecord.type` assertions, and it is the one
+test that catches the data-loss window the design names as its highest risk;
+pinning it directly is worth more than relying on the general convention in
+[fs-interface-consolidation.md](fs-interface-consolidation.md).
 
 The four external literal-string consumers rekeyed in Phase 2 step 5 each need a
 pinning test too, because a missed or mistyped key silently mis-groups or
@@ -553,7 +626,7 @@ type-level assertion that the `snapshot-*` members exist in the `types.d.ts`
 | [daemon-mount.md](daemon-mount.md), [daemon-mount-capabilities.md](daemon-mount-capabilities.md) | Define `EndoMount` / `EndoMountFile`, `readOnly()`, and `snapshot()`: the live and snapshot producers this matrix names. |
 | [readableblob-range-attenuation.md](readableblob-range-attenuation.md) | The range-I/O attenuation of the readable-blob surface; consumer of the blob naming. |
 | [npm-registry-as-directory-tree.md](npm-registry-as-directory-tree.md) | Consumes `readable-tree` (SnapshotTree) fixtures; a downstream user of the renamed formula. |
-| endojs/endo-but-for-bots#1125 (the Source PR) | Ships the persisted `readable-directory` live-view formula (commit `4743e382b`); an ordering dependency for the migration plan, reconciled in § "Reconciliation with the Existing Names". |
+| endojs/endo-but-for-bots#1125 (the Source PR) | Ships the persisted `readable-directory` live-view formula (open/DRAFT at time of writing; re-verify its formula name and shape against the PR's then-current head before editing `formula-type.js`); an ordering dependency for the migration plan, reconciled in § "Reconciliation with the Existing Names". |
 
 ## Design Decisions
 
@@ -587,6 +660,23 @@ type-level assertion that the `snapshot-*` members exist in the `types.d.ts`
 4. **Read-time alias over bulk rewrite.** Because snapshot identity is
    content-keyed, an alias is free and permanent; a destructive rewrite of
    persisted records is neither necessary nor worth its risk.
+
+5. **Classify "is this a snapshot type" through one predicate, not a per-site
+   literal test.** The migration rekeys seven-plus independent sites
+   (`collectFormulaHashes`, `getContentIdentityForId`, `extractLabeledDeps`, the
+   `makeFormulaRecord` case, `formula-view-registry.js`, `list.js`,
+   `tree-source.js`, `graph.js`) that each re-derive "is this a snapshot formula"
+   via their own two-string literal test. The alias decomplects the *value* (one
+   canonical string at one deserialization point) but leaves the *policy* (what
+   counts as a snapshot type) duplicated as a literal-match at every consumer. A
+   single exported predicate (e.g. `isSnapshotFormulaType(type)`) consumed by all
+   these sites would make this rename, and any future addition to the snapshot set,
+   a one-place edit instead of a grep-and-rekey across two packages. This is a
+   should-fix worth doing *with* the rename but genuinely separable: it does not
+   block Phase 1 (the dual-accept can land as literals first), and a design that
+   already enumerates every call site exhaustively is the right moment to route
+   them through one predicate rather than re-deriving the classification per site
+   forever.
 
 ## Open Questions
 
@@ -639,10 +729,17 @@ type-level assertion that the `snapshot-*` members exist in the `types.d.ts`
   the `ReadableTree` interface/transient-view spelling of the same cell (see
   § "Reconciliation with the Existing Names"), or does it stay as inherited from
   #1125? This is out of the current rename's scope but is the one remaining
-  spelling divergence in the Readable-view row.
+  spelling divergence in the Readable-view row. Recommendation: defer until #1125
+  merges, then align `ReadableNameHub` to the `ReadableTree` spelling in a
+  follow-up (not this change); if alignment is declined, document the divergence
+  permanently rather than letting a fourth spelling accrete.
 - Is `EndoSnapshotBlob` / `EndoSnapshotTree` the desired exo-tag spelling, or
   should the tags stay `EndoReadable*` for compatibility with any external
-  consumer that matches on the tag string?
+  consumer that matches on the tag string? Recommendation: adopt
+  `EndoSnapshotBlob` / `EndoSnapshotTree` (the tag should track the guarantee it
+  names), but keep the old tag reachable behind the alias if a repo-wide grep
+  turns up an external consumer that matches on the literal tag string, exactly as
+  Phase 2 step 4 provides for.
 
 ## Prompt
 
