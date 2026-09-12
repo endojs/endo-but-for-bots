@@ -1,7 +1,7 @@
 // @ts-check
 import test from '@endo/ses-ava/prepare-endo.js';
 
-import { makeSessionRegistry } from '../src/session-registry.js';
+import { makeResourceRegistry } from '../src/resource-registry.js';
 
 const defer = () => {
   let resolve = () => {};
@@ -13,7 +13,7 @@ const defer = () => {
 
 test('session operations serialize locally, recover after failure, and allow unrelated progress', async t => {
   t.timeout(5000);
-  const sessions = makeSessionRegistry();
+  const sessions = makeResourceRegistry();
   const acquired = defer();
   const unblock = defer();
   t.teardown(unblock.resolve);
@@ -41,7 +41,7 @@ test('session operations serialize locally, recover after failure, and allow unr
 });
 
 test('failed cleanup retains ownership and stale release cannot remove a successor', async t => {
-  const sessions = makeSessionRegistry();
+  const sessions = makeResourceRegistry();
   let busy = true;
   let attempts = 0;
   const predecessor = async () => {
@@ -68,7 +68,7 @@ test('failed cleanup retains ownership and stale release cannot remove a success
 
 test('shutdown fences queued and future work and cleans up a late acquisition', async t => {
   t.timeout(5000);
-  const sessions = makeSessionRegistry();
+  const sessions = makeResourceRegistry();
   const acquiring = defer();
   const unblock = defer();
   t.teardown(unblock.resolve);
@@ -103,7 +103,7 @@ test('shutdown fences queued and future work and cleans up a late acquisition', 
 });
 
 test('shutdown attempts independent owners and retries retained failures', async t => {
-  const sessions = makeSessionRegistry();
+  const sessions = makeResourceRegistry();
   let busy = true;
   let firstStops = 0;
   let otherStops = 0;

@@ -7,6 +7,7 @@ import { E } from '@endo/eventual-send';
 import { makePromiseKit } from '@endo/promise-kit';
 
 import { makeCgroup2Probe } from '../limits.js';
+import { makeResourceRegistry } from '../resource-registry.js';
 import {
   makeProcReader,
   parseNamespaceInode,
@@ -351,6 +352,8 @@ harden(probeRootlessNetBackend);
  * receives in `spawn` / `teardown`.
  *
  * @typedef {object} PodmanSliceContext
+ * @property {ReturnType<typeof makeResourceRegistry>} operations Acquisitions and retained removals.
+ * @property {Promise<void> | undefined} teardownFlight Coalesced, retryable teardown attempt.
  * @property {SliceSpec} spec          Original slice spec.
  * @property {string} ref              Pinned OCI image reference.
  * @property {RootlessNetBackend} netBackend Rootless network backend.
@@ -1976,6 +1979,8 @@ export const makePodmanDriver = ({
 
     /** @type {PodmanSliceContext} */
     const ctx = {
+      operations: makeResourceRegistry(),
+      teardownFlight: undefined,
       spec,
       ref,
       netBackend,
@@ -2018,11 +2023,31 @@ export const makePodmanDriver = ({
    * @param {import('../types.js').DriverSpawnControls} [controls]
    * @returns {Promise<DriverProcess>}
    */
-  const spawn = async (slice, argv, opts, controls) => {
+  const spawn = (slice, argv, opts, controls) => {
+    const containerName = makeOperationName();
+    return slice.operations.inOrder(containerName, () =>
+      acquireOperation(slice, containerName, argv, opts, controls),
+    );
+  };
+
+  /**
+   * @param {PodmanSliceContext} slice
+   * @param {string} containerName
+   * @param {string[]} argv
+   * @param {SpawnOpts} opts
+   * @param {import('../types.js').DriverSpawnControls} [controls]
+   * @returns {Promise<DriverProcess>}
+   */
+  const acquireOperation = async (
+    slice,
+    containerName,
+    argv,
+    opts,
+    controls,
+  ) => {
     if (argv.length === 0) {
       throw makeError(X`spawn argv must be non-empty`);
     }
-    const cp = await getCp();
     if (ownerId === undefined) {
       throw makeError(X`podman driver ownerId is not configured`);
     }
@@ -2032,7 +2057,6 @@ export const makePodmanDriver = ({
     const admissionCancelled = controls?.cancelled;
     const isAdmissionCancelled = controls?.isCancelled;
 
-    const containerName = makeOperationName();
     // Names include pid, time, and a counter, so the operation label remains
     // unique even when multiple handles share one formula owner.
     const operationId = containerName;
@@ -2053,23 +2077,37 @@ export const makePodmanDriver = ({
       slice.reserved.add(containerName);
     }
     const releaseReservation = () => slice.reserved.delete(containerName);
+    /** @type {(() => Promise<void>) | undefined} */
+    let cleanupOperation;
     try {
       return await admitOperation();
-    } catch (e) {
-      releaseReservation();
-      throw e;
+    } catch (error) {
+      if (cleanupOperation) {
+        try {
+          await cleanupOperation();
+        } catch (cleanupError) {
+          throw new AggregateError(
+            [error, cleanupError],
+            'Podman admission cleanup pending',
+          );
+        }
+      }
+      throw error;
+    } finally {
+      // Failed removals still occupy their admission slot.
+      if (!cleanupOperation) releaseReservation();
     }
 
     /**
      * The rest of the admission, wrapped so that the reservation above
-     * is released on every path out that is not a live operation —
-     * a create that failed, an aborted admission, a refused
-     * configuration, an attach that never happened.
+     * is released only after successful cleanup or transfer to a live
+     * operation. Failed cleanup retains the reservation for retry.
      *
      * @returns {Promise<DriverProcess>}
      */
     async function admitOperation() {
-      await null;
+      const cp = await getCp();
+      slice.operations.assertOpen();
       if (slice.join !== null) {
         // Resolve the immutable id again before every operation: a container
         // replaced under the same name must not host this operation, and the
@@ -2117,34 +2155,52 @@ export const makePodmanDriver = ({
         slice.ref,
         ...argv,
       ]);
-      // Bounded removal of the exact named operation this spawn minted.
-      // Used on every abandonment path so an aborted or failed admission
-      // cannot leak the container.
-      const removeOperation = () =>
-        removeContainer(cp, slice.runtime, containerName).catch(
-          () => undefined,
-        );
-
-      let created;
-      try {
-        created = await spawnAndCollect(cp, 'podman', createArgv, {
-          timeoutMs: CONTROL_COMMAND_TIMEOUT_MS,
-          cancelled: admissionCancelled,
-          isCancelled: isAdmissionCancelled,
+      // Register ownership before create can materialize the container, even
+      // when create eventually reports an error. A successful removal is
+      // cached so a delayed exit cannot remove a successor with the same name.
+      /** @type {Promise<void> | undefined} */
+      let removal;
+      let proxySettled = Promise.resolve();
+      const removeOperation = () => {
+        removal ??= (async () => {
+          const removed = await removeContainer(
+            cp,
+            slice.runtime,
+            containerName,
+          );
+          if (removed.code !== 0 && !reportsContainerGone(removed)) {
+            throw makeError(
+              X`podman operation reap failed: ${q(removed.stderr.trim() || removed.stdout.trim())}`,
+            );
+          }
+          // Container removal can finish before the host attach process.
+          // Keep its owner until both settle, without awaiting `exited`,
+          // which itself awaits this removal.
+          await proxySettled;
+          slice.live.delete(containerName);
+          releaseReservation();
+          slice.operations.release(containerName, removeOperation);
+        })().catch(error => {
+          removal = undefined;
+          throw error;
         });
-      } catch (e) {
-        // The stalled or aborted create may have registered the name
-        // before dying; remove it so nothing outlives the admission.
-        await removeOperation();
-        throw e;
-      }
+        return removal;
+      };
+      cleanupOperation = removeOperation;
+      slice.operations.retain(containerName, removeOperation);
+      slice.operations.assertOpen();
+      const created = await spawnAndCollect(cp, 'podman', createArgv, {
+        timeoutMs: CONTROL_COMMAND_TIMEOUT_MS,
+        cancelled: admissionCancelled,
+        isCancelled: isAdmissionCancelled,
+      });
       if (created.code !== 0) {
         throw makeError(
           X`podman operation create failed: ${q(created.stderr.trim() || created.stdout.trim())}`,
         );
       }
+      slice.operations.assertOpen();
       if (isAdmissionCancelled?.()) {
-        await removeOperation();
         throw makeError(X`podman operation admission aborted`);
       }
 
@@ -2160,17 +2216,10 @@ export const makePodmanDriver = ({
         // proved of the anchor, and carries here on the runtime applying
         // the same resolved configuration on the same host — a smaller
         // step than trusting argv, and not the same as proving it again.
-        let operationConfig;
-        try {
-          operationConfig = sliceConfigFingerprint(
-            await inspectContainer(cp, slice.runtime, containerName),
-          );
-        } catch (e) {
-          await removeOperation();
-          throw e;
-        }
+        const operationConfig = sliceConfigFingerprint(
+          await inspectContainer(cp, slice.runtime, containerName),
+        );
         if (operationConfig !== slice.policy.fingerprint) {
-          await removeOperation();
           throw makeError(
             X`podman resolved this operation's configuration differently from the attested slice: ${q(operationConfig)} is not ${q(slice.policy.fingerprint)}`,
           );
@@ -2185,13 +2234,13 @@ export const makePodmanDriver = ({
           controller => !delegation.controllers.includes(controller),
         );
         if (lost.length > 0) {
-          await removeOperation();
           throw makeError(
             X`the host no longer delegates the cgroup controllers this slice was attested under: ${q(lost.join(','))}`,
           );
         }
       }
 
+      slice.operations.assertOpen();
       const startArgv = podmanArgs(slice.runtime, [
         'start',
         '--attach',
@@ -2224,7 +2273,6 @@ export const makePodmanDriver = ({
           env: podmanEnv,
         });
       } catch (e) {
-        await removeOperation();
         throw makeError(
           X`failed to attach podman operation: ${q(/** @type {Error} */ (e).message)}`,
         );
@@ -2239,7 +2287,10 @@ export const makePodmanDriver = ({
       );
       child.once('error', rejectProxy);
       child.once('exit', (code, signal) => resolveProxy({ code, signal }));
-      proxyExited.catch(() => undefined);
+      proxySettled = proxyExited.then(
+        () => undefined,
+        () => undefined,
+      );
 
       const exited = (async () => {
         await null;
@@ -2250,13 +2301,7 @@ export const makePodmanDriver = ({
         } catch (e) {
           proxyFailure = e;
         }
-        const removed = await removeContainer(cp, slice.runtime, containerName);
-        slice.live.delete(containerName);
-        if (removed.code !== 0 && !reportsContainerGone(removed)) {
-          throw makeError(
-            X`podman operation reap failed: ${q(removed.stderr.trim() || removed.stdout.trim())}`,
-          );
-        }
+        await removeOperation();
         if (proxyFailure !== undefined) throw proxyFailure;
         return /** @type {{ code: number | null, signal: string | null }} */ (
           status
@@ -2327,59 +2372,54 @@ export const makePodmanDriver = ({
    * @param {PodmanSliceContext} slice
    * @returns {Promise<void>}
    */
-  const teardown = async slice => {
-    const cp = await getCp();
-    // The factory owns the graceful ladder and reaps every operation
-    // before it calls teardown(), so a straggler here has already spent
-    // the soft path: remove it forcibly rather than running a second
-    // escalation on a budget that disagrees with the factory's. Each
-    // operation removes and then awaits its own reaper independently,
-    // so one slow container does not gate the rest; the reaper tolerates
-    // finding the container already gone.
-    await Promise.all(
-      [...slice.live].map(async ([name, operation]) => {
-        await null;
-        await removeContainer(cp, slice.runtime, name).catch(() => undefined);
-        await operation.wait.catch(() => undefined);
-      }),
-    );
-    slice.live.clear();
-
-    // The policy anchor holds no work of its own, but it does hold the
-    // slice's join to the broker's network namespace, so it is removed
-    // on the same pass as the operations rather than left to the next
-    // incarnation's orphan sweep.
-    if (slice.policy !== null) {
-      const anchorName = slice.policy.anchorName;
-      // Checked, not swallowed. The anchor joins the broker's network
-      // namespace, so a removal that failed and went unreported would
-      // let `dispose()` resolve as a clean teardown over a container
-      // still in it — and release the namespace claim that would have
-      // stopped a later slice from attesting the same one.
-      const removed = await removeContainer(cp, slice.runtime, anchorName);
-      if (removed.code !== 0 && !reportsContainerGone(removed)) {
-        throw makeError(
-          X`podman policy anchor removal failed: ${q(removed.stderr.trim() || removed.stdout.trim())}`,
-        );
-      }
-      releaseNamespaces(anchorName);
+  const teardown = slice => {
+    // Shutdown fences even acquisitions still waiting for host powers. It
+    // waits for every admitted create before trying all retained removals.
+    const stopped = slice.operations.shutdown();
+    if (slice.teardownFlight) {
+      void stopped.catch(() => undefined);
+      return slice.teardownFlight;
     }
-
-    // Unlink any seccomp profile we materialised for `--security-opt
-    // seccomp=<path>`.  Best-effort: if the temp file was already
-    // collected by an external sweep, swallow the error.
-    if (slice.seccompTempPath !== null) {
+    slice.teardownFlight = (async () => {
+      const failures = [];
       try {
+        await stopped;
+      } catch (error) {
+        failures.push(error);
+      }
+      if (slice.policy !== null) {
+        try {
+          const cp = await getCp();
+          const anchorName = slice.policy.anchorName;
+          const removed = await removeContainer(cp, slice.runtime, anchorName);
+          if (removed.code !== 0 && !reportsContainerGone(removed)) {
+            throw makeError(
+              X`podman policy anchor removal failed: ${q(removed.stderr.trim() || removed.stdout.trim())}`,
+            );
+          }
+          releaseNamespaces(anchorName);
+          slice.policy = null;
+        } catch (error) {
+          failures.push(error);
+        }
+      }
+      // Keep configuration while any possible user remains. Successful steps
+      // are not repeated; failed removal and file cleanup remain retryable.
+      if (failures.length) {
+        throw new AggregateError(failures, 'Podman teardown pending');
+      }
+      if (slice.seccompTempPath !== null) {
         const fs = await import('fs');
         const path = await import('path');
-        const seccompPath = slice.seccompTempPath;
-        await fs.promises.unlink(seccompPath);
-        await fs.promises.rmdir(path.dirname(seccompPath));
-      } catch {
-        // already gone
+        const directory = path.dirname(slice.seccompTempPath);
+        await fs.promises.rm(directory, { recursive: true, force: true });
+        slice.seccompTempPath = null;
       }
-      slice.seccompTempPath = null;
-    }
+    })().catch(error => {
+      slice.teardownFlight = undefined;
+      throw error;
+    });
+    return slice.teardownFlight;
   };
 
   return harden({
