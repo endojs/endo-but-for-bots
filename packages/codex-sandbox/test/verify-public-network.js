@@ -3,6 +3,7 @@ import '@endo/init';
 
 import { E, Far } from '@endo/far';
 import { makePodmanProviderListenerRuntime } from '@endo/hosted-agent/provider-listener-runtime.js';
+import { makePublicEgress } from '@endo/hosted-agent/public-egress.js';
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { lookup } from 'node:dns/promises';
@@ -13,17 +14,13 @@ import { createConnection } from 'node:net';
 import process from 'node:process';
 import { promisify } from 'node:util';
 
-import {
-  makeBrokerAppServerArgv,
-  makeBrokerEnvironment,
-} from '../src/broker-launch.js';
-import { makePublicEgress } from '../src/public-egress.js';
+import { makeBrokerEnvironment } from '../src/broker-launch.js';
 
 // Explicit operator acceptance command. Uses no credentials or real provider
 // account; public HTTP(S) requests carry only a synthetic read-only test.
-const [imageRef, bootstrapImageRef, address] = process.argv.slice(2);
-if (!imageRef || !bootstrapImageRef || !address)
-  throw Error('listener image, Codex image, and operator IPv4 required');
+const [imageRef, guestImageRef, ...extra] = process.argv.slice(2);
+if (!imageRef || !guestImageRef || extra.length)
+  throw Error('listener image and guest image required');
 const directory = await mkdtemp(join(tmpdir(), 'endo-public-runtime-'));
 const name = `endo-public-probe-${randomUUID()}`;
 const execute = promisify(execFile);
@@ -89,7 +86,7 @@ try {
     imageRef,
     ownerId: `public-test-${randomUUID()}`,
     stateDirectory: directory,
-    publicInternet: { address, bootstrapImageRef },
+    publicInternet: true,
   });
   const listener = await runtime.start({
     endpoint: Far('No provider credentials', {
@@ -116,7 +113,7 @@ try {
       maxResponseBytes: 1024n,
       timeoutMs: 5000,
     },
-    network: { address, endpoint: diagnosticEndpoint },
+    network: { endpoint: diagnosticEndpoint },
   });
   const evidence = await listener.observe();
   const env = makeBrokerEnvironment(evidence.network);
@@ -136,16 +133,19 @@ try {
   );
   if (brokerRequests !== 1)
     throw Error('Synthetic inference path did not work');
-  const inner = String.raw`
+  const probe = String.raw`
 import errno,json,os,socket,sys,urllib.request
 from urllib.parse import urlparse
 p=json.loads(os.environ['PROBE'])
 status=dict(line.split(':',1) for line in open('/proc/self/status') if ':' in line)
 assert all(int(status[k].strip(),16)==0 for k in ('CapEff','CapPrm','CapBnd'))
 for host,port in [(p['brokerHost'],p['brokerPort']),(p['proxyHost'],p['proxyPort'])]:
-    try: socket.create_connection((host,port),timeout=2)
-    except OSError as error: assert error.errno in (errno.EACCES,errno.EPERM,errno.ECONNREFUSED,errno.ENETUNREACH)
-    else: raise AssertionError('native direct transport admitted')
+    with socket.create_connection((host,port),timeout=2): pass
+try:
+    with socket.create_connection(('1.1.1.1',443),timeout=2):
+        raise AssertionError('direct external transport admitted')
+except OSError as error:
+    assert error.errno in (errno.EACCES,errno.EPERM,errno.ENETUNREACH,errno.EHOSTUNREACH)
 proxy=urlparse(os.environ['HTTP_PROXY'])
 for host in ('127.0.0.1','127.1','2130706433','0x7f000001','[::ffff:127.0.0.1]','[::1]'):
     for method in ('POST','CONNECT'):
@@ -154,9 +154,7 @@ for host in ('127.0.0.1','127.1','2130706433','0x7f000001','[::ffff:127.0.0.1]',
             body='{"model":"controlled"}' if method=='POST' else ''
             connection.sendall((method+' '+target+' HTTP/1.1\r\nHost: '+host+':'+str(p['brokerPort'])+'\r\nContent-Type: application/json\r\nContent-Length: '+str(len(body))+'\r\nConnection: close\r\n\r\n'+body).encode())
             status=connection.recv(1024).split(b'\r\n')[0]
-            # The pinned proxy rejects some noncanonical authorities as malformed
-            # before policy evaluation. Neither response is an inference response;
-            # the valid canonical request above proves the broker path independently.
+            # These are proxy destination-policy denials, not guest isolation.
             denied=status.startswith(b'HTTP/1.1 403') or (host!='127.0.0.1' and status.startswith(b'HTTP/1.1 400'))
             assert denied, 'unexpected broker alias result '+method+' '+host+' '+repr(status)
 for scheme in ('http','https'):
@@ -165,14 +163,9 @@ for scheme in ('http','https'):
         assert response.status==200
         assert b'Example Domain' in response.read(32768)
     print('PUBLIC_REQUEST_OK '+scheme,file=sys.stderr,flush=True)
-print('PUBLIC_HTTP_HTTPS_AND_BROKER_DENIAL_OK')
+print('OUTER_EGRESS_AND_GUEST_LISTENERS_OK')
 `;
   const proxy = new URL(evidence.network.proxyUrl);
-  const argv = makeBrokerAppServerArgv(
-    evidence.endpoint,
-    'codex',
-    evidence.network,
-  );
   const args = [
     'run',
     '--rm',
@@ -201,24 +194,20 @@ print('PUBLIC_HTTP_HTTPS_AND_BROKER_DENIAL_OK')
     '--env',
     `PROBE=${JSON.stringify({ brokerHost: broker.hostname, brokerPort: Number(broker.port), proxyHost: proxy.hostname, proxyPort: Number(proxy.port) })}`,
     '--workdir=/workspace',
-    '--entrypoint=codex',
-    bootstrapImageRef,
-    ...argv.slice(1, -3),
-    'sandbox',
-    '--',
-    'python3',
+    '--entrypoint=python3',
+    guestImageRef,
     '-I',
     '-c',
-    inner,
+    probe,
   ];
   const result = await execute('podman', args, {
     timeout: 45_000,
     maxBuffer: 65_536,
   });
-  if (result.stdout.trim() !== 'PUBLIC_HTTP_HTTPS_AND_BROKER_DENIAL_OK')
+  if (result.stdout.trim() !== 'OUTER_EGRESS_AND_GUEST_LISTENERS_OK')
     throw Error('Unexpected acceptance output');
   if (brokerRequests !== 1)
-    throw Error('Tool request reached inference broker');
+    throw Error('Public proxy forwarded a private broker destination');
   process.stdout.write(result.stdout);
   process.stderr.write(result.stderr);
   await listener.stop();

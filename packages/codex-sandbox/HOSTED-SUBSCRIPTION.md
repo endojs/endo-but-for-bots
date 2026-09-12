@@ -95,31 +95,19 @@ and transport now admit configured larger bodies within a finite wire envelope.
 
 This remains a bounded experimental composition:
 
-- A provider lease lasts one hour and admits at most 64 requests, each bounded to
-  8 MiB request/16 MiB response, with 1.5 GiB cumulative conservative reservations.
-  These are byte ceilings, not guaranteed payload capacities: the private pipe
-  separately caps each complete encoded CapTP frame at 8 MiB, including JSON
-  escaping and envelope overhead.
-  This transfer budget is not memory or disk allocation or monetary billing.
-  The subscription composition opts into a ten-minute absolute request deadline
-  on both listener and transport, additionally bounded by independent lease expiry.
-  Other issuer users retain the two-minute default unless explicitly configured.
-  Credential renewal is separate from resource-lease renewal.
-  Before each explicit new turn, the hosted composition automatically provisions
-  a fresh bounded lease and app-server generation using the same durable session,
-  workspace, thread state, and checkpoint.
-  The old client's pending-tool barrier and complete process/resource cleanup
-  must succeed before the successor is admitted; cleanup failure refuses the turn.
-  This permits long-lived conversations without sharing one lifetime request
-  budget, at the cost of container startup and thread-resume latency every turn.
-  Active turns are never interrupted to renew a lease, and a dispatched prompt is
-  never replayed automatically.
-  A single turn still has the one-hour/64-request ceiling: expiry or exhaustion
-  during that turn is an error, not permission to refill its budget indefinitely.
-  The next explicitly submitted turn starts a new generation and uses the usual
-  durable-checkpoint reconciliation; failed-turn side effects are not undone.
+- Inference uses a revocable session grant with four simultaneous request slots.
+  There is no cumulative request, byte, cost, or one-hour lifetime budget.
+  Requests retain the 8 MiB request/16 MiB response bounds; the private pipe also
+  caps complete encoded CapTP frames at 8 MiB, including envelope overhead.
+  These distinct transport envelopes still need consolidation.
+  The subscription composition uses a ten-minute request deadline on listener
+  and transport; other issuer users default to two minutes.
+  Credential refresh is independent of grant and container lifetime.
+  Successive turns retain the same app-server, workspace, and inference grant.
+  Stop/restart still requires cleanup and native-checkpoint reconciliation;
+  dispatched prompts are never replayed automatically.
 - Broker application errors preserve the listener and return a generic HTTP error.
-  A retrying CLI can still require cancellation after quota exhaustion.
+  A retrying CLI can still require cancellation after an inference failure.
 - Abandoned registry transactions remain fenced for explicit operator recovery.
   Reaping containers alone does not prove old privileged subprocesses have stopped.
 - A shutdown blocked on an unsettled Endo tool retains ownership and refuses to

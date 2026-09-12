@@ -1,20 +1,13 @@
 # Security model
 
-The trusted computing base includes the host provisioner, credential broker,
-audit anchor, and digest-pinned Codex CLI/app-server runtime.
-Prompts, workspace data, dynamic-tool arguments, and model-launched commands
-are untrusted.
-App-server must write its credential-free state volume and is trusted to apply
-the pinned per-turn `workspaceWrite` sandbox; compromise of that runtime is
-outside the inner command-boundary threat model and requires revoking the image
-digest.
-
-`@endo/codex-sandbox` trusts only the digest-pinned Codex app-server component
-described above, not the model or the commands that app-server launches on its
-behalf.
-The outer Endo slice is the host and cross-session authority boundary; the
-pinned app-server's inner sandbox is the boundary between its own control state
-and model-launched commands.
+The host provisioner, credential broker, audit anchor, container runtime, and
+kernel enforce the host and cross-session authority boundary.
+The entire guest workload is one authority domain: the digest-pinned Codex CLI,
+native tools, plugins, and subprocesses share the granted mounts and listeners.
+Guest code may modify its credential-free `/codex-home` and use the inference
+endpoint; native conversation state is not an authoritative effects record.
+The adapter relies on the pinned app-server protocol for compatibility and
+conversation handling, without treating the CLI as a boundary against commands.
 Codex's approval UI is not an authority boundary.
 
 The lifecycle owner refuses to start a session unless the sandbox returns the

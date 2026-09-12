@@ -49,43 +49,51 @@ after the caller's deadline expires.
 ## Broker separation
 
 The outer listener namespace has only loopback and no external route.
-The inference listener binds loopback, while the command proxy binds an
-operator-owned public IPv4 address assigned as an isolated loopback `/32`.
-That address does not create a route to the host or the public network.
+The inference listener and public proxy bind `127.0.0.1` on separate ports.
+The public DNS adapter binds `127.0.0.53`.
+These listeners do not create a route to the host or the public network.
 Public traffic crosses the private capability pipe to the host-side filtered
 transport; subscription credentials never enter the listener or model container.
 
-Codex's managed proxy keeps local-address access disabled.
-Its tool commands run in an inner network namespace with only the managed proxy
-relay reachable; they cannot directly reach either outer listener.
-Using a loopback upstream with local-address access enabled is unsafe: testing
-found that an IPv4-mapped IPv6 target could bypass the intended upstream and
-reach the inference listener.
-The public profile must not reintroduce that exception.
-
-A separate, bounded, one-shot helper configures the isolated namespace using
-`NET_ADMIN` and then exits.
+Codex and its native commands share the outer container's authority, including
+access to the inference listener, public proxy, and writable native state.
+The pinned 0.152.0 process/thread configuration uses `danger-full-access` because
+those interfaces have no external-sandbox mode.
+Every turn supplies `externalSandbox` with `networkAccess` set to `enabled` for
+admitted public networking or `restricted` otherwise.
+Codex's managed proxy is disabled; the outer namespace and host egress service
+apply the network policy.
+These settings are appropriate only inside the verified outer sandbox.
 The listener and model containers retain dropped capabilities, including later
-exec operations.
+exec operations; public networking needs no privileged setup helper.
 A generated, read-only `/etc/resolv.conf` contains only the isolated DNS listener
 address and bounded resolver timeouts, not the host's resolver configuration.
 The DNS adapter forwards validated A/AAAA hostname requests through a constrained
 host capability rather than forwarding arbitrary DNS packets.
 
 Runtime admission must verify the pinned images, namespace ownership and routes,
-effective mounts, capabilities, exact merged Codex configuration, and live tool
-isolation before advertising a usable session.
+effective mounts, capabilities, exact merged Codex configuration, and guest child
+access to the granted writable mounts before advertising a usable session.
 Unit fixtures are not evidence that a kernel applied these boundaries.
+The runtime preflight executes Python children; it does not establish how the
+pinned Codex app-server executes native commands.
+The public-network acceptance command similarly probes the outer container,
+including direct guest listener access and proxy rejection of private destinations.
+Live app-server acceptance covering thread start, resume, and multiple turns with
+native commands remains outstanding.
 
 ## Operator configuration
 
-The subscription configuration accepts `publicInternet` with an operator-owned
-IPv4 `address` and immutable `bootstrapImageRef`.
-The existing `listenerImageRef` must be built from the Codex-specific
-`src/provider-worker-entry.js`, which combines the inference listener with the
-public proxy and DNS adapters.
-The ordinary inference-only worker does not supply public networking.
-Build the public listener with the explicit operator command
-`node packages/hosted-agent/test/build-provider-image.js localhost/endo-codex-public --codex-public-network`.
+The subscription configuration accepts `publicInternet: true` to make the
+public policy available; it defaults to false.
+Each session must still receive a separate public-egress capability to activate
+its listeners.
+No public bind address or helper image is configured.
+The `listenerImageRef` uses the shared hosted-agent worker, which combines the
+inference listener with optional public proxy and DNS adapters.
+The host must explicitly supply and activate public network authority; the same
+image serves sessions whose public network policy is off.
+Build the listener with the explicit operator command
+`node packages/hosted-agent/test/build-provider-image.js localhost/endo-provider`.
 Keep images pinned by digest and validate the complete production composition
 before enabling the policy.

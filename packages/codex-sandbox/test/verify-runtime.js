@@ -187,11 +187,14 @@ try {
       launchArgv: makeBrokerAppServerArgv('http://127.0.0.1:12345'),
       launchEnvironment: env,
       sessionId: identity,
-      leaseId: identity,
+      grantId: identity,
       imageDigest,
       networkNamespaceId: (await E(slice).policy()).networkNamespaceId,
     }),
   );
+  if (evidence.grantId !== identity) {
+    throw Error('Runtime evidence omitted its provider grant identity');
+  }
   acceptedEvidence = evidence;
 } catch (error) {
   console.error('LIVE RUNTIME REFUSED', diagnostic);

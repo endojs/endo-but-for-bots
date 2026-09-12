@@ -27,9 +27,16 @@
     "./provider-transport.js": "./src/provider-transport.js",
     "./provider-http.js": "./src/provider-http.js",
     "./provider-pipe.js": "./src/provider-pipe.js",
+    "./public-network.js": "./src/public-network.js",
+    "./public-egress.js": "./src/public-egress.js",
     "./provider-worker.js": "./src/provider-worker.js",
     "./provider-listener-runtime.js": "./src/provider-listener-runtime.js",
-    "./provider-lease-issuer.js": "./src/provider-lease-issuer.js",
+    "./provider-grant-issuer.js": "./src/provider-grant-issuer.js",
+    "./session-registry.js": "./src/session-registry.js",
+    "./cleanup-scope.js": "./src/cleanup-scope.js",
+    "./mcp-bridge.js": "./src/mcp-bridge.js",
+    "./mcp-socket.js": "./src/mcp-socket.js",
+    "./mcp-stdio-bridge.js": "./src/mcp-stdio-bridge.js",
     "./secret-rotator.js": "./src/secret-rotator.js"
   },
   "scripts": {

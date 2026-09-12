@@ -72,9 +72,9 @@ RUN cd /opt/codex-install \
   && rm -rf /root/.npm /root/.codex /tmp/node-compile-cache
 
 # CODEX_HOME is session-durable until teardown, not a credential boundary.
-# Commands launched by Codex run as this same node UID and may read it, while
-# the mandatory workspaceWrite turn policy denies modification outside the
-# explicit workspace/tmp roots. Never put auth.json, a reusable token, or a
+# Commands launched by Codex run as this same node UID and may read and write
+# it within the shared outer container boundary. Never put auth.json, a reusable
+# token, or a
 # machine-wide Codex home here. Hosted authentication requires a broker/proxy
 # outside this slice.
 RUN mkdir -p /codex-home /workspace \

@@ -4,7 +4,7 @@ import '@endo/init';
 
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
-import { makeProviderBrokerLeaseIssuer } from '@endo/hosted-agent/provider-lease-issuer.js';
+import { makeProviderBrokerGrantIssuer } from '@endo/hosted-agent/provider-grant-issuer.js';
 import { makePodmanProviderListenerRuntime } from '@endo/hosted-agent/provider-listener-runtime.js';
 import { makeSandboxFactory } from '@endo/sandbox/factory.js';
 import { execFile } from 'node:child_process';
@@ -101,7 +101,7 @@ try {
     ownerId,
     stateDirectory: join(directory, 'listener'),
   });
-  issuer = makeProviderBrokerLeaseIssuer({
+  issuer = makeProviderBrokerGrantIssuer({
     runtime: listener,
     secret: Far('unused acceptance secret', {
       async readBase64() {
@@ -116,15 +116,11 @@ try {
       origin: providerOrigin,
       routes: [{ method: 'POST', path: '/v1/responses' }],
       models: ['gpt-test'],
-      maxRequests: 10n,
+      maxConcurrentRequests: 4,
       maxRequestBytes: 1024n * 1024n,
       maxResponseBytes: 1024n * 1024n,
-      maxTotalBytes: 16n * 1024n * 1024n,
-      maxCostMicrounits: 10n,
-      maxCostMicrounitsPerRequest: 1n,
       authMode: 'api-key',
     },
-    leaseDurationMs: 300_000,
     imageDigest: runtimeImage.digest,
     accountRef,
   });
@@ -146,7 +142,7 @@ try {
     volumeProvider: storage.provider.volumeProvider,
     makeWorkspace: storage.provider.makeWorkspace,
     mountWorkspace: storage.provider.mountWorkspace,
-    issueBrokerLease: issuer,
+    issueProviderGrant: issuer,
     imageRef: runtimeImage.ref,
     imageDigest: runtimeImage.digest,
     providerOrigin,

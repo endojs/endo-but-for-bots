@@ -13,20 +13,13 @@ import process from 'node:process';
 const tag = process.argv[2];
 if (!tag || !/^[a-z0-9][a-z0-9._:/-]*$/.test(tag))
   throw Error('Provide a local listener image tag');
-const profile = process.argv[3];
-if (profile !== undefined && profile !== '--codex-public-network')
-  throw Error('Unknown listener image profile');
+if (process.argv.length > 3) throw Error('Unexpected listener build arguments');
 const directory = await mkdtemp(join(tmpdir(), 'endo-provider-build-'));
 try {
   await build({
     entryPoints: [
       fileURLToPath(
-        new URL(
-          profile === '--codex-public-network'
-            ? '../../codex-sandbox/src/provider-worker-entry.js'
-            : '../src/provider-worker-entry.js',
-          import.meta.url,
-        ),
+        new URL('../src/provider-worker-entry.js', import.meta.url),
       ),
     ],
     bundle: true,

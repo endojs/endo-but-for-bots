@@ -32,7 +32,6 @@
     "./src/opencode-session-provisioner.js": "./src/opencode-session-provisioner.js",
     "./src/provision-opencode-session.js": "./src/provision-opencode-session.js",
     "./src/parse-rootfs.js": "./src/parse-rootfs.js",
-    "./src/mcp-bridge.js": "./src/mcp-bridge.js",
     "./src/mcp-socket-server.js": "./src/mcp-socket-server.js",
     "./src/container-mount-bridge.js": "./src/container-mount-bridge.js",
     "./package.json": "./package.json"

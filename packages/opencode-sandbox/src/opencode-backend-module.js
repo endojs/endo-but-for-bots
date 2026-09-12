@@ -43,6 +43,7 @@ import { promisify } from 'node:util';
 
 import { Fail, q } from '@endo/errors';
 import { E } from '@endo/eventual-send';
+import { makeMcpBridgeForToolSet } from '@endo/hosted-agent/mcp-bridge.js';
 
 import { parseModelRef } from './opencode-agent-config.js';
 import { makeOpencodeBroker } from './opencode-broker.js';
@@ -51,7 +52,6 @@ import {
   OPENCODE_MODELS,
 } from './opencode-backend-factory.js';
 import { makeOpencodeSessionProvisioner } from './opencode-session-provisioner.js';
-import { makeMcpBridgeForToolSet } from './mcp-bridge.js';
 import { startMcpSocketServer } from './mcp-socket-server.js';
 
 // One provider-listener runtime per daemon worker, shared by every backend

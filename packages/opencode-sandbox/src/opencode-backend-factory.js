@@ -40,6 +40,8 @@ import {
   HostedTurnBackendInterface,
   normalizeHostedModelDescriptor,
 } from '@endo/hosted-agent';
+import { makeCleanupScope } from '@endo/hosted-agent/cleanup-scope.js';
+import { makeSessionRegistry } from '@endo/hosted-agent/session-registry.js';
 
 import { DEFAULT_MODEL, parseModelRef } from './opencode-agent-config.js';
 import {
@@ -120,7 +122,7 @@ const isIdleInterrupt = error =>
  * Build the trusted lifecycle owner for opencode backend sessions.
  *
  * @param {object} powers
- * @param {(sessionId: string, options: { mcp: { socketDir: string, innerDir: string, configPath: string }, model?: string, systemPrompt?: string, workspaceHostPath?: string, network?: 'none' | 'private', brokerEnv?: { OPENCODE_BROKER_BASE_URL: string, OPENCODE_BROKER_CONTAINER: string } }) => Promise<any>} powers.provisionClient
+ * @param {(sessionId: string, options: { mcp: { socketDir: string, innerDir: string, configPath: string }, model?: string, systemPrompt?: string, workspaceHostPath?: string, network?: 'none' | 'private' | 'join', brokerEnv?: { OPENCODE_BROKER_BASE_URL: string, OPENCODE_BROKER_CONTAINER: string } }) => Promise<any>} powers.provisionClient
  *   Provision (or reopen) the session's OpencodeClient formula with the tool
  *   bridge mount, the pinned model, and the session persona baked into the
  *   opencode agent config, and return the client capability.
@@ -137,6 +139,8 @@ const isIdleInterrupt = error =>
  * @param {(sessionId: string) => Promise<void>} powers.removeToolBridge
  *   Delete the session's socket directory.
  * @param {ReadonlyArray<any>} [powers.models] - hosted model descriptors.
+ * @param {((spec: any) => Promise<{ revoke: () => Promise<void>, attestation: () => Promise<any>, sandboxEvidence: () => Promise<any> }>) | null} [powers.broker]
+ *   Issue a revocable provider grant for a session without public networking.
  */
 export const makeOpencodeBackendFactory = ({
   provisionClient,
@@ -150,43 +154,7 @@ export const makeOpencodeBackendFactory = ({
   const catalog = harden(models.map(normalizeHostedModelDescriptor));
   const listModels = async () => catalog;
 
-  // One live instance per session. `create` and `destroy` for one session id
-  // run in order, and either stops an instance this factory still runs before
-  // acting: a second `create` for a live session is the session's new owner (a
-  // Floot factory rebuilt without a daemon restart revives every session it
-  // records, while the old instance's admin facet died with the old factory),
-  // not a request for a duplicate that would race the same opencode session
-  // store.
-  /** @type {Map<string, { terminate: () => Promise<void> }>} */
-  const live = new Map();
-  /** @type {Map<string, Promise<void>>} */
-  const sessionChains = new Map();
-  /**
-   * @template T
-   * @param {string} sessionId
-   * @param {() => Promise<T>} operation
-   * @returns {Promise<T>}
-   */
-  const inSessionOrder = (sessionId, operation) => {
-    const previous = sessionChains.get(sessionId) || Promise.resolve();
-    const result = previous.then(operation);
-    const settled = result.then(
-      () => undefined,
-      () => undefined,
-    );
-    sessionChains.set(sessionId, settled);
-    void settled.then(() => {
-      if (sessionChains.get(sessionId) === settled) {
-        sessionChains.delete(sessionId);
-      }
-    });
-    return result;
-  };
-  /** @param {string} sessionId */
-  const stopLive = async sessionId => {
-    const current = live.get(sessionId);
-    if (current) await current.terminate();
-  };
+  const sessions = makeSessionRegistry();
 
   /**
    * @param {Record<string, any>} spec
@@ -197,7 +165,7 @@ export const makeOpencodeBackendFactory = ({
     const networkPolicy = spec.networkPolicy ?? 'off';
     ['off', 'public-internet'].includes(networkPolicy) ||
       Fail`Unknown network policy ${q(networkPolicy)}; expected "off" or "public-internet"`;
-    // A broker lease makes `off` enforceable with the provider reachable:
+    // A broker grant makes `off` enforceable with the provider reachable:
     // the slice joins the listener's networkless namespace. Without a
     // broker the legacy refusal path stays (the session can still be
     // created, but a turn is refused with an actionable message).
@@ -227,31 +195,21 @@ export const makeOpencodeBackendFactory = ({
     }
     // A predecessor that cannot stop — an unsettled Endo tool call — refuses
     // the successor rather than running beside it.
-    await stopLive(sessionId);
+    await sessions.stop(sessionId);
     const bridge = await startToolBridge(sessionId, toolSet);
-    /** @type {any} */
-    let lease = null;
-    /** @type {Promise<void> | null} */
-    let leaseRevoke = null;
-    const revokeLease = () => {
-      if (!lease) return Promise.resolve();
-      if (!leaseRevoke) {
-        // Cleared on failure so a later terminate retry re-attempts the
-        // revoke; kept on success so concurrent callers share one revoke.
-        leaseRevoke = Promise.resolve(E(lease).revoke()).catch(error => {
-          leaseRevoke = null;
-          throw error;
-        });
-      }
-      return leaseRevoke;
+    const resources = makeCleanupScope();
+    resources.add(() => bridge.close());
+    const releaseResources = async () => {
+      await resources.run();
+      sessions.release(sessionId, releaseResources);
     };
     let client;
     try {
       let brokerEnv;
       if (networkPolicy === 'off' && broker) {
-        // Issue the lease before the client exists: its endpoint and the
+        // Issue the grant before the client exists: its endpoint and the
         // listener container are what the slice config and network need.
-        lease = await broker(
+        const grant = await broker(
           harden({
             sessionId,
             providerOrigin: OPENROUTER_ORIGIN,
@@ -263,15 +221,17 @@ export const makeOpencodeBackendFactory = ({
             networkPolicy: 'off',
           }),
         );
+        resources.add(() => E(grant).revoke());
         const [attestation, evidence] = await Promise.all([
-          E(lease).attestation(),
-          E(lease).sandboxEvidence(),
+          E(grant).attestation(),
+          E(grant).sandboxEvidence(),
         ]);
         brokerEnv = harden({
           OPENCODE_BROKER_BASE_URL: `${attestation.endpoint}/api/v1`,
           OPENCODE_BROKER_CONTAINER: evidence.brokerSidecar.container,
         });
       }
+      resources.add(() => cancelClient(sessionId));
       client = await provisionClient(sessionId, {
         mcp: {
           socketDir: bridge.socketDir,
@@ -285,15 +245,18 @@ export const makeOpencodeBackendFactory = ({
         ...(workspaceHostPath ? { workspaceHostPath } : {}),
       });
     } catch (error) {
-      await bridge.close().catch(() => {});
-      await revokeLease().catch(revokeError => {
-        console.error(
-          '[opencode-sandbox] broker lease revoke failed after a failed create; the listener remains until expiry:',
-          revokeError instanceof Error
-            ? revokeError.message
-            : String(revokeError),
+      // Keep partial acquisition ownership even when rollback fails. Both
+      // create and destroy retry this owner before touching the same session.
+      sessions.retain(sessionId, releaseResources);
+      try {
+        await releaseResources();
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [error, cleanupError],
+          'OpenCode session provisioning and rollback failed',
+          { cause: error },
         );
-      });
+      }
       throw error;
     }
 
@@ -341,17 +304,12 @@ export const makeOpencodeBackendFactory = ({
         // A call that raced the check above is still running host-side; it has
         // to settle before the session is declared stopped.
         refuseUnsettled(bridge.pendingCalls());
-        await bridge.close();
-        // A stop, not a deletion: the workspace and the opencode session
-        // store stay for the next revival.
-        await cancelClient(sessionId);
-        // The broker listener exists only for this client; release it after
-        // the slice is gone so the joined namespace has no live user.
-        await revokeLease();
+        // Failed stages retain ownership; independent releases are still
+        // attempted, so cancellation failure cannot suppress grant revocation.
+        // Durable workspace and native state are retained.
+        await releaseResources();
         terminated = true;
-        if (live.get(sessionId)?.terminate === terminate) {
-          live.delete(sessionId);
-        }
+        sessions.release(sessionId, terminate);
       })().finally(() => {
         if (!terminated) cleanupInFlight = undefined;
       });
@@ -434,7 +392,7 @@ export const makeOpencodeBackendFactory = ({
           'Factory-only OpenCode lifecycle administration: terminate (stops the client and the tool bridge; keeps the workspace and session store).',
       },
     );
-    live.set(sessionId, harden({ terminate }));
+    sessions.retain(sessionId, terminate);
     return harden({ run, admin });
   };
 
@@ -444,15 +402,15 @@ export const makeOpencodeBackendFactory = ({
    */
   const create = async (spec, toolSet) => {
     const sessionId = assertSessionId(spec?.sessionId);
-    return inSessionOrder(sessionId, () => createSession(spec, toolSet));
+    return sessions.inOrder(sessionId, () => createSession(spec, toolSet));
   };
 
   /** @param {Record<string, any>} spec */
   const destroy = async spec => {
     const sessionId = assertSessionId(spec?.sessionId);
-    return inSessionOrder(sessionId, async () => {
+    return sessions.inOrder(sessionId, async () => {
       // Never underneath a running client.
-      await stopLive(sessionId);
+      await sessions.stop(sessionId);
       try {
         await removeSession(sessionId);
       } finally {

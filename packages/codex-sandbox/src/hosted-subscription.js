@@ -6,8 +6,9 @@ import { Fail } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
-import { makeProviderBrokerLeaseIssuer } from '@endo/hosted-agent/provider-lease-issuer.js';
+import { makeProviderBrokerGrantIssuer } from '@endo/hosted-agent/provider-grant-issuer.js';
 import { makePodmanProviderListenerRuntime } from '@endo/hosted-agent/provider-listener-runtime.js';
+import { makePublicEgress } from '@endo/hosted-agent/public-egress.js';
 import { makeSecretRotator } from '@endo/hosted-agent/secret-rotator.js';
 import { make as makeSandbox } from '@endo/sandbox';
 
@@ -15,8 +16,6 @@ import { startAppServerTransport } from './app-server-transport.js';
 import { makeCodexBackendFactory } from './backend-factory.js';
 import { makeHostVolumeProvider } from './host-volume-provider.js';
 import { whenHostStops } from './host-lifecycle.js';
-import { makeRenewingCodexBackend } from './renewing-backend.js';
-import { makePublicEgress } from './public-egress.js';
 import { makeAttestedCodexResourceProvisioner } from './sandbox-policy.js';
 import { makeCodexSubscriptionCredential } from './subscription-auth.js';
 
@@ -40,7 +39,10 @@ export const makeHostedCodexSubscription = async options => {
     saveThreadState,
     removeSessionState,
     context,
+    publicInternet = false,
   } = options;
+  typeof publicInternet === 'boolean' ||
+    Fail`Invalid public network configuration`;
   const imageDigest = imageRef.slice(imageRef.indexOf('@') + 1);
   const credential = makeCodexSubscriptionCredential({
     secret,
@@ -60,9 +62,7 @@ export const makeHostedCodexSubscription = async options => {
     ownerId,
     stateDirectory: join(directory, 'listener'),
     maxListeners: options.maxSessions,
-    ...(options.publicInternet
-      ? { publicInternet: options.publicInternet }
-      : {}),
+    publicInternet,
   });
   let issuer;
   let provision;
@@ -90,26 +90,20 @@ export const makeHostedCodexSubscription = async options => {
   };
   try {
     await options.initializeState?.();
-    issuer = makeProviderBrokerLeaseIssuer({
+    issuer = makeProviderBrokerGrantIssuer({
       runtime: listener,
       secret,
       credential,
       fetch: globalThis.fetch,
       imageDigest,
       accountRef,
-      leaseDurationMs: 60 * 60 * 1000,
       requestTimeoutMs: 600_000,
       onDiagnostic: options.onDiagnostic,
       audit: options.audit,
-      ...(options.publicInternet
+      ...(publicInternet
         ? {
-            makePublicNetwork: () => {
-              const network = makePublicEgress({ policy: 'public-internet' });
-              return harden({
-                ...network,
-                address: options.publicInternet.address,
-              });
-            },
+            makePublicNetwork: () =>
+              makePublicEgress({ policy: 'public-internet' }),
           }
         : {}),
       policy: {
@@ -117,15 +111,9 @@ export const makeHostedCodexSubscription = async options => {
         authMode: 'subscription',
         routes: [{ method: 'POST', path: '/v1/responses' }],
         models: models.map(model => model.id),
-        maxRequests: 64n,
+        maxConcurrentRequests: 4,
         maxRequestBytes: 8n * 1024n ** 2n,
         maxResponseBytes: 16n * 1024n ** 2n,
-        // The broker conservatively reserves a full response per request.
-        // Cover all 64 bounded requests, not merely fifteen reservations.
-        maxTotalBytes: 64n * (8n + 16n) * 1024n ** 2n,
-        // Request-unit budget, not a claim about subscription monetary billing.
-        maxCostMicrounits: 64n,
-        maxCostMicrounitsPerRequest: 1n,
       },
     });
     const noScratch = makeExo(
@@ -160,7 +148,7 @@ export const makeHostedCodexSubscription = async options => {
     // alone cannot prove that old privileged host operations have stopped.
     const recovered = new Set();
     provision = makeAttestedCodexResourceProvisioner({
-      publicInternetEnabled: Boolean(options.publicInternet),
+      publicInternetEnabled: publicInternet,
       sandbox,
       volumeProvider: storage.provider.volumeProvider,
       makeWorkspace: async spec => {
@@ -171,7 +159,7 @@ export const makeHostedCodexSubscription = async options => {
         return storage.provider.makeWorkspace(spec);
       },
       mountWorkspace: storage.provider.mountWorkspace,
-      issueBrokerLease: issuer,
+      issueProviderGrant: issuer,
       imageRef,
       imageDigest,
       providerOrigin: 'https://chatgpt.com',
@@ -184,7 +172,7 @@ export const makeHostedCodexSubscription = async options => {
       startTransport: startAppServerTransport,
     });
     const backend = makeCodexBackendFactory({
-      publicInternetEnabled: Boolean(options.publicInternet),
+      publicInternetEnabled: publicInternet,
       registerShutdown: stop => {
         shutdown = stop;
       },
@@ -207,7 +195,7 @@ export const makeHostedCodexSubscription = async options => {
         console.error('Codex host cleanup remains pending');
       });
     }
-    return harden({ backend: makeRenewingCodexBackend(backend), dispose });
+    return harden({ backend, dispose });
   } catch (error) {
     await dispose();
     throw error;

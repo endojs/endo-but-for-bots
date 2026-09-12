@@ -4,9 +4,10 @@ import { Fail, q } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
+import { assertPublicNetworkEvidence } from '@endo/hosted-agent/public-network.js';
 
 import {
-  assertBrokerLeaseV1,
+  assertProviderGrantV1,
   assertContainerMounts,
   assertHostedAgentPolicyV1,
   makeCodexResourceProvisioner,
@@ -14,7 +15,6 @@ import {
 import {
   makeBrokerAppServerArgv,
   makeBrokerEnvironment,
-  assertCodexNetworkEvidence,
 } from './broker-launch.js';
 import { makeCodexRuntimeVerifier } from './runtime-verifier.js';
 import { normalizeCodexVolumeLimits } from './volume-limits.js';
@@ -137,7 +137,7 @@ export const makeAttestedCodexSliceFactory = powers => {
     volumes.workspaceVolume !== volumes.stateVolume ||
       Fail`Session volumes must be distinct`;
     const lease = await E(brokerLease).attestation();
-    assertBrokerLeaseV1(lease, {
+    assertProviderGrantV1(lease, {
       sessionId,
       imageDigest,
       networkNamespaceId: lease?.networkNamespaceId,
@@ -147,7 +147,7 @@ export const makeAttestedCodexSliceFactory = powers => {
       ...(spec.model ? { model: spec.model } : {}),
       ...(powers.brokerAuthMode ? { authMode: powers.brokerAuthMode } : {}),
     });
-    const network = assertCodexNetworkEvidence(lease.network);
+    const network = assertPublicNetworkEvidence(lease.network);
     const approvedEnvironment = makeBrokerEnvironment(network);
     const launchArgv = makeBrokerAppServerArgv(
       lease.endpoint,
@@ -170,7 +170,7 @@ export const makeAttestedCodexSliceFactory = powers => {
         version: 'CodexBrokerSandboxEvidenceV1',
         sessionId,
         imageDigest,
-        leaseId: lease.leaseId,
+        grantId: lease.grantId,
         networkNamespaceId: lease.networkNamespaceId,
         brokerSidecar,
         credentialInjection: 'broker-only',
@@ -330,7 +330,7 @@ export const makeAttestedCodexSliceFactory = powers => {
           slice,
           sessionId,
           imageDigest,
-          leaseId: lease.leaseId,
+          grantId: lease.grantId,
           networkNamespaceId: outer.networkNamespaceId,
           launchArgv,
           launchEnvironment: approvedEnvironment,
@@ -344,13 +344,11 @@ export const makeAttestedCodexSliceFactory = powers => {
           version: 'CodexRuntimeEvidenceV1',
           sessionId,
           imageDigest,
-          leaseId: lease.leaseId,
+          grantId: lease.grantId,
           networkNamespaceId: outer.networkNamespaceId,
-          toolSandbox: 'codex-workspace-write',
-          toolCodexHomeAccess: 'read-only',
-          toolBrokerAccess: 'denied',
+          executionDomain: 'guest',
           environment: network
-            ? 'credential-free-managed-proxy'
+            ? 'credential-free-proxy'
             : 'credential-and-proxy-free',
           ...(network ? { network } : {}),
           codexHomeAuthFile: 'absent',
@@ -373,9 +371,7 @@ export const makeAttestedCodexSliceFactory = powers => {
           ...(network ? { networkPolicy: 'public-internet' } : {}),
           credentialInjection: broker.credentialInjection,
           brokerTransport: broker.brokerTransport,
-          toolSandbox: runtime.toolSandbox,
-          toolCodexHomeAccess: runtime.toolCodexHomeAccess,
-          toolBrokerAccess: runtime.toolBrokerAccess,
+          executionDomain: runtime.executionDomain,
           limits: {
             memoryBytes: Number(limits.memoryBytes * 2n),
             pids: limits.pids * 2,

@@ -29,10 +29,10 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { E } from '@endo/eventual-send';
+import { makeMcpBridgeForToolSet } from '@endo/hosted-agent/mcp-bridge.js';
 
 import { makeClaudeBackendFactory } from './claude-backend-factory.js';
 import { makeClaudeSessionProvisioner } from './claude-session-provisioner.js';
-import { makeMcpBridgeForToolSet } from './mcp-bridge.js';
 import { startMcpSocketServer } from './mcp-socket-server.js';
 
 /**

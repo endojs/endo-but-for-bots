@@ -105,7 +105,9 @@ const projectToolResult = root => {
   return visit(root);
 };
 
-const CODEX_SANDBOX_MODE = 'workspace-write';
+// The CLI runs inside an attested outer sandbox. The pinned thread API has
+// no external-sandbox mode; every turn separately selects externalSandbox.
+const CODEX_SANDBOX_MODE = 'danger-full-access';
 
 /**
  * @typedef {object} AppServerTransport
@@ -1310,7 +1312,8 @@ export const makeCodexClient = ({
           await audit('session-open', {
             approvalPolicy,
             sandbox: CODEX_SANDBOX_MODE,
-            toolNetworkAccess: false,
+            executionDomain: 'guest',
+            publicNetworkAccess: publicNetworkAdmitted,
             toolSetId: toolSetId || '',
             // The kind of credential, never the credential: `apiKey`,
             // `chatgpt`, `amazonBedrock`, or `none` for a provider that needs
@@ -1666,11 +1669,8 @@ export const makeCodexClient = ({
           ],
           approvalPolicy,
           sandboxPolicy: {
-            type: 'workspaceWrite',
-            writableRoots: ['/workspace', '/tmp', '/run', '/scratch'],
-            networkAccess: publicNetworkAdmitted,
-            excludeSlashTmp: true,
-            excludeTmpdirEnvVar: true,
+            type: 'externalSandbox',
+            networkAccess: publicNetworkAdmitted ? 'enabled' : 'restricted',
           },
           ...(opts.model || model ? { model: opts.model || model } : {}),
           ...(opts.reasoningEffort || reasoningEffort

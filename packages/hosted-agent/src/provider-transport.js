@@ -153,10 +153,16 @@ export const makeProviderFetchTransport = ({
         const stopped = new Promise((_, reject) => {
           rejectStopped = reject;
         });
+        /** @type {() => void} */
+        let resolveClosed;
+        const closed = new Promise(resolve => {
+          resolveClosed = () => resolve(undefined);
+        });
         // A deadline may fire while the caller is not pulling.
         void stopped.catch(() => {});
         const finish = () => {
           finished = true;
+          resolveClosed();
           pending.delete(stop);
           clearTimer(timer);
           try {
@@ -318,7 +324,7 @@ export const makeProviderFetchTransport = ({
               return: stop,
             },
           );
-          return harden({ status: response.status, reader: stream });
+          return harden({ status: response.status, reader: stream, closed });
         } catch (_error) {
           reportFailure();
           stop();

@@ -4,15 +4,18 @@ import test from 'ava';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { mkdtemp, rm, readFile, stat } from 'node:fs/promises';
-import { Far } from '@endo/far';
-
 import {
-  makeMcpBridge,
-  makeMcpBridgeForToolSet,
-  pinToolCatalog,
-} from '../src/mcp-bridge.js';
-import { startMcpSocketServer, takeLines } from '../src/mcp-socket-server.js';
+  mkdir,
+  mkdtemp,
+  rm,
+  readFile,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
+
+import { makeMcpBridge } from '@endo/hosted-agent/mcp-bridge.js';
+
+import { startMcpSocketServer } from '../src/mcp-socket-server.js';
 
 const toolFor = (name, description = '') =>
   harden({
@@ -27,193 +30,8 @@ const toolFor = (name, description = '') =>
 
 const catalogOf = (...tools) => harden({ dynamicTools: tools });
 
-test('initialize echoes the requested protocol version and advertises tools', async t => {
-  const bridge = makeMcpBridge({
-    tools: catalogOf(),
-    execute: async () => '',
-    name: 'endo',
-    version: '9.9.9',
-  });
-  const response = /** @type {any} */ (
-    await bridge.handleMessage({
-      jsonrpc: '2.0',
-      id: 1,
-      method: 'initialize',
-      params: { protocolVersion: '2025-06-18' },
-    })
-  );
-  t.is(response.result.protocolVersion, '2025-06-18');
-  t.deepEqual(response.result.serverInfo, { name: 'endo', version: '9.9.9' });
-  t.truthy(response.result.capabilities.tools);
-});
-
-test('notifications/initialized takes no reply', async t => {
-  const bridge = makeMcpBridge({ tools: catalogOf(), execute: async () => '' });
-  const response = await bridge.handleMessage({
-    jsonrpc: '2.0',
-    method: 'notifications/initialized',
-  });
-  t.is(response, undefined);
-});
-
-test('tools/list serves the pinned hosted catalog as MCP tools', async t => {
-  const bridge = makeMcpBridge({
-    tools: catalogOf(toolFor('exec', 'run code'), toolFor('send')),
-    execute: async () => '',
-  });
-  const response = /** @type {any} */ (
-    await bridge.handleMessage({ jsonrpc: '2.0', id: 2, method: 'tools/list' })
-  );
-  t.deepEqual(
-    response.result.tools.map(tool => tool.name),
-    ['exec', 'send'],
-  );
-  const exec = response.result.tools[0];
-  t.is(exec.description, 'run code');
-  t.deepEqual(exec.inputSchema, {
-    type: 'object',
-    properties: { path: { type: 'string' } },
-    required: ['path'],
-  });
-  t.deepEqual(bridge.toolNames, ['exec', 'send']);
-});
-
-test('tools/call dispatches through execute and wraps the text result', async t => {
-  const calls = [];
-  const bridge = makeMcpBridge({
-    tools: catalogOf(toolFor('lookup')),
-    execute: async (name, args) => {
-      calls.push({ name, args });
-      return 'the answer';
-    },
-  });
-  const response = /** @type {any} */ (
-    await bridge.handleMessage({
-      jsonrpc: '2.0',
-      id: 3,
-      method: 'tools/call',
-      params: { name: 'lookup', arguments: { path: 'x' } },
-    })
-  );
-  t.deepEqual(calls, [{ name: 'lookup', args: { path: 'x' } }]);
-  t.deepEqual(response.result, {
-    content: [{ type: 'text', text: 'the answer' }],
-  });
-});
-
-test('tools/call refuses a name outside the pinned catalog before execute', async t => {
-  let executed = 0;
-  const bridge = makeMcpBridge({
-    tools: catalogOf(toolFor('lookup')),
-    execute: async () => {
-      executed += 1;
-      return '';
-    },
-  });
-  const response = /** @type {any} */ (
-    await bridge.handleMessage({
-      jsonrpc: '2.0',
-      id: 4,
-      method: 'tools/call',
-      params: { name: 'evaluate', arguments: {} },
-    })
-  );
-  t.is(executed, 0);
-  t.is(response.error.code, -32_600);
-  t.regex(response.error.message, /Unknown tool: evaluate/);
-});
-
-test('tools/call surfaces a tool failure as an isError result, not a transport error', async t => {
-  const bridge = makeMcpBridge({
-    tools: catalogOf(toolFor('exec')),
-    execute: async () => {
-      throw Error('boom');
-    },
-  });
-  const response = /** @type {any} */ (
-    await bridge.handleMessage({
-      jsonrpc: '2.0',
-      id: 5,
-      method: 'tools/call',
-      params: { name: 'exec', arguments: {} },
-    })
-  );
-  t.is(response.result.isError, true);
-  t.is(response.result.content[0].text, 'Error: boom');
-  t.is(response.error, undefined);
-});
-
-test('an unknown method returns JSON-RPC method-not-found', async t => {
-  const bridge = makeMcpBridge({ tools: catalogOf(), execute: async () => '' });
-  const response = /** @type {any} */ (
-    await bridge.handleMessage({
-      jsonrpc: '2.0',
-      id: 6,
-      method: 'does/not/exist',
-    })
-  );
-  t.is(response.error.code, -32_601);
-});
-
-test('pinToolCatalog drops names the CLI grammar cannot address', t => {
-  const { tools, byName } = pinToolCatalog([
-    toolFor('exec'),
-    toolFor('bad__name'),
-    toolFor('a,b'),
-    toolFor('read*'),
-    toolFor('__proto__'),
-    toolFor('exec'),
-  ]);
-  t.deepEqual(
-    tools.map(tool => tool.name),
-    ['exec'],
-  );
-  t.is(Object.getPrototypeOf(byName), null);
-  t.false('constructor' in byName);
-});
-
-test('makeMcpBridgeForToolSet pins describe() once and dispatches through execute', async t => {
-  let describes = 0;
-  const calls = [];
-  const toolSet = Far('HostedToolSet', {
-    describe: async () => {
-      describes += 1;
-      return catalogOf(toolFor('listMessages'));
-    },
-    execute: async (name, args) => {
-      calls.push({ name, args });
-      return `ran ${name}`;
-    },
-    help: () => 'test',
-  });
-  const bridge = await makeMcpBridgeForToolSet(toolSet);
-  await bridge.handleMessage({ jsonrpc: '2.0', id: 1, method: 'tools/list' });
-  await bridge.handleMessage({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
-  const response = /** @type {any} */ (
-    await bridge.handleMessage({
-      jsonrpc: '2.0',
-      id: 3,
-      method: 'tools/call',
-      params: { name: 'listMessages', arguments: {} },
-    })
-  );
-  t.is(describes, 1, 'the catalog is pinned, not re-read per request');
-  t.deepEqual(calls, [{ name: 'listMessages', args: {} }]);
-  t.deepEqual(response.result.content, [
-    { type: 'text', text: 'ran listMessages' },
-  ]);
-});
-
-test('takeLines frames newline-delimited JSON and carries a partial tail', t => {
-  const first = takeLines('{"a":1}\n{"b":2}\n{"c":');
-  t.deepEqual(first.lines, ['{"a":1}', '{"b":2}']);
-  t.is(first.rest, '{"c":');
-  const second = takeLines(`${first.rest}3}\n`);
-  t.deepEqual(second.lines, ['{"c":3}']);
-  t.is(second.rest, '');
-});
-
 test('socket server relays JSON-RPC over a Unix socket and installs the bridge + config', async t => {
+  t.timeout(5000);
   const dir = await mkdtemp(path.join(os.tmpdir(), 'claude-mcp-test-'));
   t.teardown(() => rm(dir, { recursive: true, force: true }));
 
@@ -243,6 +61,7 @@ test('socket server relays JSON-RPC over a Unix socket and installs the bridge +
 
   const reply = await new Promise((resolve, reject) => {
     const socket = net.connect(server.socketPath);
+    t.teardown(() => socket.destroy());
     let buffer = '';
     socket.setEncoding('utf8');
     socket.on('error', reject);
@@ -267,19 +86,8 @@ test('socket server relays JSON-RPC over a Unix socket and installs the bridge +
   t.deepEqual(reply.result.content, [{ type: 'text', text: 'ok' }]);
 });
 
-test('a JSON-RPC batch is refused with a reply rather than dropped', async t => {
-  const bridge = makeMcpBridge({
-    tools: catalogOf(toolFor('exec')),
-    execute: async () => 'ok',
-  });
-  const response = await bridge.handleMessage([
-    { jsonrpc: '2.0', id: 1, method: 'tools/list' },
-  ]);
-  t.is(response.id, null);
-  t.is(response.error.code, -32_600);
-});
-
 test('socket frames are handled concurrently and an unbounded frame drops the peer', async t => {
+  t.timeout(5000);
   const dir = await mkdtemp(path.join(os.tmpdir(), 'claude-mcp-test-'));
   t.teardown(() => rm(dir, { recursive: true, force: true }));
 
@@ -303,13 +111,15 @@ test('socket frames are handled concurrently and an unbounded frame drops the pe
   t.teardown(() => server.close());
 
   const socket = net.connect(server.socketPath);
+  t.teardown(() => socket.destroy());
+  t.teardown(release);
   socket.setEncoding('utf8');
   const replies = [];
   let buffer = '';
   socket.on('data', chunk => {
     buffer += typeof chunk === 'string' ? chunk : chunk.toString('utf8');
-    const { lines, rest } = takeLines(buffer);
-    buffer = rest;
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
     for (const line of lines) replies.push(JSON.parse(line));
   });
   const closed = new Promise(resolve => socket.on('close', resolve));
@@ -343,4 +153,33 @@ test('socket frames are handled concurrently and an unbounded frame drops the pe
   socket.write('x'.repeat(1024));
   await closed;
   t.pass();
+});
+
+test('failed socket-file cleanup can retry; a successful close cannot unlink a successor', async t => {
+  t.timeout(5000);
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'claude-mcp-retry-'));
+  t.teardown(() => rm(directory, { recursive: true, force: true }));
+  const server = await startMcpSocketServer({
+    socketDir: directory,
+    bridge: { handleMessage: async () => undefined },
+  });
+  t.teardown(async () => {
+    await rm(server.socketPath, { recursive: true, force: true });
+    // The regression leaves a rejected cached promise even after the listener
+    // has closed. Still release all real resources when that assertion fails.
+    await server.close().catch(() => {});
+  });
+  // A directory cannot be removed by the wrapper's nonrecursive unlink.
+  // The listener remains owned even after its socket name has been removed.
+  await rm(server.socketPath);
+  await mkdir(server.socketPath);
+  const first = server.close();
+  t.is(server.close(), first, 'concurrent callers share the close attempt');
+  await t.throwsAsync(first, { code: 'ERR_FS_EISDIR' });
+  await rm(server.socketPath, { recursive: true });
+  await t.notThrowsAsync(server.close());
+  // A stale successful owner must not touch a replacement at the same path.
+  await writeFile(server.socketPath, 'successor');
+  await server.close();
+  t.is(await readFile(server.socketPath, 'utf8'), 'successor');
 });

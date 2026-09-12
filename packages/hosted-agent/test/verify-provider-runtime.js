@@ -10,7 +10,7 @@ import process from 'node:process';
 import { promisify } from 'node:util';
 
 import { makePodmanProviderListenerRuntime } from '../src/provider-listener-runtime.js';
-import { makeProviderBrokerLeaseIssuer } from '../src/provider-lease-issuer.js';
+import { makeProviderBrokerGrantIssuer } from '../src/provider-grant-issuer.js';
 
 // Opt-in real Linux namespace/pipe acceptance with a controlled host upstream.
 // This is not a vendor authentication or Codex runtime acceptance test.
@@ -37,7 +37,7 @@ try {
     stateDirectory,
     host: { onStderr: chunk => process.stderr.write(chunk) },
   });
-  issuer = makeProviderBrokerLeaseIssuer({
+  issuer = makeProviderBrokerGrantIssuer({
     runtime,
     secret: Far('Controlled host secret', {
       async readBase64() {
@@ -59,14 +59,10 @@ try {
       origin: 'https://api.example.test',
       routes: [{ method: 'POST', path: '/v1/responses' }],
       models: ['controlled'],
-      maxRequests: 4n,
+      maxConcurrentRequests: 4,
       maxRequestBytes: 4096n,
       maxResponseBytes: 4096n,
-      maxTotalBytes: 32_768n,
-      maxCostMicrounits: 40n,
-      maxCostMicrounitsPerRequest: 10n,
     },
-    leaseDurationMs: 60_000,
     imageDigest: `sha256:${'a'.repeat(64)}`,
     accountRef: 'controlled',
   });
