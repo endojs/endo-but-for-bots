@@ -41,7 +41,8 @@ export type NetworkProfile =
   | 'private'
   | 'host-loopback'
   | 'host-lan'
-  | 'host-net';
+  | 'host-net'
+  | 'join';
 
 // ---------------------------------------------------------------------------
 // Backend driver names and probe results
@@ -191,6 +192,14 @@ export type SandboxMakeOpts = {
   rootfs: RootfsSpec;
   mounts?: readonly MountSpec[];
   network?: NetworkProfile;
+  /**
+   * Container whose network namespace this slice joins. Required with
+   * `network: 'join'` and rejected for every other profile. The driver
+   * observes the shared namespace is loopback-only (interfaces exactly
+   * `lo`, zero routable routes) before admitting the slice, so a networkless
+   * provider broker can front the slice without giving it egress.
+   */
+  networkRef?: string;
   backend?: BackendSelector;
   seccomp?: SeccompPolicy;
   env?: Record<string, string>;
@@ -501,6 +510,8 @@ export type SliceSpec = {
   scratchHostPath: string;
   /** Network policy. */
   network: NetworkProfile;
+  /** Container to join for `network: 'join'`; absent otherwise. */
+  networkRef?: string;
   /** Seccomp policy. */
   seccomp: SeccompPolicy;
   /**
