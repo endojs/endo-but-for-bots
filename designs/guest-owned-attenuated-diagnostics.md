@@ -265,14 +265,47 @@ subset (see `traces()` below and Design Decision 5):
 
 - **`getFormulaGraph()`** seeds from the guest's own pet-store entries, exactly as
   the host implementation seeds from `list()` (it is already agent-scoped by
-  reachability). Graph entries the guest created expand normally; entries it did
-  not create (a host-granted endowment, a shared worker) appear as opaque
-  identifier references and do not expand. ("Entry" here, not "node," is
-  deliberate: `node` is reserved throughout this design for the identifier's
-  agent-key part.) An opaque reference discloses only that a reachable dependency
-  edge exists and the referenced identifier string (never the referenced formula's
-  body or creator), so it stays within the same no-leak bar `getFormula`
-  enforces above. This is the same "render references without unwinding" principle
+  reachability), **and applies a creator-aware cutoff at every expansion edge** —
+  the identical resolution gate `getFormula` uses above, not a bare `creator`
+  comparison and not the seed narrowing alone.
+
+  Seeding narrowly is necessary but *not sufficient*, and this is the subtle part:
+  the host traversal primitive has no creator-aware stopping condition of its own.
+  `getFormulaGraphSnapshot` (`packages/daemon/src/manager.js`) BFS-walks
+  `formulaGraph.formulaDeps` from its seed set with a visited-set as its *only*
+  stopping condition, and `extractLabeledDeps` (`manager.js`) recurses into each
+  formula's dependency identifiers (an `eval` formula's endowment `values`, and
+  thence into whatever `channel` / `host` / `guest` formulas those in turn depend
+  on) with no creator check anywhere along the path. So the seed set bounds only
+  *which* subgraph the walk begins from, never *where* it stops: a guest holding a
+  single host-selected endowment would, under seed narrowing alone, let the walk
+  descend transitively from that endowment into host-internal or cross-guest
+  structure — precisely the leak `getFormula` blocks for a direct lookup of the
+  same nodes. Narrow seeding is not the attenuation boundary; the per-edge gate is.
+
+  The guest facet therefore uses a guest-scoped traversal that, before expanding
+  any entry's dependencies, tests that entry against the same two-part gate
+  `getFormula` enforces (`creator === guestId` **or** the identifier is in the
+  guest's own provisioning chain; see "The guest's own provisioning chain" below).
+  An entry that passes the gate expands normally — its dependency edges are
+  followed. An entry that fails the gate (a host-granted endowment, a shared
+  worker, any node the guest neither created nor owns) is rendered as an opaque
+  identifier reference and the walk **does not descend into it**. Because the gate
+  is applied at each edge rather than only at the seeds, a guest-owned entry that
+  transitively depends on a host-internal formula still stops at that
+  non-owned boundary: the guest sees the edge exists but cannot walk through it.
+  The gate is enforced in the daemon core against the stored `creator` (and the
+  structural provisioning set), identically to `getFormula`, so it cannot be forged
+  and cannot diverge from the single-formula path — the two methods resolve the
+  *same* predicate on the *same* identifier, so a guest's own default `worker`
+  (host-created but provisioning-chain-owned) expands under `getFormulaGraph()`
+  exactly as `getFormula(workerId)` resolves it, with no inconsistency between the
+  two facet methods. ("Entry" here, not "node," is deliberate: `node` is reserved
+  throughout this design for the identifier's agent-key part.) An opaque reference
+  discloses only that a reachable dependency edge exists and the referenced
+  identifier string (never the referenced formula's body or creator), so it stays
+  within the same no-leak bar `getFormula` enforces above. This is the same "render
+  references without unwinding" principle
   [formula-inspector](formula-inspector.md) applies to cycles, reused here as the
   attenuation boundary.
 
@@ -445,10 +478,17 @@ structure. The host facet remains the unfiltered superset for the operator.
    `E(guest).writeText` is attributed to that guest and reachable through its own
    `getFormula`, the `directory.js` call site), and continued cross-peer
    rejection. Cover `getFormulaGraph()` too, not just `getFormula`: assert it
-   seeds only from the guest's own pet-store entries and that a reference it
-   renders stays opaque (the referenced formula's body and creator are not
-   expanded), since that non-expansion property is load-bearing for the no-leak
-   rationale.
+   seeds only from the guest's own pet-store entries; that a guest-owned entry
+   expands and its dependency edges are followed; that a guest-owned entry which
+   transitively depends on a formula the guest neither created nor owns (a
+   host-granted endowment reachable *through* an owned entry, not just a
+   directly-seeded non-owned one) **stops at that non-owned boundary** — the
+   host-created formula is rendered opaque and its body/creator/onward dependencies
+   are not expanded — since this per-edge cutoff (not the seed narrowing alone) is
+   what makes the non-expansion property load-bearing for the no-leak rationale;
+   and that the expand test resolves the identical predicate as `getFormula` on the
+   same identifier (a guest's own default `worker`, provisioning-chain-owned,
+   expands under `getFormulaGraph()` iff `getFormula(workerId)` resolves it).
 3. **Add guest-scoped `traces()`** filtered to guest-created workers, or defer per
    Open Questions (optional in cut 1).
 
