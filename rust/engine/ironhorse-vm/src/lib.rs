@@ -10,8 +10,10 @@
 //! [`Halt`] includes [`Halt::HeapExhausted`] and [`Halt::Panic`]; resource stops and
 //! engine faults are not catchable guest exceptions.
 //!
-//! [`Compartment`] currently creates independently owned interpreters from pristine
-//! boot templates, not shared frozen intrinsics; Realm extraction is planned.
+//! [`Compartment`] evaluations run over one shared [`Interp`]: a [`Machine`]
+//! owns the machine and each compartment references it through its own
+//! [`Realm`] namespace, so compartments share the primordial graph (unfrozen
+//! until the SES lockdown work F054) while keeping distinct globals.
 //! `rust/engine/ARCHITECTURE.md` maps the four seams and current acceptance limits.
 //! The opcode tables follow the pinned XS ISA; broad runtime support does not imply
 //! full test262 or daemon SES acceptance.
@@ -36,7 +38,12 @@ pub mod cost;
 pub mod default_keys;
 pub mod gc;
 pub mod halt_labels;
-pub mod interp;
+// The interpreter is an implementation module: its public surface is the
+// curated root re-exports below plus `snapshot_api` for the wire format.
+// `#[doc(hidden)]` keeps rustdoc from resolving the metering macro
+// re-exports' intra-doc links inside a private module (a rustdoc ICE).
+#[doc(hidden)]
+mod interp;
 pub mod intl_number;
 pub mod meter;
 pub use ironhorse_meter as cost_table;
@@ -44,31 +51,31 @@ pub mod module;
 pub mod opcode;
 mod property_index;
 pub mod sha256;
+pub mod snapshot_api;
 #[doc(hidden)]
 pub mod source_scan;
 pub mod symbols;
 pub mod value;
 
-pub use compartment::{
-    Compartment, CompartmentId, CompartmentOptions, CompartmentSkip, Intrinsics, Machine,
-};
+pub use compartment::{Compartment, CompartmentId, CompartmentOptions, CompartmentSkip, Machine};
 pub use gc::{GcStats, Heap};
 pub use interp::DecodeError;
 #[doc(hidden)]
 pub use interp::SIDE_TABLES;
 pub use interp::{
-    dtf_component_key_static, error_name_static, AccessorRow, ArraySnapshot, AsyncRow,
-    BoundFunctionRow, CollatorData, CollectionSnapshot, CombinatorRow, CompiledSource,
-    DateTimeFormatData, DisposableStackRow, DisposalRecordRow, FunctionRow, FunctionStateSnapshot,
-    GeneratorRow, Halt, IndexPropsSnapshot, Interp, IntlBoundFunctionRow, IntlTables, IteratorRow,
-    ListFormatData, LocaleData, Native, NumberFormatData, PanicKind, PluralRulesData,
-    PrivateAccessorRow, PrivateElementSnapshot, PrivateValueRow, PromiseClusterSnapshot,
-    PromiseFnRow, PromiseReactionRow, PromiseRow, ProxyRevokerRow, ProxyRow, ProxyStateSnapshot,
-    RelinkError, RestoreError, RestoreSession, RunOutcome, SavedFrameRow, SavedJumpRow,
-    SegmentIteratorData, SegmenterData, SegmentsData, SourceCompileError, SourceCompiler,
-    PROGRAM_INVOCATION_COMPUTRONS, TYPED_ARRAY_TYPES,
+    dtf_component_key_static, error_name_static, CompiledSource, Halt, Interp, Native, PanicKind,
+    Realm, RelinkError, RestoreError, RestoreSession, RunOutcome, SourceCompileError,
+    SourceCompiler, PROGRAM_INVOCATION_COMPUTRONS, TYPED_ARRAY_TYPES,
 };
 pub use interp::{HEAVY_FRAME_COST, LIGHT_FRAME_COST, NATIVE_DEPTH_LIMIT};
+// Structural tests outside the interpreter module reconcile the field
+// declaration, GC policy, persistence policy and root walk; the generated
+// registries stay reachable, but the interpreter's own module path does not.
+#[doc(hidden)]
+pub use interp::{
+    boundary, gc_tables, persistence, roots, INTERP_FIELDS, XS_ENVIRONMENT_BEHAVIOR_ID,
+    XS_INTERNAL_FLAG,
+};
 pub use meter::{Meter, MeterCheck, MeterState, COST_TABLE_VERSION};
 pub use module::{
     BodyOp, ExportEntry, ImportEntry, ImportName, ModuleError, ModuleGraph, ModuleId, ModuleRecord,
@@ -258,9 +265,10 @@ mod tests {
 
     #[test]
     fn compartments_do_not_share_globals() {
-        // Intrinsic *sharing* is not delivered by this surface (each
-        // evaluation builds a fresh `Interp`; see `compartment`'s module
-        // documentation), so this pins only the half that is true.
+        // Intrinsic sharing is delivered by the shared machine (see
+        // `compartment`'s module documentation and
+        // `compartment::tests::compartments_share_one_primordial_graph`);
+        // this pins the other half: name-keyed globals stay per-compartment.
         let m = Machine::new();
         let mut a = m.new_compartment();
         let b = m.new_compartment();

@@ -82,6 +82,12 @@ impl<T> Tracked<T> {
     {
         self.replace(T::default())
     }
+    /// Retained only until the retired per-field `#[boot_template(...)]`
+    /// metadata column is removed: those expressions are captured by
+    /// `interp_state!` and never emitted or type-checked, so nothing calls
+    /// this today and nothing would fail if it were deleted. Removing the
+    /// column is a separate mechanical cleanup.
+    #[allow(dead_code)]
     pub(crate) fn copy_to(&self, dirt: SnapshotDirt) -> Self
     where
         T: Clone,

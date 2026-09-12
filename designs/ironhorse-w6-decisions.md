@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-09-09 |
-| **Updated** | 2026-09-10 |
+| **Updated** | 2026-09-12 |
 | **Author** | kumavis (prompted) |
 | **Status** | Active |
 | **Source** | Architecture review workstream W6 (`rust/engine/architecture-review/2026-09-06/ARCHITECTURE-REVIEW.md`) |
@@ -37,21 +37,31 @@ can be shared across realms and `Compartment` can point at one, **or** delete
 **Decision: extract a `Realm`.** We want a Realm definition; the public surface
 stays.
 
-What that commits us to, stated so the next reader does not have to re-derive
-it. `Compartment::evaluate*` still obtains a fresh, independently-owned `Interp`
-per call (`Interp::new()` for the unlinked evaluator, `BootTemplate::instantiate`'s
-deep arena copy for the symbol-linked ones).
+What that committed us to, stated so the next reader does not have to re-derive
+it. At the time of the decision, `Compartment::evaluate*` still obtained a
+fresh, independently-owned `Interp` per call (`Interp::new()` for the unlinked
+evaluator, `BootTemplate::instantiate`'s deep arena copy for the symbol-linked
+ones).
 F176 made that path fast — 228.67 to 11.52 ms per 1,000 fresh realms — but it
-made the wrong thing fast: `Intrinsics` now holds a per-machine *pristine
-template* that is deep-copied per realm, not shared frozen intrinsics.
-The boot cost got cheap instead of going away.
-Extraction therefore has to replace that template, not build on it, and requirement
-5 (Hardened JavaScript) cannot be built incrementally on today's seams.
+made the wrong thing fast: `Intrinsics` then held a per-machine *pristine
+template* that was deep-copied per realm, not shared frozen intrinsics.
+The boot cost had gotten cheap instead of going away.
+Extraction therefore had to replace that template, not build on it, and
+requirement 5 (Hardened JavaScript) could not be built incrementally on those
+seams.
 
 Because the public surface stays, F159 becomes a naming obligation rather than a
-deletion: `ironhorse_vm::Machine` currently occupies the design's `Machine` name
-while being a stateless compartment factory, and that has to be reconciled when
-`Realm` lands rather than left as drift.
+deletion: `ironhorse_vm::Machine` occupied the design's `Machine` name
+while being a stateless compartment factory, and had to be reconciled when
+`Realm` landed rather than left as drift.
+
+**Landed (2026-09).** The extraction is done; see
+[ironhorse-engine.md](ironhorse-engine.md#hardened-javascript-and-compartment-requirement-5).
+`Realm` holds the per-compartment namespace, `Machine` owns the shared `Interp`,
+`Compartment::evaluate*` takes `&mut Interp`, and the `BootTemplate` cache is
+deleted. `ironhorse_vm::Machine` now owns the shared interpreter, which
+reconciles the F159 naming obligation; the SES lockdown half (F054) remains
+open.
 
 ## 2. Engine trait — deferred, and here is the trigger
 

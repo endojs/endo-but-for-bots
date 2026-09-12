@@ -968,11 +968,6 @@ pub struct CompartmentDualRun {
     pub a_result: String,
     /// Compartment B's completion value string.
     pub b_result: String,
-    /// The two compartments held the same machine intrinsics marker
-    /// (`Rc::ptr_eq`). Marker identity only: each evaluation links the
-    /// intrinsics into a fresh `Interp`, so no intrinsic *object* is
-    /// shared — see `ironhorse_vm::compartment`'s realm decision.
-    pub shared_intrinsics: bool,
     /// Compartment A's computrons (same bytecode → same as the oracle's
     /// run-only count for a bit-exact program).
     pub a_computrons: u64,
@@ -984,11 +979,13 @@ impl CompartmentDualRun {
     /// RESULT agreement (the compartment acceptance bar): the oracle and
     /// BOTH compartments completed with the same completion value, on
     /// one machine. A completion mismatch or a cross-compartment
-    /// disagreement is a divergence, never a silent pass.
+    /// disagreement is a divergence, never a silent pass. The two
+    /// compartments share the machine's primordial graph by construction
+    /// (pinned in `ironhorse-vm`'s compartment tests), so sharing is not
+    /// a per-run condition here.
     pub fn result_agrees(&self) -> bool {
         self.oracle_completed
             && self.both_completed
-            && self.shared_intrinsics
             && self.a_result == self.oracle_result
             && self.b_result == self.oracle_result
     }
@@ -1018,15 +1015,18 @@ pub fn compartment_dual_run(source: &str) -> Option<CompartmentDualRun> {
     // The compartments run ironhorse's OWN bytecode + symbols (the flipped
     // default), never the oracle's; the oracle stays the reference.
     let (bytecode, symbols, _compile) = compile_for(Compiler::default(), source, &oracle);
-    let machine = Machine::new();
-    let a = machine.new_compartment();
-    let b = machine.new_compartment();
-    let shared_intrinsics = std::rc::Rc::ptr_eq(a.intrinsics(), b.intrinsics());
+    let mut machine = Machine::new();
+    let mut a = machine.new_compartment();
+    let mut b = machine.new_compartment();
 
     // Compared against the oracle, so in the harness's shape: the shim's
     // post-run `String(result)` makes an uncoercible completion an abort.
-    let ra = a.evaluate_with_symbols(&bytecode, &symbols).host_coerced();
-    let rb = b.evaluate_with_symbols(&bytecode, &symbols).host_coerced();
+    let ra = a
+        .evaluate_with_symbols(machine.interp_mut(), &bytecode, &symbols)
+        .host_coerced();
+    let rb = b
+        .evaluate_with_symbols(machine.interp_mut(), &bytecode, &symbols)
+        .host_coerced();
 
     Some(CompartmentDualRun {
         source: source.to_string(),
@@ -1035,7 +1035,6 @@ pub fn compartment_dual_run(source: &str) -> Option<CompartmentDualRun> {
         both_completed: ra.completed && rb.completed,
         a_result: ra.result,
         b_result: rb.result,
-        shared_intrinsics,
         a_computrons: ra.computrons,
         oracle_computrons: oracle.computrons,
         a_halt: ra.halt,
@@ -1734,23 +1733,22 @@ mod tests {
             ]
         };
 
-        let machine = Machine::new();
+        let mut machine = Machine::new();
         let mut a = machine.new_compartment();
         let mut b = machine.new_compartment();
         a.define_global_id(7, Slot::integer(11));
         b.define_global_id(7, Slot::integer(22));
-        let ra = a.evaluate(&read_x);
-        let rb = b.evaluate(&read_x);
+        let ra = a.evaluate(machine.interp_mut(), &read_x);
+        let rb = b.evaluate(machine.interp_mut(), &read_x);
         assert!(ra.completed && rb.completed);
         // Each compartment observes its own global, matching the oracle's
         // `String()` of that value...
         assert_eq!(ra.result, one.result, "compartment A sees its own 11");
         assert_eq!(rb.result, two.result, "compartment B sees its own 22");
-        // ...and the two compartments diverge while holding one machine's
-        // intrinsics MARKER (marker identity, not a shared primordial graph —
-        // see `ironhorse_vm::compartment`'s realm decision).
+        // ...and the two compartments diverge while sharing one machine's
+        // primordial intrinsic graph (the realm split; see
+        // `ironhorse_vm::compartment`).
         assert_ne!(ra.result, rb.result);
-        assert!(std::rc::Rc::ptr_eq(a.intrinsics(), b.intrinsics()));
     }
 
     #[test]

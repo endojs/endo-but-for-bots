@@ -1,11 +1,12 @@
 //! All nested stored Slot positions participate in the same visitor.
 use ironhorse_snapshot::image::SymbolKeyImage;
 use ironhorse_snapshot::{MachineImage, Signature};
-use ironhorse_vm::{
-    AccessorRow, AsyncRow, BoundFunctionRow, ChunkArena, CombinatorRow, DisposableStackRow,
-    DisposalRecordRow, GeneratorRow, PrivateAccessorRow, PrivateValueRow, PromiseReactionRow,
-    PromiseRow, SavedFrameRow, SavedJumpRow, Slot, SlotArena,
+use ironhorse_vm::snapshot_api::{
+    AccessorRow, AsyncRow, BoundFunctionRow, CombinatorRow, DisposableStackRow, DisposalRecordRow,
+    GeneratorRow, PrivateAccessorRow, PrivateValueRow, PromiseReactionRow, PromiseRow,
+    SavedFrameRow, SavedJumpRow,
 };
+use ironhorse_vm::{ChunkArena, Slot, SlotArena};
 
 fn marker(next: &mut u16) -> Slot {
     *next += 1;

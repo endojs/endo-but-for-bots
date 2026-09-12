@@ -678,7 +678,10 @@ jobs:
         # cfg(feature = "ironhorse-engine"), so without the pin a
         # default-feature flip would turn this step into a 0-test
         # green pass with no error (wave-3 finding).
-        run: cargo test --locked -p endo --features ironhorse-engine --test ironhorse_store_worker
+        # `ironhorse_source_bridge` and `ironhorse_intrinsic_permit` ride the
+        # same bundle dependency and pin the F160 production source-compiler
+        # wiring and the F144 permit across resume/rewind.
+        run: cargo test --locked -p endo --features ironhorse-engine --test ironhorse_store_worker --test ironhorse_source_bridge --test ironhorse_intrinsic_permit
 
   # Skip entire jobs, including the runner matrix, on unrelated PRs/pushes.
   format-ironhorse:

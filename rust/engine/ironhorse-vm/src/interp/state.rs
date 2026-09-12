@@ -51,6 +51,64 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     snapshot_baseline_identity: std::rc::Rc<()>,
+    #[boot_new(super::next_machine_id())]
+    #[boot_template(super::next_machine_id())]
+    #[gc_root(none)]
+    #[quiescent(retained)]
+    #[persist_refs(none)]
+    #[runtime_keys(none)]
+    #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
+    #[gc_slots(none, none)]
+    #[gc_weak(none)]
+    #[snapshot_table(none)]
+    /// Monotonic identity of the machine whose arenas this interpreter owns.
+    /// A [`crate::Realm`] records it at mint and [`Interp::swap_realm`]
+    /// refuses a realm minted on another machine, whose slot indices would
+    /// otherwise be silently installed into this arena. Runtime host
+    /// bookkeeping, never snapshotted (realms do not persist).
+    machine_id: u64,
+    #[boot_new(0)]
+    #[boot_template(state.active_realm_id)]
+    #[gc_root(none)]
+    #[quiescent(retained)]
+    #[persist_refs(none)]
+    #[runtime_keys(none)]
+    #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
+    #[gc_slots(none, none)]
+    #[gc_weak(none)]
+    #[snapshot_table(none)]
+    /// Identity of the realm whose namespace is currently installed in this
+    /// machine (`0` when none). [`Interp::swap_realm`] exchanges it with the
+    /// realm on install and park; promise jobs queued while a realm is
+    /// installed are tagged with it, so only that realm can drain them.
+    /// Runtime host bookkeeping, never snapshotted: the `Compartment` API
+    /// parks before returning, so a machine at a persistable boundary has no
+    /// installed realm. (A raw `release_realm` of the installed realm leaves
+    /// its namespace active as the machine's ordinary global state, and it
+    /// persists as such — the `realm_roots` gate no longer applies once the
+    /// handle is gone.) A restored machine starts with none installed.
+    active_realm_id: u64,
+    #[boot_new(0)]
+    #[boot_template(state.jobs_owner)]
+    #[gc_root(none)]
+    #[quiescent(retained)]
+    #[persist_refs(none)]
+    #[runtime_keys(none)]
+    #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
+    #[gc_slots(none, none)]
+    #[gc_weak(none)]
+    #[snapshot_table(none)]
+    /// Identity of the realm that queued the machine's pending promise jobs
+    /// (`0` when the queue is empty or was queued at machine level).
+    /// Machine-scoped: the jobs name the queuing realm's `code_segments`
+    /// even while it is parked, so a drain under any other realm is refused.
+    /// A persistable machine has no pending jobs (`promise_jobs` is
+    /// `EmptyAtBoundary`), so this is `0` at every snapshot boundary and is
+    /// never stored.
+    jobs_owner: u64,
     #[boot_new(Vec::with_capacity(64))]
     #[boot_template(state.stack.clone())]
     #[gc_root(slots)]
@@ -132,6 +190,26 @@ pub struct Interp {
     /// value. The global property slot remains materialized for allocation
     /// accounting and for tracing the global object's property chain.
     global_props: std::collections::HashMap<u16, crate::value::SlotIndex>,
+    #[boot_new(Vec::new())]
+    #[boot_template(state.realm_roots.clone())]
+    #[gc_root(indices)]
+    #[quiescent(retained)]
+    #[persist_refs(none)]
+    #[runtime_keys(none)]
+    #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
+    #[gc_slots(none, none)]
+    #[gc_weak(none)]
+    #[snapshot_table(none)]
+    /// Global objects of the machine's realms (F059). A machine owns one
+    /// slot/chunk arena and its primordial intrinsic graph; each
+    /// [`crate::Realm`] is a namespace whose global object is rooted from
+    /// allocation. The active realm also roots through the `global_obj`
+    /// field, but the root set keeps every live realm (and the machine's
+    /// parked default global) alive across collections. Host bookkeeping,
+    /// not guest state: it is not snapshotted, and a machine holding any
+    /// realm refuses persistence.
+    realm_roots: Vec<crate::value::SlotIndex>,
     #[boot_new(false)]
     #[boot_template(state.direct_eval_hoist)]
     #[gc_root(none)]
@@ -403,6 +481,29 @@ pub struct Interp {
     /// un-armed VM answers a string `eval` with an honest
     /// [`Halt::NotImplemented`] rather than a source-text guess.
     source_compiler: Option<std::rc::Rc<dyn SourceCompiler>>,
+    #[boot_new(None)]
+    #[boot_template(state.intrinsic_permit.clone())]
+    #[gc_root(none)]
+    #[quiescent(retained)]
+    #[persist_refs(none)]
+    #[runtime_keys(none)]
+    #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
+    #[gc_slots(none, none)]
+    #[gc_weak(none)]
+    #[snapshot_table(none)]
+    /// Host attenuation policy for this realm's intrinsic **global**
+    /// bindings, set by [`Self::set_intrinsic_permit`] before
+    /// [`Self::link_intrinsics`]. `None` keeps the legacy full realm (every
+    /// intrinsic this program names is bound). `Some(list)` admits only the
+    /// named intrinsic globals, so an embedder hosting untrusted code can
+    /// express "this realm gets no `eval`, no `Function`, no `Intl`". The
+    /// primitive value globals (`undefined`/`NaN`/`Infinity`), the
+    /// `globalThis` self-binding, and prototype behavior are unaffected:
+    /// this is a global-binding permit, not an intrinsic-graph replacement.
+    /// Host configuration, not guest state, so it is never snapshotted; a
+    /// restored realm is expected to reapply its owner's permit.
+    intrinsic_permit: Option<Vec<String>>,
     #[boot_new(Tracked::new(
         Vec::new(),
         snapshot_dirt.clone(),

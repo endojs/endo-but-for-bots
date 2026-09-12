@@ -15,7 +15,7 @@ fn repeated_stateless_evaluations() {
             "2",
         ),
     ] {
-        let machine = Machine::new();
+        let mut machine = Machine::new();
         let mut times = Vec::new();
         let mut charge = None;
         for round in 0..6 {

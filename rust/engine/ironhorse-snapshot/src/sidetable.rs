@@ -551,12 +551,12 @@ mod tests {
             assert_eq!(raw.coverage, format!("{:?}", expected.3));
             assert_eq!(raw.primary_field, expected.4);
             if let Some(field) = raw.primary_field {
-                assert!(ironhorse_vm::interp::INTERP_FIELDS
+                assert!(ironhorse_vm::INTERP_FIELDS
                     .iter()
                     .any(|(name, _)| *name == field));
             }
         }
-        assert!(!ironhorse_vm::interp::INTERP_FIELDS
+        assert!(!ironhorse_vm::INTERP_FIELDS
             .iter()
             .any(|(name, _)| *name == "Modules"));
     }
@@ -589,7 +589,7 @@ mod tests {
     #[test]
     fn ledger_classification_reconciles_with_the_interp_struct() {
         let src = include_str!("../../ironhorse-vm/src/interp/boot.rs");
-        let fields: Vec<&str> = ironhorse_vm::interp::INTERP_FIELDS
+        let fields: Vec<&str> = ironhorse_vm::INTERP_FIELDS
             .iter()
             .map(|(name, _)| *name)
             .collect();
@@ -726,10 +726,16 @@ mod tests {
             "gc_failed",
         ];
         const HOST_WIRING: &[&str] = &[
-            // Embedding policy configured outside each activation.
+            // Host policy, identity, and embedding state wired outside each
+            // activation.
             "eval_program_hoist",
+            "realm_roots",
+            "machine_id",
+            "active_realm_id",
+            "jobs_owner",
             "meter_host",
             "source_compiler",
+            "intrinsic_permit",
             "cost",
             "step_limit",
             "n_dispatched",
@@ -1032,7 +1038,7 @@ mod tests {
             include_str!("../../ironhorse-vm/src/interp/persist.rs"),
             include_str!("../../ironhorse-vm/src/interp/boundary.rs"),
         );
-        ironhorse_vm::interp::boundary::QUIESCENCE_SOURCE
+        ironhorse_vm::boundary::QUIESCENCE_SOURCE
             .lines()
             .map(|line| line.split_whitespace().collect::<String>())
             .collect::<Vec<_>>()

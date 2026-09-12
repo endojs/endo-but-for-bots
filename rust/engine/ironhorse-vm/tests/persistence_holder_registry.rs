@@ -1,5 +1,5 @@
 //! Independent obligations for the roster-generated native-reference walk.
-use ironhorse_vm::interp::persistence::PERSIST_HOLDER_SOURCE;
+use ironhorse_vm::persistence::PERSIST_HOLDER_SOURCE;
 
 fn compact(source: &str) -> String {
     source

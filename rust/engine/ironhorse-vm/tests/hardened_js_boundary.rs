@@ -14,9 +14,10 @@
 //! - **F058** — arrays, collections and functions can be frozen and
 //!   hardened, and every own-state write path they expose is rejected
 //!   afterwards, so a realistic object graph can be hardened.
-//! - **F059** — two compartments on one machine cannot observe each
-//!   other's intrinsic mutations (the isolation half of requirement 5;
-//!   the sharing half is recorded as undelivered in `compartment.rs`).
+//! - **F059** — two compartments on one machine share the primordial graph
+//!   while keeping distinct globals; the realm split landed, so a mutation
+//!   in one realm is visible in the other. The SES `lockdown` freeze that
+//!   would make the shared graph immutable is F054 and remains open.
 //! - **F061** — a `with` object environment routes `has`/`get`/`set` and
 //!   the `@@unscopables` lookup through the complete internal-method seam,
 //!   so a Proxy `with` object observes its traps and an accessor binding
@@ -276,33 +277,26 @@ fn a_hardened_function_keeps_its_name_against_redefinition() {
     assert_eq!(r, "TypeError:f:true");
 }
 
-// ---- F059: compartments cannot observe each other ----------------------
+// ---- F059: compartments share the primordial graph ---------------------
 
 #[test]
-fn two_compartment_evaluations_do_not_share_a_heap() {
-    // This pins the ABSENCE of requirement 5, not its presence, and is named
-    // so: each `evaluate*` builds a fresh `Interp`, so a mutation of one
-    // evaluation's `Object.prototype` cannot reach another because the two are
-    // unrelated heaps. It therefore cannot fail while that remains true.
-    //
-    // MUST BE REVISITED AT THE REALM SPLIT. Under genuinely shared frozen
-    // intrinsics the mutation would be rejected rather than succeed, and the
-    // isolation asserted below would come from the freeze instead of from
-    // disjoint heaps. The first assertion is deliberately only "the mutating
-    // program ran", not "the mutation took effect", so that landing the realm
-    // split does not require weakening a test that looks like it guards
-    // isolation.
-    let machine = Machine::new();
-    let a = machine.new_compartment();
-    let b = machine.new_compartment();
+fn two_compartment_evaluations_share_the_primordial_graph() {
+    // The realm split landed: both evaluations run over the machine's one
+    // intrinsic graph, so a mutation the first realm makes is visible to the
+    // second. Freezing the shared graph (so the mutation is rejected instead
+    // of shared) is the SES lockdown work F054, not this seam.
+    let mut machine = Machine::new();
+    let mut a = machine.new_compartment();
+    let mut b = machine.new_compartment();
     let (mutate, mutate_symbols) =
         compile("Object.prototype.leak = 1; var r = typeof Object.prototype.leak; r");
     let (probe, probe_symbols) = compile("var r = typeof Object.prototype.leak; r");
-    let ra = a.evaluate_with_symbols(&mutate, &mutate_symbols);
+    let ra = a.evaluate_with_symbols(machine.interp_mut(), &mutate, &mutate_symbols);
     assert!(ra.completed, "{:?}", ra.halt);
-    let rb = b.evaluate_with_symbols(&probe, &probe_symbols);
+    assert_eq!(ra.result, "number");
+    let rb = b.evaluate_with_symbols(machine.interp_mut(), &probe, &probe_symbols);
     assert!(rb.completed, "{:?}", rb.halt);
-    assert_eq!(rb.result, "undefined", "a sibling's mutation must not leak");
+    assert_eq!(rb.result, "number", "the shared graph carries the mutation");
 }
 
 #[test]
@@ -311,7 +305,7 @@ fn a_name_keyed_endowment_is_not_a_binding() {
     // the evaluators seed only the id-keyed map, because the bytecode addresses
     // a global by interned symbol id. Pinned so the documented inertness cannot
     // drift back into an implied binding.
-    let machine = Machine::new();
+    let mut machine = Machine::new();
     let mut c = machine.new_compartment();
     c.define_global("endowed", ironhorse_vm::Slot::integer(7));
     assert!(
@@ -319,7 +313,7 @@ fn a_name_keyed_endowment_is_not_a_binding() {
         "recorded on the lookup surface"
     );
     let (bytecode, symbols) = compile("var r = typeof endowed; r");
-    let outcome = c.evaluate_with_symbols(&bytecode, &symbols);
+    let outcome = c.evaluate_with_symbols(machine.interp_mut(), &bytecode, &symbols);
     assert!(outcome.completed, "{:?}", outcome.halt);
     assert_eq!(
         outcome.result, "undefined",

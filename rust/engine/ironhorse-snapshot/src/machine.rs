@@ -208,6 +208,14 @@ impl MachineSnapshot for Interp {
         if !self.is_quiescent() {
             return Err(MachineSnapshotError::NotQuiescent);
         }
+        if self.rooted_realm_count() > 0 {
+            // A realm's namespace lives only in this process; the roots are
+            // not snapshotted and the `Realm` handle cannot cross a store.
+            // Refuse rather than silently drop a realm's namespace.
+            return Err(MachineSnapshotError::PendingStateUnsupported {
+                row: "live realm namespaces (multi-realm persistence is not supported)",
+            });
+        }
         if let Some(row) = self.stored_unpersistable_row() {
             return Err(MachineSnapshotError::PendingStateUnsupported { row });
         }
@@ -1729,12 +1737,14 @@ mod tests {
             .0;
         assert_eq!(
             restore_rows(|rows| {
-                rows.proxy_state.proxies.push(ironhorse_vm::ProxyRow {
-                    owner,
-                    target: owner,
-                    handler: owner,
-                    revoked: false,
-                });
+                rows.proxy_state
+                    .proxies
+                    .push(ironhorse_vm::snapshot_api::ProxyRow {
+                        owner,
+                        target: owner,
+                        handler: owner,
+                        revoked: false,
+                    });
             }),
             Err(SnapshotError::Corrupt("restore session did not validate"))
         );
@@ -1743,7 +1753,10 @@ mod tests {
     #[test]
     fn restore_boundary_reports_exact_side_table_failures() {
         use crate::image::{CollectionImage, ErrorImage, RegExpImage, TypedArrayImage};
-        use ironhorse_vm::{AccessorRow, GeneratorRow, PrivateAccessorRow, ProxyRevokerRow, Slot};
+        use ironhorse_vm::snapshot_api::{
+            AccessorRow, GeneratorRow, PrivateAccessorRow, ProxyRevokerRow,
+        };
+        use ironhorse_vm::Slot;
         assert_eq!(restore_rows(|_| {}), Ok(()));
         assert_eq!(
             restore_rows(|rows| rows.collections.push(CollectionImage {
@@ -1864,14 +1877,14 @@ mod tests {
             ))
         );
         assert_eq!(
-            restore_rows(|rows| rows
-                .disposable_stacks
-                .push(ironhorse_vm::DisposableStackRow {
+            restore_rows(|rows| rows.disposable_stacks.push(
+                ironhorse_vm::snapshot_api::DisposableStackRow {
                     owner: u32::MAX,
                     disposed: false,
                     asynchronous: false,
                     records: vec![],
-                })),
+                }
+            )),
             Err(SnapshotError::Corrupt(
                 "side-table restore: malformed DisposableStacks row"
             ))
@@ -1880,11 +1893,12 @@ mod tests {
 
     #[test]
     fn restore_boundary_reports_remaining_language_failures() {
-        use ironhorse_vm::value::SlotIndex;
-        use ironhorse_vm::{
-            BoundFunctionRow, IntlBoundFunctionRow, IteratorRow, Kind, Payload, PromiseReactionRow,
-            PromiseRow, SegmentsData, Slot,
+        use ironhorse_vm::snapshot_api::{
+            BoundFunctionRow, IntlBoundFunctionRow, IteratorRow, PromiseReactionRow, PromiseRow,
+            SegmentsData,
         };
+        use ironhorse_vm::value::SlotIndex;
+        use ironhorse_vm::{Kind, Payload, Slot};
         assert_eq!(restore_rows(|_| {}), Ok(()));
         assert_eq!(
             restore_rows(|rows| rows.function_state.native_names = Some(vec![(0, 4)])),

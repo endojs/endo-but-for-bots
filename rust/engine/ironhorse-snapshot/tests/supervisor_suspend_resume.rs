@@ -136,7 +136,7 @@ impl SupervisorHarness {
     /// Deliver a program to a resident worker's crank. Panics if the handle
     /// is suspended — the daemon resumes before delivering, which the test
     /// driver does explicitly.
-    fn deliver(&mut self, handle: Handle, program: &[u8]) -> ironhorse_vm::interp::RunOutcome {
+    fn deliver(&mut self, handle: Handle, program: &[u8]) -> ironhorse_vm::RunOutcome {
         let worker = self
             .live
             .get_mut(&handle)

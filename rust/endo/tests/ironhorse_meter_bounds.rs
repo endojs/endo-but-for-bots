@@ -25,6 +25,7 @@ fn options(dir: &std::path::Path, meter: MeterBounds) -> HeapStoreOptions {
         signature: "endor-ironhorse-worker-v1".to_string(),
         cadence: CadencePolicy::default(),
         meter,
+        intrinsic_permit: None,
     }
 }
 
@@ -68,7 +69,7 @@ fn the_default_machine_is_bounded() {
 
 #[test]
 fn a_spinning_crank_is_refused_through_the_stateless_machine() {
-    let m = Machine::with_bounds(MeterBounds::per_crank(200_000));
+    let mut m = Machine::with_bounds(MeterBounds::per_crank(200_000));
     match m.eval(SPIN) {
         Err(MachineError::MeterAbort { computrons, limit }) => {
             assert_eq!(limit, 200_000);
@@ -92,7 +93,7 @@ fn a_spinning_crank_is_refused_through_the_stateless_machine() {
 
 #[test]
 fn a_catastrophic_regexp_is_refused_mid_match() {
-    let m = Machine::with_bounds(MeterBounds::per_crank(100_000));
+    let mut m = Machine::with_bounds(MeterBounds::per_crank(100_000));
     match m.eval(CATASTROPHIC_REGEXP) {
         Err(MachineError::MeterAbort { computrons, .. }) => {
             // The whole search is tens of millions of computrons; the
@@ -109,7 +110,7 @@ fn a_catastrophic_regexp_is_refused_mid_match() {
 
 #[test]
 fn the_unbounded_opt_in_runs_unmetered() {
-    let m = Machine::with_bounds(MeterBounds::Unbounded);
+    let mut m = Machine::with_bounds(MeterBounds::Unbounded);
     // Cheap enough to finish, expensive enough that the default bound
     // with a tiny limit would refuse it.
     let src = "var i = 0; for (i = 0; i < 50000; i++) { i = i; } i";
@@ -362,7 +363,7 @@ fn a_refusal_depends_on_the_crank_and_the_policy_not_on_history() {
 fn an_oversized_check_interval_still_enforces_the_limit() {
     let src = "var i = 0; for (i = 0; i < 50000; i++) { i = i; } i";
     for check_interval in [u64::MAX, 1 << 48, 1 << 40] {
-        let m = Machine::with_bounds(MeterBounds::PerCrank {
+        let mut m = Machine::with_bounds(MeterBounds::PerCrank {
             check_interval,
             crank_limit: 1_000,
         });
@@ -433,7 +434,7 @@ fn successful_crank_reports_compilation_plus_execution_cost() {
 
 #[test]
 fn guest_allocations_are_refused_inside_the_builtin() {
-    let machine = Machine::with_bounds(MeterBounds::per_crank(1_000));
+    let mut machine = Machine::with_bounds(MeterBounds::per_crank(1_000));
     for source in [
         "try { 'x'.repeat(1000000); } catch (_) { 'caught'; }",
         "try { new ArrayBuffer(100000000); } catch (_) { 'caught'; }",

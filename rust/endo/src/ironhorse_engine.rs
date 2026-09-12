@@ -34,8 +34,8 @@ pub mod engine {
     pub use ironhorse_compile::compile_atoms_with;
     pub use ironhorse_vm::Machine as VmMachine;
     pub use ironhorse_vm::{
-        Compartment, GcStats, Halt, Heap, Intrinsics, Meter as VMeter, MeterCheck, MeterState,
-        ModuleGraph, ModuleSource, PanicKind, RunOutcome, Slot,
+        Compartment, GcStats, Halt, Heap, Meter as VMeter, MeterCheck, MeterState, ModuleGraph,
+        ModuleSource, PanicKind, RunOutcome, Slot,
     };
 
     /// Why an evaluation could not be carried out or did not complete.
@@ -444,17 +444,10 @@ pub mod engine {
                 message: error.to_string(),
                 meter_raw: meter.raw(),
             }),
-            Err(payload) => {
-                let message = payload
-                    .downcast_ref::<String>()
-                    .cloned()
-                    .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
-                    .unwrap_or_else(|| "non-string compiler panic".to_string());
-                Err(MachineError::Halt(Halt::Panic(PanicKind::EngineFault {
-                    message,
-                    location: None,
-                })))
-            }
+            Err(payload) => Err(MachineError::Halt(Halt::Panic(PanicKind::EngineFault {
+                message: panic_message(payload.as_ref()),
+                location: None,
+            }))),
         }
     }
 
@@ -472,6 +465,144 @@ pub mod engine {
             dispatched: 0,
             meter_raw,
             halt,
+        }
+    }
+
+    /// Best-effort one-line render of a caught compiler panic payload, the
+    /// compiler-gap label the source bridge reports as `Unsupported`. Like the
+    /// 262 harness's copy, it is one line AND length-bounded so a panic payload
+    /// embedding a minified source cannot land unbounded in a diagnostic.
+    fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+        let message = if let Some(s) = payload.downcast_ref::<&str>() {
+            (*s).to_string()
+        } else if let Some(s) = payload.downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "panic".to_string()
+        };
+        let line = message.lines().next().unwrap_or("panic").trim();
+        line.chars().take(200).collect()
+    }
+
+    /// The daemon's production [`ironhorse_vm::SourceCompiler`] (F160): the
+    /// runtime source-execution bridge (`eval` of a string, the `Function`
+    /// constructor) compiles through the same `ironhorse_compile` pipeline the
+    /// top-level program rides, charging the live crank meter. A coder panic
+    /// becomes a named `Unsupported` gap rather than aborting the process.
+    ///
+    /// This mirrors `ironhorse_262::IronhorseSourceCompiler`; `rust/endo`
+    /// cannot depend on the 262 harness (it links the XS oracle), and there is
+    /// no shared bridge crate, so the production seam owns its copy.
+    struct IronhorseSourceCompiler;
+
+    impl ironhorse_vm::SourceCompiler for IronhorseSourceCompiler {
+        fn compile_source(
+            &self,
+            source: &str,
+            strict: bool,
+            raw_budget: u64,
+            charge: &mut dyn FnMut(u64) -> bool,
+        ) -> Result<ironhorse_vm::CompiledSource, ironhorse_vm::SourceCompileError> {
+            let meter = ironhorse_compile::ParseMeter::with_charge_callback(raw_budget, charge);
+            let compiled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                ironhorse_compile::compile_atoms_with_meter(source, strict, meter.clone())
+            }));
+            if meter.exhausted() {
+                return Err(ironhorse_vm::SourceCompileError::MeterAbort);
+            }
+            match compiled {
+                Ok(Ok((bytecode, symbols))) => Ok(ironhorse_vm::CompiledSource {
+                    bytecode,
+                    symbols,
+                    parse_meter_raw: meter.raw(),
+                    parse_computrons: meter.computrons(),
+                }),
+                Ok(Err(error)) => Err(map_source_compile_error(error)),
+                Err(payload) => Err(ironhorse_vm::SourceCompileError::Unsupported(
+                    panic_message(payload.as_ref()),
+                )),
+            }
+        }
+
+        fn compile_source_units(
+            &self,
+            source: &[u16],
+            strict: bool,
+            raw_budget: u64,
+            charge: &mut dyn FnMut(u64) -> bool,
+        ) -> Result<ironhorse_vm::CompiledSource, ironhorse_vm::SourceCompileError> {
+            let meter = ironhorse_compile::ParseMeter::with_charge_callback(raw_budget, charge);
+            let compiled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                ironhorse_compile::compile_atoms_units_with_meter(
+                    source,
+                    ironhorse_compile::Goal::Eval,
+                    strict,
+                    meter.clone(),
+                )
+            }));
+            if meter.exhausted() {
+                return Err(ironhorse_vm::SourceCompileError::MeterAbort);
+            }
+            match compiled {
+                Ok(Ok((bytecode, symbols))) => Ok(ironhorse_vm::CompiledSource {
+                    bytecode,
+                    symbols,
+                    parse_meter_raw: meter.raw(),
+                    parse_computrons: meter.computrons(),
+                }),
+                Ok(Err(error)) => Err(map_source_compile_error(error)),
+                Err(payload) => Err(ironhorse_vm::SourceCompileError::Unsupported(
+                    panic_message(payload.as_ref()),
+                )),
+            }
+        }
+    }
+
+    /// Map a structured parse reject to the VM's source-compile error,
+    /// exhaustively: every [`ironhorse_compile::ParseErrorKind`] and every
+    /// [`ironhorse_compile::LexErrorKind`] is named, so a newly added variant
+    /// is a compile error here rather than silently crossing the host-stop /
+    /// guest-throw boundary as a catchable `SyntaxError`.
+    fn map_source_compile_error(
+        error: ironhorse_compile::ParseError,
+    ) -> ironhorse_vm::SourceCompileError {
+        use ironhorse_compile::{LexError, LexErrorKind, ParseErrorKind};
+        use ironhorse_vm::SourceCompileError;
+        let ironhorse_compile::ParseError {
+            line,
+            kind,
+            message,
+        } = error;
+        match kind {
+            ParseErrorKind::MeterLimit => SourceCompileError::MeterAbort,
+            ParseErrorKind::Unsupported => {
+                SourceCompileError::Unsupported(format!("line {line}: {message}"))
+            }
+            ParseErrorKind::Syntax => SourceCompileError::Syntax(message),
+            ParseErrorKind::Lex(LexError { kind, .. }) => match kind {
+                // Host stops, never guest-throwable.
+                LexErrorKind::MeterLimit | LexErrorKind::RegExpBudgetExceeded => {
+                    SourceCompileError::MeterAbort
+                }
+                LexErrorKind::RegExpResourceLimit => SourceCompileError::HeapExhausted,
+                // Guest-visible syntax errors. `Overflow` is documented
+                // unreachable in ironhorse (its scan buffers grow), and is
+                // classified as syntax here to stay aligned with the 262
+                // harness and `compile_metered`.
+                LexErrorKind::InvalidCharacter(_)
+                | LexErrorKind::InvalidEscape
+                | LexErrorKind::InvalidNumber
+                | LexErrorKind::StrictOctal
+                | LexErrorKind::UnterminatedString
+                | LexErrorKind::LineTerminatorInString
+                | LexErrorKind::UnterminatedComment
+                | LexErrorKind::UnterminatedRegExp
+                | LexErrorKind::LineTerminatorInRegExp
+                | LexErrorKind::InvalidRegExp
+                | LexErrorKind::InvalidAtSign
+                | LexErrorKind::Overflow
+                | LexErrorKind::UnexpectedCharacter(_) => SourceCompileError::Syntax(message),
+            },
         }
     }
 
@@ -507,20 +638,22 @@ pub mod engine {
     impl Machine {
         /// Create a fresh machine, metered under [`MeterBounds::default`].
         ///
-        /// Each `evaluate` gets an independent realm copied from a pristine
-        /// linked template; the machine's `Intrinsics` cache is not a shared
-        /// guest-visible primordial graph
-        /// (see `ironhorse_vm::compartment`'s realm decision).
+        /// Each `evaluate` gets a fresh compartment whose realm is created
+        /// over the machine's one shared primordial graph.
         pub fn new() -> Machine {
             Machine::with_bounds(MeterBounds::default())
         }
 
         /// Create a fresh machine under an explicit metering policy.
         pub fn with_bounds(bounds: MeterBounds) -> Machine {
-            Machine {
-                inner: VmMachine::new(),
-                bounds,
-            }
+            let mut inner = VmMachine::new();
+            // The production source bridge (F160): a guest `eval("…")` or
+            // `new Function(…)` compiles through `ironhorse_compile` instead
+            // of halting on the un-armed `eval:no-compiler` gap. The compiler
+            // is machine-wide, so every compartment this machine mints
+            // receives it.
+            inner.set_source_compiler(std::rc::Rc::new(IronhorseSourceCompiler));
+            Machine { inner, bounds }
         }
 
         /// The metering policy every evaluation runs under.
@@ -533,12 +666,19 @@ pub mod engine {
         /// Compiles to bytecode **and its symbols atom**, then evaluates
         /// through `evaluate_with_symbols` so the intrinsics are linked —
         /// without the symbols atom the program's intrinsic references
-        /// would not resolve. Each evaluation is a fresh interpreter, so
-        /// its meter starts at zero and the crank limit is the ceiling
-        /// itself. A refused program comes back with `completed: false`
+        /// would not resolve. Each evaluation installs a fresh realm over the
+        /// machine's shared graph, so its globals are empty and the crank
+        /// limit is the ceiling itself; the realm is released after the run,
+        /// so a long-lived machine does not accumulate realm roots. A halted
+        /// run's queued promise jobs are discarded with the realm.
+        /// A refused program comes back with `completed: false`
         /// and `halt: Halt::MeterAbort`; [`Machine::eval`] maps that to
         /// [`MachineError::MeterAbort`].
-        pub fn evaluate(&self, source: &str, strict: bool) -> Result<EvalOutcome, MachineError> {
+        pub fn evaluate(
+            &mut self,
+            source: &str,
+            strict: bool,
+        ) -> Result<EvalOutcome, MachineError> {
             let mut meter = VMeter::new();
             let mut host = match (self.bounds.check_interval(), self.bounds.crank_limit()) {
                 (Some(interval), Some(limit)) => {
@@ -559,21 +699,27 @@ pub mod engine {
                 }
                 Err(error) => return Err(error),
             };
-            let comp = self.inner.new_compartment();
-            Ok(eval_outcome(
-                comp.evaluate_with_symbols_continuing_meter_shared(
-                    bytecode.into(),
-                    &symbols,
-                    meter,
-                    host,
-                ),
-                0,
-            ))
+            let mut comp = self.inner.new_compartment();
+            let outcome = comp.evaluate_with_symbols_continuing_meter_shared(
+                self.inner.interp_mut(),
+                bytecode.into(),
+                &symbols,
+                meter,
+                host,
+            );
+            // A fresh-realm embedder has no later use for a halted run's
+            // queued promise jobs, and the next evaluation would refuse
+            // while they are queued: discard them with the realm.
+            if self.inner.interp().has_pending_jobs() {
+                self.inner.interp_mut().discard_pending_jobs();
+            }
+            comp.release(self.inner.interp_mut());
+            Ok(eval_outcome(outcome, 0))
         }
 
         /// Evaluate and return only the completion value, failing when
         /// the program did not complete.
-        pub fn eval(&self, source: &str) -> Result<String, MachineError> {
+        pub fn eval(&mut self, source: &str) -> Result<String, MachineError> {
             let outcome = self.evaluate(source, false)?;
             if outcome.completed {
                 Ok(outcome.result)
@@ -587,7 +733,7 @@ pub mod engine {
         }
 
         /// Strict-mode counterpart of [`Machine::eval`].
-        pub fn eval_strict(&self, source: &str) -> Result<String, MachineError> {
+        pub fn eval_strict(&mut self, source: &str) -> Result<String, MachineError> {
             let outcome = self.evaluate(source, true)?;
             if outcome.completed {
                 Ok(outcome.result)
@@ -600,16 +746,16 @@ pub mod engine {
             }
         }
 
-        /// This machine's intrinsics marker (not a shared primordial
-        /// graph — see `ironhorse_vm::compartment`).
-        pub fn intrinsics(&self) -> &Intrinsics {
-            self.inner.intrinsics().as_ref()
-        }
-
         /// The underlying VM machine, for callers that need the full
         /// engine surface.
         pub fn vm_machine(&self) -> &VmMachine {
             &self.inner
+        }
+
+        /// The underlying VM machine, mutable, for callers that evaluate a
+        /// compartment of their own over the shared graph.
+        pub fn vm_machine_mut(&mut self) -> &mut VmMachine {
+            &mut self.inner
         }
     }
 
@@ -626,7 +772,7 @@ pub mod engine {
             meter_raw: 0,
         })?;
         eprintln!("endor[run -e ironhorse]: {}", path.display());
-        let machine = Machine::new();
+        let mut machine = Machine::new();
         let outcome = machine.evaluate(&source, false)?;
         eprintln!(
             "endor[run -e ironhorse]: {} computrons ({} dispatched, meter_raw {})",
@@ -674,6 +820,16 @@ pub mod engine {
         /// `cadence` not recorded in the store: replicas must agree on
         /// it out of band to refuse the same cranks.
         pub meter: MeterBounds,
+        /// The intrinsic-global permit (F144) for this machine's heap.
+        /// Required, not defaulted: host attenuation does not ride the
+        /// snapshot, so the owner must DECLARE the policy at every `open`
+        /// rather than rely on a machine default. `None` is the explicit
+        /// full-realm declaration; `Some(names)` binds only those intrinsic
+        /// globals. A resumed store that was written under a narrower policy
+        /// is therefore not silently widened by an omission — widening is an
+        /// explicit owner act at this boundary. Consensus-relevant like
+        /// `meter`: replicas must agree on it out of band.
+        pub intrinsic_permit: Option<Vec<String>>,
     }
 
     /// The checkpoint/collect cadence a [`PersistentMachine`] runs
@@ -825,6 +981,16 @@ pub mod engine {
         /// lifetime, some `10^14`; a ceiling left stranded above a
         /// restarted index is not a reachable state.)
         crank_ceiling: std::rc::Rc<std::cell::Cell<u64>>,
+        /// The intrinsic-global permit this EMBEDDER declared at open
+        /// (F144), if any. Host configuration does not ride the snapshot, so
+        /// it is taken from [`HeapStoreOptions::intrinsic_permit`] on every
+        /// `open` and retained here to be re-applied to the resumed heap
+        /// after every rewind — otherwise the engine's own relink could bind
+        /// an intrinsic the owner had denied once the restored floor falls
+        /// below a name interned before suspend. `None` is the explicit
+        /// full-realm declaration; [`Self::set_intrinsic_permit`] changes the
+        /// live policy.
+        intrinsic_permit: Option<Vec<String>>,
     }
 
     fn store_err(e: ironhorse_snapshot::store::StoreError) -> MachineError {
@@ -872,6 +1038,13 @@ pub mod engine {
                     // bounded and epoch 1 already carries the armed
                     // meter state.
                     let mut boot = ironhorse_vm::Interp::new();
+                    // The source bridge is host configuration: install it on
+                    // the boot machine before the store session adopts it, so
+                    // every later resume re-installs it on the resumed heap.
+                    boot.set_source_compiler(std::rc::Rc::new(IronhorseSourceCompiler));
+                    // The permit is declared at open, atomically with the
+                    // session: no crank can run under an undeclared policy.
+                    Self::apply_intrinsic_permit(&options.intrinsic_permit, &mut boot);
                     if let Some(interval) = options.meter.check_interval() {
                         boot.arm_meter(interval, meter_host(&crank_ceiling));
                     }
@@ -897,6 +1070,7 @@ pub mod engine {
                         last_collect_error: None,
                         meter: options.meter.clone(),
                         crank_ceiling,
+                        intrinsic_permit: options.intrinsic_permit.clone(),
                     })
                 }
                 Ok(_) => {
@@ -904,6 +1078,14 @@ pub mod engine {
                     let mut session =
                         resume_from_store_lazy(store.clone(), &signature).map_err(store_err)?;
                     Self::attach_meter(&options.meter, &crank_ceiling, session.machine_mut());
+                    // The compiler is host configuration and does not ride the
+                    // snapshot, so every resume re-installs it (F160), and the
+                    // permit declared in the options is applied before any
+                    // crank can relink an intrinsic (F144).
+                    session
+                        .machine_mut()
+                        .set_source_compiler(std::rc::Rc::new(IronhorseSourceCompiler));
+                    Self::apply_intrinsic_permit(&options.intrinsic_permit, session.machine_mut());
                     // A resumed machine carries its program symbol
                     // names in the small state; an empty table means
                     // no crank ever linked (e.g. the first crank
@@ -927,6 +1109,7 @@ pub mod engine {
                         last_collect_error: None,
                         meter: options.meter.clone(),
                         crank_ceiling,
+                        intrinsic_permit: options.intrinsic_permit.clone(),
                     })
                 }
                 Err(e) => Err(store_err(e)),
@@ -972,6 +1155,43 @@ pub mod engine {
             &self.meter
         }
 
+        /// Change the intrinsic-global permit (F144) on a live machine and
+        /// retain it across rewind. The initial policy is declared at `open`
+        /// through [`HeapStoreOptions::intrinsic_permit`]; this is for a
+        /// runtime change. Host configuration does not ride the snapshot, so
+        /// the `open`-time declaration is what keeps a resumed heap from
+        /// being widened by an omission. `None` restores the full realm.
+        ///
+        /// Narrowing applies to names not yet bound: a binding already made is
+        /// not revoked, exactly as [`ironhorse_vm::Interp::set_intrinsic_permit`]
+        /// documents.
+        pub fn set_intrinsic_permit(&mut self, permit: Option<&[&str]>) {
+            self.intrinsic_permit =
+                permit.map(|names| names.iter().map(|name| (*name).to_string()).collect());
+            if let Some(session) = self.session.as_mut() {
+                Self::apply_intrinsic_permit(&self.intrinsic_permit, session.machine_mut());
+            }
+        }
+
+        /// The intrinsic-global permit currently in force, if any (F144).
+        pub fn intrinsic_permit(&self) -> Option<&[String]> {
+            self.intrinsic_permit.as_deref()
+        }
+
+        /// Apply a retained permit to a (re)opened interpreter.
+        fn apply_intrinsic_permit(
+            permit: &Option<Vec<String>>,
+            machine: &mut ironhorse_vm::Interp,
+        ) {
+            match permit {
+                Some(names) => {
+                    let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+                    machine.set_intrinsic_permit(Some(&refs));
+                }
+                None => machine.set_intrinsic_permit(None),
+            }
+        }
+
         /// Discard the in-memory machine and resume from the store's
         /// last committed epoch — the crashed-crank/failed-checkpoint
         /// discipline. The store's commit is atomic, so a failed
@@ -995,8 +1215,13 @@ pub mod engine {
                 resume_from_store_lazy(self.store.clone(), &self.signature).map_err(store_err)?;
             // The rewound machine is a resume like any other: its host
             // callback must be reattached or its next crank fails
-            // closed.
+            // closed, and the source compiler and intrinsic permit do not
+            // ride the snapshot either (F160, F144).
             Self::attach_meter(&self.meter, &self.crank_ceiling, fresh.machine_mut());
+            fresh
+                .machine_mut()
+                .set_source_compiler(std::rc::Rc::new(IronhorseSourceCompiler));
+            Self::apply_intrinsic_permit(&self.intrinsic_permit, fresh.machine_mut());
             self.linked = !fresh.machine().program_symbol_names().is_empty();
             self.session = Some(fresh);
             Ok(())
@@ -1277,12 +1502,10 @@ pub mod engine {
                 Ok(stats.slots_reclaimed)
             }))
             .unwrap_or_else(|payload| {
-                let message = payload
-                    .downcast_ref::<String>()
-                    .cloned()
-                    .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
-                    .unwrap_or_else(|| "non-string collection panic".to_string());
-                Err(MachineError::Store(format!("collection failed: {message}")))
+                Err(MachineError::Store(format!(
+                    "collection failed: {}",
+                    panic_message(payload.as_ref())
+                )))
             });
             if let Err(error) = &result {
                 if let Err(rewind_err) = self.rewind_to_last_checkpoint() {
@@ -1450,6 +1673,7 @@ pub mod engine {
                 signature: "collector-panic".to_string(),
                 cadence: CadencePolicy::default(),
                 meter: MeterBounds::default(),
+                intrinsic_permit: None,
             };
             let mut machine = PersistentMachine::open(&options).unwrap();
             machine
@@ -1487,6 +1711,7 @@ pub mod engine {
                     collect_every: 1,
                 },
                 meter: MeterBounds::default(),
+                intrinsic_permit: None,
             };
             let mut machine = PersistentMachine::open(&options).unwrap();
             let outcome = machine.eval(
@@ -1509,10 +1734,14 @@ pub mod engine {
             let report = ironhorse_compile::compile_atoms_with_budget(source, false, u64::MAX);
             let raw = report.parse_meter_raw;
             let (code, symbols) = report.result.unwrap();
-            let baseline = ironhorse_vm::Machine::new()
-                .new_compartment()
-                .evaluate_with_symbols(&code, &symbols);
-            let machine = Machine::with_bounds(MeterBounds::Unbounded);
+            let mut baseline_machine = ironhorse_vm::Machine::new();
+            let mut baseline_compartment = baseline_machine.new_compartment();
+            let baseline = baseline_compartment.evaluate_with_symbols(
+                baseline_machine.interp_mut(),
+                &code,
+                &symbols,
+            );
+            let mut machine = Machine::with_bounds(MeterBounds::Unbounded);
             for _ in 0..3 {
                 let actual = machine.evaluate(source, false).unwrap();
                 assert!(actual.completed);
@@ -1523,7 +1752,7 @@ pub mod engine {
 
         #[test]
         fn top_level_admission_refuses_before_execution_and_retains_bill() {
-            let machine = Machine::with_bounds(MeterBounds::per_crank(32));
+            let mut machine = Machine::with_bounds(MeterBounds::per_crank(32));
             let source = format!("/*{}*/ 1", "x".repeat(1_000_000));
             let outcome = machine.evaluate(&source, false).unwrap();
             assert!(!outcome.completed);
@@ -1536,7 +1765,7 @@ pub mod engine {
         fn top_level_parse_error_retains_compile_bill() {
             let source = "var = ;";
             let report = ironhorse_compile::compile_atoms_with_budget(source, false, u64::MAX);
-            let machine = Machine::with_bounds(MeterBounds::Unbounded);
+            let mut machine = Machine::with_bounds(MeterBounds::Unbounded);
             match machine.evaluate(source, false) {
                 Err(MachineError::Compile { meter_raw, .. }) => {
                     assert_eq!(meter_raw, report.parse_meter_raw)
@@ -1552,7 +1781,7 @@ pub mod engine {
 
         #[test]
         fn evaluates_arithmetic_through_the_real_engine() {
-            let m = Machine::new();
+            let mut m = Machine::new();
             let outcome = m.evaluate("1 + 2", false).expect("compiles");
             assert!(outcome.completed, "halt: {:?}", outcome.halt);
             assert_eq!(outcome.result, "3");
@@ -1563,7 +1792,7 @@ pub mod engine {
 
         #[test]
         fn reports_meter_movement_between_programs() {
-            let m = Machine::new();
+            let mut m = Machine::new();
             let small = m.evaluate("1 + 1", false).expect("compiles");
             let bigger = m
                 .evaluate(
@@ -1583,7 +1812,7 @@ pub mod engine {
 
         #[test]
         fn compile_errors_surface_as_compile_errors() {
-            let m = Machine::new();
+            let mut m = Machine::new();
             match m.evaluate("var = ;", false) {
                 Err(MachineError::Compile { .. }) => {}
                 other => panic!("expected a compile error, got {other:?}"),
@@ -1771,6 +2000,91 @@ pub mod engine {
         fn non_panic_throw_is_not_panic() {
             assert!(!Halt::synthetic_throw("catchable".to_string()).is_panic());
             assert!(!Halt::Return.is_panic());
+        }
+
+        /// Every parse/lex variant maps to the host-stop or guest-throw arm
+        /// deliberately; a new variant must be a compile error here rather
+        /// than silently crossing the boundary as a catchable `SyntaxError`.
+        #[test]
+        fn source_compile_error_mapping_is_exhaustive() {
+            use ironhorse_compile::{LexError, LexErrorKind, ParseError, ParseErrorKind};
+            use ironhorse_vm::SourceCompileError;
+
+            let lex = |kind: LexErrorKind| ParseError {
+                line: 7,
+                kind: ParseErrorKind::Lex(LexError { line: 7, kind }),
+                message: "bad lex".to_string(),
+            };
+            let syntax = |error: ParseError| match map_source_compile_error(error) {
+                SourceCompileError::Syntax(message) => message,
+                SourceCompileError::MeterAbort => panic!("expected Syntax, got MeterAbort"),
+                SourceCompileError::Unsupported(_) => {
+                    panic!("expected Syntax, got Unsupported")
+                }
+                SourceCompileError::HeapExhausted => panic!("expected Syntax, got HeapExhausted"),
+            };
+
+            // Host stops, never guest-throwable.
+            for error in [
+                ParseError {
+                    line: 1,
+                    kind: ParseErrorKind::MeterLimit,
+                    message: "budget".to_string(),
+                },
+                lex(LexErrorKind::MeterLimit),
+                lex(LexErrorKind::RegExpBudgetExceeded),
+            ] {
+                assert!(matches!(
+                    map_source_compile_error(error),
+                    SourceCompileError::MeterAbort
+                ));
+            }
+            for error in [lex(LexErrorKind::RegExpResourceLimit)] {
+                assert!(matches!(
+                    map_source_compile_error(error),
+                    SourceCompileError::HeapExhausted
+                ));
+            }
+
+            // Guest-visible rejects stay realm-local SyntaxErrors.
+            for kind in [
+                LexErrorKind::InvalidCharacter(0x7f),
+                LexErrorKind::InvalidEscape,
+                LexErrorKind::InvalidNumber,
+                LexErrorKind::StrictOctal,
+                LexErrorKind::UnterminatedString,
+                LexErrorKind::LineTerminatorInString,
+                LexErrorKind::UnterminatedComment,
+                LexErrorKind::UnterminatedRegExp,
+                LexErrorKind::LineTerminatorInRegExp,
+                LexErrorKind::InvalidRegExp,
+                LexErrorKind::InvalidAtSign,
+                LexErrorKind::UnexpectedCharacter(0x40),
+                // Documented unreachable in ironhorse; classified as syntax
+                // to stay aligned with the 262 harness and `compile_metered`.
+                LexErrorKind::Overflow,
+            ] {
+                assert_eq!(syntax(lex(kind)), "bad lex");
+            }
+            assert_eq!(
+                syntax(ParseError {
+                    line: 7,
+                    kind: ParseErrorKind::Syntax,
+                    message: "unexpected token".to_string(),
+                }),
+                "unexpected token"
+            );
+
+            // An unported-but-valid construct is a named coverage gap.
+            let unsupported = map_source_compile_error(ParseError {
+                line: 9,
+                kind: ParseErrorKind::Unsupported,
+                message: "class fields".to_string(),
+            });
+            assert!(matches!(
+                unsupported,
+                SourceCompileError::Unsupported(message) if message == "line 9: class fields"
+            ));
         }
     }
 }

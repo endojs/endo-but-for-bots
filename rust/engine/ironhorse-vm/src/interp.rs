@@ -25,6 +25,8 @@
 
 #[macro_use]
 mod state;
+mod realm;
+pub use realm::Realm;
 
 mod admission;
 mod apply;
@@ -1678,6 +1680,21 @@ pub enum RelinkError {
 
 interp_state!(define_interp_state);
 
+/// The next machine identity, minted once per [`Interp`]. Realm ownership is
+/// checked by comparing this value; see `Interp::machine_id`.
+fn next_machine_id() -> u64 {
+    static NEXT_MACHINE_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT_MACHINE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The next realm identity, minted once per [`Realm`]. Promise jobs queued
+/// while a realm is installed are tagged with this value, so only the realm
+/// that queued them may drain them; `0` is reserved for the machine level.
+fn next_realm_id() -> u64 {
+    static NEXT_REALM_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT_REALM_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
 /// The interned `typeof`-result strings, held as chunk offsets into the
 /// machine chunk heap. Allocated once at [`Interp::new`], before any run,
 /// so `typeof` names a preexisting string (XS's `XS_STRING_X_KIND`
@@ -1972,7 +1989,6 @@ enum ResumeStatus {
 }
 
 mod boot;
-pub(crate) use boot::BootTemplate;
 
 impl Default for Interp {
     fn default() -> Self {
@@ -2141,6 +2157,64 @@ impl Interp {
         self.source_compiler = Some(compiler);
     }
 
+    /// Whether a runtime source compiler is installed ([`Self::set_source_compiler`]).
+    pub fn has_source_compiler(&self) -> bool {
+        self.source_compiler.is_some()
+    }
+
+    /// Whether any intrinsic bindings have been installed for this realm.
+    ///
+    /// A compartment's realm keeps its own `installed_names_len`, so this
+    /// answers for whichever realm is currently installed: false on a fresh
+    /// realm and true once a program has linked intrinsic globals into it.
+    pub fn intrinsics_linked(&self) -> bool {
+        self.installed_names_len > 0
+    }
+
+    /// The realm-table id the installed symbol table assigned to `name`, if
+    /// any. A host that recorded a global by a program-local id reads this
+    /// after relinking to translate that id onto the realm's persisted table.
+    pub fn symbol_id(&self, name: &str) -> Option<u16> {
+        self.symbol_ids.get(name).copied()
+    }
+
+    /// Attenuate which intrinsic **globals** this realm binds (F144).
+    /// Must be called before [`Self::link_intrinsics`], because that is when
+    /// the bindings are created. `None` (the default) keeps the legacy full
+    /// realm: every intrinsic the program names is bound. `Some(names)`
+    /// admits only the listed intrinsic globals — an empty slice is the
+    /// "no intrinsic globals" mode an embedder hosting untrusted code wants
+    /// when it must deny the `eval`, `Function`, and `Intl` **global
+    /// bindings**.
+    ///
+    /// **This is a global-binding permit, not a confinement boundary.**
+    /// Prototype behavior, the primitive value globals
+    /// (`undefined`/`NaN`/`Infinity`), and the `globalThis` self-binding are
+    /// unaffected, so a denied constructor remains reachable through a
+    /// prototype's `.constructor` (`function(){}.constructor('return 42')()`
+    /// still compiles and runs once a source compiler is installed).
+    /// Confinement needs a frozen shared intrinsic graph, the SES lockdown
+    /// work F054.
+    ///
+    /// A compartment applies its realm's permit on each evaluation, before
+    /// relinking, so the policy is fixed by [`crate::CompartmentOptions`] at
+    /// compartment creation. Calling this method directly on a linked
+    /// interpreter only affects later links: a binding already made is not
+    /// removed.
+    ///
+    /// The permit is host configuration, not guest state, so it is not
+    /// snapshotted; a restored realm's owner is expected to reapply it before
+    /// the next link.
+    pub fn set_intrinsic_permit(&mut self, permit: Option<&[&str]>) {
+        self.intrinsic_permit =
+            permit.map(|names| names.iter().map(|name| (*name).to_string()).collect());
+    }
+
+    /// The intrinsic-global permit currently installed, if any (F144).
+    pub fn intrinsic_permit(&self) -> Option<&[String]> {
+        self.intrinsic_permit.as_deref()
+    }
+
     /// Seed a global binding by id, so a program that reads an
     /// undeclared name (`EVAL_REFERENCE`/`GET_VARIABLE` falling through
     /// to the global object) observes it. Used by
@@ -2149,6 +2223,18 @@ impl Interp {
     pub fn define_global_id(&mut self, id: u16, value: Slot) {
         // Seeding a compartment global happens before the run, so it is
         // not metered (it is not a guest allocation the meter counts).
+        //
+        // Idempotent since the realm split: a realm persists across
+        // evaluations, so a re-seed updates the existing global property in
+        // place. Creating a second property for the same id would grow the
+        // property chain without bound and leave `delete` and the property
+        // index disagreeing about which entry is the binding.
+        if let Some(&property) = self.global_props.get(&id) {
+            let slot = self.slots.get_mut(property);
+            slot.kind = value.kind;
+            slot.value = value.value;
+            return;
+        }
         self.create_global_property(id, (value.kind, value.value));
     }
 
@@ -2164,6 +2250,21 @@ impl Interp {
     pub fn arm_meter(&mut self, interval: u64, host: Box<dyn FnMut(u64) -> bool>) {
         self.meter.begin(interval);
         self.meter_host = Some(host);
+    }
+
+    /// Replace this machine's meter and host callback wholesale — the
+    /// compartment evaluators' entry to per-evaluation metering. A machine
+    /// shared by many realms must not let one evaluation's meter state leak
+    /// into the next, so every evaluator installs its meter here before
+    /// linking and running. `None` host is the un-armed (never-consulted)
+    /// state, matching a fresh machine.
+    pub(crate) fn install_meter(
+        &mut self,
+        meter: crate::Meter,
+        host: Option<Box<dyn FnMut(u64) -> bool>>,
+    ) {
+        self.meter = meter;
+        self.meter_host = host;
     }
 
     /// Re-arm a RESUMED machine's meter without destroying the restored
@@ -2305,10 +2406,45 @@ impl Interp {
         !self.promise_jobs.is_empty()
     }
 
+    /// The realm id that owns this machine's pending promise jobs (`0` when
+    /// the queue is empty or was queued at machine level). Jobs name the
+    /// queuing realm's `code_segments`, so only a drain with that realm
+    /// installed may run them.
+    pub(crate) fn jobs_owner(&self) -> u64 {
+        self.jobs_owner
+    }
+
+    /// The fail-closed outcome for an operation that may not run this
+    /// machine's queued promise jobs: a new evaluation is starting while the
+    /// queue is nonempty, or a drain is asked for by a realm other than the
+    /// one that queued them. Nothing ran; the queue is untouched.
+    pub(crate) fn pending_jobs_refused(&self) -> RunOutcome {
+        RunOutcome {
+            unhandled_rejection: self.unhandled_rejection(),
+            meter_raw_this_run: 0,
+            computrons_this_run: 0,
+            dispatched_this_run: 0,
+            completed: false,
+            result: String::new(),
+            coercion_error: None,
+            host_render_halt: None,
+            computrons: self.meter_index() >> 16,
+            dispatched: self.n_dispatched,
+            meter_raw: self.meter_index(),
+            halt: Halt::EngineInvariant("compartment:pending-jobs"),
+        }
+    }
+
     /// Drain this machine's promise jobs without evaluating another script.
     /// Retains the meter and configured host; failures use the same `Halt`
     /// channel and invocation receipts as `run`. Jobs can enqueue more jobs,
     /// which are drained FIFO in this invocation.
+    ///
+    /// Refused fail-closed while the queue belongs to a realm other than the
+    /// installed one (`Interp::active_realm_id`): those jobs name another
+    /// realm's `code_segments`, so only that realm's compartment may drain
+    /// them ([`crate::Compartment::drain_promise_jobs`]). A machine-level
+    /// queue (owner `0`, no realm installed) drains here as before.
     ///
     /// Like starting a new `run`, this abandons a previous halted activation
     /// and keeps its heap effects. A transactional consumer must rewind a
@@ -2320,6 +2456,35 @@ impl Interp {
             .clone()
             .unwrap_or_else(|| std::rc::Rc::from([]));
         self.run_operation(code, false)
+    }
+
+    /// Drop this machine's queued promise jobs without running them. A job
+    /// names the realm (its `code_segments`) that queued it, so a host that
+    /// discards a realm must discard its jobs with it, or every later
+    /// realm's evaluation refuses (`compartment:pending-jobs`). The halted
+    /// run's heap effects remain; the dropped reaction state is reclaimed by
+    /// the next collection's liveness pass. Also drops the machine's
+    /// rejection report, which was that run's.
+    pub fn discard_pending_jobs(&mut self) {
+        self.promise_jobs.clear();
+        self.jobs_owner = 0;
+        self.clear_rejection_report();
+    }
+
+    /// Drop the machine's rejection report — the published
+    /// `unhandled_rejection` and the pending-rejection list — without
+    /// touching queued jobs. The report is machine-scoped, so a compartment
+    /// evaluator clears it when installing a realm: an outcome must report
+    /// only its own run, never a prior realm's rejection. Mark the
+    /// `Promises` section dirty when a report was present, or an incremental
+    /// checkpoint would reuse the last leaf and resurrect the cleared
+    /// rejection.
+    pub(crate) fn clear_rejection_report(&mut self) {
+        if self.unhandled_rejection.is_some() || !self.pending_rejections.is_empty() {
+            self.snapshot_dirt.mark(SnapshotSection::Promises.mask());
+        }
+        self.unhandled_rejection = None;
+        self.pending_rejections.clear();
     }
 
     fn run_operation(&mut self, shared: std::rc::Rc<[u8]>, execute_script: bool) -> RunOutcome {
@@ -2337,6 +2502,13 @@ impl Interp {
         shared: std::rc::Rc<[u8]>,
         execute_script: bool,
     ) -> RunOutcome {
+        // A run must not start while the queue belongs to another realm: the
+        // jobs name that realm's `code_segments`, and this run's post-script
+        // pump would execute them against the wrong buffer. The owning
+        // compartment drains its own queue (`Compartment::drain_promise_jobs`).
+        if self.has_pending_jobs() && self.jobs_owner != self.active_realm_id {
+            return self.pending_jobs_refused();
+        }
         if self.gc_failed {
             return RunOutcome {
                 unhandled_rejection: None,
@@ -2545,6 +2717,12 @@ impl Interp {
         // progress. Every surviving function has its own `func_segments`
         // entry, so no segment cursor crosses a crank boundary.
         self.active_segment = None;
+        // The queue's owner tag is meaningful only while jobs are queued; a
+        // drained (or never-queued) queue is machine-level again. A halted
+        // run that left jobs queued keeps them tagged for its realm.
+        if !self.has_pending_jobs() {
+            self.jobs_owner = 0;
+        }
         RunOutcome {
             unhandled_rejection: self.unhandled_rejection(),
             meter_raw_this_run: 0,

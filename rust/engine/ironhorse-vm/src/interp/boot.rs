@@ -1,4 +1,5 @@
-//! Machine initialization, intrinsic construction, and pristine realm templates.
+//! Machine initialization, intrinsic construction, and the per-field boot
+//! metadata columns.
 use super::*;
 
 // Constructor policies belong to the same declaration as GC and persistence
@@ -32,123 +33,12 @@ macro_rules! define_boot_initializers {
                 Interp { $($field: $new,)* }
             }};
         }
-        macro_rules! boot_template {
-            ($d state:expr, $d snapshot_dirt:expr, $d refs:expr, $d arrays:expr, $d indexed:expr, $d collections:expr) => {{
-                let $state = $d state;
-                let $snapshot_dirt = $d snapshot_dirt;
-                let $refs = $d refs;
-                let $arrays = $d arrays;
-                let $indexed = $d indexed;
-                let $collections = $d collections;
-                Interp { $($field: $template,)* }
-            }};
-        }
     };
 }
 interp_state!(define_boot_initializers, $);
 
 // The child owns its test gate so rustc and recursive source locks agree.
 mod tests;
-
-pub(crate) struct BootTemplate {
-    inner: Interp,
-    link_charge: u64,
-}
-
-impl BootTemplate {
-    /// Carry compilation's live meter into a fresh realm. The caller charges
-    /// linkage after releasing the template cache borrow, since a host callback
-    /// may itself evaluate another compartment using that cache.
-    pub(crate) fn instantiate_continuing_meter(
-        &self,
-        meter: Meter,
-        host: Option<Box<dyn FnMut(u64) -> bool>>,
-    ) -> (Interp, u64) {
-        let mut interp = self.instantiate();
-        interp.meter = meter;
-        interp.meter_host = host;
-        (interp, self.link_charge)
-    }
-
-    pub(crate) fn new(names: &[SymbolName]) -> Self {
-        let mut inner = Interp::new();
-        let before = inner.meter_index();
-        inner.link_intrinsics(names);
-        let link_charge = inner.meter_index() - before;
-        // Only pristine construction reaches this type. These activation
-        // types intentionally do not implement Clone; no guest frame or host
-        // callback may enter the immutable template.
-        assert!(inner.call_stack.is_empty());
-        assert!(inner.gen_run_stack.is_empty());
-        assert!(inner.async_run_stack.is_empty());
-        assert!(inner.async_gen_run_stack.is_empty());
-        assert!(inner.generators.is_empty());
-        assert!(inner.async_instances.is_empty());
-        assert!(inner.async_generators.is_empty());
-        assert!(inner.meter_host.is_none());
-        assert!(inner.source_compiler.is_none());
-        Self { inner, link_charge }
-    }
-
-    pub(crate) fn instantiate_metered(
-        &self,
-        interval: u64,
-        host: Box<dyn FnMut(u64) -> bool>,
-    ) -> Interp {
-        let mut interp = self.instantiate();
-        interp.arm_meter(interval, host);
-        // Match new -> arm -> link, including any linkage charges. Linking
-        // does not dispatch guest code or consult the host callback.
-        interp.meter.tick_raw(self.link_charge);
-        interp
-    }
-
-    pub(crate) fn instantiate(&self) -> Interp {
-        let state = &self.inner;
-        let snapshot_dirt = SnapshotDirt::default();
-        // Copy BULK through its counted mutators: the new arenas own these
-        // references independently, and no bare Clone can bypass accounting.
-        let mut side_refs = SideRefCounts::new();
-        let arrays = copy_arrays(&state.arrays, &mut side_refs);
-        let index_props = copy_arrays(&state.index_props, &mut side_refs);
-        let collections = state
-            .collections
-            .iter()
-            .map(|(&owner, data)| {
-                let mut copy = CollectionData::new(data.kind, data.table_length);
-                for &(key, value) in data.live_entries() {
-                    copy.push_entry(key, value, &mut side_refs);
-                }
-                (owner, copy)
-            })
-            .collect();
-        boot_template!(
-            state,
-            snapshot_dirt,
-            side_refs,
-            arrays,
-            index_props,
-            collections
-        )
-    }
-}
-
-fn copy_arrays(
-    tables: &std::collections::HashMap<crate::value::SlotIndex, ArrayData>,
-    refs: &mut SideRefCounts,
-) -> std::collections::HashMap<crate::value::SlotIndex, ArrayData> {
-    tables
-        .iter()
-        .map(|(&owner, data)| {
-            let mut copy = ArrayData::default();
-            copy.length = data.length;
-            for (&index, &value) in data.items() {
-                copy.insert_item(index, value, refs);
-            }
-            (owner, copy)
-        })
-        .collect()
-}
 
 impl Interp {
     pub fn new() -> Interp {
