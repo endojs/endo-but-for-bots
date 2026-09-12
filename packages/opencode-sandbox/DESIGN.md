@@ -297,19 +297,31 @@ reuse its config generator — that emits Claude's `mcpServers`/`type: 'stdio'`
 
 `secrets/<name>` (a `SecretBlob`) → the `f13c7cbd9` managed-credentials cap
 (which delegates only the blob read via `host.copy(['secrets', name],
-[temporary])`, validates the name, writes via `createBase64`/`replaceBase64`) →
-materialize **once per provision** (formulas reincarnate) →
-`OPENROUTER_API_KEY` in the slice `env` at `sandboxFactory.make()`.
+[temporary])`, validates the name, and seeds the secret with `createBase64`
+**only when the catalog has no entry`) → materialize **once per provision**
+(formulas reincarnate) → `OPENROUTER_API_KEY` in the slice `env` at
+`sandboxFactory.make()`.
 
 - The secret name is configuration (`ENDO_OPENCODE_CREDS_NAME`), not a
-  hardcode. Tokyo's floot default is `${dir}-openrouter-auth`; this deployment
-  sets `FLOOT_AUTH_SECRET_NAME=openrouter-auth` (or the backend config names
-  whatever exists). Setup may seed from an initial env value only when the
-  secret does not exist; an existing SecretBlob is never overwritten by a
-  stale environment variable.
+  hardcode. Setup resolves
+  `ENDO_OPENCODE_CREDS_NAME || ENDO_FLOOT_AUTH_SECRET_NAME ||
+  FLOOT_AUTH_SECRET_NAME || 'openrouter-auth'` so it cannot disagree with
+  Floot's provider setup, which defaults to `${dir}-openrouter-auth` unless
+  `FLOOT_AUTH_SECRET_NAME` is set; the deployment sets both to
+  `openrouter-auth`. The seed value comes from `ENDO_OPENROUTER_API_KEY`
+  (never a bare `OPENROUTER_API_KEY`). An existing SecretBlob is never
+  overwritten by a stale environment variable, and a name already bound to a
+  non-managed object is refused rather than destroyed.
 - Setup inputs must be `ENDO_`-prefixed to survive the daemon's `allowEnvPass`
   filter (`packages/daemon/index.js:88-102`); a bare `OPENROUTER_API_KEY` in
   `secrets.env` would never reach a setup.
+- The cap is bound at `<name>`; any daemon caplet that can resolve that name
+  can mint a grant. Grants are single-shot and capped (128 outstanding), and
+  revocation prevents later materializations but not bytes already delivered.
+  Phase 1 accepts this host-side exposure; broker-only egress removes it.
+- Setup must additionally assert that the module specifier it minted resolves
+  through `<stateDir>/current/` (not `releases/<id>/`), or a pruned release
+  breaks revival.
 - **Containment, stated honestly.** Phase 1 uses the Claude trust model, and it
   is weaker than "the key stays out of everything":
   - the token is rendered into `podman create -e`, so it appears in
