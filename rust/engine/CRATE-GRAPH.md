@@ -14,12 +14,14 @@ flowchart TD
     ironhorse_fuzz["ironhorse-fuzz"]
     ironhorse_meter["ironhorse-meter"]
     ironhorse_regexp["ironhorse-regexp"]
+    ironhorse_runtime["ironhorse-runtime"]
     ironhorse_snapshot["ironhorse-snapshot"]
     ironhorse_text["ironhorse-text"]
     ironhorse_unicode["ironhorse-unicode"]
     ironhorse_vm["ironhorse-vm"]
     xs_oracle["xs-oracle"]
     ironhorse_262 -->|"normal"| ironhorse_compile
+    ironhorse_262 -->|"normal"| ironhorse_runtime
     ironhorse_262 -->|"normal"| ironhorse_vm
     ironhorse_262 -->|"normal"| xs_oracle
     ironhorse_compile -->|"normal"| ironhorse_meter
@@ -35,6 +37,8 @@ flowchart TD
     ironhorse_regexp -->|"normal"| ironhorse_meter
     ironhorse_regexp -->|"normal"| ironhorse_unicode
     ironhorse_regexp -->|"normal optional"| xs_oracle
+    ironhorse_runtime -->|"normal"| ironhorse_compile
+    ironhorse_runtime -->|"normal"| ironhorse_vm
     ironhorse_snapshot -->|"normal optional"| ironhorse_compile
     ironhorse_snapshot -.->|"dev"| ironhorse_compile
     ironhorse_snapshot -.->|"dev"| ironhorse_snapshot

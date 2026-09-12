@@ -559,7 +559,8 @@ pub mod engine {
                 }
                 Err(error) => return Err(error),
             };
-            let comp = self.inner.new_compartment();
+            let mut comp = self.inner.new_compartment();
+            comp.set_source_compiler(std::rc::Rc::new(ironhorse_runtime::IronhorseSourceCompiler));
             Ok(eval_outcome(
                 comp.evaluate_with_symbols_continuing_meter_shared(
                     bytecode.into(),
@@ -872,6 +873,9 @@ pub mod engine {
                     // bounded and epoch 1 already carries the armed
                     // meter state.
                     let mut boot = ironhorse_vm::Interp::new();
+                    boot.set_source_compiler(std::rc::Rc::new(
+                        ironhorse_runtime::IronhorseSourceCompiler,
+                    ));
                     if let Some(interval) = options.meter.check_interval() {
                         boot.arm_meter(interval, meter_host(&crank_ceiling));
                     }
@@ -958,6 +962,8 @@ pub mod engine {
             crank_ceiling: &std::rc::Rc<std::cell::Cell<u64>>,
             machine: &mut ironhorse_vm::Interp,
         ) {
+            machine
+                .set_source_compiler(std::rc::Rc::new(ironhorse_runtime::IronhorseSourceCompiler));
             match meter.check_interval() {
                 Some(interval) => machine.attach_meter_host(interval, meter_host(crank_ceiling)),
                 None if machine.meter_is_armed() => {

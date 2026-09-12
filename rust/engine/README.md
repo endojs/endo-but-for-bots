@@ -49,13 +49,15 @@ with this release.
 
 ## Crates
 
-The workspace has **nine members**.
+The workspace has **eleven members**.
 See [Architecture](ARCHITECTURE.md) for dependency direction and the four seams.
 
 | Crate | Purpose |
 |---|---|
 | `ironhorse-meter` | Frozen XS-derived weights, default keys, canonical SHA-256 identity and release pins. |
 | `ironhorse-text` | CESU-8 symbol-name encoding, preserving lone surrogates across compiler/VM boundaries. |
+| `ironhorse-unicode` | Pinned Unicode character classifications shared by compiler and runtime. |
+| `ironhorse-runtime` | Oracle-free compiler adapter installed by production embedders and the conformance harness. |
 | `ironhorse-vm` | Index arenas, interpreter, built-ins, modules, GC and metering integration; guest string values use UTF-16. |
 | `ironhorse-compile` | Lexer, parser, scoper and coder; budgeted compilation and bytecode/SYMB emission. |
 | `ironhorse-regexp` | XSRE-derived pattern compiler and backtracking matcher with admission and metering. |

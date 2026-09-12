@@ -11,6 +11,7 @@ members = [
     "ironhorse-text",
     "ironhorse-unicode",
     "ironhorse-vm",
+    "ironhorse-runtime",
     "xs-oracle",
     "ironhorse-262",
     "ironhorse-fuzz",

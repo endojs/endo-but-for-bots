@@ -1,5 +1,5 @@
-use ironhorse_262::IronhorseSourceCompiler;
 use ironhorse_compile::{compile_atoms_with, compile_atoms_with_budget, ParseErrorKind};
+use ironhorse_runtime::IronhorseSourceCompiler;
 use ironhorse_vm::{CompiledSource, Halt, Interp, RunOutcome, SourceCompileError, SourceCompiler};
 use std::{cell::Cell, rc::Rc};
 
@@ -207,4 +207,42 @@ impl SourceCompiler for ExhaustAddressability {
 fn exhausting_raw_addressability_halts_without_unwind() {
     let (_, out) = run("eval('1')", Rc::new(ExhaustAddressability), false);
     assert_eq!(out.halt, Halt::MeterAbort);
+}
+
+#[test]
+fn utf16_production_entry_preserves_surrogates_receipts_and_refusal() {
+    // Deliberately pass an actual lone surrogate, not six ASCII escape units.
+    let mut source: Vec<u16> = "'".encode_utf16().collect();
+    source.push(0xd800);
+    source.extend("'.charCodeAt(0)".encode_utf16());
+    let mut raw = 0;
+    let compiled = IronhorseSourceCompiler
+        .compile_source_units(&source, false, u64::MAX, &mut |delta| {
+            raw += delta;
+            true
+        })
+        .unwrap_or_else(|_| panic!("UTF-16 source should compile"));
+    assert!(raw > 0);
+    assert_eq!(compiled.parse_meter_raw, raw);
+    assert_eq!(compiled.parse_computrons, raw >> 16);
+    let mut vm = Interp::new();
+    vm.link_intrinsics(&ironhorse_vm::parse_symbols(&compiled.symbols));
+    let result = vm.run(&compiled.bytecode);
+    assert!(result.completed, "{:?}", result.halt);
+    assert_eq!(result.result, "55296");
+    for budget in [0, raw - 1] {
+        assert!(matches!(
+            IronhorseSourceCompiler.compile_source_units(&source, false, budget, &mut |_| true),
+            Err(SourceCompileError::MeterAbort)
+        ));
+    }
+    let mut consulted = false;
+    assert!(matches!(
+        IronhorseSourceCompiler.compile_source_units(&source, false, u64::MAX, &mut |_| {
+            consulted = true;
+            false
+        }),
+        Err(SourceCompileError::MeterAbort)
+    ));
+    assert!(consulted);
 }

@@ -238,6 +238,7 @@ pub struct Compartment {
     /// The same bindings keyed by the interned symbol id the bytecode
     /// references them through (`GET_VARIABLE`/`SET_VARIABLE` operands).
     globals_by_id: HashMap<u16, Slot>,
+    source_compiler: Option<Rc<dyn crate::SourceCompiler>>,
     /// The compartment's module map (`new Compartment({ modules })`).
     modules: ModuleGraph,
     /// Whether a `resolveHook` was supplied at construction.
@@ -264,6 +265,7 @@ impl Compartment {
             counter,
             globals: options.endowments,
             globals_by_id: options.endowments_by_id,
+            source_compiler: None,
             modules: options.modules,
             has_resolve_hook: options.has_resolve_hook,
             has_import_hook: options.has_import_hook,
@@ -304,6 +306,11 @@ impl Compartment {
     /// resolves ids once the symbol table lands.)
     pub fn define_global_id(&mut self, id: u16, value: Slot) {
         self.globals_by_id.insert(id, value);
+    }
+
+    /// Install this compartment's runtime compiler for eval and Function.
+    pub fn set_source_compiler(&mut self, compiler: Rc<dyn crate::SourceCompiler>) {
+        self.source_compiler = Some(compiler);
     }
 
     /// Read a global binding (this compartment's, not a sibling's).
@@ -471,6 +478,9 @@ impl Compartment {
             Err(skip) => return Self::refused(skip),
         };
         let mut interp = Interp::new();
+        if let Some(compiler) = &self.source_compiler {
+            interp.set_source_compiler(Rc::clone(compiler));
+        }
         for (id, value) in seeded {
             interp.define_global_id(id, value);
         }
@@ -607,6 +617,9 @@ impl Compartment {
     /// The shared body of the symbol-linked evaluators: seed this
     /// compartment's globals into the independent linked copy, then run.
     fn evaluate_linked_shared(&self, mut interp: Interp, bytecode: Rc<[u8]>) -> RunOutcome {
+        if let Some(compiler) = &self.source_compiler {
+            interp.set_source_compiler(Rc::clone(compiler));
+        }
         let seeded = match self.seeded_globals() {
             Ok(seeded) => seeded,
             Err(skip) => return Self::refused(skip),
