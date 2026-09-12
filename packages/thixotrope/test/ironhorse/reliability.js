@@ -17,8 +17,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { makeIronhorseEngine } from '../../src/ironhorse-engine.js';
-import { inspectIronhorseStore } from '../../src/inspect-ironhorse.js';
+import { makeIronhorseEngine } from '../../src/ironhorse/ironhorse-engine.js';
+import { inspectIronhorseStore } from '../../src/ironhorse/inspect-ironhorse.js';
 import { makeFixture } from './_fixture.js';
 
 import { makeNodePowers } from '../../src/platform/node-powers.js';

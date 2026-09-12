@@ -6,10 +6,10 @@ import { E, Far } from '@endo/far';
 import { makeOcapn } from '@endo/ocapn';
 import { syrupCodec } from '@endo/ocapn/syrup';
 
-import { makePipeNetwork } from './pipe-network.js';
+import { makePipeNetwork } from '../net/pipe-network.js';
 
 /** @import { ERef } from '@endo/eventual-send' */
-/** @import { NodePowers } from './platform/node-powers.js' */
+/** @import { NodePowers } from '../platform/node-powers.js' */
 
 const IDENTIFIER_PATTERN = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 

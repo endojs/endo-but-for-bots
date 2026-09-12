@@ -59,7 +59,7 @@ Guest-to-guest references, answers, and promise settlements route through the hu
 | Ironhorse VM, snapshot, and SQLite store crates | JavaScript execution, supported machine-state encoding, integrity validation, and heap storage. |
 | `rust/thixotrope-xs-worker` | The alternative XS worker engine. |
 
-The comms hub is internal to Thixotrope at `packages/thixotrope/src/hub.js`.
+The comms hub is internal to Thixotrope at `packages/thixotrope/src/net/hub.js`.
 Its persistence transactions and session lifecycle belong to the host design.
 OCapN no longer exports a hub implementation.
 

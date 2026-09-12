@@ -3,9 +3,9 @@ import { E, Far } from '@endo/far';
 import test from '@endo/ses-ava/test.js';
 import { setImmediate } from 'node:timers/promises';
 
-import { makeMailbox as makeProtocolMailbox } from '../src/mailbox.js';
-import { makeMailContact } from '../src/mail-contact.js';
-import { makeMailAddressBook } from '../src/mail-address-book.js';
+import { makeMailbox as makeProtocolMailbox } from '../src/mail/mailbox.js';
+import { makeMailContact } from '../src/mail/mail-contact.js';
+import { makeMailAddressBook } from '../src/mail/mail-address-book.js';
 
 const makeMailbox = () =>
   makeMailAddressBook(makeProtocolMailbox(), new Map(), makeMailContact);

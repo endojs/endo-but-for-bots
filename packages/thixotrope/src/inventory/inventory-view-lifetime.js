@@ -1,5 +1,5 @@
 // @ts-check
-/** @import { NodePowers } from './platform/node-powers.js' */
+/** @import { NodePowers } from '../platform/node-powers.js' */
 import { E, Far } from '@endo/far';
 import harden from '@endo/harden';
 

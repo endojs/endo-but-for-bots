@@ -9,8 +9,8 @@ import { join } from 'node:path';
 import { setTimeout } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
-import { connectLocalControl } from '../../src/local-control.js';
-import { makeFsStore } from '../../src/store-fs.js';
+import { connectLocalControl } from '../../src/control/local-control.js';
+import { makeFsStore } from '../../src/store/store-fs.js';
 
 import { makeNodePowers } from '../../src/platform/node-powers.js';
 

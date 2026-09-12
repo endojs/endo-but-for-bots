@@ -7,8 +7,8 @@ import { join } from 'node:path';
 import { setTimeout } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
-import { bundleApplication } from '../../src/bundle-application.js';
-import { connectLocalControl } from '../../src/local-control.js';
+import { bundleApplication } from '../../src/control/bundle-application.js';
+import { connectLocalControl } from '../../src/control/local-control.js';
 
 import { makeNodePowers } from '../../src/platform/node-powers.js';
 
@@ -17,7 +17,7 @@ const nodePowers = makeNodePowers();
 /** @import {ExecutionContext} from 'ava' */
 
 const supervisorModuleSpecifier = JSON.stringify(
-  new URL('../../src/supervisor.js', import.meta.url).href,
+  new URL('../../src/control/supervisor.js', import.meta.url).href,
 );
 
 const powersModuleSpecifier = JSON.stringify(

@@ -4,9 +4,9 @@ import harden from '@endo/harden';
 import { syrupCodec } from '@endo/ocapn/syrup';
 import test from '@endo/ses-ava/test.js';
 
-import { makeThixotropeDaemon } from '../src/daemon.js';
-import { makePeerJournalReplayEngine } from '../src/peer-replay-engine.js';
-import { makeMemoryStore } from '../src/store-memory.js';
+import { makeThixotropeDaemon } from '../src/core/daemon.js';
+import { makePeerJournalReplayEngine } from '../src/core/peer-replay-engine.js';
+import { makeMemoryStore } from '../src/store/store-memory.js';
 import { parkWorkers } from './_park-workers.js';
 
 import { makeNodePowers } from '../src/platform/node-powers.js';

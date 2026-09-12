@@ -1,12 +1,12 @@
 // @ts-check
-/** @import { NodePowers } from './platform/node-powers.js' */
+/** @import { NodePowers } from '../platform/node-powers.js' */
 import { E } from '@endo/eventual-send';
 import harden from '@endo/harden';
 import { frozenBytes } from '@endo/immutable-arraybuffer';
 import { makeOcapn } from '@endo/ocapn';
 import { syrupCodec } from '@endo/ocapn/syrup';
 
-import { makePipeNetwork } from './pipe-network.js';
+import { makePipeNetwork } from '../net/pipe-network.js';
 
 /** @import { Socket } from 'node:net' */
 

@@ -1,5 +1,5 @@
 // @ts-check
-/** @import { NodePowers } from './platform/node-powers.js' */
+/** @import { NodePowers } from '../platform/node-powers.js' */
 import { Fail } from '@endo/errors';
 import harden from '@endo/harden';
 import { locationToLocationId } from '@endo/ocapn/client/util';

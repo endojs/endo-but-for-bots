@@ -4,8 +4,8 @@ import { syrupCodec } from '@endo/ocapn/syrup';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { makeIronhorseEngine } from '../src/ironhorse-engine.js';
-import { makePeerJournalReplayEngine } from '../src/peer-replay-engine.js';
+import { makeIronhorseEngine } from '../src/ironhorse/ironhorse-engine.js';
+import { makePeerJournalReplayEngine } from '../src/core/peer-replay-engine.js';
 
 import { makeNodePowers } from '../src/platform/node-powers.js';
 
