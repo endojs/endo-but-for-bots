@@ -40,8 +40,9 @@ diagnostics function scoped to the formulas it created.
 
 ### Two mechanisms, and the one this design chooses
 
-The prompt names two candidate mechanisms: partition formulas by creator, or mark
-individual formulas by creator. They are genuinely different, and the choice
+The prompt (the review comment that requested this design, quoted in full under
+`## Prompt` below) names two candidate mechanisms: partition formulas by creator,
+or mark individual formulas by creator. They are genuinely different, and the choice
 turns on what the formula identifier's *node* already means.
 
 Every formula identifier is `{number}:{node}` (per
@@ -58,7 +59,7 @@ call when `isLocalKey(node)` is false (a cross-peer locator).
   the node and the store already indexes by it. It is rejected because it
   overloads `node` with a second, conflicting meaning. Today a guest's `eval` and
   `marshal` formulas are written on `localNodeNumber` (see `formulateEval` and
-  `formulateMarshalValue` in `packages/daemon/src/manager.js`, both of which
+  `formulateMarshalValue` in `packages/daemon/src/manager.js`, both of which call
   `formatId({ number, node: localNodeNumber })`). Moving them onto the guest's
   node would change the identifier's node-part, which feeds `isLocalKey`, the
   cross-peer rejection, locator formation, and per-node retention. Attribution and
@@ -93,25 +94,58 @@ The creating agent is known at the agent-facet boundary but not at the low-level
 `formulate`. The guest facet method that produces a formula knows "I am
 `guestId`"; the host facet knows "I am `hostId`." Thread that identity down the
 `formulate*` helpers into the single `formulate` / `formulateLazy` chokepoint in
-`manager.js`, which persists it. Concretely:
+`manager.js`, which persists it.
 
-- `formulateEval` already receives the initiating agent as its first argument
-  (named `nameHubId` today, used only to resolve endowment pet-name paths). Pass
-  it through to `formulate` as the creator rather than discarding it after
-  endowment resolution.
+**The creator is a new, explicit parameter — it is not the existing `nameHubId`.**
+An earlier draft of this design proposed reusing `formulateEval`'s first argument
+(`nameHubId`) as the creator, on the reasoning that it "already receives the
+initiating agent." That is wrong, and the counterexample is a happy path, not an
+edge case: `nameHubId` denotes *whose namespace resolves the endowment pet-name
+paths*, which is not the same as *who owns the resulting formula*. The two diverge
+at `EndoHost.endow()` (`packages/daemon/src/host.js`). `endow` is a **host-facet**
+method — the host operator approving a guest's earlier `define()` proposal — that
+calls `formulateEval(guestAgentId, source, codeNames, endowmentFormulaIdsOrPaths,
+...)`. Here `nameHubId` is the *guest*, but the endowment identifiers are resolved
+through the **host's own** `petStore` (host-selected capabilities the guest never
+held), and the eval result is delivered only to the host's inbox
+(`deliverValueById`, "does NOT appear in the proposer's inbox"). If the creator
+were `nameHubId`, this eval formula — and its host-namespace endowment `lookup`
+formulas — would be marked guest-created and become visible through
+`E(guest).diagnostics().getFormula(...)`, leaking host-selected authority the
+guest never held. That directly falsifies the security rationale below. So the
+creator must be passed independently of `nameHubId`. Concretely:
+
+- `formulateEval` gains an explicit `creator` parameter, distinct from its first
+  argument. On the ordinary guest `eval` path the guest facet passes
+  `creator = guestId`. On the host-facet `endow` path the host passes
+  `creator = hostId` (the endowments are host-resolved and the result is
+  host-delivered), even though `nameHubId` is the guest. `nameHubId` continues to
+  mean only "namespace for endowment path resolution."
 - `formulateMarshalValue` and `formulateReadableBlob` are called from
   `guest.js` `storeValue` / `storeBlob` without the guest identity. Add a creator
   parameter to both and pass `guestId` from the guest facet (and `hostId` from the
   host facet, which shares these makers).
 - The subsidiary formulas a guest operation creates within the same call (the
   `worker` from `provideWorkerId` when none was named, the `lookup` formulas for
-  endowments) are attributed to the *same* initiating agent. Attribution is
-  per-operation, not per-formula-type: whoever initiated the formulate chain owns
-  every formula minted inside it.
-- Agent creation attributes correctly by the same rule. When the host calls
-  `provideGuest`, the host runs the formulate chain, so the new `guest` formula
-  and its dependency formulas (`handle`, `pet-store`, `mailbox-store`, `worker`)
-  carry `creator = hostId`. The guest did not create itself.
+  endowments) are attributed to the *same* creator passed for that operation, not
+  to `nameHubId`. Attribution is per-operation: whoever the facet declares as the
+  operation's creator owns every formula minted inside it. (For `endow` this again
+  means `hostId`, so the host-namespace endowment `lookup` formulas are correctly
+  host-scoped.)
+- Agent creation attributes by the same rule. When the host calls `provideGuest`,
+  the host declares itself the creator, so the new `guest` formula and its
+  dependency formulas (`handle`, `pet-store`, `mailbox-store`, `worker`) carry
+  `creator = hostId`. The guest did not create itself. (This has a usability
+  consequence for a guest inspecting its *own* provisioning infrastructure — see
+  Open Questions.)
+
+Some `formulate*` chokepoint call sites have no agent identity in scope at all.
+`manager.js`'s `makeResolver` / `writeStatus` calls `formulateMarshalValue` to
+persist promise-status bookkeeping, and `mail.js`'s cross-agent form-reply path
+(`submit`) formulates marshal values on the shared mailbox path. These internal,
+non-agent-initiated call sites pass the **empty-string creator** (unattributed,
+host-scope-only), the same value bootstrap formulas carry. Only a call reached
+through a guest or host facet with a declared creator records a non-empty one.
 
 Daemon-bootstrap formulas (`endo`, `least-authority`, `main` worker, the special
 names) are created before any agent exists; they keep the empty-string creator
@@ -127,25 +161,36 @@ closure, never taken from the caller, so a guest cannot ask for another agent's
 view.
 
 The facet reuses the existing `DiagnosticsInterface` shape (`help`, `getFormula`,
-`getFormulaGraph`, `traces`) so host and guest present the same surface; only the
-authority differs:
+`getFormulaGraph`, `traces`); where a method is present on both facets it behaves
+the same way and only the authority differs, but the guest's method set may be a
+subset (see `traces()` below and Design Decision 5):
 
 - **`getFormula(identifier)`** performs the daemon's existing checks (string
   shape, `isLocalKey`, cross-peer rejection, unknown-identifier normalization) and
   then one additional gate: the persisted `creator` of the formula must equal the
   bound `guestId`, with a carve-out for the guest's own identity formulas
-  (`@agent` and `@self`, whose creator is the host). A mismatch rejects with a
-  clear error that cites the identifier and does not leak the creator of record.
-  The gate is enforced in the daemon core against the stored creator, not in the
-  exo wrapper, so it cannot be forged.
+  (`@agent` and `@self`, whose creator is the host). A mismatch must reject with an
+  error **textually indistinguishable from the existing unknown-identifier
+  rejection** — same message shape, no "not created by this guest" wording that
+  would let a caller tell "exists but isn't yours" apart from "does not exist."
+  Distinguishable text would hand the guest an existence oracle over the host's and
+  other guests' formula namespace, exactly the leak this design forbids; the
+  rejection therefore reveals nothing about the creator of record or the
+  identifier's existence. The gate is enforced in the daemon core against the
+  stored creator, not in the exo wrapper, so it cannot be forged.
 
 - **`getFormulaGraph()`** seeds from the guest's own pet-store entries, exactly as
   the host implementation seeds from `list()` (it is already agent-scoped by
-  reachability). Nodes the guest created expand normally; nodes it did not create
-  (a host-granted endowment, a shared worker) appear as opaque identifier
-  references and do not expand. This is the same "render references without
-  unwinding" principle [formula-inspector](formula-inspector.md) applies to
-  cycles, reused here as the attenuation boundary.
+  reachability). Graph entries the guest created expand normally; entries it did
+  not create (a host-granted endowment, a shared worker) appear as opaque
+  identifier references and do not expand. ("Entry" here, not "node," is
+  deliberate: `node` is reserved throughout this design for the identifier's
+  agent-key part.) An opaque reference discloses only that a reachable dependency
+  edge exists and the referenced identifier string — never the referenced
+  formula's body or creator — so it stays within the same no-leak bar `getFormula`
+  enforces above. This is the same "render references without unwinding" principle
+  [formula-inspector](formula-inspector.md) applies to cycles, reused here as the
+  attenuation boundary.
 
 - **`traces()`** returns a trace facet scoped to workers the guest created (the
   `worker` formulas whose `creator` is the guest). The underlying aggregator is
@@ -153,7 +198,8 @@ authority differs:
   guest-created worker ids and omits `clear` (a guest must not drop another
   agent's traces). If per-worker creator filtering on the aggregator proves
   awkward, `traces()` may be omitted from the guest facet in the first cut and the
-  guest facet expose only `getFormula` and `getFormulaGraph`; see Open questions.
+  guest facet may expose only `getFormula` and `getFormulaGraph`; see Open
+  questions.
 
 ```mermaid
 flowchart TD
@@ -191,7 +237,7 @@ structure. The host facet remains the unfiltered superset for the operator.
   Chat surface itself is out of scope and left to a follow-up, to be filed against
   the chat milestone when a guest-bound Chat session exists.
 
-## Persistence and migration
+## Persistence and Migration
 
 - **Schema.** One additive column (`creator`) plus one index, a `schema_version`
   bump, and a migration that adds the column with the empty-string default. This
@@ -200,7 +246,7 @@ structure. The host facet remains the unfiltered superset for the operator.
 - **Existing formulas.** Every formula written before the migration carries
   `creator = ''`. Grandfathering rule: an empty creator is host-scope-only. No
   guest diagnostics facet returns such a formula; the host facet returns all of
-  them. There is no lossy backfill (see Open questions on whether best-effort
+  them. There is no lossy backfill (see Open Questions on whether best-effort
   backfill is wanted).
 - **Reincarnation.** The creator travels with the formula body's row, so a formula
   read back after a daemon restart retains its attribution with no recomputation.
@@ -216,24 +262,30 @@ structure. The host facet remains the unfiltered superset for the operator.
 | [daemon-retention-paths](daemon-retention-paths.md) | Second host-only-introspection precedent; its `listRetentionPaths` stays host-only and is not attenuated here. |
 | [daemon-256-bit-identifiers](daemon-256-bit-identifiers.md) | Defines the `{number}:{node}` identifier whose `node` this design deliberately does not overload. |
 
-## Phased implementation
+## Phased Implementation
 
 1. **Attribution.** Add the `creator` column, migration, and `writeFormula` /
-   `readFormula` / `listFormulas` changes; thread the initiating agent id through
-   the `formulate*` helpers into `formulate` / `formulateLazy`. Land with daemon
-   tests asserting each formula type records the expected creator (guest-created
-   `eval` / `marshal` / `readable-blob` carry the guest; host-created `guest` and
-   its deps carry the host; bootstrap formulas carry the empty creator).
+   `readFormula` / `listFormulas` changes; thread the declared creator through the
+   `formulate*` helpers (as an explicit parameter distinct from `nameHubId`) into
+   `formulate` / `formulateLazy`. Land with daemon tests asserting each formula
+   type records the expected creator: guest-created `eval` / `marshal` /
+   `readable-blob` carry the guest; host-created `guest` and its deps carry the
+   host; an `endow`-minted eval **and its endowment `lookup` formulas** carry the
+   host (not the `nameHubId` guest); the internal non-agent formulate paths
+   (`makeResolver` / `writeStatus`, the `mail.js` form-reply `submit`) and
+   bootstrap formulas carry the empty creator.
 2. **Guest facet.** Add `diagnostics` to `GuestInterface`, implement the
    self-attenuated facet in `guest.js`, and enforce the creator gate in the daemon
    core. Rewrite the `packages/daemon/test/endo.test.js` test
    `the diagnostics facet is absent on the guest facet` (near line 3190): the guest
    now has `diagnostics()`, but it is attenuated. Add tests for the positive case
    (guest reads a formula it created), the negative case (guest is rejected on a
-   formula the host created), the self-identity carve-out, and continued cross-peer
-   rejection.
-3. **Traces (optional in cut 1).** Guest-scoped `traces()` filtered to
-   guest-created workers, or defer per Open questions.
+   formula the host created), the `endow` case (guest is rejected on the
+   host-attributed eval it proposed via `define`), the self-identity carve-out, the
+   existence-oracle case (the "not yours" rejection is byte-for-byte the same as
+   the "unknown identifier" rejection), and continued cross-peer rejection.
+3. **Add guest-scoped `traces()`** filtered to guest-created workers, or defer per
+   Open Questions (optional in cut 1).
 
 ## Design Decisions
 
@@ -248,20 +300,38 @@ structure. The host facet remains the unfiltered superset for the operator.
    name another agent's view, and the gate cannot be bypassed by a forged exo.
 4. **Grandfather empty creators to host-scope only.** Safe by default: existing
    formulas never leak to a guest, and the operator's host facet loses nothing.
-5. **Same `DiagnosticsInterface` on both facets.** Host and guest present the
-   identical surface; only the authority behind the methods differs, so callers
-   and a future guest-bound Chat inspector reuse one shape.
+5. **Same `DiagnosticsInterface` shape on both facets, method-for-method where a
+   method is present.** Host and guest reuse one interface shape so a future
+   guest-bound Chat inspector reuses one code path, but the *method set may differ
+   by authority*: the guest facet may omit `traces()` entirely in cut 1, and even
+   when present its `traces()` sub-facet omits `clear` (a guest must not drop
+   another agent's traces). Callers must therefore discover methods via CapTP
+   introspection (`__getMethodNames__()`) rather than assume the two facets expose
+   an identical set; a method that *is* present behaves identically, only the
+   authority behind it differs.
 
-## Open questions
+## Open Questions
 
 - Should `traces()` appear on the guest facet in the first cut, or wait until
   per-worker creator filtering on the shared aggregator is proven? The design can
   ship `getFormula` + `getFormulaGraph` alone and add `traces()` later without a
   surface change.
-- Should the guest's diagnostics resolve its own identity formulas (`@agent`,
-  `@self`) even though the host created them? This design assumes yes, mirroring
-  the existing host self-identity carve-out in `getFormula`; confirm that a guest
-  reading its own `guest` and `handle` records is acceptable.
+- How far should the guest's self-identity carve-out extend? The guest's diagnostics
+  should resolve its own identity formulas (`@agent`, `@self`) even though the host
+  created them — this design assumes yes, mirroring the host's *already-shipped*
+  self-identity resolution in `getFormula` (the carve-out that today lets the host
+  facet resolve `@agent`/`@self`, distinct from the new guest-side carve-out this
+  design introduces). But the same reasoning extends to the rest of the guest's
+  *provisioning chain*: the guest's default `worker`, `pet-store`, and
+  `mailbox-store` are all minted during `provideGuest` and so carry
+  `creator = hostId`, yet they exist for that guest's exclusive future use and are
+  exactly the "my worker" resources a guest debugging its own caplet would expect
+  `getFormula`/`traces` to reach. Cut 1 as specified would wall the guest off from
+  them (the motivating worked example is only partly served). Open question:
+  broaden the carve-out (or the attribution rule) to cover the guest's own
+  provisioning-chain infrastructure, and confirm that a guest reading its own
+  `guest`, `handle`, `worker`, `pet-store`, and `mailbox-store` records is
+  acceptable.
 - Is grandfathering (empty creator equals host-only) sufficient for existing
   deployments, or is a best-effort backfill wanted (for example, attribute a
   formula reachable only from a single guest's pet store to that guest)? Backfill
