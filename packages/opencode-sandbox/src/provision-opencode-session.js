@@ -33,7 +33,7 @@ const SANDBOX_CONFIG_PATH = '/opencode-config';
 // same-host shared memory).
 const SANDBOX_STATE_PATH = '/opencode-state';
 
-const ALLOWED_NETWORKS = harden(['none', 'private']);
+const ALLOWED_NETWORKS = harden(['none', 'private', 'join']);
 
 /**
  * Deterministic sandbox session id (bounded lowercase path component) derived

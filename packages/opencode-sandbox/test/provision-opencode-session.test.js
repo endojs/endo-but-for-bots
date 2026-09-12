@@ -235,6 +235,40 @@ test('provisionOpencodeSession forwards model, persona, resume id, and turn time
   t.is(clientEnv.OPENCODE_BRIDGE_TURN_TIMEOUT_MS, '123000');
 });
 
+test('provisionOpencodeSession accepts the join network and forwards brokerEnv', async t => {
+  const rec = makeRecordingHost();
+  await provisionOpencodeSession(
+    rec.host,
+    {
+      name: 'opencode-client-session-a',
+      filesystemName: 'opencode-workspace-session-a',
+      rootfs: 'oci:test',
+      network: 'join',
+      brokerEnv: {
+        OPENCODE_BROKER_BASE_URL: 'http://127.0.0.1:41337/api/v1',
+        OPENCODE_BROKER_CONTAINER: 'endo-provider-abc',
+      },
+    },
+    {
+      resultName: ['floot', 'controller-profile', 'opencode-client-session-a'],
+    },
+  );
+  const clientEnv = rec.makeUnconfinedCalls[0].env;
+  t.is(clientEnv.NETWORK, 'join');
+  t.is(clientEnv.OPENCODE_BROKER_BASE_URL, 'http://127.0.0.1:41337/api/v1');
+  t.is(clientEnv.OPENCODE_BROKER_CONTAINER, 'endo-provider-abc');
+  await t.throwsAsync(
+    () =>
+      provisionOpencodeSession(rec.host, {
+        name: 'opencode-client-session-b',
+        filesystemName: 'opencode-workspace-session-b',
+        rootfs: 'oci:test',
+        brokerEnv: { OPENCODE_BROKER_BASE_URL: 'http://127.0.0.1:1/api/v1' },
+      }),
+    { message: /Invalid broker transport/ },
+  );
+});
+
 test('sandbox mount base honors the daemon ENDO_ variable', async t => {
   const previous = process.env.ENDO_OPENCODE_SANDBOX_MOUNT_DIR;
   process.env.ENDO_OPENCODE_SANDBOX_MOUNT_DIR = '/var/lib/endo/opencode-mounts';
