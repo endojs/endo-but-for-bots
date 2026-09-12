@@ -23,6 +23,7 @@
     "./turn-ledger.js": "./src/turn-ledger.js",
     "./package.json": "./package.json",
     "./provider-broker.js": "./src/provider-broker.js",
+    "./provider-paths.js": "./src/provider-paths.js",
     "./provider-transport.js": "./src/provider-transport.js",
     "./provider-http.js": "./src/provider-http.js",
     "./provider-pipe.js": "./src/provider-pipe.js",
