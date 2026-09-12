@@ -41,7 +41,11 @@ import {
   normalizeHostedModelDescriptor,
 } from '@endo/hosted-agent';
 
-import { DEFAULT_MODEL } from './opencode-agent-config.js';
+import { DEFAULT_MODEL, parseModelRef } from './opencode-agent-config.js';
+import {
+  OPENCODE_BROKER_ACCOUNT,
+  OPENROUTER_ORIGIN,
+} from './opencode-broker.js';
 
 /** The backend id Floot pins sessions to (`opencode:<model>`). */
 export const OPENCODE_BACKEND_ID = 'opencode';
@@ -116,7 +120,7 @@ const isIdleInterrupt = error =>
  * Build the trusted lifecycle owner for opencode backend sessions.
  *
  * @param {object} powers
- * @param {(sessionId: string, options: { mcp: { socketDir: string, innerDir: string, configPath: string }, model?: string, systemPrompt?: string, workspaceHostPath?: string, network?: 'none' | 'private' }) => Promise<any>} powers.provisionClient
+ * @param {(sessionId: string, options: { mcp: { socketDir: string, innerDir: string, configPath: string }, model?: string, systemPrompt?: string, workspaceHostPath?: string, network?: 'none' | 'private', brokerEnv?: { OPENCODE_BROKER_BASE_URL: string, OPENCODE_BROKER_CONTAINER: string } }) => Promise<any>} powers.provisionClient
  *   Provision (or reopen) the session's OpencodeClient formula with the tool
  *   bridge mount, the pinned model, and the session persona baked into the
  *   opencode agent config, and return the client capability.
@@ -141,6 +145,7 @@ export const makeOpencodeBackendFactory = ({
   startToolBridge,
   removeToolBridge,
   models = OPENCODE_MODELS,
+  broker = null,
 }) => {
   const catalog = harden(models.map(normalizeHostedModelDescriptor));
   const listModels = async () => catalog;
@@ -192,7 +197,12 @@ export const makeOpencodeBackendFactory = ({
     const networkPolicy = spec.networkPolicy ?? 'off';
     ['off', 'public-internet'].includes(networkPolicy) ||
       Fail`Unknown network policy ${q(networkPolicy)}; expected "off" or "public-internet"`;
-    const network = networkPolicy === 'off' ? 'none' : 'private';
+    // A broker lease makes `off` enforceable with the provider reachable:
+    // the slice joins the listener's networkless namespace. Without a
+    // broker the legacy refusal path stays (the session can still be
+    // created, but a turn is refused with an actionable message).
+    const network =
+      networkPolicy === 'off' ? (broker ? 'join' : 'none') : 'private';
     if (spec.model !== undefined && spec.model !== '') {
       (typeof spec.model === 'string' && spec.model.length <= 256) ||
         Fail`OpenCode model id must be a bounded string`;
@@ -219,8 +229,49 @@ export const makeOpencodeBackendFactory = ({
     // the successor rather than running beside it.
     await stopLive(sessionId);
     const bridge = await startToolBridge(sessionId, toolSet);
+    /** @type {any} */
+    let lease = null;
+    /** @type {Promise<void> | null} */
+    let leaseRevoke = null;
+    const revokeLease = () => {
+      if (!lease) return Promise.resolve();
+      if (!leaseRevoke) {
+        // Cleared on failure so a later terminate retry re-attempts the
+        // revoke; kept on success so concurrent callers share one revoke.
+        leaseRevoke = Promise.resolve(E(lease).revoke()).catch(error => {
+          leaseRevoke = null;
+          throw error;
+        });
+      }
+      return leaseRevoke;
+    };
     let client;
     try {
+      let brokerEnv;
+      if (networkPolicy === 'off' && broker) {
+        // Issue the lease before the client exists: its endpoint and the
+        // listener container are what the slice config and network need.
+        lease = await broker(
+          harden({
+            sessionId,
+            providerOrigin: OPENROUTER_ORIGIN,
+            accountRef: OPENCODE_BROKER_ACCOUNT,
+            // The broker admits provider-scoped ids (`vendor/model`), which
+            // is also what opencode's request body carries; the full
+            // `openrouter/...` ref is only Floot's selection form.
+            ...(spec.model ? { model: parseModelRef(spec.model) } : {}),
+            networkPolicy: 'off',
+          }),
+        );
+        const [attestation, evidence] = await Promise.all([
+          E(lease).attestation(),
+          E(lease).sandboxEvidence(),
+        ]);
+        brokerEnv = harden({
+          OPENCODE_BROKER_BASE_URL: `${attestation.endpoint}/api/v1`,
+          OPENCODE_BROKER_CONTAINER: evidence.brokerSidecar.container,
+        });
+      }
       client = await provisionClient(sessionId, {
         mcp: {
           socketDir: bridge.socketDir,
@@ -228,12 +279,21 @@ export const makeOpencodeBackendFactory = ({
           configPath: bridge.configPath,
         },
         network,
+        ...(brokerEnv ? { brokerEnv } : {}),
         ...(spec.model ? { model: spec.model } : {}),
         ...(spec.systemPrompt ? { systemPrompt: spec.systemPrompt } : {}),
         ...(workspaceHostPath ? { workspaceHostPath } : {}),
       });
     } catch (error) {
       await bridge.close().catch(() => {});
+      await revokeLease().catch(revokeError => {
+        console.error(
+          '[opencode-sandbox] broker lease revoke failed after a failed create; the listener remains until expiry:',
+          revokeError instanceof Error
+            ? revokeError.message
+            : String(revokeError),
+        );
+      });
       throw error;
     }
 
@@ -285,6 +345,9 @@ export const makeOpencodeBackendFactory = ({
         // A stop, not a deletion: the workspace and the opencode session
         // store stay for the next revival.
         await cancelClient(sessionId);
+        // The broker listener exists only for this client; release it after
+        // the slice is gone so the joined namespace has no live user.
+        await revokeLease();
         terminated = true;
         if (live.get(sessionId)?.terminate === terminate) {
           live.delete(sessionId);
@@ -306,7 +369,7 @@ export const makeOpencodeBackendFactory = ({
        * @param {Record<string, any>} [options]
        */
       async send(prompt, options = {}) {
-        if (networkPolicy === 'off') {
+        if (networkPolicy === 'off' && !broker) {
           // A refusal the operator can fix by setting the session policy. It is
           // reported as a leading abort — the stream contract for "the backend
           // never took the prompt" — so Floot records a clean failed turn
