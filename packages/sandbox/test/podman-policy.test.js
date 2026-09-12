@@ -18,6 +18,8 @@ import { PassThrough } from 'node:stream';
 
 import { makePodmanDriver } from '../src/drivers/podman.js';
 
+/** @import { ExecutionContext } from 'ava' */
+
 const DIGEST = `sha256:${'a1'.repeat(32)}`;
 const OTHER_DIGEST = `sha256:${'b2'.repeat(32)}`;
 const IMAGE = `registry.example/agent@${DIGEST}`;
@@ -208,9 +210,10 @@ const makeProcfs = (fileOverrides = {}, linkOverrides = {}) => {
  * operation stays live the way a long-running command does — which is
  * what a concurrency ceiling is about.
  *
+ * @param {ExecutionContext} t
  * @param {{ calls: Array<{ command: string, args: string[] }>, responses?: Record<string, { code?: number, stdout?: string }>, holdAttached?: boolean }} options
  */
-const makeEngineStub = ({ calls, responses = {}, holdAttached = false }) => {
+const makeEngineStub = (t, { calls, responses = {}, holdAttached = false }) => {
   /**
    * @param {string[]} args
    * @returns {string}
@@ -270,6 +273,10 @@ const makeEngineStub = ({ calls, responses = {}, holdAttached = false }) => {
      * @param {string[]} args
      */
     spawn(command, args) {
+      if (command === 'podman') {
+        t.deepEqual(args.slice(0, 2), ['--remote=false', '--syslog=false']);
+        args = args.slice(2);
+      }
       calls.push({ command, args: [...args] });
       const kind = command === 'podman' ? classify(args) : 'other';
       const answer = responses[kind] ?? defaults[kind] ?? { code: 1 };
@@ -298,14 +305,15 @@ const makeEngineStub = ({ calls, responses = {}, holdAttached = false }) => {
 };
 
 /**
+ * @param {ExecutionContext} t
  * @param {{ responses?: Record<string, { code?: number, stdout?: string }>, procfs?: any, holdAttached?: boolean, volumeQuota?: any }} [options]
  */
-const makeDriverUnderTest = (options = {}) => {
+const makeDriverUnderTest = (t, options = {}) => {
   /** @type {Array<{ command: string, args: string[] }>} */
   const calls = [];
   const driver = makePodmanDriver({
     childProcess: /** @type {any} */ (
-      makeEngineStub({
+      makeEngineStub(t, {
         calls,
         responses: options.responses,
         holdAttached: options.holdAttached,
@@ -362,7 +370,7 @@ for (const contents of [
         },
       ],
     };
-    const { driver, calls } = makeDriverUnderTest({
+    const { driver, calls } = makeDriverUnderTest(t, {
       responses: {
         'container-inspect': { stdout: JSON.stringify([inspect]) },
         'resolver-read': { stdout: contents },
@@ -375,6 +383,7 @@ for (const contents of [
     if (contents.startsWith('nameserver')) {
       const slice = await driver.prepareSlice(/** @type {any} */ (spec));
       t.teardown(() => driver.teardown(slice));
+      await driver.teardown(slice);
     } else {
       await t.throwsAsync(driver.prepareSlice(/** @type {any} */ (spec)), {
         message: /resolver mount/,
@@ -395,7 +404,7 @@ for (const contents of [
 const createCalls = calls => calls.filter(call => call.args[0] === 'create');
 
 test('a policy slice is attested from the live anchor', async t => {
-  const { driver, calls } = makeDriverUnderTest();
+  const { driver, calls } = makeDriverUnderTest(t);
   const slice = await driver.prepareSlice(/** @type {any} */ (makeSpec()));
   const attestation = await /** @type {any} */ (driver).policy(slice);
 
@@ -422,7 +431,7 @@ test('a policy slice is attested from the live anchor', async t => {
 });
 
 test('the anchor is created under the whole policy prefix', async t => {
-  const { driver, calls } = makeDriverUnderTest();
+  const { driver, calls } = makeDriverUnderTest(t);
   await driver.prepareSlice(/** @type {any} */ (makeSpec()));
   const [anchor] = createCalls(calls);
   t.truthy(anchor);
@@ -467,7 +476,7 @@ test('the anchor is created under the whole policy prefix', async t => {
 });
 
 test('an operation runs under the same prefix the anchor was attested at', async t => {
-  const { driver, calls } = makeDriverUnderTest();
+  const { driver, calls } = makeDriverUnderTest(t);
   const slice = await driver.prepareSlice(/** @type {any} */ (makeSpec()));
   await driver.spawn(slice, ['/bin/echo', 'hi'], {});
 
@@ -487,7 +496,7 @@ test('an operation runs under the same prefix the anchor was attested at', async
 });
 
 test('a slice with no policy has no attestation to report', async t => {
-  const { driver } = makeDriverUnderTest();
+  const { driver } = makeDriverUnderTest(t);
   const slice = await driver.prepareSlice(
     /** @type {any} */ (
       makeSpec({ network: 'none', policy: undefined, cwd: undefined })
@@ -499,7 +508,7 @@ test('a slice with no policy has no attestation to report', async t => {
 });
 
 test('broker-only without a policy names the namespace nobody supplied', async t => {
-  const { driver } = makeDriverUnderTest();
+  const { driver } = makeDriverUnderTest(t);
   await t.throwsAsync(
     driver.prepareSlice(/** @type {any} */ (makeSpec({ policy: undefined }))),
     { message: /must be requested together/ },
@@ -507,7 +516,7 @@ test('broker-only without a policy names the namespace nobody supplied', async t
 });
 
 test('a policy on any other network profile is refused', async t => {
-  const { driver } = makeDriverUnderTest();
+  const { driver } = makeDriverUnderTest(t);
   await t.throwsAsync(
     driver.prepareSlice(/** @type {any} */ (makeSpec({ network: 'private' }))),
     { message: /must be requested together/ },
@@ -524,7 +533,7 @@ const makeJoinSpec = (overrides = {}) =>
   });
 
 test('network join admits a loopback-only target and wires --network container:', async t => {
-  const { driver, calls } = makeDriverUnderTest();
+  const { driver, calls } = makeDriverUnderTest(t);
   const slice = await driver.prepareSlice(/** @type {any} */ (makeJoinSpec()));
   await driver.spawn(slice, ['/bin/echo', 'hi'], {});
   const [operation] = createCalls(calls);
@@ -561,7 +570,7 @@ for (const [label, fileOverrides, message] of [
   ],
 ]) {
   test(label, async t => {
-    const { driver } = makeDriverUnderTest({
+    const { driver } = makeDriverUnderTest(t, {
       procfs: makeProcfs(fileOverrides),
     });
     await t.throwsAsync(
@@ -572,7 +581,7 @@ for (const [label, fileOverrides, message] of [
 }
 
 test('network join refuses an absent or misused container reference', async t => {
-  const { driver, calls } = makeDriverUnderTest();
+  const { driver, calls } = makeDriverUnderTest(t);
   await t.throwsAsync(
     driver.prepareSlice(
       /** @type {any} */ (makeJoinSpec({ networkRef: undefined })),
@@ -595,7 +604,7 @@ test('network join refuses an absent or misused container reference', async t =>
 });
 
 test('network join refuses a target that is not running', async t => {
-  const { driver } = makeDriverUnderTest({
+  const { driver } = makeDriverUnderTest(t, {
     responses: { 'sidecar-pid': { code: 1, stdout: '' } },
   });
   await t.throwsAsync(
@@ -607,7 +616,7 @@ test('network join refuses a target that is not running', async t => {
 test('network join refuses a target replaced after admission', async t => {
   const otherPid = 4143;
   const responses = { 'sidecar-pid': { stdout: `${SIDECAR_PID}\n` } };
-  const { driver } = makeDriverUnderTest({
+  const { driver } = makeDriverUnderTest(t, {
     responses,
     procfs: makeProcfs(
       {
@@ -627,7 +636,7 @@ test('network join refuses a target replaced after admission', async t => {
 });
 
 test('a policy refuses a granted mount alongside its own table', async t => {
-  const { driver } = makeDriverUnderTest();
+  const { driver } = makeDriverUnderTest(t);
   await t.throwsAsync(
     driver.prepareSlice(
       /** @type {any} */ (
@@ -647,7 +656,7 @@ test('a policy refuses a granted mount alongside its own table', async t => {
 });
 
 test('a policy refuses a scratch layer alongside its own table', async t => {
-  const { driver } = makeDriverUnderTest();
+  const { driver } = makeDriverUnderTest(t);
   await t.throwsAsync(
     driver.prepareSlice(
       /** @type {any} */ (makeSpec({ scratchHostPath: '/tmp/scratch-xyz' })),
@@ -657,7 +666,7 @@ test('a policy refuses a scratch layer alongside its own table', async t => {
 });
 
 test('a policy refuses a seccomp profile it cannot stand behind', async t => {
-  const { driver } = makeDriverUnderTest();
+  const { driver } = makeDriverUnderTest(t);
   await t.throwsAsync(
     driver.prepareSlice(
       /** @type {any} */ (makeSpec({ seccomp: 'unconfined' })),
@@ -667,7 +676,7 @@ test('a policy refuses a seccomp profile it cannot stand behind', async t => {
 });
 
 test('an image whose stored digest is not the approved one fails closed', async t => {
-  const { driver, calls } = makeDriverUnderTest({
+  const { driver, calls } = makeDriverUnderTest(t, {
     responses: { 'image-digest': { stdout: `${OTHER_DIGEST}\n` } },
   });
   await t.throwsAsync(driver.prepareSlice(/** @type {any} */ (makeSpec())), {
@@ -678,7 +687,7 @@ test('an image whose stored digest is not the approved one fails closed', async 
 });
 
 test('an anchor that never started leaves nothing behind', async t => {
-  const { driver, calls } = makeDriverUnderTest({
+  const { driver, calls } = makeDriverUnderTest(t, {
     responses: { start: { code: 125, stdout: 'no such container' } },
   });
   await t.throwsAsync(driver.prepareSlice(/** @type {any} */ (makeSpec())), {
@@ -692,7 +701,7 @@ test('an anchor that never started leaves nothing behind', async t => {
 });
 
 test('an unproved control fails slice construction, not just the report', async t => {
-  const { driver, calls } = makeDriverUnderTest({
+  const { driver, calls } = makeDriverUnderTest(t, {
     // A namespace the slice shares with the daemon: the runtime still
     // echoes `--pid private`, only the kernel disagrees.
     procfs: makeProcfs(
@@ -710,7 +719,7 @@ test('an unproved control fails slice construction, not just the report', async 
 });
 
 test('a routable interface in the joined namespace fails construction', async t => {
-  const { driver } = makeDriverUnderTest({
+  const { driver } = makeDriverUnderTest(t, {
     procfs: makeProcfs({
       [`/proc/${ANCHOR_PID}/net/dev`]:
         'Inter-|   Receive |  Transmit\n face |bytes\n    lo:  0 0\n  eth0:  0 0\n',
@@ -722,7 +731,7 @@ test('a routable interface in the joined namespace fails construction', async t 
 });
 
 test('a volume with no recorded quota fails construction', async t => {
-  const { driver } = makeDriverUnderTest({
+  const { driver } = makeDriverUnderTest(t, {
     responses: { 'volume-workspace-s1': { code: 125 } },
   });
   await t.throwsAsync(driver.prepareSlice(/** @type {any} */ (makeSpec())), {
@@ -731,7 +740,7 @@ test('a volume with no recorded quota fails construction', async t => {
 });
 
 test('a host that cannot delegate the controllers fails construction', async t => {
-  const { driver } = makeDriverUnderTest({
+  const { driver } = makeDriverUnderTest(t, {
     procfs: makeProcfs({
       '/sys/fs/cgroup/user.slice/user-1000.slice/cgroup.controllers': 'io\n',
     }),
@@ -742,7 +751,7 @@ test('a host that cannot delegate the controllers fails construction', async t =
 });
 
 test('teardown removes the anchor along with the operations', async t => {
-  const { driver, calls } = makeDriverUnderTest();
+  const { driver, calls } = makeDriverUnderTest(t);
   const slice = await driver.prepareSlice(/** @type {any} */ (makeSpec()));
   const anchorName = createCalls(calls)[0].args[2];
   await driver.teardown(slice);
@@ -752,7 +761,7 @@ test('teardown removes the anchor along with the operations', async t => {
 });
 
 test('a slice whose kernel loaded no seccomp filter fails construction', async t => {
-  const { driver } = makeDriverUnderTest({
+  const { driver } = makeDriverUnderTest(t, {
     // The engine still reports its default profile in `SecurityOpt`;
     // only the kernel says whether a filter is actually loaded.
     procfs: makeProcfs({
@@ -766,7 +775,7 @@ test('a slice whose kernel loaded no seccomp filter fails construction', async t
 });
 
 test('a slice that joined some namespace other than the broker fails', async t => {
-  const { driver } = makeDriverUnderTest({
+  const { driver } = makeDriverUnderTest(t, {
     // The anchor is loopback-only and well-formed — it is simply not in
     // the namespace the broker's listener is in. Nothing about the
     // interface inventory distinguishes the two.
@@ -781,7 +790,7 @@ test('a slice that joined some namespace other than the broker fails', async t =
 });
 
 test('a broker sidecar that is not running fails construction', async t => {
-  const { driver, calls } = makeDriverUnderTest({
+  const { driver, calls } = makeDriverUnderTest(t, {
     responses: { 'sidecar-pid': { code: 125, stdout: 'no such container' } },
   });
   await t.throwsAsync(driver.prepareSlice(/** @type {any} */ (makeSpec())), {
@@ -801,7 +810,7 @@ test('a broker sidecar that is not running fails construction', async t => {
 });
 
 test('a rootful engine fails construction even without the probe gate', async t => {
-  const { driver } = makeDriverUnderTest({
+  const { driver } = makeDriverUnderTest(t, {
     // `prepareSlice` is a public entry point; a consumer that skips the
     // factory's probe must not get an attestation stamped
     // `rootless-podman` with nothing having checked.
@@ -817,7 +826,7 @@ test('the orphan sweep runs before the anchor it is evidence about', async t => 
   // owner label. Run after the anchor is created it would take the
   // anchor — and any sibling slice's live operations — as orphans, and
   // then attest a container that no longer exists.
-  const { driver, calls } = makeDriverUnderTest();
+  const { driver, calls } = makeDriverUnderTest(t);
   await driver.prepareSlice(/** @type {any} */ (makeSpec()));
   const sweepAt = calls.findIndex(call => call.args[0] === 'ps');
   const createAt = calls.findIndex(call => call.args[0] === 'create');
@@ -827,7 +836,7 @@ test('the orphan sweep runs before the anchor it is evidence about', async t => 
 });
 
 test('attested anchor and operation preserve stdin at create and attach', async t => {
-  const { driver, calls } = makeDriverUnderTest();
+  const { driver, calls } = makeDriverUnderTest(t);
   const slice = await driver.prepareSlice(/** @type {any} */ (makeSpec()));
   t.teardown(() => driver.teardown(slice));
   const proc = await driver.spawn(slice, ['/bin/cat'], {});
@@ -839,11 +848,12 @@ test('attested anchor and operation preserve stdin at create and attach', async 
     call => call.args[0] === 'start' && call.args.includes('--attach'),
   );
   t.true(attach?.args.includes('--interactive'));
+  await driver.teardown(slice);
 });
 
 test('an operation the engine resolved differently is refused', async t => {
   let inspectCount = 0;
-  const { driver } = makeDriverUnderTest({
+  const { driver } = makeDriverUnderTest(t, {
     responses: {
       'container-inspect': {
         get stdout() {
@@ -870,7 +880,7 @@ test('an operation the engine resolved differently is refused', async t => {
 });
 
 test('a slice admits only the operations its policy declared', async t => {
-  const { driver } = makeDriverUnderTest({ holdAttached: true });
+  const { driver } = makeDriverUnderTest(t, { holdAttached: true });
   const slice = await driver.prepareSlice(/** @type {any} */ (makeSpec()));
   // Every ceiling is applied per container, so the attested slice-wide
   // aggregate is only true while the live count is the one it was
@@ -883,7 +893,7 @@ test('a slice admits only the operations its policy declared', async t => {
 
 test('an anchor that stopped while it was read is not attested', async t => {
   let inspectCount = 0;
-  const { driver } = makeDriverUnderTest({
+  const { driver } = makeDriverUnderTest(t, {
     responses: {
       'container-inspect': {
         get stdout() {
@@ -906,7 +916,7 @@ test('an anchor that stopped while it was read is not attested', async t => {
 });
 
 test('two slices cannot both attest a namespace they share', async t => {
-  const { driver } = makeDriverUnderTest();
+  const { driver } = makeDriverUnderTest(t);
   await driver.prepareSlice(/** @type {any} */ (makeSpec()));
   // The stub hands every anchor the same namespace inodes. "Not the
   // daemon's" is what procfs answers; "nobody else's" takes comparing
@@ -917,7 +927,7 @@ test('two slices cannot both attest a namespace they share', async t => {
 });
 
 test('concurrent spawns cannot both slip past the operation ceiling', async t => {
-  const { driver } = makeDriverUnderTest({ holdAttached: true });
+  const { driver } = makeDriverUnderTest(t, { holdAttached: true });
   const slice = await driver.prepareSlice(/** @type {any} */ (makeSpec()));
   // Reading the live count and registering the entry are many awaits
   // apart. Without a synchronous reservation both of these observe an
@@ -937,7 +947,7 @@ test('concurrent spawns cannot both slip past the operation ceiling', async t =>
 
 test('a refused operation gives its reservation back', async t => {
   let inspectCount = 0;
-  const { driver } = makeDriverUnderTest({
+  const { driver } = makeDriverUnderTest(t, {
     responses: {
       'container-inspect': {
         get stdout() {
@@ -981,7 +991,7 @@ test('an operation is refused when the host stopped delegating a controller', as
       return procfs.readFile(path);
     },
   });
-  const { driver } = makeDriverUnderTest({ procfs: narrowing });
+  const { driver } = makeDriverUnderTest(t, { procfs: narrowing });
   const slice = await driver.prepareSlice(/** @type {any} */ (makeSpec()));
   await t.throwsAsync(driver.spawn(slice, ['/bin/echo', 'hi'], {}), {
     message: /no longer delegates the cgroup controllers/,
@@ -989,7 +999,7 @@ test('an operation is refused when the host stopped delegating a controller', as
 });
 
 test('an anchor that will not go away is not a clean teardown', async t => {
-  const { driver, calls } = makeDriverUnderTest({
+  const { driver, calls } = makeDriverUnderTest(t, {
     responses: {
       rm: { code: 125, stdout: 'container is in an unknown state' },
     },
@@ -1007,7 +1017,7 @@ test('an anchor that will not go away is not a clean teardown', async t => {
 });
 
 test('an image reference that podman would read as a flag is refused', async t => {
-  const { driver, calls } = makeDriverUnderTest();
+  const { driver, calls } = makeDriverUnderTest(t);
   // The reference is a positional argument, after every flag, so one
   // beginning with `-` becomes a flag and the next token becomes the
   // image — an argument injection into the command that establishes
@@ -1029,7 +1039,7 @@ test('an image reference that podman would read as a flag is refused', async t =
 });
 
 test('a tag-shaped image reference is refused under a policy', async t => {
-  const { driver } = makeDriverUnderTest();
+  const { driver } = makeDriverUnderTest(t);
   await t.throwsAsync(
     driver.prepareSlice(
       /** @type {any} */ (
@@ -1044,7 +1054,7 @@ test('a tag-shaped image reference is refused under a policy', async t => {
 
 test('a removal that never settles does not burn an admission slot', async t => {
   let removals = 0;
-  const { driver } = makeDriverUnderTest({
+  const { driver } = makeDriverUnderTest(t, {
     responses: {
       // A removal that reports failure rather than success. The reap
       // surfaces it, and `live.size` is what admission counts, so an
@@ -1083,27 +1093,27 @@ test('an unrelated controller losing delegation does not refuse an operation', a
       return procfs.readFile(path);
     },
   });
-  const { driver } = makeDriverUnderTest({ procfs: narrowing });
+  const { driver } = makeDriverUnderTest(t, { procfs: narrowing });
   const slice = await driver.prepareSlice(/** @type {any} */ (makeSpec()));
   await t.notThrowsAsync(driver.spawn(slice, ['/bin/echo', 'hi'], {}));
 });
 
 test('a broker-only slice does not probe for a rootless network backend', async t => {
-  const { driver, calls } = makeDriverUnderTest();
+  const { driver, calls } = makeDriverUnderTest(t);
   await driver.prepareSlice(/** @type {any} */ (makeSpec()));
   // It joins the namespace the policy names and never consults one.
   t.false(calls.some(call => ['slirp4netns', 'pasta'].includes(call.command)));
 });
 
 test('recorded volume size cannot substitute for kernel quota evidence', async t => {
-  const { driver } = makeDriverUnderTest({ volumeQuota: undefined });
+  const { driver } = makeDriverUnderTest(t, { volumeQuota: undefined });
   await t.throwsAsync(driver.prepareSlice(/** @type {any} */ (makeSpec())), {
     message: /storage ceiling/,
   });
 });
 
 test('quota evidence for a different physical volume fails construction', async t => {
-  const { driver } = makeDriverUnderTest({
+  const { driver } = makeDriverUnderTest(t, {
     volumeQuota: harden({
       observe: async ({ name }) =>
         harden({
@@ -1165,7 +1175,7 @@ const anchorMountInfo = fstype => `\
 `;
 
 test('a declared attach is attested when the kernel sees a 9P projection there', async t => {
-  const { driver, calls } = makeDriverUnderTest({
+  const { driver, calls } = makeDriverUnderTest(t, {
     responses: {
       'container-inspect': { stdout: `${JSON.stringify([ATTACH_INSPECT])}\n` },
     },
@@ -1199,7 +1209,7 @@ test('a declared attach is attested when the kernel sees a 9P projection there',
 test('a declared attach that the kernel says is host data fails construction', async t => {
   // The runtime reports the same bind either way; only the kernel can say
   // the source was an ext4 directory rather than a 9P mount.
-  const { driver } = makeDriverUnderTest({
+  const { driver } = makeDriverUnderTest(t, {
     responses: {
       'container-inspect': { stdout: `${JSON.stringify([ATTACH_INSPECT])}\n` },
     },
@@ -1219,7 +1229,7 @@ test('a declared attach that the kernel says is host data fails construction', a
 test('a policy that declares no attach never reads the mount table', async t => {
   // Without an attach in the table, the proof needs nothing from
   // mountinfo — and a fixture that lacks it must not fail construction.
-  const { driver } = makeDriverUnderTest();
+  const { driver } = makeDriverUnderTest(t);
   const slice = await driver.prepareSlice(/** @type {any} */ (makeSpec()));
   const attestation = await /** @type {any} */ (driver).policy(slice);
   t.is(attestation.mounts.length, 5);

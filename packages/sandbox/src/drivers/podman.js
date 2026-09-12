@@ -768,7 +768,7 @@ export const makePodmanDriver = ({
       info = await spawnAndCollect(
         cp,
         'podman',
-        ['info', '--format', '{{.Host.OCIRuntime.Name}}'],
+        podmanArgs('', ['info', '--format', '{{.Host.OCIRuntime.Name}}']),
         { timeoutMs: CONTROL_COMMAND_TIMEOUT_MS },
       );
     } catch {
@@ -803,16 +803,26 @@ export const makePodmanDriver = ({
   };
 
   /**
-   * Build a podman invocation argv with the resolved runtime prefix.
-   * The prefix appears as a global flag (`--runtime crun`) before the
-   * subcommand, matching podman's documented CLI ordering.
+   * Require the local engine on every invocation, including probes. Local
+   * procfs attestation and host bind paths cannot describe a remote engine.
+   * `--remote=false` overrides connection environment defaults, but Podman
+   * 4.9.3 and 5.8.0 still select remote mode for engine.remote=true in config.
+   * Their root.go registers --syslog only in local ABI mode: the false value
+   * leaves logging disabled and makes remote configurations/builds refuse
+   * the command during argument parsing, before engine initialization.
+   * See cmd/podman/root.go and cmd/podman/registry/config.go at those tags.
+   * This establishes locality, not descendant termination after a CLI dies.
    *
-   * @param {string} runtime  Empty string ⇒ no prefix.
+   * @param {string} runtime  Empty string ⇒ preserve the configured runtime.
    * @param {string[]} args
    * @returns {string[]}
    */
-  const podmanArgs = (runtime, args) =>
-    runtime === '' ? args : ['--runtime', runtime, ...args];
+  const podmanArgs = (runtime, args) => [
+    '--remote=false',
+    '--syslog=false',
+    ...(runtime === '' ? [] : ['--runtime', runtime]),
+    ...args,
+  ];
 
   /**
    * Remove one operation container, forcibly and under the control
@@ -965,9 +975,12 @@ export const makePodmanDriver = ({
 
     let versionResult;
     try {
-      versionResult = await spawnAndCollect(cp, 'podman', ['--version'], {
-        timeoutMs: CONTROL_COMMAND_TIMEOUT_MS,
-      });
+      versionResult = await spawnAndCollect(
+        cp,
+        'podman',
+        podmanArgs('', ['--version']),
+        { timeoutMs: CONTROL_COMMAND_TIMEOUT_MS },
+      );
     } catch (e) {
       const cause = /** @type {Error & { code?: string }} */ (e);
       const reason =
@@ -998,7 +1011,7 @@ export const makePodmanDriver = ({
       rootlessResult = await spawnAndCollect(
         cp,
         'podman',
-        ['info', '--format', '{{.Host.Security.Rootless}}'],
+        podmanArgs('', ['info', '--format', '{{.Host.Security.Rootless}}']),
         { timeoutMs: CONTROL_COMMAND_TIMEOUT_MS },
       );
     } catch (e) {

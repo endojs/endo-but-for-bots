@@ -48,6 +48,10 @@ const fixture = (t, storage) => {
   };
   const childProcess = {
     spawn(command, args) {
+      if (command === 'podman') {
+        t.deepEqual(args.slice(0, 2), ['--remote=false', '--syslog=false']);
+        args = args.slice(2);
+      }
       calls.push([...args]);
       /** @type {any} */
       const child = new EventEmitter();
