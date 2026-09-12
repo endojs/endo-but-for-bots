@@ -882,7 +882,7 @@ test('provideGuest accepts a caller-selected networks directory', async t => {
   const nets = await E(host).makeDirectory('delegated-nets');
   const guest = await E(host).provideGuest('guest', {
     agentName: 'guest-agent',
-    nets,
+    networks: nets,
   });
 
   await E(host).storeValue(10, 'network-marker');
@@ -903,7 +903,7 @@ test('provideGuest preserves a read-only networks attenuation', async t => {
   const readOnlyNets = await E(nets).readOnly();
   const guest = await E(host).provideGuest('guest', {
     agentName: 'guest-agent',
-    nets: readOnlyNets,
+    networks: readOnlyNets,
   });
 
   await E(host).storeValue(10, 'network-marker');
@@ -923,6 +923,103 @@ test('provideGuest preserves a read-only networks attenuation', async t => {
   const netsId = await E(host).identify('delegated-nets');
   t.is(readOnlyNetsRecord.type, 'readable-directory');
   t.is(readOnlyNetsRecord.properties.directory.identifier, netsId);
+});
+
+test('provideGuest rejects a non-daemon-minted pins reference', async t => {
+  const { host } = await prepareHost(t);
+  const notADaemonRef = Far('not-a-directory', {});
+  await t.throwsAsync(
+    E(host).provideGuest('guest', {
+      agentName: 'guest-agent',
+      pins: /** @type {any} */ (notADaemonRef),
+    }),
+    { message: /pins must be a daemon-minted directory/u },
+  );
+});
+
+test('provideGuest rejects a wrong-typed pins reference', async t => {
+  const { host } = await prepareHost(t);
+  // A read-only view is daemon-minted but is a `readable-directory`, not the
+  // plain writable `directory` the pins option requires.
+  const dir = await E(host).makeDirectory('some-dir');
+  const readOnlyDir = await E(dir).readOnly();
+  await t.throwsAsync(
+    E(host).provideGuest('guest', {
+      agentName: 'guest-agent',
+      pins: /** @type {any} */ (readOnlyDir),
+    }),
+    { message: /pins must be a directory/u },
+  );
+});
+
+test('provideGuest rejects a non-daemon-minted networks reference', async t => {
+  const { host } = await prepareHost(t);
+  const notADaemonRef = Far('not-a-directory', {});
+  await t.throwsAsync(
+    E(host).provideGuest('guest', {
+      agentName: 'guest-agent',
+      networks: /** @type {any} */ (notADaemonRef),
+    }),
+    { message: /networks must be a daemon-minted directory/u },
+  );
+});
+
+test('provideGuest rejects a wrong-typed networks reference', async t => {
+  const { host } = await prepareHost(t);
+  // A worker is daemon-minted but is neither a directory nor a
+  // readable-directory, so it must be rejected as a networks option.
+  const worker = await E(host).provideWorker('some-worker');
+  await t.throwsAsync(
+    E(host).provideGuest('guest', {
+      agentName: 'guest-agent',
+      networks: /** @type {any} */ (worker),
+    }),
+    { message: /networks must be a directory or read-only directory/u },
+  );
+});
+
+test('EndoDirectory.readOnly() mirrors reads and rejects every mutator', async t => {
+  const { host } = await prepareHost(t);
+  const dir = await E(host).makeDirectory('backing-dir');
+  await E(host).storeValue(1, 'one-src');
+  await E(host).storeValue(2, 'two-src');
+  const oneId = await E(host).identify('one-src');
+  const twoId = await E(host).identify('two-src');
+  await E(dir).storeIdentifier(['one'], oneId);
+  await E(dir).storeIdentifier(['two'], twoId);
+
+  const readOnlyDir = await E(dir).readOnly();
+
+  // Reads round-trip against the backing directory.
+  t.deepEqual([...(await E(readOnlyDir).list())].sort(), ['one', 'two']);
+  t.true(await E(readOnlyDir).has('one'));
+  t.false(await E(readOnlyDir).has('absent'));
+  t.is(await E(readOnlyDir).lookup('one'), await E(dir).lookup('one'));
+  t.is(await E(readOnlyDir).maybeLookup('absent'), undefined);
+
+  // The read-only view exposes no mutators at all.
+  await t.throwsAsync(
+    E(/** @type {any} */ (readOnlyDir)).storeIdentifier(['three'], oneId),
+    undefined,
+    'storeIdentifier is not available on a read-only view',
+  );
+  await t.throwsAsync(
+    E(/** @type {any} */ (readOnlyDir)).remove('one'),
+    undefined,
+    'remove is not available on a read-only view',
+  );
+  await t.throwsAsync(
+    E(/** @type {any} */ (readOnlyDir)).makeDirectory('nested'),
+    undefined,
+    'makeDirectory is not available on a read-only view',
+  );
+
+  // A live write to the backing directory is observable through the view,
+  // confirming it is a live attenuation rather than a snapshot.
+  await E(host).storeValue(3, 'three-src');
+  const threeId = await E(host).identify('three-src');
+  await E(dir).storeIdentifier(['three'], threeId);
+  t.true(await E(readOnlyDir).has('three'));
 });
 
 test('move moves value, between different guests', async t => {
@@ -3865,6 +3962,18 @@ testNeedsNodeWorker('guest invites a guest and they exchange mail', async t => {
         message.strings?.[0] === 'Hello from guest B',
     ),
   );
+});
+
+test('EndoGuest.invite nests the invitation at a directory path', async t => {
+  const { host } = await prepareHost(t);
+  const guest = await E(host).provideGuest('guest-handle', {
+    agentName: 'guest-agent',
+  });
+  await E(guest).makeDirectory('peers');
+  const invitation = await E(guest).invite(['peers', 'bob']);
+  t.truthy(await E(invitation).locate());
+  t.true(await E(guest).has('peers', 'bob'));
+  t.false(await E(guest).has('bob'));
 });
 
 test('reverse locate local value', async t => {

@@ -1517,10 +1517,20 @@ export interface EndoWorker {}
 export type MakeHostOrGuestOptions = {
   agentName?: string | string[];
   introducedNames?: Record<string, string>;
+};
+
+/**
+ * Guest-only creation options. `pins`/`networks` are honored solely by
+ * `provideGuest` (via `makeGuest`); `makeChildHost` behind `provideHost`
+ * neither reads nor validates them, so they must not appear on the shared
+ * host/guest options type — declaring them there would advertise an option the
+ * host path silently drops.
+ */
+export type MakeGuestOptions = MakeHostOrGuestOptions & {
   /** A caller-selected directory to expose to a new guest as `@pins`. */
   pins?: EndoDirectory;
   /** A caller-selected directory or read-only view to expose as `@nets`. */
-  nets?: EndoDirectory | ReadableNameHub;
+  networks?: EndoDirectory | ReadableNameHub;
 };
 
 export type MakeCapletOptions = {
@@ -1935,7 +1945,7 @@ export interface EndoHost extends EndoAgent {
   provideHostPath(cap: unknown): Promise<string>;
   provideGuest(
     petName?: string | string[],
-    opts?: MakeHostOrGuestOptions,
+    opts?: MakeGuestOptions,
   ): Promise<EndoGuest>;
   provideHost(
     petName?: string | string[],

@@ -5,7 +5,7 @@
 
 /** @import { ERef } from '@endo/eventual-send' */
 /** @import { PassableBytesReader } from '@endo/exo-stream' */
-/** @import { AgentDeferredTaskParams, ChannelDeferredTaskParams, Context, ContentLoadable, DaemonCore, DeferredTasks, EndoDiagnostics, EndoDirectory, EndoGuest, EndoHost, EndoMount, EnvRecord, EvalDeferredTaskParams, FormulaIdentifier, FormulaNumber, FormulaRecord, GitCredentialDeferredTaskParams, GitDeferredTaskParams, GitProvisionOptions, GitRemoteDeferredTaskParams, HostToolPowers, HttpClientDeferredTaskParams, InvitationDeferredTaskParams, MakeCapletDeferredTaskParams, MakeCapletOptions, MakeDirectoryNode, MakeHostOrGuestOptions, MakeMailbox, MountDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, PeerInfo, PetName, ReadableBlobDeferredTaskParams, ReadableNameHub, ReadableTreeDeferredTaskParams, MarshalDeferredTaskParams, ScratchMountDeferredTaskParams, ShellDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
+/** @import { AgentDeferredTaskParams, ChannelDeferredTaskParams, Context, ContentLoadable, DaemonCore, DeferredTasks, EndoDiagnostics, EndoDirectory, EndoGuest, EndoHost, EndoMount, EnvRecord, EvalDeferredTaskParams, FormulaIdentifier, FormulaNumber, FormulaRecord, GitCredentialDeferredTaskParams, GitDeferredTaskParams, GitProvisionOptions, GitRemoteDeferredTaskParams, HostToolPowers, HttpClientDeferredTaskParams, InvitationDeferredTaskParams, MakeCapletDeferredTaskParams, MakeCapletOptions, MakeDirectoryNode, MakeGuestOptions, MakeHostOrGuestOptions, MakeMailbox, MountDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, PeerInfo, PetName, ReadableBlobDeferredTaskParams, ReadableNameHub, ReadableTreeDeferredTaskParams, MarshalDeferredTaskParams, ScratchMountDeferredTaskParams, ShellDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
 /** @import { makeSecretManager } from './secret-manager.js' */
 /** @import { makeTraceAggregator } from './trace-aggregator.js' */
 
@@ -79,20 +79,20 @@ const assertPowersNameOrPath = nameOrPath => {
 
 /**
  * Normalizes host or guest options, providing default values.
- * @param {MakeHostOrGuestOptions | undefined} opts
- * @returns {{ introducedNames: Record<Name, PetName>, agentName?: NameOrPath, pins?: EndoDirectory, nets?: EndoDirectory | ReadableNameHub }}
+ * @param {MakeGuestOptions | undefined} opts
+ * @returns {{ introducedNames: Record<Name, PetName>, agentName?: NameOrPath, pins?: EndoDirectory, networks?: EndoDirectory | ReadableNameHub }}
  */
 const normalizeHostOrGuestOptions = opts => {
   const agentName = /** @type {NameOrPath | undefined} */ (opts?.agentName);
   const pins = opts?.pins;
-  const nets = opts?.nets;
+  const networks = opts?.networks;
   return {
     introducedNames: /** @type {Record<Name, PetName>} */ (
       opts?.introducedNames ?? Object.create(null)
     ),
     ...(agentName !== undefined && { agentName }),
     ...(pins !== undefined && { pins }),
-    ...(nets !== undefined && { nets }),
+    ...(networks !== undefined && { networks }),
   };
 };
 
@@ -2002,7 +2002,7 @@ export const makeHostMaker = ({
 
     /**
      * @param {NameOrPath} [handleName]
-     * @param {MakeHostOrGuestOptions} [opts]
+     * @param {MakeGuestOptions} [opts]
      * @returns {Promise<{id: FormulaIdentifier, value: Promise<EndoGuest>}>}
      */
     const makeGuest = async (
@@ -2011,7 +2011,7 @@ export const makeHostMaker = ({
         introducedNames = Object.create(null),
         agentName = undefined,
         pins = undefined,
-        nets = undefined,
+        networks = undefined,
       } = {},
     ) => {
       let guest = await getNamedAgent(handleName, 'guest');
@@ -2035,11 +2035,11 @@ export const makeHostMaker = ({
           }
         }
         let guestNetworksDirectoryId;
-        if (nets !== undefined) {
-          guestNetworksDirectoryId = getIdForRef(nets);
+        if (networks !== undefined) {
+          guestNetworksDirectoryId = getIdForRef(networks);
           if (guestNetworksDirectoryId === undefined) {
             throw makeError(
-              X`provideGuest: nets must be a daemon-minted directory`,
+              X`provideGuest: networks must be a daemon-minted directory`,
             );
           }
           const formula = await getFormulaForId(guestNetworksDirectoryId);
@@ -2048,7 +2048,7 @@ export const makeHostMaker = ({
             formula.type !== 'readable-directory'
           ) {
             throw makeError(
-              X`provideGuest: nets must be a directory or read-only directory`,
+              X`provideGuest: networks must be a directory or read-only directory`,
             );
           }
         }
