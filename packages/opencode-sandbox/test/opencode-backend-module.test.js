@@ -158,8 +158,8 @@ test.serial('resolveBackendConfig falls back to the opencode-* defaults', t => {
       path.join(os.homedir(), 'opencode-workspaces'),
     );
     t.is(config.configBaseDir, path.join(os.homedir(), 'opencode-configs'));
-    t.is(config.rootfs, 'oci:localhost/opencode:latest');
-    t.is(config.mcpBaseDir, path.join(os.tmpdir(), 'opencode-mcp'));
+    t.is(config.rootfs, 'oci:localhost/opencode-sandbox:latest');
+    t.is(config.mcpBaseDir, path.join(os.homedir(), 'opencode-mcp'));
   } finally {
     for (const name of Object.keys(process.env)) {
       if (

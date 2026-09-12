@@ -5,6 +5,7 @@ import {
   chmod,
   mkdtemp,
   mkdir,
+  readFile,
   rm,
   stat,
   symlink,
@@ -179,4 +180,61 @@ test('refuses a symlinked session directory', async t => {
   await t.throwsAsync(() => provider.provideSessionMount('ses-1'), {
     message: /Cannot create session state directory|symbolic link/,
   });
+});
+
+test('refuses a symlinked ownership directory and leaves its target alone', async t => {
+  const root = await makeRoot(t);
+  const victim = await makeRoot(t);
+  await chmod(victim, 0o755);
+  await symlink(victim, path.join(root, '.owners'));
+  const { hostAgent } = makeFakeHost();
+  const provider = makeOpencodeStateProvider({ hostAgent, stateRoot: root });
+  await t.throwsAsync(provider.provideSessionMount('ses-1'), {
+    message: /Ownership directory must not be a symlink/,
+  });
+  t.is((await stat(victim)).mode % 0o1000, 0o755);
+});
+
+test('refuses a symlinked ownership marker without touching its target', async t => {
+  const root = await makeRoot(t);
+  const victimDir = await makeRoot(t);
+  const victim = path.join(victimDir, 'victim');
+  await writeFile(victim, 'do not overwrite\n');
+  await mkdir(path.join(root, '.owners'), { mode: 0o700 });
+  await symlink(victim, path.join(root, '.owners', 'ses-1'));
+  const { hostAgent } = makeFakeHost();
+  const provider = makeOpencodeStateProvider({ hostAgent, stateRoot: root });
+  await t.throwsAsync(provider.provideSessionMount('ses-1'), {
+    message: /Ownership marker must not be a symlink/,
+  });
+  t.is(await readFile(victim, 'utf8'), 'do not overwrite\n');
+});
+
+test('refuses a symlinked state root', async t => {
+  const root = await makeRoot(t);
+  const target = await makeRoot(t);
+  const link = `${root}-link`;
+  await symlink(target, link);
+  t.teardown(() => rm(link, { force: true }));
+  const { hostAgent } = makeFakeHost();
+  const provider = makeOpencodeStateProvider({ hostAgent, stateRoot: link });
+  await t.throwsAsync(provider.provideSessionMount('ses-1'), {
+    message: /State root must not be a symlink/,
+  });
+  t.false(await stat(path.join(target, 'ses-1')).catch(() => false));
+});
+
+test('concurrent first provisions on a fresh root both succeed', async t => {
+  const root = await makeRoot(t);
+  const { hostAgent } = makeFakeHost();
+  const provider = makeOpencodeStateProvider({ hostAgent, stateRoot: root });
+  const results = await Promise.allSettled([
+    provider.provideSessionMount('ses-a'),
+    provider.provideSessionMount('ses-b'),
+  ]);
+  t.deepEqual(
+    results.map(result => result.status),
+    ['fulfilled', 'fulfilled'],
+    'the .owners/ create race must not fail a session',
+  );
 });

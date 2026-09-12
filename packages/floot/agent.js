@@ -2699,6 +2699,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
       .filter(Boolean),
     'codex-backend',
     'claude-backend',
+    'opencode-backend',
   ];
   // Operator bindings can be added, removed, or replaced after factory boot.
   // Resolve this small configured set at selection time; existing sessions

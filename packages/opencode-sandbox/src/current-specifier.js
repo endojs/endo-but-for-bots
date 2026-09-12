@@ -3,6 +3,8 @@
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
+import { Fail, q } from '@endo/errors';
+
 /**
  * Reroute a release-pinned module URL through the hosted deploy's stable
  * `current` symlink so a pinned UNCONFINED formula survives release pruning.
@@ -51,3 +53,23 @@ export const toCurrentSpecifier = specifier => {
   return specifier;
 };
 harden(toCurrentSpecifier);
+
+/**
+ * Fail closed when a specifier that must survive release pruning still points
+ * at a concrete release. `toCurrentSpecifier` rewrites `releases/<id>/` paths
+ * through `<stateDir>/current` when that twin resolves; if it could not (no
+ * symlink, unreadable path) the formula would be minted with a path that
+ * dangles as soon as the release is pruned, so setup must abort instead of
+ * committing a poisoned binding (DESIGN § Credential path).
+ *
+ * @param {string} specifier
+ * @param {string} label
+ * @returns {string}
+ */
+export const assertCurrentSpecifier = (specifier, label = 'module') => {
+  if (/\/releases\/[^/]+\//.test(specifier)) {
+    Fail`${q(label)} module specifier ${q(specifier)} is pinned to a concrete release; expected it to resolve through <stateDir>/current for revival`;
+  }
+  return specifier;
+};
+harden(assertCurrentSpecifier);

@@ -4,7 +4,10 @@ import { btoa } from 'node:buffer';
 import { E } from '@endo/eventual-send';
 import { Fail } from '@endo/errors';
 
-import { toCurrentSpecifier } from './current-specifier.js';
+import {
+  assertCurrentSpecifier,
+  toCurrentSpecifier,
+} from './current-specifier.js';
 
 /**
  * Import only on first setup. Never overwrite a UI rotation or resurrect a
@@ -68,8 +71,11 @@ export const provideManagedCredentials = async (
     if (await E(host).has(name)) await E(host).remove(name);
     await E(host).makeUnconfined(
       '@main',
-      toCurrentSpecifier(
-        new URL('./managed-credentials-module.js', import.meta.url).href,
+      assertCurrentSpecifier(
+        toCurrentSpecifier(
+          new URL('./managed-credentials-module.js', import.meta.url).href,
+        ),
+        'managed-credentials',
       ),
       {
         powersName: temporary,
