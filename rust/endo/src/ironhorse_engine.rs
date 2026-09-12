@@ -558,10 +558,6 @@ pub mod engine {
         }
     }
 
-    /// Map a structured parse reject to the VM's source-compile error the
-    /// same way the 262 harness does: resource limits and meter stops are
-    /// host stops, an unported-but-valid construct is a coverage gap, and any
-    /// other reject is the bare, realm-local `SyntaxError` diagnostic.
     /// Map a structured parse reject to the VM's source-compile error,
     /// exhaustively: every [`ironhorse_compile::ParseErrorKind`] and every
     /// [`ironhorse_compile::LexErrorKind`] is named, so a newly added variant
@@ -588,10 +584,11 @@ pub mod engine {
                 LexErrorKind::MeterLimit | LexErrorKind::RegExpBudgetExceeded => {
                     SourceCompileError::MeterAbort
                 }
-                LexErrorKind::RegExpResourceLimit | LexErrorKind::Overflow => {
-                    SourceCompileError::HeapExhausted
-                }
-                // Guest-visible syntax errors.
+                LexErrorKind::RegExpResourceLimit => SourceCompileError::HeapExhausted,
+                // Guest-visible syntax errors. `Overflow` is documented
+                // unreachable in ironhorse (its scan buffers grow), and is
+                // classified as syntax here to stay aligned with the 262
+                // harness and `compile_metered`.
                 LexErrorKind::InvalidCharacter(_)
                 | LexErrorKind::InvalidEscape
                 | LexErrorKind::InvalidNumber
@@ -603,6 +600,7 @@ pub mod engine {
                 | LexErrorKind::LineTerminatorInRegExp
                 | LexErrorKind::InvalidRegExp
                 | LexErrorKind::InvalidAtSign
+                | LexErrorKind::Overflow
                 | LexErrorKind::UnexpectedCharacter(_) => SourceCompileError::Syntax(message),
             },
         }
@@ -811,6 +809,16 @@ pub mod engine {
         /// `cadence` not recorded in the store: replicas must agree on
         /// it out of band to refuse the same cranks.
         pub meter: MeterBounds,
+        /// The intrinsic-global permit (F144) for this machine's heap.
+        /// Required, not defaulted: host attenuation does not ride the
+        /// snapshot, so the owner must DECLARE the policy at every `open`
+        /// rather than rely on a machine default. `None` is the explicit
+        /// full-realm declaration; `Some(names)` binds only those intrinsic
+        /// globals. A resumed store that was written under a narrower policy
+        /// is therefore not silently widened by an omission — widening is an
+        /// explicit owner act at this boundary. Consensus-relevant like
+        /// `meter`: replicas must agree on it out of band.
+        pub intrinsic_permit: Option<Vec<String>>,
     }
 
     /// The checkpoint/collect cadence a [`PersistentMachine`] runs
@@ -962,15 +970,15 @@ pub mod engine {
         /// lifetime, some `10^14`; a ceiling left stranded above a
         /// restarted index is not a reachable state.)
         crank_ceiling: std::rc::Rc<std::cell::Cell<u64>>,
-        /// The intrinsic-global permit this EMBEDDER chose (F144), if any.
-        /// Host configuration does not ride the snapshot, so this is
-        /// retained on the machine and re-applied to the resumed heap after
-        /// every rewind — otherwise the engine's own relink could bind an
-        /// intrinsic the owner had denied once the restored floor falls
-        /// below a name interned before suspend. `None` keeps the full realm,
-        /// matching the default of an unconfigured machine. `open` does not
-        /// carry a policy across processes; a consumer that needs one calls
-        /// [`Self::set_intrinsic_permit`] after every `open`.
+        /// The intrinsic-global permit this EMBEDDER declared at open
+        /// (F144), if any. Host configuration does not ride the snapshot, so
+        /// it is taken from [`HeapStoreOptions::intrinsic_permit`] on every
+        /// `open` and retained here to be re-applied to the resumed heap
+        /// after every rewind — otherwise the engine's own relink could bind
+        /// an intrinsic the owner had denied once the restored floor falls
+        /// below a name interned before suspend. `None` is the explicit
+        /// full-realm declaration; [`Self::set_intrinsic_permit`] changes the
+        /// live policy.
         intrinsic_permit: Option<Vec<String>>,
     }
 
@@ -1023,6 +1031,9 @@ pub mod engine {
                     // the boot machine before the store session adopts it, so
                     // every later resume re-installs it on the resumed heap.
                     boot.set_source_compiler(std::rc::Rc::new(IronhorseSourceCompiler));
+                    // The permit is declared at open, atomically with the
+                    // session: no crank can run under an undeclared policy.
+                    Self::apply_intrinsic_permit(&options.intrinsic_permit, &mut boot);
                     if let Some(interval) = options.meter.check_interval() {
                         boot.arm_meter(interval, meter_host(&crank_ceiling));
                     }
@@ -1048,7 +1059,7 @@ pub mod engine {
                         last_collect_error: None,
                         meter: options.meter.clone(),
                         crank_ceiling,
-                        intrinsic_permit: None,
+                        intrinsic_permit: options.intrinsic_permit.clone(),
                     })
                 }
                 Ok(_) => {
@@ -1057,10 +1068,13 @@ pub mod engine {
                         resume_from_store_lazy(store.clone(), &signature).map_err(store_err)?;
                     Self::attach_meter(&options.meter, &crank_ceiling, session.machine_mut());
                     // The compiler is host configuration and does not ride the
-                    // snapshot, so every resume re-installs it (F160).
+                    // snapshot, so every resume re-installs it (F160), and the
+                    // permit declared in the options is applied before any
+                    // crank can relink an intrinsic (F144).
                     session
                         .machine_mut()
                         .set_source_compiler(std::rc::Rc::new(IronhorseSourceCompiler));
+                    Self::apply_intrinsic_permit(&options.intrinsic_permit, session.machine_mut());
                     // A resumed machine carries its program symbol
                     // names in the small state; an empty table means
                     // no crank ever linked (e.g. the first crank
@@ -1084,7 +1098,7 @@ pub mod engine {
                         last_collect_error: None,
                         meter: options.meter.clone(),
                         crank_ceiling,
-                        intrinsic_permit: None,
+                        intrinsic_permit: options.intrinsic_permit.clone(),
                     })
                 }
                 Err(e) => Err(store_err(e)),
@@ -1130,11 +1144,16 @@ pub mod engine {
             &self.meter
         }
 
-        /// Set the intrinsic-global permit (F144) for this machine's heap and
-        /// retain it across rewind. Host configuration does not ride the
-        /// snapshot, so a consumer calls this after every `open`; `None`
-        /// restores the full realm. The policy is applied to the live
-        /// interpreter immediately, before any crank can relink an intrinsic.
+        /// Change the intrinsic-global permit (F144) on a live machine and
+        /// retain it across rewind. The initial policy is declared at `open`
+        /// through [`HeapStoreOptions::intrinsic_permit`]; this is for a
+        /// runtime change. Host configuration does not ride the snapshot, so
+        /// the `open`-time declaration is what keeps a resumed heap from
+        /// being widened by an omission. `None` restores the full realm.
+        ///
+        /// Narrowing applies to names not yet bound: a binding already made is
+        /// not revoked, exactly as [`ironhorse_vm::Interp::set_intrinsic_permit`]
+        /// documents.
         pub fn set_intrinsic_permit(&mut self, permit: Option<&[&str]>) {
             self.intrinsic_permit =
                 permit.map(|names| names.iter().map(|name| (*name).to_string()).collect());
@@ -1643,6 +1662,7 @@ pub mod engine {
                 signature: "collector-panic".to_string(),
                 cadence: CadencePolicy::default(),
                 meter: MeterBounds::default(),
+                intrinsic_permit: None,
             };
             let mut machine = PersistentMachine::open(&options).unwrap();
             machine
@@ -1680,6 +1700,7 @@ pub mod engine {
                     collect_every: 1,
                 },
                 meter: MeterBounds::default(),
+                intrinsic_permit: None,
             };
             let mut machine = PersistentMachine::open(&options).unwrap();
             let outcome = machine.eval(
@@ -2003,10 +2024,7 @@ pub mod engine {
                     SourceCompileError::MeterAbort
                 ));
             }
-            for error in [
-                lex(LexErrorKind::RegExpResourceLimit),
-                lex(LexErrorKind::Overflow),
-            ] {
+            for error in [lex(LexErrorKind::RegExpResourceLimit)] {
                 assert!(matches!(
                     map_source_compile_error(error),
                     SourceCompileError::HeapExhausted
@@ -2027,6 +2045,9 @@ pub mod engine {
                 LexErrorKind::InvalidRegExp,
                 LexErrorKind::InvalidAtSign,
                 LexErrorKind::UnexpectedCharacter(0x40),
+                // Documented unreachable in ironhorse; classified as syntax
+                // to stay aligned with the 262 harness and `compile_metered`.
+                LexErrorKind::Overflow,
             ] {
                 assert_eq!(syntax(lex(kind)), "bad lex");
             }

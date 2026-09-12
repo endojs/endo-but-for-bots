@@ -35,6 +35,7 @@ fn persistent_machine_evaluates_dynamic_source_across_resume() {
         signature: "endor-ironhorse-worker-v1".to_string(),
         cadence: CadencePolicy::default(),
         meter: MeterBounds::per_crank(1_000_000),
+        intrinsic_permit: None,
     };
 
     let mut machine = PersistentMachine::open(&options).unwrap();
@@ -56,6 +57,7 @@ fn rewind_reinstalls_the_source_bridge() {
         signature: "endor-ironhorse-worker-v1".to_string(),
         cadence: CadencePolicy::default(),
         meter: MeterBounds::per_crank(1_000_000),
+        intrinsic_permit: None,
     };
 
     let mut machine = PersistentMachine::open(&options).unwrap();

@@ -15,6 +15,31 @@
 
 use ironhorse_vm::{CompartmentOptions, CompartmentSkip, Machine};
 
+/// A second compiler used to pin `evaluate_with_symbols_on`'s precedence: the
+/// caller's compiler must win over the machine's. It rewrites `6*7` to `43`,
+/// so the completion distinguishes the two.
+struct CallerCompiler;
+
+impl ironhorse_vm::SourceCompiler for CallerCompiler {
+    fn compile_source(
+        &self,
+        source: &str,
+        strict: bool,
+        _raw_budget: u64,
+        _charge: &mut dyn FnMut(u64) -> bool,
+    ) -> Result<ironhorse_vm::CompiledSource, ironhorse_vm::SourceCompileError> {
+        let rewritten = if source == "6*7" { "43" } else { source };
+        let (bytecode, symbols) = ironhorse_compile::compile_atoms_with(rewritten, strict)
+            .map_err(|e| ironhorse_vm::SourceCompileError::Syntax(e.message))?;
+        Ok(ironhorse_vm::CompiledSource {
+            bytecode,
+            symbols,
+            parse_meter_raw: 0,
+            parse_computrons: 0,
+        })
+    }
+}
+
 /// A minimal evaluative source compiler for the boundary test: enough to show
 /// that a denied constructor reached through `.constructor` can still compile
 /// and run.
@@ -181,6 +206,26 @@ fn evaluate_on_resolves_permit_precedence_both_ways() {
     let overridden = restricted.evaluate_with_symbols_on(plain, &code, &symbols);
     assert!(overridden.completed, "{:?}", overridden.halt);
     assert_eq!(overridden.result, expected_restricted);
+}
+
+#[test]
+fn evaluate_on_preserves_a_callers_compiler() {
+    // The machine installs a compiler, but the caller's interpreter already
+    // carries one; the caller's explicit choice must win, or a host that
+    // supplies its own compiler through this entry point is silently ignored.
+    use ironhorse_vm::Interp;
+    let (code, symbols) = ironhorse_compile::compile_atoms("eval('6*7')").expect("compiles");
+    let machine = Machine::new();
+    machine.set_source_compiler(std::rc::Rc::new(TestCompiler));
+    let compartment = machine.new_compartment();
+    let mut caller = Interp::new();
+    caller.set_source_compiler(std::rc::Rc::new(CallerCompiler));
+    let outcome = compartment.evaluate_with_symbols_on(caller, &code, &symbols);
+    assert!(outcome.completed, "{:?}", outcome.halt);
+    assert_eq!(
+        outcome.result, "43",
+        "the caller-installed compiler must take precedence over the machine's"
+    );
 }
 
 #[test]

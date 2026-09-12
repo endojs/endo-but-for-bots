@@ -2174,13 +2174,19 @@ impl Interp {
     /// Confinement needs the shared frozen intrinsic graph of the realm split
     /// (F059), not this permit.
     ///
-    /// Applying a permit to an interpreter that has already linked intrinsic
-    /// bindings is refused rather than silently ignored
-    /// ([`crate::compartment::CompartmentSkip`]). The permit is host
-    /// configuration, not guest state, so it is not snapshotted; a restored
-    /// realm's owner is expected to reapply it before the next link, and
-    /// [`crate::Machine`] users can hold a policy across restore by setting
-    /// it again.
+    /// Applying a permit to an already-linked interpreter through
+    /// [`crate::compartment::Compartment::evaluate_with_symbols_on`] is
+    /// refused as `compartment:permit-after-link`, because binding is
+    /// create-only and a narrower policy could not be enforced. Calling this
+    /// method directly on a linked interpreter is not refused, but it only
+    /// affects later links: a binding already made is not removed, so a
+    /// caller that needs to narrow an existing realm must use the compartment
+    /// entry (which refuses) rather than expect this call to revoke.
+    ///
+    /// The permit is host configuration, not guest state, so it is not
+    /// snapshotted; a restored realm's owner is expected to reapply it before
+    /// the next link, and [`crate::Machine`] users can hold a policy across
+    /// restore by setting it again.
     pub fn set_intrinsic_permit(&mut self, permit: Option<&[&str]>) {
         self.intrinsic_permit =
             permit.map(|names| names.iter().map(|name| (*name).to_string()).collect());
