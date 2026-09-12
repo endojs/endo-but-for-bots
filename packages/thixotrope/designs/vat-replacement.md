@@ -425,14 +425,14 @@ permanent schema expansion.
 
 ## Existing mechanisms and missing work
 
-The [hub](../src/hub.js) already has table-backed identities and retirement tombstones.
-The [worker transport](../src/durable-worker-transport.js) already serializes delivery and sleep and
+The [hub](../src/net/hub.js) already has table-backed identities and retirement tombstones.
+The [worker transport](../src/core/durable-worker-transport.js) already serializes delivery and sleep and
 records replay boundaries.
 The daemon's endpoint uses OCapN `restoreExport` when restoring describable host resources.
 That endpoint mechanism is not a guest migration API: it trusts the embedder to supply an equivalent
 value and leaves an already occupied export position unchanged.
 It does not validate a replacement manifest or reconcile a live guest's session state.
-The [guest peer](../src/worker-peer.js) currently exposes evaluation, not trusted export-table
+The [guest peer](../src/core/worker-peer.js) currently exposes evaluation, not trusted export-table
 inspection and installation controls.
 
 Missing pieces include authoritative guest/session inspection, source fencing, private staging,

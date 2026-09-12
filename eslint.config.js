@@ -71,7 +71,7 @@ export default defineConfig(
     files: ['packages/thixotrope/src/**/*.js', 'packages/thixotrope/index.js'],
     ignores: [
       'packages/thixotrope/src/platform/node-powers.js',
-      'packages/thixotrope/src/worker-peer-xs.js',
+      'packages/thixotrope/src/core/worker-peer-xs.js',
     ],
     rules: {
       'no-restricted-imports': [

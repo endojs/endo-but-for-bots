@@ -1,5 +1,5 @@
 // @ts-check
-/** @import { NodePowers } from './platform/node-powers.js' */
+/** @import { NodePowers } from '../platform/node-powers.js' */
 import harden from '@endo/harden';
 import { decodeBase64, encodeBase64 } from '@endo/base64';
 import { Fail, q } from '@endo/errors';

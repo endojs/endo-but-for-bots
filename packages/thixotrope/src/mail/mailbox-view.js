@@ -1,8 +1,8 @@
 // @ts-check
-/** @import { NodePowers } from './platform/node-powers.js' */
+/** @import { NodePowers } from '../platform/node-powers.js' */
 import harden from '@endo/harden';
 
-/** @import { connectLocalControl } from './local-control.js' */
+/** @import { connectLocalControl } from '../control/local-control.js' */
 /**
  * @param {NodePowers} powers
  * @param {Awaited<ReturnType<typeof connectLocalControl>>} client

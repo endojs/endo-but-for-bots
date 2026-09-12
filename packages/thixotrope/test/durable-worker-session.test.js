@@ -19,14 +19,14 @@ import { frozenBytes } from '@endo/immutable-arraybuffer';
 import { E } from '@endo/eventual-send';
 import { syrupCodec } from '@endo/ocapn/syrup';
 
-import { makeOcapnHub } from '../src/hub.js';
-import { makeDurableWorkerTransport } from '../src/durable-worker-transport.js';
-import { makePipeNetwork } from '../src/pipe-network.js';
+import { makeOcapnHub } from '../src/net/hub.js';
+import { makeDurableWorkerTransport } from '../src/core/durable-worker-transport.js';
+import { makePipeNetwork } from '../src/net/pipe-network.js';
 import {
   makePeerJournalReplayEngine,
   makePeerSnapshottingReplayEngine,
-} from '../src/peer-replay-engine.js';
-import { makeMemoryStore } from '../src/store-memory.js';
+} from '../src/core/peer-replay-engine.js';
+import { makeMemoryStore } from '../src/store/store-memory.js';
 import { makeTestOcapn } from './_util.js';
 
 import { makeNodePowers } from '../src/platform/node-powers.js';

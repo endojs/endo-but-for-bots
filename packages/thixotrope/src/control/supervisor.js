@@ -1,26 +1,26 @@
 // @ts-check
-/** @import { NodePowers } from './platform/node-powers.js' */
+/** @import { NodePowers } from '../platform/node-powers.js' */
 import { E, Far } from '@endo/far';
 import harden from '@endo/harden';
 import { syrupCodec } from '@endo/ocapn/syrup';
 
 import { makeApplicationRegistry } from './application-registry.js';
-import { makeClockService } from './clock-service.js';
-import { makeThixotropeDaemon } from './daemon.js';
-import { makeDurableNetLayer } from './durable-netlayer.js';
-import { makeIronhorseEngine } from './ironhorse-engine.js';
+import { makeClockService } from '../alarms/clock-service.js';
+import { makeThixotropeDaemon } from '../core/daemon.js';
+import { makeDurableNetLayer } from '../net/durable-netlayer.js';
+import { makeIronhorseEngine } from '../ironhorse/ironhorse-engine.js';
 import { makeLocalControl } from './local-control.js';
-import { makeInventoryViewLifetime } from './inventory-view-lifetime.js';
-import { makeHttpServices } from './http-services.js';
-import { makeObservableInventory } from './observable-inventory.js';
-import { makeMailbox } from './mailbox.js';
-import { makeMailContact } from './mail-contact.js';
-import { makeMailAddressBook } from './mail-address-book.js';
-import { makeFileSyncStringAtom } from './file-sync-string-atom.js';
-import { makeFsStore } from './store-fs.js';
-import { assertUnixPeerLocation, makeUnixNetLayer } from './unix-netlayer.js';
+import { makeInventoryViewLifetime } from '../inventory/inventory-view-lifetime.js';
+import { makeHttpServices } from '../http/http-services.js';
+import { makeObservableInventory } from '../inventory/observable-inventory.js';
+import { makeMailbox } from '../mail/mailbox.js';
+import { makeMailContact } from '../mail/mail-contact.js';
+import { makeMailAddressBook } from '../mail/mail-address-book.js';
+import { makeFileSyncStringAtom } from '../store/file-sync-string-atom.js';
+import { makeFsStore } from '../store/store-fs.js';
+import { assertUnixPeerLocation, makeUnixNetLayer } from '../net/unix-netlayer.js';
 
-/** @import { WorkerEngine } from './worker-engine.js' */
+/** @import { WorkerEngine } from '../core/worker-engine.js' */
 /** @import { Socket } from 'node:net' */
 
 /**

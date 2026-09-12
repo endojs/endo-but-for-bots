@@ -25,8 +25,8 @@ import { frozenBytes } from '@endo/immutable-arraybuffer';
 import { E } from '@endo/eventual-send';
 import { syrupCodec } from '@endo/ocapn/syrup';
 
-import { makePipeNetwork } from '../src/pipe-network.js';
-import { makeXsEngine } from '../src/xs-engine.js';
+import { makePipeNetwork } from '../src/net/pipe-network.js';
+import { makeXsEngine } from '../src/ironhorse/xs-engine.js';
 import { makeTestOcapn } from './_util.js';
 
 import { makeNodePowers } from '../src/platform/node-powers.js';
@@ -101,7 +101,7 @@ testXs('an XS worker peer survives snapshot restore mid-session', async t => {
   // The duct: OCapN frames ride `{ t: 'f', b64 }` JSON envelopes over
   // the binary's deliver/outbound protocol. `incarnation` is mutable so
   // the same pipe network spans a terminate/restore.
-  /** @type {import('../src/worker-engine.js').WorkerIncarnation} */
+  /** @type {import('../src/core/worker-engine.js').WorkerIncarnation} */
   let incarnation;
   const hostPipe = makePipeNetwork({
     codec: syrupCodec,

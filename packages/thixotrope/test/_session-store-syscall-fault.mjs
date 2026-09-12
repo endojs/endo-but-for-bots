@@ -55,7 +55,7 @@ fs.renameSync = (from, to) => {
   if (phase === 'rename' && String(to) === target) fail();
   original.renameSync(from, to);
 };
-const { makeFsStore } = await import('../src/store-fs.js');
+const { makeFsStore } = await import('../src/store/store-fs.js');
 const session = makeFsStore(nodePowers, statePath).provideSessionStore(token);
 /** @type {string | undefined} */
 let errorCode;

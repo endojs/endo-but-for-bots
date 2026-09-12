@@ -1,9 +1,9 @@
 // @ts-check
-/** @import { NodePowers } from './platform/node-powers.js' */
+/** @import { NodePowers } from '../platform/node-powers.js' */
 import { Far } from '@endo/far';
 import harden from '@endo/harden';
 
-/** @import { connectLocalControl } from './local-control.js' */
+/** @import { connectLocalControl } from '../control/local-control.js' */
 
 /** @param {string} text */
 const terminalText = text =>

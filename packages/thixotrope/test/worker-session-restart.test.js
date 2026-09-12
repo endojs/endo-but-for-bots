@@ -25,9 +25,9 @@ import { Far } from '@endo/far';
 import { makeTcpNetLayer } from '@endo/ocapn/netlayer/tcp-testing';
 import { syrupCodec } from '@endo/ocapn/syrup';
 
-import { makeThixotropeDaemon } from '../src/daemon.js';
-import { makePeerSnapshottingReplayEngine } from '../src/peer-replay-engine.js';
-import { makeFsStore } from '../src/store-fs.js';
+import { makeThixotropeDaemon } from '../src/core/daemon.js';
+import { makePeerSnapshottingReplayEngine } from '../src/core/peer-replay-engine.js';
+import { makeFsStore } from '../src/store/store-fs.js';
 import { parkWorkers } from './_park-workers.js';
 
 import { makeNodePowers } from '../src/platform/node-powers.js';

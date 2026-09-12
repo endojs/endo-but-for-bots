@@ -1,7 +1,7 @@
 // @ts-check
 
 /**
- * The Thixotrope hub (`src/hub.js`): the non-reifying core of the
+ * The Thixotrope hub (`src/net/hub.js`): the non-reifying core of the
  * next-generation thixotrope daemon. The hub is not a client — it holds
  * only c-list tables and forwards every message by structural
  * transcoding (slot rewriting), with bootstrap `fetch` as its only
@@ -16,9 +16,9 @@ import { frozenBytes } from '@endo/immutable-arraybuffer';
 import { E } from '@endo/eventual-send';
 import { syrupCodec } from '@endo/ocapn/syrup';
 
-import { makeOcapnHub } from '../src/hub.js';
-import { makePipeNetwork } from '../src/pipe-network.js';
-import { makeWorkerPeer } from '../src/worker-peer.js';
+import { makeOcapnHub } from '../src/net/hub.js';
+import { makePipeNetwork } from '../src/net/pipe-network.js';
+import { makeWorkerPeer } from '../src/core/worker-peer.js';
 import { makeTestOcapn } from './_util.js';
 
 import { makeNodePowers } from '../src/platform/node-powers.js';

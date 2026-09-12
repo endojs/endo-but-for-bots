@@ -2,8 +2,8 @@
 import test from '@endo/ses-ava/test.js';
 import { Far } from '@endo/far';
 
-import { makeAlarmScheduler } from '../src/alarm-scheduler.js';
-import { makeDurableClock } from '../src/durable-clock.js';
+import { makeAlarmScheduler } from '../src/alarms/alarm-scheduler.js';
+import { makeDurableClock } from '../src/alarms/durable-clock.js';
 
 import { makeNodePowers } from '../src/platform/node-powers.js';
 

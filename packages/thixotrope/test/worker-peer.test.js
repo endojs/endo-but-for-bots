@@ -5,8 +5,8 @@ import { frozenBytes } from '@endo/immutable-arraybuffer';
 import { E } from '@endo/eventual-send';
 import { syrupCodec } from '@endo/ocapn/syrup';
 
-import { makePipeNetwork } from '../src/pipe-network.js';
-import { makeWorkerPeer } from '../src/worker-peer.js';
+import { makePipeNetwork } from '../src/net/pipe-network.js';
+import { makeWorkerPeer } from '../src/core/worker-peer.js';
 import { makeTestOcapn } from './_util.js';
 
 import { makeNodePowers } from '../src/platform/node-powers.js';

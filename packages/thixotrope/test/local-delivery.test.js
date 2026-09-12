@@ -2,15 +2,15 @@
 import test from '@endo/ses-ava/test.js';
 import { syrupCodec } from '@endo/ocapn/syrup';
 
-import { makeDurableWorkerTransport } from '../src/durable-worker-transport.js';
-import { makeOcapnHub } from '../src/hub.js';
-import { makeMemoryStore } from '../src/store-memory.js';
+import { makeDurableWorkerTransport } from '../src/core/durable-worker-transport.js';
+import { makeOcapnHub } from '../src/net/hub.js';
+import { makeMemoryStore } from '../src/store/store-memory.js';
 
 import { makeNodePowers } from '../src/platform/node-powers.js';
 
 const nodePowers = makeNodePowers();
 
-/** @import {WorkerEngine} from '../src/worker-engine.js' */
+/** @import {WorkerEngine} from '../src/core/worker-engine.js' */
 
 const workerId = 'a'.repeat(32);
 

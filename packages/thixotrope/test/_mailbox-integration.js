@@ -7,10 +7,10 @@ import { join } from 'node:path';
 import { setTimeout } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
-import { connectLocalControl } from '../src/local-control.js';
-import { makePeerJournalReplayEngine } from '../src/peer-replay-engine.js';
-import { serveThixotrope } from '../src/supervisor.js';
-import { makeFsStore } from '../src/store-fs.js';
+import { connectLocalControl } from '../src/control/local-control.js';
+import { makePeerJournalReplayEngine } from '../src/core/peer-replay-engine.js';
+import { serveThixotrope } from '../src/control/supervisor.js';
+import { makeFsStore } from '../src/store/store-fs.js';
 
 import { makeNodePowers } from '../src/platform/node-powers.js';
 

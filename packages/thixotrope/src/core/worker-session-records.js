@@ -4,7 +4,7 @@ import { Fail, q } from '@endo/errors';
 import { Far } from '@endo/far';
 
 /**
- * @import {ThixotropeStore} from './store-fs.js'
+ * @import {ThixotropeStore} from '../store/store-fs.js'
  */
 
 /**

@@ -8,10 +8,10 @@ const { decodeBase64 } = await import('@endo/base64');
 const { Far } = await import('@endo/far');
 const { syrupCodec } = await import('@endo/ocapn/syrup');
 const { setImmediate } = await import('node:timers/promises');
-const { makeThixotropeDaemon } = await import('../src/daemon.js');
+const { makeThixotropeDaemon } = await import('../src/core/daemon.js');
 const { makePeerJournalReplayEngine } =
-  await import('../src/peer-replay-engine.js');
-const { makeMemoryStore } = await import('../src/store-memory.js');
+  await import('../src/core/peer-replay-engine.js');
+const { makeMemoryStore } = await import('../src/store/store-memory.js');
 
 const raw = makePeerJournalReplayEngine(nodePowers);
 let gcFrames = 0;

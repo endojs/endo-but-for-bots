@@ -1,5 +1,5 @@
 // @ts-check
-/** @import { NodePowers } from './platform/node-powers.js' */
+/** @import { NodePowers } from '../platform/node-powers.js' */
 import harden from '@endo/harden';
 import { decodeBase64, encodeBase64 } from '@endo/base64';
 import { Fail, q } from '@endo/errors';
@@ -12,11 +12,11 @@ import {
   writeOcapnHandshakeMessage,
 } from '@endo/ocapn/operations';
 
-import { makeOcapnHub } from './hub.js';
+import { makeOcapnHub } from '../net/hub.js';
 import { makeDurableWorkerTransport } from './durable-worker-transport.js';
-import { makeEphemeralHubClient } from './ephemeral-hub-client.js';
-import { derivePipeResumption } from './pipe-network.js';
-import { isSessionToken } from './store-validators.js';
+import { makeEphemeralHubClient } from '../net/ephemeral-hub-client.js';
+import { derivePipeResumption } from '../net/pipe-network.js';
+import { isSessionToken } from '../store/store-validators.js';
 import { inspectVatReachability } from './vat-reachability.js';
 import { WorkerHaltError } from './worker-engine.js';
 import { makeWorkerSessionRecords } from './worker-session-records.js';
@@ -25,14 +25,14 @@ import { makeWorkerSessionRecords } from './worker-session-records.js';
  * @import {ERef, FarRef} from '@endo/eventual-send'
  * @import {Connection, OcapnBootstrap} from '@endo/ocapn/client/types'
  * @import {WorkerEngine} from './worker-engine.js'
- * @import {ThixotropeStore} from './store-fs.js'
+ * @import {ThixotropeStore} from '../store/store-fs.js'
  * @import {ThixotropeWorkerShell} from './worker-peer.js'
  */
 
 /**
  * The thixotrope daemon, hub edition: mostly a forwarding and
  * slot-rewriting hub, per design. The daemon is NOT an OCapN client —
- * the Thixotrope hub (`src/hub.js`) routes every message between
+ * the Thixotrope hub (`src/net/hub.js`) routes every message between
  * sessions by structural transcoding over persisted c-list tables, so
  * the daemon reifies nothing that flows between workers and peers:
  * no presences, no promises, no subscriptions, no obligation rows.
