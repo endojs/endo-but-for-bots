@@ -5,6 +5,7 @@ import test from 'ava';
 import {
   provisionOpencodeSession,
   buildSessionPowersSource,
+  resolveSandboxConfig,
 } from '../src/provision-opencode-session.js';
 
 const keyFor = names => (Array.isArray(names) ? names.join('/') : names);
@@ -232,4 +233,27 @@ test('provisionOpencodeSession forwards model, persona, resume id, and turn time
   t.is(clientEnv.SYSTEM_PROMPT, 'You are Floot.');
   t.is(clientEnv.OPENCODE_SESSION_ID, 'ses_recorded');
   t.is(clientEnv.OPENCODE_BRIDGE_TURN_TIMEOUT_MS, '123000');
+});
+
+test('sandbox mount base honors the daemon ENDO_ variable', async t => {
+  const previous = process.env.ENDO_OPENCODE_SANDBOX_MOUNT_DIR;
+  process.env.ENDO_OPENCODE_SANDBOX_MOUNT_DIR = '/var/lib/endo/opencode-mounts';
+  t.teardown(() => {
+    if (previous === undefined) {
+      delete process.env.ENDO_OPENCODE_SANDBOX_MOUNT_DIR;
+    } else {
+      process.env.ENDO_OPENCODE_SANDBOX_MOUNT_DIR = previous;
+    }
+  });
+  t.is(
+    resolveSandboxConfig({}).mountBaseDir,
+    '/var/lib/endo/opencode-mounts',
+    'the daemon env reaches the provisioner so mounts stay in the cleanup dir',
+  );
+  t.is(
+    resolveSandboxConfig({ OPENCODE_SANDBOX_MOUNT_DIR: '/formula/mounts' })
+      .mountBaseDir,
+    '/formula/mounts',
+    'the formula env still wins',
+  );
 });

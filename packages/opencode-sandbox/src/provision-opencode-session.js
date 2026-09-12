@@ -191,6 +191,7 @@ export const resolveSandboxConfig = (formulaEnv = {}) => ({
   mountBaseDir:
     formulaEnv.OPENCODE_SANDBOX_MOUNT_DIR ||
     process.env.OPENCODE_SANDBOX_MOUNT_DIR ||
+    process.env.ENDO_OPENCODE_SANDBOX_MOUNT_DIR ||
     os.tmpdir(),
 });
 
