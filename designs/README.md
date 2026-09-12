@@ -479,6 +479,7 @@ LLM-agent stack).*
 | [notifier-pubsub-migration](notifier-pubsub-migration.md) | 2026-06-23 | 2026-06-26 | Proposed |
 | [platform-range-and-tree-reads](platform-range-and-tree-reads.md) | 2026-07-12 | 2026-07-12 | In Progress |
 | [readableblob-range-attenuation](readableblob-range-attenuation.md) | 2026-07-22 | 2026-07-22 | Proposed |
+| [daemon-mutable-blob-block-storage](daemon-mutable-blob-block-storage.md) | 2026-09-12 | 2026-09-12 | Proposed |
 | [unredacted-stack-sanctioned-ses-api](unredacted-stack-sanctioned-ses-api.md) | 2026-07-02 | 2026-07-10 | Proposed |
 | [worker-rust-xs](worker-rust-xs.md) | 2026-03-23 | 2026-03-23 | Not Started |
 | [outliner-design-doc-2](outliner-design-doc-2.md) | 2026-07-22 | 2026-07-22 | Proposed (research note) |
