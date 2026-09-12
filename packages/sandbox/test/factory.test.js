@@ -212,6 +212,8 @@ test('NetworkProfileShape accepts the documented profiles and rejects others', t
 const makeContainmentFixture = () => {
   let spawnCalls = 0;
   let teardownCalls = 0;
+  let stopping = false;
+  const exits = new Set();
 
   const driver = harden({
     name: /** @type {const} */ ('bwrap'),
@@ -223,6 +225,7 @@ const makeContainmentFixture = () => {
      */
     spawn: async (_slice, argv) => {
       await null;
+      if (stopping) throw Error('driver is stopping');
       spawnCalls += 1;
       const stubborn = argv[0] === '/bin/stubborn';
       /** @type {(status: { code: number | null, signal: string | null }) => void} */
@@ -231,6 +234,7 @@ const makeContainmentFixture = () => {
       const exit = new Promise(resolve => {
         reportExit = resolve;
       });
+      exits.add(reportExit);
       return harden({
         pid: 4242,
         stdin: null,
@@ -248,7 +252,11 @@ const makeContainmentFixture = () => {
       });
     },
     teardown: async () => {
+      stopping = true;
       teardownCalls += 1;
+      for (const resolve of exits)
+        resolve(harden({ code: null, signal: 'SIGKILL' }));
+      exits.clear();
     },
   });
 
@@ -288,10 +296,6 @@ test('a containment failure fails the whole slice, not just one process', async 
   await t.throwsAsync(() => E(stubborn).kill(), {
     message: /could not prove containment.*synthetic signal refusal/,
   });
-  t.true(
-    fixture.counts().teardownCalls >= 1,
-    'forced backend teardown must have run',
-  );
 
   // The slice was torn down under everyone on it, so it must stop
   // accepting work rather than run the next spawn without the
@@ -312,8 +316,10 @@ test('a containment failure fails the whole slice, not just one process', async 
   await t.throwsAsync(() => siblingWait, {
     message: /torn down after a containment failure/,
   });
-  await t.throwsAsync(() => E(handle).dispose(), {
-    message: /dispose could not prove containment/,
+  await E(handle).dispose();
+  t.is(fixture.counts().teardownCalls, 1);
+  await t.throwsAsync(() => E(stubborn).wait(), {
+    message: /could not prove containment/,
   });
 });
 

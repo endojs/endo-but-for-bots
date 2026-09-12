@@ -76,7 +76,7 @@ const makeByteSource = () => {
 
 /**
  * @typedef {(ms: number) => { promise: Promise<void>, cancel: () => void }} MakeDelay
- * @param {{ spawnGate?: Promise<unknown>, afterAdmission?: () => void, softRefuse?: boolean, brokenSignals?: boolean, lifecycle?: boolean, context?: any, makeDelay?: MakeDelay, stdin?: { write: (chunk: Uint8Array) => Promise<void>, close: () => Promise<void> } }} [options]
+ * @param {{ spawnGate?: Promise<unknown>, afterAdmission?: () => void, softRefuse?: boolean, brokenSignals?: boolean, ignoreSignals?: boolean, teardown?: () => Promise<void>, lifecycle?: boolean, context?: any, scratchProvider?: any, makeDelay?: MakeDelay, stdin?: { write: (chunk: Uint8Array) => Promise<void>, close: () => Promise<void> } }} [options]
  */
 const makeDriverFixture = (options = {}) => {
   const stdout = makeByteSource();
@@ -89,6 +89,7 @@ const makeDriverFixture = (options = {}) => {
   let teardownCalls = 0;
   let admissionAborts = 0;
   let exited = false;
+  let stopping = false;
 
   const driver = harden({
     name: /** @type {const} */ ('bwrap'),
@@ -114,6 +115,7 @@ const makeDriverFixture = (options = {}) => {
         admissionAborts += 1;
       });
       if (options.spawnGate !== undefined) await options.spawnGate;
+      if (stopping) throw Error('driver is stopping');
       if (options.afterAdmission !== undefined)
         queueMicrotask(options.afterAdmission);
       return harden({
@@ -135,6 +137,7 @@ const makeDriverFixture = (options = {}) => {
           }
           if (
             !exited &&
+            !options.ignoreSignals &&
             (actual === 'SIGKILL' ||
               actual === 9 ||
               options.softRefuse !== true)
@@ -146,14 +149,19 @@ const makeDriverFixture = (options = {}) => {
       });
     },
     teardown: async () => {
+      stopping = true;
       teardownCalls += 1;
+      if (options.teardown) await options.teardown();
+      else if (options.brokenSignals) throw Error('synthetic teardown failure');
+      exited = true;
+      exit.resolve(harden({ code: null, signal: 'SIGKILL' }));
     },
   });
 
   const factory = makeSandboxFactory(
     {
       drivers: harden([driver]),
-      scratchProvider,
+      scratchProvider: options.scratchProvider ?? scratchProvider,
       context: options.context,
     },
     { makeDelay: options.makeDelay },
@@ -173,6 +181,7 @@ const makeDriverFixture = (options = {}) => {
     counts: () => harden({ spawnCalls, prepareCalls, teardownCalls }),
     admissionAborts: () => admissionAborts,
     exitStatus: () => exit.promise,
+    failWait: error => exit.reject(error),
   });
 };
 
@@ -194,28 +203,21 @@ const collectReader = async reader => {
   return harden({ chunks: harden(chunks), error });
 };
 
-test('dispose cancels a pending admission and reaps a late arrival', async t => {
-  t.timeout(2000);
+test('timeout cancels pending admission and reaps a late arrival', async t => {
+  t.timeout(3000);
   const gate = makePromiseKit();
   const fixture = makeDriverFixture({ spawnGate: gate.promise });
   const handle = await makeHandle(fixture);
-
-  const spawned = E(handle).spawn(harden(['/bin/true']));
-  spawned.catch(() => undefined);
-  await null;
-  // Disposal must settle while the driver admission is still pending;
-  // it cancels the admission instead of awaiting it.
-  await E(handle).dispose();
-  t.is(fixture.counts().spawnCalls, 1);
-  t.is(fixture.counts().teardownCalls, 1);
+  t.teardown(() => E(handle).dispose());
+  await t.throwsAsync(
+    E(handle).spawn(harden(['/bin/true']), harden({ timeoutMs: 10 })),
+    {
+      message: /timed out/,
+    },
+  );
   t.is(fixture.admissionAborts(), 1);
-  await t.throwsAsync(() => spawned, { message: /disposed/ });
-
-  // A driver that ignored the cancellation and produces the process
-  // late must see it terminated and reaped, not leaked.
   gate.resolve(undefined);
-  const status = await fixture.exitStatus();
-  t.deepEqual(status, { code: null, signal: 'SIGKILL' });
+  t.deepEqual(await fixture.exitStatus(), { code: null, signal: 'SIGKILL' });
   t.deepEqual(fixture.signals(), ['SIGKILL']);
 });
 
@@ -580,4 +582,121 @@ test('driver availability fails closed without lifecycle proof', async t => {
     prepareCalls: 0,
     teardownCalls: 0,
   });
+});
+
+test('rejected wait requires driver release and fences admission before teardown', async t => {
+  t.timeout(3000);
+  let handle;
+  const fixture = makeDriverFixture({
+    teardown: async () => {
+      await t.throwsAsync(E(handle).spawn(harden(['/bin/late'])), {
+        message: /disposed/,
+      });
+    },
+  });
+  handle = await makeHandle(fixture);
+  const proc = await E(handle).spawn(harden(['/bin/fake']));
+  fixture.failWait(Error('historical reap failure'));
+  await t.throwsAsync(E(proc).wait(), {
+    message: /could not prove containment.*historical reap failure/,
+  });
+  await E(handle).dispose();
+  t.is(fixture.counts().teardownCalls, 1);
+  await t.throwsAsync(E(proc).wait(), { message: /historical reap failure/ });
+});
+
+test('accepted SIGKILL with no reap settles process failure and starts disposal', async t => {
+  t.timeout(5000);
+  const fixture = makeDriverFixture({ ignoreSignals: true });
+  const handle = await makeHandle(fixture);
+  const proc = await E(handle).spawn(harden(['/bin/fake']));
+  await t.throwsAsync(E(proc).kill('SIGKILL'), {
+    message: /could not prove containment/,
+  });
+  await E(handle).dispose();
+  t.deepEqual(fixture.signals(), ['SIGKILL']);
+  t.is(fixture.counts().teardownCalls, 1);
+  await t.throwsAsync(E(proc).wait(), {
+    message: /could not prove containment/,
+  });
+});
+
+test('failed disposal coalesces and retries while admission remains closed', async t => {
+  t.timeout(3000);
+  const entered = makePromiseKit();
+  const release = makePromiseKit();
+  let busy = true;
+  t.teardown(() => release.resolve(undefined));
+  const fixture = makeDriverFixture({
+    teardown: async () => {
+      entered.resolve(undefined);
+      await release.promise;
+      if (busy) throw Error('removal failed');
+    },
+  });
+  const handle = await makeHandle(fixture);
+  const first = t.throwsAsync(E(handle).dispose(), {
+    message: /removal failed/,
+  });
+  const second = t.throwsAsync(E(handle).dispose(), {
+    message: /removal failed/,
+  });
+  await entered.promise;
+  t.is(fixture.counts().teardownCalls, 1);
+  release.resolve(undefined);
+  await Promise.all([first, second]);
+  await t.throwsAsync(E(handle).spawn(harden(['/bin/late'])), {
+    message: /disposed/,
+  });
+  busy = false;
+  await E(handle).dispose();
+  await E(handle).dispose();
+  t.is(fixture.counts().teardownCalls, 2);
+});
+
+test('failed disposal retains the handle for a later owner cancellation sweep', async t => {
+  t.timeout(3000);
+  const { cancelled, cancel } = makeCancelKit();
+  const retried = makePromiseKit();
+  let busy = true;
+  const fixture = makeDriverFixture({
+    context: harden({ whenCancelled: () => cancelled }),
+    teardown: async () => {
+      if (busy) throw Error('removal failed');
+      retried.resolve(undefined);
+    },
+  });
+  const handle = await makeHandle(fixture);
+  await t.throwsAsync(E(handle).dispose(), { message: /removal failed/ });
+  busy = false;
+  cancel(Error('owner died'));
+  await retried.promise;
+  await E(handle).dispose();
+  t.is(fixture.counts().teardownCalls, 2);
+});
+
+test('disposal fences a scratch capability returned after provider admission', async t => {
+  t.timeout(3000);
+  const entered = makePromiseKit();
+  const release = makePromiseKit();
+  t.teardown(() => release.resolve(harden({})));
+  const fixture = makeDriverFixture({
+    scratchProvider: harden({
+      ...scratchProvider,
+      /** @param {string} name */
+      provideScratchMount: name => {
+        if (name === 'sandbox-scratch')
+          return scratchProvider.provideScratchMount();
+        entered.resolve(undefined);
+        return release.promise;
+      },
+    }),
+  });
+  const handle = await makeHandle(fixture);
+  const scratch = E(handle).scratch('/late');
+  const rejected = t.throwsAsync(scratch, { message: /disposed/ });
+  await entered.promise;
+  await E(handle).dispose();
+  release.resolve(harden({}));
+  await rejected;
 });

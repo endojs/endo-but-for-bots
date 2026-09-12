@@ -760,7 +760,12 @@ export type SandboxDriver = {
     opts: SpawnOpts,
     controls?: DriverSpawnControls,
   ): Promise<DriverProcess>;
-  /** Tear down the slice's namespace / container. */
+  /**
+   * Fence admission and release the slice's processes and resources.
+   * Success accounts for pending acquisitions: none can later produce unowned
+   * execution. Failure retains cleanup ownership so teardown can be retried.
+   * Process wait failures describe historical outcomes, not release proof.
+   */
   teardown(slice: DriverSliceContext): Promise<void>;
 };
 
