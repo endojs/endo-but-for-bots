@@ -87,16 +87,20 @@ factory still uses the previous public path until resolver/runtime integration l
 
 The shared sandbox request now carries literal generated-file records and validates
 canonical destinations, overlapping mounts, and exact-policy exclusions before acquisition.
-Backend selection requires explicit support; both production drivers currently refuse
-generated-file requests until private staging, storage accounting, and cleanup are wired.
-This contract is implemented; generated-file execution and resolver integration are pending.
+Backend selection requires explicit support; Podman advertises support only when the
+host supplies a generated-file allocator, while bwrap still refuses these requests.
+Podman stages individual read-only file binds during owned spawn acquisition, reuses them
+across operations, and releases them only after every container removal succeeds.
+Its mount arguments use CSV field encoding; generated destinations also exclude Podman's
+automatic `/run` and `/var/tmp` mounts.
+These destination checks are lexical and do not resolve aliases inside arbitrary images.
 The host-only staging allocator now shares aggregate UTF-8 payload and entry budgets
 across its stages, retains failed deletions and their charges, and refuses to remove
 files still owned by a consumer.
 It creates an exclusive fresh root under a private host directory and refuses existing
 roots; reconciling a crashed owner's storage requires prior container reaping by the runtime.
 Writable host-path overlap is checked again on each use.
-Podman integration and the hosted runtime's storage-owner composition remain pending.
+The hosted runtime's storage-owner composition and resolver integration remain pending.
 
 Runtime unification across all three adapters, Claude credential migration, OpenCode
 public network convergence, tool/journal consolidation, emergency stop UI, and the remaining
