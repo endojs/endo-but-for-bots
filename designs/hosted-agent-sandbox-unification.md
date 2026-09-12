@@ -41,6 +41,18 @@ wait for already-running acquisitions, and attempt every retained owner.
 These scopes do not yet provide the shared supervisor's stop-during-start, immediate
 revocation, process-reaping, or hung-cleanup semantics.
 
+OpenCode's inner client now separates the immediate turn fence from completed cleanup.
+It retries failed disposal/unmount/state deletion, retains admitted startup acquisition,
+and does not wait for guest readiness or command writes before host disposal.
+The lazy provisioning module retains partial acquisitions outside its result promise,
+drains failed rollback before replacement, and checks mount-name removal results.
+Callers retain a failed direct-stop owner instead of treating cancellation as stop proof
+or proceeding to delete storage; independent provider/MCP releases remain separate.
+Rejected mount/slice acquisitions without handles remain explicitly uncertain and require
+host reconciliation before releasing their dependent storage or admitting replacements.
+This is incarnation-local ownership; cross-formula retention, durable-record adoption,
+unknown-acquisition reconciliation, and hang-safe revocation still require the supervisor.
+
 A shared passive session-record store now retains the approved plan and exact
 dependency IDs in a host-private daemon directory per logical session.
 Separate reference entries retain formula graph edges without eager capability revival.
@@ -484,6 +496,7 @@ provider requirements, or an explicit user budget, rather than copied between la
 | Provider secret isolation | Reusable upstream account credentials | Guest and listener code | Secrets controls storage access, not a secret already delivered | Keep host-only credential service; eliminate materialization into guests. |
 | Fixed provider routes/account binding | Which upstream authority a guest can exercise | Forged guest requests | Secret custody alone does not restrict credential use | Keep in provider service. |
 | Revocation and process reaping | Continued inference, networking, and execution | Stale or hostile guests | Request deadlines end one request, not the session grant | Keep one supervisor and grant owner. |
+| Cleanup completion before deletion | Storage still in use and original cleanup handles | Late acquisitions, failed stops, and callers treating cancellation as containment | A rejected call or removed formula name does not prove native resources ended; successful slice disposal is the client-side containment barrier | Retain failed and uncertain acquisitions; propagate failed stop before replacement/deletion. OpenCode incarnation-local retries landed; supervisor ownership across reconstruction remains pending. |
 | Durable session ownership | Original cleanup authority, retained dependencies, and session storage | Retargeting after backend replacement, partial construction, and failed cleanup | Backend defaults and mutable global names do not identify an older session's owner; daemon directory entries already provide durable formula retention | Keep a passive plan and exact reference entries per session; the shared store is available, supervisor and adapter wiring remain pending. |
 | Active-turn admission for Endo eval/MCP | Association of explicit host tool calls with conversational context | Out-of-turn or stray requests | Session grants limit authority, not transcript context; this does not authenticate a guest process | Keep in shared host tool executor; background mount access remains independent. |
 | 64-request ceiling | Cumulative provider usage | A looping session | No per-session cumulative bound; revocation is an action and provider quotas may be account-wide | Remove default; future token/dollar budgets are separate work. |
