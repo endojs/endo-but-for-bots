@@ -1687,6 +1687,14 @@ fn next_machine_id() -> u64 {
     NEXT_MACHINE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
+/// The next realm identity, minted once per [`Realm`]. Promise jobs queued
+/// while a realm is installed are tagged with this value, so only the realm
+/// that queued them may drain them; `0` is reserved for the machine level.
+fn next_realm_id() -> u64 {
+    static NEXT_REALM_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT_REALM_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
 /// The interned `typeof`-result strings, held as chunk offsets into the
 /// machine chunk heap. Allocated once at [`Interp::new`], before any run,
 /// so `typeof` names a preexisting string (XS's `XS_STRING_X_KIND`
@@ -2398,10 +2406,45 @@ impl Interp {
         !self.promise_jobs.is_empty()
     }
 
+    /// The realm id that owns this machine's pending promise jobs (`0` when
+    /// the queue is empty or was queued at machine level). Jobs name the
+    /// queuing realm's `code_segments`, so only a drain with that realm
+    /// installed may run them.
+    pub(crate) fn jobs_owner(&self) -> u64 {
+        self.jobs_owner
+    }
+
+    /// The fail-closed outcome for an operation that may not run this
+    /// machine's queued promise jobs: a new evaluation is starting while the
+    /// queue is nonempty, or a drain is asked for by a realm other than the
+    /// one that queued them. Nothing ran; the queue is untouched.
+    pub(crate) fn pending_jobs_refused(&self) -> RunOutcome {
+        RunOutcome {
+            unhandled_rejection: self.unhandled_rejection(),
+            meter_raw_this_run: 0,
+            computrons_this_run: 0,
+            dispatched_this_run: 0,
+            completed: false,
+            result: String::new(),
+            coercion_error: None,
+            host_render_halt: None,
+            computrons: self.meter_index() >> 16,
+            dispatched: self.n_dispatched,
+            meter_raw: self.meter_index(),
+            halt: Halt::EngineInvariant("compartment:pending-jobs"),
+        }
+    }
+
     /// Drain this machine's promise jobs without evaluating another script.
     /// Retains the meter and configured host; failures use the same `Halt`
     /// channel and invocation receipts as `run`. Jobs can enqueue more jobs,
     /// which are drained FIFO in this invocation.
+    ///
+    /// Refused fail-closed while the queue belongs to a realm other than the
+    /// installed one (`Interp::active_realm_id`): those jobs name another
+    /// realm's `code_segments`, so only that realm's compartment may drain
+    /// them ([`crate::Compartment::drain_promise_jobs`]). A machine-level
+    /// queue (owner `0`, no realm installed) drains here as before.
     ///
     /// Like starting a new `run`, this abandons a previous halted activation
     /// and keeps its heap effects. A transactional consumer must rewind a
@@ -2424,6 +2467,7 @@ impl Interp {
     /// rejection report, which was that run's.
     pub fn discard_pending_jobs(&mut self) {
         self.promise_jobs.clear();
+        self.jobs_owner = 0;
         self.clear_rejection_report();
     }
 
@@ -2458,6 +2502,13 @@ impl Interp {
         shared: std::rc::Rc<[u8]>,
         execute_script: bool,
     ) -> RunOutcome {
+        // A run must not start while the queue belongs to another realm: the
+        // jobs name that realm's `code_segments`, and this run's post-script
+        // pump would execute them against the wrong buffer. The owning
+        // compartment drains its own queue (`Compartment::drain_promise_jobs`).
+        if self.has_pending_jobs() && self.jobs_owner != self.active_realm_id {
+            return self.pending_jobs_refused();
+        }
         if self.gc_failed {
             return RunOutcome {
                 unhandled_rejection: None,
@@ -2666,6 +2717,12 @@ impl Interp {
         // progress. Every surviving function has its own `func_segments`
         // entry, so no segment cursor crosses a crank boundary.
         self.active_segment = None;
+        // The queue's owner tag is meaningful only while jobs are queued; a
+        // drained (or never-queued) queue is machine-level again. A halted
+        // run that left jobs queued keeps them tagged for its realm.
+        if !self.has_pending_jobs() {
+            self.jobs_owner = 0;
+        }
         RunOutcome {
             unhandled_rejection: self.unhandled_rejection(),
             meter_raw_this_run: 0,

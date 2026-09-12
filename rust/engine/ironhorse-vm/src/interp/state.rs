@@ -68,6 +68,47 @@ pub struct Interp {
     /// otherwise be silently installed into this arena. Runtime host
     /// bookkeeping, never snapshotted (realms do not persist).
     machine_id: u64,
+    #[boot_new(0)]
+    #[boot_template(state.active_realm_id)]
+    #[gc_root(none)]
+    #[quiescent(retained)]
+    #[persist_refs(none)]
+    #[runtime_keys(none)]
+    #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
+    #[gc_slots(none, none)]
+    #[gc_weak(none)]
+    #[snapshot_table(none)]
+    /// Identity of the realm whose namespace is currently installed in this
+    /// machine (`0` when none). [`Interp::swap_realm`] exchanges it with the
+    /// realm on install and park; promise jobs queued while a realm is
+    /// installed are tagged with it, so only that realm can drain them.
+    /// Runtime host bookkeeping, never snapshotted: the `Compartment` API
+    /// parks before returning, so a machine at a persistable boundary has no
+    /// installed realm. (A raw `release_realm` of the installed realm leaves
+    /// its namespace active as the machine's ordinary global state, and it
+    /// persists as such — the `realm_roots` gate no longer applies once the
+    /// handle is gone.) A restored machine starts with none installed.
+    active_realm_id: u64,
+    #[boot_new(0)]
+    #[boot_template(state.jobs_owner)]
+    #[gc_root(none)]
+    #[quiescent(retained)]
+    #[persist_refs(none)]
+    #[runtime_keys(none)]
+    #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
+    #[gc_slots(none, none)]
+    #[gc_weak(none)]
+    #[snapshot_table(none)]
+    /// Identity of the realm that queued the machine's pending promise jobs
+    /// (`0` when the queue is empty or was queued at machine level).
+    /// Machine-scoped: the jobs name the queuing realm's `code_segments`
+    /// even while it is parked, so a drain under any other realm is refused.
+    /// A persistable machine has no pending jobs (`promise_jobs` is
+    /// `EmptyAtBoundary`), so this is `0` at every snapshot boundary and is
+    /// never stored.
+    jobs_owner: u64,
     #[boot_new(Vec::with_capacity(64))]
     #[boot_template(state.stack.clone())]
     #[gc_root(slots)]

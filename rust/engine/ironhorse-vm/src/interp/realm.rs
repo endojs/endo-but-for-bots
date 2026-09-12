@@ -21,6 +21,14 @@ pub struct Realm {
     /// the realm carries (`global_obj`, `global_props`, symbol ids) is an
     /// index into that machine, so installing it anywhere else is refused.
     machine_id: u64,
+    /// Stable process-unique identity of this realm. Promise jobs queued
+    /// while the realm is installed are tagged with it, and only the realm
+    /// with the same id may drain them.
+    realm_id: u64,
+    /// Exchange slot for [`Interp::active_realm_id`]: it holds this realm's
+    /// own id while parked, and the displaced machine-active id while
+    /// installed, so park restores the previous namespace exactly.
+    active_realm_id: u64,
     global_obj: SlotIndex,
     global_props: std::collections::HashMap<u16, SlotIndex>,
     symbol_ids: SymbolIds,
@@ -65,8 +73,13 @@ impl Realm {
             .alloc(Slot::instance(crate::value::SlotIndex::NULL));
         interp.realm_roots.push(global_obj);
         let snapshot_dirt = interp.snapshot_dirt.clone();
+        let realm_id = next_realm_id();
         Realm {
             machine_id: interp.machine_id,
+            realm_id,
+            // A parked realm holds its own id; installing it exchanges this
+            // with the machine's previous active id.
+            active_realm_id: realm_id,
             global_obj,
             global_props: std::collections::HashMap::new(),
             symbol_ids: SymbolIds::default(),
@@ -109,6 +122,12 @@ impl Realm {
             regexp_result_ids: RegExpResultIds::default(),
         }
     }
+
+    /// This realm's stable identity, as tagged on promise jobs queued while
+    /// it is installed. Distinct from every other realm in the process.
+    pub(crate) fn realm_id(&self) -> u64 {
+        self.realm_id
+    }
 }
 
 impl Interp {
@@ -121,6 +140,9 @@ impl Interp {
     /// to install a realm and after it to park the realm again; the machine's
     /// arena and primordial graph never move.
     ///
+    /// The machine's `active_realm_id` travels with the namespace, so promise
+    /// jobs queued during the run are tagged with the installed realm's id.
+    ///
     /// `realm.global_obj` is rooted from allocation. The swap keeps exactly
     /// the NON-active realm globals rooted: the incoming global becomes
     /// active (`global_obj`, rooted by the field whether or not it is also in
@@ -132,6 +154,7 @@ impl Interp {
             "a realm may only be installed into the machine that minted it: \
              its slot and symbol indices belong to that machine's arenas"
         );
+        std::mem::swap(&mut self.active_realm_id, &mut realm.active_realm_id);
         std::mem::swap(&mut self.global_obj, &mut realm.global_obj);
         self.realm_roots.retain(|root| *root != self.global_obj);
         if !self.realm_roots.contains(&realm.global_obj) {
@@ -200,6 +223,7 @@ mod tests {
     /// realm is installed or parked.
     /// Kept in lockstep with the swap body by the test below.
     const REALM_SCOPED: &[&str] = &[
+        "active_realm_id",
         "global_obj",
         "global_props",
         "symbol_ids",
@@ -234,6 +258,7 @@ mod tests {
         "snapshot_dirt",
         "snapshot_baseline_identity",
         "machine_id",
+        "jobs_owner",
         "stack",
         "locals",
         "id_map",

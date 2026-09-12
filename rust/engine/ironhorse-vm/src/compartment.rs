@@ -20,8 +20,10 @@
 //! relink the program's symbol table onto the realm's persisted one
 //! ([`Interp::relink_crank`]) before seeding the compartment's globals.
 //! Evaluation refuses fail-closed while a halted run's promise jobs are still
-//! queued on the machine (`compartment:pending-jobs`); the owning compartment
-//! drains them with [`Compartment::drain_promise_jobs`].
+//! queued on the machine (`compartment:pending-jobs`); each job is tagged
+//! with the id of the realm that queued it, and only that compartment drains
+//! the queue with [`Compartment::drain_promise_jobs`] — a foreign drain
+//! refuses rather than run another realm's `code_segments`.
 //!
 //! What that buys:
 //!
@@ -468,26 +470,14 @@ impl Compartment {
         }
     }
 
-    /// The fail-closed outcome for an evaluation started while promise jobs
-    /// are still queued on the machine. Jobs carry no realm identity, so
-    /// draining them under this realm's `code_segments` would run (or
-    /// decode-fault) another realm's code; the host must drain them
-    /// ([`Interp::run_promise_jobs`]) before starting another realm.
+    /// The fail-closed outcome for an operation that may not run the
+    /// machine's queued promise jobs: an evaluation started while any job is
+    /// queued, or a drain asked for by a compartment that did not queue them.
+    /// Jobs are tagged with the queuing realm's id (`0` at machine level), so
+    /// a drain under another realm's `code_segments` is refused with the
+    /// queue untouched; see [`Interp::jobs_owner`].
     fn pending_jobs_refused(machine: &Interp) -> RunOutcome {
-        RunOutcome {
-            unhandled_rejection: machine.unhandled_rejection(),
-            meter_raw_this_run: 0,
-            computrons_this_run: 0,
-            dispatched_this_run: 0,
-            completed: false,
-            result: String::new(),
-            coercion_error: None,
-            host_render_halt: None,
-            computrons: machine.meter_index() >> 16,
-            dispatched: 0,
-            meter_raw: machine.meter_index(),
-            halt: Halt::EngineInvariant("compartment:pending-jobs"),
-        }
+        machine.pending_jobs_refused()
     }
 
     /// Install this compartment's realm as the machine's active namespace:
@@ -550,6 +540,11 @@ impl Compartment {
     /// recorded on this compartment are kept and re-seed into the fresh
     /// realm, and the seeded-id set is cleared with the realm. Releasing a
     /// compartment whose realm was never created is a no-op.
+    ///
+    /// Promise jobs this realm left queued are machine-scoped and are **not**
+    /// dropped here: a host discarding a realm that queued jobs must also
+    /// call [`Interp::discard_pending_jobs`], or every later evaluation
+    /// refuses (`compartment:pending-jobs`).
     pub fn release(&mut self, machine: &mut Interp) {
         if let Some(realm) = self.realm.take() {
             machine.release_realm(&realm);
@@ -559,18 +554,32 @@ impl Compartment {
 
     /// Drain this compartment's queued promise jobs under its own realm.
     ///
-    /// A halted evaluation can leave jobs queued ([`Interp::has_pending_jobs`]);
-    /// the jobs run only under the realm whose `code_segments` they name, so
-    /// the compartment that queued them is the one that drains them. Every
-    /// other compartment's evaluation refuses until the queue empties
-    /// (`compartment:pending-jobs`). A successful run reports `undefined`.
+    /// A halted evaluation can leave jobs queued
+    /// ([`Interp::has_pending_jobs`]); each job is tagged with the id of the
+    /// realm that queued it, and the jobs run only under that realm's
+    /// `code_segments`. This compartment drains only its own queue: a request
+    /// against another realm's jobs — or against a machine-level queue, which
+    /// no realm owns — is refused (`compartment:pending-jobs`) with the queue
+    /// untouched. A successful run reports `undefined`.
     pub fn drain_promise_jobs(&mut self, machine: &mut Interp) -> RunOutcome {
+        if machine.has_pending_jobs() && !self.owns_pending_jobs(machine) {
+            return Self::pending_jobs_refused(machine);
+        }
         if let Err(outcome) = self.install_with(machine, true) {
             return outcome;
         }
         let outcome = machine.run_promise_jobs();
         self.park(machine);
         outcome
+    }
+
+    /// Whether this compartment's realm is the one that queued the machine's
+    /// pending promise jobs. A compartment that never minted a realm owns
+    /// nothing.
+    fn owns_pending_jobs(&self, machine: &Interp) -> bool {
+        self.realm
+            .as_ref()
+            .is_some_and(|realm| realm.realm_id() == machine.jobs_owner())
     }
 
     /// Link the program's symbol table onto the realm's persisted table,
@@ -1151,10 +1160,9 @@ mod tests {
 
     #[test]
     fn an_evaluation_refuses_while_foreign_promise_jobs_are_queued() {
-        // A halted program can leave promise jobs queued. The jobs carry no
-        // realm identity, so draining them under another realm's code
-        // segments would run foreign code; evaluation refuses fail-closed
-        // until the host drains them.
+        // A halted program can leave promise jobs queued. Each job is tagged
+        // with the queuing realm's id, so evaluation under any realm refuses
+        // fail-closed and only the owning compartment may drain the queue.
         let mut machine = Machine::new();
         let mut a = machine.new_compartment();
         let (code, symbols) =
@@ -1163,6 +1171,11 @@ mod tests {
         let ra = a.evaluate_with_symbols(machine.interp_mut(), &code, &symbols);
         assert!(!ra.completed);
         assert!(machine.interp().has_pending_jobs());
+        assert_eq!(
+            machine.interp().jobs_owner(),
+            a.realm.as_ref().unwrap().realm_id(),
+            "the queue is tagged with the queuing realm"
+        );
 
         let mut b = machine.new_compartment();
         b.define_global_id(7, Slot::integer(1));
@@ -1177,9 +1190,72 @@ mod tests {
             "the refused evaluation must not mint a realm"
         );
 
+        // A drain by any compartment but the owner refuses with the queue
+        // untouched: B's realm must not run A's code segments.
+        let foreign = b.drain_promise_jobs(machine.interp_mut());
+        assert_eq!(
+            foreign.halt,
+            Halt::EngineInvariant("compartment:pending-jobs")
+        );
+        assert!(machine.interp().has_pending_jobs());
+        assert_eq!(
+            machine.rooted_realm_count(),
+            1,
+            "the refused drain must not mint a realm"
+        );
+
+        // A raw machine-level pump is refused too: A's realm is parked, so
+        // no namespace claims the jobs.
+        let raw = machine.interp_mut().run_promise_jobs();
+        assert_eq!(raw.halt, Halt::EngineInvariant("compartment:pending-jobs"));
+        assert!(machine.interp().has_pending_jobs());
+
+        // A raw script run must not start either: its post-script pump would
+        // execute A's jobs against the new buffer.
+        let raw_run = machine.interp_mut().run(&read_global_program(7));
+        assert_eq!(
+            raw_run.halt,
+            Halt::EngineInvariant("compartment:pending-jobs")
+        );
+        assert!(machine.interp().has_pending_jobs());
+
         // The owning realm drains the queue, and evaluation proceeds.
         assert!(a.drain_promise_jobs(machine.interp_mut()).completed);
+        assert!(!machine.interp().has_pending_jobs());
+        assert_eq!(machine.interp().jobs_owner(), 0);
         let outcome = b.evaluate(machine.interp_mut(), &read_global_program(7));
+        assert!(outcome.completed, "{:?}", outcome.halt);
+        assert_eq!(outcome.result, "1");
+    }
+
+    #[test]
+    fn a_released_realms_jobs_are_not_inherited_by_a_fresh_realm() {
+        // Releasing a realm drops its namespace but not the jobs it queued.
+        // Realm ids are monotone, so the fresh realm a later evaluation mints
+        // can never inherit them; the host discards the orphaned queue.
+        let mut machine = Machine::new();
+        let mut a = machine.new_compartment();
+        let (code, symbols) =
+            ironhorse_compile::compile_atoms("Promise.resolve().then(function(){}); throw 1")
+                .unwrap();
+        assert!(
+            !a.evaluate_with_symbols(machine.interp_mut(), &code, &symbols)
+                .completed
+        );
+        assert!(machine.interp().has_pending_jobs());
+
+        a.release(machine.interp_mut());
+        let refused = a.drain_promise_jobs(machine.interp_mut());
+        assert_eq!(
+            refused.halt,
+            Halt::EngineInvariant("compartment:pending-jobs")
+        );
+        assert!(machine.interp().has_pending_jobs());
+
+        machine.interp_mut().discard_pending_jobs();
+        assert!(!machine.interp().has_pending_jobs());
+        a.define_global_id(7, Slot::integer(1));
+        let outcome = a.evaluate(machine.interp_mut(), &read_global_program(7));
         assert!(outcome.completed, "{:?}", outcome.halt);
         assert_eq!(outcome.result, "1");
     }

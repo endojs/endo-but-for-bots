@@ -731,6 +731,8 @@ mod tests {
             "eval_program_hoist",
             "realm_roots",
             "machine_id",
+            "active_realm_id",
+            "jobs_owner",
             "meter_host",
             "source_compiler",
             "intrinsic_permit",

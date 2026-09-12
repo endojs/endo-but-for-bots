@@ -809,11 +809,18 @@ impl Interp {
     /// `count + 5`) and append it FIFO to the pending queue. `count` is 1 for a
     /// reaction job and 3 for a resolve-with-thenable job (which captures the
     /// resolve/reject/then triple beyond the folded this+function).
+    ///
+    /// The first job of a run tags the queue with the installed realm's id
+    /// (`0` at machine level), so only that realm may later drain jobs whose
+    /// `code_segments` they name.
     fn queue_promise_job_n(&mut self, job: PromiseJob, count: usize) {
         for _ in 0..(count + 5) {
             self.meter.tick_slot_alloc();
         }
         self.meter.tick_raw(PROMISE_QUEUE_JOB_METERING);
+        if self.promise_jobs.is_empty() {
+            self.jobs_owner = self.active_realm_id;
+        }
         self.promise_jobs.push_back(job);
     }
 
