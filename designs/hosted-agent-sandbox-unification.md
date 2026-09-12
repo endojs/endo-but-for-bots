@@ -29,6 +29,15 @@ interrupted, including while backend cancellation is awaiting acknowledgement.
 Previously admitted operations retain their original turn ID for result recording.
 A subsequent turn reuses the same hosted tool capability with its own active context.
 
+All three adapters now share retryable cleanup scopes for acquired resources.
+Claude/OpenCode retain failed-start cleanup ownership and retry it before replacing
+or deleting the same session; unrelated session admission remains independent.
+Independent release stages are attempted after a failure, and successful stages are
+not repeated on retry.
+Codex retains its process-before-workspace-release dependency check.
+These scopes do not yet provide the shared supervisor's stop-during-start, immediate
+revocation, process-reaping, or hung-cleanup semantics.
+
 Runtime unification across all three adapters, Claude credential migration, public
 network convergence, tool/journal consolidation, emergency stop UI, and the remaining
 limit removals are still pending.
