@@ -417,9 +417,19 @@ test('network policy is threaded; off refuses sends and maps to the none profile
     makeToolSet(),
   );
   t.is(log.find(entry => entry[0] === 'provision')[2].network, 'none');
-  await t.throwsAsync(() => E(run).send('hello'), {
-    message: /network policy is "off"/,
-  });
+  // The refusal arrives as a leading abort, not a rejection: Floot must record
+  // a clean failed turn so setting the policy lets the operator retry.
+  const events = [];
+  for await (const event of iterateReader(await E(run).send('hello'))) {
+    events.push(event);
+  }
+  t.deepEqual(events, [
+    {
+      type: 'abort',
+      reason:
+        'OpenCode session network policy is "off"; set the session policy to public-internet before sending a turn',
+    },
+  ]);
 });
 
 test('public-internet maps to the private slice profile', async t => {
