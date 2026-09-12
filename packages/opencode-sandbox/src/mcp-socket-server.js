@@ -179,7 +179,12 @@ export const startMcpSocketServer = async ({
       closing = (async () => {
         await listener.close();
         await rm(socketPath, { force: true });
-      })();
+      })().catch(error => {
+        // Retry failed filesystem cleanup, but keep a successful close cached:
+        // an old owner must never unlink a successor using this socket path.
+        closing = undefined;
+        throw error;
+      });
     }
     return closing;
   };
