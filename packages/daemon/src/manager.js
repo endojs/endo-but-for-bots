@@ -70,6 +70,7 @@ import {
   parseContentLocator,
 } from './locator.js';
 import { makeContextMaker } from './context.js';
+import { makeImportedReferenceRegistrar } from './imported-reference.js';
 import {
   assertValidId,
   assertValidNumber,
@@ -1320,6 +1321,12 @@ const makeDaemonCore = async (
 
   /** @type {Map<FormulaIdentifier, object>} */
   const refForId = new Map();
+
+  const registerImportedReference = makeImportedReferenceRegistrar({
+    idForRef,
+    refForId,
+    controllerForId,
+  });
 
   /** @type {DaemonCore['getIdForRef']} */
   const getIdForRef = ref => idForRef.get(/** @type {any} */ (ref));
@@ -4338,7 +4345,9 @@ const makeDaemonCore = async (
       const peerId = await getPeerIdForNodeIdentifier(formulaNode);
       context.thisDiesIfThatDies(peerId);
       const peer = provide(peerId, 'peer');
-      return E(peer).provide(id);
+      const value = /** @type {unknown} */ (await E(peer).provide(id));
+      registerImportedReference(id, value, context);
+      return value;
     }
 
     const formula = await getFormulaForId(id);
