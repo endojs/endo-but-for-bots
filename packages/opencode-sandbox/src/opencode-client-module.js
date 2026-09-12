@@ -83,6 +83,24 @@ import {
 /** @import { FarRef } from '@endo/eventual-send' */
 
 /**
+ * The per-turn wall-clock budget handed to the in-slice bridge. The backend's
+ * own value wins; a daemon-wide `ENDO_OPENCODE_BRIDGE_TURN_TIMEOUT_MS` (the
+ * only spelling the daemon env filter forwards) is the operator-level
+ * fallback, and empty lets the bridge apply its default.
+ *
+ * @param {Record<string, string | undefined>} env
+ * @returns {string}
+ */
+export const resolveBridgeTurnTimeout = env => {
+  const value =
+    env.OPENCODE_BRIDGE_TURN_TIMEOUT_MS ||
+    process.env.ENDO_OPENCODE_BRIDGE_TURN_TIMEOUT_MS ||
+    '';
+  return `${value}`;
+};
+harden(resolveBridgeTurnTimeout);
+
+/**
  * Map a credential kind to the environment variable opencode reads it from
  * inside the slice.  OpenRouter is the only provider this backend offers,
  * and it authenticates with a plain API key; an OAuth token has no home in
@@ -190,7 +208,10 @@ export const make = (powers, context, contextWrapper = {}) => {
   const systemPrompt = env.SYSTEM_PROMPT || undefined;
   const initialPrompt = env.INITIAL_PROMPT || undefined;
   const resumeOpencodeSessionId = env.OPENCODE_SESSION_ID || '';
-  const turnTimeoutMs = env.OPENCODE_BRIDGE_TURN_TIMEOUT_MS || '';
+  // The daemon env filter only forwards ENDO_-prefixed variables, so accept
+  // the operator's ENDO_OPENCODE_BRIDGE_TURN_TIMEOUT_MS as a fallback for the
+  // backend-provided value.
+  const turnTimeoutMs = resolveBridgeTurnTimeout(env);
 
   // Optional Endo tool bridge (see @endo/floot).  The Mount cap itself is
   // bundled by reference into the session powers, so the client never
@@ -407,6 +428,7 @@ export const make = (powers, context, contextWrapper = {}) => {
         // instance with EROFS (observed as POST /session -> 500). The
         // authoritative config travels in OPENCODE_CONFIG_CONTENT; opencode's
         // own config home stays the writable, ephemeral XDG_CONFIG_HOME.
+        ...(mcpEnabled ? { OPENCODE_MCP_SERVER_NAME: mcpServerName } : {}),
         ...(resumeOpencodeSessionId
           ? { OPENCODE_SESSION_ID: resumeOpencodeSessionId }
           : {}),
