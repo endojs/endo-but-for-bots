@@ -9,8 +9,12 @@ import {
 import { makeCryptography, makeSessionId } from '@endo/ocapn/cryptography';
 import { syrupCodec } from '@endo/ocapn/syrup';
 
-import { makeOcapnHub } from '../src/hub.js';
-import { makeDurableNetLayer } from '../src/durable-netlayer.js';
+import { makeOcapnHub } from '../src/net/hub.js';
+import { makeDurableNetLayer } from '../src/net/durable-netlayer.js';
+
+import { makeNodePowers } from '../src/platform/node-powers.js';
+
+const nodePowers = makeNodePowers();
 
 /** @param {Uint8Array} bytes */
 const hex = bytes =>
@@ -183,7 +187,7 @@ test.serial(
     let logical;
     /** @type {Array<{n: bigint, sequence: string | undefined}>} */
     const recorded = [];
-    const layer = await makeDurableNetLayer({
+    const layer = await makeDurableNetLayer(nodePowers, {
       handlers: /** @type {any} */ ({
         makeConnection: (netlayer, isOutgoing, operations) => {
           logical = { netlayer, isOutgoing, ...operations };

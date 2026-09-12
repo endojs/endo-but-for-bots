@@ -1,4 +1,7 @@
 import '@endo/init';
+import { makeNodePowers } from '../src/platform/node-powers.js';
+
+const platform = makeNodePowers();
 import assert from 'node:assert/strict';
 import { readFile, writeFile, mkdir, open, rename } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
@@ -12,8 +15,14 @@ import {
   makeIronhorseEngine,
   inspectIronhorseStore,
 } from '../index.js';
-import { counterSource, callerSource } from '../src/demo-counter-vats.js';
-import { producerSource, listenerSource } from '../src/demo-promise-vats.js';
+import {
+  counterSource,
+  callerSource,
+} from '../src/ironhorse/demo-counter-vats.js';
+import {
+  producerSource,
+  listenerSource,
+} from '../src/ironhorse/demo-promise-vats.js';
 
 const [
   demo = 'counter',
@@ -38,27 +47,55 @@ if (command === 'help') {
 assert.ok(commands.includes(command), `Unknown ${demo} command: ${command}`);
 const statePath = resolve(stateArgument);
 if (command === 'inspect') {
-  console.log(JSON.stringify(await inspectIronhorseStore(statePath), null, 2));
+  console.log(
+    JSON.stringify(
+      await inspectIronhorseStore(
+        { files: platform.files, paths: platform.paths },
+        statePath,
+      ),
+      null,
+      2,
+    ),
+  );
   process.exit(0);
 }
 const packagePath = fileURLToPath(new URL('../', import.meta.url));
-const engine = makeIronhorseEngine({
-  workerBinary:
-    process.env.THIXOTROPE_IRONHORSE_WORKER ??
-    resolve(packagePath, '../../target/release/thixotrope-ironhorse-worker'),
-  bootPaths: ['boot.js', 'worker-peer.js'].map(name =>
-    join(packagePath, 'dist-ironhorse', name),
-  ),
-  storePath: join(statePath, 'heaps'),
-});
+const engine = makeIronhorseEngine(
+  {
+    processes: platform.processes,
+    files: platform.files,
+    paths: platform.paths,
+    timers: platform.timers,
+    hashes: platform.hashes,
+  },
+  {
+    workerBinary:
+      process.env.THIXOTROPE_IRONHORSE_WORKER ??
+      resolve(packagePath, '../../target/release/thixotrope-ironhorse-worker'),
+    bootPaths: ['boot.js', 'worker-peer.js'].map(name =>
+      join(packagePath, 'dist-ironhorse', name),
+    ),
+    storePath: join(statePath, 'heaps'),
+  },
+);
 const start = () =>
-  makeThixotropeDaemon({
-    store: makeFsStore(statePath),
-    engine,
-    codec: syrupCodec,
-    makeNetlayer: ({ handlers, logger }) =>
-      makeTcpNetLayer({ handlers, logger }),
-  });
+  makeThixotropeDaemon(
+    {
+      timers: platform.timers,
+      random: platform.random,
+      logging: platform.logging,
+    },
+    {
+      store: makeFsStore(
+        { syncFiles: platform.syncFiles, paths: platform.paths },
+        statePath,
+      ),
+      engine,
+      codec: syrupCodec,
+      makeNetlayer: ({ handlers, logger }) =>
+        makeTcpNetLayer({ handlers, logger }),
+    },
+  );
 await mkdir(statePath, { recursive: true });
 const configPath = join(statePath, 'demo.json');
 let daemon = await start();

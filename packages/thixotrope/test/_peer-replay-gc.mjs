@@ -2,18 +2,20 @@
 const { gc } = globalThis;
 if (!gc) throw Error('This fixture requires --expose-gc');
 await import('@endo/init');
+const { makeNodePowers } = await import('../src/platform/node-powers.js');
+const nodePowers = makeNodePowers();
 const { decodeBase64 } = await import('@endo/base64');
 const { Far } = await import('@endo/far');
 const { syrupCodec } = await import('@endo/ocapn/syrup');
 const { setImmediate } = await import('node:timers/promises');
-const { makeThixotropeDaemon } = await import('../src/daemon.js');
+const { makeThixotropeDaemon } = await import('../src/core/daemon.js');
 const { makePeerJournalReplayEngine } =
-  await import('../src/peer-replay-engine.js');
-const { makeMemoryStore } = await import('../src/store-fs.js');
+  await import('../src/core/peer-replay-engine.js');
+const { makeMemoryStore } = await import('../src/store/store-memory.js');
 
-const raw = makePeerJournalReplayEngine();
+const raw = makePeerJournalReplayEngine(nodePowers);
 let gcFrames = 0;
-const daemon = await makeThixotropeDaemon({
+const daemon = await makeThixotropeDaemon(nodePowers, {
   store: makeMemoryStore(),
   codec: syrupCodec,
   engine: {

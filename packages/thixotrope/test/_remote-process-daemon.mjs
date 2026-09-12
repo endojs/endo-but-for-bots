@@ -4,15 +4,18 @@ import { makeTcpNetLayer } from '@endo/ocapn/netlayer/tcp-testing';
 import { syrupCodec } from '@endo/ocapn/syrup';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join, basename } from 'node:path';
+import { makeNodePowers } from '../src/platform/node-powers.js';
 
-import { makeThixotropeDaemon } from '../src/daemon.js';
-import { makeDurableNetLayer } from '../src/durable-netlayer.js';
-import { makeFsStore } from '../src/store-fs.js';
-import { counterSource } from '../src/demo-counter-vats.js';
+import { makeThixotropeDaemon } from '../src/core/daemon.js';
+import { makeDurableNetLayer } from '../src/net/durable-netlayer.js';
+import { makeFsStore } from '../src/store/store-fs.js';
+import { counterSource } from '../src/ironhorse/demo-counter-vats.js';
 import {
   isIncrement,
   makeProcessTestEngine,
 } from './_remote-process-fixture.js';
+
+const nodePowers = makeNodePowers();
 
 const [statePath, kindArg] = process.argv.slice(2);
 const kind = /** @type {'replay' | 'ironhorse'} */ (kindArg);
@@ -41,12 +44,12 @@ try {
     throw error;
 }
 const start = () =>
-  makeThixotropeDaemon({
-    store: makeFsStore(statePath),
+  makeThixotropeDaemon(nodePowers, {
+    store: makeFsStore(nodePowers, statePath),
     engine: makeProcessTestEngine(kind, statePath),
     codec: syrupCodec,
     makeNetlayer: async ({ handlers, logger, resumption }) => {
-      layer = await makeDurableNetLayer({
+      layer = await makeDurableNetLayer(nodePowers, {
         handlers: harden({
           ...handlers,
           handleMessageData: (connection, bytes, n) => {

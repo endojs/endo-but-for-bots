@@ -17,9 +17,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { makeIronhorseEngine } from '../../src/ironhorse-engine.js';
-import { inspectIronhorseStore } from '../../src/inspect-ironhorse.js';
+import { makeIronhorseEngine } from '../../src/ironhorse/ironhorse-engine.js';
+import { inspectIronhorseStore } from '../../src/ironhorse/inspect-ironhorse.js';
 import { makeFixture } from './_fixture.js';
+
+import { makeNodePowers } from '../../src/platform/node-powers.js';
+
+const nodePowers = makeNodePowers();
 
 /** @import {ExecutionContext} from 'ava' */
 
@@ -127,7 +131,7 @@ test.serial(
       .find(row => row.workerId === f.guestId);
     t.regex(online?.failure ?? '', /MeterAbort/);
     t.false(online?.awake);
-    const offline = await inspectIronhorseStore(f.statePath);
+    const offline = await inspectIronhorseStore(nodePowers, f.statePath);
     t.regex(
       offline.workers.find(row => row.workerId === f.guestId)?.metadata.failure,
       /MeterAbort/,
@@ -188,11 +192,11 @@ test.serial(
     t.deepEqual(await first.receive(), { event: 'result', value: 42 });
     first.child.send({ command: 'stop' });
     await first.exited;
-    const before = await inspectIronhorseStore(state);
+    const before = await inspectIronhorseStore(nodePowers, state);
     await t.throwsAsync(() => launch(t, state, env), {
       message: /Incompatible Ironhorse runtime/,
     });
-    t.deepEqual(await inspectIronhorseStore(state), before);
+    t.deepEqual(await inspectIronhorseStore(nodePowers, state), before);
     await copyFile(
       fileURLToPath(
         new URL('../../dist-ironhorse/worker-peer.js', import.meta.url),
@@ -214,7 +218,7 @@ test.serial(
 test.serial('ownership rejects an alternative heap directory', async t => {
   const path = await mkdtemp(join(tmpdir(), 'thixotrope-heap-path-'));
   t.teardown(() => rm(path, { recursive: true, force: true }));
-  const engine = makeIronhorseEngine({
+  const engine = makeIronhorseEngine(nodePowers, {
     workerBinary: '/unused',
     bootPaths: [],
     storePath: join(path, 'custom'),
@@ -266,7 +270,7 @@ exec ${quote(binary)} "$@"
       bootPaths: [boot],
       storePath: join(path, 'heaps'),
     };
-    const engine = makeIronhorseEngine(options);
+    const engine = makeIronhorseEngine(nodePowers, options);
     const { acquireStore } = engine;
     if (!acquireStore) throw Error('missing ownership support');
     release = await acquireStore(path);
@@ -295,7 +299,7 @@ exec ${quote(binary)} "$@"
     process.kill(helperPid, 'SIGKILL');
     await rejected;
     t.throws(() => process.kill(workerPid, 0), { code: 'ESRCH' });
-    const competitor = makeIronhorseEngine(options);
+    const competitor = makeIronhorseEngine(nodePowers, options);
     const { acquireStore: acquireCompetitor } = competitor;
     if (!acquireCompetitor) throw Error('missing ownership support');
     await t.throwsAsync(() => acquireCompetitor(path), {

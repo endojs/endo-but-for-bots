@@ -25,9 +25,14 @@ import { Far } from '@endo/far';
 import { makeTcpNetLayer } from '@endo/ocapn/netlayer/tcp-testing';
 import { syrupCodec } from '@endo/ocapn/syrup';
 
-import { makeThixotropeDaemon } from '../src/daemon.js';
-import { makePeerSnapshottingReplayEngine } from '../src/peer-replay-engine.js';
-import { makeFsStore } from '../src/store-fs.js';
+import { makeThixotropeDaemon } from '../src/core/daemon.js';
+import { makePeerSnapshottingReplayEngine } from '../src/core/peer-replay-engine.js';
+import { makeFsStore } from '../src/store/store-fs.js';
+import { parkWorkers } from './_park-workers.js';
+
+import { makeNodePowers } from '../src/platform/node-powers.js';
+
+const nodePowers = makeNodePowers();
 
 const COUNTER_SOURCE = `
 (() => {
@@ -66,9 +71,9 @@ const resources = {
 
 /** @param {string} statePath */
 const makeDaemon = statePath =>
-  makeThixotropeDaemon({
-    store: makeFsStore(statePath),
-    engine: makePeerSnapshottingReplayEngine(),
+  makeThixotropeDaemon(nodePowers, {
+    store: makeFsStore(nodePowers, statePath),
+    engine: makePeerSnapshottingReplayEngine(nodePowers),
     codec: syrupCodec,
     resources,
     makeNetlayer: ({ handlers, logger }) =>
@@ -78,7 +83,7 @@ const makeDaemon = statePath =>
 test('worker sessions survive a daemon restart', async t => {
   const statePath = await mkdtemp(join(tmpdir(), 'thixotrope-wsr-'));
   t.teardown(() => rm(statePath, { recursive: true, force: true }));
-  const store = makeFsStore(statePath);
+  const store = makeFsStore(nodePowers, statePath);
 
   /** @type {string} */
   let idA;
@@ -154,8 +159,7 @@ test('worker sessions survive a daemon restart', async t => {
     t.truthy(hubState.sessions[idA], 'worker A has hub session rows');
     t.truthy(hubState.sessions[idB], 'worker B has hub session rows');
 
-    await workerA.sleep();
-    await workerB.sleep();
+    await parkWorkers(d1);
     t.false(workerA.isAwake());
     t.false(workerB.isAwake());
 
@@ -167,10 +171,10 @@ test('worker sessions survive a daemon restart', async t => {
     const d2 = await makeDaemon(statePath);
     t.teardown(() => d2.shutdown());
 
-    t.false(
-      d2.getWorker(idB).isAwake(),
-      'restoring records and obligations woke no worker',
-    );
+    // Startup may resume journal work. Park explicitly before checking that
+    // restored references transparently wake their targets on the next call.
+    await parkWorkers(d2);
+    t.false(d2.getWorker(idB).isAwake());
 
     const greeter = await d2.lookup('greeter-cap');
     t.is(

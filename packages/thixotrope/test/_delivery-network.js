@@ -1,7 +1,11 @@
 // @ts-check
 import harden from '@endo/harden';
 
-import { makeDurableNetLayer } from '../src/durable-netlayer.js';
+import { makeDurableNetLayer } from '../src/net/durable-netlayer.js';
+
+import { makeNodePowers } from '../src/platform/node-powers.js';
+
+const nodePowers = makeNodePowers();
 
 const decoder = new TextDecoder();
 
@@ -120,7 +124,7 @@ harden(makeState);
 export const makeNode = async (network, name, state, options = {}) => {
   /** @type {any[]} */
   const connections = [];
-  const layer = await makeDurableNetLayer({
+  const layer = await makeDurableNetLayer(nodePowers, {
     reconnectDelayMs: 1_000_000,
     maxReconnectDelayMs: 1_000_000,
     logger: { info() {}, error() {} },

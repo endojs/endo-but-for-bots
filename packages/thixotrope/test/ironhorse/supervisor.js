@@ -15,13 +15,20 @@ import {
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { bundleApplication } from '../../src/bundle-application.js';
-import { connectLocalControl } from '../../src/local-control.js';
+import { bundleApplication } from '../../src/control/bundle-application.js';
+import { connectLocalControl } from '../../src/control/local-control.js';
+
+import { makeNodePowers } from '../../src/platform/node-powers.js';
+
+const nodePowers = makeNodePowers();
 
 /** @import { ExecutionContext } from 'ava' */
 const cli = fileURLToPath(new URL('../../bin/thix.js', import.meta.url));
 
-/** @param {ExecutionContext} t @param {string} path */
+/**
+ * @param {ExecutionContext} t @param {string} path
+ * @param path
+ */
 const start = async (t, path) => {
   const child = spawn(process.execPath, [cli, 'serve', path], {
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -48,9 +55,15 @@ const start = async (t, path) => {
   return { child, exited, diagnostic: () => diagnostic };
 };
 
-/** @param {ExecutionContext} t @param {string} path */
+/**
+ * @param {ExecutionContext} t @param {string} path
+ * @param path
+ */
 const connect = async (t, path) => {
-  const client = await connectLocalControl(join(path, 'control.sock'));
+  const client = await connectLocalControl(
+    nodePowers,
+    join(path, 'control.sock'),
+  );
   t.teardown(() => client.close());
   return client;
 };
@@ -596,7 +609,10 @@ test.serial(
       'evaluate',
       "inventory.set('counter', Far('GrantedCounter', { read: () => 42n })); undefined",
     );
-    const { bundle, digest } = await bundleApplication(file);
+    const { bundle, digest } = await bundleApplication(
+      nodePowers.bundler,
+      file,
+    );
     const installed = await admin.call('install', 'counter-app', bundle, [
       ['counter', 'counter'],
     ]);

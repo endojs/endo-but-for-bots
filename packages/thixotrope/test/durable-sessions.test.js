@@ -11,11 +11,15 @@ import { Far } from '@endo/far';
 import { makeTcpNetLayer } from '@endo/ocapn/netlayer/tcp-testing';
 import { syrupCodec } from '@endo/ocapn/syrup';
 
-import { makeThixotropeDaemon } from '../src/daemon.js';
-import { makeDurableNetLayer } from '../src/durable-netlayer.js';
-import { makePeerJournalReplayEngine } from '../src/peer-replay-engine.js';
-import { makeFsStore } from '../src/store-fs.js';
+import { makeThixotropeDaemon } from '../src/core/daemon.js';
+import { makeDurableNetLayer } from '../src/net/durable-netlayer.js';
+import { makePeerJournalReplayEngine } from '../src/core/peer-replay-engine.js';
+import { makeFsStore } from '../src/store/store-fs.js';
 import { makeTestOcapn } from './_util.js';
+
+import { makeNodePowers } from '../src/platform/node-powers.js';
+
+const nodePowers = makeNodePowers();
 
 const COUNTER_SOURCE = `
 (() => {
@@ -34,15 +38,16 @@ const COUNTER_SOURCE = `
  * @param {string} statePath
  * @param {number} port 0 to pick a port; a restarted daemon must pin
  *   its predecessor's port so the peer's reconnect finds it
+ * @param resources
  */
 const makeDaemon = (statePath, port, resources = {}) =>
-  makeThixotropeDaemon({
-    store: makeFsStore(statePath),
-    engine: makePeerJournalReplayEngine(),
+  makeThixotropeDaemon(nodePowers, {
+    store: makeFsStore(nodePowers, statePath),
+    engine: makePeerJournalReplayEngine(nodePowers),
     codec: syrupCodec,
     resources,
     makeNetlayer: ({ handlers, logger, resumption }) =>
-      makeDurableNetLayer({
+      makeDurableNetLayer(nodePowers, {
         handlers,
         logger,
         resumption,
@@ -61,7 +66,7 @@ const makeDurableClient = label =>
     codec: syrupCodec,
     debugLabel: label,
     network: (handlers, logger) =>
-      makeDurableNetLayer({
+      makeDurableNetLayer(nodePowers, {
         handlers,
         logger,
         makeBaseNetlayer: powers =>
@@ -123,7 +128,7 @@ test.serial('a resumed session continues without a handshake', async t => {
   );
   t.is(await E(remoteCounter).incr(), 1);
 
-  const store = makeFsStore(statePath);
+  const store = makeFsStore(nodePowers, statePath);
   const [token] = store.listSessionTokens();
   const metaPath = join(statePath, 'sessions', token, 'meta.json');
   const before = JSON.parse(readFileSync(metaPath, 'utf8'));
@@ -210,6 +215,7 @@ test.serial('a promise resolution crosses a daemon restart', async t => {
 });
 
 test.serial('an answer a resource owes rejects after a restart', async t => {
+  t.timeout(30_000);
   const statePath = await mkdtemp(join(tmpdir(), 'thixotrope-durable-ans-'));
   t.teardown(() => rm(statePath, { recursive: true, force: true }));
 
@@ -218,10 +224,20 @@ test.serial('an answer a resource owes rejects after a restart', async t => {
   // pending state, hub rows persist, but a resource promise lives in
   // endpoint memory. The endpoint's records reject it at-most-once on
   // restart, so the guest sees a rejection, never a hang.
+  /** @type {() => void} */
+  let entered = () => {};
+  const gateEntered = new Promise(resolve => {
+    entered = () => resolve(undefined);
+  });
+  let calls = 0;
   const resources = {
     gate: () =>
       Far('Gate', {
-        wait: () => new Promise(() => {}),
+        wait: () => {
+          calls += 1;
+          entered();
+          return new Promise(() => {});
+        },
       }),
   };
 
@@ -234,14 +250,16 @@ test.serial('an answer a resource owes rejects after a restart', async t => {
     `
     (() => {
       let failure = null;
-      E(gate)
+      const failed = E(gate)
         .wait()
         .catch(reason => {
           failure = String((reason && reason.message) || reason);
+          return failure;
         });
       return Far('Waiter', {
         ping: () => 'pong',
         getFailure: () => failure,
+        waitForFailure: () => failed,
       });
     })()
     `,
@@ -255,6 +273,10 @@ test.serial('an answer a resource owes rejects after a restart', async t => {
     client.makeSturdyRef(daemon1.location, secret),
   );
   t.is(await E(remoteWaiter).ping(), 'pong');
+  // A guest ping does not prove that a separate host-resource call arrived.
+  // Cross the actual host dispatch boundary before killing its pending answer.
+  await gateEntered;
+  t.is(calls, 1);
   t.is(await E(remoteWaiter).getFailure(), null, 'the wait is outstanding');
 
   // Crash, not clean shutdown: the resource promise dies with the
@@ -264,12 +286,10 @@ test.serial('an answer a resource owes rejects after a restart', async t => {
   t.teardown(() => daemon2.shutdown());
 
   t.is(await E(remoteWaiter).ping(), 'pong', 'the session itself resumed');
-  /** @type {any} */
-  let failure = null;
-  for (let i = 0; i < 1000 && failure === null; i += 1) {
-    // eslint-disable-next-line no-await-in-loop
-    failure = await E(remoteWaiter).getFailure();
-  }
+  // Await the guest's persisted listener instead of a machine-speed-dependent
+  // number of status polls. The explicit test timeout still bounds a lost break.
+  const failure = await E(remoteWaiter).waitForFailure();
+  t.is(calls, 1, 'recovery must not reissue the host-resource invocation');
   t.regex(
     String(failure),
     /aborted/,
@@ -411,7 +431,7 @@ test.serial(
       'the originating call reached the exporter',
     );
     t.is(await E(remoteHolder).observed(), 'pending');
-    const store = makeFsStore(holderPath);
+    const store = makeFsStore(nodePowers, holderPath);
     const outgoing = store
       .listSessionTokens()
       .filter(token => store.provideSessionStore(token).getMeta().isOriginator);
@@ -427,9 +447,10 @@ test.serial(
     const exporter2 = await makeDaemon(exporterPath, exporterPort);
     t.teardown(() => exporter2.shutdown());
     t.true(await E(remoteCounter).settle('settled while holder was offline'));
-    const exporterSession = makeFsStore(exporterPath).provideSessionStore(
-      outgoing[0],
-    );
+    const exporterSession = makeFsStore(
+      nodePowers,
+      exporterPath,
+    ).provideSessionStore(outgoing[0]);
     t.truthy(
       exporterSession.getMeta().frames[0],
       'the exporter retains settlement delivery while the listener node is offline',
@@ -452,3 +473,83 @@ test.serial(
     );
   },
 );
+
+for (const importFirst of [true, false]) {
+  test.serial(
+    `publication imports and third-party gifts share a session (${importFirst ? 'import' : 'gift'} first)`,
+    async t => {
+      t.timeout(20_000);
+      const exporterPath = await mkdtemp(
+        join(tmpdir(), 'thix-mixed-exporter-'),
+      );
+      t.teardown(() => rm(exporterPath, { recursive: true, force: true }));
+      const holderPath = await mkdtemp(join(tmpdir(), 'thix-mixed-holder-'));
+      t.teardown(() => rm(holderPath, { recursive: true, force: true }));
+      const exporter = await makeDaemon(exporterPath, 0);
+      t.teardown(() => exporter.shutdown());
+      const holder = await makeDaemon(holderPath, 0);
+      t.teardown(() => holder.shutdown());
+      const counterWorker = await exporter.createWorker();
+      const counter = await counterWorker.evaluate(COUNTER_SOURCE);
+      const secret = exporter.publish(counter);
+      const holderWorker = await holder.createWorker();
+      const receiver = await holderWorker.evaluate(`(() => {
+        let counter;
+        return Far('Receiver', {
+          hold: value => { counter = value; return true; },
+          incr: () => E(counter).incr(),
+        });
+      })()`);
+      const receiverSecret = holder.publish(receiver);
+      const gifter = await makeDurableClient('mixed-route-gifter');
+      t.teardown(() => gifter.shutdown());
+      const remoteCounter = await gifter.enlivenSturdyRef(
+        gifter.makeSturdyRef(exporter.location, secret),
+      );
+      const remoteReceiver = await gifter.enlivenSturdyRef(
+        gifter.makeSturdyRef(holder.location, receiverSecret),
+      );
+      const importCounter = () =>
+        holder.importReference(exporter.location, secret);
+      const giveCounter = async () => {
+        t.true(await E(remoteReceiver).hold(remoteCounter));
+        return E(remoteReceiver).incr();
+      };
+      let imported;
+      if (importFirst) {
+        imported = await importCounter();
+        t.is(await E(imported).incr(), 1);
+        t.is(await giveCounter(), 2);
+      } else {
+        t.is(await giveCounter(), 1);
+        imported = await importCounter();
+        t.is(await E(imported).incr(), 2);
+      }
+      t.is(await E(imported).incr(), 3);
+      t.is(await E(remoteReceiver).incr(), 4);
+      const store = makeFsStore(nodePowers, holderPath);
+      const outgoing = store
+        .listSessionTokens()
+        .filter(
+          token => store.provideSessionStore(token).getMeta().isOriginator,
+        );
+      t.is(outgoing.length, 1);
+      const before = store.provideSessionStore(outgoing[0]).getMeta();
+      await holder.shutdown();
+      const restored = await makeDaemon(
+        holderPath,
+        Number(holder.location.hints.port),
+      );
+      t.teardown(() => restored.shutdown());
+      t.is(await E(remoteReceiver).incr(), 5);
+      const importedAgain = await restored.importReference(
+        exporter.location,
+        secret,
+      );
+      t.is(await E(importedAgain).incr(), 6);
+      const after = store.provideSessionStore(outgoing[0]).getMeta();
+      t.deepEqual(after.identity, before.identity);
+      t.is(after.hubSessionKey, before.hubSessionKey);
+    },
+  );
+}

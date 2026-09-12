@@ -2,15 +2,19 @@
 import test from '@endo/ses-ava/test.js';
 import { syrupCodec } from '@endo/ocapn/syrup';
 
-import { makeThixotropeDaemon } from '../src/daemon.js';
-import { makePeerJournalReplayEngine } from '../src/peer-replay-engine.js';
-import { makeMemoryStore } from '../src/store-fs.js';
+import { makeThixotropeDaemon } from '../src/core/daemon.js';
+import { makePeerJournalReplayEngine } from '../src/core/peer-replay-engine.js';
+import { makeMemoryStore } from '../src/store/store-memory.js';
+
+import { makeNodePowers } from '../src/platform/node-powers.js';
+
+const nodePowers = makeNodePowers();
 
 test.serial(
   'failed sleep drains other workers before releasing ownership',
   async t => {
     t.timeout(5000);
-    const raw = makePeerJournalReplayEngine();
+    const raw = makePeerJournalReplayEngine(nodePowers);
     let releaseSlow = () => {};
     const slowGate = new Promise(resolve => {
       releaseSlow = () => resolve(undefined);
@@ -23,7 +27,7 @@ test.serial(
     let networkStopped = false;
     const events = [];
     let starts = 0;
-    const daemon = await makeThixotropeDaemon({
+    const daemon = await makeThixotropeDaemon(nodePowers, {
       store: makeMemoryStore(),
       codec: syrupCodec,
       engine: {

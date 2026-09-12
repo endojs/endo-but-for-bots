@@ -10,9 +10,13 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
-import { makeThixotropeDaemon } from '../src/daemon.js';
-import { makePeerJournalReplayEngine } from '../src/peer-replay-engine.js';
-import { makeFsStore } from '../src/store-fs.js';
+import { makeThixotropeDaemon } from '../src/core/daemon.js';
+import { makePeerJournalReplayEngine } from '../src/core/peer-replay-engine.js';
+import { makeFsStore } from '../src/store/store-fs.js';
+
+import { makeNodePowers } from '../src/platform/node-powers.js';
+
+const nodePowers = makeNodePowers();
 
 /** @import { ExecutionContext } from 'ava' */
 
@@ -30,11 +34,11 @@ const setup = async (t, existingPath = undefined) => {
   if (existingPath === undefined) {
     t.teardown(() => rm(path, { recursive: true, force: true }));
   }
-  const store = makeFsStore(path);
+  const store = makeFsStore(nodePowers, path);
   let refuse = false;
   /** @type {any} */
   let power;
-  const daemon = await makeThixotropeDaemon({
+  const daemon = await makeThixotropeDaemon(nodePowers, {
     store: harden({
       ...store,
       provideSessionStore: sessionToken => {
@@ -48,7 +52,7 @@ const setup = async (t, existingPath = undefined) => {
         });
       },
     }),
-    engine: makePeerJournalReplayEngine(),
+    engine: makePeerJournalReplayEngine(nodePowers),
     codec: syrupCodec,
     makeNetlayer: ({ resumption }) => {
       power = resumption;
@@ -71,7 +75,8 @@ const setup = async (t, existingPath = undefined) => {
     refuseWrites: () => {
       refuse = true;
     },
-    disk: () => makeFsStore(path).provideSessionStore(token).getMeta(),
+    disk: () =>
+      makeFsStore(nodePowers, path).provideSessionStore(token).getMeta(),
   };
 };
 
@@ -247,7 +252,7 @@ for (const phase of [
       t.timeout(30_000);
       const path = await mkdtemp(join(tmpdir(), 'thix-syscall-'));
       t.teardown(() => rm(path, { recursive: true, force: true }));
-      const session = makeFsStore(path).provideSessionStore(token);
+      const session = makeFsStore(nodePowers, path).provideSessionStore(token);
       const before = {
         version: 2,
         recvSeq: '1',
@@ -285,7 +290,7 @@ for (const phase of [
       // preserves the prior outbox and accepted inbox contents exactly.
       session.setMeta(after);
       t.deepEqual(
-        makeFsStore(path).provideSessionStore(token).getMeta(),
+        makeFsStore(nodePowers, path).provideSessionStore(token).getMeta(),
         after,
       );
     },

@@ -1,4 +1,5 @@
 // @ts-check
+import { builtinModules } from 'node:module';
 import { OptionDefaults } from 'typedoc';
 import { configs as endoConfigs, hardenedGlobals } from '@endo/eslint-plugin';
 import { defineConfig } from 'eslint/config';
@@ -62,6 +63,80 @@ export default defineConfig(
   {
     files: ['packages/cli/**', 'packages/daemon/**'],
     extends: [endoConfigs['flat/daemon']],
+  },
+
+  // Host authority is acquired only by explicit platform composition factories.
+  // Keep this separate from flat/daemon: that preset is general style, not confinement.
+  {
+    files: ['packages/thixotrope/src/**/*.js', 'packages/thixotrope/index.js'],
+    ignores: [
+      'packages/thixotrope/src/platform/node-powers.js',
+      'packages/thixotrope/src/core/worker-peer-xs.js',
+    ],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: builtinModules.map(name => ({
+            name,
+            message: 'Receive platform capabilities through explicit powers.',
+          })),
+          patterns: [
+            {
+              group: ['node:*', '**/node-powers.js'],
+              message:
+                'Receive platform capabilities through explicit powers; core cannot acquire them.',
+            },
+          ],
+        },
+      ],
+      'no-restricted-properties': [
+        'error',
+        {
+          object: 'Math',
+          property: 'random',
+          message: 'Receive randomness through explicit powers.',
+        },
+      ],
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector:
+            "Identifier[name='Math']:not(MemberExpression[computed=false] > Identifier.object)",
+          message:
+            'Use named deterministic Math methods; do not alias ambient Math authority.',
+        },
+        {
+          selector: 'ImportExpression',
+          message:
+            'Inject a module loader capability; core cannot acquire dynamic imports.',
+        },
+        {
+          selector:
+            "MemberExpression[object.name='Math'][property.name='random']",
+          message: 'Receive randomness through explicit powers.',
+        },
+      ],
+      'no-restricted-globals': [
+        'error',
+        'require',
+        'process',
+        'Buffer',
+        'crypto',
+        'fetch',
+        'console',
+        'globalThis',
+        'setTimeout',
+        'clearTimeout',
+        'setInterval',
+        'clearInterval',
+        'setImmediate',
+        'clearImmediate',
+        'queueMicrotask',
+        'performance',
+        'Date',
+      ],
+    },
   },
 
   // override resolution for certain dev deps which are resolved from the workspace root instead

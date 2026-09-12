@@ -2,11 +2,15 @@
 import test from '@endo/ses-ava/test.js';
 import { syrupCodec } from '@endo/ocapn/syrup';
 
-import { makeDurableWorkerTransport } from '../src/durable-worker-transport.js';
-import { makeOcapnHub } from '../src/hub.js';
-import { makeMemoryStore } from '../src/store-fs.js';
+import { makeDurableWorkerTransport } from '../src/core/durable-worker-transport.js';
+import { makeOcapnHub } from '../src/net/hub.js';
+import { makeMemoryStore } from '../src/store/store-memory.js';
 
-/** @import {WorkerEngine} from '../src/worker-engine.js' */
+import { makeNodePowers } from '../src/platform/node-powers.js';
+
+const nodePowers = makeNodePowers();
+
+/** @import {WorkerEngine} from '../src/core/worker-engine.js' */
 
 const workerId = 'a'.repeat(32);
 
@@ -80,7 +84,7 @@ test('journal acceptance survives a crash before hub removes its outbox copy', a
       terminate: async () => {},
     }),
   };
-  const transport = makeDurableWorkerTransport({
+  const transport = makeDurableWorkerTransport(nodePowers, {
     workerId,
     store: workerStore,
     engine,
@@ -104,7 +108,7 @@ test('journal acceptance survives a crash before hub removes its outbox copy', a
   transport.end();
   t.is(workerStore.journalLength(), 1);
   t.is(hubStore.getState().sessions[workerId].queue.length, 2);
-  const restoredTransport = makeDurableWorkerTransport({
+  const restoredTransport = makeDurableWorkerTransport(nodePowers, {
     workerId,
     store: workerStore,
     engine,
@@ -136,7 +140,7 @@ test('closed and failed workers decline new handoffs without journaling', async 
       throw Error('declined handoff must not start worker');
     },
   };
-  const transport = makeDurableWorkerTransport({
+  const transport = makeDurableWorkerTransport(nodePowers, {
     workerId,
     store: workerStore,
     engine,

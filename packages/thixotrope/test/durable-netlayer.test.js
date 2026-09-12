@@ -10,11 +10,16 @@ import { E } from '@endo/eventual-send';
 import { makeTcpNetLayer } from '@endo/ocapn/netlayer/tcp-testing';
 import { syrupCodec } from '@endo/ocapn/syrup';
 
-import { makeThixotropeDaemon } from '../src/daemon.js';
-import { makeDurableNetLayer } from '../src/durable-netlayer.js';
-import { makePeerJournalReplayEngine } from '../src/peer-replay-engine.js';
-import { makeFsStore } from '../src/store-fs.js';
+import { makeThixotropeDaemon } from '../src/core/daemon.js';
+import { makeDurableNetLayer } from '../src/net/durable-netlayer.js';
+import { makePeerJournalReplayEngine } from '../src/core/peer-replay-engine.js';
+import { makeFsStore } from '../src/store/store-fs.js';
 import { makeTestOcapn } from './_util.js';
+import { parkWorkers } from './_park-workers.js';
+
+import { makeNodePowers } from '../src/platform/node-powers.js';
+
+const nodePowers = makeNodePowers();
 
 const COUNTER_SOURCE = `
 (() => {
@@ -66,12 +71,12 @@ const makeDroppableTcp = () => {
 const makeDurableDaemon = async t => {
   const statePath = await mkdtemp(join(tmpdir(), 'thixotrope-durable-net-'));
   t.teardown(() => rm(statePath, { recursive: true, force: true }));
-  const daemon = await makeThixotropeDaemon({
-    store: makeFsStore(statePath),
-    engine: makePeerJournalReplayEngine(),
+  const daemon = await makeThixotropeDaemon(nodePowers, {
+    store: makeFsStore(nodePowers, statePath),
+    engine: makePeerJournalReplayEngine(nodePowers),
     codec: syrupCodec,
     makeNetlayer: ({ handlers, logger }) =>
-      makeDurableNetLayer({
+      makeDurableNetLayer(nodePowers, {
         handlers,
         logger,
         makeBaseNetlayer: powers => makeTcpNetLayer(powers),
@@ -89,7 +94,7 @@ const makeDurableClient = async (label, baseFactory) => {
     codec: syrupCodec,
     debugLabel: label,
     network: (handlers, logger) =>
-      makeDurableNetLayer({
+      makeDurableNetLayer(nodePowers, {
         handlers,
         logger,
         makeBaseNetlayer: baseFactory,
@@ -138,30 +143,36 @@ test('live remote references survive dropped connections', async t => {
   t.is(await E(remoteCounter).getCount(), 6, 'no call was lost or doubled');
 });
 
-test('a sleeping worker wakes for a call that crossed a drop', async t => {
-  const daemon = await makeDurableDaemon(t);
-  t.teardown(() => daemon.shutdown());
-  const worker = await daemon.createWorker({ debugLabel: 'counter' });
-  const counter = await worker.evaluate(COUNTER_SOURCE);
-  const secret = daemon.publish(counter);
+test.serial(
+  'a sleeping worker wakes for a call that crossed a drop',
+  async t => {
+    t.timeout(30_000);
+    const daemon = await makeDurableDaemon(t);
+    t.teardown(() => daemon.shutdown());
+    const worker = await daemon.createWorker({ debugLabel: 'counter' });
+    const counter = await worker.evaluate(COUNTER_SOURCE);
+    const secret = daemon.publish(counter);
 
-  const dropper = makeDroppableTcp();
-  const client = await makeDurableClient('durable-client-2', dropper.factory);
-  t.teardown(() => client.shutdown());
+    const dropper = makeDroppableTcp();
+    const client = await makeDurableClient('durable-client-2', dropper.factory);
+    t.teardown(() => client.shutdown());
 
-  const remoteCounter = await client.enlivenSturdyRef(
-    client.makeSturdyRef(daemon.location, secret),
-  );
-  t.is(await E(remoteCounter).incr(), 1);
+    const remoteCounter = await client.enlivenSturdyRef(
+      client.makeSturdyRef(daemon.location, secret),
+    );
+    t.is(await E(remoteCounter).incr(), 1);
 
-  await worker.sleep();
-  t.false(worker.isAwake());
-  dropper.dropAll();
+    // A completed remote answer can still be followed by GC protocol traffic.
+    // Drain that work before requiring the worker to be asleep.
+    await parkWorkers(daemon);
+    t.false(worker.isAwake());
+    dropper.dropAll();
 
-  t.is(
-    await E(remoteCounter).incr(),
-    2,
-    'the resumed session wakes the sleeping worker',
-  );
-  t.true(worker.isAwake());
-});
+    t.is(
+      await E(remoteCounter).incr(),
+      2,
+      'the resumed session wakes the sleeping worker',
+    );
+    t.true(worker.isAwake());
+  },
+);

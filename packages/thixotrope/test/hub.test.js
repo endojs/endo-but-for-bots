@@ -1,7 +1,7 @@
 // @ts-check
 
 /**
- * The Thixotrope hub (`src/hub.js`): the non-reifying core of the
+ * The Thixotrope hub (`src/net/hub.js`): the non-reifying core of the
  * next-generation thixotrope daemon. The hub is not a client — it holds
  * only c-list tables and forwards every message by structural
  * transcoding (slot rewriting), with bootstrap `fetch` as its only
@@ -16,10 +16,14 @@ import { frozenBytes } from '@endo/immutable-arraybuffer';
 import { E } from '@endo/eventual-send';
 import { syrupCodec } from '@endo/ocapn/syrup';
 
-import { makeOcapnHub } from '../src/hub.js';
-import { makePipeNetwork } from '../src/pipe-network.js';
-import { makeWorkerPeer } from '../src/worker-peer.js';
+import { makeOcapnHub } from '../src/net/hub.js';
+import { makePipeNetwork } from '../src/net/pipe-network.js';
+import { makeWorkerPeer } from '../src/core/worker-peer.js';
 import { makeTestOcapn } from './_util.js';
+
+import { makeNodePowers } from '../src/platform/node-powers.js';
+
+const nodePowers = makeNodePowers();
 
 const textEncoder = new TextEncoder();
 /** @param {string} text */
@@ -53,7 +57,7 @@ const attachWorker = async (hub, workerId, debugLabel) => {
   const outbound = { sink: undefined, pending: [] };
   /** @type {Array<Uint8Array>} every frame the hub sent this worker */
   const framesToWorker = [];
-  const worker = await makeWorkerPeer({
+  const worker = await makeWorkerPeer(nodePowers, {
     workerId,
     debugLabel,
     send: frame => {
@@ -763,4 +767,38 @@ test('released holdings return gc to the origin and shrink the tables', async t 
     SHELL_SWISSNUM,
   );
   t.is(await E(shellAgain).evaluate('2 + 3'), 5);
+});
+
+test('remote route reuse preserves a legacy import alias and its serialized dial location', t => {
+  /** @type {any} */
+  let persisted;
+  const store = {
+    getState: () => persisted,
+    setState: state => {
+      persisted = JSON.parse(JSON.stringify(state));
+    },
+  };
+  const original = harden({
+    type: 'ocapn-peer',
+    network: 'tcp-testing-only',
+    transport: 'tcp-testing-only',
+    designator: 'exporter',
+    hints: { b: '2', a: '1' },
+  });
+  const first = makeOcapnHub({ codec: syrupCodec, store });
+  const { sessionKey } = first.prepareRemoteSession(original);
+  const legacyKey = 'handoff:import:legacy';
+  persisted.sessions[legacyKey] = persisted.sessions[sessionKey];
+  delete persisted.sessions[sessionKey];
+  const restored = makeOcapnHub({ codec: syrupCodec, store });
+  const equivalent = harden({
+    hints: { a: '1', b: '2' },
+    designator: 'exporter',
+    transport: 'tcp-testing-only',
+    type: 'ocapn-peer',
+  });
+  const route = restored.prepareRemoteSession(equivalent);
+  t.is(route.sessionKey, legacyKey);
+  t.is(JSON.stringify(route.location), JSON.stringify(original));
+  t.deepEqual(Object.keys(persisted.sessions), [legacyKey]);
 });

@@ -4,8 +4,12 @@ import { syrupCodec } from '@endo/ocapn/syrup';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { makeIronhorseEngine } from '../src/ironhorse-engine.js';
-import { makePeerJournalReplayEngine } from '../src/peer-replay-engine.js';
+import { makeIronhorseEngine } from '../src/ironhorse/ironhorse-engine.js';
+import { makePeerJournalReplayEngine } from '../src/core/peer-replay-engine.js';
+
+import { makeNodePowers } from '../src/platform/node-powers.js';
+
+const nodePowers = makeNodePowers();
 
 /** @param {Uint8Array} bytes */
 export const isIncrement = bytes => {
@@ -21,11 +25,14 @@ export const isIncrement = bytes => {
 };
 harden(isIncrement);
 
-/** @param {'replay' | 'ironhorse'} kind @param {string} statePath */
+/**
+ * @param {'replay' | 'ironhorse'} kind @param {string} statePath
+ * @param statePath
+ */
 export const makeProcessTestEngine = (kind, statePath) =>
   kind === 'replay'
-    ? makePeerJournalReplayEngine()
-    : makeIronhorseEngine({
+    ? makePeerJournalReplayEngine(nodePowers)
+    : makeIronhorseEngine(nodePowers, {
         workerBinary:
           process.env.THIXOTROPE_IRONHORSE_WORKER ??
           fileURLToPath(

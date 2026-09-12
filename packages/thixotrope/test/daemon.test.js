@@ -18,11 +18,16 @@ import { Far } from '@endo/far';
 import { makeTcpNetLayer } from '@endo/ocapn/netlayer/tcp-testing';
 import { syrupCodec } from '@endo/ocapn/syrup';
 
-import { makeThixotropeDaemon } from '../src/daemon.js';
-import { makePeerJournalReplayEngine } from '../src/peer-replay-engine.js';
-import { makeTimerResource } from '../src/resources.js';
-import { makeFsStore } from '../src/store-fs.js';
+import { makeThixotropeDaemon } from '../src/core/daemon.js';
+import { makePeerJournalReplayEngine } from '../src/core/peer-replay-engine.js';
+import { makeTimerResource } from '../src/alarms/resources.js';
+import { makeFsStore } from '../src/store/store-fs.js';
 import { makeTestOcapn } from './_util.js';
+import { parkWorkers } from './_park-workers.js';
+
+import { makeNodePowers } from '../src/platform/node-powers.js';
+
+const nodePowers = makeNodePowers();
 
 const COUNTER_SOURCE = `
 (() => {
@@ -38,12 +43,14 @@ const COUNTER_SOURCE = `
 `;
 
 /** @import { ExecutionContext } from 'ava' */
-/** @param {ExecutionContext} t @param {{ onDeleteWorker?: (id: string) => void }} [options] */
+/**
+ * @param {ExecutionContext} t @param {{ onDeleteWorker?: (id: string) => void }} [options]
+ */
 const makeDaemon = async (t, { onDeleteWorker = () => {} } = {}) => {
   const statePath = await mkdtemp(join(tmpdir(), 'thixotrope-daemon-test-'));
   t.teardown(() => rm(statePath, { recursive: true, force: true }));
-  const store = makeFsStore(statePath);
-  const daemon = await makeThixotropeDaemon({
+  const store = makeFsStore(nodePowers, statePath);
+  const daemon = await makeThixotropeDaemon(nodePowers, {
     store: harden({
       ...store,
       deleteWorker: id => {
@@ -51,9 +58,11 @@ const makeDaemon = async (t, { onDeleteWorker = () => {} } = {}) => {
         onDeleteWorker(id);
       },
     }),
-    engine: makePeerJournalReplayEngine(),
+    engine: makePeerJournalReplayEngine(nodePowers),
     codec: syrupCodec,
-    resources: { timer: makeTimerResource },
+    resources: {
+      timer: description => makeTimerResource(nodePowers.timers, description),
+    },
     makeNetlayer: ({ handlers, logger }) =>
       makeTcpNetLayer({ handlers, logger }),
   });
@@ -168,9 +177,9 @@ test.serial(
     t.timeout(10_000);
     const statePath = await mkdtemp(join(tmpdir(), 'thixotrope-daemon-test-'));
     t.teardown(() => rm(statePath, { recursive: true, force: true }));
-    const daemon = await makeThixotropeDaemon({
-      store: makeFsStore(statePath),
-      engine: makePeerJournalReplayEngine(),
+    const daemon = await makeThixotropeDaemon(nodePowers, {
+      store: makeFsStore(nodePowers, statePath),
+      engine: makePeerJournalReplayEngine(nodePowers),
       codec: syrupCodec,
       idleSleepMs: 100,
       makeNetlayer: ({ handlers, logger }) =>
@@ -200,9 +209,9 @@ test.serial('a third-party gift routes through the hub bootstrap', async t => {
   t.timeout(15_000);
   const statePath = await mkdtemp(join(tmpdir(), 'thixotrope-daemon-gift-'));
   t.teardown(() => rm(statePath, { recursive: true, force: true }));
-  const daemon = await makeThixotropeDaemon({
-    store: makeFsStore(statePath),
-    engine: makePeerJournalReplayEngine(),
+  const daemon = await makeThixotropeDaemon(nodePowers, {
+    store: makeFsStore(nodePowers, statePath),
+    engine: makePeerJournalReplayEngine(nodePowers),
     codec: syrupCodec,
     // The tcp-testing netlayer distinguishes peers by designator; each
     // node in a three-party exchange needs its own.
@@ -280,9 +289,9 @@ test.serial(
       join(tmpdir(), 'thixotrope-daemon-redeem-'),
     );
     t.teardown(() => rm(statePath, { recursive: true, force: true }));
-    const daemon = await makeThixotropeDaemon({
-      store: makeFsStore(statePath),
-      engine: makePeerJournalReplayEngine(),
+    const daemon = await makeThixotropeDaemon(nodePowers, {
+      store: makeFsStore(nodePowers, statePath),
+      engine: makePeerJournalReplayEngine(nodePowers),
       codec: syrupCodec,
       makeNetlayer: ({ handlers, logger }) =>
         makeTcpNetLayer({ handlers, logger, specifiedDesignator: 'daemon' }),
@@ -367,8 +376,7 @@ test.serial(
       [first.workerId, await first.evaluate(COUNTER_SOURCE)],
       [second.workerId, await second.evaluate(COUNTER_SOURCE)],
     ]);
-    await first.sleep();
-    await second.sleep();
+    await parkWorkers(daemon);
     const [victim, rescued] = daemon.inspectReachability().collectible;
     t.is(daemon.inspectReachability().collectible.length, 2);
     deleting = id => {

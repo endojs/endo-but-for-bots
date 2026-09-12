@@ -8,17 +8,24 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { makeThixotropeDaemon } from '../../src/daemon.js';
-import { callerSource, counterSource } from '../../src/demo-counter-vats.js';
-import { makeIronhorseEngine } from '../../src/ironhorse-engine.js';
-import { makeFsStore } from '../../src/store-fs.js';
+import { makeThixotropeDaemon } from '../../src/core/daemon.js';
+import {
+  callerSource,
+  counterSource,
+} from '../../src/ironhorse/demo-counter-vats.js';
+import { makeIronhorseEngine } from '../../src/ironhorse/ironhorse-engine.js';
+import { makeFsStore } from '../../src/store/store-fs.js';
+
+import { makeNodePowers } from '../../src/platform/node-powers.js';
+
+const nodePowers = makeNodePowers();
 
 const [statePath] = process.argv.slice(2);
 const packagePath = fileURLToPath(new URL('../../', import.meta.url));
 const workerBinary =
   process.env.THIXOTROPE_IRONHORSE_WORKER ??
   join(packagePath, '../../target/release/thixotrope-ironhorse-worker');
-const rawStore = makeFsStore(statePath);
+const rawStore = makeFsStore(nodePowers, statePath);
 let ownerId;
 let armed;
 const increment = b64 => {
@@ -62,7 +69,7 @@ const store = harden({
     });
   },
 });
-const rawEngine = makeIronhorseEngine({
+const rawEngine = makeIronhorseEngine(nodePowers, {
   workerBinary,
   bootPaths: ['boot.js', 'worker-peer.js'].map(name =>
     join(
@@ -102,7 +109,7 @@ const engine = harden({
   },
 });
 const start = () =>
-  makeThixotropeDaemon({
+  makeThixotropeDaemon(nodePowers, {
     store,
     engine,
     codec: syrupCodec,
