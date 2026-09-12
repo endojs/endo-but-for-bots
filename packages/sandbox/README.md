@@ -158,8 +158,21 @@ Historical observation, pull, signal, and removal failures do not invent permane
 guest-producer uncertainty.
 Orphan cleanup validates full IDs before removal, preventing delayed cleanup from
 retargeting a reused name; an orphan sweep still cannot prove predecessor quiescence.
-Runtime composition and bwrap probe closure accounting remain pending before the
-default composed runtime may release shared storage and its ownership marker.
+The host-only `makeSandboxRuntime` from `@endo/sandbox/runtime.js` composes Podman,
+the factory, generated-file storage, and exclusive incarnation ownership.
+The generic factory continues to offer bwrap separately; this hosted composition
+requires the Podman driver and its explicit lifetime cleanup authority.
+The constructor returns an `open()`/`close()` controller before acquiring resources.
+Retain that controller through failed initialization or cleanup, and retry failed
+close before attempting to replace its owner.
+Close fences factory and driver admission immediately, attempts both shutdown paths,
+and releases storage followed by the ownership marker only after both succeed.
+The host supplies a stable private directory, a stable owner ID, and aggregate
+generated-file byte and entry budgets.
+The directory and its replaceable ancestors must remain outside guest writes.
+Existing markers and storage roots refuse startup without a probe or stale sweep;
+this controller does not infer safe recovery from parent death or container absence.
+Daemon provisioning and hosted entrypoint integration remain pending.
 
 [podman-engine-selection]: https://github.com/containers/podman/blob/v5.8.0/cmd/podman/registry/config.go
 [podman-local-flags]: https://github.com/containers/podman/blob/v5.8.0/cmd/podman/root.go

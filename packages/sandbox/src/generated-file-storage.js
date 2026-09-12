@@ -1,9 +1,8 @@
 // @ts-check
 
-/* global process */
-
 import { Fail, q } from '@endo/errors';
 
+import { assertPrivateDirectory } from './private-directory.js';
 import { makeResourceRegistry } from './resource-registry.js';
 
 /** @import { ValidatedGeneratedFile } from './generated-file-types.js' */
@@ -51,14 +50,7 @@ export const makeGeneratedFileStorage = async (
   (path.isAbsolute(directory) && !directory.includes('\0')) ||
     Fail`Generated storage requires an absolute host directory`;
   const absolute = path.resolve(directory);
-  const parent = await fs.realpath(path.dirname(absolute));
-  const parentStat = await fs.stat(parent);
-  // eslint-disable-next-line no-bitwise
-  const sharedPermissions = parentStat.mode & 0o077;
-  (parentStat.isDirectory() &&
-    sharedPermissions === 0 &&
-    parentStat.uid === process.getuid?.()) ||
-    Fail`Generated storage parent must be private and owned by this runtime: ${q(parent)}`;
+  const parent = await assertPrivateDirectory(path.dirname(absolute), fs);
   const root = path.join(parent, path.basename(absolute));
   root !== parent || Fail`Generated storage must have a distinct root`;
   const registry = makeResourceRegistry();
