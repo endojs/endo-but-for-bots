@@ -3963,17 +3963,17 @@ mod tests {
             wrappers: Vec::new(),
             regexps: Vec::new(),
             dates: Vec::new(),
-            function_state: ironhorse_vm::FunctionStateSnapshot::default(),
-            proxy_state: ironhorse_vm::ProxyStateSnapshot::default(),
+            function_state: ironhorse_vm::snapshot_api::FunctionStateSnapshot::default(),
+            proxy_state: ironhorse_vm::snapshot_api::ProxyStateSnapshot::default(),
             accessors: Vec::new(),
             intl_bound_functions: Vec::new(),
-            private_elements: ironhorse_vm::PrivateElementSnapshot::default(),
+            private_elements: ironhorse_vm::snapshot_api::PrivateElementSnapshot::default(),
             disposable_stacks: Vec::new(),
             generators: Vec::new(),
-            promise_cluster: ironhorse_vm::PromiseClusterSnapshot::default(),
+            promise_cluster: ironhorse_vm::snapshot_api::PromiseClusterSnapshot::default(),
             arguments_brands: Vec::new(),
             temporal: crate::image::TemporalImage::default(),
-            intl: ironhorse_vm::IntlTables::default(),
+            intl: ironhorse_vm::snapshot_api::IntlTables::default(),
             name_floor: None,
             iterators: Vec::new(),
         };
@@ -4004,17 +4004,17 @@ mod tests {
             wrappers: Vec::new(),
             regexps: Vec::new(),
             dates: Vec::new(),
-            function_state: ironhorse_vm::FunctionStateSnapshot::default(),
-            proxy_state: ironhorse_vm::ProxyStateSnapshot::default(),
+            function_state: ironhorse_vm::snapshot_api::FunctionStateSnapshot::default(),
+            proxy_state: ironhorse_vm::snapshot_api::ProxyStateSnapshot::default(),
             accessors: Vec::new(),
             intl_bound_functions: Vec::new(),
-            private_elements: ironhorse_vm::PrivateElementSnapshot::default(),
+            private_elements: ironhorse_vm::snapshot_api::PrivateElementSnapshot::default(),
             disposable_stacks: Vec::new(),
             generators: Vec::new(),
-            promise_cluster: ironhorse_vm::PromiseClusterSnapshot::default(),
+            promise_cluster: ironhorse_vm::snapshot_api::PromiseClusterSnapshot::default(),
             arguments_brands: Vec::new(),
             temporal: crate::image::TemporalImage::default(),
-            intl: ironhorse_vm::IntlTables::default(),
+            intl: ironhorse_vm::snapshot_api::IntlTables::default(),
             name_floor: None,
             iterators: Vec::new(),
         };
@@ -4827,7 +4827,7 @@ mod tests {
         // Function name chunks are external chunk holders. This
         // geometry-only fixture drops the corresponding function rows
         // together with the arena bytes.
-        shrunk.function_state = ironhorse_vm::FunctionStateSnapshot::default();
+        shrunk.function_state = ironhorse_vm::snapshot_api::FunctionStateSnapshot::default();
         let prev = store.manifest().unwrap().seal;
         let mut batch = image_to_batch_unchecked(&shrunk, 2, &prev);
         batch.chunk_extents.clear(); // nothing to write; drop-only

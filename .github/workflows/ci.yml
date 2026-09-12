@@ -698,6 +698,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
 
       - name: Verify shared IronHorse dependency resolutions
         run: |
@@ -708,6 +709,13 @@ jobs:
           python3 rust/engine/scripts/check-lockfile-agreement.py
           python3 rust/engine/scripts/test-intl-profile.py
           python3 rust/engine/scripts/intl-profile.py
+
+      - name: Check row-schema history and version transitions
+        env:
+          ROW_SCHEMA_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          python3 rust/engine/scripts/test-row-schema.py
+          python3 rust/engine/scripts/check-row-schema.py --base "${ROW_SCHEMA_BASE:-HEAD^}"
 
       - name: Check generated engine crate diagram and library safety declarations
         run: |

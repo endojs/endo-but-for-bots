@@ -516,7 +516,7 @@ fn every_slot_bearing_field_is_classified_and_the_classification_holds() {
         .iter()
         .map(|(name, ty)| (name.as_str(), compact_type(ty)))
         .collect();
-    let emitted: Vec<_> = ironhorse_vm::interp::INTERP_FIELDS
+    let emitted: Vec<_> = ironhorse_vm::diagnostics::INTERP_FIELDS
         .iter()
         .map(|(name, ty)| (*name, compact_type(ty)))
         .collect();
@@ -653,8 +653,8 @@ fn sweep_sources(src: &str) -> (String, String) {
     assert!(partial_template.contains("$(gc_retain!(gc_run,self,$early,dead,$early_shape);)*"));
     assert!(partial_template.contains("$(gc_retain!(gc_run,self,$late,dead,$late_shape);)*"));
     (
-        ironhorse_vm::interp::gc_tables::FULL_SWEEP_SOURCE.join("\n"),
-        ironhorse_vm::interp::gc_tables::PARTIAL_SWEEP_SOURCE.join("\n"),
+        ironhorse_vm::diagnostics::FULL_SWEEP_SOURCE.join("\n"),
+        ironhorse_vm::diagnostics::PARTIAL_SWEEP_SOURCE.join("\n"),
     )
 }
 
@@ -720,7 +720,7 @@ fn chunk_source(src: &str) -> String {
     assert!(callback.contains("self.visit_chunks(visit);"));
     let walk = compact(body_in(src, "fn visit_chunks(&mut self"));
     assert!(walk.contains("$(gc_chunk!(gc_run,self,$field,visit,$chunk);)*"));
-    ironhorse_vm::interp::gc_tables::CHUNK_WALK_SOURCE.join("\n")
+    ironhorse_vm::diagnostics::CHUNK_WALK_SOURCE.join("\n")
 }
 
 #[test]
@@ -767,9 +767,9 @@ fn edge_sources(src: &str) -> (String, String) {
     let pages = compact(body_in(src, "pub fn side_table_ref_page_bits(&self)"));
     assert!(pages.contains("self.each_side_table_ref_tail(&mut|r|"));
     assert!(pages.contains("self.side_refs.or_into_bits(&mutbits);"));
-    let full = expanded_row_edges(ironhorse_vm::interp::gc_tables::FULL_EDGE_SOURCE, true);
-    let partial = expanded_row_edges(ironhorse_vm::interp::gc_tables::PARTIAL_EDGE_SOURCE, false);
-    let tail = expanded_row_edges(ironhorse_vm::interp::gc_tables::TAIL_EDGE_SOURCE, false);
+    let full = expanded_row_edges(ironhorse_vm::diagnostics::FULL_EDGE_SOURCE, true);
+    let partial = expanded_row_edges(ironhorse_vm::diagnostics::PARTIAL_EDGE_SOURCE, false);
+    let tail = expanded_row_edges(ironhorse_vm::diagnostics::TAIL_EDGE_SOURCE, false);
     assert_tail_coverage(&partial, &tail);
     (full, partial)
 }
@@ -796,7 +796,7 @@ fn edge_checks_reject_disconnected_calls_and_missing_expansions() {
 /// Include a row body's evidence only when the table walk actually calls that
 /// policy. Promise rows reach combinator/fromAsync state through those bodies.
 fn expanded_row_edges(tables: &[&str], full: bool) -> String {
-    let rows = ironhorse_vm::interp::gc_tables::ROW_EDGE_SOURCE;
+    let rows = ironhorse_vm::diagnostics::ROW_EDGE_SOURCE;
     assert_eq!(tables.len(), rows.len());
     let mut source = tables.join("\n");
     for ((field, policy, full_row, partial_row), table) in rows.iter().zip(tables) {
@@ -817,7 +817,7 @@ fn expanded_row_edges(tables: &[&str], full: bool) -> String {
 }
 
 fn assert_tail_coverage(partial: &str, tail: &str) {
-    for (field, _) in ironhorse_vm::interp::INTERP_FIELDS {
+    for (field, _) in ironhorse_vm::diagnostics::INTERP_FIELDS {
         if ["arrays", "index_props", "collections"].contains(field) {
             assert!(
                 !mentions(tail, field),
@@ -834,8 +834,8 @@ fn assert_tail_coverage(partial: &str, tail: &str) {
 
 #[test]
 fn tail_checks_reject_missing_nonbulk_fields_and_added_bulk_fields() {
-    let partial = expanded_row_edges(ironhorse_vm::interp::gc_tables::PARTIAL_EDGE_SOURCE, false);
-    let tail = expanded_row_edges(ironhorse_vm::interp::gc_tables::TAIL_EDGE_SOURCE, false);
+    let partial = expanded_row_edges(ironhorse_vm::diagnostics::PARTIAL_EDGE_SOURCE, false);
+    let tail = expanded_row_edges(ironhorse_vm::diagnostics::TAIL_EDGE_SOURCE, false);
     assert_tail_coverage(&partial, &tail);
     for field in [
         "functions",
@@ -856,7 +856,7 @@ fn tail_checks_reject_missing_nonbulk_fields_and_added_bulk_fields() {
 
 #[test]
 fn row_checks_reject_a_disconnected_call_even_when_another_table_uses_the_policy() {
-    let mut tables: Vec<String> = ironhorse_vm::interp::gc_tables::PARTIAL_EDGE_SOURCE
+    let mut tables: Vec<String> = ironhorse_vm::diagnostics::PARTIAL_EDGE_SOURCE
         .iter()
         .map(|source| (*source).to_owned())
         .collect();
@@ -894,8 +894,8 @@ fn weak_sources(src: &str) -> (String, String) {
     let prune = compact(body_in(src, "fn prune_ephemerons(&mut self"));
     assert!(prune.contains("$(gc_weak!(gc_run,prune,self,$field,slots,visit,$weak);)*"));
     (
-        ironhorse_vm::interp::gc_tables::EPHEMERON_SOURCE.join("\n"),
-        ironhorse_vm::interp::gc_tables::WEAK_PRUNE_SOURCE.join("\n"),
+        ironhorse_vm::diagnostics::EPHEMERON_SOURCE.join("\n"),
+        ironhorse_vm::diagnostics::WEAK_PRUNE_SOURCE.join("\n"),
     )
 }
 
@@ -943,7 +943,7 @@ fn root_source(src: &str) -> String {
     let source = compact(src);
     assert!(source.contains("interp_state!(define_root_walk);"));
     assert!(source.contains("pubconstROOT_SOURCE:&[(&str,&str)]=&[$((stringify!($field),gc_root!(gc_text,self,$field,roots,$root)),)*];"));
-    let sources = ironhorse_vm::interp::roots::ROOT_SOURCE;
+    let sources = ironhorse_vm::diagnostics::ROOT_SOURCE;
     // Weak symbol-key descriptors must not silently become strong roots.
     assert_eq!(
         sources

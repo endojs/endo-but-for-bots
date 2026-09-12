@@ -28,6 +28,17 @@
 //! old state before restamping and advances monotonically through supported schemas.
 //! It does not translate execution semantics across meter releases.
 //!
+//! [`ironhorse_vm::snapshot_api::ROW_SCHEMA_VERSION`] owns the capture/restore
+//! declarations. `tests/row_schema.rs` fingerprints row fields, order, aliases
+//! and Intl records and checks `fixtures/row_schema_releases.tsv`. A row change
+//! requires a new row version and an appended ledger entry advancing both wire
+//! versions, plus migration/refusal checks and the carried-state golden suite.
+//! CI compares the ledger prefix and wire constants with the PR base revision
+//! (`scripts/check-row-schema.py`), rejecting repins and reused wire releases.
+//! Do not replace historical pins. Encoding-only releases may advance either
+//! wire version without changing the row schema. Row release 1 records the
+//! existing format 20/store 31 contract without changing persisted bytes.
+//!
 //! # Intl data and derived identity
 //!
 //! Generated `ironhorse-vm/src/intl_profile.rs` exposes `INTL_DATA_VERSION` as

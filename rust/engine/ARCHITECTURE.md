@@ -66,14 +66,48 @@ Those representations serve different boundaries; neither implies UTF-8-only str
 BigInt, regexp, Intl, Temporal, promises, generators and disposal state are present.
 Their presence does not certify full test262 coverage or persistence of every live state.
 
-`Machine`, `Intrinsics` and `Compartment` are public VM types, but the current
-compartment evaluator creates an independently owned interpreter.
-`BootTemplate` speeds this by copying a pristine template; it is not shared frozen intrinsics.
+`ironhorse_vm::Machine` owns the execution state and arenas through one shared
+`Intrinsics` owner; compartments retain separate `Realm` globals and compiler policy.
+Boot links the complete primordial vocabulary, freezes every primordial object, and
+sets `is_locked_down()` only after that succeeds.
+The pristine-copy `BootTemplate` is removed.
+Repeated evaluation preserves a compartment's globals; sibling compartments reference
+identical frozen primordial objects, including non-global generator and iterator families.
+`tests/realms.rs` checks identity, mutation refusal, isolated globals, closures and GC.
+
+The property-key table is machine-wide because heap descriptors store its IDs.
+`intrinsic_permit` limits initial intrinsic global bindings; it is not transitive
+capability attenuation through the prototype graph.
+Named scalar endowments become bindings and are seeded once or on explicit redefinition.
+Raw heap-backed endowments still lack machine provenance and are refused.
+Realm switching requires a completed, drained activation; a sibling or reentrant entry
+receives `Halt::RealmBusy` while an earlier activation remains live.
+The same Realm can resume after a refused crank.
+Dropping a failed Realm discards its jobs before any sibling can run.
+Compilers and meter callbacks are borrowed for an evaluation and released on exit,
+including refusal and panic; compiler configuration remains on the compartment handle.
+
+`Machine::collect()` is an explicit host decision and retains live Realm globals and
+rooted `ObjectIdentity` handles.
+Dropping a compartment permits its unreachable heap objects to be collected, but the
+canonical name table and tagged-template registry remain machine-owned allocations.
+Novel names and template sites consume the finite key namespace over the machine's
+lifetime; linkage refuses exhaustion while preserving the reserved engine key range.
+The old fresh-Realm timing measured deep-copy boot and is not a benchmark of this model.
+Shared `Machine` snapshots are explicitly refused: the current image/store schema and
+Endo persistent worker still carry a standalone `Interp` with its own boot profile.
+This extraction does not establish full SES boot or arbitrary cross-Realm value transfer.
+
+`interp` is private; normal execution uses curated crate-root exports.
+Capture/restore rows live in `snapshot_api`, with `ROW_SCHEMA_VERSION` tied to a
+structural fingerprint and container/store release ledger.
+Read-only invariant-test registries have a separate hidden `diagnostics` surface.
 [W6 decision 1](../../designs/ironhorse-w6-decisions.md#1-realm--decided-extract-it)
-requires Realm extraction and retains the public surface meanwhile.
+retains the public Machine/Compartment/Intrinsics surface.
 [W6 decision 2](../../designs/ironhorse-w6-decisions.md#2-engine-trait--deferred-and-here-is-the-trigger)
-defers a common daemon engine trait until its stated consumer/protocol trigger.
-Neither planned abstraction should be presented as already wired.
+continues to defer the common engine trait until its stated triggers.
+Host-function registration remains an open seam; neither the closed native enums nor
+the source compiler adapter provide arbitrary host-callable functions.
 
 ## Seam 1: SourceCompiler
 
@@ -259,15 +293,16 @@ object-code firewall proof and calibration loop remain planned work.
 
 The source documentation in [`versions.rs`](ironhorse-snapshot/src/versions.rs)
 names the bump rules and upgrade consequences.
-These are the five identifiers named by the review, audited at `96db92e23`.
+The table covers the review identifiers and the capture/restore row contract.
 `PARSE_METER_RELEASE` is now an alias, so they are not five independent counters.
 
 | Identifier | Owner and current value | Bump rule and compatibility cost |
 |---|---|---|
 | `COST_TABLE_VERSION` | `ironhorse-meter/src/lib.rs`: `ironhorse-meter-5` | Change weights, charging points or admission policy by appending to `releases::PINNED`, changing the release literal and deliberately updating golden vectors together. `METR` requires both matching name and digest; old-meter persisted heaps cannot resume on the new engine. |
 | `PARSE_METER_RELEASE` | `ironhorse-compile/src/meter.rs`: alias of `COST_TABLE_VERSION` | No independent bump. Compiler charge/admission changes follow the shared meter release procedure; do not recreate a second version namespace. |
-| `IRONHORSE_FORMAT_VERSION` | Snapshot `format.rs`: 16 | Change the container encoding/interpretation with a format bump and explicit decoder support/refusal. `MIN_READ` is 1, but decoding an old container is not permission to execute it: boot and meter identity gates still apply. |
-| `STORE_SCHEMA_VERSION` | Snapshot `store.rs`: 28 | Change paged-store/manifest/small-state representation with a schema bump and verified migration step or explicit refusal. `migrate_store` authenticates old state and advances monotonically; it does not translate old meter semantics. |
+| `IRONHORSE_FORMAT_VERSION` | Snapshot `format.rs`: 20 | Change the container encoding/interpretation with a format bump and explicit decoder support/refusal. `MIN_READ` is 1, but decoding an old container is not permission to execute it: boot and meter identity gates still apply. |
+| `STORE_SCHEMA_VERSION` | Snapshot `store.rs`: 31 | Change paged-store/manifest/small-state representation with a schema bump and verified migration step or explicit refusal. `migrate_store` authenticates old state and advances monotonically; it does not translate old meter semantics. |
+| `ROW_SCHEMA_VERSION` | VM `snapshot_api.rs`: 1 | A row field/type/order change requires a new declaration fingerprint in the append-only `row_schema_releases.tsv` ledger and advances both container and store versions, with explicit migration/refusal and carried-state golden checks. This initial row release records existing format 20/store 31; it changes no persisted bytes. |
 | `INTL_DATA_VERSION` | Generated VM `src/intl_profile.rs` | Identifies the in-tree Intl profile plus the locked ICU dependency graph, including data checksums and dependency edges. CI rejects stale generation and root/engine disagreement. The label participates in the boot fingerprint and therefore the persisted SIGN gate. Current dependencies retain an immutable legacy alias; upgrades produce a new identity. |
 
 The derived table digest versions weight/default-key encoding, not every charging point.

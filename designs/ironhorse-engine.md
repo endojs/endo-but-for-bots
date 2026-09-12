@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-07-02 |
-| **Updated** | 2026-09-10 |
+| **Updated** | 2026-09-12 |
 | **Author** | endolinbot (prompted) |
 | **Status** | Approved (2026-07-02, program supervisor `port-xs-to-rust-memory-safe-engine`; all ten open questions resolved, see § Resolved Questions) |
 | **Revised** | 2026-07-04 — **metering doctrine: accuracy over parity** (maintainer directive). The meter is Ironhorse's own release-versioned deterministic cost model, a proxy for real (wall-clock) execution cost, NOT a reproduction of XS's computron counts. The XS differential oracle is retained for **result** correctness only; computron comparison is demoted to advisory telemetry. This selects the "stated determinism-equivalence proof" branch the § Prompt already permitted. See § Metering (requirement 1a) and § Agoric consensus compatibility for the authoritative statement. |
@@ -31,10 +31,10 @@ extraction, engine-trait deferral, transcendental providers and consumer-owned G
 
 | Roadmap stage | Implementation | Acceptance and deviations |
 |---|---|---|
-| 1. Thin slice | Landed | Interpreter, meter and oracle harness exist. The early corpus passed historically; present release costs are pinned by oracle-free golden tests. Shared frozen intrinsics remain a stage-4 gap. |
+| 1. Thin slice | Landed | Interpreter, meter and oracle harness exist. The early corpus passed historically; present release costs are pinned by oracle-free golden tests. Shared frozen intrinsics are implemented; full SES boot and parity acceptance remain stage-4 work. |
 | 2. Object model and control flow | Partial | Broad opcode, object, closure and exception support exists. Exact GC exists but is not the production collection path; chunk reclamation remains open. W6 decision 5 assigns GC scheduling to the engine consumer. |
 | 3. Built-ins | Partial | RegExp, promises, BigInt, collections, Intl and Temporal exist. Covered cases are not full built-ins conformance; platform Math is per binary/platform; `deterministic-math` carries cross-host execution. |
-| 4. Hardened JavaScript | Partial — bar not met | Object integrity operations exist. Shared Realm extraction, complete daemon SES boot and SES parity acceptance remain open; named skips are not passing acceptance. |
+| 4. Hardened JavaScript | Partial — bar not met | Object integrity operations exist. Shared Realm extraction is implemented; complete daemon SES boot and SES parity acceptance remain open; named skips are not passing acceptance. |
 | 5. Compiler port | Landed; full bar not reverified | Lexer, parser, scoper and coder are the default compiler. Historical byte-identity measurements cover named corpora; budgeted compilation and golden costs now share the runtime release identity. No fresh full-conformance oracle run is claimed here. |
 | 6. Snapshots | Partial | Container/store persistence, checked restore and supervisor tests exist. Historically accepted subset expanded substantially; live activations and unsupported side-table states still fail closed. Complete daemon worker protocol integration remains open. |
 | 7. Debugger | Not started as an accepted engine surface | No standalone debugger crate or reproduced xsbug/CapTP acceptance is present. Orchestration labels such as “stage-7 child” in historical evidence do not name this roadmap stage. |
@@ -649,35 +649,40 @@ the endor daemon's actual boot sequence (`polyfills.js`, then
 Unified runner) runs identically on both engines, plus the SES
 test suites XS itself is exercised against.
 
-**Status and the realm decision of record (2026-09-06).**
-The deep architecture review
-(`rust/engine/architecture-review/2026-09-06/ARCHITECTURE-REVIEW.md`
-§ 3.7, F059) found that the "intrinsics created once per machine
-and referenced per realm" seam this section previously claimed
-for stage 1 does not exist: there is no realm object below
-`Interp`, so `Compartment::evaluate*` builds a fresh `Interp` per
-call and two compartments share no primordial object.
-`ironhorse_vm::compartment::Intrinsics` is a per-machine marker
-with no intrinsic graph and no writer for `locked_down`.
-The decision is to keep the host-side `Compartment` surface, make
-it honest, and land the realm split as the implementation of this
-requirement rather than delete the surface:
+**Realm implementation (2026-09-12).**
+The host-side `Machine`, `Compartment` and `Intrinsics` types remain public,
+following [W6 decision 1](ironhorse-w6-decisions.md#1-realm--decided-extract-it).
+`Machine` now owns the shared interpreter and arenas through its `Intrinsics` owner.
+Each compartment retains a `Realm` with a separate global object, bindings,
+intrinsic binding permit and source compiler policy.
+Repeated evaluations preserve globals; siblings share the same frozen primordial
+objects, rather than independently copied graphs.
+Boot links the full primordial vocabulary and freezes all primordial instances,
+including non-global generator/async and iterator prototype families, before
+reporting `is_locked_down()`.
+The prior `BootTemplate` has been replaced.
 
-- `Compartment`, `Machine` and `Intrinsics` stay public because
-  `rust/endo` and `ironhorse-262` build on them, but their
-  documentation states that isolation (disjoint heaps) is what they
-  deliver today and sharing is not.
-- A heap-backed endowment (an object, string, BigInt or symbol,
-  whose payload is a slot or chunk index) is refused as the named
-  skip `compartment:heap-endowment` rather than seeded into an
-  arena it does not belong to.
-- The realm split to come: extract `Realm { global_obj,
-  global_props, symbol table, installed_names_len }` from `Interp`
-  so one machine owns the primordial graph and N realms share it;
-  change `Compartment::evaluate*` to take `&mut Interp`; make
-  `Intrinsics` hold the frozen graph, with `locked_down` written
-  by a real `lockdown`.
-  Requirement 5's acceptance bar is unreachable until this lands.
+The machine owns the canonical symbol table because stored property IDs must retain
+one meaning across its heap.
+Evaluation retains its public `&self` signature using a checked exclusive machine
+borrow; sibling/reentrant entry returns `RealmBusy` until the active crank completes
+and drains, instead of switching globals under suspended work.
+Raw heap endowments remain refused until a provenance-bearing value-transfer API exists.
+Named scalar endowments now bind at evaluation and persist until explicitly rebound.
+The optional intrinsic permit restricts global bindings, not transitive capabilities.
+GC retains inactive live Realms and rooted object identities.
+Names and tagged-template cache entries remain machine-owned costs after Realm drop.
+
+Shared-Realm snapshots remain explicitly refused; the current Endo persistent path
+uses standalone `Interp` capture/restore.
+The snapshot row contract is now `snapshot_api::ROW_SCHEMA_VERSION`, while `interp`
+is private and the arena accessors remain read-only.
+The common `JsMachine` engine trait stays deferred under W6 decision 2.
+Full daemon SES acceptance and host-function registration remain open; the new
+`ironhorse-runtime` compiler adapter supplies dynamic source compilation, not a
+host-callable registration table.
+See the [architecture guide](../rust/engine/ARCHITECTURE.md) for the implemented
+boundary, retained costs and release rules.
 
 The same review's integrity findings (F015 `harden` stale marks,
 F057 frozen globals writable by bare name, F058 exotic objects
@@ -871,33 +876,25 @@ corpus and a trophies ledger.
 **Current status:** direct embedding exists in `rust/endo/src/ironhorse_engine.rs`;
 the common engine trait is deferred under W6 decision 2, and the complete worker
 deliver protocol and host-function/SES boot surface remain open.
-The following integration shape and reconciliation table are targets, not a claim
-that the current supervisor APIs are unchanged.
-
-The seam is the existing `Machine` API in `rust/endo/xsnap/src/`
-(`new`, `eval`, `define_function`, `register_powers`,
-`register_worker_io`, `run_promise_jobs`, `quiesce`, metering and
-snapshot methods, `run_debugger`, `import_archive`): Ironhorse
-implements the same surface behind an engine selection, so the
-supervisor, the worker platforms, the reactive pump, suspend and
-resume, and the embedded JS bundles are engine-agnostic. Worker
-platform selection (the `spawn` verb's `platform` field) gains an
-orthogonal engine axis surfaced through the existing `-e` flag of
-`Ironhorse worker` and `Ironhorse run` (`-e xs` today; `-e ironhorse`
-selects the Rust engine), letting both engines coexist through
-the whole result-parity campaign.
+The implemented entry points are Endo's `ironhorse_engine::Machine` and
+`PersistentMachine`, backed by the VM and snapshot crates.
+The VM's `Machine` owns shared Realm execution state; it is not the xsnap supervisor
+wrapper of the same name.
+No shared trait makes the XS and Ironhorse supervisor APIs interchangeable.
+Engine selection supports direct Ironhorse execution, while full worker delivery,
+host powers, debugger transport and archive execution retain separate acceptance work.
 
 Reconciliation with the design cluster, per document:
 
 | Design | Reconciliation |
 |---|---|
-| [daemon-endor-architecture](daemon-endor-architecture.md) | `Machine` API preserved; machine-runner threads and `!Send` pinning unchanged initially (a Send-able Rust machine is a possible later relaxation; resolved question 8 keeps `!Send`); the `shared` platform is the primary beneficiary of memory safety |
-| [daemon-rust-xs-performance](daemon-rust-xs-performance.md) | The three-variant benchmark gains a fourth variant (Rust supervisor + Ironhorse engine) and is the performance-envelope harness; the `fxHasPendingJobs` check-and-reset global latch is replaced by a per-machine pending-jobs query with identical pump-loop semantics; the host-frame off-by-one bug class is designed out |
-| [daemon-xs-worker-metering](daemon-xs-worker-metering.md) | Crank lifecycle, admission gate, meter-report envelope, and the `Machine` metering API unchanged; `xsnap-platform.c` helpers (`fxAbort` longjmp, metered promise drain) become safe Rust equivalents |
-| [daemon-xs-worker-snapshot](daemon-xs-worker-snapshot.md) | Streaming write/read, CAS layout, callback-table signature discipline, and suspend/resume verbs unchanged; Ironhorse snapshots carry an Ironhorse `VERS` |
-| [daemon-xs-worker-debugger](daemon-xs-worker-debugger.md) | Layers 2 through 6 (bus verbs, DebugSession, Debugger exo, UI, hot-attach) untouched; layer 1's C hooks become the `DebugTransport` trait; break-on-uncaught becomes native |
-| [daemon-endo-rust-sqlite](daemon-endo-rust-sqlite.md) and host powers | Host functions register through the same host-function table and alias names; the snapshot callback-table (append-only, signature-bumped) discipline carries over |
-| [endor-run-expanded](endor-run-expanded.md) | Archive and CAS execution paths sit above the `Machine` API and work unchanged under `-e ironhorse` |
+| [daemon-endor-architecture](daemon-endor-architecture.md) | Ironhorse is embedded directly through its own wrappers. Thread pinning remains; the full worker protocol and common engine abstraction are not wired. |
+| [daemon-rust-xs-performance](daemon-rust-xs-performance.md) | Engine benchmarks exist, but the complete XS supervisor pump has not been replaced by an interchangeable Ironhorse implementation. |
+| [daemon-xs-worker-metering](daemon-xs-worker-metering.md) | Ironhorse owns `Meter`, `MeterBounds` and per-crank reports. Dynamic compilation and dispatch share the live budget; these are separate Rust entry points, not the XS metering API. |
+| [daemon-xs-worker-snapshot](daemon-xs-worker-snapshot.md) | `MachineSnapshot` and `HeapStore` implement buffered container encoding, CAS/store operations and validated standalone restore. They are not XS callback streaming or shared-Realm snapshots. |
+| [daemon-xs-worker-debugger](daemon-xs-worker-debugger.md) | Centralized VM raises are available; the transport and complete xsbug/supervisor integration remain later work. |
+| [daemon-endo-rust-sqlite](daemon-endo-rust-sqlite.md) and host powers | Arbitrary host-function registration is still missing. Snapshot signatures identify compatibility but do not create a host table or power-registration surface. |
+| [endor-run-expanded](endor-run-expanded.md) | Direct source execution exists. Archive/CAS worker execution must be verified through its Ironhorse path; it does not follow automatically from a shared `Machine` API. |
 
 ### Performance and footprint envelope
 

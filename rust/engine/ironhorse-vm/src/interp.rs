@@ -32,7 +32,7 @@ mod code;
 mod coerce;
 mod dispatch;
 mod metering;
-pub use metering::*;
+use metering::*;
 mod native_ids;
 pub use native_ids::{MathId, Native, NativeMethod};
 mod snapshot_rows;
