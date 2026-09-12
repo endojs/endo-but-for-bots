@@ -1182,3 +1182,20 @@ fn a_container_without_meter_identity_is_refused() {
         Err(SnapshotError::Corrupt("missing METR identity"))
     ));
 }
+
+#[test]
+fn a_parked_realm_refuses_every_persist_verb() {
+    // A parked realm's namespace is process-local host state: it cannot
+    // ride a snapshot and its handle cannot cross a store, so a machine
+    // that holds one must not claim to be resumable.
+    let mut machine = Interp::new();
+    let mut realm = machine.new_realm();
+    machine.swap_realm(&mut realm);
+    assert_eq!(machine.parked_realm_count(), 1);
+    assert!(machine.is_quiescent());
+    assert!(matches!(
+        machine.write_snapshot(&sig()),
+        Err(MachineSnapshotError::PendingStateUnsupported { row })
+            if row.contains("parked realm")
+    ));
+}

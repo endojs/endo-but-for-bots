@@ -47,19 +47,15 @@ pub struct Realm {
 
 impl Realm {
     /// Allocate a fresh realm namespace on `interp`: a new global object in
-    /// the shared arena, rooted for the machine's GC, with an empty symbol
-    /// table and no host policy.
+    /// the shared arena, with an empty symbol table and no host policy.
+    ///
+    /// The namespace is not a GC root while it is merely allocated; the
+    /// root is taken when the realm is parked by [`Interp::swap_realm`] and
+    /// released when it is installed again or explicitly released.
     pub fn new(interp: &mut Interp) -> Realm {
-        // The active realm's global becomes inactive the moment this realm is
-        // installed; root it too so collection cannot reclaim a parked realm.
-        let current = interp.global_obj;
-        if !interp.realm_roots.contains(&current) {
-            interp.realm_roots.push(current);
-        }
         let global_obj = interp
             .slots
             .alloc(Slot::instance(crate::value::SlotIndex::NULL));
-        interp.realm_roots.push(global_obj);
         let snapshot_dirt = interp.snapshot_dirt.clone();
         Realm {
             global_obj,
@@ -115,8 +111,16 @@ impl Interp {
     /// Swap this machine's active namespace with `realm`'s. Call before a run
     /// to install a realm and after it to park the realm again; the machine's
     /// arena and primordial graph never move.
+    ///
+    /// The machine roots exactly the **parked** realms' globals: the incoming
+    /// global becomes the active one (`global_obj`, already a root), and the
+    /// outgoing global is parked and added to `realm_roots`.
     pub fn swap_realm(&mut self, realm: &mut Realm) {
         std::mem::swap(&mut self.global_obj, &mut realm.global_obj);
+        self.realm_roots.retain(|root| *root != self.global_obj);
+        if !self.realm_roots.contains(&realm.global_obj) {
+            self.realm_roots.push(realm.global_obj);
+        }
         std::mem::swap(&mut self.global_props, &mut realm.global_props);
         std::mem::swap(&mut self.symbol_ids, &mut realm.symbol_ids);
         std::mem::swap(&mut self.symbol_names, &mut realm.symbol_names);
@@ -145,5 +149,265 @@ impl Interp {
         std::mem::swap(&mut self.last_index_id, &mut realm.last_index_id);
         std::mem::swap(&mut self.regexp_getter_ids, &mut realm.regexp_getter_ids);
         std::mem::swap(&mut self.regexp_result_ids, &mut realm.regexp_result_ids);
+    }
+
+    /// Drop `realm` from this machine's parked-realm roots. The realm must not
+    /// be used afterwards; its namespace becomes unreachable and the next
+    /// collection may reclaim it. Releasing the active realm is a no-op (the
+    /// active global is rooted through `global_obj`), and releasing twice is
+    /// harmless.
+    pub fn release_realm(&mut self, realm: &Realm) {
+        self.realm_roots.retain(|root| *root != realm.global_obj);
+    }
+
+    /// The number of parked realms this machine keeps rooted. Bounded by the
+    /// number of live (parked) realms; a released realm leaves the set.
+    pub fn parked_realm_count(&self) -> usize {
+        self.realm_roots.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::INTERP_FIELDS;
+
+    /// The fields `Interp::swap_realm` moves in and out of the machine when a
+    /// realm is installed or parked.
+    /// Kept in lockstep with the swap body by the test below.
+    const REALM_SCOPED: &[&str] = &[
+        "global_obj",
+        "global_props",
+        "symbol_ids",
+        "symbol_names",
+        "installed_names_len",
+        "source_compiler",
+        "intrinsic_permit",
+        "code_segments",
+        "func_segments",
+        "active_segment",
+        "top_level_code",
+        "eval_direct",
+        "byte_length_id",
+        "byte_offset_id",
+        "buffer_id",
+        "size_id",
+        "length_id",
+        "name_id",
+        "value_id",
+        "done_id",
+        "then_id",
+        "constructor_id",
+        "prototype_key_id",
+        "last_index_id",
+        "regexp_getter_ids",
+        "regexp_result_ids",
+    ];
+
+    /// Every other `Interp` field is machine-scoped: shared by all realms.
+    /// A new field must be classified here (or in `REALM_SCOPED`) deliberately.
+    const MACHINE_SCOPED: &[&str] = &[
+        "snapshot_dirt",
+        "snapshot_baseline_identity",
+        "stack",
+        "locals",
+        "id_map",
+        "realm_roots",
+        "direct_eval_hoist",
+        "eval_program_hoist",
+        "result",
+        "strict",
+        "meter",
+        "cost",
+        "meter_host",
+        "step_limit",
+        "slots",
+        "chunks",
+        "static_str",
+        "n_dispatched",
+        "boot_slot_count",
+        "native_depth",
+        "functions",
+        "bound_functions",
+        "proxies",
+        "array_iterator_proxy_get_context",
+        "proxy_revokers",
+        "call_stack",
+        "args",
+        "this_val",
+        "this_captures",
+        "env",
+        "cur_func",
+        "cur_target",
+        "target_func",
+        "pending_new_target",
+        "exception",
+        "frame_slots",
+        "intrinsics",
+        "intl_object",
+        "locale_proto",
+        "collator_proto",
+        "list_format_proto",
+        "plural_rules_proto",
+        "segmenter_proto",
+        "segments_proto",
+        "segment_iterator_proto",
+        "segments_iterator_method",
+        "segment_iterator_identity",
+        "date_time_format_proto",
+        "number_format_proto",
+        "locales",
+        "collators",
+        "list_formats",
+        "plural_rules",
+        "number_formats",
+        "segmenters",
+        "segments",
+        "segment_iterators",
+        "date_time_formats",
+        "temporal_object",
+        "temporal_instant_proto",
+        "temporal_duration_proto",
+        "temporal_plain_protos",
+        "temporal_zoned_proto",
+        "temporal_now_object",
+        "temporal_instants",
+        "temporal_durations",
+        "temporal_plains",
+        "temporal_zoneds",
+        "collator_compare_functions",
+        "number_format_bound_functions",
+        "deleted_fn_meta",
+        "object_proto",
+        "function_proto",
+        "function_has_instance_method",
+        "template_cache",
+        "ctor_prototype",
+        "private_values",
+        "private_accessors",
+        "proto_methods",
+        "proto_data",
+        "proto_accessors",
+        "well_known_symbols",
+        "default_keys",
+        "next_symbol_key_id",
+        "installing_intrinsics",
+        "id_space_exhausted",
+        "last_crank_completed",
+        "gc_failed",
+        "error_data",
+        "wrapper_data",
+        "array_proto",
+        "arrays",
+        "index_props",
+        "arguments_objects",
+        "disposable_stacks",
+        "collections",
+        "side_refs",
+        "map_proto",
+        "set_proto",
+        "weakmap_proto",
+        "weakset_proto",
+        "array_buffers",
+        "detached_buffers",
+        "shared_buffers",
+        "arraybuffer_proto",
+        "typed_arrays",
+        "data_views",
+        "dataview_proto",
+        "array_iterator_proto",
+        "iterator_proto",
+        "iterator_wrapper_proto",
+        "map_iterator_proto",
+        "set_iterator_proto",
+        "regexp_string_iterator_proto",
+        "math_object",
+        "string_proto",
+        "string_iterator_method",
+        "number_proto",
+        "boolean_proto",
+        "date_proto",
+        "date_to_primitive_method",
+        "dates",
+        "symbol_proto",
+        "symbol_to_primitive_method",
+        "bigint_proto",
+        "symbol_registry",
+        "symbol_registry_keys",
+        "symbol_key_ids",
+        "accessors",
+        "proto_value_data",
+        "iterators",
+        "promises",
+        "promise_proto",
+        "generators",
+        "generator_proto",
+        "generator_function_proto",
+        "gen_run_stack",
+        "async_instances",
+        "async_function_proto",
+        "async_run_stack",
+        "async_generators",
+        "async_generator_proto",
+        "async_generator_function_proto",
+        "async_iterator_identity",
+        "iterator_identity",
+        "async_gen_run_stack",
+        "resume_status",
+        "promise_functions",
+        "promise_guards",
+        "unhandled_rejection",
+        "pending_rejections",
+        "promise_jobs",
+        "combinators",
+        "from_async",
+        "error_stack_accessor",
+        "regexps",
+        "regexp_proto",
+        "regexp_replace_method",
+        "regexp_match_method",
+        "regexp_match_all_method",
+        "regexp_search_method",
+        "regexp_split_method",
+        "jumps",
+    ];
+
+    #[test]
+    fn every_interp_field_is_classified_realm_or_machine() {
+        let declared: std::collections::BTreeSet<&str> =
+            INTERP_FIELDS.iter().map(|(name, _)| *name).collect();
+        let realm: std::collections::BTreeSet<&str> = REALM_SCOPED.iter().copied().collect();
+        let machine: std::collections::BTreeSet<&str> = MACHINE_SCOPED.iter().copied().collect();
+        assert!(realm.is_disjoint(&machine), "a field cannot be both scoped");
+        let classified: std::collections::BTreeSet<&str> = realm.union(&machine).copied().collect();
+        let unclassified: Vec<_> = declared.difference(&classified).collect();
+        let stale: Vec<_> = classified.difference(&declared).collect();
+        assert!(
+            unclassified.is_empty(),
+            "Interp fields with no realm/machine classification: {unclassified:?}"
+        );
+        assert!(
+            stale.is_empty(),
+            "classification names an Interp field that no longer exists: {stale:?}"
+        );
+
+        // The declared realmscoped set must be exactly what the swap body
+        // moves, and no machine-scoped field may be swapped. Whitespace is
+        // stripped so a rustfmt-wrapped `swap` call still matches.
+        let source: String = include_str!("realm.rs").split_whitespace().collect();
+        for name in REALM_SCOPED {
+            let needle = format!("std::mem::swap(&mutself.{name},");
+            assert!(
+                source.contains(&needle),
+                "REALM_SCOPED `{name}` is not moved by swap_realm"
+            );
+        }
+        for name in MACHINE_SCOPED {
+            let needle = format!("std::mem::swap(&mutself.{name},");
+            assert!(
+                !source.contains(&needle),
+                "MACHINE_SCOPED `{name}` is moved by swap_realm"
+            );
+        }
     }
 }

@@ -63,3 +63,39 @@ fn realms_share_intrinsics_but_not_globals() {
     );
     assert_eq!(run(&mut machine, &mut a, "Object.prototype.__ihProbe"), "7");
 }
+
+#[test]
+fn parked_realm_roots_are_bounded_and_releasable() {
+    let mut machine = Interp::new();
+    assert_eq!(machine.parked_realm_count(), 0, "no parked realm yet");
+    let mut realms: Vec<Realm> = (0..8).map(|_| machine.new_realm()).collect();
+    // Merely allocating a namespace does not root it.
+    assert_eq!(machine.parked_realm_count(), 0);
+
+    // Installing each realm parks the previous one; the set tracks exactly
+    // the parked realms.
+    for realm in realms.iter_mut() {
+        machine.swap_realm(realm);
+    }
+    assert!(machine.parked_realm_count() <= 8);
+
+    // Releasing every parked realm drops every root; the active realm is
+    // rooted through `global_obj`, not the parked set.
+    for realm in realms.iter() {
+        machine.release_realm(realm);
+    }
+    assert_eq!(
+        machine.parked_realm_count(),
+        0,
+        "released realms leave no parked roots"
+    );
+    for _ in 0..3 {
+        let realm = machine.new_realm();
+        machine.release_realm(&realm);
+    }
+    assert_eq!(
+        machine.parked_realm_count(),
+        0,
+        "released realms do not accumulate"
+    );
+}

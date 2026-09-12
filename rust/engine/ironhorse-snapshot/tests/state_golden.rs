@@ -172,6 +172,30 @@ fn unsupported_async_generator_state_remains_an_explicit_refusal() {
     );
 }
 
+/// Known defect, kept as an ignored known-fail rather than pinned in the
+/// golden corpus: an async function suspended at `await` writes a snapshot
+/// that restore then rejects as a malformed promise cluster. `async_carry`
+/// and `persist_gates::a_pending_await_is_now_carried` cover other await
+/// shapes, so this is a narrower write/read asymmetry in the cluster codec.
+#[test]
+#[ignore = "known defect: async-suspension snapshot restore rejects the promise cluster"]
+fn async_suspension_snapshot_round_trip_is_a_known_defect() {
+    let machine = fresh(
+        "var release; var gate = new Promise(function (r) { release = r; }); var done; \
+         async function f() { done = await gate; } f();",
+    );
+    let sig = Signature::new("w4-determinism-corpus");
+    let bytes = machine.write_snapshot(&sig).unwrap();
+    let error = match from_snapshot_bytes(&bytes, &sig) {
+        Ok(_) => panic!("the known defect is fixed; promote this to a positive test"),
+        Err(error) => error,
+    };
+    assert!(
+        format!("{error:?}").contains("malformed promise cluster"),
+        "the known defect's shape changed: {error:?}"
+    );
+}
+
 /// Explicit format/schema/boot-layout identity regeneration tool. Runtime costs and continuation
 /// results must remain unchanged; only persisted byte/seal identities move.
 #[test]
