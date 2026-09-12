@@ -5,16 +5,12 @@ state, not merely against requested command-line flags.
 `makeCodexBackendFactory` fails closed unless the provisioner returns this exact
 `HostedAgentPolicyV1` attestation.
 
-The trusted computing base is the host provisioner, credential broker, audit
-anchor, and the digest-pinned image including Codex CLI/app-server 0.152.0.
-Prompts, dynamic-tool arguments, workspace contents, and every
-model-launched command are untrusted.
-App-server itself is not sandboxed away from its own state: it must write the
-credential-free `/codex-home` and is trusted to apply the pinned per-turn
-`workspaceWrite` policy before starting untrusted commands.
-Compromise of that pinned runtime invalidates the inner command boundary and
-requires revoking its image digest; the outer slice still protects the host and
-other sessions.
+The host provisioner, credential broker, audit anchor, container runtime, and
+kernel enforce confinement.
+The digest-pinned Codex CLI/app-server 0.152.0 and its commands share one guest
+authority domain, including writable `/codex-home` and inference access.
+The CLI's native state and notifications are guest-controlled; host-mediated
+Endo records remain outside that domain.
 
 ## Isolation
 
@@ -25,25 +21,17 @@ other sessions.
 - The process runs as UID and GID 1000, with `no-new-privileges`, every Linux
   capability dropped, the default seccomp profile loaded, and a read-only root
   filesystem.
-- Every turn uses the pinned Codex `workspaceWrite` sandbox with network access
-  disabled and writable roots exactly `/workspace`, `/tmp`, `/run`, and
-  `/scratch`.
-  Model-launched commands may read the session's `/codex-home` but cannot modify
-  its configuration or rollout history; production must verify this against
-  symlink, rename, hardlink, and subprocess escape attempts.
-  This is an inner sandbox guarantee supplied by the trusted pinned app-server,
-  not a read-only outer mount: the outer mount is necessarily writable by
-  app-server so it can maintain thread and rollout state.
-  Automatic `/tmp` and `TMPDIR` writable-root expansion is disabled; the
-  app-server transport sets exactly `HOME`, `CODEX_HOME`, `TMPDIR`, `TMP`,
-  `TEMP`, `LANG`, `LC_ALL`, and `TZ`, and rejects every per-spawn addition,
-  including proxy and credential variables.
-  That is the whole of what the transport enforces: `@endo/sandbox` layers a
-  spawn's environment over the slice's own, and the policy attestation does not
-  cover the slice environment, so an operator's `makeSlice` must place no
-  credential or proxy setting there.
-  The sandbox enforcement work below landed without it, so attesting the slice
-  environment remains open.
+- Every turn uses Codex's `externalSandbox` policy with network access
+  `restricted` for public policy `off` and `enabled` for admitted public access.
+  Process/thread configuration uses `danger-full-access` inside the outer slice
+  because the pinned API has no external-sandbox mode at those levels.
+  Codex's managed proxy is disabled.
+  These values do not enforce confinement; the outer slice and host egress
+  service do, and native commands share all guest-granted writable mounts.
+  Launch environment is fixed and credential-free; admitted public sessions
+  additionally receive the explicit proxy configuration.
+  The runtime preflight checks the effective merged environment and rejects
+  unexpected entries before app-server is launched.
 - No host device, home, daemon socket, Podman/Docker socket, credential store,
   or path belonging to another session is mounted.
 - The attestation reports `devices: "none"`, `hostSockets: "none"`,
@@ -79,9 +67,10 @@ other sessions.
 
 - The slice network is `broker-only`: it contains loopback and one
   credential-free provider sidecar, with no routable interface or other peer.
-- Broker reachability is process-scoped: app-server can reach its lease
-  endpoint, while every model-launched command and descendant is denied that
-  route even though it shares the slice.
+  Admitted public sessions additionally expose the constrained proxy and DNS
+  listeners described in [network policy](./NETWORK-POLICY.md).
+- Broker reachability is session-scoped: app-server and guest commands can
+  reach the same credential-free inference endpoint.
 - The only provider traffic crosses a unique per-session broker capability.
   Production uses the attested credential-free loopback sidecar, not a host
   socket mount.
@@ -189,9 +178,13 @@ credentials, or undeclared mounts.
 They must also prove that `/codex-home` survives replacement of one slice for
 the same session, is absent after durable session deletion, never contains
 `auth.json` or a reusable credential, and is never shared across session IDs.
-Egress probes must fail for public IPv4/IPv6, loopback except the broker sidecar,
-RFC1918/ULA, link-local and metadata addresses, alternate DNS, rebinding,
-redirects, proxy CONNECT, and undeclared Unix sockets.
+Direct external sockets must fail for public IPv4/IPv6, RFC1918/ULA, link-local,
+metadata, and alternate DNS destinations.
+Guest-local listeners are within the session authority domain.
+With public policy off, public proxy authority is absent; when enabled, HTTP and
+CONNECT to allowed public destinations must work and private destinations,
+rebinding, and redirected private targets must remain denied by the host proxy.
+Undeclared host Unix sockets must remain inaccessible.
 
 Fork, memory, CPU, file-descriptor, disk, output, and never-EOF bombs must hit
 their configured bounds without affecting the host or another session.
@@ -199,6 +192,7 @@ SIGTERM-resistant, setsid, double-fork, inherited-pipe, background-terminal,
 startup/dispose race, daemon-crash/orphan, and cleanup-failure cases must all be
 reaped and journaled.
 Broker tests must additionally demonstrate that the sidecar is the only
-reachable peer from app-server, is unreachable from tool descendants, cannot be
-repurposed as a general proxy, and loses authority immediately when the session
-lease is revoked.
+provider peer from app-server and guest descendants, cannot be repurposed as a
+general proxy, and loses authority immediately when the session grant is revoked.
+Pinned app-server acceptance must cover native commands on thread start, resume,
+and subsequent turns under the external-sandbox policy.

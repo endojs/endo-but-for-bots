@@ -646,14 +646,16 @@ test('initializes, persists a new thread, and streams normalized events', async 
   const turnStart = fixture.sent.find(
     message => message.method === 'turn/start',
   );
+  t.is(
+    fixture.sent.find(message => message.method === 'thread/start').params
+      .sandbox,
+    'danger-full-access',
+  );
   t.is(turnStart.params.model, 'gpt-test');
   t.is(turnStart.params.effort, 'high');
   t.deepEqual(turnStart.params.sandboxPolicy, {
-    type: 'workspaceWrite',
-    writableRoots: ['/workspace', '/tmp', '/run', '/scratch'],
-    networkAccess: false,
-    excludeSlashTmp: true,
-    excludeTmpdirEnvVar: true,
+    type: 'externalSandbox',
+    networkAccess: 'restricted',
   });
   t.true(events.some(event => event.type === 'tool-call'));
   t.true(events.some(event => event.type === 'tool-result'));
@@ -865,7 +867,11 @@ test('resumes a persisted thread and lists server-provided models', async t => {
     },
   });
   await drain(reader);
-  t.truthy(fixture.sent.find(message => message.method === 'thread/resume'));
+  t.is(
+    fixture.sent.find(message => message.method === 'thread/resume').params
+      .sandbox,
+    'danger-full-access',
+  );
   t.falsy(fixture.sent.find(message => message.method === 'thread/start'));
   const models = await fixture.client.models();
   t.is(models[0].id, 'gpt-test');
@@ -1063,6 +1069,15 @@ test('replaying an already durable checkpoint is idempotent', async t => {
   });
   t.is((await drain(second)).at(-1).checkpoint, 'turn-2');
   await fixture.client.acknowledge('turn-2');
+  t.deepEqual(
+    fixture.sent
+      .filter(message => message.method === 'turn/start')
+      .map(message => message.params.sandboxPolicy),
+    [
+      { type: 'externalSandbox', networkAccess: 'restricted' },
+      { type: 'externalSandbox', networkAccess: 'restricted' },
+    ],
+  );
   await fixture.client.terminate();
 });
 
@@ -2696,14 +2711,9 @@ test('broker config admission precedes model discovery and rejects inherited bea
     configReadResult: {
       config: {
         model_provider: 'endo_broker',
-        sandbox_mode: 'workspace-write',
+        sandbox_mode: 'danger-full-access',
+        features: { network_proxy: { enabled: false } },
         approval_policy: 'never',
-        sandbox_workspace_write: {
-          network_access: false,
-          writable_roots: ['/workspace', '/tmp', '/run', '/scratch'],
-          exclude_slash_tmp: true,
-          exclude_tmpdir_env_var: true,
-        },
         model_providers: {
           endo_broker: {
             name: 'Endo broker',
@@ -2731,14 +2741,9 @@ test('broker config admission permits a credential-free provider', async t => {
     configReadResult: {
       config: {
         model_provider: 'endo_broker',
-        sandbox_mode: 'workspace-write',
+        sandbox_mode: 'danger-full-access',
+        features: { network_proxy: { enabled: false } },
         approval_policy: 'never',
-        sandbox_workspace_write: {
-          network_access: false,
-          writable_roots: ['/workspace', '/tmp', '/run', '/scratch'],
-          exclude_slash_tmp: true,
-          exclude_tmpdir_env_var: true,
-        },
         model_providers: {
           endo_broker: {
             name: 'Endo broker',
@@ -2758,7 +2763,7 @@ test('broker config admission permits a credential-free provider', async t => {
   );
 });
 
-test('an admitted managed proxy policy survives actual turn/start', async t => {
+test('admitted public networking is passed to the external turn policy', async t => {
   const network = harden({
     policy: 'public-internet',
     proxyUrl: 'http://207.148.100.198:23457',
@@ -2772,24 +2777,9 @@ test('an admitted managed proxy policy survives actual turn/start', async t => {
     configReadResult: {
       config: {
         model_provider: 'endo_broker',
-        sandbox_mode: 'workspace-write',
+        sandbox_mode: 'danger-full-access',
+        features: { network_proxy: { enabled: false } },
         approval_policy: 'never',
-        sandbox_workspace_write: {
-          network_access: true,
-          writable_roots: ['/workspace', '/tmp', '/run', '/scratch'],
-          exclude_slash_tmp: true,
-          exclude_tmpdir_env_var: true,
-        },
-        features: {
-          network_proxy: {
-            enabled: true,
-            allow_upstream_proxy: true,
-            allow_local_binding: false,
-            enable_socks5: false,
-            enable_socks5_udp: false,
-            domains: { '*': 'allow' },
-          },
-        },
         model_providers: {
           endo_broker: {
             name: 'Endo broker',
@@ -2802,9 +2792,10 @@ test('an admitted managed proxy policy survives actual turn/start', async t => {
     },
   });
   const reader = await fixture.client.send('inspect');
-  t.true(
+  t.deepEqual(
     fixture.sent.find(message => message.method === 'turn/start').params
-      .sandboxPolicy.networkAccess,
+      .sandboxPolicy,
+    { type: 'externalSandbox', networkAccess: 'enabled' },
   );
   await fixture.client.interrupt();
   await drain(reader);
@@ -2814,9 +2805,10 @@ test('an admitted managed proxy policy survives actual turn/start', async t => {
 test('transport metadata alone cannot enable native networking without broker config admission', async t => {
   const fixture = makeFixture({ network: { policy: 'public-internet' } });
   const reader = await fixture.client.send('inspect');
-  t.false(
+  t.deepEqual(
     fixture.sent.find(message => message.method === 'turn/start').params
-      .sandboxPolicy.networkAccess,
+      .sandboxPolicy,
+    { type: 'externalSandbox', networkAccess: 'restricted' },
   );
   await fixture.client.interrupt();
   await drain(reader);

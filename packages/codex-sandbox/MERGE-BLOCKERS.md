@@ -54,13 +54,13 @@ asserts claims the outer sandbox cannot observe:
 - `credentialInjection: "broker-only"` and `brokerTransport:
   "loopback-sidecar"` are the broker's claims.
   The sandbox proves the namespace holds nothing routable; it does not prove
-  what the listener inside it is, that it is credential-free, or that its route
-  is denied to model-launched descendants.
-- `toolSandbox`, `toolCodexHomeAccess`, and `toolBrokerAccess` require the pinned
-  runtime's inner `workspaceWrite` policy.
-  The default runtime verifier now probes these controls using that CLI and
-  the same launch policy, including direct and indirect control-state mutations.
-  The pinned runtime remains trusted to apply this policy to later commands.
+  what the listener inside it is or that it is credential-free.
+  Guest commands deliberately share inference reachability.
+- `executionDomain: "guest"` describes the common CLI/command domain.
+  The runtime verifier checks the pinned version, environment, and child writes
+  to granted mounts; merged app-server configuration is checked separately.
+  Real pinned app-server native-command acceptance under `externalSandbox`
+  remains outstanding, as described in [network policy](./NETWORK-POLICY.md).
 - The default verifier also measures the probe's effective environment and
   rejects unexpected credential or proxy settings, and looks in the session's
   `CODEX_HOME` for the `auth.json` a ChatGPT login would be cached in,

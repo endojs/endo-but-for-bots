@@ -48,6 +48,14 @@ public activation requiring a separate host-provided capability.
 Native-source and bundled-entry subprocess tests exercise the shared image entry.
 Existing egress lifetime/traffic limits remain until retained allocations are audited.
 
+Codex now supplies the pinned app-server's `externalSandbox` policy on every turn
+and disables its managed proxy, using the outer container as the execution boundary.
+Process/thread configuration uses `danger-full-access`, the supported baseline for
+that API; guest commands may reach inference and write granted native state.
+Runtime preflight checks guest child access rather than asserting an inner boundary.
+Pinned app-server native-command acceptance remains outstanding, and the temporary
+synthetic public proxy address and its setup helper have not yet been removed.
+
 Runtime unification across all three adapters, Claude credential migration, OpenCode
 public network convergence, tool/journal consolidation, emergency stop UI, and the remaining
 limit removals are still pending.

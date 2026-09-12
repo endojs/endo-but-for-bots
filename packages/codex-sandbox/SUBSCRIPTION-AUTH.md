@@ -128,12 +128,11 @@ lease: origin, method, path, model allowlist, expiry, and quota enforcement are
 the broker's, and none of them can be expressed as a secret record.
 
 The real bearer or refresh token cannot be exported through the endpoint.
-Provider reachability is process-scoped: the app-server process can use the
-lease, but model-launched commands and descendants cannot connect to the broker
-route even though stock CLIs launch tools under their own UID.
-Production must verify this separation from effective cgroup/network state; an
-environment-variable convention or an undisclosed loopback port is not an
-authority boundary.
+Provider reachability is session-scoped: app-server and guest commands can use
+the credential-free endpoint while its grant remains active.
+It does not expose provider credentials or grant administration.
+The host broker bounds the granted provider authority; identifying which guest
+process calls it is neither required nor claimed.
 
 ## Codex with a ChatGPT subscription
 
@@ -156,8 +155,8 @@ The pinned runtime verifier now probes that absence directly and reports
 `codexHomeAuthFile: 'absent'` in `CodexRuntimeEvidenceV1`; the session
 scoping, durability, and teardown are established by the durable `stateVolume`
 bound at `/codex-home`.
-App-server can write it, but the pinned `workspaceWrite` tool sandbox permits
-model-launched commands to read and not modify it.
+App-server and guest commands can both read and modify it.
+It is native conversation state, not the authoritative host effects record.
 App-server requests for `account/chatgptAuthTokens/refresh`, account login,
 logout, rate-limit-credit consumption, and account/session management are not
 exposed to the model-facing client.
