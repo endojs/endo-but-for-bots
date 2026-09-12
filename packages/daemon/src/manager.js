@@ -6822,6 +6822,17 @@ const makeDaemonCore = async (
     const guestNamePath = namePathFrom(guestName);
     const guestLeaf = guestNamePath[guestNamePath.length - 1];
 
+    // Serialize accept()/cancel() on THIS invitation so its single-use check
+    // and the consuming mutation run atomically with respect to each other.
+    // A per-invitation lock (not `withFormulaGraphLock`) is required: that
+    // lock's reentrancy guard bypasses the serial queue whenever
+    // `formulaGraphLockDepth > 0`, so two concurrent top-level accept() calls
+    // (or an accept racing a cancel) that overlap another graph mutation's
+    // window would both skip serialization and both pass the check. This
+    // queue has no such bypass, so the check-then-consume sequence below is a
+    // genuine critical section for a single invitation.
+    const invitationJobs = makeSerialJobs();
+
     const locate = async () => {
       const { node, addresses } = await networkBroker.getPeerInfo();
       const { number: hostHandleNumber, node: hostHandleNode } =
@@ -6850,21 +6861,8 @@ const makeDaemonCore = async (
      *   pet stores; now unused but retained for protocol compatibility.
      */
     const accept = async (guestHandleLocator, _hostNameFromGuest) => {
-      // Single-use, deterministic and restart-durable: a pending invitation is
-      // retained by its `guestName` slot, which still names this invitation.
-      // Acceptance rebinds that slot to the accepted handle and `cancel()` frees
-      // it, so a slot that no longer names this invitation means it has already
-      // been consumed or cancelled.  This rejects a replay before any side
-      // effect, independent of when the collected formula's record is reaped
-      // (cancelling the controller alone does not delete the persisted record,
-      // so a re-provide would otherwise reincarnate a spent invitation).
-      const currentSlot = await E(invitingAgent).identify(...guestNamePath);
-      if (currentSlot !== id) {
-        throw makeError(
-          'Invitation has already been accepted, cancelled, or superseded',
-        );
-      }
-
+      // Parse the accepted guest handle locator up front.  This is pure and
+      // side-effect-free, so it can happen before the invitation is consumed.
       const url = new URL(guestHandleLocator);
       // Path components are `@`-delimited and URL-encoded.  The first
       // component is the handle's formula address; the rest are
@@ -6889,6 +6887,47 @@ const makeDaemonCore = async (
         node: /** @type {NodeNumber} */ (guestHandleNode),
         number: guestHandleNumber,
       });
+      // The remote guest handle locator that the `guestName` slot is rebound
+      // to.  `storeLocator` internalizes the remote formula identifier for
+      // peer resolution; `formatLocator`/`internalizeLocator` are pure, so this
+      // does not depend on the peer info registered below.
+      const guestHandleLocatorString = formatLocator(guestHandleId, 'remote');
+
+      // Single-use, deterministic and restart-durable.  A pending invitation
+      // is retained by its `guestName` slot, which still names this invitation
+      // until acceptance rebinds that slot to the accepted remote handle.  The
+      // check and the consuming rebind must be atomic: a bare check followed by
+      // unguarded `await`s lets two concurrent (or replayed) accept() calls
+      // both observe the slot still naming the invitation and each redeem it,
+      // minting two guests and registering peer info twice.  Serialize the
+      // read-check-and-consume for this invitation, and perform the consume
+      // BEFORE any externally visible side effect (peer registration, guest
+      // formulation):
+      //  - Rebind the `guestName` slot to the accepted remote handle so a
+      //    concurrent or replayed accept() fails the check.
+      //  - Cancel this invitation's own controller so a re-provide cannot
+      //    reincarnate a spent invitation (cancelling the controller alone does
+      //    not delete the persisted record, hence the slot rebind is what
+      //    actually rejects a replay).
+      await invitationJobs.enqueue(async () => {
+        const currentSlot = await E(invitingAgent).identify(...guestNamePath);
+        if (currentSlot !== id) {
+          throw makeError(
+            'Invitation has already been accepted, cancelled, or superseded',
+          );
+        }
+        // Use storeLocator so the directory properly internalizes the remote
+        // formula identifier for peer resolution.  This rebind is the actual
+        // consume: after it, `identify(...guestNamePath) !== id`.
+        await E(invitingAgent).storeLocator(
+          guestNamePath,
+          guestHandleLocatorString,
+        );
+        await withFormulaGraphLock(async () => {
+          const controller = provideController(id);
+          await controller.context.cancel(new Error('Invitation accepted'));
+        });
+      });
 
       // Register the guest's agent key so we can route to its daemon.
       if (guestHandleNode !== guestDaemonNode) {
@@ -6901,14 +6940,6 @@ const makeDaemonCore = async (
         addresses,
       };
       await networkBroker.addPeerInfo(peerInfo);
-
-      // Consume the invitation once, before binding, so a replayed locator
-      // cannot redeem it a second time: cancelling this invitation's own
-      // controller revokes the pending formula.  `cancel()` below routes to the
-      // same revocation through the value already in hand.
-      await withFormulaGraphLock();
-      const controller = provideController(id);
-      await controller.context.cancel(new Error('Invitation accepted'));
 
       // Create a local guest with a regular pet store.
       // Pin the guest handle to protect it from premature collection.
@@ -6966,14 +6997,8 @@ const makeDaemonCore = async (
       }
       await unpinTransient(localGuestFormula.handle);
 
-      // Store the remote guest handle under guestName for mail delivery.
-      // Use storeLocator so the directory properly internalizes the
-      // remote formula identifier for peer resolution.
-      const guestHandleLocatorString = formatLocator(guestHandleId, 'remote');
-      await E(invitingAgent).storeLocator(
-        guestNamePath,
-        guestHandleLocatorString,
-      );
+      // The remote guest handle was already stored under `guestName` for mail
+      // delivery during the atomic consume above.
 
       // Return the remote guest's public key for retention tracking.
       return harden({ guestPublicKey: guestDaemonNode });
@@ -6994,13 +7019,23 @@ const makeDaemonCore = async (
     const cancelInvitation = async (
       reason = makeError('Invitation cancelled'),
     ) => {
-      const current = await E(invitingAgent).identify(...guestNamePath);
-      if (current === id) {
-        await E(invitingAgent).remove(...guestNamePath);
-      }
-      await withFormulaGraphLock();
-      const controller = provideController(id);
-      await controller.context.cancel(reason);
+      // Serialize against accept() on the same invitation so the check and the
+      // slot removal are atomic: without this, a cancel() racing a mid-flight
+      // accept() could read a stale `current === id`, then `remove()` the slot
+      // that accept() has since rebound to the just-accepted guest handle,
+      // silently un-naming it.  Under the shared lock, once accept() has
+      // rebound the slot, cancel()'s `current !== id` and it is the promised
+      // idempotent no-op.
+      await invitationJobs.enqueue(async () => {
+        const current = await E(invitingAgent).identify(...guestNamePath);
+        if (current === id) {
+          await E(invitingAgent).remove(...guestNamePath);
+        }
+        await withFormulaGraphLock(async () => {
+          const controller = provideController(id);
+          await controller.context.cancel(reason);
+        });
+      });
     };
 
     return makeExo('Invitation', InvitationInterface, {
