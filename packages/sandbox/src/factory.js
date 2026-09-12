@@ -16,6 +16,7 @@ import {
   SandboxHandleInterface,
 } from './interfaces.js';
 import { makeEagerReader } from './eager-reader.js';
+import { makeResourceRegistry } from './resource-registry.js';
 import { resolveLimits } from './limits.js';
 import { validateGeneratedFiles } from './generated-files.js';
 
@@ -295,19 +296,24 @@ const resolveHostPath = async (scratchProvider, cap, context) => {
 };
 
 /**
- * Phase 1 factory.
+ * Construct the guarded public factory and its host-only shutdown control.
+ * The runtime owner must retain close for retries until all resources are gone.
  *
  * @param {MakeSandboxFactoryInput} input
  * @param {{ makeDelay?: typeof delay }} [powers]
- * @returns {SandboxFactory}
+ * @returns {Readonly<{ factory: SandboxFactory, close(reason?: Error): Promise<void> }>}
  */
-export const makeSandboxFactory = (
+export const makeSandboxFactoryKit = (
   { drivers, scratchProvider, context },
   { makeDelay = delay } = {},
 ) => {
   const driverList = harden([...drivers]);
-  /** @type {Set<SandboxHandle>} */
-  const liveHandles = new Set();
+  const slices = makeResourceRegistry();
+  /** @type {Set<() => Promise<void>>} */
+  const liveClosers = new Set();
+  let nextAcquisition = 0n;
+  /** @type {Promise<void> | undefined} */
+  let closeFlight;
   // Set once the factory has lost its owner — by cancellation, by
   // disconnection, or by being handed a context that cannot report
   // either. See the `whenCancelled` hookup at the end of this function
@@ -323,6 +329,23 @@ export const makeSandboxFactory = (
    */
   const ownerCancelledError = lost =>
     makeError(X`sandbox factory owner has been cancelled: ${q(lost.message)}`);
+
+  const assertOwner = () => {
+    if (ownerLost !== undefined) throw ownerCancelledError(ownerLost);
+  };
+
+  /**
+   * @template T
+   * @param {(id: string) => Promise<T>} operation
+   * @returns {Promise<T>}
+   */
+  const acquire = operation => {
+    if (ownerLost !== undefined)
+      return Promise.reject(ownerCancelledError(ownerLost));
+    const id = String(nextAcquisition);
+    nextAcquisition += 1n;
+    return slices.inOrder(id, () => operation(id));
+  };
 
   /**
    * Require the lifecycle proof that this cut relies on. A driver may have a
@@ -372,10 +395,12 @@ export const makeSandboxFactory = (
   /**
    * @returns {Promise<BackendProbe[]>}
    */
-  const listBackends = async () => {
-    const probes = await Promise.all(driverList.map(probeDriver));
-    return harden(probes);
-  };
+  const listBackends = () =>
+    acquire(async () => {
+      const probes = await Promise.all(driverList.map(probeDriver));
+      assertOwner();
+      return harden(probes);
+    });
 
   /**
    * @param {SandboxMakeOpts['backend']} selector
@@ -496,10 +521,11 @@ export const makeSandboxFactory = (
 
   /**
    * @param {SandboxMakeOpts} opts
+   * @param {string} sliceId
    * @returns {Promise<SandboxHandle>}
    */
-  const make = async opts => {
-    if (ownerLost !== undefined) throw ownerCancelledError(ownerLost);
+  const buildSlice = async (opts, sliceId) => {
+    assertOwner();
     if ((opts.network === 'join') !== (opts.networkRef !== undefined)) {
       // Backend-independent: every driver must agree the container ref is
       // exactly what `network: 'join'` names, so a driver that ignores the
@@ -527,6 +553,7 @@ export const makeSandboxFactory = (
       needsPolicy,
       generatedFiles.length > 0,
     );
+    assertOwner();
     const { driver } = selected;
     if (driver === undefined) {
       if (generatedFiles.length > 0) {
@@ -547,8 +574,10 @@ export const makeSandboxFactory = (
     // Resolve everything that requires the privileged
     // `provideHostPath` power up front. Drivers never see Mount caps.
     const rootfs = await resolveRootfs(opts.rootfs);
+    assertOwner();
     const mountSpecs = opts.mounts ?? [];
     const resolvedMounts = await Promise.all(mountSpecs.map(resolveMount));
+    assertOwner();
     let scratchHostPath = '';
     // A policy declares the slice's whole mount table, and the scratch
     // layer is a writable path outside it. Minting one anyway would put
@@ -594,7 +623,27 @@ export const makeSandboxFactory = (
       ...(opts.policy !== undefined ? { policy: opts.policy } : {}),
     });
 
+    assertOwner();
     const driverSlice = await driver.prepareSlice(sliceSpec);
+    // Retain immediately: even rendering or minting the public handle can fail.
+    // The initial cleanup owns just the returned driver context; once built,
+    // disposal also stops process admission and releases dynamic mounts.
+    let disposeOwned = () => driver.teardown(driverSlice);
+    /** @type {Promise<void> | undefined} */
+    let cleanupFlight;
+    const cleanupOwned = () => {
+      cleanupFlight ??= (async () => {
+        await disposeOwned();
+        slices.release(sliceId, cleanupOwned);
+        liveClosers.delete(cleanupOwned);
+      })().catch(error => {
+        cleanupFlight = undefined;
+        throw error;
+      });
+      return cleanupFlight;
+    };
+    slices.retain(sliceId, cleanupOwned);
+    liveClosers.add(cleanupOwned);
     // Drivers may attach a `runtimeDetails` summary to the slice
     // context.  When present, the factory weaves it into the
     // per-slice `help()` text so callers can see which hardening
@@ -633,8 +682,6 @@ export const makeSandboxFactory = (
     let disposePromise;
     /** @type {Error | undefined} */
     let stoppingReason;
-    /** @type {SandboxHandle | undefined} */
-    let handle;
 
     // Stopping is permanent; a failed cleanup attempt remains retryable.
     const assertRunning = () => {
@@ -1115,7 +1162,8 @@ export const makeSandboxFactory = (
             );
           }
           await Promise.all([...liveMounts].map(m => E(m).unmount()));
-          if (handle !== undefined) liveHandles.delete(handle);
+          slices.release(sliceId, cleanupOwned);
+          liveClosers.delete(cleanupOwned);
         })().catch(error => {
           disposePromise = undefined;
           throw error;
@@ -1126,6 +1174,7 @@ export const makeSandboxFactory = (
 
     const disposeSlice = () =>
       beginDispose(makeError(X`sandbox handle disposed`));
+    disposeOwned = disposeSlice;
 
     const mintedHandle = /** @type {SandboxHandle} */ (
       /** @type {unknown} */ (
@@ -1142,18 +1191,59 @@ export const makeSandboxFactory = (
         })
       )
     );
-    handle = mintedHandle;
-    liveHandles.add(mintedHandle);
     // The owner may have been lost while this slice was being built, in
     // which case the cancellation sweep below has already run past this
-    // handle: dispose it here rather than hand back a slice nobody is
-    // watching.
+    // handle: reject publication and let the acquisition wrapper clean up.
     const lostDuringMake = ownerLost;
     if (lostDuringMake !== undefined) {
-      await disposeSlice();
       throw ownerCancelledError(lostDuringMake);
     }
     return mintedHandle;
+  };
+
+  /** @param {SandboxMakeOpts} opts */
+  const make = opts =>
+    acquire(async sliceId => {
+      try {
+        return await buildSlice(opts, sliceId);
+      } catch (error) {
+        try {
+          await slices.stop(sliceId);
+        } catch (cleanupError) {
+          throw new AggregateError(
+            [error, cleanupError],
+            'Sandbox construction cleanup pending',
+          );
+        }
+        throw error;
+      }
+    });
+
+  /**
+   * Host-only shutdown. Fence immediately and stop existing slices even while
+   * another acquisition is pending. Registry drain accounts for late arrivals.
+   * Failures retain ownership; only a successful close is cached permanently.
+   * @param {Error} [reason]
+   * @returns {Promise<void>}
+   */
+  const close = (reason = makeError(X`sandbox factory closed`)) => {
+    ownerLost ??= reason;
+    if (closeFlight !== undefined) return closeFlight;
+    const drained = slices.shutdown();
+    const stopping = [...liveClosers].map(cleanup => cleanup());
+    closeFlight = (async () => {
+      const results = await Promise.allSettled([drained, ...stopping]);
+      const failures = results
+        .filter(result => result.status === 'rejected')
+        .map(result => result.reason);
+      if (failures.length) {
+        throw new AggregateError(failures, 'Sandbox factory shutdown pending');
+      }
+    })().catch(error => {
+      closeFlight = undefined;
+      throw error;
+    });
+    return closeFlight;
   };
 
   /**
@@ -1201,20 +1291,16 @@ export const makeSandboxFactory = (
     E(context)
       .whenCancelled()
       .catch(reason => {
-        ownerLost = makeError(
+        const lost = makeError(
           X`sandbox factory owner is no longer reachable: ${q(/** @type {Error | undefined} */ (reason)?.message ?? reason)}`,
         );
-        return Promise.all(
-          [...liveHandles].map(handleRef =>
-            E(handleRef)
-              .dispose()
-              .catch(() => undefined),
-          ),
-        );
+        // The host kit retains retry authority if automatic cleanup fails.
+        // No new admission can occur after this close attempt begins.
+        return close(lost).catch(() => undefined);
       });
   }
 
-  return /** @type {SandboxFactory} */ (
+  const factory = /** @type {SandboxFactory} */ (
     /** @type {unknown} */ (
       makeExo('SandboxFactory', SandboxFactoryInterface, {
         help,
@@ -1223,5 +1309,17 @@ export const makeSandboxFactory = (
       })
     )
   );
+  return harden({ factory, close });
 };
+harden(makeSandboxFactoryKit);
+
+/**
+ * Convenience constructor for callers that only need the public factory.
+ * Runtime resource owners must retain the kit and await close before release.
+ * @param {MakeSandboxFactoryInput} input
+ * @param {{ makeDelay?: typeof delay }} [powers]
+ * @returns {SandboxFactory}
+ */
+export const makeSandboxFactory = (input, powers) =>
+  makeSandboxFactoryKit(input, powers).factory;
 harden(makeSandboxFactory);
