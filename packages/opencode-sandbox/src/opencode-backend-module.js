@@ -68,14 +68,14 @@ export const resolveBackendConfig = env => {
     rootfs:
       env.OPENCODE_SANDBOX_IMAGE ||
       process.env.ENDO_OPENCODE_SANDBOX_IMAGE ||
-      'oci:localhost/opencode:latest',
+      'oci:localhost/opencode-sandbox:latest',
     // The socket directory path is stable per session: the persisted client
     // formula's read-only mount records it, so a revival after a daemon
     // restart must find the new listener at the same path.
     mcpBaseDir:
       env.OPENCODE_MCP_DIR ||
       process.env.ENDO_OPENCODE_MCP_DIR ||
-      path.join(os.tmpdir(), 'opencode-mcp'),
+      path.join(os.homedir(), 'opencode-mcp'),
   });
 };
 harden(resolveBackendConfig);

@@ -32,6 +32,6 @@ ENV OPENCODE_DISABLE_AUTOUPDATE=1 \
     OPENCODE_DISABLE_MODELS_FETCH=1 \
     OPENCODE_AUTH_CONTENT={}
 
-# The session bridge is baked here once packages/opencode-sandbox/src lands, so
-# it ships with the same pinned build:
-# COPY opencode-bridge.mjs /opt/opencode-bridge/bridge.mjs
+# The session bridge ships with the same pinned build. The client spawns it at
+# exactly this path (/opt/opencode-bridge/bridge.mjs).
+COPY opencode-bridge.mjs /opt/opencode-bridge/bridge.mjs

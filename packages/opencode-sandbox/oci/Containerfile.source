@@ -51,6 +51,11 @@ RUN apt-get update \
 COPY --from=build /src/packages/opencode/dist/opencode-linux-*/bin/opencode /usr/local/bin/opencode
 RUN chmod 0755 /usr/local/bin/opencode && opencode --version
 
+# The session bridge the client spawns. Copied from the build context (the
+# fork clone has no packages/opencode-sandbox); build-reproducible.sh places
+# src/opencode-bridge.mjs beside this Containerfile.
+COPY opencode-bridge.mjs /opt/opencode-bridge/bridge.mjs
+
 WORKDIR /workspace
 
 ENV OPENCODE_DISABLE_AUTOUPDATE=1 \

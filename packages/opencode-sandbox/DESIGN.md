@@ -302,16 +302,18 @@ reuse its config generator — that emits Claude's `mcpServers`/`type: 'stdio'`
 (formulas reincarnate) → `OPENROUTER_API_KEY` in the slice `env` at
 `sandboxFactory.make()`.
 
-- The secret name is configuration (`ENDO_OPENCODE_CREDS_NAME`), not a
-  hardcode. Setup resolves
-  `ENDO_OPENCODE_CREDS_NAME || ENDO_FLOOT_AUTH_SECRET_NAME ||
-  FLOOT_AUTH_SECRET_NAME || 'openrouter-auth'` so it cannot disagree with
-  Floot's provider setup, which defaults to `${dir}-openrouter-auth` unless
-  `FLOOT_AUTH_SECRET_NAME` is set; the deployment sets both to
-  `openrouter-auth`. The seed value comes from `ENDO_OPENROUTER_API_KEY`
-  (never a bare `OPENROUTER_API_KEY`). An existing SecretBlob is never
-  overwritten by a stale environment variable, and a name already bound to a
-  non-managed object is refused rather than destroyed.
+- The secret name is configuration (`ENDO_OPENCODE_CREDS_NAME`, default
+  `openrouter-auth`), not a hardcode, and it is deliberately **not** derived
+  from Floot's provider variables: `FLOOT_AUTH_SECRET_NAME` can name a
+  provider credential of another kind (e.g. an Anthropic key), which must never
+  be wrapped and injected as `OPENROUTER_API_KEY`. The deployment points this
+  variable at the same secret Floot's OpenRouter provider uses. Only
+  `ENDO_`-prefixed names are read: the daemon strips bare variables, so a bare
+  `FLOOT_AUTH_SECRET_NAME`/`OPENCODE_*` is ignored rather than half-honored.
+  The seed value comes from `ENDO_OPENROUTER_API_KEY` (never a bare
+  `OPENROUTER_API_KEY`). An existing SecretBlob is never overwritten by a
+  stale environment variable, and a name already bound to a non-managed object
+  is refused rather than destroyed.
 - Setup inputs must be `ENDO_`-prefixed to survive the daemon's `allowEnvPass`
   filter (`packages/daemon/index.js:88-102`); a bare `OPENROUTER_API_KEY` in
   `secrets.env` would never reach a setup.
@@ -321,7 +323,17 @@ reuse its config generator — that emits Claude's `mcpServers`/`type: 'stdio'`
   Phase 1 accepts this host-side exposure; broker-only egress removes it.
 - Setup must additionally assert that the module specifier it minted resolves
   through `<stateDir>/current/` (not `releases/<id>/`), or a pruned release
-  breaks revival.
+  breaks revival. The assert runs before the first mint so a failure cannot
+  leave a half-bound profile; `setup-hosted.js` mints the replacement backend
+  under `opencode-sandbox/backend-next` and only then swaps it over the live
+  name, so a failed mint leaves the previous backend (and Floot's binding to
+  it) working.
+- The state root and the credential name are validated before any mint:
+  `ENDO_OPENCODE_STATE_DIR` must be absolute, normalized, not `/`, and not a
+  symlink (and the provider re-checks `.owners/` and the ownership marker with
+  `lstat`/`realpath` before writing, so a planted link cannot redirect
+  `chmod`/`writeFile` at a host path outside the tree). Per-session MCP sockets
+  default under `$HOME/opencode-mcp`, never a shared world-writable tmp.
 - **Containment, stated honestly.** Phase 1 uses the Claude trust model, and it
   is weaker than "the key stays out of everything":
   - the token is rendered into `podman create -e`, so it appears in
