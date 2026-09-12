@@ -397,13 +397,15 @@ reuse its config generator — that emits Claude's `mcpServers`/`type: 'stdio'`
   `core/src/database/database.ts:27-31`), and SQLite WAL requires same-host
   shared memory — it does not work over a network/FUSE filesystem
   (sqlite.org/wal.html). The claude-style provisioner only projects 9P mounts,
-  so phase 1 must mint a **host-backed bind** for `/opencode-state` the way
-  codex's volume path does (`codex-sandbox/src/host-volume-provider.js`,
-  `durable-volumes.js`, which need XFS `volumeRoot`/`projectIds`/`quotaCommand`
-  and passwordless sudo on the host). `src/opencode-state-volume.js` (or reuse
-  of that provider) is scheduled in **milestone 2**, and the NixOS host edits
-  include the XFS quota prerequisites. If neither path is ready, phase 1 is
-  blocked rather than falling back to SQLite-on-9P.
+  so `src/opencode-state-provider.js` creates one 0700 host directory per
+  session under a configured root and mints a **daemon mount** for it via
+  `host.provideMount(absolutePath, petName)`. That matters: the sandbox factory
+  resolves every Mount cap through `@agent.provideHostPath`, which rejects any
+  cap the daemon did not mint (`daemon/src/host.js:700-741`), so a wrapper
+  provider cannot substitute. `removeSession` unmounts and deletes the
+  directory on destroy only. This avoids codex's XFS quota stack; the design's
+  phase 1 has no quota or `nosuid,nodev` (see below), and the NixOS host edits
+  only need a state root directory.
 - **No quota or `nosuid,nodev` in the plain slice path.** The non-policy bind
   path supports neither; until the volume/policy path is adopted, state is
   unbounded and binds carry only `readonly` where applicable. The design says
@@ -500,7 +502,7 @@ New package `packages/opencode-sandbox/`.
 | `src/opencode-backend-factory.js` | `HostedBackendFactoryInterface`; lifecycle ordering, live ownership, teardown barriers | `claude-backend-factory.js` |
 | `src/opencode-backend-module.js` | Caplet entry; resolves env config; wires provisioner + tool bridge | `claude-backend-module.js` |
 | `src/opencode-session-provisioner.js` | Per-session exo: `provision`, `lookup`, `cancel`, `remove`; provides the state-volume power | `claude-session-provisioner.js:27-36` |
-| `src/opencode-state-volume.js` | Per-session host-backed state bind (or adapter over codex's `makeHostVolumeProvider`) | `codex-sandbox/src/host-volume-provider.js` |
+| `src/opencode-state-provider.js` | Per-session 0700 host directory + daemon mount via `host.provideMount`; destroy-only `removeSession` | daemon `host.js:685-741` |
 | `src/container-mount-bridge.js` | `provideContainerMountBridge`/`release…` (refused in phase 1) | `claude-sandbox/src/container-mount-bridge.js` |
 | `src/provision-opencode-session.js` | Bounded session powers + client formula creation | `provision-claude-session.js` |
 | `src/opencode-client-module.js` | Credentials → slice env; workspace mount; state volume; MCP mount; server child + bridge process | `claude-client-module.js` + `codex-sandbox/src/app-server-transport.js` |
