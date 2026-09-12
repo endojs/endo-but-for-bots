@@ -6,6 +6,7 @@ import { makeError, q, X } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import { makePromiseKit } from '@endo/promise-kit';
 
+import { validateGeneratedFiles } from '../generated-files.js';
 import { makeCgroup2Probe } from '../limits.js';
 import { makeResourceRegistry } from '../resource-registry.js';
 import {
@@ -29,6 +30,7 @@ import {
 import { readableToAsyncIterable, spawnAndCollect } from './child-process.js';
 import { DEFAULT_PATH } from './path.js';
 
+/** @import { GeneratedFileStage, GeneratedFileStorage } from '../generated-file-storage-types.js' */
 /** @import { SandboxDriver, SliceSpec, SpawnOpts, DriverProcess, BackendProbe, BackendProbeDetails, SlicePolicyRequest, SlicePolicyAttestation } from '../types.js' */
 
 // `network: 'join'` targets are named by the same portable pattern the
@@ -354,6 +356,7 @@ harden(probeRootlessNetBackend);
  * @typedef {object} PodmanSliceContext
  * @property {ReturnType<typeof makeResourceRegistry>} operations Acquisitions and retained removals.
  * @property {Promise<void> | undefined} teardownFlight Coalesced, retryable teardown attempt.
+ * @property {GeneratedFileStage | undefined} generatedStage Literal files retained until all containers are removed.
  * @property {SliceSpec} spec          Original slice spec.
  * @property {string} ref              Pinned OCI image reference.
  * @property {RootlessNetBackend} netBackend Rootless network backend.
@@ -546,7 +549,7 @@ const assembleCreateArgv = (spec, containerName, netBackend, extras) => {
         `target=${mount.innerPath}`,
       ];
       if (mount.mode === 'ro') parts.push('readonly');
-      argv.push('--mount', parts.join(','));
+      argv.push('--mount', encodeMount(parts));
     }
 
     // Writable scratch layer.  Mirrors the bwrap driver's `/scratch`
@@ -554,7 +557,11 @@ const assembleCreateArgv = (spec, containerName, netBackend, extras) => {
     if (spec.scratchHostPath !== '') {
       argv.push(
         '--mount',
-        `type=bind,source=${spec.scratchHostPath},target=/scratch`,
+        encodeMount([
+          'type=bind',
+          `source=${spec.scratchHostPath}`,
+          'target=/scratch',
+        ]),
       );
     }
   }
@@ -582,6 +589,22 @@ const assembleCreateArgv = (spec, containerName, netBackend, extras) => {
   return argv;
 };
 harden(assembleCreateArgv);
+
+/**
+ * Podman's --mount parser reads one CSV record, then splits each field at '='.
+ * Quote complete fields, not just path values. Go CSV normalizes CRLF; this
+ * native boundary rejects CR to avoid that normalization ambiguity.
+ * @param {readonly string[]} fields
+ */
+const encodeMount = fields =>
+  fields
+    .map(field => {
+      if (field.includes('\r') || field.includes('\0')) {
+        throw makeError(X`Podman mount fields cannot contain CR or NUL`);
+      }
+      return /[,"\n]/.test(field) ? `"${field.replaceAll('"', '""')}"` : field;
+    })
+    .join(',');
 
 /**
  * Construct the podman driver.
@@ -634,6 +657,7 @@ harden(assembleCreateArgv);
  *                                                            `procfs` text
  *                                                            in tests.
  * @param {{observe: (request: {name: string, mountpoint: string}) => Promise<import('../xfs-volume-quota.js').VolumeQuotaEvidence>}} [input.volumeQuota] Trusted host kernel-quota observer; never model-facing.
+ * @param {GeneratedFileStorage} [input.generatedFileStorage] Host-owned allocator; required for literal files.
  * @returns {SandboxDriver}
  */
 export const makePodmanDriver = ({
@@ -643,7 +667,19 @@ export const makePodmanDriver = ({
   ownerId,
   procfs,
   volumeQuota,
+  generatedFileStorage,
 } = {}) => {
+  if (
+    generatedFileStorage !== undefined &&
+    (generatedFileStorage === null ||
+      typeof generatedFileStorage.makeStage !== 'function' ||
+      typeof generatedFileStorage.close !== 'function')
+  ) {
+    throw makeError(
+      X`Podman generated file storage must provide makeStage and close`,
+    );
+  }
+
   // Lazy-resolve `child_process` so callers in test environments can
   // inject a stub without paying the import cost up front.
   /** @type {typeof import('child_process') | undefined} */
@@ -1733,8 +1769,32 @@ export const makePodmanDriver = ({
    * @returns {Promise<PodmanSliceContext>}
    */
   const prepareSlice = async spec => {
-    if (spec.generatedFiles?.length) {
-      throw makeError(X`podman driver does not yet support generated files`);
+    const files = validateGeneratedFiles(spec.generatedFiles ?? [], [
+      '/run',
+      '/var/tmp',
+      ...(spec.mounts ?? []).map(mount => mount.innerPath),
+    ]);
+    if (files.length && spec.policy !== undefined) {
+      throw makeError(X`Generated files cannot extend an exact slice policy`);
+    }
+    // Validate native destinations before acquiring host resources. Sources are
+    // generated later by the host allocator and encoded before container create.
+    for (const file of files) encodeMount([`target=${file.innerPath}`]);
+    spec = harden({ ...spec, generatedFiles: files });
+    // makeStage is inactive: it allocates no storage until an owned spawn.
+    // Do this before any other acquisition, since a closed allocator can refuse.
+    /** @type {GeneratedFileStage | undefined} */
+    let generatedStage;
+    if (files.length) {
+      if (generatedFileStorage === undefined) {
+        throw makeError(X`podman driver requires generated file storage`);
+      }
+      generatedStage = generatedFileStorage.makeStage(files, [
+        ...spec.mounts
+          .filter(mount => mount.mode === 'rw')
+          .map(mount => mount.hostPath),
+        ...(spec.scratchHostPath ? [spec.scratchHostPath] : []),
+      ]);
     }
     if (
       spec.network !== 'none' &&
@@ -1984,6 +2044,7 @@ export const makePodmanDriver = ({
     const ctx = {
       operations: makeResourceRegistry(),
       teardownFlight: undefined,
+      generatedStage,
       spec,
       ref,
       netBackend,
@@ -2131,8 +2192,11 @@ export const makePodmanDriver = ({
           );
         }
       }
+      const generatedMounts = (await slice.generatedStage?.prepare()) ?? [];
+      slice.operations.assertOpen();
       const operationSpec = harden({
         ...slice.spec,
+        mounts: [...slice.spec.mounts, ...generatedMounts],
         // Join by id, not the caller's name, so the resolved target cannot be
         // swapped between the check above and podman resolving the reference.
         ...(slice.join !== null ? { networkRef: slice.join.containerId } : {}),
@@ -2411,6 +2475,7 @@ export const makePodmanDriver = ({
       if (failures.length) {
         throw new AggregateError(failures, 'Podman teardown pending');
       }
+      await slice.generatedStage?.release();
       if (slice.seccompTempPath !== null) {
         const fs = await import('fs');
         const path = await import('path');
@@ -2427,6 +2492,9 @@ export const makePodmanDriver = ({
 
   return harden({
     name: /** @type {const} */ ('podman'),
+    ...(generatedFileStorage === undefined
+      ? {}
+      : { supportsGeneratedFiles: true }),
     probe,
     prepareSlice,
     policy: reportPolicy,

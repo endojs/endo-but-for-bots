@@ -1,16 +1,29 @@
 // @ts-check
 import test from '@endo/ses-ava/prepare-endo.js';
+import { makePromiseKit } from '@endo/promise-kit';
 import { EventEmitter } from 'node:events';
-import { mkdtemp, rm, writeFile, access } from 'node:fs/promises';
+import {
+  mkdtemp,
+  rm,
+  writeFile,
+  access,
+  readFile,
+  readdir,
+  realpath,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 
 import { makePodmanDriver } from '../src/drivers/podman.js';
+import { makeGeneratedFileStorage } from '../src/generated-file-storage.js';
 import { makeResourceRegistry } from '../src/resource-registry.js';
 
-/** @param {any} t */
-const fixture = t => {
+/**
+ * @param {any} t
+ * @param {import('../src/generated-file-storage-types.js').GeneratedFileStorage} [storage]
+ */
+const fixture = (t, storage) => {
   const active = new Set();
   const attached = new Map();
   const calls = [];
@@ -70,6 +83,10 @@ const fixture = t => {
             send(0);
           }
         });
+      } else if (command !== 'podman') {
+        queueMicrotask(() => send(1));
+      } else if (args[0] === 'image' || args[0] === 'info') {
+        queueMicrotask(() => send(0));
       } else throw Error(`Unexpected ${command} ${args[0]}`);
       return child;
     },
@@ -78,9 +95,10 @@ const fixture = t => {
     childProcess: /** @type {any} */ (childProcess),
     env: {},
     ownerId: 'cleanup-test',
+    generatedFileStorage: storage,
   });
   /** @type {any} */
-  const slice = {
+  let slice = {
     operations: makeResourceRegistry(),
     teardownFlight: undefined,
     spec: {
@@ -111,7 +129,13 @@ const fixture = t => {
   });
   return {
     driver,
-    slice,
+    get slice() {
+      return slice;
+    },
+    async prepare(spec) {
+      slice = await driver.prepareSlice({ ...slice.spec, ...spec });
+      return slice;
+    },
     active,
     calls,
     failures,
@@ -253,4 +277,183 @@ test('failed removal does not prevent sibling or anchor cleanup and retains conf
   await f.driver.teardown(f.slice);
   await Promise.all([first.wait(), second.wait()]);
   t.like(await t.throwsAsync(access(config)), { code: 'ENOENT' });
+});
+
+/** @param {any} t */
+const storageFixture = async t => {
+  const parent = await mkdtemp(join(tmpdir(), 'podman-generated-,"='));
+  t.teardown(() => rm(parent, { recursive: true, force: true }));
+  const directory = join(parent, 'files');
+  const storage = await makeGeneratedFileStorage({
+    directory,
+    maxBytes: 1024n,
+    maxEntries: 10n,
+  });
+  return { storage, directory };
+};
+
+const resolverFiles = harden([
+  { innerPath: '/etc/resolv.conf', contents: 'nameserver 127.0.0.53\n' },
+]);
+
+test('Podman lazily stages individual read-only files and reuses them across operations', async t => {
+  t.timeout(5000);
+  const { storage, directory } = await storageFixture(t);
+  const f = fixture(t, storage);
+  t.true(f.driver.supportsGeneratedFiles);
+  t.not(makePodmanDriver().supportsGeneratedFiles, true);
+  await f.prepare({ generatedFiles: resolverFiles });
+  t.deepEqual(await readdir(directory), []);
+  const procs = await Promise.all([
+    f.driver.spawn(f.slice, ['/bin/true'], {}),
+    f.driver.spawn(f.slice, ['/bin/true'], {}),
+  ]);
+  const stages = await readdir(directory);
+  t.is(stages.length, 1);
+  const source = await realpath(join(directory, stages[0], '0'));
+  t.is(await readFile(source, 'utf8'), resolverFiles[0].contents);
+  const creates = f.calls.filter(args => args[0] === 'create');
+  const expected = `type=bind,"source=${source.replaceAll('"', '""')}",target=/etc/resolv.conf,readonly`;
+  for (const args of creates) {
+    t.deepEqual(
+      args.filter((_, i) => args[i - 1] === '--mount'),
+      [expected],
+    );
+  }
+  for (const name of [...f.active]) f.finish(name);
+  await Promise.all(procs.map(proc => proc.wait()));
+  t.is(await readFile(source, 'utf8'), resolverFiles[0].contents);
+  const later = await f.driver.spawn(f.slice, ['/bin/true'], {});
+  t.deepEqual(await readdir(directory), stages);
+  await f.driver.teardown(f.slice);
+  await later.wait();
+  t.deepEqual(await readdir(directory), []);
+  await storage.close();
+});
+
+test('Podman retains generated files through failed container removal', async t => {
+  t.timeout(5000);
+  const { storage, directory } = await storageFixture(t);
+  const f = fixture(t, storage);
+  await f.prepare({ generatedFiles: resolverFiles });
+  const proc = await f.driver.spawn(f.slice, ['/bin/true'], {});
+  const [name] = f.active;
+  f.failures.add(name);
+  await t.throwsAsync(f.driver.teardown(f.slice), {
+    message: /teardown pending/,
+  });
+  t.is((await readdir(directory)).length, 1);
+  await t.throwsAsync(storage.close(), { message: /shutdown pending/ });
+  f.failures.clear();
+  await f.driver.teardown(f.slice);
+  await proc.wait();
+  t.deepEqual(await readdir(directory), []);
+  await storage.close();
+});
+
+test('Podman teardown drains pending staging and prevents container creation', async t => {
+  t.timeout(5000);
+  const { promise: preparing, resolve: began } = makePromiseKit();
+  const { promise: pending, resolve: resume } = makePromiseKit();
+  t.teardown(() => resume(undefined));
+  let released = false;
+  const f = fixture(t, {
+    makeStage: () => ({
+      prepare: async () => {
+        began(undefined);
+        await pending;
+        return [];
+      },
+      release: async () => {
+        released = true;
+      },
+    }),
+    close: async () => {},
+  });
+  await f.prepare({ generatedFiles: resolverFiles });
+  const acquired = f.driver.spawn(f.slice, ['/bin/true'], {});
+  const rejected = t.throwsAsync(acquired, { message: /shutting down/ });
+  await preparing;
+  const stopping = f.driver.teardown(f.slice);
+  t.false(released);
+  resume(undefined);
+  await rejected;
+  await stopping;
+  t.true(released);
+  t.false(f.calls.some(args => args[0] === 'create'));
+});
+
+test('Podman retries generated-file release after all containers are removed', async t => {
+  t.timeout(5000);
+  let releases = 0;
+  const f = fixture(t, {
+    makeStage: () => ({
+      prepare: async () => [],
+      release: async () => {
+        releases += 1;
+        if (releases === 1) throw Error('staging deletion failed');
+      },
+    }),
+    close: async () => {},
+  });
+  await f.prepare({ generatedFiles: resolverFiles });
+  const proc = await f.driver.spawn(f.slice, ['/bin/true'], {});
+  await t.throwsAsync(f.driver.teardown(f.slice), {
+    message: /staging deletion failed/,
+  });
+  t.is(f.active.size, 0);
+  const removals = f.calls.filter(args => args[0] === 'rm').length;
+  await f.driver.teardown(f.slice);
+  await proc.wait();
+  t.is(releases, 2);
+  t.is(f.calls.filter(args => args[0] === 'rm').length, removals);
+});
+
+test('Podman refuses invalid generated destinations and exact policies before any acquisition', async t => {
+  const f = fixture(t, {
+    makeStage: () => {
+      throw Error('must not allocate');
+    },
+    close: async () => {},
+  });
+  for (const innerPath of [
+    '/run/config',
+    '/var/tmp/config',
+    '/etc/a\rfile',
+    '/etc/../file',
+  ]) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(
+      f.prepare({ generatedFiles: [{ innerPath, contents: '' }] }),
+      {
+        message: /overlaps|CR or NUL|canonical/,
+      },
+    );
+  }
+  await t.throwsAsync(
+    f.prepare({ generatedFiles: resolverFiles, policy: {} }),
+    {
+      message: /exact slice policy/,
+    },
+  );
+  t.deepEqual(f.calls, []);
+});
+
+test('Podman quotes complete bind fields for caller mounts and scratch', async t => {
+  const f = fixture(t);
+  f.slice.spec.mounts = [
+    { hostPath: '/host,readonly', innerPath: '/work"=\nfile', mode: 'rw' },
+  ];
+  f.slice.spec.scratchHostPath = '/scratch,source=/another';
+  const proc = await f.driver.spawn(f.slice, ['/bin/true'], {});
+  const create = f.calls.find(args => args[0] === 'create');
+  t.deepEqual(
+    create?.filter((_, i) => create[i - 1] === '--mount'),
+    [
+      'type=bind,"source=/host,readonly","target=/work""=\nfile"',
+      'type=bind,"source=/scratch,source=/another",target=/scratch',
+    ],
+  );
+  await f.driver.teardown(f.slice);
+  await proc.wait();
 });

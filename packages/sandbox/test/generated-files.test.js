@@ -103,7 +103,8 @@ for (const { name, makeDriver } of [
     await t.throwsAsync(
       driver.prepareSlice(/** @type {any} */ ({ generatedFiles: files })),
       {
-        message: /does not yet support generated files/,
+        message:
+          /does not yet support generated files|requires generated file storage/,
       },
     );
   });
@@ -190,4 +191,20 @@ test('invalid generated destinations reject before probing or resolving mount ca
     },
   );
   t.is(acquisitions, 0);
+});
+
+test('Podman refuses malformed host allocators instead of advertising file support', t => {
+  for (const generatedFileStorage of [
+    null,
+    {},
+    { makeStage() {} },
+    { close() {} },
+  ]) {
+    t.throws(
+      () => makePodmanDriver(/** @type {any} */ ({ generatedFileStorage })),
+      {
+        message: /storage must provide makeStage and close/,
+      },
+    );
+  }
 });
