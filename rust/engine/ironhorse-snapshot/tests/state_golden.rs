@@ -160,7 +160,7 @@ fn carried_state_has_frozen_bytes_seals_costs_and_continuations() {
             }
         }
     }
-    assert_eq!(labels.len(), 16);
+    assert_eq!(labels.len(), 23);
 }
 
 #[test]

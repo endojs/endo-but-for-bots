@@ -1717,9 +1717,8 @@ pub use ironhorse_meter::PROMISE_FINALLY_FRAME_METERING;
 pub use ironhorse_meter::PROMISE_FUNCTIONS_METERING;
 
 // `PROMISE_HANDLER_THROW_METERING` (the near-zero native residual of a
-// throwing promise reaction handler) is not re-exported here: it is a
-// documented `ironhorse_meter` constant, reachable as
-// `ironhorse_vm::cost_table::PROMISE_HANDLER_THROW_METERING`.
+// throwing promise reaction handler) is not re-exported here: the constant is
+// reachable as `ironhorse_vm::cost_table::PROMISE_HANDLER_THROW_METERING`.
 
 /// The native frame residual of running one queued job at the drain
 /// (`fxRunPromiseJobs`'s `mxRunCount` + the `fxOnResolvedPromise`/

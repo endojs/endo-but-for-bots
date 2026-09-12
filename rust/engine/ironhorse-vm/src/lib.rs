@@ -73,8 +73,8 @@ pub use interp::{HEAVY_FRAME_COST, LIGHT_FRAME_COST, NATIVE_DEPTH_LIMIT};
 // registries stay reachable, but the interpreter's own module path does not.
 #[doc(hidden)]
 pub use interp::{
-    boundary, gc_tables, persistence, roots, INTERP_FIELDS, MAP_MIN_TABLE_LENGTH,
-    XS_ENVIRONMENT_BEHAVIOR_ID, XS_INTERNAL_FLAG,
+    boundary, gc_tables, persistence, roots, INTERP_FIELDS, XS_ENVIRONMENT_BEHAVIOR_ID,
+    XS_INTERNAL_FLAG,
 };
 pub use meter::{Meter, MeterCheck, MeterState, COST_TABLE_VERSION};
 pub use module::{
