@@ -17,6 +17,7 @@ import {
 } from './interfaces.js';
 import { makeEagerReader } from './eager-reader.js';
 import { resolveLimits } from './limits.js';
+import { validateGeneratedFiles } from './generated-files.js';
 
 /** @import { MakeSandboxFactoryInput, SandboxFactory, SandboxMakeOpts, SandboxDriver, BackendProbe, MountSpec, SliceSpec, MountCap, MountMode, SandboxHandle, ProcessHandle, MountHandle, SpawnOpts, DriverProcess, RootfsSpec, TerminationSignal } from './types.js' */
 
@@ -380,9 +381,14 @@ export const makeSandboxFactory = (
    * @param {SandboxMakeOpts['backend']} selector
    * @param {boolean} [needsPolicy] Consider only drivers that can
    *   enforce and attest a slice policy.
+   * @param {boolean} [needsGeneratedFiles] Require private literal-file staging.
    * @returns {Promise<{ driver?: SandboxDriver; failures: BackendProbe[] }>}
    */
-  const pickDriver = async (selector, needsPolicy = false) => {
+  const pickDriver = async (
+    selector,
+    needsPolicy = false,
+    needsGeneratedFiles = false,
+  ) => {
     await null;
     const named =
       selector === undefined || selector === 'auto'
@@ -392,9 +398,11 @@ export const makeSandboxFactory = (
     // has to be attested. Without this, `auto` picks the first available
     // driver — bwrap, which `agent.js` registers first — and every
     // policy slice fails on a host that has both backends installed.
-    const candidates = needsPolicy
-      ? named.filter(driver => driver.policy !== undefined)
-      : named;
+    const candidates = named.filter(
+      driver =>
+        (!needsPolicy || driver.policy !== undefined) &&
+        (!needsGeneratedFiles || driver.supportsGeneratedFiles === true),
+    );
     /** @type {BackendProbe[]} */
     const failures = [];
     for (const driver of candidates) {
@@ -505,9 +513,27 @@ export const makeSandboxFactory = (
     }
     const selector = opts.backend ?? 'auto';
     const needsPolicy = opts.policy !== undefined;
-    const selected = await pickDriver(selector, needsPolicy);
+    const generatedFiles = validateGeneratedFiles(
+      opts.generatedFiles ?? [],
+      (opts.mounts ?? []).map(mount => mount.innerPath),
+    );
+    if (needsPolicy && generatedFiles.length > 0) {
+      throw makeError(
+        X`Generated files cannot extend an exact slice policy mount table`,
+      );
+    }
+    const selected = await pickDriver(
+      selector,
+      needsPolicy,
+      generatedFiles.length > 0,
+    );
     const { driver } = selected;
     if (driver === undefined) {
+      if (generatedFiles.length > 0) {
+        throw makeError(
+          X`No available sandbox backend supports generated files for ${q(selector)}`,
+        );
+      }
       const reasons = selected.failures
         .map(probe => `${probe.name}: ${probe.reason ?? 'unavailable'}`)
         .join('; ');
@@ -554,6 +580,7 @@ export const makeSandboxFactory = (
     const sliceSpec = harden({
       rootfs,
       mounts: harden(resolvedMounts),
+      ...(generatedFiles.length > 0 ? { generatedFiles } : {}),
       scratchHostPath,
       network: opts.network ?? 'none',
       ...(opts.networkRef !== undefined ? { networkRef: opts.networkRef } : {}),

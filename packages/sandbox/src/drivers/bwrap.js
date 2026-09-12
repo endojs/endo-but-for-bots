@@ -634,6 +634,9 @@ export const makeBwrapDriver = ({
    * @returns {Promise<BwrapSliceContext>}
    */
   const prepareSlice = async spec => {
+    if (spec.generatedFiles?.length) {
+      throw makeError(X`bwrap driver does not yet support generated files`);
+    }
     // Validate network profile up front.  Phase 1.5 lifts the
     // `notImplemented` stubs for the `host-*` family.  Each is mapped
     // to bwrap's `--share-net` in `assembleSliceArgv()`; in-slice

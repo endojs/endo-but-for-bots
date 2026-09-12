@@ -1733,6 +1733,9 @@ export const makePodmanDriver = ({
    * @returns {Promise<PodmanSliceContext>}
    */
   const prepareSlice = async spec => {
+    if (spec.generatedFiles?.length) {
+      throw makeError(X`podman driver does not yet support generated files`);
+    }
     if (
       spec.network !== 'none' &&
       spec.network !== 'private' &&

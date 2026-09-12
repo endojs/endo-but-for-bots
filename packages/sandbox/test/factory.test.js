@@ -557,3 +557,21 @@ test('a policy slice refuses to hand out mounts outside its own table', async t 
     message: /not available on a policy slice/,
   });
 });
+
+test('generated files cannot silently extend an exact policy mount table', async t => {
+  const factory = makeSandboxFactory({
+    drivers: harden([]),
+    scratchProvider: /** @type {any} */ (stubScratchProvider),
+  });
+  await t.throwsAsync(
+    E(factory).make(
+      harden({
+        rootfs: { kind: 'oci', ref: 'image' },
+        network: 'broker-only',
+        policy: stubPolicyRequest,
+        generatedFiles: [{ innerPath: '/etc/resolv.conf', contents: '' }],
+      }),
+    ),
+    { message: /cannot extend an exact slice policy/ },
+  );
+});
