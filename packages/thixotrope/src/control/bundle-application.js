@@ -8,6 +8,5 @@ import harden from '@endo/harden';
  * @param {BundlerPowers} bundler
  * @param {string} file
  */
-export const bundleApplication = async (bundler, file) =>
-  bundler.bundle(file);
+export const bundleApplication = async (bundler, file) => bundler.bundle(file);
 harden(bundleApplication);
