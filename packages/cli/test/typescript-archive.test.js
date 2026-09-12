@@ -8,6 +8,8 @@ import { defaultParserForLanguage as sourceParserForLanguage } from '@endo/compa
 
 import { makeCliArchive } from '../src/cli-archive.js';
 
+/** @import { ParserImplementation, AsyncParserImplementation } from '@endo/compartment-mapper' */
+
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 
@@ -17,9 +19,9 @@ const textDecoder = new TextDecoder();
  * Used to prove that an explicitly supplied TypeScript parser is honored
  * verbatim rather than being re-wrapped in the CLI's strip-only transformer.
  *
- * @param {import('@endo/compartment-mapper').ParserImplementation} sourceParser
+ * @param {ParserImplementation} sourceParser
  * @param {{ sawRawTypeScript: boolean }} spy
- * @returns {import('@endo/compartment-mapper').AsyncParserImplementation}
+ * @returns {AsyncParserImplementation}
  */
 const makeStrippingSpyParser = (sourceParser, spy) => ({
   ...sourceParser,
