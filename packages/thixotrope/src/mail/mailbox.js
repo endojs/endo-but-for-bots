@@ -90,3 +90,10 @@ export const makeMailbox = () => {
   });
 };
 harden(makeMailbox);
+
+/**
+ * The guest-owned protocol mailbox: direct capability mail with
+ * at-most-once receive sequencing and an outbox the durable node
+ * outbox delivers. Self-contained so it can run in a guest compartment.
+ * @typedef {ReturnType<typeof makeMailbox>} Mailbox
+ */

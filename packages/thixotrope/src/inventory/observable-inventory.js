@@ -145,3 +145,10 @@ export const makeObservableInventory = () => {
   return inventory;
 };
 harden(makeObservableInventory);
+
+/**
+ * The observable, Map-like inventory a guest exposes to its user.
+ * Consumers that only need the Map surface still take the whole
+ * inventory so that reads and writes remain observable.
+ * @typedef {ReturnType<typeof makeObservableInventory>} ObservableInventory
+ */

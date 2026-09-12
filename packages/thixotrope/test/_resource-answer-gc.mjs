@@ -25,7 +25,12 @@ const collect = async () => {
 };
 
 // Exercise settlement release independently of the protocol's other caches.
-const records = makeWorkerSessionRecords({ store: makeMemoryStore() });
+const records = makeWorkerSessionRecords({
+  store: makeMemoryStore(),
+  reportError: error => {
+    throw error;
+  },
+});
 const connection = {};
 const endpointId = 'e'.repeat(32);
 /** @type {object | undefined} */

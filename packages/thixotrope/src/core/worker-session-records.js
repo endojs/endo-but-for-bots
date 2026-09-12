@@ -41,14 +41,11 @@ import { Far } from '@endo/far';
  * @param {Record<string, (description?: unknown) => object>} [options.resources]
  *   named resource factories; instances are per-process singletons per
  *   (name, description) pair
- * @param {(error: unknown) => void} [options.reportError]
+ * @param {(error: unknown) => void} options.reportError
+ *   called when a durable record write fails; required so that a caller cannot
+ *   silently drop the failures that would otherwise corrupt recovery state
  */
-export const makeWorkerSessionRecords = ({
-  store,
-  resources = {},
-
-  reportError = () => {},
-}) => {
+export const makeWorkerSessionRecords = ({ store, resources = {}, reportError }) => {
   /** @type {WeakMap<object, string>} connection -> workerId */
   const workerIdForConnection = new WeakMap();
   /** @type {WeakMap<object, { name: string, description: unknown }>} */

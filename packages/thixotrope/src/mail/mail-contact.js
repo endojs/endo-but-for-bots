@@ -2,11 +2,13 @@
 import { E, Far } from '@endo/far';
 import harden from '@endo/harden';
 
+/** @import { Mailbox } from './mailbox.js' */
+
 /**
  * A local identity for one correspondent. It carries no pet name or registry.
  * Its inbound facet grants delivery only; its owner controls introductions.
  * Self-contained so it can be created in the persistent workspace.
- * @param {any} mailbox
+ * @param {Mailbox} mailbox
  */
 export const makeMailContact = mailbox => {
   let status = 'pending';
@@ -85,3 +87,9 @@ export const makeMailContact = mailbox => {
   return identity;
 };
 harden(makeMailContact);
+
+/**
+ * A local correspondent identity: the delivery facet shared by every
+ * mailbox that speaks for it, plus the owner's introduction controls.
+ * @typedef {ReturnType<typeof makeMailContact>} MailContact
+ */
