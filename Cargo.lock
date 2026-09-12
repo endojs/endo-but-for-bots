@@ -1124,6 +1124,7 @@ dependencies = [
  "gix",
  "hex",
  "ironhorse-compile",
+ "ironhorse-runtime",
  "ironhorse-snapshot",
  "ironhorse-store-sqlite",
  "ironhorse-vm",
@@ -2833,6 +2834,14 @@ version = "0.0.1"
 dependencies = [
  "ironhorse-meter",
  "ironhorse-unicode",
+]
+
+[[package]]
+name = "ironhorse-runtime"
+version = "0.0.1"
+dependencies = [
+ "ironhorse-compile",
+ "ironhorse-vm",
 ]
 
 [[package]]
