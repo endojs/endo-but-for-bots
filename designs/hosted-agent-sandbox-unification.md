@@ -41,6 +41,16 @@ wait for already-running acquisitions, and attempt every retained owner.
 These scopes do not yet provide the shared supervisor's stop-during-start, immediate
 revocation, process-reaping, or hung-cleanup semantics.
 
+A shared passive session-record store now retains the approved plan and exact
+dependency IDs in a host-private daemon directory per logical session.
+Separate reference entries retain formula graph edges without eager capability revival.
+Creation refuses replacement and publishes the plan last; partial writes and failed
+cleanup retain ownership for recovery.
+Daemon acceptance covers GC, restart, global-name rebinding, passive inspection of a
+broken client, intentional selective activation, and retry through the original provider.
+Shared supervisor and adapter wiring remain pending; the existing adapters do not yet
+use these records for session adoption or cleanup.
+
 The ownership registry now lives in `@endo/sandbox`, shared by session adapters and
 the Podman driver.
 Podman teardown fences new operations, waits for admitted creates, and retains failed
@@ -293,6 +303,25 @@ Internal components receive validated records and narrow capabilities.
 Repeat validation only when crossing another actual trust boundary or protecting
 a different allocation.
 
+The supervisor keeps a host-private daemon directory for each logical session.
+It stores the approved plan as passive data and binds exact dependency formula IDs
+as separate entries, including the factory, mounter, state provider, and client.
+Directory entries retain formulas through GC; ID strings in metadata alone do not.
+Inspecting a plan or identifying a reference must not revive a guest or require a
+healthy client.
+An operation explicitly resolves only the capability it needs by the recorded ID.
+Do not put the client and cleanup authorities in a capability-containing marshal
+record: reading that record eagerly revives every referenced formula.
+
+Creation is serialized by the directory's sole supervisor and refuses existing records.
+Publish the plan after retaining its initial dependencies, before starting guest work.
+Retain newly acquired resources before releasing their construction names.
+On failure, keep the record and exact original cleanup authorities until stop and
+required cleanup succeed, including when the client formula cannot revive.
+A replacement backend consults the session record rather than its current default
+provider or storage roots; it cannot adopt a session by rebuilding ownership from names.
+Keep the directory itself outside guest powers.
+
 ### Session authority and lifecycle
 
 Separate durable logical identity from ephemeral runtime identity.
@@ -455,6 +484,7 @@ provider requirements, or an explicit user budget, rather than copied between la
 | Provider secret isolation | Reusable upstream account credentials | Guest and listener code | Secrets controls storage access, not a secret already delivered | Keep host-only credential service; eliminate materialization into guests. |
 | Fixed provider routes/account binding | Which upstream authority a guest can exercise | Forged guest requests | Secret custody alone does not restrict credential use | Keep in provider service. |
 | Revocation and process reaping | Continued inference, networking, and execution | Stale or hostile guests | Request deadlines end one request, not the session grant | Keep one supervisor and grant owner. |
+| Durable session ownership | Original cleanup authority, retained dependencies, and session storage | Retargeting after backend replacement, partial construction, and failed cleanup | Backend defaults and mutable global names do not identify an older session's owner; daemon directory entries already provide durable formula retention | Keep a passive plan and exact reference entries per session; the shared store is available, supervisor and adapter wiring remain pending. |
 | Active-turn admission for Endo eval/MCP | Association of explicit host tool calls with conversational context | Out-of-turn or stray requests | Session grants limit authority, not transcript context; this does not authenticate a guest process | Keep in shared host tool executor; background mount access remains independent. |
 | 64-request ceiling | Cumulative provider usage | A looping session | No per-session cumulative bound; revocation is an action and provider quotas may be account-wide | Remove default; future token/dollar budgets are separate work. |
 | One-hour authority expiry | Duration of delegated access | Abandoned or runaway sessions | Session ownership, revocation, pipe-loss handling, orphan cleanup | Remove default renewable lease; fix lifecycle directly. |

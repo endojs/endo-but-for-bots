@@ -25,6 +25,9 @@ import { ZipReader } from '@endo/zip/reader.js';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
+// Exercise the internal host-only helper without a daemon runtime dependency.
+// eslint-disable-next-line import/no-relative-packages
+import { makeSessionRecordStore } from '../../hosted-agent/src/session-record-store.js';
 import { start, stop, restart, purge, makeEndoClient } from '../index.js';
 import { makeCryptoPowers } from '../src/manager-node-powers.js';
 import { makeDaemonDatabase } from '../src/manager-database-node.js';
@@ -597,6 +600,130 @@ test('store formula values', async t => {
     t.is(2, await E(counter).incr());
   }
 });
+
+test.serial(
+  'session records retain exact references without activating clients',
+  async t => {
+    t.timeout(30_000);
+    const { cancelled, config } = await prepareConfig(t, { gcEnabled: true });
+    const plan = '{"sessionId":"session-a"}';
+    let references;
+    let recordId;
+
+    {
+      const { host } = await makeHost(config, cancelled);
+      const activations = await E(host).makeDirectory('activations');
+      const directory = await E(host).makeDirectory('session-records');
+      const store = makeSessionRecordStore(directory);
+      const providerSource = label => `
+      E(activations).writeText(${JSON.stringify(label)}, 'activated').then(() =>
+        makeExo('Provider', M.interface('Provider', {
+          identity: M.call().returns(M.string()),
+          removeSession: M.call(M.string()).returns(M.promise()),
+        }), {
+          identity: () => ${JSON.stringify(label)},
+          removeSession: sessionId => E(activations).writeText('cleaned',
+            ${JSON.stringify(label)} + ':' + sessionId),
+        })
+      )
+    `;
+      await E(host).evaluate(
+        '@main',
+        providerSource('provider-a'),
+        ['activations'],
+        ['activations'],
+        'provider',
+      );
+      const providerId = await E(host).identify('provider');
+      await t.throwsAsync(
+        () =>
+          E(host).evaluate(
+            '@main',
+            `
+      E(activations).writeText('client', 'activated').then(() => {
+        throw Error('Client cannot initialize');
+      })
+    `,
+            ['activations'],
+            ['activations'],
+            'client',
+          ),
+        {
+          message: /Client cannot initialize/,
+        },
+      );
+      const clientId = await E(host).identify('client');
+      references = harden({ provider: providerId, client: clientId });
+      await store.create('session-a', plan, references);
+      recordId = (await store.inspect('session-a')).identifier;
+
+      await E(host).evaluate(
+        '@main',
+        providerSource('provider-b'),
+        ['activations'],
+        ['activations'],
+        'provider',
+      );
+      await E(host).remove('client');
+      t.true(formulaExistsInDb(config.statePath, providerId));
+      t.true(formulaExistsInDb(config.statePath, clientId));
+      await E(activations).remove('provider-a');
+      await E(activations).remove('provider-b');
+      await E(activations).remove('client');
+    }
+
+    await restart(config);
+
+    {
+      const { host } = await makeHost(config, cancelled);
+      const activations = await E(host).lookup('activations');
+      const store = makeSessionRecordStore(
+        await E(host).lookup('session-records'),
+      );
+      const expected = harden({ identifier: recordId, plan, references });
+      t.deepEqual(await store.inspect('session-a'), expected);
+      t.false(await E(activations).has('client'));
+      t.false(await E(activations).has('provider-a'));
+      t.false(await E(activations).has('provider-b'));
+
+      await t.throwsAsync(
+        () => E(host).lookupById(expected.references.client),
+        { message: /Client cannot initialize/ },
+      );
+      t.true(await E(activations).has('client'));
+      t.false(await E(activations).has('provider-a'));
+      t.false(await E(activations).has('provider-b'));
+      await E(activations).remove('client');
+
+      await t.throwsAsync(
+        () =>
+          store.remove('session-a', async record => {
+            t.is(record.plan, plan);
+            t.deepEqual(record.references, references);
+            const provider = await E(host).lookupById(
+              record.references.provider,
+            );
+            t.is(await E(provider).identity(), 'provider-a');
+            throw Error('Cleanup must be retried');
+          }),
+        { message: /Cleanup must be retried/ },
+      );
+      t.deepEqual(await store.inspect('session-a'), expected);
+      t.false(await E(activations).has('client'));
+      t.false(await E(activations).has('provider-b'));
+
+      await store.remove('session-a', async record => {
+        const provider = await E(host).lookupById(record.references.provider);
+        await E(provider).removeSession('session-a');
+      });
+      t.is(await E(activations).readText('cleaned'), 'provider-a:session-a');
+      t.is(await store.inspect('session-a'), undefined);
+      t.false(await E(activations).has('provider-b'));
+      t.false(formulaExistsInDb(config.statePath, references.provider));
+      t.false(formulaExistsInDb(config.statePath, references.client));
+    }
+  },
+);
 
 test('fail to store non-formula exos', async t => {
   const noFormulaExo = makeExo('Exo', M.interface('Exo', {}), {});

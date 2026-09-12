@@ -70,6 +70,39 @@ state keeps loading.
 Both defects this module exists to prevent were found in a real adapter, and
 both are covered by `test/turn-ledger.test.js`.
 
+## Session ownership
+
+`session-record-store.js` retains a logical session's approved plan and exact
+dependency identities in a host-private daemon directory.
+The shared supervisor supplies the plan as encoded text and the dependency formula IDs.
+Each reference is a separate directory entry, retaining its formula through GC and
+restart without reviving it during inspection.
+Storing IDs only inside plan text would not retain those formulas.
+Storing capabilities inside a marshal record would eagerly revive them when reading
+the record, making cleanup metadata depend on a healthy client.
+
+`create` refuses an existing session name and publishes the plan only after all
+initial references have been retained.
+A failed write leaves an incomplete record with the references acquired so far;
+`inspect` reports an absent plan, and `retain` refuses further construction.
+For a complete record, `retain` adds a newly acquired resource without replacing an
+existing owner; keep any construction name until retention succeeds.
+`remove` passes a passive snapshot to the supervisor's cleanup callback and removes
+the directory only after that callback succeeds.
+Failure retains the original dependencies for retry.
+The cleanup callback must tolerate repetition, including when it succeeded but
+the subsequent directory removal failed.
+
+One supervisor must own the directory and store instance.
+The store serializes mutations and inspection for each session; cleanup callbacks
+must not reenter it for that session.
+The supervisor owns admission, stop ordering, and intentional resolution of recorded
+formula IDs; this store does not start or stop runtimes.
+Keep the directory outside guest powers and prevent other writers from rebinding it.
+The final identity check detects a prior rebind; it is not atomic compare-and-delete
+and does not replace exclusive ownership.
+Shared supervisor and adapter wiring remain pending.
+
 ## Account visibility
 
 `account.js` and `account-oracle.js` answer what plan a credential is on, how
