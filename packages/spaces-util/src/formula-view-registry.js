@@ -73,7 +73,20 @@ const REGISTRY = {
       'mailboxStore',
       'mailHub',
       'worker',
+      'networks',
+      'planes',
+      'guestPins',
+      'hostPins',
     ],
+    overrideLabels: {
+      // The guest-visible/guest-mutable pins directory (surfaced to the
+      // guest as `@pins`) and the formula-held, host-only pins directory
+      // that has no guest special name. Both are optional on the record:
+      // deployed guest formulas carry neither, so the inspector shows the
+      // "(not yet exposed)" row for those until the formula is reincarnated.
+      guestPins: 'Guest pins (@pins)',
+      hostPins: 'Host pins (hidden)',
+    },
   },
   host: {
     header: 'Host',
@@ -83,12 +96,14 @@ const REGISTRY = {
       'hostHandle',
       'mainWorker',
       'nodeWorker',
+      'registry',
       'inspector',
       'petStore',
       'mailboxStore',
       'mailHub',
       'endo',
       'networks',
+      'planes',
       'pins',
     ],
   },
@@ -202,6 +217,11 @@ const REGISTRY = {
       'separate formulas, so this view carries no formula references — the ' +
       "tree's entries are listed below instead.",
   },
+  'readable-directory': {
+    header: 'Readable directory',
+    helpText: 'Read-only view of a live directory.',
+    propertyList: ['directory'],
+  },
   promise: {
     header: 'Promise',
     helpText: 'Pending result.',
@@ -247,7 +267,10 @@ const REGISTRY = {
   invitation: {
     header: 'Invitation',
     helpText: 'Pending guest enrollment.',
-    propertyList: ['hostAgent', 'hostHandle', 'guestName'],
+    // The inviting agent may be a host or a guest; the record renames the
+    // legacy `hostAgent`/`hostHandle` fields to `invitingAgent`/
+    // `invitingHandle` (coercing legacy records on read).
+    propertyList: ['invitingAgent', 'invitingHandle', 'guestName'],
   },
   'pet-inspector': {
     header: 'Pet inspector',
