@@ -286,39 +286,81 @@ that renders an unknown type as an empty-properties record rather than rejecting
 it. But the switch is **not** inert on the renamed types: it carries a
 `case 'readable-blob':` (`formula-record.js`) that copies `formula.content` into
 `properties.content` (the `ReadableBlobFormula.content` field surfaced on the
-public record, `types.d.ts`). This is a **third** `formula.type`-keyed dispatch
-site inside `makeFormulaRecord` itself, in addition to the two incarnation sites
-in `manager.js` below. If new records begin writing `type: 'snapshot-blob'` while
-this `case` still reads `'readable-blob'`, the case stops matching and the
-`content` property is silently dropped to the empty-record `default`, so Phase 1
-step 2 must alias `formula.type` *before* this switch (not only where the record's
-own `type` field is computed) and Phase 2 step 3 rekeys the case to
-`'snapshot-blob'` in lockstep. (There is no matching `readable-tree` case: the
+public record, `types.d.ts`). This is one more `formula.type`-keyed dispatch
+site, inside `makeFormulaRecord` itself, alongside the several `manager.js` sites
+enumerated below. Because `makeFormulaRecord`'s sole caller (`host.js:2367`) feeds
+it a `getFormulaForId` result, the single deserialization-point alias (Phase 1
+step 2) already presents it a canonical `snapshot-*` formula, so its `case` must
+recognize `snapshot-*`: Phase 1 makes the `case` dual-accept both spellings
+(matching an old aliased record and a freshly-minted Phase-1 `readable-blob`
+alike), and Phase 2 step 3 narrows it to `'snapshot-blob'` once the writer flips.
+Were the `case` left reading `'readable-blob'` after the alias lands, it would
+stop matching an aliased old record and silently drop the `content` property to
+the empty-record `default`. (There is no matching `readable-tree` case: the
 tree column carries no per-record `content` property, so this site is
 blob-specific.) The actual validation gate is `assertValidFormulaType` against the
 `formulaTypes` set in `formula-type.js`, which Phase 1 step 1 targets.
-Incarnation then switches on the persisted string in two places. First, the maker
-table `makers` (typed `FormulaMakerTable`, in `manager.js`), whose
-`'readable-blob'` / `'readable-tree'` entries call `makeReadableBlob` /
-`makeReadableTree`. Second, the few direct `formula.type === 'readable-blob'` /
-`'readable-tree'` branches in `manager.js`. A rename is therefore a
-persisted-data-format change and must stay backward compatible with formula
-records already on disk.
+Incarnation, and every other in-daemon read of the persisted string, flows
+through a **single deserialization point**: `getFormulaForId`
+(`packages/daemon/src/manager.js:1261`) is the memoizing reader that turns a
+`persistencePowers.readFormula` result into the in-memory `Formula` object every
+consumer then dispatches on, caching it in the `formulaForId` map it populates
+(at `manager.js:1274`, and on the eager-populate path that also calls
+`readFormula` at `manager.js:1399`/`1410`). The `formula.type` dispatch sites are
+more numerous than "the maker table plus a couple of branches", and enumerating
+them exhaustively is what an earlier round of this design got wrong:
 
-The persisted `type` also escapes the daemon unaliased through the public
-`FormulaRecord`, and **non-`manager.js` consumers match on the literal string**:
-`packages/spaces-util/src/formula-view-registry.js` keys its UI-view lookup table
-on `'readable-blob'` / `'readable-tree'` (lines 190, 195), and
-`packages/cli/src/commands/list.js` keys the `endo list` "Directories" grouping
-set the same way (line 61). An alias applied only *before* the incarnation
-dispatch (as Phase 1 scopes it) does not reach these: a *new* record written as
-`snapshot-blob` / `snapshot-tree` would carry that string straight through
-`FormulaRecord.type` to these registries, which do not recognize it, silently
-mis-grouping or defaulting the view for every newly-created snapshot. The
-migration plan must therefore normalize at the point where `FormulaRecord.type`
-is computed (so every external consumer sees one canonical name regardless of
-on-disk vintage) **and** update these two registries; both are called out as
-explicit steps below.
+- the maker table `makers` (typed `FormulaMakerTable`, in `manager.js`), whose
+  `'readable-blob'` / `'readable-tree'` entries call `makeReadableBlob` /
+  `makeReadableTree`;
+- `getTypeForId` (`manager.js:1281`) and the `getFormulaType` accessor
+  (`manager.js:6795`, `id => formulaForId.get(id)?.type`), whose result is
+  surfaced out through `directory.js`'s `locate()` / `followNameChanges()` to
+  `packages/cli/src/commands/list.js`'s `typeForPetName` (feeding
+  `INVENTORY_GROUPS` / `groupForType` for `endo list --grouped`) and to
+  `packages/space-chat/src/inventory/tree-source.js`;
+- `collectFormulaHashes` (`manager.js:1084`), a `formula.type === 'readable-blob'`
+  / `'readable-tree'` test that feeds the content-store GC survivor/candidate
+  accounting in `reclaimCollectedStorage` (it decides whether a snapshot's content
+  hash is registered as reachable; a miss can sweep a hash a live snapshot still
+  needs);
+- `getContentIdentityForId` (`manager.js:1300`), backing the
+  content-locator / magnet-URN path (`designs/endo-content-locators-magnet-urn.md`),
+  which returns `undefined` for any type its `=== 'readable-blob'` /
+  `'readable-tree'` tests do not match;
+- `extractLabeledDeps` (`manager.js:717`), whose `case 'readable-tree': return [];`
+  is harmless *only* because it and the `default` both return `[]` today, but is
+  the same class of dispatch that falls out of sync on a rename and so is rekeyed
+  in lockstep below; and
+- the `case 'readable-blob':` inside `makeFormulaRecord` (`formula-record.js`,
+  discussed above) that populates `properties.content`.
+
+The lesson the earlier round missed is that these are not two boundaries to be
+patched independently but one invariant to be established once: **the in-memory
+`formula.type` must be canonical (`snapshot-*`) for every object in
+`formulaForId`, whatever its on-disk vintage.** Aliasing only "before the `makers`
+lookup" and "at the top of `makeFormulaRecord`" leaves `getTypeForId` /
+`getFormulaType`, `collectFormulaHashes`, and `getContentIdentityForId` reading
+the raw on-disk string, so once records carry `snapshot-*` those sites would
+mis-group a directory snapshot into the `endo list --grouped` fallback bucket,
+drop a new snapshot's content hash from the GC survivor set (a data-loss window
+if a legacy sibling shares that hash), and return `undefined` content-identity
+for every new snapshot. [proposed-rule, from the panel (critic/skeptic): a rename
+of a persisted discriminant string must normalize at the single point the value
+is deserialized from persistence, not at each individual dispatch site.]
+
+A rename is therefore a persisted-data-format change and must stay backward
+compatible with records already on disk. Because `makeFormulaRecord`'s sole caller
+(`host.js:2367`) passes it a `getFormulaForId` result, normalizing at that
+deserialization point also makes the public `FormulaRecord.type` it writes
+(`type: formula.type`) canonical for old and new records alike, so the string that
+escapes the daemon to non-`manager.js` consumers is canonical too. Those consumers
+still match on a literal and so must learn the new name in lockstep with the
+in-daemon sites: `packages/spaces-util/src/formula-view-registry.js`
+(lines 190, 195), `packages/cli/src/commands/list.js` (line 61), and the rest
+enumerated in Phase 2 step 5. What changes from the earlier draft is that they
+recognize `snapshot-*` (the name they now always receive), not that they need a
+*second* normalization boundary of their own.
 
 The content store is unaffected throughout: a snapshot's identity is its SHA-256
 content hash, not its formula-type string, so nothing is re-hashed and no dedup
@@ -330,34 +372,55 @@ across the rename: a holder's persisted reference keeps resolving.
 1. Add `snapshot-blob` and `snapshot-tree` to the `formulaTypes` set in
    `formula-type.js`, keeping `readable-blob` and `readable-tree`.
 2. Introduce a single canonical alias map (`readable-blob -> snapshot-blob`,
-   `readable-tree -> snapshot-tree`) and apply it at **both** boundaries where a
-   persisted `type` leaves the store:
-   - before the `makers` lookup in `manager.js` (and the direct
-     `formula.type ===` branches), so an old on-disk record incarnates as the new
-     type; and
-   - at the **top of `makeFormulaRecord`**, aliasing `formula.type` once before
-     it is used, so both the computed `FormulaRecord.type` field *and* the
-     function's internal `switch (formula.type)` (whose `case 'readable-blob':`
-     populates `properties.content`) see the canonical `snapshot-*` name. Aliasing
-     at this single entry point (rather than only where `FormulaRecord.type` is
-     assigned) is what keeps the `content` property from being dropped for old
-     on-disk `readable-blob` records once the case is rekeyed in Phase 2 step 3;
-     the public record then always surfaces the canonical `snapshot-*` name
-     regardless of on-disk vintage, and every external consumer (the view
-     registry, the CLI listing) sees exactly one name.
-   Backward compatibility then rides on this one alias map plus the retained
-   validation keys. The `makers` table needs only the new `snapshot-*` keys,
-   because the alias rewrites an old on-disk string to the new type *before* the
-   `makers` lookup. But the `formula-type.js` set must **keep** `readable-blob`
-   and `readable-tree` alongside the new names (step 1), because
-   `evaluateFormulaForId` runs `assertValidFormulaType(formula.type)` on the raw
-   on-disk string *before* the alias is applied (`manager.js`); dropping the old
-   keys would reject every already-persisted record on reincarnation, defeating
-   the "old records keep incarnating" invariant (Design decision 4). So the alias
-   frees only the `makers` table and the record-writing path from the old names,
-   not the validation set. The records `makeFormulaRecord` *writes* carry only the
-   new names. Every record already on disk still validates, still incarnates, and
-   still presents a recognized `FormulaRecord.type`, through the alias.
+   `readable-tree -> snapshot-tree`) and apply it at the **single deserialization
+   point**, `getFormulaForId` (`manager.js:1261`): rewrite `formula.type` through
+   the map on the `persistencePowers.readFormula` result *before* it is stored in
+   the `formulaForId` map (at `manager.js:1274`, and identically on the
+   eager-populate path that also calls `readFormula` at `manager.js:1399`/`1410`).
+   This establishes the invariant that **every object in `formulaForId` carries
+   the canonical `snapshot-*` type**, so every reader enumerated above (the
+   `makers` lookup, `getTypeForId` / `getFormulaType`, `collectFormulaHashes`,
+   `getContentIdentityForId`, `extractLabeledDeps`, and, via its sole caller,
+   `makeFormulaRecord`) reads the canonical string off the normalized object with
+   no per-site alias of its own. Crucially, the alias and the sites' recognition of
+   the name it produces must land **together, in Phase 1**: the moment the alias
+   rewrites a deserialized old record to `snapshot-*`, every literal
+   `'readable-blob'` / `'readable-tree'` comparison and `case` label that reads it
+   must already recognize `snapshot-*`, or an old record would go unmatched. So
+   Phase 1 makes all the enumerated sites **dual-accept** both spellings alongside
+   introducing the alias (the exhaustive, grep-gated site list is Phase 2 step 5,
+   which the Phase 1 dual-accept must cover in full); the later phases only flip the
+   *writer* to `snapshot-*` (Phase 2 step 3, after which the `makeFormulaRecord`
+   case can read `snapshot-*` alone) and drop the old-name recognition (Phase 3).
+   This one deserialization point replaces the earlier draft's two use-site
+   boundaries (before the `makers` lookup, and at the top of `makeFormulaRecord`),
+   which reached only a subset of readers and left the GC, content-identity, and
+   grouping sites reading the raw string.
+
+   Two keys-retention consequences follow from *where* the alias now sits, and both
+   differ from the earlier draft's reasoning:
+   - The `formula-type.js` validation set must **keep** `readable-blob` and
+     `readable-tree` alongside the new names (step 1) throughout Phases 1-2. This
+     is *not* because `assertValidFormulaType` sees the raw string (it does not:
+     `evaluateFormulaForId` reads the formula via `getFormulaForId` at
+     `manager.js:4344` (already aliased) and only then calls
+     `assertValidFormulaType(formula.type)` at `manager.js:4346`, so a deserialized
+     old record is validated under its `snapshot-*` name). It is because Phase 1 is
+     "no data change": freshly-*formulated* records are still minted and persisted
+     with the old `readable-*` names (renaming the writer is Phase 2 step 3), and a
+     freshly-minted formula enters `formulaForId` directly, not through the
+     `readFormula` alias. So during Phases 1-2 both the `formulaTypes` set **and**
+     the `makers` table (and the rekeyed literal read sites) must accept *both*
+     spellings: `snapshot-*` for deserialized old records and freshly-minted
+     Phase-2 records, `readable-*` for freshly-minted Phase-1 records. Only in
+     Phase 3, once no `readable-*` record is written and the deserialization alias
+     is the sole remaining producer of the old-to-new mapping, may the `readable-*`
+     keys be dropped.
+   - The records `makeFormulaRecord` *writes* carry only the new names once the
+     writer flips (Phase 2 step 3). Every record already on disk still validates
+     (under its aliased `snapshot-*` name), still incarnates, and still presents a
+     recognized `FormulaRecord.type`, through the one deserialization alias
+     (Design decision 4).
 
 **Phase 2: write the new name.**
 3. Write new snapshots with `type: 'snapshot-blob'` / `'snapshot-tree'`, and
@@ -392,11 +455,28 @@ across the rename: a holder's persisted reference keeps resolving.
    itself a compatibility surface an external consumer matches on is deferred to
    Open Questions; if so, this step stays behind the alias and keeps the old tag
    reachable rather than renaming in place.
-5. Re-key the literal-string consumers of `FormulaRecord.type` to the canonical
-   `snapshot-*` names. A repo-wide grep for the literal `'readable-blob'` /
-   `'readable-tree'` strings across `packages/` (excluding tests and the
-   `manager.js` / `formula-record.js` daemon read path already covered above)
-   finds the following external consumers, all of which this step updates:
+5. Re-key **every** literal-string dispatch on `formula.type` /
+   `FormulaRecord.type` to the canonical `snapshot-*` names, in lockstep with the
+   Phase 1 step 2 alias (the alias presents `snapshot-*` to all of them, so any
+   site left testing `readable-*` would stop matching a deserialized old record the
+   moment the alias lands). A repo-wide grep for the literal `'readable-blob'` /
+   `'readable-tree'` strings across `packages/` (excluding tests) finds two groups.
+
+   The **in-daemon read sites** in `manager.js`, which read `formula.type` off the
+   now-canonical `formulaForId` object and so must test `snapshot-*` (these are the
+   sites an earlier draft omitted from the checklist entirely, though the Phase 1
+   preamble named them):
+   - `collectFormulaHashes` (`manager.js:1084`): the GC survivor/candidate content-
+     hash accounting.
+   - `getContentIdentityForId` (`manager.js:1300`): the content-locator / magnet-URN
+     lookup.
+   - `extractLabeledDeps` (`manager.js:717`, `case 'readable-tree':`): rekey to
+     `case 'snapshot-tree':` for hygiene even though it and `default` both return
+     `[]` today, so the case does not silently drift out of sync.
+   - the `makeFormulaRecord` `case 'readable-blob':` is rekeyed in step 3 above.
+
+   The **external literal consumers** of the public `FormulaRecord.type`, all of
+   which this step updates:
    - `packages/spaces-util/src/formula-view-registry.js` (lines 190, 195): the
      UI-view lookup table.
    - `packages/cli/src/commands/list.js` (line 61): the `endo list` "Directories"
@@ -410,12 +490,16 @@ across the rename: a holder's persisted reference keeps resolving.
      but must be renamed (or widened to accept both) so the published types match
      the canonical `snapshot-*` records.
 
-   Because step 2's record-side alias already presents the canonical name, the
-   runtime consumers need only the new keys; keeping the old keys as well is
-   belt-and-suspenders for any record whose `type` somehow bypasses the alias.
-   This grep gates the step: any *additional* pattern-matching consumer a future
-   re-run of the grep surfaces must be added to this list before the rename is
-   considered complete.
+   Every rekeyed site above (in-daemon and external) must accept **both** spellings
+   for the duration of Phases 1-2, not the new one alone: the deserialization alias
+   presents `snapshot-*` for old on-disk records, but a freshly-minted Phase-1
+   record still carries `readable-*` (it enters `formulaForId` at formulation, not
+   through the `readFormula` alias, and Phase 2 step 3 is what flips the writer). A
+   site rekeyed to test `snapshot-*` *only* would miss those Phase-1 records. The
+   old keys are dropped in Phase 3, once no `readable-*` record is written and the
+   alias is the sole old-to-new producer. This grep gates the step: any
+   *additional* pattern-matching consumer a future re-run of the grep surfaces must
+   be added to this list before the rename is considered complete.
 
 **Phase 3: deprecate the old string.**
 6. After a release window, stop *writing* the old names entirely (already true
