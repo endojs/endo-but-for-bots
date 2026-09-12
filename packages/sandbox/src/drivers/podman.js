@@ -1779,9 +1779,7 @@ export const makePodmanDriver = ({
       // Read the effective mounted file, not the host pathname that could
       // have been replaced after mounting. This fixed operation retains the
       // anchor's cap-drop ALL profile and exposes no caller-supplied argv.
-      const resolver = await spawnAndCollect(
-        cp,
-        'podman',
+      const resolver = await producers.run(
         podmanArgs(runtime, [
           'exec',
           '--user',
@@ -1792,7 +1790,6 @@ export const makePodmanDriver = ({
           '1025',
           '/etc/resolv.conf',
         ]),
-        { timeoutMs: CONTROL_COMMAND_TIMEOUT_MS },
       );
       if (resolver.code !== 0 || resolver.stdout.length > 1024) {
         throw makeError(X`Cannot observe the effective resolver configuration`);
@@ -2416,12 +2413,42 @@ export const makePodmanDriver = ({
       // name. Once observed, every operation command uses the full engine ID.
       let containerReference = containerName;
       let proxyClosed = Promise.resolve();
+      let startAcquired = false;
+      let startupWitness = false;
+      let containerRemoved = false;
       const producers = makeProducerScope(cp, 'operation');
       const removeOperation = () => {
         removal ??= (async () => {
           await null;
           producers.assertClosed();
-          if (producers.hasAcquired()) {
+          if (startAcquired && !startupWitness && !containerRemoved) {
+            // On the supported fresh, single-start path, Podman records this
+            // timestamp only after OCI startup succeeds. Observe it before rm
+            // deletes the record; an attached CLI exit code is not this proof.
+            try {
+              const witness = await spawnAndCollect(
+                cp,
+                'podman',
+                podmanArgs(slice.runtime, [
+                  'container',
+                  'inspect',
+                  '--format',
+                  '{{.State.StartedAt.IsZero}}',
+                  containerReference,
+                ]),
+                { timeoutMs: CONTROL_COMMAND_TIMEOUT_MS },
+              );
+              startupWitness =
+                witness.code === 0 &&
+                witness.signal === null &&
+                witness.stdout.trim() === 'false';
+            } catch {
+              // Still attempt removal: it prevents an admitted but delayed
+              // start from running after a stop request. Failed observation
+              // cannot establish startup or authorize resource release.
+            }
+          }
+          if (producers.hasAcquired() && !containerRemoved) {
             const removed = await removeContainer(
               cp,
               slice.runtime,
@@ -2432,8 +2459,17 @@ export const makePodmanDriver = ({
                 X`podman operation reap failed: ${q(removed.stderr.trim() || removed.stdout.trim())}`,
               );
             }
+            containerRemoved = true;
           }
           producers.assertCompleted();
+          if (startAcquired && !startupWitness) {
+            // Successful rm can erase the remaining observation opportunity.
+            // Retry alone cannot repair that loss; retain the owner for
+            // reconciliation even after the direct attach process closes.
+            throw makeError(
+              X`Podman operation startup effects remain uncertain`,
+            );
+          }
           // Container removal and the host attach's exit can both precede
           // native stdio closure. Retain the owner until close, without
           // awaiting `exited`, which itself awaits this removal.
@@ -2555,6 +2591,7 @@ export const makePodmanDriver = ({
           ],
           env: podmanEnv,
         });
+        startAcquired = true;
       } catch (e) {
         throw makeError(
           X`failed to attach podman operation: ${q(/** @type {Error} */ (e).message)}`,

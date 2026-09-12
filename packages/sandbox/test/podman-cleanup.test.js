@@ -34,6 +34,16 @@ const hasUncertainProducer = error =>
       error.message === 'Podman operation producer effects remain uncertain';
 
 /**
+ * @param {unknown} error
+ * @returns {boolean}
+ */
+const hasUncertainStartup = error =>
+  error instanceof AggregateError
+    ? error.errors.some(hasUncertainStartup)
+    : error instanceof Error &&
+      error.message === 'Podman operation startup effects remain uncertain';
+
+/**
  * @param {any} t
  * @param {import('../src/generated-file-storage-types.js').GeneratedFileStorage} [storage]
  * @param {SeccompFilePowers} [fs]
@@ -51,7 +61,10 @@ const fixture = (t, storage, fs) => {
   let beforeIdentity;
   let createCode = 0;
   let refuseCreate = false;
-  let expectedUncertainty = false;
+  let expectedUncertainty;
+  let witnessResult = { code: 0, stdout: 'false\n' };
+  let refuseStart = false;
+  let refuseWitness = false;
   const kills = [];
   let deferCreate = false;
   let deferProxyExit = false;
@@ -60,14 +73,19 @@ const fixture = (t, storage, fs) => {
   const creating = new Promise(resolve => {
     created = resolve;
   });
-  const finish = name => {
+  /**
+   * @param {string} name
+   * @param {number | null} [code]
+   * @param {string | null} [signal]
+   */
+  const finish = (name, code = 0, signal = null) => {
     const child = attached.get(name);
     if (child) {
       attached.delete(name);
       child.stdout.end();
       child.stderr.end();
-      child.emit('exit', 0, null);
-      child.emit('close', 0, null);
+      child.emit('exit', code, signal);
+      child.emit('close', code, signal);
     }
   };
   const childProcess = {
@@ -109,6 +127,7 @@ const fixture = (t, storage, fs) => {
         created(name);
         if (!deferCreate) queueMicrotask(completeCreate);
       } else if (args[0] === 'start') {
+        if (refuseStart) throw Error('start spawn refused');
         const reference = args.at(-1);
         attached.set(containerNames.get(reference) ?? reference, child);
       } else if (args[0] === 'rm') {
@@ -131,6 +150,11 @@ const fixture = (t, storage, fs) => {
             identityResult?.stdout ?? `${containerIds.get(args.at(-1))}\n`,
           );
         });
+      } else if (args.includes('{{.State.StartedAt.IsZero}}')) {
+        if (refuseWitness) throw Error('startup inspection spawn refused');
+        queueMicrotask(() =>
+          send(witnessResult.code, '', witnessResult.stdout),
+        );
       } else if (args[0] === 'kill') {
         queueMicrotask(() => send(0));
       } else if (command !== 'podman') {
@@ -180,7 +204,7 @@ const fixture = (t, storage, fs) => {
       if (expectedUncertainty) {
         // These are synthetic processes, all closed above. Assert that the
         // production owner still retains uncertainty; do not fabricate success.
-        await rejects(driver.teardown(slice), hasUncertainProducer);
+        await rejects(driver.teardown(slice), expectedUncertainty);
         return;
       }
       await driver.teardown(slice);
@@ -212,6 +236,15 @@ const fixture = (t, storage, fs) => {
     beforeIdentity: callback => {
       beforeIdentity = callback;
     },
+    setWitness: result => {
+      witnessResult = result;
+    },
+    refuseStart: () => {
+      refuseStart = true;
+    },
+    refuseWitness: () => {
+      refuseWitness = true;
+    },
     failures,
     finish,
     exit: name => attached.get(name)?.emit('exit', 0, null),
@@ -233,7 +266,10 @@ const fixture = (t, storage, fs) => {
       refuseCreate = true;
     },
     expectUncertainty: () => {
-      expectedUncertainty = true;
+      expectedUncertainty = hasUncertainProducer;
+    },
+    expectStartupUncertainty: () => {
+      expectedUncertainty = hasUncertainStartup;
     },
   };
 };
@@ -824,4 +860,113 @@ test('cancellation during identity inspection retains the resolved ID for cleanu
     [id],
   );
   t.is(f.slice.reserved.size, 0);
+});
+
+for (const status of [
+  { code: 1, signal: null },
+  { code: 42, signal: null },
+  { code: 125, signal: null },
+  { code: 137, signal: null },
+  { code: null, signal: 'SIGTERM' },
+]) {
+  test(`a positive startup witness permits cleanup after attached exit ${JSON.stringify(status)}`, async t => {
+    t.timeout(5000);
+    const f = fixture(t);
+    const proc = await f.driver.spawn(f.slice, ['/bin/true'], {});
+    const [name] = f.active;
+    const id = f.containerIds.get(name);
+    f.finish(name, status.code, status.signal);
+    t.deepEqual(await proc.wait(), status);
+    const witnessAt = f.calls.findIndex(args =>
+      args.includes('{{.State.StartedAt.IsZero}}'),
+    );
+    const removalAt = f.calls.findIndex(args => args[0] === 'rm');
+    t.true(witnessAt >= 0 && witnessAt < removalAt);
+    t.is(f.calls[witnessAt].at(-1), id);
+    t.is(f.slice.live.size, 0);
+  });
+}
+
+for (const witness of [
+  { code: 0, stdout: 'true\n', refused: false },
+  { code: 0, stdout: '', refused: false },
+  { code: 125, stdout: 'false\n', refused: false },
+  { code: 0, stdout: 'false\n', refused: true },
+]) {
+  test(`removal without a startup witness retains ownership: ${JSON.stringify(witness)}`, async t => {
+    t.timeout(5000);
+    const f = fixture(t);
+    f.setWitness(witness);
+    if (witness.refused) f.refuseWitness();
+    f.expectStartupUncertainty();
+    let released = false;
+    f.slice.generatedStage = {
+      prepare: async () => [],
+      release: async () => {
+        released = true;
+      },
+    };
+    const proc = await f.driver.spawn(f.slice, ['/bin/true'], {});
+    const failure = await t.throwsAsync(f.driver.teardown(f.slice));
+    t.true(hasUncertainStartup(failure));
+    await t.throwsAsync(proc.wait(), {
+      message: /startup effects remain uncertain/,
+    });
+    t.is(f.active.size, 0, 'removal still stops the container');
+    t.is(f.slice.live.size, 1);
+    t.false(released);
+    const calls = f.calls.length;
+    // Once rm deletes the record, a plausible later answer is not evidence
+    // about that startup. Retry neither queries nor removes it again.
+    f.setWitness({ code: 0, stdout: 'false\n' });
+    await t.throwsAsync(f.driver.teardown(f.slice));
+    t.is(f.calls.length, calls);
+    t.false(released);
+  });
+}
+
+test('failed removal preserves the opportunity to retry startup observation', async t => {
+  t.timeout(5000);
+  const f = fixture(t);
+  f.setWitness({ code: 125, stdout: '' });
+  const proc = await f.driver.spawn(f.slice, ['/bin/true'], {});
+  const [name] = f.active;
+  f.failures.add(name);
+  await t.throwsAsync(f.driver.teardown(f.slice));
+  f.failures.clear();
+  f.setWitness({ code: 0, stdout: 'false\n' });
+  await f.driver.teardown(f.slice);
+  await proc.wait();
+  t.is(f.slice.live.size, 0);
+  t.is(
+    f.calls.filter(args => args.includes('{{.State.StartedAt.IsZero}}')).length,
+    2,
+  );
+});
+
+test('a positive witness survives a removal failure without another inspection', async t => {
+  t.timeout(5000);
+  const f = fixture(t);
+  const proc = await f.driver.spawn(f.slice, ['/bin/true'], {});
+  const [name] = f.active;
+  f.failures.add(name);
+  await t.throwsAsync(f.driver.teardown(f.slice));
+  f.failures.clear();
+  f.setWitness({ code: 125, stdout: '' });
+  await f.driver.teardown(f.slice);
+  await proc.wait();
+  t.is(
+    f.calls.filter(args => args.includes('{{.State.StartedAt.IsZero}}')).length,
+    1,
+  );
+});
+
+test('a start with no acquired child needs no startup witness', async t => {
+  const f = fixture(t);
+  f.refuseStart();
+  await t.throwsAsync(f.driver.spawn(f.slice, ['/bin/true'], {}), {
+    message: /start spawn refused/,
+  });
+  t.false(f.calls.some(args => args.includes('{{.State.StartedAt.IsZero}}')));
+  t.is(f.active.size, 0);
 });
