@@ -234,6 +234,8 @@ const makeEngineStub = (
     if (args.includes('{{.Digest}}')) return 'image-digest';
     if (args[0] === 'volume') return `volume-${args[args.length - 1]}`;
     if (args[0] === 'container' && args[1] === 'inspect') {
+      if (args.includes('{{.State.StartedAt.IsZero}}'))
+        return 'startup-witness';
       if (args.includes('{{.State.Pid}}')) return 'sidecar-pid';
       if (args.includes('{{.Id}}')) {
         return createdNames.has(args.at(-1))
@@ -271,6 +273,7 @@ const makeEngineStub = (
     'sidecar-pid': { stdout: `${SIDECAR_PID}\n` },
     'container-id': { stdout: 'a1b2c3d4e5f6a7b8\n' },
     'operation-container-id': { stdout: `${OPERATION_CONTAINER_ID}\n` },
+    'startup-witness': { stdout: 'false\n' },
     create: {},
     start: {},
     rm: {},
@@ -1441,3 +1444,51 @@ for (const cancellation of ['token', 'predicate']) {
     await driver.teardown(slice);
   });
 }
+
+test('resolver exec retains anchor ownership through pending closure and uncertain effects', async t => {
+  t.timeout(5000);
+  /** @type {any} */
+  let producer;
+  const closeProducer = () => {
+    producer?.stdout.end();
+    producer?.stderr.end();
+    producer?.emit('close', null, 'SIGKILL');
+  };
+  t.teardown(closeProducer);
+  const { driver, calls } = makeDriverUnderTest(t, {
+    intercept: (kind, child) => {
+      if (kind !== 'resolver-read') return false;
+      producer = child;
+      queueMicrotask(() => child.emit('error', Error('resolver exec lost')));
+      return true;
+    },
+  });
+  const resolver = {
+    role: 'resolver',
+    kind: 'resolver',
+    source: '/private/provider/public-resolv.conf',
+    destination: '/etc/resolv.conf',
+    mode: 'ro',
+  };
+  const spec = makeSpec({
+    policy: { ...POLICY, mounts: [...POLICY.mounts, resolver] },
+  });
+  const failure = await t.throwsAsync(
+    driver.prepareSlice(/** @type {any} */ (spec)),
+    { instanceOf: AggregateError, message: /preparation cleanup pending/ },
+  );
+  t.regex(String(failure?.errors[1]), /producer closure pending/);
+  t.false(calls.some(call => call.args[0] === 'rm'));
+  closeProducer();
+  await Promise.resolve();
+  const uncertain = await t.throwsAsync(driver.closeSlices(), {
+    instanceOf: AggregateError,
+    message: /slice cleanup pending/,
+  });
+  t.true(
+    uncertain?.errors.some(error =>
+      String(error).includes('producer effects remain uncertain'),
+    ),
+  );
+  t.is(calls.filter(call => call.args[0] === 'rm').length, 1);
+});

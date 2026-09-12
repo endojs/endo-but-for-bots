@@ -137,6 +137,16 @@ The attached host process remains owned until native stdio closes, not just unti
 an exit or error event.
 Fresh containers request `--restart=no --no-healthcheck`, excluding automatic
 restarts and inherited image healthchecks from the single-start lifecycle.
+Before operation removal, a bounded inspection of the immutable ID seeks Podman's
+positive startup timestamp, recorded after successful OCI startup on that path.
+An arbitrary workload exit code is separate from this startup evidence.
+Without a positive witness, removal still prevents delayed startup, but ownership
+remains uncertain even after native attach closure.
+Successful removal can erase the remaining observation opportunity; reconciliation,
+not repeated removal, is then required to establish release safety.
+A positive witness survives failed removal, and successful removal is not repeated.
+Resolver attestation's `exec` also uses the anchor producer scope: its fixed read-only
+payload still creates a process whose uncertain effects must remain owned.
 `closeSlices()` accounts for slice resources, not complete native-command shutdown:
 supervision of other controls and attached starts is still required before the
 composed runtime may release its storage and ownership marker.
