@@ -190,7 +190,7 @@
 | [familiar-app-ui-hosting](familiar-app-ui-hosting.md) | 2026-06-01 | 2026-06-01 | Proposed |
 | [ses-import-attributes](ses-import-attributes.md) | 2026-05-14 | 2026-05-15 | Draft |
 
-**Totals (recounted 2026-08-17 by tallying the summary table's Status column; each row is bucketed by the leading word of its Status cell):** 56 Complete/Implemented, 47 In Progress, 33 Not Started, 26 Proposed, 13 Reference, 4 Superseded, 2 Deprecated, 2 Active, 1 Draft, plus 1 row (`cbor-codec`, whose Status cell reads "Phase 1 implemented") outside the closed status vocabulary and listed here rather than absorbed into a bucket (**185 designs**). Milestone 1's designs are archived to [ARCHIVE.md](ARCHIVE.md) (their summary rows are retained here per [AGENTS.md](AGENTS.md) § *Archiving Completed Milestones*). This supersedes every count in the historical grooming summaries (now relocated to the [Changelog](#changelog) at the foot of this document), which had drifted badly: the last prose total claimed 151 designs while the table had already grown to 185 rows, and ~34 rows this pass verified against real merged/open-PR and `llm`-git state were understated — landed or in-flight work (e.g. `http-confine`, `exo-zip-package`, `inventory-drag-and-drop`/`-grouping-by-type`, `endoclaw-browser`, `endopi-edit-tool`/`-jsonl-transcript-format`, the `daemon-git-*` trio, `endo-reminder`, `endo-fetch`, `inter`/`intra-package-plain-re-exports`, `notifier-pubsub-migration`) was still marked Not Started or Proposed. See the Roadmap's **Verification drift (2026-08-17)** note for the row-by-row list. Design docs whose *own* metadata is also stale are listed there as a scoped follow-up, not silently rewritten in this pass.
+**Totals (recounted 2026-08-17 by tallying the summary table's Status column; each row is bucketed by the leading word of its Status cell):** 56 Complete/Implemented, 47 In Progress, 33 Not Started, 26 Proposed, 13 Reference, 4 Superseded, 2 Deprecated, 2 Active, 1 Draft, plus 1 row (`cbor-codec`, whose Status cell reads "Phase 1 implemented") outside the closed status vocabulary and listed here rather than absorbed into a bucket (**185 designs**). Milestone 1's designs are archived to [ARCHIVE.md](ARCHIVE.md) (their summary rows are retained here per [AGENTS.md](AGENTS.md) § *Archiving Completed Milestones*). This supersedes every count in the historical grooming summaries (now relocated to the [Changelog](#changelog) at the foot of this document), which had drifted badly: the last prose total claimed 151 designs while the table had already grown to 185 rows, and ~34 rows this pass verified against real merged/open-PR and `llm`-git state were understated as landed or in-flight work (e.g. `http-confine`, `exo-zip-package`, `inventory-drag-and-drop`/`-grouping-by-type`, `endoclaw-browser`, `endopi-edit-tool`/`-jsonl-transcript-format`, the `daemon-git-*` trio, `endo-reminder`, `endo-fetch`, `inter`/`intra-package-plain-re-exports`, `notifier-pubsub-migration`) was still marked Not Started or Proposed. See the Roadmap's **Verification drift (2026-08-17)** note for the row-by-row list. Design docs whose *own* metadata is also stale are listed there as a scoped follow-up, not silently rewritten in this pass.
 
 ## Roadmap
 
@@ -198,7 +198,7 @@
 > subsections immediately below (verification drift, expected landing order,
 > planned-vs-actual, and the velocity calibration note) are the product of that
 > pass and are the honest current picture. The milestone sections further down
-> retain their canonical **M1-M11 dependency numbering** — that numbering
+> retain their canonical **M1-M11 dependency numbering**. That numbering
 > encodes the invariant "every milestone's dependencies live in earlier
 > milestones" and is *not* a prediction of landing order. Where the two diverge,
 > the divergence is called out rather than papered over.
@@ -247,7 +247,7 @@ direction: **the README understated reality.** Rows corrected this pass
 | mvs-resolver, snapshot-mapper | Proposed | Implemented | layers 2-3 of the registry-capability stack shipped in `@endo/exo-npm` (renamed from `@endo/registry-capability`): exports `./mvs-resolver.js` (`makeMvsResolveHook`, `satisfiesRange`) and `./snapshot-mapper.js` (`mapSnapshot`, `makeMountReadPowers`, `buildCompartmentMap`) |
 | daemon-worker-import-from-mount | Proposed | Not Started | layer 4 (`makeFromPackage`/`makeFromMount` daemon-worker entry) not yet built under `packages/daemon/src` |
 
-**Stale design docs — scoped follow-up, not touched this pass.** This pass
+**Stale design docs (scoped follow-up, not touched this pass).** This pass
 reconciled the summary table only and did not rewrite individual design docs.
 Verification found the following docs whose *own* metadata table now disagrees
 with reality; they want a separate stale-design-doc sweep:
@@ -259,7 +259,7 @@ with reality; they want a separate stale-design-doc sweep:
 (docs understate), `inter`/`intra-package-plain-re-exports` and `notifier-pubsub-migration`
 (docs understate), `break-dev-dependency-cycles` (doc In Progress, actually Complete),
 `namehub-interface-unification` (doc "Accepted, not yet implemented" vs likely-landed
-`#339` EndoMount unification — needs confirmation), `captp-error-identification`,
+`#339` EndoMount unification, needs confirmation), `captp-error-identification`,
 `unredacted-stack-sanctioned-ses-api` (docs say "Draft", README says Proposed),
 `daemon-locator-reference` (doc "Current" vs Reference), and `outliner-design-doc`
 (no metadata table at all). `namehub-interface-unification` in particular is
@@ -269,19 +269,19 @@ left at Proposed in the summary because the evidence is mixed; confirm before fl
 
 The milestone list below is numbered in **dependency order**, not landing
 order. Grounded in what is actually in flight (merged and open PRs on `llm`),
-the realistic near-term landing sequence — expressed as confidence tiers rather
-than false-precision calendar dates — is:
+the realistic near-term landing sequence (expressed as confidence tiers rather
+than false-precision calendar dates) is:
 
 | Tier | Meaning | Work actually landing in this band |
 |------|---------|-------------------------------------|
-| **A — landing now / imminent** | active merged + open PRs on `llm`; converging | The Rust `endor`/`ironhorse` line (M11): snapshot-store-seam phases 1-4 (#963), rust-sqlite (Complete), npm-registry-proxy phases, native break-on-uncaught (#975). The `daemon-git-*` trio + `registry-capability` layer 1 + `@endo/agent-tools` file/shell/git tiers (M3). `cbor-codec` Phase 1 (M4). `inventory-*` and `workers-panel` (M9). `inter`/`intra-package-plain-re-exports` (M2). `http-confine`, `endoclaw-browser`, `exo-zip-package`, `endopi-edit-tool`/`-jsonl` (already landed). |
-| **B — in progress, timing uncertain** | design + partial impl landed, remainder open/draft | `gateway-package` stack (M3/M5; nine phase PRs open, several draft). `endo-fetch` / `endo-reminder` (M3, phases 1-3 landed). `endopi-provider-registry-and-oauth` (M3). `ocapn-orthogonal-persistence` remaining phases + `ocapn-network-transport-separation` (M4). `familiar-unified-weblet-server` (M7). `pass-style-promise`, `notifier-pubsub-migration`. |
-| **C — blocked / dependency-gated / not started** | no impl; waits on Tier-A/B substrate | `endo-gateway-mcp` + `endo-claude` (M6; gated on gateway-package phases 2/7/8 and `endo-posix-sandbox`). The three M5 design gaps (`gateway-oauth-bonding`, `gateway-key-recovery`, `gateway-stripe-adapter`). `daemon-capability-bank` (M10). `endor-tui` / `endor-bus-tui` (M11). Most `endoclaw-*` integrations (M7/M10). |
+| **A: landing now / imminent** | active merged + open PRs on `llm`; converging | The Rust `endor`/`ironhorse` line (M11): snapshot-store-seam phases 1-4 (#963), rust-sqlite (Complete), npm-registry-proxy phases, native break-on-uncaught (#975). The `daemon-git-*` trio + `registry-capability` layer 1 + `@endo/agent-tools` file/shell/git tiers (M3). `cbor-codec` Phase 1 (M4). `inventory-*` and `workers-panel` (M9). `inter`/`intra-package-plain-re-exports` (M2). `http-confine`, `endoclaw-browser`, `exo-zip-package`, `endopi-edit-tool`/`-jsonl` (already landed). |
+| **B: in progress, timing uncertain** | design + partial impl landed, remainder open/draft | `gateway-package` stack (M3/M5; nine phase PRs open, several draft). `endo-fetch` / `endo-reminder` (M3, phases 1-3 landed). `endopi-provider-registry-and-oauth` (M3). `ocapn-orthogonal-persistence` remaining phases + `ocapn-network-transport-separation` (M4). `familiar-unified-weblet-server` (M7). `pass-style-promise`, `notifier-pubsub-migration`. |
+| **C: blocked / dependency-gated / not started** | no impl; waits on Tier-A/B substrate | `endo-gateway-mcp` + `endo-claude` (M6; gated on gateway-package phases 2/7/8 and `endo-posix-sandbox`). The three M5 design gaps (`gateway-oauth-bonding`, `gateway-key-recovery`, `gateway-stripe-adapter`). `daemon-capability-bank` (M10). `endor-tui` / `endor-bus-tui` (M11). Most `endoclaw-*` integrations (M7/M10). |
 
 **Where realistic landing order conflicts with the dependency numbering
-(surfaced, not resolved):** The Rust `endor`/`ironhorse` line is M11 — numbered
+(surfaced, not resolved):** The Rust `endor`/`ironhorse` line is M11, numbered
 *last* because it is research-heavy and depends (in principle) on earlier
-substrate — yet it is one of the **most active landing areas right now**,
+substrate, yet it is one of the **most active landing areas right now**,
 running months ahead of much of M3/M5/M6. This is not an error in the numbering:
 the milestone body already notes M11 "may run in parallel," and the Rust port
 proceeds on its own lane against the same state directory rather than waiting on
@@ -331,12 +331,12 @@ single-developer, strictly-sequential model. Measured against reality on
 2026-08-17:
 
 - **M3 (Remote Access & Tools)** targeted *"Late July to early August 2026."*
-  Reality: still **In Progress** past that target — `gateway-package` phases
+  Reality: still **In Progress** past that target. `gateway-package` phases
   10/11 open, `daemon-mount` Phase 4 open, `@endo/agent-tools` HTTP/plugin
   tiers open. The single largest slip, and it is on the critical path.
 - **M4 (Networking)** targeted *"Late August to mid September 2026."* Reality:
   the netlayers landed early (Noise May, iroh July) but transport-separation and
-  orthogonal-persistence remainders are still open — roughly on track.
+  orthogonal-persistence remainders are still open, roughly on track.
 - **M9/M10/M11** targeted *2027*. Reality: substantial pieces landed in
   mid-2026 (above). The 2027 dates are not defensible as *earliest* dates; they
   were *sequential-after-everything-else* dates, and the sequence did not hold.
@@ -360,7 +360,7 @@ with the regime change that the older rounds could not see:
    are cited here as externally sourced rather than reproducible from the tree)
    puts a design or build job at a low single-digit-dollar and single-digit-to-
    low-tens-of-minutes wall-clock median each. Machine time per design is
-   therefore **cheap and no longer the binding constraint** — the per-size
+   therefore **cheap and no longer the binding constraint**: the per-size
    "days of developer effort" figures below overstate the wall-clock a single
    design now takes to *produce*.
 2. **The binding constraint is human review latency.** Human review dominates
@@ -660,8 +660,8 @@ formerly "Milestone A"; MCP Bridge Hosting, formerly "Milestone B")
 are now numbered as ordinary milestones (M8 and M6 respectively).
 
 > **Status cells below may lag.** The 2026-08-17 verification pass
-> reconciled the **summary table** — the whole-corpus index, cross-checked
-> this pass against real merged/open-PR and `llm`-git state — and captured
+> reconciled the **summary table** (the whole-corpus index, cross-checked
+> this pass against real merged/open-PR and `llm`-git state) and captured
 > every corrected status in the Roadmap's **Verification drift
 > (2026-08-17)** table above. It did **not** rewrite the per-milestone
 > inline Status cells in the tables below, whose varied column shapes make
@@ -673,7 +673,7 @@ are now numbered as ordinary milestones (M8 and M6 respectively).
 > (and the stale design docs listed in the drift note) is left to a
 > separate stale-design-doc sweep.
 >
-> **Milestone 2 (Project Hygiene) is a likely next archive candidate — but
+> **Milestone 2 (Project Hygiene) is a likely next archive candidate, but
 > does not yet qualify.** Its milestone-section designs are Complete, but
 > the *Unattended design routing* table above also routes
 > `inter-package-plain-re-exports` and `intra-package-plain-re-exports`
@@ -683,11 +683,11 @@ are now numbered as ordinary milestones (M8 and M6 respectively).
 > membership is revised to exclude them). Flagged here as the probable
 > next archival once its membership is all-terminal, not done unasked.
 
-#### Milestone 1: Downloadable AI Agent Experience — **Complete**; archived to [ARCHIVE.md](ARCHIVE.md).
+#### Milestone 1: Downloadable AI Agent Experience (**Complete**; archived to [ARCHIVE.md](ARCHIVE.md))
 
 (Was **Milestone 0** before the 2026-06-03 renumbering pass.) All 7
 designs `Complete`, exit criterion met, closed since March 2026. Full
-detail — goal, design table, exit criterion, actual duration — moved to
+detail (goal, design table, exit criterion, actual duration) moved to
 [ARCHIVE.md](ARCHIVE.md) on 2026-08-17 per [AGENTS.md](AGENTS.md)
 § *Archiving Completed Milestones*.
 
@@ -1761,7 +1761,7 @@ from the top of the document on 2026-08-17 (it previously sat between the
 title and the Summary table). Individual entries are preserved verbatim;
 new passes add a dated entry to the top of this log.
 
-*Groomed 2026-08-17 (verify / reorganize / archive / illuminate pass): ran a full status re-verification of the summary table and milestone rows against real merged/open PR state and the `llm` git log (fan-out across the corpus), and reconciled the drifted totals. Relocated this entire changelog chain from the head of the document to the bottom as `## Changelog` (no entry rewritten). Archived **Milestone 1** (Downloadable AI Agent Experience — all 7 designs Complete, exit criterion met since March) to the new [ARCHIVE.md](ARCHIVE.md), leaving a short pointer block where its section was, and added the standing archive convention to [AGENTS.md](AGENTS.md) § *Archiving Completed Milestones* so future passes archive completed milestones without being told. Added an **Expected landing order** view and **planned-vs-actual landing** / **estimate-vs-actual date** discrepancy sections to the Roadmap, and a 2026-08-17 calibration note grounding timing in observed fleet velocity (development is now fleet-driven, not the historical single-developer model; the binding constraint is human review latency, and token-budget admission now bounds backlog drain at dispatch). Flagged Milestone 2 as a likely next archive candidate (noting it does not yet qualify, since two In-Progress re-export designs route to it) and listed stale individual design docs as follow-ups rather than revising docs out of scope for this pass.*
+*Groomed 2026-08-17 (verify / reorganize / archive / illuminate pass): ran a full status re-verification of the summary table and milestone rows against real merged/open PR state and the `llm` git log (fan-out across the corpus), and reconciled the drifted totals. Relocated this entire changelog chain from the head of the document to the bottom as `## Changelog` (no entry rewritten). Archived **Milestone 1** (Downloadable AI Agent Experience: all 7 designs Complete, exit criterion met since March) to the new [ARCHIVE.md](ARCHIVE.md), leaving a short pointer block where its section was, and added the standing archive convention to [AGENTS.md](AGENTS.md) § *Archiving Completed Milestones* so future passes archive completed milestones without being told. Added an **Expected landing order** view and **planned-vs-actual landing** / **estimate-vs-actual date** discrepancy sections to the Roadmap, and a 2026-08-17 calibration note grounding timing in observed fleet velocity (development is now fleet-driven, not the historical single-developer model; the binding constraint is human review latency, and token-budget admission now bounds backlog drain at dispatch). Flagged Milestone 2 as a likely next archive candidate (noting it does not yet qualify, since two In-Progress re-export designs route to it) and listed stale individual design docs as follow-ups rather than revising docs out of scope for this pass.*
 
 *Layered on 2026-08-16: added [endo-claude](endo-claude.md) to M6 (MCP Bridge
 Hosting): `@endo/claude`, a hermetically-sandboxed `claude -p` that provides an

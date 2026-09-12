@@ -1,10 +1,10 @@
-# Endo Design Milestones — Archive
+# Endo Design Milestones: Archive
 
 Completed milestones move here from [README.md](README.md) once every
 design in them has landed and the milestone's exit criterion is met (see
 [AGENTS.md](AGENTS.md) § *Archiving Completed Milestones* for the rule).
-Each archived milestone keeps its full detail — goal, design table, exit
-criterion, and actual duration — so the archive reads as the delivery
+Each archived milestone keeps its full detail (goal, design table, exit
+criterion, and actual duration) so the archive reads as the delivery
 history. The archived designs remain rows in the README summary table;
 only the milestone sections move here. Ordered by milestone number.
 
@@ -14,7 +14,7 @@ only the milestone sections move here. Ordered by milestone number.
 
 (Was **Milestone 0** before the 2026-06-03 renumbering pass.)
 
-**Archived:** 2026-08-17 — every design below is `Complete`; the exit
+**Archived:** 2026-08-17. Every design below is `Complete`; the exit
 criterion (a downloadable Familiar app driving an agent with a local API
 key) was met and the milestone has been closed since March 2026.
 
