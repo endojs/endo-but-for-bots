@@ -1,5 +1,5 @@
 // @ts-check
-// Transport for the per-session MCP bridge (src/mcp-bridge.js): a Unix-domain
+// Transport for the per-session MCP bridge (@endo/hosted-agent/mcp-bridge.js): a Unix-domain
 // socket the sandboxed opencode session connects to (via the plain-node stdio
 // relay, mcp-stdio-bridge.mjs) to reach the session's Endo tools.
 //

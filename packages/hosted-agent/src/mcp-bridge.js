@@ -1,28 +1,13 @@
 // @ts-check
-// A per-session MCP (Model Context Protocol) bridge: it exposes the Endo tool
-// set a hosted backend receives from Floot — a `HostedToolSet` with
-// `describe()` and `execute(name, args)` — to a Claude Code CLI session over
-// JSON-RPC 2.0.
-//
-// This module is the PURE protocol core: `handleMessage(request)` maps a single
-// decoded JSON-RPC message to its JSON-RPC response (or `undefined` for a
-// notification, which takes no reply). It never touches a socket; the transport
-// (src/mcp-socket-server.js) frames newline-delimited JSON over a Unix socket
-// and calls this handler. Only JSON requests/results ever cross that socket —
-// never a guest capability or a daemon bearer token — so a compromised CLI
-// session can call the tools it is offered but cannot exfiltrate authority.
-//
-// The catalog is PINNED: Floot snapshots the session's tool set when it hands
-// the backend a `HostedToolSet` (names, schemas, and executable capabilities
-// bound together, so an advertised name cannot be rebound during a turn), and
-// this bridge serves exactly that snapshot. `tools/list` returns it and
-// `tools/call` refuses any name outside it before reaching `execute`, so a
-// withheld tool is absent at the boundary rather than merely omitted from a
-// client-side allow-list.
+// Shared MCP protocol adapter for hosted CLI tool interactions.
+// The pinned tool set controls which host operations can be requested; active
+// turn admission and authoritative effect records belong to its executor.
+// The socket is reachable by the whole guest. MCP does not authenticate a
+// particular guest process or prevent a guest from forwarding its granted use.
 
 import { E } from '@endo/eventual-send';
 
-// The MCP revision this bridge speaks. Claude Code negotiates on `initialize`;
+// The MCP revision this bridge speaks. The CLI negotiates on `initialize`;
 // if the client asks for a version we echo its choice, otherwise we advertise
 // this.
 const DEFAULT_PROTOCOL_VERSION = '2024-11-05';
@@ -31,16 +16,22 @@ const JSONRPC_VERSION = '2.0';
 
 // JSON-RPC 2.0 reserved error codes we use.
 export const METHOD_NOT_FOUND = -32_601;
-export const INVALID_REQUEST = -32_600;
-export const INTERNAL_ERROR = -32_603;
 harden(METHOD_NOT_FOUND);
+export const INVALID_REQUEST = -32_600;
 harden(INVALID_REQUEST);
+export const INTERNAL_ERROR = -32_603;
 harden(INTERNAL_ERROR);
 
 // MCP tool names must survive Claude Code's `mcp__<server>__<tool>` grammar
 // and its allow-list rendering: a name containing `__`, a comma, a space, or a
 // glob would either parse ambiguously or split into extra allow entries.
 const TOOL_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
+
+// Reuse OpenCode's concurrent execution envelope for both CLI adapters.
+// This bounds retained host tool work, independently of parser/connection queues.
+// It is not a cumulative tool count or a time/spending budget.
+export const MAX_PENDING_CALLS = 32;
+harden(MAX_PENDING_CALLS);
 
 /**
  * @typedef {{ name: string, description: string, inputSchema: object }} McpTool
@@ -148,7 +139,6 @@ export const makeMcpBridge = ({
    *   notification (a request with no `id`).
    */
   const handleMessage = async message => {
-    await null;
     if (!message || typeof message !== 'object' || Array.isArray(message)) {
       // One request per frame: a JSON-RPC batch (an array) is refused with a
       // reply rather than silently dropped without one.
@@ -160,7 +150,7 @@ export const makeMcpBridge = ({
     switch (method) {
       case 'initialize': {
         // Echo the client's requested protocol version when present so a newer
-        // Claude Code and this bridge agree on a shared revision.
+        // the CLI and this bridge agree on a shared revision.
         const requested =
           params && typeof params.protocolVersion === 'string'
             ? params.protocolVersion
@@ -197,6 +187,15 @@ export const makeMcpBridge = ({
             `Unknown tool: ${toolName} (not in this session's catalog)`,
           );
         }
+        if (pending >= MAX_PENDING_CALLS) {
+          return fail(
+            id,
+            INVALID_REQUEST,
+            'Too many in-flight Endo tool calls',
+          );
+        }
+        // Admit before the first await, so a burst cannot oversubscribe and
+        // lifecycle owners immediately see every admitted host operation.
         pending += 1;
         try {
           const text = await execute(toolName, harden({ ...args }));

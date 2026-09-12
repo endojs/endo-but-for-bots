@@ -142,7 +142,7 @@ transcript stay for the next revival.
 
 **Endo tools over MCP.** The tool set Floot pins for the session reaches the
 CLI through a per-session MCP server
-([`src/mcp-bridge.js`](./src/mcp-bridge.js) over a Unix socket,
+([shared MCP protocol](../hosted-agent/src/mcp-bridge.js) over a Unix socket,
 [`src/mcp-socket-server.js`](./src/mcp-socket-server.js)) whose directory the
 slice mounts read-only at `/endo-mcp`; a plain-node relay
 ([shared stdio relay](../hosted-agent/src/mcp-stdio-bridge.js)) runs inside the

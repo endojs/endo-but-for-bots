@@ -16,10 +16,13 @@ Codex subscription turns retain their runtime instead of renewing it each turn,
 and the OpenCode broker uses the same grant contract.
 Credential refresh remains separate; lifetime token/dollar budgets remain deferred.
 
-Claude and OpenCode now share the host-side MCP socket transport and guest stdio relay.
+Claude and OpenCode now share the MCP protocol, host-side socket transport, and guest stdio relay.
 The input frame limit covers both complete frames and partial tails before dispatch.
-This is only a per-frame bound: connection, in-flight dispatch, and output queue bounds
-remain pending, as do shared tool admission and journal semantics.
+The shared bridge admits at most 32 simultaneous host tool executions, reusing the
+existing OpenCode envelope; completion releases capacity without a lifetime counter.
+Admission is synchronous and excludes control messages from the execution count.
+This bounds operation count, not aggregate bytes: connection, transport dispatch,
+and output queue bounds remain pending, as do shared active-turn admission and journal semantics.
 
 Runtime unification across all three adapters, Claude credential migration, public
 network convergence, tool/journal consolidation, emergency stop UI, and the remaining
