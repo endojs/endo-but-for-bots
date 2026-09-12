@@ -4,7 +4,6 @@ import test from 'ava';
 
 import {
   provisionOpencodeSession,
-  buildSessionPowersSource,
   resolveSandboxConfig,
 } from '../src/provision-opencode-session.js';
 
@@ -16,7 +15,9 @@ const keyFor = names => (Array.isArray(names) ? names.join('/') : names);
  */
 const makeRecordingHost = () => {
   const names = new Set();
-  const evaluateCalls = [];
+  const stored = [];
+  const lookups = [];
+  const powersCalls = [];
   const makeUnconfinedCalls = [];
   const provideMountCalls = [];
   const host = harden({
@@ -26,8 +27,12 @@ const makeRecordingHost = () => {
     async remove(...path) {
       names.delete(keyFor(path));
     },
-    async evaluate(_main, source, codeNames, petNames, resultName) {
-      evaluateCalls.push({ source, codeNames, petNames, resultName });
+    async lookup(path) {
+      lookups.push(path);
+      return harden({ identity: keyFor(path) });
+    },
+    async storeValue(value, resultName) {
+      stored.push({ value, resultName });
       names.add(keyFor(resultName));
     },
     async provideMount(path, name, options) {
@@ -36,63 +41,21 @@ const makeRecordingHost = () => {
       return harden({ kind: 'mount', path, name });
     },
     async makeUnconfined(_main, _specifier, options) {
-      makeUnconfinedCalls.push(options);
+      if (_specifier.endsWith('/session-powers.js')) powersCalls.push(options);
+      else makeUnconfinedCalls.push(options);
       if (options.resultName) names.add(keyFor(options.resultName));
       return harden({ kind: 'client' });
     },
   });
   return {
     host,
-    evaluateCalls,
+    stored,
+    lookups,
+    powersCalls,
     makeUnconfinedCalls,
     provideMountCalls,
   };
 };
-
-test('buildSessionPowersSource always endows the stateProvider power', t => {
-  const source = buildSessionPowersSource(
-    [{ mountPoint: '/mnt', mountName: 'ws' }],
-    false,
-  );
-  t.true(source.includes('stateProvider: () => stateProvider'));
-  t.true(source.includes('stateProvider: M.call().returns(M.any())'));
-  // Optional powers are null unless requested.
-  t.true(source.includes('mcpMount: () => null'));
-  t.true(source.includes('configFilesystem: () => null'));
-});
-
-test('buildSessionPowersSource exposes an mcpMount accessor only when requested', t => {
-  const mounts = [{ mountPoint: '/mnt', mountName: 'ws' }];
-  const withMcp = buildSessionPowersSource(mounts, false, true);
-  t.true(withMcp.includes('mcpMount: () => mcpMount'));
-  const withoutMcp = buildSessionPowersSource(mounts, false, false);
-  t.true(withoutMcp.includes('mcpMount: () => null'));
-});
-
-test('buildSessionPowersSource exposes a configFilesystem accessor + config mount only when requested', t => {
-  const withConfig = buildSessionPowersSource(
-    [
-      { mountPoint: '/mnt', mountName: 'ws' },
-      { mountPoint: '/cfg', mountName: 'cfg' },
-    ],
-    false,
-    false,
-    true,
-  );
-  t.true(withConfig.includes('configFilesystem: () => configFilesystem'));
-  // provideMount now allows both the workspace and the config mountpoints.
-  t.true(withConfig.includes('/cfg'));
-  t.true(withConfig.includes('"cfg"'));
-
-  const withoutConfig = buildSessionPowersSource(
-    [{ mountPoint: '/mnt', mountName: 'ws' }],
-    false,
-    false,
-    false,
-  );
-  t.true(withoutConfig.includes('configFilesystem: () => null'));
-  t.false(withoutConfig.includes('/cfg'));
-});
 
 test('provisionOpencodeSession wires the MCP bridge mount, powers ref, and env', async t => {
   const rec = makeRecordingHost();
@@ -122,13 +85,11 @@ test('provisionOpencodeSession wires the MCP bridge mount, powers ref, and env',
   t.deepEqual(rec.provideMountCalls[0].options, { readOnly: true });
   const mcpMountName = rec.provideMountCalls[0].name;
 
-  // The powers eval references the state provider and the mount cap.
-  const evalCall = rec.evaluateCalls[0];
-  t.true(evalCall.codeNames.includes('stateProvider'));
-  t.true(evalCall.codeNames.includes('mcpMount'));
-  t.true(evalCall.petNames.includes('state-provider'));
-  t.true(evalCall.petNames.includes(mcpMountName));
-  t.true(evalCall.source.includes('mcpMount: () => mcpMount'));
+  const bundle = rec.stored[0].value;
+  t.deepEqual(bundle.stateProvider, { identity: 'state-provider' });
+  t.deepEqual(bundle.mcpMount, { identity: mcpMountName });
+  t.is(rec.powersCalls[0].powersName, rec.stored[0].resultName);
+  t.is(rec.makeUnconfinedCalls[0].powersName, rec.powersCalls[0].resultName);
 
   // The client formula env carries the slice-internal bridge paths.
   const clientEnv = rec.makeUnconfinedCalls[0].env;
@@ -156,11 +117,9 @@ test('provisionOpencodeSession wires a config filesystem, powers ref, and env', 
     },
   );
 
-  // The powers eval references the config filesystem cap and hands it back.
-  const evalCall = rec.evaluateCalls[0];
-  t.true(evalCall.codeNames.includes('configFilesystem'));
-  t.true(evalCall.petNames.includes('opencode-config-session-c'));
-  t.true(evalCall.source.includes('configFilesystem: () => configFilesystem'));
+  t.deepEqual(rec.stored[0].value.configFilesystem, {
+    identity: 'opencode-config-session-c',
+  });
 
   // The client formula env carries the slice-internal + host config paths.
   const clientEnv = rec.makeUnconfinedCalls[0].env;
@@ -186,8 +145,7 @@ test('provisionOpencodeSession omits config wiring when no config filesystem is 
       resultName: ['floot', 'controller-profile', 'opencode-client-session-d'],
     },
   );
-  t.false(rec.evaluateCalls[0].codeNames.includes('configFilesystem'));
-  t.true(rec.evaluateCalls[0].source.includes('configFilesystem: () => null'));
+  t.is(rec.stored[0].value.configFilesystem, undefined);
   t.is(rec.makeUnconfinedCalls[0].env.CONFIG_MOUNT_POINT, undefined);
   t.is(rec.makeUnconfinedCalls[0].env.OPENCODE_CONFIG_HOST_DIR, undefined);
 });
@@ -206,9 +164,8 @@ test('provisionOpencodeSession omits MCP wiring when no bridge is given', async 
     },
   );
   t.is(rec.provideMountCalls.length, 0);
-  t.false(rec.evaluateCalls[0].codeNames.includes('mcpMount'));
+  t.is(rec.stored[0].value.mcpMount, undefined);
   t.is(rec.makeUnconfinedCalls[0].env.MCP_CONFIG_PATH, undefined);
-  t.true(rec.evaluateCalls[0].source.includes('mcpMount: () => null'));
 });
 
 test('provisionOpencodeSession forwards model, persona, resume id, and turn timeout', async t => {

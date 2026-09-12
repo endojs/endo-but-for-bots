@@ -52,8 +52,8 @@
  *   INITIAL_PROMPT        Optional one-shot prompt fired on creation.
  *
  * This caplet does **not** run with `@agent`. The factory builds a
- * **per-session powers** cap (factory.js, via `evaluate`) that is a total
- * attenuation: it bundles the four caps the client needs **by reference**
+ * **per-session powers** cap through the shared static session-powers module.
+ * It bundles the four caps the client needs **by reference**
  * and exposes only `sandboxFactory()` / `fsMounter()` / `filesystem()` /
  * `credentials()` accessors plus a `provideMount(path, name)` bounded to
  * *this session's* workspace mountpoint. There is **no `lookup`**, so the
@@ -156,7 +156,7 @@ const cancellationPromiseOf = resolvedContext => {
  * @returns {object}
  */
 export const make = (powers, context, contextWrapper = {}) => {
-  // The per-session powers cap (factory.js builds it via `evaluate`): a
+  // The per-session powers cap (the shared static module builds it): a
   // total attenuation that exposes only `sandboxFactory()` / `fsMounter()`
   // / `filesystem()` / `credentials()` accessors (the caps bundled by
   // reference at creation) and a `provideMount(path, name)` bounded to

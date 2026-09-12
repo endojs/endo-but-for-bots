@@ -13,14 +13,20 @@ import {
 } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 
-import { makeOpencodeStateProvider } from '../src/opencode-state-provider.js';
+import {
+  makeOpencodeStateProvider,
+  makeOpencodeStateStorage,
+} from '../src/opencode-state-provider.js';
 
-const makeFakeHost = () => {
+/** @param {{failMount?: boolean}} [options] */
+const makeFakeHost = ({ failMount = false } = {}) => {
   const names = new Map();
   const mounts = new Map();
+  const calls = new Set();
   const key = name => JSON.stringify(name);
   const hostAgent = makeExo(
     'FakeHost',
@@ -32,12 +38,16 @@ const makeFakeHost = () => {
     }),
     {
       async has(...name) {
+        calls.add('has');
         return names.has(key(name));
       },
       async makeDirectory(name) {
+        calls.add('makeDirectory');
         names.set(key(name), 'dir');
       },
       async provideMount(directory, name) {
+        calls.add('provideMount');
+        if (failMount) throw Error('Mount formulation failed');
         mounts.set(key(name), directory);
         names.set(key(name), 'mount');
         return makeExo(
@@ -47,12 +57,13 @@ const makeFakeHost = () => {
         );
       },
       async remove(...name) {
+        calls.add('remove');
         names.delete(key(name));
         mounts.delete(key(name));
       },
     },
   );
-  return harden({ hostAgent, names, mounts });
+  return harden({ hostAgent, names, mounts, calls });
 };
 
 const makeRoot = async t => {
@@ -60,6 +71,125 @@ const makeRoot = async t => {
   t.teardown(() => rm(root, { recursive: true, force: true }));
   return root;
 };
+
+test('native state preparation and removal need no daemon capabilities', async t => {
+  const root = await makeRoot(t);
+  const storage = makeOpencodeStateStorage({ stateRoot: root });
+  const expected = { directory: path.join(root, 'ses-1') };
+  t.deepEqual(await E(storage).prepareSessionDirectory('ses-1'), expected);
+  await writeFile(path.join(expected.directory, 'state.db'), 'saved state');
+  const revived = makeOpencodeStateStorage({ stateRoot: root });
+  t.deepEqual(await E(revived).prepareSessionDirectory('ses-1'), expected);
+  t.is(
+    await readFile(path.join(expected.directory, 'state.db'), 'utf8'),
+    'saved state',
+  );
+  await E(revived).removeSessionDirectory('ses-1');
+  await t.throwsAsync(stat(expected.directory), { code: 'ENOENT' });
+  await t.throwsAsync(stat(path.join(root, '.owners', 'ses-1')), {
+    code: 'ENOENT',
+  });
+  await E(revived).removeSessionDirectory('ses-1');
+});
+
+test('provider native methods return only placement data and leave daemon names alone', async t => {
+  const root = await makeRoot(t);
+  const { hostAgent, calls, names } = makeFakeHost();
+  const provider = makeOpencodeStateProvider({ hostAgent, stateRoot: root });
+  names.set(JSON.stringify(['opencode-state', 'ses-1']), 'existing mount');
+  t.deepEqual(await E(provider).prepareSessionDirectory('ses-1'), {
+    directory: path.join(root, 'ses-1'),
+  });
+  await E(provider).removeSessionDirectory('ses-1');
+  t.deepEqual([...calls], []);
+  t.is(
+    names.get(JSON.stringify(['opencode-state', 'ses-1'])),
+    'existing mount',
+  );
+});
+
+test('failed Mount formulation retains prepared native storage for its owner', async t => {
+  const root = await makeRoot(t);
+  const { hostAgent, calls } = makeFakeHost({ failMount: true });
+  const provider = makeOpencodeStateProvider({ hostAgent, stateRoot: root });
+  await t.throwsAsync(() => E(provider).provideSessionMount('ses-1'), {
+    message: /Mount formulation failed/,
+  });
+  calls.clear();
+  t.deepEqual(await E(provider).prepareSessionDirectory('ses-1'), {
+    directory: path.join(root, 'ses-1'),
+  });
+  t.deepEqual([...calls], []);
+  t.is(await readFile(path.join(root, '.owners', 'ses-1'), 'utf8'), 'ses-1\n');
+});
+
+test('native cleanup remains at the original provider root', async t => {
+  const originalRoot = await makeRoot(t);
+  const replacementRoot = await makeRoot(t);
+  const original = makeOpencodeStateStorage({ stateRoot: originalRoot });
+  const replacement = makeOpencodeStateStorage({ stateRoot: replacementRoot });
+  await E(original).prepareSessionDirectory('ses-1');
+  const replacementPlan = await E(replacement).prepareSessionDirectory('ses-1');
+  await E(original).removeSessionDirectory('ses-1');
+  t.true((await stat(replacementPlan.directory)).isDirectory());
+});
+
+test('native removal rejects symlinked ownership directories', async t => {
+  const root = await makeRoot(t);
+  const outside = await makeRoot(t);
+  const storage = makeOpencodeStateStorage({ stateRoot: root });
+  await E(storage).prepareSessionDirectory('ses-1');
+  await rm(path.join(root, '.owners'), { recursive: true });
+  await writeFile(path.join(outside, 'ses-1'), 'ses-1\n');
+  await symlink(outside, path.join(root, '.owners'));
+  await t.throwsAsync(() => E(storage).removeSessionDirectory('ses-1'), {
+    message: /Ownership directory must not be a symlink/,
+  });
+  t.true((await stat(path.join(root, 'ses-1'))).isDirectory());
+  t.is(await readFile(path.join(outside, 'ses-1'), 'utf8'), 'ses-1\n');
+});
+
+test('native removal rejects a symlinked state root', async t => {
+  const outside = await makeRoot(t);
+  const root = await makeRoot(t);
+  const target = makeOpencodeStateStorage({ stateRoot: outside });
+  await E(target).prepareSessionDirectory('ses-1');
+  const link = path.join(root, 'linked-state');
+  await symlink(outside, link);
+  const storage = makeOpencodeStateStorage({ stateRoot: link });
+  await t.throwsAsync(() => E(storage).removeSessionDirectory('ses-1'), {
+    message: /State root must not be a symlink/,
+  });
+  t.true((await stat(path.join(outside, 'ses-1'))).isDirectory());
+});
+
+test('native removal retains a foreign marker when its directory is already absent', async t => {
+  const root = await makeRoot(t);
+  await mkdir(path.join(root, '.owners'));
+  const marker = path.join(root, '.owners', 'ses-1');
+  await writeFile(marker, 'someone-else\n');
+  const storage = makeOpencodeStateStorage({ stateRoot: root });
+  await t.throwsAsync(() => E(storage).removeSessionDirectory('ses-1'), {
+    message: /not owned by this session/,
+  });
+  t.is(await readFile(marker, 'utf8'), 'someone-else\n');
+});
+
+test('native removal propagates a failed root observation before checking descendants', async t => {
+  const root = await makeRoot(t);
+  const file = path.join(root, 'file');
+  await writeFile(file, 'not a directory');
+  const stateRoot = path.join(file, 'state');
+  const storage = makeOpencodeStateStorage({ stateRoot });
+  const error = await t.throwsAsync(
+    () => E(storage).removeSessionDirectory('ses-1'),
+    { code: 'ENOTDIR' },
+  );
+  // Preserve the error from observing the root, not a later attempt to remove
+  // an ownership marker after treating the failed observation as absence.
+  t.like(error, { path: stateRoot });
+  t.is(await readFile(file, 'utf8'), 'not a directory');
+});
 
 test('creates a 0700 session directory with a marker and mints a daemon mount', async t => {
   const root = await makeRoot(t);

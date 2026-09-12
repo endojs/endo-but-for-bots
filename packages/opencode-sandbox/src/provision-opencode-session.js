@@ -23,6 +23,10 @@ const clientModuleSpecifier = toCurrentSpecifier(
   new URL('./opencode-client-module.js', import.meta.url).href,
 );
 
+const sessionPowersModuleSpecifier = toCurrentSpecifier(
+  new URL('../../hosted-agent/src/session-powers.js', import.meta.url).href,
+);
+
 const SANDBOX_WORKSPACE_PATH = '/workspace';
 // Slice-internal mount path for the (optional, read-only) opencode config
 // dir.  Deliberately outside /workspace so a planted workspace opencode.json
@@ -51,94 +55,6 @@ export const makeSandboxSessionId = name => {
   return `${slug}-${digest}`;
 };
 harden(makeSandboxSessionId);
-
-/**
- * @param {Array<{ mountPoint: string, mountName: string }>} mounts - The
- *   (mountPoint, mountName) pairs this session may `provideMount`/`removeMount`.
- *   Always the workspace; plus the optional opencode config dir.
- * @param {boolean} hasCredentials
- * @param {boolean} [hasMcpMount] - whether an `mcpMount` cap is bundled by
- *   reference into the powers (the Endo tool bridge socket directory).
- * @param {boolean} [hasConfigFilesystem] - whether a dedicated config
- *   `Filesystem` cap is bundled by reference.
- * @param {string} [sandboxSessionId] - when set, `stateProvider` is a
- *   per-session wrapper that refuses any other id.
- * @returns {string}
- */
-export const buildSessionPowersSource = (
-  mounts,
-  hasCredentials,
-  hasMcpMount = false,
-  hasConfigFilesystem = false,
-  sandboxSessionId = '',
-) => {
-  const stateProviderExpression = sandboxSessionId
-    ? `makeExo(
-    'OpencodeSessionState',
-    M.interface('OpencodeSessionState', {
-      provideSessionMount: M.call().optional(M.string()).returns(M.promise()),
-      removeSession: M.call().optional(M.string()).returns(M.promise()),
-    }),
-    {
-      provideSessionMount: requested => {
-        if (requested !== undefined && requested !== ${JSON.stringify(sandboxSessionId)}) {
-          throw Error('opencode-sandbox state provider is restricted to this session');
-        }
-        return E(stateProvider).provideSessionMount(${JSON.stringify(sandboxSessionId)});
-      },
-      removeSession: requested => {
-        if (requested !== undefined && requested !== ${JSON.stringify(sandboxSessionId)}) {
-          throw Error('opencode-sandbox state provider is restricted to this session');
-        }
-        return E(stateProvider).removeSession(${JSON.stringify(sandboxSessionId)});
-      },
-    },
-  )`
-    : 'stateProvider';
-  return `makeExo(
-  'OpencodeSessionPowers',
-  M.interface('OpencodeSessionPowers', {
-    sandboxFactory: M.call().returns(M.any()),
-    fsMounter: M.call().returns(M.any()),
-    stateProvider: M.call().returns(M.any()),
-    filesystem: M.call().returns(M.any()),
-    configFilesystem: M.call().returns(M.any()),
-    credentials: M.call().returns(M.any()),
-    mcpMount: M.call().returns(M.any()),
-    provideMount: M.call(M.string(), M.string())
-      .optional(M.record())
-      .returns(M.promise()),
-    removeMount: M.call().returns(M.promise()),
-    help: M.call().returns(M.string()),
-  }),
-  {
-    sandboxFactory: () => sandboxFactory,
-    fsMounter: () => fsMounter,
-    stateProvider: () => ${stateProviderExpression},
-    filesystem: () => filesystem,
-    configFilesystem: () => ${hasConfigFilesystem ? 'configFilesystem' : 'null'},
-    credentials: () => ${hasCredentials ? 'credentials' : 'null'},
-    mcpMount: () => ${hasMcpMount ? 'mcpMount' : 'null'},
-    provideMount: (path, name, options = {}) => {
-      const allowed = ${JSON.stringify(
-        mounts.map(m => [m.mountPoint, m.mountName]),
-      )};
-      if (!allowed.some(pair => pair[0] === path && pair[1] === name)) {
-        throw Error('opencode-sandbox session powers: provideMount restricted to this session mountpoints');
-      }
-      return E(agent).provideMount(path, name, options);
-    },
-    removeMount: () =>
-      Promise.allSettled(
-        ${JSON.stringify(
-          mounts.map(m => m.mountName),
-        )}.map(name => E(agent).remove(name)),
-      ),
-    help: () =>
-      'Per-session opencode-sandbox powers: sandboxFactory/fsMounter/stateProvider/filesystem/configFilesystem/credentials/mcpMount accessors + provideMount/removeMount bounded to this session mounts. No lookup.',
-  },
-)`;
-};
 
 /**
  * @param {string} name
@@ -310,7 +226,8 @@ export const provisionOpencodeSession = async (
       : '';
 
     const powersName = `opencode-${sessionId}-powers`;
-    toCleanup = [powersName, ...removeNames];
+    const inputName = `${powersName}-input`;
+    toCleanup = [powersName, inputName, ...removeNames];
     const codeNames = [
       'agent',
       'sandboxFactory',
@@ -369,18 +286,27 @@ export const provisionOpencodeSession = async (
         : []),
     ];
 
-    await E(hostAgent).evaluate(
-      '@main',
-      buildSessionPowersSource(
-        mountList,
-        Boolean(credentialsName),
-        hasMcpMount,
-        hasConfigFilesystem,
-        sessionId,
+    // Capture exact capabilities now. A nested-name eval endowment would be
+    // a lookup formula that can resolve a different resource after restart.
+    const dependencies = await Promise.all(
+      petNames.map(petName =>
+        E(hostAgent).lookup(Array.isArray(petName) ? petName : [petName]),
       ),
-      harden(codeNames),
-      harden(petNames),
-      powersName,
+    );
+    await E(hostAgent).storeValue(
+      harden({
+        ...Object.fromEntries(
+          codeNames.map((key, index) => [key, dependencies[index]]),
+        ),
+        mounts: mountList,
+        sessionId,
+      }),
+      inputName,
+    );
+    await E(hostAgent).makeUnconfined(
+      '@main',
+      sessionPowersModuleSpecifier,
+      harden({ powersName: inputName, resultName: powersName }),
     );
 
     /** @type {Record<string, any>} */
@@ -474,5 +400,4 @@ export const provisionOpencodeSession = async (
   }
 };
 harden(provisionOpencodeSession);
-harden(buildSessionPowersSource);
 harden(resolveSandboxConfig);

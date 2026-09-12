@@ -6,48 +6,104 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { main } from '../setup-hosted.js';
+import {
+  sandboxSpecifier,
+  stateProviderSpecifier,
+} from '../src/hosted-runtime-setup.js';
+
+/** @import { EndoHost } from '@endo/daemon' */
 
 const key = (...parts) => JSON.stringify(parts.flat());
 
-const makeFakeHost = ({ failMint } = {}) => {
+/** @param {{ failMint?: (specifier: string, options: any) => boolean, factorySpecifier?: string }} [options] */
+const makeFakeHost = ({
+  failMint,
+  factorySpecifier = sandboxSpecifier,
+} = {}) => {
   const bindings = new Map();
   const mints = [];
   const copies = [];
   const removed = [];
+  /** @type {Map<string, Record<string, string | undefined>>} */
+  const environments = new Map();
+  environments.set(
+    'sandbox-factory-id',
+    harden({
+      ENDO_SANDBOX_OWNER_ID: 'test-owned',
+      ENDO_SANDBOX_RUNTIME_DIR: process.env.ENDO_SANDBOX_RUNTIME_DIR,
+      ENDO_SANDBOX_GENERATED_MAX_BYTES: '4096',
+      ENDO_SANDBOX_GENERATED_MAX_ENTRIES: '16',
+    }),
+  );
+  environments.set(
+    'state-provider-id',
+    harden({ ENDO_OPENCODE_STATE_DIR: process.env.ENDO_OPENCODE_STATE_DIR }),
+  );
+  const reads = [];
   return {
     bindings,
     mints,
     copies,
     removed,
-    host: {
-      async has(...parts) {
-        return bindings.has(key(...parts));
-      },
-      async lookup(pathParts) {
-        if (pathParts[1] === 'catalog') {
-          return harden({ list: async () => [] });
-        }
-        return harden({ createBase64: async () => {} });
-      },
-      async copy(from, to) {
-        copies.push({ from, to });
-        bindings.set(key(...to), bindings.get(key(...from)) ?? 'cap');
-      },
-      async remove(...parts) {
-        removed.push(parts);
-        bindings.delete(key(...parts));
-      },
-      async makeUnconfined(worker, specifier, options) {
-        if (failMint && failMint(specifier, options)) {
-          throw Error('mint failed');
-        }
-        mints.push({ worker, specifier, options });
-        const result = Array.isArray(options.resultName)
-          ? options.resultName
-          : [options.resultName];
-        bindings.set(key(...result), 'cap');
-      },
-    },
+    environments,
+    reads,
+    host: /** @type {EndoHost} */ (
+      /** @type {unknown} */ ({
+        async identify(...parts) {
+          return bindings.has(key(...parts)) ? `${parts.at(-1)}-id` : undefined;
+        },
+        async diagnostics() {
+          return harden({
+            getFormula: async id => {
+              reads.push(['formula', id]);
+              return harden({
+                type: 'make-unconfined',
+                properties: {
+                  specifier: {
+                    kind: 'literal',
+                    value:
+                      id === 'state-provider-id'
+                        ? stateProviderSpecifier
+                        : factorySpecifier,
+                  },
+                },
+              });
+            },
+          });
+        },
+        async getFormulaEnvironment(id) {
+          reads.push(['env', id]);
+          return environments.get(id);
+        },
+        async has(...parts) {
+          return bindings.has(key(...parts));
+        },
+        async lookup(pathParts) {
+          if (pathParts[1] === 'catalog') {
+            return harden({ list: async () => [] });
+          }
+          return harden({ createBase64: async () => {} });
+        },
+        async copy(from, to) {
+          copies.push({ from, to });
+          bindings.set(key(...to), bindings.get(key(...from)) ?? 'cap');
+        },
+        async remove(...parts) {
+          removed.push(parts);
+          bindings.delete(key(...parts));
+        },
+        async makeUnconfined(worker, specifier, options) {
+          if (failMint && failMint(specifier, options)) {
+            throw Error('mint failed');
+          }
+          mints.push({ worker, specifier, options });
+          const result = Array.isArray(options.resultName)
+            ? options.resultName
+            : [options.resultName];
+          bindings.set(key(...result), 'cap');
+        },
+      })
+    ),
   };
 };
 
@@ -89,7 +145,11 @@ const preflightHost = () => {
 
 const baseEnv = async t => {
   const base = await makeTmp(t, 'setup-hosted-');
+  const runtime = path.join(base, 'runtime');
+  await mkdir(runtime, { mode: 0o700 });
   await withEnv(t, {
+    ENDO_SANDBOX_RUNTIME_DIR: runtime,
+    ENDO_OPENCODE_STATE_DIR: path.join(base, 'state'),
     ENDO_OPENCODE_WORKSPACE_DIR: path.join(base, 'workspaces'),
     ENDO_OPENCODE_CONFIG_DIR: path.join(base, 'configs'),
     ENDO_OPENCODE_MCP_DIR: path.join(base, 'mcp'),
@@ -115,6 +175,85 @@ test.serial('requires setup-host.js artifacts', async t => {
   await t.throwsAsync(main(noMounter.host), { message: /fs-mounter/ });
   t.is(noMounter.mints.length, 0, 'no mint precedes the preflight failures');
 });
+
+test.serial(
+  'standalone hosted setup refuses a generic factory before any mutation',
+  async t => {
+    await baseEnv(t);
+    const fake = makeFakeHost({
+      factorySpecifier: new URL('../../sandbox/src/agent.js', import.meta.url)
+        .href,
+    });
+    for (const name of ['sandbox-factory', 'state-provider', 'fs-mounter']) {
+      fake.bindings.set(key('opencode-sandbox', name), 'cap');
+    }
+    await t.throwsAsync(main(fake.host), { message: /Retire the old runtime/ });
+    t.deepEqual(fake.mints, []);
+    t.deepEqual(fake.removed, []);
+    t.deepEqual(fake.copies, []);
+  },
+);
+
+test.serial(
+  'standalone hosted setup refuses guest storage inside the runtime parent',
+  async t => {
+    const base = await baseEnv(t);
+    await withEnv(t, {
+      ENDO_OPENCODE_CONFIG_DIR: path.join(base, 'runtime', 'configs'),
+    });
+    const fake = preflightHost();
+    await t.throwsAsync(main(fake.host), { message: /must be disjoint/ });
+    t.deepEqual(fake.mints, []);
+  },
+);
+
+test.serial(
+  'hosted setup validates retained runtime and state roots rather than current env',
+  async t => {
+    const base = await baseEnv(t);
+    const fake = preflightHost();
+    await withEnv(t, {
+      ENDO_SANDBOX_RUNTIME_DIR: path.join(base, 'ignored-runtime'),
+      ENDO_OPENCODE_STATE_DIR: path.join(base, 'ignored-state'),
+      ENDO_OPENCODE_WORKSPACE_DIR: path.join(
+        base,
+        'runtime',
+        'guest-workspaces',
+      ),
+    });
+    await t.throwsAsync(main(fake.host), { message: /must be disjoint/ });
+    t.deepEqual(fake.mints, []);
+    await withEnv(t, {
+      ENDO_OPENCODE_WORKSPACE_DIR: path.join(base, 'workspaces'),
+    });
+    fake.environments.set(
+      'state-provider-id',
+      harden({ ENDO_OPENCODE_STATE_DIR: base }),
+    );
+    await t.throwsAsync(main(fake.host), { message: /must be disjoint/ });
+    t.deepEqual(fake.mints, []);
+  },
+);
+
+test.serial(
+  'hosted setup needs no replacement runtime or state env for retained formulas',
+  async t => {
+    await baseEnv(t);
+    const fake = preflightHost();
+    await withEnv(t, {
+      ENDO_SANDBOX_RUNTIME_DIR: undefined,
+      ENDO_OPENCODE_STATE_DIR: undefined,
+    });
+    await main(fake.host);
+    t.is(fake.mints.length, 2);
+    t.deepEqual(fake.reads, [
+      ['formula', 'sandbox-factory-id'],
+      ['env', 'sandbox-factory-id'],
+      ['formula', 'state-provider-id'],
+      ['env', 'state-provider-id'],
+    ]);
+  },
+);
 
 test.serial(
   'mints the backend under a temp name and rebinds the Floot profile',

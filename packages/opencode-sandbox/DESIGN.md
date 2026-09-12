@@ -5,6 +5,94 @@ backend source is not written yet; the `oci/` build seed and the patched fork
 exist. Target lineage: the hosted-backend seam from PR #1248
 (`codex/claude-provisioning-fixes` @ `4b9fe52c0`).
 
+Implementation update (2026-09-13): backend and provisioning source now exist.
+Host setup uses the shared owned Podman runtime described in
+[the unification plan](../../designs/hosted-agent-sandbox-unification.md).
+The remaining sections preserve the original design context; the unification plan
+tracks current lifecycle, credential, networking, and acceptance gaps.
+
+### Stop failure ownership
+
+The client fences new turns immediately when termination begins and reports
+`stopped` only after resource cleanup and admitted startup acquisition have settled.
+Termination does not wait for a guest shutdown command, command-writer closure,
+or the bridge's readiness message before requesting slice disposal.
+Successful slice disposal is the containment barrier before unmounting storage.
+Failed disposal, unmount, credential revocation, or mount-name removal retains its
+cleanup owner for retry; completed stages are not repeated.
+State deletion begins only after successful termination, and a failed deletion remains
+retryable rather than marking the client destroyed.
+Callers propagate stop failures before cancelling/replacing a client formula or
+deleting its storage; independent provider/MCP cleanup still runs where permitted.
+
+Lazy provisioning supplies a cleanup owner independently of its result promise.
+Partial acquisitions remain owned even when provisioning rejects, and a later attempt
+must drain predecessor rollback before acquiring replacements.
+Public mount and slice acquisition APIs can reject after retaining native resources
+without returning a cleanup handle.
+Such rejections remain uncertain: ordinary retries cannot release dependent storage
+or acquire replacements, although credential revocation is still attempted.
+They require host reconciliation; no error-message heuristic supplies a release proof.
+
+This ownership is local to a client incarnation.
+The shared supervisor must still retain it across formula cancellation/reconstruction,
+wire the durable session records, reconcile unknown acquisitions, and revoke authority
+without waiting for hung control operations.
+The missing-client deletion backstop still requires the existing stable-provider-binding
+precondition until record-backed adoption and cleanup are integrated.
+
+### Owned runtime provisioning
+
+The deployment must create a private runtime parent owned by the daemon user, then
+supply `ENDO_SANDBOX_RUNTIME_DIR`, `ENDO_SANDBOX_GENERATED_MAX_BYTES`, and
+`ENDO_SANDBOX_GENERATED_MAX_ENTRIES` to host setup.
+Budgets are explicit decimal integers: nonnegative bytes and positive directory entries.
+There are no default budgets or spending limits.
+`ENDO_OPENCODE_SANDBOX_OWNER_ID` optionally supplies the stable owner ID; otherwise
+setup derives it from the host formula identity.
+The factory formula persists these four values under their `ENDO_SANDBOX_*` names.
+Host setup validates configuration before minting and never adopts or chmods a
+directory for runtime ownership.
+
+Keep the runtime parent separate from the configured state, workspace, configuration,
+and MCP roots, and from every other guest-granted host tree.
+Both setup scripts check disjoint placement using existing canonical ancestors,
+including paths whose final directories do not exist yet.
+The deployment must preserve those ancestors outside guest rename authority.
+When a formula already exists, setup reads its persisted environment through the
+host-only `getFormulaEnvironment` method, using the same verified formula ID as
+the entrypoint check.
+The runtime parent and state root are selected independently: retained formulas
+use persisted values, while missing formulas use requested construction settings.
+An existing state provider must have a supported entrypoint and a persisted state
+root; its ambient environment fallback cannot establish stable placement.
+`setup-hosted.js` requires both formulas and uses their persisted roots.
+Current runtime or state environment values neither override nor need to repeat them.
+
+Both scripts inspect the existing factory formula and refuse a generic or unknown
+entrypoint before provisioning mutations.
+Retire an old generic runtime and establish that its processes have stopped before
+replacing its formula; deleting a name alone does not establish this.
+There is no automatic migration or stale-owner takeover.
+An existing owned factory is retained with its persisted configuration.
+Environment values remain absent from ordinary diagnostics; the explicit host-only
+reader verifies effective placement without reviving or changing retained formulas.
+Rerunning host setup does not reapply runtime configuration.
+Live replacement and reconfiguration require a separate lifecycle operation.
+
+Provisioning for one host must be serialized.
+Session construction resolves dependency capabilities once, stores them in a host-only
+execution bundle, and uses the shared static `@endo/hosted-agent/session-powers.js` module.
+The client formula retains the powers formula, bundle, and original dependencies;
+revival no longer resolves nested factory/provider names against current bindings.
+Daemon acceptance covers rebinding, GC, restart, and session-scoped state access.
+This active bundle excludes the client and does not replace passive session records.
+Backend defaults and cleanup backstops still use mutable names and current paths, so
+factory/state-provider bindings must remain stable until durable-record adoption lands.
+
+This provisioning change does not complete resolver integration, broker-only policy,
+durable volume quota attestation, or live Linux acceptance.
+
 **Lineage dependencies that must land first.** The OpenCode backend needs the
 hosted-backend seam (`@endo/hosted-agent`, present in PR #1248) **and** a
 credential cap backed by the Endo secrets manager. The latter is the Tokyo
@@ -549,6 +637,11 @@ New package `packages/opencode-sandbox/`.
    provider is adopted, the XFS `volumeRoot`/project-quota + sudo prerequisites
    (mirroring `modules/codex-storage.nix` on Tokyo). Every name must be
    `ENDO_`-prefixed.
+   Create a dedicated runtime parent owned by the daemon user with mode `0700`,
+   supply `ENDO_SANDBOX_RUNTIME_DIR` when creating the factory, and supply explicit
+   `ENDO_SANDBOX_GENERATED_MAX_BYTES`/`ENDO_SANDBOX_GENERATED_MAX_ENTRIES` budgets
+   to host setup.
+   These external deployment changes are not tracked in this repository.
 
 ## Security summary
 

@@ -200,14 +200,7 @@ export const makeOpencodeSessionProvisioner = (
       // Stop the live incarnation first so the successor cannot race its
       // mounts, then drop the formula; durable state and the recorded
       // opencode session survive (terminate keeps them).
-      await E(client)
-        .terminate()
-        .catch(error => {
-          console.error(
-            `[opencode-sandbox] stop before network change failed for ${sessionId}:`,
-            error instanceof Error ? error.message : String(error),
-          );
-        });
+      await E(client).terminate();
       await E(hostAgent).remove(...clientPath);
     }
 
@@ -331,10 +324,10 @@ export const makeOpencodeSessionProvisioner = (
         return E(hostAgent).lookup(clientPath);
       },
       /**
-       * Stop the session's live incarnation without deleting it: the daemon
-       * cancels the client formula, which tears down its slice, mounts, and
-       * credential grant; durable workspace and state survive, and the next
-       * `lookup` reincarnates it over the same host directories.
+       * Stop the captured client before cancelling its formula. Cancellation
+       * alone does not prove slice/mount cleanup completed, including when
+       * this is the rollback of a failed policy change. Durable workspace
+       * and state survive for the next incarnation.
        *
        * @param {string} sessionId
        */
@@ -343,6 +336,8 @@ export const makeOpencodeSessionProvisioner = (
         await inFlight.get(sessionId)?.catch(() => {});
         if (!(await E(hostAgent).has(...sessionsPath))) return;
         if (await E(hostAgent).has(...clientPath)) {
+          const client = await E(hostAgent).lookup(clientPath);
+          await E(client).terminate();
           await E(hostAgent).cancel(
             [...clientPath],
             Error(`OpenCode session ${sessionId} stopped`),
@@ -360,17 +355,9 @@ export const makeOpencodeSessionProvisioner = (
         await inFlight.get(sessionId)?.catch(() => {});
         // Destroy through the live client first: its `destroy()` terminates
         // the incarnation and then deletes durable state through the state
-        // provider (never a plain terminate/cancel).  Best-effort — the
-        // formula may already be gone and the state directory already
-        // deleted.
-        try {
-          await destroyClient(sessionId);
-        } catch (error) {
-          console.error(
-            `[opencode-sandbox] direct destroy of session ${sessionId} failed; relying on formula removal:`,
-            error instanceof Error ? error.message : String(error),
-          );
-        }
+        // provider (never a plain terminate/cancel). A failed destroy retains
+        // the formula and storage so the same owner can finish cleanup on retry.
+        await destroyClient(sessionId);
         if (
           (await E(hostAgent).has(...sessionsPath)) &&
           (await E(hostAgent).has(...clientPath))
@@ -388,7 +375,7 @@ export const makeOpencodeSessionProvisioner = (
         // safe to delete outright (it is never a shared workspace/worktree).
         await removeDirectory(configDir, { recursive: true, force: true });
         // Backstop: delete durable state through the provider directly, so a
-        // destroy whose client formula was unreachable still removes it.
+        // session whose client formula is absent still removes it.
         // Idempotent after the client's own destroy already deleted it.
         await removeSessionState(makeSandboxSessionId(sessionId));
       },

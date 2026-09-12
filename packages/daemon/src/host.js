@@ -8,10 +8,11 @@
 /** @import { AgentDeferredTaskParams, ChannelDeferredTaskParams, Context, ContentLoadable, DaemonCore, DeferredTasks, EndoDiagnostics, EndoDirectory, EndoGuest, EndoHost, EndoMount, EnvRecord, EvalDeferredTaskParams, FormulaIdentifier, FormulaNumber, FormulaRecord, GitCredentialDeferredTaskParams, GitDeferredTaskParams, GitProvisionOptions, GitRemoteDeferredTaskParams, HostToolPowers, HttpClientDeferredTaskParams, InvitationDeferredTaskParams, MakeAgentOptions, MakeCapletDeferredTaskParams, MakeCapletOptions, MakeDirectoryNode, MakeMailbox, MountDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, PeerInfo, PetName, ReadableBlobDeferredTaskParams, ReadableTreeDeferredTaskParams, MarshalDeferredTaskParams, ScratchMountDeferredTaskParams, ShellDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
 /** @import { makeSecretManager } from './secret-manager.js' */
 /** @import { makeTraceAggregator } from './trace-aggregator.js' */
+/** @import { SessionRecordDirectory } from './session-record-store.js' */
 
 import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
-import { makeError, q, X } from '@endo/errors';
+import { Fail, makeError, q, X } from '@endo/errors';
 import {
   getGitCredentialController as getGitCredentialControllerForCap,
   getGitRemoteController as getGitRemoteControllerForCap,
@@ -28,13 +29,15 @@ import {
   namePathFrom,
   petNamePathFrom,
 } from './pet-name.js';
-import { parseId } from './formula-identifier.js';
+import { assertValidId, parseId } from './formula-identifier.js';
 import { idFromLocator, internalizeLocator } from './locator.js';
 import { toHex, fromHex } from './hex.js';
 import { makePetSitter } from './pet-sitter.js';
 
 import { makeDeferredTasks } from './deferred-tasks.js';
 import { makeFormulaRecord } from './formula-record.js';
+import { makeSerialJobs } from './serial-jobs.js';
+import { makeSessionOwner } from './session-owner.js';
 
 import {
   DiagnosticsInterface,
@@ -288,6 +291,7 @@ harden(normalizeHttpClientPolicy);
 /**
  * @param {object} args
  * @param {DaemonCore['provide']} args.provide
+ * @param {DaemonCore['provideController']} args.provideController
  * @param {DaemonCore['provideStoreController']} args.provideStoreController
  * @param {DaemonCore['cancelValue']} args.cancelValue
  * @param {DaemonCore['formulateWorker']} args.formulateWorker
@@ -345,6 +349,7 @@ harden(normalizeHttpClientPolicy);
  */
 export const makeHostMaker = ({
   provide,
+  provideController,
   provideStoreController,
   cancelValue,
   formulateWorker,
@@ -424,6 +429,11 @@ export const makeHostMaker = ({
   secretManager,
   formulateSecretLookup,
 }) => {
+  // A directory is one administrative serialization domain, even when its ID
+  // is named by several hosts. Claims last for this daemon incarnation; host
+  // cancellation alone does not establish that its native cleanup completed.
+  /** @type {Map<FormulaIdentifier, {hostId: FormulaIdentifier, context: Context}>} */
+  const sessionDirectoryHosts = new Map();
   /**
    * @param {FormulaIdentifier} hostId
    * @param {FormulaIdentifier} handleId
@@ -536,6 +546,130 @@ export const makeHostMaker = ({
       getNetworkAddresses,
       getContentSources,
     );
+
+    // These owners belong to this host incarnation, not the worker which
+    // requested one. Directory and client references remain daemon-local.
+    let sessionOwnersActive = true;
+    void context.cancelled.catch(() => {
+      sessionOwnersActive = false;
+    });
+    const assertSessionOwnersActive = () => {
+      sessionOwnersActive || Fail`Session owner host is cancelled`;
+    };
+    const sessionOwnerJobs = makeSerialJobs();
+    /** @type {Map<FormulaIdentifier, {owner: ReturnType<typeof makeSessionOwner>, assertActive: () => void}>} */
+    const sessionOwnersById = new Map();
+    /** @type {Map<string, Promise<{identifier: FormulaIdentifier, owner: ReturnType<typeof makeSessionOwner>, assertActive: () => void}>>} */
+    const sessionOwnersByPath = new Map();
+
+    /** @type {EndoHost['provideSessionOwner']} */
+    const provideSessionOwner = async recordsPath => {
+      const { namePath } = assertPetNamePath(namePathFrom(recordsPath));
+      const key = JSON.stringify(namePath);
+      assertSessionOwnersActive();
+      let pending = sessionOwnersByPath.get(key);
+      if (pending === undefined) {
+        // Serialize creation across paths as well: two new owners may need
+        // the same missing parent, and makeDirectory replaces existing names.
+        pending = sessionOwnerJobs.enqueue(async () => {
+          assertSessionOwnersActive();
+          let identifier;
+          for (let length = 1; length <= namePath.length; length += 1) {
+            const prefix = namePath.slice(0, length);
+            // eslint-disable-next-line no-await-in-loop
+            identifier = await E(directory).identify(...prefix);
+            assertSessionOwnersActive();
+            if (identifier === undefined) {
+              // The returned directory stays here; it must not cross CapTP
+              // into a worker merely because it initiated this operation.
+              // eslint-disable-next-line no-await-in-loop
+              await E(directory).makeDirectory(prefix);
+              assertSessionOwnersActive();
+              // eslint-disable-next-line no-await-in-loop
+              identifier = await E(directory).identify(...prefix);
+              assertSessionOwnersActive();
+            }
+            if (identifier === undefined) {
+              throw makeError(X`Missing session owner directory`);
+            }
+            assertValidId(identifier);
+            isLocalKey(parseId(identifier).node) ||
+              Fail`Session owner storage must be a local directory`;
+            // Validate each parent before using it to traverse or create the
+            // next segment; an arbitrary NameHub is not administrative storage.
+            // eslint-disable-next-line no-await-in-loop
+            const formula = await getFormulaForId(identifier);
+            assertSessionOwnersActive();
+            formula.type === 'directory' ||
+              Fail`Session owner storage must be a local directory`;
+          }
+          if (identifier === undefined) {
+            throw makeError(X`Missing session owner directory`);
+          }
+          const claimedHost = sessionDirectoryHosts.get(identifier);
+          claimedHost === undefined ||
+            claimedHost.hostId === hostId ||
+            Fail`Session owner directory is already owned by another host`;
+          claimedHost === undefined ||
+            claimedHost.context === context ||
+            Fail`Session owner directory is retained by an earlier host incarnation`;
+          sessionDirectoryHosts.set(identifier, harden({ hostId, context }));
+          let retainedOwner = sessionOwnersById.get(identifier);
+          if (retainedOwner === undefined) {
+            // Capture value and cancellation from the same controller. A
+            // separate later lookup could observe a successor incarnation.
+            const controller = provideController(identifier);
+            let directoryActive = true;
+            void controller.context.cancelled.catch(() => {
+              directoryActive = false;
+            });
+            const assertActive = () => {
+              assertSessionOwnersActive();
+              directoryActive || Fail`Session owner directory is cancelled`;
+            };
+            const records = /** @type {SessionRecordDirectory} */ (
+              await controller.value
+            );
+            assertActive();
+            const owner = makeSessionOwner({
+              directory: records,
+              assertActive,
+              provide: async id => {
+                assertActive();
+                assertValidId(id);
+                const value = await provide(id);
+                assertActive();
+                return value;
+              },
+              cancel: async (id, reason) => {
+                assertActive();
+                assertValidId(id);
+                await cancelValue(id, reason);
+                assertActive();
+              },
+            });
+            retainedOwner = harden({ owner, assertActive });
+            sessionOwnersById.set(identifier, retainedOwner);
+          }
+          retainedOwner.assertActive();
+          return harden({ identifier, ...retainedOwner });
+        });
+        sessionOwnersByPath.set(key, pending);
+        void pending.catch(() => {
+          if (sessionOwnersByPath.get(key) === pending) {
+            sessionOwnersByPath.delete(key);
+          }
+        });
+      }
+      const retained = await pending;
+      assertSessionOwnersActive();
+      const current = await E(directory).identify(...namePath);
+      assertSessionOwnersActive();
+      current === retained.identifier ||
+        Fail`Session owner directory changed while its owner is retained`;
+      retained.assertActive();
+      return retained.owner;
+    };
     /**
      * Inspect one inventory path without resolving its value.
      * @param {Name[]} path
@@ -2311,9 +2445,8 @@ export const makeHostMaker = ({
      * on genuinely remote peers are rejected with a clear error.
      *
      * @param {FormulaIdentifier} identifier
-     * @returns {Promise<FormulaRecord>}
      */
-    const getFormula = async identifier => {
+    const getLocalFormula = async identifier => {
       await null;
       if (typeof identifier !== 'string') {
         throw new TypeError(
@@ -2345,6 +2478,15 @@ export const makeHostMaker = ({
           { cause },
         );
       }
+      return harden({ formula, number });
+    };
+
+    /**
+     * @param {FormulaIdentifier} identifier
+     * @returns {Promise<FormulaRecord>}
+     */
+    const getFormula = async identifier => {
+      const { formula, number } = await getLocalFormula(identifier);
       // A scratch-mount carries no path on disk; resolve the daemon-
       // managed host path so the formula record can surface it. Other
       // formula types (including `mount`, whose path lives in the
@@ -2356,6 +2498,27 @@ export const makeHostMaker = ({
         );
       }
       return makeFormulaRecord(formula, number, { mountHostPath });
+    };
+
+    /**
+     * Read construction policy without reviving the formula. Environment values
+     * can include credentials, so this authority is on EndoHost itself, never on
+     * the separately delegable diagnostics facet or ordinary formula records.
+     * @param {FormulaIdentifier} identifier
+     * @returns {Promise<Record<string, string>>}
+     */
+    const getFormulaEnvironment = async identifier => {
+      const { formula } = await getLocalFormula(identifier);
+      if (
+        formula.type !== 'make-unconfined' &&
+        formula.type !== 'make-archive' &&
+        formula.type !== 'make-from-tree'
+      ) {
+        throw makeError(
+          X`Formula ${q(identifier)} has no construction environment`,
+        );
+      }
+      return harden({ ...formula.env });
     };
 
     const { reverseIdentify } = specialStore;
@@ -2703,6 +2866,7 @@ export const makeHostMaker = ({
       storeTree,
       provideMount,
       provideScratchMount,
+      provideSessionOwner,
       provideSubMount,
       provideGit,
       provideShell,
@@ -2744,6 +2908,7 @@ export const makeHostMaker = ({
       sendValue,
       // Diagnostics (formula records, dependency graph, error traces)
       diagnostics,
+      getFormulaEnvironment,
       listRetentionPaths: listRetentionPathsForHost,
       followRetentionPaths: followRetentionPathsForHost,
     };

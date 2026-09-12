@@ -87,13 +87,11 @@ context** (how it tears down).
 
 ### Two create paths — who supplies the caps
 
-The caps a session needs (`Filesystem`, `ClaudeCredentials`) must be endowed
-into the per-session powers **by name**, because `evaluate` endows by name and a
-remote formula id is a valid endowment. The constraint is how a caller's cap
-acquires a host name — and a cap **cannot** be passed as a method argument
-across a daemon boundary (it arrives as a bare CapTP presence with no formula
-id: `No corresponding formula`), so there is no cap-argument entry point. Both
-create paths are therefore mailbox-based and **host-rooted**:
+The factory must first obtain formula-backed dependencies that the host can persist.
+For mailbox imports, adopting the resource establishes its tracked import identity.
+The factory resolves these references once, persists a capability bundle, and constructs
+shared static session powers from that bundle.
+Both mailbox create paths remain host-rooted:
 
 - **A remote peer (or any agent) `send`s a session-request package** to the
   host: a `package` message with a `filesystem` (+ optional `credentials`) edge
@@ -612,33 +610,19 @@ errors surface as `abort` events, not `send()` rejections.
 ### 8. Least authority for the client worker — FIXED
 
 **Caps as arguments.**
-The per-session `claude-client` formula does not run with `@agent`. The factory
-builds a **per-session powers** cap for each session (via `E(hostAgent).evaluate`,
-`buildSessionPowersSource` in `claude-sandbox-factory.js`) that is a **total
-attenuation**: it closes over the four caps the client needs — resolved once, by
-reference, from the endowed pet names — and `@agent`, and exposes only
+The per-session `claude-client` formula does not run with `@agent`.
+Both creation paths use the shared static `@endo/hosted-agent/session-powers.js` module.
+The host resolves dependencies once and persists the exact capability references with
+`storeValue`; no generated powers source or nested lookup formulas remain.
+Factory, mounter, workspace, credentials, and optional config/MCP references therefore
+retain their original identities across name rebinding and daemon restart.
 
-- `sandboxFactory()` / `fsMounter()` / `filesystem()` / `credentials()` —
-  accessors returning the bundled caps (no name lookup; `credentials()` is a
-  baked `null` when the session has none). Note: the `filesystem` and
-  `credentials` endowments are single host names, so they are pinned to a
-  formula id at `evaluate` time. The infra endowments (`sandbox-factory` /
-  `fs-mounter`) are now **path** endowments (under the factory's
-  `SANDBOX_NAMESPACE` directory), which the daemon resolves with a `lookup`
-  formula against the **live** host directory on each incarnation — so a
-  reincarnated session re-resolves the current infra caps rather than stale
-  ids. This is benign (rebinding `<ns>/sandbox-factory` requires full host
-  authority, above the factory in the TCB) but is a deliberate asymmetry with
-  the eagerly-pinned `filesystem` / `credentials`;
-- `provideMount(path, name)` — bounded to **exactly this session's** workspace
-  mountpoint, so a client cannot `provideMount('/etc', …)` (or any other path)
-  and recover host paths through a slice.
-
-There is **no `lookup`** and nothing else of the host surface, so a client worker
-cannot resolve any host name beyond its own four caps, nor reach `makeUnconfined`
-/ `provideHostPath` / `provideGuest` / `remove` / `store` / `evaluate`. This is
-the "caps as arguments" shape: the client receives its authority as object
-references, not as names it resolves.
+The powers expose selected resource accessors and mount registration restricted to
+this session's exact path/name pairs.
+The host agent stays inside the construction bundle; no host lookup is exposed.
+The shared module can also scope a state provider to one session ID when required by
+an adapter; Claude does not supply one.
+This is a host-side attenuation, not an isolation boundary between guest processes.
 
 The client module's call sites changed from `E(powers).lookup(name)` to the
 accessors; the cap-name env vars (`FILESYSTEM_NAME`, `SANDBOX_FACTORY_NAME`,
@@ -649,10 +633,10 @@ not `env`.
 **Host-only** (the `EndoGuest` interface has `evaluate` / `lookup` / `storeValue`
 but **not** `makeUnconfined` / `provideMount`) and resolves `powersName` against
 the **host** petstore, so the per-session powers must be named to be used. The
-factory therefore **unnames it immediately after `makeUnconfined`**: the
+factory therefore drops the temporary bundle and powers names after client construction: the
 `make-unconfined` formula declares `['powers', …]` as a dependency
 (`daemon.js`), which `onFormulaAdded` turns into a group **reachability** edge
-client→powers (`graph.js`). So once the client references it, dropping the pet
+client→powers→bundle→dependencies (`graph.js`). So once the client references it, dropping the pet
 name leaves the powers rooted **only** by that edge — it stays alive for exactly
 the client's lifetime and is collected **with** the client. No per-session
 host-petstore residue. `test/live-daemon.test.js` proves this end to end: after a

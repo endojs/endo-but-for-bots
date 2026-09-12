@@ -76,6 +76,7 @@ import {
   parseContentLocator,
 } from './locator.js';
 import { makeContextMaker } from './context.js';
+import { makeImportedReferenceRegistrar } from './imported-reference.js';
 import {
   assertValidId,
   assertValidNumber,
@@ -1358,6 +1359,12 @@ const makeDaemonCore = async (
 
   /** @type {Map<FormulaIdentifier, object>} */
   const refForId = new Map();
+
+  const registerImportedReference = makeImportedReferenceRegistrar({
+    idForRef,
+    refForId,
+    controllerForId,
+  });
 
   /** @type {DaemonCore['getIdForRef']} */
   const getIdForRef = ref => idForRef.get(/** @type {any} */ (ref));
@@ -4679,7 +4686,9 @@ const makeDaemonCore = async (
       const peerId = await getPeerIdForNodeIdentifier(formulaNode);
       context.thisDiesIfThatDies(peerId);
       const peer = provide(peerId, 'peer');
-      return E(peer).provide(id);
+      const value = /** @type {unknown} */ (await E(peer).provide(id));
+      registerImportedReference(id, value, context);
+      return value;
     }
 
     const formula = await getFormulaForId(id);
@@ -5521,6 +5530,10 @@ const makeDaemonCore = async (
   };
 
   /**
+   * Transfers one transient pin to the caller, acquired before releasing the
+   * formula graph lock. The caller must release it after publishing a durable
+   * reference, or if publication fails.
+   *
    * @type {DaemonCore['formulateDirectory']}
    */
   const formulateDirectory = async (nodeNumber = localNodeNumber) => {
@@ -5749,9 +5762,9 @@ const makeDaemonCore = async (
     // Every agent owns an initially empty `@planes` directory. A data plane is
     // opt-in: only a capability the agent places here can contribute a source
     // hint to its content locators.
-    const planesDirectoryId = pin(
-      (await formulateDirectory(agentNodeNumber)).id,
-    );
+    const { id: planesDirectoryId } = await formulateDirectory(agentNodeNumber);
+    // Adopt the pin transferred by formulateDirectory without taking another.
+    pinned.push(planesDirectoryId);
     /* eslint-enable no-use-before-define */
 
     return harden({
@@ -5915,27 +5928,25 @@ const makeDaemonCore = async (
     );
     // Each guest gets its own (initially empty) networks directory that
     // controls which connection hints appear in locators it produces.
-    const networksDirectoryId = pin(
-      specifiedNetworksDirectoryId ??
-        (await formulateDirectory(agentNodeNumber)).id,
+    // Newly formulated directories transfer one construction pin. Adopt it;
+    // caller-provided directories require a new pin for this construction.
+    /** @param {FormulaIdentifier | undefined} [specifiedId] */
+    const retainDirectory = async specifiedId => {
+      if (specifiedId !== undefined) return pin(specifiedId);
+      const { id } = await formulateDirectory(agentNodeNumber);
+      pinned.push(id);
+      return id;
+    };
+    const networksDirectoryId = await retainDirectory(
+      specifiedNetworksDirectoryId,
     );
-    const planesDirectoryId = pin(
-      (await formulateDirectory(agentNodeNumber)).id,
+    const planesDirectoryId = await retainDirectory();
+    // The guest may manage its own @pins, while host-owned relationship pins
+    // remain outside the guest's namespace and authority.
+    const guestPinsDirectoryId = await retainDirectory(
+      specifiedGuestPinsDirectoryId,
     );
-    // A guest-scoped pin directory, the guest's own `@pins`. It mirrors the
-    // host's `@pins`, but it is the guest's own directory (not the daemon's
-    // root pins), so it confers no host authority.
-    const guestPinsDirectoryId = pin(
-      specifiedGuestPinsDirectoryId ??
-        (await formulateDirectory(agentNodeNumber)).id,
-    );
-    // A second pin directory is held by the guest formula but never installed
-    // as a special name. Daemon-owned relationships can therefore remain
-    // durable without letting the guest or its connected agent remove their
-    // pin.
-    const hostPinsDirectoryId = pin(
-      (await formulateDirectory(agentNodeNumber)).id,
-    );
+    const hostPinsDirectoryId = await retainDirectory();
     return harden({
       guestFormulaNumber,
       guestId,
@@ -6578,14 +6589,14 @@ const makeDaemonCore = async (
         const { id: pinsDirectoryId } = await formulateDirectory();
 
         // Ensure the default host is formulated and persisted.
-        const { id: defaultHostId } = await formulateNumberedHost(
-          await formulateHostDependencies({
-            endoId,
-            networksDirectoryId,
-            pinsDirectoryId,
-            specifiedWorkerId: defaultHostWorkerId,
-          }),
-        );
+        const hostIdentifiers = await formulateHostDependencies({
+          endoId,
+          networksDirectoryId,
+          pinsDirectoryId,
+          specifiedWorkerId: defaultHostWorkerId,
+        });
+        const { id: defaultHostId } =
+          await formulateNumberedHost(hostIdentifiers);
 
         /** @type {EndoFormula} */
         const formula = {
@@ -6599,6 +6610,14 @@ const makeDaemonCore = async (
 
         const result = await formulate(formulaNumber, formula);
         formulaGraph.addRoot(result.id);
+        // The rooted Endo formula now retains these construction dependencies.
+        for (const id of [
+          networksDirectoryId,
+          pinsDirectoryId,
+          ...hostIdentifiers.pinned,
+        ]) {
+          unpinTransient(id);
+        }
         return result;
       })
     );
@@ -7796,7 +7815,6 @@ const makeDaemonCore = async (
     getContentIdentityForId,
     formulateDirectory,
     formulateReadableBlob,
-    pinTransient,
     unpinTransient,
   });
 
@@ -8206,6 +8224,7 @@ const makeDaemonCore = async (
   const makeHost = makeHostMaker({
     gitClone,
     provide,
+    provideController,
     provideStoreController,
     cancelValue,
     formulateWorker,

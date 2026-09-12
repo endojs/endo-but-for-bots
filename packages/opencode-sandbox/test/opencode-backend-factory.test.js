@@ -94,6 +94,7 @@ const makeHarness = (options = {}) => {
   const log = [];
   const { client, turns, interrupts } = makeFakeClient(() => {
     log.push(['stop-client']);
+    options.onTerminate?.();
   });
   let pending = 0;
   let bridgeClosed = 0;
@@ -108,6 +109,7 @@ const makeHarness = (options = {}) => {
     },
     removeSession: async sessionId => {
       log.push(['remove', sessionId]);
+      options.onRemove?.();
     },
     startToolBridge: async (sessionId, toolSet) => {
       log.push(['bridge', sessionId, await E(toolSet).describe()]);
@@ -512,7 +514,7 @@ test('a failed lease revoke is retried on the next terminate attempt', async t =
     instanceOf: AggregateError,
     message: /cleanup remains pending/,
   });
-  t.regex(error.errors[0].message, /listener busy/);
+  t.regex(error.errors[0].errors[0].message, /listener busy/);
   // The failed teardown keeps ownership and the retry releases the lease.
   await E(admin).terminate();
   t.is(revoked, 2);
@@ -598,4 +600,124 @@ test('grant refusal closes the bridge without cancelling an unattempted client',
     log.map(entry => entry[0]),
     ['bridge'],
   );
+});
+
+test('failed client stop fences successors and deletion while independent authority is withdrawn', async t => {
+  let stopFails = true;
+  let revocations = 0;
+  const { factory, log, bridgeClosed } = makeHarness({
+    onTerminate: () => {
+      if (stopFails) throw Error('guest process still live');
+    },
+    broker: async () =>
+      harden({
+        async attestation() {
+          return harden({ endpoint: 'http://127.0.0.1:41337' });
+        },
+        async sandboxEvidence() {
+          return harden({ brokerSidecar: { container: 'endo-provider-abc' } });
+        },
+        async revoke() {
+          revocations += 1;
+        },
+      }),
+  });
+  const spec = harden({ sessionId: 'stop-retry' });
+  const { admin } = await E(factory).create(spec, makeToolSet());
+  await t.throwsAsync(() => E(admin).terminate(), {
+    message: /guest process still live/,
+  });
+  t.is(revocations, 1);
+  t.is(bridgeClosed(), 1);
+  await t.throwsAsync(() => E(factory).create(spec, makeToolSet()), {
+    message: /guest process still live/,
+  });
+  await t.throwsAsync(() => E(factory).destroy(spec), {
+    message: /guest process still live/,
+  });
+  t.is(log.filter(([event]) => event === 'provision').length, 1);
+  t.false(
+    log.some(([event]) =>
+      ['cancel', 'remove', 'remove-bridge'].includes(event),
+    ),
+  );
+
+  stopFails = false;
+  await E(factory).destroy(spec);
+  t.is(log.filter(([event]) => event === 'stop-client').length, 4);
+  t.deepEqual(log.slice(-3), [
+    ['cancel', 'stop-retry'],
+    ['remove', 'stop-retry'],
+    ['remove-bridge', 'stop-retry'],
+  ]);
+  t.is(revocations, 1, 'successful authority releases are not repeated');
+  t.is(bridgeClosed(), 1);
+});
+
+test('failed client stop retains the MCP reader for a raced Endo call', async t => {
+  let stopFails = true;
+  let revocations = 0;
+  const { factory, setPending, log, bridgeClosed } = makeHarness({
+    onTerminate: () => {
+      if (stopFails) {
+        setPending(1);
+        throw Error('guest process still live');
+      }
+    },
+    broker: async () =>
+      harden({
+        async attestation() {
+          return harden({ endpoint: 'http://127.0.0.1:41337' });
+        },
+        async sandboxEvidence() {
+          return harden({ brokerSidecar: { container: 'endo-provider-abc' } });
+        },
+        async revoke() {
+          revocations += 1;
+        },
+      }),
+  });
+  const { admin } = await E(factory).create(
+    harden({ sessionId: 'raced-stop' }),
+    makeToolSet(),
+  );
+  const failure = await t.throwsAsync(() => E(admin).terminate(), {
+    instanceOf: AggregateError,
+    message: /client stop and authority cleanup remain pending/,
+  });
+  t.regex(failure.errors[0].message, /guest process still live/);
+  t.is(revocations, 1);
+  t.is(bridgeClosed(), 0);
+  t.false(log.some(([event]) => event === 'cancel'));
+  await t.throwsAsync(() => E(admin).terminate(), {
+    message: /1 unsettled Endo tool call/,
+  });
+  stopFails = false;
+  setPending(0);
+  await E(admin).terminate();
+  t.is(log.filter(([event]) => event === 'stop-client').length, 2);
+  t.is(revocations, 1);
+  t.is(bridgeClosed(), 1);
+});
+
+test('failed session removal retains the bridge directory for retry', async t => {
+  let removeFails = true;
+  const { factory, log } = makeHarness({
+    onRemove: () => {
+      if (removeFails) throw Error('session destruction incomplete');
+    },
+  });
+  const spec = harden({ sessionId: 'remove-retry' });
+  // No live backend registry entry: the provisioner still owns the durable
+  // client formula and can refuse destruction when it cannot prove a stop.
+  await t.throwsAsync(() => E(factory).destroy(spec), {
+    message: /session destruction incomplete/,
+  });
+  t.deepEqual(log, [['remove', 'remove-retry']]);
+  removeFails = false;
+  await E(factory).destroy(spec);
+  t.deepEqual(log.slice(-2), [
+    ['remove', 'remove-retry'],
+    ['remove-bridge', 'remove-retry'],
+  ]);
 });

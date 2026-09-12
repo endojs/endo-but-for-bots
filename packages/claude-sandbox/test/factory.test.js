@@ -115,9 +115,12 @@ const makeMockPowers = () => {
   };
 };
 
-const makeMockHostAgent = ({ filesystems = {}, evaluateThrows } = {}) => {
+const makeMockHostAgent = ({ filesystems = {}, storeThrows } = {}) => {
   const unconfinedCalls = [];
-  const evaluateCalls = [];
+  const storeCalls = [];
+  const powersCalls = [];
+  const lookupCalls = [];
+  const resolved = new Map();
   const removeCalls = [];
   const adoptCalls = [];
   const replyCalls = [];
@@ -144,20 +147,28 @@ const makeMockHostAgent = ({ filesystems = {}, evaluateThrows } = {}) => {
       adoptCalls.push({ number, edge, petName });
       storedNames.add(nameKey(petName));
     },
-    async evaluate(workerName, source, codeNames, petNames, resultName) {
-      evaluateCalls.push({
-        workerName,
-        source,
-        codeNames,
-        petNames,
-        resultName,
-      });
-      if (evaluateThrows) throw new Error(evaluateThrows);
-      if (resultName !== undefined) storedNames.add(nameKey(resultName));
-      return harden({ kind: 'fake-powers', name: resultName });
+    async lookup(name) {
+      lookupCalls.push(name);
+      const key = nameKey(name);
+      if (!resolved.has(key)) {
+        resolved.set(
+          key,
+          filesystems[key] || harden({ kind: 'dependency', name: key }),
+        );
+      }
+      return resolved.get(key);
+    },
+    async storeValue(bundle, name) {
+      storeCalls.push({ bundle, name });
+      if (storeThrows) throw new Error(storeThrows);
+      storedNames.add(nameKey(name));
     },
     async makeUnconfined(powersName, specifier, opts) {
-      unconfinedCalls.push({ powersName, specifier, opts });
+      if (specifier.endsWith('/session-powers.js')) {
+        powersCalls.push({ powersName, specifier, opts });
+      } else {
+        unconfinedCalls.push({ powersName, specifier, opts });
+      }
       if (opts.resultName !== undefined)
         storedNames.add(nameKey(opts.resultName));
       return harden({ kind: 'fake-client', name: opts.resultName });
@@ -192,7 +203,10 @@ const makeMockHostAgent = ({ filesystems = {}, evaluateThrows } = {}) => {
   return {
     hostAgent,
     unconfinedCalls,
-    evaluateCalls,
+    storeCalls,
+    powersCalls,
+    lookupCalls,
+    resolved,
     removeCalls,
     adoptCalls,
     replyCalls,
@@ -301,29 +315,35 @@ test('submission formulates a claude-client caplet with the right env', async t 
   // and not a shared cap. The name is per-session (`claude-<sessionId>-powers`).
   t.regex(call.opts.powersName, /^claude-my-claude-.*-powers$/);
 
-  // The per-session powers was built by `evaluate`, endowing the operator's
-  // own pet names **directly** (the form path does not storeValue — the names
-  // already exist in the host petstore), plus `@agent` for provideMount.
-  t.is(host.evaluateCalls.length, 1);
-  const evalCall = host.evaluateCalls[0];
-  t.is(evalCall.resultName, call.opts.powersName);
-  t.deepEqual(evalCall.petNames, [
+  // The persisted bundle captures exact capabilities, not lookup names.
+  t.is(host.storeCalls.length, 1);
+  const { bundle, name: inputName } = host.storeCalls[0];
+  t.is(bundle.filesystem, fsCap);
+  t.is(bundle.credentials, credCap);
+  t.deepEqual(host.lookupCalls, [
     '@agent',
     'sandbox-factory',
     'fs-mounter',
     'my-fs',
     'my-creds',
   ]);
-  t.deepEqual(evalCall.codeNames, [
-    'agent',
-    'sandboxFactory',
-    'fsMounter',
-    'filesystem',
-    'credentials',
+  t.deepEqual(host.powersCalls[0].opts, {
+    powersName: inputName,
+    resultName: call.opts.powersName,
+  });
+  t.regex(
+    host.powersCalls[0].specifier,
+    /hosted-agent\/src\/session-powers\.js$/,
+  );
+  t.deepEqual(bundle.mounts, [
+    {
+      mountPoint: call.opts.env.WORKSPACE_MOUNT_POINT,
+      mountName: call.opts.env.WORKSPACE_PET_NAME,
+    },
   ]);
-  // Only the per-session powers name is removed — the operator's `my-fs` /
-  // `my-creds` names are durable and must NOT be removed.
-  t.deepEqual(host.removeCalls, [call.opts.powersName]);
+  // Both temporary bundle/powers names are dropped after client construction;
+  // the operator's own names remain untouched.
+  t.deepEqual(host.removeCalls, [call.opts.powersName, inputName]);
 
   const { env } = call.opts;
   // Caps are passed by reference through powers — no cap-name env vars.
@@ -364,8 +384,8 @@ test('SANDBOX_NAMESPACE endows the infra caps under the factory directory', asyn
     network: 'private',
   });
 
-  await waitFor(() => host.evaluateCalls.length > 0);
-  t.deepEqual(host.evaluateCalls[0].petNames, [
+  await waitFor(() => host.storeCalls.length > 0);
+  t.deepEqual(host.lookupCalls, [
     '@agent',
     ['claude-sandbox', 'sandbox-factory'],
     ['claude-sandbox', 'fs-mounter'],
@@ -473,7 +493,10 @@ test('a session-request package adopts the cap, formulates, replies, and dismiss
   t.is(host.adoptCalls.length, 1);
   t.like(host.adoptCalls[0], { number: 7, edge: 'filesystem' });
   t.regex(host.adoptCalls[0].petName, /^claude-peer-1-.*-fscap$/);
-  t.is(host.evaluateCalls[0].petNames[3], host.adoptCalls[0].petName);
+  t.is(
+    host.storeCalls[0].bundle.filesystem,
+    host.resolved.get(host.adoptCalls[0].petName),
+  );
 
   // Host-rooted under a Date.now()-bearing leaf (restart-collision-safe).
   const { resultName } = host.unconfinedCalls[0].opts;
@@ -511,11 +534,9 @@ test('a session-request package with a credentials edge adopts both caps', async
     host.adoptCalls.map(c => c.edge),
     ['filesystem', 'credentials'],
   );
-  const evalCall = host.evaluateCalls[0];
-  t.is(evalCall.petNames.length, 5);
-  t.regex(evalCall.petNames[3], /-fscap$/);
-  t.regex(evalCall.petNames[4], /-credcap$/);
-  t.true(evalCall.codeNames.includes('credentials'));
+  const { bundle } = host.storeCalls[0];
+  t.is(bundle.filesystem, host.resolved.get(host.adoptCalls[0].petName));
+  t.is(bundle.credentials, host.resolved.get(host.adoptCalls[1].petName));
 });
 
 test('a package without the kind marker is ignored (no hijack of host traffic)', async t => {
@@ -547,7 +568,7 @@ test('a package without the kind marker is ignored (no hijack of host traffic)',
 
 test('a session-request that fails formulation replies an error, cleans up, and dismisses', async t => {
   const mock = makeMockPowers();
-  const host = makeMockHostAgent({ evaluateThrows: 'boom' });
+  const host = makeMockHostAgent({ storeThrows: 'boom' });
   const stream = makeHostMessageStream();
   make(mock.powers, undefined, {
     ...wireDeps(mock, host),
@@ -610,7 +631,7 @@ test('concurrent session-request packages each get a distinct session, no residu
   });
 
   // Two requests back-to-back exercise the shared sessionCounter/tempCounter
-  // and the interleaved evaluate→makeUnconfined→remove name dance.
+  // and the interleaved storeValue→makeUnconfined→remove name dance.
   stream.push(
     sessionRequestPackage(30, {
       kind: 'claude-sandbox-session',
@@ -633,7 +654,7 @@ test('concurrent session-request packages each get a distinct session, no residu
   t.regex(names[1], /^session-conc-b-/);
   t.not(names[0], names[1], 'distinct session names');
   // Distinct per-session powers + adopt temp names (no counter collision).
-  const powers = host.evaluateCalls.map(c => c.resultName);
+  const powers = host.powersCalls.map(c => c.opts.resultName);
   t.not(powers[0], powers[1]);
   const fscaps = host.adoptCalls.map(c => c.petName);
   t.not(fscaps[0], fscaps[1]);

@@ -5,7 +5,7 @@ import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import { M, matches } from '@endo/patterns';
 
-import { makeSandboxFactory } from '../src/factory.js';
+import { makeSandboxFactory, makeSandboxFactoryKit } from '../src/factory.js';
 import {
   BackendProbeShape,
   NetworkProfileShape,
@@ -409,6 +409,27 @@ test('a policy reaches the driver and its attestation reaches the caller', async
   const attestation = await E(handle).policy();
   t.is(attestation.version, 'SlicePolicyAttestationV1');
   t.is(attestation.imageDigest, stubPolicyRequest.imageDigest);
+});
+
+test('native preparation refuses scratch outside an exact policy', async t => {
+  const kit = makeSandboxFactoryKit({
+    drivers: [makePolicyStubDriver()],
+    scratchProvider: /** @type {any} */ (stubScratchProvider),
+  });
+  t.teardown(() => kit.close());
+  const nativeOptions = harden({
+    rootfs: { kind: /** @type {const} */ ('oci'), ref: 'image' },
+    network: /** @type {const} */ ('broker-only'),
+    policy: stubPolicyRequest,
+  });
+  await t.throwsAsync(
+    () => kit.makeResolved({ ...nativeOptions, scratchHostPath: '/scratch' }),
+    { message: /Scratch cannot extend an exact slice policy/ },
+  );
+  const handle = await kit.makeResolved(nativeOptions);
+  const attestation = await E(handle).policy();
+  t.is(attestation.imageDigest, stubPolicyRequest.imageDigest);
+  await E(handle).dispose();
 });
 
 test('a backend that cannot attest a policy is refused the slice', async t => {
