@@ -6,6 +6,7 @@ import { makeError, q, X } from '@endo/errors';
 import { makePromiseKit } from '@endo/promise-kit';
 
 import { makeLandlockProbe } from '../landlock.js';
+import { makeResourceRegistry } from '../resource-registry.js';
 import {
   PRIVATE_BLOCKED_RANGES,
   HOST_LOOPBACK_ALLOWED_RANGES,
@@ -37,11 +38,9 @@ import {
  * `SandboxDriver` for `bubblewrap` (`bwrap`) on Linux.
  *
  * Translates a fully-resolved `SliceSpec` (host paths only, no Endo
- * capabilities) into a `bwrap` argv invocation.  The driver itself is
- * stateless except for the per-slice context returned by
- * `prepareSlice`, which carries the assembled argv prefix, the
- * teardown bookkeeping (pasta subprocess, temporary files), and the
- * resolved mount table.
+ * capabilities) into a `bwrap` argv invocation. The per-slice context
+ * returned by `prepareSlice` carries the assembled argv prefix,
+ * process cleanup ownership, and resolved mount table.
  */
 
 /**
@@ -55,11 +54,11 @@ const CONTROL_COMMAND_TIMEOUT_MS = 30_000;
  * Grace allowed, after the SIGKILL sweep in `teardown`, for each
  * straggler's stdio to reach `'close'`.
  *
- * A slice child leaves `slice.live` on `'close'`, not on `'exit'`.  That
+ * A slice releases child ownership on `'close'`, not on `'exit'`.  That
  * asymmetry is deliberate — a descendant that escaped the process group
  * still holding an inherited pipe keeps the parent's stdio open, and the
  * driver wants to know about it — but it also means such a straggler
- * never leaves the set, so an unbounded wait here would hang `teardown`,
+ * retains its owner, so an unbounded wait here would hang `teardown`,
  * and with it the factory's `dispose()`.
  *
  * The value mirrors `KILL_GRACE_MS` in `../factory.js`: that is the
@@ -170,14 +169,7 @@ harden(parseBwrapVersion);
  *                                     the slice command.  Empty when
  *                                     no caps are configured.
  * @property {SliceSpec} spec          Original slice spec.
- * @property {Set<import('child_process').ChildProcess>} live  Live
- *                                     child processes for teardown.
- * @property {{ proc: import('child_process').ChildProcess, netnsPath: string } | null} pasta
- *                                     `pasta` subprocess and netns
- *                                     path when network is `private`.
- * @property {string | null} seccompTempPath  Temp file holding the
- *                                     compiled seccomp BPF blob,
- *                                     unlinked at teardown.
+ * @property {ReturnType<typeof makeResourceRegistry>} operations Acquisitions and retained children.
  * @property {{ landlock: { available: boolean, reason?: string }, cgroup2: { available: boolean, controllers: string[], reason?: string }, prlimit: { applied: string[] } }} runtimeDetails
  *                                     Hardening-layer report the
  *                                     factory weaves into per-slice
@@ -517,6 +509,7 @@ export const makeBwrapDriver = ({
   // inject a stub without paying the import cost up front.
   /** @type {typeof import('child_process') | undefined} */
   let cpModule = childProcessModule;
+  let nextOperation = 0n;
   const getCp = async () => {
     await null;
     if (cpModule === undefined) {
@@ -685,8 +678,6 @@ export const makeBwrapDriver = ({
     // `seccompFd !== null`.
     /** @type {number | null} */
     const seccompFd = null;
-    /** @type {string | null} */
-    const seccompTempPath = null;
 
     // Lazy-resolve `fs` for the existsSync probe and the
     // promise-returning `realpath` resolver used by the PATH
@@ -771,29 +762,9 @@ export const makeBwrapDriver = ({
       sliceArgv,
       prlimitArgv,
       spec,
-      live: new Set(),
-      pasta: null,
-      seccompTempPath,
+      operations: makeResourceRegistry(),
       runtimeDetails,
     };
-
-    // `private` network: spawn pasta to drive the netns and load the
-    // egress nftables ruleset.  Phase 1 ships this best-effort: if
-    // pasta is missing we throw a structured error, but the driver
-    // does not gate slice creation on the nft binary being present
-    // (we still reject misconfigured callers).
-    //
-    // The actual netns wiring for bwrap+pasta is non-trivial: bwrap
-    // must be told to use pasta's netns via `--unshare-net` plus a
-    // userns-block-fd handshake.  Phase 1 leaves the pasta subprocess
-    // as a teardown placeholder; full integration lands alongside the
-    // first consumer that needs `private` networking.
-    if (spec.network === 'private') {
-      // Documented but not yet wired end-to-end.  We still record
-      // what would happen so teardown is correct if a future code
-      // path attaches a pasta proc here.
-      ctx.pasta = null;
-    }
 
     return ctx;
   };
@@ -802,9 +773,26 @@ export const makeBwrapDriver = ({
    * @param {BwrapSliceContext} slice
    * @param {string[]} argv
    * @param {SpawnOpts} opts
+   * @param {import('../types.js').DriverSpawnControls} [controls]
    * @returns {Promise<DriverProcess>}
    */
-  const spawn = async (slice, argv, opts) => {
+  const spawn = (slice, argv, opts, controls) => {
+    const operationId = String(nextOperation);
+    nextOperation += 1n;
+    return slice.operations.inOrder(operationId, () =>
+      acquireOperation(slice, operationId, argv, opts, controls),
+    );
+  };
+
+  /**
+   * @param {BwrapSliceContext} slice
+   * @param {string} operationId
+   * @param {string[]} argv
+   * @param {SpawnOpts} opts
+   * @param {import('../types.js').DriverSpawnControls} [controls]
+   * @returns {Promise<DriverProcess>}
+   */
+  const acquireOperation = async (slice, operationId, argv, opts, controls) => {
     if (argv.length === 0) {
       throw makeError(X`spawn argv must be non-empty`);
     }
@@ -846,6 +834,10 @@ export const makeBwrapDriver = ({
 
     /** @type {import('child_process').ChildProcess} */
     let child;
+    slice.operations.assertOpen();
+    if (controls?.isCancelled?.()) {
+      throw makeError(X`bwrap operation admission aborted`);
+    }
     try {
       child = cp.spawn(execProgram, execArgv, {
         stdio: [
@@ -868,7 +860,29 @@ export const makeBwrapDriver = ({
       );
     }
 
-    slice.live.add(child);
+    let closed = false;
+    const stop = async () => {
+      await null;
+      if (closed) return;
+      // Arm before signalling. A retry may signal a still-live child, but
+      // killProcessGroup declines a group whose leader Node already reaped.
+      const closing = raceChildClose(child, TEARDOWN_CLOSE_GRACE_MS);
+      try {
+        killProcessGroup(child, 'SIGKILL');
+      } catch {
+        // A signal refusal is not a close proof; still wait for close.
+      }
+      if (!(await closing)) {
+        throw makeError(
+          X`bwrap teardown could not prove containment: child still held stdio open ${q(TEARDOWN_CLOSE_GRACE_MS)}ms after SIGKILL`,
+        );
+      }
+    };
+    slice.operations.retain(operationId, stop);
+    child.once('close', () => {
+      closed = true;
+      slice.operations.release(operationId, stop);
+    });
 
     const {
       promise: exited,
@@ -878,11 +892,10 @@ export const makeBwrapDriver = ({
       makePromiseKit()
     );
     child.once('error', err => {
-      slice.live.delete(child);
       rejectExit(err);
     });
     child.once('exit', (code, signal) => resolveExit({ code, signal }));
-    child.once('close', () => slice.live.delete(child));
+    exited.catch(() => undefined);
 
     // The DriverProcess surface exposes async-iterables for stdout
     // and stderr, plus closures that the factory wires into a
@@ -918,76 +931,13 @@ export const makeBwrapDriver = ({
   };
 
   /**
-   * Release everything the slice still holds.
-   *
-   * Rejects when the SIGKILL sweep cannot prove the slice's stdio was
-   * released within `TEARDOWN_CLOSE_GRACE_MS`.  The rest of the teardown
-   * (pasta, seccomp temp file) runs first either way, so the rejection
-   * costs the caller no cleanup.
+   * Fence admission, drain acquisitions, and attempt every retained child.
+   * A bounded close failure retains its owner for the next teardown attempt.
    *
    * @param {BwrapSliceContext} slice
    * @returns {Promise<void>}
    */
-  const teardown = async slice => {
-    // Kill any stragglers.  The factory owns the graceful ladder and
-    // reaps every process before it calls teardown(), so reaching a
-    // straggler here means the soft path is already spent (or was
-    // skipped entirely) — go straight to SIGKILL rather than running a
-    // second escalation on a budget that disagrees with the factory's.
-    const stragglers = [...slice.live];
-    const closures = stragglers.map(child => {
-      // Arm the bounded wait before signalling so a child that dies
-      // instantly cannot close between the kill and the listener.
-      const closed = raceChildClose(child, TEARDOWN_CLOSE_GRACE_MS);
-      try {
-        killProcessGroup(child, 'SIGKILL');
-      } catch {
-        // A backend refusal here is reported by the supervisor's
-        // own kill path; teardown must still finish the sweep.
-      }
-      return closed;
-    });
-    const closed = await Promise.all(closures);
-    const escaped = closed.filter(ok => !ok).length;
-    // The ladder is spent whatever the outcome: a second sweep would
-    // re-signal a process group the kernel may already have reissued,
-    // and holding the handles would only retain the child objects and
-    // their stdio buffers.
-    slice.live.clear();
-
-    // Stop pasta if we ever spawned one.
-    if (slice.pasta !== null) {
-      try {
-        slice.pasta.proc.kill('SIGTERM');
-      } catch {
-        // ignore
-      }
-      slice.pasta = null;
-    }
-
-    // Unlink seccomp temp file.
-    if (slice.seccompTempPath !== null) {
-      try {
-        const fs = await import('fs');
-        await fs.promises.unlink(slice.seccompTempPath);
-      } catch {
-        // already gone
-      }
-      slice.seccompTempPath = null;
-    }
-
-    if (escaped > 0) {
-      // Reported rather than logged: `dispose()` already rejects to say
-      // "could not prove containment", and the supervisor's other
-      // teardown call site folds a teardown rejection into that same
-      // report.  Resolving here would claim the slice was released while
-      // an fd is still out, which is exactly what tracking `'close'`
-      // instead of `'exit'` exists to detect.
-      throw makeError(
-        X`bwrap teardown could not prove containment: ${q(escaped)} of ${q(stragglers.length)} slice children still held stdio open ${q(TEARDOWN_CLOSE_GRACE_MS)}ms after SIGKILL; a descendant likely escaped the process group with an inherited pipe`,
-      );
-    }
-  };
+  const teardown = slice => slice.operations.shutdown();
 
   return harden({
     name: /** @type {const} */ ('bwrap'),
