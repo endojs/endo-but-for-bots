@@ -3,6 +3,7 @@ import '@endo/init';
 
 import { E, Far } from '@endo/far';
 import { makePodmanProviderListenerRuntime } from '@endo/hosted-agent/provider-listener-runtime.js';
+import { makePublicEgress } from '@endo/hosted-agent/public-egress.js';
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { lookup } from 'node:dns/promises';
@@ -17,7 +18,6 @@ import {
   makeBrokerAppServerArgv,
   makeBrokerEnvironment,
 } from '../src/broker-launch.js';
-import { makePublicEgress } from '../src/public-egress.js';
 
 // Explicit operator acceptance command. Uses no credentials or real provider
 // account; public HTTP(S) requests carry only a synthetic read-only test.

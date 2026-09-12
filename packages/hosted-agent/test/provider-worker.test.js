@@ -4,34 +4,63 @@ import { E } from '@endo/eventual-send';
 import { Fail } from '@endo/errors';
 import { Far } from '@endo/far';
 import { spawn } from 'node:child_process';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { build } from 'esbuild';
 
 import { makeProviderPipe } from '../src/provider-pipe.js';
 import { readHttpText, requestHttp } from './http-client.js';
 
 for (const diagnosticsEnabled of [false, true]) {
   test.serial(
-    `separate credential-free worker forwards HTTP over private capability pipes (diagnostics=${diagnosticsEnabled})`,
+    `shared worker ${diagnosticsEnabled ? 'bundle' : 'source'} forwards HTTP over private capability pipes (diagnostics=${diagnosticsEnabled})`,
     async t => {
       t.timeout(5000);
-      const worker = spawn(
-        process.execPath,
-        [
-          '--input-type=module',
-          '-e',
-          `import { startProviderListenerWorker } from ${JSON.stringify(new URL('../src/provider-worker.js', import.meta.url).href)}; await startProviderListenerWorker({input:process.stdin,output:process.stdout});`,
-        ],
-        {
-          stdio: ['pipe', 'pipe', 'pipe'],
-          env: {
-            PATH: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
-            NODE_VERSION: '22.19.0',
-            YARN_VERSION: '1.22.22',
-            HOME: '/home/node',
-            LANG: 'C.UTF-8',
-            LC_ALL: 'C.UTF-8',
-          },
-        },
+      let entryPath = fileURLToPath(
+        new URL('../src/provider-worker-entry.js', import.meta.url),
       );
+      if (diagnosticsEnabled) {
+        const directory = await mkdtemp(join(tmpdir(), 'endo-worker-bundle-'));
+        t.teardown(() => rm(directory, { recursive: true, force: true }));
+        const outfile = join(directory, 'worker.mjs');
+        await build({
+          entryPoints: [entryPath],
+          bundle: true,
+          platform: 'node',
+          format: 'esm',
+          target: 'node22',
+          outfile,
+          banner: {
+            js: "import { createRequire as __endoCreateRequire } from 'node:module'; const require = __endoCreateRequire(import.meta.url);",
+          },
+          logLevel: 'silent',
+        });
+        entryPath = outfile;
+      }
+      // macOS adds this variable even with an explicit child environment.
+      // Normalize the fixture before loading the real Linux image entrypoint;
+      // do not relax the production environment allowlist for a test host.
+      const args =
+        process.platform === 'darwin'
+          ? [
+              '--input-type=module',
+              '-e',
+              `delete process.env.__CF_USER_TEXT_ENCODING; await import(${JSON.stringify(pathToFileURL(entryPath).href)});`,
+            ]
+          : [entryPath];
+      const worker = spawn(process.execPath, args, {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env: {
+          PATH: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+          NODE_VERSION: '22.19.0',
+          YARN_VERSION: '1.22.22',
+          HOME: '/home/node',
+          LANG: 'C.UTF-8',
+          LC_ALL: 'C.UTF-8',
+        },
+      });
       let diagnostics = '';
       worker.stderr.on('data', chunk => {
         diagnostics += chunk;
@@ -116,7 +145,11 @@ for (const diagnosticsEnabled of [false, true]) {
         // eslint-disable-next-line no-await-in-loop
         await readHttpText(denied);
       }
-      await E(control).stop();
+      // No network capability was supplied. Activation must fail closed even
+      // though this shared image also contains the public listener modules.
+      await t.throwsAsync(E(control).activateNetwork(), {
+        message: /network unavailable|Provider pipe closed/,
+      });
       pipe.close();
       t.is(await finished, 0, diagnostics);
       const lines = diagnostics

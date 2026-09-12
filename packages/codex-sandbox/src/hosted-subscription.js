@@ -8,6 +8,7 @@ import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { makeProviderBrokerGrantIssuer } from '@endo/hosted-agent/provider-grant-issuer.js';
 import { makePodmanProviderListenerRuntime } from '@endo/hosted-agent/provider-listener-runtime.js';
+import { makePublicEgress } from '@endo/hosted-agent/public-egress.js';
 import { makeSecretRotator } from '@endo/hosted-agent/secret-rotator.js';
 import { make as makeSandbox } from '@endo/sandbox';
 
@@ -15,7 +16,6 @@ import { startAppServerTransport } from './app-server-transport.js';
 import { makeCodexBackendFactory } from './backend-factory.js';
 import { makeHostVolumeProvider } from './host-volume-provider.js';
 import { whenHostStops } from './host-lifecycle.js';
-import { makePublicEgress } from './public-egress.js';
 import { makeAttestedCodexResourceProvisioner } from './sandbox-policy.js';
 import { makeCodexSubscriptionCredential } from './subscription-auth.js';
 

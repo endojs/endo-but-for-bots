@@ -41,8 +41,15 @@ wait for already-running acquisitions, and attempt every retained owner.
 These scopes do not yet provide the shared supervisor's stop-during-start, immediate
 revocation, process-reaping, or hung-cleanup semantics.
 
-Runtime unification across all three adapters, Claude credential migration, public
-network convergence, tool/journal consolidation, emergency stop UI, and the remaining
+Generic public TCP egress, HTTP/CONNECT proxying, and constrained DNS now live in
+`@endo/hosted-agent`; Codex uses those shared services.
+One shared listener image contains inference and optional public listeners, with
+public activation requiring a separate host-provided capability.
+Native-source and bundled-entry subprocess tests exercise the shared image entry.
+Existing egress lifetime/traffic limits remain until retained allocations are audited.
+
+Runtime unification across all three adapters, Claude credential migration, OpenCode
+public network convergence, tool/journal consolidation, emergency stop UI, and the remaining
 limit removals are still pending.
 Live rootless Linux Podman and pinned CLI acceptance have not yet been established.
 The local implementation environment currently has no Podman executable.

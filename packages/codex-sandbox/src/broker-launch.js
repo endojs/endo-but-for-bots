@@ -2,7 +2,7 @@
 
 import { Fail, makeError, X } from '@endo/errors';
 
-import { isPublicEgressAddress } from './public-egress.js';
+import { isPublicEgressAddress } from '@endo/hosted-agent/public-egress.js';
 
 /**
  * Validate evidence from the operator-owned listener, never session input.
