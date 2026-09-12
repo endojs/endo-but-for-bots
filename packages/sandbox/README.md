@@ -121,9 +121,17 @@ directory cleanup for retry through the host-only `closeSlices()` method.
 This method permanently fences probe, preparation, and spawn admission, starts
 cleanup of completed slices immediately, and drains pending preparations.
 Successful slice teardown releases its driver registration.
-Anchor removal waits for the creating and starting commands' native closure;
-failed or interrupted producers retain uncertain effects even if removal succeeds.
+Anchor producers and operation creation share the same lifetime accounting.
+Removal waits for their native closure; failed or interrupted producers retain
+uncertain effects and operation admission slots even if removal succeeds.
+Proven no-child acquisition failures can release without operation removal.
 Repeated removal is not evidence that detached OCI/conmon work has finished.
+Admission observes cancellation through policy checks and immediately before
+attached start, including when only an asynchronous cancellation token is provided.
+The attached host process remains owned until native stdio closes, not just until
+an exit or error event.
+Fresh containers request `--restart=no --no-healthcheck`, excluding automatic
+restarts and inherited image healthchecks from the single-start lifecycle.
 `closeSlices()` accounts for slice resources, not complete native-command shutdown:
 supervision of other controls and attached starts is still required before the
 composed runtime may release its storage and ownership marker.

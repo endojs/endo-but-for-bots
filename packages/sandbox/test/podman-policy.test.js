@@ -13,6 +13,7 @@
  */
 
 import test from '@endo/ses-ava/prepare-endo.js';
+import { makeCancelKit } from '@endo/cancel';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 
@@ -441,6 +442,8 @@ test('the anchor is created under the whole policy prefix', async t => {
   const [anchor] = createCalls(calls);
   t.truthy(anchor);
   const argv = anchor.args;
+  t.true(argv.includes('--restart=no'));
+  t.true(argv.includes('--no-healthcheck'));
 
   /**
    * @param {string} flag
@@ -1385,5 +1388,39 @@ for (const failedCommand of ['create', 'start']) {
       calls.filter(call => call.args[0] === 'rm').length,
       failedCommand === 'start' ? 1 : 0,
     );
+  });
+}
+
+for (const cancellation of ['token', 'predicate']) {
+  test(`${cancellation} cancellation during policy inspection prevents attached start`, async t => {
+    const kit = makeCancelKit();
+    let admitting = false;
+    const { driver, calls } = makeDriverUnderTest(t, {
+      intercept: kind => {
+        if (admitting && kind === 'container-inspect') kit.cancel();
+        return false;
+      },
+    });
+    const slice = await driver.prepareSlice(/** @type {any} */ (makeSpec()));
+    t.teardown(() => driver.teardown(slice));
+    admitting = true;
+    await t.throwsAsync(
+      driver.spawn(
+        slice,
+        ['/bin/echo', 'must not start'],
+        {},
+        cancellation === 'token'
+          ? { cancelled: kit.cancelled }
+          : { isCancelled: kit.isCancelled },
+      ),
+      { message: /admission aborted/ },
+    );
+    t.false(
+      calls.some(
+        call => call.args[0] === 'start' && call.args.includes('--attach'),
+      ),
+    );
+    t.is(calls.filter(call => call.args[0] === 'rm').length, 1);
+    await driver.teardown(slice);
   });
 }

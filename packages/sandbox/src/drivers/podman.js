@@ -36,6 +36,7 @@ import { DEFAULT_PATH } from './path.js';
 
 /** @import { GeneratedFileStage, GeneratedFileStorage } from '../generated-file-storage-types.js' */
 /** @import { SandboxDriver, SliceSpec, SpawnOpts, DriverProcess, BackendProbe, BackendProbeDetails, SlicePolicyRequest, SlicePolicyAttestation } from '../types.js' */
+/** @import { PromiseKit } from '@endo/promise-kit' */
 
 // `network: 'join'` targets are named by the same portable pattern the
 // policy layer uses for volumes and sidecars.
@@ -527,6 +528,10 @@ const assembleCreateArgv = (spec, containerName, netBackend, extras) => {
     // start --interactive only attaches stdin if create kept it open.
     // The same setting applies to the attested anchor and each operation.
     '--interactive',
+    // One requested startup per fresh container. An image healthcheck or
+    // automatic restart would introduce execution outside that lifecycle.
+    '--restart=no',
+    '--no-healthcheck',
   ];
 
   if (extras.policyArgv !== undefined) {
@@ -1599,6 +1604,62 @@ export const makePodmanDriver = ({
   };
 
   /**
+   * Own the native commands that can create or initialize one container.
+   * Both anchor preparation and operation admission must distinguish command
+   * outcome from closure and from completed producer effects. Removal may stop
+   * an existing container after failure, but cannot prove that detached work
+   * from that failure has finished. Keep that uncertainty until reconciliation.
+   *
+   * @param {typeof import('child_process')} cp
+   * @param {'policy anchor' | 'operation'} label
+   */
+  const makeProducerScope = (cp, label) => {
+    /** @type {Array<{ closed: boolean, completed: boolean, acquired: boolean }>} */
+    const commands = [];
+    /**
+     * @param {string[]} args
+     * @param {Parameters<typeof startControlCommand>[3]} [options]
+     */
+    const run = async (args, options) => {
+      slices.assertOpen();
+      const command = startControlCommand(cp, 'podman', args, {
+        timeoutMs: CONTROL_COMMAND_TIMEOUT_MS,
+        ...options,
+      });
+      const record = {
+        closed: false,
+        completed: false,
+        acquired: command.hasChild(),
+      };
+      commands.push(record);
+      void command.closed.then(() => {
+        record.closed = true;
+      });
+      const result = await command.result;
+      record.completed =
+        result.code === 0 &&
+        result.signal === null &&
+        !command.wasInterrupted();
+      if (result.code === 0 && !record.completed) {
+        throw makeError(`Podman ${label} producer completion is uncertain`);
+      }
+      return result;
+    };
+    const assertClosed = () => {
+      if (commands.some(command => !command.closed)) {
+        throw makeError(`Podman ${label} producer closure pending`);
+      }
+    };
+    const hasAcquired = () => commands.some(command => command.acquired);
+    const assertCompleted = () => {
+      if (commands.some(command => command.acquired && !command.completed)) {
+        throw makeError(`Podman ${label} producer effects remain uncertain`);
+      }
+    };
+    return harden({ run, assertClosed, hasAcquired, assertCompleted });
+  };
+
+  /**
    * Create, start, and attest the slice's policy anchor.
    *
    * The anchor is an ordinary operation container created from the same
@@ -1639,8 +1700,7 @@ export const makePodmanDriver = ({
       throw makeError(X`podman driver ownerId is not configured`);
     }
     const anchorName = makeOperationName();
-    /** @type {Array<{ closed: boolean, completed: boolean, acquired: boolean }>} */
-    const producers = [];
+    const producers = makeProducerScope(cp, 'policy anchor');
     let anchorRemoved = false;
     /** @type {Promise<void> | undefined} */
     let removal;
@@ -1648,10 +1708,8 @@ export const makePodmanDriver = ({
       if (anchorRemoved) return Promise.resolve();
       removal ??= (async () => {
         await null;
-        if (producers.some(command => !command.closed)) {
-          throw makeError(X`Podman policy anchor producer closure pending`);
-        }
-        if (producers.some(command => command.acquired)) {
+        producers.assertClosed();
+        if (producers.hasAcquired()) {
           const removed = await removeContainer(cp, runtime, anchorName);
           if (removed.code !== 0 && !reportsContainerGone(removed)) {
             throw makeError(
@@ -1659,14 +1717,7 @@ export const makePodmanDriver = ({
             );
           }
         }
-        // Removal is useful even after a producer fails, but absence does not
-        // prove that detached OCI/conmon work from that failure is finished.
-        // Repeated rm success cannot turn uncertainty into release evidence.
-        if (producers.some(command => command.acquired && !command.completed)) {
-          throw makeError(
-            X`Podman policy anchor producer effects remain uncertain`,
-          );
-        }
+        producers.assertCompleted();
         releaseNamespaces(anchorName);
         anchorRemoved = true;
       })().catch(error => {
@@ -1675,34 +1726,7 @@ export const makePodmanDriver = ({
       });
       return removal;
     };
-    /** @param {string[]} args */
-    const produceAnchor = async args => {
-      slices.assertOpen();
-      const command = startControlCommand(cp, 'podman', args, {
-        timeoutMs: CONTROL_COMMAND_TIMEOUT_MS,
-      });
-      const record = {
-        closed: false,
-        completed: false,
-        acquired: command.hasChild(),
-      };
-      producers.push(record);
-      void command.closed.then(() => {
-        record.closed = true;
-      });
-      const result = await command.result;
-      record.completed =
-        result.code === 0 &&
-        result.signal === null &&
-        !command.wasInterrupted();
-      if (result.code === 0 && !record.completed) {
-        throw makeError(
-          X`Podman policy anchor producer completion is uncertain`,
-        );
-      }
-      return result;
-    };
-    const created = await produceAnchor(
+    const created = await producers.run(
       podmanArgs(runtime, [
         ...assembleCreateArgv(spec, anchorName, null, {
           seccompProfilePath: null,
@@ -1728,7 +1752,7 @@ export const makePodmanDriver = ({
     const configuredFingerprint = sliceConfigFingerprint(
       await inspectContainer(cp, runtime, anchorName),
     );
-    const started = await produceAnchor(
+    const started = await producers.run(
       podmanArgs(runtime, ['start', anchorName]),
     );
     if (started.code !== 0) {
@@ -2270,6 +2294,17 @@ export const makePodmanDriver = ({
     const owner = ownerId;
     const admissionCancelled = controls?.cancelled;
     const isAdmissionCancelled = controls?.isCancelled;
+    let admissionAborted = false;
+    void admissionCancelled?.catch(() => {
+      admissionAborted = true;
+    });
+    const isAborted = () =>
+      admissionAborted || isAdmissionCancelled?.() === true;
+    const assertAdmissionOpen = () => {
+      slices.assertOpen();
+      slice.operations.assertOpen();
+      if (isAborted()) throw makeError(X`podman operation admission aborted`);
+    };
 
     // Names include pid, time, and a counter, so the operation label remains
     // unique even when multiple handles share one formula owner.
@@ -2321,7 +2356,7 @@ export const makePodmanDriver = ({
      */
     async function admitOperation() {
       const cp = await getCp();
-      slice.operations.assertOpen();
+      assertAdmissionOpen();
       if (slice.join !== null) {
         // Resolve the immutable id again before every operation: a container
         // replaced under the same name must not host this operation, and the
@@ -2343,7 +2378,7 @@ export const makePodmanDriver = ({
         }
       }
       const generatedMounts = (await slice.generatedStage?.prepare()) ?? [];
-      slice.operations.assertOpen();
+      assertAdmissionOpen();
       const operationSpec = harden({
         ...slice.spec,
         mounts: [...slice.spec.mounts, ...generatedMounts],
@@ -2377,23 +2412,29 @@ export const makePodmanDriver = ({
       // cached so a delayed exit cannot remove a successor with the same name.
       /** @type {Promise<void> | undefined} */
       let removal;
-      let proxySettled = Promise.resolve();
+      let proxyClosed = Promise.resolve();
+      const producers = makeProducerScope(cp, 'operation');
       const removeOperation = () => {
         removal ??= (async () => {
-          const removed = await removeContainer(
-            cp,
-            slice.runtime,
-            containerName,
-          );
-          if (removed.code !== 0 && !reportsContainerGone(removed)) {
-            throw makeError(
-              X`podman operation reap failed: ${q(removed.stderr.trim() || removed.stdout.trim())}`,
+          await null;
+          producers.assertClosed();
+          if (producers.hasAcquired()) {
+            const removed = await removeContainer(
+              cp,
+              slice.runtime,
+              containerName,
             );
+            if (removed.code !== 0 && !reportsContainerGone(removed)) {
+              throw makeError(
+                X`podman operation reap failed: ${q(removed.stderr.trim() || removed.stdout.trim())}`,
+              );
+            }
           }
-          // Container removal can finish before the host attach process.
-          // Keep its owner until both settle, without awaiting `exited`,
-          // which itself awaits this removal.
-          await proxySettled;
+          producers.assertCompleted();
+          // Container removal and the host attach's exit can both precede
+          // native stdio closure. Retain the owner until close, without
+          // awaiting `exited`, which itself awaits this removal.
+          await proxyClosed;
           slice.live.delete(containerName);
           releaseReservation();
           slice.operations.release(containerName, removeOperation);
@@ -2405,21 +2446,17 @@ export const makePodmanDriver = ({
       };
       cleanupOperation = removeOperation;
       slice.operations.retain(containerName, removeOperation);
-      slice.operations.assertOpen();
-      const created = await spawnAndCollect(cp, 'podman', createArgv, {
-        timeoutMs: CONTROL_COMMAND_TIMEOUT_MS,
+      assertAdmissionOpen();
+      const created = await producers.run(createArgv, {
         cancelled: admissionCancelled,
-        isCancelled: isAdmissionCancelled,
+        isCancelled: isAborted,
       });
       if (created.code !== 0) {
         throw makeError(
           X`podman operation create failed: ${q(created.stderr.trim() || created.stdout.trim())}`,
         );
       }
-      slice.operations.assertOpen();
-      if (isAdmissionCancelled?.()) {
-        throw makeError(X`podman operation admission aborted`);
-      }
+      assertAdmissionOpen();
 
       if (slice.policy !== null) {
         // The operation shares the anchor's frozen policy argv, but "the
@@ -2457,7 +2494,7 @@ export const makePodmanDriver = ({
         }
       }
 
-      slice.operations.assertOpen();
+      assertAdmissionOpen();
       const startArgv = podmanArgs(slice.runtime, [
         'start',
         '--attach',
@@ -2481,6 +2518,7 @@ export const makePodmanDriver = ({
             ['CONTAINERS_CONF', process.env.CONTAINERS_CONF],
           ].filter(([, value]) => value !== undefined),
         );
+        assertAdmissionOpen();
         child = cp.spawn('podman', startArgv, {
           stdio: [
             'pipe',
@@ -2504,10 +2542,10 @@ export const makePodmanDriver = ({
       );
       child.once('error', rejectProxy);
       child.once('exit', (code, signal) => resolveProxy({ code, signal }));
-      proxySettled = proxyExited.then(
-        () => undefined,
-        () => undefined,
-      );
+      /** @type {PromiseKit<void>} */
+      const closure = makePromiseKit();
+      proxyClosed = closure.promise;
+      child.once('close', () => closure.resolve(undefined));
 
       const exited = (async () => {
         await null;
