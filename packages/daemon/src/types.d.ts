@@ -658,17 +658,27 @@ export type InvitationFormula = {
    * `EndoGuest` (via `EndoGuest.invite`). Network mediation is not drawn from
    * this agent; the daemon supplies it internally (see `makeInvitation`), so a
    * guest inviter gains no network authority.
+   *
+   * Optional because a record minted before the
+   * `hostAgent`/`hostHandle` -> `invitingAgent`/`invitingHandle` rename
+   * carries only the deprecated {@link hostAgent}; every read coerces
+   * `invitingAgent ?? hostAgent`, so an on-disk record may satisfy this shape
+   * through the fallback field alone.
    */
-  invitingAgent: FormulaIdentifier;
-  /** The inviting agent's handle, which the locator's `from` names. */
-  invitingHandle: FormulaIdentifier;
+  invitingAgent?: FormulaIdentifier;
+  /**
+   * The inviting agent's handle, which the locator's `from` names. Optional
+   * for the same legacy reason as {@link invitingAgent}; reads coerce
+   * `invitingHandle ?? hostHandle`.
+   */
+  invitingHandle?: FormulaIdentifier;
   guestName: NameOrPath;
   /**
    * @deprecated Legacy field name for {@link invitingAgent}, persisted by
-   * records minted before the `hostAgent`/`hostHandle` →
-   * `invitingAgent`/`invitingHandle` rename. Read-only: newly minted
-   * invitations never set it, but reads coerce it so existing production
-   * databases need not be purged.
+   * records minted before the `hostAgent`/`hostHandle` ->
+   * `invitingAgent`/`invitingHandle` rename, and the fallback source reads
+   * coerce from. Read-only: newly minted invitations never set it, but reads
+   * coerce it so existing production databases need not be purged.
    */
   hostAgent?: FormulaIdentifier;
   /**
