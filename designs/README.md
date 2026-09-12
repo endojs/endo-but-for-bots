@@ -16,6 +16,14 @@ Intl residue plus one outstanding F056 Fix clause, leaving two hard gates in six
 phases; decides
 F127's open question in favour of documenting the `Array.fromAsync` checkpoint
 refusal on `PersistentMachine` rather than carrying its rows),
+[hosted-agent-sandbox-unification](hosted-agent-sandbox-unification.md) (added
+2026-09-12; one guest authority domain, session-scoped revocable inference without
+request-count leases or expiry, persistent runtimes, shared services, and an
+explicit justification table for retained and removed protections; revised after
+adversarial review to distinguish turn interruption from a Settings emergency stop,
+preserve background mount access, keep CLI eval calls tied to active-turn context,
+distinguish future process-facing CapTP access, and replace unused implementations
+directly),
 [hosted-agent-broker-oauth](hosted-agent-broker-oauth.md) (added 2026-09-08 and
 revised 2026-09-09; credential custody for hosted agent sessions — a broker-held
 refreshing OAuth credential with expiry tracking, single-flight exchange, a
@@ -286,6 +294,7 @@ LLM-agent stack).*
 
 | Design | Created | Updated | Status |
 |--------|---------|---------|--------|
+| [hosted-agent-sandbox-unification](hosted-agent-sandbox-unification.md) | 2026-09-12 | 2026-09-12 | Not Started |
 | [hosted-agent-broker-oauth](hosted-agent-broker-oauth.md) | 2026-09-08 | 2026-09-09 | In Progress |
 | [gateway-sites-publication](gateway-sites-publication.md) | 2026-07-20 | 2026-07-20 | Proposed |
 | [npm-dev-publisher-attenuation](npm-dev-publisher-attenuation.md) | 2026-07-30 | 2026-08-29 | Proposed |
@@ -598,6 +607,7 @@ inventing implementation commitments.
 | `captp-error-identification`, `daemon-locator-reference` | M4 | CapTP identity and locator semantics for federation. |
 | `notifier-pubsub-migration`, `unredacted-stack-sanctioned-ses-api` | M10 | Shared ecosystem surface and confinement diagnostics. |
 | `hosted-agent-broker-oauth` | M5 | Which credential bills a hosted agent session, and who holds it. Records why both vendor subscription modes stay closed. |
+| `hosted-agent-sandbox-unification` | M10 | Shared Claude/Codex/OpenCode runtime and revocable session authority; replaces mandatory request-count/expiry leases and redundant limits. |
 | `daemon-engo-supervisor`, `worker-rust-xs` | M11 | Supervisor and native worker path for `endor`. |
 | `hardener-indexed-cardinality` | Out of milestone | Localized `master`-based hardener performance work; no roadmap dependency or critical-path effect. |
 | `outliner-design-doc-2`, `outliner_drag_and_drop`, `OUTLINER_INTERACTION_PATTERNS`, `threading-research-overview`, `type-1-chat-spec`, `type-2-chat-spec`, `type-3-chat-spec` | M9 | UX research inputs, held as reference until an owned Chat or Outliner implementation slice needs them. |
@@ -788,6 +798,7 @@ flowchart TD
 
     subgraph Capability System
         dsand[endo-posix-sandbox<br/><i>IN PROGRESS</i>]
+        hsandbox[hosted-agent-sandbox-unification<br/><i>NOT STARTED</i>]
         pfs[platform-fs<br/><i>COMPLETE</i>]
         dfs[daemon-capability-filesystem<br/><i>REFERENCE</i>]
         dmount[daemon-mount<br/><i>IN PROGRESS</i>]
@@ -886,6 +897,9 @@ flowchart TD
     %% endo-posix-sandbox (dsand, Capability System) into LLM Agents by
     %% first-mention.
     dsand --> eclaude
+    dsand --> hsandbox
+    dsecret --> hsandbox
+    ebroker --> hsandbox
 
     %% endo-workflow (eworkflow, Agent Capabilities) composes the daemon
     %% form/request mail, agentry agents, and the git loop; top-level for
@@ -1435,6 +1449,7 @@ ecosystem.
 |--------|--------|-------|
 | ~~daemon-os-sandbox-plugin~~ | Superseded | Replaced by `endo-posix-sandbox`; retained as historical proposal |
 | endo-posix-sandbox | In Progress | Phases 0-1 shipped, Phases 2 + 3 in flight on `bots-ssh/jcorbin-sandbox-paths`; Phase 4 (macOS via lima + Apple Containerization) and Phase 6 (Windows via WSL2) compose the same in-guest backend pattern |
+| hosted-agent-sandbox-unification | Not Started | Shared session supervisor and revocable inference, one guest authority domain, retained runtime across turns, bounded host transports, and small Claude/Codex/OpenCode adapters; refines the existing sandbox envelope. |
 | daemon-capability-persona | Not Started | Epithets and delegation |
 | daemon-secret-manager | Implemented (local backend) | Singleton manager for arbitrary secret bytes; management under `@secrets`, read capabilities in the ordinary `secrets` pet store, existing lookup/marshal formulas, live inventory-path metadata, replacement, revocation, post-revocation deletion with retained audit, and a value-blind Secret Blobs Space; no ACL |
 | daemon-capability-bank | Not Started | Integrates all capability categories |
@@ -1447,8 +1462,14 @@ ecosystem.
 authority enforced — sandboxed processes, confined filesystem, auditable
 identity. Browser automation available for web research and form filling.
 Agents reachable from external messaging platforms via channel bridges.
+The unified hosted adapters must also pass the same authority, revocation,
+long-session, and resource-containment acceptance tests.
 
 **Estimated duration (1 dev):** 8-12 weeks
+
+Hosted sandbox unification is provisionally L / 2-4 developer weeks within the
+existing M10 confinement estimate, not an additive project or critical-path change.
+Recalibrate after its CLI compatibility phase if that envelope proves insufficient.
 
 ---
 
@@ -1808,6 +1829,7 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | namehub-interface-unification | S | 1-2 days | 9 | Introduce `ReadableNameHubInterface`; refactor `MountInterface` and inventory-component dispatch; defers mount-entry locator question |
 | ~~daemon-os-sandbox-plugin~~ | — | — | 10 | Superseded by `endo-posix-sandbox` |
 | endo-posix-sandbox | L-XL | 6-10 weeks remaining | 10 | Phases 0-1 shipped (bwrap on Linux); Phase 2 (podman) and Phase 3 (nested slices) in flight; Phases 1.5, 4, 6 ahead. Per-phase estimates pending PLAN backfill |
+| hosted-agent-sandbox-unification | L | 2-4 weeks (provisional, non-additive) | 10 | Refines the existing M10 sandbox envelope: compatibility, shared authority/lifecycle, three adapter migrations, and live conformance. Re-estimate after Phase 1; no additional critical-path duration assigned. |
 | daemon-capability-persona | S-M | 3 days | 10 | Handle extension, epithet tracking |
 | daemon-secret-manager | XL | 4-6 weeks | 10 | Endo-native singleton for arbitrary secret bytes, pluggable durable backend, `@secrets` management directory, ordinary `secrets` pet store, existing lookup/marshal formulas, audit, replacement, revocation, restart durability with a recorded crash-reconciliation gap, canary leak tests, and the Secret Blobs Space; capability possession is the only authorization; decomposes the secret-storage slice already included in daemon-capability-bank, so this estimate is not additive to that row |
 | daemon-capability-bank | XL | 4-6 weeks | 10 | Integrates all capabilities (XL bumped 1.3x as conservative pending data) |
@@ -1856,9 +1878,9 @@ date of this pass.
 | M7: Weblets & Integrations (was M3) | 12 (`familiar-unified-weblet-server`, `familiar-chat-weblet-hosting`, `cli-store-verb-text-modes`, `cli-edit-verb`, `daemon-weblet-application`, `exo-zip-package`, `endoclaw-oauth`, `exo-google-sheets`, `endoclaw-proactive-messages`, `endoclaw-notifications`, `endoclaw-webhooks`, `endoclaw-voice`) | 6-8 weeks | 8-11 weeks |
 | M8: Peer App Sharing (was Milestone A) | 3 net-new (`familiar-deep-link-invitations`, `endo-app-sharing`, `familiar-app-ui-hosting`); existing constituents counted under M3/M4/M7 | 2-3 weeks | 3-5 weeks |
 | M9: UX & Tooling (was M4) | 13 (`chat-pending-commands`, `chat-slot-slash-commands`, `daemon-commands-as-messages`, `inventory-cancel-and-liveness`, `inventory-grouping-by-type`, `inventory-drag-and-drop`, `formula-inspector`, `workers-panel`, `daemon-retention-paths`, `chat-edit-message-ui`, `chat-inventory-create-menu`, `lal-transcript-memory-management`, `namehub-interface-unification`) | 9-12 weeks | 11-14 weeks |
-| M10: Confinement & Ecosystem (was M5) | 7 (`endo-posix-sandbox`, `daemon-capability-persona`, `daemon-secret-manager`, `daemon-capability-bank`, `endoclaw-browser`, `endoclaw-channel-bridges`, `endoclaw-skill-registry`) | 14-20 weeks | 16-22 weeks |
+| M10: Confinement & Ecosystem (was M5) | 8 (`endo-posix-sandbox`, `hosted-agent-sandbox-unification`, `daemon-capability-persona`, `daemon-secret-manager`, `daemon-capability-bank`, `endoclaw-browser`, `endoclaw-channel-bridges`, `endoclaw-skill-registry`) | 14-20 weeks (unification refines existing scope) | 16-22 weeks |
 | M11: Rust Daemon (`endor`) (was M6) | 6 (`endor-git-bindings`, `endor-registry-proxy-worker`, `daemon-endor-sqlite-iterate-streaming`, `endor-tui`, `endor-bus-tui`, `endor-native-zip-xs`) | 15-22 weeks | 17-24 weeks |
-| **Total remaining** | **65** + 7 M5 rows (4 in-flight + 3 design gaps) + 2 M6 own-work rows | **~61-83 weeks** + M5 4-6 weeks + M6 ~3-3.5 weeks | **~74-101 weeks** |
+| **Total remaining** | **66** + 7 M5 rows (4 in-flight + 3 design gaps) + 2 M6 own-work rows | **~61-83 weeks** + M5 4-6 weeks + M6 ~3-3.5 weeks | **~74-101 weeks** |
 
 The 2026-05-20 reconciliation corrects a counting gap in the prior
 snapshot's narrative: M1, M3, and M4 had absorbed new rows since the
@@ -1874,6 +1896,10 @@ No status flips this pass; the per-design statuses match the 2026-05-19
 sweep's reconciliation.
 
 ### Timeline
+
+The 2026-09-12 hosted sandbox unification plan refines existing M10 work.
+Its provisional estimate is non-additive, so the milestone durations and timeline
+remain unchanged pending the compatibility phase.
 
 ```mermaid
 gantt
