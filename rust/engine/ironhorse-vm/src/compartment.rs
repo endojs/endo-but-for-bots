@@ -532,7 +532,12 @@ impl Compartment {
                     Ok(id) => id,
                     Err(halt) => return Self::unrun(halt, machine.meter_index()),
                 };
-                machine.define_global_id(id, value);
+                if !machine.define_global_id(id, value) {
+                    return Self::unrun(
+                        Halt::Refused("compartment:global-definition-rejected"),
+                        machine.meter_index(),
+                    );
+                }
             }
             self.pending_ids.borrow_mut().clear();
             self.pending_names.borrow_mut().clear();
