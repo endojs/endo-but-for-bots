@@ -1,6 +1,7 @@
 // @ts-check
 import '@endo/init';
 
+import { assertPublicNetworkEvidence } from '@endo/hosted-agent/public-network.js';
 import test from 'ava';
 
 import {
@@ -8,7 +9,6 @@ import {
   assertBrokerRuntimeConfig,
   makeBrokerAppServerArgv,
   makeBrokerEnvironment,
-  assertCodexNetworkEvidence,
 } from '../src/broker-launch.js';
 
 const endpoint = 'http://127.0.0.1:23456';
@@ -83,7 +83,7 @@ test('public proxy evidence requires canonical loopback without credentials', t 
     'http://127.0.0.1:23457/path',
     'http://127.0.0.1:23457/',
   ]) {
-    t.throws(() => assertCodexNetworkEvidence({ ...network, proxyUrl }), {
+    t.throws(() => assertPublicNetworkEvidence({ ...network, proxyUrl }), {
       message: /network evidence/,
     });
   }

@@ -10,9 +10,9 @@ import {
   normalizeHostedModelDescriptor,
 } from '@endo/hosted-agent';
 import { makeCleanupScope } from '@endo/hosted-agent/cleanup-scope.js';
+import { assertPublicNetworkEvidence } from '@endo/hosted-agent/public-network.js';
 import { makeSessionRegistry } from '@endo/hosted-agent/session-registry.js';
 
-import { assertCodexNetworkEvidence } from './broker-launch.js';
 import { makeCodexClient } from './codex-client.js';
 import { adaptEndoTools, withEndoToolInstructions } from './endo-tools.js';
 
@@ -81,7 +81,7 @@ export const assertProviderGrantV1 = (grant, requirements) => {
   if (requirements.networkPolicy === 'public-internet') {
     grant?.network !== undefined ||
       Fail`Broker public network evidence missing`;
-    assertCodexNetworkEvidence(grant.network);
+    assertPublicNetworkEvidence(grant.network);
   }
   if (
     Object.keys(grant || {})

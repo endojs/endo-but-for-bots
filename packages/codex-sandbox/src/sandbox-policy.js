@@ -4,6 +4,7 @@ import { Fail, q } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
+import { assertPublicNetworkEvidence } from '@endo/hosted-agent/public-network.js';
 
 import {
   assertProviderGrantV1,
@@ -14,7 +15,6 @@ import {
 import {
   makeBrokerAppServerArgv,
   makeBrokerEnvironment,
-  assertCodexNetworkEvidence,
 } from './broker-launch.js';
 import { makeCodexRuntimeVerifier } from './runtime-verifier.js';
 import { normalizeCodexVolumeLimits } from './volume-limits.js';
@@ -147,7 +147,7 @@ export const makeAttestedCodexSliceFactory = powers => {
       ...(spec.model ? { model: spec.model } : {}),
       ...(powers.brokerAuthMode ? { authMode: powers.brokerAuthMode } : {}),
     });
-    const network = assertCodexNetworkEvidence(lease.network);
+    const network = assertPublicNetworkEvidence(lease.network);
     const approvedEnvironment = makeBrokerEnvironment(network);
     const launchArgv = makeBrokerAppServerArgv(
       lease.endpoint,

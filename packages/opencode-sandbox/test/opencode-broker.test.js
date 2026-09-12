@@ -33,6 +33,16 @@ const makeFakeRuntime = () => {
             containerName: 'listener',
             networkNamespaceId: 'net-1',
             listenerImageDigest: digest,
+            ...(input.network
+              ? {
+                  network: {
+                    policy: 'public-internet',
+                    proxyUrl: 'http://127.0.0.1:23457',
+                    dnsHost: '127.0.0.53',
+                    resolverConfigPath: '/private-runtime/public-resolv.conf',
+                  },
+                }
+              : {}),
           });
         },
         async stop() {
@@ -237,4 +247,31 @@ test('refuses unpinned images and invalid operator identity', async t => {
       message: /fetch authority/,
     },
   );
+});
+
+test('public grants use shared egress and revocation removes its authority', async t => {
+  const runtime = makeFakeRuntime();
+  const broker = await makeBroker(runtime, { publicInternet: true });
+  t.teardown(broker.dispose);
+  const grant = await broker.issuer({
+    sessionId: 'public-session',
+    providerOrigin: OPENROUTER_ORIGIN,
+    accountRef: OPENCODE_BROKER_ACCOUNT,
+    model: models[0],
+    networkPolicy: 'public-internet',
+  });
+  const { network } = runtime.starts[0];
+  t.deepEqual(Object.keys(network), ['endpoint']);
+  const evidence = await E(grant).attestation();
+  t.is(evidence.network.proxyUrl, 'http://127.0.0.1:23457');
+  // No network dial is needed: private destinations are rejected by the
+  // shared host service before resolution or connection.
+  await t.throwsAsync(E(network.endpoint).open('127.0.0.1', 80), {
+    message: /denied/,
+  });
+  await E(grant).revoke();
+  await t.throwsAsync(E(network.endpoint).open('example.com', 443), {
+    message: /Public egress is disabled/,
+  });
+  t.is(runtime.stops(), 1);
 });

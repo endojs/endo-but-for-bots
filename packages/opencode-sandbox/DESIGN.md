@@ -746,3 +746,14 @@ New package `packages/opencode-sandbox/`.
   `4504983b8ab7`, same binary) ran normal mode with exit 0 and streamed deltas
   and compact mode with no leak and a reaped container, proving the hard-coded
   OpenRouter provider block works with no catalog file present.
+
+
+## Shared public egress integration
+
+The host-only `makeOpencodeBroker` composition accepts `publicInternet: true`
+to issue separately revocable public-egress capabilities alongside inference.
+It uses the shared hosted-agent listeners and destination filtering; the guest
+still receives no real provider credential.
+This option does not yet configure the hosted backend's public session path.
+That integration requires the shared generated resolver file to reach the slice;
+the hosted factory's existing public path remains pending replacement.
