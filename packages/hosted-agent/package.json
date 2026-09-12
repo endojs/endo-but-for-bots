@@ -27,6 +27,7 @@
     "./provider-transport.js": "./src/provider-transport.js",
     "./provider-http.js": "./src/provider-http.js",
     "./provider-pipe.js": "./src/provider-pipe.js",
+    "./public-egress.js": "./src/public-egress.js",
     "./provider-worker.js": "./src/provider-worker.js",
     "./provider-listener-runtime.js": "./src/provider-listener-runtime.js",
     "./provider-grant-issuer.js": "./src/provider-grant-issuer.js",

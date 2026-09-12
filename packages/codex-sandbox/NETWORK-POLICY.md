@@ -81,11 +81,11 @@ Unit fixtures are not evidence that a kernel applied these boundaries.
 
 The subscription configuration accepts `publicInternet` with an operator-owned
 IPv4 `address` and immutable `bootstrapImageRef`.
-The existing `listenerImageRef` must be built from the Codex-specific
-`src/provider-worker-entry.js`, which combines the inference listener with the
-public proxy and DNS adapters.
-The ordinary inference-only worker does not supply public networking.
-Build the public listener with the explicit operator command
-`node packages/hosted-agent/test/build-provider-image.js localhost/endo-codex-public --codex-public-network`.
+The `listenerImageRef` uses the shared hosted-agent worker, which combines the
+inference listener with optional public proxy and DNS adapters.
+The host must explicitly supply and activate public network authority; the same
+image serves sessions whose public network policy is off.
+Build the listener with the explicit operator command
+`node packages/hosted-agent/test/build-provider-image.js localhost/endo-provider`.
 Keep images pinned by digest and validate the complete production composition
 before enabling the policy.
