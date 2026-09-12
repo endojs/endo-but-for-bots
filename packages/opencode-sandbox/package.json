@@ -24,6 +24,7 @@
     "./src/managed-credentials-module.js": "./src/managed-credentials-module.js",
     "./src/opencode-client-module.js": "./src/opencode-client-module.js",
     "./src/opencode-client.js": "./src/opencode-client.js",
+    "./src/opencode-broker.js": "./src/opencode-broker.js",
     "./src/opencode-state-provider.js": "./src/opencode-state-provider.js",
     "./src/opencode-state-provider-module.js": "./src/opencode-state-provider-module.js",
     "./src/opencode-backend-factory.js": "./src/opencode-backend-factory.js",
