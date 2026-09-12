@@ -34,6 +34,7 @@
     "./provider-grant-issuer.js": "./src/provider-grant-issuer.js",
     "./session-registry.js": "./src/session-registry.js",
     "./session-record-store.js": "./src/session-record-store.js",
+    "./session-powers.js": "./src/session-powers.js",
     "./cleanup-scope.js": "./src/cleanup-scope.js",
     "./mcp-bridge.js": "./src/mcp-bridge.js",
     "./mcp-socket.js": "./src/mcp-socket.js",

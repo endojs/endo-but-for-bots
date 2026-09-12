@@ -56,7 +56,7 @@
  *   MCP_SERVER_NAME       MCP server key opencode sees the tools under.
  *
  * This caplet does **not** run with `@agent`.  The provisioner builds a
- * **per-session powers** cap (via `evaluate`) that is a total attenuation:
+ * **per-session powers** cap through the shared static session-powers module:
  * it bundles the caps the client needs **by reference** and exposes only
  * accessors plus a `provideMount(path, name)` bounded to *this session's*
  * mountpoints.  There is **no `lookup`**, so the client cannot resolve any

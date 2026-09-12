@@ -20,6 +20,10 @@ const clientModuleSpecifier = toCurrentSpecifier(
   new URL('./claude-client-module.js', import.meta.url).href,
 );
 
+const sessionPowersModuleSpecifier = toCurrentSpecifier(
+  new URL('../../hosted-agent/src/session-powers.js', import.meta.url).href,
+);
+
 const SANDBOX_WORKSPACE_PATH = '/workspace';
 // Slice-internal mount path for the persistent Claude config dir (also
 // CLAUDE_CONFIG_DIR). Deliberately outside /workspace so the transcript never
@@ -30,64 +34,6 @@ const ALLOWED_NETWORKS = harden(['none', 'private']);
 
 /** @type {number} */
 let sessionCounter = 0;
-
-/**
- * @param {Array<{ mountPoint: string, mountName: string }>} mounts - The
- *   (mountPoint, mountName) pairs this session may `provideMount`/`removeMount`.
- *   Always the workspace; plus the persistent Claude config dir when one was
- *   provisioned.
- * @param {boolean} hasCredentials
- * @param {boolean} [hasMcpMount] - whether an `mcpMount` cap is bundled by
- *   reference into the powers (the Endo tool bridge socket directory).
- * @param {boolean} [hasConfigFilesystem] - whether a dedicated persistent
- *   config `Filesystem` cap is bundled by reference (enables cross-restart
- *   conversation persistence).
- * @returns {string}
- */
-export const buildSessionPowersSource = (
-  mounts,
-  hasCredentials,
-  hasMcpMount = false,
-  hasConfigFilesystem = false,
-) => `makeExo(
-  'ClaudeSessionPowers',
-  M.interface('ClaudeSessionPowers', {
-    sandboxFactory: M.call().returns(M.any()),
-    fsMounter: M.call().returns(M.any()),
-    filesystem: M.call().returns(M.any()),
-    configFilesystem: M.call().returns(M.any()),
-    credentials: M.call().returns(M.any()),
-    mcpMount: M.call().returns(M.any()),
-    provideMount: M.call(M.string(), M.string()).returns(M.promise()),
-    removeMount: M.call().returns(M.promise()),
-    help: M.call().returns(M.string()),
-  }),
-  {
-    sandboxFactory: () => sandboxFactory,
-    fsMounter: () => fsMounter,
-    filesystem: () => filesystem,
-    configFilesystem: () => ${hasConfigFilesystem ? 'configFilesystem' : 'null'},
-    credentials: () => ${hasCredentials ? 'credentials' : 'null'},
-    mcpMount: () => ${hasMcpMount ? 'mcpMount' : 'null'},
-    provideMount: (path, name) => {
-      const allowed = ${JSON.stringify(
-        mounts.map(m => [m.mountPoint, m.mountName]),
-      )};
-      if (!allowed.some(pair => pair[0] === path && pair[1] === name)) {
-        throw Error('claude-sandbox session powers: provideMount restricted to this session mountpoints');
-      }
-      return E(agent).provideMount(path, name);
-    },
-    removeMount: () =>
-      Promise.allSettled(
-        ${JSON.stringify(
-          mounts.map(m => m.mountName),
-        )}.map(name => E(agent).remove(name)),
-      ),
-    help: () =>
-      'Per-session claude-sandbox powers: sandboxFactory/fsMounter/filesystem/configFilesystem/credentials/mcpMount accessors + provideMount/removeMount bounded to this session mounts. No lookup.',
-  },
-)`;
 
 /**
  * @param {string} name
@@ -229,7 +175,8 @@ export const provisionClaudeSession = async (
       : '';
 
     const powersName = `claude-${sessionId}-powers`;
-    toCleanup = [powersName, ...removeNames];
+    const inputName = `${powersName}-input`;
+    toCleanup = [powersName, inputName, ...removeNames];
     const codeNames = ['agent', 'sandboxFactory', 'fsMounter', 'filesystem'];
     const petNames = [
       '@agent',
@@ -274,17 +221,22 @@ export const provisionClaudeSession = async (
         : []),
     ];
 
-    await E(hostAgent).evaluate(
-      '@main',
-      buildSessionPowersSource(
-        mountList,
-        Boolean(credentialsName),
-        hasMcpMount,
-        hasConfigFilesystem,
+    // Resolve each dependency once, then persist its exact capability edge.
+    // Revival of the static module must not consult these mutable pet names.
+    const dependencies = await Promise.all(
+      petNames.map(petName => E(hostAgent).lookup(petName)),
+    );
+    const bundle = harden({
+      ...Object.fromEntries(
+        codeNames.map((key, index) => [key, dependencies[index]]),
       ),
-      harden(codeNames),
-      harden(petNames),
-      powersName,
+      mounts: mountList,
+    });
+    await E(hostAgent).storeValue(bundle, inputName);
+    await E(hostAgent).makeUnconfined(
+      '@main',
+      sessionPowersModuleSpecifier,
+      harden({ powersName: inputName, resultName: powersName }),
     );
 
     /** @type {Record<string, any>} */
@@ -338,5 +290,4 @@ export const provisionClaudeSession = async (
   }
 };
 harden(provisionClaudeSession);
-harden(buildSessionPowersSource);
 harden(resolveSandboxConfig);

@@ -53,6 +53,14 @@ host reconciliation before releasing their dependent storage or admitting replac
 This is incarnation-local ownership; cross-formula retention, durable-record adoption,
 unknown-acquisition reconciliation, and hang-safe revocation still require the supervisor.
 
+Claude and OpenCode now use one static session-powers module instead of three
+independently generated powers source strings.
+Construction persists exact dependency capabilities before creating the powers/client
+formula chain; nested factory/provider names are no longer resolved again on revival.
+Daemon acceptance covers name rebinding, GC, restart, and scoped state access.
+The active bundle excludes the client and is distinct from passive recovery metadata.
+Record-backed backend adoption, original-path cleanup, and supervisor ownership remain pending.
+
 A shared passive session-record store now retains the approved plan and exact
 dependency IDs in a host-private daemon directory per logical session.
 Separate reference entries retain formula graph edges without eager capability revival.
@@ -138,8 +146,8 @@ persisted-environment reader, using the same verified ID for each formula's meta
 and environment before checking placement against prospective guest storage roots.
 Ordinary diagnostics remain environment-blind; retained settings are not reapplied.
 Provisioning must be serialized and factory/provider bindings must remain stable while
-dependent backends or sessions persist: nested session lookup formulas can retarget on
-revival, so durable identity pinning is still pending.
+dependent backends or sessions persist: backend adoption and cleanup still resolve
+current names/paths even though client execution dependencies are now pinned.
 Stronger crash recovery and resolver integration remain pending.
 Recovery from hung driver control calls and the complete session emergency-stop path
 remain pending.
@@ -492,7 +500,7 @@ provider requirements, or an explicit user budget, rather than copied between la
 | Protection or limit | Resource or authority protected | From whom? | Where already bounded? | Decision and owning layer |
 |---|---|---|---|---|
 | Container/process and mount isolation | Host files, processes, other sessions | All guest code | Endo caps govern host APIs, not arbitrary native syscalls | Keep in shared runtime. |
-| Effective provisioning configuration | Private runtime ownership markers and generated files | Guest writes enabled by mismatched retained/current host configuration | Private permissions do not protect a directory explicitly granted as a guest mount; formula environments are immutable but current process settings can differ | Read effective factory/state roots by verified formula ID before provisioning; pin durable dependencies in the next wiring increment. |
+| Effective provisioning configuration | Private runtime ownership markers and generated files | Guest writes enabled by mismatched retained/current host configuration | Private permissions do not protect a directory explicitly granted as a guest mount; formula environments are immutable but current process settings can differ | Read effective factory/state roots by verified formula ID before provisioning; client execution powers now pin exact dependencies; backend ownership adoption remains pending. |
 | Provider secret isolation | Reusable upstream account credentials | Guest and listener code | Secrets controls storage access, not a secret already delivered | Keep host-only credential service; eliminate materialization into guests. |
 | Fixed provider routes/account binding | Which upstream authority a guest can exercise | Forged guest requests | Secret custody alone does not restrict credential use | Keep in provider service. |
 | Revocation and process reaping | Continued inference, networking, and execution | Stale or hostile guests | Request deadlines end one request, not the session grant | Keep one supervisor and grant owner. |
