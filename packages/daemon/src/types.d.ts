@@ -1980,6 +1980,17 @@ export interface EndoHost extends EndoAgent {
    */
   diagnostics(): Promise<EndoDiagnostics>;
   /**
+   * Read the stored construction environment of a local make-unconfined,
+   * make-archive, or make-from-tree formula without reviving it.
+   * Returns an empty record when the supported formula has no stored env.
+   * Rejects other formula types and cross-peer identifiers.
+   * Values may contain credentials: this method is available only on EndoHost,
+   * not on guests, diagnostics, or ordinary formula inspection records.
+   */
+  getFormulaEnvironment(
+    identifier: FormulaIdentifier,
+  ): Promise<Record<string, string>>;
+  /**
    * Snapshot every retention path from a GC root to the target,
    * identified by an endo:// locator. Pet-store edges along the
    * path render as `pet:<name>` labels; internal field edges

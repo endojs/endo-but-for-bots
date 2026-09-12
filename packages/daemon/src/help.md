@@ -392,6 +392,16 @@ Evaluate JavaScript code in a worker with named endowments.
 Example: evaluate(undefined, "x + y", ["x", "y"], ["a", "b"], ["result"])
   Runs "x + y" where x=lookup("a"), y=lookup("b"), stores result as "result"
 
+## getFormulaEnvironment(identifier) -> Promise<Record<string, string>>
+
+Read a local caplet formula's persisted construction environment without reviving it.
+Supports make-unconfined, make-archive, and make-from-tree formulas, returning an
+empty record when no environment was stored.
+Other formula types and cross-peer identifiers are rejected.
+This host-only method can reveal environment credentials; it is absent from the
+guest and diagnostics facets, and ordinary formula inspection omits these values.
+Use the formula identifier rather than a mutable pet name when verifying configuration.
+
 ## makeUnconfined(workerName, specifier, options?) -> Promise<any>
 
 Load and instantiate an unconfined module (has access to Node.js APIs).

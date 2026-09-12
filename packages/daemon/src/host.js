@@ -2320,9 +2320,8 @@ export const makeHostMaker = ({
      * on genuinely remote peers are rejected with a clear error.
      *
      * @param {FormulaIdentifier} identifier
-     * @returns {Promise<FormulaRecord>}
      */
-    const getFormula = async identifier => {
+    const getLocalFormula = async identifier => {
       await null;
       if (typeof identifier !== 'string') {
         throw new TypeError(
@@ -2354,6 +2353,15 @@ export const makeHostMaker = ({
           { cause },
         );
       }
+      return harden({ formula, number });
+    };
+
+    /**
+     * @param {FormulaIdentifier} identifier
+     * @returns {Promise<FormulaRecord>}
+     */
+    const getFormula = async identifier => {
+      const { formula, number } = await getLocalFormula(identifier);
       // A scratch-mount carries no path on disk; resolve the daemon-
       // managed host path so the formula record can surface it. Other
       // formula types (including `mount`, whose path lives in the
@@ -2365,6 +2373,27 @@ export const makeHostMaker = ({
         );
       }
       return makeFormulaRecord(formula, number, { mountHostPath });
+    };
+
+    /**
+     * Read construction policy without reviving the formula. Environment values
+     * can include credentials, so this authority is on EndoHost itself, never on
+     * the separately delegable diagnostics facet or ordinary formula records.
+     * @param {FormulaIdentifier} identifier
+     * @returns {Promise<Record<string, string>>}
+     */
+    const getFormulaEnvironment = async identifier => {
+      const { formula } = await getLocalFormula(identifier);
+      if (
+        formula.type !== 'make-unconfined' &&
+        formula.type !== 'make-archive' &&
+        formula.type !== 'make-from-tree'
+      ) {
+        throw makeError(
+          X`Formula ${q(identifier)} has no construction environment`,
+        );
+      }
+      return harden({ ...formula.env });
     };
 
     const { reverseIdentify } = specialStore;
@@ -2751,6 +2780,7 @@ export const makeHostMaker = ({
       sendValue,
       // Diagnostics (formula records, dependency graph, error traces)
       diagnostics,
+      getFormulaEnvironment,
       listRetentionPaths: listRetentionPathsForHost,
       followRetentionPaths: followRetentionPathsForHost,
     };
