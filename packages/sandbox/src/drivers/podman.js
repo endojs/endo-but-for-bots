@@ -21,6 +21,7 @@ import {
   assertSlicePolicyRequest,
   attestSlicePolicy,
   PINNED_IMAGE_REFERENCE_PATTERN,
+  PORTABLE_NAME_PATTERN,
   REQUIRED_CGROUP_CONTROLLERS,
   sliceConfigFingerprint,
 } from '../policy.js';
@@ -28,6 +29,10 @@ import { readableToAsyncIterable, spawnAndCollect } from './child-process.js';
 import { DEFAULT_PATH } from './path.js';
 
 /** @import { SandboxDriver, SliceSpec, SpawnOpts, DriverProcess, BackendProbe, BackendProbeDetails, SlicePolicyRequest, SlicePolicyAttestation } from '../types.js' */
+
+// `network: 'join'` targets are named by the same portable pattern the
+// policy layer uses for volumes and sidecars.
+const JOIN_CONTAINER_PATTERN = PORTABLE_NAME_PATTERN;
 
 /**
  * `SandboxDriver` for rootless `podman` on Linux.
@@ -227,9 +232,10 @@ harden(seccompSecurityOpt);
  *
  * @param {SliceSpec['network']} profile
  * @param {RootlessNetBackend} backend
+ * @param {string | undefined} [networkRef]
  * @returns {string}
  */
-const networkArgForProfile = (profile, backend) => {
+const networkArgForProfile = (profile, backend, networkRef) => {
   switch (profile) {
     case 'none':
       return 'none';
@@ -251,6 +257,20 @@ const networkArgForProfile = (profile, backend) => {
       throw makeError(
         X`network 'broker-only' is only reachable through an attested slice policy`,
       );
+    case 'join':
+      // The slice shares a network namespace the operator prepared (e.g.
+      // a networkless provider broker). The caller names the container;
+      // `prepareSlice` observed that namespace is loopback-only and the
+      // admission path re-resolves this target before every operation.
+      if (
+        typeof networkRef !== 'string' ||
+        !JOIN_CONTAINER_PATTERN.test(networkRef)
+      ) {
+        throw makeError(
+          X`network 'join' requires a container reference, got ${q(networkRef)}`,
+        );
+      }
+      return `container:${networkRef}`;
     case 'host-loopback':
     case 'host-lan':
     case 'host-net':
@@ -362,6 +382,14 @@ harden(probeRootlessNetBackend);
  *                                     policy-bearing create prefix every
  *                                     operation shares with the anchor
  *                                     the attestation was read from.
+ * @property {{ container: string, containerId: string, namespaceId: string } | null} join
+ *                                     Observed loopback-only namespace this
+ *                                     slice shares for `network: 'join'`, or
+ *                                     `null` for every other profile. Every
+ *                                     operation re-resolves the immutable id,
+ *                                     re-observes the inventory, and refuses
+ *                                     if the namespace changed or gained a
+ *                                     non-loopback interface or route.
  * @property {{ cgroup2: { available: boolean, controllers: string[], reason?: string }, rootless: { available: boolean, reason?: string }, rootlessNet: { backend: RootlessNetBackend, reason?: string }, path: { value: string, source: 'env' | 'image' | 'fallback' } }} runtimeDetails
  *                                     Hardening-layer report the
  *                                     factory weaves into per-slice
@@ -492,7 +520,7 @@ const assembleCreateArgv = (spec, containerName, netBackend, extras) => {
       '--read-only',
       '--read-only-tmpfs=true',
       '--network',
-      networkArgForProfile(spec.network, netBackend),
+      networkArgForProfile(spec.network, netBackend, spec.networkRef),
     );
 
     // Optional seccomp override.  `'default'` falls through to podman's
@@ -1357,15 +1385,51 @@ export const makePodmanDriver = ({
    * @param {SlicePolicyRequest['brokerSidecar']} sidecar
    * @returns {Promise<string>}
    */
-  const resolveBrokerNamespaceId = async (cp, runtime, proc, sidecar) => {
-    await null;
-    if (Object.hasOwn(sidecar, 'netnsPath')) {
-      return readNetworkNamespaceIdAtPath(
-        proc,
-        /** @type {{ netnsPath: string }} */ (sidecar).netnsPath,
+  /**
+   * The one network posture a `join` target must have: no interface but
+   * loopback and no route that could leave it. Re-run per operation so the
+   * guarantee is not only an admission-time observation.
+   *
+   * @param {{ interfaces: Iterable<string>, routableRoutes: number }} observed
+   * @param {string} container
+   */
+  const assertLoopbackOnly = (observed, container) => {
+    const interfaces = [...observed.interfaces].sort().join(',');
+    if (interfaces !== 'lo') {
+      throw makeError(
+        `network join target ${q(container)} must expose only loopback; saw ${q(interfaces)}`,
       );
     }
-    const container = /** @type {{ container: string }} */ (sidecar).container;
+    if (observed.routableRoutes !== 0) {
+      throw makeError(
+        `network join target ${q(container)} must not have routable routes; saw ${q(observed.routableRoutes)}`,
+      );
+    }
+  };
+  harden(assertLoopbackOnly);
+
+  /**
+   * Resolve a running container to its pid and network-namespace identity.
+   *
+   * @param {any} cp
+   * @param {string} runtime
+   * @param {import('../observe.js').ProcReader} proc
+   * @param {string} container
+   * @param {string} label - What the container is, for error text.
+   * @returns {Promise<{ pid: number, containerId: string, namespaceId: string }>}
+   */
+  const resolveContainerNetworkTarget = async (
+    cp,
+    runtime,
+    proc,
+    container,
+    label = 'container',
+  ) => {
+    await null;
+    if (!JOIN_CONTAINER_PATTERN.test(container)) {
+      // A plain template (not `X`/`Fail`) so the human label stays unquoted.
+      throw makeError(`${label} ${q(container)} is not a container name`);
+    }
     const result = await spawnAndCollect(
       cp,
       'podman',
@@ -1378,30 +1442,70 @@ export const makePodmanDriver = ({
       ]),
       { timeoutMs: CONTROL_COMMAND_TIMEOUT_MS },
     );
-    const sidecarPid = Number(result.stdout.trim());
-    if (result.code !== 0 || !Number.isInteger(sidecarPid) || sidecarPid <= 0) {
+    const pid = Number(result.stdout.trim());
+    if (result.code !== 0 || !Number.isInteger(pid) || pid <= 0) {
       throw makeError(
-        X`broker sidecar ${q(container)} is not a running container: ${q(result.stderr.trim() || result.stdout.trim())}`,
+        `${label} ${q(container)} is not a running container: ${q(result.stderr.trim() || result.stdout.trim())}`,
       );
     }
-    // Only the identity: reading the sidecar's interfaces and routes
-    // too would discard them and would report a failure on a container
-    // this driver does not own as though it were the slice's.
+    // The immutable id, so a name cannot be re-pointed between this check
+    // and the create that joins the namespace.
+    const idResult = await spawnAndCollect(
+      cp,
+      'podman',
+      podmanArgs(runtime, [
+        'container',
+        'inspect',
+        '--format',
+        '{{.Id}}',
+        container,
+      ]),
+      { timeoutMs: CONTROL_COMMAND_TIMEOUT_MS },
+    );
+    const containerId = idResult.stdout.trim();
+    if (idResult.code !== 0 || !/^[0-9a-f]{12,64}$/.test(containerId)) {
+      throw makeError(
+        `${label} ${q(container)} has no stable container id: ${q(idResult.stderr.trim() || idResult.stdout.trim())}`,
+      );
+    }
     let namespaceId;
     try {
       namespaceId = parseNamespaceInode(
-        await proc.readLink(`/proc/${sidecarPid}/ns/net`),
+        await proc.readLink(`/proc/${pid}/ns/net`),
       );
     } catch (e) {
       throw makeError(
-        X`cannot read the broker sidecar network namespace: ${q(/** @type {Error} */ (e).message)}`,
+        `cannot read the ${label} network namespace: ${q(/** @type {Error} */ (e).message)}`,
       );
     }
     if (namespaceId === null) {
       throw makeError(
-        X`broker sidecar ${q(container)} has an unrecognized network namespace`,
+        `${label} ${q(container)} has an unrecognized network namespace`,
       );
     }
+    return harden({ pid, containerId, namespaceId });
+  };
+  harden(resolveContainerNetworkTarget);
+
+  const resolveBrokerNamespaceId = async (cp, runtime, proc, sidecar) => {
+    await null;
+    if (Object.hasOwn(sidecar, 'netnsPath')) {
+      return readNetworkNamespaceIdAtPath(
+        proc,
+        /** @type {{ netnsPath: string }} */ (sidecar).netnsPath,
+      );
+    }
+    const container = /** @type {{ container: string }} */ (sidecar).container;
+    // Only the identity: reading the sidecar's interfaces and routes
+    // too would discard them and would report a failure on a container
+    // this driver does not own as though it were the slice's.
+    const { namespaceId } = await resolveContainerNetworkTarget(
+      cp,
+      runtime,
+      proc,
+      container,
+      'broker sidecar',
+    );
     return namespaceId;
   };
 
@@ -1632,9 +1736,21 @@ export const makePodmanDriver = ({
       spec.network !== 'broker-only' &&
       spec.network !== 'host-loopback' &&
       spec.network !== 'host-lan' &&
-      spec.network !== 'host-net'
+      spec.network !== 'host-net' &&
+      spec.network !== 'join'
     ) {
       throw makeError(X`unknown network profile ${q(spec.network)}`);
+    }
+    if ((spec.network === 'join') !== (spec.networkRef !== undefined)) {
+      // Joining an operator-prepared namespace is the only reason to name
+      // a container here; accepting one on another profile would leave a
+      // caller believing they had constrained something they had not.
+      throw makeError(
+        X`network 'join' requires a networkRef container and no other profile accepts one`,
+      );
+    }
+    if (spec.network === 'join' && spec.policy !== undefined) {
+      throw makeError(X`network 'join' cannot be combined with a slice policy`);
     }
     if ((spec.network === 'broker-only') !== (spec.policy !== undefined)) {
       // The broker's namespace is named by the policy and nowhere else,
@@ -1676,7 +1792,9 @@ export const makePodmanDriver = ({
     // two `--version` probes for it would only produce a misleading
     // "no rootless network backend" line in `help()`.
     const netBackend =
-      spec.network === 'broker-only' ? null : await probeRootlessNetBackend(cp);
+      spec.network === 'broker-only' || spec.network === 'join'
+        ? null
+        : await probeRootlessNetBackend(cp);
     if (spec.network === 'private' && netBackend === null) {
       throw makeError(
         X`podman driver: network 'private' requires either slirp4netns or pasta on PATH; neither was found`,
@@ -1730,13 +1848,18 @@ export const makePodmanDriver = ({
       }),
       rootless: harden({ available: true }),
       rootlessNet: harden(
-        netBackend === null
+        spec.network === 'join'
           ? {
               backend: /** @type {RootlessNetBackend} */ (null),
-              reason:
-                'no rootless network backend on PATH (slirp4netns / pasta)',
+              reason: 'network join shares the named container namespace',
             }
-          : { backend: netBackend },
+          : netBackend === null
+            ? {
+                backend: /** @type {RootlessNetBackend} */ (null),
+                reason:
+                  'no rootless network backend on PATH (slirp4netns / pasta)',
+              }
+            : { backend: netBackend },
       ),
       path: slicePath,
     });
@@ -1815,6 +1938,42 @@ export const makePodmanDriver = ({
       });
     }
 
+    /** @type {{ container: string, containerId: string, namespaceId: string } | null} */
+    let join = null;
+    if (spec.network === 'join') {
+      const joinRef = /** @type {string} */ (spec.networkRef);
+      try {
+        const proc = await getProcfs();
+        const target = await resolveContainerNetworkTarget(
+          cp,
+          runtime,
+          proc,
+          joinRef,
+          'network join target',
+        );
+        // The slice will share this namespace, so it is admitted on what the
+        // namespace actually contains, not on the flag that asked for it.
+        const observed = await readNetworkNamespace(proc, target.pid);
+        assertLoopbackOnly(observed, joinRef);
+        // Bind every later operation to the immutable container id, never the
+        // name: a target replaced under the same name cannot be joined.
+        join = harden({
+          container: joinRef,
+          containerId: target.containerId,
+          namespaceId: target.namespaceId,
+        });
+      } catch (error) {
+        // A rejected join creates no slice for teardown to clean, so release
+        // the seccomp temp file this attempt already materialised.
+        if (seccompTempPath !== null) {
+          const fs = await import('fs');
+          await fs.promises.unlink(seccompTempPath).catch(() => undefined);
+          seccompTempPath = null;
+        }
+        throw error;
+      }
+    }
+
     /** @type {PodmanSliceContext} */
     const ctx = {
       spec,
@@ -1825,6 +1984,7 @@ export const makePodmanDriver = ({
       reserved: new Set(),
       seccompTempPath,
       policy,
+      join,
       runtimeDetails,
     };
     return ctx;
@@ -1910,8 +2070,31 @@ export const makePodmanDriver = ({
      */
     async function admitOperation() {
       await null;
+      if (slice.join !== null) {
+        // Resolve the immutable id again before every operation: a container
+        // replaced under the same name must not host this operation, and the
+        // namespace must still carry nothing but loopback.
+        const proc = await getProcfs();
+        const target = await resolveContainerNetworkTarget(
+          cp,
+          slice.runtime,
+          proc,
+          slice.join.containerId,
+          'network join target',
+        );
+        const observed = await readNetworkNamespace(proc, target.pid);
+        assertLoopbackOnly(observed, slice.join.container);
+        if (target.namespaceId !== slice.join.namespaceId) {
+          throw makeError(
+            `network join target ${q(slice.join.container)} was replaced after the slice was admitted`,
+          );
+        }
+      }
       const operationSpec = harden({
         ...slice.spec,
+        // Join by id, not the caller's name, so the resolved target cannot be
+        // swapped between the check above and podman resolving the reference.
+        ...(slice.join !== null ? { networkRef: slice.join.containerId } : {}),
         env: harden({ ...slice.spec.env, ...(opts.env ?? {}) }),
         cwd: opts.cwd ?? slice.spec.cwd,
       });
