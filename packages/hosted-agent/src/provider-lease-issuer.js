@@ -202,6 +202,10 @@ export const makeProviderBrokerLeaseIssuer = ({
           maxRequestBytes: configuredPolicy.maxRequestBytes,
           maxResponseBytes: configuredPolicy.maxResponseBytes,
           timeoutMs,
+          allowedPaths: [
+            ...new Set(configuredPolicy.routes.map(route => route.path)),
+          ],
+          clientAuthorization: configuredPolicy.clientAuthorization ?? 'reject',
         }),
       });
       const initial = await worker.observe();

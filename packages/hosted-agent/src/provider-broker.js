@@ -5,11 +5,13 @@ import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 
+import { INFERENCE_PATHS } from './provider-paths.js';
 import { makeSecretRotator } from './secret-rotator.js';
 
 /**
  * @typedef {{ method: string, path: string }} Route
  * @typedef {{ origin: string, routes: Route[], models: string[], expiresAt: number,
+ * clientAuthorization?: 'reject' | 'strip',
  * maxRequests: bigint, maxRequestBytes: bigint, maxResponseBytes: bigint,
  * maxTotalBytes: bigint, maxCostMicrounits: bigint,
  * maxCostMicrounitsPerRequest: bigint, credentialHeader?: 'bearer' | 'x-api-key',
@@ -586,13 +588,15 @@ export const makeProviderBrokerLease = (
     !parsedOrigin.username &&
     !parsedOrigin.password) ||
     Fail`Invalid provider origin`;
+  const clientAuthorization = policy.clientAuthorization ?? 'reject';
+  clientAuthorization === 'reject' ||
+    clientAuthorization === 'strip' ||
+    Fail`Unsupported client authorization mode`;
   const routes = policy.routes.map(({ method, path }) => {
     // Exact paths only: no normalization, query, fragment, percent escaping,
     // alternate authority or dot segments can affect dispatch.
     (method === 'POST' &&
-      ['/v1/responses', '/v1/messages', '/v1/chat/completions'].includes(
-        path,
-      ) &&
+      INFERENCE_PATHS.includes(path) &&
       /^\/[a-zA-Z0-9_-]+(?:\/[a-zA-Z0-9_-]+)*$/.test(path)) ||
       Fail`Invalid inference route`;
     return `${method} ${path}`;
@@ -601,6 +605,7 @@ export const makeProviderBrokerLease = (
   if (authMode === 'subscription') {
     (origin === 'https://chatgpt.com' &&
       credentialHeader === 'bearer' &&
+      clientAuthorization === 'reject' &&
       anthropicVersion === undefined &&
       anthropicBeta === undefined &&
       typeof accountRef === 'string' &&

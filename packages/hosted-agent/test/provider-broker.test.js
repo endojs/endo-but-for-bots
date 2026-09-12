@@ -588,6 +588,23 @@ test('operator chooses Anthropic authorization without caller headers', async t 
   );
 });
 
+test('broker admits the OpenRouter OpenAI-compatible route and validates client auth mode', async t => {
+  const { endpoint, calls } = setup({
+    limits: {
+      origin: 'https://openrouter.ai',
+      routes: [{ method: 'POST', path: '/api/v1/chat/completions' }],
+      clientAuthorization: 'strip',
+    },
+  });
+  await E(endpoint).request(
+    harden({ ...request, path: '/api/v1/chat/completions' }),
+  );
+  t.is(calls[0].url, 'https://openrouter.ai/api/v1/chat/completions');
+  t.throws(() =>
+    setup({ limits: /** @type {any} */ ({ clientAuthorization: 'forward' }) }),
+  );
+});
+
 test('operator configuration cannot enable administrative routes or unprovisioned subscription auth', t => {
   t.throws(
     () =>

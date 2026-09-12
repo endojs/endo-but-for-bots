@@ -231,6 +231,21 @@ test('request deadlines clamp to remaining lease time before admission', async t
   t.is(f.listenerLimits().timeoutMs, 59_000);
 });
 
+test('listener limits mirror the lease routes and client authorization mode', async t => {
+  const f = fixture({
+    policy: {
+      ...policy,
+      routes: [{ method: 'POST', path: '/api/v1/chat/completions' }],
+      clientAuthorization: 'strip',
+    },
+  });
+  t.teardown(f.issuer.dispose);
+  const lease = await f.issuer(spec);
+  t.deepEqual(f.listenerLimits().allowedPaths, ['/api/v1/chat/completions']);
+  t.is(f.listenerLimits().clientAuthorization, 'strip');
+  await E(lease).revoke();
+});
+
 test('invalid host request deadlines are refused', t => {
   for (const requestTimeoutMs of [
     0,
