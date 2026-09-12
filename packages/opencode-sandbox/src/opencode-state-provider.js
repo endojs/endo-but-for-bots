@@ -1,13 +1,14 @@
 // @ts-check
+import { constants } from 'node:fs';
 import {
   chmod,
   lstat,
   mkdir,
+  open,
   readFile,
   realpath,
   rm,
   stat,
-  writeFile,
 } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -71,11 +72,58 @@ export const makeOpencodeStateProvider = ({ hostAgent, stateRoot }) => {
     });
   };
 
-  const ensureOwnersDirectory = async () => {
+  /**
+   * The `.owners/` directory is provider-owned and sits outside the mounted
+   * session dir. Refuse to follow a symlink at its path: chmod/mkdir through
+   * one would let a stale or planted link redirect provider writes to an
+   * arbitrary host path.
+   *
+   * @param {string} resolvedRoot - canonical state root (already symlink-free)
+   */
+  const ensureOwnersDirectory = async resolvedRoot => {
     const owners = `${stateRoot}/${OWNERS_DIRECTORY}`;
-    await mkdir(owners, { recursive: true, mode: 0o700 });
+    const info = await lstat(owners).catch(() => undefined);
+    if (info?.isSymbolicLink()) {
+      throw Fail`Ownership directory must not be a symlink: ${owners}`;
+    }
+    if (info && !info.isDirectory()) {
+      throw Fail`Ownership directory is not a directory: ${owners}`;
+    }
+    if (!info) {
+      try {
+        await mkdir(owners, { mode: 0o700 });
+      } catch (error) {
+        // A concurrent provideSessionMount may have won the create; re-verify
+        // below instead of failing the session.
+        if (/** @type {NodeJS.ErrnoException} */ (error).code !== 'EEXIST') {
+          throw error;
+        }
+      }
+    }
+    (await realpath(owners)) === `${resolvedRoot}/${OWNERS_DIRECTORY}` ||
+      Fail`Ownership directory contains symbolic links`;
     await chmod(owners, 0o700);
     return owners;
+  };
+
+  /**
+   * Classify an ownership marker without ever following a symlink at its path:
+   * a planted link could otherwise redirect reads (or the later write) at a
+   * file outside the state tree.
+   *
+   * @param {string} ownerMarker
+   * @param {string} sessionId
+   * @returns {Promise<'absent' | 'owned' | 'foreign'>}
+   */
+  const readMarkerState = async (ownerMarker, sessionId) => {
+    const info = await lstat(ownerMarker).catch(() => undefined);
+    if (!info) return 'absent';
+    info.isSymbolicLink() &&
+      Fail`Ownership marker must not be a symlink: ${ownerMarker}`;
+    info.isFile() ||
+      Fail`Ownership marker is not a regular file: ${ownerMarker}`;
+    const marker = await readFile(ownerMarker, 'utf8');
+    return marker.trim() === sessionId ? 'owned' : 'foreign';
   };
 
   /**
@@ -87,12 +135,10 @@ export const makeOpencodeStateProvider = ({ hostAgent, stateRoot }) => {
     const { directory, ownerMarker } = sessionPaths(sessionId);
     const info = await lstat(directory).catch(() => undefined);
     if (!info) return undefined;
-    info.isDirectory() || Fail`Session state path is not a directory`;
     info.isSymbolicLink() && Fail`Session state path is a symbolic link`;
-    const marker = await readFile(ownerMarker, 'utf8').catch(() => undefined);
-    marker !== undefined && marker.trim() === sessionId
-      ? undefined
-      : Fail`Session state directory is not owned by this session`;
+    info.isDirectory() || Fail`Session state path is not a directory`;
+    (await readMarkerState(ownerMarker, sessionId)) === 'owned' ||
+      Fail`Session state directory is not owned by this session`;
     return directory;
   };
 
@@ -109,6 +155,9 @@ export const makeOpencodeStateProvider = ({ hostAgent, stateRoot }) => {
    */
   const provideSessionMount = async sessionId => {
     const { directory, ownerMarker, name } = sessionPaths(sessionId);
+    const rootInfo = await lstat(stateRoot).catch(() => undefined);
+    rootInfo?.isSymbolicLink() &&
+      Fail`State root must not be a symlink: ${stateRoot}`;
     await mkdir(stateRoot, { recursive: true, mode: 0o700 });
     const resolvedRoot = await realpath(stateRoot);
     try {
@@ -121,18 +170,41 @@ export const makeOpencodeStateProvider = ({ hostAgent, stateRoot }) => {
         Fail`Cannot create session state directory`;
       (await realpath(directory)) === `${resolvedRoot}/${sessionId}` ||
         Fail`Session state path contains symbolic links`;
-      const marker = await readFile(ownerMarker, 'utf8').catch(() => undefined);
-      marker !== undefined && marker.trim() === sessionId
-        ? undefined
-        : Fail`Session state directory is not owned by this session`;
+      (await readMarkerState(ownerMarker, sessionId)) === 'owned' ||
+        Fail`Session state directory is not owned by this session`;
     }
-    await chmod(directory, 0o700);
     const info = await stat(directory);
     info.isDirectory() || Fail`Session state path is not a directory`;
+    // Verify the canonical path before chmod or any write, so a swapped link
+    // cannot redirect them outside the state tree.
     (await realpath(directory)) === `${resolvedRoot}/${sessionId}` ||
       Fail`Session state path contains symbolic links`;
-    await ensureOwnersDirectory();
-    await writeFile(ownerMarker, `${sessionId}\n`, { mode: 0o600 });
+    await chmod(directory, 0o700);
+    await ensureOwnersDirectory(resolvedRoot);
+    const markerState = await readMarkerState(ownerMarker, sessionId);
+    markerState !== 'foreign' ||
+      Fail`Session state directory is not owned by this session`;
+    if (markerState === 'owned') {
+      // Normalize a pre-existing marker rather than trusting its mode.
+      await chmod(ownerMarker, 0o600);
+    }
+    if (markerState === 'absent') {
+      // O_NOFOLLOW: never write through a symlink swapped in after the lstat.
+      /* eslint-disable no-bitwise */
+      const flags =
+        constants.O_WRONLY |
+        constants.O_CREAT |
+        constants.O_TRUNC |
+        constants.O_NOFOLLOW;
+      /* eslint-enable no-bitwise */
+      const handle = await open(ownerMarker, flags, 0o600);
+      try {
+        await handle.writeFile(`${sessionId}\n`);
+      } finally {
+        await handle.close();
+      }
+      await chmod(ownerMarker, 0o600);
+    }
     await ensureMountDirectory();
     // Replace any stale mount name for this session before re-minting.
     if (await E(hostAgent).has(...name)) {
