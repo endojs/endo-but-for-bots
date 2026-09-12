@@ -23,6 +23,7 @@
     "./resource-registry.js": "./src/resource-registry.js",
     "./generated-file-storage.js": "./src/generated-file-storage.js",
     "./factory.js": "./src/factory.js",
+    "./runtime.js": "./src/runtime.js",
     "./interfaces.js": "./src/interfaces.js",
     "./xfs-volume-quota.js": "./src/xfs-volume-quota.js",
     "./package.json": "./package.json",

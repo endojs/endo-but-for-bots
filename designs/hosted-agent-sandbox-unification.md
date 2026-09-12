@@ -45,8 +45,8 @@ The ownership registry now lives in `@endo/sandbox`, shared by session adapters 
 the Podman driver.
 Podman teardown fences new operations, waits for admitted creates, and retains failed
 removals and their admission slots for retry.
-Successful cleanup requires both checked container removal and host attach-process
-settlement; configuration remains until all owners are released.
+Successful cleanup requires both checked container removal and native attach-process
+stdio closure; configuration remains until all owners are released.
 Independent operation and policy-anchor removal failures are collected without losing owners.
 Controlled driver regressions cover these races.
 Bwrap now shares the registry, fences delayed admissions, and retains children through
@@ -66,8 +66,44 @@ and backend probes, and retains every returned driver context before publishing 
 Close stops existing handles without waiting for unrelated pending construction, drains
 late acquisitions, and retains cleanup failures for the host owner to retry.
 Context cancellation uses this same close path; the public factory has no close authority.
-The native runtime must retain this kit and close it before shared storage is released;
-that storage-owner composition and crash reconciliation remain pending.
+The host runtime controller now acquires exclusive ownership, shared generated-file
+storage, and this factory kit in that order, then releases them in reverse order.
+It returns its cleanup controller before initialization starts, so cleanup of failed
+construction remains owned and a failed release can be retried by the host owner.
+An atomic ownership marker contains a nonce unique to that acquisition; old successful
+release calls cannot remove a successor's marker.
+Existing markers and storage roots refuse startup, without a probe or stale sweep.
+A dead daemon worker is insufficient evidence for recovery: a surviving `podman create`
+can finish after a successor's container sweep.
+Every Podman invocation now requires the local engine, including probes and cleanup.
+Podman preparation now retains anchor and seccomp-directory cleanup before a context
+can be returned, with a host-only `closeSlices()` fence and retry path.
+Anchor and operation-create removal cannot overtake an unfinished producer; failed
+producer effects retain configuration and operation slots even after removal succeeds,
+while proven no-child acquisition failures can release.
+Operation admission observes cancellation through identity and policy inspection.
+After successful creation, operations resolve a full container ID and use it for
+policy inspection, startup, signaling, and removal, including cleanup retries.
+Fixed creation flags disable automatic restart and inherited image healthchecks.
+Operation removal now observes Podman's positive startup timestamp before deleting
+the container record; attached exit status alone is insufficient startup evidence.
+Failed observation still permits removal, but retains uncertainty and configuration
+until reconciliation; successful removal is cached rather than repeated as evidence.
+Resolver attestation's process-launching `exec` shares anchor producer ownership.
+Podman's host-only `close()` now composes retained slice cleanup with direct native
+command lifetime tracking, including failed observations, pulls, and signaling.
+It aborts ordinary observations during close, preserves admitted producer deadlines,
+permits cleanup retries, and seals all command admission before reporting closure.
+Orphan cleanup validates full IDs before issuing removal.
+Runtime shutdown now invokes factory and driver close independently and releases
+storage and ownership only after both succeed; partial failures retain retry ownership.
+Tests include the production Podman driver with a simulated pending native closure,
+in addition to filesystem and composed-owner failures.
+The hosted runtime composes Podman; the generic factory retains bwrap support,
+whose separate probe-closure gap is outside this hosted composition.
+Uncertain descendant completion must retain ownership rather than license replacement.
+Daemon entrypoint retention and configuration, stronger crash
+recovery, and resolver integration remain pending.
 Recovery from hung driver control calls and the complete session emergency-stop path
 remain pending.
 
@@ -107,7 +143,8 @@ files still owned by a consumer.
 It creates an exclusive fresh root under a private host directory and refuses existing
 roots; reconciling a crashed owner's storage requires prior container reaping by the runtime.
 Writable host-path overlap is checked again on each use.
-The hosted runtime's storage-owner composition and resolver integration remain pending.
+The host-only runtime controller composes storage ownership; daemon and hosted entrypoint
+wiring and resolver integration remain pending.
 
 Runtime unification across all three adapters, Claude credential migration, OpenCode
 public network convergence, tool/journal consolidation, emergency stop UI, and the remaining

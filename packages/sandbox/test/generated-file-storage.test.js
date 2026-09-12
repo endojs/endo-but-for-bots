@@ -232,7 +232,7 @@ test('private parent is required before the storage root is created', async t =>
   await fs.chmod(parent, 0o755);
   await t.throwsAsync(
     makeGeneratedFileStorage({ directory, maxBytes: 1n, maxEntries: 3n }),
-    { message: /parent must be private/ },
+    { message: /directory must be private/ },
   );
   t.like(await t.throwsAsync(fs.access(directory)), { code: 'ENOENT' });
 });
