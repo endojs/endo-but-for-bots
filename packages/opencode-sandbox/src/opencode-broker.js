@@ -136,8 +136,16 @@ export const makeOpencodeBroker = async ({
   (typeof listenerImageRef === 'string' &&
     listenerImageRef.includes('@sha256:')) ||
     Fail`OpenCode listener image must be digest-pinned`;
-  typeof secret?.readBase64 === 'function' ||
-    typeof secret?.readBase64 === 'object' ||
+  // A remote exo presence exposes no own properties; `readBase64` is only
+  // reachable through eventual send. Accept any object/function presence, but
+  // still refuse a local cap that carries an explicitly broken reader
+  // (`{ readBase64: null }`), which the old typeof check missed.
+  const isPresence = value =>
+    typeof value === 'function' ||
+    (typeof value === 'object' && value !== null);
+  isPresence(secret) || Fail`OpenCode broker requires a SecretBlob read facet`;
+  Object.hasOwn(secret, 'readBase64') &&
+    !isPresence(secret.readBase64) &&
     Fail`OpenCode broker requires a SecretBlob read facet`;
   typeof fetchAuthority === 'function' ||
     Fail`OpenCode broker requires an outbound fetch authority`;

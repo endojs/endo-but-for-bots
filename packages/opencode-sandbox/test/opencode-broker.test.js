@@ -176,6 +176,13 @@ test('denies leases for other origins, accounts, or models', async t => {
   );
 });
 
+test('accepts a property-less remote-presence secret at composition', async t => {
+  // A CapTP SecretBlob presence has no own properties; composition must not
+  // introspect it synchronously, or every real deployment fails here.
+  const broker = await makeBroker(makeFakeRuntime(), { secret: harden({}) });
+  t.truthy(broker.issuer);
+});
+
 test('refuses unpinned images and invalid operator identity', async t => {
   const runtime = makeFakeRuntime();
   const base = {
@@ -220,7 +227,11 @@ test('refuses unpinned images and invalid operator identity', async t => {
     () => makeOpencodeBroker({ ...base, ownerId: `a${'b'.repeat(64)}` }),
     { message: /owner id is invalid/ },
   );
-  await t.throwsAsync(() => makeOpencodeBroker({ ...base, secret: {} }), {
+  await t.throwsAsync(
+    () => makeOpencodeBroker({ ...base, secret: { readBase64: null } }),
+    { message: /SecretBlob read facet/ },
+  );
+  await t.throwsAsync(() => makeOpencodeBroker({ ...base, secret: null }), {
     message: /SecretBlob read facet/,
   });
   await t.throwsAsync(() => makeOpencodeBroker({ ...base, fetch: null }), {
