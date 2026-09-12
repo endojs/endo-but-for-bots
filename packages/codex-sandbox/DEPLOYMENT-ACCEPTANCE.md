@@ -23,7 +23,7 @@ is missing.
   rootless Podman namespace with no routable interface.
   Only an inherited stdin/stdout CapTP connection carries the inference facet;
   the model slice shares the network namespace, not those pipes or process mounts.
-- `@endo/hosted-agent/provider-lease-issuer.js` composes the host-held secret and
+- `@endo/hosted-agent/provider-grant-issuer.js` composes the host-held secret and
   fetch authority with that worker, issuing observed session leases.
   Expiry, revocation, worker exit, identity drift, and failed cleanup retire
   admission; cleanup remains reachable for retry.

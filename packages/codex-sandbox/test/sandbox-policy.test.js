@@ -15,7 +15,7 @@ const imageDigest = `sha256:${'a'.repeat(64)}`;
 const identity = harden({
   sessionId: 's1',
   imageDigest,
-  leaseId: 'lease1',
+  grantId: 'lease1',
   networkNamespaceId: 'netns1',
 });
 
@@ -146,16 +146,14 @@ const fixture = (changes = {}) => {
   const brokerLease = Far('lease', {
     attestation: () =>
       harden({
-        version: 'BrokerLeaseV1',
+        version: 'ProviderGrantV1',
         ...(changes.network ? { network: changes.network } : {}),
         ...identity,
         providerOrigin: 'https://api.example.com',
         accountRef: 'account1',
         authMode: 'api-key',
         endpoint: 'http://127.0.0.1:1234/',
-        expiresAt: new Date(Date.now() + 60_000).toISOString(),
         modelAllowlist: ['model1'],
-        limits: { requests: 10, bytes: 1024n, costMicrounits: 100n },
       }),
     sandboxEvidence: () =>
       harden({
@@ -243,7 +241,7 @@ test('public slice binds resolver, proxy environment, and unchanged broker denia
   );
   const off = fixture({ network });
   await t.throwsAsync(off.create(), {
-    message: /lease attestation is not exact/,
+    message: /grant attestation is not exact/,
   });
 });
 
@@ -451,7 +449,7 @@ test('attested resource provisioner wires verification into lifecycle and teardo
           f.events.push('unmount');
         },
       }),
-    issueBrokerLease: async () =>
+    issueProviderGrant: async () =>
       Far('owned lease', {
         attestation: () => E(f.brokerLease).attestation(),
         sandboxEvidence: () => E(f.brokerLease).sandboxEvidence(),

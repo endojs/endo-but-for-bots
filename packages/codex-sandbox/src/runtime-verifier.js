@@ -260,7 +260,7 @@ export const makeCodexRuntimeVerifier = ({
             version: 'CodexRuntimeEvidenceV1',
             sessionId: context.sessionId,
             imageDigest: context.imageDigest,
-            leaseId: context.leaseId,
+            grantId: context.grantId,
             networkNamespaceId: context.networkNamespaceId,
             toolSandbox: 'codex-workspace-write',
             toolCodexHomeAccess: 'read-only',

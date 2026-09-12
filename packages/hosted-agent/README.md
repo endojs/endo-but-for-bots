@@ -75,3 +75,13 @@ both are covered by `test/turn-ledger.test.js`.
 `account.js` and `account-oracle.js` answer what plan a credential is on, how
 much of the rate limit is left, and what a token count costs — without holding
 the credential. See [ACCOUNT-ORACLE.md](./ACCOUNT-ORACLE.md).
+
+## Session inference grants
+
+`makeProviderBrokerGrant` and `makeProviderBrokerGrantIssuer` grant inference until
+explicit revocation or owner/transport shutdown, independently of credential expiry.
+The host keeps credentials and refresh authority and fixes provider routes and models.
+Request and response size bounds and simultaneous request slots protect host resources;
+completed requests do not exhaust a lifetime budget.
+An open stream holds its slot until upstream EOF, cancellation, or failure.
+Token and dollar spending limits are future application policy, not implicit defaults.

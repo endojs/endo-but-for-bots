@@ -5,8 +5,22 @@
 | **Created** | 2026-09-12 |
 | **Updated** | 2026-09-12 |
 | **Author** | kumavis (prompted) |
-| **Status** | Not Started |
+| **Status** | In Progress |
 | **Source** | Review of PR #1248 and subsequent simplicity and authority-lifetime discussion |
+
+## Implementation status
+
+The first implementation increment replaces mandatory inference leases with revocable
+session grants and simultaneous-request admission in the shared broker.
+Codex subscription turns retain their runtime instead of renewing it each turn,
+and the OpenCode broker uses the same grant contract.
+Credential refresh remains separate; lifetime token/dollar budgets remain deferred.
+
+Runtime unification across all three adapters, Claude credential migration, public
+network convergence, tool/journal consolidation, emergency stop UI, and the remaining
+limit removals are still pending.
+Live rootless Linux Podman and pinned CLI acceptance have not yet been established.
+The local implementation environment currently has no Podman executable.
 
 ## Motivation
 

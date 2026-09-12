@@ -72,7 +72,7 @@ const fixture = ({
     brokerEndpoint: 'http://127.0.0.1:1234',
     launchArgv: makeBrokerAppServerArgv('http://127.0.0.1:1234'),
     sessionId: 'session',
-    leaseId: 'lease',
+    grantId: 'lease',
     imageDigest: `sha256:${'a'.repeat(64)}`,
     networkNamespaceId: 'namespace',
   });
@@ -130,7 +130,7 @@ test('controlled probe success binds evidence and launches exact bounded preflig
   t.like(result, {
     version: 'CodexRuntimeEvidenceV1',
     sessionId: 'session',
-    leaseId: 'lease',
+    grantId: 'lease',
     networkNamespaceId: 'namespace',
     environment: 'credential-and-proxy-free',
     codexHomeAuthFile: 'absent',

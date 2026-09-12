@@ -16,7 +16,7 @@
 import { join } from 'node:path';
 
 import { Fail, q } from '@endo/errors';
-import { makeProviderBrokerLeaseIssuer } from '@endo/hosted-agent/provider-lease-issuer.js';
+import { makeProviderBrokerGrantIssuer } from '@endo/hosted-agent/provider-grant-issuer.js';
 import { makePodmanProviderListenerRuntime } from '@endo/hosted-agent/provider-listener-runtime.js';
 
 /** @import { BrokerPolicy } from '@endo/hosted-agent/provider-broker.js' */
@@ -26,14 +26,9 @@ export const OPENROUTER_INFERENCE_PATH = '/api/v1/chat/completions';
 export const OPENCODE_BROKER_ACCOUNT = 'openrouter';
 export const OPENCODE_BROKER_VERSION = 'OpencodeProviderBrokerV1';
 
-// Conservative ceilings mirroring the sibling Codex broker: 64 bounded
-// requests per lease, a full 8 MiB request plus 16 MiB response reserved for
-// each, and one cost unit per request so a runaway session cannot drain an
-// unbounded account.
-export const DEFAULT_MAX_REQUESTS = 64n;
+// Per-request buffers and simultaneous operations bound host allocations.
 export const DEFAULT_MAX_REQUEST_BYTES = 8n * 1024n ** 2n;
 export const DEFAULT_MAX_RESPONSE_BYTES = 16n * 1024n ** 2n;
-export const DEFAULT_LEASE_DURATION_MS = 60 * 60 * 1000;
 export const DEFAULT_REQUEST_TIMEOUT_MS = 600_000;
 
 const DIGEST_PATTERN = /^sha256:[a-f0-9]{64}$/;
@@ -48,14 +43,14 @@ const OWNER_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/;
  *
  * @param {object} options
  * @param {string[]} options.models - provider-scoped model ids the lease admits
- * @param {bigint} [options.maxRequests]
+ * @param {number} [options.maxConcurrentRequests]
  * @param {bigint} [options.maxRequestBytes]
  * @param {bigint} [options.maxResponseBytes]
- * @returns {Omit<BrokerPolicy, 'expiresAt'>}
+ * @returns {BrokerPolicy}
  */
 export const buildOpencodeBrokerPolicy = ({
   models,
-  maxRequests = DEFAULT_MAX_REQUESTS,
+  maxConcurrentRequests = 4,
   maxRequestBytes = DEFAULT_MAX_REQUEST_BYTES,
   maxResponseBytes = DEFAULT_MAX_RESPONSE_BYTES,
 }) => {
@@ -77,14 +72,9 @@ export const buildOpencodeBrokerPolicy = ({
     ],
     clientAuthorization: /** @type {const} */ ('strip'),
     models: [...models],
-    maxRequests,
+    maxConcurrentRequests,
     maxRequestBytes,
     maxResponseBytes,
-    // Every admitted request may reserve a full response; cover the whole
-    // request budget rather than a smaller per-window value.
-    maxTotalBytes: maxRequests * (maxRequestBytes + maxResponseBytes),
-    maxCostMicrounits: maxRequests,
-    maxCostMicrounitsPerRequest: 1n,
   });
 };
 
@@ -161,13 +151,12 @@ export const makeOpencodeBroker = async ({
     }));
   let issuer;
   try {
-    issuer = makeProviderBrokerLeaseIssuer({
+    issuer = makeProviderBrokerGrantIssuer({
       runtime: listener,
       secret,
       fetch: fetchAuthority,
       imageDigest,
       accountRef: OPENCODE_BROKER_ACCOUNT,
-      leaseDurationMs: DEFAULT_LEASE_DURATION_MS,
       requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
       policy,
       ...(audit === undefined ? {} : { audit }),

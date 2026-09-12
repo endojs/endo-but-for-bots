@@ -3,7 +3,7 @@ import test from '@endo/ses-ava/prepare-endo.js';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
 
-import { makeProviderBrokerLeaseIssuer } from '../src/provider-lease-issuer.js';
+import { makeProviderBrokerGrantIssuer } from '../src/provider-grant-issuer.js';
 
 const digest = `sha256:${'a'.repeat(64)}`;
 const spec = harden({
@@ -16,12 +16,9 @@ const policy = harden({
   origin: spec.providerOrigin,
   routes: [{ method: 'POST', path: '/v1/responses' }],
   models: ['allowed'],
-  maxRequests: 2n,
+  maxConcurrentRequests: 4,
   maxRequestBytes: 1024n,
   maxResponseBytes: 1024n,
-  maxTotalBytes: 8192n,
-  maxCostMicrounits: 20n,
-  maxCostMicrounitsPerRequest: 10n,
 });
 
 const networkEvidence = harden({
@@ -33,10 +30,8 @@ const networkEvidence = harden({
 
 /** @param {any} [options] */
 const fixture = ({
-  leaseDurationMs = 60_000,
   requestTimeoutMs,
   startBarrier,
-  now,
   policy: policyOverride,
   credential,
   makePublicNetwork,
@@ -52,7 +47,7 @@ const fixture = ({
   const closed = new Promise(resolve => {
     disconnect = () => resolve(undefined);
   });
-  const issuer = makeProviderBrokerLeaseIssuer({
+  const issuer = makeProviderBrokerGrantIssuer({
     runtime: {
       async start(input) {
         endpoint = input.endpoint;
@@ -87,9 +82,7 @@ const fixture = ({
     policy: policyOverride ?? policy,
     ...(credential === undefined ? {} : { credential }),
     ...(makePublicNetwork ? { makePublicNetwork } : {}),
-    leaseDurationMs,
     requestTimeoutMs,
-    now,
     imageDigest: digest,
     accountRef: 'account',
   });
@@ -202,33 +195,17 @@ test('unsupported public policy and unexpected off egress fail closed', async t 
   t.is(unexpected.stops(), 1);
 });
 
-test('request deadlines default to two minutes and allow bounded host opt-in', async t => {
-  for (const [leaseDurationMs, requestTimeoutMs, expected] of [
-    [3_600_000, undefined, 120_000],
-    [3_600_000, 600_000, 600_000],
-    [60_000, 600_000, 60_000],
+test('request deadlines are independent of session lifetime', async t => {
+  for (const [requestTimeoutMs, expected] of [
+    [undefined, 120_000],
+    [600_000, 600_000],
   ]) {
-    const f = fixture({ leaseDurationMs, requestTimeoutMs, now: () => 0 });
+    const f = fixture({ requestTimeoutMs });
     t.teardown(f.issuer.dispose);
     // eslint-disable-next-line no-await-in-loop
     await f.issuer(spec);
     t.is(f.listenerLimits().timeoutMs, expected);
   }
-});
-
-test('request deadlines clamp to remaining lease time before admission', async t => {
-  let reads = 0;
-  const f = fixture({
-    leaseDurationMs: 60_000,
-    requestTimeoutMs: 600_000,
-    now: () => {
-      reads += 1;
-      return reads === 1 ? 0 : 1000;
-    },
-  });
-  t.teardown(f.issuer.dispose);
-  await f.issuer(spec);
-  t.is(f.listenerLimits().timeoutMs, 59_000);
 });
 
 test('listener limits mirror the lease routes and client authorization mode', async t => {
@@ -316,36 +293,41 @@ test('failed lease teardown retains authority and retries the same worker', asyn
   t.is(f.stops(), 2);
 });
 
-// The outer budget on these tests guards against a hang, not against a slow
-// runner: the expiry and admission timers they exercise are tens of
-// milliseconds, but spinning the fixture (listener, broker, worker) alongside
-// the rest of the affected set on a loaded macOS runner has taken well over a
-// second, which a one-second budget reported as a failure.
 const LOADED_RUNNER_BUDGET_MS = 10_000;
 
-test('lease expiry revokes traffic and stops worker', async t => {
+test('grant preserves identity beyond 64 requests until explicit revocation', async t => {
   t.timeout(LOADED_RUNNER_BUDGET_MS);
-  // Setup can exceed the short expiry interval on a loaded CI runner. Keep
-  // admission live, then advance the policy clock and await the real timer.
-  let time = 0;
-  const f = fixture({ leaseDurationMs: 20, now: () => time });
+  const f = fixture();
   t.teardown(f.issuer.dispose);
-  const lease = await f.issuer(spec);
-  time = 20;
-  await f.closed;
-  await t.throwsAsync(() => E(lease).attestation(), { message: /inactive/ });
+  const grant = await f.issuer(spec);
+  const initial = await E(grant).attestation();
+  t.false(Object.hasOwn(initial, 'expiresAt'));
+  t.false(Object.hasOwn(initial, 'limits'));
+  for (let index = 0; index < 100; index += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    const response = await E(f.endpoint()).request(
+      harden({
+        method: 'POST',
+        path: '/v1/responses',
+        body: '{"model":"allowed"}',
+      }),
+    );
+    t.is(response.status, 200);
+  }
+  t.deepEqual(await E(grant).attestation(), initial);
+  t.is(f.stops(), 0);
+  await E(grant).revoke();
+  t.is(f.stops(), 1);
   await t.throwsAsync(
-    () =>
-      E(f.endpoint()).request(
-        harden({
-          method: 'POST',
-          path: '/v1/responses',
-          body: '{"model":"allowed"}',
-        }),
-      ),
+    E(f.endpoint()).request(
+      harden({
+        method: 'POST',
+        path: '/v1/responses',
+        body: '{"model":"allowed"}',
+      }),
+    ),
     { message: /inactive/ },
   );
-  t.is(f.stops(), 1);
 });
 
 test('worker disconnect revokes host endpoint', async t => {
@@ -354,8 +336,7 @@ test('worker disconnect revokes host endpoint', async t => {
   t.teardown(f.issuer.dispose);
   await f.issuer(spec);
   f.disconnect();
-  await f.issuer.dispose();
-  t.is(f.stops(), 1);
+  await f.closed;
   await t.throwsAsync(
     () =>
       E(f.endpoint()).request(
@@ -367,6 +348,7 @@ test('worker disconnect revokes host endpoint', async t => {
       ),
     { message: /inactive/ },
   );
+  t.is(f.stops(), 1);
 });
 
 test('disposal during acquisition waits and cleans late worker', async t => {
@@ -380,6 +362,18 @@ test('disposal during acquisition waits and cleans late worker', async t => {
   const starting = f.issuer(spec);
   await Promise.resolve();
   const disposing = f.issuer.dispose();
+  t.teardown(release);
+  // Shutdown fences authority before a slow acquisition can finish.
+  await t.throwsAsync(
+    E(f.endpoint()).request(
+      harden({
+        method: 'POST',
+        path: '/v1/responses',
+        body: '{"model":"allowed"}',
+      }),
+    ),
+    { message: /inactive/ },
+  );
   release();
   await t.throwsAsync(starting);
   await disposing;
@@ -416,12 +410,12 @@ test('an oauth issuer requires a credential bound to its own account', async t =
   // No credential at all: the mode is refused at admission rather than on the
   // first turn, which is the whole point of checking here.
   t.throws(() => fixture({ policy: base }), {
-    message: /Invalid provider lease issuer policy/,
+    message: /Invalid provider grant issuer policy/,
   });
   // A credential for another account is a different session's.
   t.throws(
     () => fixture({ policy: base, credential: oauthCredential('other') }),
-    { message: /Invalid provider lease issuer policy/ },
+    { message: /Invalid provider grant issuer policy/ },
   );
   // One that cannot refresh is refused too: it would otherwise be admitted,
   // report `authMode: 'oauth'` in its attestation, and fail on first use.
