@@ -27,7 +27,11 @@ import {
   REQUIRED_CGROUP_CONTROLLERS,
   sliceConfigFingerprint,
 } from '../policy.js';
-import { readableToAsyncIterable, spawnAndCollect } from './child-process.js';
+import {
+  readableToAsyncIterable,
+  spawnAndCollect,
+  startControlCommand,
+} from './child-process.js';
 import { DEFAULT_PATH } from './path.js';
 
 /** @import { GeneratedFileStage, GeneratedFileStorage } from '../generated-file-storage-types.js' */
@@ -41,14 +45,14 @@ const JOIN_CONTAINER_PATTERN = PORTABLE_NAME_PATTERN;
  * `SandboxDriver` for rootless `podman` on Linux.
  *
  * Translates a fully-resolved `SliceSpec` (host paths only, no Endo
- * capabilities) into one operation container per spawn. The driver is
- * stateless except for the per-slice context returned from `prepareSlice`,
- * which carries immutable construction policy, live operation containers,
+ * capabilities) into one operation container per spawn. The driver retains
+ * pending and failed preparations as well as returned slice contexts.
+ * Each context carries immutable construction policy, live operation containers,
  * and the runtime-feature report woven into `slice.help()`.
  *
  * Lifecycle:
  *   1. `prepareSlice` verifies the OCI image, network backend, runtime, and
- *      immutable policy without starting a container.
+ *      immutable policy, starting an anchor when kernel attestation is required.
  *   2. `spawn` creates an exactly labelled operation container whose PID 1
  *      is the requested argv, then attaches its three standard streams.
  *   3. wait, kill, and teardown remove each operation container before
@@ -356,6 +360,7 @@ harden(probeRootlessNetBackend);
  * @typedef {object} PodmanSliceContext
  * @property {ReturnType<typeof makeResourceRegistry>} operations Acquisitions and retained removals.
  * @property {Promise<void> | undefined} teardownFlight Coalesced, retryable teardown attempt.
+ * @property {() => void} [releaseOwnership] Release this exact driver registration after teardown.
  * @property {GeneratedFileStage | undefined} generatedStage Literal files retained until all containers are removed.
  * @property {SliceSpec} spec          Original slice spec.
  * @property {string} ref              Pinned OCI image reference.
@@ -404,6 +409,21 @@ harden(probeRootlessNetBackend);
  *                                     ended up with and where it came
  *                                     from (caller env, OCI image,
  *                                     or canonical fallback).
+ */
+
+/**
+ * Resources owned before prepareSlice can return a context.
+ * @typedef {object} PreparationResources
+ * @property {string | null} seccompDirectory
+ * @property {(() => Promise<void>) | undefined} removeAnchor
+ */
+
+/**
+ * Host filesystem authority for temporary seccomp profiles.
+ * @typedef {object} SeccompFilePowers
+ * @property {(prefix: string) => Promise<string>} mkdtemp
+ * @property {(path: string, contents: string) => Promise<void>} writeFile
+ * @property {(path: string, options: { recursive: true, force: true }) => Promise<void>} rm
  */
 
 /**
@@ -658,7 +678,8 @@ const encodeMount = fields =>
  *                                                            in tests.
  * @param {{observe: (request: {name: string, mountpoint: string}) => Promise<import('../xfs-volume-quota.js').VolumeQuotaEvidence>}} [input.volumeQuota] Trusted host kernel-quota observer; never model-facing.
  * @param {GeneratedFileStorage} [input.generatedFileStorage] Host-owned allocator; required for literal files.
- * @returns {SandboxDriver}
+ * @param {SeccompFilePowers} [input.fs] Host filesystem powers; injectable for cleanup failures.
+ * @returns {SandboxDriver & { closeSlices(): Promise<void> }}
  */
 export const makePodmanDriver = ({
   env: _env = {},
@@ -668,6 +689,7 @@ export const makePodmanDriver = ({
   procfs,
   volumeQuota,
   generatedFileStorage,
+  fs: fsPower,
 } = {}) => {
   if (
     generatedFileStorage !== undefined &&
@@ -690,6 +712,21 @@ export const makePodmanDriver = ({
       cpModule = await import('child_process');
     }
     return cpModule;
+  };
+
+  const getFs = async () => fsPower ?? import('node:fs/promises');
+  const slices = makeResourceRegistry();
+  /** @type {Set<() => Promise<void>>} */
+  const readyCleanups = new Set();
+  /** @type {Promise<void> | undefined} */
+  let closeFlight;
+
+  /** @param {PreparationResources} resources */
+  const releasePreparationFiles = async resources => {
+    if (resources.seccompDirectory === null) return;
+    const fs = await getFs();
+    await fs.rm(resources.seccompDirectory, { recursive: true, force: true });
+    resources.seccompDirectory = null;
   };
 
   // cgroup v2 is the only kernel-feature probe that is meaningful for
@@ -954,7 +991,7 @@ export const makePodmanDriver = ({
   // on probe freshness. Memoizing the probe verdict would need an
   // invalidation policy reconciled with the `listBackends()` re-probe
   // contract; revisit if `make()` frequency ever makes probe cost material.
-  const probe = async () => {
+  const probeBackend = async () => {
     await null;
     if (ownerId === undefined || ownerId === '' || /[\0\r\n]/.test(ownerId)) {
       return crashCleanupUnavailable(
@@ -1583,6 +1620,7 @@ export const makePodmanDriver = ({
    *   succeeded. It runs before any container of this slice exists,
    *   because it removes by that exact owner label and would otherwise
    *   take the anchor it is meant to be evidence about.
+   * @param {PreparationResources} resources
    * @returns {Promise<{ anchorName: string, fingerprint: string, attestation: SlicePolicyAttestation }>}
    */
   const attestPolicy = async (
@@ -1595,193 +1633,299 @@ export const makePodmanDriver = ({
     pathInjection,
     cgroup2,
     reconciled,
+    resources,
   ) => {
     if (ownerId === undefined) {
       throw makeError(X`podman driver ownerId is not configured`);
     }
     const anchorName = makeOperationName();
-    const removeAnchor = () =>
-      removeContainer(cp, runtime, anchorName).catch(() => undefined);
-    await null;
-    try {
-      // Inside the try, unlike before: a create that trips the control
-      // deadline can have registered the name already, and the outer
-      // catch removing it is what keeps the container from outliving
-      // the attempt.
-      const created = await spawnAndCollect(
+    /** @type {Array<{ closed: boolean, completed: boolean, acquired: boolean }>} */
+    const producers = [];
+    let anchorRemoved = false;
+    /** @type {Promise<void> | undefined} */
+    let removal;
+    resources.removeAnchor = () => {
+      if (anchorRemoved) return Promise.resolve();
+      removal ??= (async () => {
+        await null;
+        if (producers.some(command => !command.closed)) {
+          throw makeError(X`Podman policy anchor producer closure pending`);
+        }
+        if (producers.some(command => command.acquired)) {
+          const removed = await removeContainer(cp, runtime, anchorName);
+          if (removed.code !== 0 && !reportsContainerGone(removed)) {
+            throw makeError(
+              X`podman policy anchor removal failed: ${q(removed.stderr.trim() || removed.stdout.trim())}`,
+            );
+          }
+        }
+        // Removal is useful even after a producer fails, but absence does not
+        // prove that detached OCI/conmon work from that failure is finished.
+        // Repeated rm success cannot turn uncertainty into release evidence.
+        if (producers.some(command => command.acquired && !command.completed)) {
+          throw makeError(
+            X`Podman policy anchor producer effects remain uncertain`,
+          );
+        }
+        releaseNamespaces(anchorName);
+        anchorRemoved = true;
+      })().catch(error => {
+        removal = undefined;
+        throw error;
+      });
+      return removal;
+    };
+    /** @param {string[]} args */
+    const produceAnchor = async args => {
+      slices.assertOpen();
+      const command = startControlCommand(cp, 'podman', args, {
+        timeoutMs: CONTROL_COMMAND_TIMEOUT_MS,
+      });
+      const record = {
+        closed: false,
+        completed: false,
+        acquired: command.hasChild(),
+      };
+      producers.push(record);
+      void command.closed.then(() => {
+        record.closed = true;
+      });
+      const result = await command.result;
+      record.completed =
+        result.code === 0 &&
+        result.signal === null &&
+        !command.wasInterrupted();
+      if (result.code === 0 && !record.completed) {
+        throw makeError(
+          X`Podman policy anchor producer completion is uncertain`,
+        );
+      }
+      return result;
+    };
+    const created = await produceAnchor(
+      podmanArgs(runtime, [
+        ...assembleCreateArgv(spec, anchorName, null, {
+          seccompProfilePath: null,
+          pathInjection,
+          ownerId,
+          operationId: anchorName,
+          policyArgv,
+        }),
+        ref,
+        ...request.attestationArgv,
+      ]),
+    );
+    if (created.code !== 0) {
+      throw makeError(
+        X`podman policy anchor create failed: ${q(created.stderr.trim() || created.stdout.trim())}`,
+      );
+    }
+    // Compare operation admission to the anchor at the same lifecycle
+    // stage. Podman materializes inherited defaults (notably NPROC) at
+    // start, so a running anchor's metadata differs from an identical
+    // not-yet-started operation. Kernel attestation below still observes
+    // the running anchor and verifies its effective controls.
+    const configuredFingerprint = sliceConfigFingerprint(
+      await inspectContainer(cp, runtime, anchorName),
+    );
+    const started = await produceAnchor(
+      podmanArgs(runtime, ['start', anchorName]),
+    );
+    if (started.code !== 0) {
+      throw makeError(
+        X`podman policy anchor start failed: ${q(started.stderr.trim() || started.stdout.trim())}`,
+      );
+    }
+    const inspect = await inspectContainer(cp, runtime, anchorName);
+    const pid = inspect?.State?.Pid;
+    if (
+      inspect?.State?.Running !== true ||
+      typeof pid !== 'number' ||
+      !Number.isInteger(pid) ||
+      pid <= 0
+    ) {
+      throw makeError(X`podman policy anchor is not running`);
+    }
+    const proc = await getProcfs();
+    const attachDeclared = request.mounts.filter(
+      mount => mount.kind === 'attach' || mount.kind === 'resolver',
+    );
+    let resolverContents;
+    if (request.mounts.some(mount => mount.kind === 'resolver')) {
+      // Read the effective mounted file, not the host pathname that could
+      // have been replaced after mounting. This fixed operation retains the
+      // anchor's cap-drop ALL profile and exposes no caller-supplied argv.
+      const resolver = await spawnAndCollect(
         cp,
         'podman',
         podmanArgs(runtime, [
-          ...assembleCreateArgv(spec, anchorName, null, {
-            seccompProfilePath: null,
-            pathInjection,
-            ownerId,
-            operationId: anchorName,
-            policyArgv,
-          }),
-          ref,
-          ...request.attestationArgv,
+          'exec',
+          '--user',
+          '1000:1000',
+          anchorName,
+          '/bin/head',
+          '-c',
+          '1025',
+          '/etc/resolv.conf',
         ]),
         { timeoutMs: CONTROL_COMMAND_TIMEOUT_MS },
       );
-      if (created.code !== 0) {
-        throw makeError(
-          X`podman policy anchor create failed: ${q(created.stderr.trim() || created.stdout.trim())}`,
-        );
+      if (resolver.code !== 0 || resolver.stdout.length > 1024) {
+        throw makeError(X`Cannot observe the effective resolver configuration`);
       }
-      // Compare operation admission to the anchor at the same lifecycle
-      // stage. Podman materializes inherited defaults (notably NPROC) at
-      // start, so a running anchor's metadata differs from an identical
-      // not-yet-started operation. Kernel attestation below still observes
-      // the running anchor and verifies its effective controls.
-      const configuredFingerprint = sliceConfigFingerprint(
-        await inspectContainer(cp, runtime, anchorName),
-      );
-      const started = await spawnAndCollect(
-        cp,
-        'podman',
-        podmanArgs(runtime, ['start', anchorName]),
-        { timeoutMs: CONTROL_COMMAND_TIMEOUT_MS },
-      );
-      if (started.code !== 0) {
-        throw makeError(
-          X`podman policy anchor start failed: ${q(started.stderr.trim() || started.stdout.trim())}`,
-        );
-      }
-      const inspect = await inspectContainer(cp, runtime, anchorName);
-      const pid = inspect?.State?.Pid;
-      if (
-        inspect?.State?.Running !== true ||
-        typeof pid !== 'number' ||
-        !Number.isInteger(pid) ||
-        pid <= 0
-      ) {
-        throw makeError(X`podman policy anchor is not running`);
-      }
-      const proc = await getProcfs();
-      const attachDeclared = request.mounts.filter(
-        mount => mount.kind === 'attach' || mount.kind === 'resolver',
-      );
-      let resolverContents;
-      if (request.mounts.some(mount => mount.kind === 'resolver')) {
-        // Read the effective mounted file, not the host pathname that could
-        // have been replaced after mounting. This fixed operation retains the
-        // anchor's cap-drop ALL profile and exposes no caller-supplied argv.
-        const resolver = await spawnAndCollect(
-          cp,
-          'podman',
-          podmanArgs(runtime, [
-            'exec',
-            '--user',
-            '1000:1000',
-            anchorName,
-            '/bin/head',
-            '-c',
-            '1025',
-            '/etc/resolv.conf',
-          ]),
-          { timeoutMs: CONTROL_COMMAND_TIMEOUT_MS },
-        );
-        if (resolver.code !== 0 || resolver.stdout.length > 1024) {
-          throw makeError(
-            X`Cannot observe the effective resolver configuration`,
-          );
-        }
-        resolverContents = resolver.stdout;
-      }
-      const [
-        namespaces,
-        anchorNetwork,
-        processIdentity,
-        brokerNamespaceId,
-        rootless,
-        anchorMountTable,
-      ] = await Promise.all([
-        readNamespaceIdentities(proc, pid),
-        readNetworkNamespace(proc, pid),
-        readProcessStatus(proc, pid),
-        resolveBrokerNamespaceId(cp, runtime, proc, request.brokerSidecar),
-        isRootless(cp, runtime),
-        // The kernel's account of the anchor's own mount namespace, read
-        // only when the table declares an attach: it is what proves the
-        // bind at each attach destination is a 9P projection and not host
-        // data, which the runtime's inspect record cannot say.
-        attachDeclared.length > 0 ? readMountTable(proc, pid) : undefined,
-      ]);
-      // Everything above read `/proc/<pid>/…`. If the anchor exited
-      // partway — an `attestationArgv` that does not in fact block, or
-      // an OOM kill — the kernel can hand that pid to an unrelated
-      // process, and the reads would then describe it instead. Asking
-      // the runtime again, for the same still-running pid, is what says
-      // the answers belong to the container they were attributed to.
-      const after = await inspectContainer(cp, runtime, anchorName);
-      if (after?.State?.Running !== true || after?.State?.Pid !== pid) {
-        throw makeError(
-          X`podman policy anchor did not stay running while it was read`,
-        );
-      }
-      /** @type {Map<string, { sizeBytes: bigint | null, hostPath: string | null }>} */
-      const volumes = new Map(
-        await Promise.all(
-          request.mounts
-            .filter(mount => mount.kind === 'volume')
-            .map(async mount => {
-              await null;
-              const source = /** @type {{ source: string }} */ (mount).source;
-              const volume = await inspectVolume(cp, source);
-              return /** @type {[string, typeof volume]} */ ([source, volume]);
-            }),
-        ),
-      );
-      /** @type {Map<string, { fstype: string, root: string, options: readonly string[] } | null>} */
-      const attachMounts = new Map(
-        attachDeclared.map(mount => {
-          const kernel = anchorMountTable?.get(mount.destination);
-          return [
-            mount.destination,
-            kernel === undefined
-              ? null
-              : harden({
-                  fstype: kernel.fstype,
-                  root: kernel.root,
-                  options: kernel.options,
-                }),
-          ];
-        }),
-      );
-      const attestation = attestSlicePolicy(request, {
-        ...(resolverContents === undefined ? {} : { resolverContents }),
-        inspect,
-        rootless,
-        namespaces,
-        network: harden({ ...anchorNetwork, brokerNamespaceId }),
-        processIdentity,
-        volumes,
-        attachMounts,
-        resources: harden({ cgroupControllers: cgroup2.controllers }),
-        // A private pid namespace puts every descendant — setsid,
-        // double-forked, or backgrounded — inside the container the
-        // driver force-removes; reconciliation covers the ones whose
-        // owning daemon died first.
-        descendantReaping: namespaces.pid.unshared && reconciled,
-      });
-      claimNamespaces(anchorName, namespaces);
-      return harden({
-        anchorName,
-        fingerprint: configuredFingerprint,
-        attestation,
-      });
-    } catch (e) {
-      await removeAnchor();
-      throw e;
+      resolverContents = resolver.stdout;
     }
+    const [
+      namespaces,
+      anchorNetwork,
+      processIdentity,
+      brokerNamespaceId,
+      rootless,
+      anchorMountTable,
+    ] = await Promise.all([
+      readNamespaceIdentities(proc, pid),
+      readNetworkNamespace(proc, pid),
+      readProcessStatus(proc, pid),
+      resolveBrokerNamespaceId(cp, runtime, proc, request.brokerSidecar),
+      isRootless(cp, runtime),
+      // The kernel's account of the anchor's own mount namespace, read
+      // only when the table declares an attach: it is what proves the
+      // bind at each attach destination is a 9P projection and not host
+      // data, which the runtime's inspect record cannot say.
+      attachDeclared.length > 0 ? readMountTable(proc, pid) : undefined,
+    ]);
+    // Everything above read `/proc/<pid>/…`. If the anchor exited
+    // partway — an `attestationArgv` that does not in fact block, or
+    // an OOM kill — the kernel can hand that pid to an unrelated
+    // process, and the reads would then describe it instead. Asking
+    // the runtime again, for the same still-running pid, is what says
+    // the answers belong to the container they were attributed to.
+    const after = await inspectContainer(cp, runtime, anchorName);
+    if (after?.State?.Running !== true || after?.State?.Pid !== pid) {
+      throw makeError(
+        X`podman policy anchor did not stay running while it was read`,
+      );
+    }
+    /** @type {Map<string, { sizeBytes: bigint | null, hostPath: string | null }>} */
+    const volumes = new Map(
+      await Promise.all(
+        request.mounts
+          .filter(mount => mount.kind === 'volume')
+          .map(async mount => {
+            await null;
+            const source = /** @type {{ source: string }} */ (mount).source;
+            const volume = await inspectVolume(cp, source);
+            return /** @type {[string, typeof volume]} */ ([source, volume]);
+          }),
+      ),
+    );
+    /** @type {Map<string, { fstype: string, root: string, options: readonly string[] } | null>} */
+    const attachMounts = new Map(
+      attachDeclared.map(mount => {
+        const kernel = anchorMountTable?.get(mount.destination);
+        return [
+          mount.destination,
+          kernel === undefined
+            ? null
+            : harden({
+                fstype: kernel.fstype,
+                root: kernel.root,
+                options: kernel.options,
+              }),
+        ];
+      }),
+    );
+    const attestation = attestSlicePolicy(request, {
+      ...(resolverContents === undefined ? {} : { resolverContents }),
+      inspect,
+      rootless,
+      namespaces,
+      network: harden({ ...anchorNetwork, brokerNamespaceId }),
+      processIdentity,
+      volumes,
+      attachMounts,
+      resources: harden({ cgroupControllers: cgroup2.controllers }),
+      // A private pid namespace puts every descendant — setsid,
+      // double-forked, or backgrounded — inside the container the
+      // driver force-removes; reconciliation covers the ones whose
+      // owning daemon died first.
+      descendantReaping: namespaces.pid.unshared && reconciled,
+    });
+    claimNamespaces(anchorName, namespaces);
+    return harden({
+      anchorName,
+      fingerprint: configuredFingerprint,
+      attestation,
+    });
   };
 
   /**
    * @param {SliceSpec} spec
    * @returns {Promise<PodmanSliceContext>}
    */
-  const prepareSlice = async spec => {
+  const prepareSlice = spec => {
+    const id = makeOperationName();
+    return slices.inOrder(id, async () => {
+      /** @type {PreparationResources} */
+      const resources = { seccompDirectory: null, removeAnchor: undefined };
+      /** @type {PodmanSliceContext | undefined} */
+      let context;
+      /** @type {Promise<void> | undefined} */
+      let cleanupFlight;
+      const releaseOwnership = () => {
+        slices.release(id, cleanup);
+        readyCleanups.delete(cleanup);
+      };
+      const cleanup = () => {
+        cleanupFlight ??= (async () => {
+          await null;
+          if (context === undefined) {
+            await resources.removeAnchor?.();
+            await releasePreparationFiles(resources);
+          } else {
+            await teardown(context);
+          }
+          releaseOwnership();
+        })().catch(error => {
+          cleanupFlight = undefined;
+          throw error;
+        });
+        return cleanupFlight;
+      };
+      // A rejected prepare never hands its context to the factory. Retain
+      // cleanup before any acquisition, including partial file creation.
+      slices.retain(id, cleanup);
+      try {
+        context = await buildSlice(spec, resources);
+        context.releaseOwnership = releaseOwnership;
+        // One owner changes from partial resources to the finished context.
+        resources.seccompDirectory = null;
+        resources.removeAnchor = undefined;
+        readyCleanups.add(cleanup);
+        slices.assertOpen();
+        return context;
+      } catch (error) {
+        readyCleanups.add(cleanup);
+        try {
+          // Do not await the preparation chain here: this is that chain.
+          await cleanup();
+        } catch (cleanupError) {
+          throw new AggregateError(
+            [error, cleanupError],
+            'Podman preparation cleanup pending',
+          );
+        }
+        throw error;
+      }
+    });
+  };
+
+  /**
+   * @param {SliceSpec} spec
+   * @param {PreparationResources} resources
+   * @returns {Promise<PodmanSliceContext>}
+   */
+  const buildSlice = async (spec, resources) => {
     const files = validateGeneratedFiles(spec.generatedFiles ?? [], [
       '/run',
       '/var/tmp',
@@ -1892,12 +2036,14 @@ export const makePodmanDriver = ({
       spec.seccomp !== null &&
       'profile' in spec.seccomp
     ) {
-      const fs = await import('fs');
+      const fs = await getFs();
       const os = await import('os');
       const path = await import('path');
-      const dir = fs.mkdtempSync(
+      const dir = await fs.mkdtemp(
         path.join(os.tmpdir(), 'endo-sandbox-seccomp-'),
       );
+      // Serialization and writing can both fail. Own the directory first.
+      resources.seccompDirectory = dir;
       const file = path.join(dir, 'profile.json');
       const profile = /** @type {{ profile: unknown }} */ (spec.seccomp)
         .profile;
@@ -1907,7 +2053,7 @@ export const makePodmanDriver = ({
           : profile instanceof Uint8Array
             ? Buffer.from(profile).toString('utf8')
             : JSON.stringify(profile);
-      fs.writeFileSync(file, body);
+      await fs.writeFile(file, body);
       seccompTempPath = file;
     }
 
@@ -1999,6 +2145,7 @@ export const makePodmanDriver = ({
         slicePath.source === 'env' ? null : slicePath.value,
         cgroup2,
         reconciled,
+        resources,
       );
       policy = harden({
         request,
@@ -2021,36 +2168,25 @@ export const makePodmanDriver = ({
     let join = null;
     if (spec.network === 'join') {
       const joinRef = /** @type {string} */ (spec.networkRef);
-      try {
-        const proc = await getProcfs();
-        const target = await resolveContainerNetworkTarget(
-          cp,
-          runtime,
-          proc,
-          joinRef,
-          'network join target',
-        );
-        // The slice will share this namespace, so it is admitted on what the
-        // namespace actually contains, not on the flag that asked for it.
-        const observed = await readNetworkNamespace(proc, target.pid);
-        assertLoopbackOnly(observed, joinRef);
-        // Bind every later operation to the immutable container id, never the
-        // name: a target replaced under the same name cannot be joined.
-        join = harden({
-          container: joinRef,
-          containerId: target.containerId,
-          namespaceId: target.namespaceId,
-        });
-      } catch (error) {
-        // A rejected join creates no slice for teardown to clean, so release
-        // the seccomp temp file this attempt already materialised.
-        if (seccompTempPath !== null) {
-          const fs = await import('fs');
-          await fs.promises.unlink(seccompTempPath).catch(() => undefined);
-          seccompTempPath = null;
-        }
-        throw error;
-      }
+      const proc = await getProcfs();
+      const target = await resolveContainerNetworkTarget(
+        cp,
+        runtime,
+        proc,
+        joinRef,
+        'network join target',
+      );
+      // The slice will share this namespace, so it is admitted on what the
+      // namespace actually contains, not on the flag that asked for it.
+      const observed = await readNetworkNamespace(proc, target.pid);
+      assertLoopbackOnly(observed, joinRef);
+      // Bind every later operation to the immutable container id, never the
+      // name: a target replaced under the same name cannot be joined.
+      join = harden({
+        container: joinRef,
+        containerId: target.containerId,
+        namespaceId: target.namespaceId,
+      });
     }
 
     /** @type {PodmanSliceContext} */
@@ -2101,6 +2237,7 @@ export const makePodmanDriver = ({
    * @returns {Promise<DriverProcess>}
    */
   const spawn = (slice, argv, opts, controls) => {
+    slices.assertOpen();
     const containerName = makeOperationName();
     return slice.operations.inOrder(containerName, () =>
       acquireOperation(slice, containerName, argv, opts, controls),
@@ -2490,18 +2627,50 @@ export const makePodmanDriver = ({
       }
       await slice.generatedStage?.release();
       if (slice.seccompTempPath !== null) {
-        const fs = await import('fs');
+        const fs = await getFs();
         const path = await import('path');
         const directory = path.dirname(slice.seccompTempPath);
-        await fs.promises.rm(directory, { recursive: true, force: true });
+        await fs.rm(directory, { recursive: true, force: true });
         slice.seccompTempPath = null;
       }
+      slice.releaseOwnership?.();
     })().catch(error => {
       slice.teardownFlight = undefined;
       throw error;
     });
     return slice.teardownFlight;
   };
+
+  // This drains owned slice lifetimes, including failed preparation. It is
+  // deliberately not a native-command shutdown proof: untracked probes and
+  // operation control children still need supervision before runtime release.
+  const closeSlices = () => {
+    const drained = slices.shutdown();
+    if (closeFlight !== undefined) {
+      void drained.catch(() => undefined);
+      return closeFlight;
+    }
+    // Stop completed and failed preparations immediately, even if another
+    // preparation is still awaiting an unrelated image pull or host power.
+    closeFlight = (async () => {
+      const results = await Promise.allSettled([
+        drained,
+        ...[...readyCleanups].map(cleanup => cleanup()),
+      ]);
+      const failures = results
+        .filter(result => result.status === 'rejected')
+        .map(result => result.reason);
+      if (failures.length) {
+        throw new AggregateError(failures, 'Podman slice cleanup pending');
+      }
+    })().catch(error => {
+      closeFlight = undefined;
+      throw error;
+    });
+    return closeFlight;
+  };
+
+  const probe = () => slices.inOrder(makeOperationName(), probeBackend);
 
   return harden({
     name: /** @type {const} */ ('podman'),
@@ -2513,6 +2682,7 @@ export const makePodmanDriver = ({
     policy: reportPolicy,
     spawn,
     teardown,
+    closeSlices,
   });
 };
 harden(makePodmanDriver);

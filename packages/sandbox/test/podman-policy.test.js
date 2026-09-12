@@ -211,9 +211,12 @@ const makeProcfs = (fileOverrides = {}, linkOverrides = {}) => {
  * what a concurrency ceiling is about.
  *
  * @param {ExecutionContext} t
- * @param {{ calls: Array<{ command: string, args: string[] }>, responses?: Record<string, { code?: number, stdout?: string }>, holdAttached?: boolean }} options
+ * @param {{ calls: Array<{ command: string, args: string[] }>, responses?: Record<string, { code?: number, stdout?: string }>, holdAttached?: boolean, intercept?: (kind: string, child: any) => boolean }} options
  */
-const makeEngineStub = (t, { calls, responses = {}, holdAttached = false }) => {
+const makeEngineStub = (
+  t,
+  { calls, responses = {}, holdAttached = false, intercept },
+) => {
   /**
    * @param {string[]} args
    * @returns {string}
@@ -289,6 +292,7 @@ const makeEngineStub = (t, { calls, responses = {}, holdAttached = false }) => {
         stderr: stderrStream,
         stdin: new PassThrough(),
       });
+      if (intercept?.(kind, child)) return child;
       const attached = kind === 'start' && args.includes('--attach');
       void Promise.resolve().then(() => {
         stdoutStream.end(answer.stdout ?? '');
@@ -306,7 +310,7 @@ const makeEngineStub = (t, { calls, responses = {}, holdAttached = false }) => {
 
 /**
  * @param {ExecutionContext} t
- * @param {{ responses?: Record<string, { code?: number, stdout?: string }>, procfs?: any, holdAttached?: boolean, volumeQuota?: any }} [options]
+ * @param {{ responses?: Record<string, { code?: number, stdout?: string }>, procfs?: any, holdAttached?: boolean, volumeQuota?: any, intercept?: (kind: string, child: any) => boolean }} [options]
  */
 const makeDriverUnderTest = (t, options = {}) => {
   /** @type {Array<{ command: string, args: string[] }>} */
@@ -317,6 +321,7 @@ const makeDriverUnderTest = (t, options = {}) => {
         calls,
         responses: options.responses,
         holdAttached: options.holdAttached,
+        intercept: options.intercept,
       })
     ),
     env: {},
@@ -686,18 +691,22 @@ test('an image whose stored digest is not the approved one fails closed', async 
   t.deepEqual(createCalls(calls), []);
 });
 
-test('an anchor that never started leaves nothing behind', async t => {
+test('failed anchor start retains uncertainty after best-effort removal', async t => {
   const { driver, calls } = makeDriverUnderTest(t, {
     responses: { start: { code: 125, stdout: 'no such container' } },
   });
   await t.throwsAsync(driver.prepareSlice(/** @type {any} */ (makeSpec())), {
-    message: /policy anchor start failed/,
+    instanceOf: AggregateError,
+    message: /preparation cleanup pending/,
   });
   const anchorName = createCalls(calls)[0].args[2];
   t.true(
     calls.some(call => call.args[0] === 'rm' && call.args.includes(anchorName)),
-    'the anchor this failure minted is removed',
+    'best-effort removal still runs after a failed start',
   );
+  await t.throwsAsync(driver.closeSlices(), {
+    message: /slice cleanup pending/,
+  });
 });
 
 test('an unproved control fails slice construction, not just the report', async t => {
@@ -1234,3 +1243,147 @@ test('a policy that declares no attach never reads the mount table', async t => 
   const attestation = await /** @type {any} */ (driver).policy(slice);
   t.is(attestation.mounts.length, 5);
 });
+
+test('failed attestation retains its anchor until a checked removal succeeds', async t => {
+  let denyRemoval = true;
+  const { driver, calls } = makeDriverUnderTest(t, {
+    procfs: makeProcfs(
+      {},
+      { [`/proc/${ANCHOR_PID}/ns/pid`]: 'pid:[4026531836]' },
+    ),
+    responses: {
+      rm: {
+        get code() {
+          return denyRemoval ? 125 : 0;
+        },
+        stdout: 'removal denied',
+      },
+    },
+  });
+  const failure = await t.throwsAsync(
+    driver.prepareSlice(/** @type {any} */ (makeSpec())),
+    { instanceOf: AggregateError, message: /preparation cleanup pending/ },
+  );
+  t.regex(String(failure?.errors[0]), /pid namespace/);
+  t.regex(String(failure?.errors[1]), /anchor removal failed/);
+  await t.throwsAsync(driver.closeSlices(), {
+    message: /slice cleanup pending/,
+  });
+  denyRemoval = false;
+  await driver.closeSlices();
+  const removed = calls.filter(call => call.args[0] === 'rm');
+  t.true(removed.length >= 3);
+  t.true(
+    removed.every(call => call.args.at(-1) === createCalls(calls)[0].args[2]),
+  );
+  await driver.closeSlices();
+  t.is(calls.filter(call => call.args[0] === 'rm').length, removed.length);
+});
+
+test('pending anchor closure fences removal; failed producer effects remain owned after close', async t => {
+  t.timeout(5000);
+  let first = true;
+  /** @type {any} */
+  let producer;
+  const { driver, calls } = makeDriverUnderTest(t, {
+    intercept: (kind, child) => {
+      if (kind !== 'create' || !first) return false;
+      first = false;
+      producer = child;
+      queueMicrotask(() => child.emit('error', Error('creator lost')));
+      return true;
+    },
+  });
+  await t.throwsAsync(driver.prepareSlice(/** @type {any} */ (makeSpec())), {
+    message: /preparation cleanup pending/,
+  });
+  t.false(calls.some(call => call.args[0] === 'rm'));
+  // Uncertainty belongs to the failed anchor. A distinct slice can still run.
+  const unrelated = await driver.prepareSlice(/** @type {any} */ (makeSpec()));
+  await driver.teardown(unrelated);
+  const removals = calls.filter(call => call.args[0] === 'rm').length;
+  const pending = await t.throwsAsync(driver.closeSlices(), {
+    instanceOf: AggregateError,
+    message: /slice cleanup pending/,
+  });
+  t.true(
+    pending?.errors.some(error =>
+      String(error).includes('producer closure pending'),
+    ),
+  );
+  t.is(calls.filter(call => call.args[0] === 'rm').length, removals);
+  producer.stdout.end();
+  producer.stderr.end();
+  producer.emit('close', null, 'SIGKILL');
+  await Promise.resolve();
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    const uncertain = await t.throwsAsync(driver.closeSlices(), {
+      instanceOf: AggregateError,
+      message: /slice cleanup pending/,
+    });
+    t.true(
+      uncertain?.errors.some(error =>
+        String(error).includes('effects remain uncertain'),
+      ),
+    );
+  }
+  t.true(calls.filter(call => call.args[0] === 'rm').length > removals);
+});
+
+test('closing during anchor creation drains the creator and refuses a later start', async t => {
+  t.timeout(5000);
+  let signalEntered;
+  const entered = new Promise(resolve => {
+    signalEntered = resolve;
+  });
+  /** @type {any} */
+  let producer;
+  const { driver, calls } = makeDriverUnderTest(t, {
+    intercept: (kind, child) => {
+      if (kind !== 'create') return false;
+      producer = child;
+      signalEntered(undefined);
+      return true;
+    },
+  });
+  const acquired = driver.prepareSlice(/** @type {any} */ (makeSpec()));
+  const rejected = t.throwsAsync(acquired, { message: /shutting down/ });
+  await entered;
+  let closed = false;
+  const stopping = driver.closeSlices().then(() => {
+    closed = true;
+  });
+  await new Promise(resolve => setImmediate(resolve));
+  t.false(closed);
+  t.false(calls.some(call => call.args[0] === 'rm'));
+  producer.stdout.end();
+  producer.stderr.end();
+  producer.emit('close', 0, null);
+  await rejected;
+  await stopping;
+  t.false(calls.some(call => call.args[0] === 'start'));
+  t.is(calls.filter(call => call.args[0] === 'rm').length, 1);
+});
+
+for (const failedCommand of ['create', 'start']) {
+  test(`a ${failedCommand} spawn that acquired no child does not invent uncertain effects`, async t => {
+    const { driver, calls } = makeDriverUnderTest(t, {
+      intercept: kind => {
+        if (kind === failedCommand)
+          throw Error('spawn refused before acquisition');
+        return false;
+      },
+    });
+    await t.throwsAsync(driver.prepareSlice(/** @type {any} */ (makeSpec())), {
+      message: /spawn refused before acquisition/,
+    });
+    await driver.closeSlices();
+    // A start failure still owes removal of the successfully created anchor.
+    // A create that acquired nothing owes no container removal at all.
+    t.is(
+      calls.filter(call => call.args[0] === 'rm').length,
+      failedCommand === 'start' ? 1 : 0,
+    );
+  });
+}

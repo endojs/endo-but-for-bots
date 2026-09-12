@@ -26,6 +26,8 @@ import { makePromiseKit } from '@endo/promise-kit';
  * closed covers this direct child and its stdio, not arbitrary descendants or
  * remote engine work. wasInterrupted records a requested termination, not proof
  * of its effect; drivers must preserve uncertain effects for reconciliation.
+ * hasChild records whether spawn returned a child handle. False proves that
+ * this attempt acquired none; true does not prove that native startup succeeded.
  *
  * @param {typeof import('child_process')} cpModule
  * @param {string} command
@@ -84,6 +86,7 @@ export const startControlCommand = (cpModule, command, args, options = {}) => {
     closed: closure.promise,
     abort,
     wasInterrupted: () => interrupted,
+    hasChild: () => child !== undefined,
   });
   if (isCancelled?.()) {
     fail(makeError(X`${q(command)} control command aborted`));

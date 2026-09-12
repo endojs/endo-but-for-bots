@@ -115,6 +115,19 @@ refusal test in `test/podman.test.js`.
 Local engine selection does not prove that killing a Podman command terminates
 its descendants or finishes outstanding container creation.
 
+The driver owns each preparation before acquiring its resources.
+A rejected preparation retains failed anchor removal and temporary seccomp
+directory cleanup for retry through the host-only `closeSlices()` method.
+This method permanently fences probe, preparation, and spawn admission, starts
+cleanup of completed slices immediately, and drains pending preparations.
+Successful slice teardown releases its driver registration.
+Anchor removal waits for the creating and starting commands' native closure;
+failed or interrupted producers retain uncertain effects even if removal succeeds.
+Repeated removal is not evidence that detached OCI/conmon work has finished.
+`closeSlices()` accounts for slice resources, not complete native-command shutdown:
+supervision of other controls and attached starts is still required before the
+composed runtime may release its storage and ownership marker.
+
 [podman-engine-selection]: https://github.com/containers/podman/blob/v5.8.0/cmd/podman/registry/config.go
 [podman-local-flags]: https://github.com/containers/podman/blob/v5.8.0/cmd/podman/root.go
 
