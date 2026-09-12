@@ -28,8 +28,9 @@ fn endowments_seed_in_id_order_not_map_order() {
         for n in insertion {
             opts.endowments_by_id.insert(id_of(n), Slot::undefined());
         }
-        let c = Machine::new().compartment(opts);
-        let out = c.evaluate_with_symbols(&b, &syms);
+        let mut machine = Machine::new();
+        let mut c = machine.compartment(opts);
+        let out = c.evaluate_with_symbols(machine.interp_mut(), &b, &syms);
         assert!(out.completed, "{:?}", out.halt);
         // The endowed subsequence of the enumeration, in order.
         out.result

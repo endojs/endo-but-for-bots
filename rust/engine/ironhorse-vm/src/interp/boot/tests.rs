@@ -461,16 +461,10 @@ fn check_wiring(source: &str) {
         "fresh($new_dirt:ident, $slots:ident, $chunks:ident, $global:ident, $static:ident);",
         "template($state:ident, $snapshot_dirt:ident, $refs:ident, $arrays:ident, $indexed:ident, $collections:ident);",
         "let $new_dirt = $d snapshot_dirt; let $slots = $d slots; let $chunks = $d chunks; let $global = $d global; let $static = $d strings; Interp { $($field: $new,)* }",
-        "let $state = $d state; let $snapshot_dirt = $d snapshot_dirt; let $refs = $d refs; let $arrays = $d arrays; let $indexed = $d indexed; let $collections = $d collections; Interp { $($field: $template,)* }",
     ] { once(emitter, needle); }
     once(&code, "interp_state!(define_boot_initializers, $);");
     let fresh = &code[token_body(&code, "pub fn new() -> Interp")];
     once(fresh, "let mut interp = boot_fresh!(snapshot_dirt, slots, chunks, global_obj, static_str); interp.create_intrinsics(); interp.boot_slot_count = interp.slots.capacity(); interp");
-    let template = &code[token_body(&code, "pub(crate) fn instantiate(&self) -> Interp")];
-    once(
-        template,
-        "boot_template!(state, snapshot_dirt, side_refs, arrays, index_props, collections)",
-    );
 }
 
 #[test]
@@ -479,24 +473,10 @@ fn constructor_emitter_forwards_policies_and_owned_contexts() {
     check_wiring(source);
     for (before, after) in [
         ("$($field: $new,)*", "$($field: Default::default(),)*"),
-        ("$($field: $template,)*", "$($field: $new,)*"),
-        (
-            "let $snapshot_dirt = $d snapshot_dirt;",
-            "let $snapshot_dirt = SnapshotDirt::default();",
-        ),
-        ("let $refs = $d refs;", "let $refs = SideRefCounts::new();"),
-        (
-            "let $indexed = $d indexed;",
-            "let $indexed = Default::default();",
-        ),
         ("interp_state!(define_boot_initializers, $);", ""),
         (
             "boot_fresh!(snapshot_dirt, slots, chunks, global_obj, static_str)",
             "Interp::default()",
-        ),
-        (
-            "boot_template!(\n            state,\n            snapshot_dirt,\n            side_refs,\n            arrays,\n            index_props,\n            collections\n        )",
-            "Interp::new()",
         ),
     ] {
         let mutated = source.replace(before, after);
@@ -506,40 +486,4 @@ fn constructor_emitter_forwards_policies_and_owned_contexts() {
             "missed {before}"
         );
     }
-}
-
-#[test]
-fn template_instances_keep_independent_trackers_and_baselines() {
-    let template = BootTemplate::new(&[], None);
-    let mut first = template.instantiate();
-    let mut second = template.instantiate();
-    assert_eq!(
-        first.derive_boot_fingerprint(),
-        template.inner.derive_boot_fingerprint()
-    );
-    assert_eq!(
-        second.derive_boot_fingerprint(),
-        first.derive_boot_fingerprint()
-    );
-    let first_baseline = first.acknowledge_snapshot();
-    let second_baseline = second.acknowledge_snapshot();
-    template.inner.snapshot_dirt.clear();
-    first.dates.insert(first.global_obj, 123.0);
-    assert!(first
-        .snapshot_dirty_sections(&first_baseline)
-        .contains(SnapshotSection::Dates));
-    assert!(!second
-        .snapshot_dirty_sections(&second_baseline)
-        .contains(SnapshotSection::Dates));
-    assert!(!template
-        .inner
-        .snapshot_dirt
-        .snapshot()
-        .contains(SnapshotSection::Dates));
-    assert!(!second.dates.contains_key(&first.global_obj));
-    assert!(!template.inner.dates.contains_key(&first.global_obj));
-    // An acknowledgement from another instance cannot clear or hide changes.
-    assert!(second
-        .snapshot_dirty_sections(&first_baseline)
-        .contains(SnapshotSection::Dates));
 }

@@ -65,8 +65,8 @@ fn repeated_shared_bytecode_and_fresh_realms() {
             expected.unwrap()
         );
     }
-    let machine = Machine::new();
-    let compartment: Compartment = machine.new_compartment();
+    let mut machine = Machine::new();
+    let mut compartment: Compartment = machine.new_compartment();
     for (name, source, expected_result) in [
         ("fresh_scalar", "1", "1"),
         (
@@ -81,7 +81,13 @@ fn repeated_shared_bytecode_and_fresh_realms() {
         for round in 0..6 {
             let start = Instant::now();
             for _ in 0..1000 {
-                let out = compartment.evaluate_with_symbols(&code, &symbols);
+                // Release the realm after each evaluation so every run
+                // mints, links, and meters a fresh namespace over the
+                // machine's shared graph — the constant per-evaluation
+                // meter this bench locks — without accumulating parked
+                // realm roots.
+                let out = compartment.evaluate_with_symbols(machine.interp_mut(), &code, &symbols);
+                compartment.release(machine.interp_mut());
                 assert!(out.completed, "{:?}", out.halt);
                 assert_eq!(out.result, expected_result);
                 if let Some(old) = expected {

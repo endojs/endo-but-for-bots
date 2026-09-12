@@ -1190,7 +1190,25 @@ impl Interp {
         crank_names: &[SymbolName],
     ) -> Result<Vec<u8>, RelinkError> {
         let (site_order, accesses) = Self::template_site_accesses(bytecode)?;
+        // The realm's FIRST link must run the full install (implicit keys,
+        // the name-independent well-known-symbol/prototype installs, and the
+        // current-layout marker), or restore mistakes this machine for a
+        // legacy layout and changes allocation order. Keyed on the
+        // installed-names floor, not on table emptiness: a realm that
+        // interned a runtime key before its first linked program (the
+        // unlinked `evaluate` path) has a non-empty table but has never been
+        // linked, and its first program's names may all already be in the
+        // table (so the aligned fast path would otherwise skip the install
+        // forever).
+        let needs_full_install = self.installed_names_len == 0;
         if crank_names == self.symbol_names.as_slice() {
+            if needs_full_install {
+                let table = crank_names.to_vec();
+                self.link_intrinsics(&table);
+                if self.id_space_exhausted {
+                    return Err(RelinkError::TableFull);
+                }
+            }
             let mut remapped = bytecode.to_vec();
             if !self.has_guest_key_capacity(site_order.len()) {
                 return Err(RelinkError::TableFull);
@@ -1239,15 +1257,13 @@ impl Interp {
         if !self.has_guest_key_capacity(novel_count.saturating_add(site_order.len())) {
             return Err(RelinkError::TableFull);
         }
-        if extended.len() != old_len {
-            // The table grew: re-derive the inverse table, the intern
-            // counter, and every name-keyed lookup-id cache. The
-            // install pass below then covers the appended ids along
-            // with any older above-floor backlog.
-            if old_len == 0 {
-                // Initial relinking must establish the implicit keys and
-                // current-layout marker, or restore mistakes this current
-                // machine for a legacy layout and changes allocation order.
+        if needs_full_install || extended.len() != old_len {
+            // Either the realm's first link (full install) or a table
+            // growth: re-derive the inverse table, the intern counter, and
+            // every name-keyed lookup-id cache. The install pass below then
+            // covers the appended ids along with any older above-floor
+            // backlog.
+            if needs_full_install {
                 self.link_intrinsics(&extended);
                 if self.id_space_exhausted {
                     return Err(RelinkError::TableFull);

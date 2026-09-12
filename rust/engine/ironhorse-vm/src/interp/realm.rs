@@ -49,13 +49,17 @@ impl Realm {
     /// Allocate a fresh realm namespace on `interp`: a new global object in
     /// the shared arena, with an empty symbol table and no host policy.
     ///
-    /// The namespace is not a GC root while it is merely allocated; the
-    /// root is taken when the realm is parked by [`Interp::swap_realm`] and
-    /// released when it is installed again or explicitly released.
+    /// The namespace's global object is **rooted from allocation** and stays
+    /// rooted until [`Interp::release_realm`]: a live [`Realm`] handle must
+    /// keep its namespace alive, and the interval between minting a realm
+    /// and installing it is otherwise open to a collection. While the realm
+    /// is the installed one the active `global_obj` field roots it; while it
+    /// is parked, the machine's root set does.
     pub fn new(interp: &mut Interp) -> Realm {
         let global_obj = interp
             .slots
             .alloc(Slot::instance(crate::value::SlotIndex::NULL));
+        interp.realm_roots.push(global_obj);
         let snapshot_dirt = interp.snapshot_dirt.clone();
         Realm {
             global_obj,
@@ -112,9 +116,11 @@ impl Interp {
     /// to install a realm and after it to park the realm again; the machine's
     /// arena and primordial graph never move.
     ///
-    /// The machine roots exactly the **parked** realms' globals: the incoming
-    /// global becomes the active one (`global_obj`, already a root), and the
-    /// outgoing global is parked and added to `realm_roots`.
+    /// `realm.global_obj` is rooted from allocation. The swap keeps exactly
+    /// the NON-active realm globals rooted: the incoming global becomes
+    /// active (`global_obj`, rooted by the field whether or not it is also in
+    /// the root set) and is removed from `realm_roots`; the outgoing global
+    /// is parked and added.
     pub fn swap_realm(&mut self, realm: &mut Realm) {
         std::mem::swap(&mut self.global_obj, &mut realm.global_obj);
         self.realm_roots.retain(|root| *root != self.global_obj);
@@ -151,25 +157,26 @@ impl Interp {
         std::mem::swap(&mut self.regexp_result_ids, &mut realm.regexp_result_ids);
     }
 
-    /// Drop `realm` from this machine's parked-realm roots. The realm must not
-    /// be used afterwards; its namespace becomes unreachable and the next
-    /// collection may reclaim it. Releasing the active realm is a no-op (the
-    /// active global is rooted through `global_obj`), and releasing twice is
-    /// harmless.
+    /// Drop `realm` from this machine's root set. The realm must not be used
+    /// afterwards; its namespace becomes unreachable and the next collection
+    /// may reclaim it. Releasing twice is harmless, and releasing the active
+    /// realm is a no-op for the root set (the active global is rooted through
+    /// `global_obj`), though the handle itself is then unusable for a swap.
     pub fn release_realm(&mut self, realm: &Realm) {
         self.realm_roots.retain(|root| *root != realm.global_obj);
     }
 
-    /// The number of parked realms this machine keeps rooted. Bounded by the
-    /// number of live (parked) realms; a released realm leaves the set.
-    pub fn parked_realm_count(&self) -> usize {
+    /// The number of realm namespaces this machine keeps rooted while they
+    /// are not the active one — every minted realm until
+    /// [`Interp::release_realm`], plus a parked default global. Bounded by the
+    /// number of live realm handles.
+    pub fn rooted_realm_count(&self) -> usize {
         self.realm_roots.len()
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::INTERP_FIELDS;
 
     /// The fields `Interp::swap_realm` moves in and out of the machine when a

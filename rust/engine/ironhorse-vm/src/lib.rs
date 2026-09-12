@@ -10,8 +10,10 @@
 //! [`Halt`] includes [`Halt::HeapExhausted`] and [`Halt::Panic`]; resource stops and
 //! engine faults are not catchable guest exceptions.
 //!
-//! [`Compartment`] currently creates independently owned interpreters from pristine
-//! boot templates, not shared frozen intrinsics; Realm extraction is planned.
+//! [`Compartment`] evaluations run over one shared [`Interp`]: a [`Machine`]
+//! owns the machine and each compartment references it through its own
+//! [`Realm`] namespace, so compartments share the primordial graph (unfrozen
+//! until the SES lockdown work F054) while keeping distinct globals.
 //! `rust/engine/ARCHITECTURE.md` maps the four seams and current acceptance limits.
 //! The opcode tables follow the pinned XS ISA; broad runtime support does not imply
 //! full test262 or daemon SES acceptance.
@@ -55,9 +57,7 @@ pub mod source_scan;
 pub mod symbols;
 pub mod value;
 
-pub use compartment::{
-    Compartment, CompartmentId, CompartmentOptions, CompartmentSkip, Intrinsics, Machine,
-};
+pub use compartment::{Compartment, CompartmentId, CompartmentOptions, CompartmentSkip, Machine};
 pub use gc::{GcStats, Heap};
 pub use interp::DecodeError;
 #[doc(hidden)]
@@ -265,9 +265,10 @@ mod tests {
 
     #[test]
     fn compartments_do_not_share_globals() {
-        // Intrinsic *sharing* is not delivered by this surface (each
-        // evaluation builds a fresh `Interp`; see `compartment`'s module
-        // documentation), so this pins only the half that is true.
+        // Intrinsic sharing is delivered by the shared machine (see
+        // `compartment`'s module documentation and
+        // `compartment::tests::compartments_share_one_primordial_graph`);
+        // this pins the other half: name-keyed globals stay per-compartment.
         let m = Machine::new();
         let mut a = m.new_compartment();
         let b = m.new_compartment();

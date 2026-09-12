@@ -1,203 +1,75 @@
 //! The host-side `Compartment` surface (design § Hardened JavaScript and
-//! Compartment; requirement 5) — and an honest statement of what it does
-//! and does not yet deliver.
+//! Compartment; requirement 5).
 //!
 //! XS implements SES natively (`xsModule.c`'s compartment half):
 //! intrinsics are created **once per machine** and referenced per realm,
 //! every evaluator is reachable for per-compartment replacement, and a
 //! compartment is a fresh `globalThis` over those shared, frozen
-//! intrinsics with its own module map. That is the target shape.
+//! intrinsics with its own module map. This module delivers the
+//! machine/realm half of that shape; freezing is the SES lockdown work of
+//! F054.
 //!
-//! **What this module is today (the realm decision of record).** There is
-//! no realm object below [`crate::interp::Interp`]: one `Interp` owns its
-//! global object, its intrinsic graph, its symbol table and its slot
-//! arena together. Consequently every [`Compartment::evaluate`] and
-//! [`Compartment::evaluate_with_symbols`] obtains a **fresh `Interp`**,
-//! seeds this compartment's own globals, and runs. Symbol-linked evaluation
-//! copies a pristine linked boot template into independent mutable arenas;
-//! one exact-symbol-table template is cached per machine. Two compartments — and two evaluations of one compartment —
-//! therefore share **no primordial object**: `Object.prototype` in one
-//! run is a different heap object from `Object.prototype` in the next.
-//! [`Intrinsics`] is the per-machine identity compartments hold by `Rc`.
-//! Its private boot template is never guest-executed and carries no lockdown
-//! state; the mutable graph in each evaluation is independently owned.
-//! The identity the tests certify with `Rc::ptr_eq`
-//! is the marker's, not a shared frozen primordial graph's.
+//! **The realm split (landed).** A [`Realm`] holds the per-compartment
+//! namespace — its global object and property index, its program symbol
+//! table, its host policy, and its derived id caches — while one [`Interp`]
+//! owns the slot/chunk arenas and the primordial intrinsic graph. A
+//! [`Machine`] owns that `Interp` and mints [`Compartment`]s over it.
+//! Every evaluator installs the compartment's realm
+//! ([`Interp::swap_realm`]), runs, and parks it again — each evaluation pairs
+//! one install with one park. The symbol-linked evaluators additionally
+//! relink the program's symbol table onto the realm's persisted one
+//! ([`Interp::relink_crank`]) before seeding the compartment's globals.
+//! Evaluation refuses fail-closed while a halted run's promise jobs are still
+//! queued on the machine (`compartment:pending-jobs`); the owning compartment
+//! drains them with [`Compartment::drain_promise_jobs`].
 //!
-//! What this buys, and what it does not:
+//! What that buys:
 //!
-//! - **Isolation holds, trivially.** A guest mutation of an intrinsic in
-//!   one compartment cannot reach another, because the heaps are
-//!   disjoint. This is the isolation the unit corpus below and the
-//!   `ironhorse-262` compartment dual-run actually observe.
-//! - **Sharing does not hold.** Requirement 5's "per-compartment globals
-//!   over shared frozen intrinsics" — the property SES's `lockdown` then
-//!   `harden` discipline and cross-compartment `instanceof`/identity
-//!   rely on — has no seam to land on here. A realm split (`Realm {
-//!   global_obj, global_props, symbol table, installed_names_len }`
-//!   extracted from `Interp`, `Compartment::evaluate*` taking
-//!   `&mut Interp`, `Intrinsics` holding the frozen graph with
-//!   `locked_down` written by a real `lockdown`) is the recorded path;
-//!   until it lands this module must not be read as delivering it.
-//! - **Only ID-KEYED endowments are seeded, and only arena-free
-//!   primitives.** Two endowment maps exist and they are not equivalent:
-//!   [`Compartment::define_global_id`] (and `endowments_by_id`) seeds the
-//!   evaluator, while the name-keyed [`Compartment::define_global`] (and
-//!   `endowments`) is an INERT lookup surface that no evaluation reads —
-//!   resolving a display name to the interned id the bytecode addresses
-//!   needs the symbol table, which arrives with the program. Do not read
-//!   `define_global` as "binding a global"; it is not, and was not before
-//!   this was written down.
-//!   Of the seeded half, an endowment whose payload is a slot or chunk
-//!   index — an object, a string, a BigInt, a symbol — would point into no
-//!   arena at all, because each evaluation runs in a fresh one. Such an
-//!   endowment is refused as the named skip `compartment:heap-endowment`
-//!   rather than seeded as a dangling slot; only `undefined`, `null`,
-//!   booleans and numbers are seeded.
+//! - **Shared intrinsics.** Every realm references the machine's one
+//!   `Object.prototype` and the rest of the primordial graph, so a mutation
+//!   one compartment makes is visible in the next. That is the SES model —
+//!   and why a real `lockdown` freeze (F054) is the prerequisite before
+//!   untrusted realms share a machine.
+//! - **Per-compartment globals.** Each realm has its own global object and
+//!   program symbol table, so global bindings and `globalThis` are
+//!   compartment-local and stable across that compartment's evaluations.
+//!   Id-keyed endowments seed once, on first evaluation, so they neither
+//!   accumulate property-chain entries nor revert a guest write on a later
+//!   run. Realm namespaces are GC-rooted from allocation and
+//!   [`Compartment::release`] drops a realm when the host is done with it.
+//! - **Heap endowments seed.** An endowment payload now indexes the shared
+//!   arena, so object/string/BigInt/symbol references are seeded like any
+//!   other value. The old `compartment:heap-endowment` refusal existed only
+//!   because each evaluation ran in a fresh heap; it is gone.
 //!
-//! The surface this module does provide:
-//!
-//! - **Per-compartment globals**, with endowments copied onto the new
-//!   global at construction and a `globalThis` whose identity is the
-//!   compartment's own (distinct per compartment, stable for one
-//!   compartment) — [`Compartment::global_this`].
-//! - **Per-compartment evaluators**: [`Compartment::evaluate_with_symbols`]
-//!   links the program's intrinsic references (by the XS symbol atom)
-//!   and seeds **this** compartment's globals, so two compartments running
-//!   the same program agree on the intrinsic *behaviour* and diverge
-//!   exactly and only in their own globals.
-//! - **Nested compartments**: [`Compartment::new_compartment`] mints a
-//!   child with fresh globals and a fresh globalThis identity.
-//! - **Module map integration**: a compartment owns a
-//!   [`crate::module::ModuleGraph`] (the `new Compartment({ modules,
-//!   resolveHook, importHook })` surface). Static imports resolve through
-//!   the compartment's module map ([`Compartment::import_static`]);
-//!   dynamic `import()` is an honest **named skip**
-//!   (`compartment:dynamic-import`), the async host loader the static
-//!   half does not build.
+//! Still to come, from F054: a real `lockdown` that freezes the shared graph
+//! and records machine lockdown state, the host-function registration
+//! surface, and dynamic `import()` (the named skip
+//! `compartment:dynamic-import`).
 //!
 //! **Scope fold (recorded honestly).** ironhorse models `Compartment` as a
-//! host-side Rust realm API — matching XS's C-level compartment
-//! machinery in `xsModule.c` — **not** as a guest-callable `Compartment`
-//! intrinsic. A guest program's `new Compartment().evaluate('…')` would
-//! require ironhorse's interpreter to expose a native `Compartment`
-//! constructor whose `evaluate` re-enters the compiler; that re-entrant
-//! compile seam needs the oracle at run time, which `ironhorse-vm`
-//! deliberately does not link (`#![forbid(unsafe_code)]`, no FFI). So a
-//! program that *references the `Compartment` intrinsic itself* is a
-//! named skip (`compartment:intrinsic-surface`) in the differential
-//! harness, exactly as the module goal is a named skip on the oracle
-//! seam. The differential this module DOES certify is evaluator
-//! faithfulness and cross-compartment global isolation (see
-//! `ironhorse-262`'s `compartment` dual-run) plus the ironhorse-side
-//! isolation/globalThis/endowments/module-map unit corpus below.
+//! host-side Rust realm API — matching XS's C-level compartment machinery in
+//! `xsModule.c` — **not** as a guest-callable `Compartment` intrinsic. A
+//! guest program's `new Compartment().evaluate('…')` would require
+//! ironhorse's interpreter to expose a native `Compartment` constructor whose
+//! `evaluate` re-enters the compiler; that re-entrant compile seam needs the
+//! oracle at run time, which `ironhorse-vm` deliberately does not link
+//! (`#![forbid(unsafe_code)]`, no FFI). So a program that *references the
+//! `Compartment` intrinsic itself* is a named skip
+//! (`compartment:intrinsic-surface`) in the differential harness, exactly as
+//! the module goal is a named skip on the oracle seam. The differential this
+//! module DOES certify is evaluator faithfulness and cross-compartment
+//! global isolation (see `ironhorse-262`'s `compartment` dual-run) plus the
+//! ironhorse-side sharing/isolation/globalThis/endowments/module-map unit
+//! corpus below.
 
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::interp::{Halt, Interp, RunOutcome, SourceCompiler};
+use crate::interp::{Halt, Interp, Realm, RunOutcome, SourceCompiler};
 use crate::module::{ModuleError, ModuleGraph, ModuleId};
-use crate::value::{Kind, Payload, Slot};
-
-/// The per-machine intrinsics **marker** compartments hold by `Rc`.
-///
-/// This is the seam where a shared frozen primordial graph belongs; it
-/// does not expose one yet. A bounded private cache holds one pristine linked
-/// template; every symbol-linked evaluation copies it into its own `Interp`
-/// and therefore its own intrinsic objects (see the module documentation's
-/// realm decision), so two compartments that `Rc::ptr_eq` on this struct
-/// share a marker, not an `Object.prototype`. Lockdown state belongs
-/// with the shared graph once the realm split lands.
-#[derive(Default)]
-pub struct Intrinsics {
-    // One exact-symbol-table, exact-permit template bounds cache growth even
-    // when a caller supplies a different set of names or a different
-    // intrinsic permit on every evaluation.
-    boot: RefCell<
-        Option<(
-            Vec<crate::symbols::SymbolName>,
-            Option<Vec<String>>,
-            crate::interp::BootTemplate,
-        )>,
-    >,
-    // The machine's host-installed runtime source compiler (F160), cloned
-    // into every realm this machine mints. Host configuration, not guest
-    // state: the pristine template stays compiler-free and the compiler is
-    // attached to each fresh interpreter after instantiation.
-    compiler: RefCell<Option<Rc<dyn SourceCompiler>>>,
-}
-
-impl Intrinsics {
-    /// Install the runtime source compiler every realm of this machine should
-    /// carry (F160). The compiler is host configuration, so it lives on the
-    /// per-machine `Intrinsics` rather than on any pristine boot template.
-    pub fn set_source_compiler(&self, compiler: Rc<dyn SourceCompiler>) {
-        *self.compiler.borrow_mut() = Some(compiler);
-    }
-
-    /// Attach the machine's compiler (if any) to a freshly instantiated
-    /// realm. Called after `BootTemplate::instantiate`; the pristine
-    /// template itself stays compiler-free (asserted in `BootTemplate::new`).
-    fn install_source_compiler(&self, interp: &mut Interp) {
-        if let Some(compiler) = self.compiler.borrow().as_ref() {
-            interp.set_source_compiler(Rc::clone(compiler));
-        }
-    }
-
-    fn with_template<R>(
-        &self,
-        names: &[crate::symbols::SymbolName],
-        permit: Option<&[String]>,
-        use_template: impl FnOnce(&crate::interp::BootTemplate) -> R,
-    ) -> R {
-        let mut cache = self.boot.borrow_mut();
-        let matches = cache
-            .as_ref()
-            .is_some_and(|(cached_names, cached_permit, _)| {
-                cached_names == names && cached_permit.as_deref() == permit
-            });
-        if !matches {
-            *cache = Some((
-                names.to_vec(),
-                permit.map(<[String]>::to_vec),
-                crate::interp::BootTemplate::new(names, permit),
-            ));
-        }
-        use_template(&cache.as_ref().unwrap().2)
-    }
-
-    fn fresh_linked(
-        &self,
-        names: &[crate::symbols::SymbolName],
-        permit: Option<&[String]>,
-        meter: Option<(u64, Box<dyn FnMut(u64) -> bool>)>,
-    ) -> Interp {
-        let mut interp = self.with_template(names, permit, |template| match meter {
-            Some((interval, host)) => template.instantiate_metered(interval, host),
-            None => template.instantiate(),
-        });
-        self.install_source_compiler(&mut interp);
-        interp
-    }
-
-    pub fn new() -> Rc<Intrinsics> {
-        Rc::new(Intrinsics::default())
-    }
-}
-
-/// Whether a value's payload indexes a slot or chunk arena — an object
-/// reference, a string, a BigInt, a symbol descriptor, or a computed key —
-/// and so cannot travel into an evaluation's fresh `Interp`.
-fn is_heap_backed(value: Slot) -> bool {
-    matches!(
-        value.value,
-        Payload::Reference(_) | Payload::String(_) | Payload::BigInt(_) | Payload::At(..)
-    ) || matches!(
-        value.kind,
-        Kind::Reference | Kind::String | Kind::BigInt | Kind::Symbol
-    )
-}
+use crate::value::Slot;
 
 /// A compartment's (its `globalThis`'s) identity within a machine.
 /// Distinct across every compartment — including a nested compartment —
@@ -213,16 +85,6 @@ pub enum CompartmentSkip {
     /// Dynamic `import()` / `compartment.import()` needs the asynchronous
     /// host loader (`importHook`) the static half does not build.
     DynamicImport,
-    /// A heap-backed endowment: an object reference, a string, a BigInt or
-    /// a symbol, whose payload is a slot or chunk index. Each evaluation
-    /// runs in a fresh arena, so such a payload names nothing there;
-    /// seeding it would install a dangling slot on the new global.
-    HeapEndowment,
-    /// A compartment permit was applied to an interpreter that has already
-    /// linked intrinsic bindings. Binding is create-only, so the narrower
-    /// policy could not be enforced; the request is refused fail-closed
-    /// rather than silently no-op'd.
-    PermitAfterLink,
 }
 
 impl CompartmentSkip {
@@ -230,15 +92,15 @@ impl CompartmentSkip {
     pub fn name(self) -> &'static str {
         match self {
             CompartmentSkip::DynamicImport => "compartment:dynamic-import",
-            CompartmentSkip::HeapEndowment => "compartment:heap-endowment",
-            CompartmentSkip::PermitAfterLink => "compartment:permit-after-link",
         }
     }
 }
 
 /// The `new Compartment({ globals/endowments, modules, resolveHook,
-/// importHook, name })` option bag, to the XS surface shape. Endowments
-/// are copied onto the new global at construction; `modules` is the
+/// importHook, name })` option bag, to the XS surface shape. The id-keyed
+/// endowments are seeded into the compartment's realm on its first
+/// evaluation; the name-keyed map is recorded on the lookup surface but does
+/// not bind (see [`Compartment::define_global`]). `modules` is the
 /// compartment's module map; the resolve/import hook flags record the
 /// SES constructor shape the suites probe (the static resolve is the
 /// module map itself — [`ModuleGraph::resolve`]).
@@ -246,11 +108,12 @@ impl CompartmentSkip {
 pub struct CompartmentOptions {
     /// The compartment's `name` option (SES `Compartment` name).
     pub name: Option<String>,
-    /// Endowments copied onto the new global, by display name.
+    /// Endowments recorded on the name-keyed lookup surface. These do NOT
+    /// bind an evaluation (see [`Compartment::define_global`]).
     pub endowments: HashMap<String, Slot>,
-    /// Endowments keyed by the interned symbol id the bytecode addresses
-    /// them through (until the compiler/symbol table lands, the harness
-    /// supplies the ids alongside the names).
+    /// Endowments keyed by the program-local symbol id the bytecode
+    /// addresses them through. Seeded (translated onto the realm's persisted
+    /// symbol table) on first evaluation.
     pub endowments_by_id: HashMap<u16, Slot>,
     /// The compartment's module map (`modules` option / the records a
     /// host loader registered). The static resolve hook is the map's own
@@ -268,18 +131,19 @@ pub struct CompartmentOptions {
     pub intrinsic_permit: Option<Vec<String>>,
 }
 
-/// A compartment: its own globals, module map, and evaluator, over a
-/// per-machine intrinsics MARKER rather than a shared frozen primordial
-/// graph — see the module documentation's realm decision for what that
-/// does and does not deliver.
+/// A compartment: its own global namespace, module map, and evaluator, over
+/// the machine's shared primordial graph. The [`Realm`] that carries the
+/// namespace is created on first evaluation against the machine and persists
+/// across this compartment's evaluations, so its globals and program symbol
+/// table survive while the intrinsic objects stay the machine's one set.
 pub struct Compartment {
     /// This compartment's (its globalThis's) identity within the machine.
     id: CompartmentId,
     /// The SES `name` option, if any.
     name: Option<String>,
-    /// The machine's intrinsics marker (one per machine; not yet a shared
-    /// primordial graph — see the module documentation).
-    intrinsics: Rc<Intrinsics>,
+    /// This compartment's namespace on the machine, created on first
+    /// evaluation. `None` until then (and again after [`Self::release`]).
+    realm: Option<Realm>,
     /// The machine-wide realm counter, so a nested compartment mints a
     /// fresh (globally unique) globalThis identity.
     counter: Rc<Cell<usize>>,
@@ -289,6 +153,11 @@ pub struct Compartment {
     /// The same bindings keyed by the interned symbol id the bytecode
     /// references them through (`GET_VARIABLE`/`SET_VARIABLE` operands).
     globals_by_id: HashMap<u16, Slot>,
+    /// The ids already seeded into this compartment's realm. Seeding happens
+    /// once per id: the realm persists across evaluations, so re-seeding on
+    /// every evaluation would duplicate the global property chain entry and
+    /// revert a guest write to the global.
+    seeded_ids: std::collections::HashSet<u16>,
     /// The compartment's module map (`new Compartment({ modules })`).
     modules: ModuleGraph,
     /// Whether a `resolveHook` was supplied at construction.
@@ -297,15 +166,18 @@ pub struct Compartment {
     has_import_hook: bool,
     /// The intrinsic-global permit (F144); `None` is the full realm.
     intrinsic_permit: Option<Vec<String>>,
+    /// The machine's host-installed runtime source compiler (F160), copied
+    /// into this compartment's realm on first evaluation. Host
+    /// configuration, not guest state.
+    source_compiler: Option<Rc<dyn SourceCompiler>>,
 }
 
 impl Compartment {
-    /// Create a compartment holding the machine's `intrinsics` marker with
-    /// its siblings but owning fresh globals, module map, and globalThis
-    /// identity.
+    /// Create a compartment with fresh globals, module map, and globalThis
+    /// identity. Its realm is created lazily on first evaluation.
     fn from_options(
-        intrinsics: Rc<Intrinsics>,
         counter: Rc<Cell<usize>>,
+        source_compiler: Option<Rc<dyn SourceCompiler>>,
         options: CompartmentOptions,
     ) -> Compartment {
         let id = CompartmentId(counter.get());
@@ -313,14 +185,16 @@ impl Compartment {
         Compartment {
             id,
             name: options.name,
-            intrinsics,
+            realm: None,
             counter,
             globals: options.endowments,
             globals_by_id: options.endowments_by_id,
+            seeded_ids: std::collections::HashSet::new(),
             modules: options.modules,
             has_resolve_hook: options.has_resolve_hook,
             has_import_hook: options.has_import_hook,
             intrinsic_permit: options.intrinsic_permit,
+            source_compiler,
         }
     }
 
@@ -346,16 +220,21 @@ impl Compartment {
     /// arrives with the program, not with the compartment. A program
     /// evaluated here reads `undefined` for `name`. The map is a lookup
     /// and listing surface ([`Compartment::global`],
-    /// [`Compartment::global_this_keys`]) until the realm split gives
-    /// names somewhere real to land.
+    /// [`Compartment::global_this_keys`]).
     pub fn define_global(&mut self, name: &str, value: Slot) {
         self.globals.insert(name.to_string(), value);
     }
 
     /// Bind a global by the interned symbol id the bytecode addresses it
-    /// through, so [`Compartment::evaluate`] can seed a program that
-    /// reads that global. (`define_global` is the name-keyed seam that
-    /// resolves ids once the symbol table lands.)
+    /// through, so an evaluation can seed a program that reads that global.
+    /// The value may reference any slot or chunk in the machine's arenas,
+    /// because the realm shares the machine rather than running in a fresh
+    /// heap.
+    ///
+    /// Seed-once: the compartment seeds each id on its first evaluation
+    /// after the call. A later redefinition of an id that has already been
+    /// seeded is ignored, and a guest write to a seeded global survives
+    /// later evaluations.
     pub fn define_global_id(&mut self, id: u16, value: Slot) {
         self.globals_by_id.insert(id, value);
     }
@@ -371,12 +250,6 @@ impl Compartment {
         let mut keys: Vec<String> = self.globals.keys().cloned().collect();
         keys.sort();
         keys
-    }
-
-    /// The machine's intrinsics marker this compartment holds (see
-    /// [`Intrinsics`]: not yet a shared primordial graph).
-    pub fn intrinsics(&self) -> &Rc<Intrinsics> {
-        &self.intrinsics
     }
 
     /// The compartment's module map (`new Compartment({ modules })`),
@@ -434,15 +307,15 @@ impl Compartment {
 
     /// Mint a **nested** compartment on the same machine with fresh
     /// globals and a fresh globalThis identity — a Compartment created
-    /// inside a compartment chains correctly (one machine marker,
+    /// inside a compartment chains correctly (one shared intrinsic graph,
     /// isolated globals). A nested compartment INHERITS the parent's
     /// intrinsic-global permit (F144): attenuation is not something a
     /// child may silently widen. Use [`Self::new_compartment_with`] to
     /// choose the child's permit explicitly.
     pub fn new_compartment(&self) -> Compartment {
         Compartment::from_options(
-            Rc::clone(&self.intrinsics),
             Rc::clone(&self.counter),
+            self.source_compiler.clone(),
             CompartmentOptions {
                 intrinsic_permit: self.intrinsic_permit.clone(),
                 ..CompartmentOptions::default()
@@ -455,40 +328,80 @@ impl Compartment {
     /// [`Self::new_compartment`]'s permit inheritance.
     pub fn new_compartment_with(&self, options: CompartmentOptions) -> Compartment {
         Compartment::from_options(
-            Rc::clone(&self.intrinsics),
             Rc::clone(&self.counter),
+            self.source_compiler.clone(),
             options,
         )
     }
 
-    /// This compartment's id-keyed endowments in the order they are
-    /// seeded, or the named skip that refuses the whole evaluation.
+    /// Bind every id-keyed endowment not yet seeded into this compartment's
+    /// realm, in realm-id order.
     ///
-    /// Seed in ID order, as checked by `tests/endowment_order.rs`:
-    /// iterating the HashMap would seed
-    /// per-process SipHash order into the global object's property CHAIN
-    /// (`create_global_property` prepends) and into slot allocation
-    /// order — for-in enumeration, `Object.keys`, and snapshot bytes would
-    /// differ between replicas.
+    /// Seed in id order, as checked by `tests/endowment_order.rs`: iterating
+    /// the HashMap would seed per-process SipHash order into the global
+    /// object's property CHAIN (`create_global_property` prepends) and into
+    /// slot allocation order — for-in enumeration, `Object.keys`, and
+    /// snapshot bytes would differ between replicas. The order is a function
+    /// of the translated realm id (a `BTreeMap`), not of map iteration.
     ///
-    /// A heap-backed endowment is refused before anything runs: the
-    /// evaluation's `Interp` is fresh, so a slot or chunk index names
-    /// nothing in its arenas, and seeding it would hand the guest a
-    /// dangling global. Only arena-free primitives (`undefined`, `null`,
-    /// booleans, integers, numbers) can be seeded.
-    fn seeded_globals(&self) -> Result<Vec<(u16, Slot)>, CompartmentSkip> {
-        let mut seeded: Vec<(u16, Slot)> =
-            self.globals_by_id.iter().map(|(&i, &v)| (i, v)).collect();
-        if seeded.iter().any(|(_, value)| is_heap_backed(*value)) {
-            return Err(CompartmentSkip::HeapEndowment);
+    /// Each id is seeded once: the realm persists, so a second evaluation
+    /// must not re-create the property (which would grow the chain and
+    /// revert a guest write to the global).
+    ///
+    /// With `names` (a symbol-linked evaluation), a recorded id is a
+    /// PROGRAM-local id. `relink_crank` remaps the bytecode onto the realm's
+    /// persisted table, so the seed is translated through `names` and the
+    /// realm table before filtering: the same numeric id can mean different
+    /// globals in two programs, and the realm-table id is what the relinked
+    /// program addresses. An id outside the program's table cannot name a
+    /// realm binding and is skipped; if two local ids translate to one realm
+    /// id, the smaller local id wins, deterministically.
+    fn seed(&mut self, machine: &mut Interp, names: Option<&[crate::symbols::SymbolName]>) {
+        let mut pending: std::collections::BTreeMap<u16, (u16, Slot)> =
+            std::collections::BTreeMap::new();
+        for (&local_id, &value) in &self.globals_by_id {
+            let realm_id = match names {
+                Some(names) => {
+                    match local_id
+                        .checked_sub(1)
+                        .and_then(|index| names.get(index as usize))
+                        .and_then(|name| name.as_str())
+                        .and_then(|name| machine.symbol_id(name))
+                    {
+                        Some(id) => id,
+                        None => continue,
+                    }
+                }
+                None => {
+                    if local_id == 0 {
+                        // XS_NO_ID: never a table position.
+                        continue;
+                    }
+                    local_id
+                }
+            };
+            if self.seeded_ids.contains(&realm_id) {
+                continue;
+            }
+            pending
+                .entry(realm_id)
+                .and_modify(|entry| {
+                    if local_id < entry.0 {
+                        *entry = (local_id, value);
+                    }
+                })
+                .or_insert((local_id, value));
         }
-        seeded.sort_unstable_by_key(|(i, _)| *i);
-        Ok(seeded)
+        for (realm_id, (_, value)) in pending {
+            machine.define_global_id(realm_id, value);
+            self.seeded_ids.insert(realm_id);
+        }
     }
 
-    /// The fail-closed outcome for a refused evaluation: nothing ran, so
-    /// the counters are zero and the halt names the skip.
-    fn refused(skip: CompartmentSkip) -> RunOutcome {
+    /// The fail-closed outcome for a program whose symbol table cannot be
+    /// relinked onto the realm's persisted table. Nothing ran; the machine
+    /// is unchanged.
+    fn relink_refused(machine: &Interp) -> RunOutcome {
         RunOutcome {
             unhandled_rejection: None,
             meter_raw_this_run: 0,
@@ -498,26 +411,125 @@ impl Compartment {
             result: String::new(),
             coercion_error: None,
             host_render_halt: None,
-            computrons: 0,
+            computrons: machine.meter_index() >> 16,
             dispatched: 0,
-            meter_raw: 0,
-            // Spelled out per skip rather than through `skip.name()`: the
-            // halt-label registry (`src/halt_labels.rs`, mirrored by
-            // `tests/halt_label_registry.rs`) pins every `Halt::NotImplemented`
-            // label as a literal at its construction site, so a new refusal
-            // is a visible edit to that allowlist.
-            halt: match skip {
-                CompartmentSkip::DynamicImport => {
-                    Halt::NotImplemented("compartment:dynamic-import")
-                }
-                CompartmentSkip::HeapEndowment => {
-                    Halt::NotImplemented("compartment:heap-endowment")
-                }
-                CompartmentSkip::PermitAfterLink => {
-                    Halt::NotImplemented("compartment:permit-after-link")
-                }
-            },
+            meter_raw: machine.meter_index(),
+            halt: Halt::EngineInvariant("eval:relink"),
         }
+    }
+
+    /// The fail-closed outcome for an evaluation started while promise jobs
+    /// are still queued on the machine. Jobs carry no realm identity, so
+    /// draining them under this realm's `code_segments` would run (or
+    /// decode-fault) another realm's code; the host must drain them
+    /// ([`Interp::run_promise_jobs`]) before starting another realm.
+    fn pending_jobs_refused(machine: &Interp) -> RunOutcome {
+        RunOutcome {
+            unhandled_rejection: machine.unhandled_rejection(),
+            meter_raw_this_run: 0,
+            computrons_this_run: 0,
+            dispatched_this_run: 0,
+            completed: false,
+            result: String::new(),
+            coercion_error: None,
+            host_render_halt: None,
+            computrons: machine.meter_index() >> 16,
+            dispatched: 0,
+            meter_raw: machine.meter_index(),
+            halt: Halt::EngineInvariant("compartment:pending-jobs"),
+        }
+    }
+
+    /// Install this compartment's realm as the machine's active namespace:
+    /// mint the realm on first use, swap it in, and apply the namespace's
+    /// host policy (permit, source compiler). Every successful install is
+    /// paired with exactly one [`Self::park`] before the machine is handed
+    /// back to its owner.
+    ///
+    /// Refused fail-closed while promise jobs from another realm are queued
+    /// on the machine; see [`Self::pending_jobs_refused`].
+    fn install(&mut self, machine: &mut Interp) -> Result<(), RunOutcome> {
+        self.install_with(machine, false)
+    }
+
+    /// The body of [`Self::install`]. `allow_pending_jobs` is set only by
+    /// [`Self::drain_promise_jobs`]: draining a realm's own queued jobs is
+    /// the one operation that must install a realm while jobs are queued.
+    fn install_with(
+        &mut self,
+        machine: &mut Interp,
+        allow_pending_jobs: bool,
+    ) -> Result<(), RunOutcome> {
+        if !allow_pending_jobs && machine.has_pending_jobs() {
+            return Err(Self::pending_jobs_refused(machine));
+        }
+        if self.realm.is_none() {
+            self.realm = Some(machine.new_realm());
+        }
+        machine.swap_realm(self.realm.as_mut().expect("realm minted above"));
+        match &self.intrinsic_permit {
+            Some(permit) => {
+                let refs: Vec<&str> = permit.iter().map(String::as_str).collect();
+                machine.set_intrinsic_permit(Some(&refs));
+            }
+            None => machine.set_intrinsic_permit(None),
+        }
+        if !machine.has_source_compiler() {
+            if let Some(compiler) = &self.source_compiler {
+                machine.set_source_compiler(Rc::clone(compiler));
+            }
+        }
+        Ok(())
+    }
+
+    /// Park the active realm again so the machine's previous namespace is
+    /// reinstalled. Always paired with [`Self::install`].
+    fn park(&mut self, machine: &mut Interp) {
+        machine.swap_realm(self.realm.as_mut().expect("installed by `install`"));
+    }
+
+    /// Drop this compartment's realm from the machine's parked-realm roots.
+    /// The namespace becomes unreachable and the next collection may reclaim
+    /// it; a later evaluation lazily mints a fresh realm, so the compartment
+    /// starts over with empty globals. Releasing a compartment whose realm
+    /// was never created is a no-op.
+    pub fn release(&mut self, machine: &mut Interp) {
+        if let Some(realm) = self.realm.take() {
+            machine.release_realm(&realm);
+        }
+        self.seeded_ids.clear();
+    }
+
+    /// Drain this compartment's queued promise jobs under its own realm.
+    ///
+    /// A halted evaluation can leave jobs queued ([`Interp::has_pending_jobs`]);
+    /// the jobs run only under the realm whose `code_segments` they name, so
+    /// the compartment that queued them is the one that drains them. Every
+    /// other compartment's evaluation refuses until the queue empties
+    /// (`compartment:pending-jobs`). A successful run reports `undefined`.
+    pub fn drain_promise_jobs(&mut self, machine: &mut Interp) -> RunOutcome {
+        if let Err(outcome) = self.install_with(machine, true) {
+            return outcome;
+        }
+        let outcome = machine.run_promise_jobs();
+        self.park(machine);
+        outcome
+    }
+
+    /// Link the program's symbol table onto the realm's persisted table,
+    /// seed this compartment's globals, then run the relinked program.
+    fn link_seed_run(
+        &mut self,
+        machine: &mut Interp,
+        bytecode: Rc<[u8]>,
+        names: &[crate::symbols::SymbolName],
+    ) -> RunOutcome {
+        let code = match machine.relink_crank(&bytecode, names) {
+            Ok(code) => code,
+            Err(_) => return Self::relink_refused(machine),
+        };
+        self.seed(machine, Some(names));
+        machine.run_shared(Rc::from(code))
     }
 
     /// Evaluate a program bytecode buffer in this compartment, seeding
@@ -525,81 +537,98 @@ impl Compartment {
     /// linking — for programs that reference only operators and the
     /// compartment's own globals. Programs that name
     /// intrinsics (`Boolean`, `Object`, …) must use
-    /// [`Compartment::evaluate_with_symbols`]. Runs in a fresh `Interp`
-    /// (see the module documentation's realm decision); a heap-backed
-    /// endowment is refused as `compartment:heap-endowment`. Reports the
-    /// engine's raw completion, like [`Interp::run`]: a differential caller
-    /// applies [`RunOutcome::host_coerced`] itself.
-    pub fn evaluate(&self, bytecode: &[u8]) -> RunOutcome {
-        self.evaluate_shared(Rc::from(bytecode))
+    /// [`Compartment::evaluate_with_symbols`]. The program runs in this
+    /// compartment's realm on `machine`, whose shared arenas and intrinsic
+    /// graph every realm references. Reports the engine's raw completion,
+    /// like [`Interp::run`]: a differential caller applies
+    /// [`RunOutcome::host_coerced`] itself.
+    pub fn evaluate(&mut self, machine: &mut Interp, bytecode: &[u8]) -> RunOutcome {
+        self.evaluate_shared(machine, Rc::from(bytecode))
     }
 
     /// [`Self::evaluate`] using a caller-owned immutable program buffer.
-    pub fn evaluate_shared(&self, bytecode: Rc<[u8]>) -> RunOutcome {
-        let seeded = match self.seeded_globals() {
-            Ok(seeded) => seeded,
-            Err(skip) => return Self::refused(skip),
-        };
-        let mut interp = Interp::new();
-        self.intrinsics.install_source_compiler(&mut interp);
-        for (id, value) in seeded {
-            interp.define_global_id(id, value);
+    pub fn evaluate_shared(&mut self, machine: &mut Interp, bytecode: Rc<[u8]>) -> RunOutcome {
+        machine.install_meter(crate::Meter::new(), None);
+        if let Err(outcome) = self.install(machine) {
+            return outcome;
         }
-        interp.run_shared(bytecode)
+        self.seed(machine, None);
+        let outcome = machine.run_shared(bytecode);
+        self.park(machine);
+        outcome
     }
 
     /// Evaluate a program bytecode buffer with its XS `symbols` atom, so
     /// the program's intrinsic references link by name (exactly as
     /// [`crate::run_program_with_symbols`] does for the top-level realm),
     /// and seed **this** compartment's own globals. This is the
-    /// load-bearing per-compartment evaluator: two compartments running
-    /// the same intrinsic-referencing program agree on the intrinsic
-    /// *behaviour* and diverge exactly and only in their own globals.
-    /// Reports the engine's raw completion, like [`Interp::run`]: unlike
-    /// the top-level differential wrappers, no oracle-harness coercion is
-    /// applied.
+    /// load-bearing per-compartment evaluator: two compartments running the
+    /// same intrinsic-referencing program agree on the intrinsic *behaviour*
+    /// and keep their global bindings distinct. (The intrinsic graph itself
+    /// is shared, so a guest mutation of a primordial object in one realm is
+    /// visible in the others; freezing it is the SES lockdown work F054.)
     ///
-    /// A pristine linked template is copied into a **fresh `Interp`** per call,
-    /// so the two compartments do not share intrinsic object identity (see the
-    /// module documentation's realm decision), and a heap-backed endowment
-    /// is refused as `compartment:heap-endowment`.
-    pub fn evaluate_with_symbols(&self, bytecode: &[u8], symbols: &[u8]) -> RunOutcome {
-        self.evaluate_with_symbols_shared(Rc::from(bytecode), symbols)
+    /// The realm's symbol table persists across evaluations, so a second
+    /// program is relinked onto it ([`Interp::relink_crank`]) rather than
+    /// receiving a fresh primordial graph. Reports the engine's raw
+    /// completion, like [`Interp::run`]: unlike the top-level differential
+    /// wrappers, no oracle-harness coercion is applied.
+    pub fn evaluate_with_symbols(
+        &mut self,
+        machine: &mut Interp,
+        bytecode: &[u8],
+        symbols: &[u8],
+    ) -> RunOutcome {
+        self.evaluate_with_symbols_shared(machine, Rc::from(bytecode), symbols)
     }
 
     /// [`Self::evaluate_with_symbols`] without copying a shared program.
-    pub fn evaluate_with_symbols_shared(&self, bytecode: Rc<[u8]>, symbols: &[u8]) -> RunOutcome {
+    pub fn evaluate_with_symbols_shared(
+        &mut self,
+        machine: &mut Interp,
+        bytecode: Rc<[u8]>,
+        symbols: &[u8],
+    ) -> RunOutcome {
         let names = match crate::symbols::parse_symbols_checked(symbols) {
             Ok(names) => names,
             Err(halt) => return crate::symbols::decode_refusal(halt),
         };
-        self.evaluate_linked_shared(
-            self.intrinsics
-                .fresh_linked(&names, self.intrinsic_permit.as_deref(), None),
-            bytecode,
-        )
+        machine.install_meter(crate::Meter::new(), None);
+        if let Err(outcome) = self.install(machine) {
+            return outcome;
+        }
+        let outcome = self.link_seed_run(machine, bytecode, &names);
+        self.park(machine);
+        outcome
     }
 
-    /// [`Compartment::evaluate_with_symbols`] under an ARMED meter
-    /// with the same fresh interpreter, but
-    /// [`Interp::arm_meter`]ed with `interval` (computrons between host
-    /// consultations) and `host` before anything runs, so the host's
-    /// refusal halts the program with [`crate::Halt::MeterAbort`]. This is
-    /// the evaluator an embedder that bounds its cranks uses; the un-armed
-    /// form stays for the differential harness.
+    /// [`Compartment::evaluate_with_symbols`] under an ARMED meter: the
+    /// machine is [`Interp::arm_meter`]ed with `interval` (computrons
+    /// between host consultations) and `host` before anything runs, so the
+    /// host's refusal halts the program with [`crate::Halt::MeterAbort`].
+    /// This is the evaluator an embedder that bounds its cranks uses; the
+    /// un-armed form stays for the differential harness.
     pub fn evaluate_with_symbols_metered(
-        &self,
+        &mut self,
+        machine: &mut Interp,
         bytecode: &[u8],
         symbols: &[u8],
         interval: u64,
         host: Box<dyn FnMut(u64) -> bool>,
     ) -> RunOutcome {
-        self.evaluate_with_symbols_metered_shared(Rc::from(bytecode), symbols, interval, host)
+        self.evaluate_with_symbols_metered_shared(
+            machine,
+            Rc::from(bytecode),
+            symbols,
+            interval,
+            host,
+        )
     }
 
     /// [`Self::evaluate_with_symbols_metered`] using shared bytecode.
     pub fn evaluate_with_symbols_metered_shared(
-        &self,
+        &mut self,
+        machine: &mut Interp,
         bytecode: Rc<[u8]>,
         symbols: &[u8],
         interval: u64,
@@ -609,57 +638,23 @@ impl Compartment {
             Ok(names) => names,
             Err(halt) => return crate::symbols::decode_refusal(halt),
         };
-        let interp = self.intrinsics.fresh_linked(
-            &names,
-            self.intrinsic_permit.as_deref(),
-            Some((interval, host)),
-        );
-        self.evaluate_linked_shared(interp, bytecode)
-    }
-
-    /// Link and evaluate on the interpreter whose meter admitted compilation.
-    /// Compilation owns this fresh interpreter until cached meter handoff is
-    /// integrated; preserve both its charges and host consultation window.
-    pub fn evaluate_with_symbols_on(
-        &self,
-        mut interp: Interp,
-        bytecode: &[u8],
-        symbols: &[u8],
-    ) -> RunOutcome {
-        let names = match crate::symbols::parse_symbols_checked(symbols) {
-            Ok(names) => names,
-            Err(halt) => return crate::symbols::decode_refusal(halt),
-        };
-        // A compartment permit overrides; a compartment without one leaves
-        // the caller's policy on the supplied interpreter intact. Binding is
-        // create-only, so a permit applied to an already-linked interpreter
-        // cannot be enforced: refuse fail-closed rather than no-op.
-        if let Some(permit) = &self.intrinsic_permit {
-            if interp.intrinsics_linked() {
-                return Self::refused(CompartmentSkip::PermitAfterLink);
-            }
-            let refs: Vec<&str> = permit.iter().map(String::as_str).collect();
-            interp.set_intrinsic_permit(Some(&refs));
+        machine.install_meter(crate::Meter::new(), None);
+        machine.arm_meter(interval, host);
+        if let Err(outcome) = self.install(machine) {
+            return outcome;
         }
-        // Precedence, stated for both host-configuration fields on this
-        // public entry: the caller's interpreter may already carry its own
-        // compiler, and that explicit choice wins; otherwise the machine's
-        // compiler is installed. (For the permit above, the compartment's
-        // non-`None` policy wins; a `None` compartment policy defers to the
-        // interpreter.)
-        if !interp.has_source_compiler() {
-            self.intrinsics.install_source_compiler(&mut interp);
-        }
-        interp.link_intrinsics(&names);
-        self.evaluate_linked_shared(interp, Rc::from(bytecode))
+        let outcome = self.link_seed_run(machine, bytecode, &names);
+        self.park(machine);
+        outcome
     }
 
     /// Evaluate with the live meter already charged by source compilation.
-    /// The index, next checkpoint, and host callback continue unchanged.
-    /// This preserves the pristine boot cache without replaying compilation's
-    /// charges or resetting its consultation window.
+    /// The index, next checkpoint, and host callback continue unchanged:
+    /// the caller's meter becomes the machine's for this evaluation, so
+    /// compilation charges and the run's charges share one accounting.
     pub fn evaluate_with_symbols_continuing_meter_shared(
-        &self,
+        &mut self,
+        machine: &mut Interp,
         bytecode: Rc<[u8]>,
         symbols: &[u8],
         meter: crate::Meter,
@@ -674,60 +669,24 @@ impl Compartment {
                 return outcome;
             }
         };
-        let (mut interp, link_charge) =
-            self.intrinsics
-                .with_template(&names, self.intrinsic_permit.as_deref(), |template| {
-                    template.instantiate_continuing_meter(meter, host)
-                });
-        self.intrinsics.install_source_compiler(&mut interp);
-        // The callback runs outside the cache borrow, including on a cache hit.
-        if !interp.charge_compilation(link_charge) {
-            return RunOutcome {
-                unhandled_rejection: interp.unhandled_rejection(),
-                meter_raw_this_run: 0,
-                computrons_this_run: 0,
-                dispatched_this_run: 0,
-                completed: false,
-                result: String::new(),
-                coercion_error: None,
-                host_render_halt: None,
-                computrons: interp.meter_index() >> 16,
-                meter_raw: interp.meter_index(),
-                dispatched: 0,
-                halt: Halt::MeterAbort,
-            };
-        }
-        if let Err(skip) = self.seeded_globals() {
-            let mut outcome = Self::refused(skip);
-            outcome.meter_raw = interp.meter_index();
-            outcome.computrons = outcome.meter_raw >> 16;
+        machine.install_meter(meter, host);
+        if let Err(outcome) = self.install(machine) {
             return outcome;
         }
-        self.evaluate_linked_shared(interp, bytecode)
-    }
-
-    /// The shared body of the symbol-linked evaluators: seed this
-    /// compartment's globals into the independent linked copy, then run.
-    fn evaluate_linked_shared(&self, mut interp: Interp, bytecode: Rc<[u8]>) -> RunOutcome {
-        let seeded = match self.seeded_globals() {
-            Ok(seeded) => seeded,
-            Err(skip) => return Self::refused(skip),
-        };
-        for (id, value) in seeded {
-            interp.define_global_id(id, value);
-        }
-        interp.run_shared(bytecode)
+        let outcome = self.link_seed_run(machine, bytecode, &names);
+        self.park(machine);
+        outcome
     }
 }
 
-/// A machine hosts one intrinsics marker and any number of compartments
-/// over it (design target: intrinsics once per machine, referenced per
-/// realm — not yet delivered, see the module documentation). It also owns
-/// the machine-wide realm counter that mints a unique globalThis identity
-/// per compartment (nested compartments included).
+/// A machine owns the shared [`Interp`]: one slot/chunk arena, one primordial
+/// intrinsic graph, and the realm counter that mints a unique globalThis
+/// identity per compartment (nested compartments included). Every compartment
+/// of a machine evaluates its own namespace over that graph; see [`Compartment`].
 pub struct Machine {
-    intrinsics: Rc<Intrinsics>,
+    interp: Interp,
     counter: Rc<Cell<usize>>,
+    source_compiler: Option<Rc<dyn SourceCompiler>>,
 }
 
 impl Default for Machine {
@@ -739,32 +698,45 @@ impl Default for Machine {
 impl Machine {
     pub fn new() -> Machine {
         Machine {
-            intrinsics: Intrinsics::new(),
+            interp: Interp::new(),
             counter: Rc::new(Cell::new(0)),
+            source_compiler: None,
         }
     }
 
-    /// The machine's intrinsics marker (see [`Intrinsics`]).
-    pub fn intrinsics(&self) -> &Rc<Intrinsics> {
-        &self.intrinsics
+    /// The shared machine state every compartment evaluates over.
+    pub fn interp(&self) -> &Interp {
+        &self.interp
+    }
+
+    /// The shared machine state, mutable, for an evaluation that installs a
+    /// compartment's realm.
+    pub fn interp_mut(&mut self) -> &mut Interp {
+        &mut self.interp
+    }
+
+    /// The number of realm namespaces this machine keeps rooted while they
+    /// are not active; see [`Interp::rooted_realm_count`].
+    pub fn rooted_realm_count(&self) -> usize {
+        self.interp.rooted_realm_count()
     }
 
     /// Install the runtime source compiler every realm this machine mints
     /// should carry (F160): with one installed, a guest `eval("…")` or
     /// `new Function(…)` compiles through it instead of halting on the
     /// un-armed `eval:no-compiler` gap. The compiler is machine-wide host
-    /// configuration and is attached to each fresh interpreter as it is
-    /// instantiated, so it survives the pristine-template cache.
-    pub fn set_source_compiler(&self, compiler: Rc<dyn SourceCompiler>) {
-        self.intrinsics.set_source_compiler(compiler);
+    /// configuration and is copied into each compartment as it is minted,
+    /// so call this before minting the compartments that should carry it.
+    pub fn set_source_compiler(&mut self, compiler: Rc<dyn SourceCompiler>) {
+        self.source_compiler = Some(compiler);
     }
 
     /// A fresh compartment on this machine, with empty globals and module
     /// map.
     pub fn new_compartment(&self) -> Compartment {
         Compartment::from_options(
-            Rc::clone(&self.intrinsics),
             Rc::clone(&self.counter),
+            self.source_compiler.clone(),
             CompartmentOptions::default(),
         )
     }
@@ -773,8 +745,8 @@ impl Machine {
     /// name, resolve/import hooks) — the `new Compartment({...})` surface.
     pub fn compartment(&self, options: CompartmentOptions) -> Compartment {
         Compartment::from_options(
-            Rc::clone(&self.intrinsics),
             Rc::clone(&self.counter),
+            self.source_compiler.clone(),
             options,
         )
     }
@@ -782,10 +754,12 @@ impl Machine {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
+
     use super::*;
     use crate::module::{BodyOp, ExportEntry, ImportEntry, ImportName, ModuleRecord, ModuleValue};
     use crate::opcode::Opcode;
-    use crate::value::Slot;
+    use crate::value::{Kind, Payload, Slot};
 
     /// Program bytecode reading the global symbol `id` and returning it:
     /// `EVAL_REFERENCE id; GET_VARIABLE id; SET_RESULT; END`.
@@ -804,7 +778,7 @@ mod tests {
     }
 
     #[test]
-    fn template_metering_matches_arm_before_link_and_remains_isolated() {
+    fn metered_evaluation_matches_arm_before_link() {
         for source in [
             "var i=0; while(i<20){i++;} i",
             "var m=new Map(); for(var i=0;i<8;i++){m.set(i,String(i));} Object.keys({a:1}).length + m.size",
@@ -815,8 +789,6 @@ mod tests {
         ] {
             let (code, symbols) = ironhorse_compile::compile_atoms(source).unwrap();
             let names = crate::parse_symbols(&symbols);
-            let machine = Machine::new();
-            let compartment = machine.new_compartment();
             for interval in [1, 32] {
                 for allow in [true, false] {
                     let baseline_calls = Rc::new(RefCell::new(Vec::new()));
@@ -828,7 +800,9 @@ mod tests {
                     for _ in 0..3 {
                         let actual_calls = Rc::new(RefCell::new(Vec::new()));
                         let calls = actual_calls.clone();
-                        let actual = compartment.evaluate_with_symbols_metered(&code, &symbols, interval, Box::new(move |n| { calls.borrow_mut().push(n); allow }));
+                        let mut machine = Machine::new();
+                        let mut compartment = machine.new_compartment();
+                        let actual = compartment.evaluate_with_symbols_metered(machine.interp_mut(), &code, &symbols, interval, Box::new(move |n| { calls.borrow_mut().push(n); allow }));
                         assert_eq!((actual.completed, actual.result, actual.meter_raw, actual.dispatched, format!("{:?}",actual.halt)), (expected.completed, expected.result.clone(), expected.meter_raw, expected.dispatched, format!("{:?}",expected.halt)), "{source}");
                         assert_eq!(*actual_calls.borrow(), *baseline_calls.borrow(), "{source}");
                     }
@@ -838,9 +812,9 @@ mod tests {
     }
 
     #[test]
-    fn template_cache_preserves_surrogate_property_names() {
-        let machine = Machine::new();
-        let compartment = machine.new_compartment();
+    fn realm_evaluations_preserve_surrogate_property_names() {
+        let mut machine = Machine::new();
+        let mut compartment = machine.new_compartment();
         for source in [
             r#"({"\uD800":7,"\uFFFD":9})["\uD800"]"#,
             r#"({"\uDC00":7,"\uFFFD":9})["\uDC00"]"#,
@@ -852,7 +826,8 @@ mod tests {
         {
             let (code, symbols) = ironhorse_compile::compile_atoms(source).unwrap();
             for _ in 0..2 {
-                let outcome = compartment.evaluate_with_symbols(&code, &symbols);
+                let outcome =
+                    compartment.evaluate_with_symbols(machine.interp_mut(), &code, &symbols);
                 assert!(outcome.completed, "{:?}", outcome.halt);
                 assert_eq!(outcome.result, "7");
             }
@@ -861,12 +836,17 @@ mod tests {
 
     #[test]
     fn continuing_meter_rejects_malformed_symbols_without_losing_bill() {
-        let machine = Machine::new();
+        let mut machine = Machine::new();
+        let mut compartment = machine.new_compartment();
         let mut meter = crate::Meter::new();
         assert!(meter.charge_compilation(7 << 16, None));
-        let outcome = machine
-            .new_compartment()
-            .evaluate_with_symbols_continuing_meter_shared(Rc::from([]), &[0xff], meter, None);
+        let outcome = compartment.evaluate_with_symbols_continuing_meter_shared(
+            machine.interp_mut(),
+            Rc::from([]),
+            &[0xff],
+            meter,
+            None,
+        );
         assert!(!outcome.completed);
         assert_eq!(outcome.meter_raw, 7 << 16);
         assert_eq!(outcome.dispatched, 0);
@@ -876,8 +856,7 @@ mod tests {
     fn continuing_meter_preserves_charges_and_host_schedule() {
         let (code, symbols) =
             ironhorse_compile::compile_atoms("Object.keys({a:1}).length").unwrap();
-        let machine = Machine::new();
-        let compartment = machine.new_compartment();
+        let mut machine = Machine::new();
         for interval in [1, 32, 1000] {
             let expected_calls = Rc::new(RefCell::new(Vec::new()));
             let calls = expected_calls.clone();
@@ -902,7 +881,9 @@ mod tests {
                 let mut meter = crate::Meter::new();
                 meter.begin(interval);
                 assert!(meter.charge_compilation(7 << 16, Some(host.as_mut())));
+                let mut compartment = machine.new_compartment();
                 let actual = compartment.evaluate_with_symbols_continuing_meter_shared(
+                    machine.interp_mut(),
                     code.clone().into(),
                     &symbols,
                     meter,
@@ -922,12 +903,11 @@ mod tests {
     }
 
     #[test]
-    fn continuing_meter_host_can_reenter_shared_template_cache() {
+    fn continuing_meter_host_can_reenter_another_machines_realm() {
         let (code, symbols) =
             ironhorse_compile::compile_atoms("Object.keys({a:1}).length").unwrap();
-        let machine = Machine::new();
-        let outer = machine.new_compartment();
-        let inner = machine.new_compartment();
+        let mut inner_machine = Machine::new();
+        let mut inner = inner_machine.new_compartment();
         let inner_code = code.clone();
         let inner_symbols = symbols.clone();
         let calls = Rc::new(std::cell::Cell::new(0));
@@ -936,14 +916,17 @@ mod tests {
             seen.set(seen.get() + 1);
             assert!(
                 inner
-                    .evaluate_with_symbols(&inner_code, &inner_symbols)
+                    .evaluate_with_symbols(inner_machine.interp_mut(), &inner_code, &inner_symbols)
                     .completed
             );
             true
         });
+        let mut outer_machine = Machine::new();
+        let mut outer = outer_machine.new_compartment();
         let mut meter = crate::Meter::new();
         meter.begin(1);
         let outcome = outer.evaluate_with_symbols_continuing_meter_shared(
+            outer_machine.interp_mut(),
             code.into(),
             &symbols,
             meter,
@@ -954,9 +937,9 @@ mod tests {
     }
 
     #[test]
-    fn template_cache_switches_symbol_tables_without_changing_bindings() {
-        let machine = Machine::new();
-        let compartment = machine.new_compartment();
+    fn realm_relinks_switched_symbol_tables_without_changing_bindings() {
+        let mut machine = Machine::new();
+        let mut compartment = machine.new_compartment();
         for source in [
             "Object.keys({a:1}).length",
             "Math.abs(-3)",
@@ -968,46 +951,101 @@ mod tests {
         .take(12)
         {
             let (code, symbols) = ironhorse_compile::compile_atoms(source).unwrap();
+            let actual = compartment.evaluate_with_symbols(machine.interp_mut(), &code, &symbols);
             let mut fresh = Interp::new();
             fresh.link_intrinsics(&crate::parse_symbols(&symbols));
             let expected = fresh.run(&code);
-            let actual = compartment.evaluate_with_symbols(&code, &symbols);
             assert_eq!(
                 (actual.completed, actual.result, actual.meter_raw),
-                (expected.completed, expected.result, expected.meter_raw)
+                (expected.completed, expected.result, expected.meter_raw),
+                "{source}"
             );
         }
     }
 
     #[test]
-    fn metered_template_refuses_heap_endowments_without_host_calls() {
-        let machine = Machine::new();
+    fn endowment_ids_survive_relinked_symbol_tables() {
+        // A host records an endowment by the id the program's own symbol
+        // table assigned it. The realm's table persists and remaps the
+        // program's ids, so two programs with different tables must each
+        // find their own binding.
+        let mut machine = Machine::new();
         let mut compartment = machine.new_compartment();
-        compartment.define_global_id(
-            1,
-            Slot::of(Kind::Reference, Payload::Reference(crate::SlotIndex(10))),
+
+        let (one, one_symbols) = ironhorse_compile::compile_atoms("x").unwrap();
+        let names = crate::parse_symbols(&one_symbols);
+        let x = names.iter().position(|name| name == "x").unwrap() as u16 + 1;
+        compartment.define_global_id(x, Slot::integer(1));
+        let first = compartment.evaluate_with_symbols(machine.interp_mut(), &one, &one_symbols);
+        assert!(first.completed, "{:?}", first.halt);
+        assert_eq!(first.result, "1");
+
+        let (two, two_symbols) = ironhorse_compile::compile_atoms("y").unwrap();
+        let names = crate::parse_symbols(&two_symbols);
+        let y = names.iter().position(|name| name == "y").unwrap() as u16 + 1;
+        compartment.define_global_id(y, Slot::integer(2));
+        let second = compartment.evaluate_with_symbols(machine.interp_mut(), &two, &two_symbols);
+        assert!(second.completed, "{:?}", second.halt);
+        assert_eq!(second.result, "2", "the second program's own binding");
+
+        let (both, both_symbols) = ironhorse_compile::compile_atoms("x + ',' + y").unwrap();
+        let third = compartment.evaluate_with_symbols(machine.interp_mut(), &both, &both_symbols);
+        assert!(third.completed, "{:?}", third.halt);
+        assert_eq!(third.result, "1,2", "both bindings survive the relink");
+    }
+
+    #[test]
+    fn release_then_evaluate_mints_a_fresh_realm() {
+        let mut machine = Machine::new();
+        let mut compartment = machine.new_compartment();
+        let (code, symbols) = ironhorse_compile::compile_atoms("var r = 1; r").unwrap();
+        let first = compartment.evaluate_with_symbols(machine.interp_mut(), &code, &symbols);
+        assert!(first.completed, "{:?}", first.halt);
+        assert_eq!(first.result, "1");
+        assert_eq!(machine.rooted_realm_count(), 1);
+
+        compartment.release(machine.interp_mut());
+        assert_eq!(machine.rooted_realm_count(), 0, "release drops the root");
+
+        let (probe, probe_symbols) = ironhorse_compile::compile_atoms("typeof r").unwrap();
+        let second =
+            compartment.evaluate_with_symbols(machine.interp_mut(), &probe, &probe_symbols);
+        assert!(second.completed, "{:?}", second.halt);
+        assert_eq!(
+            second.result, "undefined",
+            "a released realm starts over with empty globals"
         );
-        let (code, symbols) = ironhorse_compile::compile_atoms("while(true){}").unwrap();
-        for _ in 0..2 {
-            let result = compartment.evaluate_with_symbols_metered(
-                &code,
-                &symbols,
-                1,
-                Box::new(|_| panic!("refused endowment must not call host")),
-            );
-            assert!(!result.completed);
-            assert_eq!(result.meter_raw, 0);
-            assert_eq!(result.dispatched, 0);
-            assert!(matches!(
-                result.halt,
-                Halt::NotImplemented("compartment:heap-endowment")
-            ));
-        }
+        assert_eq!(machine.rooted_realm_count(), 1);
+    }
+
+    #[test]
+    fn metered_evaluation_seeds_heap_endowments() {
+        let mut machine = Machine::new();
+        let mut compartment = machine.new_compartment();
+        let (code, symbols) = ironhorse_compile::compile_atoms("typeof x").unwrap();
+        let names = crate::parse_symbols(&symbols);
+        let id = names.iter().position(|name| name == "x").unwrap() as u16 + 1;
+        // A reference endowment now names a real slot in the machine's shared
+        // arena (slot 0 is the machine's boot global object), so it is seeded
+        // rather than refused.
+        compartment.define_global_id(
+            id,
+            Slot::of(Kind::Reference, Payload::Reference(crate::SlotIndex(0))),
+        );
+        let result = compartment.evaluate_with_symbols_metered(
+            machine.interp_mut(),
+            &code,
+            &symbols,
+            1,
+            Box::new(|_| true),
+        );
+        assert!(result.completed, "{:?}", result.halt);
+        assert_eq!(result.result, "object");
     }
 
     #[test]
     fn compartments_diverge_only_in_their_own_globals() {
-        let m = Machine::new();
+        let mut m = Machine::new();
         let program = read_global_program(7);
 
         let mut a = m.new_compartment();
@@ -1015,8 +1053,8 @@ mod tests {
         a.define_global_id(7, Slot::integer(1));
         b.define_global_id(7, Slot::integer(2));
 
-        let ra = a.evaluate(&program);
-        let rb = b.evaluate(&program);
+        let ra = a.evaluate(m.interp_mut(), &program);
+        let rb = b.evaluate(m.interp_mut(), &program);
 
         assert!(ra.completed && rb.completed, "both read their own binding");
         assert_eq!(ra.result, "1", "compartment A sees its own global");
@@ -1026,67 +1064,91 @@ mod tests {
     }
 
     #[test]
-    fn heap_backed_endowments_are_refused_before_anything_runs() {
-        // Each evaluation runs in a fresh arena, so an object, string,
-        // BigInt or symbol endowment would seed a dangling slot. Each is
-        // refused as a named skip, and the refusal is fail-closed: nothing
-        // ran.
-        use crate::value::{ChunkOffset, SlotIndex};
-        let heap_backed = [
-            Slot::of(Kind::Reference, Payload::Reference(SlotIndex(3))),
-            Slot::of(Kind::String, Payload::String(ChunkOffset(0))),
-            Slot::of(Kind::BigInt, Payload::BigInt(ChunkOffset(0))),
-            Slot::of(Kind::Symbol, Payload::Reference(SlotIndex(3))),
-        ];
-        for endowment in heap_backed {
-            let m = Machine::new();
-            let mut c = m.new_compartment();
-            c.define_global_id(7, Slot::integer(1));
-            c.define_global_id(8, endowment);
-            for outcome in [
-                c.evaluate(&read_global_program(7)),
-                c.evaluate_with_symbols(&read_global_program(7), b""),
-            ] {
-                assert!(!outcome.completed, "{endowment:?}");
-                assert_eq!(
-                    outcome.halt,
-                    Halt::NotImplemented("compartment:heap-endowment"),
-                    "{endowment:?}"
-                );
-                assert_eq!(outcome.dispatched, 0, "refused before dispatch");
-            }
-        }
-        // Arena-free primitives still seed.
-        let m = Machine::new();
+    fn heap_endowments_are_seeded_into_the_shared_realm() {
+        // The realm shares the machine's arenas, so a reference endowment
+        // names a real slot rather than a dangling index. It seeds and the
+        // program reads the object the machine holds (slot 0 is the machine's
+        // boot global object).
+        let mut m = Machine::new();
+        let object = Slot::of(Kind::Reference, Payload::Reference(crate::SlotIndex(0)));
+        let mut c = m.new_compartment();
+        c.define_global_id(7, Slot::integer(1));
+        c.define_global_id(8, object);
+        let outcome = c.evaluate(m.interp_mut(), &read_global_program(8));
+        assert!(outcome.completed, "{:?}", outcome.halt);
+        assert_eq!(outcome.result, "[object Object]");
+        // Arena-free primitives seed on the same path.
         let mut c = m.new_compartment();
         c.define_global_id(7, Slot::integer(1));
         c.define_global_id(8, Slot::boolean(true));
         c.define_global_id(9, Slot::undefined());
-        assert!(c.evaluate(&read_global_program(7)).completed);
+        assert!(
+            c.evaluate(m.interp_mut(), &read_global_program(7))
+                .completed
+        );
+    }
+
+    #[test]
+    fn an_evaluation_refuses_while_foreign_promise_jobs_are_queued() {
+        // A halted program can leave promise jobs queued. The jobs carry no
+        // realm identity, so draining them under another realm's code
+        // segments would run foreign code; evaluation refuses fail-closed
+        // until the host drains them.
+        let mut machine = Machine::new();
+        let mut a = machine.new_compartment();
+        let (code, symbols) =
+            ironhorse_compile::compile_atoms("Promise.resolve().then(function(){}); throw 1")
+                .unwrap();
+        let ra = a.evaluate_with_symbols(machine.interp_mut(), &code, &symbols);
+        assert!(!ra.completed);
+        assert!(machine.interp().has_pending_jobs());
+
+        let mut b = machine.new_compartment();
+        b.define_global_id(7, Slot::integer(1));
+        let refused = b.evaluate(machine.interp_mut(), &read_global_program(7));
+        assert_eq!(
+            refused.halt,
+            Halt::EngineInvariant("compartment:pending-jobs")
+        );
+        assert_eq!(
+            machine.rooted_realm_count(),
+            1,
+            "the refused evaluation must not mint a realm"
+        );
+
+        // The owning realm drains the queue, and evaluation proceeds.
+        assert!(a.drain_promise_jobs(machine.interp_mut()).completed);
+        let outcome = b.evaluate(machine.interp_mut(), &read_global_program(7));
+        assert!(outcome.completed, "{:?}", outcome.halt);
+        assert_eq!(outcome.result, "1");
     }
 
     #[test]
     fn unbound_global_read_throws_not_reads_a_sibling() {
-        let m = Machine::new();
+        let mut m = Machine::new();
         let program = read_global_program(9);
-        let a = m.new_compartment();
+        let mut a = m.new_compartment();
         // No binding for id 9 in this compartment: the read is a
         // ReferenceError, never a leak from a sibling compartment.
-        let r = a.evaluate(&program);
+        let r = a.evaluate(m.interp_mut(), &program);
         assert!(!r.completed, "an unbound global read does not complete");
     }
 
     #[test]
-    fn compartments_hold_one_intrinsics_marker() {
-        let m = Machine::new();
-        let a = m.new_compartment();
-        let b = m.new_compartment();
-        // Every compartment holds the SAME machine marker (one per
-        // machine). This is marker identity only: the evaluators build a
-        // fresh `Interp` per call, so no intrinsic *object* is shared —
-        // see the module documentation's realm decision.
-        assert!(Rc::ptr_eq(a.intrinsics(), b.intrinsics()));
-        assert!(Rc::ptr_eq(a.intrinsics(), m.intrinsics()));
+    fn compartments_share_one_primordial_graph() {
+        let mut m = Machine::new();
+        let mut a = m.new_compartment();
+        let mut b = m.new_compartment();
+        // A mutation of a primordial prototype in one compartment's realm is
+        // a mutation of the machine's one `Object.prototype`.
+        let (mutate, mutate_symbols) =
+            ironhorse_compile::compile_atoms("Object.prototype.__ihShared = 7; 0").unwrap();
+        let ra = a.evaluate_with_symbols(m.interp_mut(), &mutate, &mutate_symbols);
+        assert!(ra.completed, "{:?}", ra.halt);
+        let (probe, probe_symbols) = ironhorse_compile::compile_atoms("({}).__ihShared").unwrap();
+        let rb = b.evaluate_with_symbols(m.interp_mut(), &probe, &probe_symbols);
+        assert!(rb.completed, "{:?}", rb.halt);
+        assert_eq!(rb.result, "7", "the intrinsic graph is shared");
     }
 
     #[test]
@@ -1101,18 +1163,29 @@ mod tests {
     }
 
     #[test]
-    fn nested_compartment_chains_shared_intrinsics_fresh_globals() {
-        let m = Machine::new();
+    fn nested_compartment_chains_shared_graph_with_fresh_globals() {
+        let mut m = Machine::new();
         let mut outer = m.new_compartment();
         outer.define_global("x", Slot::integer(1));
-        let inner = outer.new_compartment();
-        // A Compartment created inside a compartment holds the machine's
-        // intrinsics marker...
-        assert!(Rc::ptr_eq(inner.intrinsics(), outer.intrinsics()));
-        // ...but has fresh globals (the outer's binding does not leak in)...
+        let mut inner = outer.new_compartment();
+        // A Compartment created inside a compartment shares the machine's
+        // primordial graph: a mutation the outer realm makes is visible to
+        // the inner realm's evaluation...
+        let (mutate, mutate_symbols) =
+            ironhorse_compile::compile_atoms("Object.prototype.__ihNested = 3; 0").unwrap();
+        assert!(
+            outer
+                .evaluate_with_symbols(m.interp_mut(), &mutate, &mutate_symbols)
+                .completed
+        );
+        // ...while the inner compartment's own globals are fresh (the
+        // outer's name-keyed endowment does not leak in)...
         assert!(inner.global("x").is_none());
-        // ...and a fresh, distinct globalThis identity.
+        // ...and it has a fresh, distinct globalThis identity.
         assert_ne!(inner.global_this(), outer.global_this());
+        let (probe, probe_symbols) = ironhorse_compile::compile_atoms("({}).__ihNested").unwrap();
+        let outcome = inner.evaluate_with_symbols(m.interp_mut(), &probe, &probe_symbols);
+        assert_eq!(outcome.result, "3");
     }
 
     #[test]
@@ -1136,15 +1209,15 @@ mod tests {
 
     #[test]
     fn endowment_id_is_seeded_into_the_evaluator() {
-        let m = Machine::new();
+        let mut m = Machine::new();
         let mut endowments_by_id = HashMap::new();
         endowments_by_id.insert(7u16, Slot::integer(99));
-        let c = m.compartment(CompartmentOptions {
+        let mut c = m.compartment(CompartmentOptions {
             endowments_by_id,
             ..Default::default()
         });
         // A program reading global id 7 observes the endowment.
-        let r = c.evaluate(&read_global_program(7));
+        let r = c.evaluate(m.interp_mut(), &read_global_program(7));
         assert!(r.completed);
         assert_eq!(r.result, "99");
     }

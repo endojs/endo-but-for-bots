@@ -64,11 +64,15 @@ Those representations serve different boundaries; neither implies UTF-8-only str
 BigInt, regexp, Intl, Temporal, promises, generators and disposal state are present.
 Their presence does not certify full test262 coverage or persistence of every live state.
 
-`Machine`, `Intrinsics` and `Compartment` are public VM types, but the current
-compartment evaluator creates an independently owned interpreter.
-`BootTemplate` speeds this by copying a pristine template; it is not shared frozen intrinsics.
+`Machine`, `Realm` and `Compartment` are public VM types.
+A `Machine` owns the shared interpreter, and `Compartment::evaluate*` installs
+a `Realm` namespace over that one primordial graph, relinks the program's
+symbol table onto the realm's persisted one, and parks the realm again — so
+compartments share every intrinsic object while keeping distinct globals.
 [W6 decision 1](../../designs/ironhorse-w6-decisions.md#1-realm--decided-extract-it)
-requires Realm extraction and retains the public surface meanwhile.
+decided this extraction and retained the public surface; the SES lockdown half
+(freezing the shared graph) remains F054, so untrusted realms must not yet
+share a machine.
 [W6 decision 2](../../designs/ironhorse-w6-decisions.md#2-engine-trait--deferred-and-here-is-the-trigger)
 defers a common daemon engine trait until its stated consumer/protocol trigger.
 Neither planned abstraction should be presented as already wired.

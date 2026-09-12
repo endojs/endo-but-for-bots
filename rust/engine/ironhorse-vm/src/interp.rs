@@ -1974,7 +1974,6 @@ enum ResumeStatus {
 }
 
 mod boot;
-pub(crate) use boot::BootTemplate;
 
 impl Default for Interp {
     fn default() -> Self {
@@ -2150,12 +2149,18 @@ impl Interp {
 
     /// Whether any intrinsic bindings have been installed for this realm.
     ///
-    /// Used by the compartment evaluator to refuse a permit narrowed *after*
-    /// linking (F144): binding is create-only, so an already-linked
-    /// interpreter cannot be un-bound and applying a stricter policy to it
-    /// would silently no-op.
+    /// A compartment's realm keeps its own `installed_names_len`, so this
+    /// answers for whichever realm is currently installed: false on a fresh
+    /// realm and true once a program has linked intrinsic globals into it.
     pub fn intrinsics_linked(&self) -> bool {
         self.installed_names_len > 0
+    }
+
+    /// The realm-table id the installed symbol table assigned to `name`, if
+    /// any. A host that recorded a global by a program-local id reads this
+    /// after relinking to translate that id onto the realm's persisted table.
+    pub fn symbol_id(&self, name: &str) -> Option<u16> {
+        self.symbol_ids.get(name).copied()
     }
 
     /// Attenuate which intrinsic **globals** this realm binds (F144).
@@ -2173,22 +2178,18 @@ impl Interp {
     /// unaffected, so a denied constructor remains reachable through a
     /// prototype's `.constructor` (`function(){}.constructor('return 42')()`
     /// still compiles and runs once a source compiler is installed).
-    /// Confinement needs the shared frozen intrinsic graph of the realm split
-    /// (F059), not this permit.
+    /// Confinement needs a frozen shared intrinsic graph, the SES lockdown
+    /// work F054.
     ///
-    /// Applying a permit to an already-linked interpreter through
-    /// [`crate::compartment::Compartment::evaluate_with_symbols_on`] is
-    /// refused as `compartment:permit-after-link`, because binding is
-    /// create-only and a narrower policy could not be enforced. Calling this
-    /// method directly on a linked interpreter is not refused, but it only
-    /// affects later links: a binding already made is not removed, so a
-    /// caller that needs to narrow an existing realm must use the compartment
-    /// entry (which refuses) rather than expect this call to revoke.
+    /// A compartment applies its realm's permit on each evaluation, before
+    /// relinking, so the policy is fixed by [`crate::CompartmentOptions`] at
+    /// compartment creation. Calling this method directly on a linked
+    /// interpreter only affects later links: a binding already made is not
+    /// removed.
     ///
     /// The permit is host configuration, not guest state, so it is not
     /// snapshotted; a restored realm's owner is expected to reapply it before
-    /// the next link, and [`crate::Machine`] users can hold a policy across
-    /// restore by setting it again.
+    /// the next link.
     pub fn set_intrinsic_permit(&mut self, permit: Option<&[&str]>) {
         self.intrinsic_permit =
             permit.map(|names| names.iter().map(|name| (*name).to_string()).collect());
@@ -2207,6 +2208,18 @@ impl Interp {
     pub fn define_global_id(&mut self, id: u16, value: Slot) {
         // Seeding a compartment global happens before the run, so it is
         // not metered (it is not a guest allocation the meter counts).
+        //
+        // Idempotent since the realm split: a realm persists across
+        // evaluations, so a re-seed updates the existing global property in
+        // place. Creating a second property for the same id would grow the
+        // property chain without bound and leave `delete` and the property
+        // index disagreeing about which entry is the binding.
+        if let Some(&property) = self.global_props.get(&id) {
+            let slot = self.slots.get_mut(property);
+            slot.kind = value.kind;
+            slot.value = value.value;
+            return;
+        }
         self.create_global_property(id, (value.kind, value.value));
     }
 
@@ -2222,6 +2235,21 @@ impl Interp {
     pub fn arm_meter(&mut self, interval: u64, host: Box<dyn FnMut(u64) -> bool>) {
         self.meter.begin(interval);
         self.meter_host = Some(host);
+    }
+
+    /// Replace this machine's meter and host callback wholesale — the
+    /// compartment evaluators' entry to per-evaluation metering. A machine
+    /// shared by many realms must not let one evaluation's meter state leak
+    /// into the next, so every evaluator installs its meter here before
+    /// linking and running. `None` host is the un-armed (never-consulted)
+    /// state, matching a fresh machine.
+    pub(crate) fn install_meter(
+        &mut self,
+        meter: crate::Meter,
+        host: Option<Box<dyn FnMut(u64) -> bool>>,
+    ) {
+        self.meter = meter;
+        self.meter_host = host;
     }
 
     /// Re-arm a RESUMED machine's meter without destroying the restored
@@ -2378,6 +2406,16 @@ impl Interp {
             .clone()
             .unwrap_or_else(|| std::rc::Rc::from([]));
         self.run_operation(code, false)
+    }
+
+    /// Drop this machine's queued promise jobs without running them. A job
+    /// names the realm (its `code_segments`) that queued it, so a host that
+    /// discards a realm must discard its jobs with it, or every later
+    /// realm's evaluation refuses (`compartment:pending-jobs`). The halted
+    /// run's heap effects remain; the dropped reaction state is reclaimed by
+    /// the next collection's liveness pass.
+    pub fn discard_pending_jobs(&mut self) {
+        self.promise_jobs.clear();
     }
 
     fn run_operation(&mut self, shared: std::rc::Rc<[u8]>, execute_script: bool) -> RunOutcome {

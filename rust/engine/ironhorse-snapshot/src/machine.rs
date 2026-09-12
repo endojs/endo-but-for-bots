@@ -208,12 +208,12 @@ impl MachineSnapshot for Interp {
         if !self.is_quiescent() {
             return Err(MachineSnapshotError::NotQuiescent);
         }
-        if self.parked_realm_count() > 0 {
-            // A parked realm's namespace lives only in this process; the
-            // roots are not snapshotted and the `Realm` handle cannot cross a
-            // store. Refuse rather than silently drop parked namespaces.
+        if self.rooted_realm_count() > 0 {
+            // A realm's namespace lives only in this process; the roots are
+            // not snapshotted and the `Realm` handle cannot cross a store.
+            // Refuse rather than silently drop a realm's namespace.
             return Err(MachineSnapshotError::PendingStateUnsupported {
-                row: "parked realm namespaces (multi-realm persistence is not supported)",
+                row: "live realm namespaces (multi-realm persistence is not supported)",
             });
         }
         if let Some(row) = self.stored_unpersistable_row() {

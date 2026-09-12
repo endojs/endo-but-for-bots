@@ -15,7 +15,7 @@ use endo::ironhorse_engine::engine::{
 
 #[test]
 fn ephemeral_machine_evaluates_dynamic_source() {
-    let machine = Machine::new();
+    let mut machine = Machine::new();
     assert_eq!(machine.eval("eval('1+1')").unwrap(), "2");
     assert_eq!(
         machine

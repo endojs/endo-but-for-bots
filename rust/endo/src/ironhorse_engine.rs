@@ -34,8 +34,8 @@ pub mod engine {
     pub use ironhorse_compile::compile_atoms_with;
     pub use ironhorse_vm::Machine as VmMachine;
     pub use ironhorse_vm::{
-        Compartment, GcStats, Halt, Heap, Intrinsics, Meter as VMeter, MeterCheck, MeterState,
-        ModuleGraph, ModuleSource, PanicKind, RunOutcome, Slot,
+        Compartment, GcStats, Halt, Heap, Meter as VMeter, MeterCheck, MeterState, ModuleGraph,
+        ModuleSource, PanicKind, RunOutcome, Slot,
     };
 
     /// Why an evaluation could not be carried out or did not complete.
@@ -638,21 +638,19 @@ pub mod engine {
     impl Machine {
         /// Create a fresh machine, metered under [`MeterBounds::default`].
         ///
-        /// Each `evaluate` gets an independent realm copied from a pristine
-        /// linked template; the machine's `Intrinsics` cache is not a shared
-        /// guest-visible primordial graph
-        /// (see `ironhorse_vm::compartment`'s realm decision).
+        /// Each `evaluate` gets a fresh compartment whose realm is created
+        /// over the machine's one shared primordial graph.
         pub fn new() -> Machine {
             Machine::with_bounds(MeterBounds::default())
         }
 
         /// Create a fresh machine under an explicit metering policy.
         pub fn with_bounds(bounds: MeterBounds) -> Machine {
-            let inner = VmMachine::new();
+            let mut inner = VmMachine::new();
             // The production source bridge (F160): a guest `eval("…")` or
             // `new Function(…)` compiles through `ironhorse_compile` instead
             // of halting on the un-armed `eval:no-compiler` gap. The compiler
-            // is machine-wide, so every fresh realm this machine evaluates in
+            // is machine-wide, so every compartment this machine mints
             // receives it.
             inner.set_source_compiler(std::rc::Rc::new(IronhorseSourceCompiler));
             Machine { inner, bounds }
@@ -668,12 +666,19 @@ pub mod engine {
         /// Compiles to bytecode **and its symbols atom**, then evaluates
         /// through `evaluate_with_symbols` so the intrinsics are linked —
         /// without the symbols atom the program's intrinsic references
-        /// would not resolve. Each evaluation is a fresh interpreter, so
-        /// its meter starts at zero and the crank limit is the ceiling
-        /// itself. A refused program comes back with `completed: false`
+        /// would not resolve. Each evaluation installs a fresh realm over the
+        /// machine's shared graph, so its globals are empty and the crank
+        /// limit is the ceiling itself; the realm is released after the run,
+        /// so a long-lived machine does not accumulate realm roots. A halted
+        /// run's queued promise jobs are discarded with the realm.
+        /// A refused program comes back with `completed: false`
         /// and `halt: Halt::MeterAbort`; [`Machine::eval`] maps that to
         /// [`MachineError::MeterAbort`].
-        pub fn evaluate(&self, source: &str, strict: bool) -> Result<EvalOutcome, MachineError> {
+        pub fn evaluate(
+            &mut self,
+            source: &str,
+            strict: bool,
+        ) -> Result<EvalOutcome, MachineError> {
             let mut meter = VMeter::new();
             let mut host = match (self.bounds.check_interval(), self.bounds.crank_limit()) {
                 (Some(interval), Some(limit)) => {
@@ -694,21 +699,27 @@ pub mod engine {
                 }
                 Err(error) => return Err(error),
             };
-            let comp = self.inner.new_compartment();
-            Ok(eval_outcome(
-                comp.evaluate_with_symbols_continuing_meter_shared(
-                    bytecode.into(),
-                    &symbols,
-                    meter,
-                    host,
-                ),
-                0,
-            ))
+            let mut comp = self.inner.new_compartment();
+            let outcome = comp.evaluate_with_symbols_continuing_meter_shared(
+                self.inner.interp_mut(),
+                bytecode.into(),
+                &symbols,
+                meter,
+                host,
+            );
+            // A fresh-realm embedder has no later use for a halted run's
+            // queued promise jobs, and the next evaluation would refuse
+            // while they are queued: discard them with the realm.
+            if self.inner.interp().has_pending_jobs() {
+                self.inner.interp_mut().discard_pending_jobs();
+            }
+            comp.release(self.inner.interp_mut());
+            Ok(eval_outcome(outcome, 0))
         }
 
         /// Evaluate and return only the completion value, failing when
         /// the program did not complete.
-        pub fn eval(&self, source: &str) -> Result<String, MachineError> {
+        pub fn eval(&mut self, source: &str) -> Result<String, MachineError> {
             let outcome = self.evaluate(source, false)?;
             if outcome.completed {
                 Ok(outcome.result)
@@ -722,7 +733,7 @@ pub mod engine {
         }
 
         /// Strict-mode counterpart of [`Machine::eval`].
-        pub fn eval_strict(&self, source: &str) -> Result<String, MachineError> {
+        pub fn eval_strict(&mut self, source: &str) -> Result<String, MachineError> {
             let outcome = self.evaluate(source, true)?;
             if outcome.completed {
                 Ok(outcome.result)
@@ -735,16 +746,16 @@ pub mod engine {
             }
         }
 
-        /// This machine's intrinsics marker (not a shared primordial
-        /// graph — see `ironhorse_vm::compartment`).
-        pub fn intrinsics(&self) -> &Intrinsics {
-            self.inner.intrinsics().as_ref()
-        }
-
         /// The underlying VM machine, for callers that need the full
         /// engine surface.
         pub fn vm_machine(&self) -> &VmMachine {
             &self.inner
+        }
+
+        /// The underlying VM machine, mutable, for callers that evaluate a
+        /// compartment of their own over the shared graph.
+        pub fn vm_machine_mut(&mut self) -> &mut VmMachine {
+            &mut self.inner
         }
     }
 
@@ -761,7 +772,7 @@ pub mod engine {
             meter_raw: 0,
         })?;
         eprintln!("endor[run -e ironhorse]: {}", path.display());
-        let machine = Machine::new();
+        let mut machine = Machine::new();
         let outcome = machine.evaluate(&source, false)?;
         eprintln!(
             "endor[run -e ironhorse]: {} computrons ({} dispatched, meter_raw {})",
@@ -1723,10 +1734,14 @@ pub mod engine {
             let report = ironhorse_compile::compile_atoms_with_budget(source, false, u64::MAX);
             let raw = report.parse_meter_raw;
             let (code, symbols) = report.result.unwrap();
-            let baseline = ironhorse_vm::Machine::new()
-                .new_compartment()
-                .evaluate_with_symbols(&code, &symbols);
-            let machine = Machine::with_bounds(MeterBounds::Unbounded);
+            let mut baseline_machine = ironhorse_vm::Machine::new();
+            let mut baseline_compartment = baseline_machine.new_compartment();
+            let baseline = baseline_compartment.evaluate_with_symbols(
+                baseline_machine.interp_mut(),
+                &code,
+                &symbols,
+            );
+            let mut machine = Machine::with_bounds(MeterBounds::Unbounded);
             for _ in 0..3 {
                 let actual = machine.evaluate(source, false).unwrap();
                 assert!(actual.completed);
@@ -1737,7 +1752,7 @@ pub mod engine {
 
         #[test]
         fn top_level_admission_refuses_before_execution_and_retains_bill() {
-            let machine = Machine::with_bounds(MeterBounds::per_crank(32));
+            let mut machine = Machine::with_bounds(MeterBounds::per_crank(32));
             let source = format!("/*{}*/ 1", "x".repeat(1_000_000));
             let outcome = machine.evaluate(&source, false).unwrap();
             assert!(!outcome.completed);
@@ -1750,7 +1765,7 @@ pub mod engine {
         fn top_level_parse_error_retains_compile_bill() {
             let source = "var = ;";
             let report = ironhorse_compile::compile_atoms_with_budget(source, false, u64::MAX);
-            let machine = Machine::with_bounds(MeterBounds::Unbounded);
+            let mut machine = Machine::with_bounds(MeterBounds::Unbounded);
             match machine.evaluate(source, false) {
                 Err(MachineError::Compile { meter_raw, .. }) => {
                     assert_eq!(meter_raw, report.parse_meter_raw)
@@ -1766,7 +1781,7 @@ pub mod engine {
 
         #[test]
         fn evaluates_arithmetic_through_the_real_engine() {
-            let m = Machine::new();
+            let mut m = Machine::new();
             let outcome = m.evaluate("1 + 2", false).expect("compiles");
             assert!(outcome.completed, "halt: {:?}", outcome.halt);
             assert_eq!(outcome.result, "3");
@@ -1777,7 +1792,7 @@ pub mod engine {
 
         #[test]
         fn reports_meter_movement_between_programs() {
-            let m = Machine::new();
+            let mut m = Machine::new();
             let small = m.evaluate("1 + 1", false).expect("compiles");
             let bigger = m
                 .evaluate(
@@ -1797,7 +1812,7 @@ pub mod engine {
 
         #[test]
         fn compile_errors_surface_as_compile_errors() {
-            let m = Machine::new();
+            let mut m = Machine::new();
             match m.evaluate("var = ;", false) {
                 Err(MachineError::Compile { .. }) => {}
                 other => panic!("expected a compile error, got {other:?}"),

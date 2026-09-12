@@ -1184,18 +1184,18 @@ fn a_container_without_meter_identity_is_refused() {
 }
 
 #[test]
-fn a_parked_realm_refuses_every_persist_verb() {
-    // A parked realm's namespace is process-local host state: it cannot
+fn a_live_realm_refuses_every_persist_verb() {
+    // A live realm's namespace is process-local host state: it cannot
     // ride a snapshot and its handle cannot cross a store, so a machine
     // that holds one must not claim to be resumable.
     let mut machine = Interp::new();
     let mut realm = machine.new_realm();
     machine.swap_realm(&mut realm);
-    assert_eq!(machine.parked_realm_count(), 1);
+    assert_eq!(machine.rooted_realm_count(), 1);
     assert!(machine.is_quiescent());
     assert!(matches!(
         machine.write_snapshot(&sig()),
         Err(MachineSnapshotError::PendingStateUnsupported { row })
-            if row.contains("parked realm")
+            if row.contains("live realm")
     ));
 }

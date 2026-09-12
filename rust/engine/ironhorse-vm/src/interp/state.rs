@@ -143,14 +143,14 @@ pub struct Interp {
     #[gc_slots(none, none)]
     #[gc_weak(none)]
     #[snapshot_table(none)]
-    /// Global objects of the machine's **inactive** realms (F059). A machine
-    /// owns one slot/chunk arena and its primordial intrinsic graph; each
-    /// [`crate::Realm`] is a namespace that is swapped into the machine's
-    /// active realm fields while it runs. A parked realm's global object is
-    /// referenced by no active field, so the machine roots it here for as
-    /// long as the realm exists. Host bookkeeping, not guest state: it is not
-    /// snapshotted, and the single-realm persistent path keeps at most the
-    /// boot global in the list.
+    /// Global objects of the machine's realms (F059). A machine owns one
+    /// slot/chunk arena and its primordial intrinsic graph; each
+    /// [`crate::Realm`] is a namespace whose global object is rooted from
+    /// allocation. The active realm also roots through the `global_obj`
+    /// field, but the root set keeps every live realm (and the machine's
+    /// parked default global) alive across collections. Host bookkeeping,
+    /// not guest state: it is not snapshotted, and a machine holding any
+    /// realm refuses persistence.
     realm_roots: Vec<crate::value::SlotIndex>,
     #[boot_new(false)]
     #[boot_template(state.direct_eval_hoist)]
