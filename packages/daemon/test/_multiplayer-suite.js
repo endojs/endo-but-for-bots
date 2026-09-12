@@ -260,6 +260,76 @@ export const runMultiplayerSuite = ({ test, network }) => {
   });
 
   test.serial(
+    'adopted peer capabilities can be stored and revived by exact identity',
+    async t => {
+      t.timeout(30_000);
+      const { host: hostA, config: configA } =
+        await prepareHostWithGcAndNetwork(t);
+      const {
+        host: hostB,
+        config: configB,
+        cancelled: cancelledB,
+      } = await prepareHostWithGcAndNetwork(t);
+      const invitation = await E(hostA).invite('bob');
+      await E(hostB).accept(await E(invitation).locate(), 'alice');
+
+      const original = await E(hostA).makeDirectory('filesystem');
+      await E(original).writeText('identity', 'original-filesystem');
+      await E(hostA).send(
+        'bob',
+        ['Filesystem'],
+        ['filesystem'],
+        ['filesystem'],
+      );
+      const messages = await E(hostB).listMessages();
+      const message = messages.find(
+        item => item.type === 'package' && item.strings?.[0] === 'Filesystem',
+      );
+      t.truthy(message);
+      await E(hostB).adopt(message.number, 'filesystem', 'adopted');
+      const importedId = await E(hostB).identify('adopted');
+      const imported = await E(hostB).lookup('adopted');
+      t.is(imported, await E(hostB).lookupById(importedId));
+      const nested = await E(imported).lookup('identity');
+      await t.throwsAsync(
+        () => E(hostB).storeValue(harden({ file: nested }), 'unknown-nested'),
+        { message: /No corresponding formula/ },
+      );
+      await E(hostB).storeValue(harden({ filesystem: imported }), 'bundle');
+      const bundleId = await E(hostB).identify('bundle');
+      const { number: bundleNumber } = parseId(bundleId);
+      t.like(openTestDb(configB.statePath).readFormula(bundleNumber).formula, {
+        type: 'marshal',
+        slots: [importedId],
+      });
+
+      // Neither source nor importing public names may retarget the bundle.
+      // Keep the original explicitly rooted at its source; this test does not
+      // assume a distributed GC guarantee from the receiver's marshal slots.
+      await E(hostA).move(['filesystem'], ['original-filesystem']);
+      const replacement = await E(hostA).makeDirectory('filesystem');
+      await E(replacement).writeText('identity', 'replacement-filesystem');
+      await E(hostB).remove('adopted');
+      await E(hostB).storeValue('replacement', 'adopted');
+      await restart(configB);
+
+      const { host: revivedHostB } = await makeHost(configB, cancelledB);
+      const bundle = await E(revivedHostB).lookup('bundle');
+      t.is(
+        await E(bundle.filesystem).readText('identity'),
+        'original-filesystem',
+      );
+      t.is(bundle.filesystem, await E(revivedHostB).lookupById(importedId));
+      await E(revivedHostB).storeValue(bundle, 'copied-bundle');
+
+      // Reverse-map registration must not change the peer connection's
+      // cancellation semantics: a disconnected presence remains unusable.
+      await stop(configA);
+      await t.throwsAsync(() => E(bundle.filesystem).readText('identity'));
+    },
+  );
+
+  test.serial(
     'deleting invited guest and pin collects guest formulas',
     async t => {
       const { host: hostA, config: configA } =
