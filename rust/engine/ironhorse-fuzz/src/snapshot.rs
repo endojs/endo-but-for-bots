@@ -405,7 +405,7 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
     let opt_slot = |c: &mut Cursor| (c.byte() % 3 != 0).then(|| slot(c));
 
     let mut next_owner = 0u32;
-    let mut proxies: Vec<ironhorse_vm::ProxyRow> = Vec::new();
+    let mut proxies: Vec<ironhorse_vm::snapshot_api::ProxyRow> = Vec::new();
     for _ in 0..(c.byte() % 6) {
         if next_owner >= cap {
             break;
@@ -413,7 +413,7 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
         let owner = next_owner;
         next_owner += 1 + (c.byte() % 3) as u32;
         let revoked = c.byte() % 4 == 0;
-        proxies.push(ironhorse_vm::ProxyRow {
+        proxies.push(ironhorse_vm::snapshot_api::ProxyRow {
             owner,
             // A revoked proxy NULLs both edges (`SlotIndex::NULL`, not
             // index 0, which is a live slot): the decoder refuses a
@@ -432,14 +432,14 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
         });
     }
     let mut next_owner = 0u32;
-    let mut revokers: Vec<ironhorse_vm::ProxyRevokerRow> = Vec::new();
+    let mut revokers: Vec<ironhorse_vm::snapshot_api::ProxyRevokerRow> = Vec::new();
     for _ in 0..(c.byte() % 4) {
         if next_owner >= cap || proxies.is_empty() {
             break;
         }
         let owner = next_owner;
         next_owner += 1 + (c.byte() % 3) as u32;
-        revokers.push(ironhorse_vm::ProxyRevokerRow {
+        revokers.push(ironhorse_vm::snapshot_api::ProxyRevokerRow {
             owner,
             proxy: proxies[(c.byte() as usize) % proxies.len()].owner,
             // A name chunk is a real chunk-arena offset (or NULL), not
@@ -449,7 +449,7 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
     }
 
     let mut next_owner = 0u32;
-    let mut accessors: Vec<ironhorse_vm::AccessorRow> = Vec::new();
+    let mut accessors: Vec<ironhorse_vm::snapshot_api::AccessorRow> = Vec::new();
     for _ in 0..(c.byte() % 6) {
         if next_owner >= cap || names.is_empty() {
             break;
@@ -461,7 +461,7 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
         // outside the property-key tables. (Ids are 1-based: id `k + 1`
         // names `names[k]`.)
         next_owner += 1 + (c.byte() % 3) as u32;
-        accessors.push(ironhorse_vm::AccessorRow {
+        accessors.push(ironhorse_vm::snapshot_api::AccessorRow {
             owner,
             id: (c.u32() as usize % names.len()) as u16 + 1,
             get: opt_slot(&mut c),
@@ -481,14 +481,14 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
     // drawn -- and the brand is a slot index like any other, so it
     // comes from the live prefix.
     let mut next_receiver = 0u32;
-    let mut private_values: Vec<ironhorse_vm::PrivateValueRow> = Vec::new();
+    let mut private_values: Vec<ironhorse_vm::snapshot_api::PrivateValueRow> = Vec::new();
     for _ in 0..(c.byte() % 6) {
         if next_receiver >= cap || live_idxs.is_empty() {
             break;
         }
         let receiver = next_receiver;
         next_receiver += 1 + (c.byte() % 3) as u32;
-        private_values.push(ironhorse_vm::PrivateValueRow {
+        private_values.push(ironhorse_vm::snapshot_api::PrivateValueRow {
             receiver,
             brand: pick_ref(&mut c, &live_idxs).0,
             value: slot(&mut c),
@@ -499,14 +499,14 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
     // keeping the two disjoint means the generated image stays
     // adoptable as well as decodable.
     let mut next_receiver = next_receiver + 1;
-    let mut private_accessors: Vec<ironhorse_vm::PrivateAccessorRow> = Vec::new();
+    let mut private_accessors: Vec<ironhorse_vm::snapshot_api::PrivateAccessorRow> = Vec::new();
     for _ in 0..(c.byte() % 6) {
         if next_receiver >= cap || live_idxs.is_empty() {
             break;
         }
         let receiver = next_receiver;
         next_receiver += 1 + (c.byte() % 3) as u32;
-        private_accessors.push(ironhorse_vm::PrivateAccessorRow {
+        private_accessors.push(ironhorse_vm::snapshot_api::PrivateAccessorRow {
             receiver,
             brand: pick_ref(&mut c, &live_idxs).0,
             get: opt_slot(&mut c),
@@ -515,7 +515,7 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
     }
 
     let mut next_owner = 0u32;
-    let mut disposable_stacks: Vec<ironhorse_vm::DisposableStackRow> = Vec::new();
+    let mut disposable_stacks: Vec<ironhorse_vm::snapshot_api::DisposableStackRow> = Vec::new();
     for _ in 0..(c.byte() % 6) {
         if next_owner >= cap {
             break;
@@ -526,12 +526,12 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
         // A disposed stack ran its records to completion; the decoder
         // refuses one that still retains them.
         let n_records = if disposed { 0 } else { (c.byte() % 3) as usize };
-        disposable_stacks.push(ironhorse_vm::DisposableStackRow {
+        disposable_stacks.push(ironhorse_vm::snapshot_api::DisposableStackRow {
             owner,
             disposed,
             asynchronous: c.byte() % 2 == 0,
             records: (0..n_records)
-                .map(|_| ironhorse_vm::DisposalRecordRow {
+                .map(|_| ironhorse_vm::snapshot_api::DisposalRecordRow {
                     resource: slot(&mut c),
                     method: slot(&mut c),
                     pass_resource: c.byte() % 2 == 0,
@@ -553,12 +553,12 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
     let n_body = 4 + (c.byte() % 8) as u64;
     let func_owner = pick_ref(&mut c, &live_idxs);
     let function_state = if live_idxs.is_empty() {
-        ironhorse_vm::FunctionStateSnapshot::default()
+        ironhorse_vm::snapshot_api::FunctionStateSnapshot::default()
     } else {
-        ironhorse_vm::FunctionStateSnapshot {
+        ironhorse_vm::snapshot_api::FunctionStateSnapshot {
             native_names: None,
             segments: vec![vec![XS_CODE_END; n_body as usize]],
-            functions: vec![ironhorse_vm::FunctionRow {
+            functions: vec![ironhorse_vm::snapshot_api::FunctionRow {
                 owner: func_owner.0,
                 segment: Some(0),
                 body_start: Some(0),
@@ -579,7 +579,7 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
     let has_function = !function_state.functions.is_empty();
 
     let mut next_owner = 0u32;
-    let mut generators: Vec<ironhorse_vm::GeneratorRow> = Vec::new();
+    let mut generators: Vec<ironhorse_vm::snapshot_api::GeneratorRow> = Vec::new();
     for _ in 0..(c.byte() % 6) {
         if next_owner >= cap {
             break;
@@ -596,7 +596,7 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
         };
         let frame = (state != 2).then(|| {
             let n_locals = 1 + (c.byte() % 4) as usize;
-            ironhorse_vm::SavedFrameRow {
+            ironhorse_vm::snapshot_api::SavedFrameRow {
                 locals: (0..n_locals).map(|_| slot(&mut c)).collect(),
                 // A scope entry names a program symbol (1-based, in
                 // range) and a local of THIS frame; the ids ascend
@@ -626,7 +626,7 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
                 resume_pc: c.u32() as u64 % n_body,
             }
         });
-        generators.push(ironhorse_vm::GeneratorRow {
+        generators.push(ironhorse_vm::snapshot_api::GeneratorRow {
             state,
             owner,
             frame,
@@ -642,7 +642,7 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
     // real empty chunk, and the bounds gate refuses the null it
     // tolerates on other rows).
     let mut next_owner = 0u32;
-    let mut prms_promises: Vec<ironhorse_vm::PromiseRow> = Vec::new();
+    let mut prms_promises: Vec<ironhorse_vm::snapshot_api::PromiseRow> = Vec::new();
     for _ in 0..(c.byte() % 4) {
         if next_owner >= live_cap {
             break;
@@ -654,7 +654,7 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
         // capability must reference a resolving PAIR, so reactions
         // join below once the pair rows exist.
         let state = c.byte() % 3;
-        prms_promises.push(ironhorse_vm::PromiseRow {
+        prms_promises.push(ironhorse_vm::snapshot_api::PromiseRow {
             owner,
             state,
             result: slot(&mut c),
@@ -662,7 +662,7 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
             reactions: Vec::new(),
         });
     }
-    let mut prms_combinators: Vec<ironhorse_vm::CombinatorRow> = Vec::new();
+    let mut prms_combinators: Vec<ironhorse_vm::snapshot_api::CombinatorRow> = Vec::new();
     {
         let pending: Vec<usize> = prms_promises
             .iter()
@@ -684,7 +684,7 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
                 let results = sized[(c.byte() as usize) % sized.len()];
                 // A native element reaction carries NO capability —
                 // the decoder refuses populated slots on one.
-                let reaction = ironhorse_vm::PromiseReactionRow {
+                let reaction = ironhorse_vm::snapshot_api::PromiseReactionRow {
                     on_fulfilled: ironhorse_vm::Slot::undefined(),
                     on_rejected: ironhorse_vm::Slot::undefined(),
                     resolve: ironhorse_vm::Slot::undefined(),
@@ -705,7 +705,7 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
                     1 + c.u32() % results.length
                 };
                 let callback = Slot::of(Kind::Reference, Payload::Reference(func_owner));
-                prms_combinators.push(ironhorse_vm::CombinatorRow {
+                prms_combinators.push(ironhorse_vm::snapshot_api::CombinatorRow {
                     kind,
                     resolve: callback,
                     reject: callback,
@@ -719,7 +719,7 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
     // opposite polarity — exactly `fxPushPromiseFunctions`' mint (the
     // guard-coherence gate refuses anything else; a swept singleton
     // half is also honest but a pair exercises more of the codec).
-    let mut prms_functions: Vec<ironhorse_vm::PromiseFnRow> = Vec::new();
+    let mut prms_functions: Vec<ironhorse_vm::snapshot_api::PromiseFnRow> = Vec::new();
     let mut prms_guards: Vec<bool> = Vec::new();
     let mut pairs: Vec<(u32, u32)> = Vec::new();
     if !prms_promises.is_empty() && !offs.is_empty() {
@@ -736,7 +736,7 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
             let promise = prms_promises[(c.byte() as usize) % prms_promises.len()].owner;
             let name_chunk = pick_off(&mut c, &offs).0;
             for (function, reject) in [(resolve_fn, false), (reject_fn, true)] {
-                prms_functions.push(ironhorse_vm::PromiseFnRow {
+                prms_functions.push(ironhorse_vm::snapshot_api::PromiseFnRow {
                     function,
                     promise,
                     reject,
@@ -762,9 +762,8 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
                 let host = pending[(c.byte() as usize) % pending.len()];
                 let (resolve_fn, reject_fn) = pairs[(c.byte() as usize) % pairs.len()];
                 let fn_ref = |f: u32| Slot::of(Kind::Reference, Payload::Reference(SlotIndex(f)));
-                prms_promises[host]
-                    .reactions
-                    .push(ironhorse_vm::PromiseReactionRow {
+                prms_promises[host].reactions.push(
+                    ironhorse_vm::snapshot_api::PromiseReactionRow {
                         on_fulfilled: slot(&mut c),
                         on_rejected: slot(&mut c),
                         resolve: fn_ref(resolve_fn),
@@ -772,11 +771,12 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
                         kind: c.byte() % 2,
                         a: 0,
                         b: 0,
-                    });
+                    },
+                );
             }
         }
     }
-    let promise_cluster = ironhorse_vm::PromiseClusterSnapshot {
+    let promise_cluster = ironhorse_vm::snapshot_api::PromiseClusterSnapshot {
         unhandled_rejection: None,
         async_instances: Vec::new(),
         promises: prms_promises,
@@ -796,9 +796,9 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
     )
     .with_meter(meter)
     .with_function_state(function_state)
-    .with_proxy_state(ironhorse_vm::ProxyStateSnapshot { proxies, revokers })
+    .with_proxy_state(ironhorse_vm::snapshot_api::ProxyStateSnapshot { proxies, revokers })
     .with_accessors(accessors)
-    .with_private_elements(ironhorse_vm::PrivateElementSnapshot {
+    .with_private_elements(ironhorse_vm::snapshot_api::PrivateElementSnapshot {
         values: private_values,
         accessors: private_accessors,
     })

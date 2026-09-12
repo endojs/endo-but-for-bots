@@ -45,7 +45,7 @@ fn native_name_restore_rejects_non_native_owners_and_invalid_offsets() {
 fn pruning_followed_by_invalid_guest_metadata_cannot_publish_a_machine() {
     let mut restored = session();
     restored.restore_native_names(Some(&[])).unwrap();
-    let mut invalid = ironhorse_vm::FunctionStateSnapshot::default();
+    let mut invalid = ironhorse_vm::snapshot_api::FunctionStateSnapshot::default();
     invalid.ctor_prototypes.push((0, 0));
     let error = restored.restore_function_state(invalid).unwrap_err();
     assert_eq!(error.row, "Functions");

@@ -168,6 +168,12 @@ class Repository(unittest.TestCase):
     def test_format_helper_inputs(self):
         self.assertTrue(self.selected("rust/engine/scripts/generate-compiler-opcodes.py")["format-ironhorse"])
 
+    def test_row_schema_guard_inputs(self):
+        for path in ["rust/engine/scripts/check-row-schema.py",
+                     "rust/engine/scripts/test-row-schema.py",
+                     "rust/engine/ironhorse-snapshot/tests/fixtures/row_schema_releases.tsv"]:
+            self.assertTrue(self.selected(path)["format-ironhorse"], path)
+
     def test_deleted_type_target_selects_uniformity(self):
         self.assertTrue(self.selected("packages/cbor/types-index.d.ts")["package-uniformity"])
 

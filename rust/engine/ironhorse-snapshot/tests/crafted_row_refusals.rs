@@ -1026,7 +1026,7 @@ fn a_crafted_reaction_capability_is_refused() {
     let image = read_machine(&bytes, &sig()).expect("reads");
     fn reaction_of(
         img: &mut ironhorse_snapshot::image::MachineImage,
-    ) -> &mut ironhorse_vm::PromiseReactionRow {
+    ) -> &mut ironhorse_vm::snapshot_api::PromiseReactionRow {
         img.promise_cluster
             .promises
             .iter_mut()

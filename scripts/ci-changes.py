@@ -316,6 +316,8 @@ def classify(paths, graphs, all_jobs=False):
             "rust/engine/scripts/test-math-vectors.py", "rust/engine/scripts/compare-math-vectors.py",
             "rust/engine/scripts/test-lockfile-agreement.py", "rust/engine/scripts/check-lockfile-agreement.py",
             "rust/engine/scripts/test-compiler-opcodes.py", "rust/engine/scripts/generate-compiler-opcodes.py",
+            "rust/engine/scripts/check-row-schema.py", "rust/engine/scripts/test-row-schema.py",
+            "rust/engine/ironhorse-snapshot/tests/fixtures/row_schema_releases.tsv",
         }:
             jobs["format-ironhorse"] = True
         if path in {

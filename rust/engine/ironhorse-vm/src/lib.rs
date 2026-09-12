@@ -34,12 +34,16 @@ pub use snapshot_dirty::{SnapshotBaseline, SnapshotDirty, SnapshotSection};
 pub mod compartment;
 pub mod cost;
 pub mod default_keys;
+#[doc(hidden)]
+pub mod diagnostics;
 pub mod gc;
 pub mod halt_labels;
-pub mod interp;
+mod interp;
 pub mod intl_number;
 pub mod meter;
+pub mod snapshot_api;
 pub use ironhorse_meter as cost_table;
+pub use ironhorse_meter::PROGRAM_INVOCATION_COMPUTRONS;
 pub mod module;
 pub mod opcode;
 mod property_index;
@@ -57,16 +61,9 @@ pub use gc::{GcStats, Heap};
 #[doc(hidden)]
 pub use interp::SIDE_TABLES;
 pub use interp::{
-    dtf_component_key_static, error_name_static, AccessorRow, ArraySnapshot, AsyncRow,
-    BoundFunctionRow, CollatorData, CollectionSnapshot, CombinatorRow, CompiledSource,
-    DateTimeFormatData, DisposableStackRow, DisposalRecordRow, FunctionRow, FunctionStateSnapshot,
-    GeneratorRow, Halt, IndexPropsSnapshot, Interp, IntlBoundFunctionRow, IntlTables, IteratorRow,
-    ListFormatData, LocaleData, Native, NumberFormatData, PanicKind, PluralRulesData,
-    PrivateAccessorRow, PrivateElementSnapshot, PrivateValueRow, PromiseClusterSnapshot,
-    PromiseFnRow, PromiseReactionRow, PromiseRow, ProxyRevokerRow, ProxyRow, ProxyStateSnapshot,
-    RelinkError, RestoreError, RestoreSession, RunOutcome, SavedFrameRow, SavedJumpRow,
-    SegmentIteratorData, SegmenterData, SegmentsData, SourceCompileError, SourceCompiler,
-    PROGRAM_INVOCATION_COMPUTRONS, TYPED_ARRAY_TYPES,
+    dtf_component_key_static, error_name_static, CompiledSource, Halt, Interp, Native, PanicKind,
+    RelinkError, RestoreError, RestoreSession, RunOutcome, SourceCompileError, SourceCompiler,
+    TYPED_ARRAY_TYPES,
 };
 pub use interp::{DecodeError, Realm};
 pub use interp::{HEAVY_FRAME_COST, LIGHT_FRAME_COST, NATIVE_DEPTH_LIMIT};
@@ -107,6 +104,11 @@ pub const NATIVE_STACK_BYTES: usize = if cfg!(debug_assertions) {
     8 * 1024 * 1024
 };
 
+/// The implementation module is deliberately private:
+/// ```compile_fail
+/// use ironhorse_vm::interp::Interp;
+/// ```
+///
 /// Run a program bytecode buffer (as emitted by the XS compiler) on
 /// a fresh interpreter, returning the completion value and computrons
 /// in the ORACLE HARNESS's shape ([`RunOutcome::host_coerced`]): these

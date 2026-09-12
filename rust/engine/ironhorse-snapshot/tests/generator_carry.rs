@@ -357,7 +357,7 @@ fn generator_pcs_outside_the_owning_body_are_refused() {
         .as_mut()
         .unwrap()
         .jumps
-        .push(ironhorse_vm::SavedJumpRow {
+        .push(ironhorse_vm::snapshot_api::SavedJumpRow {
             target_pc: starts[1],
             segment: None,
             stack_offset: 0,

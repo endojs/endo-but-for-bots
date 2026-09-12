@@ -291,9 +291,9 @@ mod tests {
             (
                 5,
                 "GlobalProps",
-                "global_props",
+                "realm.global_props",
                 Coverage::RebuiltAtRestore,
-                Some("global_props"),
+                Some("realm"),
             ),
             (
                 6,
@@ -551,12 +551,12 @@ mod tests {
             assert_eq!(raw.coverage, format!("{:?}", expected.3));
             assert_eq!(raw.primary_field, expected.4);
             if let Some(field) = raw.primary_field {
-                assert!(ironhorse_vm::interp::INTERP_FIELDS
+                assert!(ironhorse_vm::diagnostics::INTERP_FIELDS
                     .iter()
                     .any(|(name, _)| *name == field));
             }
         }
-        assert!(!ironhorse_vm::interp::INTERP_FIELDS
+        assert!(!ironhorse_vm::diagnostics::INTERP_FIELDS
             .iter()
             .any(|(name, _)| *name == "Modules"));
     }
@@ -589,7 +589,7 @@ mod tests {
     #[test]
     fn ledger_classification_reconciles_with_the_interp_struct() {
         let src = include_str!("../../ironhorse-vm/src/interp/boot.rs");
-        let fields: Vec<&str> = ironhorse_vm::interp::INTERP_FIELDS
+        let fields: Vec<&str> = ironhorse_vm::diagnostics::INTERP_FIELDS
             .iter()
             .map(|(name, _)| *name)
             .collect();
@@ -609,7 +609,7 @@ mod tests {
             "proxy_revokers",
             "call_stack",
             "jumps",
-            "global_props",
+            "realm",
             "error_data",
             "accessors",
             "wrapper_data",
@@ -665,8 +665,6 @@ mod tests {
         ];
         const ARENAS: &[&str] = &["slots", "chunks", "stack"];
         const SATELLITES: &[&str] = &[
-            // The PRMS suffix roots a promise whose row already carries its reason.
-            "unhandled_rejection",
             "detached_buffers",
             "shared_buffers",
             "deleted_fn_meta",
@@ -728,15 +726,18 @@ mod tests {
         const HOST_WIRING: &[&str] = &[
             // Embedding policy configured outside each activation.
             "eval_program_hoist",
+            // Shared machines refuse persistence; standalone boots keep these
+            // maps empty and the shared-profile bit false.
+            "inactive_realms",
+            "identity_roots",
+            "intrinsics_frozen",
             "meter_host",
-            "source_compiler",
             "cost",
             "step_limit",
             "n_dispatched",
         ];
         const BOOT_DERIVED: &[&str] = &[
             "intrinsics",
-            "global_obj",
             "intl_object",
             "temporal_object",
             "temporal_now_object",
@@ -911,6 +912,62 @@ mod tests {
         }
     }
 
+    fn realm_fields(source: &str) -> std::collections::BTreeSet<String> {
+        let source = ironhorse_vm::source_scan::code_only(source);
+        let body = source
+            .split("pub struct Realm {")
+            .nth(1)
+            .unwrap()
+            .split("\n}")
+            .next()
+            .unwrap();
+        body.lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| {
+                let (declaration, _) = line.split_once(':').expect("unclassified Realm field line");
+                declaration
+                    .split_whitespace()
+                    .last()
+                    .expect("Realm field name")
+                    .to_owned()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn realm_fields_have_an_explicit_standalone_persistence_policy() {
+        let source = include_str!("../../ironhorse-vm/src/interp/realm.rs");
+        let fields = realm_fields(source);
+        let extended = source.replacen(
+            "pub struct Realm {",
+            "pub struct Realm {\n    private_state: u32,",
+            1,
+        );
+        assert!(realm_fields(&extended).contains("private_state"));
+        assert_ne!(realm_fields(&extended), fields);
+        // Global head is boot-fingerprinted; its derived property map is rebuilt
+        // from slots. PRMS carries the unhandled reason. Owner/permit/compiler
+        // are host configuration; shared boot is explicitly unpersistable.
+        assert_eq!(
+            fields,
+            [
+                "global_obj",
+                "global_props",
+                "unhandled_rejection",
+                "owner",
+                "intrinsic_permit",
+                "source_compiler"
+            ]
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
+        );
+        let boot = include_str!("../../ironhorse-vm/src/interp/boot.rs");
+        assert!(boot.contains("self.realm.global_obj"));
+        let persist = include_str!("../../ironhorse-vm/src/interp/persist.rs");
+        assert!(persist.contains("if self.intrinsics_frozen {"));
+    }
+
     #[test]
     fn pending_is_derived_from_ledger() {
         let pending = SideTable::pending();
@@ -1032,7 +1089,7 @@ mod tests {
             include_str!("../../ironhorse-vm/src/interp/persist.rs"),
             include_str!("../../ironhorse-vm/src/interp/boundary.rs"),
         );
-        ironhorse_vm::interp::boundary::QUIESCENCE_SOURCE
+        ironhorse_vm::diagnostics::QUIESCENCE_SOURCE
             .lines()
             .map(|line| line.split_whitespace().collect::<String>())
             .collect::<Vec<_>>()

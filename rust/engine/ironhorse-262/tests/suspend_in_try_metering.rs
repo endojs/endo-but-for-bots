@@ -4,7 +4,7 @@
 //! handler-rebase (a throw after a resume lands in the catch that was live
 //! across the suspend). Results alone do not gate the meter: a throw
 //! unwinding to a rebased handler costs XS one extra bytecode dispatch
-//! (`ironhorse_vm::interp::RESUMED_HANDLER_THROW_METERING`), and a run
+//! (`ironhorse_vm::cost_table::RESUMED_HANDLER_THROW_METERING`), and a run
 //! missing it completes with exactly the right value.
 //!
 //! These snippets assert **bit-exactness** — completion, result, AND

@@ -507,10 +507,9 @@ pub mod engine {
     impl Machine {
         /// Create a fresh machine, metered under [`MeterBounds::default`].
         ///
-        /// Each `evaluate` gets an independent realm copied from a pristine
-        /// linked template; the machine's `Intrinsics` cache is not a shared
-        /// guest-visible primordial graph
-        /// (see `ironhorse_vm::compartment`'s realm decision).
+        /// Each `evaluate` creates a fresh Realm on the VM machine's shared
+        /// heap and frozen primordial graph. Persistent workers below use a
+        /// standalone `Interp`; shared-Realm snapshots are not yet supported.
         pub fn new() -> Machine {
             Machine::with_bounds(MeterBounds::default())
         }
@@ -533,7 +532,7 @@ pub mod engine {
         /// Compiles to bytecode **and its symbols atom**, then evaluates
         /// through `evaluate_with_symbols` so the intrinsics are linked —
         /// without the symbols atom the program's intrinsic references
-        /// would not resolve. Each evaluation is a fresh interpreter, so
+        /// would not resolve. Each evaluation has a fresh Realm and meter, so
         /// its meter starts at zero and the crank limit is the ceiling
         /// itself. A refused program comes back with `completed: false`
         /// and `halt: Halt::MeterAbort`; [`Machine::eval`] maps that to

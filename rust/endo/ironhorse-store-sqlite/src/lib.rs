@@ -1952,7 +1952,7 @@ mod tests {
                 slot.value = ironhorse_vm::Payload::Integer(0);
             }
         }
-        shrunk.function_state = ironhorse_vm::FunctionStateSnapshot::default();
+        shrunk.function_state = ironhorse_vm::snapshot_api::FunctionStateSnapshot::default();
         let prev = store.manifest().unwrap().seal;
         let mut batch = image_to_batch_unchecked(&shrunk, 2, &prev);
         batch.chunk_extents.clear();

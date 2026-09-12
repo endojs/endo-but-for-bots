@@ -3,12 +3,13 @@
 //! Owners, handles, code bytes and scalar metadata are not Slot records.
 use crate::image::{ArrayImage, CollectionImage, IndexPropsImage, MachineImage, WrapperImage};
 use crate::store::SmallState;
-use ironhorse_vm::{
+use ironhorse_vm::snapshot_api::{
     AccessorRow, AsyncRow, BoundFunctionRow, CombinatorRow, DisposableStackRow, DisposalRecordRow,
     FunctionStateSnapshot, GeneratorRow, PrivateAccessorRow, PrivateElementSnapshot,
     PrivateValueRow, PromiseClusterSnapshot, PromiseReactionRow, PromiseRow, SavedFrameRow,
-    SavedJumpRow, Slot,
+    SavedJumpRow,
 };
+use ironhorse_vm::Slot;
 
 // A sealed, compile-time classification. There is deliberately no impl for
 // Slot: metadata fields (including nested rows) cannot silently acquire one.
@@ -62,7 +63,7 @@ macro_rules! metadata_row {
 }
 metadata_row!(crate::image::BufferImage, [owner, data, length, flags]);
 metadata_row!(
-    ironhorse_vm::interp::CollatorData,
+    ironhorse_vm::snapshot_api::CollatorData,
     [
         locale,
         usage,
@@ -80,7 +81,7 @@ metadata_row!(
 metadata_row!(crate::image::DataViewImage, [owner, buffer, offset, size]);
 metadata_row!(crate::image::DateImage, [owner, value_bits]);
 metadata_row!(
-    ironhorse_vm::interp::DateTimeFormatData,
+    ironhorse_vm::snapshot_api::DateTimeFormatData,
     [
         locale,
         calendar,
@@ -95,7 +96,7 @@ metadata_row!(
 );
 metadata_row!(crate::image::ErrorImage, [owner, name, message, frames]);
 metadata_row!(
-    ironhorse_vm::interp::FunctionRow,
+    ironhorse_vm::snapshot_api::FunctionRow,
     [
         owner,
         segment,
@@ -111,11 +112,11 @@ metadata_row!(
     ]
 );
 metadata_row!(
-    ironhorse_vm::interp::IntlBoundFunctionRow,
+    ironhorse_vm::snapshot_api::IntlBoundFunctionRow,
     [kind, function, owner, name, name_chunk, arity]
 );
 metadata_row!(
-    ironhorse_vm::interp::IntlTables,
+    ironhorse_vm::snapshot_api::IntlTables,
     [
         locales,
         collators,
@@ -129,12 +130,15 @@ metadata_row!(
     ]
 );
 metadata_row!(
-    ironhorse_vm::interp::IteratorRow,
+    ironhorse_vm::snapshot_api::IteratorRow,
     [owner, kind, iterable, index, done, result, enum_keys, str_bytes]
 );
-metadata_row!(ironhorse_vm::interp::ListFormatData, [locale, kind, style]);
 metadata_row!(
-    ironhorse_vm::interp::LocaleData,
+    ironhorse_vm::snapshot_api::ListFormatData,
+    [locale, kind, style]
+);
+metadata_row!(
+    ironhorse_vm::snapshot_api::LocaleData,
     [tag, language, script, region, variants, unicode]
 );
 metadata_row!(
@@ -148,7 +152,7 @@ metadata_row!(
     ]
 );
 metadata_row!(
-    ironhorse_vm::interp::NumberFormatData,
+    ironhorse_vm::snapshot_api::NumberFormatData,
     [
         locale,
         numbering_system,
@@ -176,7 +180,7 @@ metadata_row!(
     ]
 );
 metadata_row!(
-    ironhorse_vm::interp::PluralRulesData,
+    ironhorse_vm::snapshot_api::PluralRulesData,
     [
         locale,
         kind,
@@ -194,19 +198,19 @@ metadata_row!(
     ]
 );
 metadata_row!(
-    ironhorse_vm::interp::PromiseFnRow,
+    ironhorse_vm::snapshot_api::PromiseFnRow,
     [function, promise, reject, guard, name_chunk]
 );
 metadata_row!(
-    ironhorse_vm::interp::ProxyRevokerRow,
+    ironhorse_vm::snapshot_api::ProxyRevokerRow,
     [owner, proxy, name_chunk]
 );
 metadata_row!(
-    ironhorse_vm::interp::ProxyRow,
+    ironhorse_vm::snapshot_api::ProxyRow,
     [owner, target, handler, revoked]
 );
 metadata_row!(
-    ironhorse_vm::interp::ProxyStateSnapshot,
+    ironhorse_vm::snapshot_api::ProxyStateSnapshot,
     [proxies, revokers]
 );
 metadata_row!(
@@ -215,12 +219,15 @@ metadata_row!(
 );
 metadata_row!(crate::image::RegistryImage, [key, descriptor]);
 metadata_row!(
-    ironhorse_vm::interp::SegmentIteratorData,
+    ironhorse_vm::snapshot_api::SegmentIteratorData,
     [segments_inst, pos]
 );
-metadata_row!(ironhorse_vm::interp::SegmenterData, [locale, granularity]);
 metadata_row!(
-    ironhorse_vm::interp::SegmentsData,
+    ironhorse_vm::snapshot_api::SegmenterData,
+    [locale, granularity]
+);
+metadata_row!(
+    ironhorse_vm::snapshot_api::SegmentsData,
     [units, segments, granularity]
 );
 metadata_row!(crate::image::SymbolKeyImage, [next_id, pairs]);
