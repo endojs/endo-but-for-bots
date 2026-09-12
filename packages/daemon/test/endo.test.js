@@ -879,36 +879,36 @@ test('provideGuest accepts a caller-selected guest pins directory', async t => {
 
 test('provideGuest accepts a caller-selected networks directory', async t => {
   const { host } = await prepareHost(t);
-  const nets = await E(host).makeDirectory('delegated-nets');
+  const networks = await E(host).makeDirectory('delegated-nets');
   const guest = await E(host).provideGuest('guest', {
     agentName: 'guest-agent',
-    networks: nets,
+    networks,
   });
 
   await E(host).storeValue(10, 'network-marker');
   const markerId = await E(host).identify('network-marker');
-  await E(nets).storeIdentifier(['loopback'], markerId);
+  await E(networks).storeIdentifier(['loopback'], markerId);
 
   t.deepEqual(await E(guest).list('@nets'), ['loopback']);
 
   const guestId = await E(host).identify('guest-agent');
   const guestRecord = await E(E(host).diagnostics()).getFormula(guestId);
-  const netsId = await E(host).identify('delegated-nets');
-  t.is(guestRecord.properties.networks.identifier, netsId);
+  const networksId = await E(host).identify('delegated-nets');
+  t.is(guestRecord.properties.networks.identifier, networksId);
 });
 
 test('provideGuest preserves a read-only networks attenuation', async t => {
   const { host } = await prepareHost(t);
-  const nets = await E(host).makeDirectory('delegated-nets');
-  const readOnlyNets = await E(nets).readOnly();
+  const networks = await E(host).makeDirectory('delegated-nets');
+  const readOnlyNetworks = await E(networks).readOnly();
   const guest = await E(host).provideGuest('guest', {
     agentName: 'guest-agent',
-    networks: readOnlyNets,
+    networks: readOnlyNetworks,
   });
 
   await E(host).storeValue(10, 'network-marker');
   const markerId = await E(host).identify('network-marker');
-  await E(nets).storeIdentifier(['loopback'], markerId);
+  await E(networks).storeIdentifier(['loopback'], markerId);
 
   t.deepEqual(await E(guest).list('@nets'), ['loopback']);
   await t.throwsAsync(E(guest).storeIdentifier(['@nets', 'other'], markerId), {
@@ -917,12 +917,12 @@ test('provideGuest preserves a read-only networks attenuation', async t => {
 
   const guestId = await E(host).identify('guest-agent');
   const guestRecord = await E(E(host).diagnostics()).getFormula(guestId);
-  const readOnlyNetsRecord = await E(E(host).diagnostics()).getFormula(
+  const readOnlyNetworksRecord = await E(E(host).diagnostics()).getFormula(
     guestRecord.properties.networks.identifier,
   );
-  const netsId = await E(host).identify('delegated-nets');
-  t.is(readOnlyNetsRecord.type, 'readable-directory');
-  t.is(readOnlyNetsRecord.properties.directory.identifier, netsId);
+  const networksId = await E(host).identify('delegated-nets');
+  t.is(readOnlyNetworksRecord.type, 'readable-directory');
+  t.is(readOnlyNetworksRecord.properties.directory.identifier, networksId);
 });
 
 test('provideGuest rejects a non-daemon-minted pins reference', async t => {
@@ -1346,11 +1346,16 @@ testNeedsNodeWorker('persist confined services and their requests', async t => {
 
 // Integration test for endojs/endo-but-for-bots#1125.
 //
-// Story: a guest is serviced by a host-pinned agent caplet that answers every
-// message the guest receives and then dismisses it. Whether the worker holding
-// the agent is cancelled, or the whole daemon is restarted, re-incarnating the
-// pinned agent must resume the guest's autonomous responses — the durable
-// formula, not any live process, is what carries the behavior across the gap.
+// Story: a guest is serviced by an agent caplet, retained in the guest's pin
+// directory, that answers every message the guest receives and then dismisses
+// it. Whether the worker holding the agent is cancelled, or the whole daemon is
+// restarted, the caplet must resume the guest's autonomous responses without an
+// explicit lookup: delivering a message to the guest's mailbox auto-reincarnates
+// its pinned formulas (reincarnateMailboxPins), so the durable formula, not any
+// live process — and not a manual revival — is what carries the behavior across
+// the gap. The tests therefore never look the responder up before the
+// post-gap send; deleting the reincarnateMailboxPins call in deliver() makes
+// them hang for lack of any acknowledgement.
 
 const autoResponderLocation = url.pathToFileURL(
   path.join(dirname, 'test', 'auto-responder-agent.js'),
@@ -1359,27 +1364,39 @@ const autoResponderLocation = url.pathToFileURL(
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 /**
- * Provision a guest whose mailbox is serviced by the host-pinned
- * auto-responder caplet running in a dedicated named worker. Returns the guest
- * agent facet (for inbox inspection).
+ * Provision a guest whose mailbox is serviced by an auto-responder caplet
+ * running in a dedicated named worker. The caplet is retained in the guest's
+ * own pin directory, which is exactly the set `reincarnateMailboxPins` re-warms
+ * on every delivery to the guest — so a message arriving at the guest revives
+ * the responder with no explicit lookup. Returns the guest agent facet (for
+ * inbox inspection).
  *
  * @param {any} host
  */
 const pinGuestResponder = async host => {
   await E(host).provideWorker(['responder-worker']);
+  // A caller-selected pin directory for the guest, so the test can retain the
+  // responder in the very directory reincarnateMailboxPins walks.
+  const pins = await E(host).makeDirectory('responder-pins');
   const guest = await E(host).provideGuest('responder', {
     agentName: 'responder-agent',
+    pins,
   });
   await E(host).makeUnconfined('responder-worker', autoResponderLocation, {
     powersName: 'responder-agent',
     resultName: 'auto-responder',
   });
+  // Pin the responder into the guest's pin directory. This is the retention
+  // edge reincarnateMailboxPins follows on delivery: without it, a cancelled or
+  // restarted responder would stay dormant until something looked it up.
+  const responderId = await E(host).identify('auto-responder');
+  await E(pins).storeIdentifier(['auto-responder'], responderId);
   return guest;
 };
 
 /**
  * Send one prompt to the pinned guest and wait for the auto-responder's
- * matching acknowledgement (`ack:<prompt>`) to arrive in the sender host's own
+ * matching acknowledgement (`acknowledged:<prompt>`) to arrive in the sender host's own
  * inbox. Matching on the echoed prompt skips any backlog a fresh
  * `followMessages` replays after a restart.
  *
@@ -1387,7 +1404,7 @@ const pinGuestResponder = async host => {
  * @param {AsyncIterator<any>} hostMessages
  * @param {string} prompt
  */
-const sendAndAwaitAck = async (host, hostMessages, prompt) => {
+const sendAndAwaitAcknowledgement = async (host, hostMessages, prompt) => {
   await E(host).send('responder', [prompt], [], []);
   for (;;) {
     // eslint-disable-next-line no-await-in-loop
@@ -1395,7 +1412,7 @@ const sendAndAwaitAck = async (host, hostMessages, prompt) => {
     if (
       message.type === 'package' &&
       message.replyTo !== undefined &&
-      message.strings?.[0] === `ack:${prompt}`
+      message.strings?.[0] === `acknowledged:${prompt}`
     ) {
       return message;
     }
@@ -1432,7 +1449,7 @@ const assertDismissed = async (t, guest, prompt) => {
 };
 
 testNeedsNodeWorker(
-  'host-pinned guest responder survives worker cancellation (#1125)',
+  'pinned guest responder survives worker cancellation (#1125)',
   async t => {
     const { host } = await prepareHost(t);
     const guest = await pinGuestResponder(host);
@@ -1440,55 +1457,76 @@ testNeedsNodeWorker(
 
     // Baseline: the pinned agent answers the guest's messages and dismisses
     // them.
-    const ack0 = await sendAndAwaitAck(host, hostMessages, 'ping-0');
-    t.deepEqual(ack0.strings, ['ack:ping-0']);
+    const acknowledgement0 = await sendAndAwaitAcknowledgement(
+      host,
+      hostMessages,
+      'ping-0',
+    );
+    t.deepEqual(acknowledgement0.strings, ['acknowledged:ping-0']);
     await assertDismissed(t, guest, 'ping-0');
 
     // Cancel the worker containing the agent; its follow loop stops with it.
     await E(host).cancel('responder-worker');
 
-    // Re-incarnate the pinned agent. A fresh incarnation re-runs `make`, which
-    // restarts the follow loop against the still-durable guest mailbox; its
-    // response counter therefore starts back at zero.
-    const responder = await E(host).lookup('auto-responder');
-    t.is(await E(responder).respondedCount(), 0);
-
-    // The guest keeps responding to new messages.
-    const ack1 = await sendAndAwaitAck(host, hostMessages, 'ping-1');
-    t.deepEqual(ack1.strings, ['ack:ping-1']);
+    // Do NOT look the responder up: an explicit lookup would itself
+    // re-incarnate it and mask the feature under test. Instead, send another
+    // message. Delivering it to the guest's mailbox must auto-reincarnate the
+    // pinned responder (reincarnateMailboxPins), and only a live responder ever
+    // sends the acknowledgement this awaits — so if the reincarnation call is
+    // removed from deliver(), this hangs.
+    const acknowledgement1 = await sendAndAwaitAcknowledgement(
+      host,
+      hostMessages,
+      'ping-1',
+    );
+    t.deepEqual(acknowledgement1.strings, ['acknowledged:ping-1']);
     await assertDismissed(t, guest, 'ping-1');
+
+    // The revived responder is a fresh incarnation: its counter restarted at
+    // zero and now reads one, proving a new incarnation (not a survivor)
+    // answered the post-cancel message.
+    const responder = await E(host).lookup('auto-responder');
     t.is(await E(responder).respondedCount(), 1);
   },
 );
 
 testNeedsNodeWorker(
-  'host-pinned guest responder survives a daemon restart (#1125)',
+  'pinned guest responder survives a daemon restart (#1125)',
   async t => {
     const { cancelled, config, host } = await prepareHost(t);
     const guest = await pinGuestResponder(host);
     const hostMessages = iterateReader(E(host).followMessages());
 
     // Baseline: the pinned agent answers and dismisses before the restart.
-    const ack0 = await sendAndAwaitAck(host, hostMessages, 'ping-0');
-    t.deepEqual(ack0.strings, ['ack:ping-0']);
+    const acknowledgement0 = await sendAndAwaitAcknowledgement(
+      host,
+      hostMessages,
+      'ping-0',
+    );
+    t.deepEqual(acknowledgement0.strings, ['acknowledged:ping-0']);
     await assertDismissed(t, guest, 'ping-0');
 
     await restart(config);
 
     const { host: hostAfter } = await makeHost(config, cancelled);
-
-    // Re-incarnate the pinned agent after the restart; its counter starts
-    // fresh, proving a new incarnation (not a surviving process).
-    const responder = await E(hostAfter).lookup('auto-responder');
-    t.is(await E(responder).respondedCount(), 0);
-
-    const guestAfter = await E(hostAfter).lookup('responder-agent');
     const hostMessagesAfter = iterateReader(E(hostAfter).followMessages());
 
-    // The guest keeps responding to new messages after the restart.
-    const ack1 = await sendAndAwaitAck(hostAfter, hostMessagesAfter, 'ping-1');
-    t.deepEqual(ack1.strings, ['ack:ping-1']);
+    // Do NOT look the responder up after the restart. Sending to the guest must
+    // itself auto-reincarnate the pinned responder on delivery; the awaited
+    // acknowledgement can only come from a live, freshly-incarnated responder.
+    const acknowledgement1 = await sendAndAwaitAcknowledgement(
+      hostAfter,
+      hostMessagesAfter,
+      'ping-1',
+    );
+    t.deepEqual(acknowledgement1.strings, ['acknowledged:ping-1']);
+
+    const guestAfter = await E(hostAfter).lookup('responder-agent');
     await assertDismissed(t, guestAfter, 'ping-1');
+
+    // The counter reads one on the post-restart incarnation, proving a new
+    // incarnation (not a surviving process) answered.
+    const responder = await E(hostAfter).lookup('auto-responder');
     t.is(await E(responder).respondedCount(), 1);
   },
 );

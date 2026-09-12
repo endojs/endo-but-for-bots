@@ -40,7 +40,12 @@ export const make = async powers => {
           // Echo the prompt so each acknowledgement is distinguishable from a
           // backlog replayed by a fresh `followMessages` after a restart.
           const prompt = message.strings?.[0] ?? String(message.number);
-          await E(powers).reply(message.number, [`ack:${prompt}`], [], []);
+          await E(powers).reply(
+            message.number,
+            [`acknowledged:${prompt}`],
+            [],
+            [],
+          );
         }
         await E(powers).dismiss(message.number);
         responded += 1;
