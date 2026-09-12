@@ -83,7 +83,7 @@ const makeFakeClient = () => {
 const makeRecordingHost = () => {
   /** @type {Map<string, any>} */
   const names = new Map();
-  const evaluateCalls = [];
+  const storedValues = [];
   const makeUnconfinedCalls = [];
   const provideMountCalls = [];
   const cancelled = [];
@@ -106,9 +106,9 @@ const makeRecordingHost = () => {
     async cancel(namesPath, reason) {
       cancelled.push({ path: [...namesPath], reason: reason.message });
     },
-    async evaluate(_main, source, codeNames, petNames, resultName) {
-      evaluateCalls.push({ source, codeNames, petNames, resultName });
-      names.set(keyFor(resultName), harden({ kind: 'powers' }));
+    async storeValue(value, resultName) {
+      storedValues.push(value);
+      names.set(keyFor(resultName), value);
     },
     async provideMount(mountPath, name, options) {
       provideMountCalls.push({ path: mountPath, name, options });
@@ -124,7 +124,9 @@ const makeRecordingHost = () => {
       const cap =
         options.powersName === '@none'
           ? harden({ kind: 'fs', root: options.env.ENDO_FS_ROOT })
-          : client;
+          : specifier.endsWith('/session-powers.js')
+            ? harden({ kind: 'powers' })
+            : client;
       names.set(keyFor(options.resultName), cap);
       return cap;
     },
@@ -132,7 +134,7 @@ const makeRecordingHost = () => {
   return {
     host,
     names,
-    evaluateCalls,
+    storedValues,
     makeUnconfinedCalls,
     provideMountCalls,
     cancelled,
@@ -266,8 +268,8 @@ test('make() wires the provisioner and tool bridge into a working factory', asyn
 
   // The client formula env carries the pinned model, persona, session id, and
   // the MCP mount paths.
-  const clientCall = rec.makeUnconfinedCalls.find(
-    call => call.options.powersName !== '@none',
+  const clientCall = rec.makeUnconfinedCalls.find(call =>
+    call.specifier.endsWith('/opencode-client-module.js'),
   );
   t.is(clientCall.options.env.MODEL, 'openrouter/deepseek/deepseek-v4.1-flash');
   t.is(clientCall.options.env.SYSTEM_PROMPT, 'You are Floot.');
@@ -276,8 +278,8 @@ test('make() wires the provisioner and tool bridge into a working factory', asyn
   t.regex(clientCall.options.env.SESSION_ID, /^session-a-[0-9a-f]{12}$/);
   t.is(clientCall.options.env.MCP_CONFIG_PATH, '/endo-mcp/mcp.json');
   t.is(clientCall.options.env.MCP_INNER_DIR, '/endo-mcp');
-  t.true(rec.evaluateCalls[0].codeNames.includes('mcpMount'));
-  t.true(rec.evaluateCalls[0].codeNames.includes('stateProvider'));
+  t.true(Object.hasOwn(rec.storedValues[0], 'mcpMount'));
+  t.true(Object.hasOwn(rec.storedValues[0], 'stateProvider'));
 
   // The tool-bridge socket dir is mounted read-only into the slice.
   t.is(rec.provideMountCalls.length, 1);

@@ -33,7 +33,7 @@ const nodeFsModuleHref = pathToFileURL(
   ),
 ).href;
 
-// The per-session powers `evaluate` resolves `sandbox-factory` / `fs-mounter`
+// The factory resolves `sandbox-factory` / `fs-mounter` for the static powers bundle
 // eagerly (caps-by-reference) under the factory's directory, so they must
 // exist before a session is created. The real flow mints them in setup-host.js;
 // here we mint trivial stubs (setup-host.js mints the real ones; status()/the
@@ -437,7 +437,12 @@ test.serial(
     const findReply = async () => {
       const messages = /** @type {any[]} */ (await E(peer).listMessages());
       return messages.find(
-        m => m.type === 'package' && (m.names || []).includes('client'),
+        m =>
+          m.type === 'package' &&
+          ((m.names || []).includes('client') ||
+            (m.strings || []).some(text =>
+              text.startsWith('Error creating sandbox:'),
+            )),
       );
     };
     let reply;
@@ -450,6 +455,10 @@ test.serial(
       await new Promise(resolve => setTimeout(resolve, 250));
     }
     t.truthy(reply, 'factory replied with a client package');
+    t.true(
+      (reply.names || []).includes('client'),
+      (reply.strings || []).join('\n'),
+    );
 
     // Adopt the client and drive it across the mesh.
     await E(peer).adopt(reply.number, 'client', ['remote-client']);

@@ -725,6 +725,124 @@ test.serial(
   },
 );
 
+testNeedsNodeWorker.serial(
+  'static session powers retain exact dependencies across rebinding and restart',
+  async t => {
+    t.timeout(30_000);
+    const { cancelled, config } = await prepareConfig(t, { gcEnabled: true });
+    const modulePath = url.fileURLToPath(
+      new URL('../../hosted-agent/src/session-powers.js', import.meta.url),
+    );
+    let originalIds;
+    let bundleId;
+
+    {
+      const { host } = await makeHost(config, cancelled);
+      await E(host).makeDirectory('dependencies');
+      const factory = await E(host).makeDirectory(['dependencies', 'factory']);
+      const mounter = await E(host).makeDirectory(['dependencies', 'mounter']);
+      const filesystem = await E(host).makeDirectory('filesystem');
+      await E(factory).writeText('identity', 'original-factory');
+      await E(mounter).writeText('identity', 'original-mounter');
+      await E(filesystem).writeText('identity', 'original-filesystem');
+      const stateProvider = await E(host).evaluate(
+        '@main',
+        `makeExo('SessionState', M.interface('SessionState', {
+          provideSessionMount: M.call(M.string()).returns(M.promise()),
+          removeSession: M.call(M.string()).returns(M.promise()),
+        }), {
+          provideSessionMount: sessionId => E(filesystem).readText(sessionId),
+          removeSession: sessionId => E(filesystem).writeText('removed', sessionId),
+        })`,
+        ['filesystem'],
+        ['filesystem'],
+        'state-provider',
+      );
+      await E(filesystem).writeText('session-a', 'original-state');
+      originalIds = await Promise.all([
+        E(host).identify('dependencies', 'factory'),
+        E(host).identify('dependencies', 'mounter'),
+        E(host).identify('filesystem'),
+        E(host).identify('state-provider'),
+      ]);
+      await E(host).storeValue(
+        harden({
+          agent: await E(host).lookup('@agent'),
+          sandboxFactory: factory,
+          fsMounter: mounter,
+          filesystem,
+          stateProvider,
+          sessionId: 'session-a',
+          mounts: [],
+        }),
+        'powers-input',
+      );
+      bundleId = await E(host).identify('powers-input');
+      await E(host).makeUnconfined('@main', modulePath, {
+        powersName: 'powers-input',
+        resultName: 'session-powers',
+      });
+      const powersId = await E(host).identify('session-powers');
+      t.is(readFormulaFromDb(config.statePath, powersId).powers, bundleId);
+
+      // Remove all staging and original public bindings; only the static
+      // powers formula retains the marshal bundle and its original slots.
+      await E(host).remove('powers-input');
+      await E(host).remove('dependencies');
+      await E(host).remove('filesystem');
+      await E(host).remove('state-provider');
+      await E(host).makeDirectory('dependencies');
+      const replacement = await E(host).makeDirectory([
+        'dependencies',
+        'factory',
+      ]);
+      await E(replacement).writeText('identity', 'replacement-factory');
+      await E(host).storeValue('replacement', 'filesystem');
+      await E(host).storeValue('replacement', 'state-provider');
+      await E(host).storeValue('replacement', 'powers-input');
+      for (const id of [...originalIds, bundleId]) {
+        t.true(formulaExistsInDb(config.statePath, id));
+      }
+    }
+
+    await restart(config);
+
+    {
+      const { host } = await makeHost(config, cancelled);
+      const powers = await E(host).lookup('session-powers');
+      t.is(
+        await E(E(powers).sandboxFactory()).readText('identity'),
+        'original-factory',
+      );
+      t.is(
+        await E(E(powers).fsMounter()).readText('identity'),
+        'original-mounter',
+      );
+      const filesystem = await E(powers).filesystem();
+      t.is(await E(filesystem).readText('identity'), 'original-filesystem');
+      const provider = await E(powers).stateProvider();
+      t.is(await E(provider).provideSessionMount(), 'original-state');
+      await t.throwsAsync(() => E(provider).removeSession('session-b'), {
+        message: /restricted to its approved session/,
+      });
+      t.false(await E(filesystem).has('removed'));
+      await E(provider).removeSession();
+      t.is(await E(filesystem).readText('removed'), 'session-a');
+      // eslint-disable-next-line no-underscore-dangle
+      const methods = await E(powers).__getMethodNames__();
+      t.false(methods.includes('lookup'));
+      t.false(methods.includes('lookupById'));
+      t.false(methods.includes('agent'));
+      t.is(await E(powers).credentials(), null);
+
+      await E(host).remove('session-powers');
+      for (const id of [...originalIds, bundleId]) {
+        t.false(formulaExistsInDb(config.statePath, id));
+      }
+    }
+  },
+);
+
 test('fail to store non-formula exos', async t => {
   const noFormulaExo = makeExo('Exo', M.interface('Exo', {}), {});
   const { cancelled, config } = await prepareConfig(t);

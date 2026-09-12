@@ -103,6 +103,22 @@ The final identity check detects a prior rebind; it is not atomic compare-and-de
 and does not replace exclusive ownership.
 Shared supervisor and adapter wiring remain pending.
 
+## Session execution powers
+
+`session-powers.js` replaces generated powers source in Claude and OpenCode.
+The host resolves selected capabilities once and persists them with `storeValue`.
+A static daemon formula turns that bundle into resource accessors, exact mount
+path/name registration, and optional state access restricted to one session ID.
+Neither the host agent nor host lookup is exposed to the client.
+The input bundle and powers construction names remain until the client formula
+retains the chain of dependencies.
+
+This is an active execution bundle: reading it revives its capability references.
+It must not contain the client or replace the passive ownership records above.
+Real daemon tests cover name rebinding, GC, restart, and scoped state access.
+The module does not provide runtime reconciliation or ownership across failed
+client construction; those still belong to the session supervisor.
+
 ## Account visibility
 
 `account.js` and `account-oracle.js` answer what plan a credential is on, how

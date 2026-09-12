@@ -80,11 +80,15 @@ reader verifies effective placement without reviving or changing retained formul
 Rerunning host setup does not reapply runtime configuration.
 Live replacement and reconfiguration require a separate lifecycle operation.
 
-Provisioning for one host must be serialized, and factory/state-provider bindings
-must remain stable while dependent backends or sessions persist.
-Session powers currently use nested lookup formulas, which can resolve names again
-on revival; they do not durably pin the originally verified factory/provider IDs.
-Durable identity pinning is a separate pending increment.
+Provisioning for one host must be serialized.
+Session construction resolves dependency capabilities once, stores them in a host-only
+execution bundle, and uses the shared static `@endo/hosted-agent/session-powers.js` module.
+The client formula retains the powers formula, bundle, and original dependencies;
+revival no longer resolves nested factory/provider names against current bindings.
+Daemon acceptance covers rebinding, GC, restart, and session-scoped state access.
+This active bundle excludes the client and does not replace passive session records.
+Backend defaults and cleanup backstops still use mutable names and current paths, so
+factory/state-provider bindings must remain stable until durable-record adoption lands.
 
 This provisioning change does not complete resolver integration, broker-only policy,
 durable volume quota attestation, or live Linux acceptance.
