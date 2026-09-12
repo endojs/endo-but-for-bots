@@ -10,7 +10,7 @@ The architecture review is an independently revised record, not this guide's TOD
 
 ## Workspace and dependency direction
 
-`rust/engine/Cargo.toml` defines an independent workspace with **nine members**.
+`rust/engine/Cargo.toml` defines an independent workspace with **eleven members**.
 The repository's outer Cargo workspace excludes it but consumes its crates by path.
 A dependency arrow means the source crate imports the target crate.
 The [generated crate diagram](CRATE-GRAPH.md) includes optional and development edges.
@@ -22,6 +22,8 @@ is supplied through a trait owned by the VM.
 |---|---|
 | `ironhorse-meter` | Frozen weights, default keys, canonical digest, append-only release identities. |
 | `ironhorse-text` | CESU-8 encoding/decoding for symbol names, including lone surrogates. |
+| `ironhorse-unicode` | Pinned Unicode character classifications shared by compiler and runtime. |
+| `ironhorse-runtime` | Oracle-free compiler adapter installed by production embedders and the conformance harness. |
 | `ironhorse-vm` | Values, arenas, interpreter, built-ins, modules, collector and meter integration. |
 | `ironhorse-compile` | Lexer, parser, scoper, coder and budgeted source compilation. |
 | `ironhorse-regexp` | XSRE-derived regexp compiler and backtracking matcher. |
@@ -79,6 +81,11 @@ The VM owns `SourceCompiler` in `ironhorse-vm/src/interp.rs`.
 An embedder installs an implementation for dynamic source evaluation.
 This avoids a production VM-to-compiler dependency cycle.
 The compiler itself emits data the VM consumes, not an interpreter instance.
+`ironhorse-runtime::IronhorseSourceCompiler` assembles both crates above that seam.
+The conformance harness re-exports this adapter, and Endo installs it for ephemeral
+compartments and persistent machines at fresh boot, resume, and rewind.
+The adapter preserves UTF-16 source units, live charges, and receipt reconciliation.
+Its oracle-free tests run on the Linux debug/release and macOS engine lanes.
 
 `compile_source` receives source, strictness, a raw budget and an incremental
 charge callback, returning `CompiledSource` or `SourceCompileError`.
