@@ -536,6 +536,10 @@ New package `packages/opencode-sandbox/`.
 - Egress is unfiltered NAT unless the operator filters it.
 - Workspace config, instructions, and state are untrusted; config is
   host-generated with project config disabled, and `auth.json` is neutralized.
+- **Bridge stdout is untrusted UI text, not attestation.** In-slice processes
+  share the root-in-userns boundary and can forge bridge events or kill the
+  bridge; the host validates shapes but does not authenticate content. Never
+  base a recovery or authorization decision on bridge output alone.
 - MCP socket access control (mode, peer uid, connection bound) is a follow-up.
 
 ## Testing
@@ -619,6 +623,11 @@ New package `packages/opencode-sandbox/`.
 8. A product-level turn budget for the compaction-continue loop. The harness
    now reaps timed-out containers, but the backend still needs an explicit
    step/time cap rather than an external kill.
+9. Bridge queue dispatch after a `halt` idle can swallow a pipelined send
+   (bounded by the turn timer). The host client queues one turn at a time, so
+   this is outside the current contract; revisit with server-side turn
+   identity if pipelining is ever allowed. The bridge's UTF-16 SSE buffer cap
+   is also imprecise (a byte counter after frame extraction would be exact).
 
 ## Review record
 
