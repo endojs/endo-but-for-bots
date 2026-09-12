@@ -6,7 +6,7 @@ import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 
 import {
-  assertBrokerLeaseV1,
+  assertProviderGrantV1,
   assertContainerMounts,
   assertHostedAgentPolicyV1,
   makeCodexResourceProvisioner,
@@ -137,7 +137,7 @@ export const makeAttestedCodexSliceFactory = powers => {
     volumes.workspaceVolume !== volumes.stateVolume ||
       Fail`Session volumes must be distinct`;
     const lease = await E(brokerLease).attestation();
-    assertBrokerLeaseV1(lease, {
+    assertProviderGrantV1(lease, {
       sessionId,
       imageDigest,
       networkNamespaceId: lease?.networkNamespaceId,
@@ -170,7 +170,7 @@ export const makeAttestedCodexSliceFactory = powers => {
         version: 'CodexBrokerSandboxEvidenceV1',
         sessionId,
         imageDigest,
-        leaseId: lease.leaseId,
+        grantId: lease.grantId,
         networkNamespaceId: lease.networkNamespaceId,
         brokerSidecar,
         credentialInjection: 'broker-only',
@@ -330,7 +330,7 @@ export const makeAttestedCodexSliceFactory = powers => {
           slice,
           sessionId,
           imageDigest,
-          leaseId: lease.leaseId,
+          grantId: lease.grantId,
           networkNamespaceId: outer.networkNamespaceId,
           launchArgv,
           launchEnvironment: approvedEnvironment,
@@ -344,7 +344,7 @@ export const makeAttestedCodexSliceFactory = powers => {
           version: 'CodexRuntimeEvidenceV1',
           sessionId,
           imageDigest,
-          leaseId: lease.leaseId,
+          grantId: lease.grantId,
           networkNamespaceId: outer.networkNamespaceId,
           toolSandbox: 'codex-workspace-write',
           toolCodexHomeAccess: 'read-only',

@@ -294,7 +294,7 @@ LLM-agent stack).*
 
 | Design | Created | Updated | Status |
 |--------|---------|---------|--------|
-| [hosted-agent-sandbox-unification](hosted-agent-sandbox-unification.md) | 2026-09-12 | 2026-09-12 | Not Started |
+| [hosted-agent-sandbox-unification](hosted-agent-sandbox-unification.md) | 2026-09-12 | 2026-09-12 | In Progress |
 | [hosted-agent-broker-oauth](hosted-agent-broker-oauth.md) | 2026-09-08 | 2026-09-09 | In Progress |
 | [gateway-sites-publication](gateway-sites-publication.md) | 2026-07-20 | 2026-07-20 | Proposed |
 | [npm-dev-publisher-attenuation](npm-dev-publisher-attenuation.md) | 2026-07-30 | 2026-08-29 | Proposed |
@@ -798,7 +798,7 @@ flowchart TD
 
     subgraph Capability System
         dsand[endo-posix-sandbox<br/><i>IN PROGRESS</i>]
-        hsandbox[hosted-agent-sandbox-unification<br/><i>NOT STARTED</i>]
+        hsandbox[hosted-agent-sandbox-unification<br/><i>IN PROGRESS</i>]
         pfs[platform-fs<br/><i>COMPLETE</i>]
         dfs[daemon-capability-filesystem<br/><i>REFERENCE</i>]
         dmount[daemon-mount<br/><i>IN PROGRESS</i>]
@@ -1449,7 +1449,7 @@ ecosystem.
 |--------|--------|-------|
 | ~~daemon-os-sandbox-plugin~~ | Superseded | Replaced by `endo-posix-sandbox`; retained as historical proposal |
 | endo-posix-sandbox | In Progress | Phases 0-1 shipped, Phases 2 + 3 in flight on `bots-ssh/jcorbin-sandbox-paths`; Phase 4 (macOS via lima + Apple Containerization) and Phase 6 (Windows via WSL2) compose the same in-guest backend pattern |
-| hosted-agent-sandbox-unification | Not Started | Shared session supervisor and revocable inference, one guest authority domain, retained runtime across turns, bounded host transports, and small Claude/Codex/OpenCode adapters; refines the existing sandbox envelope. |
+| hosted-agent-sandbox-unification | In Progress | Shared session supervisor and revocable inference, one guest authority domain, retained runtime across turns, bounded host transports, and small Claude/Codex/OpenCode adapters; refines the existing sandbox envelope. |
 | daemon-capability-persona | Not Started | Epithets and delegation |
 | daemon-secret-manager | Implemented (local backend) | Singleton manager for arbitrary secret bytes; management under `@secrets`, read capabilities in the ordinary `secrets` pet store, existing lookup/marshal formulas, live inventory-path metadata, replacement, revocation, post-revocation deletion with retained audit, and a value-blind Secret Blobs Space; no ACL |
 | daemon-capability-bank | Not Started | Integrates all capability categories |

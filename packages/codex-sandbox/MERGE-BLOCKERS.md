@@ -86,7 +86,7 @@ A separate unconfined broker must own the selected vendor-supported upstream
 credential: individual ChatGPT or Claude.ai OAuth refresh state, or supported
 enterprise access-token/workload-identity material.
 It issues revocable, quota-bound, provider-only session endpoints.
-This branch defines and validates the exact `BrokerLeaseV1` attestation at the
+This branch defines and validates the exact `ProviderGrantV1` attestation at the
 provisioning seam.
 The inference broker, incremental HTTP adapter, pinned namespace worker,
 private-pipe CapTP transport, and observed lease issuer are implemented.
@@ -136,7 +136,7 @@ saying so and the next holder refuses rather than replaying.
 An intent that cannot be persisted means no exchange is dispatched at all.
 That refusal is fail-closed by design: recovering a provider response nobody
 received is not possible, so a lost exchange needs a fresh grant.
-`BrokerLeaseV1` now carries `authMode`, so an operator can pin the mode it
+`ProviderGrantV1` now carries `authMode`, so an operator can pin the mode it
 accepts and refuse a lease issued in the other.
 The claim it carries is narrow: the broker core refuses to exist in `oauth` mode
 without a refreshing credential bound to the lease's account, and it is

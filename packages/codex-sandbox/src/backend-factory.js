@@ -58,20 +58,18 @@ export const HOSTED_AGENT_POLICY_V1 = harden({
 harden(HOSTED_AGENT_POLICY_V1);
 
 /**
- * Validate the concrete provider lease before it enters a slice.
+ * Validate the concrete provider grant before it enters a slice.
  *
- * @param {any} lease
+ * @param {any} grant
  * @param {{ sessionId: string, imageDigest: string, networkNamespaceId: string, providerOrigin: string, accountRef: string, model?: string, authMode?: 'api-key' | 'oauth' | 'subscription', networkPolicy?: string }} requirements
  */
-export const assertBrokerLeaseV1 = (lease, requirements) => {
+export const assertProviderGrantV1 = (grant, requirements) => {
   const keys = [
     'accountRef',
     'authMode',
     'endpoint',
-    'expiresAt',
     'imageDigest',
-    'leaseId',
-    'limits',
+    'grantId',
     'modelAllowlist',
     'networkNamespaceId',
     'providerOrigin',
@@ -81,56 +79,53 @@ export const assertBrokerLeaseV1 = (lease, requirements) => {
   if (requirements.networkPolicy === 'public-internet') keys.push('network');
   keys.sort();
   if (requirements.networkPolicy === 'public-internet') {
-    lease?.network !== undefined ||
+    grant?.network !== undefined ||
       Fail`Broker public network evidence missing`;
-    assertCodexNetworkEvidence(lease.network);
+    assertCodexNetworkEvidence(grant.network);
   }
   if (
-    Object.keys(lease || {})
+    Object.keys(grant || {})
       .sort()
       .join(',') !== keys.join(',')
   ) {
-    throw makeError(X`broker lease attestation is not exact`);
+    throw makeError(X`broker grant attestation is not exact`);
   }
-  const accountRef = /** @type {unknown} */ (lease.accountRef);
+  const accountRef = /** @type {unknown} */ (grant.accountRef);
   if (
-    lease.version !== 'BrokerLeaseV1' ||
-    !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(lease.leaseId || '') ||
-    lease.sessionId !== requirements.sessionId ||
-    lease.imageDigest !== requirements.imageDigest ||
-    lease.networkNamespaceId !== requirements.networkNamespaceId ||
-    lease.providerOrigin !== requirements.providerOrigin ||
+    grant.version !== 'ProviderGrantV1' ||
+    !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(grant.grantId || '') ||
+    grant.sessionId !== requirements.sessionId ||
+    grant.imageDigest !== requirements.imageDigest ||
+    grant.networkNamespaceId !== requirements.networkNamespaceId ||
+    grant.providerOrigin !== requirements.providerOrigin ||
     typeof accountRef !== 'string' ||
     accountRef === '' ||
     accountRef.length > 256 ||
     accountRef !== requirements.accountRef
   ) {
-    throw makeError(X`broker lease identity does not match the session`);
+    throw makeError(X`broker grant identity does not match the session`);
   }
   // Authentication mode is a property of the host-held broker, never a token
   // delivered to the slice. Refuse a silent API-billing downgrade.
   if (
-    !['api-key', 'oauth', 'subscription'].includes(lease.authMode) ||
-    (lease.authMode === 'subscription' &&
-      lease.providerOrigin !== 'https://chatgpt.com') ||
-    (requirements.authMode && lease.authMode !== requirements.authMode)
+    !['api-key', 'oauth', 'subscription'].includes(grant.authMode) ||
+    (grant.authMode === 'subscription' &&
+      grant.providerOrigin !== 'https://chatgpt.com') ||
+    (requirements.authMode && grant.authMode !== requirements.authMode)
   ) {
-    throw makeError(X`broker lease authentication mode is not supported`);
+    throw makeError(X`broker grant authentication mode is not supported`);
   }
   let origin;
   let endpoint;
   try {
-    origin = new URL(lease.providerOrigin);
-    endpoint = new URL(lease.endpoint);
+    origin = new URL(grant.providerOrigin);
+    endpoint = new URL(grant.endpoint);
   } catch {
-    throw makeError(X`broker lease contains an invalid endpoint`);
+    throw makeError(X`broker grant contains an invalid endpoint`);
   }
-  const requests = /** @type {unknown} */ (lease.limits?.requests);
-  const bytes = /** @type {unknown} */ (lease.limits?.bytes);
-  const costMicrounits = /** @type {unknown} */ (lease.limits?.costMicrounits);
   if (
     origin.protocol !== 'https:' ||
-    origin.origin !== lease.providerOrigin ||
+    origin.origin !== grant.providerOrigin ||
     endpoint.protocol !== 'http:' ||
     !['127.0.0.1', '[::1]'].includes(endpoint.hostname) ||
     endpoint.username !== '' ||
@@ -139,40 +134,22 @@ export const assertBrokerLeaseV1 = (lease, requirements) => {
     endpoint.search !== '' ||
     endpoint.hash !== ''
   ) {
-    throw makeError(X`broker lease endpoint is not provider-bound loopback`);
-  }
-  const expiry = Date.parse(lease.expiresAt);
-  if (!Number.isFinite(expiry) || expiry <= Date.now()) {
-    throw makeError(X`broker lease is expired`);
+    throw makeError(X`broker grant endpoint is not provider-bound loopback`);
   }
   if (
-    !Array.isArray(lease.modelAllowlist) ||
-    lease.modelAllowlist.length === 0 ||
-    lease.modelAllowlist.some(
+    !Array.isArray(grant.modelAllowlist) ||
+    grant.modelAllowlist.length === 0 ||
+    grant.modelAllowlist.some(
       model => typeof model !== 'string' || model === '',
     ) ||
-    new Set(lease.modelAllowlist).size !== lease.modelAllowlist.length ||
-    (requirements.model && !lease.modelAllowlist.includes(requirements.model))
+    new Set(grant.modelAllowlist).size !== grant.modelAllowlist.length ||
+    (requirements.model && !grant.modelAllowlist.includes(requirements.model))
   ) {
-    throw makeError(X`broker lease model allowlist is invalid`);
+    throw makeError(X`broker grant model allowlist is invalid`);
   }
-  if (
-    Object.keys(lease.limits || {})
-      .sort()
-      .join(',') !== 'bytes,costMicrounits,requests' ||
-    typeof requests !== 'number' ||
-    !Number.isInteger(requests) ||
-    requests <= 0 ||
-    typeof bytes !== 'bigint' ||
-    bytes <= 0n ||
-    typeof costMicrounits !== 'bigint' ||
-    costMicrounits <= 0n
-  ) {
-    throw makeError(X`broker lease quotas are invalid`);
-  }
-  return harden(lease);
+  return harden(grant);
 };
-harden(assertBrokerLeaseV1);
+harden(assertProviderGrantV1);
 
 /**
  * The key a declared runtime attach is known by. It names the attach's row
@@ -458,7 +435,7 @@ harden(assertHostedAgentPolicyV1);
  *   slice failure on the way must not cost the user its contents. Only the
  *   factory's `destroy` removes durable state.
  * @param {(workspace: any, spec: any) => Promise<{ unmount: () => Promise<void> }>} powers.mountWorkspace
- * @param {(spec: any) => Promise<{ revoke: () => Promise<void>, attestation: () => Promise<any> }>} powers.issueBrokerLease
+ * @param {(spec: any) => Promise<{ revoke: () => Promise<void>, attestation: () => Promise<any> }>} powers.issueProviderGrant
  * @param {(options: any) => Promise<{ policy: () => Promise<any>, dispose: () => Promise<void> }>} powers.makeSlice
  * @param {() => Promise<void>} [powers.retrySliceCleanup]
  *   Reap slices retained by a failed makeSlice before releasing workspace leases.
@@ -640,7 +617,7 @@ export const makeCodexResourceProvisioner = powers => {
         },
         done: false,
       });
-      const brokerLease = await powers.issueBrokerLease(
+      const brokerLease = await powers.issueProviderGrant(
         harden({
           ...leaseSpec,
           providerOrigin: powers.providerOrigin,
@@ -671,7 +648,7 @@ export const makeCodexResourceProvisioner = powers => {
         containerMounts,
         networkPolicy: spec.networkPolicy,
       });
-      assertBrokerLeaseV1(brokerAttestation, {
+      assertProviderGrantV1(brokerAttestation, {
         sessionId: spec.sessionId,
         imageDigest: powers.imageDigest,
         networkNamespaceId: policy.networkNamespaceId,
@@ -684,7 +661,7 @@ export const makeCodexResourceProvisioner = powers => {
       await E(auditJournal.writer).append('session-resources-provisioned', {
         sessionId: spec.sessionId,
         imageDigest: policy.imageDigest,
-        brokerLeaseId: brokerAttestation.leaseId,
+        brokerLeaseId: brokerAttestation.grantId,
         providerOrigin: brokerAttestation.providerOrigin,
         accountRef: brokerAttestation.accountRef,
       });

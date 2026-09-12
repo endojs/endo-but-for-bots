@@ -6,7 +6,7 @@ import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { randomUUID } from 'node:crypto';
 
-import { makeProviderBrokerLease } from './provider-broker.js';
+import { makeProviderBrokerGrant } from './provider-broker.js';
 import { makeProviderFetchTransport } from './provider-transport.js';
 
 /** @import { BrokerPolicy } from './provider-broker.js' */
@@ -22,52 +22,43 @@ import { makeProviderFetchTransport } from './provider-transport.js';
  * over one record separate refresh guards, and both would redeem the same
  * refresh token. Its refresh authority is deliberately not the inference
  * transport — a token endpoint is neither the provider origin nor one of the
- * three inference paths the lease admits, so a refresh that could travel
- * through the lease would mean the lease admitted something else.
+ * three inference paths the grant admits, so a refresh that could travel
+ * through the grant would mean the grant admitted something else.
  *
  * @param {object} options
  * @param {any} options.runtime Concrete provider listener runtime.
  * @param {any} options.secret SecretBlob read facet.
  * @param {typeof globalThis.fetch} options.fetch Explicit outbound authority.
- * @param {Omit<BrokerPolicy,'expiresAt'>} options.policy
- * @param {number} options.leaseDurationMs
- * @param {number} [options.requestTimeoutMs] Host-only request deadline, at most ten minutes; lease expiry remains authoritative.
+ * @param {BrokerPolicy} options.policy
+ * @param {number} [options.requestTimeoutMs] Host-only request deadline, independent of grant lifetime.
  * @param {string} options.imageDigest Target Codex image, not listener image.
  * @param {string} options.accountRef
- * @param {() => number} [options.now]
  * @param {(event: any) => void} [options.audit]
  * @param {Parameters<typeof makeProviderFetchTransport>[0]['onDiagnostic']} [options.onDiagnostic]
  * @param {any} [options.credential] The record's shared refreshing credential,
  * from `makeBrokerOAuthCredential`. One per secret record, shared by every
- * issuer and lease over it.
+ * issuer and grant over it.
  * @param {(spec:any)=>{endpoint:any,address:string,dispose:()=>void}} [options.makePublicNetwork]
  * Host-only factory for a separately revocable public-egress capability.
  */
-export const makeProviderBrokerLeaseIssuer = ({
+export const makeProviderBrokerGrantIssuer = ({
   runtime,
   secret,
   fetch,
   policy,
-  leaseDurationMs,
   requestTimeoutMs = 120_000,
   imageDigest,
   accountRef,
-  now = Date.now,
   audit,
   onDiagnostic,
   credential,
   makePublicNetwork,
 }) => {
-  (Number.isInteger(leaseDurationMs) &&
-    leaseDurationMs > 0 &&
-    leaseDurationMs <= 0x7fff_ffff &&
-    /^sha256:[a-f0-9]{64}$/.test(imageDigest) &&
+  (/^sha256:[a-f0-9]{64}$/.test(imageDigest) &&
     typeof accountRef === 'string' &&
     accountRef.length > 0 &&
-    accountRef.length <= 256 &&
-    policy.maxRequests > 0n &&
-    policy.maxRequests <= 0xffff_ffffn) ||
-    Fail`Invalid provider lease issuer policy`;
+    accountRef.length <= 256) ||
+    Fail`Invalid provider grant issuer policy`;
   (Number.isInteger(requestTimeoutMs) &&
     requestTimeoutMs > 0 &&
     requestTimeoutMs <= 600_000) ||
@@ -77,29 +68,28 @@ export const makeProviderBrokerLeaseIssuer = ({
   // credential — including a refreshed one — that belongs elsewhere.
   policy.accountRef === undefined ||
     policy.accountRef === accountRef ||
-    Fail`Invalid provider lease issuer policy`;
+    Fail`Invalid provider grant issuer policy`;
   const authMode = policy.authMode ?? 'api-key';
   // The credential arrives already built and already bound to an account, so
-  // this checks that it is one this issuer's leases can actually use: bound to
+  // this checks that it is one this issuer's grants can actually use: bound to
   // the selected account, and able to refresh. Without the second half an
   // object that cannot refresh is admitted here, reports `authMode: 'oauth'`
   // in its attestation, and only fails on the first turn.
   if (authMode === 'oauth' || authMode === 'subscription') {
-    credential !== undefined || Fail`Invalid provider lease issuer policy`;
+    credential !== undefined || Fail`Invalid provider grant issuer policy`;
     credential.accountRef === accountRef ||
-      Fail`Invalid provider lease issuer policy`;
+      Fail`Invalid provider grant issuer policy`;
     typeof credential.current === 'function' ||
       Fail`Unprovisioned broker OAuth mode`;
   }
-  // BrokerLeaseV1 carries the bounded request count as a number; its profile
-  // explicitly caps it at 32 bits. Byte and cost counters retain bigint.
   const configuredPolicy = harden({
     ...policy,
     accountRef,
     routes: policy.routes.map(route => ({ ...route })),
     models: [...policy.models],
   });
-  const leases = new Set();
+  const grants = new Set();
+  const fences = new Set();
   const pending = new Set();
   let queue = Promise.resolve();
   /**
@@ -123,17 +113,12 @@ export const makeProviderBrokerLeaseIssuer = ({
       spec.providerOrigin === configuredPolicy.origin &&
       spec.accountRef === accountRef &&
       (!spec.model || configuredPolicy.models.includes(spec.model))) ||
-      Fail`Provider lease request denied`;
+      Fail`Provider grant request denied`;
     spec.networkPolicy === 'off' ||
       (spec.networkPolicy === 'public-internet' && makePublicNetwork) ||
-      Fail`Unsupported provider lease network policy`;
-    const expiresAt = now() + leaseDurationMs;
-    const leaseId = `lease-${randomUUID()}`;
-    // Both sides of the private pipe use the same host-selected ceiling.
-    // The lease's independent expiry timer also revokes requests started late.
-    const timeoutMs = Math.min(requestTimeoutMs, expiresAt - now());
-    (Number.isInteger(timeoutMs) && timeoutMs > 0) ||
-      Fail`Provider lease expired before admission`;
+      Fail`Unsupported provider grant network policy`;
+    const grantId = `grant-${randomUUID()}`;
+    const timeoutMs = requestTimeoutMs;
     const transport = makeProviderFetchTransport({
       fetch,
       timeoutMs,
@@ -141,39 +126,37 @@ export const makeProviderBrokerLeaseIssuer = ({
       maxResponseBytes: configuredPolicy.maxResponseBytes,
       onDiagnostic,
     });
-    const core = makeProviderBrokerLease(
-      { ...configuredPolicy, expiresAt },
-      {
-        secret,
-        transport: transport.transport,
-        now,
-        audit,
-        credential,
-      },
-    );
+    const core = makeProviderBrokerGrant(configuredPolicy, {
+      secret,
+      transport: transport.transport,
+      audit,
+      credential,
+    });
     let worker;
     let network;
     let inactive = false;
     let cleaned = false;
     let cleanup;
-    let timer;
     const checkLive = () => {
-      (!inactive && !disposed && now() < expiresAt) ||
-        Fail`Provider lease inactive`;
+      (!inactive && !disposed) || Fail`Provider grant inactive`;
     };
-    const revoke = () => {
-      if (cleaned) return Promise.resolve();
+    const fence = () => {
       inactive = true;
-      pending.add(revoke);
-      globalThis.clearTimeout(timer);
       transport.dispose();
       network?.dispose();
-      const revoking = E(core.admin).revoke();
+      return E(core.admin).revoke();
+    };
+    fences.add(fence);
+    const revoke = () => {
+      if (cleaned) return Promise.resolve();
+      pending.add(revoke);
+      const revoking = fence();
       if (!cleanup) {
         cleanup = (async () => {
           await revoking;
           if (worker) await worker.stop();
-          leases.delete(revoke);
+          grants.delete(revoke);
+          fences.delete(fence);
           pending.delete(revoke);
           cleaned = true;
         })().catch(error => {
@@ -183,7 +166,7 @@ export const makeProviderBrokerLeaseIssuer = ({
       }
       return cleanup;
     };
-    leases.add(revoke);
+    grants.add(revoke);
     try {
       if (spec.networkPolicy === 'public-internet') {
         if (!makePublicNetwork) throw Fail`Public network factory unavailable`;
@@ -198,7 +181,7 @@ export const makeProviderBrokerLeaseIssuer = ({
           : {}),
         limits: harden({
           diagnostics: Boolean(onDiagnostic),
-          maxConnections: 4,
+          maxConnections: configuredPolicy.maxConcurrentRequests,
           maxRequestBytes: configuredPolicy.maxRequestBytes,
           maxResponseBytes: configuredPolicy.maxResponseBytes,
           timeoutMs,
@@ -213,12 +196,6 @@ export const makeProviderBrokerLeaseIssuer = ({
         (!network || initial.network.policy === 'public-internet')) ||
         Fail`Provider listener network policy mismatch`;
       checkLive();
-      timer = globalThis.setTimeout(
-        () => {
-          void revoke().catch(() => {});
-        },
-        Math.max(1, expiresAt - now()),
-      );
       void worker.closed.then(() => revoke()).catch(() => {});
       const observe = async () => {
         checkLive();
@@ -238,9 +215,9 @@ export const makeProviderBrokerLeaseIssuer = ({
           throw error;
         }
       };
-      const lease = makeExo(
-        'ProviderLease',
-        M.interface('ProviderLease', {
+      const grant = makeExo(
+        'ProviderGrant',
+        M.interface('ProviderGrant', {
           attestation: M.call().returns(M.promise()),
           sandboxEvidence: M.call().returns(M.promise()),
           revoke: M.call().returns(M.promise()),
@@ -249,12 +226,12 @@ export const makeProviderBrokerLeaseIssuer = ({
           async attestation() {
             const current = await observe();
             return harden({
-              version: 'BrokerLeaseV1',
+              version: 'ProviderGrantV1',
               sessionId: spec.sessionId,
-              leaseId,
+              grantId,
               imageDigest,
               accountRef,
-              // What this reports is how the lease was configured, checked
+              // What this reports is how the grant was configured, checked
               // against a credential that was present and account-bound at
               // admission. It is not evidence about the stored secret, which
               // is first read on the first request, nor about how many other
@@ -264,13 +241,7 @@ export const makeProviderBrokerLeaseIssuer = ({
               ...(current.network ? { network: current.network } : {}),
               endpoint: current.endpoint,
               providerOrigin: configuredPolicy.origin,
-              expiresAt: new Date(expiresAt).toISOString(),
               modelAllowlist: [...configuredPolicy.models],
-              limits: {
-                requests: Number(configuredPolicy.maxRequests),
-                bytes: configuredPolicy.maxTotalBytes,
-                costMicrounits: configuredPolicy.maxCostMicrounits,
-              },
             });
           },
           async sandboxEvidence() {
@@ -279,7 +250,7 @@ export const makeProviderBrokerLeaseIssuer = ({
               version: 'CodexBrokerSandboxEvidenceV1',
               sessionId: spec.sessionId,
               imageDigest,
-              leaseId,
+              grantId,
               networkNamespaceId: current.networkNamespaceId,
               ...(current.network ? { network: current.network } : {}),
               brokerSidecar: { container: current.containerName },
@@ -290,15 +261,15 @@ export const makeProviderBrokerLeaseIssuer = ({
           revoke,
         },
       );
-      return lease;
+      return grant;
     } catch (error) {
       await revoke().catch(cleanupError => {
         throw AggregateError(
           [error, cleanupError],
-          'Provider lease admission and cleanup failed',
+          'Provider grant admission and cleanup failed',
         );
       });
-      throw AggregateError([error], 'Provider lease admission failed');
+      throw AggregateError([error], 'Provider grant admission failed');
     }
   };
   const clean = async callbacks => {
@@ -309,7 +280,7 @@ export const makeProviderBrokerLeaseIssuer = ({
       result.status === 'rejected' ? [result.reason] : [],
     );
     if (errors.length)
-      throw AggregateError(errors, 'Provider lease cleanup failed');
+      throw AggregateError(errors, 'Provider grant cleanup failed');
   };
   return harden(
     Object.assign(
@@ -328,10 +299,13 @@ export const makeProviderBrokerLeaseIssuer = ({
         retryCleanup: () => serialize(() => clean(pending)),
         dispose: () => {
           disposed = true;
-          return serialize(() => clean(leases));
+          // Withdrawal must not wait behind a listener still being acquired.
+          // Cleanup stays serialized so it also reaps that late acquisition.
+          for (const fence of fences) void fence().catch(() => {});
+          return serialize(() => clean(grants));
         },
       },
     ),
   );
 };
-harden(makeProviderBrokerLeaseIssuer);
+harden(makeProviderBrokerGrantIssuer);
