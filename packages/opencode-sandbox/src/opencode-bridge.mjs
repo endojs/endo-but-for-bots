@@ -20,6 +20,8 @@
 // must not import workspace packages.
 
 import { spawn } from 'node:child_process';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { createInterface } from 'node:readline';
@@ -36,6 +38,17 @@ const MAX_SSE_BUFFER_BYTES = 2 * 1024 * 1024;
 const positiveEnvNumber = (raw, fallback) => {
   const value = Number(raw ?? fallback);
   return Number.isFinite(value) && value > 0 ? value : fallback;
+};
+
+/** Remove secret-shaped material before it can reach the host transcript. */
+const redactSecrets = (text, secrets) => {
+  let out = text;
+  for (const secret of secrets) {
+    if (typeof secret === 'string' && secret.length >= 8) {
+      out = out.replaceAll(secret, '[redacted]');
+    }
+  }
+  return out.replace(/sk-[A-Za-z0-9_-]{8,}/g, '[redacted]');
 };
 
 const TURN_TIMEOUT_MS = positiveEnvNumber(
@@ -155,23 +168,37 @@ export const mapSseEvent = (event, registry, sessionID) => {
           type: 'tool-call',
           id: part.callID,
           name: part.tool,
-          args: state.input,
+          // Floot renders args as text; a raw object becomes '[object Object]'.
+          args:
+            typeof state.input === 'string'
+              ? state.input
+              : JSON.stringify(state.input ?? {}),
         });
       }
       if (state.status === 'completed') {
+        const rendered =
+          typeof state.output === 'string'
+            ? state.output
+            : JSON.stringify(state.output ?? '');
         return Object.freeze({
           type: 'tool-result',
           id: part.callID,
+          name: part.tool,
           ok: true,
-          result: state.output,
+          result: rendered,
         });
       }
       if (state.status === 'error') {
+        const rendered = `${state.error ?? 'tool failed'}`;
         return Object.freeze({
           type: 'tool-result',
           id: part.callID,
+          name: part.tool,
           ok: false,
-          error: `${state.error ?? 'tool failed'}`,
+          // Floot reads `result` (and treats an absent one as an empty
+          // success), so a failure must carry its message there too.
+          result: rendered,
+          error: rendered,
         });
       }
       return undefined;
@@ -419,8 +446,11 @@ const main = async () => {
     return;
   }
 
-  // Resolve or create the session. A requested session that cannot be read
-  // fails closed: silently starting a new history would break continuity.
+  // Resolve, resume, or create the session. A recorded or requested session
+  // that cannot be read fails closed: silently starting a new history would
+  // break the transcript continuity contract.
+  const stateDir = process.env.XDG_DATA_HOME || '/opencode-state';
+  const sessionFile = path.join(stateDir, 'opencode-session-id');
   let sessionID = requestedSession;
   if (sessionID) {
     try {
@@ -434,6 +464,22 @@ const main = async () => {
       return;
     }
   } else {
+    const recorded = await readFile(sessionFile, 'utf8').catch(() => undefined);
+    const candidate = recorded?.trim();
+    if (candidate) {
+      try {
+        await api(`/session/${encodeURIComponent(candidate)}`);
+        sessionID = candidate;
+      } catch {
+        await shutdown(
+          1,
+          'recorded opencode session is unavailable; refusing to start a new history',
+        );
+        return;
+      }
+    }
+  }
+  if (!sessionID) {
     try {
       const session = await api('/session', {
         method: 'POST',
@@ -445,6 +491,14 @@ const main = async () => {
       await shutdown(1, `could not create a session: ${error}`);
       return;
     }
+  }
+  // Persist the id so the next incarnation resumes this history.
+  try {
+    await mkdir(stateDir, { recursive: true, mode: 0o700 });
+    await writeFile(sessionFile, `${sessionID}\n`, { mode: 0o600 });
+  } catch (error) {
+    await shutdown(1, `cannot persist the opencode session id: ${error}`);
+    return;
   }
   const activeSessionId = String(sessionID);
   writeEvent({
@@ -662,7 +716,7 @@ const main = async () => {
   await consumeEvents;
   // A clean event-stream end means the server instance is gone; do not stay
   // alive with the key in memory and a dead event feed.
-  const detail = stderrTail.trim().slice(-200);
+  const detail = redactSecrets(stderrTail, [password]).trim().slice(-200);
   await shutdown(1, `event stream ended${detail === '' ? '' : `: ${detail}`}`);
 };
 

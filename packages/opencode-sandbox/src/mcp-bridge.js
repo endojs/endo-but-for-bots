@@ -152,90 +152,95 @@ export const makeMcpBridge = ({
    *   notification (a request with no `id`).
    */
   const handleMessage = async message => {
-    await null;
-    if (!message || typeof message !== 'object' || Array.isArray(message)) {
-      // One request per frame: a JSON-RPC batch (an array) is refused with a
-      // reply rather than silently dropped without one.
-      return fail(null, INVALID_REQUEST, 'Expected a single JSON-RPC object');
-    }
-    const { id = null, method, params } = message;
-    const isNotification = message.id === undefined || message.id === null;
+    // Reserve synchronously at dispatch: terminate() reads pendingCalls()
+    // before an asynchronously dispatched call has reached its first await,
+    // so the count must exist before this function yields.
+    pending += 1;
+    try {
+      await null;
+      if (!message || typeof message !== 'object' || Array.isArray(message)) {
+        // One request per frame: a JSON-RPC batch (an array) is refused with a
+        // reply rather than silently dropped without one.
+        return fail(null, INVALID_REQUEST, 'Expected a single JSON-RPC object');
+      }
+      const { id = null, method, params } = message;
+      const isNotification = message.id === undefined || message.id === null;
 
-    switch (method) {
-      case 'initialize': {
-        // Echo the client's requested protocol version when present so a newer
-        // opencode and this bridge agree on a shared revision.
-        const requested =
-          params && typeof params.protocolVersion === 'string'
-            ? params.protocolVersion
-            : DEFAULT_PROTOCOL_VERSION;
-        return ok(id, {
-          protocolVersion: requested,
-          capabilities: { tools: { listChanged: false } },
-          serverInfo,
-        });
-      }
-      // Lifecycle notifications carry no id and take no reply.
-      case 'notifications/initialized':
-      case 'notifications/cancelled':
-        return undefined;
-      case 'ping':
-        return ok(id, {});
-      case 'tools/list':
-        return ok(id, { tools: catalog.tools });
-      case 'tools/call': {
-        const toolName = params && params.name;
-        const args =
-          params && params.arguments && typeof params.arguments === 'object'
-            ? params.arguments
-            : {};
-        if (typeof toolName !== 'string' || toolName === '') {
-          return fail(id, INVALID_REQUEST, 'tools/call requires a tool name');
-        }
-        if (!Object.hasOwn(catalog.byName, toolName)) {
-          // The pinned catalog is the boundary: a name it does not contain is
-          // refused here, never forwarded to `execute`.
-          return fail(
-            id,
-            INVALID_REQUEST,
-            `Unknown tool: ${toolName} (not in this session's catalog)`,
-          );
-        }
-        if (pending >= MAX_PENDING_CALLS) {
-          // A hostile session must not be able to exhaust host-side tool
-          // capacity or wedge teardown with unsettled calls.
-          return fail(
-            id,
-            INVALID_REQUEST,
-            `Too many in-flight Endo tool calls (limit ${MAX_PENDING_CALLS})`,
-          );
-        }
-        pending += 1;
-        try {
-          const text = await execute(toolName, harden({ ...args }));
+      switch (method) {
+        case 'initialize': {
+          // Echo the client's requested protocol version when present so a newer
+          // opencode and this bridge agree on a shared revision.
+          const requested =
+            params && typeof params.protocolVersion === 'string'
+              ? params.protocolVersion
+              : DEFAULT_PROTOCOL_VERSION;
           return ok(id, {
-            content: [{ type: 'text', text: `${text}` }],
+            protocolVersion: requested,
+            capabilities: { tools: { listChanged: false } },
+            serverInfo,
           });
-        } catch (error) {
-          // MCP convention: surface a tool failure as a result with
-          // `isError: true` (so the model reads the message and can retry)
-          // rather than a JSON-RPC transport error.
-          const text = error instanceof Error ? error.message : String(error);
-          return ok(id, {
-            content: [{ type: 'text', text: `Error: ${text}` }],
-            isError: true,
-          });
-        } finally {
-          pending -= 1;
         }
-      }
-      default: {
-        if (isNotification) {
-          // Unknown notifications are ignored, not errors.
+        // Lifecycle notifications carry no id and take no reply.
+        case 'notifications/initialized':
+        case 'notifications/cancelled':
           return undefined;
+        case 'ping':
+          return ok(id, {});
+        case 'tools/list':
+          return ok(id, { tools: catalog.tools });
+        case 'tools/call': {
+          const toolName = params && params.name;
+          const args =
+            params && params.arguments && typeof params.arguments === 'object'
+              ? params.arguments
+              : {};
+          if (typeof toolName !== 'string' || toolName === '') {
+            return fail(id, INVALID_REQUEST, 'tools/call requires a tool name');
+          }
+          if (!Object.hasOwn(catalog.byName, toolName)) {
+            // The pinned catalog is the boundary: a name it does not contain is
+            // refused here, never forwarded to `execute`.
+            return fail(
+              id,
+              INVALID_REQUEST,
+              `Unknown tool: ${toolName} (not in this session's catalog)`,
+            );
+          }
+          if (pending > MAX_PENDING_CALLS) {
+            // A hostile session must not be able to exhaust host-side tool
+            // capacity or wedge teardown with unsettled calls.
+            return fail(
+              id,
+              INVALID_REQUEST,
+              `Too many in-flight Endo tool calls (limit ${MAX_PENDING_CALLS})`,
+            );
+          }
+          try {
+            const text = await execute(toolName, harden({ ...args }));
+            return ok(id, {
+              content: [{ type: 'text', text: `${text}` }],
+            });
+          } catch (error) {
+            // MCP convention: surface a tool failure as a result with
+            // `isError: true` (so the model reads the message and can retry)
+            // rather than a JSON-RPC transport error.
+            const text = error instanceof Error ? error.message : String(error);
+            return ok(id, {
+              content: [{ type: 'text', text: `Error: ${text}` }],
+              isError: true,
+            });
+          }
         }
-        return fail(id, METHOD_NOT_FOUND, `Unknown method: ${method}`);
+        default: {
+          if (isNotification) {
+            // Unknown notifications are ignored, not errors.
+            return undefined;
+          }
+          return fail(id, METHOD_NOT_FOUND, `Unknown method: ${method}`);
+        }
       }
+    } finally {
+      pending -= 1;
     }
   };
 

@@ -25,6 +25,8 @@
     "./src/opencode-client-module.js": "./src/opencode-client-module.js",
     "./src/opencode-client.js": "./src/opencode-client.js",
     "./src/opencode-state-provider.js": "./src/opencode-state-provider.js",
+    "./src/opencode-backend-factory.js": "./src/opencode-backend-factory.js",
+    "./src/opencode-backend-module.js": "./src/opencode-backend-module.js",
     "./src/opencode-session-provisioner.js": "./src/opencode-session-provisioner.js",
     "./src/provision-opencode-session.js": "./src/provision-opencode-session.js",
     "./src/parse-rootfs.js": "./src/parse-rootfs.js",

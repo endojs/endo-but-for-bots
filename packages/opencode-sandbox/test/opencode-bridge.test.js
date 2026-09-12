@@ -238,7 +238,7 @@ test('maps tool parts to call and result events', t => {
       registry,
       SESSION,
     ),
-    { type: 'tool-call', id: 'call_1', name: 'bash', args: { command: 'ls' } },
+    { type: 'tool-call', id: 'call_1', name: 'bash', args: '{"command":"ls"}' },
   );
   t.deepEqual(
     mapSseEvent(
@@ -253,7 +253,7 @@ test('maps tool parts to call and result events', t => {
       registry,
       SESSION,
     ),
-    { type: 'tool-result', id: 'call_1', ok: true, result: 'ok' },
+    { type: 'tool-result', id: 'call_1', name: 'bash', ok: true, result: 'ok' },
   );
   t.deepEqual(
     mapSseEvent(
@@ -268,7 +268,14 @@ test('maps tool parts to call and result events', t => {
       registry,
       SESSION,
     ),
-    { type: 'tool-result', id: 'call_1', ok: false, error: 'boom' },
+    {
+      type: 'tool-result',
+      id: 'call_1',
+      name: 'bash',
+      ok: false,
+      result: 'boom',
+      error: 'boom',
+    },
   );
   // A tool part without an id is dropped rather than emitting undefined ids.
   t.is(

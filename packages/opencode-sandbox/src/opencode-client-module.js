@@ -481,6 +481,7 @@ export const make = (powers, context, contextWrapper = {}) => {
     rootfsLabel: rootfsLabel(parsedRootfs),
     model,
     systemPrompt,
+    env: harden({ NETWORK: network }),
     opencodeSessionId: resumeOpencodeSessionId,
     resumePriorConversation: Boolean(resumeOpencodeSessionId),
     initialPrompt,
