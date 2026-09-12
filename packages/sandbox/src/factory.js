@@ -16,7 +16,9 @@ import {
   SandboxHandleInterface,
 } from './interfaces.js';
 import { makeEagerReader } from './eager-reader.js';
+import { makeResourceRegistry } from './resource-registry.js';
 import { resolveLimits } from './limits.js';
+import { validateGeneratedFiles } from './generated-files.js';
 
 /** @import { MakeSandboxFactoryInput, SandboxFactory, SandboxMakeOpts, SandboxDriver, BackendProbe, MountSpec, SliceSpec, MountCap, MountMode, SandboxHandle, ProcessHandle, MountHandle, SpawnOpts, DriverProcess, RootfsSpec, TerminationSignal } from './types.js' */
 
@@ -294,19 +296,24 @@ const resolveHostPath = async (scratchProvider, cap, context) => {
 };
 
 /**
- * Phase 1 factory.
+ * Construct the guarded public factory and its host-only shutdown control.
+ * The runtime owner must retain close for retries until all resources are gone.
  *
  * @param {MakeSandboxFactoryInput} input
  * @param {{ makeDelay?: typeof delay }} [powers]
- * @returns {SandboxFactory}
+ * @returns {Readonly<{ factory: SandboxFactory, close(reason?: Error): Promise<void> }>}
  */
-export const makeSandboxFactory = (
+export const makeSandboxFactoryKit = (
   { drivers, scratchProvider, context },
   { makeDelay = delay } = {},
 ) => {
   const driverList = harden([...drivers]);
-  /** @type {Set<SandboxHandle>} */
-  const liveHandles = new Set();
+  const slices = makeResourceRegistry();
+  /** @type {Set<() => Promise<void>>} */
+  const liveClosers = new Set();
+  let nextAcquisition = 0n;
+  /** @type {Promise<void> | undefined} */
+  let closeFlight;
   // Set once the factory has lost its owner — by cancellation, by
   // disconnection, or by being handed a context that cannot report
   // either. See the `whenCancelled` hookup at the end of this function
@@ -322,6 +329,23 @@ export const makeSandboxFactory = (
    */
   const ownerCancelledError = lost =>
     makeError(X`sandbox factory owner has been cancelled: ${q(lost.message)}`);
+
+  const assertOwner = () => {
+    if (ownerLost !== undefined) throw ownerCancelledError(ownerLost);
+  };
+
+  /**
+   * @template T
+   * @param {(id: string) => Promise<T>} operation
+   * @returns {Promise<T>}
+   */
+  const acquire = operation => {
+    if (ownerLost !== undefined)
+      return Promise.reject(ownerCancelledError(ownerLost));
+    const id = String(nextAcquisition);
+    nextAcquisition += 1n;
+    return slices.inOrder(id, () => operation(id));
+  };
 
   /**
    * Require the lifecycle proof that this cut relies on. A driver may have a
@@ -371,18 +395,25 @@ export const makeSandboxFactory = (
   /**
    * @returns {Promise<BackendProbe[]>}
    */
-  const listBackends = async () => {
-    const probes = await Promise.all(driverList.map(probeDriver));
-    return harden(probes);
-  };
+  const listBackends = () =>
+    acquire(async () => {
+      const probes = await Promise.all(driverList.map(probeDriver));
+      assertOwner();
+      return harden(probes);
+    });
 
   /**
    * @param {SandboxMakeOpts['backend']} selector
    * @param {boolean} [needsPolicy] Consider only drivers that can
    *   enforce and attest a slice policy.
+   * @param {boolean} [needsGeneratedFiles] Require private literal-file staging.
    * @returns {Promise<{ driver?: SandboxDriver; failures: BackendProbe[] }>}
    */
-  const pickDriver = async (selector, needsPolicy = false) => {
+  const pickDriver = async (
+    selector,
+    needsPolicy = false,
+    needsGeneratedFiles = false,
+  ) => {
     await null;
     const named =
       selector === undefined || selector === 'auto'
@@ -392,9 +423,11 @@ export const makeSandboxFactory = (
     // has to be attested. Without this, `auto` picks the first available
     // driver — bwrap, which `agent.js` registers first — and every
     // policy slice fails on a host that has both backends installed.
-    const candidates = needsPolicy
-      ? named.filter(driver => driver.policy !== undefined)
-      : named;
+    const candidates = named.filter(
+      driver =>
+        (!needsPolicy || driver.policy !== undefined) &&
+        (!needsGeneratedFiles || driver.supportsGeneratedFiles === true),
+    );
     /** @type {BackendProbe[]} */
     const failures = [];
     for (const driver of candidates) {
@@ -488,10 +521,11 @@ export const makeSandboxFactory = (
 
   /**
    * @param {SandboxMakeOpts} opts
+   * @param {string} sliceId
    * @returns {Promise<SandboxHandle>}
    */
-  const make = async opts => {
-    if (ownerLost !== undefined) throw ownerCancelledError(ownerLost);
+  const buildSlice = async (opts, sliceId) => {
+    assertOwner();
     if ((opts.network === 'join') !== (opts.networkRef !== undefined)) {
       // Backend-independent: every driver must agree the container ref is
       // exactly what `network: 'join'` names, so a driver that ignores the
@@ -505,9 +539,28 @@ export const makeSandboxFactory = (
     }
     const selector = opts.backend ?? 'auto';
     const needsPolicy = opts.policy !== undefined;
-    const selected = await pickDriver(selector, needsPolicy);
+    const generatedFiles = validateGeneratedFiles(
+      opts.generatedFiles ?? [],
+      (opts.mounts ?? []).map(mount => mount.innerPath),
+    );
+    if (needsPolicy && generatedFiles.length > 0) {
+      throw makeError(
+        X`Generated files cannot extend an exact slice policy mount table`,
+      );
+    }
+    const selected = await pickDriver(
+      selector,
+      needsPolicy,
+      generatedFiles.length > 0,
+    );
+    assertOwner();
     const { driver } = selected;
     if (driver === undefined) {
+      if (generatedFiles.length > 0) {
+        throw makeError(
+          X`No available sandbox backend supports generated files for ${q(selector)}`,
+        );
+      }
       const reasons = selected.failures
         .map(probe => `${probe.name}: ${probe.reason ?? 'unavailable'}`)
         .join('; ');
@@ -521,8 +574,10 @@ export const makeSandboxFactory = (
     // Resolve everything that requires the privileged
     // `provideHostPath` power up front. Drivers never see Mount caps.
     const rootfs = await resolveRootfs(opts.rootfs);
+    assertOwner();
     const mountSpecs = opts.mounts ?? [];
     const resolvedMounts = await Promise.all(mountSpecs.map(resolveMount));
+    assertOwner();
     let scratchHostPath = '';
     // A policy declares the slice's whole mount table, and the scratch
     // layer is a writable path outside it. Minting one anyway would put
@@ -554,6 +609,7 @@ export const makeSandboxFactory = (
     const sliceSpec = harden({
       rootfs,
       mounts: harden(resolvedMounts),
+      ...(generatedFiles.length > 0 ? { generatedFiles } : {}),
       scratchHostPath,
       network: opts.network ?? 'none',
       ...(opts.networkRef !== undefined ? { networkRef: opts.networkRef } : {}),
@@ -567,7 +623,27 @@ export const makeSandboxFactory = (
       ...(opts.policy !== undefined ? { policy: opts.policy } : {}),
     });
 
+    assertOwner();
     const driverSlice = await driver.prepareSlice(sliceSpec);
+    // Retain immediately: even rendering or minting the public handle can fail.
+    // The initial cleanup owns just the returned driver context; once built,
+    // disposal also stops process admission and releases dynamic mounts.
+    let disposeOwned = () => driver.teardown(driverSlice);
+    /** @type {Promise<void> | undefined} */
+    let cleanupFlight;
+    const cleanupOwned = () => {
+      cleanupFlight ??= (async () => {
+        await disposeOwned();
+        slices.release(sliceId, cleanupOwned);
+        liveClosers.delete(cleanupOwned);
+      })().catch(error => {
+        cleanupFlight = undefined;
+        throw error;
+      });
+      return cleanupFlight;
+    };
+    slices.retain(sliceId, cleanupOwned);
+    liveClosers.add(cleanupOwned);
     // Drivers may attach a `runtimeDetails` summary to the slice
     // context.  When present, the factory weaves it into the
     // per-slice `help()` text so callers can see which hardening
@@ -600,23 +676,16 @@ export const makeSandboxFactory = (
 
     /** @type {Set<{ killAndReap: (reason: Error, initialSignal?: TerminationSignal) => Promise<void> }>} */
     const liveProcesses = new Set();
-    // Cleanup errors for processes whose containment could not be proven.
-    // Their leases have already settled, so dispose() must re-surface
-    // these rather than report a clean teardown.
-    /** @type {Error[]} */
-    const containmentFailures = [];
     /** @type {Set<MountHandle>} */
     const liveMounts = new Set();
     /** @type {Promise<void> | undefined} */
     let disposePromise;
-    /** @type {SandboxHandle | undefined} */
-    let handle;
+    /** @type {Error | undefined} */
+    let stoppingReason;
 
-    // `disposeSlice` assigns `disposePromise` synchronously, so its
-    // presence *is* the "no longer accepting work" flag; a separate
-    // status variable could only ever restate it.
+    // Stopping is permanent; a failed cleanup attempt remains retryable.
     const assertRunning = () => {
-      disposePromise === undefined || Fail`sandbox handle has been disposed`;
+      stoppingReason === undefined || Fail`sandbox handle has been disposed`;
     };
 
     /**
@@ -641,7 +710,8 @@ export const makeSandboxFactory = (
       // abort its in-flight control command and remove the exact named
       // operation; the factory additionally treats a pending admission as
       // abandonable, so a driver that stalls (or ignores the token) can
-      // never hold up timeout, disposal, or owner cancellation.
+      // never hold up the caller's admission timeout. Disposal still requires
+      // the driver to account for every pending acquisition.
       const {
         cancelled: admissionCancelled,
         cancel: cancelAdmission,
@@ -663,15 +733,11 @@ export const makeSandboxFactory = (
       const observeAdmission = proc => {
         admittedProc = proc;
         if (!admissionAbandoned) return;
-        void (async () => {
-          await null;
-          try {
-            await proc.kill('SIGKILL');
-          } catch {
-            // The late process may already be gone.
-          }
-          await proc.wait().catch(() => undefined);
-        })();
+        void reapProcess(
+          proc,
+          terminalError ?? makeError(X`sandbox admission abandoned`),
+          'SIGKILL',
+        ).catch(() => undefined);
       };
 
       /** @type {Error | undefined} */
@@ -711,6 +777,73 @@ export const makeSandboxFactory = (
       };
 
       /**
+       * Reap one admitted process, including a late arrival after abandonment.
+       * Failure fences the slice before initiating its single disposal path.
+       *
+       * @param {DriverProcess} driverProc
+       * @param {Error} reason
+       * @param {TerminationSignal} initialSignal
+       */
+      const reapProcess = async (driverProc, reason, initialSignal) => {
+        const failures = [];
+        let reaped = false;
+        const exitTracked = Promise.resolve()
+          .then(() => driverProc.wait())
+          .then(
+            () => {
+              reaped = true;
+            },
+            error => {
+              failures.push(error);
+            },
+          );
+        const hardFirst = initialSignal === 'SIGKILL';
+        let hardKillDelivered = false;
+        try {
+          await driverProc.kill(initialSignal);
+          hardKillDelivered = hardFirst;
+        } catch (error) {
+          failures.push(error);
+        }
+        if (!hardFirst && failures.length === 0) {
+          await raceDelay(exitTracked, KILL_GRACE_MS, makeDelay);
+        }
+        if (!reaped && !hardKillDelivered) {
+          try {
+            await driverProc.kill('SIGKILL');
+          } catch (error) {
+            failures.push(error);
+          }
+        }
+        // A delivered signal is not a reap proof. Bound the wait even when
+        // SIGKILL was accepted, and never treat a rejected wait as success.
+        if (!reaped) await raceDelay(exitTracked, KILL_GRACE_MS, makeDelay);
+        if (!reaped) {
+          const detail = failures.length
+            ? failures
+                .map(error =>
+                  error instanceof Error ? error.message : String(error),
+                )
+                .join('; ')
+            : 'driver did not report process reaped';
+          const failure = makeError(
+            X`sandbox cleanup could not prove containment: ${q(detail)}`,
+          );
+          // Do not await disposal here: it awaits this process's lease.
+          // Admission closes synchronously before any slice teardown starts.
+          void beginDispose(
+            makeError(
+              X`sandbox slice torn down after a containment failure: ${q(reason.message)}; ${q(failure.message)}`,
+            ),
+          ).catch(() => undefined);
+          signalContainmentFailure(failure);
+          await boundedDrain();
+          throw failure;
+        }
+        await boundedDrain();
+      };
+
+      /**
        * The sole termination path. It is safe to call before the driver has
        * finished spawning: a pending admission is cancelled and abandoned
        * rather than awaited, so a stalled driver call cannot delay
@@ -744,106 +877,7 @@ export const makeSandboxFactory = (
               admissionAbandoned = true;
               return;
             }
-            const waitPromise = driverProc.wait();
-            let exited = false;
-            const exitTracked = waitPromise.then(
-              () => {
-                exited = true;
-              },
-              () => {
-                exited = true;
-              },
-            );
-            const hardFirst = initialSignal === 'SIGKILL';
-            /** @type {Error[]} */
-            const signalFailures = [];
-            let hardKillDelivered = false;
-            try {
-              await driverProc.kill(hardFirst ? 'SIGKILL' : initialSignal);
-              if (hardFirst) hardKillDelivered = true;
-            } catch (e) {
-              // Drivers normalize the expected already-gone cases, so an
-              // error reaching this layer is a live backend failure
-              // (storage, permission, daemon) and must be preserved.
-              signalFailures.push(/** @type {Error} */ (e));
-            }
-            if (!hardFirst && signalFailures.length === 0) {
-              // The grace period exists for the process to act on the
-              // soft signal; skip it when nothing was delivered.
-              await raceDelay(exitTracked, KILL_GRACE_MS, makeDelay);
-            }
-            if (!exited && !hardKillDelivered) {
-              try {
-                await driverProc.kill('SIGKILL');
-                hardKillDelivered = true;
-              } catch (e) {
-                signalFailures.push(/** @type {Error} */ (e));
-              }
-            }
-            if (!exited && !hardKillDelivered) {
-              // The backend accepted no signal, so its reap primitive may
-              // never settle. Give the process one bounded chance to exit
-              // on its own, force backend-level teardown, and surface a
-              // cleanup error rather than waiting forever on containment
-              // that cannot be proven.
-              await raceDelay(exitTracked, KILL_GRACE_MS, makeDelay);
-              if (!exited) {
-                await raceDelay(
-                  driver.teardown(driverSlice).then(
-                    () => undefined,
-                    e => {
-                      signalFailures.push(/** @type {Error} */ (e));
-                    },
-                  ),
-                  KILL_GRACE_MS,
-                  makeDelay,
-                );
-                // Let a teardown-induced exit land before judging.
-                await raceDelay(exitTracked, DRAIN_GRACE_MS, makeDelay);
-              }
-              if (!exited) {
-                await boundedDrain();
-                const failure = makeError(
-                  X`sandbox cleanup could not prove containment: ${q(signalFailures.map(e => e.message).join('; '))}`,
-                );
-                containmentFailures.push(failure);
-                // The remedy above was slice-wide: `driver.teardown`
-                // does not take a process, so proving containment for
-                // this one cost the slice its backend state (network,
-                // seccomp profile, container storage) and killed its
-                // other processes. The slice therefore fails as a unit.
-                // Disposing it is what stops `assertRunning` from
-                // admitting further spawns and mounts against a slice
-                // that is no longer there — a spawn admitted after this
-                // point would run with whatever policy the torn-down
-                // backend defaults to, which is exactly the
-                // confinement the caller asked for and no longer has.
-                // Disposal also carries this failure to the leases the
-                // teardown collected, so the owners of sibling
-                // processes learn why their process died rather than
-                // watching it exit unexplained.
-                const disposal = beginDispose(
-                  makeError(
-                    X`sandbox slice torn down after a containment failure: ${q(failure.message)}`,
-                  ),
-                );
-                // Deliberately not awaited. Disposal awaits every lease
-                // it snapshotted, this one included, so awaiting it
-                // from inside this kill would wait on itself. What
-                // matters is done synchronously: `beginDispose`
-                // assigns `disposePromise` before returning, so
-                // admission is already closed when this throw becomes
-                // observable, and the sibling kills it started proceed
-                // as soon as this kill settles.
-                disposal.catch(() => undefined);
-                signalContainmentFailure(failure);
-                throw failure;
-              }
-            }
-            // Reaping is mandatory. Driver probes fail closed unless their
-            // wait primitive is tied to the contained process/container.
-            await waitPromise.catch(() => undefined);
-            await boundedDrain();
+            await reapProcess(driverProc, reason, initialSignal);
           })();
           killPromise.catch(() => undefined);
         }
@@ -1053,6 +1087,7 @@ export const makeSandboxFactory = (
           `sandbox-scratch-${innerPath.replace(/[^a-zA-Z0-9-]/g, '-')}`,
         )
       );
+      assertRunning();
       return makeMountHandle(scratchCap, innerPath, 'rw');
     };
 
@@ -1096,62 +1131,50 @@ export const makeSandboxFactory = (
     };
 
     /**
-     * Begin — or observe — the one disposal of this slice.
-     *
-     * Assigning `disposePromise` closes admission, and snapshotting
-     * the leases without awaiting makes exactly one spawn/dispose
-     * race winner visible.
-     *
-     * `reason` is the terminal error handed to every process still
-     * holding a lease, so a slice torn down because containment failed
-     * tells the owners of its *other* processes that, instead of
-     * reporting an ordinary disposal.
+     * Permanently stop admission and start or share a cleanup attempt.
+     * Failed attempts retain the handle for retry. Historical process errors
+     * remain on their process promises; current driver release proves disposal.
      *
      * @param {Error} reason
      * @returns {Promise<void>}
      */
     const beginDispose = reason => {
+      stoppingReason ??= reason;
+      const stopReason = stoppingReason;
       if (disposePromise === undefined) {
         const leases = [...liveProcesses];
         disposePromise = (async () => {
-          // A lease whose cleanup cannot prove containment must not stop
-          // the others (or the driver teardown) from running. Swallowing
-          // the rejection here loses nothing: `killAndReap` records every
-          // such failure in `containmentFailures` before it throws.
-          await Promise.all(
-            leases.map(lease => lease.killAndReap(reason).catch(() => {})),
+          // Independent lease failures must not prevent driver cleanup.
+          await Promise.allSettled(
+            leases.map(lease => lease.killAndReap(stopReason)),
           );
-          await Promise.all(
-            [...liveMounts].map(m =>
-              E(m)
-                .unmount()
-                .catch(() => {}),
-            ),
-          );
+          // Only the driver can prove that pending acquisitions and retained
+          // processes are released, even when their historical waits failed.
           try {
             await driver.teardown(driverSlice);
-          } catch (e) {
-            // A teardown that cannot prove containment is one more
-            // containment failure, not a separate channel. Folding it in
-            // lets the aggregate below report it alongside the
-            // per-process failures; letting it propagate here would
-            // pre-empt that summary and show the caller one of the two.
-            containmentFailures.push(/** @type {Error} */ (e));
-          } finally {
-            if (handle !== undefined) liveHandles.delete(handle);
-          }
-          if (containmentFailures.length > 0) {
+          } catch (error) {
+            const failure =
+              error instanceof Error ? error : makeError(X`${q(error)}`);
             throw makeError(
-              X`sandbox dispose could not prove containment: ${q(containmentFailures.map(e => e.message).join('; '))}`,
+              X`sandbox dispose could not prove containment: ${q(failure.message)}`,
+              undefined,
+              { cause: failure },
             );
           }
-        })();
+          await Promise.all([...liveMounts].map(m => E(m).unmount()));
+          slices.release(sliceId, cleanupOwned);
+          liveClosers.delete(cleanupOwned);
+        })().catch(error => {
+          disposePromise = undefined;
+          throw error;
+        });
       }
       return disposePromise;
     };
 
     const disposeSlice = () =>
       beginDispose(makeError(X`sandbox handle disposed`));
+    disposeOwned = disposeSlice;
 
     const mintedHandle = /** @type {SandboxHandle} */ (
       /** @type {unknown} */ (
@@ -1168,18 +1191,59 @@ export const makeSandboxFactory = (
         })
       )
     );
-    handle = mintedHandle;
-    liveHandles.add(mintedHandle);
     // The owner may have been lost while this slice was being built, in
     // which case the cancellation sweep below has already run past this
-    // handle: dispose it here rather than hand back a slice nobody is
-    // watching.
+    // handle: reject publication and let the acquisition wrapper clean up.
     const lostDuringMake = ownerLost;
     if (lostDuringMake !== undefined) {
-      await disposeSlice();
       throw ownerCancelledError(lostDuringMake);
     }
     return mintedHandle;
+  };
+
+  /** @param {SandboxMakeOpts} opts */
+  const make = opts =>
+    acquire(async sliceId => {
+      try {
+        return await buildSlice(opts, sliceId);
+      } catch (error) {
+        try {
+          await slices.stop(sliceId);
+        } catch (cleanupError) {
+          throw new AggregateError(
+            [error, cleanupError],
+            'Sandbox construction cleanup pending',
+          );
+        }
+        throw error;
+      }
+    });
+
+  /**
+   * Host-only shutdown. Fence immediately and stop existing slices even while
+   * another acquisition is pending. Registry drain accounts for late arrivals.
+   * Failures retain ownership; only a successful close is cached permanently.
+   * @param {Error} [reason]
+   * @returns {Promise<void>}
+   */
+  const close = (reason = makeError(X`sandbox factory closed`)) => {
+    ownerLost ??= reason;
+    if (closeFlight !== undefined) return closeFlight;
+    const drained = slices.shutdown();
+    const stopping = [...liveClosers].map(cleanup => cleanup());
+    closeFlight = (async () => {
+      const results = await Promise.allSettled([drained, ...stopping]);
+      const failures = results
+        .filter(result => result.status === 'rejected')
+        .map(result => result.reason);
+      if (failures.length) {
+        throw new AggregateError(failures, 'Sandbox factory shutdown pending');
+      }
+    })().catch(error => {
+      closeFlight = undefined;
+      throw error;
+    });
+    return closeFlight;
   };
 
   /**
@@ -1227,20 +1291,16 @@ export const makeSandboxFactory = (
     E(context)
       .whenCancelled()
       .catch(reason => {
-        ownerLost = makeError(
+        const lost = makeError(
           X`sandbox factory owner is no longer reachable: ${q(/** @type {Error | undefined} */ (reason)?.message ?? reason)}`,
         );
-        return Promise.all(
-          [...liveHandles].map(handleRef =>
-            E(handleRef)
-              .dispose()
-              .catch(() => undefined),
-          ),
-        );
+        // The host kit retains retry authority if automatic cleanup fails.
+        // No new admission can occur after this close attempt begins.
+        return close(lost).catch(() => undefined);
       });
   }
 
-  return /** @type {SandboxFactory} */ (
+  const factory = /** @type {SandboxFactory} */ (
     /** @type {unknown} */ (
       makeExo('SandboxFactory', SandboxFactoryInterface, {
         help,
@@ -1249,5 +1309,17 @@ export const makeSandboxFactory = (
       })
     )
   );
+  return harden({ factory, close });
 };
+harden(makeSandboxFactoryKit);
+
+/**
+ * Convenience constructor for callers that only need the public factory.
+ * Runtime resource owners must retain the kit and await close before release.
+ * @param {MakeSandboxFactoryInput} input
+ * @param {{ makeDelay?: typeof delay }} [powers]
+ * @returns {SandboxFactory}
+ */
+export const makeSandboxFactory = (input, powers) =>
+  makeSandboxFactoryKit(input, powers).factory;
 harden(makeSandboxFactory);

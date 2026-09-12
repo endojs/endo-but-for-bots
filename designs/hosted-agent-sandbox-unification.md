@@ -41,6 +41,72 @@ wait for already-running acquisitions, and attempt every retained owner.
 These scopes do not yet provide the shared supervisor's stop-during-start, immediate
 revocation, process-reaping, or hung-cleanup semantics.
 
+The ownership registry now lives in `@endo/sandbox`, shared by session adapters and
+the Podman driver.
+Podman teardown fences new operations, waits for admitted creates, and retains failed
+removals and their admission slots for retry.
+Successful cleanup requires both checked container removal and native attach-process
+stdio closure; configuration remains until all owners are released.
+Independent operation and policy-anchor removal failures are collected without losing owners.
+Controlled driver regressions cover these races.
+Bwrap now shares the registry, fences delayed admissions, and retains children through
+failed cleanup attempts until their stdio closes; process errors do not release ownership.
+Its existing bounded close wait applies on each retry, and group signalling still refuses
+a process group whose leader Node already reaped.
+Unused pasta and seccomp-file cleanup placeholders are removed.
+Factory disposal now permanently fences admission, shares concurrent attempts, and
+retains failed handles for retry, including an owner-cancellation cleanup sweep.
+One disposal path owns driver teardown; successful current release does not rewrite a
+process's historical failure, and a rejected process wait is never a reap proof.
+The process reap wait remains bounded after an accepted SIGKILL, and late arrivals use
+the same termination path.
+Scratch acquisition checks admission again after its provider returns.
+A host-only factory kit now fences factory admission, tracks pending slice construction
+and backend probes, and retains every returned driver context before publishing its handle.
+Close stops existing handles without waiting for unrelated pending construction, drains
+late acquisitions, and retains cleanup failures for the host owner to retry.
+Context cancellation uses this same close path; the public factory has no close authority.
+The host runtime controller now acquires exclusive ownership, shared generated-file
+storage, and this factory kit in that order, then releases them in reverse order.
+It returns its cleanup controller before initialization starts, so cleanup of failed
+construction remains owned and a failed release can be retried by the host owner.
+An atomic ownership marker contains a nonce unique to that acquisition; old successful
+release calls cannot remove a successor's marker.
+Existing markers and storage roots refuse startup, without a probe or stale sweep.
+A dead daemon worker is insufficient evidence for recovery: a surviving `podman create`
+can finish after a successor's container sweep.
+Every Podman invocation now requires the local engine, including probes and cleanup.
+Podman preparation now retains anchor and seccomp-directory cleanup before a context
+can be returned, with a host-only `closeSlices()` fence and retry path.
+Anchor and operation-create removal cannot overtake an unfinished producer; failed
+producer effects retain configuration and operation slots even after removal succeeds,
+while proven no-child acquisition failures can release.
+Operation admission observes cancellation through identity and policy inspection.
+After successful creation, operations resolve a full container ID and use it for
+policy inspection, startup, signaling, and removal, including cleanup retries.
+Fixed creation flags disable automatic restart and inherited image healthchecks.
+Operation removal now observes Podman's positive startup timestamp before deleting
+the container record; attached exit status alone is insufficient startup evidence.
+Failed observation still permits removal, but retains uncertainty and configuration
+until reconciliation; successful removal is cached rather than repeated as evidence.
+Resolver attestation's process-launching `exec` shares anchor producer ownership.
+Podman's host-only `close()` now composes retained slice cleanup with direct native
+command lifetime tracking, including failed observations, pulls, and signaling.
+It aborts ordinary observations during close, preserves admitted producer deadlines,
+permits cleanup retries, and seals all command admission before reporting closure.
+Orphan cleanup validates full IDs before issuing removal.
+Runtime shutdown now invokes factory and driver close independently and releases
+storage and ownership only after both succeed; partial failures retain retry ownership.
+Tests include the production Podman driver with a simulated pending native closure,
+in addition to filesystem and composed-owner failures.
+The hosted runtime composes Podman; the generic factory retains bwrap support,
+whose separate probe-closure gap is outside this hosted composition.
+Uncertain descendant completion must retain ownership rather than license replacement.
+Daemon entrypoint retention and configuration, stronger crash
+recovery, and resolver integration remain pending.
+Recovery from hung driver control calls and the complete session emergency-stop path
+remain pending.
+
 Generic public TCP egress, HTTP/CONNECT proxying, and constrained DNS now live in
 `@endo/hosted-agent`; Codex uses those shared services.
 One shared listener image contains inference and optional public listeners, with
@@ -61,6 +127,24 @@ Pinned app-server native-command acceptance remains outstanding.
 The network evidence and proxy environment contract now lives in `@endo/hosted-agent`.
 OpenCode's broker can issue separately revocable public-egress grants; its hosted
 factory still uses the previous public path until resolver/runtime integration lands.
+
+The shared sandbox request now carries literal generated-file records and validates
+canonical destinations, overlapping mounts, and exact-policy exclusions before acquisition.
+Backend selection requires explicit support; Podman advertises support only when the
+host supplies a generated-file allocator, while bwrap still refuses these requests.
+Podman stages individual read-only file binds during owned spawn acquisition, reuses them
+across operations, and releases them only after every container removal succeeds.
+Its mount arguments use CSV field encoding; generated destinations also exclude Podman's
+automatic `/run` and `/var/tmp` mounts.
+These destination checks are lexical and do not resolve aliases inside arbitrary images.
+The host-only staging allocator now shares aggregate UTF-8 payload and entry budgets
+across its stages, retains failed deletions and their charges, and refuses to remove
+files still owned by a consumer.
+It creates an exclusive fresh root under a private host directory and refuses existing
+roots; reconciling a crashed owner's storage requires prior container reaping by the runtime.
+Writable host-path overlap is checked again on each use.
+The host-only runtime controller composes storage ownership; daemon and hosted entrypoint
+wiring and resolver integration remain pending.
 
 Runtime unification across all three adapters, Claude credential migration, OpenCode
 public network convergence, tool/journal consolidation, emergency stop UI, and the remaining
@@ -362,7 +446,7 @@ provider requirements, or an explicit user budget, rather than copied between la
 | Container renewal each turn | Fresh runtime/grant generation | Stale runtime state | Explicit incarnation change on policy changes, failures, and restart | Remove ordinary per-turn replacement. |
 | CLI/tool separation inside guest | Inference endpoint and native state from shell tools | Other code in the same guest | Host protects credentials, routes, administration, and effects records | Remove baseline guarantee; optional stronger profile only. |
 | Synthetic public IP/NET_ADMIN helper | Inner proxy's exclusion of inference addresses | Guest tools reaching the broker | Such access is allowed in the new authority domain | Remove requirement; verify CLI compatibility first. |
-| Generated configuration staging | Host file authority and temporary host storage | Configuration callers and guest mutations | Declared mount destinations restrict exposure; host storage budget is still required because guest cgroups do not cover staging | Stage literal bytes privately, mount read-only, and retain cleanup ownership; implement with shared runtime storage. |
+| Generated configuration staging | Host file authority, payload storage, and directory entries | Configuration callers and guest mutations | Literal destinations restrict exposure; the host allocator charges aggregate UTF-8 bytes and entries until deletion; guest cgroups do not cover this storage | Integrate private staging with container lifetime and runtime ownership; refuse stale roots until prior users are reaped. |
 | Public destination/DNS filtering | Host/LAN services and ungranted external access | Guest requests and hostile DNS answers | Container isolation alone does not constrain a host proxy's sockets | Keep in shared egress service. |
 | Frame/header size cap | Allocation and parse work for one message | Guest/listener/provider input | Guest memory caps do not bound host parser allocation | Keep at each parsing boundary; derive compatible envelopes. |
 | Queue/inflight/connection caps | Aggregate host memory, FDs, pending work | Flooding or slow peers | One frame cap does not bound many queued frames | Keep with backpressure in shared transport/services. |

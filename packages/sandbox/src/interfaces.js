@@ -2,6 +2,8 @@
 
 import { M } from '@endo/patterns';
 
+import { GeneratedFileShape } from './generated-files.js';
+
 /**
  * Runtime `M.interface()` guards for the `@endo/sandbox` capability
  * surface. The compile-time shapes live in `./types.d.ts`; these guards
@@ -135,6 +137,7 @@ const SandboxMakeOptsShape = M.splitRecord(
   },
   {
     mounts: M.arrayOf(MountSpecShape),
+    generatedFiles: M.arrayOf(GeneratedFileShape),
     network: NetworkProfileShape,
     networkRef: M.string(),
     backend: BackendSelectorShape,
