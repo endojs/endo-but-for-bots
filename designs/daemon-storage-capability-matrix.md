@@ -25,8 +25,8 @@ The review comment that prompted this design puts it precisely:
 > further guarantee of immutability behind the read only view.
 
 A `readOnly()` view attenuates write authority but is a *face over live
-backing* — content can change behind it, and two reads may differ. A
-`snapshot()` captures content at a moment and freezes it — byte-identical on
+backing*: content can change behind it, and two reads may differ. A
+`snapshot()` captures content at a moment and freezes it, byte-identical on
 every read, forever, content-addressed. These are different guarantees wearing
 the same read surface, and the formula names give the immutable one the generic
 "readable" name, which is exactly the collision.
@@ -45,7 +45,7 @@ guarantee** down the side.
 |---|---|---|
 | **Mutable** (read + write, live) | **File** (`EndoMountFile`) | **Directory** (`EndoMount`, `directory` formula / `EndoDirectory`) |
 | **Readable view** (read-only, live) | **ReadableBlob** view (`file.readOnly()`) | **ReadableTree** view (`mount.readOnly()`) |
-| **Snapshot** (read-only, immutable, content-addressed) | **SnapshotBlob** — formula `snapshot-blob` (today `readable-blob`) | **SnapshotTree** — formula `snapshot-tree` (today `readable-tree`) |
+| **Snapshot** (read-only, immutable, content-addressed) | **SnapshotBlob**: formula `snapshot-blob` (today `readable-blob`) | **SnapshotTree**: formula `snapshot-tree` (today `readable-tree`) |
 
 The guarantees, stated so a caller knows what it holds:
 
@@ -60,9 +60,11 @@ The guarantees, stated so a caller knows what it holds:
   in the daemon's own words, "a write-disabled face over the live file, not a
   snapshot" (`packages/daemon/src/mount.js`, `makeReadableBlobView`);
   `mount.readOnly()` returns the analogous `ReadableTree`
-  (`makeReadableTreeView`). No content-address is offered, because there is no
-  fixed content to address. Today these views are **transient** exos, not
-  persisted formulas.
+  (`makeReadableTreeView`). No *stable* content identity is offered: the blob
+  view does expose `getInfo()`, but it hashes whatever the backing holds at the
+  moment of the call, so it is a current-state fingerprint, not a fixed address,
+  and there is no `sha256()` identity method. Today these views are **transient**
+  exos, not persisted formulas.
 
 - **Snapshot.** Content captured at an instant and frozen. Content-addressed by
   SHA-256; byte-identical on every read for all time; freely dedupable; the
@@ -75,7 +77,7 @@ The guarantees, stated so a caller knows what it holds:
 
 ### Why the read surface is shared but the guarantee is not
 
-The two read-only rows deliberately share the **structural read interface** —
+The two read-only rows deliberately share the **structural read interface**:
 `readableBlobMethodGuards` (`help` / `streamBase64` / `text` / `json`) for
 bytes and `readableTreeMethodGuards` (`help` / `has` / `list` / `lookup`) for
 collections (`packages/platform/src/fs/interfaces.js`). That sharing is
@@ -83,12 +85,23 @@ correct: "can read, cannot write" is a genuine common capability shape, and a
 caller that only reads should accept either a live view or a snapshot.
 
 What must **not** be shared is the guarantee. A snapshot advertises its stronger
-promise by additionally carrying the content-address accessor: `SnapshotBlob`
-and `SnapshotTree` add `getInfo()` / `sha256()` (the `{ algorithm, hash, size }`
-identity triple), which a live `readOnly()` view does not and cannot offer. So
-the presence of a content address is the observable, type-level witness that
-distinguishes "immutable snapshot" from "live read-only view" behind the same
-read methods. `readOnly` != `snapshot`, made explicit in the type.
+promise by additionally carrying the `sha256()` method. `SnapshotBlobInterface`
+and `SnapshotTreeInterface` each add `sha256` (and spread `getInfoMethodGuard`)
+in `packages/platform/src/fs/interfaces.js`; it is the `sha256()` method,
+present on both snapshot interfaces and on neither live-view interface, that is
+the observable type-level witness distinguishing "immutable snapshot" from "live
+read-only view" behind the same read methods.
+
+`getInfo()` alone is **not** that witness. interfaces.js calls it the *uniform*
+content-address accessor, and it is carried by a live read-only blob view too:
+`file.readOnly()` returns a `ReadableBlob` on `ReadableBlobRangeInterface` whose
+`getInfo()` hashes the file's *current* bytes (`packages/daemon/src/mount.js`,
+`makeReadableBlobView`). The semantic difference is what the hash *means*: a live
+view's `getInfo().hash` tracks mutating backing and may differ between calls,
+while a snapshot's `sha256()` is fixed for all time and *is* the cap's identity.
+So `readOnly` != `snapshot` is a type-level fact (the `sha256()` method) backed
+by a semantic one (permanent identity vs. current-state fingerprint), not merely
+the presence of a content address.
 
 ## Reconciliation with the existing names
 
@@ -117,7 +130,7 @@ vocabulary:
   `formulaTypes` (`packages/daemon/src/formula-type.js`); a repository-wide grep
   finds no `readable-directory` / `ReadableDirectory`. The live read-only view
   of a directory or mount is the **transient** `ReadableTree` returned by
-  `mount.readOnly()`, deliberately not a persisted formula — a live view has no
+  `mount.readOnly()`, deliberately not a persisted formula: a live view has no
   fixed content identity to persist and is re-derived from its mutable backing
   each session. (The originating prompt lists `readable-directory` among
   "existing" names; that is the discrepancy this section resolves. The intended
@@ -141,35 +154,40 @@ Renaming also **frees** the `readable-blob` / `readable-tree` names, so if a
 *persistable* read-only-but-live handle is ever wanted (a durable attenuation a
 holder can store and pass on, distinct from today's transient view), those names
 become available for it cleanly. That is a possible future formula, not part of
-this change (see Open Questions).
+this change (see Open questions).
 
 ## Migration path
 
-A formula's `type` string is persisted verbatim: `formula-record.js` writes
-`type: formula.type`, and incarnation switches on it in two places — the record
-parser's `switch` (`serializeFormula` / `deserializeFormula` in
-`formula-record.js`) and the maker table (`formulaMakerTable` in `manager.js`,
-whose `'readable-blob'` / `'readable-tree'` entries call `makeReadableBlob` /
-`makeReadableTree`). A rename is therefore a persisted-data-format change and
-must stay backward compatible with formula records already on disk.
+A formula's `type` string is persisted verbatim: `makeFormulaRecord`
+(`formula-record.js`) writes `type: formula.type`, guarded by a
+`switch (formula.type)` that validates each known type before the record is
+written. Incarnation then switches on that string in the maker table (`makers`,
+typed `FormulaMakerTable`, in `manager.js`, whose `'readable-blob'` /
+`'readable-tree'` entries call `makeReadableBlob` / `makeReadableTree`) and in
+the few direct `formula.type === 'readable-blob'` / `'readable-tree'` branches
+in `manager.js`. A rename is therefore a persisted-data-format change and must
+stay backward compatible with formula records already on disk.
 
 The content store is unaffected throughout: a snapshot's identity is its SHA-256
 content hash, not its formula-type string, so nothing is re-hashed and no dedup
 state churns. Formula *identifiers* are content-number/node-keyed (see
 `formatId` / `parseId`), not type-keyed, so an existing snapshot's id is stable
-across the rename — a holder's persisted reference keeps resolving.
+across the rename: a holder's persisted reference keeps resolving.
 
-**Phase 1 — dual-accept (no data change).**
+**Phase 1: dual-accept (no data change).**
 1. Add `snapshot-blob` and `snapshot-tree` to the `formulaTypes` set in
    `formula-type.js`, keeping `readable-blob` and `readable-tree`.
 2. Introduce a single canonical alias map (`readable-blob -> snapshot-blob`,
-   `readable-tree -> snapshot-tree`) applied at the one parse boundary in
-   `formula-record.js`, and register both the old and new keys in the
-   `manager.js` maker table and the record serializer `switch`. Every record
-   already on disk still incarnates; new records may be written under either
-   name.
+   `readable-tree -> snapshot-tree`) applied at the one boundary where a
+   persisted `type` is read back for incarnation (normalizing the record's
+   `type` before the `makers` lookup in `manager.js`), so an old on-disk record
+   resolves to the new type. Backward compatibility rides on that one alias, not
+   on dual key-registration: the `makers` table and the `formula-type.js` set
+   then need only the new `snapshot-*` keys, and the `makeFormulaRecord` switch
+   validates only the new names it will write. Every record already on disk
+   still incarnates, through the alias.
 
-**Phase 2 — write the new name.**
+**Phase 2: write the new name.**
 3. Formulation of a new snapshot writes `type: 'snapshot-blob'` /
    `'snapshot-tree'`. Old on-disk records keep their old string and are read
    through the alias, so **no bulk rewrite is required**.
@@ -180,9 +198,12 @@ across the rename — a holder's persisted reference keeps resolving.
    returns the snapshot-tagged exo (interfaces.js `readOnly` / `snapshot`
    method guards). Update the in-tree doc references that say "readable-tree
    capability" in lockstep (for example the `EndoRegistry.fetch` / `lookup`
-   comments in `interfaces.js`, and `help.md`).
+   comments in `interfaces.js`, and `help.md`). Whether the exo-tag string is
+   itself a compatibility surface an external consumer matches on is deferred to
+   Open questions; if so, this step stays behind the alias and keeps the old tag
+   reachable rather than renaming in place.
 
-**Phase 3 — deprecate the old string.**
+**Phase 3: deprecate the old string.**
 5. After a release window, stop *writing* the old names entirely (already true
    after Phase 2) and either keep the read-time alias indefinitely (recommended;
    it costs nothing because identity is content-keyed) or run a one-time
@@ -199,16 +220,19 @@ daemon-test validation pass, per the convention in
 |---|---|
 | [fs-interface-consolidation.md](fs-interface-consolidation.md) | Established the `ReadableBlob`/`SnapshotBlob`/`File` and `ReadableTree`/`SnapshotTree`/`Directory` type-tiers (§ C2/C3/C4) this design elevates to the formula-name layer. |
 | [fs-interface-reconciliation.md](fs-interface-reconciliation.md) | Unified the read-method names/signatures the shared surface depends on. |
-| [daemon-mount.md](daemon-mount.md), [daemon-mount-capabilities.md](daemon-mount-capabilities.md) | Define `EndoMount` / `EndoMountFile`, `readOnly()`, and `snapshot()` — the live and snapshot producers this matrix names. |
+| [daemon-mount.md](daemon-mount.md), [daemon-mount-capabilities.md](daemon-mount-capabilities.md) | Define `EndoMount` / `EndoMountFile`, `readOnly()`, and `snapshot()`: the live and snapshot producers this matrix names. |
 | [readableblob-range-attenuation.md](readableblob-range-attenuation.md) | The range-I/O attenuation of the readable-blob surface; consumer of the blob naming. |
 | [npm-registry-as-directory-tree.md](npm-registry-as-directory-tree.md) | Consumes `readable-tree` (SnapshotTree) fixtures; a downstream user of the renamed formula. |
 
-## Design Decisions
+## Design decisions
 
-1. **Keep the read surface shared; distinguish the guarantee by the content
-   address.** A snapshot carries `getInfo()` / `sha256()`; a live read-only view
-   does not. This makes `readOnly` != `snapshot` a type-level fact rather than a
-   naming convention, answering the review comment directly.
+1. **Keep the read surface shared; distinguish the guarantee by the `sha256()`
+   method.** A snapshot carries `sha256()` (a hash fixed for all time); a live
+   read-only view does not. `getInfo()` is *not* the distinguisher: it is the
+   uniform content-address accessor and is carried by a live blob view too, where
+   its hash tracks the mutating backing. This makes `readOnly` != `snapshot` a
+   type-level fact rather than a naming convention, answering the review comment
+   directly.
 
 2. **Rename the immutable formulas to `snapshot-*`, not the mutable or view
    forms.** The mistake is localized to the two snapshot formula names; File,
@@ -223,7 +247,7 @@ daemon-test validation pass, per the convention in
    content-keyed, an alias is free and permanent; a destructive rewrite of
    persisted records is neither necessary nor worth its risk.
 
-## Open Questions
+## Open questions
 
 - Should a **persistable live read-only handle** exist (reusing the freed
   `readable-blob` / `readable-tree` names as live-view formulas), or does the
@@ -232,12 +256,18 @@ daemon-test validation pass, per the convention in
 - Permanent read-time **alias** vs. a one-time **migration pass** for old
   persisted records? Recommendation: permanent alias (identity is content-keyed,
   so there is no functional cost).
-- Should the **mutable** rows (`File`, `Directory` / `EndoMount`) gain a
-  `getInfo()`-style content address of their *current* state, so the identity
-  accessor is uniform across all three rows (a live blob would report the hash
-  of its bytes right now)? This would let a caller content-address any handle
-  without feature-detecting snapshot vs. live, at the cost of a hash on demand
-  over mutable backing.
+- Should the **mutable** rows (`File`, `Directory` / `EndoMount`) expose a
+  `getInfo()` fingerprint of their *current* state, so the accessor is uniform
+  across all three rows? This is partly true already: the live `ReadableBlob`
+  view returned by `file.readOnly()` implements `getInfo()` over the current
+  bytes today (`mount.js`, `makeReadableBlobView`). The hazard is that treating
+  such a fingerprint as a "content address" re-introduces the exact
+  state/identity conflation this design removes: a hash that changes with content
+  is not an identity. Any uniform accessor must therefore be documented as a
+  current-state fingerprint, explicitly distinct from the stable `sha256()`
+  snapshot identity, or the collision returns under a new name. Recommendation:
+  keep `sha256()` (stable identity) snapshot-only; name any current-state
+  fingerprint separately.
 - Is `EndoSnapshotBlob` / `EndoSnapshotTree` the desired exo-tag spelling, or
   should the tags stay `EndoReadable*` for compatibility with any external
   consumer that matches on the tag string?
