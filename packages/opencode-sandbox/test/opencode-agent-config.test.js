@@ -16,6 +16,7 @@ test('builds the default OpenRouter config with a fixed provider list', t => {
     share: 'disabled',
     model: DEFAULT_MODEL,
     small_model: DEFAULT_MODEL,
+    default_agent: 'floot',
     permission: { doom_loop: 'allow' },
     provider: {
       openrouter: {
