@@ -999,9 +999,11 @@ test('an anchor that will not go away is not a clean teardown', async t => {
   // The anchor holds the slice's join to the broker's namespace, so a
   // removal that failed silently would let dispose() report proven
   // containment over a container still in it.
-  await t.throwsAsync(driver.teardown(slice), {
-    message: /policy anchor removal failed/,
+  const error = await t.throwsAsync(driver.teardown(slice), {
+    instanceOf: AggregateError,
+    message: /teardown pending/,
   });
+  t.regex(error.errors[0].message, /policy anchor removal failed/);
 });
 
 test('an image reference that podman would read as a flag is refused', async t => {

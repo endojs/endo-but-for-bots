@@ -41,6 +41,16 @@ wait for already-running acquisitions, and attempt every retained owner.
 These scopes do not yet provide the shared supervisor's stop-during-start, immediate
 revocation, process-reaping, or hung-cleanup semantics.
 
+The ownership registry now lives in `@endo/sandbox`, shared by session adapters and
+the Podman driver.
+Podman teardown fences new operations, waits for admitted creates, and retains failed
+removals and their admission slots for retry.
+Successful cleanup requires both checked container removal and host attach-process
+settlement; configuration remains until all owners are released.
+Independent operation and policy-anchor removal failures are collected without losing owners.
+Controlled driver regressions cover these races; factory disposal, bwrap reaping, and
+bounded recovery from a hung host process still need work before emergency-stop claims.
+
 Generic public TCP egress, HTTP/CONNECT proxying, and constrained DNS now live in
 `@endo/hosted-agent`; Codex uses those shared services.
 One shared listener image contains inference and optional public listeners, with
