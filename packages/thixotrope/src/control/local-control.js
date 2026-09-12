@@ -1,5 +1,6 @@
 // @ts-check
-/** @import { NodePowers } from '../platform/node-powers.js' */
+/** @import { RandomPowers } from '../platform/random.js' */
+/** @import { SocketConnection, SocketPowers } from '../platform/sockets.js' */
 import { E } from '@endo/eventual-send';
 import harden from '@endo/harden';
 import { frozenBytes } from '@endo/immutable-arraybuffer';
@@ -8,8 +9,6 @@ import { syrupCodec } from '@endo/ocapn/syrup';
 
 import { makePipeNetwork } from '../net/pipe-network.js';
 
-/** @import { Socket } from 'node:net' */
-
 // Local admin frames have a four-byte length, capped before allocation.
 const MAX_FRAME = 8 * 1024 * 1024;
 const secret = frozenBytes(new TextEncoder().encode('admin'));
@@ -17,13 +16,15 @@ const secret = frozenBytes(new TextEncoder().encode('admin'));
 /**
  * An OCapN session over a private Unix socket. Each socket has fresh client
  * tables; the fixed pipe identities authorize nothing beyond socket access.
- * @param {NodePowers} powers
- * @param {Socket} socket
+ * @param {object} powers
+ * @param {SocketPowers} powers.sockets
+ * @param {RandomPowers} powers.random
+ * @param {SocketConnection} socket
  * @param {'host' | 'worker'} role
  * @param {object} [admin]
  */
 export const makeLocalControl = async (
-  powers,
+  { sockets, random },
   socket,
   role,
   admin = undefined,
@@ -54,8 +55,7 @@ export const makeLocalControl = async (
   let target = new Uint8Array(4);
   let offset = 0;
   let header = true;
-  socket.on('data', data => {
-    const bytes = /** @type {Uint8Array} */ (data);
+  socket.onData(bytes => {
     let cursor = 0;
     while (cursor < bytes.length && !ended) {
       const length = Math.min(target.length - offset, bytes.length - cursor);
@@ -79,15 +79,15 @@ export const makeLocalControl = async (
       }
     }
   });
-  socket.on('error', () => socket.destroy());
-  socket.once('close', () => {
+  socket.onError(() => socket.destroy());
+  socket.onClose(() => {
     ended = true;
     pipe.close();
     client?.shutdown();
     finish();
   });
   client = await makeOcapn({
-    randomBytes: length => powers.randomBytes(length),
+    randomBytes: length => random.randomBytes(length),
     logger: harden({ log: () => {}, error: () => {}, info: () => {} }),
     codec: syrupCodec,
     network: pipe.network,
@@ -113,13 +113,14 @@ export const makeLocalControl = async (
 harden(makeLocalControl);
 
 /**
- * @param {NodePowers} powers @param {string} socketPath
- * @param socketPath
+ * @param {object} powers
+ * @param {SocketPowers} powers.sockets
+ * @param {RandomPowers} powers.random
+ * @param {string} socketPath
  */
-export const connectLocalControl = async (powers, socketPath) => {
-  const { createConnection } = powers.net;
-  const socket = createConnection(socketPath);
-  const control = await makeLocalControl(powers, socket, 'host');
+export const connectLocalControl = async ({ sockets, random }, socketPath) => {
+  const socket = sockets.connectPath(socketPath);
+  const control = await makeLocalControl({ sockets, random }, socket, 'host');
   const disconnected = control.closed.then(() => {
     throw Error(
       'Supervisor disconnected; evaluation outcome may be unknown. No retry was sent.',

@@ -1,62 +1,68 @@
 // @ts-check
-// Inject syscall failures through the store platform capability.
+// Inject failure phases through the store's sync file capability.
 import '@endo/init';
-import { dirname, join } from 'node:path';
+import {
+  closeSync,
+  fsyncSync,
+  openSync,
+  renameSync,
+  writeFileSync,
+} from 'node:fs';
+import { join } from 'node:path';
 
 import { makeNodePowers } from '../src/platform/node-powers.js';
 
 const platform = makeNodePowers();
-const fs = { ...platform.fs };
-const nodePowers = { ...platform, fs };
+const syncFiles = { ...platform.syncFiles };
 
 const [statePath, token, phase, encodedMeta] = process.argv.slice(2);
 const target = join(statePath, 'sessions', token, 'meta.json');
-const temporary = `${target}.tmp`;
-const original = {
-  openSync: fs.openSync,
-  closeSync: fs.closeSync,
-  writeFileSync: fs.writeFileSync,
-  fsyncSync: fs.fsyncSync,
-  renameSync: fs.renameSync,
-};
-/** @type {Map<number, string>} */
-const paths = new Map();
 let injections = 0;
 const fail = () => {
   injections += 1;
   throw Object.assign(Error(`injected ${phase}`), { code: 'ENOSPC' });
 };
-fs.openSync = (path, flags, mode) => {
-  const fd = original.openSync(path, flags, mode);
-  paths.set(fd, String(path));
-  return fd;
-};
-fs.closeSync = fd => {
-  paths.delete(fd);
-  original.closeSync(fd);
-};
-fs.writeFileSync = (path, data, ...rest) => {
-  if (phase === 'partial-write' && String(path) === temporary) {
-    original.writeFileSync(path, String(data).slice(0, 19), ...rest);
-    fail();
-  }
-  original.writeFileSync(path, data, ...rest);
-};
-fs.fsyncSync = fd => {
-  if (
-    (phase === 'temp-fsync' && paths.get(fd) === temporary) ||
-    (phase === 'directory-fsync' && paths.get(fd) === dirname(target))
-  ) {
-    fail();
-  }
-  original.fsyncSync(fd);
-};
-fs.renameSync = (from, to) => {
-  if (phase === 'rename' && String(to) === target) fail();
-  original.renameSync(from, to);
-};
+if (phase !== 'read') {
+  syncFiles.writeTextAtomic = (path, text, options) => {
+    if (path !== target) {
+      platform.syncFiles.writeTextAtomic(path, text, options);
+      return;
+    }
+    const temporary = `${path}.tmp`;
+    if (phase === 'partial-write') {
+      writeFileSync(temporary, text.slice(0, 19));
+      fail();
+      return;
+    }
+    if (phase === 'temp-fsync' || phase === 'rename') {
+      writeFileSync(temporary, text);
+      fail();
+      return;
+    }
+    if (phase === 'directory-fsync') {
+      // Publish first, then fail while persisting the directory entry, so a
+      // restarted process observes the renamed image even though the caller
+      // learned of a failure.
+      const fd = openSync(temporary, 'w');
+      try {
+        writeFileSync(fd, text);
+        fsyncSync(fd);
+      } finally {
+        closeSync(fd);
+      }
+      renameSync(temporary, path);
+      fail();
+      return;
+    }
+    platform.syncFiles.writeTextAtomic(path, text, options);
+  };
+}
+
 const { makeFsStore } = await import('../src/store/store-fs.js');
-const session = makeFsStore(nodePowers, statePath).provideSessionStore(token);
+const session = makeFsStore(
+  { syncFiles, paths: platform.paths },
+  statePath,
+).provideSessionStore(token);
 /** @type {string | undefined} */
 let errorCode;
 try {

@@ -1,5 +1,9 @@
 // @ts-check
-/** @import { NodePowers } from '../platform/node-powers.js' */
+/** @import { FilePowers } from '../platform/files.js' */
+/** @import { HashPowers } from '../platform/hashes.js' */
+/** @import { PathPowers } from '../platform/paths.js' */
+/** @import { ChildProcessPowers, ProcessPowers } from '../platform/processes.js' */
+/** @import { TimerPowers } from '../platform/timers.js' */
 import harden from '@endo/harden';
 import { acquireIronhorseRuntime, hashFile } from './ironhorse-runtime.js';
 
@@ -14,7 +18,12 @@ import { WorkerHaltError } from '../core/worker-engine.js';
  * incarnation's newer checkpoint. This keeps the existing journal/sequence
  * protocol valid without a distributed transaction between heap and hub.
  *
- * @param {NodePowers} powers
+ * @param {object} powers
+ * @param {ProcessPowers} powers.processes
+ * @param {FilePowers} powers.files
+ * @param {PathPowers} powers.paths
+ * @param {TimerPowers} powers.timers
+ * @param {HashPowers} powers.hashes
  * @param {object} options
  * @param {string} options.workerBinary
  * @param {Array<string>} options.bootPaths trusted bootstrap files
@@ -24,7 +33,7 @@ import { WorkerHaltError } from '../core/worker-engine.js';
  * @returns {WorkerEngine}
  */
 export const makeIronhorseEngine = (
-  powers,
+  { processes, files, paths, timers, hashes },
   {
     workerBinary,
     bootPaths,
@@ -33,21 +42,18 @@ export const makeIronhorseEngine = (
     requestTimeoutMs = 60_000,
   },
 ) => {
-  const { spawn } = powers.childProcess;
-  const { copyFile, mkdir, mkdtemp, open, realpath, rename, rm } =
-    powers.fsPromises;
-  const { dirname, join, resolve: resolvePath } = powers.path;
-  const { createInterface } = powers.readline;
-  const { setTimeout, clearTimeout } = powers.timers;
-  /** @param {string} path */
-  const syncFile = async path => {
-    const file = await open(path, 'r');
-    try {
-      await file.sync();
-    } finally {
-      await file.close();
-    }
-  };
+  const { spawn } = processes;
+  const {
+    copyFile,
+    makeDirectory,
+    makeTempDirectory,
+    realPath,
+    rename,
+    remove,
+    syncPath,
+  } = files;
+  const { dirname, join, resolve: resolvePath } = paths;
+  const { setTimer, clearTimer } = timers;
 
   if (
     !Number.isSafeInteger(crankBudget) ||
@@ -91,28 +97,31 @@ export const makeIronhorseEngine = (
       try {
         if (
           resolvePath(storePath) !== resolvePath(statePath, 'heaps') ||
-          (await realpath(statePath)) !== (await realpath(dirname(storePath)))
+          (await realPath(statePath)) !== (await realPath(dirname(storePath)))
         ) {
           throw Error(
             'Ironhorse heaps must belong to the daemon state directory',
           );
         }
-        await mkdir(storePath, { recursive: true });
+        await makeDirectory(storePath);
         if (
-          (await realpath(storePath)) !==
-          join(await realpath(statePath), 'heaps')
+          (await realPath(storePath)) !==
+          join(await realPath(statePath), 'heaps')
         ) {
           throw Error('Ironhorse heaps directory must not be a symlink');
         }
-        runtime = await acquireIronhorseRuntime(powers, {
-          statePath,
-          workerBinary,
-          bootPaths,
-          crankBudget,
-          onLost: () => {
-            void stopWorkers().catch(() => {});
+        runtime = await acquireIronhorseRuntime(
+          { processes, files, paths, hashes },
+          {
+            statePath,
+            workerBinary,
+            bootPaths,
+            crankBudget,
+            onLost: () => {
+              void stopWorkers().catch(() => {});
+            },
           },
-        });
+        );
       } finally {
         acquiring = false;
       }
@@ -122,7 +131,7 @@ export const makeIronhorseEngine = (
         runtime = undefined;
       };
     },
-    releaseSnapshot: async ref => rm(imagePath(ref), { force: true }),
+    releaseSnapshot: async ref => remove(imagePath(ref), { force: true }),
     start: async ({ snapshot, onOutbound }) => {
       if (!runtime)
         throw Error(
@@ -130,33 +139,25 @@ export const makeIronhorseEngine = (
         );
       const owned = runtime;
       owned.assertOwned();
-      const first = await mkdir(images, { recursive: true });
-      if (first) {
-        for (let path = images; ; path = dirname(path)) {
-          // Persist every newly created directory entry up to its parent.
-          // eslint-disable-next-line no-await-in-loop
-          await syncFile(path);
-          if (path === dirname(first)) break;
-        }
-      }
-      await mkdir(work, { recursive: true });
-      const directory = await mkdtemp(join(work, 'vat-'));
+      await makeDirectory(images);
+      await makeDirectory(work);
+      const directory = await makeTempDirectory(join(work, 'vat-'));
       const heap = join(directory, 'heap.sqlite');
       try {
         if (snapshot != null) {
           const source = imagePath(snapshot);
-          if ((await hashFile(powers, source)) !== snapshot) {
+          if ((await hashFile(hashes, source)) !== snapshot) {
             throw Error('Ironhorse snapshot digest mismatch');
           }
           await copyFile(source, heap);
         }
       } catch (error) {
-        await rm(directory, { recursive: true, force: true });
+        await remove(directory, { recursive: true, force: true });
         throw error;
       }
 
       let terminated = false;
-      /** @type {ReturnType<typeof spawn> | undefined} */
+      /** @type {ChildProcessPowers | undefined} */
       let child;
       /** @type {Promise<number | null> | undefined} */
       let exited;
@@ -177,21 +178,21 @@ export const makeIronhorseEngine = (
             reject(Error('Ironhorse worker is unavailable or busy'));
             return;
           }
-          const timer = setTimeout(
+          const timer = setTimer(
             () => fail(Error('Ironhorse worker request timed out')),
             requestTimeoutMs,
           );
           pending = {
             resolve: value => {
-              clearTimeout(timer);
+              clearTimer(timer);
               resolve(value);
             },
             reject: error => {
-              clearTimeout(timer);
+              clearTimer(timer);
               reject(error);
             },
           };
-          if (message) child.stdin?.write(`${JSON.stringify(message)}\n`);
+          if (message) child.input(0)?.write(`${JSON.stringify(message)}\n`);
         });
 
       const launch = async () => {
@@ -211,40 +212,35 @@ export const makeIronhorseEngine = (
           },
         );
         const workerProcess = child;
-        exited = new Promise(resolve => {
-          workerProcess.once('exit', (code, signal) => {
-            if (pending)
-              fail(Error(`Ironhorse worker exited (${code ?? signal})`));
-            resolve(code);
-          });
-          workerProcess.once('error', error => {
-            fail(error);
-            resolve(null);
-          });
+        exited = workerProcess.exited.then(code => {
+          if (pending)
+            fail(Error(`Ironhorse worker exited (${code ?? 'signaled'})`));
+          return code;
         });
-        workerProcess.stdin?.on('error', fail);
-        const lines = createInterface({
-          input: /** @type {import('node:stream').Readable} */ (
-            workerProcess.stdout
-          ),
-        });
-        lines.on('line', line => {
+        void (async () => {
+          await null;
           try {
-            const reply = JSON.parse(line);
-            const waiter = pending;
-            if (!waiter) throw Error('Unsolicited Ironhorse reply');
-            if (reply.op === 'fatal') {
-              fail(new WorkerHaltError(String(reply.message)));
-              return;
+            for await (const line of workerProcess.lines(1)) {
+              try {
+                const reply = JSON.parse(line);
+                const waiter = pending;
+                if (!waiter) throw Error('Unsolicited Ironhorse reply');
+                if (reply.op === 'fatal') {
+                  fail(new WorkerHaltError(String(reply.message)));
+                } else {
+                  if (!['ready', 'result'].includes(reply.op))
+                    throw Error('Invalid Ironhorse reply');
+                  pending = undefined;
+                  waiter.resolve(reply);
+                }
+              } catch (error) {
+                fail(/** @type {Error} */ (error));
+              }
             }
-            if (!['ready', 'result'].includes(reply.op))
-              throw Error('Invalid Ironhorse reply');
-            pending = undefined;
-            waiter.resolve(reply);
           } catch (error) {
             fail(/** @type {Error} */ (error));
           }
-        });
+        })();
         const ready = await request();
         owned.assertOwned();
         if (ready.op !== 'ready')
@@ -252,13 +248,10 @@ export const makeIronhorseEngine = (
       };
 
       const close = async () => {
-        const timer = setTimeout(
-          () => child?.kill('SIGKILL'),
-          requestTimeoutMs,
-        );
-        child?.stdin?.end(`${JSON.stringify({ op: 'close' })}\n`);
+        const timer = setTimer(() => child?.kill('SIGKILL'), requestTimeoutMs);
+        child?.input(0)?.end(`${JSON.stringify({ op: 'close' })}\n`);
         const code = await exited;
-        clearTimeout(timer);
+        clearTimer(timer);
         child = undefined;
         if (code !== 0)
           throw Error('Ironhorse failed to close its SQLite heap');
@@ -268,7 +261,7 @@ export const makeIronhorseEngine = (
         terminated = true;
         child?.kill('SIGKILL');
         await exited;
-        await rm(directory, { recursive: true, force: true });
+        await remove(directory, { recursive: true, force: true });
         incarnations.delete(terminate);
       };
       incarnations.add(terminate);
@@ -301,12 +294,12 @@ export const makeIronhorseEngine = (
         },
         snapshot: async () => {
           await close(); // SQLite folds the WAL before the file is copied.
-          const ref = await hashFile(powers, heap);
+          const ref = await hashFile(hashes, heap);
           const temporary = join(directory, 'snapshot.sqlite');
           await copyFile(heap, temporary);
-          await syncFile(temporary);
+          await syncPath(temporary);
           await rename(temporary, imagePath(ref));
-          await syncFile(images);
+          await syncPath(images);
           await launch();
           return ref;
         },

@@ -64,7 +64,7 @@ export const registerHttpIntegration = (test, kind) => {
       const granted = await host.client.call('httpGrant', 'web', port);
       t.is(granted.desired, 'allocated');
       const { bundle } = await bundleApplication(
-        nodePowers,
+        nodePowers.bundler,
         fileURLToPath(new URL('../examples/http-counter.js', import.meta.url)),
       );
       await host.client.call('install', 'site', bundle, [['http', 'web']]);
