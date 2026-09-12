@@ -2936,6 +2936,7 @@ testNeedsNodeWorker(
     await E(host).makeUnconfined('worker', counterPath, {
       powersName: '@none',
       resultName: 'counter',
+      env: { ENDO_TEST_PRIVATE_ENV: 'environment-canary' },
     });
 
     const counterId = await E(host).identify('counter');
@@ -2946,6 +2947,42 @@ testNeedsNodeWorker(
     t.is(record.properties.specifier.value, counterPath);
     t.is(record.properties.worker.kind, 'reference');
     t.is(record.properties.powers.kind, 'reference');
+    t.false('env' in record.properties);
+    t.false(JSON.stringify(record).includes('environment-canary'));
+    t.deepEqual(await E(host).getFormulaEnvironment(counterId), {
+      ENDO_TEST_PRIVATE_ENV: 'environment-canary',
+    });
+    await t.throwsAsync(
+      E(E(host).diagnostics()).getFormulaEnvironment(counterId),
+      {
+        message: /target has no method "getFormulaEnvironment"/u,
+      },
+    );
+  },
+);
+
+test.serial(
+  'getFormulaEnvironment reads persisted environment after startup failure',
+  async t => {
+    const { host } = await prepareHost(t);
+    const missing = path.join(
+      dirname,
+      'test',
+      'missing-environment-fixture.js',
+    );
+    await t.throwsAsync(
+      E(host).makeUnconfined(undefined, missing, {
+        powersName: '@none',
+        resultName: 'failed-caplet',
+        env: { ENDO_RUNTIME_DIRECTORY: '/host/private/runtime' },
+      }),
+    );
+    const identifier = await E(host).identify('failed-caplet');
+    t.truthy(identifier);
+    t.deepEqual(await E(host).getFormulaEnvironment(identifier), {
+      ENDO_RUNTIME_DIRECTORY: '/host/private/runtime',
+    });
+    await t.throwsAsync(E(host).lookup('failed-caplet'));
   },
 );
 
@@ -2978,6 +3015,7 @@ testNeedsNodeWorker(
     // direct `getFormula` call that exposes the `worker` reference.
     const counterId = await E(host).identify('counter');
     const counterRecord = await E(E(host).diagnostics()).getFormula(counterId);
+    t.deepEqual(await E(host).getFormulaEnvironment(counterId), {});
     t.is(counterRecord.properties.worker.kind, 'reference');
     const workerId = counterRecord.properties.worker.identifier;
 
@@ -3204,6 +3242,12 @@ test('the diagnostics facet is absent on the guest facet', async t => {
   await t.throwsAsync(() => E(guest).getFormula(tenId), {
     message: /target has no method "getFormula"/u,
   });
+  await t.throwsAsync(() => E(guest).getFormulaEnvironment(tenId), {
+    message: /target has no method "getFormulaEnvironment"/u,
+  });
+  await t.throwsAsync(() => E(host).getFormulaEnvironment(tenId), {
+    message: /has no construction environment/u,
+  });
 });
 
 test('getFormula rejects cross-peer locators', async t => {
@@ -3223,6 +3267,9 @@ test('getFormula rejects cross-peer locators', async t => {
     number: formulaNumber,
   });
   await t.throwsAsync(() => E(E(host).diagnostics()).getFormula(crossPeerId), {
+    message: /cross-peer/u,
+  });
+  await t.throwsAsync(() => E(host).getFormulaEnvironment(crossPeerId), {
     message: /cross-peer/u,
   });
 });
