@@ -609,7 +609,10 @@ test.serial(
       'evaluate',
       "inventory.set('counter', Far('GrantedCounter', { read: () => 42n })); undefined",
     );
-    const { bundle, digest } = await bundleApplication(nodePowers, file);
+    const { bundle, digest } = await bundleApplication(
+      nodePowers.bundler,
+      file,
+    );
     const installed = await admin.call('install', 'counter-app', bundle, [
       ['counter', 'counter'],
     ]);

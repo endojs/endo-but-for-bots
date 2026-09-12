@@ -1,5 +1,7 @@
 // @ts-check
-/** @import { NodePowers } from '../platform/node-powers.js' */
+/** @import { LogPowers } from '../platform/logging.js' */
+/** @import { RandomPowers } from '../platform/random.js' */
+/** @import { TimerPowers } from '../platform/timers.js' */
 import harden from '@endo/harden';
 import { decodeBase64, encodeBase64 } from '@endo/base64';
 import { Fail, q } from '@endo/errors';
@@ -104,7 +106,10 @@ const ENDPOINT_ID = 'e'.repeat(32);
 const ENDPOINT_SESSION = 'endpoint';
 
 /**
- * @param {Pick<NodePowers, 'randomBytes' | 'console' | 'timers'>} powers
+ * @param {object} powers
+ * @param {TimerPowers} powers.timers
+ * @param {RandomPowers} powers.random
+ * @param {LogPowers} powers.logging
  * @param {object} options
  * @param {ThixotropeStore} options.store
  * @param {WorkerEngine} options.engine
@@ -118,7 +123,7 @@ const ENDPOINT_SESSION = 'endpoint';
  * @returns {Promise<ThixotropeDaemon>}
  */
 const buildDaemon = async (
-  powers,
+  { timers, random, logging },
   {
     store,
     engine,
@@ -131,18 +136,18 @@ const buildDaemon = async (
 ) => {
   // 128 random bits as lowercase hex: worker ids and default swissnums.
   const randomHex128 = () => {
-    const bytes = powers.randomBytes(16);
+    const bytes = random.randomBytes(16);
     return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join(
       '',
     );
   };
 
   const logError = verbose
-    ? (...args) => powers.console.error('thixotrope daemon:', ...args)
+    ? (...args) => logging.error('thixotrope daemon:', ...args)
     : () => {};
 
   const cryptography = makeCryptography(codec, length =>
-    powers.randomBytes(length),
+    random.randomBytes(length),
   );
   /** @type {any} */
   const handoffDialRef = {};
@@ -169,7 +174,7 @@ const buildDaemon = async (
       const workerStore = store.provideWorkerStore(workerId);
       /** @type {any} */
       const holder = {};
-      const transport = makeDurableWorkerTransport(powers, {
+      const transport = makeDurableWorkerTransport({ timers, logging }, {
         workerId,
         store: workerStore,
         engine,
@@ -210,7 +215,7 @@ const buildDaemon = async (
     store,
     resources: resourceMakers,
     reportError: error =>
-      powers.console.error('thixotrope worker sessions:', error),
+      logging.error('thixotrope worker sessions:', error),
   });
 
   /**
@@ -236,7 +241,7 @@ const buildDaemon = async (
   const pendingEndpointAnswers = new Set();
   const endpointClient = await makeOcapn({
     logger: harden({ log: logError, error: logError, info: () => {} }),
-    randomBytes: length => powers.randomBytes(length),
+    randomBytes: length => random.randomBytes(length),
     codec,
     debugLabel: 'thixotrope-endpoint',
     sessionHooks: {
@@ -1143,7 +1148,7 @@ const buildDaemon = async (
     lookup,
     openEphemeralClient: async () => {
       if (stopping) throw Error('Daemon is stopping');
-      const opening = makeEphemeralHubClient(powers, {
+      const opening = makeEphemeralHubClient(random, {
         codec,
         hub,
         sessionKey: `transient:${randomHex128()}`,
@@ -1216,7 +1221,10 @@ const buildDaemon = async (
 };
 /**
  * Acquire engine ownership before reading or restoring daemon state.
- * @param {Pick<NodePowers, 'randomBytes' | 'console' | 'timers'>} powers
+ * @param {object} powers
+ * @param {TimerPowers} powers.timers
+ * @param {RandomPowers} powers.random
+ * @param {LogPowers} powers.logging
  * @param {Parameters<typeof buildDaemon>[1]} options
  */
 export const makeThixotropeDaemon = async (powers, options) => {

@@ -1,5 +1,5 @@
 // @ts-check
-/** @import { NodePowers } from '../platform/node-powers.js' */
+/** @import { TerminalSession } from '../platform/terminal.js' */
 import { Far } from '@endo/far';
 import harden from '@endo/harden';
 
@@ -28,64 +28,34 @@ harden(renderInventory);
 /**
  * The TUI owns a dedicated connection. Every exit path closes it; the server
  * then explicitly removes the guest subscription before dropping its bridge.
- * @param {NodePowers} powers
+ * @param {TerminalSession} session
  * @param {Awaited<ReturnType<typeof connectLocalControl>>} client
  */
-export const showInventory = async (powers, client) => {
-  const {
-    process,
-    readline: { createInterface },
-  } = powers;
-  const terminal = createInterface({
-    input: process.stdin,
-    output: process.stdout,
-    terminal: Boolean(process.stdin.isTTY),
-  });
+export const showInventory = async (session, client) => {
   let closing = false;
-  /** @type {(() => void) | undefined} */
-  let finishRender;
   const close = () => {
     if (closing) return;
     closing = true;
-    terminal.close();
-    finishRender?.();
-    process.stdin.destroy();
-    if (!process.stdout.isTTY) process.stdout.destroy();
+    session.close();
     client.close();
   };
   const observer = Far('InventoryTUI', {
     changed: snapshot => {
       if (closing) return;
       const text = renderInventory(snapshot);
-      return new Promise(resolve => {
-        const done = () => {
-          process.stdout.removeListener('drain', done);
-          process.stdout.removeListener('error', done);
-          finishRender = undefined;
-          resolve(undefined);
-        };
-        if (
-          process.stdout.write(
-            `${process.stdout.isTTY ? '\x1b[2J\x1b[H' : ''}${text}`,
-          )
-        ) {
-          done();
-        } else {
-          finishRender = done;
-          process.stdout.once('drain', done);
-          process.stdout.once('error', done);
-        }
-      });
+      session.clearScreen();
+      return session.write(text);
     },
   });
-  process.stdout.once('error', close);
-  terminal.on('line', line => {
-    if (line.trim() === 'q') close();
-  });
-  terminal.once('close', close);
-  terminal.once('SIGINT', close);
-  process.once('SIGINT', close);
-  process.once('SIGTERM', close);
+  void (async () => {
+    for await (const line of session.lines()) {
+      if (line.trim() === 'q') break;
+    }
+    // 'q', end of input, or session teardown all end the reader; every path
+    // releases the dedicated control connection.
+    close();
+  })();
+  session.onClose(close);
   void client.closed.then(close);
   try {
     await client.call('watchInventory', observer);
@@ -94,9 +64,6 @@ export const showInventory = async (powers, client) => {
     if (!closing) throw error;
   } finally {
     close();
-    process.removeListener('SIGINT', close);
-    process.removeListener('SIGTERM', close);
-    process.stdout.removeListener('error', close);
   }
 };
 harden(showInventory);

@@ -3,7 +3,6 @@
 import '@endo/init';
 import process from 'node:process';
 import { join, resolve } from 'node:path';
-import { createInterface } from 'node:readline';
 
 import { bundleApplication } from '../src/control/bundle-application.js';
 import { connectLocalControl } from '../src/control/local-control.js';
@@ -13,13 +12,13 @@ import { serveThixotrope } from '../src/control/supervisor.js';
 
 import { makeNodePowers } from '../src/platform/node-powers.js';
 
-const nodePowers = makeNodePowers();
+const platform = makeNodePowers();
 
 const [command, directory = './.thix', ...args] = process.argv.slice(2);
 const statePath = resolve(directory);
 try {
   if (command === 'serve') {
-    const supervisor = await serveThixotrope(nodePowers, statePath);
+    const supervisor = await serveThixotrope(platform, statePath);
     const stop = () => {
       void supervisor.close().catch(error => {
         console.error(error.message);
@@ -63,7 +62,7 @@ try {
     command === 'stop'
   ) {
     const client = await connectLocalControl(
-      nodePowers,
+      { sockets: platform.sockets, random: platform.random },
       join(statePath, 'control.sock'),
     );
     try {
@@ -83,7 +82,7 @@ try {
       } else if (command === 'http-services') {
         console.log(JSON.stringify(await client.call('httpServices'), null, 2));
       } else if (command === 'mail') {
-        await showMailbox(nodePowers, client);
+        await showMailbox(platform.terminal.open(), platform.logging, client);
       } else if (
         [
           'revoke-invite',
@@ -120,7 +119,10 @@ try {
           if (separator < 1) throw Error('Expected power=inventory-key');
           return [grant.slice(0, separator), grant.slice(separator + 1)];
         });
-        const { bundle } = await bundleApplication(nodePowers, modulePath);
+        const { bundle } = await bundleApplication(
+          platform.bundler,
+          modulePath,
+        );
         console.log(
           JSON.stringify(
             await client.call('install', name, bundle, grants),
@@ -129,21 +131,16 @@ try {
           ),
         );
       } else if (command === 'inventory') {
-        await showInventory(nodePowers, client);
+        await showInventory(platform.terminal.open(), client);
       } else if (command === 'attach') {
-        const terminal = createInterface({
-          input: process.stdin,
-          output: process.stdout,
-          terminal: Boolean(process.stdin.isTTY),
-        });
+        const terminal = platform.terminal.open();
         const close = () => {
           terminal.close();
           client.close();
         };
-        process.once('SIGINT', close);
-        terminal.once('SIGINT', close);
+        terminal.onClose(close);
         void client.closed.then(() => terminal.close());
-        if (process.stdin.isTTY) {
+        if (terminal.isTTY) {
           console.log(
             'Workspace JavaScript; retain bindings with globalThis. Ctrl-D detaches.',
           );
@@ -151,19 +148,18 @@ try {
           terminal.prompt();
         }
         try {
-          for await (const source of terminal) {
+          for await (const source of terminal.lines()) {
             // eslint-disable-next-line no-continue
             if (!source.trim()) continue;
             try {
               console.log(await client.call('evaluate', source));
             } catch (error) {
               console.error(/** @type {Error} */ (error).message);
-              if (!process.stdin.isTTY) process.exitCode = 1;
+              if (!terminal.isTTY) process.exitCode = 1;
             }
-            if (process.stdin.isTTY) terminal.prompt();
+            if (terminal.isTTY) terminal.prompt();
           }
         } finally {
-          process.removeListener('SIGINT', close);
           terminal.close();
         }
       } else {

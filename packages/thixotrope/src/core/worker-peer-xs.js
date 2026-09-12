@@ -35,19 +35,21 @@ if (typeof send !== 'function') {
   );
 }
 
-const trace = /** @type {(text: string) => void} */ (
-  /** @type {any} */ (globalThis).thixotropeTrace
-);
+const nativeTrace = /** @type {any} */ (globalThis).thixotropeTrace;
 // The bootstrap alone obtains engine-provided entropy and diagnostics.
 const cryptoPower = globalThis.crypto;
+/** @param {...unknown} args */
+const trace = (...args) => {
+  if (typeof nativeTrace === 'function') {
+    nativeTrace(args.map(String).join(' '));
+  }
+};
+/** @param {number} length */
+const randomBytes = length =>
+  cryptoPower.getRandomValues(new Uint8Array(length));
 const powers = harden({
-  randomBytes: (/** @type {number} */ length) =>
-    cryptoPower.getRandomValues(new Uint8Array(length)),
-  console: {
-    error: (...args) => {
-      if (typeof trace === 'function') trace(args.map(String).join(' '));
-    },
-  },
+  random: harden({ randomBytes }),
+  logging: harden({ log: trace, error: trace }),
 });
 
 /** @type {{ deliver: (bytes: Uint8Array) => void } | undefined} */
