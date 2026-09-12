@@ -25,8 +25,12 @@ import {
   reportsContainerNotRunning,
   seccompSecurityOpt,
 } from '../src/drivers/podman.js';
+import { startControlCommand } from '../src/drivers/child-process.js';
 import { DEFAULT_PATH } from '../src/drivers/path.js';
 import { makeSandboxFactory } from '../src/factory.js';
+
+/** @import { SpawnOptions } from 'node:child_process' */
+/** @import { ExecutionContext } from 'ava' */
 
 const StubMountInterface = M.interface('Mount', {
   help: M.call().returns(M.string()),
@@ -53,7 +57,13 @@ const podmanRun = async args => {
   return new Promise(resolve => {
     let child;
     try {
-      child = nodeSpawn('podman', args, { stdio: 'pipe' });
+      child = nodeSpawn(
+        'podman',
+        ['--remote=false', '--syslog=false', ...args],
+        {
+          stdio: 'pipe',
+        },
+      );
     } catch (e) {
       resolve({
         code: null,
@@ -193,6 +203,70 @@ test('podman probe fails closed without an exact cleanup scope', async t => {
   t.false(probe.details?.lifecycle?.available ?? true);
 });
 
+test.serial(
+  'local-only flags refuse configured remote mode before connecting',
+  async t => {
+    t.timeout(10_000);
+    const directory = await nodeFs.promises.mkdtemp(
+      nodePath.join(nodeOs.tmpdir(), 'podman-remote-refusal-'),
+    );
+    t.teardown(() =>
+      nodeFs.promises.rm(directory, { recursive: true, force: true }),
+    );
+    const config = nodePath.join(directory, 'containers.conf');
+    await nodeFs.promises.writeFile(config, '[engine]\nremote = true\n');
+    const childProcess = {
+      /**
+       * @param {string} command
+       * @param {string[]} args
+       * @param {SpawnOptions} options
+       */
+      spawn: (command, args, options) =>
+        nodeSpawn(command, args, {
+          ...options,
+          env: {
+            ...process.env,
+            CONTAINERS_CONF_OVERRIDE: config,
+            // Even a regressed parser must not contact an operator's remote
+            // engine: this private pathname has no listening socket.
+            CONTAINER_HOST: `unix://${nodePath.join(directory, 'absent.sock')}`,
+            CONTAINER_CONNECTION: '',
+          },
+        }),
+    };
+    // This probes the native parser contract independently of the driver argv
+    // assertions below. No container is required, and no remote socket should
+    // be contacted: the local-only flag must fail before engine initialization.
+    const control = startControlCommand(
+      /** @type {any} */ (childProcess),
+      'podman',
+      ['--remote=false', '--syslog=false', 'info'],
+      { timeoutMs: 3000 },
+    );
+    t.teardown(async () => {
+      control.abort();
+      await control.closed;
+    });
+    let result;
+    try {
+      result = await control.result;
+    } catch (error) {
+      // Do not gate this test on probe(): the local-mode flags it tests are
+      // themselves part of that probe, so a regression could become a skip.
+      if (/** @type {NodeJS.ErrnoException} */ (error).code !== 'ENOENT') {
+        throw error;
+      }
+      await control.closed;
+      t.log('SKIPPED: podman binary not found on PATH');
+      t.pass();
+      return;
+    }
+    await control.closed;
+    t.not(result.code, 0);
+    t.regex(result.stderr, /unknown flag: --syslog/);
+  },
+);
+
 test('podman reconciliation uses only the exact owner label', async t => {
   /** @type {Array<{ command: string, args: string[] }>} */
   const calls = [];
@@ -202,6 +276,10 @@ test('podman reconciliation uses only the exact owner label', async t => {
      * @param {string[]} args
      */
     spawn(command, args) {
+      if (command === 'podman') {
+        t.deepEqual(args.slice(0, 2), ['--remote=false', '--syslog=false']);
+        args = args.slice(2);
+      }
       calls.push({ command, args: [...args] });
       let code = 0;
       let stdout = '';
@@ -1486,16 +1564,17 @@ test('seccompSecurityOpt leaves the built-in policies unchanged', t => {
  * Build a `child_process` stub that answers the podman probe path
  * (`--version`, `info`, the orphan sweep's `ps` / `rm -f`).
  *
+ * @param {ExecutionContext} t
  * @param {object} [options]
  * @param {string[]} [options.containers]  Names the orphan listing reports.
  * @param {(name: string) => { code: number, stderr: string }} [options.rm]
  *   Outcome for `podman rm -f <name>`; defaults to success.
  * @returns {{ childProcess: any, calls: Array<{ command: string, args: string[] }> }}
  */
-const makeProbeStub = ({
-  containers = [],
-  rm = () => ({ code: 0, stderr: '' }),
-} = {}) => {
+const makeProbeStub = (
+  t,
+  { containers = [], rm = () => ({ code: 0, stderr: '' }) } = {},
+) => {
   /** @type {Array<{ command: string, args: string[] }>} */
   const calls = [];
   const childProcess = {
@@ -1504,6 +1583,10 @@ const makeProbeStub = ({
      * @param {string[]} args
      */
     spawn(command, args) {
+      if (command === 'podman') {
+        t.deepEqual(args.slice(0, 2), ['--remote=false', '--syslog=false']);
+        args = args.slice(2);
+      }
       calls.push({ command, args: [...args] });
       let code = 0;
       let stdout = '';
@@ -1540,7 +1623,7 @@ const makeProbeStub = ({
 test('orphan sweep tolerates a container another sweep already removed', async t => {
   // Two probes race; the loser's `rm -f` finds the container gone. That is
   // the desired state, not a reason to report the backend unavailable.
-  const { childProcess } = makeProbeStub({
+  const { childProcess } = makeProbeStub(t, {
     containers: ['owned-operation'],
     rm: name => ({
       code: 1,
@@ -1557,7 +1640,7 @@ test('orphan sweep tolerates a container another sweep already removed', async t
 });
 
 test('orphan sweep still fails closed on a live removal failure', async t => {
-  const { childProcess } = makeProbeStub({
+  const { childProcess } = makeProbeStub(t, {
     containers: ['owned-operation'],
     rm: () => ({
       code: 1,
@@ -1576,7 +1659,7 @@ test('orphan sweep still fails closed on a live removal failure', async t => {
 });
 
 test('concurrent probes share one orphan sweep', async t => {
-  const { childProcess, calls } = makeProbeStub({
+  const { childProcess, calls } = makeProbeStub(t, {
     containers: ['owned-operation'],
   });
   const driver = makePodmanDriver({
@@ -1603,7 +1686,7 @@ test('concurrent probes share one orphan sweep', async t => {
 
 test('a failed orphan sweep is retried by the next probe', async t => {
   let attempt = 0;
-  const { childProcess, calls } = makeProbeStub({
+  const { childProcess, calls } = makeProbeStub(t, {
     containers: ['owned-operation'],
     rm: () => {
       attempt += 1;

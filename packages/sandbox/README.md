@@ -99,6 +99,25 @@ The podman driver shells out to a rootless `podman` binary. The
 driver `probe()` returns `available: false` when any of these is
 missing; `make()` then refuses the slice with a structured error.
 
+Every Podman invocation requires the local Linux engine: `/proc` observations
+and bind paths belong to the daemon's host.
+The driver prefixes `--remote=false --syslog=false`, including on probes and
+cleanup commands, and never retries without those flags.
+On the source-reviewed Podman 4.9.3 and 5.8.0 versions, configuration can still
+force remote mode despite `--remote=false`.
+The `--syslog` flag is registered only for the local engine; passing its default
+false value makes remote configurations and remote-only builds refuse argument
+parsing without enabling logging.
+See Podman's [engine selection][podman-engine-selection] and
+[local-only flag registration][podman-local-flags].
+Recheck this behavior when upgrading Podman, using the native remote-configuration
+refusal test in `test/podman.test.js`.
+Local engine selection does not prove that killing a Podman command terminates
+its descendants or finishes outstanding container creation.
+
+[podman-engine-selection]: https://github.com/containers/podman/blob/v5.8.0/cmd/podman/registry/config.go
+[podman-local-flags]: https://github.com/containers/podman/blob/v5.8.0/cmd/podman/root.go
+
 | Tool            | Phase | Tested version | Notes                                                                |
 | --------------- | ----- | -------------- | -------------------------------------------------------------------- |
 | `podman`        | 2     | 5.8.x          | <https://podman.io>; rootful installs are rejected by the probe.     |
