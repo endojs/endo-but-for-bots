@@ -552,6 +552,72 @@ export const runMultiplayerSuite = ({ test, network }) => {
     },
   );
 
+  // Concurrency: two acceptors race the SAME single-use invitation. The
+  // inviter-side `invitationJobs` serial queue exists precisely so the check
+  // and its consuming rebind are atomic, so at most one accept() may redeem
+  // the invitation even when both are in flight together. A sequential replay
+  // test cannot exercise the queue; this one starts both before either
+  // resolves. Deleting the invitationJobs wrapper (reverting to unserialized
+  // check-then-act) is what this test guards against.
+  test.serial(
+    'concurrent accept() on one invitation redeems at most once',
+    async t => {
+      const { host: hostA } = await prepareHostWithGcAndNetwork(t);
+      const { host: hostB } = await prepareHostWithGcAndNetwork(t);
+      const { host: hostC } = await prepareHostWithGcAndNetwork(t);
+
+      const invitation = await E(hostA).invite('bob');
+      const locator = await E(invitation).locate();
+
+      const results = await Promise.allSettled([
+        E(hostB).accept(locator, 'alice'),
+        E(hostC).accept(locator, 'alice'),
+      ]);
+      const fulfilled = results.filter(r => r.status === 'fulfilled');
+      const rejected = results.filter(r => r.status === 'rejected');
+      t.is(fulfilled.length, 1, 'exactly one concurrent accept succeeds');
+      t.is(rejected.length, 1, 'the racing accept is rejected as single-use');
+
+      // The inviter's invitation slot names exactly one accepted remote handle.
+      t.truthy(
+        await E(hostA).identify('bob'),
+        'the winning acceptor bound its handle under the invitation name',
+      );
+    },
+  );
+
+  // Supersession: re-minting an invitation under a name already bound to a
+  // pending invitation rebinds that slot, orphaning the first. The superseded
+  // invitation must fail its single-use check on accept, matching the
+  // "accepted, cancelled, or superseded" contract the accept guard asserts.
+  test.serial(
+    'a superseded invitation (its name rebound) is no longer redeemable',
+    async t => {
+      const { host: hostA } = await prepareHostWithGcAndNetwork(t);
+      const { host: hostB } = await prepareHostWithGcAndNetwork(t);
+      const { host: hostC } = await prepareHostWithGcAndNetwork(t);
+
+      const inv1 = await E(hostA).invite('bob');
+      const locator1 = await E(inv1).locate();
+      // Re-mint under the same name; this rebinds 'bob' and supersedes inv1.
+      const inv2 = await E(hostA).invite('bob');
+      const locator2 = await E(inv2).locate();
+
+      await t.throwsAsync(
+        () => E(hostB).accept(locator1, 'alice'),
+        undefined,
+        'the superseded invitation is rejected',
+      );
+
+      // The current invitation still redeems cleanly.
+      await E(hostC).accept(locator2, 'carol');
+      t.truthy(
+        await E(hostA).identify('bob'),
+        'the current invitation redeemed and bound its acceptor',
+      );
+    },
+  );
+
   test.serial('three-party invite with partition and recovery', async t => {
     const { host: hostA } = await prepareHostWithGcAndNetwork(t);
     const { host: hostB, config: configB } =
