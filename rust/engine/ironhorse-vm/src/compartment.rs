@@ -69,7 +69,7 @@ use std::rc::Rc;
 
 use crate::interp::{Halt, Interp, Realm, RunOutcome, SourceCompiler};
 use crate::module::{ModuleError, ModuleGraph, ModuleId};
-use crate::value::Slot;
+use crate::value::{Payload, Slot};
 
 /// A compartment's (its `globalThis`'s) identity within a machine.
 /// Distinct across every compartment — including a nested compartment —
@@ -334,6 +334,48 @@ impl Compartment {
         )
     }
 
+    /// Whether `value` carries an arena index that is not live on `machine`
+    /// — a reference to a free or out-of-range slot, or a string/BigInt
+    /// chunk offset past the chunk arena. Such a value can only come from a
+    /// host that minted it against another machine or after a collection;
+    /// seeding it would install a dangling global on the realm.
+    fn dangling_endowment(machine: &Interp, value: Slot) -> bool {
+        match value.value {
+            Payload::Reference(index) => {
+                index.is_null()
+                    || index.0 >= machine.slots().capacity()
+                    || machine.slots().is_free_index(index)
+            }
+            Payload::String(offset) | Payload::BigInt(offset) => {
+                offset.is_null() || (offset.0 as usize) >= machine.chunks().byte_size()
+            }
+            Payload::None
+            | Payload::Boolean(_)
+            | Payload::Integer(_)
+            | Payload::Number(_)
+            | Payload::At(..) => false,
+        }
+    }
+
+    /// The fail-closed outcome for a host endowment whose payload does not
+    /// index this machine's arenas. Nothing ran.
+    fn bad_endowment_refused(machine: &Interp) -> RunOutcome {
+        RunOutcome {
+            unhandled_rejection: None,
+            meter_raw_this_run: 0,
+            computrons_this_run: 0,
+            dispatched_this_run: 0,
+            completed: false,
+            result: String::new(),
+            coercion_error: None,
+            host_render_halt: None,
+            computrons: machine.meter_index() >> 16,
+            dispatched: 0,
+            meter_raw: machine.meter_index(),
+            halt: Halt::EngineInvariant("compartment:bad-endowment"),
+        }
+    }
+
     /// Bind every id-keyed endowment not yet seeded into this compartment's
     /// realm, in realm-id order.
     ///
@@ -356,7 +398,11 @@ impl Compartment {
     /// program addresses. An id outside the program's table cannot name a
     /// realm binding and is skipped; if two local ids translate to one realm
     /// id, the smaller local id wins, deterministically.
-    fn seed(&mut self, machine: &mut Interp, names: Option<&[crate::symbols::SymbolName]>) {
+    fn seed(
+        &mut self,
+        machine: &mut Interp,
+        names: Option<&[crate::symbols::SymbolName]>,
+    ) -> Result<(), RunOutcome> {
         let mut pending: std::collections::BTreeMap<u16, (u16, Slot)> =
             std::collections::BTreeMap::new();
         for (&local_id, &value) in &self.globals_by_id {
@@ -383,6 +429,9 @@ impl Compartment {
             if self.seeded_ids.contains(&realm_id) {
                 continue;
             }
+            if Self::dangling_endowment(machine, value) {
+                return Err(Self::bad_endowment_refused(machine));
+            }
             pending
                 .entry(realm_id)
                 .and_modify(|entry| {
@@ -396,6 +445,7 @@ impl Compartment {
             machine.define_global_id(realm_id, value);
             self.seeded_ids.insert(realm_id);
         }
+        Ok(())
     }
 
     /// The fail-closed outcome for a program whose symbol table cannot be
@@ -535,7 +585,9 @@ impl Compartment {
             Ok(code) => code,
             Err(_) => return Self::relink_refused(machine),
         };
-        self.seed(machine, Some(names));
+        if let Err(outcome) = self.seed(machine, Some(names)) {
+            return outcome;
+        }
         machine.run_shared(Rc::from(code))
     }
 
@@ -559,8 +611,10 @@ impl Compartment {
         if let Err(outcome) = self.install(machine) {
             return outcome;
         }
-        self.seed(machine, None);
-        let outcome = machine.run_shared(bytecode);
+        let outcome = match self.seed(machine, None) {
+            Ok(()) => machine.run_shared(bytecode),
+            Err(outcome) => outcome,
+        };
         self.park(machine);
         outcome
     }
@@ -1163,6 +1217,54 @@ mod tests {
         assert!(
             rb.unhandled_rejection.is_none(),
             "a sibling must not inherit the report"
+        );
+    }
+
+    #[test]
+    fn a_dangling_endowment_is_refused_before_anything_runs() {
+        // A host can hand in a slot minted against another machine or after
+        // a collection. It must not reach the shared heap as a dangling
+        // global: seeding refuses fail-closed.
+        let mut machine = Machine::new();
+        let mut compartment = machine.new_compartment();
+        compartment.define_global_id(
+            7,
+            Slot::of(
+                Kind::Reference,
+                Payload::Reference(crate::SlotIndex(1_000_000)),
+            ),
+        );
+        let outcome = compartment.evaluate(machine.interp_mut(), &read_global_program(7));
+        assert_eq!(
+            outcome.halt,
+            Halt::EngineInvariant("compartment:bad-endowment")
+        );
+        assert_eq!(outcome.dispatched, 0, "refused before dispatch");
+
+        let mut compartment = machine.new_compartment();
+        compartment.define_global_id(
+            7,
+            Slot::of(
+                Kind::String,
+                Payload::String(crate::value::ChunkOffset(1_000_000)),
+            ),
+        );
+        let outcome = compartment.evaluate(machine.interp_mut(), &read_global_program(7));
+        assert_eq!(
+            outcome.halt,
+            Halt::EngineInvariant("compartment:bad-endowment")
+        );
+
+        // A live reference (slot 0 is the machine's boot global) still seeds.
+        let mut compartment = machine.new_compartment();
+        compartment.define_global_id(
+            7,
+            Slot::of(Kind::Reference, Payload::Reference(crate::SlotIndex(0))),
+        );
+        assert!(
+            compartment
+                .evaluate(machine.interp_mut(), &read_global_program(7))
+                .completed
         );
     }
 

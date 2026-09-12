@@ -250,6 +250,7 @@ pub const ENGINE_INVARIANT_LABELS: &[&str] = &[
     "collection:missing-method-brand",
     "collection:unexpected-method",
     "comparison:stack-underflow",
+    "compartment:bad-endowment",
     "compartment:pending-jobs",
     "delete_property_at:key",
     "dispatch:control-transfer-escaped",
