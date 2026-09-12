@@ -29,7 +29,7 @@ authority and write authority as separately delegable capabilities (why that
 separation is worth having, rather than a single read+write face, is argued in
 the "Two independent authorities" section below).
 
-The originating maintainer prompt (reproduced verbatim in the Prompt section at
+The originating maintainer prompt (reproduced verbatim in the "Prompt" section at
 the end) asked for five things: pick a name (`blob`/`file`/`block-storage`); split
 the filesystem powers into separate ranged-read and ranged-write authorities;
 forbid a ranged write from extending the file in the middle while allowing append;
@@ -42,6 +42,12 @@ Concretely, it adds that mutable counterpart as its own formula type, threads
 constrains the write power so it can overwrite within the current extent or
 append at the end but cannot splice or extend from the middle. It reserves room
 for a later splice-capable variant backed by content-defined blocks from CASK.
+
+The new ranged-write primitive is scoped to the `block-storage` formula only.
+`EndoMountFile`'s existing whole-value write surface (`writeText` / `writeBytes`
+/ `append`, cited above as motivation) is **deliberately left unchanged**: a
+mount-file ranged write is out of scope here, not merely deferred, and a mount
+file that wants ranged writes would be a separate change.
 
 CASK is a content-addressed-storage successor system specified outside this
 repository; it is not yet present here. The `cask-*` names referenced below
@@ -63,7 +69,7 @@ ranged writes. Three names were offered.
 | `block-storage` | **Recommend** | Names the constrained medium honestly: a fixed-address byte store read and written by range, growing only by append, with no splice (exactly the semantics below). It leaves `file` and `blob` free for the splice-capable successor. |
 
 **Recommendation: `block-storage`.** The final pick is a maintainer decision
-(see Open Questions). Formula type `block-storage`; the mutable exo is
+(see the "Open questions" section). Formula type `block-storage`; the mutable exo is
 `EndoBlockStorage`; the branch/PR slug is `daemon-mutable-block-storage`.
 
 ## Design
@@ -71,14 +77,21 @@ ranged writes. Three names were offered.
 ### Two independent authorities
 
 The load-bearing observation: on **in-place** block storage a ranged read and a
-ranged write are *independent* authorities. An overwrite or an append does not
-need to read the current bytes, so a genuine **write-only** power is honest
-here. This diverges deliberately from CASK's cell capability lattice (a cell is a
-compare-and-swap named typed pointer, sketched in the "Room for a splice-capable
-CASK-backed variant" section below), where `write implies read` because a cell
-mutation is compare-and-swap and needs the current value (see the forward
-reference `cask-entry-type-capability`). Because the two authorities are
-independent, they split cleanly into two separately delegable powers:
+ranged write are **content-independent** authorities. An overwrite or an append
+does not need to read the current bytes, so a genuine **write-only** power is
+honest for content here. The split is content-independent, **not**
+state-independent: the write-admission rule below branches on the store's current
+`size`, so a write-only holder can still probe size. That partial exception is
+stated in full in the "The write-only cap is content-opaque but not size-opaque"
+subsection below, and it is why this section claims content-independence rather
+than blanket authority independence. The diagram's authority split is absolute
+for bytes, not for size. This diverges deliberately from CASK's cell capability
+lattice (a cell is a compare-and-swap named typed pointer, sketched in the "Room
+for a splice-capable CASK-backed variant" section below), where `write implies
+read` because a cell mutation is compare-and-swap and needs the current value
+(see the forward reference `cask-entry-type-capability`). Because the two
+authorities are content-independent, they split cleanly into two separately
+delegable powers:
 
 ```mermaid
 flowchart LR
@@ -89,7 +102,7 @@ flowchart LR
 ```
 
 A holder can be given the read-only cap, the write-only cap, or both. The maker
-(`storeBlockStorage`, see the Daemon plumbing section) mints the full store and returns it
+(`storeBlockStorage`, see the "Daemon plumbing" section) mints the full store and returns it
 to its creator; the read-only and write-only faces are then obtained by
 **attenuating** that full cap down to the range-read power or the range-write
 power, the same attenuation move the read face inherits from
@@ -109,12 +122,14 @@ size, a state observation that does not require the read-only cap. This is an
 intentional, coarse size leak, not a content leak; the two-authority split stays
 honest for bytes. A caller that needs the store's size to be opaque even to a
 writer cannot be handed the write-only cap, and would need a constant-response
-admission variant (noted in Open Questions). The read power's `getInfo().size`
+admission variant (noted in the "Open questions" section). The read power's `getInfo().size`
 remains the sanctioned, non-probing way to observe size.
 
 ### Range-read power (least authority: read only)
 
-Mirrors the existing `rangeReadMethodGuards`:
+Extends the existing `rangeReadMethodGuards` (`getInfo` plus `fetch` /
+`rangeRead`) and **deliberately diverges** from it by adding a cheap `size()`
+accessor:
 
 ```ts
 getInfo(): Promise<{ algorithm: 'sha256', digest: string, size: bigint }>
@@ -122,11 +137,37 @@ size(): Promise<bigint>                                      // cheap, no hash
 rangeRead(offset: bigint, length: bigint): Promise<Uint8Array>  // clamps at EOF
 ```
 
+The `size()` accessor is **new**, not a mirror of the existing surface:
+`rangeReadMethodGuards` in
+[`packages/platform/src/fs/interfaces.js`](../packages/platform/src/fs/interfaces.js)
+carries no size accessor today, and that file's own comment records that a prior
+separate `sha256()` accessor was *removed* in favor of a single `getInfo()`
+(the daemon's internals already hold the digest, so the cap method was
+superseded). This design reintroduces a standalone accessor against that
+convention because, unlike the immutable `readable-blob`, `getInfo()` here must
+re-hash the *current* bytes on every call (O(n)), so a caller that needs only the
+current length before a write cannot be asked to pay a full hash. That divergence
+is intentional and should be reconciled with
+[fs-interface-consolidation.md](fs-interface-consolidation.md) (which owns the
+shared `M.interface` guard records) when the new write guard is added: `size()`
+is a new shared member deliberately added, not an accidental mismatch with the
+read guard it extends.
+
 `rangeRead` reuses the established spelling from
 [platform-range-and-tree-reads.md](platform-range-and-tree-reads.md)
 (`rangeRead(offset, length) -> Uint8Array`, the ergonomic plain-byte-array form
 alongside the streaming `fetch`), rather than inventing a third verb; unlike
 `readable-blob` it reads the *current* bytes on each call.
+[readableblob-range-attenuation.md](readableblob-range-attenuation.md)'s
+"Relationship to `rangeRead*`" section recommends replacing
+`rangeRead(offset, length)` with the endpoint form `range(start, end)` in a
+future rich-blob API version. `block-storage` deliberately keeps the
+`rangeRead(offset, length)` form **now** so its read face stays identical to the
+live `readable-blob` read face it attenuates from (this design is that face's
+mutable sibling); the two blob-like read surfaces should migrate to
+`range(start, end)` **together** in that future version, rather than
+`block-storage` minting the new spelling alone now and leaving the two faces
+permanently spelling range reads two different ways.
 
 **`getInfo().digest` is a per-call snapshot, not an identity.** On the
 content-addressed `readable-blob`, `getInfo()` returns `{ algorithm, hash, size }`
@@ -158,20 +199,41 @@ truncate(newSize: bigint): Promise<void>       // shrink only: newSize <= size
 - **Append at the end:** `offset === size` grows the store from its exact
   current end.
 
-All other writes reject with a descriptive `Error` (the daemon's exo convention,
-following `mount.js`/`manager.js`; this is not a thrown POSIX errno string, which
-appears in this codebase only in comments describing underlying OS behavior):
+All other writes reject with a thrown `Error` whose message carries the
+`EINVAL:`-prefixed shape the platform already uses for out-of-bounds range
+arguments. `packages/platform/src/fs/extended/cas.js`'s `cacheBackedRead`
+throws `EINVAL: ... range out of bounds` for the near-identical case; the
+same prefix recurs in `lock-table.js`, `xattrs-exo.js`, and
+`in-memory-backend.js`, and it is the explicit convention in the sibling
+[readableblob-range-attenuation.md](readableblob-range-attenuation.md) (an
+invalid range rejects with `EINVAL`). Adopting that shape means a caller already
+pattern-matching `EINVAL:` for invalid-range rejections elsewhere in the
+daemon/platform surface sees the same coded shape here. The message is a
+descriptive string, not a re-thrown POSIX errno from the OS (a bare errno appears
+in this codebase only in comments describing underlying OS behavior):
 
-- `offset > size` is a hole/gap past the end (extend into never-written space).
-- `offset < size && offset + bytes.length > size` is a **middle-anchored
-  extension**: a write that begins inside the extent and crosses the end. The
-  caller must split it into an in-place overwrite of `[offset, size)` followed
-  by an `append` of the remainder. This is the "extend the file in the middle"
-  the write power forbids.
+- `offset > size` rejects (`EINVAL:`): a hole/gap past the end (extend into
+  never-written space).
+- `offset < size && offset + bytes.length > size` rejects (`EINVAL:`): a
+  **middle-anchored extension**, a write that begins inside the extent and
+  crosses the end. The caller must split it into an in-place overwrite of
+  `[offset, size)` followed by an `append` of the remainder. This is the "extend
+  the file in the middle" the write power forbids. That two-call workaround is
+  safe **only under a single-writer assumption** (see the "Multi-call sequence
+  race" note below, which states plainly that a concurrent writer can invalidate
+  it).
 
 There is **no** primitive for a true splice (inserting bytes that shift the
 tail, or deleting bytes from the middle) on this capability. `truncate` shrinks
 only; growing by truncate would create a hole and is rejected.
+
+Forbidding `offset > size` is deliberately **stricter than the maintainer
+prompt**, which asked only that a ranged write not "extend the file in the
+middle" while allowing append. Rejecting a hole-punch past the end (a gap of
+never-written bytes) keeps the store's bytes fully defined over `[0, size)` and
+matches append-only growth. A caller that wanted sparse holes past the end would
+have to relax this one rule; it is called out here so the stricter-than-literal
+reading is a stated choice, not silent extrapolation.
 
 **Concurrent writers are serialized per call by the exo.** The admission rule is
 a read-then-write check (read `size` via `statPath`, then `writeFileRange`) with
@@ -198,7 +260,7 @@ compound "overwrite-then-extend" primitive, so a caller that needs the two-step
 extension to be atomic must hold the store's sole write cap (no concurrent writer
 exists) or coordinate out of band. Surfacing an explicit size/compare-and-swap
 token, so a caller can detect the racing writer rather than silently losing the
-sequence, is deferred (see Open Questions).
+sequence, is deferred (see the "Open questions" section).
 
 ### Daemon plumbing
 
@@ -219,15 +281,23 @@ confinement point). Register `block-storage` in
 `packages/daemon/src/formula-type.js` and its record shape in
 `packages/daemon/src/formula-record.js`, alongside `formulateBlockStorage` and
 `makeBlockStorage` in `manager.js` paralleling `formulateReadableBlob` /
-`makeReadableBlob`. Host/guest/directory expose a maker method
-`storeBlockStorage(petName?)`, the entry-point verb a user actually calls,
-paralleling the existing `storeBlob(readerRef, petName?)` that mints a
-`readableBlobId`. Where `storeBlob` ingests an existing reader and returns a
-`readableBlobId`, `storeBlockStorage` mints a fresh, empty store and returns a
-`blockStorageId` resolving to the **full** cap (both range-read and range-write
-powers); the read-only and write-only faces are the attenuations of that full cap
-described in the Two independent authorities section. `petName`, as with `storeBlob`, is the
-optional pet-name binding in the caller's directory.
+`makeReadableBlob`. Host/guest/directory expose a maker method `storeBlockStorage(petName?)`, the
+entry-point verb a user actually calls, paralleling the existing `storeBlob` that
+mints a `readableBlobId`. Where `storeBlob` ingests an existing reader and
+returns a `readableBlobId`, `storeBlockStorage` mints a fresh, empty store and
+returns a `blockStorageId` resolving to the **full** cap (both range-read and
+range-write powers); the read-only and write-only faces are the attenuations of
+that full cap described in the "Two independent authorities" section.
+
+The codebase does **not** consistently agree on whether `storeBlob`'s pet name is
+optional: `packages/daemon/src/guest.js`'s `storeBlob` throws `'storeBlob
+requires a pet name'` when it is omitted, `host.js`'s JSDoc marks it
+non-optional, and only one of the `types.d.ts` overloads spells it `petName?`.
+`storeBlockStorage` follows the **host-side** `storeBlob(readerRef, petName?)`
+overload, where the pet name is the optional binding in the caller's directory; an
+implementation that instead mirrored `guest.js` would make the pet name required.
+Which `storeBlob` face `storeBlockStorage` sits beside should settle this before
+implementation.
 
 ### Cancellation
 
@@ -247,6 +317,17 @@ shift) that `block-storage` deliberately omits. Naming `block-storage` now
 keeps that successor's name (`file`) free.
 
 ### The mechanism CASK uses for content-delimited blocks
+
+> **Confidence note.** CASK is specified outside this repository and is not yet
+> vendored here (see the Problem section). The algorithmic detail in this
+> subsection is therefore **restated from the external CASK design line and is
+> not checkable against any source in this repo**: no citation below resolves
+> here today. It is included only because the maintainer prompt asked for it and
+> to justify reserving the `blob`/`file` names. Treat the specific constants and
+> boundary formulas below (`MinChunk`/`AvgChunk`/`MaxChunk`, the no-reset
+> property, the internal-node CDC) as a recollection of the CASK spec to be
+> reconciled with that spec's authoritative text or a future `cask-*` design
+> doc, not as a definition this repo owns or can validate.
 
 CASK's `cask/blob` package (a content-addressed tree, "CAT", which is a
 content-defined-chunked (CDC) Merkle tree; see the forward references
@@ -299,7 +380,7 @@ read-mutability axis (readable / snapshot / mutable) against the shape axis
 the mutable-blob (block-storage) cell; the naming pick here should be reconciled
 with it before implementation.
 
-## Open Questions
+## Open questions
 
 - Which name: `block-storage` (recommended), `file`, or `blob`? The
   recommendation reserves `file`/`blob` for a later splice-capable CASK-backed
@@ -324,11 +405,11 @@ with it before implementation.
   independent authorities" section). Is a size-opaque write authority worth offering as a
   separate constant-response admission variant, or is the coarse size leak
   acceptable for every intended use?
-- The admission boundaries (`offset+len<=size`, `offset===size`, `offset>size`
-  reject, `offset<size && offset+len>size` reject, shrink-only `truncate`) and
-  the per-store write serialization are the new semantics and should carry an
-  explicit test catalog authored before implementation starts, even though
-  sibling designs skip a Test Plan section at Proposed stage.
+- Should the admission boundaries (`offset+len<=size`, `offset===size`,
+  `offset>size` reject, `offset<size && offset+len>size` reject, shrink-only
+  `truncate`) and the per-store write serialization (the new semantics here)
+  carry an explicit test catalog authored before implementation starts, even
+  though sibling designs skip a Test Plan section at Proposed stage?
 
 ## Prompt
 
