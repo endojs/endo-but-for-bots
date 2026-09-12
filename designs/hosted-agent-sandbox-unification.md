@@ -109,7 +109,16 @@ and retries failed predecessor cleanup before replacement.
 Separate module instances still refuse existing filesystem markers; this is no crash recovery.
 Formula configuration supplies the private parent, stable owner ID, and explicit aggregate
 generated-file budgets, with no invented defaults.
-Hosted provisioning, stronger crash recovery, and resolver integration remain pending.
+OpenCode provisioning now selects the owned entrypoint and persists explicit configuration.
+Both setup scripts refuse a stored generic factory without replacing or cancelling it.
+Setup reads effective factory and state-provider configuration through the host-only
+persisted-environment reader, using the same verified ID for each formula's metadata
+and environment before checking placement against prospective guest storage roots.
+Ordinary diagnostics remain environment-blind; retained settings are not reapplied.
+Provisioning must be serialized and factory/provider bindings must remain stable while
+dependent backends or sessions persist: nested session lookup formulas can retarget on
+revival, so durable identity pinning is still pending.
+Stronger crash recovery and resolver integration remain pending.
 Recovery from hung driver control calls and the complete session emergency-stop path
 remain pending.
 
@@ -149,8 +158,8 @@ files still owned by a consumer.
 It creates an exclusive fresh root under a private host directory and refuses existing
 roots; reconciling a crashed owner's storage requires prior container reaping by the runtime.
 Writable host-path overlap is checked again on each use.
-The host-only runtime controller and owned daemon entrypoint compose storage ownership; hosted
-wiring and resolver integration remain pending.
+The host-only runtime controller, owned daemon entrypoint, and OpenCode provisioning
+compose storage ownership; resolver integration remains pending.
 
 Runtime unification across all three adapters, Claude credential migration, OpenCode
 public network convergence, tool/journal consolidation, emergency stop UI, and the remaining
@@ -442,6 +451,7 @@ provider requirements, or an explicit user budget, rather than copied between la
 | Protection or limit | Resource or authority protected | From whom? | Where already bounded? | Decision and owning layer |
 |---|---|---|---|---|
 | Container/process and mount isolation | Host files, processes, other sessions | All guest code | Endo caps govern host APIs, not arbitrary native syscalls | Keep in shared runtime. |
+| Effective provisioning configuration | Private runtime ownership markers and generated files | Guest writes enabled by mismatched retained/current host configuration | Private permissions do not protect a directory explicitly granted as a guest mount; formula environments are immutable but current process settings can differ | Read effective factory/state roots by verified formula ID before provisioning; pin durable dependencies in the next wiring increment. |
 | Provider secret isolation | Reusable upstream account credentials | Guest and listener code | Secrets controls storage access, not a secret already delivered | Keep host-only credential service; eliminate materialization into guests. |
 | Fixed provider routes/account binding | Which upstream authority a guest can exercise | Forged guest requests | Secret custody alone does not restrict credential use | Keep in provider service. |
 | Revocation and process reaping | Continued inference, networking, and execution | Stale or hostile guests | Request deadlines end one request, not the session grant | Keep one supervisor and grant owner. |

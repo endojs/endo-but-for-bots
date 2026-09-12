@@ -5,6 +5,60 @@ backend source is not written yet; the `oci/` build seed and the patched fork
 exist. Target lineage: the hosted-backend seam from PR #1248
 (`codex/claude-provisioning-fixes` @ `4b9fe52c0`).
 
+Implementation update (2026-09-13): backend and provisioning source now exist.
+Host setup uses the shared owned Podman runtime described in
+[the unification plan](../../designs/hosted-agent-sandbox-unification.md).
+The remaining sections preserve the original design context; the unification plan
+tracks current lifecycle, credential, networking, and acceptance gaps.
+
+### Owned runtime provisioning
+
+The deployment must create a private runtime parent owned by the daemon user, then
+supply `ENDO_SANDBOX_RUNTIME_DIR`, `ENDO_SANDBOX_GENERATED_MAX_BYTES`, and
+`ENDO_SANDBOX_GENERATED_MAX_ENTRIES` to host setup.
+Budgets are explicit decimal integers: nonnegative bytes and positive directory entries.
+There are no default budgets or spending limits.
+`ENDO_OPENCODE_SANDBOX_OWNER_ID` optionally supplies the stable owner ID; otherwise
+setup derives it from the host formula identity.
+The factory formula persists these four values under their `ENDO_SANDBOX_*` names.
+Host setup validates configuration before minting and never adopts or chmods a
+directory for runtime ownership.
+
+Keep the runtime parent separate from the configured state, workspace, configuration,
+and MCP roots, and from every other guest-granted host tree.
+Both setup scripts check disjoint placement using existing canonical ancestors,
+including paths whose final directories do not exist yet.
+The deployment must preserve those ancestors outside guest rename authority.
+When a formula already exists, setup reads its persisted environment through the
+host-only `getFormulaEnvironment` method, using the same verified formula ID as
+the entrypoint check.
+The runtime parent and state root are selected independently: retained formulas
+use persisted values, while missing formulas use requested construction settings.
+An existing state provider must have a supported entrypoint and a persisted state
+root; its ambient environment fallback cannot establish stable placement.
+`setup-hosted.js` requires both formulas and uses their persisted roots.
+Current runtime or state environment values neither override nor need to repeat them.
+
+Both scripts inspect the existing factory formula and refuse a generic or unknown
+entrypoint before provisioning mutations.
+Retire an old generic runtime and establish that its processes have stopped before
+replacing its formula; deleting a name alone does not establish this.
+There is no automatic migration or stale-owner takeover.
+An existing owned factory is retained with its persisted configuration.
+Environment values remain absent from ordinary diagnostics; the explicit host-only
+reader verifies effective placement without reviving or changing retained formulas.
+Rerunning host setup does not reapply runtime configuration.
+Live replacement and reconfiguration require a separate lifecycle operation.
+
+Provisioning for one host must be serialized, and factory/state-provider bindings
+must remain stable while dependent backends or sessions persist.
+Session powers currently use nested lookup formulas, which can resolve names again
+on revival; they do not durably pin the originally verified factory/provider IDs.
+Durable identity pinning is a separate pending increment.
+
+This provisioning change does not complete resolver integration, broker-only policy,
+durable volume quota attestation, or live Linux acceptance.
+
 **Lineage dependencies that must land first.** The OpenCode backend needs the
 hosted-backend seam (`@endo/hosted-agent`, present in PR #1248) **and** a
 credential cap backed by the Endo secrets manager. The latter is the Tokyo
@@ -549,6 +603,11 @@ New package `packages/opencode-sandbox/`.
    provider is adopted, the XFS `volumeRoot`/project-quota + sudo prerequisites
    (mirroring `modules/codex-storage.nix` on Tokyo). Every name must be
    `ENDO_`-prefixed.
+   Create a dedicated runtime parent owned by the daemon user with mode `0700`,
+   supply `ENDO_SANDBOX_RUNTIME_DIR` when creating the factory, and supply explicit
+   `ENDO_SANDBOX_GENERATED_MAX_BYTES`/`ENDO_SANDBOX_GENERATED_MAX_ENTRIES` budgets
+   to host setup.
+   These external deployment changes are not tracked in this repository.
 
 ## Security summary
 
