@@ -288,12 +288,12 @@ impl Interp {
             property.next = self.slots.get(inst).next;
             let index = self.slots.alloc(property);
             self.slots.get_mut(inst).next = index;
-            if inst == self.global_obj {
+            if inst == self.realm.global_obj {
                 // The global object's property chain is also the backing set
                 // for identifier resolution. Keep its fast index in lockstep
                 // when an ordinary [[DefineOwnProperty]] creates a global via
                 // `globalThis.x = value` or its computed equivalent.
-                self.global_props.insert(id, index);
+                self.realm.global_props.insert(id, index);
             }
             self.tick_property_create(id);
             return true;
@@ -772,8 +772,8 @@ impl Interp {
                 // drop the `global_props` entry too, else identifier resolution
                 // would keep reading the now-freed slot. Only the global object
                 // carries a fast index; every other instance has none.
-                if inst == self.global_obj {
-                    self.global_props.remove(&id);
+                if inst == self.realm.global_obj {
+                    self.realm.global_props.remove(&id);
                 }
                 self.accessors.remove(&(inst, id));
                 return true;

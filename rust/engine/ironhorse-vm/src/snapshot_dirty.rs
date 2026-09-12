@@ -82,12 +82,6 @@ impl<T> Tracked<T> {
     {
         self.replace(T::default())
     }
-    pub(crate) fn copy_to(&self, dirt: SnapshotDirt) -> Self
-    where
-        T: Clone,
-    {
-        Self::new(self.value.clone(), dirt, self.mask)
-    }
 }
 // The former classification maps need only snapshot tracking now. These
 // callback helpers preserve their mutation API without a derived type index.

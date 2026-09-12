@@ -636,7 +636,9 @@ fn restored_proxy_metadata_takes_precedence_over_a_runnable_body() {
     let (mut interp, state, candidate, target) = callable_overlap_fixture();
     interp.restore_function_state(state).unwrap();
     let handler = *interp.symbol_ids.get("handler").unwrap();
-    let Payload::Reference(handler) = interp.boot_chain_get(interp.global_obj, handler).value
+    let Payload::Reference(handler) = interp
+        .boot_chain_get(interp.realm.global_obj, handler)
+        .value
     else {
         panic!("fixture handler is an object");
     };
@@ -1363,14 +1365,14 @@ fn marker_free_restore_migrates_only_untouched_standard_global_descriptors() {
 
     for name in ["Date", "Array", "globalThis"] {
         let id = *interp.symbol_ids.get(name).unwrap();
-        let property = interp.global_props[&id];
+        let property = interp.realm.global_props[&id];
         interp.slots.get_mut(property).flag = 0;
     }
     let number_id = *interp.symbol_ids.get("Number").unwrap();
-    let number_property = interp.global_props[&number_id];
+    let number_property = interp.realm.global_props[&number_id];
     interp.slots.get_mut(number_property).flag = XS_DONT_SET_FLAG;
     let object_id = *interp.symbol_ids.get("Object").unwrap();
-    let object_property = interp.global_props[&object_id];
+    let object_property = interp.realm.global_props[&object_id];
     interp.slots.get_mut(object_property).flag = 0;
     interp.slots.get_mut(object_property).kind = Kind::Integer;
     interp.slots.get_mut(object_property).value = Payload::Integer(17);
@@ -1379,7 +1381,7 @@ fn marker_free_restore_migrates_only_untouched_standard_global_descriptors() {
 
     for name in ["Date", "Array", "globalThis"] {
         let id = *interp.symbol_ids.get(name).unwrap();
-        let property = interp.global_props[&id];
+        let property = interp.realm.global_props[&id];
         assert_eq!(
             interp.slots.get(property).flag,
             XS_DONT_ENUM_FLAG,
@@ -1887,6 +1889,7 @@ fn every_opcode_decodes_and_dispatches_without_panic_or_decode_error() {
             | Halt::StackOverflow(_)
             | Halt::ReentryLimit { .. } => {}
             Halt::Decode(_) => unreachable!("handled above"),
+            Halt::RealmBusy => unreachable!("standalone interpreter has no competing Realm"),
             Halt::Panic(_) => unreachable!("engine-fault panic escaped the FFI/Machine seam"),
         }
     }
@@ -3363,7 +3366,7 @@ fn call_entry_failures_retire_the_pending_frame_tuple() {
         let mut vm = Interp::new();
         vm.link_intrinsics(&crate::parse_symbols(&symbols));
         assert!(vm.run(&code).completed);
-        let callable = vm.boot_chain_get(vm.global_obj, *vm.symbol_ids.get("f").unwrap());
+        let callable = vm.boot_chain_get(vm.realm.global_obj, *vm.symbol_ids.get("f").unwrap());
         let function = match failure {
             "noncallable" => Slot::integer(7),
             "bodyless" => Slot::of(Kind::Reference, Payload::Reference(vm.intrinsics["Object"])),

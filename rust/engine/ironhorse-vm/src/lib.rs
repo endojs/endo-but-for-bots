@@ -10,8 +10,8 @@
 //! [`Halt`] includes [`Halt::HeapExhausted`] and [`Halt::Panic`]; resource stops and
 //! engine faults are not catchable guest exceptions.
 //!
-//! [`Compartment`] currently creates independently owned interpreters from pristine
-//! boot templates, not shared frozen intrinsics; Realm extraction is planned.
+//! [`Machine`] owns one frozen intrinsic graph and shared heap. Each
+//! [`Compartment`] retains a [`Realm`] with independent globals and compiler policy.
 //! `rust/engine/ARCHITECTURE.md` maps the four seams and current acceptance limits.
 //! The opcode tables follow the pinned XS ISA; broad runtime support does not imply
 //! full test262 or daemon SES acceptance.
@@ -51,9 +51,9 @@ pub mod value;
 
 pub use compartment::{
     Compartment, CompartmentId, CompartmentOptions, CompartmentSkip, Intrinsics, Machine,
+    ObjectIdentity,
 };
 pub use gc::{GcStats, Heap};
-pub use interp::DecodeError;
 #[doc(hidden)]
 pub use interp::SIDE_TABLES;
 pub use interp::{
@@ -68,6 +68,7 @@ pub use interp::{
     SegmentIteratorData, SegmenterData, SegmentsData, SourceCompileError, SourceCompiler,
     PROGRAM_INVOCATION_COMPUTRONS, TYPED_ARRAY_TYPES,
 };
+pub use interp::{DecodeError, Realm};
 pub use interp::{HEAVY_FRAME_COST, LIGHT_FRAME_COST, NATIVE_DEPTH_LIMIT};
 pub use meter::{Meter, MeterCheck, MeterState, COST_TABLE_VERSION};
 pub use module::{
@@ -258,9 +259,8 @@ mod tests {
 
     #[test]
     fn compartments_do_not_share_globals() {
-        // Intrinsic *sharing* is not delivered by this surface (each
-        // evaluation builds a fresh `Interp`; see `compartment`'s module
-        // documentation), so this pins only the half that is true.
+        // Configured endowments belong to each compartment; the intrinsic
+        // graph identity is covered by the executable Realm tests.
         let m = Machine::new();
         let mut a = m.new_compartment();
         let b = m.new_compartment();

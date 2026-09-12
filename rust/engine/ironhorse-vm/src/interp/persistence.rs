@@ -60,7 +60,6 @@ macro_rules! persist_holder {
 macro_rules! define_persist_holders {
     (() $vis:vis struct $name:ident {
         $(#[boot_new($boot_new:expr)]
-          #[boot_template($boot_template:expr)]
           #[gc_root($root:ident)]
           #[quiescent($boundary:ident)]
           #[persist_refs($persist:ident)]
@@ -114,7 +113,6 @@ macro_rules! runtime_key_iter {
 macro_rules! define_runtime_key_scan {
     (() $vis:vis struct $name:ident {
         $(#[boot_new($boot_new:expr)]
-          #[boot_template($boot_template:expr)]
           #[gc_root($root:ident)]
           #[quiescent($boundary:ident)]
           #[persist_refs($persist:ident)]

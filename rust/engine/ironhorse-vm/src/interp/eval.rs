@@ -37,7 +37,7 @@ impl Interp {
         // the caller's lexical environment). Captured before the nested-frame
         // setup clears `eval_direct`.
         let is_direct = self.eval_direct;
-        let compiler = match &self.source_compiler {
+        let compiler = match &self.realm.source_compiler {
             Some(compiler) => compiler.clone(),
             None => return Err(Step::Host(Halt::NotImplemented("eval:no-compiler"))),
         };

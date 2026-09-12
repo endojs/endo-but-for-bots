@@ -246,3 +246,24 @@ fn utf16_production_entry_preserves_surrogates_receipts_and_refusal() {
     ));
     assert!(consulted);
 }
+
+#[test]
+fn sibling_realms_keep_independent_source_compilers() {
+    let machine = ironhorse_vm::Machine::new();
+    let mut a = machine.new_compartment();
+    let b = machine.new_compartment();
+    a.set_source_compiler(Rc::new(IronhorseSourceCompiler));
+    let run = |compartment: &ironhorse_vm::Compartment, source: &str| {
+        let (code, symbols) = compile_atoms_with(source, false).unwrap();
+        compartment.evaluate_with_symbols(&code, &symbols)
+    };
+    let first = run(&a, "var n=7; eval('n+1')");
+    assert!(first.completed, "{:?}", first.halt);
+    assert_eq!(first.result, "8");
+    assert_eq!(
+        run(&b, "eval('1')").halt,
+        Halt::NotImplemented("eval:no-compiler")
+    );
+    assert!(run(&b, "1").completed);
+    assert_eq!(run(&a, "Function('return n+2')()").result, "9");
+}

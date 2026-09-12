@@ -33,6 +33,7 @@ use std::collections::BTreeMap;
 
 const SRC: &str = concat!(
     include_str!("../src/interp.rs"),
+    include_str!("../src/interp/realm.rs"),
     include_str!("../src/interp/metering.rs"),
     include_str!("../src/interp/native_ids.rs"),
     include_str!("../src/interp/snapshot_rows.rs"),
@@ -354,8 +355,9 @@ const REGISTRY: &[(&str, &[Req], &str)] = &[
     ("target_func", &[Req::GcRoots], "call target register"),
     ("call_stack", &[Req::GcRoots], "suspended caller activations"),
     ("jumps", &[Req::GcRoots], "catch-jump chain (env restore)"),
-    ("global_obj", &[Req::GcRoots], "the global object"),
-    ("global_props", &[Req::GcRoots], "global own-property fast index"),
+    ("realm", &[Req::GcRoots], "active globals, property index and first rejection report"),
+    ("inactive_realms", &[Req::GcRoots], "inactive globals, property indexes and first rejection reports"),
+    ("identity_roots", &[Req::GcRoots], "live host object identity leases"),
     ("intrinsics", &[Req::GcRoots], "every boot constructor — the anchor that transitively keeps boot structure alive"),
     ("well_known_symbols", &[Req::GcRoots], "realm well-known symbol descriptors"),
     ("symbol_registry", &[Req::GcRoots], "Symbol.for registry (strong per spec)"),
@@ -402,7 +404,7 @@ const REGISTRY: &[(&str, &[Req], &str)] = &[
     ("gen_run_stack", &[Req::GcRoots], "mid-resume generator stack"),
     ("async_run_stack", &[Req::GcRoots], "mid-step async stack"),
     ("async_gen_run_stack", &[Req::GcRoots], "mid-step async-generator stack"),
-    ("unhandled_rejection", &[Req::GcRoots], "first reported rejection roots its promise and reason"),
+
     ("pending_rejections", &[Req::GcRoots], "settlement candidates survive collection until the job drain"),
     ("promise_jobs", &[Req::GcRoots], "queued microtasks (survive halted cranks)"),
     // --- side tables with strong outgoing edges, walked by BOTH collectors ---

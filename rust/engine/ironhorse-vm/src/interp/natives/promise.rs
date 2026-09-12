@@ -773,7 +773,10 @@ impl Interp {
             pd.result = value;
             std::mem::take(&mut pd.reactions)
         };
-        if reject && !self.promises[&promise].ever_handled && self.unhandled_rejection.is_none() {
+        if reject
+            && !self.promises[&promise].ever_handled
+            && self.realm.unhandled_rejection.is_none()
+        {
             self.pending_rejections.push(promise);
         }
         // Queue one job per registered reaction (XS's `fxQueueJob` per THEN),
