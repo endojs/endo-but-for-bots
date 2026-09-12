@@ -30,6 +30,8 @@
     "./provider-worker.js": "./src/provider-worker.js",
     "./provider-listener-runtime.js": "./src/provider-listener-runtime.js",
     "./provider-grant-issuer.js": "./src/provider-grant-issuer.js",
+    "./mcp-socket.js": "./src/mcp-socket.js",
+    "./mcp-stdio-bridge.js": "./src/mcp-stdio-bridge.js",
     "./secret-rotator.js": "./src/secret-rotator.js"
   },
   "scripts": {

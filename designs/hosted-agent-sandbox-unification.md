@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-09-12 |
-| **Updated** | 2026-09-12 |
+| **Updated** | 2026-09-13 |
 | **Author** | kumavis (prompted) |
 | **Status** | In Progress |
 | **Source** | Review of PR #1248 and subsequent simplicity and authority-lifetime discussion |
@@ -15,6 +15,11 @@ session grants and simultaneous-request admission in the shared broker.
 Codex subscription turns retain their runtime instead of renewing it each turn,
 and the OpenCode broker uses the same grant contract.
 Credential refresh remains separate; lifetime token/dollar budgets remain deferred.
+
+Claude and OpenCode now share the host-side MCP socket transport and guest stdio relay.
+The input frame limit covers both complete frames and partial tails before dispatch.
+This is only a per-frame bound: connection, in-flight dispatch, and output queue bounds
+remain pending, as do shared tool admission and journal semantics.
 
 Runtime unification across all three adapters, Claude credential migration, public
 network convergence, tool/journal consolidation, emergency stop UI, and the remaining
