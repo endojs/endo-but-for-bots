@@ -255,7 +255,9 @@ test('maps tool parts to call and result events', t => {
     ),
     { type: 'tool-result', id: 'call_1', name: 'bash', ok: true, result: 'ok' },
   );
-  t.deepEqual(
+  // A second terminal update for the same call is a repeat, not a new result:
+  // Floot rejects a result whose call is already settled.
+  t.is(
     mapSseEvent(
       partUpdated({
         id: 'prt_tool',
@@ -268,14 +270,7 @@ test('maps tool parts to call and result events', t => {
       registry,
       SESSION,
     ),
-    {
-      type: 'tool-result',
-      id: 'call_1',
-      name: 'bash',
-      ok: false,
-      result: 'boom',
-      error: 'boom',
-    },
+    undefined,
   );
   // A tool part without an id is dropped rather than emitting undefined ids.
   t.is(
@@ -386,4 +381,72 @@ test('parses SSE frames across chunk boundaries', async t => {
     payloads.push(payload);
   }
   t.deepEqual(payloads, [{ n: 1 }, { n: 2 }, { n: 3 }]);
+});
+
+test('deduplicates repeated running updates for one tool call', t => {
+  const registry = registryWithParts();
+  const running = partUpdated({
+    id: 'prt_tool2',
+    messageID: 'msg_answer',
+    type: 'tool',
+    callID: 'call_2',
+    tool: 'bash',
+    state: { status: 'running', input: { command: 'ls' } },
+  });
+  t.deepEqual(mapSseEvent(running, registry, SESSION), {
+    type: 'tool-call',
+    id: 'call_2',
+    name: 'bash',
+    args: '{"command":"ls"}',
+  });
+  // opencode re-emits the running update as input streams; the second copy
+  // must not reach Floot, which requires unique call ids.
+  t.is(mapSseEvent(running, registry, SESSION), undefined);
+  t.true(registry.hasToolCall('call_2'));
+  t.deepEqual(
+    mapSseEvent(
+      partUpdated({
+        id: 'prt_tool2',
+        messageID: 'msg_answer',
+        type: 'tool',
+        callID: 'call_2',
+        tool: 'bash',
+        state: { status: 'completed', output: 'done' },
+      }),
+      registry,
+      SESSION,
+    ),
+    {
+      type: 'tool-result',
+      id: 'call_2',
+      name: 'bash',
+      ok: true,
+      result: 'done',
+    },
+  );
+  // A terminal update with no observed call still yields a result; the
+  // bridge announces a placeholder call before writing it.
+  const orphan = registryWithParts();
+  t.false(orphan.hasToolCall('call_3'));
+  t.deepEqual(
+    mapSseEvent(
+      partUpdated({
+        id: 'prt_tool3',
+        messageID: 'msg_answer',
+        type: 'tool',
+        callID: 'call_3',
+        tool: 'read',
+        state: { status: 'completed', output: 'text' },
+      }),
+      orphan,
+      SESSION,
+    ),
+    {
+      type: 'tool-result',
+      id: 'call_3',
+      name: 'read',
+      ok: true,
+      result: 'text',
+    },
+  );
 });

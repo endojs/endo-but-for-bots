@@ -87,6 +87,12 @@ export const makeMessageRegistry = () => {
   const messages = new Map(); // messageID -> { role, summary }
   const parts = new Map(); // partID -> { messageID, type, sawDelta }
   const summaryIDs = new Set();
+  // opencode re-emits `message.part.updated` with status 'running' as a tool
+  // part's input streams, and may repeat the terminal update. Floot requires
+  // each hosted tool call to have a unique id and each result a single
+  // matching unsettled call, so track what was emitted per callID.
+  const startedToolCalls = new Set();
+  const finishedToolCalls = new Set();
 
   const isCompactionSummary = info =>
     info?.role === 'assistant' && info.summary === true;
@@ -111,6 +117,19 @@ export const makeMessageRegistry = () => {
     noteDelta(partID) {
       const part = parts.get(partID);
       if (part) part.sawDelta = true;
+    },
+    markToolCall(callID) {
+      if (startedToolCalls.has(callID)) return false;
+      startedToolCalls.add(callID);
+      return true;
+    },
+    hasToolCall(callID) {
+      return startedToolCalls.has(callID);
+    },
+    markToolResult(callID) {
+      if (finishedToolCalls.has(callID)) return false;
+      finishedToolCalls.add(callID);
+      return true;
     },
     isSummaryMessage(messageID) {
       return summaryIDs.has(messageID);
@@ -164,6 +183,9 @@ export const mapSseEvent = (event, registry, sessionID) => {
         return undefined;
       }
       if (state.status === 'running') {
+        // Only the first running update announces the call; later input
+        // updates repeat the same callID.
+        if (!registry.markToolCall(part.callID)) return undefined;
         return Object.freeze({
           type: 'tool-call',
           id: part.callID,
@@ -176,6 +198,7 @@ export const mapSseEvent = (event, registry, sessionID) => {
         });
       }
       if (state.status === 'completed') {
+        if (!registry.markToolResult(part.callID)) return undefined;
         const rendered =
           typeof state.output === 'string'
             ? state.output
@@ -189,6 +212,7 @@ export const mapSseEvent = (event, registry, sessionID) => {
         });
       }
       if (state.status === 'error') {
+        if (!registry.markToolResult(part.callID)) return undefined;
         const rendered = `${state.error ?? 'tool failed'}`;
         return Object.freeze({
           type: 'tool-result',
@@ -591,6 +615,18 @@ const main = async () => {
       }
       const mapped = mapSseEvent(event, registry, activeSessionId);
       if (mapped) {
+        // A terminal tool update can arrive without an observed running
+        // update; Floot only accepts a result with a matching unsettled call,
+        // so announce a bare call first.
+        if (mapped.type === 'tool-result' && !registry.hasToolCall(mapped.id)) {
+          registry.markToolCall(mapped.id);
+          writeEvent({
+            type: 'tool-call',
+            id: mapped.id,
+            name: mapped.name,
+            args: '',
+          });
+        }
         if (mapped.type === 'phase' && mapped.phase === 'error') {
           if (inFlight && !sawBusy) {
             pendingError = mapped.error;
