@@ -2,6 +2,7 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
+import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 
 import { makeStreamingAgent } from '../agent.js';
 import { makeReplyChannel } from '../src/stream.js';
@@ -266,6 +267,76 @@ test('failed transcript-backed turns keep text/tool interleaving in history', as
   );
   t.is(history[2].name, 'read');
   t.is(history[2].result, 'file');
+});
+
+test('a leading backend refusal fails cleanly without fencing the next turn', async t => {
+  const powers = makeFakePowers();
+  const refusing = harden({
+    async send() {
+      return readerFromIterator(
+        (async function* refused() {
+          yield {
+            type: 'abort',
+            reason:
+              'OpenCode session network policy is "off"; set the session policy to public-internet before sending a turn',
+          };
+        })(),
+      );
+    },
+  });
+  const agent = await makeStreamingAgent(
+    powers,
+    undefined,
+    { hostedClient: refusing },
+    'test prompt',
+  );
+  await t.throwsAsync(
+    () => agent.converse('blocked', makeReplyChannel().writer),
+    { message: /network policy is "off"/ },
+  );
+  const [turn] = await agent.getTurns();
+  t.is(
+    turn.state,
+    'failed',
+    'a pre-dispatch refusal is not an uncertain outcome',
+  );
+
+  // The refusal must not fence the session: after the operator sets the
+  // policy, the next turn dispatches normally.
+  const accepting = harden({
+    async send() {
+      return readerFromIterator(
+        (async function* ok() {
+          yield { type: 'text-delta', text: 'Unblocked.' };
+          yield { type: 'end' };
+        })(),
+      );
+    },
+  });
+  const revived = await makeStreamingAgent(
+    powers,
+    undefined,
+    { hostedClient: accepting },
+    'test prompt',
+  );
+  const reply = makeReplyChannel();
+  await revived.converse('retry', reply.writer);
+  t.deepEqual(
+    (await revived.getHistory()).map(message => [
+      message.role,
+      message.content,
+    ]),
+    [
+      ['user', 'blocked'],
+      [
+        'assistant',
+        'Turn failed: OpenCode session network policy is "off"; set the session policy to public-internet before sending a turn',
+      ],
+      ['user', 'retry'],
+      ['assistant', 'Unblocked.'],
+    ],
+    'the refusal is recorded with its reason and the retry is allowed',
+  );
 });
 
 test('agent shutdown interrupts and awaits an active hosted turn', async t => {
