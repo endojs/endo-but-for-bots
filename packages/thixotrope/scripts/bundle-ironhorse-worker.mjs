@@ -47,7 +47,7 @@ lockdown({ errorTaming: 'safe', reporting: 'none', overrideTaming: 'min' });
 const excluded = new Set(['ses', '@endo/init', '@endo/lockdown']);
 const peer = await makeBundle(
   readPowers,
-  new URL('src/worker-peer-xs.js', root).href,
+  new URL('src/core/worker-peer-xs.js', root).href,
   {
     packageDependenciesHook: ({ dependencies }) =>
       new Set([...dependencies].filter(name => !excluded.has(name))),

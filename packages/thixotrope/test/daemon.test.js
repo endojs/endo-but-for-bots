@@ -18,10 +18,10 @@ import { Far } from '@endo/far';
 import { makeTcpNetLayer } from '@endo/ocapn/netlayer/tcp-testing';
 import { syrupCodec } from '@endo/ocapn/syrup';
 
-import { makeThixotropeDaemon } from '../src/daemon.js';
-import { makePeerJournalReplayEngine } from '../src/peer-replay-engine.js';
-import { makeTimerResource } from '../src/resources.js';
-import { makeFsStore } from '../src/store-fs.js';
+import { makeThixotropeDaemon } from '../src/core/daemon.js';
+import { makePeerJournalReplayEngine } from '../src/core/peer-replay-engine.js';
+import { makeTimerResource } from '../src/alarms/resources.js';
+import { makeFsStore } from '../src/store/store-fs.js';
 import { makeTestOcapn } from './_util.js';
 import { parkWorkers } from './_park-workers.js';
 

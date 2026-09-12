@@ -2,15 +2,15 @@
 import { syrupCodec } from '@endo/ocapn/syrup';
 import test from '@endo/ses-ava/test.js';
 
-import { makeThixotropeDaemon } from '../src/daemon.js';
-import { makeMemoryStore } from '../src/store-memory.js';
-import { WorkerHaltError } from '../src/worker-engine.js';
+import { makeThixotropeDaemon } from '../src/core/daemon.js';
+import { makeMemoryStore } from '../src/store/store-memory.js';
+import { WorkerHaltError } from '../src/core/worker-engine.js';
 
 import { makeNodePowers } from '../src/platform/node-powers.js';
 
 const nodePowers = makeNodePowers();
 
-/** @import { WorkerEngine } from '../src/worker-engine.js' */
+/** @import { WorkerEngine } from '../src/core/worker-engine.js' */
 
 const makeNetlayer = () => ({
   location: {

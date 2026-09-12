@@ -5,10 +5,10 @@ import { join } from 'node:path';
 import { setTimeout } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
-import { bundleApplication } from '../src/bundle-application.js';
-import { connectLocalControl } from '../src/local-control.js';
-import { makePeerJournalReplayEngine } from '../src/peer-replay-engine.js';
-import { serveThixotrope } from '../src/supervisor.js';
+import { bundleApplication } from '../src/control/bundle-application.js';
+import { connectLocalControl } from '../src/control/local-control.js';
+import { makePeerJournalReplayEngine } from '../src/core/peer-replay-engine.js';
+import { serveThixotrope } from '../src/control/supervisor.js';
 
 import { makeNodePowers } from '../src/platform/node-powers.js';
 

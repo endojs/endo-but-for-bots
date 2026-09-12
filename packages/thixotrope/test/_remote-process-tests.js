@@ -10,9 +10,9 @@ import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { makeThixotropeDaemon } from '../src/daemon.js';
-import { makeDurableNetLayer } from '../src/durable-netlayer.js';
-import { makeFsStore } from '../src/store-fs.js';
+import { makeThixotropeDaemon } from '../src/core/daemon.js';
+import { makeDurableNetLayer } from '../src/net/durable-netlayer.js';
+import { makeFsStore } from '../src/store/store-fs.js';
 import { makeTestOcapn } from './_util.js';
 import {
   isIncrement,

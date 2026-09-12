@@ -6,8 +6,8 @@ import { chmod, mkdtemp, rm } from 'node:fs/promises';
 import { createConnection, createServer } from 'node:net';
 import { join } from 'node:path';
 
-import { connectLocalControl, makeLocalControl } from '../src/local-control.js';
-import { serveThixotrope } from '../src/supervisor.js';
+import { connectLocalControl, makeLocalControl } from '../src/control/local-control.js';
+import { serveThixotrope } from '../src/control/supervisor.js';
 
 import { makeNodePowers } from '../src/platform/node-powers.js';
 

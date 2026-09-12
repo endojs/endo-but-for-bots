@@ -3,7 +3,7 @@ import test from '@endo/ses-ava/test.js';
 import harden from '@endo/harden';
 import { createHash } from 'node:crypto';
 
-import { inspectVatReachability } from '../src/vat-reachability.js';
+import { inspectVatReachability } from '../src/core/vat-reachability.js';
 
 const workers = harden(
   ['a', 'b', 'c'].map(workerId => ({ workerId, awake: false })),

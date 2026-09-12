@@ -20,11 +20,11 @@ import { frozenBytes } from '@endo/immutable-arraybuffer';
 import { E } from '@endo/eventual-send';
 import { syrupCodec } from '@endo/ocapn/syrup';
 
-import { makeOcapnHub } from '../src/hub.js';
-import { makeDurableWorkerTransport } from '../src/durable-worker-transport.js';
-import { makePipeNetwork } from '../src/pipe-network.js';
-import { makeFsStore } from '../src/store-fs.js';
-import { makeXsEngine } from '../src/xs-engine.js';
+import { makeOcapnHub } from '../src/net/hub.js';
+import { makeDurableWorkerTransport } from '../src/core/durable-worker-transport.js';
+import { makePipeNetwork } from '../src/net/pipe-network.js';
+import { makeFsStore } from '../src/store/store-fs.js';
+import { makeXsEngine } from '../src/ironhorse/xs-engine.js';
 import { makeTestOcapn } from './_util.js';
 
 import { makeNodePowers } from '../src/platform/node-powers.js';

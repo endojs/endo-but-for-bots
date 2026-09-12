@@ -3,8 +3,8 @@ import { E, Far } from '@endo/far';
 import test from '@endo/ses-ava/test.js';
 import { setImmediate } from 'node:timers/promises';
 
-import { makeObservableInventory } from '../src/observable-inventory.js';
-import { renderInventory } from '../src/inventory-view.js';
+import { makeObservableInventory } from '../src/inventory/observable-inventory.js';
+import { renderInventory } from '../src/inventory/inventory-view.js';
 
 const flush = async () => {
   await setImmediate();

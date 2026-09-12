@@ -2,7 +2,7 @@
 import test from '@endo/ses-ava/test.js';
 import { E, Far } from '@endo/far';
 
-import { makeDurableClock } from '../src/durable-clock.js';
+import { makeDurableClock } from '../src/alarms/durable-clock.js';
 
 const scheduler = Far('TestScheduler', {
   now: () => 15n,

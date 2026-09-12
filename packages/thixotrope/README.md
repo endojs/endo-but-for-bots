@@ -13,7 +13,7 @@ Application upgrades are not yet implemented; candidate mechanisms are described
 
 The machine speaks the OCapN p2p wire protocol end to end, and the
 daemon is mostly a forwarding and slot-rewriting hub
-(`src/hub.js`): workers and remote peers are hub sessions, and
+(`src/net/hub.js`): workers and remote peers are hub sessions, and
 every message between them is structurally transcoded through
 persisted c-list tables — the daemon reifies no presences, no
 promises, no subscriptions for routed traffic.
@@ -42,6 +42,34 @@ returned (the worker persists like any other and shows up in
 The [potential designs](designs/README.md) record the current hypotheses for user-space
 upgrade, delivery responsibility, host-directed vat retirement, and crossing persistence regimes.
 They distinguish intended behavior from current implementation gaps.
+
+## Source layout and host powers
+
+`src/` groups modules by responsibility:
+
+- `core/`: the daemon, worker peers and transports, session records,
+  replay engines, and reachability inspection.
+- `control/`: the supervisor composition root, local admin socket, and
+  application bundle/install helpers.
+- `net/`: the OCapN hub, the in-host pipe network, and the durable and
+  Unix netlayers.
+- `store/`: durable worker and session stores, validators, and string
+  atoms.
+- `alarms/`: the guest clock, its host timer index, and the timer
+  resource.
+- `mail/`: the guest mail protocol, contacts, address book, and mail
+  TUI.
+- `inventory/`: the observable workspace inventory and its views.
+- `http/`: durable HTTP listener recipes.
+- `ironhorse/`: Ironhorse and XS worker engines and their guest
+  fixtures.
+- `platform/`: host capability adapters.
+
+Only `platform/node-powers.js` imports Node built-ins. It composes
+minimal capability objects (`timers`, `random`, `files`, `processes`,
+`sockets`, and so on) whose methods return plain data, so no host API
+or host handle type reaches core. Every other module receives just the
+objects it names; the root ESLint configuration enforces both rules.
 
 ## Local supervisor and workspace
 
@@ -513,11 +541,11 @@ pick a fresh ephemeral port.
 ## Worker sessions
 
 Each worker runs a full (reduced-profile) OCapN peer —
-`src/worker-peer.js`, a persistent `Compartment` behind an OCapN
+`src/core/worker-peer.js`, a persistent `Compartment` behind an OCapN
 client whose evaluate facet is fetched from the worker's own locator
 under the well-known swissnum `shell`.
 The daemon's side of the session is a durable worker transport
-(`src/durable-worker-transport.js`), the durability envelope of the
+(`src/core/durable-worker-transport.js`), the durability envelope of the
 worker's hub session: no wire handshake, no client — the OCapN hub
 owns routing, and attaching the transport is the *same* operation for
 a fresh worker, a wake from snapshot, and a daemon restart.
@@ -545,7 +573,7 @@ requirement.
 
 Thixotrope owns the hub, its persistence transactions, delivery queues, and session lifecycle.
 OCapN supplies protocol codecs, descriptor helpers, and signature operations.
-The hub (`src/hub.js`) holds only per-session c-lists (position ↔
+The hub (`src/net/hub.js`) holds only per-session c-lists (position ↔
 reference row), answer routes, and publications — plain JSON tables,
 written through to the store before any frame that names them exists.
 Every message is decoded with the ordinary wire codecs against a
@@ -583,7 +611,7 @@ process (rust/thixotrope-xs-worker, a minimal runner on the `xsnap` crate)
 evaluating the worker peer bundle inside an XS machine, with real heap
 snapshots streamed into a content-addressed store.
 Binary OCapN frames ride the binary's ASCII NDJSON duct base64-encoded
-(`src/worker-peer-xs.js` is the bundle entry; `dist-xs/worker-peer.js`
+(`src/core/worker-peer-xs.js` is the bundle entry; `dist-xs/worker-peer.js`
 the artifact).
 Build it with:
 
@@ -607,9 +635,9 @@ shared intrinsics inside a native `Compartment`.
 
 The engine seam stays open for future JS engines with other heap
 snapshot mechanisms: any object satisfying the `WorkerEngine` type in
-`src/worker-engine.js` (`canSnapshot`, `start`, optional
+`src/core/worker-engine.js` (`canSnapshot`, `start`, optional
 `releaseSnapshot`) plugs in.
-Two internal replay engines (`src/peer-replay-engine.js`) implement
+Two internal replay engines (`src/core/peer-replay-engine.js`) implement
 the same contract deterministically without an XS build; they are test
 doubles for the daemon's persistence logic, deliberately not part of
 the public API.

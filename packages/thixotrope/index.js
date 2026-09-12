@@ -7,10 +7,10 @@
 // tests reach via relative imports. The `WorkerEngine` type in
 // src/worker-engine.js remains the extension seam for future
 // snapshotting JS engines.
-export { makeThixotropeDaemon } from './src/daemon.js';
-export { makeXsEngine } from './src/xs-engine.js';
-export { makeIronhorseEngine } from './src/ironhorse-engine.js';
-export { makeFsStore } from './src/store-fs.js';
-export { makeTimerResource } from './src/resources.js';
-export { makeDurableNetLayer } from './src/durable-netlayer.js';
-export { inspectIronhorseStore } from './src/inspect-ironhorse.js';
+export { makeThixotropeDaemon } from './src/core/daemon.js';
+export { makeXsEngine } from './src/ironhorse/xs-engine.js';
+export { makeIronhorseEngine } from './src/ironhorse/ironhorse-engine.js';
+export { makeFsStore } from './src/store/store-fs.js';
+export { makeTimerResource } from './src/alarms/resources.js';
+export { makeDurableNetLayer } from './src/net/durable-netlayer.js';
+export { inspectIronhorseStore } from './src/ironhorse/inspect-ironhorse.js';

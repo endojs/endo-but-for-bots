@@ -6,9 +6,9 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { request } from 'node:http';
 import { createServer } from 'node:net';
 import { setImmediate } from 'node:timers/promises';
-import { makeFileSyncStringAtom } from '../src/file-sync-string-atom.js';
+import { makeFileSyncStringAtom } from '../src/store/file-sync-string-atom.js';
 
-import { makeHttpServices } from '../src/http-services.js';
+import { makeHttpServices } from '../src/http/http-services.js';
 
 import { makeNodePowers } from '../src/platform/node-powers.js';
 

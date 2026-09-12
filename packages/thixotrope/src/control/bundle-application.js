@@ -1,5 +1,5 @@
 // @ts-check
-/** @import { NodePowers } from './platform/node-powers.js' */
+/** @import { NodePowers } from '../platform/node-powers.js' */
 import { makeBundle } from '@endo/compartment-mapper/bundle.js';
 import harden from '@endo/harden';
 

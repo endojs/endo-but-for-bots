@@ -4,10 +4,10 @@ import test from '@endo/ses-ava/test.js';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { connectLocalControl } from '../src/local-control.js';
-import { makePeerJournalReplayEngine } from '../src/peer-replay-engine.js';
+import { connectLocalControl } from '../src/control/local-control.js';
+import { makePeerJournalReplayEngine } from '../src/core/peer-replay-engine.js';
 import { makeNodePowers } from '../src/platform/node-powers.js';
-import { serveThixotrope } from '../src/supervisor.js';
+import { serveThixotrope } from '../src/control/supervisor.js';
 import { registerMailboxIntegration } from './_mailbox-integration.js';
 
 const nodePowers = makeNodePowers();

@@ -1,7 +1,7 @@
 // @ts-check
 import harden from '@endo/harden';
 
-import { makeDurableNetLayer } from '../src/durable-netlayer.js';
+import { makeDurableNetLayer } from '../src/net/durable-netlayer.js';
 
 import { makeNodePowers } from '../src/platform/node-powers.js';
 

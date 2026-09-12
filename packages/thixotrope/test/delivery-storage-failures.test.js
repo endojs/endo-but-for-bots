@@ -10,9 +10,9 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
-import { makeThixotropeDaemon } from '../src/daemon.js';
-import { makePeerJournalReplayEngine } from '../src/peer-replay-engine.js';
-import { makeFsStore } from '../src/store-fs.js';
+import { makeThixotropeDaemon } from '../src/core/daemon.js';
+import { makePeerJournalReplayEngine } from '../src/core/peer-replay-engine.js';
+import { makeFsStore } from '../src/store/store-fs.js';
 
 import { makeNodePowers } from '../src/platform/node-powers.js';
 

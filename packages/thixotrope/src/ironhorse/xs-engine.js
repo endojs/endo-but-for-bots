@@ -1,11 +1,11 @@
 // @ts-check
-/** @import { NodePowers } from './platform/node-powers.js' */
+/** @import { NodePowers } from '../platform/node-powers.js' */
 import harden from '@endo/harden';
 
 import { Fail, q } from '@endo/errors';
 
 /**
- * @import {WorkerEngine, WorkerIncarnation} from './worker-engine.js'
+ * @import {WorkerEngine, WorkerIncarnation} from '../core/worker-engine.js'
  */
 
 /**

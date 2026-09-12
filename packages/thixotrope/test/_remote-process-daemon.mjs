@@ -6,10 +6,10 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { join, basename } from 'node:path';
 import { makeNodePowers } from '../src/platform/node-powers.js';
 
-import { makeThixotropeDaemon } from '../src/daemon.js';
-import { makeDurableNetLayer } from '../src/durable-netlayer.js';
-import { makeFsStore } from '../src/store-fs.js';
-import { counterSource } from '../src/demo-counter-vats.js';
+import { makeThixotropeDaemon } from '../src/core/daemon.js';
+import { makeDurableNetLayer } from '../src/net/durable-netlayer.js';
+import { makeFsStore } from '../src/store/store-fs.js';
+import { counterSource } from '../src/ironhorse/demo-counter-vats.js';
 import {
   isIncrement,
   makeProcessTestEngine,

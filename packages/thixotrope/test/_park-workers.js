@@ -1,7 +1,7 @@
 // @ts-check
 import harden from '@endo/harden';
 
-/** @import {ThixotropeDaemon} from '../src/daemon.js' */
+/** @import {ThixotropeDaemon} from '../src/core/daemon.js' */
 /** @param {ThixotropeDaemon} daemon */
 export const parkWorkers = async daemon => {
   for (let pass = 0; pass < 10; pass += 1) {
