@@ -1253,11 +1253,19 @@ export const makeStreamingAgent = async (
       }
     }
 
+    /**
+     * @param {string} replyText
+     * @param {{ inputTokens: number, outputTokens: number } | undefined} turnUsage
+     * @param {string | undefined} backendCheckpoint
+     * @param {Array<{ id: string, name: string, args: string, result: string | null }>} [toolCalls]
+     * @param {Array<{ type: 'text', text: string } | { type: 'tools', calls: Array<{ id: string, name: string, args: string, result: string | null }> }>} [segments]
+     */
     const commitExternalTurn = async (
       replyText,
       turnUsage,
       backendCheckpoint,
       toolCalls = [],
+      segments = undefined,
     ) => {
       await assertTurnToolsSettled(turnId);
       const current = await loadUsage();
@@ -1267,25 +1275,45 @@ export const makeStreamingAgent = async (
         turns: current.turns + 1,
       };
       const messages = receivedMail ? [] : [...inputMessages];
-      if (toolCalls.length > 0) {
+      // A hosted backend that reports segments preserves the real interleaving
+      // of text and tool rounds; grouping every call into one assistant message
+      // and concatenating every text run made the transcript read as one long
+      // answer with all tools at the end (and joined split sentences like
+      // "Let me write the review.REVIEW-COMPLETE").
+      const appendToolRound = calls => {
         messages.push({
           role: 'assistant',
           content: '',
-          tool_calls: toolCalls.map(call => ({
+          tool_calls: calls.map(call => ({
             id: call.id,
             type: 'function',
             function: { name: call.name, arguments: call.args },
           })),
         });
         messages.push(
-          ...toolCalls.map(call => ({
+          ...calls.map(call => ({
             role: 'tool',
             tool_call_id: call.id,
             content: call.result ?? '',
           })),
         );
+      };
+      if (segments && segments.length > 0) {
+        for (const segment of segments) {
+          if (segment.type === 'text') {
+            if (segment.text) {
+              messages.push({ role: 'assistant', content: segment.text });
+            }
+          } else {
+            appendToolRound(segment.calls);
+          }
+        }
+      } else {
+        if (toolCalls.length > 0) {
+          appendToolRound(toolCalls);
+        }
+        messages.push({ role: 'assistant', content: replyText });
       }
-      messages.push({ role: 'assistant', content: replyText });
       // Commit the external answer and accounting as a unit. Typed incoming
       // mail was recorded separately; ordinary input remains atomic with its
       // answer, so a failed runtime call cannot leave an orphaned UI turn.
@@ -1320,7 +1348,15 @@ export const makeStreamingAgent = async (
         }
       }
       writer.usage(nextUsage);
-      writer.final(replyText);
+      // Consumers flush streaming text into a message at each tool_call and
+      // flush the trailing segment at end. Re-emitting the concatenated reply
+      // here would re-merge those segments into one bubble (the
+      // "Let me write the review.REVIEW-COMPLETE" artifact) and render the
+      // already-flushed text twice. A toolless turn has one segment, so final
+      // still carries the complete message for consumers that ignore deltas.
+      if (toolCalls.length === 0) {
+        writer.final(replyText);
+      }
       writer.end();
     };
 
@@ -1329,20 +1365,29 @@ export const makeStreamingAgent = async (
     // stop or a failure — without the usage accounting or reply traffic of a
     // completed turn. Nothing to add (mail already recorded, nothing streamed)
     // leaves the branch where it was.
-    const commitDeliveredTurn = async (replyText, toolCalls = []) => {
+    /**
+     * @param {string} replyText
+     * @param {Array<{ id: string, name: string, args: string, result: string | null }>} [toolCalls]
+     * @param {Array<{ type: 'text', text: string } | { type: 'tools', calls: Array<{ id: string, name: string, args: string, result: string | null }> }>} [segments]
+     */
+    const commitDeliveredTurn = async (
+      replyText,
+      toolCalls = [],
+      segments = undefined,
+    ) => {
       const messages = receivedMail ? [] : [...inputMessages];
-      if (toolCalls.length > 0) {
+      const appendToolRound = calls => {
         messages.push({
           role: 'assistant',
           content: '',
-          tool_calls: toolCalls.map(call => ({
+          tool_calls: calls.map(call => ({
             id: call.id,
             type: 'function',
             function: { name: call.name, arguments: call.args },
           })),
         });
         messages.push(
-          ...toolCalls.map(call => ({
+          ...calls.map(call => ({
             role: 'tool',
             tool_call_id: call.id,
             // A call the turn ended before settling: say so, rather than
@@ -1350,9 +1395,24 @@ export const makeStreamingAgent = async (
             content: call.result ?? UNSETTLED_TOOL_RESULT,
           })),
         );
-      }
-      if (replyText) {
-        messages.push({ role: 'assistant', content: replyText });
+      };
+      if (segments && segments.length > 0) {
+        for (const segment of segments) {
+          if (segment.type === 'text') {
+            if (segment.text) {
+              messages.push({ role: 'assistant', content: segment.text });
+            }
+          } else {
+            appendToolRound(segment.calls);
+          }
+        }
+      } else {
+        if (toolCalls.length > 0) {
+          appendToolRound(toolCalls);
+        }
+        if (replyText) {
+          messages.push({ role: 'assistant', content: replyText });
+        }
       }
       if (messages.length === 0) return;
       const node = await tree.addNode(baseLeafId, messages, { turnId });
@@ -1408,7 +1468,11 @@ export const makeStreamingAgent = async (
         const partial = hostedTurnPartialOf(error);
         if (retainsDeliveredTurns && partial?.delivered) {
           try {
-            await commitDeliveredTurn(partial.finalContent, partial.toolCalls);
+            await commitDeliveredTurn(
+              partial.finalContent,
+              partial.toolCalls,
+              partial.segments,
+            );
           } catch (commitError) {
             // The turn's own failure is the one to surface; a mirroring
             // failure must not mask it.
@@ -1436,11 +1500,17 @@ export const makeStreamingAgent = async (
           // whatever streamed before the kill; mirror that partial turn into
           // the tree instead of dropping it. A stop that landed before the
           // prompt was dispatched leaves nothing to mirror.
-          await commitDeliveredTurn(replyText, toolCalls);
+          await commitDeliveredTurn(replyText, toolCalls, hosted.segments);
         }
         return;
       }
-      await commitExternalTurn(replyText, turnUsage, checkpoint, toolCalls);
+      await commitExternalTurn(
+        replyText,
+        turnUsage,
+        checkpoint,
+        toolCalls,
+        hosted.segments,
+      );
       return;
     }
 
@@ -2329,28 +2399,43 @@ export const makeStreamingAgent = async (
           tool.result ?? 'Tool outcome unknown; do not automatically retry.',
       }));
       const users = projected.filter(message => message.role === 'user');
-      const messages =
-        turn.state === 'completed' && committed
-          ? [...projected]
-          : [
-              ...(users.length
-                ? users
-                : [{ role: 'user', content: turn.input }]),
-              ...journalTools,
-              ...(turn.output
-                ? [{ role: 'assistant', content: turn.output }]
-                : projected.filter(message => message.role === 'assistant')),
-            ];
-      if (turn.state === 'completed' && committed) {
+      // A partial turn the backend retained was mirrored into the tree in
+      // stream order; prefer it over the journal's joined output so a
+      // failed/cancelled turn keeps the same text/tool interleaving as a
+      // completed one. A tree node with only user messages (mail input, no
+      // mirrored partial) still composes from the journal.
+      const mirrored = Boolean(
+        committed && committed.some(message => message.role !== 'user'),
+      );
+      const ordered =
+        (turn.state === 'completed' && Boolean(committed)) || mirrored;
+      const messages = ordered
+        ? [...projected]
+        : [
+            ...(users.length ? users : [{ role: 'user', content: turn.input }]),
+            ...journalTools,
+            ...(turn.output
+              ? [{ role: 'assistant', content: turn.output }]
+              : projected.filter(message => message.role === 'assistant')),
+          ];
+      if (ordered) {
         const unmatchedTools = projected.filter(
           message => message.role === 'tool',
         );
+        // Both placeholders mean "no result was reported"; a journal entry
+        // carrying one must not duplicate a mirrored call carrying the other.
+        const placeholders = new Set([
+          UNSETTLED_TOOL_RESULT,
+          'Tool outcome unknown; do not automatically retry.',
+        ]);
+        const sameResult = (left, right) =>
+          left === right || (placeholders.has(left) && placeholders.has(right));
         for (const tool of journalTools) {
           const match = unmatchedTools.findIndex(
             other =>
               other.name === tool.name &&
               other.args === tool.args &&
-              other.result === tool.result,
+              sameResult(other.result, tool.result),
           );
           if (match >= 0) unmatchedTools.splice(match, 1);
           else messages.splice(Math.max(0, messages.length - 1), 0, tool);
