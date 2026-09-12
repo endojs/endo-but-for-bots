@@ -147,9 +147,19 @@ not repeated removal, is then required to establish release safety.
 A positive witness survives failed removal, and successful removal is not repeated.
 Resolver attestation's `exec` also uses the anchor producer scope: its fixed read-only
 payload still creates a process whose uncertain effects must remain owned.
-`closeSlices()` accounts for slice resources, not complete native-command shutdown:
-supervision of other controls and attached starts is still required before the
-composed runtime may release its storage and ownership marker.
+The host-only `close()` composes slice cleanup with shared native-command accounting.
+It fences ordinary commands and aborts outstanding observations and image pulls,
+retaining their direct native closure even if their result has already failed.
+Already admitted producers retain their existing deadlines, and attached processes
+are stopped through container removal rather than a blanket proxy kill.
+Cleanup commands remain available on failed close retries; after successful slice
+cleanup all command admission is sealed, and pending native closure prevents release.
+Historical observation, pull, signal, and removal failures do not invent permanent
+guest-producer uncertainty.
+Orphan cleanup validates full IDs before removal, preventing delayed cleanup from
+retargeting a reused name; an orphan sweep still cannot prove predecessor quiescence.
+Runtime composition and bwrap probe closure accounting remain pending before the
+default composed runtime may release shared storage and its ownership marker.
 
 [podman-engine-selection]: https://github.com/containers/podman/blob/v5.8.0/cmd/podman/registry/config.go
 [podman-local-flags]: https://github.com/containers/podman/blob/v5.8.0/cmd/podman/root.go

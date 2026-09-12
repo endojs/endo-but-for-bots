@@ -290,7 +290,7 @@ test('podman reconciliation uses only the exact owner label', async t => {
       } else if (args.includes('{{.Host.OCIRuntime.Name}}')) {
         stdout = 'crun\n';
       } else if (args.includes('ps')) {
-        stdout = 'owned-operation\n';
+        stdout = `${'a'.repeat(64)}\n`;
       } else if (command !== 'podman') {
         code = 1;
       }
@@ -325,17 +325,18 @@ test('podman reconciliation uses only the exact owner label', async t => {
     args: [
       'ps',
       '-a',
+      '--no-trunc',
       '--filter',
       `label=${PODMAN_OWNER_LABEL}=${ownerId}`,
       '--format',
-      '{{.Names}}',
+      '{{.ID}}',
     ],
   });
   t.deepEqual(
     calls
       .filter(call => call.args.includes('rm'))
       .map(call => call.args.at(-1)),
-    ['owned-operation'],
+    ['a'.repeat(64)],
   );
 });
 
@@ -1566,7 +1567,7 @@ test('seccompSecurityOpt leaves the built-in policies unchanged', t => {
  *
  * @param {ExecutionContext} t
  * @param {object} [options]
- * @param {string[]} [options.containers]  Names the orphan listing reports.
+ * @param {string[]} [options.containers]  Full IDs the orphan listing reports.
  * @param {(name: string) => { code: number, stderr: string }} [options.rm]
  *   Outcome for `podman rm -f <name>`; defaults to success.
  * @returns {{ childProcess: any, calls: Array<{ command: string, args: string[] }> }}
@@ -1624,7 +1625,7 @@ test('orphan sweep tolerates a container another sweep already removed', async t
   // Two probes race; the loser's `rm -f` finds the container gone. That is
   // the desired state, not a reason to report the backend unavailable.
   const { childProcess } = makeProbeStub(t, {
-    containers: ['owned-operation'],
+    containers: ['a'.repeat(64)],
     rm: name => ({
       code: 1,
       stderr: `Error: no such container ${name}\n`,
@@ -1641,7 +1642,7 @@ test('orphan sweep tolerates a container another sweep already removed', async t
 
 test('orphan sweep still fails closed on a live removal failure', async t => {
   const { childProcess } = makeProbeStub(t, {
-    containers: ['owned-operation'],
+    containers: ['a'.repeat(64)],
     rm: () => ({
       code: 1,
       stderr: 'Error: unlinking layer: permission denied\n',
@@ -1660,7 +1661,7 @@ test('orphan sweep still fails closed on a live removal failure', async t => {
 
 test('concurrent probes share one orphan sweep', async t => {
   const { childProcess, calls } = makeProbeStub(t, {
-    containers: ['owned-operation'],
+    containers: ['a'.repeat(64)],
   });
   const driver = makePodmanDriver({
     childProcess,
@@ -1687,7 +1688,7 @@ test('concurrent probes share one orphan sweep', async t => {
 test('a failed orphan sweep is retried by the next probe', async t => {
   let attempt = 0;
   const { childProcess, calls } = makeProbeStub(t, {
-    containers: ['owned-operation'],
+    containers: ['a'.repeat(64)],
     rm: () => {
       attempt += 1;
       return attempt === 1

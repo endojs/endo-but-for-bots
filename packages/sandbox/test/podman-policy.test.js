@@ -14,6 +14,7 @@
 
 import test from '@endo/ses-ava/prepare-endo.js';
 import { makeCancelKit } from '@endo/cancel';
+import { makePromiseKit } from '@endo/promise-kit';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 
@@ -245,6 +246,7 @@ const makeEngineStub = (
       return 'container-inspect';
     }
     if (args[0] === 'create') return 'create';
+    if (args[0] === 'pull') return 'pull';
     if (args[0] === 'start') return 'start';
     if (args[0] === 'rm') return 'rm';
     if (args[0] === 'kill') return 'kill';
@@ -275,6 +277,7 @@ const makeEngineStub = (
     'operation-container-id': { stdout: `${OPERATION_CONTAINER_ID}\n` },
     'startup-witness': { stdout: 'false\n' },
     create: {},
+    pull: {},
     start: {},
     rm: {},
     kill: {},
@@ -1492,3 +1495,113 @@ test('resolver exec retains anchor ownership through pending closure and uncerta
   );
   t.is(calls.filter(call => call.args[0] === 'rm').length, 1);
 });
+
+test('a failed probe retains its native command after its result is swallowed', async t => {
+  t.timeout(5000);
+  /** @type {any} */
+  let held;
+  const finish = () => {
+    held?.stdout.end();
+    held?.stderr.end();
+    held?.emit('close', null, 'SIGKILL');
+  };
+  t.teardown(finish);
+  const { driver } = makeDriverUnderTest(t, {
+    intercept: (kind, child) => {
+      if (kind !== 'version') return false;
+      held = child;
+      queueMicrotask(() => child.emit('error', Error('probe failed')));
+      return true;
+    },
+  });
+  const probe = await driver.probe();
+  t.false(probe.available);
+  await t.throwsAsync(driver.close(), {
+    message: /native command closure pending/,
+  });
+  finish();
+  await Promise.resolve();
+  await driver.close();
+});
+
+test('driver close aborts a held image pull and retains its direct closure only', async t => {
+  t.timeout(5000);
+  const { promise: entered, resolve: began } = makePromiseKit();
+  /** @type {any} */
+  let held;
+  const signals = [];
+  const finish = () => {
+    held?.stdout.end();
+    held?.stderr.end();
+    held?.emit('close', null, 'SIGKILL');
+  };
+  t.teardown(finish);
+  const { driver, calls } = makeDriverUnderTest(t, {
+    responses: { 'image-exists': { code: 1 } },
+    intercept: (kind, child) => {
+      if (kind !== 'pull') return false;
+      held = child;
+      child.kill = signal => {
+        signals.push(signal);
+        return true;
+      };
+      began(undefined);
+      return true;
+    },
+  });
+  const preparing = driver.prepareSlice(
+    /** @type {any} */ (
+      makeSpec({ network: 'none', policy: undefined, cwd: undefined })
+    ),
+  );
+  const rejected = t.throwsAsync(preparing, {
+    message: /control command aborted/,
+  });
+  await entered;
+  await t.throwsAsync(driver.close(), {
+    message: /native command closure pending/,
+  });
+  await rejected;
+  t.deepEqual(signals, ['SIGKILL']);
+  t.false(calls.some(call => call.args[0] === 'create'));
+  finish();
+  await Promise.resolve();
+  await driver.close();
+});
+
+test('driver close fences a probe before its asynchronous acquisition', async t => {
+  const { driver, calls } = makeDriverUnderTest(t);
+  const probing = driver.probe();
+  const rejected = t.throwsAsync(probing, { message: /shutting down/ });
+  await driver.close();
+  await rejected;
+  t.deepEqual(calls, []);
+});
+
+for (const invalid of [false, true]) {
+  test(`orphan sweep validates full immutable IDs before removal: ${invalid ? 'invalid' : 'valid'}`, async t => {
+    const first = 'a'.repeat(64);
+    const second = invalid ? 'short-id' : 'b'.repeat(64);
+    const { driver, calls } = makeDriverUnderTest(t, {
+      responses: { ps: { stdout: `${first}\n${second}\n` } },
+    });
+    const probe = await driver.probe();
+    if (invalid) {
+      t.false(probe.available);
+      t.regex(probe.reason ?? '', /orphan listing returned an invalid ID/);
+      t.false(calls.some(call => call.args[0] === 'rm'));
+    } else {
+      t.true(probe.available);
+      t.deepEqual(
+        calls
+          .filter(call => call.args[0] === 'rm')
+          .map(call => call.args.at(-1)),
+        [first, second],
+      );
+    }
+    await driver.close();
+    const listing = calls.find(call => call.args[0] === 'ps');
+    t.true(listing?.args.includes('--no-trunc'));
+    t.true(listing?.args.includes('{{.ID}}'));
+  });
+}
