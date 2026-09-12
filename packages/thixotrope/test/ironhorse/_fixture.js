@@ -10,7 +10,10 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { makeThixotropeDaemon } from '../../src/core/daemon.js';
-import { callerSource, counterSource } from '../../src/ironhorse/demo-counter-vats.js';
+import {
+  callerSource,
+  counterSource,
+} from '../../src/ironhorse/demo-counter-vats.js';
 import { makeIronhorseEngine } from '../../src/ironhorse/ironhorse-engine.js';
 import { makeFsStore } from '../../src/store/store-fs.js';
 

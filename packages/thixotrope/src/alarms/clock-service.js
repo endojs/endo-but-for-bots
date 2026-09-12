@@ -1,5 +1,6 @@
 // @ts-check
-/** @import { NodePowers } from '../platform/node-powers.js' */
+/** @import { TimerPowers } from '../platform/timers.js' */
+/** @import { RandomPowers } from '../platform/random.js' */
 import { E, Far } from '@endo/far';
 import { Fail } from '@endo/errors';
 import harden from '@endo/harden';
@@ -15,15 +16,18 @@ import { makeDurableClock } from './durable-clock.js';
  * Construct only under the daemon's engine lease. Reifying its scheduler is
  * inert; neither restoration nor start allocates an unused clock vat.
  * The public clock is the only capability returned to application grant code.
- * @param {Pick<NodePowers, 'timers' | 'randomBytes' | 'now'>} powers
+ * @param {{ timers: TimerPowers, random: RandomPowers }} powers
  * @param {object} options
  * @param {SyncStringAtom} options.storage
  * @param {() => Awaited<ReturnType<typeof makeThixotropeDaemon>>} options.getDaemon
  * @param {() => bigint} [options.now]
  */
-export const makeClockService = (powers, { storage, getDaemon, now }) => {
+export const makeClockService = (
+  { timers, random },
+  { storage, getDaemon, now },
+) => {
   const randomId = () =>
-    Array.from(powers.randomBytes(16), byte =>
+    Array.from(random.randomBytes(16), byte =>
       byte.toString(16).padStart(2, '0'),
     ).join('');
   /** @type {ClockConfig | undefined} */
@@ -67,7 +71,7 @@ export const makeClockService = (powers, { storage, getDaemon, now }) => {
 
   const provideScheduler = () => {
     if (!config) throw Fail`Clock has not been allocated`;
-    scheduler ??= makeAlarmScheduler(powers, {
+    scheduler ??= makeAlarmScheduler(timers, {
       secret: config.secret,
       openClient: () => getDaemon().openEphemeralClient(),
       ...(now === undefined ? {} : { now }),

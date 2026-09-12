@@ -124,7 +124,7 @@ const setup = async (t, pause) => {
   const restore = () => {
     service = makeClockService(nodePowers, {
       storage: makeFileSyncStringAtom(
-        nodePowers,
+        nodePowers.syncFiles,
         join(statePath, 'clock.json'),
       ),
       getDaemon: () => {

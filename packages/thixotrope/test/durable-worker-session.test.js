@@ -32,6 +32,10 @@ import { makeTestOcapn } from './_util.js';
 import { makeNodePowers } from '../src/platform/node-powers.js';
 
 const nodePowers = makeNodePowers();
+const transportPowers = {
+  timers: nodePowers.timers,
+  logging: nodePowers.logging,
+};
 
 const textEncoder = new TextEncoder();
 /** @param {string} text */
@@ -66,7 +70,7 @@ const makeHubKit = async (t, { workerId, engine, store, debugLabel }) => {
   const hub = makeOcapnHub({ codec: syrupCodec });
   /** @type {any} */
   const holder = {};
-  const transport = makeDurableWorkerTransport(nodePowers, {
+  const transport = makeDurableWorkerTransport(transportPowers, {
     workerId,
     store: store.provideWorkerStore(workerId),
     engine,
@@ -247,7 +251,7 @@ test('idle parking reports awake until the snapshot commits', async t => {
   const workerId = 'a'.repeat(32);
   const store = makeMemoryStore().provideWorkerStore(workerId);
   let snapshots = 0;
-  const transport = makeDurableWorkerTransport({
+  const transport = makeDurableWorkerTransport(transportPowers, {
     workerId,
     store,
     idleSleepMs: 1,

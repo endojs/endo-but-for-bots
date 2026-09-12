@@ -1,5 +1,6 @@
 // @ts-check
-/** @import { NodePowers } from '../platform/node-powers.js' */
+/** @import { LogPowers } from '../platform/logging.js' */
+/** @import { TimerHandle, TimerPowers } from '../platform/timers.js' */
 import harden from '@endo/harden';
 import { decodeBase64, encodeBase64 } from '@endo/base64';
 import { Fail, q } from '@endo/errors';
@@ -45,7 +46,9 @@ import { WorkerHaltError } from './worker-engine.js';
  * naturally drains the deliveries queued before it, and deliveries
  * queued after it reopen the worker from the snapshot it just took.
  *
- * @param {Pick<NodePowers, 'timers' | 'console'>} powers
+ * @param {object} powers
+ * @param {TimerPowers} powers.timers
+ * @param {LogPowers} powers.logging
  * @param {object} options
  * @param {string} options.workerId
  * @param {WorkerStore} options.store
@@ -65,7 +68,7 @@ import { WorkerHaltError } from './worker-engine.js';
  * @param {() => void} [options.onFatal] retire the failed logical session
  */
 export const makeDurableWorkerTransport = (
-  powers,
+  { timers, logging },
   {
     workerId,
     store,
@@ -76,7 +79,6 @@ export const makeDurableWorkerTransport = (
     onFatal = () => {},
   },
 ) => {
-  const { setTimeout, clearTimeout } = powers.timers;
   typeof onFrame === 'function' ||
     Fail`durable worker transport requires an onFrame callback`;
   const debugName = `${debugLabel ?? 'worker'}(${workerId.slice(0, 8)})`;
@@ -112,14 +114,14 @@ export const makeDurableWorkerTransport = (
 
   // --- idle-sleep policy ---
 
-  /** @type {ReturnType<typeof setTimeout> | undefined} */
+  /** @type {TimerHandle | undefined} */
   let idleTimer;
   let opGeneration = 0;
 
   const noteActivity = () => {
     opGeneration += 1;
     if (idleTimer !== undefined) {
-      clearTimeout(idleTimer);
+      timers.clearTimer(idleTimer);
       idleTimer = undefined;
     }
   };
@@ -129,10 +131,10 @@ export const makeDurableWorkerTransport = (
       return;
     }
     if (idleTimer !== undefined) {
-      clearTimeout(idleTimer);
+      timers.clearTimer(idleTimer);
     }
     const generation = opGeneration;
-    const timer = setTimeout(() => {
+    const timer = timers.setTimer(() => {
       idleTimer = undefined;
       if (
         destroyed ||
@@ -143,15 +145,13 @@ export const makeDurableWorkerTransport = (
       }
 
       sleepInternal().catch(error =>
-        powers.console.error(
+        logging.error(
           `thixotrope worker transport ${debugName}: idle sleep failed`,
           error,
         ),
       );
     }, idleSleepMs);
-    if (typeof timer.unref === 'function') {
-      timer.unref();
-    }
+    timers.unrefTimer?.(timer);
     idleTimer = timer;
   };
 
@@ -300,7 +300,7 @@ export const makeDurableWorkerTransport = (
         deliveredUpTo = index + 1;
         if (hubSequence !== undefined) deliveredHubSequence = hubSequence;
       }).catch(error => {
-        powers.console.error(
+        logging.error(
           `thixotrope worker transport ${debugName}: delivery failed`,
           error,
         );

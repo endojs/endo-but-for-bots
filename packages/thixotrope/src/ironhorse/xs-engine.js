@@ -1,5 +1,8 @@
 // @ts-check
-/** @import { NodePowers } from '../platform/node-powers.js' */
+/** @import { FilePowers } from '../platform/files.js' */
+/** @import { PathPowers } from '../platform/paths.js' */
+/** @import { ProcessPowers } from '../platform/processes.js' */
+/** @import { TimerPowers } from '../platform/timers.js' */
 import harden from '@endo/harden';
 
 import { Fail, q } from '@endo/errors';
@@ -31,7 +34,11 @@ const asciiJson = value =>
  * Build inputs: `cargo build --release -p thixotrope-xs-worker` (after
  * `yarn build:xs-bundles` in this package generates `dist-xs/`).
  *
- * @param {NodePowers} powers
+ * @param {object} powers
+ * @param {ProcessPowers} powers.processes
+ * @param {FilePowers} powers.files
+ * @param {PathPowers} powers.paths
+ * @param {TimerPowers} powers.timers
  * @param {object} options
  * @param {string} options.workerBinary path to the thixotrope-xs-worker binary
  * @param {string} options.bootPath pre-bundle boot script (dist-xs/boot.js)
@@ -40,19 +47,17 @@ const asciiJson = value =>
  * @returns {WorkerEngine}
  */
 export const makeXsEngine = (
-  powers,
+  { processes, files, paths, timers },
   { workerBinary, bootPath, bundlePath, casPath },
 ) => {
-  const { spawn } = powers.childProcess;
-  const { mkdirSync } = powers.fs;
-  const { rm } = powers.fsPromises;
-  const { join } = powers.path;
-  const { setTimeout, clearTimeout } = powers.timers;
-  mkdirSync(casPath, { recursive: true });
+  const { spawn } = processes;
+  const { join } = paths;
+  const { setTimer, clearTimer, unrefTimer } = timers;
   return harden({
     canSnapshot: true,
     /** @type {WorkerEngine['start']} */
     start: async ({ debugName, snapshot, onOutbound }) => {
+      await files.makeDirectory(casPath);
       const args = [
         '--boot',
         bootPath,
@@ -69,12 +74,7 @@ export const makeXsEngine = (
       const child = spawn(workerBinary, args, {
         stdio: ['ignore', 'inherit', 'inherit', 'pipe', 'pipe'],
       });
-      const toChild = /** @type {import('node:stream').Writable} */ (
-        child.stdio[3]
-      );
-      const fromChild = /** @type {import('node:stream').Readable} */ (
-        child.stdio[4]
-      );
+      const toChild = child.input(3);
 
       /** @type {Array<{ expect: string, resolve: (reply: any) => void, reject: (reason: Error) => void }>} */
       const pending = [];
@@ -92,68 +92,61 @@ export const makeXsEngine = (
         failAll(reason);
         child.kill('SIGKILL');
       };
-      child.on('exit', (code, signal) => {
+      void child.exited.then(code => {
         exited = true;
         failAll(
           Error(
-            `thixotrope-xs-worker for ${debugName} exited (${code ?? signal})`,
+            `thixotrope-xs-worker for ${debugName} exited (${code ?? 'signaled'})`,
           ),
         );
+        return code;
       });
-      child.on('error', error => {
-        exited = true;
-        failAll(
-          Error(
-            `thixotrope-xs-worker for ${debugName} failed to spawn: ${
-              /** @type {Error} */ (error).message
-            }`,
-          ),
-        );
-      });
-      toChild.on('error', () => {});
-      fromChild.on('error', () => {});
-
-      fromChild.setEncoding('utf8');
-      let buffer = '';
-      fromChild.on('data', chunk => {
-        buffer += chunk;
-        let index = buffer.indexOf('\n');
-        while (index >= 0) {
-          const line = buffer.slice(0, index);
-          buffer = buffer.slice(index + 1);
-          index = buffer.indexOf('\n');
-          if (line !== '') {
-            /** @type {any} */
-            let reply;
-            try {
-              reply = JSON.parse(line);
-            } catch (_error) {
-              failProtocol(Error(`garbled line from XS worker ${debugName}`));
-              return;
-            }
-            if (reply.op === 'outbound') {
-              onOutbound(reply.message);
-            } else {
-              const waiter = pending.shift();
-              if (waiter === undefined) {
-                failProtocol(
-                  Error(`unsolicited ${q(reply.op)} from XS worker`),
-                );
+      void (async () => {
+        await null;
+        try {
+          for await (const line of child.lines(4)) {
+            if (line !== '') {
+              /** @type {any} */
+              let reply;
+              try {
+                reply = JSON.parse(line);
+              } catch (_error) {
+                failProtocol(Error(`garbled line from XS worker ${debugName}`));
                 return;
               }
-              if (reply.op === waiter.expect) {
-                waiter.resolve(reply);
+              if (reply.op === 'outbound') {
+                onOutbound(reply.message);
               } else {
-                waiter.reject(
-                  Error(
-                    `XS worker replied ${reply.op}, expected ${waiter.expect}`,
-                  ),
-                );
+                const waiter = pending.shift();
+                if (waiter === undefined) {
+                  failProtocol(
+                    Error(`unsolicited ${q(reply.op)} from XS worker`),
+                  );
+                  return;
+                }
+                if (reply.op === waiter.expect) {
+                  waiter.resolve(reply);
+                } else {
+                  waiter.reject(
+                    Error(
+                      `XS worker replied ${reply.op}, expected ${waiter.expect}`,
+                    ),
+                  );
+                }
               }
             }
           }
+        } catch (error) {
+          exited = true;
+          failAll(
+            Error(
+              `thixotrope-xs-worker for ${debugName} failed to spawn: ${
+                /** @type {Error} */ (error).message
+              }`,
+            ),
+          );
         }
-      });
+      })();
 
       /**
        * @param {Record<string, unknown> | undefined} payload
@@ -168,7 +161,7 @@ export const makeXsEngine = (
           }
           pending.push({ expect, resolve, reject });
           if (payload !== undefined) {
-            toChild.write(`${asciiJson(payload)}\n`);
+            toChild?.write(`${asciiJson(payload)}\n`);
           }
         });
 
@@ -187,12 +180,11 @@ export const makeXsEngine = (
           if (exited) {
             return;
           }
-          const done = new Promise(resolve => child.once('exit', resolve));
-          toChild.write('{"op":"exit"}\n');
-          const killer = setTimeout(() => child.kill('SIGKILL'), 2000);
-          killer.unref?.();
-          await done;
-          clearTimeout(killer);
+          child.input(3)?.write('{"op":"exit"}\n');
+          const killer = setTimer(() => child.kill('SIGKILL'), 2000);
+          unrefTimer?.(killer);
+          await child.exited;
+          clearTimer(killer);
         },
       };
       return harden(incarnation);
@@ -202,7 +194,7 @@ export const makeXsEngine = (
       const hash = /** @type {string} */ (ref);
       /^[0-9a-f]{64}$/.test(hash) ||
         Fail`XS engine snapshot ref must be a sha256 hex digest`;
-      await rm(join(casPath, hash), { force: true });
+      await files.remove(join(casPath, hash), { force: true });
     },
   });
 };

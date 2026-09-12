@@ -1,25 +1,25 @@
 // @ts-check
-/** @import { NodePowers } from '../platform/node-powers.js' */
+/** @import { TimerPowers } from '../platform/timers.js' */
 import { E, Far } from '@endo/far';
 import harden from '@endo/harden';
 
 /**
  * Reconstructible host timer index. The guest clock owns durable registrations.
  * Each host observation has a bounded lifetime and its own disposable session.
- * @param {Pick<NodePowers, 'now' | 'timers'>} powers
+ * @param {TimerPowers} timers
  * @param {{openClient: () => Promise<any>, secret: string,
  * now?: () => bigint, setTimer?: (callback: () => void, ms: number) => any,
  * clearTimer?: (handle: any) => void, retryMs?: number,
  * requestTimeoutMs?: number}} options
  */
 export const makeAlarmScheduler = (
-  powers,
+  timers,
   {
     openClient,
     secret,
-    now = () => BigInt(powers.now()),
-    setTimer = powers.timers.setTimeout,
-    clearTimer = powers.timers.clearTimeout,
+    now = () => BigInt(timers.now()),
+    setTimer = timers.setTimer,
+    clearTimer = timers.clearTimer,
     retryMs = 1000,
     requestTimeoutMs = 30_000,
   },
