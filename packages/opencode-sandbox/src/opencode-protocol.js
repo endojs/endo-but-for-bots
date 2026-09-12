@@ -116,8 +116,11 @@ export const assertBridgeEvent = candidate => {
   const { type } = candidate;
   if (type === 'ready') {
     const rawSessionId = candidate.sessionId;
-    if (!(typeof rawSessionId === 'string' && rawSessionId !== '')) {
-      Fail`ready event needs a sessionId`;
+    if (!(
+      typeof rawSessionId === 'string' &&
+      /^[A-Za-z0-9_.:-]{1,160}$/.test(rawSessionId)
+    )) {
+      Fail`ready event needs a bounded sessionId`;
     }
     const rawPort = candidate.port;
     if (!(
