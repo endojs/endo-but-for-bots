@@ -183,7 +183,7 @@ export const makeOpencodeSessionProvisioner = (
     } = namesFor(sessionId);
     const { network: requestedNetwork } = options;
     if (requestedNetwork !== undefined) {
-      ['none', 'private'].includes(requestedNetwork) ||
+      ['none', 'private', 'join'].includes(requestedNetwork) ||
         Fail`Unknown network profile ${q(requestedNetwork)}`;
     }
     await ensureSessionsDirectory();
