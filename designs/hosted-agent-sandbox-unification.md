@@ -90,6 +90,13 @@ canonical destinations, overlapping mounts, and exact-policy exclusions before a
 Backend selection requires explicit support; both production drivers currently refuse
 generated-file requests until private staging, storage accounting, and cleanup are wired.
 This contract is implemented; generated-file execution and resolver integration are pending.
+The host-only staging allocator now shares aggregate UTF-8 payload and entry budgets
+across its stages, retains failed deletions and their charges, and refuses to remove
+files still owned by a consumer.
+It creates an exclusive fresh root under a private host directory and refuses existing
+roots; reconciling a crashed owner's storage requires prior container reaping by the runtime.
+Writable host-path overlap is checked again on each use.
+Podman integration and the hosted runtime's storage-owner composition remain pending.
 
 Runtime unification across all three adapters, Claude credential migration, OpenCode
 public network convergence, tool/journal consolidation, emergency stop UI, and the remaining
@@ -391,7 +398,7 @@ provider requirements, or an explicit user budget, rather than copied between la
 | Container renewal each turn | Fresh runtime/grant generation | Stale runtime state | Explicit incarnation change on policy changes, failures, and restart | Remove ordinary per-turn replacement. |
 | CLI/tool separation inside guest | Inference endpoint and native state from shell tools | Other code in the same guest | Host protects credentials, routes, administration, and effects records | Remove baseline guarantee; optional stronger profile only. |
 | Synthetic public IP/NET_ADMIN helper | Inner proxy's exclusion of inference addresses | Guest tools reaching the broker | Such access is allowed in the new authority domain | Remove requirement; verify CLI compatibility first. |
-| Generated configuration staging | Host file authority and temporary host storage | Configuration callers and guest mutations | Declared mount destinations restrict exposure; host storage budget is still required because guest cgroups do not cover staging | Stage literal bytes privately, mount read-only, and retain cleanup ownership; implement with shared runtime storage. |
+| Generated configuration staging | Host file authority, payload storage, and directory entries | Configuration callers and guest mutations | Literal destinations restrict exposure; the host allocator charges aggregate UTF-8 bytes and entries until deletion; guest cgroups do not cover this storage | Integrate private staging with container lifetime and runtime ownership; refuse stale roots until prior users are reaped. |
 | Public destination/DNS filtering | Host/LAN services and ungranted external access | Guest requests and hostile DNS answers | Container isolation alone does not constrain a host proxy's sockets | Keep in shared egress service. |
 | Frame/header size cap | Allocation and parse work for one message | Guest/listener/provider input | Guest memory caps do not bound host parser allocation | Keep at each parsing boundary; derive compatible envelopes. |
 | Queue/inflight/connection caps | Aggregate host memory, FDs, pending work | Flooding or slow peers | One frame cap does not bound many queued frames | Keep with backpressure in shared transport/services. |

@@ -21,6 +21,7 @@
     ".": "./src/agent.js",
     "./types.js": "./src/types.d.ts",
     "./resource-registry.js": "./src/resource-registry.js",
+    "./generated-file-storage.js": "./src/generated-file-storage.js",
     "./factory.js": "./src/factory.js",
     "./interfaces.js": "./src/interfaces.js",
     "./xfs-volume-quota.js": "./src/xfs-volume-quota.js",

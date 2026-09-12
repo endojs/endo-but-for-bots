@@ -18,6 +18,11 @@ import type {
   ValidatedGeneratedFile,
 } from './generated-file-types.js';
 export type { GeneratedFile } from './generated-file-types.js';
+export type {
+  GeneratedFileMount,
+  GeneratedFileStage,
+  GeneratedFileStorage,
+} from './generated-file-storage-types.js';
 
 // ---------------------------------------------------------------------------
 // Network policy
