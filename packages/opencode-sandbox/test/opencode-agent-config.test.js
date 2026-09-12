@@ -114,6 +114,45 @@ test('normalizes a local mcp server map without freezing the caller input', t =>
   t.false(Object.isFrozen(mcpServers.endo));
 });
 
+test('accepts a loopback http broker endpoint and rejects any other http', t => {
+  const broker = makeOpencodeConfig({
+    baseUrl: 'http://127.0.0.1:41337/api/v1',
+    allowLoopbackHttp: true,
+  });
+  t.is(
+    /** @type {any} */ (broker.provider).openrouter.options.baseURL,
+    'http://127.0.0.1:41337/api/v1',
+  );
+  const ipv6 = makeOpencodeConfig({
+    baseUrl: 'http://[::1]:41337/api/v1',
+    allowLoopbackHttp: true,
+  });
+  t.is(
+    /** @type {any} */ (ipv6.provider).openrouter.options.baseURL,
+    'http://[::1]:41337/api/v1',
+  );
+  for (const baseUrl of [
+    'http://openrouter.ai/api/v1',
+    'http://10.0.0.5:41337/api/v1',
+    'http://0.0.0.0:41337/api/v1',
+    'http://localhost:41337/api/v1',
+    'http://user@127.0.0.1:41337/api/v1',
+    'http://127.0.0.1/api/v1',
+    'http://127.0.0.1:0/api/v1',
+    'http://127.0.0.1:41337/other',
+    'https://127.0.0.1:41337/api/v1',
+  ]) {
+    t.throws(() => makeOpencodeConfig({ baseUrl, allowLoopbackHttp: true }), {
+      message: /baseUrl/,
+    });
+  }
+  // Without the explicit opt-in, loopback http is not admitted at all.
+  t.throws(
+    () => makeOpencodeConfig({ baseUrl: 'http://127.0.0.1:41337/api/v1' }),
+    { message: /must use https/ },
+  );
+});
+
 test('passes through local mcp environment entries', t => {
   const config = makeOpencodeConfig({
     mcpServers: {
@@ -153,7 +192,7 @@ test('rejects invalid inputs', t => {
   t.throws(
     () => makeOpencodeConfig({ baseUrl: 'http://openrouter.ai/api/v1' }),
     {
-      message: /https/,
+      message: /must use https/,
     },
   );
   t.throws(
