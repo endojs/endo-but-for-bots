@@ -29,7 +29,6 @@ import {
 } from '../policy.js';
 import {
   readableToAsyncIterable,
-  spawnAndCollect,
   startControlCommand,
 } from './child-process.js';
 import { DEFAULT_PATH } from './path.js';
@@ -37,6 +36,8 @@ import { DEFAULT_PATH } from './path.js';
 /** @import { GeneratedFileStage, GeneratedFileStorage } from '../generated-file-storage-types.js' */
 /** @import { SandboxDriver, SliceSpec, SpawnOpts, DriverProcess, BackendProbe, BackendProbeDetails, SlicePolicyRequest, SlicePolicyAttestation } from '../types.js' */
 /** @import { PromiseKit } from '@endo/promise-kit' */
+
+/** @typedef {Parameters<typeof startControlCommand>} ControlArguments */
 
 // `network: 'join'` targets are named by the same portable pattern the
 // policy layer uses for volumes and sidecars.
@@ -326,15 +327,16 @@ harden(ociRefFromRootfs);
  * `host-*` slices but rejects `private` with a structured error.
  *
  * @param {typeof import('child_process')} cp
+ * @param {(...args: ControlArguments) => ReturnType<typeof startControlCommand>['result']} collect
  * @returns {Promise<RootlessNetBackend>}
  */
-const probeRootlessNetBackend = async cp => {
+const probeRootlessNetBackend = async (cp, collect) => {
   await null;
   for (const candidate of /** @type {const} */ (['slirp4netns', 'pasta'])) {
     let result;
     try {
       // eslint-disable-next-line no-await-in-loop
-      result = await spawnAndCollect(cp, candidate, ['--version'], {
+      result = await collect(cp, candidate, ['--version'], {
         timeoutMs: CONTROL_COMMAND_TIMEOUT_MS,
       });
     } catch (e) {
@@ -684,7 +686,7 @@ const encodeMount = fields =>
  * @param {{observe: (request: {name: string, mountpoint: string}) => Promise<import('../xfs-volume-quota.js').VolumeQuotaEvidence>}} [input.volumeQuota] Trusted host kernel-quota observer; never model-facing.
  * @param {GeneratedFileStorage} [input.generatedFileStorage] Host-owned allocator; required for literal files.
  * @param {SeccompFilePowers} [input.fs] Host filesystem powers; injectable for cleanup failures.
- * @returns {SandboxDriver & { closeSlices(): Promise<void> }}
+ * @returns {SandboxDriver & { closeSlices(): Promise<void>, close(): Promise<void> }}
  */
 export const makePodmanDriver = ({
   env: _env = {},
@@ -725,6 +727,43 @@ export const makePodmanDriver = ({
   const readyCleanups = new Set();
   /** @type {Promise<void> | undefined} */
   let closeFlight;
+  /** @type {Set<{ abortOnClose: (() => void) | undefined }>} */
+  const nativeControls = new Set();
+  let controlsSealed = false;
+  /** @type {Promise<void> | undefined} */
+  let driverCloseFlight;
+
+  /**
+   * Track direct native closure independently of command outcome. Producer
+   * scopes separately account for authority to create or initialize guests.
+   *
+   * @param {Promise<void>} closed
+   * @param {() => void} [abortOnClose]
+   */
+  const trackNative = (closed, abortOnClose) => {
+    const record = { abortOnClose };
+    nativeControls.add(record);
+    void closed.then(() => nativeControls.delete(record));
+  };
+  /**
+   * @param {'ordinary' | 'producer' | 'cleanup'} kind
+   * @param {ControlArguments} args
+   */
+  const launchControl = (kind, ...args) => {
+    if (controlsSealed)
+      throw makeError(X`Podman native command owner is closed`);
+    if (kind !== 'cleanup') slices.assertOpen();
+    const command = startControlCommand(...args);
+    trackNative(
+      command.closed,
+      kind === 'ordinary' ? () => command.abort() : undefined,
+    );
+    return command;
+  };
+  /** @param {ControlArguments} args */
+  const collectControl = (...args) => launchControl('ordinary', ...args).result;
+  /** @param {ControlArguments} args */
+  const collectCleanup = (...args) => launchControl('cleanup', ...args).result;
 
   /** @param {PreparationResources} resources */
   const releasePreparationFiles = async resources => {
@@ -807,7 +846,7 @@ export const makePodmanDriver = ({
     if (resolvedRuntime !== null) return resolvedRuntime;
     let info;
     try {
-      info = await spawnAndCollect(
+      info = await collectControl(
         cp,
         'podman',
         podmanArgs('', ['info', '--format', '{{.Host.OCIRuntime.Name}}']),
@@ -832,7 +871,7 @@ export const makePodmanDriver = ({
     // with its own error message.
     for (const candidate of EXEC_CAPABLE_RUNTIMES) {
       // eslint-disable-next-line no-await-in-loop
-      const v = await spawnAndCollect(cp, candidate, ['--version'], {
+      const v = await collectControl(cp, candidate, ['--version'], {
         timeoutMs: CONTROL_COMMAND_TIMEOUT_MS,
       }).catch(() => null);
       if (v !== null && v.code === 0) {
@@ -877,7 +916,7 @@ export const makePodmanDriver = ({
    * @param {string} name
    */
   const removeContainer = (cp, runtime, name) =>
-    spawnAndCollect(cp, 'podman', podmanArgs(runtime, ['rm', '-f', name]), {
+    collectCleanup(cp, 'podman', podmanArgs(runtime, ['rm', '-f', name]), {
       timeoutMs: CONTROL_COMMAND_TIMEOUT_MS,
     });
 
@@ -891,32 +930,38 @@ export const makePodmanDriver = ({
    */
   const sweepOrphans = async cp => {
     const runtime = await ensureRuntime(cp);
-    const listing = await spawnAndCollect(
+    const listing = await collectControl(
       cp,
       'podman',
       podmanArgs(runtime, [
         'ps',
         '-a',
+        '--no-trunc',
         '--filter',
         `label=${PODMAN_OWNER_LABEL}=${ownerId}`,
         '--format',
-        '{{.Names}}',
+        '{{.ID}}',
       ]),
       { timeoutMs: CONTROL_COMMAND_TIMEOUT_MS },
     );
-    if (listing.code !== 0) {
+    if (listing.code !== 0 || listing.signal !== null) {
       throw makeError(
         X`podman exact-label orphan listing failed: ${q(listing.stderr.trim() || listing.stdout.trim())}`,
       );
     }
-    const names = listing.stdout
+    const ids = listing.stdout
       .split('\n')
       .map(s => s.trim())
       .filter(s => s !== '');
+    if (ids.some(id => !/^[0-9a-f]{64}$/.test(id))) {
+      throw makeError(
+        X`podman exact-label orphan listing returned an invalid ID`,
+      );
+    }
     const removals = await Promise.all(
-      names.map(async name => {
+      ids.map(async id => {
         await null;
-        const result = await removeContainer(cp, runtime, name);
+        const result = await removeContainer(cp, runtime, id);
         // Removal is a goal, not a command: a container that another
         // sweep, another daemon incarnation, or the operation's own
         // reaper already removed between the listing above and this
@@ -924,7 +969,7 @@ export const makePodmanDriver = ({
         if (result.code === 0 || reportsContainerGone(result)) {
           return undefined;
         }
-        return `${name}: ${result.stderr.trim() || result.stdout.trim()}`;
+        return `${id}: ${result.stderr.trim() || result.stdout.trim()}`;
       }),
     );
     const failures = removals.filter(result => result !== undefined);
@@ -1017,7 +1062,7 @@ export const makePodmanDriver = ({
 
     let versionResult;
     try {
-      versionResult = await spawnAndCollect(
+      versionResult = await collectControl(
         cp,
         'podman',
         podmanArgs('', ['--version']),
@@ -1050,7 +1095,7 @@ export const makePodmanDriver = ({
     // could not initialise its storage; that is fatal for the driver.
     let rootlessResult;
     try {
-      rootlessResult = await spawnAndCollect(
+      rootlessResult = await collectControl(
         cp,
         'podman',
         podmanArgs('', ['info', '--format', '{{.Host.Security.Rootless}}']),
@@ -1167,7 +1212,7 @@ export const makePodmanDriver = ({
     const runtime = await ensureRuntime(cp);
     let result;
     try {
-      result = await spawnAndCollect(
+      result = await collectControl(
         cp,
         'podman',
         podmanArgs(runtime, [
@@ -1202,13 +1247,13 @@ export const makePodmanDriver = ({
    */
   const ensureImage = async (cp, ref) => {
     const runtime = await ensureRuntime(cp);
-    const exists = await spawnAndCollect(
+    const exists = await collectControl(
       cp,
       'podman',
       podmanArgs(runtime, ['image', 'exists', ref]),
     );
     if (exists.code === 0) return;
-    const pulled = await spawnAndCollect(
+    const pulled = await collectControl(
       cp,
       'podman',
       podmanArgs(runtime, ['pull', ref]),
@@ -1232,7 +1277,7 @@ export const makePodmanDriver = ({
    */
   const inspectImageDigest = async (cp, ref) => {
     const runtime = await ensureRuntime(cp);
-    const result = await spawnAndCollect(
+    const result = await collectControl(
       cp,
       'podman',
       podmanArgs(runtime, ['image', 'inspect', '--format', '{{.Digest}}', ref]),
@@ -1267,7 +1312,7 @@ export const makePodmanDriver = ({
    */
   const inspectVolume = async (cp, name) => {
     const runtime = await ensureRuntime(cp);
-    const result = await spawnAndCollect(
+    const result = await collectControl(
       cp,
       'podman',
       podmanArgs(runtime, [
@@ -1417,7 +1462,7 @@ export const makePodmanDriver = ({
    * @returns {Promise<any>}
    */
   const inspectContainer = async (cp, runtime, name) => {
-    const inspected = await spawnAndCollect(
+    const inspected = await collectControl(
       cp,
       'podman',
       podmanArgs(runtime, [
@@ -1458,7 +1503,7 @@ export const makePodmanDriver = ({
    * @returns {Promise<boolean>}
    */
   const isRootless = async (cp, runtime) => {
-    const result = await spawnAndCollect(
+    const result = await collectControl(
       cp,
       'podman',
       podmanArgs(runtime, ['info', '--format', '{{.Host.Security.Rootless}}']),
@@ -1524,7 +1569,7 @@ export const makePodmanDriver = ({
       // A plain template (not `X`/`Fail`) so the human label stays unquoted.
       throw makeError(`${label} ${q(container)} is not a container name`);
     }
-    const result = await spawnAndCollect(
+    const result = await collectControl(
       cp,
       'podman',
       podmanArgs(runtime, [
@@ -1544,7 +1589,7 @@ export const makePodmanDriver = ({
     }
     // The immutable id, so a name cannot be re-pointed between this check
     // and the create that joins the namespace.
-    const idResult = await spawnAndCollect(
+    const idResult = await collectControl(
       cp,
       'podman',
       podmanArgs(runtime, [
@@ -1622,7 +1667,7 @@ export const makePodmanDriver = ({
      */
     const run = async (args, options) => {
       slices.assertOpen();
-      const command = startControlCommand(cp, 'podman', args, {
+      const command = launchControl('producer', cp, 'podman', args, {
         timeoutMs: CONTROL_COMMAND_TIMEOUT_MS,
         ...options,
       });
@@ -2038,7 +2083,7 @@ export const makePodmanDriver = ({
     const netBackend =
       spec.network === 'broker-only' || spec.network === 'join'
         ? null
-        : await probeRootlessNetBackend(cp);
+        : await probeRootlessNetBackend(cp, collectControl);
     if (spec.network === 'private' && netBackend === null) {
       throw makeError(
         X`podman driver: network 'private' requires either slirp4netns or pasta on PATH; neither was found`,
@@ -2426,7 +2471,7 @@ export const makePodmanDriver = ({
             // timestamp only after OCI startup succeeds. Observe it before rm
             // deletes the record; an attached CLI exit code is not this proof.
             try {
-              const witness = await spawnAndCollect(
+              const witness = await collectCleanup(
                 cp,
                 'podman',
                 podmanArgs(slice.runtime, [
@@ -2499,7 +2544,7 @@ export const makePodmanDriver = ({
 
       // Supported passthrough log drivers suppress create's ID on stdout.
       // Query it explicitly before any guest startup, independently of logging.
-      const identity = await spawnAndCollect(
+      const identity = await collectControl(
         cp,
         'podman',
         podmanArgs(slice.runtime, [
@@ -2611,6 +2656,7 @@ export const makePodmanDriver = ({
       const closure = makePromiseKit();
       proxyClosed = closure.promise;
       child.once('close', () => closure.resolve(undefined));
+      trackNative(proxyClosed);
 
       const exited = (async () => {
         await null;
@@ -2647,7 +2693,8 @@ export const makePodmanDriver = ({
           // The operation itself is container PID 1. Signalling the exact
           // container therefore covers every descendant, unlike signalling a
           // host-side `podman exec` proxy.
-          const result = await spawnAndCollect(
+          if (containerRemoved) return;
+          const result = await collectCleanup(
             cp,
             'podman',
             podmanArgs(slice.runtime, [
@@ -2744,9 +2791,8 @@ export const makePodmanDriver = ({
     return slice.teardownFlight;
   };
 
-  // This drains owned slice lifetimes, including failed preparation. It is
-  // deliberately not a native-command shutdown proof: untracked probes and
-  // operation control children still need supervision before runtime release.
+  // This drains owned slice lifetimes, including failed preparation. The host
+  // close() below also accounts for native commands before runtime release.
   const closeSlices = () => {
     const drained = slices.shutdown();
     if (closeFlight !== undefined) {
@@ -2775,6 +2821,30 @@ export const makePodmanDriver = ({
 
   const probe = () => slices.inOrder(makeOperationName(), probeBackend);
 
+  const close = () => {
+    // Public admission closes before aborting observers. Cleanup remains
+    // launchable until every slice is released. Do not abort healthy producers
+    // or attached proxies: their owners retain the existing deadline/removal
+    // semantics, avoiding uncertainty manufactured by routine shutdown.
+    const stopped = closeSlices();
+    for (const control of nativeControls) control.abortOnClose?.();
+    if (driverCloseFlight !== undefined) {
+      void stopped.catch(() => undefined);
+      return driverCloseFlight;
+    }
+    driverCloseFlight = (async () => {
+      await stopped;
+      controlsSealed = true;
+      if (nativeControls.size !== 0) {
+        throw makeError(X`Podman native command closure pending`);
+      }
+    })().catch(error => {
+      driverCloseFlight = undefined;
+      throw error;
+    });
+    return driverCloseFlight;
+  };
+
   return harden({
     name: /** @type {const} */ ('podman'),
     ...(generatedFileStorage === undefined
@@ -2786,6 +2856,7 @@ export const makePodmanDriver = ({
     spawn,
     teardown,
     closeSlices,
+    close,
   });
 };
 harden(makePodmanDriver);

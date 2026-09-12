@@ -65,6 +65,8 @@ const fixture = (t, storage, fs) => {
   let witnessResult = { code: 0, stdout: 'false\n' };
   let refuseStart = false;
   let refuseWitness = false;
+  let failKill = false;
+  let closeKill;
   const kills = [];
   let deferCreate = false;
   let deferProxyExit = false;
@@ -156,7 +158,11 @@ const fixture = (t, storage, fs) => {
           send(witnessResult.code, '', witnessResult.stdout),
         );
       } else if (args[0] === 'kill') {
-        queueMicrotask(() => send(0));
+        closeKill = () => send(0);
+        queueMicrotask(() => {
+          if (failKill) child.emit('error', Error('signal command failed'));
+          else closeKill();
+        });
       } else if (command !== 'podman') {
         queueMicrotask(() => send(1));
       } else if (args[0] === 'image' || args[0] === 'info') {
@@ -201,6 +207,7 @@ const fixture = (t, storage, fs) => {
       deferProxyExit = false;
       for (const name of attached.keys()) finish(name);
       completeCreate?.();
+      closeKill?.();
       if (expectedUncertainty) {
         // These are synthetic processes, all closed above. Assert that the
         // production owner still retains uncertainty; do not fabricate success.
@@ -208,7 +215,7 @@ const fixture = (t, storage, fs) => {
         return;
       }
       await driver.teardown(slice);
-      await driver.closeSlices();
+      await driver.close();
     } finally {
       // Assert outside production catches, including calls made by teardown.
       // AVA assertions cannot run after the test body has finished.
@@ -245,6 +252,10 @@ const fixture = (t, storage, fs) => {
     refuseWitness: () => {
       refuseWitness = true;
     },
+    failKill: () => {
+      failKill = true;
+    },
+    closeKill: () => closeKill?.(),
     failures,
     finish,
     exit: name => attached.get(name)?.emit('exit', 0, null),
@@ -969,4 +980,63 @@ test('a start with no acquired child needs no startup witness', async t => {
   });
   t.false(f.calls.some(args => args.includes('{{.State.StartedAt.IsZero}}')));
   t.is(f.active.size, 0);
+});
+
+test('driver close drains a healthy create without aborting its producer', async t => {
+  t.timeout(5000);
+  const f = fixture(t);
+  await f.prepare({});
+  f.defer();
+  const pending = f.driver.spawn(f.slice, ['/bin/true'], {});
+  const rejected = t.throwsAsync(pending, { message: /shutting down/ });
+  await f.creating;
+  const closing = f.driver.close();
+  t.is(f.driver.close(), closing);
+  t.deepEqual(f.kills, []);
+  f.complete();
+  await rejected;
+  await closing;
+  t.is(f.active.size, 0);
+  t.false(f.calls.some(args => args[0] === 'start'));
+  t.deepEqual(f.kills, []);
+});
+
+test('driver close permits witness and removal retries and fences completed handles', async t => {
+  t.timeout(5000);
+  const f = fixture(t);
+  await f.prepare({});
+  const proc = await f.driver.spawn(f.slice, ['/bin/true'], {});
+  const [name] = f.active;
+  f.failures.add(name);
+  await t.throwsAsync(f.driver.close(), { message: /slice cleanup pending/ });
+  f.failures.clear();
+  await f.driver.close();
+  await proc.wait();
+  t.deepEqual(f.kills, [], 'container removal handles the attach process');
+  const count = f.calls.length;
+  await proc.kill('SIGKILL');
+  await f.driver.close();
+  t.is(f.calls.length, count);
+});
+
+test('failed signaling retains native closure without poisoning later removal', async t => {
+  t.timeout(5000);
+  const f = fixture(t);
+  await f.prepare({});
+  const proc = await f.driver.spawn(f.slice, ['/bin/true'], {});
+  f.failKill();
+  await t.throwsAsync(proc.kill('SIGTERM'), {
+    message: /signal command failed/,
+  });
+  await t.throwsAsync(f.driver.close(), {
+    message: /native command closure pending/,
+  });
+  t.is(f.active.size, 0);
+  await proc.wait();
+  const count = f.calls.length;
+  await proc.kill('SIGKILL');
+  t.is(f.calls.length, count);
+  f.closeKill();
+  await Promise.resolve();
+  await f.driver.close();
 });
