@@ -116,6 +116,19 @@ does not itself gate the add. With the column present on every database,
 empty-string default is the grandfathering value: it means "unattributed," and
 every row that predates the column-add carries it.
 
+Because `stmtWriteFormula` is a full-row `INSERT OR REPLACE` keyed by `number`,
+`writeFormula` is also the in-place *update* path, not only the first-insert path:
+the git-remote policy/revocation updater in `manager.js` re-writes an
+already-persisted formula's row (spreading `...latestFormula` for the JSON body),
+and `formulateNumberedHandle` mints the `handle` formula through the same call.
+Every non-insert call site must therefore read the existing row's `creator` and
+re-supply it unchanged, exactly as it already re-supplies the existing `node` and
+`type`; the `creator` travels with the row and is never recomputed from the
+updater's scope, so an in-place update can neither reset a row to the empty
+creator nor misattribute it to the updating code path. Auditing `writeFormula` by
+its every call site (not just the `formulate` / `formulateLazy` chokepoint below)
+is a required step of the schema change.
+
 The creating agent is known at the agent-facet boundary but not at the low-level
 `formulate`. The guest facet method that produces a formula knows "I am
 `guestId`"; the host facet knows "I am `hostId`." Thread that identity down the
@@ -164,6 +177,18 @@ must be passed independently of `nameHubId`. Concretely:
   `guest.js` `storeValue` / `storeBlob` without the guest identity. Add a creator
   parameter to both and pass `guestId` from the guest facet (and `hostId` from the
   host facet, which shares these makers).
+- `formulateReadableBlob` reaches the chokepoint through a second guest-facing
+  surface the inventory must not omit: `GuestInterface` spreads
+  `directoryFileMethodGuards`, so `E(guest).writeText(petName, content)` is a
+  first-class guest operation whose implementation (`guest.js` `writeText`,
+  aliased `directoryWriteText`) delegates to `directory.js`, which calls
+  `formulateReadableBlob` directly. `makeDirectoryNode` carries no agent identity
+  in its current signature, so this is not merely a missed call but a plumbing
+  path that must be threaded: the directory node maker gains a creator it forwards
+  to `formulateReadableBlob`, and the guest facet supplies `guestId` (the host
+  facet `hostId`). Without it a blob a guest stores via `writeText` (one of the
+  two blob-storing paths this design exists to serve) would carry `creator = ''`
+  and be invisible to that guest's own `diagnostics()`.
 - The subsidiary formulas a guest operation creates within the same call (the
   `worker` from `provideWorkerId` when none was named, the `lookup` formulas for
   endowments) are attributed to the *same* creator passed for that operation, not
@@ -225,7 +250,7 @@ subset (see `traces()` below and Design Decision 5):
   then one additional gate: the persisted `creator` of the formula must equal the
   bound `guestId`, **or** the identifier must be one of the guest's own
   provisioning-chain formulas (its own agent identity plus every dependency the
-  `GuestFormula` names for it other than `hostHandle` / `hostAgent` — the `handle`,
+  `GuestFormula` names for it other than `hostHandle` / `hostAgent`: the `handle`,
   `pet-store`, `mailbox-store`, `mail-hub`, default `worker`, `networks`, and
   `planes`, all host-created; see "The guest's own provisioning chain" below). A mismatch must
   reject with an error **textually indistinguishable from the existing
@@ -260,7 +285,7 @@ subset (see `traces()` below and Design Decision 5):
   `lookup` / `recent` to that worker-id set and omits `clear` (a guest must not drop
   another agent's traces). If per-worker creator filtering on
   the aggregator proves awkward, `traces()` may be omitted from the guest facet in
-  the first cut and the guest facet may expose only `getFormula` and
+  cut 1 and the guest facet may expose only `getFormula` and
   `getFormulaGraph`; see Open Questions.
 
 ```mermaid
@@ -297,7 +322,7 @@ guest's own agent formula (its `@self` / `@agent`) and reads *every* dependency
 identifier that formula names, excluding only `hostHandle` and `hostAgent` (which
 name the *host's* identity, not the guest's own resources). For the current
 `GuestFormula` shape that admits the `handle`, `pet-store`, `mailbox-store`,
-`mail-hub`, default `worker`, `networks`, and `planes` — the full set of
+`mail-hub`, default `worker`, `networks`, and `planes`: the full set of
 infrastructure the host mints per guest for that guest's exclusive use, all of it
 structurally identical in kind. Enumerating "every field but `hostHandle` /
 `hostAgent`" rather than a fixed list keeps the carve-out from silently drifting
@@ -367,7 +392,7 @@ structure. The host facet remains the unfiltered superset for the operator.
   bookkeeping paths (`makeResolver` / `writeStatus`, and any bootstrap formula) keep
   minting `creator = ''` rows going forward, not just for pre-migration data. This
   is an accepted permanent state, not a transitional one: these are internal
-  wrappers (for example the `PROMISE_STATUS_NAME` status record), not user-facing
+  wrappers (for example, the `PROMISE_STATUS_NAME` status record), not user-facing
   content a guest would expect its own `diagnostics()` to reach, so leaving them
   host-scope-only is correct rather than a gap to close. The one internal path that
   *does* have an agent in scope, `mail.js`'s `submit`, is attributed to the
@@ -411,12 +436,19 @@ structure. The host facet remains the unfiltered superset for the operator.
    formula the host created), the `endow` case (guest is rejected on the
    host-attributed eval it proposed via `define`), the self-identity carve-out, the
    provisioning-chain carve-out (guest resolves each host-created dependency its own
-   agent formula names other than `hostHandle` / `hostAgent` — `worker`,
-   `pet-store`, `mailbox-store`, `handle`, `mail-hub`, `networks`, and `planes` —
+   agent formula names other than `hostHandle` / `hostAgent`: `worker`,
+   `pet-store`, `mailbox-store`, `handle`, `mail-hub`, `networks`, and `planes`,
    with one assertion per admitted field so the test list tracks the formula shape),
    the existence-oracle case (the "not
    yours" rejection is byte-for-byte the same as the "unknown identifier"
-   rejection), and continued cross-peer rejection.
+   rejection), the `writeText`-stored blob case (a blob a guest stored via
+   `E(guest).writeText` is attributed to that guest and reachable through its own
+   `getFormula`, the `directory.js` call site), and continued cross-peer
+   rejection. Cover `getFormulaGraph()` too, not just `getFormula`: assert it
+   seeds only from the guest's own pet-store entries and that a reference it
+   renders stays opaque (the referenced formula's body and creator are not
+   expanded), since that non-expansion property is load-bearing for the no-leak
+   rationale.
 3. **Add guest-scoped `traces()`** filtered to guest-created workers, or defer per
    Open Questions (optional in cut 1).
 
@@ -447,7 +479,7 @@ structure. The host facet remains the unfiltered superset for the operator.
    agent formula names other than `hostHandle` / `hostAgent` (`handle`, `pet-store`,
    `mailbox-store`, `mail-hub`, default `worker`, `networks`, `planes`) even though
    the host created them, because those exist solely for the guest's use. The set is
-   stated data-driven over the formula shape, not as a fixed list, so it cannot drift
+   defined data-driven over the formula shape, not as a fixed list, so it cannot drift
    from `GuestFormula` as new per-guest dependencies are added. The judgment lives in
    the resolution gate (a structurally computed ownership set), leaving the `creator`
    column a
@@ -456,7 +488,7 @@ structure. The host facet remains the unfiltered superset for the operator.
 
 ## Open Questions
 
-- Should `traces()` appear on the guest facet in the first cut, or wait until
+- Should `traces()` appear on the guest facet in cut 1, or wait until
   per-worker creator filtering on the shared aggregator is proven? The design can
   ship `getFormula` + `getFormulaGraph` alone and add `traces()` later without a
   surface change.
