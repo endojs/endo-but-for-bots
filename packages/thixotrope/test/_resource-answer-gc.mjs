@@ -7,12 +7,12 @@ const nodePowers = makeNodePowers();
 const { E, Far } = await import('@endo/far');
 const { syrupCodec } = await import('@endo/ocapn/syrup');
 const { setImmediate } = await import('node:timers/promises');
-const { makeThixotropeDaemon } = await import('../src/daemon.js');
+const { makeThixotropeDaemon } = await import('../src/core/daemon.js');
 const { makePeerJournalReplayEngine } =
-  await import('../src/peer-replay-engine.js');
-const { makeMemoryStore } = await import('../src/store-memory.js');
+  await import('../src/core/peer-replay-engine.js');
+const { makeMemoryStore } = await import('../src/store/store-memory.js');
 const { makeWorkerSessionRecords } =
-  await import('../src/worker-session-records.js');
+  await import('../src/core/worker-session-records.js');
 
 const collect = async () => {
   for (let i = 0; i < 20; i += 1) {

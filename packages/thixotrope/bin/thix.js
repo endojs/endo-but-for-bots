@@ -5,11 +5,11 @@ import process from 'node:process';
 import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 
-import { bundleApplication } from '../src/bundle-application.js';
-import { connectLocalControl } from '../src/local-control.js';
-import { showInventory } from '../src/inventory-view.js';
-import { showMailbox } from '../src/mailbox-view.js';
-import { serveThixotrope } from '../src/supervisor.js';
+import { bundleApplication } from '../src/control/bundle-application.js';
+import { connectLocalControl } from '../src/control/local-control.js';
+import { showInventory } from '../src/inventory/inventory-view.js';
+import { showMailbox } from '../src/mail/mailbox-view.js';
+import { serveThixotrope } from '../src/control/supervisor.js';
 
 import { makeNodePowers } from '../src/platform/node-powers.js';
 

@@ -9,17 +9,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { makeThixotropeDaemon } from '../../src/daemon.js';
-import { callerSource, counterSource } from '../../src/demo-counter-vats.js';
-import { makeIronhorseEngine } from '../../src/ironhorse-engine.js';
-import { makeFsStore } from '../../src/store-fs.js';
+import { makeThixotropeDaemon } from '../../src/core/daemon.js';
+import { callerSource, counterSource } from '../../src/ironhorse/demo-counter-vats.js';
+import { makeIronhorseEngine } from '../../src/ironhorse/ironhorse-engine.js';
+import { makeFsStore } from '../../src/store/store-fs.js';
 
 import { makeNodePowers } from '../../src/platform/node-powers.js';
 
 const nodePowers = makeNodePowers();
 
 /** @import { ExecutionContext } from 'ava' */
-/** @import { WorkerEngine } from '../../src/worker-engine.js' */
+/** @import { WorkerEngine } from '../../src/core/worker-engine.js' */
 
 const packagePath = fileURLToPath(new URL('../../', import.meta.url));
 const workerBinary =

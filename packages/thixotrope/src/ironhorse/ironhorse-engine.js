@@ -1,11 +1,11 @@
 // @ts-check
-/** @import { NodePowers } from './platform/node-powers.js' */
+/** @import { NodePowers } from '../platform/node-powers.js' */
 import harden from '@endo/harden';
 import { acquireIronhorseRuntime, hashFile } from './ironhorse-runtime.js';
 
-import { WorkerHaltError } from './worker-engine.js';
+import { WorkerHaltError } from '../core/worker-engine.js';
 
-/** @import { WorkerEngine } from './worker-engine.js' */
+/** @import { WorkerEngine } from '../core/worker-engine.js' */
 
 /**
  * Ironhorse with incremental SQLite checkpoints and immutable sleep images.

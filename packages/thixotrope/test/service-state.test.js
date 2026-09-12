@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { makeNodePowers } from '../src/platform/node-powers.js';
-import { makeFileSyncStringAtom } from '../src/file-sync-string-atom.js';
+import { makeFileSyncStringAtom } from '../src/store/file-sync-string-atom.js';
 
 test('file string atom preserves raw contents across reopening', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'thix-string-atom-'));

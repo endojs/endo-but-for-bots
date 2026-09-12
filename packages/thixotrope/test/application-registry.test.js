@@ -2,7 +2,7 @@
 import { E, Far } from '@endo/far';
 import test from '@endo/ses-ava/test.js';
 
-import { makeApplicationRegistry } from '../src/application-registry.js';
+import { makeApplicationRegistry } from '../src/control/application-registry.js';
 
 test('concurrent installs share one result and capture only named powers', async t => {
   let created = 0n;

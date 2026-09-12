@@ -15,8 +15,8 @@ import {
   makeIronhorseEngine,
   inspectIronhorseStore,
 } from '../index.js';
-import { counterSource, callerSource } from '../src/demo-counter-vats.js';
-import { producerSource, listenerSource } from '../src/demo-promise-vats.js';
+import { counterSource, callerSource } from '../src/ironhorse/demo-counter-vats.js';
+import { producerSource, listenerSource } from '../src/ironhorse/demo-promise-vats.js';
 
 const [
   demo = 'counter',

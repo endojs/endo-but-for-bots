@@ -9,8 +9,8 @@ import {
 import { makeCryptography, makeSessionId } from '@endo/ocapn/cryptography';
 import { syrupCodec } from '@endo/ocapn/syrup';
 
-import { makeOcapnHub } from '../src/hub.js';
-import { makeDurableNetLayer } from '../src/durable-netlayer.js';
+import { makeOcapnHub } from '../src/net/hub.js';
+import { makeDurableNetLayer } from '../src/net/durable-netlayer.js';
 
 import { makeNodePowers } from '../src/platform/node-powers.js';
 
