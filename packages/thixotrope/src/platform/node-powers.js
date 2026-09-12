@@ -1,5 +1,4 @@
 // @ts-check
-import { makeReadPowers } from '@endo/compartment-mapper/node-powers.js';
 import harden from '@endo/harden';
 import * as childProcess from 'node:child_process';
 import * as crypto from 'node:crypto';
@@ -15,7 +14,6 @@ import * as nodeTimers from 'node:timers';
 import * as url from 'node:url';
 import * as util from 'node:util';
 
-import { makeBundlerPowers } from './bundler.js';
 import { makeDisplayPowers } from './display.js';
 import { makeEnvironmentPowers, makeUserPowers } from './environment.js';
 import { makeFilePowers } from './files.js';
@@ -92,11 +90,22 @@ export const makeNodePowers = () => {
     describe: value =>
       util.inspect(value, { customInspect: false, getters: false, depth: 3 }),
   });
-  const bundler = makeBundlerPowers({
-    readPowers: makeReadPowers({ fs, path, url, crypto }),
-    pathToFileURL: p => url.pathToFileURL(p),
-    resolve: (...parts) => path.resolve(...parts),
-    sha256Hex: hashes.sha256Hex,
+  const bundler = harden({
+    // The compartment mapper is heavy and only needed to install an
+    // application, so load it on first use to keep ordinary startup light.
+    bundle: async file => {
+      const [{ makeBundlerPowers }, { makeReadPowers }] = await Promise.all([
+        import('./bundler.js'),
+        import('@endo/compartment-mapper/node-powers.js'),
+      ]);
+      const bundlerPowers = makeBundlerPowers({
+        readPowers: makeReadPowers({ fs, path, url, crypto }),
+        pathToFileURL: p => url.pathToFileURL(p),
+        resolve: (...parts) => path.resolve(...parts),
+        sha256Hex: hashes.sha256Hex,
+      });
+      return bundlerPowers.bundle(file);
+    },
   });
   return harden({
     timers: timerPowers,
