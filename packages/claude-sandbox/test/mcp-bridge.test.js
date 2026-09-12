@@ -12,7 +12,7 @@ import {
   makeMcpBridgeForToolSet,
   pinToolCatalog,
 } from '../src/mcp-bridge.js';
-import { startMcpSocketServer, takeLines } from '../src/mcp-socket-server.js';
+import { startMcpSocketServer } from '../src/mcp-socket-server.js';
 
 const toolFor = (name, description = '') =>
   harden({
@@ -204,16 +204,8 @@ test('makeMcpBridgeForToolSet pins describe() once and dispatches through execut
   ]);
 });
 
-test('takeLines frames newline-delimited JSON and carries a partial tail', t => {
-  const first = takeLines('{"a":1}\n{"b":2}\n{"c":');
-  t.deepEqual(first.lines, ['{"a":1}', '{"b":2}']);
-  t.is(first.rest, '{"c":');
-  const second = takeLines(`${first.rest}3}\n`);
-  t.deepEqual(second.lines, ['{"c":3}']);
-  t.is(second.rest, '');
-});
-
 test('socket server relays JSON-RPC over a Unix socket and installs the bridge + config', async t => {
+  t.timeout(5000);
   const dir = await mkdtemp(path.join(os.tmpdir(), 'claude-mcp-test-'));
   t.teardown(() => rm(dir, { recursive: true, force: true }));
 
@@ -243,6 +235,7 @@ test('socket server relays JSON-RPC over a Unix socket and installs the bridge +
 
   const reply = await new Promise((resolve, reject) => {
     const socket = net.connect(server.socketPath);
+    t.teardown(() => socket.destroy());
     let buffer = '';
     socket.setEncoding('utf8');
     socket.on('error', reject);
@@ -280,6 +273,7 @@ test('a JSON-RPC batch is refused with a reply rather than dropped', async t => 
 });
 
 test('socket frames are handled concurrently and an unbounded frame drops the peer', async t => {
+  t.timeout(5000);
   const dir = await mkdtemp(path.join(os.tmpdir(), 'claude-mcp-test-'));
   t.teardown(() => rm(dir, { recursive: true, force: true }));
 
@@ -303,13 +297,15 @@ test('socket frames are handled concurrently and an unbounded frame drops the pe
   t.teardown(() => server.close());
 
   const socket = net.connect(server.socketPath);
+  t.teardown(() => socket.destroy());
+  t.teardown(release);
   socket.setEncoding('utf8');
   const replies = [];
   let buffer = '';
   socket.on('data', chunk => {
     buffer += typeof chunk === 'string' ? chunk : chunk.toString('utf8');
-    const { lines, rest } = takeLines(buffer);
-    buffer = rest;
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
     for (const line of lines) replies.push(JSON.parse(line));
   });
   const closed = new Promise(resolve => socket.on('close', resolve));

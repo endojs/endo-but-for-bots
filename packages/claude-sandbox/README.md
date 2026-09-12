@@ -145,7 +145,7 @@ CLI through a per-session MCP server
 ([`src/mcp-bridge.js`](./src/mcp-bridge.js) over a Unix socket,
 [`src/mcp-socket-server.js`](./src/mcp-socket-server.js)) whose directory the
 slice mounts read-only at `/endo-mcp`; a plain-node relay
-([`src/mcp-stdio-bridge.mjs`](./src/mcp-stdio-bridge.mjs)) runs inside the
+([shared stdio relay](../hosted-agent/src/mcp-stdio-bridge.js)) runs inside the
 slice and pipes Claude Code's stdio to the socket, and `claude -p` gets
 `--mcp-config /endo-mcp/mcp.json --strict-mcp-config`. Only JSON crosses the
 socket: `tools/list` serves the pinned catalog, `tools/call` is refused for
