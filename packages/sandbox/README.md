@@ -172,7 +172,24 @@ generated-file byte and entry budgets.
 The directory and its replaceable ancestors must remain outside guest writes.
 Existing markers and storage roots refuse startup without a probe or stale sweep;
 this controller does not infer safe recovery from parent death or container absence.
-Daemon provisioning and hosted entrypoint integration remain pending.
+The host-only `@endo/sandbox/owned-agent.js` unconfined entrypoint retains these
+controllers across formula reconstructions in the same native module instance.
+It observes daemon cancellation before queued acquisition, closes outside the
+construction queue, and retries a failed predecessor's cleanup before replacement.
+An overlapping live owner is refused; an old or refused caller's cancellation
+cannot close a successor.
+Only the public factory is returned to the daemon's callers.
+Separate module instances and workers still rely on the exclusive filesystem marker;
+an empty in-memory registry grants no authority to take over stale resources.
+Cancellation is eventual: publication is fenced after cancellation is observed locally.
+Automatic cleanup failures are reported on stderr and retained for a later construction
+to retry; daemon disposal completion is not proof that this cleanup succeeded.
+The persisted formula must supply `ENDO_SANDBOX_RUNTIME_DIR`, `ENDO_SANDBOX_OWNER_ID`,
+`ENDO_SANDBOX_GENERATED_MAX_BYTES`, and `ENDO_SANDBOX_GENERATED_MAX_ENTRIES`.
+Budgets are explicit decimal bigint quantities, with nonnegative bytes and positive
+entries; the entrypoint invents no default quota or spending policy.
+The runtime parent must already exist and remain outside guest write authority.
+Hosted provisioning has not yet switched to this entrypoint.
 
 [podman-engine-selection]: https://github.com/containers/podman/blob/v5.8.0/cmd/podman/registry/config.go
 [podman-local-flags]: https://github.com/containers/podman/blob/v5.8.0/cmd/podman/root.go

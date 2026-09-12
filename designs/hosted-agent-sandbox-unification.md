@@ -102,8 +102,14 @@ in addition to filesystem and composed-owner failures.
 The hosted runtime composes Podman; the generic factory retains bwrap support,
 whose separate probe-closure gap is outside this hosted composition.
 Uncertain descendant completion must retain ownership rather than license replacement.
-Daemon entrypoint retention and configuration, stronger crash
-recovery, and resolver integration remain pending.
+The owned daemon entrypoint now retains exact invocation controllers across formula
+reconstruction within the same native module instance.
+It refuses live overlaps, closes outside the construction queue on observed owner loss,
+and retries failed predecessor cleanup before replacement.
+Separate module instances still refuse existing filesystem markers; this is no crash recovery.
+Formula configuration supplies the private parent, stable owner ID, and explicit aggregate
+generated-file budgets, with no invented defaults.
+Hosted provisioning, stronger crash recovery, and resolver integration remain pending.
 Recovery from hung driver control calls and the complete session emergency-stop path
 remain pending.
 
@@ -143,7 +149,7 @@ files still owned by a consumer.
 It creates an exclusive fresh root under a private host directory and refuses existing
 roots; reconciling a crashed owner's storage requires prior container reaping by the runtime.
 Writable host-path overlap is checked again on each use.
-The host-only runtime controller composes storage ownership; daemon and hosted entrypoint
+The host-only runtime controller and owned daemon entrypoint compose storage ownership; hosted
 wiring and resolver integration remain pending.
 
 Runtime unification across all three adapters, Claude credential migration, OpenCode
