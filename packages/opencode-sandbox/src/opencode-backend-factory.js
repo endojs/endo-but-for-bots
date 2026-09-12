@@ -32,6 +32,7 @@
 import { Fail, q } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
+import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 import path from 'node:path';
 import {
   HostedBackendFactoryInterface,
@@ -305,8 +306,22 @@ export const makeOpencodeBackendFactory = ({
        * @param {Record<string, any>} [options]
        */
       async send(prompt, options = {}) {
-        networkPolicy !== 'off' ||
-          Fail`OpenCode session network policy is "off"; set the session policy to public-internet before sending a turn`;
+        if (networkPolicy === 'off') {
+          // A refusal the operator can fix by setting the session policy. It is
+          // reported as a leading abort — the stream contract for "the backend
+          // never took the prompt" — so Floot records a clean failed turn
+          // instead of an uncertain outcome, which would fence the session
+          // until an operator resolved it.
+          return readerFromIterator(
+            (async function* refused() {
+              yield {
+                type: 'abort',
+                reason:
+                  'OpenCode session network policy is "off"; set the session policy to public-internet before sending a turn',
+              };
+            })(),
+          );
+        }
         const systemPrompt = options.systemPrompt || spec.systemPrompt;
         return E(client).send(
           prompt,
