@@ -29,7 +29,15 @@ authority and write authority as separately delegable capabilities (why that
 separation is worth having, rather than a single read+write face, is argued in
 the "Two independent authorities" section below).
 
-This design adds that mutable counterpart as its own formula type, threads
+The originating maintainer prompt (reproduced verbatim in the Prompt section at
+the end) asked for five things: pick a name (`blob`/`file`/`block-storage`); split
+the filesystem powers into separate ranged-read and ranged-write authorities;
+forbid a ranged write from extending the file in the middle while allowing append;
+reserve room for a later CASK-backed variant that withstands mid-range splicing;
+and restate the mechanism CASK uses for content-delimited blocks. This design
+answers each in turn below.
+
+Concretely, it adds that mutable counterpart as its own formula type, threads
 **separate least-authority powers for ranged reads and ranged writes**, and
 constrains the write power so it can overwrite within the current extent or
 append at the end but cannot splice or extend from the middle. It reserves room
@@ -65,11 +73,12 @@ ranged writes. Three names were offered.
 The load-bearing observation: on **in-place** block storage a ranged read and a
 ranged write are *independent* authorities. An overwrite or an append does not
 need to read the current bytes, so a genuine **write-only** power is honest
-here. This diverges deliberately from CASK's cell capability lattice, where
-`write implies read` because a cell mutation is compare-and-swap and needs the
-current value (see the forward reference `cask-entry-type-capability`). Because
-the two authorities are independent, they split cleanly into two separately
-delegable powers:
+here. This diverges deliberately from CASK's cell capability lattice (a cell is a
+compare-and-swap named typed pointer, sketched in the "Room for a splice-capable
+CASK-backed variant" section below), where `write implies read` because a cell
+mutation is compare-and-swap and needs the current value (see the forward
+reference `cask-entry-type-capability`). Because the two authorities are
+independent, they split cleanly into two separately delegable powers:
 
 ```mermaid
 flowchart LR
@@ -79,10 +88,17 @@ flowchart LR
   WP --> WO["write-only cap<br/>(handed to a writer)"]
 ```
 
-A holder can be given the read-only cap, the write-only cap, or both. The
-read-only cap is precisely the live-blob read face of
-[readableblob-range-attenuation.md](readableblob-range-attenuation.md); this
-design is its mutable, write-bearing sibling.
+A holder can be given the read-only cap, the write-only cap, or both. The maker
+(`storeBlockStorage`, see the Daemon plumbing section) mints the full store and returns it
+to its creator; the read-only and write-only faces are then obtained by
+**attenuating** that full cap down to the range-read power or the range-write
+power, the same attenuation move the read face inherits from
+[readableblob-range-attenuation.md](readableblob-range-attenuation.md). A facet is
+therefore a delegation, not a separate mint: the creator holds the full cap and
+hands a reader the read-only attenuation, a writer the write-only attenuation, or
+both. The read-only cap is precisely the live-blob read face of
+readableblob-range-attenuation.md; this design is its mutable, write-bearing
+sibling.
 
 **The write-only cap is content-opaque but not size-opaque.** "Independent" is a
 claim about *content* authority: an overwrite or append never reveals the
@@ -157,21 +173,32 @@ There is **no** primitive for a true splice (inserting bytes that shift the
 tail, or deleting bytes from the middle) on this capability. `truncate` shrinks
 only; growing by truncate would create a hole and is rejected.
 
-**Concurrent writers are serialized by the exo.** The admission rule is a
-read-then-write check (read `size` via `statPath`, then `writeFileRange`) with
+**Concurrent writers are serialized per call by the exo.** The admission rule is
+a read-then-write check (read `size` via `statPath`, then `writeFileRange`) with
 an `await` between the two steps, and the write-only cap is separately delegable,
-so two holders (or one holder issuing two calls) could otherwise interleave:
-two appenders both observing the same `size`, both targeting `offset === size`,
-one silently clobbering the other (a lost update), and the caller-side two-step
-workaround for a middle-anchored extension could land its `append` at a
-`size` another writer moved underneath it. The invariant is therefore not merely
-*checked* but *maintained*: the `EndoBlockStorage` write exo **serializes writes
-per store** (a single-store write queue, so each `writeAt`/`append`/`truncate`
-runs its size-read and its write atomically with respect to other writes on the
-same store). `EndoMountFile`'s `append` gets this for free from an OS-level
-atomic append; because this design builds on a raw `pwrite`-style
-`writeFileRange`, the serialization is the exo's responsibility and is stated
-here rather than assumed.
+so two holders (or one holder issuing two calls) could otherwise interleave.
+There are two distinct races, and the exo closes only the first.
+
+*Single-call lost update.* Two appenders both observe the same `size`, both
+target `offset === size`, and one silently clobbers the other. The
+`EndoBlockStorage` write exo closes this by **serializing writes per store** (a
+single-store write queue, so each individual `writeAt`/`append`/`truncate` runs
+its size-read and its write atomically with respect to other writes on the same
+store). The invariant is therefore not merely *checked* but *maintained* within a
+single call. `EndoMountFile`'s `append` gets this for free from an OS-level atomic
+append; because this design builds on a raw `pwrite`-style `writeFileRange`, the
+serialization is the exo's responsibility and is stated here rather than assumed.
+
+*Multi-call sequence race.* The caller-side workaround for a middle-anchored
+extension (an in-place overwrite of `[offset, size)` followed by an `append` of
+the remainder) is **two** separate exo calls. Per-call serialization does not make
+the pair atomic: another writer's `append` can land between them, moving `size`,
+so the follow-up `append` writes past the intended end. This capability offers no
+compound "overwrite-then-extend" primitive, so a caller that needs the two-step
+extension to be atomic must hold the store's sole write cap (no concurrent writer
+exists) or coordinate out of band. Surfacing an explicit size/compare-and-swap
+token, so a caller can detect the racing writer rather than silently losing the
+sequence, is deferred (see Open Questions).
 
 ### Daemon plumbing
 
@@ -193,14 +220,21 @@ confinement point). Register `block-storage` in
 `packages/daemon/src/formula-record.js`, alongside `formulateBlockStorage` and
 `makeBlockStorage` in `manager.js` paralleling `formulateReadableBlob` /
 `makeReadableBlob`. Host/guest/directory expose a maker method
-`storeBlockStorage(...)`, the entry-point verb a user actually calls, paralleling
-the existing `storeBlob(readerRef, petName?)` that mints a `readableBlobId`.
+`storeBlockStorage(petName?)`, the entry-point verb a user actually calls,
+paralleling the existing `storeBlob(readerRef, petName?)` that mints a
+`readableBlobId`. Where `storeBlob` ingests an existing reader and returns a
+`readableBlobId`, `storeBlockStorage` mints a fresh, empty store and returns a
+`blockStorageId` resolving to the **full** cap (both range-read and range-write
+powers); the read-only and write-only faces are the attenuations of that full cap
+described in the Two independent authorities section. `petName`, as with `storeBlob`, is the
+optional pet-name binding in the caller's directory.
 
 ### Cancellation
 
-If the formula holds a resource whose lifetime the maker should be able to end,
-thread a `cancelled` `Promise<never>` argument rather than an imperative
-`cancel()` method, matching the daemon's standard cancellation shape.
+The `block-storage` formula holds a persisted byte store whose lifetime the maker
+should be able to end. It therefore threads a `cancelled` `Promise<never>`
+argument rather than an imperative `cancel()` method, matching the daemon's
+standard cancellation shape.
 
 ## Room for a splice-capable CASK-backed variant
 
@@ -254,7 +288,7 @@ right name for the capability specified here.
 
 | Design | Relationship |
 |---|---|
-| [readableblob-range-attenuation.md](readableblob-range-attenuation.md) | Defines the attenuatable ranged-read cap; this design's read power is its mutable sibling. The read-surface spelling is reconciled with it and with [platform-range-and-tree-reads.md](platform-range-and-tree-reads.md): this design uses `rangeRead` (the established plain-byte-array form), not a fresh `readAt`. |
+| [readableblob-range-attenuation.md](readableblob-range-attenuation.md) | Defines the attenuatable ranged-read cap; this design's read power is its mutable sibling. This design's read face uses the identical `rangeRead(offset, length) -> Uint8Array` signature and return type that document and [platform-range-and-tree-reads.md](platform-range-and-tree-reads.md) establish (the plain-byte-array form), not a fresh `readAt`; the sole difference is that this cap reads the *current* bytes on each call rather than a fixed content-addressed value. |
 | [fs-interface-consolidation.md](fs-interface-consolidation.md) | Owns the shared `M.interface` guard records the new write guard should join. |
 
 A sibling job posted from the same review (PR
