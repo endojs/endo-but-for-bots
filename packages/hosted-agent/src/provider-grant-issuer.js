@@ -106,73 +106,112 @@ export const makeProviderBrokerGrantIssuer = ({
     return result;
   };
   let disposed = false;
-  /** @param {any} spec */
-  const issue = async spec => {
-    (!disposed &&
-      /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(spec.sessionId) &&
-      spec.providerOrigin === configuredPolicy.origin &&
-      spec.accountRef === accountRef &&
-      (!spec.model || configuredPolicy.models.includes(spec.model))) ||
-      Fail`Provider grant request denied`;
-    spec.networkPolicy === 'off' ||
-      (spec.networkPolicy === 'public-internet' && makePublicNetwork) ||
-      Fail`Unsupported provider grant network policy`;
+  /**
+   * Retain one grant's cleanup before queued issuance. This is the same issuer,
+   * account policy, runtime and admission queue as callable promise issuance.
+   * A rejected value does not release its listener; revoke() remains scoped to
+   * this grant and retries its original listener acquisition owner.
+   * @param {any} requested
+   */
+  const issueKit = requested => {
+    const spec = harden({
+      sessionId: requested.sessionId,
+      providerOrigin: requested.providerOrigin,
+      accountRef: requested.accountRef,
+      model: requested.model,
+      networkPolicy:
+        requested.networkPolicy === undefined ? 'off' : requested.networkPolicy,
+    });
     const grantId = `grant-${randomUUID()}`;
-    const timeoutMs = requestTimeoutMs;
-    const transport = makeProviderFetchTransport({
-      fetch,
-      timeoutMs,
-      maxRequestBytes: configuredPolicy.maxRequestBytes,
-      maxResponseBytes: configuredPolicy.maxResponseBytes,
-      onDiagnostic,
-    });
-    const core = makeProviderBrokerGrant(configuredPolicy, {
-      secret,
-      transport: transport.transport,
-      audit,
-      credential,
-    });
+    let transport;
+    let core;
     let worker;
+    let workerKit;
     let network;
+    let admitted = false;
     let inactive = false;
     let cleaned = false;
+    /** @type {Promise<void> | undefined} */
     let cleanup;
     const checkLive = () => {
       (!inactive && !disposed) || Fail`Provider grant inactive`;
     };
     const fence = () => {
       inactive = true;
-      transport.dispose();
+      transport?.dispose();
       network?.dispose();
-      return E(core.admin).revoke();
+      return core ? E(core.admin).revoke() : Promise.resolve();
     };
-    fences.add(fence);
+    /** @returns {Promise<void>} */
     const revoke = () => {
+      inactive = true;
       if (cleaned) return Promise.resolve();
-      pending.add(revoke);
-      const revoking = fence();
-      if (!cleanup) {
-        cleanup = (async () => {
-          await revoking;
-          if (worker) await worker.stop();
-          grants.delete(revoke);
-          fences.delete(fence);
-          pending.delete(revoke);
-          cleaned = true;
-        })().catch(error => {
-          cleanup = undefined;
-          throw error;
-        });
-      }
+      if (cleanup) return cleanup;
+      if (admitted) pending.add(revoke);
+      // Fence authority and reach a pending listener handshake immediately.
+      // Both acknowledgements are retained even if the other stage fails.
+      const revoking = (async () => {
+        await fence();
+      })();
+      const stopping = (async () => {
+        await workerKit?.stop();
+      })();
+      cleanup = (async () => {
+        const results = await Promise.allSettled([
+          revoking,
+          stopping,
+          acquisition.catch(() => {}),
+        ]);
+        const errors = results.flatMap(result =>
+          result.status === 'rejected' ? [result.reason] : [],
+        );
+        if (errors.length === 1) throw errors[0];
+        if (errors.length)
+          throw AggregateError(errors, 'Provider grant cleanup failed');
+        grants.delete(revoke);
+        fences.delete(fence);
+        pending.delete(revoke);
+        cleaned = true;
+      })().catch(error => {
+        cleanup = undefined;
+        throw error;
+      });
       return cleanup;
     };
-    grants.add(revoke);
-    try {
+    const acquisition = serialize(async () => {
+      (!disposed &&
+        !inactive &&
+        /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(spec.sessionId) &&
+        spec.providerOrigin === configuredPolicy.origin &&
+        spec.accountRef === accountRef &&
+        (!spec.model || configuredPolicy.models.includes(spec.model))) ||
+        Fail`Provider grant request denied`;
+      spec.networkPolicy === 'off' ||
+        (spec.networkPolicy === 'public-internet' && makePublicNetwork) ||
+        Fail`Unsupported provider grant network policy`;
+      admitted = true;
+      grants.add(revoke);
+      fences.add(fence);
+      const timeoutMs = requestTimeoutMs;
+      transport = makeProviderFetchTransport({
+        fetch,
+        timeoutMs,
+        maxRequestBytes: configuredPolicy.maxRequestBytes,
+        maxResponseBytes: configuredPolicy.maxResponseBytes,
+        onDiagnostic,
+      });
+      core = makeProviderBrokerGrant(configuredPolicy, {
+        secret,
+        transport: transport.transport,
+        audit,
+        credential,
+      });
       if (spec.networkPolicy === 'public-internet') {
         if (!makePublicNetwork) throw Fail`Public network factory unavailable`;
         network = makePublicNetwork(spec);
       }
-      worker = await runtime.start({
+      checkLive();
+      workerKit = runtime.startKit({
         endpoint: core.endpoint,
         ...(network
           ? {
@@ -191,6 +230,8 @@ export const makeProviderBrokerGrantIssuer = ({
           clientAuthorization: configuredPolicy.clientAuthorization ?? 'reject',
         }),
       });
+      worker = await workerKit.value;
+      checkLive();
       const initial = await worker.observe();
       (!!initial.network === !!network &&
         (!network || initial.network.policy === 'public-internet')) ||
@@ -262,7 +303,9 @@ export const makeProviderBrokerGrantIssuer = ({
         },
       );
       return grant;
-    } catch (error) {
+    });
+    const value = acquisition.catch(async error => {
+      if (!admitted) throw error;
       await revoke().catch(cleanupError => {
         throw AggregateError(
           [error, cleanupError],
@@ -270,7 +313,9 @@ export const makeProviderBrokerGrantIssuer = ({
         );
       });
       throw AggregateError([error], 'Provider grant admission failed');
-    }
+    });
+    void value.catch(() => {});
+    return harden({ value, revoke });
   };
   const clean = async callbacks => {
     const results = await Promise.allSettled(
@@ -283,29 +328,17 @@ export const makeProviderBrokerGrantIssuer = ({
       throw AggregateError(errors, 'Provider grant cleanup failed');
   };
   return harden(
-    Object.assign(
-      spec => {
-        const request = harden({
-          sessionId: spec.sessionId,
-          providerOrigin: spec.providerOrigin,
-          accountRef: spec.accountRef,
-          model: spec.model,
-          networkPolicy:
-            spec.networkPolicy === undefined ? 'off' : spec.networkPolicy,
-        });
-        return serialize(() => issue(request));
+    Object.assign(spec => issueKit(spec).value, {
+      issueKit,
+      retryCleanup: () => serialize(() => clean(pending)),
+      dispose: () => {
+        disposed = true;
+        // Withdrawal must not wait behind a listener still being acquired.
+        // Cleanup stays serialized so it also reaps that late acquisition.
+        for (const fence of fences) void fence().catch(() => {});
+        return serialize(() => clean(grants));
       },
-      {
-        retryCleanup: () => serialize(() => clean(pending)),
-        dispose: () => {
-          disposed = true;
-          // Withdrawal must not wait behind a listener still being acquired.
-          // Cleanup stays serialized so it also reaps that late acquisition.
-          for (const fence of fences) void fence().catch(() => {});
-          return serialize(() => clean(grants));
-        },
-      },
-    ),
+    }),
   );
 };
 harden(makeProviderBrokerGrantIssuer);

@@ -31,6 +31,18 @@ proofs or complete per-session controller adoption.
 Async convenience wrappers still lose the cleanup handle when startup and rollback both
 fail; native controllers must retain the kits directly.
 
+The shared provider runtime and issuer now expose retained per-listener `startKit()`
+and per-grant `issueKit()` owners before queued acquisition.
+Cancellation fences immediately, waits admitted acquisition, and retains failed cleanup
+for scoped retry without stopping healthy sibling grants or duplicating the operator
+runtime, issuer, capacity, or account policy.
+Listener release waits for the original child process's `close` event;
+a process `error` rejects admission but is not release proof.
+Thirty-six shared lifecycle tests cover cancellation before and during acquisition,
+failed startup and cleanup retry, sibling survival, and delayed native closure.
+Controller adoption, Podman descendant quiescence, and stale-owner recovery proof remain
+pending.
+
 Claude and OpenCode now share the MCP protocol, host-side socket transport, and guest stdio relay.
 The input frame limit covers both complete frames and partial tails before dispatch.
 The shared bridge admits at most 32 simultaneous host tool executions, reusing the
@@ -726,7 +738,7 @@ provider requirements, or an explicit user budget, rather than copied between la
 | Fixed provider routes/account binding | Which upstream authority a guest can exercise | Forged guest requests | Secret custody alone does not restrict credential use | Keep in provider service. |
 | Revocation and process reaping | Continued inference, networking, and execution | Stale or hostile guests | Request deadlines end one request, not the session grant | Keep one supervisor and grant owner. |
 | Cleanup completion before deletion | Storage still in use and original cleanup handles | Late acquisitions, failed stops, and callers treating cancellation as containment | A rejected call or removed formula name does not prove native resources ended; successful slice disposal is the client-side containment barrier | Retain failed and uncertain acquisitions; propagate failed stop before replacement/deletion. The uncommitted OpenCode integration exercises original records and cleanup sharing within one worker; daemon collection and cross-worker ownership acceptance remain pending. |
-| Provider initialization ownership | Listener cleanup authority, open resolver handles, and runtime lock/recovery reservations | Failed startup, late acquisitions, and a caller treating rejection as release | Per-listener limits bound live service work, not ownership of partially acquired host resources; persistent configuration remains operator-owned | Retain inert runtime/broker kits before acquisition and retry failed cleanup. This adds no lease or new budget, and does not prove descendants stopped after a native crash. |
+| Provider initialization ownership | Listener cleanup authority, open resolver handles, and runtime lock/recovery reservations | Failed startup, late acquisitions, and a caller treating rejection as release | Per-listener limits bound live service work, not ownership of partially acquired host resources; persistent configuration remains operator-owned | Retain runtime/broker kits plus scoped listener/grant kits before acquisition; retry the failed issuance and retain its charge and ownership until original child closure and checked removal. This adds no lease or new budget and does not prove descendants stopped after a native crash. |
 | Per-preparation cleanup | Policy anchors, temporary files, and cleanup authority for one slice; sibling availability | Failed or late preparation followed by overly broad shared-driver shutdown | The driver registry already retains failures and the shared allocator retains charges, but both span multiple preparations | Retain `prepareSliceKit` before awaiting acquisition; close and retry that preparation only. Keep shared native-command closure and driver-wide shutdown with the operator owner. No new count, timeout, or lease. |
 | Filesystem drain acknowledgement | Backing files, directories, and cleanup authority still used by 9P calls | Late I/O, failed source cleanup, or a caller equating socket closure with release | Frame sizes and flow control bound transport work, not the lifetime of admitted filesystem effects; stream terminal errors can repeat an earlier I/O failure | Keep a separate release acknowledgement at the stream provider and await kernel unmount, bridge drain, and retained handle cleanup. Do not add a lease or treat a timeout as release. |
 | Durable session ownership | Original cleanup authority, retained dependencies, and session storage | Retargeting after backend replacement, partial construction, and failed cleanup | Backend defaults and mutable global names do not identify an older session's owner; daemon directory entries already provide durable formula retention | The configured daemon owner retains exact IDs and contexts, publishes before acquisition, and separates native cleanup from original-plan storage removal. Node fixture acceptance passes; actual adapter wiring remains pending. |
