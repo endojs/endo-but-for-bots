@@ -7,6 +7,7 @@ import { E } from '@endo/eventual-send';
 import { Fail, makeError, q, X } from '@endo/errors';
 import { makePromiseKit } from '@endo/promise-kit';
 import { makeExo } from '@endo/exo';
+import { M } from '@endo/patterns';
 import { bytesWriterFromIterator } from '@endo/exo-stream/bytes-writer-from-iterator.js';
 
 import {
@@ -14,6 +15,7 @@ import {
   ProcessHandleInterface,
   SandboxFactoryInterface,
   SandboxHandleInterface,
+  SpawnOptsShape,
 } from './interfaces.js';
 import { makeEagerReader } from './eager-reader.js';
 import { makeResourceRegistry } from './resource-registry.js';
@@ -21,6 +23,19 @@ import { resolveLimits } from './limits.js';
 import { validateGeneratedFiles } from './generated-files.js';
 
 /** @import { MakeSandboxFactoryInput, SandboxFactory, SandboxMakeOpts, SandboxDriver, BackendProbe, MountSpec, SliceSpec, MountCap, MountMode, SandboxHandle, ProcessHandle, MountHandle, SpawnOpts, DriverProcess, RootfsSpec, TerminationSignal } from './types.js' */
+/** @import { NativeSandboxMakeOpts, NativeSandboxHandle } from './native-factory-types.js' */
+
+const NativeHandleInterface = harden(
+  M.interface('NativeSandboxHandle', {
+    help: M.call().optional(M.string()).returns(M.string()),
+    spawn: M.call(M.arrayOf(M.string()))
+      .optional(SpawnOptsShape)
+      .returns(M.promise()),
+    policy: M.call().returns(M.promise()),
+    reset: M.call().returns(M.promise()),
+    dispose: M.call().returns(M.promise()),
+  }),
+);
 
 const FACTORY_HELP = `\
 SandboxFactory — root capability of the @endo/sandbox plugin.
@@ -299,9 +314,14 @@ const resolveHostPath = async (scratchProvider, cap, context) => {
  * Construct the guarded public factory and its host-only shutdown control.
  * The runtime owner must retain close for retries until all resources are gone.
  *
+ * The local makeResolved method grants native path authority. Only a host
+ * administrator may call it, after resolving and retaining mount formulas.
+ * It shares the public factory's admission and cleanup owner, but never
+ * acquires daemon mounts and returns a handle with static mounts only.
+ *
  * @param {MakeSandboxFactoryInput} input
  * @param {{ makeDelay?: typeof delay }} [powers]
- * @returns {Readonly<{ factory: SandboxFactory, close(reason?: Error): Promise<void> }>}
+ * @returns {Readonly<{ factory: SandboxFactory, makeResolved(opts: NativeSandboxMakeOpts): Promise<NativeSandboxHandle>, close(reason?: Error): Promise<void> }>}
  */
 export const makeSandboxFactoryKit = (
   { drivers, scratchProvider, context },
@@ -519,12 +539,35 @@ export const makeSandboxFactoryKit = (
     }
   };
 
+  /** @param {SandboxMakeOpts} opts */
+  const resolvePathsFromCaps = async opts => {
+    const rootfs = await resolveRootfs(opts.rootfs);
+    assertOwner();
+    const resolvedMounts = await Promise.all(
+      (opts.mounts ?? []).map(resolveMount),
+    );
+    assertOwner();
+    let scratchHostPath = '';
+    try {
+      // A policy already declares the complete mount table. OCI provides its
+      // own writable layer; the generic capability API still permits scratch
+      // when its provider can supply one.
+      if (opts.policy === undefined)
+        scratchHostPath = await acquireScratchHostPath();
+    } catch (error) {
+      if (rootfs.kind === 'minimal' && resolvedMounts.length === 0) throw error;
+    }
+    return harden({ rootfs, mounts: resolvedMounts, scratchHostPath });
+  };
+
   /**
-   * @param {SandboxMakeOpts} opts
+   * @param {SandboxMakeOpts | NativeSandboxMakeOpts} opts
    * @param {string} sliceId
-   * @returns {Promise<SandboxHandle>}
+   * @param {() => Promise<Pick<SliceSpec, 'rootfs' | 'mounts' | 'scratchHostPath'>>} resolvePaths
+   * @param {boolean} nativeOnly
+   * @returns {Promise<NativeSandboxHandle | SandboxHandle>}
    */
-  const buildSlice = async (opts, sliceId) => {
+  const buildSlice = async (opts, sliceId, resolvePaths, nativeOnly) => {
     assertOwner();
     if ((opts.network === 'join') !== (opts.networkRef !== undefined)) {
       // Backend-independent: every driver must agree the container ref is
@@ -571,31 +614,16 @@ export const makeSandboxFactoryKit = (
       );
     }
 
-    // Resolve everything that requires the privileged
-    // `provideHostPath` power up front. Drivers never see Mount caps.
-    const rootfs = await resolveRootfs(opts.rootfs);
+    const {
+      rootfs,
+      mounts: resolvedMounts,
+      scratchHostPath,
+    } = await resolvePaths();
     assertOwner();
-    const mountSpecs = opts.mounts ?? [];
-    const resolvedMounts = await Promise.all(mountSpecs.map(resolveMount));
-    assertOwner();
-    let scratchHostPath = '';
-    // A policy declares the slice's whole mount table, and the scratch
-    // layer is a writable path outside it. Minting one anyway would put
-    // every policy slice into the driver's own "no undeclared mount"
-    // rejection, on any daemon whose powers can actually allocate one.
-    try {
-      if (!needsPolicy) scratchHostPath = await acquireScratchHostPath();
-    } catch (e) {
-      // Scratch is optional in Phase 1 — some callers may want a
-      // pure read-only slice. Re-throw only if we actually need it
-      // (e.g. minimal rootfs with no mounts).  An `oci` rootfs supplies
-      // its own writable layer (podman manages a per-container upper
-      // overlay) so a missing scratch is not fatal there either.
-      if (rootfs.kind === 'minimal' && resolvedMounts.length === 0) {
-        throw e;
-      }
-      // Otherwise leave scratchHostPath empty; the driver skips the
-      // scratch bind when the path is empty.
+    if (needsPolicy && scratchHostPath !== '') {
+      throw makeError(
+        X`Scratch cannot extend an exact slice policy mount table`,
+      );
     }
 
     // Phase 1.5: merge caller-supplied resource caps onto the driver
@@ -1176,19 +1204,27 @@ export const makeSandboxFactoryKit = (
       beginDispose(makeError(X`sandbox handle disposed`));
     disposeOwned = disposeSlice;
 
-    const mintedHandle = /** @type {SandboxHandle} */ (
+    const sharedMethods = {
+      help: () =>
+        nativeOnly
+          ? `Native sandbox with static mounts. Methods: help, spawn, policy, reset, dispose.\n${sliceRuntimeReport}`
+          : `${HANDLE_HELP_BASE}\n${sliceRuntimeReport}`,
+      spawn: spawnProc,
+      policy: attestPolicy,
+      reset: resetSlice,
+      dispose: disposeSlice,
+    };
+    const mintedHandle = /** @type {NativeSandboxHandle | SandboxHandle} */ (
       /** @type {unknown} */ (
-        makeExo('SandboxHandle', SandboxHandleInterface, {
-          help: () => `${HANDLE_HELP_BASE}\n${sliceRuntimeReport}`,
-          spawn: spawnProc,
-          policy: attestPolicy,
-          mount: mountInSlice,
-          scratch: scratchInSlice,
-          open: openInSlice,
-          fork: forkSlice,
-          reset: resetSlice,
-          dispose: disposeSlice,
-        })
+        nativeOnly
+          ? makeExo('NativeSandboxHandle', NativeHandleInterface, sharedMethods)
+          : makeExo('SandboxHandle', SandboxHandleInterface, {
+              ...sharedMethods,
+              mount: mountInSlice,
+              scratch: scratchInSlice,
+              open: openInSlice,
+              fork: forkSlice,
+            })
       )
     );
     // The owner may have been lost while this slice was being built, in
@@ -1201,11 +1237,29 @@ export const makeSandboxFactoryKit = (
     return mintedHandle;
   };
 
-  /** @param {SandboxMakeOpts} opts */
-  const make = opts =>
+  /**
+   * @overload
+   * @param {SandboxMakeOpts} opts
+   * @param {() => Promise<Pick<SliceSpec, 'rootfs' | 'mounts' | 'scratchHostPath'>>} resolvePaths
+   * @param {false} nativeOnly
+   * @returns {Promise<SandboxHandle>}
+   */
+  /**
+   * @overload
+   * @param {NativeSandboxMakeOpts} opts
+   * @param {() => Promise<Pick<SliceSpec, 'rootfs' | 'mounts' | 'scratchHostPath'>>} resolvePaths
+   * @param {true} nativeOnly
+   * @returns {Promise<NativeSandboxHandle>}
+   */
+  /**
+   * @param {SandboxMakeOpts | NativeSandboxMakeOpts} opts
+   * @param {() => Promise<Pick<SliceSpec, 'rootfs' | 'mounts' | 'scratchHostPath'>>} resolvePaths
+   * @param {boolean} nativeOnly
+   */
+  const makeOwned = (opts, resolvePaths, nativeOnly) =>
     acquire(async sliceId => {
       try {
-        return await buildSlice(opts, sliceId);
+        return await buildSlice(opts, sliceId, resolvePaths, nativeOnly);
       } catch (error) {
         try {
           await slices.stop(sliceId);
@@ -1218,6 +1272,24 @@ export const makeSandboxFactoryKit = (
         throw error;
       }
     });
+
+  /** @param {SandboxMakeOpts} opts */
+  const make = opts => makeOwned(opts, () => resolvePathsFromCaps(opts), false);
+
+  /** @param {NativeSandboxMakeOpts} opts */
+  const makeResolved = opts => {
+    const approved = harden(opts);
+    return makeOwned(
+      approved,
+      async () =>
+        harden({
+          rootfs: approved.rootfs,
+          mounts: [...(approved.mounts ?? [])],
+          scratchHostPath: approved.scratchHostPath ?? '',
+        }),
+      true,
+    );
+  };
 
   /**
    * Host-only shutdown. Fence immediately and stop existing slices even while
@@ -1309,7 +1381,7 @@ export const makeSandboxFactoryKit = (
       })
     )
   );
-  return harden({ factory, close });
+  return harden({ factory, makeResolved, close });
 };
 harden(makeSandboxFactoryKit);
 

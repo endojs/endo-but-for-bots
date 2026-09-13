@@ -158,6 +158,18 @@ Historical observation, pull, signal, and removal failures do not invent permane
 guest-producer uncertainty.
 Orphan cleanup validates full IDs before removal, preventing delayed cleanup from
 retargeting a reused name; an orphan sweep still cannot prove predecessor quiescence.
+
+`makeSandboxFactoryKit` also provides a local host-only `makeResolved(opts)` method.
+It accepts already authorized rootfs/bind paths and optional explicit scratch, sharing
+the factory's driver selection, admission, and retryable cleanup.
+It never asks daemon powers to resolve or acquire mounts.
+Its handle supports process execution, policy inspection, reset, and disposal, with
+no dynamic mount or scratch acquisition methods.
+This method is not exposed by the public factory: native paths grant host filesystem
+authority and must come from an administrative owner, which retains their backing
+formulas until native disposal completes.
+Hosted runtime and adapter wiring to this entry point remains pending.
+
 The host-only `makeSandboxRuntime` from `@endo/sandbox/runtime.js` composes Podman,
 the factory, generated-file storage, and exclusive incarnation ownership.
 The generic factory continues to offer bwrap separately; this hosted composition
