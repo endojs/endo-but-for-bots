@@ -685,6 +685,14 @@ export const makeDirectoryMaker = ({
         readText: directory.readText,
         maybeReadText: directory.maybeReadText,
         writeText: directory.writeText,
+        // Mint a read-only `ReadableNameHub` view. Attenuation is SHALLOW:
+        // the view withholds this directory's mutators, but `lookup`/
+        // `maybeLookup` on it forward to the backing directory and return any
+        // nested directory / agent handle / worker as the live, fully-writable
+        // object — not a further-attenuated view. A holder of the read-only
+        // view can therefore mutate nested directories one level down. This is
+        // documented on `ReadableNameHub.lookup` in types.d.ts; callers needing
+        // a recursively read-only surface must re-attenuate results themselves.
         readOnly: async () => {
           await null;
           const { value } = await formulateReadableDirectory(directoryId);

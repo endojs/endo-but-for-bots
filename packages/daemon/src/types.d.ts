@@ -1024,7 +1024,22 @@ export interface ReadableNameHub {
   help(method?: string): string;
   has(...petNamePath: string[]): Promise<boolean>;
   list(...petNamePath: string[]): Promise<Array<Name>>;
+  /**
+   * Resolve a pet-name path to the value named at it.
+   *
+   * Attenuation is SHALLOW: only this hub's own mutators (`storeIdentifier`,
+   * `remove`, `makeDirectory`, `writeText`, …) are withheld. A path that
+   * resolves to a nested capability-bearing value — a sub-`EndoDirectory`, an
+   * agent handle, a worker — is returned as the live, fully-authorized object,
+   * NOT a further read-only view. A holder of the read-only hub can therefore
+   * reach and mutate nested directories one level down. Callers that need a
+   * recursively read-only surface must re-attenuate the result themselves (or
+   * arrange that the backing directory contains no nested writable
+   * capabilities). Contrast `EndoMount.readOnly()`, whose `SubMount` narrowing
+   * is recursive through nested lookups.
+   */
   lookup(petNamePath: string | readonly string[]): Promise<unknown>;
+  /** See {@link ReadableNameHub.lookup}: attenuation is shallow, not recursive. */
   maybeLookup(petNamePath: string | readonly string[]): unknown;
 }
 
@@ -1033,6 +1048,13 @@ export interface EndoDirectory extends NameHub {
   readText(petNamePath: string | string[]): Promise<string>;
   maybeReadText(petNamePath: string | string[]): Promise<string | undefined>;
   writeText(petNamePath: string | string[], content: string): Promise<void>;
+  /**
+   * Mint a read-only view of this directory as a {@link ReadableNameHub}. The
+   * attenuation is SHALLOW — it withholds this directory's mutators but does
+   * not recursively narrow values returned by `lookup`/`maybeLookup`; see
+   * {@link ReadableNameHub.lookup}. A view of a directory that contains nested
+   * writable directories still hands those nested directories out live.
+   */
   readOnly?(): Promise<ReadableNameHub>;
 }
 

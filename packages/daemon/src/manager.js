@@ -6860,9 +6860,21 @@ const makeDaemonCore = async (
     const networkBroker = await makeInvitationNetworkBroker();
     // The invitation persists the name (or directory path) the redeemed
     // guest should be stored under.  The durable mail-delivery name takes
-    // the full path; the pin and label use the leaf pet name.
+    // the full path; the label uses the leaf pet name.
     const guestNamePath = namePathFrom(guestName);
     const guestLeaf = guestNamePath[guestNamePath.length - 1];
+    // The retention pin key is derived from the *whole* guest name path, not
+    // just its leaf, so two invitations that share a leaf under different
+    // directory paths (e.g. `team-a/bob` vs `team-b/bob`) retain under distinct
+    // keys instead of colliding on a bare `guest-<leaf>` slot — which would let
+    // the second accept() clobber the first's retention edge and leave the
+    // first guest collectible. For the common single-segment name the key is
+    // still exactly `guest-<name>` (the operator-navigable `@pins/guest-<name>`
+    // entry callers expect), since joining a one-element path is that element.
+    // The key is a pure function of the guest name path, so it is stable across
+    // a crash-retry of the *same* invitation and the documented
+    // retry-overwrites-its-own-pin cleanup (below) is preserved.
+    const guestPinName = `guest-${guestNamePath.join('-')}`;
 
     // Serialize accept()/cancel() on THIS invitation so its single-use check
     // and the consuming mutation run atomically with respect to each other.
@@ -6969,7 +6981,7 @@ const makeDaemonCore = async (
       // `storeIdentifier`) but before the final consume leaves the invitation
       // un-consumed and redeemable, so a post-restart retry re-runs the whole
       // fallible section and mints a *fresh* guest, orphaning the earlier
-      // attempt's partial formula chain (the prior `guest-${guestLeaf}` pin is
+      // attempt's partial formula chain (the prior `guestPinName` pin is
       // overwritten and its guest becomes collectible).  That is the accepted
       // trade for keeping the invitation redeemable after a crash rather than
       // stranding it spent; making guest-mint reuse-by-invitation-id idempotent
@@ -7035,7 +7047,7 @@ const makeDaemonCore = async (
               await provide(hostPinsDirectoryId, 'directory')
             );
             await E(hostPinsDirectory).storeIdentifier(
-              /** @type {NamePath} */ ([`guest-${guestLeaf}`]),
+              /** @type {NamePath} */ ([guestPinName]),
               localGuestFormula.handle,
             );
           } else {
@@ -7047,13 +7059,13 @@ const makeDaemonCore = async (
               'agent',
             );
             await E(creatingAgent).storeIdentifier(
-              /** @type {NamePath} */ (['@pins', `guest-${guestLeaf}`]),
+              /** @type {NamePath} */ (['@pins', guestPinName]),
               localGuestFormula.handle,
             );
           }
         } else {
           await E(invitingAgent).storeIdentifier(
-            /** @type {NamePath} */ (['@pins', `guest-${guestLeaf}`]),
+            /** @type {NamePath} */ (['@pins', guestPinName]),
             localGuestFormula.handle,
           );
         }

@@ -925,6 +925,60 @@ test('provideGuest preserves a read-only networks attenuation', async t => {
   t.is(readOnlyNetworksRecord.properties.directory.identifier, networksId);
 });
 
+// Regression guard for the `readable-directory` unwrap in
+// `getAllNetworkAddresses` (manager.js): a guest whose `networks` is a
+// read-only attenuation must still be able to *compute* its advertised
+// addresses, which means `locate()` (the only path that reaches
+// `getAllNetworkAddresses` for a guest) must succeed — not throw the
+// `provide(id, 'directory')` type mismatch it would if the unwrap were
+// reverted to an unconditional `provide`. We also assert the read-only view
+// yields the exact same addresses as a plain writable `networks` directory,
+// so the attenuation is transparent to address computation.
+test('guest with read-only networks locates through the attenuated view', async t => {
+  const { host } = await prepareHost(t);
+
+  // Reuse the host's own ready loopback network so the addresses walk actually
+  // traverses a live network (`refForId` hit), not merely an empty directory.
+  const [loopbackName] = await E(host).list('@nets');
+  const loopbackNetworkId = await E(host).identify('@nets', loopbackName);
+  t.truthy(loopbackNetworkId, 'host has a ready loopback network to delegate');
+
+  // A writable delegated networks directory carrying the same real network.
+  const writableNetworks = await E(host).makeDirectory('writable-nets');
+  await E(writableNetworks).storeIdentifier([loopbackName], loopbackNetworkId);
+
+  // A guest handed the plain writable directory — the baseline.
+  const writableGuest = await E(host).provideGuest('writable-guest', {
+    agentName: 'writable-guest-agent',
+    networks: writableNetworks,
+  });
+
+  // A guest handed a read-only attenuation of the *same* directory.
+  const readOnlyNetworks = await E(writableNetworks).readOnly();
+  const readOnlyGuest = await E(host).provideGuest('read-only-guest', {
+    agentName: 'read-only-guest-agent',
+    networks: readOnlyNetworks,
+  });
+
+  // The discriminating assertion: locate() on the read-only-networks guest
+  // must succeed. Without the `readable-directory` unwrap in
+  // `getAllNetworkAddresses`, this rejects with a `provide(id, 'directory')`
+  // type mismatch against the `readable-directory` formula.
+  const readOnlyLocator = await E(readOnlyGuest).locate('@self');
+  t.truthy(readOnlyLocator, 'read-only-networks guest can locate');
+
+  const writableLocator = await E(writableGuest).locate('@self');
+  t.truthy(writableLocator, 'writable-networks guest can locate');
+
+  // The attenuated view computes the identical advertised addresses as the
+  // writable directory — the unwrap produces the same walk, not a degraded one.
+  t.deepEqual(
+    addressesFromLocator(readOnlyLocator),
+    addressesFromLocator(writableLocator),
+    'read-only networks yields the same advertised addresses as writable',
+  );
+});
+
 test('provideGuest rejects a non-daemon-minted pins reference', async t => {
   const { host } = await prepareHost(t);
   const notADaemonRef = Far('not-a-directory', {});
