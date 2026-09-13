@@ -66,40 +66,60 @@ Those representations serve different boundaries; neither implies UTF-8-only str
 BigInt, regexp, Intl, Temporal, promises, generators and disposal state are present.
 Their presence does not certify full test262 coverage or persistence of every live state.
 
-`ironhorse_vm::Machine` owns the execution state and arenas through one shared
-`Intrinsics` owner; compartments retain separate `Realm` globals and compiler policy.
-Boot links the complete primordial vocabulary, freezes every primordial object, and
-sets `is_locked_down()` only after that succeeds.
-The pristine-copy `BootTemplate` is removed.
-Repeated evaluation preserves a compartment's globals; sibling compartments reference
-identical frozen primordial objects, including non-global generator and iterator families.
-`tests/realms.rs` checks identity, mutation refusal, isolated globals, closures and GC.
+`ironhorse_vm::Machine` owns arenas, canonical keys, code storage, the execution
+stack, metering, and one ordered promise queue.
+Its single `Realm` holds the primordial references and the default global environment;
+`Machine::start_compartment()` uses that same environment.
+`Intrinsics` contains primordial references and lockdown state, with no interpreter
+or queue back-reference.
+Boot initializes and freezes the graph once, including non-global generator and
+iterator families, before `is_locked_down()` becomes true.
+The old deep-copy `BootTemplate` is removed.
 
-The property-key table is machine-wide because heap descriptors store its IDs.
-`intrinsic_permit` limits initial intrinsic global bindings; it is not transitive
-capability attenuation through the prototype graph.
-Named scalar endowments become bindings and are seeded once or on explicit redefinition.
-Raw heap-backed endowments still lack machine provenance and are refused.
-Realm switching requires a completed, drained activation; a sibling or reentrant entry
-receives `Halt::RealmBusy` while an earlier activation remains live.
-The same Realm can resume after a refused crank.
-Dropping a failed Realm discards its jobs before any sibling can run.
-Compilers and meter callbacks are borrowed for an evaluation and released on exit,
-including refusal and panic; compiler configuration remains on the compartment handle.
+Every other compartment has its own `CompartmentEnvironment`, globals, evaluator
+identities, compiler policy, and module map.
+Functions and suspended activations capture their defining environment; direct,
+nested, callback, and promise calls restore it through the execution-context stack.
+A checked exclusive Machine borrow excludes host reentry (`Halt::MachineBusy`).
+The property-key namespace and code storage remain shared throughout those calls.
+`RootedValue` carries machine provenance and a GC-managed value cell, preserving
+object identity and relocated string/BigInt payloads across collection.
+Raw heap-backed Slot endowments remain refused.
+Host rebinding updates one property through descriptor semantics and respects integrity.
+An intrinsic permit controls global bindings, not transitive capabilities.
 
-`Machine::collect()` is an explicit host decision and retains live Realm globals and
-rooted `ObjectIdentity` handles.
-Endo's ephemeral wrapper collects the prior dropped Realm before the next compilation.
-The latest heap remains allocated until a later collection or machine drop, keeping
-returned raw diagnostics valid; the persistent worker has a separate policy.
-Dropping a compartment permits its unreachable heap objects to be collected, but the
-canonical name table and tagged-template registry remain machine-owned allocations.
-Novel names and template sites consume the finite key namespace over the machine's
-lifetime; linkage refuses exhaustion while preserving the reserved engine key range.
-The old fresh-Realm timing measured deep-copy boot and is not a benchmark of this model.
-Shared `Machine` snapshots are explicitly refused: the current image/store schema and
-Endo persistent worker still carry a standalone `Interp` with its own boot profile.
-This extraction does not establish full SES boot or arbitrary cross-Realm value transfer.
+Compartment evaluation executes only its script and never pumps pending jobs.
+`Machine::run_promise_jobs()` pumps the ordered queue; `resume_promise_jobs(host)`
+reattaches a meter callback without changing accumulated charges or its check window.
+Jobs retain their callbacks even after the originating compartment handle is dropped.
+`discard_promise_jobs()` is the explicit abandonment operation.
+Rejection reports belong to the promise's originating environment.
+Machine exposes rooted reports through `unhandled_rejections()` even after the host
+compartment handle is dropped; `take_unhandled_rejections()` acknowledges them.
+Unacknowledged reports retain their environment until inspected and acknowledged.
+`Machine::collect()` retains environments reachable through handles, functions, and
+jobs, and prunes unreachable environment records and their compiler registrations.
+
+Compiler services are owned by Machine outside the execution core; environments
+hold weak service references, preventing cycles through compilers that capture siblings.
+`Machine::set_source_compiler` configures the default Realm's evaluator service.
+Shared dynamic constructors reached through prototype links use that default global;
+compartment `eval` and `Function` objects are bound to their own globals.
+Dropping Machine releases these services; retained value/compartment handles keep
+heap references alive but cannot keep expired compiler services running.
+Meter callbacks detach after success, refusal, or panic.
+
+Endo's ephemeral Machine wrapper explicitly pumps after a successful script.
+Its next evaluation explicitly discards prior pending work and acknowledges reports,
+then collects prior unreachable environments before compilation.
+It retains the latest heap until a later collection so returned diagnostics stay valid.
+Canonical names and tagged-template cache entries remain machine-owned allocations;
+new names/sites consume the finite key space, preserving the engine's reserved range.
+Shared-machine snapshots remain refused: the persistent worker uses standalone Interp.
+Standalone function/frame/promise environment associations derive from its default
+global, preserving existing snapshot rows and boot identity.
+Multiple Realms, cross-machine sharing, arbitrary host-function registration, and full
+SES acceptance remain outside this extraction.
 
 `interp` is private; normal execution uses curated crate-root exports.
 Capture/restore rows live in `snapshot_api`, with `ROW_SCHEMA_VERSION` tied to a

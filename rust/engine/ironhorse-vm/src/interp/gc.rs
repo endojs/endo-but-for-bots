@@ -7,7 +7,7 @@ impl Interp {
         if self.gc_failed {
             return Err(crate::gc::GcAdmissionError::PreviousCollectionFailed);
         }
-        if !self.is_quiescent() {
+        if !self.is_quiescent() && !self.fields_at_shared_collection_boundary() {
             return Err(crate::gc::GcAdmissionError::NotQuiescent);
         }
         Ok(())

@@ -1,22 +1,23 @@
-//! Compartments retain Realm globals over one machine-owned frozen intrinsic graph.
+//! Compartments provide distinct globals and evaluators in one shared Realm.
 //!
-//! The machine links and freezes its primordial objects once. Program-local
-//! symbol IDs are remapped into its shared key namespace; no arena or intrinsic
-//! object is copied for evaluation. Each compartment retains its own global
-//! object, compiler and intrinsic-binding permit across calls.
+//! Machine owns the arenas, canonical keys, code, execution stack, and job queue.
+//! Ordinary primordial objects are initialized and frozen once. Functions and
+//! suspended frames retain their defining compartment environment; guest calls
+//! switch that environment through the dispatcher under one exclusive borrow.
+//! Host reentry returns `Halt::MachineBusy`.
 //!
-//! A machine switches Realms only at a completed, drained crank boundary.
-//! A halted Realm can continue in place; sibling execution and host reentry
-//! return `Halt::RealmBusy` while its work remains active. Dropping that
-//! compartment abandons its pending work at the next machine entry.
-//! Collection is explicit host policy, through `Machine::collect`.
+//! `RootedValue` shares values within a machine without copying objects. Raw
+//! heap-backed Slot endowments remain refused. Dropping a compartment releases
+//! its host root; reachable functions and jobs retain its environment. Only an
+//! explicit `Machine::discard_promise_jobs` abandons queued work.
 //!
-//! Raw heap-backed `Slot` endowments remain refused because they carry no arena
-//! provenance. `ObjectIdentity` supports rooted identity comparisons without
-//! granting a mutation path into an arena. Global bindings may be restricted
-//! by name; a binding permit is not a transitive capability attenuation policy.
-//! Module maps remain the existing host-side static module API; dynamic import
-//! remains an explicit unsupported operation.
+//! Machine owns compiler services outside its execution core to avoid cycles
+//! through host compilers that capture compartments. Its default compiler serves
+//! shared dynamic constructors; compartment compilers serve their own evaluators.
+//! Retained handles keep the heap alive after Machine drops, but compiler services
+//! expire with that policy owner. Collection is explicit consumer policy.
+//! Intrinsic permits control global bindings, not transitive capability access.
+//! Static module maps remain host-side; dynamic import is unsupported.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -26,33 +27,27 @@ use crate::interp::{Halt, Interp, RunOutcome};
 use crate::module::{ModuleError, ModuleGraph, ModuleId};
 use crate::value::{Kind, Payload, Slot};
 
-/// The shared, frozen intrinsic graph and its owning interpreter.
-/// Every compartment on a machine executes against these same arenas.
+/// Primordial object references and initialization state for one Realm.
+/// Execution stacks, queues, and arenas belong to Machine.
+#[derive(Default)]
 pub struct Intrinsics {
-    machine: RefCell<Interp>,
-    locked_down: bool,
+    pub(crate) roots: Vec<crate::SlotIndex>,
+    pub(crate) locked_down: bool,
 }
 
 impl Intrinsics {
-    pub fn new() -> Rc<Intrinsics> {
-        Rc::new(Self::default())
-    }
-
-    /// Set only after the complete primordial graph has been frozen.
+    /// True after the complete primordial graph has been frozen.
     pub fn is_locked_down(&self) -> bool {
         self.locked_down
     }
 }
 
-impl Default for Intrinsics {
-    fn default() -> Self {
-        let machine = Interp::new_shared_realm_machine();
-        let locked_down = machine.intrinsics_are_frozen();
-        Self {
-            machine: RefCell::new(machine),
-            locked_down,
-        }
-    }
+type CompilerRegistry = RefCell<HashMap<crate::SlotIndex, Rc<dyn crate::SourceCompiler>>>;
+
+struct MachineState {
+    compilers: std::rc::Weak<CompilerRegistry>,
+    interpreter: RefCell<Interp>,
+    realm: Rc<crate::Realm>,
 }
 
 /// A rooted identity in one machine. It can be compared but not dereferenced.
@@ -60,7 +55,7 @@ impl Default for Intrinsics {
 /// overwritten or its compartment is dropped.
 #[derive(Clone)]
 pub struct ObjectIdentity {
-    machine: Rc<Intrinsics>,
+    machine: Rc<MachineState>,
     lease: Rc<()>,
     object: crate::SlotIndex,
 }
@@ -76,6 +71,23 @@ impl std::fmt::Debug for ObjectIdentity {
             .field("object", &self.object)
             .finish_non_exhaustive()
     }
+}
+
+/// A machine-associated value root. GC updates arena-backed payloads in its
+/// private root slot, so strings, symbols, functions, and objects stay valid.
+#[derive(Clone)]
+pub struct RootedValue {
+    machine: Rc<MachineState>,
+    root: crate::SlotIndex,
+    _lease: Rc<()>,
+}
+
+/// A rooted, non-destructive view of a compartment's first reported rejection.
+/// Reports remain inspectable after the originating Compartment is dropped.
+pub struct UnhandledRejection {
+    pub environment: ObjectIdentity,
+    pub promise: ObjectIdentity,
+    pub reason: RootedValue,
 }
 
 /// Whether a value's payload indexes a slot or chunk arena — an object
@@ -131,7 +143,7 @@ impl CompartmentSkip {
 pub struct CompartmentOptions {
     /// The compartment's `name` option (SES `Compartment` name).
     pub name: Option<String>,
-    /// Global intrinsic names this Realm may expose. None admits the standard
+    /// Global intrinsic names this compartment may expose. None admits the standard
     /// set; an empty list starts with only globalThis and explicit endowments.
     /// This controls bindings, not transitive reachability through endowed objects.
     pub intrinsic_permit: Option<Vec<String>>,
@@ -153,26 +165,27 @@ pub struct CompartmentOptions {
     pub has_import_hook: bool,
 }
 
-/// A persistent Realm handle, module map and evaluator sharing its machine's
-/// frozen primordial objects. The Realm is allocated at its first evaluation.
+/// A persistent compartment environment, module map, and evaluator sharing
+/// its machine's frozen primordials. Globals are allocated at first evaluation.
 pub struct Compartment {
     /// This compartment's (its globalThis's) identity within the machine.
     id: CompartmentId,
     /// The SES `name` option, if any.
     name: Option<String>,
     /// The machine's shared frozen primordial graph and execution state.
-    intrinsics: Rc<Intrinsics>,
-    /// The machine-wide realm counter, so a nested compartment mints a
+    machine: Rc<MachineState>,
+    /// The machine-wide compartment counter, so a nested compartment mints a
     /// fresh (globally unique) globalThis identity.
     counter: Rc<Cell<usize>>,
     /// This compartment's own global bindings by display name, distinct
     /// from every other compartment's and from the intrinsics.
     globals: HashMap<String, Slot>,
+    rooted_globals: HashMap<String, RootedValue>,
     /// The same bindings keyed by the interned symbol id the bytecode
     /// references them through (`GET_VARIABLE`/`SET_VARIABLE` operands).
     globals_by_id: HashMap<u16, Slot>,
     source_compiler: Option<Rc<dyn crate::SourceCompiler>>,
-    realm: Cell<Option<crate::SlotIndex>>,
+    environment: Cell<Option<crate::SlotIndex>>,
     lease: Rc<()>,
     intrinsic_permit: Option<Vec<String>>,
     pending_names: RefCell<std::collections::BTreeSet<String>>,
@@ -190,7 +203,7 @@ impl Compartment {
     /// its siblings but owning fresh globals, module map, and globalThis
     /// identity.
     fn from_options(
-        intrinsics: Rc<Intrinsics>,
+        machine: Rc<MachineState>,
         counter: Rc<Cell<usize>>,
         options: CompartmentOptions,
     ) -> Compartment {
@@ -199,14 +212,15 @@ impl Compartment {
         Compartment {
             id,
             name: options.name,
-            intrinsics,
+            machine,
             counter,
             pending_names: RefCell::new(options.endowments.keys().cloned().collect()),
             pending_ids: RefCell::new(options.endowments_by_id.keys().copied().collect()),
-            realm: Cell::new(None),
+            environment: Cell::new(None),
             lease: Rc::new(()),
             intrinsic_permit: options.intrinsic_permit,
             globals: options.endowments,
+            rooted_globals: HashMap::new(),
             globals_by_id: options.endowments_by_id,
             source_compiler: None,
             modules: options.modules,
@@ -232,8 +246,32 @@ impl Compartment {
     /// Later guest writes persist; a subsequent define call explicitly rebinds
     /// the name. Host endowments are applied in deterministic name order.
     pub fn define_global(&mut self, name: &str, value: Slot) {
+        self.rooted_globals.remove(name);
         self.globals.insert(name.to_string(), value);
         self.pending_names.get_mut().insert(name.to_owned());
+    }
+
+    /// Share a rooted value by reference within this Machine. Reject a foreign
+    /// machine before any binding or pending state is changed.
+    pub fn define_global_value(&mut self, name: &str, value: &RootedValue) -> Result<(), Halt> {
+        if !Rc::ptr_eq(&self.machine, &value.machine) {
+            return Err(Halt::Refused("compartment:foreign-machine-value"));
+        }
+        self.globals.remove(name);
+        self.rooted_globals.insert(name.to_owned(), value.clone());
+        self.pending_names.get_mut().insert(name.to_owned());
+        Ok(())
+    }
+
+    /// Root an own global data property's current value without invoking getters.
+    pub fn global_value(&self, name: &str) -> Option<RootedValue> {
+        let mut machine = self.machine.interpreter.try_borrow_mut().ok()?;
+        let (root, lease) = machine.global_value_root(self.environment.get()?, name)?;
+        Some(RootedValue {
+            machine: Rc::clone(&self.machine),
+            root,
+            _lease: lease,
+        })
     }
 
     /// Bind a global by the interned symbol id the bytecode addresses it
@@ -258,14 +296,24 @@ impl Compartment {
 
     /// List configured named endowments in deterministic order.
     pub fn global_this_keys(&self) -> Vec<String> {
-        let mut keys: Vec<String> = self.globals.keys().cloned().collect();
+        let mut keys: Vec<String> = self
+            .globals
+            .keys()
+            .chain(self.rooted_globals.keys())
+            .cloned()
+            .collect();
         keys.sort();
         keys
     }
 
+    /// The single Realm shared by all compartments of this Machine.
+    pub fn realm(&self) -> &Rc<crate::Realm> {
+        &self.machine.realm
+    }
+
     /// The machine's shared frozen intrinsic graph.
     pub fn intrinsics(&self) -> &Rc<Intrinsics> {
-        &self.intrinsics
+        self.machine.realm.intrinsics()
     }
 
     /// The compartment's module map (`new Compartment({ modules })`),
@@ -322,7 +370,7 @@ impl Compartment {
     /// isolated globals).
     pub fn new_compartment(&self) -> Compartment {
         Compartment::from_options(
-            Rc::clone(&self.intrinsics),
+            Rc::clone(&self.machine),
             Rc::clone(&self.counter),
             CompartmentOptions::default(),
         )
@@ -330,11 +378,7 @@ impl Compartment {
 
     /// Mint a nested compartment with explicit options.
     pub fn new_compartment_with(&self, options: CompartmentOptions) -> Compartment {
-        Compartment::from_options(
-            Rc::clone(&self.intrinsics),
-            Rc::clone(&self.counter),
-            options,
-        )
+        Compartment::from_options(Rc::clone(&self.machine), Rc::clone(&self.counter), options)
     }
 
     /// The fail-closed outcome for a refused evaluation: nothing ran, so
@@ -368,14 +412,21 @@ impl Compartment {
         }
     }
 
-    /// Execute in this Realm, retaining its globals across evaluations.
+    /// Execute only this compartment's script, retaining its globals.
+    /// Promise jobs run only when the host pumps Machine explicitly.
     /// Unlinked IDs occupy a separate namespace from named program symbols.
     pub fn evaluate(&self, bytecode: &[u8]) -> RunOutcome {
         self.evaluate_shared(Rc::from(bytecode))
     }
 
     pub fn evaluate_shared(&self, bytecode: Rc<[u8]>) -> RunOutcome {
-        self.execute(bytecode, None, crate::Meter::new(), None)
+        self.execute(
+            bytecode,
+            None,
+            crate::Meter::new(),
+            None,
+            Interp::run_script_shared,
+        )
     }
 
     pub fn evaluate_with_symbols(&self, bytecode: &[u8], symbols: &[u8]) -> RunOutcome {
@@ -413,7 +464,7 @@ impl Compartment {
         self.evaluate_with_symbols_continuing_meter_shared(bytecode, symbols, meter, Some(host))
     }
 
-    /// Carry a compiler's live meter into this machine's Realm. The supplied
+    /// Carry a compiler's live meter into this compartment. The supplied
     /// interpreter's private heap and compiler are discarded; the compartment's
     /// own compiler policy applies. It must not contain guest endowments.
     pub fn evaluate_with_symbols_on(
@@ -437,7 +488,13 @@ impl Compartment {
             Ok(names) => names,
             Err(halt) => return Self::unrun(halt, meter.state().index),
         };
-        self.execute(bytecode, Some(&names), meter, host)
+        self.execute(
+            bytecode,
+            Some(&names),
+            meter,
+            host,
+            Interp::run_script_shared,
+        )
     }
 
     fn unrun(halt: Halt, raw: u64) -> RunOutcome {
@@ -453,6 +510,7 @@ impl Compartment {
         names: Option<&[crate::SymbolName]>,
         meter: crate::Meter,
         host: Option<Box<dyn FnMut(u64) -> bool>>,
+        operation: fn(&mut Interp, Rc<[u8]>) -> RunOutcome,
     ) -> RunOutcome {
         let raw = meter.state().index;
         if self
@@ -466,16 +524,16 @@ impl Compartment {
             refusal.computrons = raw >> 16;
             return refusal;
         }
-        let Ok(mut machine) = self.intrinsics.machine.try_borrow_mut() else {
-            return Self::unrun(Halt::RealmBusy, raw);
+        let Ok(mut machine) = self.machine.interpreter.try_borrow_mut() else {
+            return Self::unrun(Halt::MachineBusy, raw);
         };
-        if let Err(halt) = machine.reap_realms() {
+        if let Err(halt) = machine.reap_environments() {
             return Self::unrun(halt, raw);
         }
-        let activate = match self.realm.get() {
-            Some(realm) => machine.activate_realm(realm),
+        let activate = match self.environment.get() {
+            Some(realm) => machine.activate_environment(realm),
             None => machine
-                .create_realm(
+                .create_environment(
                     self.intrinsic_permit.as_ref().map(|names| {
                         names
                             .iter()
@@ -484,15 +542,25 @@ impl Compartment {
                     }),
                     Rc::downgrade(&self.lease),
                 )
-                .map(|realm| self.realm.set(Some(realm))),
+                .map(|realm| self.environment.set(Some(realm))),
         };
         if let Err(halt) = activate {
             return Self::unrun(halt, raw);
         }
+        let mut retired_compiler = None;
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             machine.set_realm_meter(meter, host);
             if let Some(compiler) = &self.source_compiler {
-                machine.set_source_compiler(Rc::clone(compiler));
+                let Some(registry) = self.machine.compilers.upgrade() else {
+                    return Self::unrun(
+                        Halt::Refused("machine:compiler-policy-owner-dropped"),
+                        machine.meter_index(),
+                    );
+                };
+                retired_compiler = registry
+                    .borrow_mut()
+                    .insert(self.environment.get().unwrap(), Rc::clone(compiler));
+                machine.set_shared_compiler(compiler);
             }
             let code = match names {
                 Some(names) => machine
@@ -525,10 +593,15 @@ impl Compartment {
                 bindings.push((name, self.globals_by_id[&id]));
             }
             for name in self.pending_names.borrow().iter() {
-                bindings.push((crate::SymbolName::from(name.as_str()), self.globals[name]));
+                let value = if let Some(root) = self.rooted_globals.get(name) {
+                    machine.rooted_value(root.root)
+                } else {
+                    self.globals[name]
+                };
+                bindings.push((crate::SymbolName::from(name.as_str()), value));
             }
             for (name, value) in bindings {
-                let id = match machine.realm_symbol(name) {
+                let id = match machine.environment_symbol(name) {
                     Ok(id) => id,
                     Err(halt) => return Self::unrun(halt, machine.meter_index()),
                 };
@@ -541,7 +614,7 @@ impl Compartment {
             }
             self.pending_ids.borrow_mut().clear();
             self.pending_names.borrow_mut().clear();
-            machine.run_shared(code.into())
+            operation(&mut machine, code.into())
         }));
         // Hosts and compilers may capture compartments on this machine. Detach even
         // after refusal or unwind, and drop outside the interpreter borrow.
@@ -550,30 +623,34 @@ impl Compartment {
         drop(machine);
         drop(host);
         drop(compiler);
+        drop(retired_compiler);
         match result {
             Ok(outcome) => outcome,
             Err(payload) => std::panic::resume_unwind(payload),
         }
     }
 
-    /// Compare actual object identity across evaluations and sibling Realms.
+    /// Compare actual object identity across evaluations and sibling compartments.
     /// Only own data properties are inspected; no getter executes.
     pub fn global_object_identity(&self, name: &str) -> Option<ObjectIdentity> {
-        let mut machine = self.intrinsics.machine.try_borrow_mut().ok()?;
-        let object = machine.realm_global_identity(self.realm.get()?, name)?;
+        let mut machine = self.machine.interpreter.try_borrow_mut().ok()?;
+        let object = machine.environment_global_identity(self.environment.get()?, name)?;
         let lease = machine.pin_identity(object);
         Some(ObjectIdentity {
-            machine: Rc::clone(&self.intrinsics),
+            machine: Rc::clone(&self.machine),
             lease,
             object,
         })
     }
 
-    /// Inspect the Realm after its first evaluation. The borrow prevents
+    /// Inspect the compartment environment after its first evaluation. The borrow prevents
     /// execution until released, so its global identity stays attached.
-    pub fn realm(&self) -> Option<std::cell::Ref<'_, crate::Realm>> {
-        let machine = self.intrinsics.machine.try_borrow().ok()?;
-        std::cell::Ref::filter_map(machine, |machine| machine.realm_context(self.realm.get()?)).ok()
+    pub fn environment(&self) -> Option<std::cell::Ref<'_, crate::CompartmentEnvironment>> {
+        let machine = self.machine.interpreter.try_borrow().ok()?;
+        std::cell::Ref::filter_map(machine, |machine| {
+            machine.environment_context(self.environment.get()?)
+        })
+        .ok()
     }
 }
 
@@ -582,7 +659,8 @@ impl Compartment {
 /// is dropped. This is the VM machine; Endo's wrapper adds compilation/budgets,
 /// and PersistentMachine adds the separate store-backed single-Realm lifecycle.
 pub struct Machine {
-    intrinsics: Rc<Intrinsics>,
+    compilers: Rc<CompilerRegistry>,
+    machine: Rc<MachineState>,
     counter: Rc<Cell<usize>>,
 }
 
@@ -594,39 +672,240 @@ impl Default for Machine {
 
 impl Machine {
     pub fn new() -> Machine {
+        let interpreter = Interp::new_shared_realm_machine();
+        let realm = Rc::clone(interpreter.realm());
+        let compilers = Rc::new(CompilerRegistry::default());
         Machine {
-            intrinsics: Intrinsics::new(),
-            counter: Rc::new(Cell::new(0)),
+            compilers: Rc::clone(&compilers),
+            machine: Rc::new(MachineState {
+                interpreter: RefCell::new(interpreter),
+                realm,
+                compilers: Rc::downgrade(&compilers),
+            }),
+            counter: Rc::new(Cell::new(1)),
         }
     }
 
-    /// Collect all live Realms and rooted host identities at a quiescent
+    /// Configure the default Realm evaluator service, used by shared dynamic
+    /// constructors. Machine owns the service lifetime; it is not stored in the heap.
+    pub fn set_source_compiler(&self, compiler: Rc<dyn crate::SourceCompiler>) -> Result<(), Halt> {
+        let mut machine = self
+            .machine
+            .interpreter
+            .try_borrow_mut()
+            .map_err(|_| Halt::MachineBusy)?;
+        machine.set_default_compiler(&compiler);
+        drop(machine);
+        let retired = self
+            .compilers
+            .borrow_mut()
+            .insert(self.realm().global_object(), compiler);
+        drop(retired);
+        Ok(())
+    }
+
+    /// Collect live compartment environments and rooted host identities at a quiescent
     /// boundary. The host chooses when to request collection.
     pub fn collect(&self) -> Result<crate::GcStats, Halt> {
         let mut machine = self
-            .intrinsics
             .machine
+            .interpreter
             .try_borrow_mut()
-            .map_err(|_| Halt::RealmBusy)?;
-        machine.reap_realms()?;
-        machine.collect_garbage().map_err(|error| match error {
-            crate::gc::GcAdmissionError::NotQuiescent => Halt::RealmBusy,
+            .map_err(|_| Halt::MachineBusy)?;
+        machine.prepare_collection()?;
+        let stats = machine.collect_garbage().map_err(|error| match error {
+            crate::gc::GcAdmissionError::NotQuiescent => Halt::MachineBusy,
             crate::gc::GcAdmissionError::PreviousCollectionFailed => {
                 Halt::EngineInvariant("gc:previous-collection-failed")
             }
-        })
+        })?;
+        let live = machine.live_environment_ids();
+        drop(machine);
+        let dead: Vec<_> = self
+            .compilers
+            .borrow()
+            .keys()
+            .filter(|id| !live.contains(id))
+            .copied()
+            .collect();
+        let retired: Vec<_> = {
+            let mut compilers = self.compilers.borrow_mut();
+            dead.iter().filter_map(|id| compilers.remove(id)).collect()
+        };
+        drop(retired);
+        Ok(stats)
+    }
+
+    /// The single Realm shared by all compartments of this Machine.
+    pub fn realm(&self) -> &Rc<crate::Realm> {
+        &self.machine.realm
     }
 
     /// The machine's shared frozen intrinsic graph.
     pub fn intrinsics(&self) -> &Rc<Intrinsics> {
-        &self.intrinsics
+        self.machine.realm.intrinsics()
+    }
+
+    /// A handle to the Realm's default global environment. Repeated handles
+    /// select the same start compartment; new_compartment creates separate globals.
+    pub fn start_compartment(&self) -> Compartment {
+        let mut compartment = Compartment::from_options(
+            Rc::clone(&self.machine),
+            Rc::new(Cell::new(0)),
+            CompartmentOptions::default(),
+        );
+        compartment.counter = Rc::clone(&self.counter);
+        compartment
+            .environment
+            .set(Some(self.realm().global_object()));
+        compartment
+    }
+
+    /// Run a complete consumer crank: evaluate the selected compartment, pump
+    /// the Machine queue, then render the script completion. Compartment's own
+    /// evaluate methods never pump jobs. A single borrow preserves completion
+    /// objects and the original meter through both phases.
+    pub fn evaluate_compartment_with_symbols_continuing_meter_shared(
+        &self,
+        compartment: &Compartment,
+        bytecode: Rc<[u8]>,
+        symbols: &[u8],
+        meter: crate::Meter,
+        host: Option<Box<dyn FnMut(u64) -> bool>>,
+    ) -> RunOutcome {
+        if !Rc::ptr_eq(&self.machine, &compartment.machine) {
+            return Compartment::unrun(
+                Halt::Refused("compartment:foreign-machine-value"),
+                meter.state().index,
+            );
+        }
+        let names = match crate::symbols::parse_symbols_checked(symbols) {
+            Ok(names) => names,
+            Err(halt) => return Compartment::unrun(halt, meter.state().index),
+        };
+        compartment.execute(bytecode, Some(&names), meter, host, Interp::run_shared)
+    }
+
+    /// Drain the machine's ordered promise queue through captured callback contexts.
+    pub fn run_promise_jobs(&self) -> RunOutcome {
+        self.pump(None, None)
+    }
+
+    /// Resume the current meter without changing its accumulated charges or
+    /// next-check threshold. The callback is detached after the pump.
+    pub fn resume_promise_jobs(&self, host: Box<dyn FnMut(u64) -> bool>) -> RunOutcome {
+        self.pump(None, Some(host))
+    }
+
+    /// Explicitly supply a meter for this pump, including any existing charges.
+    pub fn run_promise_jobs_with_meter(
+        &self,
+        meter: crate::Meter,
+        host: Option<Box<dyn FnMut(u64) -> bool>>,
+    ) -> RunOutcome {
+        self.pump(Some(meter), host)
+    }
+
+    fn pump(
+        &self,
+        meter: Option<crate::Meter>,
+        host: Option<Box<dyn FnMut(u64) -> bool>>,
+    ) -> RunOutcome {
+        let raw = meter.as_ref().map_or(0, |meter| meter.state().index);
+        let Ok(mut machine) = self.machine.interpreter.try_borrow_mut() else {
+            return Compartment::unrun(Halt::MachineBusy, raw);
+        };
+        if let Some(meter) = meter {
+            machine.set_realm_meter(meter, host);
+        } else if let Some(host) = host {
+            machine.reattach_meter_host(host);
+        }
+        let result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| machine.run_promise_jobs()));
+        let host = machine.detach_realm_host();
+        drop(machine);
+        drop(host);
+        match result {
+            Ok(outcome) => outcome,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
+    }
+
+    /// Inspect all environment rejection reports without running guest code.
+    /// Promise identity lets the host deduplicate repeated inspections.
+    pub fn unhandled_rejections(&self) -> Result<Vec<UnhandledRejection>, Halt> {
+        self.rejection_reports(false)
+    }
+
+    /// Root and acknowledge the current reports, releasing their implicit roots.
+    pub fn take_unhandled_rejections(&self) -> Result<Vec<UnhandledRejection>, Halt> {
+        self.rejection_reports(true)
+    }
+
+    fn rejection_reports(&self, acknowledge: bool) -> Result<Vec<UnhandledRejection>, Halt> {
+        let mut machine = self
+            .machine
+            .interpreter
+            .try_borrow_mut()
+            .map_err(|_| Halt::MachineBusy)?;
+        let values = machine.rejection_values();
+        let mut reports = Vec::with_capacity(values.len());
+        for (environment, promise, reason) in values {
+            let environment_lease = machine.pin_identity(environment);
+            let promise_lease = machine.pin_identity(promise);
+            let (root, lease) = machine.root_value(reason)?;
+            reports.push(UnhandledRejection {
+                environment: ObjectIdentity {
+                    machine: Rc::clone(&self.machine),
+                    object: environment,
+                    lease: environment_lease,
+                },
+                promise: ObjectIdentity {
+                    machine: Rc::clone(&self.machine),
+                    object: promise,
+                    lease: promise_lease,
+                },
+                reason: RootedValue {
+                    machine: Rc::clone(&self.machine),
+                    root,
+                    _lease: lease,
+                },
+            });
+        }
+        if acknowledge {
+            machine.acknowledge_rejections();
+        }
+        Ok(reports)
+    }
+
+    /// Acknowledge reports without allocating handles, for consumers discarding
+    /// old delivery diagnostics before collection.
+    pub fn discard_unhandled_rejections(&self) -> Result<(), Halt> {
+        let mut machine = self
+            .machine
+            .interpreter
+            .try_borrow_mut()
+            .map_err(|_| Halt::MachineBusy)?;
+        machine.acknowledge_rejections();
+        Ok(())
+    }
+
+    /// Explicitly abandon queued work at a host boundary.
+    pub fn discard_promise_jobs(&self) -> Result<(), Halt> {
+        let mut machine = self
+            .machine
+            .interpreter
+            .try_borrow_mut()
+            .map_err(|_| Halt::MachineBusy)?;
+        machine.discard_promise_jobs();
+        Ok(())
     }
 
     /// A fresh compartment on this machine, with empty globals and module
     /// map.
     pub fn new_compartment(&self) -> Compartment {
         Compartment::from_options(
-            Rc::clone(&self.intrinsics),
+            Rc::clone(&self.machine),
             Rc::clone(&self.counter),
             CompartmentOptions::default(),
         )
@@ -635,11 +914,7 @@ impl Machine {
     /// A fresh compartment with explicit options (endowments, module map,
     /// name, resolve/import hooks) — the `new Compartment({...})` surface.
     pub fn compartment(&self, options: CompartmentOptions) -> Compartment {
-        Compartment::from_options(
-            Rc::clone(&self.intrinsics),
-            Rc::clone(&self.counter),
-            options,
-        )
+        Compartment::from_options(Rc::clone(&self.machine), Rc::clone(&self.counter), options)
     }
 }
 
@@ -649,6 +924,22 @@ mod tests {
     use crate::module::{BodyOp, ExportEntry, ImportEntry, ImportName, ModuleRecord, ModuleValue};
     use crate::opcode::Opcode;
     use crate::value::Slot;
+
+    #[test]
+    fn rejection_inspection_refuses_full_heap_but_acknowledgment_allocates_nothing() {
+        let machine = Machine::new();
+        let a = machine.new_compartment();
+        let (code, symbols) = ironhorse_compile::compile_atoms("Promise.reject(42); 0").unwrap();
+        assert!(a.evaluate_with_symbols(&code, &symbols).completed);
+        assert!(machine.run_promise_jobs().completed);
+        machine.machine.interpreter.borrow_mut().set_slot_ceiling(0);
+        assert!(matches!(
+            machine.unhandled_rejections(),
+            Err(Halt::HeapExhausted)
+        ));
+        machine.discard_unhandled_rejections().unwrap();
+        assert!(machine.unhandled_rejections().unwrap().is_empty());
+    }
 
     /// Program bytecode reading the global symbol `id` and returning it:
     /// `EVAL_REFERENCE id; GET_VARIABLE id; SET_RESULT; END`.
@@ -803,7 +1094,7 @@ mod tests {
                 inner
                     .evaluate_with_symbols(&inner_code, &inner_symbols)
                     .halt,
-                Halt::RealmBusy
+                Halt::MachineBusy
             );
             true
         });

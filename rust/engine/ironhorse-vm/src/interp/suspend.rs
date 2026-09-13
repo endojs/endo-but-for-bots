@@ -49,6 +49,7 @@ impl Interp {
             .collect();
         self.meter.tick_raw(GENERATOR_YIELD_METERING);
         Ok(SavedFrame {
+            global_env: self.capture_global_environment(),
             locals: std::mem::take(&mut self.locals),
             id_map: std::mem::take(&mut self.id_map),
             args: std::mem::take(&mut self.args),
@@ -69,6 +70,7 @@ impl Interp {
     /// for leave_call. START opcodes have no private stack or jump entries yet.
     pub(super) fn fresh_activation(&self, resume_pc: usize) -> SavedFrame {
         SavedFrame {
+            global_env: self.capture_global_environment(),
             locals: self.locals.clone(),
             id_map: self.id_map.clone(),
             args: self.args.clone(),
@@ -97,6 +99,7 @@ impl Interp {
         self.id_map = saved.id_map;
         self.args = saved.args;
         self.this_val = saved.this_val;
+        self.switch_environment(saved.global_env);
         self.env = saved.env;
         self.cur_func = saved.cur_func;
         self.cur_target = saved.cur_target;
@@ -260,6 +263,7 @@ impl Interp {
         let driver_footprint = FRAME_OVERHEAD_SLOTS + self.args.len() + self.locals.len();
         self.frame_slots += driver_footprint;
         self.call_stack.push(CallerState {
+            global_env: self.capture_global_environment(),
             locals: std::mem::take(&mut self.locals),
             id_map: std::mem::take(&mut self.id_map),
             result: self.result,
@@ -593,6 +597,7 @@ impl Interp {
         let driver_footprint = FRAME_OVERHEAD_SLOTS + self.args.len() + self.locals.len();
         self.frame_slots += driver_footprint;
         self.call_stack.push(CallerState {
+            global_env: self.capture_global_environment(),
             locals: std::mem::take(&mut self.locals),
             id_map: std::mem::take(&mut self.id_map),
             result: self.result,
@@ -800,6 +805,7 @@ impl Interp {
         let driver_footprint = FRAME_OVERHEAD_SLOTS + self.args.len() + self.locals.len();
         self.frame_slots += driver_footprint;
         self.call_stack.push(CallerState {
+            global_env: self.capture_global_environment(),
             locals: std::mem::take(&mut self.locals),
             id_map: std::mem::take(&mut self.id_map),
             result: self.result,

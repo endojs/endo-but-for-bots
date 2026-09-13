@@ -74,15 +74,18 @@ impl Interp {
         }
         let v = if self.id_map.contains_key(&name) {
             self.resolve_frame_get(name)
-        } else if self.realm.global_props.contains_key(&name) {
+        } else if self.environment.global_props.contains_key(&name) {
             // A global object binding is an Object Environment
             // Record binding. Read it through the object's full
             // [[Get]] path so a descriptor installed with
             // Object.defineProperty(globalThis, ...) observes an
             // accessor (and its abrupt completion), rather than
             // exposing the accessor's backing placeholder slot.
-            let global = Slot::of(Kind::Reference, Payload::Reference(self.realm.global_obj));
-            Some((self.mop_get(code, self.realm.global_obj, name, global))?)
+            let global = Slot::of(
+                Kind::Reference,
+                Payload::Reference(self.environment.global_obj),
+            );
+            Some((self.mop_get(code, self.environment.global_obj, name, global))?)
         } else if self.mop_has(code, self.object_proto, name)? {
             // `global_props` is the OWN-property index of the
             // global object, but a bare name resolves through
@@ -106,7 +109,10 @@ impl Interp {
             // the global object, so an inherited accessor runs
             // with the `this` XS gives it and its abrupt
             // completion is observed.
-            let global = Slot::of(Kind::Reference, Payload::Reference(self.realm.global_obj));
+            let global = Slot::of(
+                Kind::Reference,
+                Payload::Reference(self.environment.global_obj),
+            );
             Some((self.mop_get(code, self.object_proto, name, global))?)
         } else {
             None
@@ -142,7 +148,7 @@ impl Interp {
             // agreeing on the one question they both ask.
             None if next_opcode == Some(Opcode::XS_CODE_TYPEOF as u8)
                 && !self.id_map.contains_key(&name)
-                && !self.realm.global_props.contains_key(&name) =>
+                && !self.environment.global_props.contains_key(&name) =>
             {
                 // Returns successfully to the dispatch loop;
                 // the following `TYPEOF` reads this `undefined`.
@@ -284,7 +290,7 @@ impl Interp {
             // unmetered: XS's own chain walk is already folded into
             // this arm's measured cost, and both forms stay
             // bit-exact against the pin.
-            let own_global = self.realm.global_props.contains_key(&name);
+            let own_global = self.environment.global_props.contains_key(&name);
             let resolvable = own_global || self.mop_has(code, self.object_proto, name)?;
             if !resolvable && self.strict {
                 // XS's `SET_VARIABLE` strict arm:
@@ -307,7 +313,7 @@ impl Interp {
                 // binding appears — but XS charges the
                 // `mxBehaviorSetProperty` code unit either way, so
                 // the tick sits OUTSIDE the extensibility guard.
-                if self.instance_extensible(self.realm.global_obj) {
+                if self.instance_extensible(self.environment.global_obj) {
                     self.materialize_global_property(name);
                 }
                 // Creating a sloppy global through `SET_VARIABLE`
@@ -324,10 +330,13 @@ impl Interp {
                 // carry it.
                 self.meter.tick_code();
             }
-            let global = Slot::of(Kind::Reference, Payload::Reference(self.realm.global_obj));
-            let accepted = (self.mop_set(code, self.realm.global_obj, name, value, global))?;
+            let global = Slot::of(
+                Kind::Reference,
+                Payload::Reference(self.environment.global_obj),
+            );
+            let accepted = (self.mop_set(code, self.environment.global_obj, name, value, global))?;
             if !accepted && self.strict {
-                return Err(self.failed_set_error(self.realm.global_obj, name, "set"));
+                return Err(self.failed_set_error(self.environment.global_obj, name, "set"));
             }
         }
         // The property store itself is one built-in step

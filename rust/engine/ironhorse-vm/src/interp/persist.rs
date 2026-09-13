@@ -254,16 +254,16 @@ impl Interp {
         if symbol_names.len() > usize::from(u16::MAX) {
             return Err(refuse("name table exceeds the property ID space"));
         }
-        if slots.is_free_index(self.realm.global_obj) {
+        if slots.is_free_index(self.environment.global_obj) {
             return Err(refuse("global root is a free slot"));
         }
-        let global = slots.get(self.realm.global_obj);
+        let global = slots.get(self.environment.global_obj);
         if global.kind != Kind::Instance
             || !matches!(global.value, Payload::None | Payload::Reference(_))
         {
             return Err(refuse("global root is not an instance"));
         }
-        validate_restore_chain(&slots, self.realm.global_obj, &mut Default::default())?;
+        validate_restore_chain(&slots, self.environment.global_obj, &mut Default::default())?;
         self.slots = slots;
         self.chunks = chunks;
         self.stack = stack;
@@ -508,7 +508,7 @@ impl Interp {
     ) -> Option<&'static str> {
         // The existing image/store schema restores a standalone interpreter.
         // It cannot carry the shared frozen boot profile or multiple Realms.
-        if self.intrinsics_frozen {
+        if self.shared_compartments {
             return Some("a shared Realm machine, which no snapshot carries");
         }
         // The test262 `$262` host ([`Self::install_test262_host`]):
@@ -1212,7 +1212,7 @@ impl Interp {
             })
             .collect();
         for (id, intrinsic) in legacy_globals {
-            let Some(&property) = self.realm.global_props.get(&id) else {
+            let Some(&property) = self.environment.global_props.get(&id) else {
                 continue;
             };
             let slot = self.slots.get_mut(property);
@@ -1224,11 +1224,11 @@ impl Interp {
             }
         }
         if let Some(&id) = self.symbol_ids.get("globalThis") {
-            if let Some(&property) = self.realm.global_props.get(&id) {
+            if let Some(&property) = self.environment.global_props.get(&id) {
                 let slot = self.slots.get_mut(property);
                 if slot.flag == 0
                     && slot.kind == Kind::Reference
-                    && slot.value == Payload::Reference(self.realm.global_obj)
+                    && slot.value == Payload::Reference(self.environment.global_obj)
                 {
                     slot.flag |= XS_DONT_ENUM_FLAG;
                 }
@@ -1631,6 +1631,7 @@ impl Interp {
             self.functions.insert(
                 owner,
                 FuncInfo {
+                    global_env: crate::value::SlotIndex::NULL,
                     body_start: row.body_start.map(|v| v as usize),
                     body_len: row.body_len as usize,
                     closures: crate::value::SlotIndex(row.closures),
@@ -2233,6 +2234,7 @@ impl Interp {
                     .collect()
             };
             Some(SavedFrame {
+                global_env: crate::value::SlotIndex::NULL,
                 locals: row.locals,
                 id_map: std::rc::Rc::new(map(row.id_map)?),
                 args: row.args,
@@ -2422,7 +2424,7 @@ impl Interp {
             .collect();
         async_instances.sort_unstable_by_key(|row| row.owner);
         PromiseClusterSnapshot {
-            unhandled_rejection: self.realm.unhandled_rejection.map(|owner| owner.0),
+            unhandled_rejection: self.environment.unhandled_rejection.map(|owner| owner.0),
             async_instances,
             promises: promises
                 .into_iter()
@@ -2733,6 +2735,7 @@ impl Interp {
             promises.push((
                 crate::value::SlotIndex(row.owner),
                 PromiseData {
+                    global_env: crate::value::SlotIndex::NULL,
                     state,
                     result: row.result,
                     reactions,
@@ -2909,7 +2912,8 @@ impl Interp {
                 },
             ));
         }
-        self.realm.unhandled_rejection = snap.unhandled_rejection.map(crate::value::SlotIndex);
+        self.environment.unhandled_rejection =
+            snap.unhandled_rejection.map(crate::value::SlotIndex);
         self.promises.extend(promises);
         for (owner, data) in functions {
             self.functions.insert(owner, data);
@@ -3711,11 +3715,11 @@ impl Interp {
     ///
     /// Initial adoption validates this chain before installing the arenas.
     pub(super) fn rebuild_global_props(&mut self) {
-        self.realm.global_props.clear();
-        let mut cur = self.slots.get(self.realm.global_obj).next;
+        self.environment.global_props.clear();
+        let mut cur = self.slots.get(self.environment.global_obj).next;
         while !cur.is_null() {
             let s = self.slots.get(cur);
-            self.realm.global_props.insert(s.id, cur);
+            self.environment.global_props.insert(s.id, cur);
             cur = s.next;
         }
     }

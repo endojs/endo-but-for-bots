@@ -205,6 +205,7 @@ impl Interp {
         self.frame_slots += caller_footprint;
         // Save the caller's activation and install the callee's.
         self.call_stack.push(CallerState {
+            global_env: self.capture_global_environment(),
             locals: std::mem::take(&mut self.locals),
             id_map: std::mem::take(&mut self.id_map),
             result: self.result,
@@ -218,6 +219,7 @@ impl Interp {
             target_func: self.target_func,
             ret_pc,
         });
+        self.switch_environment(self.functions[&func].global_env);
         self.result = Slot::undefined();
         self.strict = false;
         self.args = args;
@@ -308,6 +310,7 @@ impl Interp {
         self.args = caller.args;
         self.this_val = caller.this_val;
         self.this_captures = caller.this_captures;
+        self.switch_environment(caller.global_env);
         self.env = caller.env;
         self.cur_func = caller.cur_func;
         self.cur_target = caller.cur_target;

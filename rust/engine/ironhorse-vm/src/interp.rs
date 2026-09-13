@@ -658,6 +658,8 @@ enum ReadKey {
 
 #[derive(Clone, Debug)]
 struct FuncInfo {
+    /// Captured compartment global; NULL derives the standalone default.
+    global_env: crate::value::SlotIndex,
     /// Start offset of the function body in the program code buffer (the
     /// byte just past the `code` opcode's operand — where `begin_*` sits).
     ///
@@ -721,6 +723,7 @@ struct FuncInfo {
 impl Default for FuncInfo {
     fn default() -> Self {
         FuncInfo {
+            global_env: crate::value::SlotIndex::NULL,
             body_start: None,
             body_len: 0,
             closures: crate::value::SlotIndex::NULL,
@@ -881,6 +884,7 @@ struct DataViewData {
 /// gated on `state == Pending` instead.
 #[derive(Clone, Debug)]
 struct PromiseData {
+    global_env: crate::value::SlotIndex,
     state: PromiseState,
     result: Slot,
     reactions: Vec<PromiseReaction>,
@@ -1270,8 +1274,8 @@ pub fn error_name_static(name: &str) -> Option<&'static str> {
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum Halt {
-    /// Another Realm or a reentrant host call tried to enter an active machine.
-    RealmBusy,
+    /// A host operation tried to borrow a Machine that is already executing.
+    MachineBusy,
     /// Reached RETURN/END: the completion value is in `result`.
     Return,
     /// The meter host refused more computation.
@@ -1729,6 +1733,8 @@ pub fn dtf_component_key_static(name: &str) -> Option<&'static str> {
 /// callee's result, matching XS's `mxStack = mxFrameEnd; *mxStack = *slot`.
 #[cfg_attr(test, derive(Debug))]
 struct CallerState {
+    /// Captured compartment global; NULL derives the standalone default.
+    global_env: crate::value::SlotIndex,
     locals: Vec<Slot>,
     // Shared with catch/suspend checkpoints; binding changes copy on write.
     id_map: std::rc::Rc<std::collections::HashMap<u16, usize>>,
@@ -1814,6 +1820,8 @@ enum GeneratorState {
 /// the resume rebases them onto the live chain), and the resume cursor
 /// (`resume_pc`).
 struct SavedFrame {
+    /// Captured compartment global; NULL derives the standalone default.
+    global_env: crate::value::SlotIndex,
     locals: Vec<Slot>,
     // Shared with catch/suspend checkpoints; binding changes copy on write.
     id_map: std::rc::Rc<std::collections::HashMap<u16, usize>>,
@@ -1975,7 +1983,7 @@ enum ResumeStatus {
 
 mod boot;
 mod realm;
-pub use realm::Realm;
+pub use realm::{CompartmentEnvironment, Realm};
 
 impl Default for Interp {
     fn default() -> Self {
@@ -2058,7 +2066,7 @@ impl Interp {
         let slot = if self.id_map.contains_key(&id) {
             self.resolve_frame_get(id)?
         } else {
-            let property = self.slots.get(*self.realm.global_props.get(&id)?);
+            let property = self.slots.get(*self.environment.global_props.get(&id)?);
             if property.flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) != 0 {
                 return None;
             }
@@ -2089,24 +2097,33 @@ impl Interp {
     /// not erase a report already delivered. The promise and its reason remain
     /// rooted and travel with snapshots. No guest conversion runs here.
     pub fn unhandled_rejection(&self) -> Option<(crate::value::SlotIndex, Slot)> {
-        self.realm
+        self.environment
             .unhandled_rejection
             .map(|owner| (owner, self.promises[&owner].result))
     }
 
     fn publish_unhandled_rejection(&mut self) {
-        if self.realm.unhandled_rejection.is_none() {
-            self.realm.unhandled_rejection =
-                self.pending_rejections.iter().copied().find(|owner| {
-                    self.promises
-                        .get(owner)
-                        .is_some_and(|promise| !promise.ever_handled)
-                });
-            if self.realm.unhandled_rejection.is_some() {
-                self.snapshot_dirt.mark(SnapshotSection::Promises.mask());
+        let pending = std::mem::take(&mut self.pending_rejections);
+        for owner in pending {
+            let Some(promise) = self
+                .promises
+                .get(&owner)
+                .filter(|promise| !promise.ever_handled)
+            else {
+                continue;
+            };
+            let global = if promise.global_env.is_null() {
+                self.environment.global_obj
+            } else {
+                promise.global_env
+            };
+            if let Some(environment) = self.environment_context_mut(global) {
+                if environment.unhandled_rejection.is_none() {
+                    environment.unhandled_rejection = Some(owner);
+                    self.snapshot_dirt.mark(SnapshotSection::Promises.mask());
+                }
             }
         }
-        self.pending_rejections.clear();
     }
 
     /// The raw bytecode-dispatch count (`n_dispatched`), exposed for the C1
@@ -2143,7 +2160,7 @@ impl Interp {
     /// [`Self::link_intrinsics`]; a string `eval` or the `Function`
     /// constructor is an honest [`Halt::NotImplemented`] until it is armed.
     pub fn set_source_compiler(&mut self, compiler: std::rc::Rc<dyn SourceCompiler>) {
-        self.realm.source_compiler = Some(compiler);
+        self.environment.source_compiler = Some(compiler);
     }
 
     /// Seed a global binding by id, so a program that reads an
@@ -2154,9 +2171,12 @@ impl Interp {
     pub fn define_global_id(&mut self, id: u16, value: Slot) -> bool {
         // Seeding a compartment global happens before the run, so it is
         // not metered (it is not a guest allocation the meter counts).
-        if self.find_property(self.realm.global_obj, id).is_some() {
+        if self
+            .find_property(self.environment.global_obj, id)
+            .is_some()
+        {
             return self.ordinary_define_own_property(
-                self.realm.global_obj,
+                self.environment.global_obj,
                 id,
                 OrdinaryDescriptor {
                     value: Some(value),
@@ -2164,7 +2184,7 @@ impl Interp {
                 },
             );
         }
-        if !self.instance_extensible(self.realm.global_obj) {
+        if !self.instance_extensible(self.environment.global_obj) {
             return false;
         }
         self.create_global_property(id, (value.kind, value.value));
@@ -2315,7 +2335,12 @@ impl Interp {
     /// Execute caller-owned immutable bytecode without copying its bytes.
     /// Escaping functions retain this same allocation across later cranks.
     pub fn run_shared(&mut self, shared: std::rc::Rc<[u8]>) -> RunOutcome {
-        self.run_operation(shared, true)
+        self.run_operation(shared, true, true)
+    }
+
+    /// Evaluate a compartment script without pumping the machine's job queue.
+    pub(crate) fn run_script_shared(&mut self, code: std::rc::Rc<[u8]>) -> RunOutcome {
+        self.run_operation(code, true, false)
     }
 
     /// Whether this machine has queued promise jobs. This is distinct from
@@ -2338,13 +2363,18 @@ impl Interp {
             .top_level_code
             .clone()
             .unwrap_or_else(|| std::rc::Rc::from([]));
-        self.run_operation(code, false)
+        self.run_operation(code, false, true)
     }
 
-    fn run_operation(&mut self, shared: std::rc::Rc<[u8]>, execute_script: bool) -> RunOutcome {
+    fn run_operation(
+        &mut self,
+        shared: std::rc::Rc<[u8]>,
+        execute_script: bool,
+        pump_jobs: bool,
+    ) -> RunOutcome {
         let start_raw = self.meter.raw();
         let start_dispatched = self.n_dispatched;
-        let mut outcome = self.run_shared_outcome(shared, execute_script);
+        let mut outcome = self.run_shared_outcome(shared, execute_script, pump_jobs);
         outcome.meter_raw_this_run = outcome.meter_raw.saturating_sub(start_raw);
         outcome.computrons_this_run = outcome.meter_raw_this_run >> 16;
         outcome.dispatched_this_run = outcome.dispatched.saturating_sub(start_dispatched);
@@ -2355,6 +2385,7 @@ impl Interp {
         &mut self,
         shared: std::rc::Rc<[u8]>,
         execute_script: bool,
+        pump_jobs: bool,
     ) -> RunOutcome {
         if self.gc_failed {
             return RunOutcome {
@@ -2373,7 +2404,7 @@ impl Interp {
             };
         }
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.run_inner(shared, execute_script)
+            self.run_inner(shared, execute_script, pump_jobs)
         })) {
             Ok(outcome) => outcome,
             Err(payload) if payload.is::<crate::value::HeapExhausted>() => {
@@ -2408,21 +2439,11 @@ impl Interp {
         }
     }
 
-    fn run_inner(&mut self, shared: std::rc::Rc<[u8]>, execute_script: bool) -> RunOutcome {
-        let code: &[u8] = &shared;
-        if self.slots.capacity() > self.slots.ceiling()
-            || self.chunks.byte_size() > self.chunks.ceiling()
-        {
-            crate::value::heap_exhausted();
-        }
-        // A halted crank retains its activation for inspection until the
-        // caller explicitly starts another run. Abandon that activation now:
-        // otherwise its frames make BEGIN treat this program as a callee,
-        // and its operands, handler PCs, or with environment leak into it.
-        // Captured locals and environments already live in arena cells and
-        // retained function records; dropping these transient roots preserves
-        // them. Keep queued jobs, metering, poison latches, and the externally
-        // configured eval_program_hoist policy unchanged.
+    pub(crate) fn reset_activation(&mut self) {
+        self.strict = false;
+        self.gen_run_stack.clear();
+        self.async_run_stack.clear();
+        self.async_gen_run_stack.clear();
         while !self.call_stack.is_empty() {
             let _ = self.leave_call();
         }
@@ -2444,6 +2465,32 @@ impl Interp {
         self.resume_status = ResumeStatus::NoStatus;
         self.eval_direct = false;
         self.direct_eval_hoist = false;
+        self.top_level_code = None;
+        self.active_segment = None;
+        self.strict = false;
+    }
+
+    fn run_inner(
+        &mut self,
+        shared: std::rc::Rc<[u8]>,
+        execute_script: bool,
+        pump_jobs: bool,
+    ) -> RunOutcome {
+        let code: &[u8] = &shared;
+        if self.slots.capacity() > self.slots.ceiling()
+            || self.chunks.byte_size() > self.chunks.ceiling()
+        {
+            crate::value::heap_exhausted();
+        }
+        // A halted crank retains its activation for inspection until the
+        // caller explicitly starts another run. Abandon that activation now:
+        // otherwise its frames make BEGIN treat this program as a callee,
+        // and its operands, handler PCs, or with environment leak into it.
+        // Captured locals and environments already live in arena cells and
+        // retained function records; dropping these transient roots preserves
+        // them. Keep queued jobs, metering, poison latches, and the externally
+        // configured eval_program_hoist policy unchanged.
+        self.reset_activation();
         // Retain the top-level bytecode so an eval-defined function that calls
         // back into a top-level function can be dispatched over the right
         // buffer from a nested segment. Only the cross-segment call path reads
@@ -2482,7 +2529,7 @@ impl Interp {
         // changed by the drain (reactions mutate closure state, not the
         // top-level result). A job that reaches an un-modeled path turns the
         // whole run into an honest `Halt::NotImplemented`.
-        if step == Step::Returned {
+        if pump_jobs && step == Step::Returned {
             let script_result = self.result;
             if let Err(h) = self.drain_promise_jobs(code) {
                 step = h;
@@ -2503,7 +2550,9 @@ impl Interp {
         // either host coercion; rendering reads the captured value and cannot
         // execute guest code or collect the heap.
         if completed {
-            self.publish_unhandled_rejection();
+            if pump_jobs {
+                self.publish_unhandled_rejection();
+            }
             self.result = Slot::undefined();
             self.exception = Slot::undefined();
             self.locals.clear();

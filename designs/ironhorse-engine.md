@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-07-02 |
-| **Updated** | 2026-09-12 |
+| **Updated** | 2026-09-13 |
 | **Author** | endolinbot (prompted) |
 | **Status** | Approved (2026-07-02, program supervisor `port-xs-to-rust-memory-safe-engine`; all ten open questions resolved, see § Resolved Questions) |
 | **Revised** | 2026-07-04 — **metering doctrine: accuracy over parity** (maintainer directive). The meter is Ironhorse's own release-versioned deterministic cost model, a proxy for real (wall-clock) execution cost, NOT a reproduction of XS's computron counts. The XS differential oracle is retained for **result** correctness only; computron comparison is demoted to advisory telemetry. This selects the "stated determinism-equivalence proof" branch the § Prompt already permitted. See § Metering (requirement 1a) and § Agoric consensus compatibility for the authoritative statement. |
@@ -649,29 +649,29 @@ the endor daemon's actual boot sequence (`polyfills.js`, then
 Unified runner) runs identically on both engines, plus the SES
 test suites XS itself is exercised against.
 
-**Realm implementation (2026-09-12).**
-The host-side `Machine`, `Compartment` and `Intrinsics` types remain public,
-following [W6 decision 1](ironhorse-w6-decisions.md#1-realm--decided-extract-it).
-`Machine` now owns the shared interpreter and arenas through its `Intrinsics` owner.
-Each compartment retains a `Realm` with a separate global object, bindings,
-intrinsic binding permit and source compiler policy.
-Repeated evaluations preserve globals; siblings share the same frozen primordial
-objects, rather than independently copied graphs.
-Boot links the full primordial vocabulary and freezes all primordial instances,
-including non-global generator/async and iterator prototype families, before
-reporting `is_locked_down()`.
-The prior `BootTemplate` has been replaced.
+**Realm implementation (2026-09-13).**
+The public `Machine`, `Compartment`, and `Intrinsics` surface remains.
+Machine owns execution, arenas, canonical keys, code, and an ordered promise queue.
+One Realm holds shared frozen primordials and a default environment, also used by
+`Machine::start_compartment()`; other compartments have distinct global environments.
+Intrinsics contains primordial references and lockdown state, with no interpreter.
+Boot initializes and freezes the complete graph once; BootTemplate is removed.
 
-The machine owns the canonical symbol table because stored property IDs must retain
-one meaning across its heap.
-Evaluation retains its public `&self` signature using a checked exclusive machine
-borrow; sibling/reentrant entry returns `RealmBusy` until the active crank completes
-and drains, instead of switching globals under suspended work.
-Raw heap endowments remain refused until a provenance-bearing value-transfer API exists.
-Named scalar endowments now bind at evaluation and persist until explicitly rebound.
-The optional intrinsic permit restricts global bindings, not transitive capabilities.
-GC retains inactive live Realms and rooted object identities.
-Names and tagged-template cache entries remain machine-owned costs after Realm drop.
+Functions and suspended frames capture their defining compartment environment.
+Nested A → B → A calls and promise callbacks use the dispatcher context stack.
+Host reentry is refused under the exclusive machine borrow.
+Rooted host values preserve ordinary reference identity and survive collection;
+raw arena coordinates are refused as endowments.
+Host rebindings preserve property identity and respect descriptors and integrity.
+Compartment evaluators retain their target globals; shared prototype-linked dynamic
+constructors use the default Realm evaluator service configured on Machine.
+Machine owns compiler services outside the execution core to break host capture cycles.
+
+GC retains environments reachable from handles, functions, and queued jobs.
+Dropping a compartment does not abandon its queued work; Machine provides an explicit
+pump and discard operation, including metered continuation without resetting charges.
+Names and tagged-template cache entries remain machine lifetime costs.
+Intrinsic permits restrict global bindings, not transitive capabilities.
 
 Shared-Realm snapshots remain explicitly refused; the current Endo persistent path
 uses standalone `Interp` capture/restore.

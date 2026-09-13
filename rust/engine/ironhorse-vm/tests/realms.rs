@@ -143,7 +143,15 @@ fn caught_native_callback_panics_do_not_strand_siblings() {
                 Box::new(|_| panic!("host panic probe")),
             )
         }));
-        assert!(result.is_err(), "{source}");
+        let panicked = if result.is_err() {
+            true
+        } else {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                machine.resume_promise_jobs(Box::new(|_| panic!("host job panic probe")))
+            }))
+            .is_err()
+        };
+        assert!(panicked, "{source}");
         drop(a);
         assert_eq!(eval(&sibling, "42"), "42");
         machine.collect().unwrap();
@@ -177,7 +185,7 @@ fn realm_permit_applies_at_creation_and_later_relinking() {
 }
 
 #[test]
-fn failed_realm_cannot_run_its_pending_jobs_in_a_sibling() {
+fn failed_compartment_jobs_keep_their_context_when_a_sibling_pumps() {
     let machine = Machine::new();
     let a = machine.new_compartment();
     let b = machine.new_compartment();
@@ -186,8 +194,9 @@ fn failed_realm_cannot_run_its_pending_jobs_in_a_sibling() {
         "var n = 1; Promise.resolve().then(() => n = 9); throw 1",
     );
     assert!(!out.completed);
-    assert!(matches!(evaluate(&b, "1").halt, Halt::RealmBusy));
+    assert_eq!(eval(&b, "1"), "1");
     assert_eq!(eval(&a, "n"), "1");
+    assert!(machine.run_promise_jobs().completed);
     assert_eq!(eval(&a, "n"), "9");
     assert_eq!(eval(&b, "typeof n"), "undefined");
 }
@@ -224,7 +233,7 @@ fn collection_preserves_inactive_globals_closures_and_rooted_identities() {
 }
 
 #[test]
-fn dropping_a_failed_realm_discards_its_jobs_without_blocking_siblings() {
+fn dropping_a_failed_compartment_retains_jobs_in_their_environment() {
     let machine = Machine::new();
     let b = machine.new_compartment();
     {
@@ -317,12 +326,14 @@ fn non_global_primordial_families_are_frozen_across_realms() {
         assert_eq!(
             eval(
                 &a,
-                &format!("({expression}).realmLeak = 123; typeof ({expression}).realmLeak")
+                &format!(
+                    "({expression}).environmentLeak = 123; typeof ({expression}).environmentLeak"
+                )
             ),
             "undefined"
         );
         assert_eq!(
-            eval(&b, &format!("typeof ({expression}).realmLeak")),
+            eval(&b, &format!("typeof ({expression}).environmentLeak")),
             "undefined"
         );
     }
@@ -380,4 +391,237 @@ fn compilers_capturing_siblings_are_released_after_execution() {
         drop(machine);
         assert!(weak.upgrade().is_none());
     }
+}
+
+#[test]
+fn one_realm_has_a_default_start_environment_and_distinct_compartments() {
+    use std::rc::Rc;
+    let machine = Machine::new();
+    let start = machine.start_compartment();
+    let a = machine.new_compartment();
+    eval(&start, "var answer = 17; answer");
+    eval(&a, "var answer = 99; answer");
+    assert!(Rc::ptr_eq(start.realm(), a.realm()));
+    assert_eq!(
+        start.environment().unwrap().global_object(),
+        machine.realm().global_object()
+    );
+    assert_eq!(eval(&machine.start_compartment(), "answer"), "17");
+    assert_ne!(
+        a.environment().unwrap().global_object(),
+        machine.realm().global_object()
+    );
+}
+
+#[test]
+fn shared_values_preserve_identity_mutation_and_foreign_global_indexes() {
+    let machine = Machine::new();
+    let a = machine.new_compartment();
+    let mut b = machine.new_compartment();
+    eval(&a, "var value = {n: 1}; var ownGlobal = globalThis; value");
+    b.define_global_value("value", &a.global_value("value").unwrap())
+        .unwrap();
+    b.define_global_value("otherGlobal", &a.global_value("ownGlobal").unwrap())
+        .unwrap();
+    assert_eq!(
+        eval(&b, "value.n = 42; otherGlobal.added = 7; value"),
+        "[object Object]"
+    );
+    assert_eq!(
+        a.global_object_identity("value"),
+        b.global_object_identity("value")
+    );
+    assert_eq!(eval(&a, "value.n + added"), "49");
+    eval(&b, "delete otherGlobal.added; 0");
+    assert_eq!(eval(&a, "typeof added"), "undefined");
+    machine.collect().unwrap();
+    assert_eq!(eval(&b, "value.n"), "42");
+    let other = Machine::new();
+    assert!(other
+        .new_compartment()
+        .define_global_value("value", &a.global_value("value").unwrap())
+        .is_err());
+}
+
+#[test]
+fn nested_cross_compartment_calls_restore_defining_globals() {
+    let machine = Machine::new();
+    let mut a = machine.new_compartment();
+    let mut b = machine.new_compartment();
+    eval(
+        &a,
+        "var answer = 42; var read = () => answer; var callB = () => fromB() + ':' + answer; 0",
+    );
+    b.define_global_value("fromA", &a.global_value("read").unwrap())
+        .unwrap();
+    eval(
+        &b,
+        "var answer = 99; var read = () => fromA() + ':' + answer; 0",
+    );
+    a.define_global_value("fromB", &b.global_value("read").unwrap())
+        .unwrap();
+    assert_eq!(eval(&a, "callB()"), "42:99:42");
+    assert_eq!(
+        eval(&b, "[1,2].map(fromA).join(',') + ':' + answer"),
+        "42,42:99"
+    );
+    eval(&a, "var throws = () => { throw answer }; 0");
+    b.define_global_value("throwsA", &a.global_value("throws").unwrap())
+        .unwrap();
+    assert_eq!(
+        eval(&b, "try { throwsA() } catch(e) { e + ':' + answer }"),
+        "42:99"
+    );
+    machine.collect().unwrap();
+    assert_eq!(eval(&a, "callB()"), "42:99:42");
+}
+
+#[test]
+fn functions_and_chunk_values_survive_origin_drop_and_collection() {
+    let machine = Machine::new();
+    let mut b = machine.new_compartment();
+    {
+        let a = machine.new_compartment();
+        eval(
+            &a,
+            "var answer = 42; var read = () => answer; var text = 'rooted text'; 0",
+        );
+        b.define_global_value("read", &a.global_value("read").unwrap())
+            .unwrap();
+        b.define_global_value("text", &a.global_value("text").unwrap())
+            .unwrap();
+    }
+    machine.collect().unwrap();
+    assert_eq!(eval(&b, "read() + ':' + text"), "42:rooted text");
+    machine.collect().unwrap();
+    assert_eq!(eval(&b, "read()"), "42");
+}
+
+#[test]
+fn promise_settlement_from_another_compartment_preserves_order_and_context() {
+    let machine = Machine::new();
+    let mut b = machine.new_compartment();
+    {
+        let a = machine.new_compartment();
+        eval(&a, "var answer = 'A'; var events = []; var resolve; var p = new Promise(r => resolve = r); p.then(() => events.push(answer)); var read = () => events.join(','); 0");
+        b.define_global_value("resolve", &a.global_value("resolve").unwrap())
+            .unwrap();
+        b.define_global_value("p", &a.global_value("p").unwrap())
+            .unwrap();
+        b.define_global_value("events", &a.global_value("events").unwrap())
+            .unwrap();
+        b.define_global_value("read", &a.global_value("read").unwrap())
+            .unwrap();
+    }
+    machine.collect().unwrap();
+    eval(
+        &b,
+        "var answer = 'B'; p.then(() => events.push(answer)); resolve(); 0",
+    );
+    assert_eq!(eval(&b, "read()"), "");
+    assert!(machine.run_promise_jobs().completed);
+    assert_eq!(eval(&b, "read()"), "A,B");
+}
+
+#[test]
+fn queued_callbacks_survive_collection_and_origin_drop_until_explicit_pump() {
+    let machine = Machine::new();
+    let mut b = machine.new_compartment();
+    {
+        let a = machine.new_compartment();
+        let outcome = evaluate(&a, "var answer = 42; var state = {n:0}; Promise.resolve().then(() => state.n = answer); throw 1");
+        assert!(!outcome.completed);
+        b.define_global_value("state", &a.global_value("state").unwrap())
+            .unwrap();
+    }
+    machine.collect().unwrap();
+    assert!(machine.run_promise_jobs().completed);
+    assert_eq!(eval(&b, "state.n"), "42");
+}
+
+#[test]
+fn rejection_reports_are_associated_with_the_promise_environment() {
+    let machine = Machine::new();
+    let a = machine.new_compartment();
+    let mut b = machine.new_compartment();
+    eval(
+        &a,
+        "var reject; var p = new Promise((_, r) => reject = r); 0",
+    );
+    b.define_global_value("rejectA", &a.global_value("reject").unwrap())
+        .unwrap();
+    assert!(evaluate(&b, "rejectA(42); 0").unhandled_rejection.is_none());
+    assert!(machine.run_promise_jobs().completed);
+    assert!(evaluate(&a, "0").unhandled_rejection.is_some());
+    machine.collect().unwrap();
+    assert!(evaluate(&b, "0").unhandled_rejection.is_none());
+}
+
+#[test]
+fn start_compartment_children_use_the_machine_counter() {
+    let machine = Machine::new();
+    let start = machine.start_compartment();
+    let first = start.new_compartment();
+    let second = machine.new_compartment();
+    let third = machine.start_compartment().new_compartment();
+    assert_eq!(
+        start.global_this(),
+        machine.start_compartment().global_this()
+    );
+    assert_ne!(first.global_this(), second.global_this());
+    assert_ne!(first.global_this(), third.global_this());
+    assert_ne!(second.global_this(), third.global_this());
+}
+
+#[test]
+fn metered_machine_pump_resumes_the_existing_receipt_and_detaches_host() {
+    use std::rc::Rc;
+    let machine = Machine::new();
+    let a = machine.new_compartment();
+    let (code, symbols) = ironhorse_compile::compile_atoms(
+        "var n = 0; Promise.resolve().then(() => n = 42); throw 1",
+    )
+    .unwrap();
+    let before = a.evaluate_with_symbols_metered(&code, &symbols, 1, Box::new(|_| true));
+    assert!(!before.completed);
+    assert_eq!(machine.run_promise_jobs().halt, Halt::MeterAbort);
+    let lease = Rc::new(());
+    let weak = Rc::downgrade(&lease);
+    let resumed = machine.resume_promise_jobs(Box::new(move |_| {
+        let _ = &lease;
+        true
+    }));
+    assert!(resumed.completed, "{:?}", resumed.halt);
+    assert!(resumed.meter_raw >= before.meter_raw);
+    assert!(resumed.meter_raw_this_run > 0);
+    assert!(weak.upgrade().is_none());
+    assert_eq!(eval(&a, "n"), "42");
+}
+
+#[test]
+fn machine_reports_rejections_from_collected_orphan_compartments() {
+    let machine = Machine::new();
+    let a = machine.new_compartment();
+    let out = evaluate(
+        &a,
+        "Promise.resolve().then(() => { throw 'orphan rejection'; }); throw 1",
+    );
+    assert!(!out.completed);
+    drop(a);
+    machine.collect().unwrap();
+    assert!(machine.run_promise_jobs().completed);
+    machine.collect().unwrap();
+    let reports = machine.unhandled_rejections().unwrap();
+    assert_eq!(reports.len(), 1);
+    let mut inspector = machine.new_compartment();
+    inspector
+        .define_global_value("reason", &reports[0].reason)
+        .unwrap();
+    machine.collect().unwrap();
+    assert_eq!(eval(&inspector, "reason"), "orphan rejection");
+    assert_eq!(
+        machine.take_unhandled_rejections().unwrap()[0].promise,
+        reports[0].promise
+    );
+    assert!(machine.unhandled_rejections().unwrap().is_empty());
 }

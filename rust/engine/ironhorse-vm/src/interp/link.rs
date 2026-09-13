@@ -274,14 +274,14 @@ impl Interp {
             if !keep(id) {
                 continue;
             }
-            if self.realm.global_props.contains_key(&id)
-                || self.slots.get(self.realm.global_obj).flag & XS_DONT_PATCH_FLAG != 0
+            if self.environment.global_props.contains_key(&id)
+                || self.slots.get(self.environment.global_obj).flag & XS_DONT_PATCH_FLAG != 0
             {
                 continue;
             }
             if name != "globalThis"
                 && self
-                    .realm
+                    .environment
                     .intrinsic_permit
                     .as_ref()
                     .is_some_and(|permit| !permit.contains(name))
@@ -289,6 +289,7 @@ impl Interp {
                 continue;
             }
             if let Some(&func) = name.as_str().and_then(|name| self.intrinsics.get(name)) {
+                let func = self.compartment_evaluator(func);
                 // The global binding is an own property whose value is a
                 // **reference** to the intrinsic function instance, exactly
                 // like any other global property (so `get_variable` /
@@ -330,13 +331,13 @@ impl Interp {
                 // property of `global_obj`. The self-reference
                 // (`globalThis.globalThis === globalThis`) is exact — the
                 // property's value slot points back at `global_obj`.
-                let g = self.realm.global_obj;
+                let g = self.environment.global_obj;
                 let property =
                     self.create_global_property(id, (Kind::Reference, Payload::Reference(g)));
                 self.slots.get_mut(property).flag |= XS_DONT_ENUM_FLAG;
             }
         }
-        if self.intrinsics_frozen {
+        if self.shared_compartments {
             self.installing_intrinsics = was_installing;
             return;
         }
@@ -1333,7 +1334,7 @@ impl Interp {
         {
             member_names.push("stack");
         }
-        if inst == self.realm.global_obj {
+        if inst == self.environment.global_obj {
             member_names.extend(self.intrinsics.keys().copied());
             member_names.extend(["undefined", "NaN", "Infinity", "globalThis"]);
         }
@@ -1443,9 +1444,9 @@ impl Interp {
     /// later lookup from resurrecting it. The name and property (or its
     /// deletion) then travel through the ordinary snapshot tables.
     pub(super) fn materialize_runtime_global(&mut self, id: u16, name: &str) {
-        if self.realm.global_obj.is_null()
-            || self.realm.global_props.contains_key(&id)
-            || self.slots.get(self.realm.global_obj).flag & XS_DONT_PATCH_FLAG != 0
+        if self.environment.global_obj.is_null()
+            || self.environment.global_props.contains_key(&id)
+            || self.slots.get(self.environment.global_obj).flag & XS_DONT_PATCH_FLAG != 0
         {
             return;
         }
@@ -1456,7 +1457,7 @@ impl Interp {
         } else if name == "globalThis" {
             Some(Slot::of(
                 Kind::Reference,
-                Payload::Reference(self.realm.global_obj),
+                Payload::Reference(self.environment.global_obj),
             ))
         } else {
             None
