@@ -724,6 +724,310 @@ test.serial(
 );
 
 testNeedsNodeWorker.serial(
+  'daemon-local session owner removes one session while sibling workers survive',
+  async t => {
+    t.timeout(30_000);
+    const { cancelled, config } = await prepareConfig(t, { gcEnabled: true });
+    const modulePath = url.fileURLToPath(
+      new URL('./_session-owner-probe.js', import.meta.url),
+    );
+    const plan = 'original approved workspace and storage';
+    const sendText = async (client, text) => {
+      await null;
+      const events = [];
+      for await (const event of iterateReader(await E(client).send(text))) {
+        events.push(event);
+      }
+      return events;
+    };
+    let original;
+    let recordId;
+    let referencesId;
+    let siblingId;
+    const makeProbe = async (host, name) => {
+      await E(host).provideWorker(name);
+      return E(host).makeUnconfined(name, modulePath, {
+        powersName: '@agent',
+        resultName: `${name}-probe`,
+      });
+    };
+    {
+      const { host } = await makeHost(config, cancelled);
+      await E(host).makeDirectory('audit');
+      for (const label of ['a', 'b']) {
+        // Distinct worker formulas prevent same-worker placement from hiding
+        // collection that would otherwise kill a shared supervisor.
+        // eslint-disable-next-line no-await-in-loop
+        await E(host).provideWorker(`client-worker-${label}`);
+        // eslint-disable-next-line no-await-in-loop
+        await E(host).makeUnconfined(`client-worker-${label}`, modulePath, {
+          powersName: 'audit',
+          resultName: `client-${label}`,
+          env: harden({ ROLE: 'client', LABEL: label }),
+        });
+      }
+      await E(host).provideWorker('storage-worker');
+      await E(host).evaluate(
+        'storage-worker',
+        `makeExo('Storage', M.interface('Storage', {
+          remove: M.callWhen(M.string()).returns(M.undefined()),
+        }), {
+          remove: async plan => {
+            await E(audit).writeText('removed-plan', plan);
+            if (!(await E(audit).has('allow-remove'))) {
+              throw Error('Storage removal pending');
+            }
+            await E(audit).writeText('storage-removed', 'yes');
+          },
+        })`,
+        ['audit'],
+        ['audit'],
+        'storage-a',
+      );
+      await E(host).makeDirectory('private-a');
+      original = harden({
+        client: await E(host).identify('client-a'),
+        storage: await E(host).identify('storage-a'),
+        directory: await E(host).identify('private-a'),
+      });
+      siblingId = await E(host).identify('client-b');
+      const probe = await makeProbe(host, 'administration');
+      const record = await E(probe).create('a', plan, original);
+      recordId = record.identifier;
+      referencesId = await E(host).identify(
+        'owned-sessions',
+        'a',
+        'references',
+      );
+      await E(probe).create('b', 'sibling plan', { client: siblingId });
+      t.deepEqual(record.references, original);
+      // Retire public bindings. Only the records retain original resources.
+      for (const name of ['client-a', 'storage-a', 'private-a', 'client-b']) {
+        // eslint-disable-next-line no-await-in-loop
+        await E(host).storeValue('replacement must not be used', name);
+      }
+      for (const identifier of Object.values(original)) {
+        t.true(formulaExistsInDb(config.statePath, identifier));
+      }
+    }
+
+    await restart(config);
+
+    {
+      const { host } = await makeHost(config, cancelled);
+      const probe = await makeProbe(host, 'recovered-administration');
+      const peer = await makeProbe(host, 'other-administration');
+      const audit = await E(host).lookup('audit');
+      const record = await E(probe).inspect('a');
+      t.like(record, { identifier: recordId, plan, phase: 'ready' });
+      t.deepEqual(record.references, original);
+      t.false(await E(audit).has('stopped-a'));
+      const clientA = await E(probe).client('a');
+      const clientB = await E(peer).client('b');
+      t.deepEqual(await sendText(clientA, 'before stop'), [
+        { type: 'text', text: 'a:before stop' },
+      ]);
+      t.is(await E(peer).client('a'), clientA);
+      await E(peer).stop('a');
+      t.is(await E(audit).readText('stopped-a'), 'yes');
+      t.is((await E(probe).inspect('a')).references.client, undefined);
+      t.false(formulaExistsInDb(config.statePath, original.client));
+      await t.throwsAsync(() => E(clientA).status(), { message: /stopped/ });
+      t.deepEqual(await sendText(clientB, 'still running'), [
+        { type: 'text', text: 'b:still running' },
+      ]);
+      t.is(await E(probe).ping(), 'alive');
+
+      await t.throwsAsync(() => E(probe).remove('a'), {
+        message: /Storage removal pending/,
+      });
+      t.like(await E(peer).inspect('a'), { plan, phase: 'removing' });
+      await t.throwsAsync(() => E(peer).client('a'), {
+        message: /stopped|removal/,
+      });
+      await t.throwsAsync(() => E(peer).revise('a', 'new defaults'), {
+        message: /removal/,
+      });
+      for (const identifier of [
+        recordId,
+        referencesId,
+        original.storage,
+        original.directory,
+      ]) {
+        t.true(formulaExistsInDb(config.statePath, identifier));
+      }
+      t.is(await E(audit).readText('removed-plan'), plan);
+      await E(audit).writeText('allow-remove', 'yes');
+      await E(peer).remove('a');
+      t.is(await E(audit).readText('storage-removed'), 'yes');
+      t.is(await E(probe).inspect('a'), undefined);
+      for (const identifier of [
+        recordId,
+        referencesId,
+        ...Object.values(original),
+      ]) {
+        t.false(formulaExistsInDb(config.statePath, identifier));
+      }
+      t.true(formulaExistsInDb(config.statePath, siblingId));
+      t.is(await E(clientB).status(), 'ready-b');
+      t.deepEqual(await sendText(clientB, 'after removal'), [
+        { type: 'text', text: 'b:after removal' },
+      ]);
+      t.is(await E(probe).ping(), 'alive');
+      t.is(await E(peer).ping(), 'alive');
+      await t.throwsAsync(() => E(clientA).send('stale'), {
+        message: /stopped/,
+      });
+    }
+  },
+);
+
+test.serial(
+  'session owners fence retained clients when their original directory dies',
+  async t => {
+    t.timeout(30_000);
+    const { cancelled, config } = await prepareConfig(t, { gcEnabled: true });
+    {
+      const { host } = await makeHost(config, cancelled);
+      await E(host).makeDirectory('records-cancel');
+      await E(host).makeDirectory('records-collect');
+      await E(host).evaluate(
+        '@main',
+        `makeExo('RetainedClient', M.interface('RetainedClient', {
+        status: M.callWhen().returns(M.string()),
+      }), { status: () => 'alive' })`,
+        [],
+        [],
+        'retained-client',
+      );
+    }
+    // Exercise persisted roots, without any construction-time transient pins.
+    await restart(config);
+    const { host } = await makeHost(config, cancelled);
+    const client = await E(host).lookup('retained-client');
+    const clientId = await E(host).identify('retained-client');
+    for (const action of ['cancel', 'collect']) {
+      const name = `records-${action}`;
+      // eslint-disable-next-line no-await-in-loop
+      const owner = await E(host).provideSessionOwner(name);
+      // eslint-disable-next-line no-await-in-loop
+      const directoryId = await E(host).identify(name);
+      // eslint-disable-next-line no-await-in-loop
+      await E(owner).create('session', 'plan', { client: clientId });
+      // eslint-disable-next-line no-await-in-loop
+      const forwarded = await E(owner).client('session');
+      // eslint-disable-next-line no-await-in-loop
+      t.is(await E(forwarded).status(), 'alive');
+      if (action === 'cancel') {
+        // eslint-disable-next-line no-await-in-loop
+        await E(host).cancel(name, Error('Original records cancelled'));
+      } else {
+        // eslint-disable-next-line no-await-in-loop
+        await E(host).remove(name);
+        t.false(formulaExistsInDb(config.statePath, directoryId));
+      }
+      // A public name still retains this client. Only the owner incarnation
+      // loses its authority; directory collection is not client termination.
+      // eslint-disable-next-line no-await-in-loop
+      t.is(await E(client).status(), 'alive');
+      // eslint-disable-next-line no-await-in-loop
+      await t.throwsAsync(() => E(forwarded).status(), {
+        message: /Session owner directory is cancelled/,
+      });
+      // eslint-disable-next-line no-await-in-loop
+      await t.throwsAsync(() => E(owner).inspect('session'), {
+        message: /Session owner directory is cancelled/,
+      });
+    }
+  },
+);
+
+test.serial(
+  'session owner directory claims reject another host and share same-host aliases',
+  async t => {
+    t.timeout(30_000);
+    const { host } = await prepareHost(t);
+    const first = await E(host).provideSessionOwner(['private', 'records']);
+    const directoryId = await E(host).identify('private', 'records');
+    await E(host).storeIdentifier('same-host-alias', directoryId);
+    t.is(await E(host).provideSessionOwner('same-host-alias'), first);
+    const child = await E(host).provideHost('other-host');
+    await E(child).storeIdentifier('other-host-alias', directoryId);
+    await t.throwsAsync(
+      () => E(child).provideSessionOwner('other-host-alias'),
+      { message: /already owned by another host/ },
+    );
+    await E(first).create('one', 'original plan', {});
+    t.is((await E(first).inspect('one')).plan, 'original plan');
+  },
+);
+
+test.serial(
+  'session owner claims survive host cancellation while admitted cleanup is pending',
+  async t => {
+    t.timeout(30_000);
+    const { host } = await prepareHost(t);
+    // This storage formula belongs to the root host and remains usable when
+    // the administrative child host is cancelled.
+    const storage = await E(host).evaluate(
+      '@main',
+      `(() => {
+        let enter;
+        let resume;
+        const entered = new Promise(resolve => { enter = resolve; });
+        const gate = new Promise(resolve => { resume = resolve; });
+        return makeExo('HeldStorage', M.interface('HeldStorage', {
+          remove: M.callWhen(M.string()).returns(M.undefined()),
+          whenEntered: M.callWhen().returns(M.undefined()),
+          release: M.callWhen().returns(M.undefined()),
+        }), {
+          remove: async () => { enter(); await gate; },
+          whenEntered: () => entered,
+          release: () => resume(),
+        });
+      })()`,
+      [],
+      [],
+      'held-storage',
+    );
+    t.teardown(() =>
+      E(storage)
+        .release()
+        .catch(() => {}),
+    );
+    const child = await E(host).provideHost('child-handle', {
+      agentName: 'child-agent',
+    });
+    const hostId = await E(host).identify('child-agent');
+    const owner = await E(child).provideSessionOwner('records');
+    const directoryId = await E(child).identify('records');
+    await E(owner).create('one', 'original cleanup plan', {
+      storage: await E(host).identify('held-storage'),
+    });
+    const removing = E(owner).remove('one');
+    await E(storage).whenEntered();
+    await E(host).cancel('child-agent');
+    const revived = await E(host).lookup('child-agent');
+    t.not(revived, child);
+    t.is(await E(host).identify('child-agent'), hostId);
+    t.is(await E(revived).identify('records'), directoryId);
+    await t.throwsAsync(() => E(revived).provideSessionOwner('records'), {
+      message: /earlier host incarnation/,
+    });
+    await t.throwsAsync(() => E(owner).inspect('one'), {
+      message: /host is cancelled/,
+    });
+    // The cancellation fence has not claimed to interrupt this native call.
+    // It can finish its original cleanup without a competing owner queue.
+    await E(storage).release();
+    await removing;
+    await t.throwsAsync(() => E(revived).provideSessionOwner('records'), {
+      message: /earlier host incarnation/,
+    });
+  },
+);
+
+testNeedsNodeWorker.serial(
   'static session powers retain exact dependencies across rebinding and restart',
   async t => {
     t.timeout(30_000);

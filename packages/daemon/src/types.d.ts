@@ -21,6 +21,7 @@ import type {
   TreeEntry,
 } from '@endo/platform/fs/lite/types';
 import type { ContentKind, ContentSourceHint } from './locator.js';
+import type { makeSessionOwner } from './session-owner.js';
 
 // Branded string types for pet names and special names
 declare const PetNameBrand: unique symbol;
@@ -1686,6 +1687,20 @@ export interface SecretManagerDirectory {
 export type FarEndoGuest = FarRef<EndoGuest>;
 
 export interface EndoHost extends EndoAgent {
+  /**
+   * Provide a daemon-local administrative owner for a private directory.
+   * Creates missing directory parents; refuses a changed retained binding.
+   * Disposable record/client capabilities are not exported to the caller.
+   * Another host cannot claim the same directory in this daemon incarnation.
+   * A revived host formula also cannot take over its earlier incarnation's
+   * claim; cancellation does not prove that admitted cleanup has drained.
+   * Owners and their client forwarding facets are fenced when this host or
+   * the original directory incarnation is cancelled; that fence is not native
+   * cleanup proof.
+   */
+  provideSessionOwner(
+    recordsPath: NameOrPath,
+  ): Promise<ReturnType<typeof makeSessionOwner>>;
   form(
     recipientNameOrPath: string | string[],
     description: string,
