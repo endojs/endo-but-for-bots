@@ -16,7 +16,7 @@ import { assertCopyData, wrapSessionReader } from './session-protocol.js';
  * controller acquisition; cancel retains the original control and never revives
  * an unpublished or already cancelled formula.
  * @typedef {object} NativeSessionConstruction
- * @property {(name: string, publish: (worker: string, client: string) => Promise<void>) => Promise<any>} construct
+ * @property {(name: string, publish: (worker: string, client: string) => Promise<void>) => { value: Promise<any>, cancel(): Promise<void> }} construct
  * @property {(identifier: string, reason: Error) => Promise<void>} cancel
  * @property {(identifier: string) => Promise<any>} provideClient
  */
@@ -27,6 +27,8 @@ import { assertCopyData, wrapSessionReader } from './session-protocol.js';
  * @property {any} value
  * @property {boolean} active
  * @property {boolean} activating
+ * @property {boolean} constructing
+ * @property {{ value: Promise<any>, cancel(): Promise<void> } | undefined} construction
  * @property {() => Promise<void>} closeDependencies
  * @property {(() => Promise<void>) | undefined} closeNative
  */
@@ -141,6 +143,9 @@ export const makeSessionOwner = ({
     if (active) {
       active.active = false;
       void active.closeDependencies().catch(() => {});
+      if (active.constructing) {
+        void active.construction?.cancel().catch(() => {});
+      }
       if (active.activating) {
         // Starting is already persisted. Reach cancellation-dependent startup
         // without waiting behind its queue; that queue still owns the drain.
@@ -258,6 +263,9 @@ export const makeSessionOwner = ({
     );
     const clientId = record.references.client;
     const closed = (await E(entry).maybeReadText('native-closed')) === 'yes';
+    if (!closed && unstarted) {
+      await started.get(name)?.construction?.cancel();
+    }
     if (!closed && !unstarted && clientId !== undefined) {
       const retained = started.get(name);
       const target =
@@ -307,6 +315,8 @@ export const makeSessionOwner = ({
       value: undefined,
       active: true,
       activating: false,
+      constructing: false,
+      construction: undefined,
       closeDependencies: async () => {},
       closeNative: undefined,
     };
@@ -324,7 +334,7 @@ export const makeSessionOwner = ({
       await E(entry).writeText('native-closed', '');
       await E(entry).writeText('lifecycle', 'constructing');
       check();
-      activation.value = await native.construct(
+      activation.construction = native.construct(
         name,
         async (workerId, clientId) => {
           check();
@@ -335,6 +345,12 @@ export const makeSessionOwner = ({
           check();
         },
       );
+      activation.constructing = true;
+      try {
+        activation.value = await activation.construction.value;
+      } finally {
+        activation.constructing = false;
+      }
     } else {
       activation.value = await native.provideClient(identifier);
     }
@@ -344,6 +360,7 @@ export const makeSessionOwner = ({
     activation.identifier = identifier;
     await E(entry).writeText('lifecycle', 'starting');
     check();
+    activation.construction = undefined;
     const resolver = dependencies(record, check);
     activation.closeDependencies = resolver.close;
     activation.closeNative = makeNativeClose(
