@@ -874,6 +874,22 @@ export const makeMailboxMaker = ({
           messageNumber,
           harden([{ envelope: harden({ ...envelope, done }), done, date }]),
         );
+        // Re-provide the mailbox's retained pins on every delivery, not once
+        // per restart. This is deliberate and load-bearing: the durability
+        // guarantee this feature adds is that a pinned agent-side responder
+        // resurrects on the *next message* after its worker was canceled
+        // mid-life (see the "survives worker cancellation" integration test),
+        // not only after a whole-daemon restart. A worker can die at any point
+        // in the mailbox's lifetime with no restart to reset a once-per-process
+        // gate, so the revive must run on each delivery to catch it before the
+        // message-received notification is published to a now-dead reader.
+        // The steady-state cost is bounded: `provide` memoizes live formulas
+        // via `controllerForId`, so re-providing an already-incarnated pin is
+        // cheap; the residual per-delivery work is one `listIdentifiers` plus an
+        // O(pins) fan-out of memoized provides, acceptable for the small pin
+        // sets a mailbox accumulates. (Amortizing to once-per-restart was
+        // considered and rejected: it silently defeats mid-life worker-cancel
+        // resurrection.)
         await reincarnateMailboxPins({
           selfId,
           getFormulaForId,

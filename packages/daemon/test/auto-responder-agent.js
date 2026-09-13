@@ -12,11 +12,11 @@ export const AutoResponderInterface = M.interface(
 /**
  * A host-pinned agent caplet. Endowed with an agent's own powers, it follows
  * that agent's mailbox and autonomously answers every message the agent
- * receives — replying with an acknowledgement and then dismissing the
+ * receives — replying with an acknowledgment and then dismissing the
  * message — for as long as this incarnation lives.
  *
  * Because the caplet is a persisted formula, re-incarnating it (after its
- * worker is cancelled or after the daemon restarts) re-runs `make`, which
+ * worker is canceled or after the daemon restarts) re-runs `make`, which
  * restarts the follow loop against the still-durable mailbox, so the agent
  * resumes responding to new messages.
  *
@@ -31,13 +31,13 @@ export const make = async powers => {
   const serviceMailbox = async () => {
     for await (const message of iterateReader(E(powers).followMessages())) {
       // Only react to messages the agent receives, never to messages it sent
-      // (a reply carries a `replyTo`), so the acknowledgements below cannot
+      // (a reply carries a `replyTo`), so the acknowledgments below cannot
       // feed the loop back into itself.
       const inbound =
         message.from !== selfLocator && message.replyTo === undefined;
       if (inbound) {
         if (typeof message.messageId === 'string') {
-          // Echo the prompt so each acknowledgement is distinguishable from a
+          // Echo the prompt so each acknowledgment is distinguishable from a
           // backlog replayed by a fresh `followMessages` after a restart.
           const prompt = message.strings?.[0] ?? String(message.number);
           await E(powers).reply(
@@ -54,7 +54,7 @@ export const make = async powers => {
   };
 
   // Fire-and-forget: the loop runs for the life of this incarnation. When the
-  // worker is cancelled the follow reader rejects and the loop unwinds.
+  // worker is canceled the follow reader rejects and the loop unwinds.
   serviceMailbox().catch(() => {});
 
   return makeExo('Auto responder', AutoResponderInterface, {

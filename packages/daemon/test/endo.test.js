@@ -1348,14 +1348,14 @@ testNeedsNodeWorker('persist confined services and their requests', async t => {
 //
 // Story: a guest is serviced by an agent caplet, retained in the guest's pin
 // directory, that answers every message the guest receives and then dismisses
-// it. Whether the worker holding the agent is cancelled, or the whole daemon is
+// it. Whether the worker holding the agent is canceled, or the whole daemon is
 // restarted, the caplet must resume the guest's autonomous responses without an
 // explicit lookup: delivering a message to the guest's mailbox auto-reincarnates
 // its pinned formulas (reincarnateMailboxPins), so the durable formula, not any
 // live process — and not a manual revival — is what carries the behavior across
 // the gap. The tests therefore never look the responder up before the
 // post-gap send; deleting the reincarnateMailboxPins call in deliver() makes
-// them hang for lack of any acknowledgement.
+// them hang for lack of any acknowledgment.
 
 const autoResponderLocation = url.pathToFileURL(
   path.join(dirname, 'test', 'auto-responder-agent.js'),
@@ -1387,7 +1387,7 @@ const pinGuestResponder = async host => {
     resultName: 'auto-responder',
   });
   // Pin the responder into the guest's pin directory. This is the retention
-  // edge reincarnateMailboxPins follows on delivery: without it, a cancelled or
+  // edge reincarnateMailboxPins follows on delivery: without it, a canceled or
   // restarted responder would stay dormant until something looked it up.
   const responderId = await E(host).identify('auto-responder');
   await E(pins).storeIdentifier(['auto-responder'], responderId);
@@ -1396,7 +1396,7 @@ const pinGuestResponder = async host => {
 
 /**
  * Send one prompt to the pinned guest and wait for the auto-responder's
- * matching acknowledgement (`acknowledged:<prompt>`) to arrive in the sender host's own
+ * matching acknowledgment (`acknowledged:<prompt>`) to arrive in the sender host's own
  * inbox. Matching on the echoed prompt skips any backlog a fresh
  * `followMessages` replays after a restart.
  *
@@ -1423,7 +1423,7 @@ const sendAndAwaitAcknowledgement = async (host, hostMessages, prompt) => {
  * Poll the guest's inbox until the named inbound prompt has been dismissed by
  * the auto-responder.
  *
- * @param {import('ava').ExecutionContext} t
+ * @param {ExecutionContext} t
  * @param {any} guest
  * @param {string} prompt
  */
@@ -1472,7 +1472,7 @@ testNeedsNodeWorker(
     // re-incarnate it and mask the feature under test. Instead, send another
     // message. Delivering it to the guest's mailbox must auto-reincarnate the
     // pinned responder (reincarnateMailboxPins), and only a live responder ever
-    // sends the acknowledgement this awaits — so if the reincarnation call is
+    // sends the acknowledgment this awaits — so if the reincarnation call is
     // removed from deliver(), this hangs.
     const acknowledgement1 = await sendAndAwaitAcknowledgement(
       host,
@@ -1513,7 +1513,7 @@ testNeedsNodeWorker(
 
     // Do NOT look the responder up after the restart. Sending to the guest must
     // itself auto-reincarnate the pinned responder on delivery; the awaited
-    // acknowledgement can only come from a live, freshly-incarnated responder.
+    // acknowledgment can only come from a live, freshly-incarnated responder.
     const acknowledgement1 = await sendAndAwaitAcknowledgement(
       hostAfter,
       hostMessagesAfter,

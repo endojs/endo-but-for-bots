@@ -2793,7 +2793,7 @@ export interface DaemonCore {
     storeId: FormulaIdentifier,
   ) => FormulateResult<EndoDirectory>;
 
-  formulateReadOnlyDirectory: (
+  formulateReadableDirectory: (
     directoryId: FormulaIdentifier,
     nodeNumber?: NodeNumber,
   ) => FormulateResult<ReadableNameHub>;

@@ -2811,6 +2811,12 @@ const makeDaemonCore = async (
             readText: notSupported,
             maybeReadText: notSupported,
             writeText: disallowedMutation,
+            // Unlike `EndoDirectory.readOnly()` (which mints a narrow
+            // `ReadableNameHub` view via `formulateReadableDirectory`), this hub
+            // is *already* fully read-only: every mutator above is
+            // `disallowedMutation`/`notSupported`, so there is no writable
+            // surface left to attenuate. `readOnly()` therefore returns the
+            // same already-attenuated hub rather than a distinct narrower exo.
             readOnly: async () => mailHub,
           }),
         )
@@ -3192,6 +3198,12 @@ const makeDaemonCore = async (
             readText: notSupported,
             maybeReadText: notSupported,
             writeText: disallowedMutation,
+            // Unlike `EndoDirectory.readOnly()` (which mints a narrow
+            // `ReadableNameHub` view via `formulateReadableDirectory`), this hub
+            // is *already* fully read-only: every mutator above is
+            // `disallowedMutation`/`notSupported`, so there is no writable
+            // surface left to attenuate. `readOnly()` therefore returns the
+            // same already-attenuated hub rather than a distinct narrower exo.
             readOnly: async () => messageHub,
           }),
         )
@@ -5268,8 +5280,8 @@ const makeDaemonCore = async (
     );
   };
 
-  /** @type {DaemonCore['formulateReadOnlyDirectory']} */
-  const formulateReadOnlyDirectory = async (
+  /** @type {DaemonCore['formulateReadableDirectory']} */
+  const formulateReadableDirectory = async (
     directoryId,
     nodeNumber = localNodeNumber,
   ) => {
@@ -6359,6 +6371,17 @@ const makeDaemonCore = async (
   /** @type {DaemonCore['getAllNetworkAddresses']} */
   const getAllNetworkAddresses = async networksDirectoryId => {
     const networksFormula = await getFormulaForId(networksDirectoryId);
+    // When a guest's `@nets` is a `readable-directory` attenuation, unwrap to
+    // the underlying writable directory rather than reading through the
+    // attenuated exo. This is a deliberate server-side bypass, safe here for
+    // two reasons: (1) `listIdentifiers` is not on `ReadableNameHubInterface`,
+    // so the read-only view cannot enumerate entries and the raw ref is the
+    // only way to walk them; (2) the unwrapped reference never leaves the
+    // daemon -- it is used only to compute this agent's own advertised
+    // addresses and is not handed back to the guest -- so the guest-facing
+    // attenuation boundary is not weakened. A less-trusted call site must NOT
+    // copy this unwrap idiom; it is justified only by this internal,
+    // non-escaping use.
     const readableNetworksDirectoryId =
       networksFormula.type === 'readable-directory'
         ? networksFormula.directory
@@ -6925,23 +6948,39 @@ const makeDaemonCore = async (
       //
       // Ordering within the critical section matters for failure atomicity.
       // The consume has two irreversible parts -- rebinding the `guestName`
-      // slot to the accepted remote handle, and cancelling this invitation's
+      // slot to the accepted remote handle, and canceling this invitation's
       // own controller so a re-provide cannot reincarnate a spent invitation.
       // If the consume ran first and a later, fallible step (peer registration
       // or guest formulation) then threw, the invitation would be irrevocably
       // spent -- slot pointing at a raw remote handle, no peer info, controller
-      // cancelled -- with no cleanup path and every future accept() failing the
+      // canceled -- with no cleanup path and every future accept() failing the
       // "already accepted" check permanently.  So we do all the fallible work
       // first, and perform the consume LAST, as the final mutation.  A failure
       // in the fallible work leaves the invitation un-consumed and redeemable
       // (the check is still satisfied on a retry); serialization on
       // `invitationJobs` guarantees no concurrent accept() can observe the
       // in-progress, not-yet-consumed state.
+      //
+      // Scope of "restart-durable": the guarantee is that an invitation is
+      // never double-*consumed* -- across concurrency, replay, and a crash at
+      // any point, the `guestName` slot is rebound to an accepted handle at
+      // most once.  It is NOT full mid-accept idempotency across a process
+      // crash: a crash after some fallible work (a `formulateGuest`, a pin
+      // `storeIdentifier`) but before the final consume leaves the invitation
+      // un-consumed and redeemable, so a post-restart retry re-runs the whole
+      // fallible section and mints a *fresh* guest, orphaning the earlier
+      // attempt's partial formula chain (the prior `guest-${guestLeaf}` pin is
+      // overwritten and its guest becomes collectible).  That is the accepted
+      // trade for keeping the invitation redeemable after a crash rather than
+      // stranding it spent; making guest-mint reuse-by-invitation-id idempotent
+      // is possible but deferred, as the orphan is GC-reachable and no
+      // authority leaks.  Callers must therefore treat a crashed accept as
+      // "retry the whole accept", not "resume a half-minted guest".
       return invitationJobs.enqueue(async () => {
         const currentSlot = await E(invitingAgent).identify(...guestNamePath);
         if (currentSlot !== id) {
           throw makeError(
-            'Invitation has already been accepted, cancelled, or superseded',
+            'Invitation has already been accepted, canceled, or superseded',
           );
         }
 
@@ -7049,13 +7088,18 @@ const makeDaemonCore = async (
      * while it still names *this* invitation, so that a sibling invitation and
      * an already-accepted binding (which `accept` rebinds the slot to) are both
      * left intact — and then cancels this invitation's own controller.  Once the
-     * retaining reference is gone and the controller cancelled, the formula is
+     * retaining reference is gone and the controller canceled, the formula is
      * collected and can no longer be redeemed.  Revokes exactly this invitation;
      * an idempotent no-op once accepted.
+     *
+     * Like `accept`, `cancel` is a bare bearer capability: anyone holding the
+     * invitation locator may revoke it (the same trust model under which they
+     * could redeem it), so this is not restricted to the host/inviter. A holder
+     * can thus pre-emptively revoke instead of accepting.
      * @param {Error} [reason]
      */
     const cancelInvitation = async (
-      reason = makeError('Invitation cancelled'),
+      reason = makeError('Invitation canceled'),
     ) => {
       // Serialize against accept() on the same invitation so the check and the
       // slot removal are atomic: without this, a cancel() racing a mid-flight
@@ -7097,7 +7141,7 @@ const makeDaemonCore = async (
     getContentIdentityForId,
     formulateDirectory,
     formulateReadableBlob,
-    formulateReadOnlyDirectory,
+    formulateReadableDirectory,
     pinTransient,
     unpinTransient,
   });

@@ -44,7 +44,7 @@ import { DirectoryInterface } from './interfaces.js';
  * @param {DaemonCore['formulateReadableBlob']} args.formulateReadableBlob
  * @param {DaemonCore['pinTransient']} args.pinTransient
  * @param {DaemonCore['unpinTransient']} args.unpinTransient
- * @param {DaemonCore['formulateReadOnlyDirectory']} args.formulateReadOnlyDirectory
+ * @param {DaemonCore['formulateReadableDirectory']} args.formulateReadableDirectory
  */
 export const makeDirectoryMaker = ({
   provide,
@@ -56,7 +56,7 @@ export const makeDirectoryMaker = ({
   formulateReadableBlob,
   pinTransient,
   unpinTransient,
-  formulateReadOnlyDirectory,
+  formulateReadableDirectory,
 }) => {
   /** @type {MakeDirectoryNode} */
   const makeDirectoryNode = (
@@ -687,7 +687,7 @@ export const makeDirectoryMaker = ({
         writeText: directory.writeText,
         readOnly: async () => {
           await null;
-          const { value } = await formulateReadOnlyDirectory(directoryId);
+          const { value } = await formulateReadableDirectory(directoryId);
           return value;
         },
       }),

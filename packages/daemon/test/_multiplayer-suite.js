@@ -529,11 +529,11 @@ export const runMultiplayerSuite = ({ test, network }) => {
       // Cancel exactly the first.
       await E(inv1).cancel();
 
-      // The cancelled invitation can no longer be redeemed.
+      // The canceled invitation can no longer be redeemed.
       await t.throwsAsync(
         () => E(hostB).accept(locator1, 'from-peer1'),
         undefined,
-        'cancelled invitation is not redeemable',
+        'canceled invitation is not redeemable',
       );
 
       // The sibling invitation is untouched and still redeemable.
@@ -543,11 +543,11 @@ export const runMultiplayerSuite = ({ test, network }) => {
         'sibling invitation still redeemed and bound',
       );
 
-      // The cancelled invitation left its pet name unbound.
+      // The canceled invitation left its pet name unbound.
       t.is(
         await E(guestA).identify('peer1'),
         undefined,
-        'cancelled invitation left its name unbound',
+        'canceled invitation left its name unbound',
       );
     },
   );
@@ -589,7 +589,7 @@ export const runMultiplayerSuite = ({ test, network }) => {
   // Supersession: re-minting an invitation under a name already bound to a
   // pending invitation rebinds that slot, orphaning the first. The superseded
   // invitation must fail its single-use check on accept, matching the
-  // "accepted, cancelled, or superseded" contract the accept guard asserts.
+  // "accepted, canceled, or superseded" contract the accept guard asserts.
   test.serial(
     'a superseded invitation (its name rebound) is no longer redeemable',
     async t => {
@@ -614,6 +614,82 @@ export const runMultiplayerSuite = ({ test, network }) => {
       t.truthy(
         await E(hostA).identify('bob'),
         'the current invitation redeemed and bound its acceptor',
+      );
+    },
+  );
+
+  // Concurrency: a cancel() racing a mid-flight accept() on the SAME
+  // invitation. This is the harder race the `invitationJobs` serial queue is
+  // built to close (the accept-vs-accept race is covered above); the queue's
+  // whole point is that a cancel() cannot read a stale `current === id` and
+  // remove() the slot accept() has since rebound to the accepted guest. Both
+  // calls funnel through the same per-invitation queue, so exactly one wins and
+  // the loser observes the terminal state rather than corrupting it. A
+  // sequential cancel-then-accept (covered elsewhere) never exercises the
+  // queue; this one starts both before either resolves.
+  test.serial(
+    'a cancel() racing an accept() never un-names an accepted guest',
+    async t => {
+      const { host: hostA } = await prepareHostWithGcAndNetwork(t);
+      const { host: hostB } = await prepareHostWithGcAndNetwork(t);
+
+      const invitation = await E(hostA).invite('bob');
+      const locator = await E(invitation).locate();
+
+      const [acceptResult] = await Promise.allSettled([
+        E(hostB).accept(locator, 'alice'),
+        E(invitation).cancel(),
+      ]);
+
+      const bound = await E(hostA).identify('bob');
+      if (acceptResult.status === 'fulfilled') {
+        // accept() won the race: the slot must still name the accepted guest.
+        // The racing cancel() must have observed `current !== id` and been the
+        // promised idempotent no-op, NOT removed the just-rebound slot.
+        t.truthy(
+          bound,
+          'accept winning the race leaves the guest bound; cancel did not un-name it',
+        );
+      } else {
+        // cancel() won the race: the invitation was revoked before acceptance,
+        // so the slot is unbound and the invitation is no longer redeemable.
+        t.is(
+          bound,
+          undefined,
+          'cancel winning the race leaves the name unbound',
+        );
+        await t.throwsAsync(
+          () => E(hostB).accept(locator, 'alice'),
+          undefined,
+          'a canceled invitation is not redeemable even after a lost accept race',
+        );
+      }
+    },
+  );
+
+  // The docstring on cancelInvitation promises it is "an idempotent no-op once
+  // accepted". Pin that contract: cancelling an already-redeemed invitation
+  // must neither throw nor remove the now-rebound guest slot.
+  test.serial(
+    'invitation cancel() after a successful accept() is an idempotent no-op',
+    async t => {
+      const { host: hostA } = await prepareHostWithGcAndNetwork(t);
+      const { host: hostB } = await prepareHostWithGcAndNetwork(t);
+
+      const invitation = await E(hostA).invite('bob');
+      const locator = await E(invitation).locate();
+
+      await E(hostB).accept(locator, 'alice');
+      const boundBefore = await E(hostA).identify('bob');
+      t.truthy(boundBefore, 'the invitation was accepted and bound');
+
+      // cancel() on the already-accepted invitation is the promised no-op.
+      await E(invitation).cancel();
+      const boundAfter = await E(hostA).identify('bob');
+      t.is(
+        boundAfter,
+        boundBefore,
+        'cancel() after accept did not un-name the accepted guest',
       );
     },
   );

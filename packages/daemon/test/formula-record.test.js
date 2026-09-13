@@ -101,7 +101,7 @@ test('makeFormulaRecord surfaces a current-shape invitation record', t => {
 });
 
 test('makeFormulaRecord coerces a legacy hostAgent/hostHandle invitation record', t => {
-  // Records minted before the hostAgent/hostHandle →
+  // Records minted before the hostAgent/hostHandle ->
   // invitingAgent/invitingHandle rename must still inspect, so existing
   // production databases need not be purged.
   const formula = /** @type {Formula} */ (

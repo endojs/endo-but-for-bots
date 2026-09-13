@@ -78,7 +78,17 @@ const assertPowersNameOrPath = nameOrPath => {
 };
 
 /**
- * Normalizes host or guest options, providing default values.
+ * Normalizes options for provisioning either a host or a guest, filling in
+ * default values. Typed against `MakeGuestOptions` — the wider of the two
+ * option shapes — because the guest path (`provideGuest`) may carry the
+ * guest-only `pins`/`networks` fields this function forwards; the host path
+ * (`provideHost`) passes a `MakeHostOrGuestOptions`, which is structurally a
+ * `MakeGuestOptions` with those two fields simply absent and never set. The
+ * parameter type is therefore the guest shape by construction, not in
+ * contradiction with the shared name: it is the widest input this normalizer
+ * must accept, while `pins`/`networks` stay off the shared
+ * `MakeHostOrGuestOptions` type so the host path never advertises an option it
+ * silently drops.
  * @param {MakeGuestOptions | undefined} opts
  * @returns {{ introducedNames: Record<Name, PetName>, agentName?: NameOrPath, pins?: EndoDirectory, networks?: EndoDirectory | ReadableNameHub }}
  */

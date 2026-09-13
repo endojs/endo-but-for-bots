@@ -364,7 +364,15 @@ export const makeGuestMaker = ({
      * and acceptance overwrites that slot with the accepted handle (consume
      * once). Network mediation is supplied internally by the daemon inside the
      * invitation formula, so this call hands the guest no `getPeerInfo`,
-     * `addPeerInfo`, host facet, peer enumeration, or outbound-dialing surface.
+     * `addPeerInfo`, host facet, peer enumeration, or outbound-dialing surface:
+     * a guest inviter gains no *dialing or peer-registration* authority. Note
+     * this is narrower than "no network authority" — the invitation URL the
+     * guest can then obtain via `locate()` does embed this daemon's advertised
+     * connection-hint addresses (by design; every invitation, host- or
+     * guest-issued, encodes them), so a guest learns and can forward those
+     * addresses even with an empty `@nets`. That disclosure is inherent to
+     * issuing a redeemable invitation and grants no authority to act on the
+     * addresses.
      * @param {NameOrPath} guestName
      */
     const invite = async guestName => {
