@@ -417,7 +417,7 @@ export const make = (powers, context, contextWrapper = {}) => {
       mountHandle = await E(fsMounter).mount(
         fs,
         workspaceMountPoint,
-        harden({ lazyUnmount: true }),
+        harden({}),
       );
       const workspaceCap = await E(sessionPowers).provideMount(
         workspaceMountPoint,
@@ -441,7 +441,7 @@ export const make = (powers, context, contextWrapper = {}) => {
         configMountHandle = await E(fsMounter).mount(
           configFs,
           configMountPoint,
-          harden({ lazyUnmount: true }),
+          harden({}),
         );
         configCap = await E(sessionPowers).provideMount(
           configMountPoint,

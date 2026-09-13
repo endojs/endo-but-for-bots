@@ -5,6 +5,8 @@ import { E } from '@endo/eventual-send';
 import { makePromiseKit } from '@endo/promise-kit';
 import { mustMatch } from '@endo/patterns';
 
+import { observePromise } from './observe-promise.js';
+
 /** @import { Passable } from '@endo/pass-style' */
 /** @import { ERef } from '@endo/eventual-send' */
 /** @import { PassableWriter, StreamNode, IterateWriterOptions, WriterIterator } from './types.js' */
@@ -41,12 +43,7 @@ export const iterateWriter = (writerRef, options = {}) => {
 
   // Call stream() - returns a promise for the acknowledge (flow-control) chain head
   /** @type {Promise<StreamNode<undefined, TWriteReturn>>} */
-  let ackPromise = E(writerRef).stream(synHead);
-  // Each link is observed only by the following pull; mark it handled so an
-  // abandoned iterator does not surface a peer disconnection as an unhandled
-  // rejection.
-  // See iterate-reader.js.
-  ackPromise.catch(() => {});
+  let ackPromise = observePromise(E(writerRef).stream(synHead));
 
   /** @type {Promise<IteratorResult<undefined, TWriteReturn>> | null} */
   let terminalPromise = null;
@@ -109,9 +106,7 @@ export const iterateWriter = (writerRef, options = {}) => {
           /** @type {unknown} */ (terminalPromise)
         );
       }
-      ackPromise = ackNode.promise;
-      // Mark the new link handled, as for the head above.
-      ackPromise.catch(() => {});
+      ackPromise = observePromise(ackNode.promise);
       return harden({ done: false, value: undefined });
     } catch (error) {
       return fail(error);

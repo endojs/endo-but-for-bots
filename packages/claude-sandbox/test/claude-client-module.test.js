@@ -199,7 +199,7 @@ test('first send() mounts the workspace, registers a Mount cap, and mints the sl
   t.is(host.mountCalls.length, 1);
   t.is(host.mountCalls[0].fs, host.fsCap);
   t.is(host.mountCalls[0].mountPoint, '/tmp/claude-sandbox-my-claude-abc');
-  t.true(host.mountCalls[0].opts.lazyUnmount);
+  t.is(host.mountCalls[0].opts.lazyUnmount, undefined);
 
   t.is(host.provideMountCalls.length, 1);
   t.is(host.provideMountCalls[0].path, '/tmp/claude-sandbox-my-claude-abc');

@@ -479,7 +479,7 @@ export const make = (powers, context, contextWrapper = {}) => {
       mountHandle = await E(fsMounter).mount(
         fs,
         workspaceMountPoint,
-        harden({ lazyUnmount: true }),
+        harden({}),
       );
       uncertainMount = false;
       unmounts.add(() => E(mountHandle).unmount());
@@ -507,7 +507,7 @@ export const make = (powers, context, contextWrapper = {}) => {
         configMountHandle = await E(fsMounter).mount(
           configFs,
           configMountPoint,
-          harden({ lazyUnmount: true, readOnly: true }),
+          harden({ readOnly: true }),
         );
         uncertainMount = false;
         unmounts.add(() => E(configMountHandle).unmount());
