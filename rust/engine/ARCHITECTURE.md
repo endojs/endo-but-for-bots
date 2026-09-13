@@ -87,6 +87,13 @@ object identity and relocated string/BigInt payloads across collection.
 Raw heap-backed Slot endowments remain refused.
 Host rebinding updates one property through descriptor semantics and respects integrity.
 An intrinsic permit controls global bindings, not transitive capabilities.
+`HeapStoreOptions::intrinsic_permit` requires an explicit host declaration:
+`None` allows all future intrinsic bindings; a list allows only those names
+and `globalThis`.
+Persistent workers apply it before fresh linking and reapply it after resume
+and rewind, including bindings discovered through runtime property keys.
+This policy is host configuration, agreed out of band; it does not revoke
+existing heap bindings or resurrect deleted bindings.
 
 Compartment evaluation executes only its script and never pumps pending jobs.
 `Machine::run_promise_jobs()` pumps the ordered queue; `resume_promise_jobs(host)`

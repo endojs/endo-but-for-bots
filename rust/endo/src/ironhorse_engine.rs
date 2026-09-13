@@ -690,6 +690,12 @@ pub mod engine {
         /// `cadence` not recorded in the store: replicas must agree on
         /// it out of band to refuse the same cranks.
         pub meter: MeterBounds,
+        /// Explicit intrinsic-global binding policy for fresh boot, resume,
+        /// and rewind. `None` permits all; `Some(vec![])` permits only
+        /// `globalThis`. This host policy is not stored: replicas must agree
+        /// out of band. It cannot revoke bindings already in the heap or
+        /// capabilities reachable through prototypes.
+        pub intrinsic_permit: Option<Vec<String>>,
     }
 
     /// The checkpoint/collect cadence a [`PersistentMachine`] runs
@@ -831,6 +837,7 @@ pub mod engine {
         /// an armed meter with none. There is no path through this type
         /// that runs a crank without the policy in force.
         meter: MeterBounds,
+        intrinsic_permit: Option<Vec<String>>,
         /// The absolute computron ceiling the CURRENT crank runs under,
         /// shared with the installed host callback and re-pointed at
         /// every crank start to `meter index at start + crank_limit`.
@@ -888,6 +895,7 @@ pub mod engine {
                     // bounded and epoch 1 already carries the armed
                     // meter state.
                     let mut boot = ironhorse_vm::Interp::new();
+                    boot.set_intrinsic_permit(options.intrinsic_permit.as_deref());
                     boot.set_source_compiler(std::rc::Rc::new(
                         ironhorse_runtime::IronhorseSourceCompiler,
                     ));
@@ -915,6 +923,7 @@ pub mod engine {
                         collect_failures: 0,
                         last_collect_error: None,
                         meter: options.meter.clone(),
+                        intrinsic_permit: options.intrinsic_permit.clone(),
                         crank_ceiling,
                     })
                 }
@@ -923,6 +932,9 @@ pub mod engine {
                     let mut session =
                         resume_from_store_lazy(store.clone(), &signature).map_err(store_err)?;
                     Self::attach_meter(&options.meter, &crank_ceiling, session.machine_mut());
+                    session
+                        .machine_mut()
+                        .set_intrinsic_permit(options.intrinsic_permit.as_deref());
                     // A resumed machine carries its program symbol
                     // names in the small state; an empty table means
                     // no crank ever linked (e.g. the first crank
@@ -945,6 +957,7 @@ pub mod engine {
                         collect_failures: 0,
                         last_collect_error: None,
                         meter: options.meter.clone(),
+                        intrinsic_permit: options.intrinsic_permit.clone(),
                         crank_ceiling,
                     })
                 }
@@ -1018,6 +1031,9 @@ pub mod engine {
             // callback must be reattached or its next crank fails
             // closed.
             Self::attach_meter(&self.meter, &self.crank_ceiling, fresh.machine_mut());
+            fresh
+                .machine_mut()
+                .set_intrinsic_permit(self.intrinsic_permit.as_deref());
             self.linked = !fresh.machine().program_symbol_names().is_empty();
             self.session = Some(fresh);
             Ok(())
@@ -1471,6 +1487,7 @@ pub mod engine {
                 signature: "collector-panic".to_string(),
                 cadence: CadencePolicy::default(),
                 meter: MeterBounds::default(),
+                intrinsic_permit: None,
             };
             let mut machine = PersistentMachine::open(&options).unwrap();
             machine
@@ -1508,6 +1525,7 @@ pub mod engine {
                     collect_every: 1,
                 },
                 meter: MeterBounds::default(),
+                intrinsic_permit: None,
             };
             let mut machine = PersistentMachine::open(&options).unwrap();
             let outcome = machine.eval(

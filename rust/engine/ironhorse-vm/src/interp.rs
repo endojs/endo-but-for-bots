@@ -2163,6 +2163,20 @@ impl Interp {
         self.environment.source_compiler = Some(compiler);
     }
 
+    /// Declare which intrinsic global bindings may be installed from now on.
+    /// `None` permits all; an empty slice permits only `globalThis`.
+    /// This host policy is not serialized and must be reapplied after restore.
+    /// It neither removes existing bindings nor restricts intrinsic objects
+    /// reached through prototypes, and does not resurrect deleted bindings.
+    pub fn set_intrinsic_permit(&mut self, names: Option<&[String]>) {
+        self.environment.intrinsic_permit = names.map(|names| {
+            names
+                .iter()
+                .map(|name| SymbolName::from(name.as_str()))
+                .collect()
+        });
+    }
+
     /// Seed a global binding by id, so a program that reads an
     /// undeclared name (`EVAL_REFERENCE`/`GET_VARIABLE` falling through
     /// to the global object) observes it. Used by
