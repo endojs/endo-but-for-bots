@@ -20,9 +20,9 @@ const approved = harden({
 
 /**
  * @param {ExecutionContext} t
- * @param {{prepare?: () => Promise<unknown>}} [options]
+ * @param {{prepare?: () => Promise<unknown>, backend?: 'podman' | 'bwrap'}} [options]
  */
-const fixture = (t, { prepare } = {}) => {
+const fixture = (t, { prepare, backend = 'bwrap' } = {}) => {
   /** @type {SliceSpec[]} */
   const specs = [];
   /** @type {unknown[]} */
@@ -40,7 +40,7 @@ const fixture = (t, { prepare } = {}) => {
     },
     drivers: [
       {
-        name: 'bwrap',
+        name: backend,
         probe: async () => ({
           available: true,
           details: { lifecycle: { available: true } },
@@ -76,6 +76,35 @@ const fixture = (t, { prepare } = {}) => {
     },
   };
 };
+
+test('native profile reaches explicit Podman without legacy rlimit defaults', async t => {
+  const f = fixture(t, { backend: 'podman' });
+  const nativeProfile = harden({
+    uid: 1000,
+    gid: 1000,
+    memoryBytes: 536_870_912n,
+    pids: 128,
+    cpuQuotaMicros: 200_000n,
+    cpuPeriodMicros: 100_000,
+    maxConcurrentOperations: 2,
+  });
+  /** @type {NativeSandboxMakeOpts} */
+  const opts = harden({ ...approved, backend: 'podman', nativeProfile });
+  const slice = await f.makeResolved(opts);
+  t.deepEqual(f.specs[0].nativeProfile, nativeProfile);
+  t.false(Object.hasOwn(f.specs[0], 'limits'));
+  await E(slice).dispose();
+  for (const backend of /** @type {const} */ ([undefined, 'auto', 'bwrap'])) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(() => f.makeResolved({ ...opts, backend }), {
+      message: /require explicit Podman/,
+    });
+  }
+  await t.throwsAsync(() => f.makeResolved({ ...opts, limits: {} }), {
+    message: /cannot mix/,
+  });
+  t.is(f.specs.length, 1);
+});
 
 test('native preparation consumes explicit paths without daemon mount authority', async t => {
   const f = fixture(t);

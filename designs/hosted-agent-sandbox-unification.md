@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-09-12 |
-| **Updated** | 2026-09-13 |
+| **Updated** | 2026-09-14 |
 | **Author** | kumavis (prompted) |
 | **Status** | In Progress |
 | **Source** | Review of PR #1248 and subsequent simplicity and authority-lifetime discussion |
@@ -393,6 +393,26 @@ public network convergence, tool/journal consolidation, emergency stop UI, and t
 limit removals are still pending.
 Live rootless Linux Podman and pinned CLI acceptance have not yet been established.
 The local implementation environment currently has no Podman executable.
+
+The native Podman profile increment now validates declared mounts at preparation and
+observes the gate process's kernel mount table before release; granted binds, the
+driver's own staged literal files, and host scratch form the declared set.
+The startup gate issues its release write synchronously when the driver releases a ready
+gate, so the admission check and the moment execution becomes possible share one
+synchronous stretch;
+a cancellation delivered after the check and before the write is acknowledged still fails
+the release and removes an operation that may have run.
+The observer reads controls from the gate process's own cgroup, which crun writes directly
+on entry, including its systemd driver's `container` sub-cgroup; ancestors are never
+consulted, and an unbounded leaf beneath a limited scope is refused.
+No launch flag steers cgroup placement: an empty `run.oci.systemd.subgroup` annotation
+proposed by a first review was withdrawn after reading crun's source, since it would move
+the process into the systemd-managed scope whose re-applied `MemorySwapMax` could loosen
+the observed limit.
+Controlled fixtures cover identity, cgroup, network, starttime, namespace and mount
+refusals, generated-file staging, cancellation after release, sibling user-namespace
+reuse, and preparation refusals; the pinned Podman and crun cgroup placement is live Linux
+acceptance, and refusal on mismatch is the safe outcome, not evidence.
 
 ## Motivation
 
@@ -1037,6 +1057,7 @@ The entries below track those boundaries and remaining adapter integration.
 | Provider runtime and broker initialization ownership | The old broker could lose a listener-runtime cleanup handle when issuer construction and rollback both failed. Retained broker/runtime kits now own initialization before effects, including resolver handles, lock claims, recovery reservations, and required sweeps. Fourteen Node runtime tests and ten broker tests cover initialization/cleanup retries, late acquisition, revoked grant admission, and successful-stage retention. | Podman controls are simulated; listener workers run in Node. Existing PID-based stale-owner detection and native command/descendant uncertainty are unchanged. A successful fixture cleanup is not live Podman crash-recovery evidence. Per-session native-controller adoption remains unverified; async convenience wrappers still have a documented failed-rollback handle gap. |
 | Inert construction cancellation | Before the fix, Node probes reproduced two cancelled-context dependency-registration paths that revived missing controllers, and a held worker-formula load increased worker acquisitions from two to three after cancellation. Original-context checks now fence dependency acquisition before/after the provider, formula evaluation after loading, and unconfined powers after awaiting the worker. Late dependent cancellation consults only existing controllers. The combined 16 context/formula tests pass, including worker and client formula loads and a later intentional revival. | Fresh construction now retains an inert value/cancel kit before effects and reaches cancellation outside the owner queue. Two injected-daemon tests hold successful and failed caplet persistence: original worker cancellation waits for write settlement and acquires no successor. A real Node pending-constructor test verifies PID disappearance, released worker/client references, and a usable sibling. Stalled persistence still retains ownership; prior-ready reconstruction may have native effects and still requires cleanup. Core admission fences and fresh abort do not prove whole-session stop, recovery, or native Podman containment; adapter and pinned-CLI acceptance remain pending. |
 | Worker death versus connection closure | Node termination now waits for the original child’s `close` event. The focused worker/context run passes 19 tests, including a real child that closes its CapTP pipes and ignores SIGTERM until forced termination. Cancellation is retained by the original context before acquisition, including late completion and failed acquisition; the existing grace budget escalates without treating expiry as termination. | The existing `testWorkerTermination` gate in `packages/daemon/test/endo.test.js` still skips whenever `ENDO_BIN` is set. Its engo connection-closure comment is prior evidence about an optional execution path; the Node regression above is independently reproduced. Whole-session emergency stop, descendant containment, failed-startup storage release, record deletion, and restart acceptance remain separate requirements. |
+| Native cgroup topology | The profile observer reads controls only from the process's own cgroup. crun's source (`libcrun_cgroup_enter` calling `update_cgroup_resources(status->path)`, with its systemd driver's path ending in the `container` sub-cgroup) shows the requested limits are written to exactly that cgroup. A first review claimed the leaf reads `max` and prompted an empty `run.oci.systemd.subgroup` annotation; a second pass contradicted the claim there and the annotation was withdrawn, because crun also reports `MemorySwapMax` to systemd as the raw memory-plus-swap total, which a later systemd re-application would restore on the scope. A fixture proves an unbounded leaf beneath a limited scope is refused without reading the scope. | Verify on rootless Linux that the pinned Podman/crun place the gate in a cgroup carrying exactly the profile's `memory.max`, `memory.swap.max` of zero, `pids.max` and `cpu.max`. Refusal on mismatch is the safe outcome, not acceptance evidence; do not add ancestor resolution. |
 
 Every newly discovered compatibility issue should include its reproducer or code
 evidence, exact execution configuration, observed versus inferred behavior, affected
