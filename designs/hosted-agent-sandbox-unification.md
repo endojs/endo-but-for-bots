@@ -115,6 +115,22 @@ Original host/directory cancellation fences existing handles, and a revived host
 claim a second cleanup queue while the earlier incarnation retains the directory.
 This boundary does not yet construct native sessions or own the outer MCP/broker grants;
 OpenCode adoption remains uncommitted until those operations use the same owner.
+
+Node worker termination now waits for the original child process's `close` event,
+which follows process exit or failed spawn and closure of its stdio.
+A closed CapTP connection or an `exit` event alone no longer completes that proof.
+The manager installs the original context's cancellation hook before worker acquisition
+can yield, retaining both a late worker and a rejected acquisition's cleanup outcome.
+The hook uses that acquisition, rather than resolving a replacement worker by formula ID.
+Cancellation uses the existing grace period and force signal; expiry requests escalation
+and does not itself acknowledge native termination.
+Node setup failures after fork retain the child until close, and the parent releases
+its duplicate log descriptor.
+The focused worker/context run passes 19 tests, including a real Node child that closes
+its CapTP pipes, ignores graceful termination, and remains owned until forced closure.
+These results do not establish Endor/Ironhorse behavior or complete native-controller
+activation, whole-session stop, or descendant containment.
+
 Podman teardown fences new operations, waits for admitted creates, and retains failed
 removals and their admission slots for retry.
 Successful cleanup requires both checked container removal and native attach-process
@@ -828,7 +844,7 @@ The entries below concern this sandbox work; they are not a catalog of engine de
 | Native 9P/Podman test activation | The local `test:ninep` command reports two passing tests, but its probe records `not linux (darwin)` and `podman --version exit ENOENT`; both native bodies return before exercising mounts. | Count this as unexecuted native acceptance. Run with `NINEP_REQUIRE=1` on the supported Linux/Podman deployment and retain the probe result alongside test totals. Node fake-native mounter tests and Unix-socket bridge tests cover different boundaries. |
 | MCP setup ownership and host-call drain | The previous async listener API exposed its cleanup handle only after startup; closing also ignored admitted host calls. Shared transport and OpenCode setup now provide inert kits, fence connections, drain admitted calls and startup work, and retain failed cleanup for retry. OpenCode refuses existing socket paths rather than assuming stale-file deletion authority. | Node Unix-socket tests and simulated late-listen/failed-close tests cover these boundaries. Callers must exclusively own the private socket directory and its stable ancestry. Async wrappers retain a documented failed-startup ownership gap until controller callers adopt the kits; these tests do not establish Ironhorse support or whole-session cleanup. |
 | Provider runtime and broker initialization ownership | The old broker could lose a listener-runtime cleanup handle when issuer construction and rollback both failed. Retained broker/runtime kits now own initialization before effects, including resolver handles, lock claims, recovery reservations, and required sweeps. Fourteen Node runtime tests and ten broker tests cover initialization/cleanup retries, late acquisition, revoked grant admission, and successful-stage retention. | Podman controls are simulated; listener workers run in Node. Existing PID-based stale-owner detection and native command/descendant uncertainty are unchanged. A successful fixture cleanup is not live Podman crash-recovery evidence. Endor/Ironhorse behavior and per-session native-controller adoption remain unverified; async convenience wrappers still have a documented failed-rollback handle gap. |
-| Worker death versus connection closure | The existing `testWorkerTermination` gate in `packages/daemon/test/endo.test.js` skips whenever `ENDO_BIN` is set. Its comment specifically describes the engo path closing a connection before worker termination is delivered, although the skip gate covers all `ENDO_BIN` paths. That comment is existing evidence, not a newly reproduced Ironhorse defect. | Add supervised acceptance that checks actual native worker/process closure, not only a rejected CapTP call. Exercise emergency stop, failed startup, record deletion, and daemon restart; this remains unverified for the hosted design. |
+| Worker death versus connection closure | Node termination now waits for the original child’s `close` event. The focused worker/context run passes 19 tests, including a real child that closes its CapTP pipes and ignores SIGTERM until forced termination. Cancellation is retained by the original context before acquisition, including late completion and failed acquisition; the existing grace budget escalates without treating expiry as termination. | The existing `testWorkerTermination` gate in `packages/daemon/test/endo.test.js` still skips whenever `ENDO_BIN` is set. Its engo connection-closure comment is prior evidence, not a newly reproduced Ironhorse defect. Endor/Ironhorse behavior remains unverified. Whole-session emergency stop, descendant containment, failed-startup storage release, record deletion, and restart acceptance remain separate requirements. |
 
 Every newly discovered compatibility issue should include its reproducer or code
 evidence, exact execution configuration, observed versus inferred behavior, affected

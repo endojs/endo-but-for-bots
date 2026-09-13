@@ -1804,6 +1804,14 @@ const makeDaemonCore = async (
 
     const { promise: workerCancelled, reject: cancelWorker } =
       /** @type {PromiseKit<never>} */ (makePromiseKit());
+    // Acquisition can fail before the native power subscribes to its signals.
+    void workerCancelled.catch(() => {});
+    void forceCancelled.catch(() => {});
+    const workerForceCancelled = Promise.race([
+      forceCancelled,
+      gracePeriodElapsed,
+    ]);
+    void workerForceCancelled.catch(() => {});
 
     /**
      * Stamp every error we decode from this worker with its origin so
@@ -1823,18 +1831,62 @@ const makeDaemonCore = async (
       inboundErrorOrigin.set(err, { workerId: workerFormulaId, errorId });
     };
 
-    const { workerTerminated, workerDaemonFacet } =
-      await controlPowers.makeWorker(
-        workerId512,
-        daemonWorkerFacet,
-        workerCancelled,
-        Promise.race([forceCancelled, gracePeriodElapsed]),
-        capTpConnectionRegistrar,
-        trustedShims,
-        label,
-        kind,
-        recordInboundOrigin,
+    const acquisition =
+      /** @type {PromiseKit<Awaited<ReturnType<DaemonicPowers['control']['makeWorker']>>>} */ (
+        makePromiseKit()
       );
+    const terminated = acquisition.promise.then(
+      result => result.workerTerminated,
+    );
+    // Both promises may reject before anyone intentionally observes this worker.
+    void terminated.catch(() => {});
+
+    // Register before acquisition can yield. Contexts do not accept hooks after
+    // cancellation, and a late worker must remain owned by this exact context.
+    const gracefulCancel = async () => {
+      cancelWorker(new Error('Worker cancelled'));
+      void acquisition.promise.then(
+        ({ workerDaemonFacet }) => E.sendOnly(workerDaemonFacet).terminate(),
+        () => {},
+      );
+      const cancelWorkerGracePeriod = () => {
+        throw new Error('Exited gracefully before grace period elapsed');
+      };
+      const workerGracePeriodCancelled = Promise.race([
+        gracePeriodElapsed,
+        terminated,
+      ]).then(cancelWorkerGracePeriod, cancelWorkerGracePeriod);
+      // Escalation starts while acquisition is pending, too. The native power
+      // must observe these signals as soon as it has acquired a child.
+      await delay(gracePeriodMs, workerGracePeriodCancelled)
+        .then(() => {
+          throw new Error(
+            `Worker termination grace period ${gracePeriodMs}ms elapsed`,
+          );
+        })
+        .catch(forceCancel);
+      await terminated;
+    };
+    context.onCancel(gracefulCancel);
+
+    try {
+      acquisition.resolve(
+        controlPowers.makeWorker(
+          workerId512,
+          daemonWorkerFacet,
+          workerCancelled,
+          workerForceCancelled,
+          capTpConnectionRegistrar,
+          trustedShims,
+          label,
+          kind,
+          recordInboundOrigin,
+        ),
+      );
+    } catch (error) {
+      acquisition.reject(error);
+    }
+    const { workerTerminated, workerDaemonFacet } = await acquisition.promise;
 
     /** @param {Error} [_reason] */
     const terminateWorker = async _reason => {
@@ -1848,31 +1900,10 @@ const makeDaemonCore = async (
     logLifecycle(context.id, 'WORKER_READY');
 
     workerTerminationByNumber.set(workerId512, terminateWorker);
-    workerTerminated.finally(() => {
-      workerTerminationByNumber.delete(workerId512);
-    });
-
-    const gracefulCancel = async () => {
-      cancelWorker(new Error('Worker cancelled'));
-      E.sendOnly(workerDaemonFacet).terminate();
-      const cancelWorkerGracePeriod = () => {
-        throw new Error('Exited gracefully before grace period elapsed');
-      };
-      const workerGracePeriodCancelled = Promise.race([
-        gracePeriodElapsed,
-        workerTerminated,
-      ]).then(cancelWorkerGracePeriod, cancelWorkerGracePeriod);
-      await delay(gracePeriodMs, workerGracePeriodCancelled)
-        .then(() => {
-          throw new Error(
-            `Worker termination grace period ${gracePeriodMs}ms elapsed`,
-          );
-        })
-        .catch(forceCancel);
-      await workerTerminated;
-    };
-
-    context.onCancel(gracefulCancel);
+    void workerTerminated.then(
+      () => workerTerminationByNumber.delete(workerId512),
+      () => workerTerminationByNumber.delete(workerId512),
+    );
 
     const worker = makeExo('EndoWorker', WorkerInterface, {});
 
@@ -4423,7 +4454,9 @@ const makeDaemonCore = async (
     // Behold, recursion:
     // eslint-disable-next-line no-use-before-define
     const context = makeContext(id);
-    promise.catch(context.cancel);
+    // Automatic cancellation must observe its cleanup failure too. Explicit
+    // cancellation and context.disposed retain that rejection for the owner.
+    void promise.catch(context.cancel).catch(() => {});
     const controller = harden({
       context,
       value: promise,
@@ -4455,7 +4488,9 @@ const makeDaemonCore = async (
     // Behold, recursion:
     // eslint-disable-next-line no-use-before-define
     const context = makeContext(id);
-    promise.catch(context.cancel);
+    // Automatic cancellation must observe its cleanup failure too. Explicit
+    // cancellation and context.disposed retain that rejection for the owner.
+    void promise.catch(context.cancel).catch(() => {});
     const newController = harden({
       context,
       value: promise,

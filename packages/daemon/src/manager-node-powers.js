@@ -1089,10 +1089,22 @@ export const makeDaemonicControlPowers = (
       workerId,
     );
 
+    let cancelledBeforeFork = false;
+    void cancelled.catch(() => {
+      cancelledBeforeFork = true;
+    });
+    void forceCancelled.catch(() => {
+      cancelledBeforeFork = true;
+    });
+
     await Promise.all([
       filePowers.makePath(workerStatePath),
       filePowers.makePath(workerEphemeralStatePath),
     ]);
+
+    if (cancelledBeforeFork) {
+      throw makeError(X`Worker cancelled before native acquisition`);
+    }
 
     const logPath = filePowers.joinPath(workerStatePath, 'worker.log');
     const pidPath = filePowers.joinPath(workerEphemeralStatePath, 'worker.pid');
@@ -1102,77 +1114,106 @@ export const makeDaemonicControlPowers = (
     const workerArgs = useShims ? [JSON.stringify(trustedShims)] : [];
 
     const log = fs.openSync(logPath, 'a');
-    const child = popen.fork(workerPath, workerArgs, {
-      stdio: ['ignore', log, log, 'pipe', 'pipe', 'ipc'],
-      // @ts-ignore Stale Node.js type definition.
-      windowsHide: true,
-    });
+    let child;
+    try {
+      child = popen.fork(workerPath, workerArgs, {
+        stdio: ['ignore', log, log, 'pipe', 'pipe', 'ipc'],
+        // @ts-ignore Stale Node.js type definition.
+        windowsHide: true,
+      });
+    } catch (error) {
+      fs.closeSync(log);
+      throw error;
+    }
     const workerPid = child.pid;
-    const nodeWriter = /** @type {import('stream').Writable} */ (
-      child.stdio[3]
-    );
-    const nodeReader = /** @type {import('stream').Readable} */ (
-      child.stdio[4]
-    );
-    assert(nodeWriter);
-    assert(nodeReader);
-    const reader = makeNodeReader(nodeReader);
-    const writer = makeNodeWriter(nodeWriter);
-
-    const workerClosed = new Promise(resolve => {
-      child.on('exit', () => {
+    /** @type {Error | undefined} */
+    let spawnError;
+    child.once('error', error => {
+      spawnError = error;
+    });
+    // Node's close event follows process exit (or failed spawn) AND stdio
+    // closure. CapTP closing is not proof that the native child has stopped.
+    const workerTerminated = new Promise(resolve => {
+      child.once('close', () => {
         console.log(
-          `Endo worker exited for PID ${workerPid} with unique identifier ${workerId}`,
+          `Endo worker closed for PID ${workerPid} with unique identifier ${workerId}`,
         );
         resolve(undefined);
       });
     });
 
-    await filePowers.writeFileText(pidPath, `${child.pid}\n`);
+    // Install both signals before any post-fork await. Even failed signals do
+    // not release ownership: workerTerminated still waits for actual closure.
+    void cancelled.catch(() => child.kill()).catch(() => {});
+    void forceCancelled.catch(() => child.kill('SIGKILL')).catch(() => {});
 
-    const metaPath = filePowers.joinPath(workerStatePath, 'worker.meta.json');
-    const meta = JSON.stringify({
-      createdAt: new Date().toISOString(),
-      label,
-    });
-    await filePowers.writeFileText(metaPath, `${meta}\n`);
-
-    workerClosed.then(() => filePowers.removePath(pidPath).catch(() => {}));
-
-    cancelled.catch(() => {
-      child.kill();
-    });
-
-    forceCancelled.catch(() => {
-      child.kill('SIGKILL');
-    });
-
-    console.log(
-      `Endo worker started PID ${workerPid} unique identifier ${workerId}`,
-    );
-
-    const { getBootstrap, closed: capTpClosed } = makeNetstringCapTP(
-      `Worker ${workerId}`,
-      writer,
-      reader,
-      cancelled,
-      daemonWorkerFacet,
-      { marshalLoadError },
-      capTpConnectionRegistrar,
-    );
-
-    capTpClosed.finally(() => {
-      console.log(
-        `Endo worker connection closed for PID ${workerPid} with unique identifier ${workerId}`,
+    try {
+      // The child owns duplicated log descriptors; the parent must not keep
+      // one descriptor open for every worker it ever starts.
+      fs.closeSync(log);
+      const nodeWriter = /** @type {import('stream').Writable} */ (
+        child.stdio[3]
       );
-    });
+      const nodeReader = /** @type {import('stream').Readable} */ (
+        child.stdio[4]
+      );
+      assert(nodeWriter);
+      assert(nodeReader);
+      const reader = makeNodeReader(nodeReader);
+      const writer = makeNodeWriter(nodeWriter);
 
-    const workerTerminated = Promise.race([workerClosed, capTpClosed]);
+      await filePowers.writeFileText(pidPath, `${child.pid}\n`);
 
-    /** @type {ERef<WorkerDaemonFacet>} */
-    const workerDaemonFacet = getBootstrap();
+      const metaPath = filePowers.joinPath(workerStatePath, 'worker.meta.json');
+      const meta = JSON.stringify({
+        createdAt: new Date().toISOString(),
+        label,
+      });
+      await filePowers.writeFileText(metaPath, `${meta}\n`);
+      if (spawnError) throw spawnError;
 
-    return { workerTerminated, workerDaemonFacet };
+      void workerTerminated.then(() =>
+        filePowers.removePath(pidPath).catch(() => {}),
+      );
+
+      console.log(
+        `Endo worker started PID ${workerPid} unique identifier ${workerId}`,
+      );
+
+      const { getBootstrap, closed: capTpClosed } = makeNetstringCapTP(
+        `Worker ${workerId}`,
+        writer,
+        reader,
+        cancelled,
+        daemonWorkerFacet,
+        { marshalLoadError },
+        capTpConnectionRegistrar,
+      );
+
+      void capTpClosed.then(
+        () => {
+          console.log(
+            `Endo worker connection closed for PID ${workerPid} with unique identifier ${workerId}`,
+          );
+        },
+        () => {},
+      );
+
+      /** @type {ERef<WorkerDaemonFacet>} */
+      const workerDaemonFacet = getBootstrap();
+
+      return { workerTerminated, workerDaemonFacet };
+    } catch (error) {
+      // Failure after fork is still an acquired native child. Do not reject
+      // construction until the original child and its stdio have closed.
+      try {
+        child.kill('SIGKILL');
+      } finally {
+        await workerTerminated;
+      }
+      await filePowers.removePath(pidPath).catch(() => {});
+      throw error;
+    }
   };
 
   return harden({
