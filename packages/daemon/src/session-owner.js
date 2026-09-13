@@ -25,6 +25,7 @@ import { assertCopyData, wrapSessionReader } from './session-protocol.js';
  * @typedef {object} NativeActivation
  * @property {string} identifier
  * @property {any} value
+ * @property {object | undefined} tools
  * @property {boolean} active
  * @property {boolean} activating
  * @property {boolean} constructing
@@ -41,7 +42,7 @@ const OwnerInterface = M.interface('SessionOwner', {
   ).returns(M.any()),
   inspect: M.callWhen(M.string()).returns(M.any()),
   revise: M.callWhen(M.string(), M.string()).returns(M.undefined()),
-  start: M.callWhen(M.string()).returns(M.any()),
+  start: M.callWhen(M.string()).optional(M.remotable()).returns(M.any()),
   client: M.callWhen(M.string()).returns(M.any()),
   stop: M.callWhen(M.string()).returns(M.undefined()),
   remove: M.callWhen(M.string()).returns(M.undefined()),
@@ -159,8 +160,9 @@ export const makeSessionOwner = ({
    * It avoids eagerly reviving credentials or infrastructure during cleanup.
    * @param {SessionRecord} record
    * @param {() => void} check
+   * @param {object} [tools]
    */
-  const dependencies = (record, check) => {
+  const dependencies = (record, check, tools = undefined) => {
     let open = true;
     /** @type {Set<Promise<any>>} */
     const pending = new Set();
@@ -173,6 +175,11 @@ export const makeSessionOwner = ({
         get: role => {
           check();
           open || Fail`Session dependency admission is closed`;
+          if (role === 'tools') {
+            tools !== undefined ||
+              Fail`No tool authority is attached to this activation`;
+            return tools;
+          }
           !['client', 'worker', 'storage'].includes(role) ||
             Fail`Administrative session role is not a runtime dependency`;
           const id = record.references[role];
@@ -295,15 +302,20 @@ export const makeSessionOwner = ({
   /**
    * @param {string} name
    * @param {() => void} checkAdmission
+   * @param {object} [tools]
    */
-  const start = async (name, checkAdmission) => {
+  const start = async (name, checkAdmission, tools = undefined) => {
     checkAdmission();
     if (!native) throw Fail`Native session construction is not configured`;
     const record = await inspect(name);
     if (!record || record.plan === undefined)
       throw Fail`Session record is incomplete`;
     const existing = started.get(name);
-    if (existing?.active && record.phase === 'ready') return client(name);
+    if (existing?.active && record.phase === 'ready') {
+      existing.tools === tools ||
+        Fail`Session tool authority cannot change during an active incarnation`;
+      return client(name);
+    }
     ['planned', 'stopped', 'ready'].includes(record.phase) ||
       Fail`Interrupted session startup or cleanup must finish before reuse`;
     // A new explicit start can follow a completed stop. Any later stop fences
@@ -313,6 +325,7 @@ export const makeSessionOwner = ({
     const activation = {
       identifier: '',
       value: undefined,
+      tools,
       active: true,
       activating: false,
       constructing: false,
@@ -361,7 +374,7 @@ export const makeSessionOwner = ({
     await E(entry).writeText('lifecycle', 'starting');
     check();
     activation.construction = undefined;
-    const resolver = dependencies(record, check);
+    const resolver = dependencies(record, check, tools);
     activation.closeDependencies = resolver.close;
     activation.closeNative = makeNativeClose(
       record,
@@ -506,6 +519,8 @@ export const makeSessionOwner = ({
     create: (name, plan, references) =>
       inOrder(name, async () => {
         if (native) {
+          references.tools === undefined ||
+            Fail`Session tool authority must be attached at activation`;
           (references.client === undefined &&
             references.worker === undefined) ||
             Fail`Native session identities must be constructed by their owner`;
@@ -515,13 +530,17 @@ export const makeSessionOwner = ({
         return inspect(name);
       }),
     inspect: name => inOrder(name, () => inspect(name)),
-    start: name => {
+    start: (name, tools = undefined) => {
       const version = stopVersions.get(name);
       return inOrder(name, () =>
-        start(name, () => {
-          stopVersions.get(name) === version ||
-            Fail`Session startup was interrupted`;
-        }),
+        start(
+          name,
+          () => {
+            stopVersions.get(name) === version ||
+              Fail`Session startup was interrupted`;
+          },
+          tools,
+        ),
       );
     },
     revise: (name, plan) =>
