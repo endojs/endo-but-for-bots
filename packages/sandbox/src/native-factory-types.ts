@@ -2,6 +2,8 @@ import type { FarRef, RemoteFunctions } from '@endo/eventual-send';
 
 import type {
   DriverSliceContext,
+  MakeSandboxFactoryInput,
+  SandboxPowers,
   SandboxHandle,
   SandboxMakeOpts,
   SpawnOpts,
@@ -46,3 +48,9 @@ export type DriverPreparation<Context = DriverSliceContext> = Readonly<{
 
 /** Native callers write through the returned process; they cannot import a reader. */
 export type NativeSpawnOpts = Omit<SpawnOpts, 'stdin'>;
+
+/** Native construction has resolved paths and imports no scratch capability. */
+export type MakeSandboxFactoryKitInput = Omit<
+  MakeSandboxFactoryInput,
+  'scratchProvider'
+> & { scratchProvider: SandboxPowers | null };

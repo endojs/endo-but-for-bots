@@ -52,7 +52,7 @@ const makeOwnedEntrypoint = (
   };
 
   /**
-   * @param {ERef<SandboxPowers>} scratchProvider
+   * @param {ERef<SandboxPowers | null>} scratchProvider
    * @param {ERef<{ whenCancelled(): Promise<never> }>} context
    * @param {{ env?: Record<string, string> }} [options]
    */
