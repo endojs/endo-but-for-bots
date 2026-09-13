@@ -10,6 +10,9 @@
 
 import type { ERef } from '@endo/eventual-send';
 import type {
+  CloseablePassableReader,
+  CloseablePassableBytesReader,
+  CloseablePassableBytesWriter,
   PassableBytesReader,
   PassableBytesWriter,
   PassableReader,
@@ -131,7 +134,7 @@ export type DirectoryPage = {
 
 export type Cursor = {
   read: (limit?: bigint) => Promise<DirectoryPage>;
-  stream: () => ERef<PassableReader<DirectoryEntry>>;
+  stream: () => ERef<CloseablePassableReader<DirectoryEntry>>;
   toArray: () => Promise<DirectoryEntry[]>;
   skip: (n: bigint) => Promise<void>;
   rewind: () => Promise<void>;
@@ -277,8 +280,11 @@ export type Lock = {
 };
 
 export type OpenFile = {
-  read: (offset?: bigint, length?: bigint) => ERef<PassableBytesReader>;
-  write: (offset?: bigint) => ERef<PassableBytesWriter>;
+  read: (
+    offset?: bigint,
+    length?: bigint,
+  ) => ERef<CloseablePassableBytesReader>;
+  write: (offset?: bigint) => ERef<CloseablePassableBytesWriter>;
   truncate: (size: bigint) => Promise<void>;
   fsync: () => Promise<void>;
   lock: (opts: LockOpts) => ERef<Lock>;
