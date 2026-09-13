@@ -5961,13 +5961,23 @@ const makeDaemonCore = async (
       hostHandleId,
       specifiedPowersId,
     );
-    const workerId = await provideWorkerId(
-      specifiedWorkerId,
-      trustedShims,
-      workerLabel,
-      undefined,
-      workerKind,
-    );
+    // Allocate a fresh worker identity without starting its process. Like
+    // formulateWorker, publish ownership before persisting/evaluating it.
+    // A rejected publication must not leave a newly acquired worker behind.
+    const freshWorkerNumber =
+      specifiedWorkerId === undefined
+        ? /** @type {FormulaNumber} */ (await randomHex256())
+        : undefined;
+    const workerId =
+      freshWorkerNumber === undefined
+        ? await provideWorkerId(
+            specifiedWorkerId,
+            trustedShims,
+            workerLabel,
+            undefined,
+            workerKind,
+          )
+        : formatId({ number: freshWorkerNumber, node: localNodeNumber });
     // When a new node worker was created because the specified worker
     // was XS-only, record the original so that cancelling the original
     // worker cascades to the caplet.  This is a runtime dependency only,
@@ -5990,6 +6000,13 @@ const makeDaemonCore = async (
     // pet-store edges) so that the powers guest is reachable
     // before we unpin its dependencies.
     await deferredTasks.execute(identifiers);
+    if (freshWorkerNumber !== undefined) {
+      await formulateNumberedWorker(freshWorkerNumber, {
+        kind: workerKind,
+        trustedShims,
+        label: workerLabel,
+      });
+    }
     for (const id of powersPinned) {
       unpinTransient(id);
     }

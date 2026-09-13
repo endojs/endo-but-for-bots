@@ -15,7 +15,8 @@ preserve background mount access, keep CLI eval calls tied to active-turn contex
 distinguish future process-facing CapTP access, and replace unused implementations
 directly; now tracks Ironhorse/Endor versus native Node acceptance explicitly,
 including the record-deletion collection failure and cross-worker supervisor risk;
-the administrative owner belongs at a daemon-local boundary),
+the administrative owner belongs at a daemon-local boundary, and fresh caplet
+workers now wait for reference publication before process acquisition),
 [hosted-agent-broker-oauth](hosted-agent-broker-oauth.md) (added 2026-09-08 and
 revised 2026-09-09; credential custody for hosted agent sessions — a broker-held
 refreshing OAuth credential with expiry tracking, single-flight exchange, a
