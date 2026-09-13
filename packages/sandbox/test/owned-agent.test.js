@@ -12,6 +12,7 @@ import {
   makeOwnedSandboxAgent,
   makeOwnedNativeSandboxAgent,
 } from '../src/owned-agent.js';
+import { make as makeNativeService } from '../src/native-agent.js';
 import { readRuntimeConfig } from '../src/runtime-config.js';
 import { makeSandboxRuntime } from '../src/runtime.js';
 
@@ -406,7 +407,7 @@ test('native operator entrypoint exposes scoped authority and retains cancellati
   const context = harden({
     whenCancelled: () => /** @type {Promise<never>} */ (token.promise),
   });
-  const service = await make(powers, context, {
+  const service = await make(null, context, {
     env: { ...env, ENDO_SANDBOX_RUNTIME_DIR: directory },
   });
   const scope = await E(service).provideScope('one');
@@ -416,5 +417,38 @@ test('native operator entrypoint exposes scoped authority and retains cancellati
   await setImmediate();
   await retained?.close();
   await t.throwsAsync(E(service).provideScope('two'), { message: /closing/ });
+  t.deepEqual(await fs.readdir(directory), []);
+});
+
+test('native entrypoint refuses non-null powers before construction', async t => {
+  const context = harden({ whenCancelled: () => new Promise(() => {}) });
+  await t.throwsAsync(
+    Reflect.apply(makeNativeService, undefined, [harden({}), context, { env }]),
+    { message: /requires null powers/ },
+  );
+});
+
+test('native entrypoint cancellation interrupts pending null powers', async t => {
+  t.timeout(3000);
+  const directory = await fs.mkdtemp(join(tmpdir(), 'endo-native-powers-'));
+  const token = makePromiseKit();
+  /** @type {PromiseKit<null>} */
+  const input = makePromiseKit();
+  t.teardown(async () => {
+    input.resolve(null);
+    token.reject(Error('test finished'));
+    await fs.rm(directory, { recursive: true, force: true });
+  });
+  const context = harden({
+    whenCancelled: () => /** @type {Promise<never>} */ (token.promise),
+  });
+  const rejected = t.throwsAsync(
+    makeNativeService(input.promise, context, {
+      env: { ...env, ENDO_SANDBOX_RUNTIME_DIR: directory },
+    }),
+    { message: /cancelled or unreachable/ },
+  );
+  token.reject(Error('owner cancelled'));
+  await rejected;
   t.deepEqual(await fs.readdir(directory), []);
 });

@@ -24,7 +24,7 @@ import { resolveLimits } from './limits.js';
 import { validateGeneratedFiles } from './generated-files.js';
 
 /** @import { MakeSandboxFactoryInput, SandboxFactory, SandboxMakeOpts, SandboxDriver, BackendProbe, MountSpec, SliceSpec, MountCap, MountMode, SandboxHandle, ProcessHandle, MountHandle, SpawnOpts, DriverProcess, RootfsSpec, TerminationSignal } from './types.js' */
-/** @import { NativeSandboxMakeOpts, NativeSandboxHandle } from './native-factory-types.js' */
+/** @import { NativeSandboxMakeOpts, NativeSandboxHandle, MakeSandboxFactoryKitInput } from './native-factory-types.js' */
 
 const NativeHandleInterface = harden(
   M.interface('NativeSandboxHandle', {
@@ -320,7 +320,7 @@ const resolveHostPath = async (scratchProvider, cap, context) => {
  * It shares the public factory's admission and cleanup owner, but never
  * acquires daemon mounts and returns a handle with static mounts only.
  *
- * @param {MakeSandboxFactoryInput} input
+ * @param {MakeSandboxFactoryKitInput} input
  * @param {{ makeDelay?: typeof delay }} [powers]
  * @returns {Readonly<{ factory: SandboxFactory, makeResolved(opts: NativeSandboxMakeOpts): Promise<NativeSandboxHandle>, close(reason?: Error): Promise<void> }>}
  */
@@ -328,6 +328,11 @@ export const makeSandboxFactoryKit = (
   { drivers, scratchProvider, context },
   { makeDelay = delay } = {},
 ) => {
+  const requireScratchProvider = () => {
+    if (scratchProvider === null)
+      throw Fail`Sandbox capability construction requires a scratch provider`;
+    return scratchProvider;
+  };
   const driverList = harden([...drivers]);
   const slices = makeResourceRegistry();
   /** @type {Set<() => Promise<void>>} */
@@ -487,7 +492,7 @@ export const makeSandboxFactoryKit = (
     }
     // Otherwise treat it as a Mount cap.
     const hostPath = await resolveHostPath(
-      scratchProvider,
+      requireScratchProvider(),
       /** @type {MountCap} */ (rootfs),
       'rootfs',
     );
@@ -500,7 +505,7 @@ export const makeSandboxFactoryKit = (
    */
   const resolveMount = async mount => {
     const hostPath = await resolveHostPath(
-      scratchProvider,
+      requireScratchProvider(),
       mount.cap,
       `mount ${mount.innerPath}`,
     );
@@ -526,10 +531,11 @@ export const makeSandboxFactoryKit = (
     // Preferred path: mint a scratch mount and resolve it via
     // `provideHostPath`.
     try {
-      const scratchCap =
-        await E(scratchProvider).provideScratchMount('sandbox-scratch');
+      const scratchCap = await E(requireScratchProvider()).provideScratchMount(
+        'sandbox-scratch',
+      );
       return await resolveHostPath(
-        scratchProvider,
+        requireScratchProvider(),
         /** @type {MountCap} */ (scratchCap),
         'scratch upper layer',
       );
@@ -1123,7 +1129,7 @@ export const makeSandboxFactoryKit = (
       // Lifecycle is bound to the slice; the daemon's scratch GC
       // sweeps the host directory when the cap is unpinned.
       const scratchCap = /** @type {MountCap} */ (
-        await E(scratchProvider).provideScratchMount(
+        await E(requireScratchProvider()).provideScratchMount(
           `sandbox-scratch-${innerPath.replace(/[^a-zA-Z0-9-]/g, '-')}`,
         )
       );
@@ -1289,7 +1295,10 @@ export const makeSandboxFactoryKit = (
     });
 
   /** @param {SandboxMakeOpts} opts */
-  const make = opts => makeOwned(opts, () => resolvePathsFromCaps(opts), false);
+  const make = opts => {
+    requireScratchProvider();
+    return makeOwned(opts, () => resolvePathsFromCaps(opts), false);
+  };
 
   /** @param {NativeSandboxMakeOpts} opts */
   const makeResolved = opts => {
@@ -1408,6 +1417,9 @@ harden(makeSandboxFactoryKit);
  * @param {{ makeDelay?: typeof delay }} [powers]
  * @returns {SandboxFactory}
  */
-export const makeSandboxFactory = (input, powers) =>
-  makeSandboxFactoryKit(input, powers).factory;
+export const makeSandboxFactory = (input, powers) => {
+  input.scratchProvider !== null ||
+    Fail`Sandbox factory requires a scratch provider`;
+  return makeSandboxFactoryKit(input, powers).factory;
+};
 harden(makeSandboxFactory);

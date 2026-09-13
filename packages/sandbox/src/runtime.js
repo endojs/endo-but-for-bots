@@ -51,7 +51,7 @@ const NativeServiceInterface = harden(
  * requires a driver with explicit host-only lifetime cleanup authority.
  *
  * @param {{ directory: string, ownerId: string, maxBytes: bigint, maxEntries: bigint, env?: Record<string, string> }} config
- * @param {{ scratchProvider: SandboxPowers, fs?: typeof import('node:fs/promises'), makeDriver?: (storage: GeneratedFileStorage) => SandboxDriver & { close(): Promise<void> } }} powers
+ * @param {{ scratchProvider: SandboxPowers | null, fs?: typeof import('node:fs/promises'), makeDriver?: (storage: GeneratedFileStorage) => SandboxDriver & { close(): Promise<void> } }} powers
  */
 export const makeSandboxRuntime = (
   { directory, ownerId, maxBytes, maxEntries, env = {} },
