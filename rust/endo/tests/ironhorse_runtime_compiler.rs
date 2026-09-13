@@ -30,6 +30,7 @@ fn persistent_compiler_is_attached_at_boot_resume_and_rewind() {
         signature: "runtime-compiler-test".to_string(),
         cadence: CadencePolicy::default(),
         meter: MeterBounds::per_crank(200_000),
+        intrinsic_permit: None,
     };
     let mut machine = PersistentMachine::open(&options).unwrap();
     assert_eq!(
@@ -66,4 +67,47 @@ fn ephemeral_dynamic_source_stays_under_the_crank_budget() {
         .unwrap();
     assert!(!outcome.completed);
     assert!(matches!(outcome.halt, ironhorse_vm::Halt::MeterAbort));
+}
+
+#[test]
+fn persistent_intrinsic_permit_survives_boot_resume_and_rewind() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut options = HeapStoreOptions {
+        path: dir.path().join("intrinsic-permit.sqlite"),
+        signature: "intrinsic-permit-test".to_string(),
+        cadence: CadencePolicy::default(),
+        meter: MeterBounds::per_crank(200_000),
+        intrinsic_permit: Some(vec!["JSON".to_string()]),
+    };
+    fn assert_denied(machine: &mut PersistentMachine, name: &str) {
+        // The first crank interns the denied name through JSON's runtime key
+        // path, before an identifier atom could mask a materialization leak.
+        machine
+            .eval(&format!("JSON.parse('{{\"{name}\":1}}'); 0"))
+            .unwrap();
+        assert_eq!(
+            machine.eval(&format!("typeof {name}")).unwrap().result,
+            "undefined"
+        );
+    }
+    let mut machine = PersistentMachine::open(&options).unwrap();
+    assert_denied(&mut machine, "eval");
+    machine.close().unwrap();
+
+    let mut machine = PersistentMachine::open(&options).unwrap();
+    assert_denied(&mut machine, "Object");
+    assert!(matches!(
+        machine.eval("while (true) {}"),
+        Err(MachineError::MeterAbort { .. })
+    ));
+    assert_denied(&mut machine, "Number");
+    assert_eq!(machine.eval("typeof Function").unwrap().result, "undefined");
+    machine.close().unwrap();
+
+    // The supervisor explicitly chooses full binding authority on a later
+    // open. Existing bindings and deletions are untouched; new names may bind.
+    options.intrinsic_permit = None;
+    let mut machine = PersistentMachine::open(&options).unwrap();
+    assert_eq!(machine.eval("typeof Date").unwrap().result, "function");
+    machine.close().unwrap();
 }

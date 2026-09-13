@@ -1444,6 +1444,15 @@ impl Interp {
     /// later lookup from resurrecting it. The name and property (or its
     /// deletion) then travel through the ordinary snapshot tables.
     pub(super) fn materialize_runtime_global(&mut self, id: u16, name: &str) {
+        if name != "globalThis"
+            && self
+                .environment
+                .intrinsic_permit
+                .as_ref()
+                .is_some_and(|permit| !permit.contains(&SymbolName::from(name)))
+        {
+            return;
+        }
         if self.environment.global_obj.is_null()
             || self.environment.global_props.contains_key(&id)
             || self.slots.get(self.environment.global_obj).flag & XS_DONT_PATCH_FLAG != 0
