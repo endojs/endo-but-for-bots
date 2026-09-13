@@ -5,6 +5,8 @@ import { E } from '@endo/eventual-send';
 import { makePromiseKit } from '@endo/promise-kit';
 import { mustMatch } from '@endo/patterns';
 
+import { observePromise } from './observe-promise.js';
+
 /** @import { Passable } from '@endo/pass-style' */
 /** @import { ERef } from '@endo/eventual-send' */
 /** @import { Pattern } from '@endo/patterns' */
@@ -52,7 +54,7 @@ export const iterateReader = (readerRef, options = {}) => {
 
   // Call stream() - returns a promise for the acknowledge chain head
   /** @type {Promise<StreamNode<TRead, TReadReturn>>} */
-  let nodePromise = E(readerRef).stream(synHead);
+  let nodePromise = observePromise(E(readerRef).stream(synHead));
 
   /** @type {Promise<IteratorResult<TRead, TReadReturn>> | null} */
   let terminalPromise = null;
@@ -114,7 +116,8 @@ export const iterateReader = (readerRef, options = {}) => {
 
       // Get the promise to next node - DON'T await, just access the property
       // node is already local (resolved from nodePromise), so direct property access works
-      const nextPromiseOrNull = node.promise;
+      const nextPromiseOrNull =
+        node.promise === null ? null : observePromise(node.promise);
 
       // Check if stream ended (promise is null)
       if (nextPromiseOrNull === null) {

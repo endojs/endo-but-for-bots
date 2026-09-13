@@ -5,6 +5,8 @@ import { E } from '@endo/eventual-send';
 import { encodeBase64 } from '@endo/base64';
 import { makePromiseKit } from '@endo/promise-kit';
 
+import { observePromise } from './observe-promise.js';
+
 /** @import { Passable } from '@endo/pass-style' */
 /** @import { ERef } from '@endo/eventual-send' */
 /** @import { PassableBytesWriter, StreamNode, IterateBytesWriterOptions, BytesWriterIterator } from './types.js' */
@@ -40,7 +42,7 @@ export const iterateBytesWriter = (bytesWriterRef, options = {}) => {
 
   // Call streamBase64() - returns a promise for the acknowledge (flow-control) chain head
   /** @type {Promise<StreamNode<undefined, TWriteReturn>>} */
-  let ackPromise = E(bytesWriterRef).streamBase64(synHead);
+  let ackPromise = observePromise(E(bytesWriterRef).streamBase64(synHead));
 
   /** @type {Promise<IteratorResult<undefined, TWriteReturn>> | null} */
   let terminalPromise = null;
@@ -98,7 +100,7 @@ export const iterateBytesWriter = (bytesWriterRef, options = {}) => {
           /** @type {unknown} */ (terminalPromise)
         );
       }
-      ackPromise = ackNode.promise;
+      ackPromise = observePromise(ackNode.promise);
       return harden({ done: false, value: undefined });
     } catch (error) {
       return fail(error);

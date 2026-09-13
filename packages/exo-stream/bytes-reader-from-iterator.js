@@ -4,12 +4,12 @@ import { makeExo } from '@endo/exo';
 import { encodeBase64 } from '@endo/base64';
 
 import { asyncIterate } from './async-iterate.js';
-import { PassableBytesReaderInterface } from './type-guards.js';
+import { CloseablePassableBytesReaderInterface } from './type-guards.js';
 import { makeReaderPump } from './reader-pump.js';
 
 /** @import { Passable } from '@endo/pass-style' */
 /** @import { Pattern } from '@endo/patterns' */
-/** @import { SomehowAsyncIterable, PassableBytesReader, MakeBytesReaderOptions } from './types.js' */
+/** @import { SomehowAsyncIterable, CloseablePassableBytesReader, MakeBytesReaderOptions } from './types.js' */
 
 /**
  * Convert a local AsyncIterator<Uint8Array> to a remote PassableBytesReader reference
@@ -38,7 +38,7 @@ import { makeReaderPump } from './reader-pump.js';
  *
  * @param {SomehowAsyncIterable<Uint8Array>} bytesIterator
  * @param {MakeBytesReaderOptions} [options]
- * @returns {PassableBytesReader}
+ * @returns {CloseablePassableBytesReader}
  */
 export const bytesReaderFromIterator = (bytesIterator, options = {}) => {
   const { buffer = 0, readReturnPattern, cancelPending } = options;
@@ -71,8 +71,9 @@ export const bytesReaderFromIterator = (bytesIterator, options = {}) => {
   const pump = makeReaderPump(base64Iterator, { buffer, cancelPending });
 
   // @ts-expect-error Exo pump types use Passable where template expects specific subtype
-  return makeExo('PassableBytesReader', PassableBytesReaderInterface, {
+  return makeExo('PassableBytesReader', CloseablePassableBytesReaderInterface, {
     streamBase64: pump,
+    close: pump.close,
 
     /**
      * Returns the pattern for validating TReadReturn (return value).

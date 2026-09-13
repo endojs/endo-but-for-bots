@@ -6,6 +6,8 @@ import { decodeBase64 } from '@endo/base64';
 import { M, mustMatch } from '@endo/patterns';
 import { makePromiseKit } from '@endo/promise-kit';
 
+import { observePromise } from './observe-promise.js';
+
 /** @import { Passable } from '@endo/pass-style' */
 /** @import { ERef } from '@endo/eventual-send' */
 /** @import { PassableBytesReader, StreamNode, IterateBytesReaderOptions, BytesReaderIterator } from './types.js' */
@@ -60,7 +62,7 @@ export const iterateBytesReader = (bytesReaderRef, options = {}) => {
 
   // Call streamBase64() - returns a promise for the acknowledge chain head
   /** @type {Promise<StreamNode<string, TReadReturn>>} */
-  let nodePromise = E(bytesReaderRef).streamBase64(synHead);
+  let nodePromise = observePromise(E(bytesReaderRef).streamBase64(synHead));
 
   /** @type {Promise<IteratorResult<Uint8Array, TReadReturn>> | null} */
   let terminalPromise = null;
@@ -121,7 +123,8 @@ export const iterateBytesReader = (bytesReaderRef, options = {}) => {
       const base64Value = await E.get(node).value;
 
       // Get the promise to next node - DON'T await, just access the property
-      const nextPromiseOrNull = node.promise;
+      const nextPromiseOrNull =
+        node.promise === null ? null : observePromise(node.promise);
 
       // Check if stream ended (promise is null)
       if (nextPromiseOrNull === null) {

@@ -428,3 +428,41 @@ export interface IterateBytesWriterOptions<
   /** Number of data values to pre-send before waiting for acks (default 0) */
   buffer?: number;
 }
+
+/**
+ * Resource owner for one source iterator, shared by its admitted streams.
+ * close() permanently fences stream admission and source pulls, cooperatively
+ * interrupts pending work, and waits for admitted work and source cleanup.
+ * Failed source cleanup stays owned for retry. Stream I/O or validation errors
+ * remain on the stream chain and do not by themselves make close() reject.
+ *
+ * The source's return() must fulfill with done:true after cleaning up its
+ * resources. An unfinished result remains owned for explicit retry. An absent
+ * return() declares no separately owned cleanup. A pending next() must settle
+ * naturally or cooperate with the local interruption hook.
+ */
+export interface StreamEndpointClose {
+  close(): Promise<void>;
+}
+
+export interface CloseablePassableReader<
+  TRead extends Passable = Passable,
+  TReadReturn extends Passable = Passable,
+>
+  extends PassableReader<TRead, TReadReturn>, StreamEndpointClose {}
+
+export interface CloseablePassableWriter<
+  TWrite extends Passable = Passable,
+  TWriteReturn extends Passable = Passable,
+>
+  extends PassableWriter<TWrite, TWriteReturn>, StreamEndpointClose {}
+
+export interface CloseablePassableBytesReader<
+  TReadReturn extends Passable = undefined,
+>
+  extends PassableBytesReader<TReadReturn>, StreamEndpointClose {}
+
+export interface CloseablePassableBytesWriter<
+  TWriteReturn extends Passable = undefined,
+>
+  extends PassableBytesWriter<TWriteReturn>, StreamEndpointClose {}
