@@ -81,7 +81,7 @@
     "@endo/pass-style": "workspace:^",
     "@endo/patterns": "workspace:^",
     "@endo/preact-container": "workspace:^",
-    "marked": "^17.0.5",
+    "marked": "^18.0.11",
     "preact": "^10.29.8"
   },
   "devDependencies": {
