@@ -32,10 +32,10 @@ import { makePromiseKit } from '@endo/promise-kit';
  * @param {typeof import('child_process')} cpModule
  * @param {string} command
  * @param {string[]} args
- * @param {{ timeoutMs?: number, cancelled?: import('@endo/cancel').Cancelled, isCancelled?: import('@endo/cancel').IsCancelled }} [options]
+ * @param {{ timeoutMs?: number, cancelled?: import('@endo/cancel').Cancelled, isCancelled?: import('@endo/cancel').IsCancelled, env?: Readonly<Record<string,string>> }} [options]
  */
 export const startControlCommand = (cpModule, command, args, options = {}) => {
-  const { timeoutMs, cancelled, isCancelled } = options;
+  const { timeoutMs, cancelled, isCancelled, env } = options;
   /** @type {ReturnType<typeof makePromiseKit<{ code: number | null; signal: string | null; stdout: string; stderr: string }>>} */
   const outcome = makePromiseKit();
   /** @type {ReturnType<typeof makePromiseKit<void>>} */
@@ -95,7 +95,10 @@ export const startControlCommand = (cpModule, command, args, options = {}) => {
     return control;
   }
   try {
-    child = cpModule.spawn(command, args, { stdio: 'pipe' });
+    child = cpModule.spawn(command, args, {
+      stdio: 'pipe',
+      ...(env ? { env } : {}),
+    });
   } catch (error) {
     fail(/** @type {Error} */ (error));
     closed = true; // No child was acquired.
@@ -152,7 +155,7 @@ harden(startControlCommand);
  * @param {typeof import('child_process')} cpModule
  * @param {string} command
  * @param {string[]} args
- * @param {{ timeoutMs?: number, cancelled?: import('@endo/cancel').Cancelled, isCancelled?: import('@endo/cancel').IsCancelled }} [options]
+ * @param {Parameters<typeof startControlCommand>[3]} [options]
  */
 export const spawnAndCollect = (cpModule, command, args, options = {}) =>
   startControlCommand(cpModule, command, args, options).result;

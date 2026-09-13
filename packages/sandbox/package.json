@@ -26,6 +26,7 @@
     "./factory.js": "./src/factory.js",
     "./runtime.js": "./src/runtime.js",
     "./runtime-config.js": "./src/runtime-config.js",
+    "./podman-host-environment.js": "./src/podman-host-environment.js",
     "./private-directory.js": "./src/private-directory.js",
     "./native-agent.js": "./src/native-agent.js",
     "./owned-agent.js": "./src/owned-agent.js",

@@ -62,9 +62,10 @@ export const makeOwnedOpencodeBrokerService = ({
   /**
    * @param {ReturnType<typeof readOpencodeBrokerConfig>} config
    * @param {{readBase64(): Promise<string>}} secret
+   * @param {Record<string,string>} env
    */
-  const makeKit = (config, secret) => {
-    const kit = makeServiceKit({ ...config, secret });
+  const makeKit = (config, secret, env) => {
+    const kit = makeServiceKit({ ...config, secret, env });
     return harden({ open: async () => kit.service, close: kit.close });
   };
   return makeOwnedNativeService({
