@@ -19,8 +19,11 @@ findings before every commit.
    collection and Compartment drop; make queued-work abandonment explicit.
 6. [x] Check persistent-worker permit policy at open/resume/rewind, rejection and
    meter isolation, carried-state coverage, and the reported async restore issue.
-7. [ ] Reconcile current documentation and PR scope, run appropriate validation,
+7. [x] Reconcile current documentation and PR scope, run appropriate validation,
    push reviewed commits, and continue CI/conflict monitoring.
+
+Follow-up implementation published to #1263 on 2026-09-13.
+The 10-minute monitor continues while the PR remains open; merging is not requested.
 
 Multiple Realms, cross-machine messaging, JsMachine (F068/F157), arbitrary host
 function registration, and full daemon SES acceptance remain outside this work.
