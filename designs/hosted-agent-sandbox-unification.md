@@ -50,8 +50,8 @@ Callers retain a failed direct-stop owner instead of treating cancellation as st
 or proceeding to delete storage; independent provider/MCP releases remain separate.
 Rejected mount/slice acquisitions without handles remain explicitly uncertain and require
 host reconciliation before releasing their dependent storage or admitting replacements.
-This is incarnation-local ownership; cross-formula retention, durable-record adoption,
-unknown-acquisition reconciliation, and hang-safe revocation still require the supervisor.
+Native unknown-acquisition reconciliation and hang-safe revocation still require
+the supervisor; durable OpenCode record adoption is described below.
 
 Claude and OpenCode now use one static session-powers module instead of three
 independently generated powers source strings.
@@ -59,7 +59,7 @@ Construction persists exact dependency capabilities before creating the powers/c
 formula chain; nested factory/provider names are no longer resolved again on revival.
 Daemon acceptance covers name rebinding, GC, restart, and scoped state access.
 The active bundle excludes the client and is distinct from passive recovery metadata.
-Record-backed backend adoption, original-path cleanup, and supervisor ownership remain pending.
+Claude record-backed backend adoption and shared supervisor ownership remain pending.
 
 A shared passive session-record store now retains the approved plan and exact
 dependency IDs in a host-private daemon directory per logical session.
@@ -68,11 +68,28 @@ Creation refuses replacement and publishes the plan last; partial writes and fai
 cleanup retain ownership for recovery.
 Daemon acceptance covers GC, restart, global-name rebinding, passive inspection of a
 broken client, intentional selective activation, and retry through the original provider.
-Shared supervisor and adapter wiring remain pending; the existing adapters do not yet
-use these records for session adoption or cleanup.
+The current uncommitted OpenCode increment adopts these records through a
+backend-owned provisioner; its daemon acceptance has exposed the collection failure
+tracked below and must pass before this integration is committed.
+New records capture dependency IDs, effective image/broker configuration, and original
+workspace/config/MCP paths before acquiring native resources.
+Backend re-mints share the process-local cleanup registry; new defaults apply only to
+new sessions, whose hosted network policy defaults to `off`.
+A proven stop releases only the client incarnation reference, retaining the logical
+plan and stable dependencies for a later incarnation with fresh transports/grants.
+Removal persists its intent before cleanup; failed deletion prevents resuming partly
+deleted storage and retains the original provider and paths for retry.
+The unused standalone provisioner entrypoint is removed so lifecycle calls pass through
+the backend that owns outer MCP and broker cleanup.
+These records do not prove containment after a native crash or reconcile orphaned
+resources; conservative native ownership markers still refuse uncertain takeover.
+Claude/Codex adoption and the full shared supervisor remain pending.
 
-The ownership registry now lives in `@endo/sandbox`, shared by session adapters and
-the Podman driver.
+The ownership registry and passive record store now live in `@endo/daemon`, below
+the session adapters and native drivers.
+The sandbox registry entrypoint delegates to that implementation.
+A stopped incarnation can release its client reference while retaining the logical
+plan and its stable dependencies.
 Podman teardown fences new operations, waits for admitted creates, and retains failed
 removals and their admission slots for retry.
 Successful cleanup requires both checked container removal and native attach-process
@@ -333,6 +350,31 @@ An operation explicitly resolves only the capability it needs by the recorded ID
 Do not put the client and cleanup authorities in a capability-containing marshal
 record: reading that record eagerly revives every referenced formula.
 
+The administrative owner must live at a daemon-local, host-only boundary.
+Exporting disposable directory, mount, or cleanup capabilities into a shared worker
+is unsafe under the daemon's current residence policy: collecting one of those
+formulas can terminate that entire worker, including unrelated sessions.
+Keeping only directory CRUD in the daemon does not solve this for providers,
+private filesystems, or client capabilities imported during construction and cleanup.
+Keep exact-ID record operations, stop/destroy/release ordering, and publication before
+activation within the same administrative boundary.
+Return passive snapshots and stable session-facing forwarding capabilities, rather
+than exporting the disposable administrative capabilities themselves.
+Native filesystem, process, socket, and provider work stays behind explicit host
+capabilities; this does not move Podman or Node dependencies into the daemon core.
+The owner must be stable across backend re-mints and worker placement, rather than
+depending on one process's module cache.
+
+Do not silently exempt workers from collection because they have received `@agent`.
+Existing daemon tests intentionally terminate such workers when retained authorities
+are collected; possession of host authority does not establish isolated placement.
+An explicit dedicated administrative worker role would be a different lifetime
+contract requiring separate design and acceptance, not a fix hidden in this refactor.
+Before adopting record-backed cleanup, prove removal of session A leaves both
+session B and its supervisor usable, including after restart and with dependencies
+originating in another worker.
+Verify actual formula collection and preserve ordinary-worker termination tests.
+
 Creation is serialized by the directory's sole supervisor and refuses existing records.
 Publish the plan after retaining its initial dependencies, before starting guest work.
 Retain newly acquired resources before releasing their construction names.
@@ -504,7 +546,7 @@ provider requirements, or an explicit user budget, rather than copied between la
 | Provider secret isolation | Reusable upstream account credentials | Guest and listener code | Secrets controls storage access, not a secret already delivered | Keep host-only credential service; eliminate materialization into guests. |
 | Fixed provider routes/account binding | Which upstream authority a guest can exercise | Forged guest requests | Secret custody alone does not restrict credential use | Keep in provider service. |
 | Revocation and process reaping | Continued inference, networking, and execution | Stale or hostile guests | Request deadlines end one request, not the session grant | Keep one supervisor and grant owner. |
-| Cleanup completion before deletion | Storage still in use and original cleanup handles | Late acquisitions, failed stops, and callers treating cancellation as containment | A rejected call or removed formula name does not prove native resources ended; successful slice disposal is the client-side containment barrier | Retain failed and uncertain acquisitions; propagate failed stop before replacement/deletion. OpenCode incarnation-local retries landed; supervisor ownership across reconstruction remains pending. |
+| Cleanup completion before deletion | Storage still in use and original cleanup handles | Late acquisitions, failed stops, and callers treating cancellation as containment | A rejected call or removed formula name does not prove native resources ended; successful slice disposal is the client-side containment barrier | Retain failed and uncertain acquisitions; propagate failed stop before replacement/deletion. The uncommitted OpenCode integration exercises original records and cleanup sharing within one worker; daemon collection and cross-worker ownership acceptance remain pending. |
 | Durable session ownership | Original cleanup authority, retained dependencies, and session storage | Retargeting after backend replacement, partial construction, and failed cleanup | Backend defaults and mutable global names do not identify an older session's owner; daemon directory entries already provide durable formula retention | Keep a passive plan and exact reference entries per session; the shared store is available, supervisor and adapter wiring remain pending. |
 | Active-turn admission for Endo eval/MCP | Association of explicit host tool calls with conversational context | Out-of-turn or stray requests | Session grants limit authority, not transcript context; this does not authenticate a guest process | Keep in shared host tool executor; background mount access remains independent. |
 | 64-request ceiling | Cumulative provider usage | A looping session | No per-session cumulative bound; revocation is an action and provider quotas may be account-wide | Remove default; future token/dollar budgets are separate work. |
@@ -692,6 +734,29 @@ Run real rootless Linux Podman tests in a job whose missing prerequisites are a
 failure, alongside fast parser, cancellation, and state-machine tests.
 Do not claim local macOS/remote Podman compatibility from Linux procfs checks;
 that deployment needs its own supported execution and observation adapter.
+
+### Ironhorse and daemon compatibility tracking
+
+Track native host services separately from the JavaScript engine executing the
+daemon manager or a confined worker.
+The Node daemon, an Endor supervisor with native Node workers, and a confined
+Ironhorse worker are distinct acceptance configurations.
+A passing Node test or a skipped native-worker test is not Ironhorse evidence.
+The entries below concern this sandbox work; they are not a catalog of engine defects.
+
+| Area | Evidence and status | Consequence and required acceptance |
+|---|---|---|
+| Native host modules | The OpenCode provisioner imports `node:fs/promises` and `node:path`; its backend imports native networking/crypto modules. These are host-native services, not demonstrated Ironhorse-compatible modules. | Keep native operations behind explicit host powers. Run the hosted path with an Endor supervisor, the selected manager engine, and its configured native Node worker; separately exercise portable policy/lifecycle code on Ironhorse before claiming portability. |
+| Worker selection and shared ownership | `provideWorkerId` in `packages/daemon/src/manager.js` creates a separate Node worker when an unconfined caplet targets a default locked worker. The proposed OpenCode owner registry is a module-local `Map`. Cross-worker sharing has not been established. | Re-minted backend facets must reach one stable supervisor, independent of Node module-cache coincidence. Verify two backend mints against the same host/session under Endor; one must not bypass the other's cleanup owner. This is a design risk inferred from code, not a reproduced Ironhorse failure. |
+| Collection during successful record deletion | The new real-daemon `OpenCode records` acceptance fails on the Node path after recovery and cancellation: removing the record reports `Formula "directory" became unreachable by any pet name path and was collected`. `disconnectRetainersHolding` in `packages/daemon/src/residence.js` closes workers retaining collected formula references; the record helper exported child directories to its own worker. | Treat this as a confirmed daemon-integration blocker, with Ironhorse/Endor behavior untested. Put supervisor administration at an appropriate daemon boundary; do not swallow the rejection or count it as containment. Verify deletion succeeds while another session and the supervisor remain usable, including after restart. |
+| Native-worker test skips | `testNeedsNodeWorker` in `packages/daemon/test/endo.test.js` skips when `ENDO_BIN` is set without `ENDO_NODE_WORKER_BIN`. `test:rust` and `test:rust-node-workers` in `packages/daemon/package.json` therefore cover different paths. | Record the selected engine, manager, supervisor, native-worker configuration, and skipped cases with each acceptance result. A bare Rust smoke-test pass cannot establish hosted sandbox support. No Endor/Ironhorse acceptance result has been established for this record increment. |
+| Worker death versus connection closure | The existing `testWorkerTermination` gate in `packages/daemon/test/endo.test.js` skips whenever `ENDO_BIN` is set. Its comment specifically describes the engo path closing a connection before worker termination is delivered, although the skip gate covers all `ENDO_BIN` paths. That comment is existing evidence, not a newly reproduced Ironhorse defect. | Add supervised acceptance that checks actual native worker/process closure, not only a rejected CapTP call. Exercise emergency stop, failed startup, record deletion, and daemon restart; this remains unverified for the hosted design. |
+
+Every newly discovered compatibility issue should include its reproducer or code
+evidence, exact execution configuration, observed versus inferred behavior, affected
+design boundary, and the test needed to close it.
+Keep this table current as fixes land; do not relabel an unresolved case as supported
+because another execution configuration passes.
 
 Required cases:
 

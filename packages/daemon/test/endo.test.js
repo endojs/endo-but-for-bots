@@ -25,9 +25,7 @@ import { ZipReader } from '@endo/zip/reader.js';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
-// Exercise the internal host-only helper without a daemon runtime dependency.
-// eslint-disable-next-line import/no-relative-packages
-import { makeSessionRecordStore } from '../../hosted-agent/src/session-record-store.js';
+import { makeSessionRecordStore } from '../src/session-record-store.js';
 import { start, stop, restart, purge, makeEndoClient } from '../index.js';
 import { makeCryptoPowers } from '../src/manager-node-powers.js';
 import { makeDaemonDatabase } from '../src/manager-database-node.js';
