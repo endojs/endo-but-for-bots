@@ -24,6 +24,7 @@ const harness = () => {
   let construct = async () => {};
   let cancelConstruction = async () => {};
   let activate = async () => {};
+  /** @type {(plan: string, dependencies: any) => Promise<void>} */
   let terminate = async () => {};
   let retainedResolver;
   const entry = () =>
@@ -42,9 +43,12 @@ const harness = () => {
       if (faults.activate) throw Error('Activation failed');
     },
     status: async () => 'ready',
-    terminate: async () => {
+    interrupt: async () => {
+      calls.push(['interrupt']);
+    },
+    terminate: async (plan, dependencies) => {
       calls.push(['terminate']);
-      await terminate();
+      await terminate(plan, dependencies);
     },
     destroy: async () => {
       calls.push(['destroy']);
@@ -450,3 +454,42 @@ for (const failFirst of [false, true]) {
     });
   });
 }
+
+test('tool authority is attached to one activation and absent after reconstruction', async t => {
+  const h = harness();
+  const tools = Far('CurrentJournaledTools', {});
+  const replacement = Far('ReplacementJournaledTools', {});
+  await E(h.owner).create('a', 'plan', { dependency: 'dependency-id' });
+  const client = await E(h.owner).start('a', tools);
+  t.is(await E(h.resolver()).get('tools'), tools);
+  await E(client).interrupt();
+  t.is(await E(h.resolver()).get('tools'), tools);
+  t.is(await E(h.owner).start('a', tools), client);
+  await t.throwsAsync(E(h.owner).start('a', replacement), {
+    message: /tool authority/,
+  });
+  const oldResolver = h.resolver();
+  h.onTerminate(async (_plan, cleanup) => {
+    await t.throwsAsync(E(cleanup).get('tools'), { message: /tool authority/ });
+  });
+  await E(h.owner).stop('a');
+  await t.throwsAsync(E(oldResolver).get('tools'), {
+    message: /stopped|interrupted/,
+  });
+  const revived = makeSessionOwner(h.powers);
+  await E(revived).start('a');
+  await t.throwsAsync(E(h.resolver()).get('tools'), {
+    message: /tool authority/,
+  });
+});
+
+test('native records cannot persist the activation tool authority role', async t => {
+  const h = harness();
+  await t.throwsAsync(
+    E(h.owner).create('a', 'plan', { tools: 'tool-formula' }),
+    {
+      message: /tool authority/,
+    },
+  );
+  t.is(await E(h.owner).inspect('a'), undefined);
+});

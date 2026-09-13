@@ -150,6 +150,19 @@ This fresh-construction abort does not prove cleanup of a previously ready sessi
 reconstructed controller may own native effects; actual adapter, Podman, and CLI acceptance
 remain pending.
 
+The daemon owner can attach a transient journaled tool capability with
+`start(name, tools)`.
+It reserves the `tools` dependency role for that activation and refuses persisted tool
+references or replacement with a different capability during an active incarnation.
+An ordinary turn interrupt retains the binding; stop fences further resolver retrieval.
+The generic owner permits an omitted binding, so hosted controllers must require
+`dependencies.get('tools')` during activation.
+After daemon restart, the caller must supply its new journaled binding explicitly.
+This does not revoke an already-returned capability or authenticate a guest process:
+the host MCP bridge still fences admission and drains admitted calls, and Floot records
+each interaction using its originating turn context.
+Actual adapter wiring remains pending.
+
 Node worker termination now waits for the original child process's `close` event,
 which follows process exit or failed spawn and closure of its stdio.
 A closed CapTP connection or an `exit` event alone no longer completes that proof.
@@ -708,6 +721,7 @@ provider requirements, or an explicit user budget, rather than copied between la
 | Provider initialization ownership | Listener cleanup authority, open resolver handles, and runtime lock/recovery reservations | Failed startup, late acquisitions, and a caller treating rejection as release | Per-listener limits bound live service work, not ownership of partially acquired host resources; persistent configuration remains operator-owned | Retain inert runtime/broker kits before acquisition and retry failed cleanup. This adds no lease or new budget, and does not prove descendants stopped after a native crash. |
 | Filesystem drain acknowledgement | Backing files, directories, and cleanup authority still used by 9P calls | Late I/O, failed source cleanup, or a caller equating socket closure with release | Frame sizes and flow control bound transport work, not the lifetime of admitted filesystem effects; stream terminal errors can repeat an earlier I/O failure | Keep a separate release acknowledgement at the stream provider and await kernel unmount, bridge drain, and retained handle cleanup. Do not add a lease or treat a timeout as release. |
 | Durable session ownership | Original cleanup authority, retained dependencies, and session storage | Retargeting after backend replacement, partial construction, and failed cleanup | Backend defaults and mutable global names do not identify an older session's owner; daemon directory entries already provide durable formula retention | The configured daemon owner retains exact IDs and contexts, publishes before acquisition, and separates native cleanup from original-plan storage removal. Node fixture acceptance passes; actual adapter wiring remains pending. |
+| Transient tool attachment | Endo tool authority and its transcript context | Accidental persistence or rebinding to a different executor during a live incarnation | Floot already captures the originating turn on admission and rejects out-of-turn execution; the MCP bridge owns request admission and drain | Attach the current journaled capability only at explicit start, reserve its resolver role, and require stop before replacement. Closing the resolver prevents new retrieval; it is not revocation of a previously returned capability or process authentication. |
 | Controller activation and dependency drain | Authority to revive effectful dependencies and retain their cleanup | Eager marshal-slot revival, detached requests, and startup/stop races | Exact-ID records preserve identity but do not authorize when revival may begin; a closed transport does not drain an admitted host effect | Use slot-free constructor input, persist startup intent before a scoped resolver is supplied, and drain admitted revivals before native cleanup acknowledgement and cancellation. Fence late evaluation using the original context's cancellation state; fresh constructor cancellation waits for formulation to settle before cancelling original contexts, and prior-ready reconstruction still requires native cleanup. Reuse the existing lifetime owner; add no lease or policy budget. |
 | Active-turn admission for Endo eval/MCP | Association of explicit host tool calls with conversational context | Out-of-turn or stray requests | Session grants limit authority, not transcript context; this does not authenticate a guest process | Keep in shared host tool executor; background mount access remains independent. |
 | 64-request ceiling | Cumulative provider usage | A looping session | No per-session cumulative bound; revocation is an action and provider quotas may be account-wide | Remove default; future token/dollar budgets are separate work. |

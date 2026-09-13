@@ -1250,6 +1250,52 @@ testNeedsNodeWorker.serial(
 );
 
 testNeedsNodeWorker.serial(
+  'native session tools are transient across daemon restart',
+  async t => {
+    t.timeout(30_000);
+    const { config, cancelled } = await prepareConfig(t);
+    const specifier = new URL('./_native-session-tools.js', import.meta.url)
+      .href;
+    const tools = label =>
+      Far('TransientToolSet', {
+        describe: async () => harden({ toolSetId: label }),
+      });
+    {
+      const { host } = await makeHost(config, cancelled);
+      const owner = await E(host).provideSessionOwner(
+        'tool-sessions',
+        specifier,
+      );
+      await E(owner).create('one', 'plan', {});
+      const originalTools = tools('original');
+      const client = await E(owner).start('one', originalTools);
+      t.is(await E(client).status(), 'original');
+      await E(client).interrupt();
+      t.is(await E(owner).start('one', originalTools), client);
+      await t.throwsAsync(E(owner).start('one', tools('replacement')), {
+        message: /tool authority cannot change/,
+      });
+      t.false('tools' in (await E(owner).inspect('one')).references);
+    }
+    await restart(config);
+    {
+      const { host } = await makeHost(config, cancelled);
+      const owner = await E(host).provideSessionOwner(
+        'tool-sessions',
+        specifier,
+      );
+      await t.throwsAsync(E(owner).start('one'), {
+        message: /No tool authority is attached/,
+      });
+      await E(owner).stop('one');
+      const client = await E(owner).start('one', tools('rebound'));
+      t.is(await E(client).status(), 'rebound');
+      await E(owner).remove('one');
+    }
+  },
+);
+
+testNeedsNodeWorker.serial(
   'static session powers retain exact dependencies across rebinding and restart',
   async t => {
     t.timeout(30_000);
