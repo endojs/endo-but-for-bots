@@ -7231,6 +7231,7 @@ const makeDaemonCore = async (
   const makeHost = makeHostMaker({
     gitClone,
     provide,
+    provideController,
     provideStoreController,
     cancelValue,
     formulateWorker,

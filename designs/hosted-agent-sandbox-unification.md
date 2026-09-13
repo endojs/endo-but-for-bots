@@ -90,6 +90,16 @@ the session adapters and native drivers.
 The sandbox registry entrypoint delegates to that implementation.
 A stopped incarnation can release its client reference while retaining the logical
 plan and its stable dependencies.
+The daemon-local owner now retains disposable record and client capabilities inside
+the daemon, returning passive snapshots and forwarding facets with copy-only events.
+Stop and removal intent survive reconstruction; failed cleanup retains its original
+authority and prevents reuse.
+Node acceptance proves that session A can be collected after restart while session B
+and both supervisor workers remain usable.
+Original host/directory cancellation fences existing handles, and a revived host cannot
+claim a second cleanup queue while the earlier incarnation retains the directory.
+This boundary does not yet construct native sessions or own the outer MCP/broker grants;
+OpenCode adoption remains uncommitted until those operations use the same owner.
 Podman teardown fences new operations, waits for admitted creates, and retains failed
 removals and their admission slots for retry.
 Successful cleanup requires both checked container removal and native attach-process
@@ -374,6 +384,19 @@ Before adopting record-backed cleanup, prove removal of session A leaves both
 session B and its supervisor usable, including after restart and with dependencies
 originating in another worker.
 Verify actual formula collection and preserve ordinary-worker termination tests.
+
+Native construction must publish a retained controller formula before activation.
+Give each session an explicit native worker; its controller constructor is inert and
+its start operation acquires fresh transports and grants under the owner's queue.
+The controller owns MCP/broker and client cleanup together and returns stop proof before
+the daemon releases its formula references.
+Dedicated client placement alone is insufficient: the shared factory currently receives
+mount capabilities, and state providers construct mounts through their host powers.
+Resolve mount authority at the daemon boundary and pass validated native bind descriptors
+to the shared native factory; separate native state-directory preparation/removal from
+daemon mount formulation.
+Keep mount registrations retained until native cleanup completes, so their collection
+cannot kill a shared factory/provider worker or interrupt the client's cleanup reply.
 
 Creation is serialized by the directory's sole supervisor and refuses existing records.
 Publish the plan after retaining its initial dependencies, before starting guest work.
@@ -749,6 +772,8 @@ The entries below concern this sandbox work; they are not a catalog of engine de
 | Native host modules | The OpenCode provisioner imports `node:fs/promises` and `node:path`; its backend imports native networking/crypto modules. These are host-native services, not demonstrated Ironhorse-compatible modules. | Keep native operations behind explicit host powers. Run the hosted path with an Endor supervisor, the selected manager engine, and its configured native Node worker; separately exercise portable policy/lifecycle code on Ironhorse before claiming portability. |
 | Worker selection and shared ownership | `provideWorkerId` in `packages/daemon/src/manager.js` creates a separate Node worker when an unconfined caplet targets a default locked worker. The proposed OpenCode owner registry is a module-local `Map`. Cross-worker sharing has not been established. | Re-minted backend facets must reach one stable supervisor, independent of Node module-cache coincidence. Verify two backend mints against the same host/session under Endor; one must not bypass the other's cleanup owner. This is a design risk inferred from code, not a reproduced Ironhorse failure. |
 | Collection during successful record deletion | The new real-daemon `OpenCode records` acceptance fails on the Node path after recovery and cancellation: removing the record reports `Formula "directory" became unreachable by any pet name path and was collected`. `disconnectRetainersHolding` in `packages/daemon/src/residence.js` closes workers retaining collected formula references; the record helper exported child directories to its own worker. | Treat this as a confirmed daemon-integration blocker, with Ironhorse/Endor behavior untested. Put supervisor administration at an appropriate daemon boundary; do not swallow the rejection or count it as containment. Verify deletion succeeds while another session and the supervisor remain usable, including after restart. |
+| Daemon-local ownership acceptance | The Node `daemon-local session owner removes one session while sibling workers survive` test passes using clients and cleanup authority in separate workers, after daemon restart. Directory lifetime and host cancellation/revival tests cover stale facets and competing owner queues. | This closes the isolated administrative boundary's Node regression, not the draft OpenCode construction path. Native client/factory/provider mount exchanges and outer MCP/broker ownership still need adoption. Endor/Ironhorse acceptance remains unverified; the local `target/release/endor` binary is absent. |
+| Directory construction pin balance | Node regressions exposed duplicate transient pins: `formulateDirectory` transfers one pin, but directory publication and host/guest dependency construction took another. Fresh directories then survived loss of their final name until restart. The fix adopts the transferred pin once and releases bootstrap pins after durable root publication. | Verify fresh concurrent directory and pet-store collection without restart, plus host/guest directory collection and continued bootstrap access. These Node regressions pass; this is a daemon lifetime bug, not an observed Ironhorse defect. Failed agent-construction unwinding is outside this pin-balance fix. |
 | Native-worker test skips | `testNeedsNodeWorker` in `packages/daemon/test/endo.test.js` skips when `ENDO_BIN` is set without `ENDO_NODE_WORKER_BIN`. `test:rust` and `test:rust-node-workers` in `packages/daemon/package.json` therefore cover different paths. | Record the selected engine, manager, supervisor, native-worker configuration, and skipped cases with each acceptance result. A bare Rust smoke-test pass cannot establish hosted sandbox support. No Endor/Ironhorse acceptance result has been established for this record increment. |
 | Worker death versus connection closure | The existing `testWorkerTermination` gate in `packages/daemon/test/endo.test.js` skips whenever `ENDO_BIN` is set. Its comment specifically describes the engo path closing a connection before worker termination is delivered, although the skip gate covers all `ENDO_BIN` paths. That comment is existing evidence, not a newly reproduced Ironhorse defect. | Add supervised acceptance that checks actual native worker/process closure, not only a rejected CapTP call. Exercise emergency stop, failed startup, record deletion, and daemon restart; this remains unverified for the hosted design. |
 
