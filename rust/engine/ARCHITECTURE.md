@@ -2,6 +2,7 @@
 
 Current-state guide audited at `96db92e23` on 2026-09-09.
 GC policy incorporates the W6 decision at `d38196799`.
+Ownership and suspended-activation corrections updated on 2026-09-13.
 This describes the implementation, with explicit limits where it differs from
 [the roadmap](../../designs/ironhorse-engine.md#status).
 [README acceptance status](README.md#acceptance-status) records which bars remain open.
@@ -262,6 +263,13 @@ Closures/functions, proxies and accessors are carried.
 A resumed guest function is callable; “functions cannot resume” is not a valid gate rationale.
 `functions_carry.rs`, `proxy_carry.rs` and `accessor_carry.rs` exercise these paths.
 Generators and promises have carried representations subject to their boundary restrictions.
+Suspended expression stacks carry validated assignment targets, including computed
+property keys and `super` receivers, across `await` and generator suspension.
+Symbol keys held only by those stacks keep their descriptors alive through GC;
+unreachable activations do not retain them.
+`async_carry.rs` checks these targets through blob and store restore, and
+`additional_carry.rs` compares values and costs for indexed properties, symbol
+registry entries, errors, DataView aliases, wrappers, and mapped arguments.
 Not every possible live async activation has a portable persistent representation.
 `persist_gates.rs` tests refusals; a refusal is not a silent omission or successful carry.
 

@@ -17,7 +17,7 @@ findings before every commit.
    pumping and preserve callback contexts and queue ordering across compartments.
 5. [x] Retain environments/code through functions, jobs, and host handles after
    collection and Compartment drop; make queued-work abandonment explicit.
-6. [ ] Check persistent-worker permit policy at open/resume/rewind, rejection and
+6. [x] Check persistent-worker permit policy at open/resume/rewind, rejection and
    meter isolation, carried-state coverage, and the reported async restore issue.
 7. [ ] Reconcile current documentation and PR scope, run appropriate validation,
    push reviewed commits, and continue CI/conflict monitoring.

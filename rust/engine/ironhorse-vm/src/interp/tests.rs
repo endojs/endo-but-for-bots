@@ -3483,6 +3483,55 @@ fn reserved_symbol_ids_are_refused_without_mutating_the_table() {
 }
 
 #[test]
+fn suspended_symbol_keys_are_retained_only_with_their_activation() {
+    for function in [
+        "function* f(){ obj[Symbol('ephemeral')] += yield 0; } var it = f(); it.next();",
+        "async function f(){ obj[Symbol('ephemeral')] += await gate; } f();",
+        "async function* f(){ obj[Symbol('ephemeral')] += await gate; } var it = f(); it.next();",
+    ] {
+        let mut vm = Interp::new();
+        let (code, names) = ironhorse_compile::compile_atoms(&format!(
+            "var obj = {{}}; var gate = new Promise(() => {{}}); {function}"
+        ))
+        .unwrap();
+        vm.link_intrinsics(&crate::parse_symbols(&names));
+        assert!(vm.run(&code).completed);
+        let key = vm
+            .generators
+            .values()
+            .filter_map(|row| row.frame.as_ref())
+            .chain(
+                vm.async_instances
+                    .values()
+                    .filter_map(|row| row.frame.as_ref()),
+            )
+            .chain(
+                vm.async_generators
+                    .values()
+                    .filter_map(|row| row.frame.as_ref()),
+            )
+            .flat_map(|frame| &frame.stack_slice)
+            .find_map(|slot| match (slot.kind, slot.value) {
+                (Kind::At, Payload::At(id, 0)) => vm.symbol_key_ids.descriptor(id),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("no suspended computed symbol key: {function}"));
+        vm.collect_garbage().unwrap();
+        assert!(vm.symbol_key_ids.contains_key(&key));
+        let (code, names) =
+            ironhorse_compile::compile_atoms("var it; it = null; gate = null; obj = null; 0")
+                .unwrap();
+        let code = vm
+            .relink_crank(&code, &crate::parse_symbols(&names))
+            .unwrap();
+        assert!(vm.run(&code).completed);
+        vm.collect_garbage().unwrap();
+        assert!(!vm.symbol_key_ids.contains_key(&key), "{function}");
+        assert!(vm.slots.is_free_index(key));
+    }
+}
+
+#[test]
 fn conflicting_symbol_restore_is_atomic_and_exhaustion_does_not_alias() {
     let mut vm = Interp::new();
     vm.link_intrinsics(&["seed".into()]);
