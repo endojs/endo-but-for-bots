@@ -652,11 +652,21 @@ export const makeSandboxFactoryKit = (
     });
 
     assertOwner();
-    const driverSlice = await driver.prepareSlice(sliceSpec);
-    // Retain immediately: even rendering or minting the public handle can fail.
-    // The initial cleanup owns just the returned driver context; once built,
-    // disposal also stops process admission and releases dynamic mounts.
-    let disposeOwned = () => driver.teardown(driverSlice);
+    let preparation;
+    if (driver.prepareSliceKit !== undefined) {
+      preparation = driver.prepareSliceKit(sliceSpec);
+    } else {
+      // Legacy drivers only transfer ownership after successful preparation.
+      // Their failed acquisitions cannot be cleaned up through this factory.
+      const slice = await driver.prepareSlice(sliceSpec);
+      preparation = {
+        value: Promise.resolve(slice),
+        close: () => driver.teardown(slice),
+      };
+    }
+    // Retain before waiting for preparation, rendering, or handle construction.
+    // Once built, disposal also releases processes and dynamic mounts.
+    let disposeOwned = preparation.close;
     /** @type {Promise<void> | undefined} */
     let cleanupFlight;
     const cleanupOwned = () => {
@@ -672,6 +682,7 @@ export const makeSandboxFactoryKit = (
     };
     slices.retain(sliceId, cleanupOwned);
     liveClosers.add(cleanupOwned);
+    const driverSlice = await preparation.value;
     // Drivers may attach a `runtimeDetails` summary to the slice
     // context.  When present, the factory weaves it into the
     // per-slice `help()` text so callers can see which hardening
