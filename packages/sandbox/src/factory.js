@@ -576,6 +576,19 @@ export const makeSandboxFactoryKit = (
    */
   const buildSlice = async (opts, sliceId, resolvePaths, nativeOnly) => {
     assertOwner();
+    const nativeProfile =
+      'nativeProfile' in opts ? opts.nativeProfile : undefined;
+    if (
+      nativeProfile !== undefined &&
+      (!nativeOnly ||
+        opts.backend !== 'podman' ||
+        opts.policy !== undefined ||
+        opts.limits !== undefined)
+    ) {
+      throw makeError(
+        X`Native profiles require explicit Podman selection and cannot mix with legacy policy or rlimits`,
+      );
+    }
     if ((opts.network === 'join') !== (opts.networkRef !== undefined)) {
       // Backend-independent: every driver must agree the container ref is
       // exactly what `network: 'join'` names, so a driver that ignores the
@@ -638,11 +651,13 @@ export const makeSandboxFactoryKit = (
     // `prlimit` prefix before exec.  Passing the merged dictionary
     // (rather than the raw overrides) keeps drivers ignorant of the
     // default policy table.
-    const limits = resolveLimits(opts.limits);
+    const limits =
+      nativeProfile === undefined ? resolveLimits(opts.limits) : undefined;
 
     /** @type {SliceSpec} */
     const sliceSpec = harden({
       rootfs,
+      ...(nativeProfile !== undefined ? { nativeProfile } : {}),
       mounts: harden(resolvedMounts),
       ...(generatedFiles.length > 0 ? { generatedFiles } : {}),
       scratchHostPath,
@@ -651,7 +666,7 @@ export const makeSandboxFactoryKit = (
       seccomp: opts.seccomp ?? 'default',
       env: harden({ ...(opts.env ?? {}) }),
       cwd: opts.cwd,
-      limits,
+      ...(nativeProfile === undefined ? { limits } : {}),
       // Passed through as the caller wrote it: validating a policy
       // means saying which controls the backend can enforce and read
       // back, and only the driver knows that.
