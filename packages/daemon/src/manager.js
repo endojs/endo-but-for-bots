@@ -2105,6 +2105,7 @@ const makeDaemonCore = async (
     const worker = await provide(workerId, 'worker');
     const workerDaemonFacet = workerDaemonFacets.get(worker);
     assert(workerDaemonFacet, 'Cannot make unconfined plugin with non-worker');
+    context.assertActive();
     const powersP = provide(powersId);
     return E(/** @type {any} */ (workerDaemonFacet)).makeUnconfined(
       specifier,
@@ -4369,6 +4370,7 @@ const makeDaemonCore = async (
    * @param {Context} context
    */
   const evaluateFormulaForId = async (id, context) => {
+    context.assertActive();
     const { number: formulaNumber, node: formulaNode } = parseId(id);
     const isRemote = !isLocalKey(formulaNode);
     if (isRemote) {
@@ -4382,6 +4384,7 @@ const makeDaemonCore = async (
     }
 
     const formula = await getFormulaForId(id);
+    context.assertActive();
     logLifecycle(id, 'REINCARNATE');
     assertValidFormulaType(formula.type);
 
