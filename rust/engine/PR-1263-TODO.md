@@ -25,6 +25,36 @@ findings before every commit.
 Follow-up implementation published to #1263 on 2026-09-13.
 The 10-minute monitor continues while the PR remains open; merging is not requested.
 
-Multiple Realms, cross-machine messaging, JsMachine (F068/F157), arbitrary host
-function registration, and full daemon SES acceptance remain outside this work.
+## Expanded scope, 2026-09-13
+
+Source: [snapshot and F054 requirements](https://github.com/endojs/endo-but-for-bots/pull/1263#issuecomment-5650044747).
+The preceding checklist records the first follow-up, not completion of this scope.
+
+8. [x] Carry shared environment, evaluator, function/frame context, ordered jobs,
+   rejection, and host-root records through the schema and restore validator.
+9. [x] Expose Machine container persistence and explicit compartment/root
+   reacquisition; release unclaimed roots and reattach compiler/permit/loader policy.
+10. [x] Integrate shared Machines with paged HeapStore eager/lazy resume,
+    checkpoints, collection, and rewind in the supported persistent consumer.
+11. [ ] Implement F054 host-callable registration through the common dispatcher,
+    with rooted captures, stable persisted identities, and explicit reattachment.
+12. [ ] Add uninterrupted/restored continuity and malformed-state tests, complete
+    adversarial review loops, reconcile documentation, and publish reviewed commits.
+
+Multiple Realms, cross-machine messaging, and JsMachine (F068/F157) remain deferred.
+Full daemon SES acceptance is a separate acceptance bar, not implied by freezing.
 Do not edit the historical architecture review.
+
+Shared persistence review loops resolved queue-only combinator and async anchors,
+scoped evaluator restore ordering, cyclic callable admission, module-only environments,
+prospective intrinsic binding lookup, report ownership, partial-allocation recovery,
+and independent provisional compartment/export root lifetimes.
+Both adversarial reviewers reported no remaining blocker in this increment.
+Format 21/store 32/row release 2 carry shared state; format-20 byte controls are retained.
+F054 host registration remains the next increment before overall completion.
+
+Validation for the shared increment: full ironhorse-snapshot suite; VM unit, realm
+and promise-pump suites; Endo engine unit, meter-bound, runtime-compiler and store-worker
+suites; deterministic-provider shared/golden/metamorphic suites; Rust 1.88 Clippy with
+warnings denied and rustfmt.
+Rust API documentation builds, with existing VM rustdoc warnings.

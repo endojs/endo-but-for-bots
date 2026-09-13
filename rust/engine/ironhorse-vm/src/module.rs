@@ -1345,3 +1345,6 @@ mod tests {
         assert_eq!(d_reads, 1);
     }
 }
+
+#[path = "module_snapshot.rs"]
+mod snapshot;

@@ -123,11 +123,28 @@ then collects prior unreachable environments before compilation.
 It retains the latest heap until a later collection so returned diagnostics stay valid.
 Canonical names and tagged-template cache entries remain machine-owned allocations;
 new names/sites consume the finite key space, preserving the engine's reserved range.
-Shared-machine snapshots remain refused: the persistent worker uses standalone Interp.
-Standalone function/frame/promise environment associations derive from its default
-global, preserving existing snapshot rows and boot identity.
-Multiple Realms, cross-machine sharing, arbitrary host-function registration, and full
-SES acceptance remain outside this extraction.
+Shared Machines now use container and eager/lazy HeapStore persistence.
+The persistent worker owns this same Machine through `SharedStoreSession`.
+The optional FUNC extension carries environment associations, scoped evaluators,
+ordered jobs, rejection reports, static module cells and exported host roots.
+Standalone images retain their old row shapes and default environment interpretation.
+Multiple Realms, cross-machine sharing and full SES acceptance remain separate work.
+Host-function registration is the next increment required by PR #1263.
+
+Restoration requires exhaustive host policy for every environment before Machine adoption.
+Compiler services and armed meter callbacks must be reattached explicitly.
+Compartment and root IDs can reacquire handles on the restored heap; old handles retain
+their original Machine identity and cannot be inserted into the restored graph.
+`release_unclaimed_roots` releases provisional ownership without cancelling guest jobs.
+Completed scripts may snapshot queued work without pumping it; active/incomplete cranks
+remain refused.
+Pending host endowments must first be applied by evaluation; snapshots refuse them.
+The static module model carries primitive cells, namespace aliases and evaluation status;
+active or heap-backed host module records remain an explicit admission refusal.
+Shared checkpoint extraction revisits FUNC each time because weak handle ownership,
+module cells and queue changes are not covered by arena dirty-page tracking.
+Store collection uses the same environment-root normalization as Machine collection.
+The worker explicitly refuses old standalone stores before any migration writes.
 
 `interp` is private; normal execution uses curated crate-root exports.
 Capture/restore rows live in `snapshot_api`, with `ROW_SCHEMA_VERSION` tied to a
@@ -338,9 +355,9 @@ The table covers the review identifiers and the capture/restore row contract.
 |---|---|---|
 | `COST_TABLE_VERSION` | `ironhorse-meter/src/lib.rs`: `ironhorse-meter-5` | Change weights, charging points or admission policy by appending to `releases::PINNED`, changing the release literal and deliberately updating golden vectors together. `METR` requires both matching name and digest; old-meter persisted heaps cannot resume on the new engine. |
 | `PARSE_METER_RELEASE` | `ironhorse-compile/src/meter.rs`: alias of `COST_TABLE_VERSION` | No independent bump. Compiler charge/admission changes follow the shared meter release procedure; do not recreate a second version namespace. |
-| `IRONHORSE_FORMAT_VERSION` | Snapshot `format.rs`: 20 | Change the container encoding/interpretation with a format bump and explicit decoder support/refusal. `MIN_READ` is 1, but decoding an old container is not permission to execute it: boot and meter identity gates still apply. |
-| `STORE_SCHEMA_VERSION` | Snapshot `store.rs`: 31 | Change paged-store/manifest/small-state representation with a schema bump and verified migration step or explicit refusal. `migrate_store` authenticates old state and advances monotonically; it does not translate old meter semantics. |
-| `ROW_SCHEMA_VERSION` | VM `snapshot_api.rs`: 1 | A row field/type/order change requires a new declaration fingerprint in the append-only `row_schema_releases.tsv` ledger and advances both container and store versions, with explicit migration/refusal and carried-state golden checks. This initial row release records existing format 20/store 31; it changes no persisted bytes. |
+| `IRONHORSE_FORMAT_VERSION` | Snapshot `format.rs`: 21 | Change the container encoding/interpretation with a format bump and explicit decoder support/refusal. `MIN_READ` is 1, but decoding an old container is not permission to execute it: boot and meter identity gates still apply. |
+| `STORE_SCHEMA_VERSION` | Snapshot `store.rs`: 32 | Change paged-store/manifest/small-state representation with a schema bump and verified migration step or explicit refusal. `migrate_store` authenticates old state and advances monotonically; it does not translate old meter semantics. |
+| `ROW_SCHEMA_VERSION` | VM `snapshot_api.rs`: 2 | A row field/type/order change requires a new declaration fingerprint in the append-only `row_schema_releases.tsv` ledger and advances both container and store versions, with explicit migration/refusal and carried-state golden checks. Release 2 adds shared Machine rows in format 21/store 32; prior format-20 bytes remain pinned. |
 | `INTL_DATA_VERSION` | Generated VM `src/intl_profile.rs` | Identifies the in-tree Intl profile plus the locked ICU dependency graph, including data checksums and dependency edges. CI rejects stale generation and root/engine disagreement. The label participates in the boot fingerprint and therefore the persisted SIGN gate. Current dependencies retain an immutable legacy alias; upgrades produce a new identity. |
 
 The derived table digest versions weight/default-key encoding, not every charging point.

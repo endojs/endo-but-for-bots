@@ -19,6 +19,7 @@ impl Interp {
         let idx = self.slots.alloc(prop);
         self.slots.get_mut(self.environment.global_obj).next = idx;
         self.environment.global_props.insert(id, idx);
+        self.environment.binding_names.insert(id);
         idx
     }
 

@@ -136,6 +136,14 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         "f1557aab3334933b351940ca7b5cbe070ee42d325a440ed61c0820b8d7b38e90"
     );
 
+    let mut format20 = session.machine().snapshot_image(&sig).unwrap().into_image();
+    format20.signature = Signature::decode(&platform_signature).unwrap();
+    format20.version.format_version = 20;
+    assert_eq!(
+        hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&format20)),
+        "e129c2191459e2f228d5fd84f78ca28873c16f36786396ab19ce95db7ec90fce"
+    );
+
     let blob = session
         .machine()
         .write_snapshot(&sig)
@@ -355,11 +363,12 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Format18 adds the boot-native name table to FUNC.
         // Format19: saved-handler segment identity. Guest result and meter pins stay fixed.
         // Format20 / schema31 carry the first reported rejection.
+        // Format21 / schema32 carry shared Machine state.
         if ironhorse_vm::MATH_PROVIDER == "platform" {
-            "e129c2191459e2f228d5fd84f78ca28873c16f36786396ab19ce95db7ec90fce"
+            "a3a379424af6e6678900fdf89a7056325b5f54b95e5741381d5f59c740e4e234"
         } else {
             // F189 reserved IDs, with the deterministic provider SIGN.
-            "2fd8758022816889ec2870a839b6ea36c2260b0b9752a111e500beec5724a710"
+            "a9f6f2eb74b42114ed5261bac8c74a12876c6e774a7adbccf47467cf91cfb0a1"
         },
         "canonical final blob hash"
     );
@@ -574,10 +583,11 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Store29 and FUNC native-name rows change the authenticated state.
         // Schema30 and format19 authenticate the saved-handler layout.
         // Schema31 / format20 authenticate the rejection-report suffix.
+        // Schema32 / format21 authenticate shared Machine state.
         if ironhorse_vm::MATH_PROVIDER == "platform" {
-            "601fece7ad269cb87dab53afa8d9d79af97f185fd0b43c3c0589578412c3f007"
+            "5f8a281a9bb375cf34969c761f1c8abe1c3fda3d5d3f1083429e5be69884e105"
         } else {
-            "69479e004c7014a252c6e9ff0f701d11ec28564826986c02d82de653e4945834"
+            "e1246d4f8670431252e20400b664d646436e643d508c51f80474493367689371"
         },
         "epoch-3 seal chain"
     );

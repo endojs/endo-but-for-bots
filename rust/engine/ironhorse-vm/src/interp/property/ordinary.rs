@@ -294,6 +294,7 @@ impl Interp {
                 // when an ordinary [[DefineOwnProperty]] creates a global via
                 // `globalThis.x = value` or its computed equivalent.
                 environment.global_props.insert(id, index);
+                environment.binding_names.insert(id);
             }
             self.tick_property_create(id);
             return true;

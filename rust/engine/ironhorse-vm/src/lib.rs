@@ -54,8 +54,9 @@ pub mod symbols;
 pub mod value;
 
 pub use compartment::{
-    Compartment, CompartmentId, CompartmentOptions, CompartmentSkip, Intrinsics, Machine,
-    ObjectIdentity, RootedValue, UnhandledRejection,
+    Compartment, CompartmentId, CompartmentOptions, CompartmentSkip, EnvironmentId,
+    EnvironmentPolicy, HostRootId, Intrinsics, Machine, MachineRestorePolicy, ObjectIdentity,
+    RootedValue, UnhandledRejection,
 };
 pub use gc::{GcStats, Heap};
 #[doc(hidden)]

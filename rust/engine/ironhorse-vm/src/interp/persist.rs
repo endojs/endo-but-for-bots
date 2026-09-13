@@ -78,7 +78,7 @@ impl Interp {
         Ok(())
     }
 
-    fn validate_restore_owners(
+    pub(super) fn validate_restore_owners(
         &self,
         owners: impl IntoIterator<Item = u32>,
         row: &'static str,
@@ -100,7 +100,7 @@ impl Interp {
     /// Check value shape and coordinates without loading chunk contents.
     /// Returns the primitive whose chunk needs content validation, if any;
     /// a Symbol's String descriptor is that primitive rather than the Symbol.
-    fn validate_restore_value_shape(
+    pub(super) fn validate_restore_value_shape(
         &self,
         value: Slot,
         row: &'static str,
@@ -506,10 +506,15 @@ impl Interp {
         &self,
         dirty_heap_only: bool,
     ) -> Option<&'static str> {
-        // The existing image/store schema restores a standalone interpreter.
-        // It cannot carry the shared frozen boot profile or multiple Realms.
-        if self.shared_compartments {
-            return Some("a shared Realm machine, which no snapshot carries");
+        if std::iter::once(&self.environment)
+            .chain(self.inactive_environments.values())
+            .any(|e| {
+                e.modules
+                    .try_borrow()
+                    .map_or(true, |m| !m.snapshot_admitted())
+            })
+        {
+            return Some("an active or heap-backed host module graph");
         }
         // The test262 `$262` host ([`Self::install_test262_host`]):
         // harness-only, minted above `boot_slot_count`, carried by no
@@ -549,6 +554,10 @@ impl Interp {
             .promises
             .values()
             .flat_map(|p| p.reactions.iter())
+            .chain(self.promise_jobs.iter().filter_map(|job| match job {
+                PromiseJob::Reaction { reaction, .. } => Some(reaction),
+                _ => None,
+            }))
             .any(|r| {
                 !matches!(
                     r.kind,
@@ -651,9 +660,11 @@ impl Interp {
         {
             return true;
         }
-        self.functions
-            .get(&function)
-            .is_some_and(|info| info.native.is_none() && info.method.is_none())
+        self.functions.get(&function).is_some_and(|info| {
+            (info.native.is_none() && info.method.is_none())
+                || (self.shared_compartments
+                    && matches!(info.native, Some(Native::Eval | Native::Function)))
+        })
     }
 
     /// Function slots rejected by [`Self::function_persists`], including
@@ -1427,6 +1438,7 @@ impl Interp {
             .collect();
         native_names.sort_unstable();
         FunctionStateSnapshot {
+            shared: self.shared_machine_snapshot(),
             native_names: Some(native_names),
             segments,
             functions,
@@ -2426,14 +2438,8 @@ impl Interp {
             .iter()
             .filter_map(|(_, d)| is_promise_resolving_guard(d.guard).then_some(d.guard))
             .collect();
-        let live_comb: std::collections::BTreeSet<u32> = promises
-            .iter()
-            .flat_map(|(_, p)| p.reactions.iter())
-            .filter_map(|r| match r.kind {
-                ReactionKind::Combine(ci, _) | ReactionKind::CombineDirect(ci, _) => Some(ci),
-                _ => None,
-            })
-            .collect();
+        let live_comb: std::collections::BTreeSet<u32> =
+            self.snapshot_combinator_map().into_keys().collect();
         let guard_map: std::collections::HashMap<usize, u32> = live_guards
             .iter()
             .enumerate()
@@ -2472,7 +2478,11 @@ impl Interp {
             .collect();
         async_instances.sort_unstable_by_key(|row| row.owner);
         PromiseClusterSnapshot {
-            unhandled_rejection: self.environment.unhandled_rejection.map(|owner| owner.0),
+            unhandled_rejection: if self.shared_compartments {
+                None
+            } else {
+                self.environment.unhandled_rejection.map(|owner| owner.0)
+            },
             async_instances,
             promises: promises
                 .into_iter()
@@ -3018,8 +3028,13 @@ impl Interp {
                 })
         });
         let mut awaited = std::collections::BTreeSet::new();
-        for promise in self.promises.values() {
-            for reaction in &promise.reactions {
+        for reaction in self.promises.values().flat_map(|p| &p.reactions).chain(
+            self.promise_jobs.iter().filter_map(|job| match job {
+                PromiseJob::Reaction { reaction, .. } => Some(reaction),
+                _ => None,
+            }),
+        ) {
+            {
                 if let ReactionKind::AsyncAwait(owner) = reaction.kind {
                     if !self.async_instances.contains_key(&owner) || !awaited.insert(owner.0) {
                         return false;
@@ -3799,6 +3814,7 @@ impl Interp {
     /// ([`RunOutcome::host_coerced`]).
     pub fn is_quiescent(&self) -> bool {
         self.fields_are_quiescent()
+            || (self.last_crank_completed && self.fields_at_shared_collection_boundary())
     }
 
     /// Sections changed relative to this session's durable acknowledgement.
@@ -3806,6 +3822,9 @@ impl Interp {
         &self,
         baseline: &crate::SnapshotBaseline,
     ) -> crate::SnapshotDirty {
+        if self.shared_compartments {
+            return crate::SnapshotDirty::all();
+        }
         if !std::rc::Rc::ptr_eq(&baseline.identity, &self.snapshot_baseline_identity) {
             return crate::SnapshotDirty::all();
         }

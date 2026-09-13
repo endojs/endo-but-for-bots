@@ -5,9 +5,10 @@ use crate::image::{ArrayImage, CollectionImage, IndexPropsImage, MachineImage, W
 use crate::store::SmallState;
 use ironhorse_vm::snapshot_api::{
     AccessorRow, AsyncRow, BoundFunctionRow, CombinatorRow, DisposableStackRow, DisposalRecordRow,
-    FunctionStateSnapshot, GeneratorRow, PrivateAccessorRow, PrivateElementSnapshot,
-    PrivateValueRow, PromiseClusterSnapshot, PromiseReactionRow, PromiseRow, SavedFrameRow,
-    SavedJumpRow,
+    EnvironmentRow, EvaluatorRow, FunctionStateSnapshot, GeneratorRow, ModuleGraphSnapshot,
+    ModuleRecordRow, PrivateAccessorRow, PrivateElementSnapshot, PrivateValueRow,
+    PromiseClusterSnapshot, PromiseJobRow, PromiseReactionRow, PromiseRow, SavedFrameRow,
+    SavedJumpRow, SharedMachineSnapshot,
 };
 use ironhorse_vm::Slot;
 
@@ -326,7 +327,7 @@ row!(WrapperImage {
     metadata: [owner]
 });
 row!(FunctionStateSnapshot {
-    slots: [bound_functions],
+    slots: [bound_functions, shared],
     metadata: [
         native_names,
         segments,
@@ -608,5 +609,64 @@ mod tests {
             }
         });
         assert_eq!(visited, (2..=11).collect::<Vec<_>>());
+    }
+}
+
+row!(SharedMachineSnapshot {
+    slots: [jobs, environments],
+    metadata: [
+        default_global,
+        current_global,
+        intrinsic_roots,
+        function_environments,
+        generator_environments,
+        async_environments,
+        promise_environments,
+        evaluators,
+        roots,
+        pending_rejections
+    ]
+});
+row!(PromiseJobRow {
+    slots: [reaction, value],
+    metadata: [thenable, rejected]
+});
+row!(EnvironmentRow {
+    slots: [modules],
+    metadata: [
+        global,
+        binding_names,
+        host_owned,
+        compiler_required,
+        unhandled_rejection
+    ]
+});
+metadata_row!(EvaluatorRow, [owner, kind, name_chunk]);
+
+row!(ModuleGraphSnapshot {
+    slots: [modules, cells],
+    metadata: [dfs_counter]
+});
+row!(ModuleRecordRow {
+    slots: [body],
+    metadata: [
+        specifier,
+        imports,
+        exports,
+        status,
+        environment,
+        dfs_index,
+        dfs_ancestor_index
+    ]
+});
+
+impl VisitSlots for (String, Option<Slot>) {
+    fn visit(&self, f: &mut dyn FnMut(&Slot)) {
+        self.1.visit(f);
+    }
+}
+impl VisitSlots for (u8, Slot, u32) {
+    fn visit(&self, f: &mut dyn FnMut(&Slot)) {
+        f(&self.1);
     }
 }

@@ -20,6 +20,8 @@
 //! tables are enumerated in [`crate::sidetable`] with their coverage; the
 //! ones marked `Pending` there are the remaining atoms.
 
+mod shared_codec;
+
 use crate::atom::{AtomReader, AtomWriter};
 use crate::format::{
     Signature, SnapshotError, Version, BLOC, CREA, HEAP, KEYS, METR, NAME, SIGN, STAC, SYMB, VERS,
@@ -1956,6 +1958,9 @@ pub(crate) fn encode_function_state(
             v.extend_from_slice(&offset.to_be_bytes());
         }
     }
+    if let Some(shared) = &state.shared {
+        shared_codec::encode(shared, &mut v);
+    }
     v
 }
 
@@ -2098,8 +2103,14 @@ pub(crate) fn decode_function_state(
         }
         Some(rows)
     };
+    let shared = if c.i == p.len() {
+        None
+    } else {
+        Some(shared_codec::decode(&mut c)?)
+    };
     c.done()?;
     Ok(ironhorse_vm::snapshot_api::FunctionStateSnapshot {
+        shared,
         native_names,
         segments,
         functions,
@@ -2799,7 +2810,27 @@ pub(crate) fn encode_promise_cluster(
 /// - a live non-`Race` combinator's `remaining` covers its
 ///   pending element reactions — each drain decrements it once, so a
 ///   smaller count would underflow at resume.
-pub(crate) fn decode_promise_cluster(
+#[cfg(test)]
+fn decode_promise_cluster(
+    p: &[u8],
+) -> Result<ironhorse_vm::snapshot_api::PromiseClusterSnapshot, SnapshotError> {
+    let state = decode_promise_cluster_payload(p)?;
+    let referenced: std::collections::BTreeSet<_> = state
+        .promises
+        .iter()
+        .flat_map(|p| &p.reactions)
+        .filter(|r| r.kind == 2 || r.kind == 12)
+        .map(|r| r.a)
+        .collect();
+    if referenced.len() != state.combinators.len() {
+        return Err(SnapshotError::Corrupt(
+            "promise cluster: combinators not densely referenced",
+        ));
+    }
+    Ok(state)
+}
+
+pub(crate) fn decode_promise_cluster_payload(
     p: &[u8],
 ) -> Result<ironhorse_vm::snapshot_api::PromiseClusterSnapshot, SnapshotError> {
     let mut c = Cursor::new(p, "promise cluster");
@@ -3069,11 +3100,6 @@ pub(crate) fn decode_promise_cluster(
         }
     }
     for (row, &pending) in combinators.iter().zip(&comb_pending) {
-        if pending == 0 {
-            return Err(SnapshotError::Corrupt(
-                "promise cluster: combinators not densely referenced",
-            ));
-        }
         if row.resolve.kind != Kind::Reference || row.reject.kind != Kind::Reference {
             return Err(SnapshotError::Corrupt(
                 "promise cluster: combinator capability names no function",
@@ -3922,6 +3948,7 @@ static EMPTY_INTL: IntlTables = IntlTables {
 #[cfg(test)]
 static EMPTY_FUNCTION_STATE: ironhorse_vm::snapshot_api::FunctionStateSnapshot =
     ironhorse_vm::snapshot_api::FunctionStateSnapshot {
+        shared: None,
         native_names: None,
         segments: Vec::new(),
         functions: Vec::new(),
@@ -4105,6 +4132,9 @@ fn generator_body_starts(
 /// Check all stored Slot records through the exhaustive image visitor, then
 /// validate scalar owners, handles and cross-table geometry.
 pub(crate) fn check_machine_image_bounds(image: &MachineImage) -> Result<(), SnapshotError> {
+    if image.function_state.shared.is_some() && image.version.format_version < 21 {
+        return Err(SnapshotError::Corrupt("shared machine requires format 21"));
+    }
     check_stored_bounds(
         &image.slots,
         |f| image.visit_slots(f),
@@ -8241,6 +8271,7 @@ mod function_decoder_refusals {
     #[test]
     fn function_cluster_ordering() {
         let valid = FunctionStateSnapshot {
+            shared: None,
             native_names: None,
             segments: vec![],
             functions: vec![row(2), row(3)],

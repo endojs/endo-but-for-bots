@@ -673,8 +673,13 @@ pump and discard operation, including metered continuation without resetting cha
 Names and tagged-template cache entries remain machine lifetime costs.
 Intrinsic permits restrict global bindings, not transitive capabilities.
 
-Shared-Realm snapshots remain explicitly refused; the current Endo persistent path
-uses standalone `Interp` capture/restore.
+Shared Machine snapshots carry the single Realm, environment and defining-code
+associations, queued jobs, rejection reports, static module state and host roots.
+The Endo persistent path now uses the same Machine through `SharedStoreSession`,
+including lazy resume, checkpoints, collection and rewind.
+Restoration requires explicit host policy before adoption and supports handle
+reacquisition; it never pumps queued jobs during snapshot or restore.
+Old standalone worker stores are explicitly refused before migration writes.
 The snapshot row contract is now `snapshot_api::ROW_SCHEMA_VERSION`, while `interp`
 is private and the arena accessors remain read-only.
 The common `JsMachine` engine trait stays deferred under W6 decision 2.
@@ -891,7 +896,7 @@ Reconciliation with the design cluster, per document:
 | [daemon-endor-architecture](daemon-endor-architecture.md) | Ironhorse is embedded directly through its own wrappers. Thread pinning remains; the full worker protocol and common engine abstraction are not wired. |
 | [daemon-rust-xs-performance](daemon-rust-xs-performance.md) | Engine benchmarks exist, but the complete XS supervisor pump has not been replaced by an interchangeable Ironhorse implementation. |
 | [daemon-xs-worker-metering](daemon-xs-worker-metering.md) | Ironhorse owns `Meter`, `MeterBounds` and per-crank reports. Dynamic compilation and dispatch share the live budget; these are separate Rust entry points, not the XS metering API. |
-| [daemon-xs-worker-snapshot](daemon-xs-worker-snapshot.md) | `MachineSnapshot` and `HeapStore` implement buffered container encoding, CAS/store operations and validated standalone restore. They are not XS callback streaming or shared-Realm snapshots. |
+| [daemon-xs-worker-snapshot](daemon-xs-worker-snapshot.md) | `MachineSnapshot` and `HeapStore` implement buffered container encoding, CAS/store operations and validated standalone restore. Shared Machine state also round-trips; XS callback streaming remains separate. |
 | [daemon-xs-worker-debugger](daemon-xs-worker-debugger.md) | Centralized VM raises are available; the transport and complete xsbug/supervisor integration remain later work. |
 | [daemon-endo-rust-sqlite](daemon-endo-rust-sqlite.md) and host powers | Arbitrary host-function registration is still missing. Snapshot signatures identify compatibility but do not create a host table or power-registration surface. |
 | [endor-run-expanded](endor-run-expanded.md) | Direct source execution exists. Archive/CAS worker execution must be verified through its Ironhorse path; it does not follow automatically from a shared `Machine` API. |

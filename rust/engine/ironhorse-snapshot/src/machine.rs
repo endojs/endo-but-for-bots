@@ -374,12 +374,14 @@ macro_rules! define_restore_chain {
             use crate::format::SnapshotError;
             // Prune collected boot-native metadata before runtime function
             // clusters can reuse those slots, and restore relocated names.
+            let shared = tables.function_state.shared.take();
             let native_names = tables.function_state.native_names.take();
             if interp.restore_native_names(native_names.as_deref()).is_err() {
                 return Err(SnapshotError::Corrupt(
                     "side-table restore: malformed native names",
                 ));
             }
+            interp.restore_shared_machine(shared).map_err(|_| SnapshotError::Corrupt("invalid shared machine state"))?;
             macro_rules! restore_step {
                 $(( $section, $d current_interp:ident, $d current_tables:ident) => {{
                     $(let $field = $d current_tables.$field;)+
@@ -581,9 +583,13 @@ struct LazyPin {
 }
 
 pub struct StoreSession {
+    interp: Interp,
+    tracking: StoreTracking,
+}
+
+struct StoreTracking {
     backing_authority: Option<ironhorse_vm::BackingCommitAuthority>,
     snapshot_baseline: ironhorse_vm::SnapshotBaseline,
-    interp: Interp,
     epoch: u64,
     seal: String,
     /// Present on lazily resumed sessions: advancing it on checkpoint
@@ -623,8 +629,8 @@ pub struct StoreSession {
 impl std::fmt::Debug for StoreSession {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("StoreSession")
-            .field("epoch", &self.epoch)
-            .field("seal", &self.seal)
+            .field("epoch", &self.tracking.epoch)
+            .field("seal", &self.tracking.seal)
             .finish_non_exhaustive()
     }
 }
@@ -632,36 +638,36 @@ impl std::fmt::Debug for StoreSession {
 impl StoreSession {
     /// The store epoch this session last committed or adopted.
     pub fn epoch(&self) -> u64 {
-        self.epoch
+        self.tracking.epoch
     }
 
     /// Total COMPLETED cranks this store has absorbed — the durable
     /// counter a cadence schedule must key off if it is to survive a
     /// suspend (see [`StoreManifest::cranks`]).
     pub fn cranks(&self) -> u64 {
-        self.cranks
+        self.tracking.cranks
     }
 
     /// Record the store's completed-crank total, to be written by the
     /// next checkpoint. The session cannot derive this — it has no
     /// notion of a crank — so the caller that does owns it.
     pub fn set_cranks(&mut self, cranks: u64) {
-        self.cranks = cranks;
+        self.tracking.cranks = cranks;
     }
 
     /// Collection cadence committed at genesis (zero disables scheduling).
     pub fn collect_every(&self) -> u32 {
-        self.collect_every
+        self.tracking.collect_every
     }
 
     /// Durable collection events, including explicit collections.
     pub fn collections(&self) -> u64 {
-        self.collections
+        self.tracking.collections
     }
 
     /// Record a completed collection before checkpointing it atomically.
     pub fn set_collections(&mut self, collections: u64) {
-        self.collections = collections;
+        self.tracking.collections = collections;
     }
 
     /// The bound machine.
@@ -727,10 +733,22 @@ pub fn begin_store_session_with_cadence(
     store: &mut dyn HeapStore,
     collect_every: u32,
 ) -> Result<StoreSession, (Interp, StoreError)> {
+    match begin_store_core(&mut interp, signature, store, collect_every) {
+        Ok(tracking) => Ok(StoreSession { interp, tracking }),
+        Err(error) => Err((interp, error)),
+    }
+}
+
+fn begin_store_core(
+    interp: &mut Interp,
+    signature: &Signature,
+    store: &mut dyn HeapStore,
+    collect_every: u32,
+) -> Result<StoreTracking, StoreError> {
     match store.manifest() {
         Err(StoreError::Empty) => {}
-        Ok(m) => return Err((interp, StoreError::NotEmpty { epoch: m.epoch })),
-        Err(e) => return Err((interp, e)),
+        Ok(m) => return Err(StoreError::NotEmpty { epoch: m.epoch }),
+        Err(e) => return Err(e),
     }
     // The persist gate, on the data path: the ONLY way to
     // an image of this machine is the gated `snapshot_image`, whose
@@ -746,21 +764,19 @@ pub fn begin_store_session_with_cadence(
     let image = match interp.snapshot_image(signature) {
         Ok(image) => image,
         Err(MachineSnapshotError::NotQuiescent) => {
-            return Err((interp, StoreError::MachineNotQuiescent));
+            return Err(StoreError::MachineNotQuiescent);
         }
         Err(MachineSnapshotError::PendingStateUnsupported { row }) => {
-            return Err((interp, StoreError::PendingStateUnsupported { row }));
+            return Err(StoreError::PendingStateUnsupported { row });
         }
-        Err(MachineSnapshotError::Snapshot(e)) => return Err((interp, StoreError::Snapshot(e))),
+        Err(MachineSnapshotError::Snapshot(e)) => return Err(StoreError::Snapshot(e)),
         // Unreachable for `Interp` (`snapshot_image` does no I/O); kept
         // so the match stays exhaustive if the error type grows an arm.
-        Err(MachineSnapshotError::Io(e)) => return Err((interp, StoreError::Io(e.to_string()))),
+        Err(MachineSnapshotError::Io(e)) => return Err(StoreError::Io(e.to_string())),
     };
     let batch = crate::store::image_to_batch_with_cadence(&image, 1, "", collect_every);
-    if let Err(e) = store.commit(&batch) {
-        // A failed commit hands the machine back with its dirt intact.
-        return Err((interp, e));
-    }
+    // A failed commit hands the machine back with its dirt intact.
+    store.commit(&batch)?;
     // Only a successful commit clears the bitmaps: a failed commit
     // forgets nothing and the next attempt re-offers the same dirt.
     interp.acknowledge_arena_commit();
@@ -791,10 +807,9 @@ pub fn begin_store_session_with_cadence(
     let gen_dirty: std::collections::BTreeSet<u32> =
         (0..crate::store::slot_page_count(batch.manifest.slot_count)).collect();
     let snapshot_baseline = interp.acknowledge_snapshot();
-    Ok(StoreSession {
+    Ok(StoreTracking {
         snapshot_baseline,
         gen_dirty,
-        interp,
         epoch: 1,
         seal,
         pin: None,
@@ -822,16 +837,22 @@ pub fn checkpoint_to_store(
     signature: &Signature,
     store: &mut dyn HeapStore,
 ) -> Result<u64, StoreError> {
+    checkpoint_to_store_core(&mut session.interp, &mut session.tracking, signature, store)
+}
+
+fn checkpoint_to_store_core(
+    interp: &mut Interp,
+    tracking: &mut StoreTracking,
+    signature: &Signature,
+    store: &mut dyn HeapStore,
+) -> Result<u64, StoreError> {
     signature.check_boot()?;
-    if let Some(authority) = &session.backing_authority {
-        session
-            .interp
-            .check_backing_authority(authority)
-            .map_err(|_| {
-                StoreError::Snapshot(SnapshotError::Corrupt(
-                    "commit authority does not match the machine's backing",
-                ))
-            })?;
+    if let Some(authority) = &tracking.backing_authority {
+        interp.check_backing_authority(authority).map_err(|_| {
+            StoreError::Snapshot(SnapshotError::Corrupt(
+                "commit authority does not match the machine's backing",
+            ))
+        })?;
     }
     // Runtime-interned property ids remain resumable: string keys live
     // in the NAME table (persisted every checkpoint via the small
@@ -853,50 +874,47 @@ pub fn checkpoint_to_store(
     // here: a live machine's stored ids come only from minting, and the
     // audit exists for adopted bytes, which begin/resume/import run it
     // on.
-    if !session.interp.is_quiescent() {
+    if !interp.is_quiescent() {
         return Err(StoreError::MachineNotQuiescent);
     }
-    if let Some(row) = session.interp.stored_unpersistable_row_at_checkpoint() {
+    if let Some(row) = interp.stored_unpersistable_row_at_checkpoint() {
         return Err(StoreError::PendingStateUnsupported { row });
     }
     let stored = store.manifest()?;
-    if stored.epoch != session.epoch {
+    if stored.epoch != tracking.epoch {
         return Err(StoreError::EpochMismatch {
-            expected: session.epoch,
+            expected: tracking.epoch,
             found: stored.epoch,
         });
     }
-    if stored.seal != session.seal {
+    if stored.seal != tracking.seal {
         // Equal height, different lineage: a fork, copy, or foreign
         // store — the case a bare epoch counter cannot see.
         return Err(StoreError::BaselineMismatch {
-            expected: session.seal.clone(),
+            expected: tracking.seal.clone(),
             found: stored.seal,
         });
     }
-    if let Some(pin) = &session.pin {
+    if let Some(pin) = &tracking.pin {
         // Read through the caller's existing store borrow: the lazy source
         // owns the same RefCell and cannot be borrowed during checkpoint.
-        session
-            .interp
-            .slots()
-            .validate_backing_before_checkpoint(|page| {
-                let bytes = store.read_slot_page(page)?;
-                if pin.leaves.borrow().pages.get(page as usize).copied()
-                    != Some(leaf_hash(LEAF_PAGE, page, &bytes))
-                {
-                    return Err(StoreError::Snapshot(crate::format::SnapshotError::Corrupt(
-                        "checkpoint deferred slot page leaf mismatch",
-                    )));
-                }
-                crate::slot_codec::decode_slots(&bytes).map_err(|_| {
-                    StoreError::Snapshot(crate::format::SnapshotError::Corrupt(
-                        "checkpoint deferred slot page decode",
-                    ))
-                })
-            })?;
+        interp.slots().validate_backing_before_checkpoint(|page| {
+            let bytes = store.read_slot_page(page)?;
+            if pin.leaves.borrow().pages.get(page as usize).copied()
+                != Some(leaf_hash(LEAF_PAGE, page, &bytes))
+            {
+                return Err(StoreError::Snapshot(crate::format::SnapshotError::Corrupt(
+                    "checkpoint deferred slot page leaf mismatch",
+                )));
+            }
+            crate::slot_codec::decode_slots(&bytes).map_err(|_| {
+                StoreError::Snapshot(crate::format::SnapshotError::Corrupt(
+                    "checkpoint deferred slot page decode",
+                ))
+            })
+        })?;
     }
-    let epoch = session.epoch.checked_add(1).ok_or(StoreError::Snapshot(
+    let epoch = tracking.epoch.checked_add(1).ok_or(StoreError::Snapshot(
         crate::format::SnapshotError::Corrupt("store epoch exhausted"),
     ))?;
     // Root maintenance takes one of two paths. FAST: the
@@ -927,7 +945,7 @@ pub fn checkpoint_to_store(
     // reads the edited bytes — and the edit stays detected by the
     // backend's own recombination, every fault's row/leaf check, and
     // the next open.
-    let mut ledger = match session.root_ledger.take() {
+    let mut ledger = match tracking.root_ledger.take() {
         Some(ledger) => ledger,
         None => {
             let (pages, exts) = store.leaf_hashes()?;
@@ -947,11 +965,10 @@ pub fn checkpoint_to_store(
             ledger
         }
     };
-    let interp = &mut session.interp;
-    let mut manifest = manifest_of(interp, signature, epoch, session.cranks);
-    manifest.parent_seal = session.seal.clone();
-    manifest.collect_every = session.collect_every;
-    manifest.collections = session.collections;
+    let mut manifest = manifest_of(interp, signature, epoch, tracking.cranks);
+    manifest.parent_seal = tracking.seal.clone();
+    manifest.collect_every = tracking.collect_every;
+    manifest.collections = tracking.collections;
 
     // Dirty rows only — never the whole heap. `page_records`/
     // `extent_bytes` copy one page/extent out of the arena (dirty rows
@@ -1000,7 +1017,7 @@ pub fn checkpoint_to_store(
             .ok_or(StoreError::Snapshot(SnapshotError::Corrupt(
                 "checkpoint ledger lacks section inventory",
             )))?;
-    let dirty = interp.snapshot_dirty_sections(&session.snapshot_baseline);
+    let dirty = interp.snapshot_dirty_sections(&tracking.snapshot_baseline);
     let small = small_state_of(interp, dirty);
     let small_updates = crate::store_sections::SmallSection::ALL
         .into_iter()
@@ -1027,7 +1044,7 @@ pub fn checkpoint_to_store(
         })
         .collect();
     let mut batch = CheckpointBatch {
-        prev_seal: session.seal.clone(),
+        prev_seal: tracking.seal.clone(),
         manifest,
         small: Vec::new(),
         small_updates: Some(small_updates),
@@ -1042,11 +1059,11 @@ pub fn checkpoint_to_store(
     store.commit(&batch)?;
     // Failed writes drop the advanced ledger; the next attempt validates the
     // persisted inventory and reoffers every difference against that baseline.
-    session.root_ledger = Some(ledger);
+    tracking.root_ledger = Some(ledger);
     // Accumulate the traveled slot pages into the generational
     // candidate set (dirtied ∪ grown — exactly what this commit
     // shipped); a collection consumes and clears it.
-    session
+    tracking
         .gen_dirty
         .extend(batch.slot_pages.iter().map(|(p, _)| *p));
     // Did this commit land in the PINNED store — the one the machine's
@@ -1060,18 +1077,18 @@ pub fn checkpoint_to_store(
     // `tests/store_checkpoint.rs::evict_after_a_twin_store_checkpoint_keeps_the_modified_body`.
     let landed_in_backing = {
         let committed: *const dyn HeapStore = &*store;
-        session
+        tracking
             .pin
             .as_ref()
             .is_some_and(|pin| committed.cast::<()>() == pin.store_addr)
     };
     if !landed_in_backing {
-        session.interp.acknowledge_arena_commit();
+        interp.acknowledge_arena_commit();
     }
-    session.snapshot_baseline = session.interp.acknowledge_snapshot();
-    session.epoch = epoch;
-    session.seal = seal.clone();
-    if let Some(pin) = &session.pin {
+    tracking.snapshot_baseline = interp.acknowledge_snapshot();
+    tracking.epoch = epoch;
+    tracking.seal = seal.clone();
+    if let Some(pin) = &tracking.pin {
         if landed_in_backing {
             pin.epoch.set(epoch);
             *pin.seal.borrow_mut() = seal;
@@ -1106,10 +1123,9 @@ pub fn checkpoint_to_store(
             // geometry: rows appended past the attach-time range are
             // now store-backed (evictable, re-faultable), and the
             // tail row's expected fault length is the committed one.
-            session
-                .interp
+            interp
                 .acknowledge_backing_commit(
-                    session
+                    tracking
                         .backing_authority
                         .as_mut()
                         .expect("lazy session has backing authority"),
@@ -1187,17 +1203,19 @@ pub fn resume_from_store(
     // Restore can normalize older payloads; preserve that dirt until committed.
     let snapshot_baseline = interp.snapshot_baseline();
     Ok(StoreSession {
-        snapshot_baseline,
-        gen_dirty: std::collections::BTreeSet::new(),
         interp,
-        epoch: manifest.epoch,
-        seal: manifest.seal,
-        pin: None,
-        backing_authority: None,
-        root_ledger: Some(root_ledger),
-        cranks: manifest.cranks,
-        collect_every: manifest.collect_every,
-        collections: manifest.collections,
+        tracking: StoreTracking {
+            snapshot_baseline,
+            gen_dirty: std::collections::BTreeSet::new(),
+            epoch: manifest.epoch,
+            seal: manifest.seal,
+            pin: None,
+            backing_authority: None,
+            root_ledger: Some(root_ledger),
+            cranks: manifest.cranks,
+            collect_every: manifest.collect_every,
+            collections: manifest.collections,
+        },
     })
 }
 
@@ -1391,17 +1409,19 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
     // Restore can normalize older payloads; preserve that dirt until committed.
     let snapshot_baseline = interp.snapshot_baseline();
     Ok(StoreSession {
-        snapshot_baseline,
-        gen_dirty: std::collections::BTreeSet::new(),
         interp,
-        epoch: manifest.epoch,
-        seal: manifest.seal,
-        pin: Some(pin),
-        backing_authority: Some(backing_authority),
-        root_ledger: Some(root_ledger),
-        cranks: manifest.cranks,
-        collect_every: manifest.collect_every,
-        collections: manifest.collections,
+        tracking: StoreTracking {
+            snapshot_baseline,
+            gen_dirty: std::collections::BTreeSet::new(),
+            epoch: manifest.epoch,
+            seal: manifest.seal,
+            pin: Some(pin),
+            backing_authority: Some(backing_authority),
+            root_ledger: Some(root_ledger),
+            cranks: manifest.cranks,
+            collect_every: manifest.collect_every,
+            collections: manifest.collections,
+        },
     })
 }
 
@@ -1417,7 +1437,14 @@ pub fn full_collect(
     session: &mut StoreSession,
     store: &dyn HeapStore,
 ) -> Result<ironhorse_vm::gc::GcStats, StoreError> {
-    let interp = session.machine();
+    full_collect_core(&mut session.interp, &mut session.tracking, store)
+}
+
+fn full_collect_core(
+    interp: &mut Interp,
+    tracking: &mut StoreTracking,
+    store: &dyn HeapStore,
+) -> Result<ironhorse_vm::gc::GcStats, StoreError> {
     if !interp.is_quiescent() {
         return Err(StoreError::MachineNotQuiescent);
     }
@@ -1426,20 +1453,19 @@ pub fn full_collect(
         "full collect requires a clean checkpoint boundary (dirty rows present)"
     );
     let manifest = store.manifest()?;
-    if manifest.epoch != session.epoch || manifest.seal != session.seal {
+    if manifest.epoch != tracking.epoch || manifest.seal != tracking.seal {
         return Err(StoreError::BaselineMismatch {
-            expected: session.seal.clone(),
+            expected: tracking.seal.clone(),
             found: manifest.seal,
         });
     }
-    let stats = session
-        .machine_mut()
+    let stats = interp
         .collect_garbage()
         .map_err(|_| StoreError::MachineNotQuiescent)?;
-    if !session.machine().is_quiescent() {
+    if !interp.is_quiescent() {
         return Err(StoreError::MachineNotQuiescent);
     }
-    session.gen_dirty.clear();
+    tracking.gen_dirty.clear();
     Ok(stats)
 }
 
@@ -1486,7 +1512,14 @@ pub fn partial_collect(
     session: &mut StoreSession,
     store: &dyn HeapStore,
 ) -> Result<u32, StoreError> {
-    let interp = session.machine();
+    partial_collect_core(&mut session.interp, &mut session.tracking, store)
+}
+
+fn partial_collect_core(
+    interp: &mut Interp,
+    tracking: &mut StoreTracking,
+    store: &dyn HeapStore,
+) -> Result<u32, StoreError> {
     if !interp.is_quiescent() {
         return Err(StoreError::MachineNotQuiescent);
     }
@@ -1495,9 +1528,9 @@ pub fn partial_collect(
         "partial collect requires a clean checkpoint boundary (dirty rows present)"
     );
     let manifest = store.manifest()?;
-    if manifest.epoch != session.epoch || manifest.seal != session.seal {
+    if manifest.epoch != tracking.epoch || manifest.seal != tracking.seal {
         return Err(StoreError::BaselineMismatch {
-            expected: session.seal.clone(),
+            expected: tracking.seal.clone(),
             found: manifest.seal,
         });
     }
@@ -1540,18 +1573,17 @@ pub fn partial_collect(
     let roots: Vec<u32> = root_pages.into_iter().collect();
     let reached = store.reachable_page_set(&roots)?;
     let dead: Vec<u32> = (0..total).filter(|p| !reached.contains(p)).collect();
-    let freed = session
-        .machine_mut()
+    let freed = interp
         .free_pages(&dead)
         .map_err(|_| StoreError::MachineNotQuiescent)?;
     // Pruning a dead bulk row can discover an undercount masked in
     // the bitmap by another reference to the same page.
-    if !session.machine().is_quiescent() {
+    if !interp.is_quiescent() {
         return Err(StoreError::MachineNotQuiescent);
     }
     // A full partial collect re-examines everything, so the
     // generational candidate set restarts empty.
-    session.gen_dirty.clear();
+    tracking.gen_dirty.clear();
     Ok(freed)
 }
 
@@ -1595,7 +1627,14 @@ pub fn generational_collect(
     session: &mut StoreSession,
     store: &dyn HeapStore,
 ) -> Result<u32, StoreError> {
-    let interp = session.machine();
+    generational_collect_core(&mut session.interp, &mut session.tracking, store)
+}
+
+fn generational_collect_core(
+    interp: &mut Interp,
+    tracking: &mut StoreTracking,
+    store: &dyn HeapStore,
+) -> Result<u32, StoreError> {
     if !interp.is_quiescent() {
         return Err(StoreError::MachineNotQuiescent);
     }
@@ -1604,9 +1643,9 @@ pub fn generational_collect(
         "generational collect requires a clean checkpoint boundary (dirty rows present)"
     );
     let manifest = store.manifest()?;
-    if manifest.epoch != session.epoch || manifest.seal != session.seal {
+    if manifest.epoch != tracking.epoch || manifest.seal != tracking.seal {
         return Err(StoreError::BaselineMismatch {
-            expected: session.seal.clone(),
+            expected: tracking.seal.clone(),
             found: manifest.seal,
         });
     }
@@ -1618,7 +1657,7 @@ pub fn generational_collect(
             found,
         });
     }
-    let dirty: Vec<u32> = session
+    let dirty: Vec<u32> = tracking
         .gen_dirty
         .iter()
         .copied()
@@ -1631,7 +1670,6 @@ pub fn generational_collect(
 
     // Seed class 1: candidate pages that are current roots.
     let mut seeds: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
-    let interp = session.machine();
     for r in interp.gc_roots() {
         if !r.is_null() {
             let p = r.0 / crate::store::SLOTS_PER_PAGE;
@@ -1656,14 +1694,13 @@ pub fn generational_collect(
     let seed_vec: Vec<u32> = seeds.into_iter().collect();
     let kept = store.reachable_within(&seed_vec, &dirty)?;
     let dead: Vec<u32> = dirty.into_iter().filter(|p| !kept.contains(p)).collect();
-    let freed = session
-        .machine_mut()
+    let freed = interp
         .free_pages(&dead)
         .map_err(|_| StoreError::MachineNotQuiescent)?;
-    if !session.machine().is_quiescent() {
+    if !interp.is_quiescent() {
         return Err(StoreError::MachineNotQuiescent);
     }
-    session.gen_dirty.clear();
+    tracking.gen_dirty.clear();
     Ok(freed)
 }
 
@@ -2063,8 +2100,14 @@ mod tests {
                 // for malformed bytes through the private test-visible pin.
                 // This is not a claim that valid admission can forge its pin.
                 let bytes = shared.borrow().read_slot_page(page).unwrap();
-                session.pin.as_ref().unwrap().leaves.borrow_mut().pages[page as usize] =
-                    leaf_hash(LEAF_PAGE, page, &bytes);
+                session
+                    .tracking
+                    .pin
+                    .as_ref()
+                    .unwrap()
+                    .leaves
+                    .borrow_mut()
+                    .pages[page as usize] = leaf_hash(LEAF_PAGE, page, &bytes);
             }
             let result = checkpoint_to_store(&mut session, &sig(), &mut *shared.borrow_mut());
             if authenticated {
@@ -2086,8 +2129,14 @@ mod tests {
             assert_eq!(std::fs::read(&path).unwrap(), corrupt);
             std::fs::write(&path, &original).unwrap();
             let bytes = shared.borrow().read_slot_page(page).unwrap();
-            session.pin.as_ref().unwrap().leaves.borrow_mut().pages[page as usize] =
-                leaf_hash(LEAF_PAGE, page, &bytes);
+            session
+                .tracking
+                .pin
+                .as_ref()
+                .unwrap()
+                .leaves
+                .borrow_mut()
+                .pages[page as usize] = leaf_hash(LEAF_PAGE, page, &bytes);
             checkpoint_to_store(&mut session, &sig(), &mut *shared.borrow_mut()).unwrap();
             assert_eq!(shared.borrow().manifest().unwrap().epoch, 2);
         }
@@ -2106,7 +2155,7 @@ mod tests {
             .unwrap();
         let prior = store.manifest().unwrap();
         let (pages, extents) = store.leaf_hashes().unwrap();
-        session.root_ledger = Some(RootLedger::build(
+        session.tracking.root_ledger = Some(RootLedger::build(
             &store.read_small_state().unwrap(),
             pages,
             extents,
@@ -2120,7 +2169,7 @@ mod tests {
             )))
         ));
         assert_eq!(store.manifest().unwrap(), prior);
-        assert!(session.root_ledger.is_none());
+        assert!(session.tracking.root_ledger.is_none());
         checkpoint_to_store(&mut session, &sig(), &mut store).unwrap();
         assert_eq!(store.manifest().unwrap().epoch, prior.epoch + 1);
     }
@@ -2598,4 +2647,161 @@ pub(crate) mod extraction_counts {
             assert_eq!(ENCODE.get()[section.id() as usize], 1);
         }
     }
+}
+
+/// A paged-store session bound to the same shared Machine used by its live
+/// compartments and rooted host values. Checkpoints never replace that core.
+pub struct SharedStoreSession {
+    machine: ironhorse_vm::Machine,
+    tracking: StoreTracking,
+}
+
+fn shared_access_error(halt: ironhorse_vm::Halt) -> StoreError {
+    match halt {
+        ironhorse_vm::Halt::MachineBusy => StoreError::MachineNotQuiescent,
+        ironhorse_vm::Halt::Refused(row) => StoreError::PendingStateUnsupported { row },
+        other => StoreError::MachineOperation(format!("{other:?}")),
+    }
+}
+
+impl SharedStoreSession {
+    pub fn machine(&self) -> &ironhorse_vm::Machine {
+        &self.machine
+    }
+    pub fn epoch(&self) -> u64 {
+        self.tracking.epoch
+    }
+    pub fn cranks(&self) -> u64 {
+        self.tracking.cranks
+    }
+    pub fn set_cranks(&mut self, cranks: u64) {
+        self.tracking.cranks = cranks;
+    }
+    pub fn collect_every(&self) -> u32 {
+        self.tracking.collect_every
+    }
+    pub fn collections(&self) -> u64 {
+        self.tracking.collections
+    }
+    pub fn set_collections(&mut self, collections: u64) {
+        self.tracking.collections = collections;
+    }
+
+    pub fn checkpoint(
+        &mut self,
+        signature: &Signature,
+        store: &mut dyn HeapStore,
+    ) -> Result<u64, StoreError> {
+        self.machine
+            .with_persistence(|interp| {
+                checkpoint_to_store_core(interp, &mut self.tracking, signature, store)
+            })
+            .map_err(shared_access_error)?
+    }
+    pub fn full_collect(
+        &mut self,
+        store: &dyn HeapStore,
+    ) -> Result<ironhorse_vm::gc::GcStats, StoreError> {
+        self.machine
+            .with_collection(|interp| full_collect_core(interp, &mut self.tracking, store))
+            .map_err(shared_access_error)?
+    }
+    pub fn partial_collect(&mut self, store: &dyn HeapStore) -> Result<u32, StoreError> {
+        self.machine
+            .with_collection(|interp| partial_collect_core(interp, &mut self.tracking, store))
+            .map_err(shared_access_error)?
+    }
+    pub fn generational_collect(&mut self, store: &dyn HeapStore) -> Result<u32, StoreError> {
+        self.machine
+            .with_collection(|interp| generational_collect_core(interp, &mut self.tracking, store))
+            .map_err(shared_access_error)?
+    }
+}
+
+pub fn begin_shared_store_session(
+    machine: ironhorse_vm::Machine,
+    signature: &Signature,
+    store: &mut dyn HeapStore,
+    collect_every: u32,
+) -> Result<SharedStoreSession, (ironhorse_vm::Machine, StoreError)> {
+    let result = machine
+        .with_persistence(|interp| begin_store_core(interp, signature, store, collect_every))
+        .map_err(shared_access_error)
+        .and_then(|r| r);
+    match result {
+        Ok(tracking) => Ok(SharedStoreSession { machine, tracking }),
+        Err(error) => Err((machine, error)),
+    }
+}
+
+/// Eagerly restore a shared heap and reattach its exhaustive host policy.
+pub fn resume_shared_from_store(
+    store: &dyn HeapStore,
+    signature: &Signature,
+    policy: ironhorse_vm::MachineRestorePolicy,
+) -> Result<SharedStoreSession, StoreError> {
+    adopt_shared_session(resume_from_store(store, signature)?, policy)
+}
+
+/// Restore shared environments over the same authenticated lazy page source used
+/// by standalone sessions, with identical commit-authority and pin advancement.
+pub fn resume_shared_from_store_lazy<S: HeapStore + 'static>(
+    store: std::rc::Rc<std::cell::RefCell<S>>,
+    signature: &Signature,
+    policy: ironhorse_vm::MachineRestorePolicy,
+) -> Result<SharedStoreSession, StoreError> {
+    adopt_shared_session(resume_from_store_lazy(store, signature)?, policy)
+}
+
+pub fn adopt_shared_session(
+    session: StoreSession,
+    policy: ironhorse_vm::MachineRestorePolicy,
+) -> Result<SharedStoreSession, StoreError> {
+    let machine = ironhorse_vm::Machine::from_restored_interpreter(session.interp, policy)
+        .map_err(shared_access_error)?;
+    Ok(SharedStoreSession {
+        machine,
+        tracking: session.tracking,
+    })
+}
+
+impl MachineSnapshot for ironhorse_vm::Machine {
+    fn persist_gate(&self) -> Result<(), MachineSnapshotError> {
+        self.with_persistence(|interp| interp.persist_gate())
+            .map_err(|_| MachineSnapshotError::NotQuiescent)?
+    }
+    fn snapshot_image(&self, signature: &Signature) -> Result<GatedImage, MachineSnapshotError> {
+        self.with_persistence(|interp| interp.snapshot_image(signature))
+            .map_err(|_| MachineSnapshotError::NotQuiescent)?
+    }
+}
+
+pub fn shared_from_snapshot_bytes(
+    bytes: &[u8],
+    signature: &Signature,
+    policy: ironhorse_vm::MachineRestorePolicy,
+) -> Result<ironhorse_vm::Machine, StoreError> {
+    ironhorse_vm::Machine::from_restored_interpreter(from_snapshot_bytes(bytes, signature)?, policy)
+        .map_err(shared_access_error)
+}
+
+/// Inspect an inert lazy restore before supplying host policy. This entry point
+/// never exposes the interpreter; the supplied policy must cover every environment.
+pub fn resume_shared_from_store_lazy_with<S: HeapStore + 'static>(
+    store: std::rc::Rc<std::cell::RefCell<S>>,
+    signature: &Signature,
+    policy: impl FnOnce(
+        &[ironhorse_vm::EnvironmentId],
+        ironhorse_vm::MeterState,
+    ) -> Result<ironhorse_vm::MachineRestorePolicy, StoreError>,
+) -> Result<SharedStoreSession, StoreError> {
+    let session = resume_from_store_lazy(store, signature)?;
+    let ids: Vec<_> = session
+        .interp
+        .shared_environment_ids()
+        .into_iter()
+        .map(ironhorse_vm::EnvironmentId)
+        .collect();
+    let policy = policy(&ids, session.interp.meter_state())?;
+    adopt_shared_session(session, policy)
 }

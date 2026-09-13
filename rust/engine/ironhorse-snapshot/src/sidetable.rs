@@ -384,7 +384,7 @@ mod tests {
                 19,
                 "PromiseJobs",
                 "promise_jobs",
-                Coverage::EmptyAtBoundary,
+                Coverage::Serialized,
                 Some("promise_jobs"),
             ),
             (
@@ -518,7 +518,7 @@ mod tests {
                 39,
                 "Modules",
                 "module::ModuleGraph",
-                Coverage::Pending,
+                Coverage::Serialized,
                 None,
             ),
             (
@@ -665,6 +665,14 @@ mod tests {
         ];
         const ARENAS: &[&str] = &["slots", "chunks", "stack"];
         const SATELLITES: &[&str] = &[
+            // FUNC's shared extension carries environment/lease identities and
+            // pending report candidates. Rc/Weak policy is rebuilt on adoption.
+            "inactive_environments",
+            "identity_roots",
+            "restored_leases",
+            "restored_environment_leases",
+            "shared_compartments",
+            "pending_rejections",
             "detached_buffers",
             "shared_buffers",
             "deleted_fn_meta",
@@ -677,7 +685,6 @@ mod tests {
             "snapshot_baseline_identity",
         ];
         const TRANSIENTS: &[&str] = &[
-            "pending_rejections",
             // Intrinsic linking is synchronous and restores this guard before
             // control can reach a persistence boundary.
             "installing_intrinsics",
@@ -726,11 +733,6 @@ mod tests {
         const HOST_WIRING: &[&str] = &[
             // Embedding policy configured outside each activation.
             "eval_program_hoist",
-            // Shared machines refuse persistence; standalone boots keep these
-            // maps empty and the shared-profile bit false.
-            "inactive_environments",
-            "identity_roots",
-            "shared_compartments",
             "meter_host",
             "cost",
             "step_limit",
@@ -954,6 +956,9 @@ mod tests {
             [
                 "global_obj",
                 "global_props",
+                "binding_names",
+                "modules",
+                "compiler_required",
                 "unhandled_rejection",
                 "owner",
                 "intrinsic_permit",
@@ -973,7 +978,7 @@ mod tests {
     #[test]
     fn pending_is_derived_from_ledger() {
         let pending = SideTable::pending();
-        assert_eq!(pending.len(), 2, "the design's Remaining ledger count");
+        assert_eq!(pending.len(), 1, "the design's Remaining ledger count");
         // The rich per-instance tables are still pending.
         assert!(!pending.contains(&SideTable::Functions));
         assert!(!pending.contains(&SideTable::BoundFunctions));
@@ -1033,14 +1038,17 @@ mod tests {
         assert!(!pending.contains(&SideTable::PromiseGuards));
         assert!(!pending.contains(&SideTable::Combinators));
         assert!(!pending.contains(&SideTable::AsyncInstances));
-        assert!(pending.contains(&SideTable::Modules));
-        // The quiescence-gated run stacks, call chain, catch chain, and
-        // microtask queue are EmptyAtBoundary, not pending: no atom is
+        assert!(!pending.contains(&SideTable::Modules));
+        assert_eq!(
+            SideTable::PromiseJobs.descriptor().coverage,
+            Coverage::Serialized
+        );
+        // The quiescence-gated run stacks, call chain and catch chain
+        // are EmptyAtBoundary, not pending: no atom is
         // ever needed for state the gates prove empty.
         for t in [
             SideTable::CallStack,
             SideTable::Jumps,
-            SideTable::PromiseJobs,
             SideTable::GenRunStack,
             SideTable::AsyncRunStack,
         ] {
@@ -1064,7 +1072,7 @@ mod tests {
         let interp = compact(interp);
         let boundary = compact(boundary);
         assert!(
-            interp.contains("pubfnis_quiescent(&self)->bool{self.fields_are_quiescent()}"),
+            interp.contains("pubfnis_quiescent(&self)->bool{self.fields_are_quiescent()||(self.last_crank_completed&&self.fields_at_shared_collection_boundary())}"),
             "public gate must invoke the generated field predicates"
         );
         assert!(boundary.contains("pub(super)fnfields_are_quiescent(&self)->bool{true$(&&boundary_predicate!(boundary_run,self,$field,$boundary))*}"),
@@ -1153,7 +1161,10 @@ mod tests {
             "this_captures",
             "locals",
             "id_map",
+            // These queues must be empty in the standalone predicate; the
+            // shared completed-script predicate carries them in FUNC instead.
             "pending_rejections",
+            "promise_jobs",
         ];
         const NON_EMPTINESS_CONJUNCTS: &[&str] = &[
             "this_val",
