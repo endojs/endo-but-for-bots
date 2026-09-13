@@ -7943,6 +7943,46 @@ testNeedsNodeWorker(
   },
 );
 
+testNeedsNodeWorker.serial(
+  'failed caplet publication does not formulate its fresh native worker',
+  async t => {
+    t.timeout(30_000);
+    const { host, config } = await prepareHost(t);
+    const modulePath = path.join(dirname, 'test', 'move-hub.js');
+    await t.throwsAsync(
+      () =>
+        E(host).makeUnconfined('unpublished-worker', modulePath, {
+          powersName: '@none',
+          resultName: ['missing-parent', 'client'],
+        }),
+      { message: /missing-parent/ },
+    );
+    // Worker-name publication is a separate deferred task and can succeed
+    // before result-name publication fails. The retained identity must not
+    // have acquired a process: no worker formula was persisted/evaluated.
+    const workerId = await E(host).identify('unpublished-worker');
+    t.is(typeof workerId, 'string');
+    t.false(formulaExistsInDb(config.statePath, workerId));
+
+    await E(host).makeUnconfined('published-worker', modulePath, {
+      powersName: '@none',
+      resultName: 'published-client',
+    });
+    const publishedWorkerId = await E(host).identify('published-worker');
+    const clientId = await E(host).identify('published-client');
+    t.like(readFormulaFromDb(config.statePath, publishedWorkerId), {
+      type: 'worker',
+      kind: 'node',
+      label: 'published-worker',
+    });
+    t.like(readFormulaFromDb(config.statePath, clientId), {
+      type: 'make-unconfined',
+      worker: publishedWorkerId,
+    });
+    t.not(publishedWorkerId, await E(host).identify('@node'));
+  },
+);
+
 test('Phase 6: guest.lookup("@node") rejects', async t => {
   const { host } = await prepareHost(t);
 
