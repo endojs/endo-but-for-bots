@@ -1048,7 +1048,10 @@ test('EndoDirectory.readOnly() mirrors reads and rejects every mutator', async t
   t.deepEqual([...(await E(readOnlyDirectory).list())].sort(), ['one', 'two']);
   t.true(await E(readOnlyDirectory).has('one'));
   t.false(await E(readOnlyDirectory).has('absent'));
-  t.is(await E(readOnlyDirectory).lookup('one'), await E(directory).lookup('one'));
+  t.is(
+    await E(readOnlyDirectory).lookup('one'),
+    await E(directory).lookup('one'),
+  );
   t.is(await E(readOnlyDirectory).maybeLookup('absent'), undefined);
 
   // The read-only view exposes no mutators at all.
