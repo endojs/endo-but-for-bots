@@ -37,6 +37,6 @@
   "entry": "node_modules/app/index.js",
   "entryCompartment": "app",
   "entryModule": "./index.js",
-  "fixture": "fixtures-nested-pkg",
+  "fixture": "fixtures/node-modules/nested-package-json",
   "oracle": "node"
 }

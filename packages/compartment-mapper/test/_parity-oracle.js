@@ -195,6 +195,7 @@ export const FIXTURES = [
   },
   {
     name: 'nested-pkg',
+    directory: 'fixtures/node-modules/nested-package-json',
     entry: 'node_modules/app/index.js',
     oracle: 'node',
   },
@@ -369,9 +370,17 @@ export const FIXTURES = [
  */
 export const testRoot = new URL('./', import.meta.url);
 
+/**
+ * The fixture directory relative to {@link testRoot}.
+ *
+ * @param {{ name: string, directory?: string }} fix
+ */
+export const fixtureDirectoryOf = fix =>
+  fix.directory || `fixtures-${fix.name}`;
+
 /** The absolute `file:` URL of a fixture's canonical entry point. */
 const entryLocationOf = fix =>
-  new URL(`fixtures-${fix.name}/${fix.entry}`, testRoot).href;
+  new URL(`${fixtureDirectoryOf(fix)}/${fix.entry}`, testRoot).href;
 
 /** Normalise a compartment-mapper / endor parser tag to a base language. */
 const baseLanguage = parser => {
@@ -662,7 +671,7 @@ export const buildNodeGolden = async fix => {
         )
       : projectMap(await archiveMapOf(entryLocation, fix));
   return {
-    fixture: `fixtures-${fix.name}`,
+    fixture: fixtureDirectoryOf(fix),
     entry: fix.entry,
     oracle: 'node',
     ...(fix.projection ? { projection: fix.projection } : {}),
@@ -695,7 +704,7 @@ export const checkEndorBaselineDivergence = async fix => {
     // Divergence holds if the entry resolved into a package other than
     // the fixture itself (e.g. the enclosing @endo/compartment-mapper).
     const held =
-      entryName !== `fixtures-${fix.name}` && !entryName?.startsWith(fix.name);
+      entryName !== fixtureDirectoryOf(fix) && !entryName?.startsWith(fix.name);
     return {
       held,
       observed: `resolved entry compartment "${entryName}" (outside the fixture)`,
@@ -709,10 +718,17 @@ export const checkEndorBaselineDivergence = async fix => {
   }
 };
 
-/** The absolute filesystem path of a fixture's committed golden. */
-export const goldenPath = name =>
+/**
+ * The absolute filesystem path of a fixture's committed golden.
+ *
+ * @param {{ name: string, directory?: string }} fix
+ */
+export const goldenPath = fix =>
   url.fileURLToPath(
-    new URL(`fixtures-${name}/expected-compartment-map.json`, testRoot),
+    new URL(
+      `${fixtureDirectoryOf(fix)}/expected-compartment-map.json`,
+      testRoot,
+    ),
   );
 
 /** Serialize a golden object exactly as the committed file stores it. */
