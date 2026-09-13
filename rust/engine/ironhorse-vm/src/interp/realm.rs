@@ -26,10 +26,13 @@ impl Realm {
 /// Heap coordinates and property-key identities belong to the owning machine.
 pub struct CompartmentEnvironment {
     pub(super) global_obj: crate::value::SlotIndex,
+    pub(super) modules: std::rc::Rc<std::cell::RefCell<crate::ModuleGraph>>,
+    pub(super) binding_names: std::collections::BTreeSet<u16>,
     pub(super) global_props: std::collections::HashMap<u16, crate::value::SlotIndex>,
     pub(super) owner: Option<std::rc::Weak<()>>,
     pub(super) intrinsic_permit: Option<std::collections::BTreeSet<SymbolName>>,
     pub(super) unhandled_rejection: Option<crate::value::SlotIndex>,
+    pub(super) compiler_required: bool,
     pub(super) shared_compiler: Option<std::rc::Weak<dyn SourceCompiler>>,
     pub(super) source_compiler: Option<std::rc::Rc<dyn SourceCompiler>>,
 }
@@ -39,8 +42,11 @@ impl CompartmentEnvironment {
         Self {
             global_obj,
             global_props: Default::default(),
+            binding_names: Default::default(),
+            modules: Default::default(),
             source_compiler: None,
             shared_compiler: None,
+            compiler_required: false,
             intrinsic_permit: None,
             owner: None,
             unhandled_rejection: None,
@@ -51,11 +57,15 @@ impl CompartmentEnvironment {
 impl Interp {
     pub(crate) fn set_default_compiler(&mut self, compiler: &std::rc::Rc<dyn SourceCompiler>) {
         self.environment_context_mut(self.realm.global_object())
+            .unwrap()
+            .compiler_required = true;
+        self.environment_context_mut(self.realm.global_object())
             .expect("default environment")
             .shared_compiler = Some(std::rc::Rc::downgrade(compiler));
     }
 
     pub(crate) fn set_shared_compiler(&mut self, compiler: &std::rc::Rc<dyn SourceCompiler>) {
+        self.environment.compiler_required = true;
         self.environment.shared_compiler = Some(std::rc::Rc::downgrade(compiler));
     }
 
@@ -92,7 +102,12 @@ impl Interp {
     /// Build the complete intrinsic graph before any guest can observe it.
     /// Program-local symbol operands will be relinked to this machine table.
     pub(crate) fn new_shared_realm_machine() -> Self {
+        Self::new_shared_realm_machine_with_permit(None)
+    }
+
+    pub(crate) fn new_shared_realm_machine_with_permit(permit: Option<&[String]>) -> Self {
         let mut machine = Self::new();
+        machine.set_intrinsic_permit(permit);
         let mut names: Vec<SymbolName> = crate::default_keys::DEFAULT_KEYS
             .iter()
             .copied()
@@ -128,6 +143,10 @@ impl Interp {
             }),
             default_global: machine.environment.global_obj,
         });
+        machine
+            .environment
+            .binding_names
+            .extend(machine.environment.global_props.keys().copied());
         machine.shared_compartments = true;
         for info in machine.functions.values_mut() {
             if matches!(
@@ -176,6 +195,10 @@ impl Interp {
         self.inactive_environments.insert(old.global_obj, old);
     }
 
+    pub(crate) fn current_environment_id(&self) -> crate::SlotIndex {
+        self.environment.global_obj
+    }
+
     pub(crate) fn activate_environment(&mut self, target: crate::SlotIndex) -> Result<(), Halt> {
         self.switch_environment(target);
         Ok(())
@@ -185,18 +208,53 @@ impl Interp {
         &mut self,
         permit: Option<std::collections::BTreeSet<SymbolName>>,
         owner: std::rc::Weak<()>,
+        modules: std::rc::Rc<std::cell::RefCell<crate::ModuleGraph>>,
     ) -> Result<crate::value::SlotIndex, Halt> {
-        let global = self
-            .slots
-            .alloc(Slot::instance(crate::value::SlotIndex::NULL));
-        let mut realm = CompartmentEnvironment::new(global);
-        realm.intrinsic_permit = permit;
-        realm.owner = Some(owner);
-        let old = std::mem::replace(&mut self.environment, realm);
-        self.inactive_environments.insert(old.global_obj, old);
-        let names = self.symbol_names.to_vec();
-        self.install_intrinsic_bindings(&names, 0, false, |_| true);
-        Ok(global)
+        let previous = self.environment.global_obj;
+        let installing = self.installing_intrinsics;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let global = self
+                .slots
+                .alloc(Slot::instance(crate::value::SlotIndex::NULL));
+            let mut realm = CompartmentEnvironment::new(global);
+            realm.intrinsic_permit = permit;
+            realm.owner = Some(owner);
+            realm.modules = modules;
+            let old = std::mem::replace(&mut self.environment, realm);
+            self.inactive_environments.insert(old.global_obj, old);
+            let names = self.symbol_names.to_vec();
+            self.install_intrinsic_bindings(&names, 0, false, |_| true);
+            self.environment
+                .binding_names
+                .extend(self.environment.global_props.keys().copied());
+            global
+        }));
+        match result {
+            Ok(global) => Ok(global),
+            Err(payload) => {
+                self.installing_intrinsics = installing;
+                let partial = self.environment.global_obj;
+                if partial != previous {
+                    self.switch_environment(previous);
+                    self.inactive_environments.remove(&partial);
+                    let evaluators: Vec<_> = self
+                        .functions
+                        .iter()
+                        .filter(|(_, f)| f.global_env == partial)
+                        .map(|(id, _)| *id)
+                        .collect();
+                    for evaluator in evaluators {
+                        self.functions.remove(&evaluator);
+                        self.ctor_prototype.remove(&evaluator);
+                    }
+                }
+                if payload.is::<crate::value::HeapExhausted>() {
+                    Err(Halt::HeapExhausted)
+                } else {
+                    std::panic::resume_unwind(payload)
+                }
+            }
+        }
     }
 
     pub(crate) fn set_realm_meter(
@@ -489,14 +547,8 @@ mod tests {
     #[test]
     fn complete_primordial_graph_admits_freezing() {
         let mut machine = Interp::new_shared_realm_machine();
-        assert!(machine
-            .stored_unpersistable_row()
-            .unwrap()
-            .contains("shared Realm"));
-        assert!(machine
-            .stored_unpersistable_row_at_checkpoint()
-            .unwrap()
-            .contains("shared Realm"));
+        assert_eq!(machine.stored_unpersistable_row(), None);
+        assert_eq!(machine.stored_unpersistable_row_at_checkpoint(), None);
         let roots: Vec<_> = machine.intrinsics.values().copied().collect();
         for root in roots {
             assert!(machine.test_integrity_level(&[], root, true).unwrap());

@@ -134,6 +134,28 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     identity_roots: std::collections::HashMap<crate::value::SlotIndex, std::rc::Weak<()>>,
+    #[boot_new(Default::default())]
+    #[gc_root(none)]
+    #[quiescent(retained)]
+    #[persist_refs(none)]
+    #[runtime_keys(none)]
+    #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
+    #[gc_slots(none, none)]
+    #[gc_weak(none)]
+    #[snapshot_table(none)]
+    restored_leases: std::collections::HashMap<crate::value::SlotIndex, std::rc::Rc<()>>,
+    #[boot_new(Default::default())]
+    #[gc_root(none)]
+    #[quiescent(retained)]
+    #[persist_refs(none)]
+    #[runtime_keys(none)]
+    #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
+    #[gc_slots(none, none)]
+    #[gc_weak(none)]
+    #[snapshot_table(none)]
+    restored_environment_leases: std::collections::HashMap<crate::value::SlotIndex, std::rc::Rc<()>>,
     #[boot_new(false)]
     #[gc_root(none)]
     #[quiescent(retained)]
@@ -2615,7 +2637,7 @@ pub struct Interp {
     #[gc_chunk(jobs)]
     #[gc_slots(none, none)]
     #[gc_weak(none)]
-    #[snapshot_table(PromiseJobs, 19, 19, EmptyAtBoundary, "promise_jobs")]
+    #[snapshot_table(PromiseJobs, 19, 19, Serialized, "promise_jobs")]
     /// The pending promise-job queue (XS's `mxPendingJobs` list): the
     /// microtasks queued by settling a promise with registered reactions,
     /// drained FIFO by [`Self::run_promise_jobs`] after the script settles —
@@ -2882,7 +2904,7 @@ boot_context {
     fresh(snapshot_dirt, slots, chunks, global_obj, static_str);
 }
 external_tables {
-    Modules, 39, 39, Pending, "module::ModuleGraph";
+    Modules, 39, 39, Serialized, "module::ModuleGraph";
 }
         }
     };

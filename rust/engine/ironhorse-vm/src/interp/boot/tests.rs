@@ -32,6 +32,8 @@ const FRESH_ORDER: &[&str] = &[
     "environment",
     "inactive_environments",
     "identity_roots",
+    "restored_leases",
+    "restored_environment_leases",
     "shared_compartments",
     "direct_eval_hoist",
     "eval_program_hoist",

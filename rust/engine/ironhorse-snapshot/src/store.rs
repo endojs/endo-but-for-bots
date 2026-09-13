@@ -94,7 +94,8 @@ pub use ironhorse_vm::{CHUNK_EXTENT_BYTES, SLOTS_PER_PAGE};
 /// v29: FUNC persists surviving boot-native name chunk locations.
 /// v30: GENR and ASYN may carry explicit saved-handler code segments.
 /// v31: PRMS may carry the first reported unhandled rejection.
-pub const STORE_SCHEMA_VERSION: u32 = 31;
+/// v32: FUNC may carry the shared Realm, environment, module, root and job graph.
+pub const STORE_SCHEMA_VERSION: u32 = 32;
 /// The oldest schema [`migrate_store`] can upgrade in place. Decode
 /// accepts the whole supported range; validation refuses an
 /// un-migrated older store with [`StoreError::NeedsMigration`], and
@@ -111,6 +112,9 @@ pub enum StoreError {
     /// its last crank halted. Rewind or complete a crank before
     /// persisting.
     MachineNotQuiescent,
+    /// A live Machine operation failed (for example, host-root allocation).
+    /// This does not classify the stored heap as corrupt.
+    MachineOperation(String),
     /// The heap holds unsupported live state identified by
     /// `Interp::stored_unpersistable_row_at_checkpoint`. Persistence
     /// refuses by row name rather than resume with missing state.
@@ -1994,7 +1998,7 @@ pub fn migrate_store(
             (25, _) => migrate_v25_to_v26(store)?,
             (26, _) => migrate_v26_to_v27(store)?,
             (27, _) => migrate_v27_to_v28(store)?,
-            (28 | 29 | 30, _) => migrate_framed_schema_identity(store, schema + 1)?,
+            (28 | 29 | 30 | 31, _) => migrate_framed_schema_identity(store, schema + 1)?,
             (_, Some(&(target, extra_len))) => {
                 migrate_append_small_section(store, target, extra_len)?;
             }

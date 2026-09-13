@@ -2081,3 +2081,7 @@ needed since `followMessages()` replays all historical submissions).
 `familiar-bundled-agents` complete (esbuild bundles for Lal/Fae, resource
 paths, env var passthrough, inline guest provisioning in daemon-node.js
 using setup.js pattern — Option C instead of Option A from the design doc).
+
+The 2026-09-13 IronHorse update adds single-Realm shared Machine persistence to the
+[engine design](ironhorse-engine.md), including explicit host reattachment and the
+persistent worker lifecycle; its Approved status and scope totals are unchanged.

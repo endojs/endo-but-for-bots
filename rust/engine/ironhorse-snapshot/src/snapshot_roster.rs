@@ -2179,6 +2179,7 @@ macro_rules! snapshot_payloads {
                         .promises
                         .iter()
                         .flat_map(|p| &p.reactions)
+                        .chain(tables.function_state.shared.iter().flat_map(|s| s.jobs.iter()).filter(|j| !j.thenable).map(|j| &j.reaction))
                     {
                         if reaction.kind == 3
                             && (!awaited.insert(reaction.a)
@@ -2275,6 +2276,20 @@ macro_rules! snapshot_payloads {
                         }
                         results_lengths.push(len);
                     }
+                    let mut pending = vec![0u32; promise_cluster.combinators.len()];
+                    let mut elements = std::collections::BTreeSet::new();
+                    for r in promise_cluster.promises.iter().flat_map(|p| &p.reactions)
+                        .chain(tables.function_state.shared.iter().flat_map(|s| &s.jobs).filter(|j| !j.thenable).map(|j| &j.reaction)) {
+                        if r.kind == 2 || r.kind == 12 {
+                            let Some(count) = pending.get_mut(r.a as usize) else { return Err(SnapshotError::Corrupt("promise cluster: combinator index outside table")); };
+                            if !elements.insert((r.a,r.b)) { return Err(SnapshotError::Corrupt("promise cluster: duplicate combinator element")); }
+                            *count += 1;
+                        }
+                    }
+                    for (c, n) in promise_cluster.combinators.iter().zip(pending) {
+                        if n == 0 { return Err(SnapshotError::Corrupt("promise cluster: combinators not densely referenced")); }
+                        if c.kind != 2 && c.remaining < n { return Err(SnapshotError::Corrupt("promise cluster: remaining below its pending reactions")); }
+                    }
                     // A combinator reaction's element index writes the results Array at
                     // the drain (`array_set_dense` grows `length` to cover it) — and on
                     // the `any` path the AggregateError builder then iterates
@@ -2289,6 +2304,7 @@ macro_rules! snapshot_payloads {
                         .promises
                         .iter()
                         .flat_map(|row| row.reactions.iter())
+                        .chain(tables.function_state.shared.iter().flat_map(|s| s.jobs.iter()).filter(|j| !j.thenable).map(|j| &j.reaction))
                     {
                         if (r.kind == 2 || r.kind == 12)
                             && results_lengths
@@ -2323,13 +2339,13 @@ macro_rules! snapshot_payloads {
                     state.promise_cluster = if bytes.is_empty() {
                         Default::default()
                     } else {
-                        crate::image::decode_promise_cluster(bytes)?
+                        crate::image::decode_promise_cluster_payload(bytes)?
                     };
                 },
                 decode_container: [AsyncInstances, replace, (r, [], []) {
                     let promise_cluster = match r.find(crate::format::PRMS) {
                         Some(a) => {
-                            let cluster = decode_promise_cluster(a.payload)?;
+                            let cluster = decode_promise_cluster_payload(a.payload)?;
                             if cluster.is_empty() {
                                 return Err(SnapshotError::Corrupt(
                                     "PRMS atom present but empty; the writer omits it",
@@ -2347,7 +2363,7 @@ macro_rules! snapshot_payloads {
                     crate::image::encode_promise_cluster(&state.promise_cluster)
                 },
                 canonicalize(bytes): {
-                    crate::image::decode_promise_cluster(bytes)
+                    crate::image::decode_promise_cluster_payload(bytes)
                         .map(|value| crate::image::encode_promise_cluster(&value))
                 },
                 slot_visit: slots,

@@ -17,7 +17,8 @@
 //! Retained handles keep the heap alive after Machine drops, but compiler services
 //! expire with that policy owner. Collection is explicit consumer policy.
 //! Intrinsic permits control global bindings, not transitive capability access.
-//! Static module maps remain host-side; dynamic import is unsupported.
+//! Static module cells and evaluation status are persisted; loader services are
+//! explicitly reattached. Dynamic import is unsupported.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -48,6 +49,88 @@ struct MachineState {
     compilers: std::rc::Weak<CompilerRegistry>,
     interpreter: RefCell<Interp>,
     realm: Rc<crate::Realm>,
+    default_modules: Rc<RefCell<ModuleGraph>>,
+    pending: RefCell<Vec<PendingEnvironment>>,
+}
+
+// Weak descriptors preserve lazily created host compartments without retaining
+// dropped handles or closures. Pending endowments require their symbol atom and
+// must be applied by evaluation before persistence can admit the machine.
+struct PendingEnvironment {
+    environment: std::rc::Weak<Cell<Option<crate::SlotIndex>>>,
+    owner: std::rc::Weak<()>,
+    modules: std::rc::Weak<RefCell<ModuleGraph>>,
+    compiler: std::rc::Weak<RefCell<Option<Rc<dyn crate::SourceCompiler>>>>,
+    names: std::rc::Weak<RefCell<std::collections::BTreeSet<String>>>,
+    ids: std::rc::Weak<RefCell<std::collections::BTreeSet<u16>>>,
+    permit: Option<Vec<String>>,
+}
+impl MachineState {
+    fn prepare_persistence(&self, interp: &mut Interp) -> Result<(), Halt> {
+        self.pending
+            .borrow_mut()
+            .retain(|p| p.environment.strong_count() != 0);
+        let previous = interp.current_environment_id();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            for pending in self.pending.borrow().iter() {
+                let Some(environment) = pending.environment.upgrade() else {
+                    continue;
+                };
+                if pending
+                    .names
+                    .upgrade()
+                    .is_some_and(|p| !p.borrow().is_empty())
+                    || pending
+                        .ids
+                        .upgrade()
+                        .is_some_and(|p| !p.borrow().is_empty())
+                {
+                    return Err(Halt::Refused("machine:unapplied-endowments"));
+                }
+                if environment.get().is_some() {
+                    continue;
+                }
+                let registry = self
+                    .compilers
+                    .upgrade()
+                    .ok_or(Halt::Refused("machine:compiler-policy-owner-dropped"))?;
+                let id = {
+                    let Some(modules) = pending.modules.upgrade() else {
+                        continue;
+                    };
+                    let id = interp.create_environment(
+                        pending.permit.as_ref().map(|p| {
+                            p.iter()
+                                .map(|n| crate::SymbolName::from(n.as_str()))
+                                .collect()
+                        }),
+                        pending.owner.clone(),
+                        modules,
+                    )?;
+                    environment.set(Some(id));
+                    id
+                };
+                if let Some(compiler) = pending.compiler.upgrade() {
+                    if let Some(compiler) = compiler.borrow().as_ref() {
+                        interp.activate_environment(id)?;
+                        interp.set_shared_compiler(compiler);
+                        // A freshly allocated environment has no old service to drop.
+                        registry
+                            .borrow_mut()
+                            .entry(id)
+                            .or_insert_with(|| compiler.clone());
+                        interp.detach_realm_compiler();
+                    }
+                }
+            }
+            Ok(())
+        }));
+        interp.activate_environment(previous)?;
+        match result {
+            Ok(result) => result,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
+    }
 }
 
 /// A rooted identity in one machine. It can be compared but not dereferenced.
@@ -58,6 +141,11 @@ pub struct ObjectIdentity {
     machine: Rc<MachineState>,
     lease: Rc<()>,
     object: crate::SlotIndex,
+}
+impl ObjectIdentity {
+    pub fn snapshot_id(&self) -> HostRootId {
+        HostRootId(self.object.0)
+    }
 }
 impl PartialEq for ObjectIdentity {
     fn eq(&self, other: &Self) -> bool {
@@ -80,6 +168,38 @@ pub struct RootedValue {
     machine: Rc<MachineState>,
     root: crate::SlotIndex,
     _lease: Rc<()>,
+}
+
+/// Stable identifier within a snapshot lineage, never a dereferenceable arena handle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct EnvironmentId(pub u32);
+
+/// A value root exported by a snapshot. Resolve only against that restored lineage.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct HostRootId(pub u32);
+
+impl RootedValue {
+    pub fn snapshot_id(&self) -> HostRootId {
+        HostRootId(self.root.0)
+    }
+}
+
+/// Explicit host wiring for one restored environment. Module cells are carried;
+/// loader configuration and compiler services must be reattached by the embedder.
+/// No pending endowment is applied by restoration.
+pub struct EnvironmentPolicy {
+    pub intrinsic_permit: Option<Vec<String>>,
+    pub source_compiler: Option<Rc<dyn crate::SourceCompiler>>,
+    pub name: Option<String>,
+    pub has_resolve_hook: bool,
+    pub has_import_hook: bool,
+}
+
+/// Exhaustive policy for all restored environments, including those retained
+/// only by guest references. An armed meter requires its callback reattachment.
+pub struct MachineRestorePolicy {
+    pub environments: std::collections::BTreeMap<EnvironmentId, EnvironmentPolicy>,
+    pub meter_host: Option<Box<dyn FnMut(u64) -> bool>>,
 }
 
 /// A rooted, non-destructive view of a compartment's first reported rejection.
@@ -184,14 +304,14 @@ pub struct Compartment {
     /// The same bindings keyed by the interned symbol id the bytecode
     /// references them through (`GET_VARIABLE`/`SET_VARIABLE` operands).
     globals_by_id: HashMap<u16, Slot>,
-    source_compiler: Option<Rc<dyn crate::SourceCompiler>>,
-    environment: Cell<Option<crate::SlotIndex>>,
+    source_compiler: Rc<RefCell<Option<Rc<dyn crate::SourceCompiler>>>>,
+    environment: Rc<Cell<Option<crate::SlotIndex>>>,
     lease: Rc<()>,
     intrinsic_permit: Option<Vec<String>>,
-    pending_names: RefCell<std::collections::BTreeSet<String>>,
-    pending_ids: RefCell<std::collections::BTreeSet<u16>>,
+    pending_names: Rc<RefCell<std::collections::BTreeSet<String>>>,
+    pending_ids: Rc<RefCell<std::collections::BTreeSet<u16>>>,
     /// The compartment's module map (`new Compartment({ modules })`).
-    modules: ModuleGraph,
+    modules: Rc<RefCell<ModuleGraph>>,
     /// Whether a `resolveHook` was supplied at construction.
     has_resolve_hook: bool,
     /// Whether an `importHook` was supplied at construction.
@@ -209,24 +329,36 @@ impl Compartment {
     ) -> Compartment {
         let id = CompartmentId(counter.get());
         counter.set(id.0 + 1);
-        Compartment {
+        let compartment = Compartment {
             id,
             name: options.name,
-            machine,
+            machine: machine.clone(),
             counter,
-            pending_names: RefCell::new(options.endowments.keys().cloned().collect()),
-            pending_ids: RefCell::new(options.endowments_by_id.keys().copied().collect()),
-            environment: Cell::new(None),
+            pending_names: Rc::new(RefCell::new(options.endowments.keys().cloned().collect())),
+            pending_ids: Rc::new(RefCell::new(
+                options.endowments_by_id.keys().copied().collect(),
+            )),
+            environment: Rc::new(Cell::new(None)),
             lease: Rc::new(()),
             intrinsic_permit: options.intrinsic_permit,
             globals: options.endowments,
             rooted_globals: HashMap::new(),
             globals_by_id: options.endowments_by_id,
-            source_compiler: None,
-            modules: options.modules,
+            source_compiler: Rc::new(RefCell::new(None)),
+            modules: Rc::new(RefCell::new(options.modules)),
             has_resolve_hook: options.has_resolve_hook,
             has_import_hook: options.has_import_hook,
-        }
+        };
+        machine.pending.borrow_mut().push(PendingEnvironment {
+            environment: Rc::downgrade(&compartment.environment),
+            owner: Rc::downgrade(&compartment.lease),
+            modules: Rc::downgrade(&compartment.modules),
+            compiler: Rc::downgrade(&compartment.source_compiler),
+            names: Rc::downgrade(&compartment.pending_names),
+            ids: Rc::downgrade(&compartment.pending_ids),
+            permit: compartment.intrinsic_permit.clone(),
+        });
+        compartment
     }
 
     /// This compartment's (its `globalThis`'s) identity — distinct per
@@ -235,6 +367,16 @@ impl Compartment {
     /// object is identified by [`CompartmentId`].
     pub fn global_this(&self) -> CompartmentId {
         self.id
+    }
+
+    /// Resolve the persisted environment identity, materializing pending environments
+    /// at an idle boundary. Pending endowments or a busy/full heap return None.
+    pub fn snapshot_id(&self) -> Option<EnvironmentId> {
+        if self.environment.get().is_none() {
+            let mut interp = self.machine.interpreter.try_borrow_mut().ok()?;
+            self.machine.prepare_persistence(&mut interp).ok()?;
+        }
+        self.environment.get().map(|i| EnvironmentId(i.0))
     }
 
     /// This compartment's `name` option (SES `Compartment` name), if any.
@@ -248,7 +390,7 @@ impl Compartment {
     pub fn define_global(&mut self, name: &str, value: Slot) {
         self.rooted_globals.remove(name);
         self.globals.insert(name.to_string(), value);
-        self.pending_names.get_mut().insert(name.to_owned());
+        self.pending_names.borrow_mut().insert(name.to_owned());
     }
 
     /// Share a rooted value by reference within this Machine. Reject a foreign
@@ -259,7 +401,7 @@ impl Compartment {
         }
         self.globals.remove(name);
         self.rooted_globals.insert(name.to_owned(), value.clone());
-        self.pending_names.get_mut().insert(name.to_owned());
+        self.pending_names.borrow_mut().insert(name.to_owned());
         Ok(())
     }
 
@@ -280,12 +422,12 @@ impl Compartment {
     /// resolves ids once the symbol table lands.)
     pub fn define_global_id(&mut self, id: u16, value: Slot) {
         self.globals_by_id.insert(id, value);
-        self.pending_ids.get_mut().insert(id);
+        self.pending_ids.borrow_mut().insert(id);
     }
 
     /// Install this compartment's runtime compiler for eval and Function.
     pub fn set_source_compiler(&mut self, compiler: Rc<dyn crate::SourceCompiler>) {
-        self.source_compiler = Some(compiler);
+        *self.source_compiler.borrow_mut() = Some(compiler);
     }
 
     /// Read this compartment's configured endowment. Guest mutations are
@@ -318,14 +460,14 @@ impl Compartment {
 
     /// The compartment's module map (`new Compartment({ modules })`),
     /// read-only.
-    pub fn module_map(&self) -> &ModuleGraph {
-        &self.modules
+    pub fn module_map(&self) -> std::cell::Ref<'_, ModuleGraph> {
+        self.modules.borrow()
     }
 
     /// The compartment's module map, mutable (register a module, drive
     /// link/evaluate).
-    pub fn module_map_mut(&mut self) -> &mut ModuleGraph {
-        &mut self.modules
+    pub fn module_map_mut(&mut self) -> std::cell::RefMut<'_, ModuleGraph> {
+        self.modules.borrow_mut()
     }
 
     /// Whether a `resolveHook` was supplied at construction (SES
@@ -349,9 +491,10 @@ impl Compartment {
     /// compartments with different maps for the same specifier import
     /// different modules.
     pub fn import_static(&mut self, specifier: &str) -> Result<ModuleId, ModuleError> {
-        let id = self.modules.resolve(specifier)?;
-        self.modules.instantiate(id)?;
-        self.modules.evaluate(id)?;
+        let mut modules = self.modules.borrow_mut();
+        let id = modules.resolve(specifier)?;
+        modules.instantiate(id)?;
+        modules.evaluate(id)?;
         Ok(id)
     }
 
@@ -541,6 +684,7 @@ impl Compartment {
                             .collect()
                     }),
                     Rc::downgrade(&self.lease),
+                    self.modules.clone(),
                 )
                 .map(|realm| self.environment.set(Some(realm))),
         };
@@ -550,7 +694,7 @@ impl Compartment {
         let mut retired_compiler = None;
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             machine.set_realm_meter(meter, host);
-            if let Some(compiler) = &self.source_compiler {
+            if let Some(compiler) = self.source_compiler.borrow().as_ref() {
                 let Some(registry) = self.machine.compilers.upgrade() else {
                     return Self::unrun(
                         Halt::Refused("machine:compiler-policy-owner-dropped"),
@@ -662,6 +806,7 @@ pub struct Machine {
     compilers: Rc<CompilerRegistry>,
     machine: Rc<MachineState>,
     counter: Rc<Cell<usize>>,
+    restored_policies: RefCell<std::collections::BTreeMap<EnvironmentId, EnvironmentPolicy>>,
 }
 
 impl Default for Machine {
@@ -672,18 +817,162 @@ impl Default for Machine {
 
 impl Machine {
     pub fn new() -> Machine {
-        let interpreter = Interp::new_shared_realm_machine();
+        Self::with_start_permit(None)
+    }
+
+    /// Apply a prospective binding policy before installing the start globals.
+    /// All ordinary primordials are still created and frozen exactly once.
+    pub fn with_start_permit(permit: Option<&[String]>) -> Machine {
+        let interpreter = Interp::new_shared_realm_machine_with_permit(permit);
         let realm = Rc::clone(interpreter.realm());
         let compilers = Rc::new(CompilerRegistry::default());
         Machine {
             compilers: Rc::clone(&compilers),
             machine: Rc::new(MachineState {
+                pending: Default::default(),
+                default_modules: interpreter
+                    .environment_modules(realm.global_object())
+                    .unwrap(),
                 interpreter: RefCell::new(interpreter),
                 realm,
                 compilers: Rc::downgrade(&compilers),
             }),
             counter: Rc::new(Cell::new(1)),
+            restored_policies: Default::default(),
         }
+    }
+
+    /// Borrow the actual engine for snapshot/store operations. The caller is a
+    /// trusted embedding layer; execution remains excluded for the whole borrow.
+    pub fn with_persistence<R>(&self, operation: impl FnOnce(&mut Interp) -> R) -> Result<R, Halt> {
+        let mut interpreter = self
+            .machine
+            .interpreter
+            .try_borrow_mut()
+            .map_err(|_| Halt::MachineBusy)?;
+        self.machine.prepare_persistence(&mut interpreter)?;
+        Ok(operation(&mut interpreter))
+    }
+
+    /// Adopt an admitted shared heap only after every environment's host policy
+    /// has been supplied. The restored Machine has a new identity; old handles
+    /// continue to belong to the original heap and cannot be inserted into it.
+    pub fn from_restored_interpreter(
+        mut interpreter: Interp,
+        mut policy: MachineRestorePolicy,
+    ) -> Result<Self, Halt> {
+        let ids = interpreter.shared_environment_ids();
+        if ids.is_empty()
+            || ids.iter().copied().map(EnvironmentId).collect::<Vec<_>>()
+                != policy.environments.keys().copied().collect::<Vec<_>>()
+        {
+            return Err(Halt::Refused("machine:incomplete-restore-policy"));
+        }
+        if interpreter.meter_state().interval != 0 && policy.meter_host.is_none() {
+            return Err(Halt::Refused("machine:missing-restored-meter"));
+        }
+        let compilers = Rc::new(CompilerRegistry::default());
+        for (&id, env) in &policy.environments {
+            interpreter.attach_environment_policy(
+                id.0,
+                env.intrinsic_permit.as_deref(),
+                env.source_compiler.as_ref(),
+            )?;
+            if let Some(compiler) = &env.source_compiler {
+                compilers
+                    .borrow_mut()
+                    .insert(crate::SlotIndex(id.0), compiler.clone());
+            }
+        }
+        if let Some(host) = policy.meter_host.take() {
+            interpreter.reattach_meter_host(host);
+        }
+        let realm = Rc::clone(interpreter.realm());
+        Ok(Self {
+            machine: Rc::new(MachineState {
+                pending: Default::default(),
+                default_modules: interpreter
+                    .environment_modules(realm.global_object())
+                    .unwrap(),
+                interpreter: RefCell::new(interpreter),
+                realm,
+                compilers: Rc::downgrade(&compilers),
+            }),
+            compilers,
+            counter: Rc::new(Cell::new(1)),
+            restored_policies: RefCell::new(policy.environments),
+        })
+    }
+
+    /// Reacquire a compartment, its carried module graph and reattached loader
+    /// configuration. Dropped originating handles are not required for this claim.
+    pub fn claim_compartment(&self, id: EnvironmentId) -> Result<Compartment, Halt> {
+        let mut machine = self
+            .machine
+            .interpreter
+            .try_borrow_mut()
+            .map_err(|_| Halt::MachineBusy)?;
+        if !self.restored_policies.borrow().contains_key(&id) {
+            return Err(Halt::Refused("machine:unknown-restored-environment"));
+        }
+        let lease = machine.claim_environment(id.0)?;
+        let modules = machine.environment_modules(crate::SlotIndex(id.0)).unwrap();
+        drop(machine);
+        let policy = self.restored_policies.borrow_mut().remove(&id).unwrap();
+        let mut compartment = self.compartment(CompartmentOptions {
+            name: policy.name,
+            intrinsic_permit: policy.intrinsic_permit,
+            has_resolve_hook: policy.has_resolve_hook,
+            has_import_hook: policy.has_import_hook,
+            ..Default::default()
+        });
+        if id.0 == self.realm().global_object().0 {
+            compartment.id = CompartmentId(0);
+        }
+        compartment.environment.set(Some(crate::SlotIndex(id.0)));
+        compartment.lease = lease;
+        compartment.modules = modules;
+        *compartment.source_compiler.borrow_mut() = policy.source_compiler;
+        Ok(compartment)
+    }
+
+    pub fn claim_rooted_value(&self, id: HostRootId) -> Result<RootedValue, Halt> {
+        let lease = self
+            .machine
+            .interpreter
+            .try_borrow_mut()
+            .map_err(|_| Halt::MachineBusy)?
+            .claim_value_root(id.0)?;
+        Ok(RootedValue {
+            machine: self.machine.clone(),
+            root: crate::SlotIndex(id.0),
+            _lease: lease,
+        })
+    }
+
+    pub fn claim_object_identity(&self, id: HostRootId) -> Result<ObjectIdentity, Halt> {
+        let lease = self
+            .machine
+            .interpreter
+            .try_borrow_mut()
+            .map_err(|_| Halt::MachineBusy)?
+            .claim_identity_root(id.0)?;
+        Ok(ObjectIdentity {
+            machine: self.machine.clone(),
+            object: crate::SlotIndex(id.0),
+            lease,
+        })
+    }
+
+    /// Release all unclaimed provisional roots. Reachable guest functions/jobs
+    /// continue retaining their environments; this operation never cancels work.
+    pub fn release_unclaimed_roots(&self) -> Result<(), Halt> {
+        self.machine
+            .interpreter
+            .try_borrow_mut()
+            .map_err(|_| Halt::MachineBusy)?
+            .release_restored_roots();
+        Ok(())
     }
 
     /// Configure the default Realm evaluator service, used by shared dynamic
@@ -719,6 +1008,27 @@ impl Machine {
                 Halt::EngineInvariant("gc:previous-collection-failed")
             }
         })?;
+        drop(machine);
+        self.retire_compilers()?;
+        Ok(stats)
+    }
+
+    /// Store collectors borrow the same engine and use the same host-root boundary.
+    pub fn with_collection<R>(&self, operation: impl FnOnce(&mut Interp) -> R) -> Result<R, Halt> {
+        let result = self.with_persistence(|interp| {
+            interp.prepare_collection()?;
+            Ok(operation(interp))
+        })??;
+        self.retire_compilers()?;
+        Ok(result)
+    }
+
+    fn retire_compilers(&self) -> Result<(), Halt> {
+        let machine = self
+            .machine
+            .interpreter
+            .try_borrow()
+            .map_err(|_| Halt::MachineBusy)?;
         let live = machine.live_environment_ids();
         drop(machine);
         let dead: Vec<_> = self
@@ -733,7 +1043,7 @@ impl Machine {
             dead.iter().filter_map(|id| compilers.remove(id)).collect()
         };
         drop(retired);
-        Ok(stats)
+        Ok(())
     }
 
     /// The single Realm shared by all compartments of this Machine.
@@ -755,6 +1065,7 @@ impl Machine {
             CompartmentOptions::default(),
         );
         compartment.counter = Rc::clone(&self.counter);
+        compartment.modules = self.machine.default_modules.clone();
         compartment
             .environment
             .set(Some(self.realm().global_object()));
@@ -924,6 +1235,60 @@ mod tests {
     use crate::module::{BodyOp, ExportEntry, ImportEntry, ImportName, ModuleRecord, ModuleValue};
     use crate::opcode::Opcode;
     use crate::value::Slot;
+
+    #[test]
+    fn pending_environment_heap_exhaustion_restores_the_previous_context() {
+        let machine = Machine::new();
+        let pending = machine.new_compartment();
+        let previous = machine
+            .machine
+            .interpreter
+            .borrow()
+            .current_environment_id();
+        machine.machine.interpreter.borrow_mut().set_slot_ceiling(0);
+        assert_eq!(machine.with_persistence(|_| ()), Err(Halt::HeapExhausted));
+        assert_eq!(
+            machine
+                .machine
+                .interpreter
+                .borrow()
+                .current_environment_id(),
+            previous
+        );
+        assert_eq!(pending.snapshot_id(), None);
+        assert_eq!(
+            machine
+                .machine
+                .interpreter
+                .borrow()
+                .live_environment_ids()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn partial_environment_installation_failure_leaves_a_coherent_machine() {
+        for allowance in [1, 8, 32] {
+            let machine = Machine::new();
+            let pending = machine.new_compartment();
+            let mut interp = machine.machine.interpreter.borrow_mut();
+            let previous = interp.current_environment_id();
+            let ceiling = interp.slots().capacity() + allowance;
+            interp.set_slot_ceiling(ceiling);
+            drop(interp);
+            assert_eq!(machine.with_persistence(|_| ()), Err(Halt::HeapExhausted));
+            let mut interp = machine.machine.interpreter.borrow_mut();
+            assert_eq!(interp.current_environment_id(), previous);
+            assert!(interp.is_quiescent());
+            assert_eq!(interp.stored_unpersistable_row(), None);
+            interp.set_slot_ceiling(u32::MAX);
+            drop(interp);
+            assert!(pending.snapshot_id().is_some());
+            let (code, symbols) = ironhorse_compile::compile_atoms("40 + 2").unwrap();
+            assert_eq!(pending.evaluate_with_symbols(&code, &symbols).result, "42");
+        }
+    }
 
     #[test]
     fn rejection_inspection_refuses_full_heap_but_acknowledgment_allocates_nothing() {
@@ -1345,12 +1710,14 @@ mod tests {
             ..Default::default()
         });
         let id = c.import_static("m").expect("resolves through the map");
-        let ns = c.module_map().namespace(id);
+        let module_map = c.module_map();
+        let ns = module_map.namespace(id);
         assert_eq!(ns.own_string_keys(), vec!["x".to_string()]);
         assert_eq!(
             ns.get("x").unwrap(),
             Some(ModuleValue::Value(Slot::integer(41)))
         );
+        drop(module_map);
         // An unmapped specifier is an unresolved-specifier error, never a
         // silent empty namespace.
         assert!(matches!(

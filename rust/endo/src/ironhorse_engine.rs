@@ -777,9 +777,9 @@ pub mod engine {
     /// lands), or bytecode the instruction walker cannot decode.
     pub struct PersistentMachine {
         store: std::rc::Rc<std::cell::RefCell<ironhorse_store_sqlite::SqliteHeapStore>>,
-        session: Option<ironhorse_snapshot::machine::StoreSession>,
+        session: Option<ironhorse_snapshot::machine::SharedStoreSession>,
+        start: Option<Compartment>,
         signature: ironhorse_snapshot::Signature,
-        linked: bool,
         heap_store: std::path::PathBuf,
         cadence: CadencePolicy,
         /// Completed cranks not yet checkpointed (the live rewind
@@ -860,9 +860,7 @@ pub mod engine {
         /// machine at epoch 1; a populated one is validated against
         /// its sealed root and resumed lazily.
         pub fn open(options: &HeapStoreOptions) -> Result<PersistentMachine, MachineError> {
-            use ironhorse_snapshot::machine::{
-                begin_store_session_with_cadence, resume_from_store_lazy,
-            };
+            use ironhorse_snapshot::machine::begin_shared_store_session;
             use ironhorse_snapshot::store::{HeapStore, StoreError};
 
             let signature = ironhorse_snapshot::Signature::new(&options.signature);
@@ -881,7 +879,26 @@ pub mod engine {
                         "collection cadence mismatch".to_string(),
                     ));
                 }
-                Ok(_) | Err(StoreError::Empty) => {}
+                Ok(manifest) => {
+                    // The shared worker cannot adopt the old standalone profile.
+                    // Refuse before migration can restamp a heap still owned by an
+                    // older worker. This is an explicit profile incompatibility.
+                    if manifest.store_schema < 32
+                        || ironhorse_snapshot::store::SmallState::decode(
+                            &store.read_small_state().map_err(store_err)?,
+                        )
+                        .map_err(store_err)?
+                        .function_state
+                        .shared
+                        .is_none()
+                    {
+                        return Err(MachineError::Store(
+                            "incompatible standalone heap profile; shared Machine store required"
+                                .to_owned(),
+                        ));
+                    }
+                }
+                Err(StoreError::Empty) => {}
                 Err(error) => return Err(store_err(error)),
             }
             ironhorse_snapshot::store::migrate_store(&mut store, &signature).map_err(store_err)?;
@@ -894,15 +911,19 @@ pub mod engine {
                     // to the store, so the very first crank runs
                     // bounded and epoch 1 already carries the armed
                     // meter state.
-                    let mut boot = ironhorse_vm::Interp::new();
-                    boot.set_intrinsic_permit(options.intrinsic_permit.as_deref());
+                    let boot = VmMachine::with_start_permit(options.intrinsic_permit.as_deref());
                     boot.set_source_compiler(std::rc::Rc::new(
                         ironhorse_runtime::IronhorseSourceCompiler,
-                    ));
-                    if let Some(interval) = options.meter.check_interval() {
-                        boot.arm_meter(interval, meter_host(&crank_ceiling));
-                    }
-                    let session = begin_store_session_with_cadence(
+                    ))
+                    .map_err(MachineError::Halt)?;
+                    let start = boot.start_compartment();
+                    boot.with_persistence(|interp| {
+                        if let Some(interval) = options.meter.check_interval() {
+                            interp.arm_meter(interval, meter_host(&crank_ceiling));
+                        }
+                    })
+                    .map_err(MachineError::Halt)?;
+                    let session = begin_shared_store_session(
                         boot,
                         &signature,
                         &mut store,
@@ -914,7 +935,7 @@ pub mod engine {
                         store: std::rc::Rc::new(std::cell::RefCell::new(store)),
                         session: Some(session),
                         signature,
-                        linked: false,
+                        start: Some(start),
                         heap_store: options.path.clone(),
                         cadence: options.cadence.clone(),
                         pending_cranks: 0,
@@ -929,17 +950,13 @@ pub mod engine {
                 }
                 Ok(_) => {
                     let store = std::rc::Rc::new(std::cell::RefCell::new(store));
-                    let mut session =
-                        resume_from_store_lazy(store.clone(), &signature).map_err(store_err)?;
-                    Self::attach_meter(&options.meter, &crank_ceiling, session.machine_mut());
-                    session
-                        .machine_mut()
-                        .set_intrinsic_permit(options.intrinsic_permit.as_deref());
-                    // A resumed machine carries its program symbol
-                    // names in the small state; an empty table means
-                    // no crank ever linked (e.g. the first crank
-                    // crashed before its checkpoint).
-                    let linked = !session.machine().program_symbol_names().is_empty();
+                    let (session, start) = Self::resume_shared(
+                        store.clone(),
+                        &signature,
+                        &options.meter,
+                        &options.intrinsic_permit,
+                        &crank_ceiling,
+                    )?;
                     // The durable crank total the store already carries:
                     // the schedule continues from here, which is what
                     // makes a suspend invisible to it.
@@ -948,7 +965,7 @@ pub mod engine {
                         store,
                         session: Some(session),
                         signature,
-                        linked,
+                        start: Some(start),
                         heap_store: options.path.clone(),
                         cadence: options.cadence.clone(),
                         pending_cranks: 0,
@@ -985,20 +1002,67 @@ pub mod engine {
         /// continues, so the explicit opt-out means "refuse nothing"
         /// instead of "abort everything"; a never-armed store stays
         /// un-armed.
-        fn attach_meter(
+        fn resume_shared(
+            store: std::rc::Rc<std::cell::RefCell<ironhorse_store_sqlite::SqliteHeapStore>>,
+            signature: &ironhorse_snapshot::Signature,
             meter: &MeterBounds,
-            crank_ceiling: &std::rc::Rc<std::cell::Cell<u64>>,
-            machine: &mut ironhorse_vm::Interp,
-        ) {
-            machine
-                .set_source_compiler(std::rc::Rc::new(ironhorse_runtime::IronhorseSourceCompiler));
-            match meter.check_interval() {
-                Some(interval) => machine.attach_meter_host(interval, meter_host(crank_ceiling)),
-                None if machine.meter_is_armed() => {
-                    machine.reattach_meter_host(Box::new(|_| true));
-                }
-                None => {}
-            }
+            permit: &Option<Vec<String>>,
+            ceiling: &std::rc::Rc<std::cell::Cell<u64>>,
+        ) -> Result<(ironhorse_snapshot::machine::SharedStoreSession, Compartment), MachineError>
+        {
+            let mut start_id = None;
+            let session = ironhorse_snapshot::machine::resume_shared_from_store_lazy_with(
+                store,
+                signature,
+                |ids, state| {
+                    if ids.len() != 1 {
+                        return Err(ironhorse_snapshot::store::StoreError::Snapshot(
+                            ironhorse_snapshot::SnapshotError::Corrupt(
+                                "persistent worker requires one start compartment",
+                            ),
+                        ));
+                    }
+                    start_id = Some(ids[0]);
+                    let environments = [(
+                        ids[0],
+                        ironhorse_vm::EnvironmentPolicy {
+                            intrinsic_permit: permit.clone(),
+                            source_compiler: Some(std::rc::Rc::new(
+                                ironhorse_runtime::IronhorseSourceCompiler,
+                            )),
+                            name: None,
+                            has_resolve_hook: false,
+                            has_import_hook: false,
+                        },
+                    )]
+                    .into_iter()
+                    .collect();
+                    Ok(ironhorse_vm::MachineRestorePolicy {
+                        environments,
+                        meter_host: (state.interval != 0).then(|| meter_host(ceiling)),
+                    })
+                },
+            )
+            .map_err(store_err)?;
+            session
+                .machine()
+                .with_persistence(|interp| match meter.check_interval() {
+                    Some(interval) => interp.attach_meter_host(interval, meter_host(ceiling)),
+                    None if interp.meter_is_armed() => {
+                        interp.reattach_meter_host(Box::new(|_| true));
+                    }
+                    None => {}
+                })
+                .map_err(MachineError::Halt)?;
+            let start = session
+                .machine()
+                .claim_compartment(start_id.unwrap())
+                .map_err(MachineError::Halt)?;
+            session
+                .machine()
+                .release_unclaimed_roots()
+                .map_err(MachineError::Halt)?;
+            Ok((session, start))
         }
 
         /// The metering policy this machine's cranks run under.
@@ -1011,7 +1075,7 @@ pub mod engine {
         /// discipline. The store's commit is atomic, so a failed
         /// checkpoint left it at the prior epoch.
         fn rewind_to_last_checkpoint(&mut self) -> Result<(), MachineError> {
-            use ironhorse_snapshot::machine::resume_from_store_lazy;
+            self.start = None;
             self.session = None;
             // The cadence just cost this workload every pending crank;
             // make the next completed one durable rather than betting
@@ -1025,16 +1089,14 @@ pub mod engine {
             // from the same absolute total a replica that never halted
             // would be at.
             self.pending_cranks = 0;
-            let mut fresh =
-                resume_from_store_lazy(self.store.clone(), &self.signature).map_err(store_err)?;
-            // The rewound machine is a resume like any other: its host
-            // callback must be reattached or its next crank fails
-            // closed.
-            Self::attach_meter(&self.meter, &self.crank_ceiling, fresh.machine_mut());
-            fresh
-                .machine_mut()
-                .set_intrinsic_permit(self.intrinsic_permit.as_deref());
-            self.linked = !fresh.machine().program_symbol_names().is_empty();
+            let (fresh, start) = Self::resume_shared(
+                self.store.clone(),
+                &self.signature,
+                &self.meter,
+                &self.intrinsic_permit,
+                &self.crank_ceiling,
+            )?;
+            self.start = Some(start);
             self.session = Some(fresh);
             Ok(())
         }
@@ -1064,32 +1126,46 @@ pub mod engine {
         /// `checkpoint_every > 1`. Compile errors carry their attempted raw
         /// charge even though the persistent meter is restored with the heap.
         pub fn eval(&mut self, source: &str) -> Result<EvalOutcome, MachineError> {
-            use ironhorse_snapshot::machine::checkpoint_to_store;
-
             // Compilation is part of the crank: arm before any source work,
             // retain its live charges, and rewind failures under the same pending
             // checkpoint window as execution failures.
-            let (compiled, crank_start_raw, compile_spent) = {
-                let session = self.session.as_mut().ok_or_else(|| {
-                    MachineError::Store("machine has no session (a rewind failed)".to_string())
-                })?;
-                let machine = session.machine_mut();
-                let start = machine.meter_index();
-                if let (Some(interval), Some(limit)) =
-                    (self.meter.check_interval(), self.meter.crank_limit())
-                {
-                    self.crank_ceiling.set((start >> 16).saturating_add(limit));
-                    machine.rearm_meter(interval, meter_host(&self.crank_ceiling));
-                }
-                let budget = compile_allowance(&self.meter, start);
-                let result =
-                    compile_metered(source, false, budget, |raw| machine.charge_compilation(raw));
-                (
-                    result,
-                    start,
-                    machine.meter_index().saturating_sub(start) >> 16,
-                )
+            let mut crank_meter = VMeter::new();
+            let state = self
+                .session
+                .as_ref()
+                .ok_or_else(|| {
+                    MachineError::Store("machine has no session (a rewind failed)".into())
+                })?
+                .machine()
+                .with_persistence(|i| i.meter_state())
+                .map_err(MachineError::Halt)?;
+            crank_meter.restore(state);
+            let crank_start_raw = state.index;
+            if let (Some(interval), Some(limit)) =
+                (self.meter.check_interval(), self.meter.crank_limit())
+            {
+                self.crank_ceiling
+                    .set((state.index >> 16).saturating_add(limit));
+                crank_meter.rearm(interval);
+            }
+            let mut host = if crank_meter.is_armed() {
+                Some(if self.meter.check_interval().is_some() {
+                    meter_host(&self.crank_ceiling)
+                } else {
+                    Box::new(|_| true) as Box<dyn FnMut(u64) -> bool>
+                })
+            } else {
+                None
             };
+            let budget = compile_allowance(&self.meter, state.index);
+            let compiled = compile_metered(source, false, budget, |raw| {
+                crank_meter.charge_compilation(
+                    raw,
+                    host.as_mut()
+                        .map(|h| h.as_mut() as &mut dyn FnMut(u64) -> bool),
+                )
+            });
+            let compile_spent = crank_meter.state().index.saturating_sub(state.index) >> 16;
             let (bytecode, symbols) = match compiled {
                 Ok(atoms) => atoms,
                 Err(error) => {
@@ -1102,7 +1178,6 @@ pub mod engine {
                     return Err(self.rewind_preparation_error(error));
                 }
             };
-            let names = ironhorse_vm::parse_symbols(&symbols);
             // The cadence decision (deferred item I), taken up front
             // from replica-visible state: counted in completed cranks,
             // so identically configured replicas flush and collect at
@@ -1134,55 +1209,20 @@ pub mod engine {
                 // so it must travel with the commit that makes these
                 // cranks durable. The session cannot derive it.
                 session.set_cranks(total_after);
-                if !self.linked {
-                    // An EMPTY table links nothing and constrains
-                    // nothing (there are no ids to misalign), and
-                    // `open` derives `linked` from the persisted name
-                    // count — so leave the machine unlinked on an
-                    // empty first crank, keeping the live machine and
-                    // its reopened twin accepting the same next crank
-                    // (wave-3 finding: they diverged).
-                    if !names.is_empty() {
-                        session.machine_mut().link_intrinsics(&names);
-                        self.linked = true;
-                    }
-                }
-                // Per-crank RELINKING (side-table ledger G2): a later
-                // crank compiles against its OWN symbol table — ids
-                // are table positions, so running it raw against a
-                // differing persisted table would silently bind the
-                // wrong globals (the review finding that used to make
-                // this a hard refusal). `relink_crank` rewrites the
-                // bytecode's ID operands onto the persisted table
-                // (extending it append-only for genuinely new names),
-                // so textual alignment is no longer required. Aligned
-                // cranks pass through byte-identical. The remaining
-                // refusals are fail-closed and name their reason:
-                // malformed bytecode cannot be walked, and a table
-                // grown to the symbol-key floor cannot extend (the
-                // runtime-intern extension refusal retired with the
-                // id-space unification — interned names live in the
-                // persisted table and symbol keys mint top-down, so
-                // extension aliases nothing). A preparation refusal now rewinds
-                // compilation charges and any partially extended symbol state.
-                let bytecode = if self.linked {
-                    match session.machine_mut().relink_crank(&bytecode, &names) {
-                        Ok(bytecode) => bytecode,
-                        Err(error) => {
-                            let message = format!("this crank's compiled table ({} names) could not be relinked onto the persisted table ({} names): {error:?}", names.len(), session.machine().program_symbol_names().len());
-                            return Err(MachineError::SymbolMismatch(message));
-                        }
-                    }
-                } else {
-                    bytecode
-                };
-                let outcome = session.machine_mut().run_shared(bytecode.into());
-                Ok(if outcome.completed && checkpoint_due {
-                    let r = checkpoint_to_store(
-                        session,
-                        &self.signature,
-                        &mut *self.store.borrow_mut(),
+                let start = self.start.as_ref().ok_or_else(|| {
+                    MachineError::Store("machine has no start compartment".into())
+                })?;
+                let outcome = session
+                    .machine()
+                    .evaluate_compartment_with_symbols_continuing_meter_shared(
+                        start,
+                        bytecode.into(),
+                        &symbols,
+                        crank_meter,
+                        host,
                     );
+                Ok(if outcome.completed && checkpoint_due {
+                    let r = session.checkpoint(&self.signature, &mut *self.store.borrow_mut());
                     (outcome, Some(r), crank_start_raw)
                 } else {
                     (outcome, None, crank_start_raw)
@@ -1258,10 +1298,13 @@ pub mod engine {
                     }
                     // Scheduled collection (or its recovery) may relocate reason
                     // chunks after run_shared produced the original outcome.
-                    outcome.unhandled_rejection = self
-                        .session
-                        .as_ref()
-                        .and_then(|session| session.machine().unhandled_rejection());
+                    outcome.unhandled_rejection = self.session.as_ref().and_then(|session| {
+                        session
+                            .machine()
+                            .with_persistence(|i| i.unhandled_rejection())
+                            .ok()
+                            .flatten()
+                    });
                     Ok(eval_outcome(outcome, crank_start_raw))
                 }
                 Some(Err(e)) => {
@@ -1298,7 +1341,6 @@ pub mod engine {
         /// failure rewinds to that durable boundary: delivery remains committed,
         /// while the failed collection event is not counted. Returns slots freed.
         pub fn collect(&mut self) -> Result<u32, MachineError> {
-            use ironhorse_snapshot::machine::{checkpoint_to_store, full_collect};
             self.flush_pending()?;
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let session = self.session.as_mut().ok_or_else(|| {
@@ -1307,9 +1349,12 @@ pub mod engine {
                 let collections = session.collections().checked_add(1).ok_or_else(|| {
                     MachineError::Store("collection counter exhausted".to_string())
                 })?;
-                let stats = full_collect(session, &*self.store.borrow()).map_err(store_err)?;
+                let stats = session
+                    .full_collect(&*self.store.borrow())
+                    .map_err(store_err)?;
                 session.set_collections(collections);
-                checkpoint_to_store(session, &self.signature, &mut *self.store.borrow_mut())
+                session
+                    .checkpoint(&self.signature, &mut *self.store.borrow_mut())
                     .map_err(store_err)?;
                 Ok(stats.slots_reclaimed)
             }))
@@ -1383,7 +1428,6 @@ pub mod engine {
         /// the last checkpoint — the pending cranks were never
         /// durable, and the error says so.
         fn flush_pending(&mut self) -> Result<(), MachineError> {
-            use ironhorse_snapshot::machine::checkpoint_to_store;
             if self.pending_cranks == 0 {
                 return Ok(());
             }
@@ -1396,7 +1440,7 @@ pub mod engine {
                     MachineError::Store("machine has no session (a rewind failed)".to_string())
                 })?;
                 session.set_cranks(total);
-                checkpoint_to_store(session, &self.signature, &mut *self.store.borrow_mut())
+                session.checkpoint(&self.signature, &mut *self.store.borrow_mut())
             };
             match r {
                 Ok(_epoch) => {
@@ -1430,6 +1474,7 @@ pub mod engine {
             // P3). The store is closed either way (the machine is being
             // released).
             let flush = self.flush_pending();
+            drop(self.start.take());
             drop(self.session.take());
             let store = match std::rc::Rc::try_unwrap(self.store) {
                 Ok(cell) => cell.into_inner(),
@@ -1480,6 +1525,42 @@ pub mod engine {
         use super::*;
 
         #[test]
+        fn standalone_store_profile_refusal_preserves_the_heap() {
+            use ironhorse_snapshot::{
+                machine::begin_store_session_with_cadence, store::HeapStore, Signature,
+            };
+            let dir = tempfile::tempdir().unwrap();
+            let options = HeapStoreOptions {
+                path: dir.path().join("standalone.sqlite"),
+                signature: "standalone-profile".into(),
+                cadence: CadencePolicy::default(),
+                meter: MeterBounds::default(),
+                intrinsic_permit: None,
+            };
+            let mut store = ironhorse_store_sqlite::SqliteHeapStore::open(&options.path).unwrap();
+            let vm = ironhorse_vm::Interp::new();
+            let session = begin_store_session_with_cadence(
+                vm,
+                &Signature::new(&options.signature),
+                &mut store,
+                options.cadence.collect_every,
+            )
+            .map_err(|(_, e)| e)
+            .unwrap();
+            let manifest = store.manifest().unwrap();
+            let small = store.read_small_state().unwrap();
+            drop(session);
+            store.close().unwrap();
+            assert!(
+                matches!(PersistentMachine::open(&options), Err(MachineError::Store(message)) if message.contains("incompatible standalone heap profile"))
+            );
+            let store = ironhorse_store_sqlite::SqliteHeapStore::open(&options.path).unwrap();
+            assert_eq!(store.manifest().unwrap(), manifest);
+            assert_eq!(store.read_small_state().unwrap(), small);
+            store.close().unwrap();
+        }
+
+        #[test]
         fn collector_panic_rewinds_to_the_committed_heap() {
             let dir = tempfile::tempdir().unwrap();
             let options = HeapStoreOptions {
@@ -1494,21 +1575,34 @@ pub mod engine {
                 .eval("var committed=42; var garbage={}; garbage=null;")
                 .unwrap();
             let epoch = machine.epoch().unwrap();
-            let vm = machine.session.as_mut().unwrap().machine_mut();
-            // Deliberately bypass the host checkpoint path. The collector's
-            // dirty-boundary assertion must be caught and rewind this state.
-            let (code, names) = ironhorse_compile::compile_atoms("committed=99").unwrap();
-            let code = vm
-                .relink_crank(&code, &ironhorse_vm::parse_symbols(&names))
+            machine
+                .session
+                .as_ref()
+                .unwrap()
+                .machine()
+                .with_persistence(|vm| {
+                    // Deliberately bypass the host checkpoint path. The collector's
+                    // dirty-boundary assertion must be caught and rewind this state.
+                    let (code, names) = ironhorse_compile::compile_atoms("committed=99").unwrap();
+                    let code = vm
+                        .relink_crank(&code, &ironhorse_vm::parse_symbols(&names))
+                        .unwrap();
+                    assert!(vm.run(&code).completed);
+                    assert!(vm.is_quiescent());
+                })
                 .unwrap();
-            assert!(vm.run(&code).completed);
-            assert!(vm.is_quiescent());
             assert!(
                 matches!(machine.collect(), Err(MachineError::Store(message)) if message.contains("collection failed"))
             );
             assert_eq!(machine.epoch().unwrap(), epoch);
             assert_eq!(machine.session.as_ref().unwrap().collections(), 0);
-            assert!(machine.session.as_ref().unwrap().machine().is_quiescent());
+            assert!(machine
+                .session
+                .as_ref()
+                .unwrap()
+                .machine()
+                .with_persistence(|vm| vm.is_quiescent())
+                .unwrap());
             machine.collect().unwrap();
             assert_eq!(machine.session.as_ref().unwrap().collections(), 1);
             assert_eq!(machine.eval("committed").unwrap().result, "42");
@@ -1532,12 +1626,16 @@ pub mod engine {
                 "var garbage = 'x'.repeat(2000); garbage = null; Promise.reject(String.fromCharCode(55296));"
             ).unwrap();
             let current = machine.session.as_ref().unwrap().machine();
-            assert_eq!(outcome.unhandled_rejection, current.unhandled_rejection());
-            let (_, reason) = outcome.unhandled_rejection.unwrap();
-            let ironhorse_vm::value::Payload::String(chunk) = reason.value else {
-                panic!("string reason");
-            };
-            assert_eq!(current.chunks().slice(chunk, 2)[..], [0xd8, 0]);
+            current
+                .with_persistence(|current| {
+                    assert_eq!(outcome.unhandled_rejection, current.unhandled_rejection());
+                    let (_, reason) = outcome.unhandled_rejection.unwrap();
+                    let ironhorse_vm::value::Payload::String(chunk) = reason.value else {
+                        panic!("string reason");
+                    };
+                    assert_eq!(current.chunks().slice(chunk, 2)[..], [0xd8, 0]);
+                })
+                .unwrap();
             assert_eq!(machine.failed_collections().0, 0);
             machine.close().unwrap();
         }

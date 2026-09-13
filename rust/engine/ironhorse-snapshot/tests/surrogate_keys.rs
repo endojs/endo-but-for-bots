@@ -117,7 +117,7 @@ fn legacy_utf8_names_migrate_without_changing_ids_or_epoch() {
         &[],
         &[],
     );
-    for schema in [28, 29, 30] {
+    for schema in [28, 29, 30, 31] {
         intermediate.store_schema = schema;
         intermediate.parent_seal = intermediate_seal;
         intermediate.root = compute_root(

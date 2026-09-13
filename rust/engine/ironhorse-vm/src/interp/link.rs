@@ -1189,6 +1189,14 @@ impl Interp {
         bytecode: &[u8],
         crank_names: &[SymbolName],
     ) -> Result<Vec<u8>, RelinkError> {
+        if self.shared_compartments {
+            for name in crank_names {
+                if let Some(id) = self.symbol_ids.get(name).copied() {
+                    self.consider_shared_binding(id, name);
+                }
+            }
+        }
+
         let (site_order, accesses) = Self::template_site_accesses(bytecode)?;
         if crank_names == self.symbol_names.as_slice() {
             let mut remapped = bytecode.to_vec();
@@ -1460,7 +1468,10 @@ impl Interp {
             return;
         }
         let value = if let Some(function) = self.intrinsics.get(name).copied() {
-            Some(Slot::of(Kind::Reference, Payload::Reference(function)))
+            Some(Slot::of(
+                Kind::Reference,
+                Payload::Reference(self.compartment_evaluator(function)),
+            ))
         } else if let Some(value) = value_global(name) {
             Some(value)
         } else if name == "globalThis" {

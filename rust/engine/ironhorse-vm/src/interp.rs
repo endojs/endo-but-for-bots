@@ -38,11 +38,12 @@ pub use native_ids::{MathId, Native, NativeMethod};
 mod snapshot_rows;
 pub use snapshot_rows::{
     AccessorRow, ArraySnapshot, AsyncRow, BoundFunctionRow, CollectionSnapshot, CombinatorRow,
-    DisposableStackRow, DisposalRecordRow, FunctionRow, FunctionStateSnapshot, GeneratorRow,
-    IndexPropsSnapshot, IntlBoundFunctionRow, IteratorRow, PrivateAccessorRow,
-    PrivateElementSnapshot, PrivateValueRow, PromiseClusterSnapshot, PromiseFnRow,
-    PromiseReactionRow, PromiseRow, ProxyRevokerRow, ProxyRow, ProxyStateSnapshot, SavedFrameRow,
-    SavedJumpRow,
+    DisposableStackRow, DisposalRecordRow, EnvironmentRow, EvaluatorRow, FunctionRow,
+    FunctionStateSnapshot, GeneratorRow, IndexPropsSnapshot, IntlBoundFunctionRow, IteratorRow,
+    ModuleGraphSnapshot, ModuleRecordRow, PrivateAccessorRow, PrivateElementSnapshot,
+    PrivateValueRow, PromiseClusterSnapshot, PromiseFnRow, PromiseJobRow, PromiseReactionRow,
+    PromiseRow, ProxyRevokerRow, ProxyRow, ProxyStateSnapshot, SavedFrameRow, SavedJumpRow,
+    SharedMachineSnapshot,
 };
 mod symbol_keys;
 use symbol_keys::SymbolKeys;
@@ -69,6 +70,7 @@ mod link;
 mod native_try;
 mod natives;
 mod persist;
+mod shared_persist;
 pub use persist::RestoreError;
 mod restore;
 pub use restore::RestoreSession;

@@ -82,6 +82,8 @@ pub struct BoundFunctionRow {
 /// carrying any one without the function rows would restore a partial exotic.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FunctionStateSnapshot {
+    /// Shared Realm profile and compartment contexts; absent for standalone heaps.
+    pub shared: Option<SharedMachineSnapshot>,
     /// Boot-native name chunks move during GC even though their code and
     /// identities are rebuilt. None denotes the legacy boot-offset contract.
     /// Some carries the authoritative surviving subset; absent owners may
@@ -96,7 +98,8 @@ pub struct FunctionStateSnapshot {
 
 impl FunctionStateSnapshot {
     pub fn is_empty(&self) -> bool {
-        self.native_names.is_none()
+        self.shared.is_none()
+            && self.native_names.is_none()
             && self.segments.is_empty()
             && self.functions.is_empty()
             && self.bound_functions.is_empty()
@@ -358,4 +361,78 @@ impl PromiseClusterSnapshot {
             && self.guards.is_empty()
             && self.combinators.is_empty()
     }
+}
+
+/// Shared Machine state carried atomically with function metadata.
+/// Host closures and binding permits are deliberately reattached by the embedder.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SharedMachineSnapshot {
+    pub default_global: u32,
+    pub current_global: u32,
+    pub intrinsic_roots: Vec<u32>,
+    pub environments: Vec<EnvironmentRow>,
+    pub function_environments: Vec<(u32, u32)>,
+    pub generator_environments: Vec<(u32, u32)>,
+    pub async_environments: Vec<(u32, u32)>,
+    pub promise_environments: Vec<(u32, u32)>,
+    pub evaluators: Vec<EvaluatorRow>,
+    /// Exported host roots, including roots whose Compartment handle was dropped.
+    pub roots: Vec<u32>,
+    pub jobs: Vec<PromiseJobRow>,
+    pub pending_rejections: Vec<u32>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct EnvironmentRow {
+    pub global: u32,
+    pub binding_names: Vec<u16>,
+    pub modules: ModuleGraphSnapshot,
+    pub host_owned: bool,
+    pub compiler_required: bool,
+    pub unhandled_rejection: Option<u32>,
+}
+
+/// A clone of a primordial evaluator: 0 = eval, 1 = Function.
+#[derive(Clone, Debug, PartialEq)]
+pub struct EvaluatorRow {
+    pub owner: u32,
+    pub kind: u8,
+    pub name_chunk: u32,
+}
+
+/// Ordered job payload. For reaction jobs, `reaction` holds the reaction row;
+/// for thenables, its four slots hold then, thenable, resolve, reject and all
+/// three reaction discriminants are zero. `value` is undefined for thenables.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PromiseJobRow {
+    pub thenable: bool,
+    pub reaction: PromiseReactionRow,
+    pub value: Slot,
+    pub rejected: bool,
+}
+
+/// The supported static module graph, including binding cells and evaluation
+/// state. Its host-modeled Slot values are arena-free primitives; heap-backed
+/// values need a provenance-aware module binding API before admission.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ModuleGraphSnapshot {
+    pub modules: Vec<ModuleRecordRow>,
+    /// 0 = TDZ, 1 = primitive value, 2 = module namespace.
+    pub cells: Vec<(u8, Slot, u32)>,
+    pub dfs_counter: u32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ModuleRecordRow {
+    pub specifier: String,
+    /// (request, imported name or namespace, local name).
+    pub imports: Vec<(String, Option<String>, String)>,
+    /// (kind: local/indirect/star, exported name, local name or request, imported name).
+    pub exports: Vec<(u8, String, String, String)>,
+    /// Some value initializes a local; None reads it.
+    pub body: Vec<(String, Option<Slot>)>,
+    pub status: u8,
+    pub environment: Vec<(String, u32)>,
+    pub dfs_index: u32,
+    pub dfs_ancestor_index: u32,
 }

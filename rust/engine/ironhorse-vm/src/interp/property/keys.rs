@@ -22,6 +22,7 @@ impl Interp {
     pub(in crate::interp) fn intern_key_reserved(&mut self, name: impl Into<SymbolName>) -> u16 {
         let name: SymbolName = name.into();
         if let Some(&id) = self.symbol_ids.get(&name) {
+            self.consider_shared_binding(id, &name);
             return id;
         }
         let id = self.append_name_key(&name);
@@ -34,6 +35,17 @@ impl Interp {
             self.materialize_runtime_global(id, text);
         }
         id
+    }
+
+    pub(in crate::interp) fn consider_shared_binding(&mut self, id: u16, name: &SymbolName) {
+        if self.shared_compartments
+            && !self.installing_intrinsics
+            && self.environment.binding_names.insert(id)
+        {
+            if let Some(name) = name.as_str() {
+                self.materialize_runtime_global(id, name);
+            }
+        }
     }
 
     /// Keep 1,024 ids for bounded engine bookkeeping and error construction.
