@@ -1903,6 +1903,14 @@ const makeDaemonCore = async (
 
     const { promise: workerCancelled, reject: cancelWorker } =
       /** @type {PromiseKit<never>} */ (makePromiseKit());
+    // Acquisition can fail before the native power subscribes to its signals.
+    void workerCancelled.catch(() => {});
+    void forceCancelled.catch(() => {});
+    const workerForceCancelled = Promise.race([
+      forceCancelled,
+      gracePeriodElapsed,
+    ]);
+    void workerForceCancelled.catch(() => {});
 
     /**
      * Stamp every error we decode from this worker with its origin so
@@ -1922,18 +1930,62 @@ const makeDaemonCore = async (
       inboundErrorOrigin.set(err, { workerId: workerFormulaId, errorId });
     };
 
-    const { workerTerminated, workerDaemonFacet } =
-      await controlPowers.makeWorker(
-        workerId512,
-        daemonWorkerFacet,
-        workerCancelled,
-        Promise.race([forceCancelled, gracePeriodElapsed]),
-        capTpConnectionRegistrar,
-        trustedShims,
-        label,
-        kind,
-        recordInboundOrigin,
+    const acquisition =
+      /** @type {PromiseKit<Awaited<ReturnType<DaemonicPowers['control']['makeWorker']>>>} */ (
+        makePromiseKit()
       );
+    const terminated = acquisition.promise.then(
+      result => result.workerTerminated,
+    );
+    // Both promises may reject before anyone intentionally observes this worker.
+    void terminated.catch(() => {});
+
+    // Register before acquisition can yield. Contexts do not accept hooks after
+    // cancellation, and a late worker must remain owned by this exact context.
+    const gracefulCancel = async () => {
+      cancelWorker(new Error('Worker cancelled'));
+      void acquisition.promise.then(
+        ({ workerDaemonFacet }) => E.sendOnly(workerDaemonFacet).terminate(),
+        () => {},
+      );
+      const cancelWorkerGracePeriod = () => {
+        throw new Error('Exited gracefully before grace period elapsed');
+      };
+      const workerGracePeriodCancelled = Promise.race([
+        gracePeriodElapsed,
+        terminated,
+      ]).then(cancelWorkerGracePeriod, cancelWorkerGracePeriod);
+      // Escalation starts while acquisition is pending, too. The native power
+      // must observe these signals as soon as it has acquired a child.
+      await delay(gracePeriodMs, workerGracePeriodCancelled)
+        .then(() => {
+          throw new Error(
+            `Worker termination grace period ${gracePeriodMs}ms elapsed`,
+          );
+        })
+        .catch(forceCancel);
+      await terminated;
+    };
+    context.onCancel(gracefulCancel);
+
+    try {
+      acquisition.resolve(
+        controlPowers.makeWorker(
+          workerId512,
+          daemonWorkerFacet,
+          workerCancelled,
+          workerForceCancelled,
+          capTpConnectionRegistrar,
+          trustedShims,
+          label,
+          kind,
+          recordInboundOrigin,
+        ),
+      );
+    } catch (error) {
+      acquisition.reject(error);
+    }
+    const { workerTerminated, workerDaemonFacet } = await acquisition.promise;
 
     /** @param {Error} [_reason] */
     const terminateWorker = async _reason => {
@@ -1947,31 +1999,10 @@ const makeDaemonCore = async (
     logLifecycle(context.id, 'WORKER_READY');
 
     workerTerminationByNumber.set(workerId512, terminateWorker);
-    workerTerminated.finally(() => {
-      workerTerminationByNumber.delete(workerId512);
-    });
-
-    const gracefulCancel = async () => {
-      cancelWorker(new Error('Worker cancelled'));
-      E.sendOnly(workerDaemonFacet).terminate();
-      const cancelWorkerGracePeriod = () => {
-        throw new Error('Exited gracefully before grace period elapsed');
-      };
-      const workerGracePeriodCancelled = Promise.race([
-        gracePeriodElapsed,
-        workerTerminated,
-      ]).then(cancelWorkerGracePeriod, cancelWorkerGracePeriod);
-      await delay(gracePeriodMs, workerGracePeriodCancelled)
-        .then(() => {
-          throw new Error(
-            `Worker termination grace period ${gracePeriodMs}ms elapsed`,
-          );
-        })
-        .catch(forceCancel);
-      await workerTerminated;
-    };
-
-    context.onCancel(gracefulCancel);
+    void workerTerminated.then(
+      () => workerTerminationByNumber.delete(workerId512),
+      () => workerTerminationByNumber.delete(workerId512),
+    );
 
     const worker = makeExo('EndoWorker', WorkerInterface, {});
 
@@ -2255,6 +2286,7 @@ const makeDaemonCore = async (
     const worker = await provide(workerId, 'worker');
     const workerDaemonFacet = workerDaemonFacets.get(worker);
     assert(workerDaemonFacet, 'Cannot make unconfined plugin with non-worker');
+    context.assertActive();
     const powersP = provide(powersId);
     return E(/** @type {any} */ (workerDaemonFacet)).makeUnconfined(
       specifier,
@@ -4679,6 +4711,7 @@ const makeDaemonCore = async (
    * @param {Context} context
    */
   const evaluateFormulaForId = async (id, context) => {
+    context.assertActive();
     const { number: formulaNumber, node: formulaNode } = parseId(id);
     const isRemote = !isLocalKey(formulaNode);
     if (isRemote) {
@@ -4692,6 +4725,7 @@ const makeDaemonCore = async (
     }
 
     const formula = await getFormulaForId(id);
+    context.assertActive();
     logLifecycle(id, 'REINCARNATE');
     assertValidFormulaType(formula.type);
 
@@ -4764,7 +4798,9 @@ const makeDaemonCore = async (
     // Behold, recursion:
     // eslint-disable-next-line no-use-before-define
     const context = makeContext(id);
-    promise.catch(context.cancel);
+    // Automatic cancellation must observe its cleanup failure too. Explicit
+    // cancellation and context.disposed retain that rejection for the owner.
+    void promise.catch(context.cancel).catch(() => {});
     const controller = harden({
       context,
       value: promise,
@@ -4778,6 +4814,7 @@ const makeDaemonCore = async (
     return harden({
       id,
       value: controller.value,
+      context,
     });
   };
 
@@ -4796,7 +4833,9 @@ const makeDaemonCore = async (
     // Behold, recursion:
     // eslint-disable-next-line no-use-before-define
     const context = makeContext(id);
-    promise.catch(context.cancel);
+    // Automatic cancellation must observe its cleanup failure too. Explicit
+    // cancellation and context.disposed retain that rejection for the owner.
+    void promise.catch(context.cancel).catch(() => {});
     const newController = harden({
       context,
       value: promise,
@@ -6312,6 +6351,7 @@ const makeDaemonCore = async (
    * @param {string[]} [trustedShims]
    * @param {string} [workerLabel]
    * @param {'locked' | 'node'} [workerKind]
+   * @param {(id: FormulaIdentifier, context: Context) => void} [retainWorker]
    */
   const formulateCapletDependencies = async (
     hostAgentId,
@@ -6322,6 +6362,7 @@ const makeDaemonCore = async (
     trustedShims = undefined,
     workerLabel = undefined,
     workerKind = undefined,
+    retainWorker = undefined,
   ) => {
     const ownFormulaNumber = /** @type {FormulaNumber} */ (
       await randomHex256()
@@ -6331,13 +6372,23 @@ const makeDaemonCore = async (
       hostHandleId,
       specifiedPowersId,
     );
-    const workerId = await provideWorkerId(
-      specifiedWorkerId,
-      trustedShims,
-      workerLabel,
-      undefined,
-      workerKind,
-    );
+    // Allocate a fresh worker identity without starting its process. Like
+    // formulateWorker, publish ownership before persisting/evaluating it.
+    // A rejected publication must not leave a newly acquired worker behind.
+    const freshWorkerNumber =
+      specifiedWorkerId === undefined
+        ? /** @type {FormulaNumber} */ (await randomHex256())
+        : undefined;
+    const workerId =
+      freshWorkerNumber === undefined
+        ? await provideWorkerId(
+            specifiedWorkerId,
+            trustedShims,
+            workerLabel,
+            undefined,
+            workerKind,
+          )
+        : formatId({ number: freshWorkerNumber, node: localNodeNumber });
     // When a new node worker was created because the specified worker
     // was XS-only, record the original so that cancelling the original
     // worker cascades to the caplet.  This is a runtime dependency only,
@@ -6360,6 +6411,14 @@ const makeDaemonCore = async (
     // pet-store edges) so that the powers guest is reachable
     // before we unpin its dependencies.
     await deferredTasks.execute(identifiers);
+    if (freshWorkerNumber !== undefined) {
+      const worker = await formulateNumberedWorker(freshWorkerNumber, {
+        kind: workerKind,
+        trustedShims,
+        label: workerLabel,
+      });
+      retainWorker?.(worker.id, worker.context);
+    }
     for (const id of powersPinned) {
       unpinTransient(id);
     }
@@ -6377,6 +6436,7 @@ const makeDaemonCore = async (
     env = {},
     trustedShims = undefined,
     workerLabel = undefined,
+    retainWorker = undefined,
   ) => {
     return withFormulaGraphLock(async () => {
       const { powersId, capletFormulaNumber, workerId, originalWorkerId } =
@@ -6389,6 +6449,7 @@ const makeDaemonCore = async (
           trustedShims,
           workerLabel,
           'node',
+          retainWorker,
         );
 
       /** @type {MakeUnconfinedFormula} */
@@ -6553,7 +6614,7 @@ const makeDaemonCore = async (
 
   /** @type {DaemonCore['formulateNetworksDirectory']} */
   const formulateNetworksDirectory = async () => {
-    const { id, value } = await formulateDirectory();
+    const { id, value, context } = await formulateDirectory();
     // Make default networks.
     const { id: loopbackNetworkId } = await formulateLoopbackNetwork();
     const loopbackType = await getTypeForId(loopbackNetworkId);
@@ -6566,7 +6627,7 @@ const makeDaemonCore = async (
       /** @type {NamePath} */ (['loop']),
       loopbackLocator,
     );
-    return { id, value };
+    return { id, value, context };
   };
 
   /** @type {DaemonCore['formulateEndo']} */
@@ -8227,6 +8288,7 @@ const makeDaemonCore = async (
     provideController,
     provideStoreController,
     cancelValue,
+    getActiveContext: id => controllerForId.get(id)?.context,
     formulateWorker,
     formulateHost,
     formulateGuest,

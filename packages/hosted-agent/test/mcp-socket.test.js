@@ -1,13 +1,13 @@
 // @ts-check
 import test from '@endo/ses-ava/prepare-endo.js';
-import { once } from 'node:events';
+import { EventEmitter, once } from 'node:events';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 
-import { listenMcpSocket } from '../src/mcp-socket.js';
+import { listenMcpSocket, makeMcpSocketListener } from '../src/mcp-socket.js';
 
 /** @import { ExecutionContext } from 'ava' */
 /** @import { Interface } from 'node:readline' */
@@ -124,12 +124,12 @@ test('parse errors, blank lines and a partial tail retain framing', async t => {
   ]);
 });
 
-test('close drops connected peers without waiting for an outstanding host call', async t => {
+test('close drops peers immediately and waits for an outstanding host call', async t => {
+  t.timeout(5000);
   let release = () => {};
   const pending = new Promise(resolve => {
     release = () => resolve(undefined);
   });
-  t.teardown(release);
   let admitted = () => {};
   const admission = new Promise(resolve => {
     admitted = () => resolve(undefined);
@@ -139,11 +139,131 @@ test('close drops connected peers without waiting for an outstanding host call',
     await pending;
     return { result: 'late' };
   });
+  // AVA awaits teardowns in reverse order: release before listener.close.
+  t.teardown(release);
   socket.write('{}\n');
   await admission;
   const closed = once(socket, 'close');
-  await Promise.all([listener.close(), listener.close()]);
+  const closing = listener.close();
+  t.is(listener.close(), closing);
+  let finished = false;
+  void closing.then(() => {
+    finished = true;
+  });
   await closed;
+  t.false(finished);
   release();
+  await closing;
   t.true(socket.destroyed);
+});
+
+/** @import net from 'node:net' */
+
+const makeNativeFixture = () => {
+  const server = new EventEmitter();
+  let bound = () => {};
+  let creates = 0;
+  let closes = 0;
+  let failClose = false;
+  Object.assign(server, {
+    listen(_path, callback) {
+      bound = callback;
+    },
+    close(callback) {
+      closes += 1;
+      callback(failClose ? Error('native close failed') : undefined);
+    },
+  });
+  // Intentionally small native-net boundary fixture.
+  const netModule = /** @type {typeof net} */ (
+    /** @type {unknown} */ ({
+      createServer() {
+        creates += 1;
+        return server;
+      },
+    })
+  );
+  return {
+    netModule,
+    server,
+    bind: () => bound(),
+    failClose: value => {
+      failClose = value;
+    },
+    counts: () => ({ creates, closes }),
+  };
+};
+
+test('inert listener fences start when closed before acquisition', async t => {
+  const native = makeNativeFixture();
+  const listener = makeMcpSocketListener({
+    socketPath: '/unused',
+    bridge: { handleMessage: async () => undefined },
+    netModule: native.netModule,
+  });
+  t.deepEqual(native.counts(), { creates: 0, closes: 0 });
+  await listener.close();
+  t.throws(() => listener.start(), { message: /closed/ });
+  t.deepEqual(native.counts(), { creates: 0, closes: 0 });
+});
+
+test('same-tick start and close fence the queued native acquisition', async t => {
+  t.timeout(5000);
+  const native = makeNativeFixture();
+  const listener = makeMcpSocketListener({
+    socketPath: '/unused',
+    bridge: { handleMessage: async () => undefined },
+    netModule: native.netModule,
+  });
+  t.teardown(async () => {
+    native.bind();
+    await listener.close();
+  });
+  const starting = listener.start();
+  const closing = listener.close();
+  await t.throwsAsync(starting, { message: /closed/ });
+  await closing;
+  t.deepEqual(native.counts(), { creates: 0, closes: 0 });
+});
+
+test('close waits for late listen and retains native close failure for retry', async t => {
+  t.timeout(5000);
+  const native = makeNativeFixture();
+  const listener = makeMcpSocketListener({
+    socketPath: '/unused',
+    bridge: { handleMessage: async () => undefined },
+    netModule: native.netModule,
+  });
+  t.teardown(async () => {
+    native.failClose(false);
+    native.bind();
+    await listener.close();
+  });
+  const starting = listener.start();
+  const failedStart = t.throwsAsync(starting, { message: /closed/ });
+  await Promise.resolve();
+  native.failClose(true);
+  const closing = listener.close();
+  const failedClose = t.throwsAsync(closing, { message: /cleanup pending/ });
+  t.deepEqual(native.counts(), { creates: 1, closes: 0 });
+  native.bind();
+  await failedStart;
+  await failedClose;
+  t.deepEqual(native.counts(), { creates: 1, closes: 1 });
+  native.failClose(false);
+  await listener.close();
+  await listener.close();
+  t.deepEqual(native.counts(), { creates: 1, closes: 2 });
+});
+
+test('a failed host call preserves its error response without poisoning cleanup', async t => {
+  const { socket, reader, listener } = await setup(t, async () => {
+    throw Error('tool failed');
+  });
+  const replies = readReplies(reader, 1);
+  socket.write('{"id":9}\n');
+  t.deepEqual(await replies, [
+    { jsonrpc: '2.0', id: 9, error: { code: -32_603, message: 'tool failed' } },
+  ]);
+  await t.notThrowsAsync(listener.close());
 });

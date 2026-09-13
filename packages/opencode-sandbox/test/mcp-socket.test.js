@@ -2,8 +2,9 @@
 import '@endo/init';
 import test from 'ava';
 import { spawn } from 'node:child_process';
-import { once } from 'node:events';
+import { EventEmitter, once } from 'node:events';
 import {
+  chmod,
   mkdir,
   mkdtemp,
   readFile,
@@ -16,7 +17,10 @@ import { join } from 'node:path';
 import process from 'node:process';
 import { createInterface } from 'node:readline';
 
-import { startMcpSocketServer } from '../src/mcp-socket-server.js';
+import {
+  makeMcpSocketServer,
+  startMcpSocketServer,
+} from '../src/mcp-socket-server.js';
 
 test('installs the shared standalone relay with OpenCode config and private permissions', async t => {
   t.timeout(5000);
@@ -107,4 +111,123 @@ test('failed socket-file cleanup can retry; a successful close cannot unlink a s
   await writeFile(server.socketPath, 'successor');
   await server.close();
   t.is(await readFile(server.socketPath, 'utf8'), 'successor');
+});
+
+/** @import net from 'node:net' */
+
+test('inert server close has no native storage effects', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'opencode-mcp-inert-'));
+  t.teardown(() => rm(directory, { recursive: true, force: true }));
+  const socketDir = join(directory, 'absent');
+  const server = makeMcpSocketServer({
+    socketDir,
+    bridge: { handleMessage: async () => undefined },
+  });
+  await t.throwsAsync(() => stat(socketDir), { code: 'ENOENT' });
+  await server.close();
+  t.throws(() => server.start(), { message: /closed/ });
+  await t.throwsAsync(() => stat(socketDir), { code: 'ENOENT' });
+});
+
+test('close drains admitted relay installation and fences later startup effects', async t => {
+  t.timeout(5000);
+  const directory = await mkdtemp(join(tmpdir(), 'opencode-mcp-install-'));
+  t.teardown(() => rm(directory, { recursive: true, force: true }));
+  let release = () => {};
+  const pending = new Promise(resolve => {
+    release = () => resolve(undefined);
+  });
+  let entered = () => {};
+  const admission = new Promise(resolve => {
+    entered = () => resolve(undefined);
+  });
+  let writes = 0;
+  const server = makeMcpSocketServer({
+    socketDir: directory,
+    bridge: { handleMessage: async () => undefined },
+    installBridge: async () => {
+      entered();
+      await pending;
+    },
+    writeConfig: async () => {
+      writes += 1;
+    },
+  });
+  t.teardown(async () => {
+    release();
+    await server.close();
+  });
+  const starting = server.start();
+  const failedStart = t.throwsAsync(starting, { message: /closed/ });
+  await admission;
+  const closing = server.close();
+  t.is(server.close(), closing);
+  let finished = false;
+  void closing.then(() => {
+    finished = true;
+  });
+  await Promise.resolve();
+  t.false(finished);
+  release();
+  await failedStart;
+  await closing;
+  t.is(writes, 0);
+  await t.throwsAsync(() => stat(server.socketPath), { code: 'ENOENT' });
+});
+
+test('post-listen permission failure retains native listener until close retry succeeds', async t => {
+  t.timeout(5000);
+  const directory = await mkdtemp(join(tmpdir(), 'opencode-mcp-chmod-'));
+  t.teardown(() => rm(directory, { recursive: true, force: true }));
+  const native = new EventEmitter();
+  let closes = 0;
+  let failClose = true;
+  Object.assign(native, {
+    listen(socketPath, callback) {
+      void writeFile(socketPath, 'owned socket placeholder').then(callback);
+    },
+    close(callback) {
+      closes += 1;
+      callback(failClose ? Error('native close failed') : undefined);
+    },
+  });
+  const netModule = /** @type {typeof net} */ (
+    /** @type {unknown} */ ({ createServer: () => native })
+  );
+  const server = makeMcpSocketServer({
+    socketDir: directory,
+    netModule,
+    bridge: { handleMessage: async () => undefined },
+    setPermissions: async (nativePath, mode) => {
+      if (nativePath === join(directory, 'mcp.sock'))
+        throw Error('socket chmod failed');
+      await chmod(nativePath, mode);
+    },
+  });
+  t.teardown(async () => {
+    failClose = false;
+    await server.close();
+  });
+  await t.throwsAsync(server.start(), { message: /socket chmod failed/ });
+  await t.throwsAsync(server.close(), { message: /cleanup pending/ });
+  t.is(await readFile(server.socketPath, 'utf8'), 'owned socket placeholder');
+  failClose = false;
+  await server.close();
+  t.is(closes, 2);
+  await t.throwsAsync(() => stat(server.socketPath), { code: 'ENOENT' });
+});
+
+test('existing socket paths are refused without taking deletion authority', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'opencode-mcp-collision-'));
+  t.teardown(() => rm(directory, { recursive: true, force: true }));
+  const socketPath = join(directory, 'mcp.sock');
+  await writeFile(socketPath, 'prior owner');
+  const server = makeMcpSocketServer({
+    socketDir: directory,
+    bridge: { handleMessage: async () => undefined },
+  });
+  t.teardown(() => server.close());
+  await t.throwsAsync(server.start(), { message: /already exists/ });
+  await server.close();
+  t.is(await readFile(socketPath, 'utf8'), 'prior owner');
 });

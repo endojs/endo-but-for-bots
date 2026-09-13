@@ -10,6 +10,7 @@ import {
   OPENROUTER_ORIGIN,
   buildOpencodeBrokerPolicy,
   makeOpencodeBroker,
+  makeOpencodeBrokerKit,
 } from '../src/opencode-broker.js';
 
 const digest = `sha256:${'a'.repeat(64)}`;
@@ -57,23 +58,25 @@ const makeFakeRuntime = () => {
   };
 };
 
+const brokerOptions = (runtime, overrides = {}) => ({
+  secret: Far('secret', {
+    async readBase64() {
+      return btoa('openrouter-key');
+    },
+  }),
+  ownerId: 'opencode-owner',
+  directory: '/var/lib/endo/opencode-broker',
+  imageRef: `localhost/opencode-sandbox@${digest}`,
+  imageDigest: digest,
+  listenerImageRef,
+  models,
+  fetch: async () => new Response('ok'),
+  runtime,
+  ...overrides,
+});
+
 const makeBroker = (runtime, overrides = {}) =>
-  makeOpencodeBroker({
-    secret: Far('secret', {
-      async readBase64() {
-        return btoa('openrouter-key');
-      },
-    }),
-    ownerId: 'opencode-owner',
-    directory: '/var/lib/endo/opencode-broker',
-    imageRef: `localhost/opencode-sandbox@${digest}`,
-    imageDigest: digest,
-    listenerImageRef,
-    models,
-    fetch: async () => new Response('ok'),
-    runtime,
-    ...overrides,
-  });
+  makeOpencodeBroker(brokerOptions(runtime, overrides));
 
 test('policy pins the OpenRouter origin, route, and strip handling', t => {
   const policy = buildOpencodeBrokerPolicy({ models });
@@ -274,4 +277,164 @@ test('public grants use shared egress and revocation removes its authority', asy
     message: /Public egress is disabled/,
   });
   t.is(runtime.stops(), 1);
+});
+
+test('broker kit fences same-tick startup before opening its runtime', async t => {
+  t.timeout(5000);
+  let opens = 0;
+  let closes = 0;
+  const runtimeKit = {
+    open: async () => {
+      opens += 1;
+      return makeFakeRuntime();
+    },
+    close: async () => {
+      closes += 1;
+    },
+  };
+  const kit = makeOpencodeBrokerKit(brokerOptions(undefined, { runtimeKit }));
+  t.teardown(kit.close);
+  t.is(opens, 0);
+  t.is(closes, 0);
+  const starting = kit.start();
+  const closing = kit.close();
+  await t.throwsAsync(starting, { message: /closed/ });
+  await closing;
+  t.is(opens, 0);
+  t.is(closes, 1);
+});
+
+test('broker retains late runtime acquisition and fences issuer construction', async t => {
+  t.timeout(5000);
+  const runtime = makeFakeRuntime();
+  let release = () => {};
+  const pending = new Promise(resolve => {
+    release = () => resolve(runtime);
+  });
+  let opened = () => {};
+  const admission = new Promise(resolve => {
+    opened = () => resolve(undefined);
+  });
+  let issuers = 0;
+  const runtimeKit = {
+    open: async () => {
+      opened();
+      return pending;
+    },
+    close: async () => {
+      await pending;
+      await runtime.dispose();
+    },
+  };
+  const kit = makeOpencodeBrokerKit(
+    brokerOptions(undefined, {
+      runtimeKit,
+      makeIssuer: () => {
+        issuers += 1;
+        throw Error('unexpected issuer');
+      },
+    }),
+  );
+  t.teardown(async () => {
+    release();
+    await kit.close();
+  });
+  const starting = kit.start();
+  const rejected = t.throwsAsync(starting, { message: /closed/ });
+  await admission;
+  const closing = kit.close();
+  t.is(kit.close(), closing);
+  let finished = false;
+  void closing.then(() => {
+    finished = true;
+  });
+  await Promise.resolve();
+  t.false(finished);
+  release();
+  await rejected;
+  await closing;
+  t.is(issuers, 0);
+  t.is(runtime.disposes(), 1);
+});
+
+test('failed issuer construction retains failed runtime cleanup for retry', async t => {
+  let failClose = true;
+  let closes = 0;
+  const runtime = makeFakeRuntime();
+  const kit = makeOpencodeBrokerKit(
+    brokerOptions(runtime, {
+      runtime: {
+        ...runtime,
+        dispose: () => {
+          closes += 1;
+          if (failClose) throw Error('release failed');
+          return Promise.resolve();
+        },
+      },
+      makeIssuer: () => {
+        throw Error('issuer failed');
+      },
+    }),
+  );
+  t.teardown(async () => {
+    failClose = false;
+    await kit.close();
+  });
+  await t.throwsAsync(kit.start(), { message: /issuer failed/ });
+  await t.throwsAsync(kit.close(), { message: /cleanup pending/ });
+  failClose = false;
+  await kit.close();
+  await kit.close();
+  t.is(closes, 2);
+});
+
+test('broker retries failed grant revocation without repeating released runtime cleanup', async t => {
+  let failStop = true;
+  let stops = 0;
+  const runtime = makeFakeRuntime();
+  const kit = makeOpencodeBrokerKit(
+    brokerOptions({
+      ...runtime,
+      start: async input => {
+        const worker = await runtime.start(input);
+        return {
+          ...worker,
+          stop: async () => {
+            stops += 1;
+            if (failStop) throw Error('stop failed');
+          },
+        };
+      },
+    }),
+  );
+  t.teardown(async () => {
+    failStop = false;
+    await kit.close();
+  });
+  const broker = await kit.start();
+  const grant = await broker.issuer({
+    sessionId: 'session-retry',
+    providerOrigin: OPENROUTER_ORIGIN,
+    accountRef: OPENCODE_BROKER_ACCOUNT,
+    model: models[0],
+    networkPolicy: 'off',
+  });
+  const closing = kit.close();
+  await t.throwsAsync(
+    () =>
+      broker.issuer({
+        sessionId: 'other',
+        providerOrigin: OPENROUTER_ORIGIN,
+        accountRef: OPENCODE_BROKER_ACCOUNT,
+        model: models[0],
+        networkPolicy: 'off',
+      }),
+    { message: /denied/ },
+  );
+  await t.throwsAsync(closing, { message: /cleanup pending/ });
+  await t.throwsAsync(E(grant).attestation(), { message: /inactive/ });
+  failStop = false;
+  await kit.close();
+  t.is(runtime.disposes(), 1);
+  t.is(stops, 2);
 });

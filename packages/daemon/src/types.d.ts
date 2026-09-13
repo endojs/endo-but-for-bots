@@ -866,6 +866,8 @@ export interface Context {
    * The identifier for the associated formula.
    */
   id: FormulaIdentifier;
+  /** Refuse further acquisition through this original context after cancellation. */
+  assertActive: () => void;
   /**
    * Cancel the value, preparing it for garbage collection. Cancellation
    * propagates to all values that depend on this value.
@@ -1885,6 +1887,7 @@ export interface EndoHost extends EndoAgent {
    */
   provideSessionOwner(
     recordsPath: NameOrPath,
+    controllerSpecifier?: string,
   ): Promise<ReturnType<typeof makeSessionOwner>>;
   form(
     recipientNameOrPath: string | string[],
@@ -2798,6 +2801,7 @@ export type DaemonicPowers = {
 export type FormulateResult<T> = Promise<{
   id: FormulaIdentifier;
   value: T;
+  context: Context;
 }>;
 
 export type DeferredTask<T extends Record<string, string | string[]>> = (
@@ -3037,6 +3041,8 @@ export interface DaemonCore {
 
   getFormulaForId: (id: FormulaIdentifier) => Promise<Formula>;
 
+  getActiveContext: (id: FormulaIdentifier) => Context | undefined;
+
   formulateNumberedGuest: (
     identifiers: FormulateNumberedGuestParams,
   ) => FormulateResult<EndoGuest>;
@@ -3148,6 +3154,7 @@ export interface DaemonCore {
     env?: Record<string, string>,
     trustedShims?: string[],
     workerLabel?: string,
+    retainWorker?: (id: FormulaIdentifier, context: Context) => void,
   ) => FormulateResult<unknown>;
 
   formulateWorker: (

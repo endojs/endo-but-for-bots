@@ -18,7 +18,7 @@ import { join } from 'node:path';
 import { Fail, q } from '@endo/errors';
 import { makeProviderBrokerGrantIssuer } from '@endo/hosted-agent/provider-grant-issuer.js';
 import { makePublicEgress } from '@endo/hosted-agent/public-egress.js';
-import { makePodmanProviderListenerRuntime } from '@endo/hosted-agent/provider-listener-runtime.js';
+import { makePodmanProviderListenerRuntimeKit } from '@endo/hosted-agent/provider-listener-runtime.js';
 
 /** @import { BrokerPolicy } from '@endo/hosted-agent/provider-broker.js' */
 
@@ -80,7 +80,9 @@ export const buildOpencodeBrokerPolicy = ({
 };
 
 /**
- * Compose the OpenRouter broker over a podman provider-listener runtime. Runs
+ * Construct an inert OpenRouter broker owner. Retain the kit before start().
+ * close() fences admission immediately and retains failed runtime/issuer cleanup
+ * for retry, including listener acquisition that completes after close. Runs
  * only with operator powers: it reads the OpenRouter secret, starts listener
  * containers, and mints leases. Callers hand the returned issuer to the
  * sandbox provisioning path and keep the compose/`dispose` authority.
@@ -99,9 +101,13 @@ export const buildOpencodeBrokerPolicy = ({
  * @param {(diagnostic: any) => void} [options.onDiagnostic]
  * @param {typeof globalThis.fetch} [options.fetch]
  * @param {any} [options.runtime] - Injectable provider listener runtime (tests)
- * @returns {Promise<{issuer: any, imageRef: string, dispose: () => Promise<void>}>}
+ * @param {ReturnType<typeof makePodmanProviderListenerRuntimeKit>} [options.runtimeKit]
+ *   Injectable retained runtime owner (tests); mutually exclusive with runtime.
+ * @param {typeof makeProviderBrokerGrantIssuer} [options.makeIssuer]
+ *   Injectable synchronous issuer constructor (tests).
+ * @returns {{start: () => Promise<{issuer: any, imageRef: string}>, close: () => Promise<void>}}
  */
-export const makeOpencodeBroker = async ({
+export const makeOpencodeBrokerKit = ({
   secret,
   ownerId,
   directory,
@@ -115,6 +121,8 @@ export const makeOpencodeBroker = async ({
   onDiagnostic,
   fetch: fetchAuthority = globalThis.fetch,
   runtime,
+  runtimeKit,
+  makeIssuer = makeProviderBrokerGrantIssuer,
 }) => {
   typeof publicInternet === 'boolean' ||
     Fail`Invalid public network configuration`;
@@ -146,60 +154,121 @@ export const makeOpencodeBroker = async ({
     Fail`OpenCode broker requires an outbound fetch authority`;
 
   const policy = buildOpencodeBrokerPolicy({ models });
-  const listener =
-    runtime ??
-    (await makePodmanProviderListenerRuntime({
-      imageRef: listenerImageRef,
-      ownerId,
-      stateDirectory: join(directory, 'listener'),
-      publicInternet,
-      ...(maxSessions === undefined ? {} : { maxListeners: maxSessions }),
-    }));
+  runtime === undefined ||
+    runtimeKit === undefined ||
+    Fail`Supply one OpenCode listener runtime owner`;
+  const owner =
+    runtimeKit ??
+    (runtime === undefined
+      ? makePodmanProviderListenerRuntimeKit({
+          imageRef: listenerImageRef,
+          ownerId,
+          stateDirectory: join(directory, 'listener'),
+          publicInternet,
+          ...(maxSessions === undefined ? {} : { maxListeners: maxSessions }),
+        })
+      : { open: async () => runtime, close: () => runtime.dispose() });
+  /** @type {ReturnType<typeof makeProviderBrokerGrantIssuer> | undefined} */
   let issuer;
-  try {
-    issuer = makeProviderBrokerGrantIssuer({
-      runtime: listener,
-      secret,
-      fetch: fetchAuthority,
-      imageDigest,
-      accountRef: OPENCODE_BROKER_ACCOUNT,
-      requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
-      policy,
-      ...(publicInternet
-        ? {
-            makePublicNetwork: () =>
-              makePublicEgress({ policy: 'public-internet' }),
-          }
-        : {}),
-      ...(audit === undefined ? {} : { audit }),
-      ...(onDiagnostic === undefined ? {} : { onDiagnostic }),
+  /** @type {Promise<{issuer: any, imageRef: string}> | undefined} */
+  let starting;
+  /** @type {Promise<void> | undefined} */
+  let closing;
+  let stopped = false;
+  let issuerReleased = false;
+  let runtimeReleased = false;
+  const assertOpen = () => {
+    !stopped || Fail`OpenCode broker is closed`;
+  };
+  const start = () => {
+    assertOpen();
+    starting ??= Promise.resolve().then(async () => {
+      assertOpen();
+      const listener = await owner.open();
+      assertOpen();
+      issuer = makeIssuer({
+        runtime: listener,
+        secret,
+        fetch: fetchAuthority,
+        imageDigest,
+        accountRef: OPENCODE_BROKER_ACCOUNT,
+        requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
+        policy,
+        ...(publicInternet
+          ? {
+              makePublicNetwork: () =>
+                makePublicEgress({ policy: 'public-internet' }),
+            }
+          : {}),
+        ...(audit === undefined ? {} : { audit }),
+        ...(onDiagnostic === undefined ? {} : { onDiagnostic }),
+      });
+      assertOpen();
+      return harden({ issuer, imageRef });
     });
+    return starting;
+  };
+  const close = () => {
+    stopped = true;
+    if (closing) return closing;
+    // Both native disposal entrypoints fence synchronously. In particular,
+    // issuer disposal revokes transport authority before queued listener
+    // acquisition settles, and runtime closure owns its late native results.
+    const revoking = (async () => {
+      if (issuer && !issuerReleased) {
+        await issuer.dispose();
+        issuerReleased = true;
+      }
+    })();
+    const releasing = (async () => {
+      if (!runtimeReleased) {
+        await owner.close();
+        runtimeReleased = true;
+      }
+    })();
+    const attempt = (async () => {
+      const results = await Promise.allSettled([
+        starting?.catch(() => {}),
+        revoking,
+        releasing,
+      ]);
+      const failures = results.flatMap(result =>
+        result.status === 'rejected' ? [result.reason] : [],
+      );
+      if (failures.length)
+        throw AggregateError(failures, 'OpenCode broker cleanup pending');
+    })();
+    closing = attempt;
+    void attempt.catch(() => {
+      if (closing === attempt) closing = undefined;
+    });
+    return attempt;
+  };
+  return harden({ start, close });
+};
+harden(makeOpencodeBrokerKit);
+
+/**
+ * Transitional convenience entrypoint. If startup and rollback both fail, the
+ * rejected promise does not retain a public cleanup handle or prove release.
+ * Native owners must retain makeOpencodeBrokerKit() before starting instead.
+ * @param {Parameters<typeof makeOpencodeBrokerKit>[0]} options
+ */
+export const makeOpencodeBroker = async options => {
+  const kit = makeOpencodeBrokerKit(options);
+  try {
+    const broker = await kit.start();
+    return harden({ ...broker, dispose: kit.close });
   } catch (error) {
-    // Do not leave the runtime's owner lock held when admission of the issuer
-    // itself fails (a future policy/digest option can throw here).
-    await listener.dispose().catch(() => {});
+    try {
+      await kit.close();
+    } catch (cleanupError) {
+      throw AggregateError(
+        [error, cleanupError],
+        'OpenCode broker startup and cleanup failed',
+      );
+    }
     throw error;
   }
-  const dispose = async () => {
-    const failures = [];
-    try {
-      await issuer.dispose();
-    } catch (error) {
-      failures.push(error);
-    }
-    try {
-      await listener.dispose();
-    } catch (error) {
-      failures.push(error);
-    }
-    if (failures.length)
-      throw new AggregateError(failures, 'OpenCode broker cleanup pending');
-  };
-  // `imageRef` participates in deployment assertions; keep it in the composed
-  // value so callers never have to re-derive the pairing. Do not deep-harden
-  // the wrapper: `runtime`/`listener` may be caller-owned state (or a test
-  // double) whose arrays must stay mutable.
-  harden(dispose);
-  return harden({ issuer, imageRef, dispose });
 };
 harden(makeOpencodeBroker);

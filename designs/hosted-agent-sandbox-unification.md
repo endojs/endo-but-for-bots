@@ -16,6 +16,21 @@ Codex subscription turns retain their runtime instead of renewing it each turn,
 and the OpenCode broker uses the same grant contract.
 Credential refresh remains separate; lifetime token/dollar budgets remain deferred.
 
+The OpenCode broker and shared provider-listener runtime now expose inert retained kits:
+`makeOpencodeBrokerKit` provides `start`/`close`, and
+`makePodmanProviderListenerRuntimeKit` provides `open`/`close`.
+The broker retains the runtime kit before opening it, fences grant admission during
+shutdown, and retries failed issuer/runtime release without repeating successful stages.
+The runtime retains initialization file handles, lock claims, recovery reservations,
+and required orphan sweeps before later startup steps can fail.
+Node tests cover delayed acquisition, failed initialization and release, preservation
+of a live foreign owner's marker, and stale takeover with failed reservation cleanup.
+These tests use simulated Podman controls and local Node listener workers.
+They do not strengthen the existing PID-based recovery or native-command descendant
+proofs or complete per-session controller adoption.
+Async convenience wrappers still lose the cleanup handle when startup and rollback both
+fail; native controllers must retain the kits directly.
+
 Claude and OpenCode now share the MCP protocol, host-side socket transport, and guest stdio relay.
 The input frame limit covers both complete frames and partial tails before dispatch.
 The shared bridge admits at most 32 simultaneous host tool executions, reusing the
@@ -98,8 +113,70 @@ Node acceptance proves that session A can be collected after restart while sessi
 and both supervisor workers remain usable.
 Original host/directory cancellation fences existing handles, and a revived host cannot
 claim a second cleanup queue while the earlier incarnation retains the directory.
-This boundary does not yet construct native sessions or own the outer MCP/broker grants;
-OpenCode adoption remains uncommitted until those operations use the same owner.
+The configured daemon-local owner now constructs and activates inert native controllers.
+Its fixed controller specifier, slot-free constructor input, and marked session-record
+child directory survive restart; worker/client IDs are published before dedicated Node
+worker acquisition.
+Only explicit start persists `starting` and then supplies an exact-role dependency resolver;
+inspection and reconstruction do not eagerly revive the controller's dependencies.
+Stop can reach cancellation-dependent activation outside the session queue, while the
+queue retains activation, dependency revival, and cleanup until they drain.
+The controller's native cleanup acknowledgement precedes exact-context cancellation;
+persistent storage has a separate optional `storage.remove(originalPlan)` authority.
+Failed cleanup retains the plan and references and forbids revision or reuse.
+Twenty-seven owner unit tests and Node daemon acceptance cover this boundary,
+including effectful dependency revival, restart identity reuse, nested-directory claims,
+and removal of one session while a sibling and its backend remain usable.
+These are controller-fixture results; actual Claude/Codex/OpenCode adapters do not yet
+use this construction path or unify their outer MCP/broker cleanup under it.
+The earlier OpenCode record/provisioner draft remains uncommitted.
+Core cancellation now fences late dependency acquisition and delayed formula evaluation
+using the original context's cancelled state.
+Node regressions reproduced both dependency-registration paths and a held worker-formula
+load that previously increased native worker acquisitions from two to three after cancel.
+The combined 16 context/formula tests now pass: cancelled evaluation does not acquire a
+worker or construct a client, while a later intentional lookup can revive the formula.
+This does not permanently revoke a formula ID or prove previously admitted effects ended.
+Fresh native construction now returns a retained `{ value, cancel }` kit before effects.
+Stop latches cancellation outside the session queue and waits for formula publication and
+persistence to settle, separately from the constructor value, before cancelling original
+contexts; failed cleanup remains retryable.
+Two injected-daemon tests hold successful and failed caplet persistence and verify that
+only the original worker is cancelled after the write settles, with no successor acquired.
+A real Node test stops a never-resolving inert constructor, verifies its PID is gone and
+its worker/client references are released, and confirms its sibling remains usable.
+Stalled persistence still retains ownership and blocks completion.
+This fresh-construction abort does not prove cleanup of a previously ready session whose
+reconstructed controller may own native effects; actual adapter, Podman, and CLI acceptance
+remain pending.
+
+The daemon owner can attach a transient journaled tool capability with
+`start(name, tools)`.
+It reserves the `tools` dependency role for that activation and refuses persisted tool
+references or replacement with a different capability during an active incarnation.
+An ordinary turn interrupt retains the binding; stop fences further resolver retrieval.
+The generic owner permits an omitted binding, so hosted controllers must require
+`dependencies.get('tools')` during activation.
+After daemon restart, the caller must supply its new journaled binding explicitly.
+This does not revoke an already-returned capability or authenticate a guest process:
+the host MCP bridge still fences admission and drains admitted calls, and Floot records
+each interaction using its originating turn context.
+Actual adapter wiring remains pending.
+
+Node worker termination now waits for the original child process's `close` event,
+which follows process exit or failed spawn and closure of its stdio.
+A closed CapTP connection or an `exit` event alone no longer completes that proof.
+The manager installs the original context's cancellation hook before worker acquisition
+can yield, retaining both a late worker and a rejected acquisition's cleanup outcome.
+The hook uses that acquisition, rather than resolving a replacement worker by formula ID.
+Cancellation uses the existing grace period and force signal; expiry requests escalation
+and does not itself acknowledge native termination.
+Node setup failures after fork retain the child until close, and the parent releases
+its duplicate log descriptor.
+The focused worker/context run passes 19 tests, including a real Node child that closes
+its CapTP pipes, ignores graceful termination, and remains owned until forced closure.
+These results do not establish whole-session stop or descendant containment.
+
 Podman teardown fences new operations, waits for admitted creates, and retains failed
 removals and their admission slots for retry.
 Successful cleanup requires both checked container removal and native attach-process
@@ -386,10 +463,70 @@ originating in another worker.
 Verify actual formula collection and preserve ordinary-worker termination tests.
 
 Native construction must publish a retained controller formula before activation.
-Give each session an explicit native worker; its controller constructor is inert and
-its start operation acquires fresh transports and grants under the owner's queue.
-The controller owns MCP/broker and client cleanup together and returns stop proof before
-the daemon releases its formula references.
+Fresh caplet workers now follow the same publication ordering as explicit worker
+construction: allocate identities, publish references, then create the worker.
+This prevents failed client publication from starting that fresh worker.
+Configured `provideSessionOwner(recordsPath, controllerSpecifier)` now stores one fixed
+controller specifier and an initially null marshal input with no capability slots.
+A marked `sessions` child belongs to that owner root and cannot be reopened as a separate
+owner through an alias, including after restart.
+Each native controller gets an explicit dedicated Node worker; its worker and client IDs
+are retained before native acquisition, and original contexts remain available for retry.
+Implicit powers creation and existing-worker substitution are separate paths.
+The constructor is inert: decoding a capability-bearing marshal would eagerly revive all
+its slots, so such constructor inputs are refused.
+
+Explicit `start` persists `starting` before calling
+`controller.activate(originalPlan, dependencies)`.
+The ephemeral resolver admits only recorded runtime roles, resolves their exact IDs in
+the daemon, and excludes administrative client, worker, and storage roles.
+It owns even detached admitted revivals; closing fences new gets and waits for them to settle.
+Inspection is passive, and a restarted daemon requires explicit start before forwarding
+client operations; this start reuses the recorded worker/client IDs.
+
+Stop immediately fences the client and activation resolver.
+For a fresh incarnation, host construction returns an inert `{ value, cancel }` kit before
+awaiting configuration, publication, or persistence.
+The owner retains it before awaiting the controller, so its fence can request cancellation
+outside the queue even when the constructor never settles.
+Cancellation latches immediately but waits for the boxed formulation result or rejection,
+which owns formula/context acquisition separately from the eventual constructor value.
+Only then does it cancel the exact acquired contexts, retaining failed cleanup for retry;
+cancelling the worker earlier could let still-pending caplet persistence acquire a successor.
+Once `starting` is persisted, the owner releases the redundant construction kit and hands
+cleanup to the native controller's retained termination control.
+A permanently stalled persistence operation still prevents completion and remains owned.
+Reconstructing a previously ready session may represent earlier native effects and does
+not take this fresh inert-abort shortcut; native cleanup is still required.
+The core now checks `context.assertActive()` before dependency acquisition and again
+after its provider returns, preserving the original cancellation reason.
+A cancelled parent's late dependent registration uses only an existing controller;
+it never revives a missing dependent merely to cancel it.
+Formula evaluation checks the same original context after asynchronous formula loading,
+and unconfined construction checks after awaiting its worker before providing powers.
+These checks prevent cancelled work from admitting a successor through a late continuation;
+they neither cancel an unresolved constructor by themselves nor replace native cleanup.
+Once `starting` is persisted, a retained, retryable `terminate(originalPlan, dependencies)`
+control can run outside the queue to unblock cancellation-dependent activation.
+The queue still drains activation, its dependency work, and cleanup before persisting
+`native-closed` and cancelling the original client/worker contexts.
+A cancellation failure retains that exact context for retry; successful cancellation
+releases the retained context without reviving a replacement by ID.
+Removal uses the separately recorded optional `storage.remove(originalPlan)` capability
+after native cleanup and cancellation, then releases the record and its stop tokens.
+Revision is forbidden during cleanup, preserving the original storage instructions.
+No timeout, formula cancellation, or transport rejection substitutes for the controller's
+native cleanup acknowledgement.
+
+The configured owner boundary passes Node unit and daemon-fixture acceptance.
+Actual adapters must still make their controller own MCP/broker, client, mounter, and
+storage cleanup together before this becomes whole-session stop proof.
+Shared MCP transport and OpenCode socket setup now expose inert kits whose close controls
+exist before startup effects.
+Closing fences connections immediately and drains admitted host handlers and setup work;
+failed native closure or socket removal remains retryable through the retained kit.
+The async convenience wrappers still cannot return that owner after a failed startup and
+rollback, so native controller adoption must retain the kits directly.
 Dedicated client placement alone is insufficient: the shared factory currently receives
 mount capabilities, and state providers construct mounts through their host powers.
 Resolve mount authority at the daemon boundary and pass validated native bind descriptors
@@ -581,8 +718,11 @@ provider requirements, or an explicit user budget, rather than copied between la
 | Fixed provider routes/account binding | Which upstream authority a guest can exercise | Forged guest requests | Secret custody alone does not restrict credential use | Keep in provider service. |
 | Revocation and process reaping | Continued inference, networking, and execution | Stale or hostile guests | Request deadlines end one request, not the session grant | Keep one supervisor and grant owner. |
 | Cleanup completion before deletion | Storage still in use and original cleanup handles | Late acquisitions, failed stops, and callers treating cancellation as containment | A rejected call or removed formula name does not prove native resources ended; successful slice disposal is the client-side containment barrier | Retain failed and uncertain acquisitions; propagate failed stop before replacement/deletion. The uncommitted OpenCode integration exercises original records and cleanup sharing within one worker; daemon collection and cross-worker ownership acceptance remain pending. |
+| Provider initialization ownership | Listener cleanup authority, open resolver handles, and runtime lock/recovery reservations | Failed startup, late acquisitions, and a caller treating rejection as release | Per-listener limits bound live service work, not ownership of partially acquired host resources; persistent configuration remains operator-owned | Retain inert runtime/broker kits before acquisition and retry failed cleanup. This adds no lease or new budget, and does not prove descendants stopped after a native crash. |
 | Filesystem drain acknowledgement | Backing files, directories, and cleanup authority still used by 9P calls | Late I/O, failed source cleanup, or a caller equating socket closure with release | Frame sizes and flow control bound transport work, not the lifetime of admitted filesystem effects; stream terminal errors can repeat an earlier I/O failure | Keep a separate release acknowledgement at the stream provider and await kernel unmount, bridge drain, and retained handle cleanup. Do not add a lease or treat a timeout as release. |
-| Durable session ownership | Original cleanup authority, retained dependencies, and session storage | Retargeting after backend replacement, partial construction, and failed cleanup | Backend defaults and mutable global names do not identify an older session's owner; daemon directory entries already provide durable formula retention | Keep a passive plan and exact reference entries per session; the shared store is available, supervisor and adapter wiring remain pending. |
+| Durable session ownership | Original cleanup authority, retained dependencies, and session storage | Retargeting after backend replacement, partial construction, and failed cleanup | Backend defaults and mutable global names do not identify an older session's owner; daemon directory entries already provide durable formula retention | The configured daemon owner retains exact IDs and contexts, publishes before acquisition, and separates native cleanup from original-plan storage removal. Node fixture acceptance passes; actual adapter wiring remains pending. |
+| Transient tool attachment | Endo tool authority and its transcript context | Accidental persistence or rebinding to a different executor during a live incarnation | Floot already captures the originating turn on admission and rejects out-of-turn execution; the MCP bridge owns request admission and drain | Attach the current journaled capability only at explicit start, reserve its resolver role, and require stop before replacement. Closing the resolver prevents new retrieval; it is not revocation of a previously returned capability or process authentication. |
+| Controller activation and dependency drain | Authority to revive effectful dependencies and retain their cleanup | Eager marshal-slot revival, detached requests, and startup/stop races | Exact-ID records preserve identity but do not authorize when revival may begin; a closed transport does not drain an admitted host effect | Use slot-free constructor input, persist startup intent before a scoped resolver is supplied, and drain admitted revivals before native cleanup acknowledgement and cancellation. Fence late evaluation using the original context's cancellation state; fresh constructor cancellation waits for formulation to settle before cancelling original contexts, and prior-ready reconstruction still requires native cleanup. Reuse the existing lifetime owner; add no lease or policy budget. |
 | Active-turn admission for Endo eval/MCP | Association of explicit host tool calls with conversational context | Out-of-turn or stray requests | Session grants limit authority, not transcript context; this does not authenticate a guest process | Keep in shared host tool executor; background mount access remains independent. |
 | 64-request ceiling | Cumulative provider usage | A looping session | No per-session cumulative bound; revocation is an action and provider quotas may be account-wide | Remove default; future token/dollar budgets are separate work. |
 | One-hour authority expiry | Duration of delegated access | Abandoned or runaway sessions | Session ownership, revocation, pipe-loss handling, orphan cleanup | Remove default renewable lease; fix lifecycle directly. |
@@ -770,29 +910,36 @@ failure, alongside fast parser, cancellation, and state-machine tests.
 Do not claim local macOS/remote Podman compatibility from Linux procfs checks;
 that deployment needs its own supported execution and observation adapter.
 
-### Ironhorse and daemon compatibility tracking
+### Native runtime and daemon compatibility tracking
 
-Track native host services separately from the JavaScript engine executing the
-daemon manager or a confined worker.
-The Node daemon, an Endor supervisor with native Node workers, and a confined
-Ironhorse worker are distinct acceptance configurations.
-A passing Node test or a skipped native-worker test is not Ironhorse evidence.
-The entries below concern this sandbox work; they are not a catalog of engine defects.
+The required path uses Node-hosted sandbox controllers and services managing Podman.
+Acceptance covers the Node daemon lifecycle, supported Linux/Podman deployment, and pinned
+Claude, Codex, and OpenCode CLIs.
+Ironhorse execution is not a requirement or blocker for this unification.
+Broader Endor supervisor or engine compatibility is optional, separate work; a selected
+alternative deployment would need its own tests without delaying the required Node path.
+Keep reproduced Node lifetime bugs and simulated versus native test results explicit.
+The entries below track those boundaries and remaining adapter integration.
 
 | Area | Evidence and status | Consequence and required acceptance |
 |---|---|---|
-| Native host modules | The OpenCode provisioner imports `node:fs/promises` and `node:path`; its backend imports native networking/crypto modules. These are host-native services, not demonstrated Ironhorse-compatible modules. | Keep native operations behind explicit host powers. Run the hosted path with an Endor supervisor, the selected manager engine, and its configured native Node worker; separately exercise portable policy/lifecycle code on Ironhorse before claiming portability. |
-| Worker selection and shared ownership | `provideWorkerId` in `packages/daemon/src/manager.js` creates a separate Node worker when an unconfined caplet targets a default locked worker. The proposed OpenCode owner registry is a module-local `Map`. Cross-worker sharing has not been established. | Re-minted backend facets must reach one stable supervisor, independent of Node module-cache coincidence. Verify two backend mints against the same host/session under Endor; one must not bypass the other's cleanup owner. This is a design risk inferred from code, not a reproduced Ironhorse failure. |
-| Collection during successful record deletion | The new real-daemon `OpenCode records` acceptance fails on the Node path after recovery and cancellation: removing the record reports `Formula "directory" became unreachable by any pet name path and was collected`. `disconnectRetainersHolding` in `packages/daemon/src/residence.js` closes workers retaining collected formula references; the record helper exported child directories to its own worker. | Treat this as a confirmed daemon-integration blocker, with Ironhorse/Endor behavior untested. Put supervisor administration at an appropriate daemon boundary; do not swallow the rejection or count it as containment. Verify deletion succeeds while another session and the supervisor remain usable, including after restart. |
-| Daemon-local ownership acceptance | The Node `daemon-local session owner removes one session while sibling workers survive` test passes using clients and cleanup authority in separate workers, after daemon restart. Directory lifetime and host cancellation/revival tests cover stale facets and competing owner queues. | This closes the isolated administrative boundary's Node regression, not the draft OpenCode construction path. Native client/factory/provider mount exchanges and outer MCP/broker ownership still need adoption. Endor/Ironhorse acceptance remains unverified; the local `target/release/endor` binary is absent. |
-| Directory construction pin balance | Node regressions exposed duplicate transient pins: `formulateDirectory` transfers one pin, but directory publication and host/guest dependency construction took another. Fresh directories then survived loss of their final name until restart. The fix adopts the transferred pin once and releases bootstrap pins after durable root publication. | Verify fresh concurrent directory and pet-store collection without restart, plus host/guest directory collection and continued bootstrap access. These Node regressions pass; this is a daemon lifetime bug, not an observed Ironhorse defect. Failed agent-construction unwinding is outside this pin-balance fix. |
-| Shared 9P mounter lifetime and cleanup | `session-powers.js` exposes the original shared mounter; Claude/OpenCode clients pass workspace/config filesystem formulas into it. `9p-server/mount-caplet.js` and `src/fs-bridge.js` retain those capabilities in the shared worker, leaving the same collection hazard even with a resolved-path sandbox factory. The original mounter dropped some failed shutdown ownership, and the server closed sockets without awaiting admitted filesystem effects and handle closures. The new kit retains staged cleanup and reserves paths; its 31 fake-native mounter tests pass. Unix-socket integration verifies held filesystem work and failed cleanup retain storage, with kernel commands simulated. Per-session native-controller adoption remains pending. | Place mounter/bridges inside the explicit per-session native controller and retain their staged cleanup through failures. Prove A's filesystem collection leaves B alive, and held writes/handle closes prevent storage release. These are code-identified gaps, not demonstrated Ironhorse failures; native cross-worker acceptance remains pending. |
-| 9P stream release acknowledgement | Adversarial Node probes found that waiting for dispatch before sending stream cancellation can deadlock a cooperative pending read. Existing exo-stream iterators also cache terminal operation errors, while the former pumps could suppress source cleanup errors; a rejected iterator `return()` therefore cannot distinguish an old I/O error from failed release. | Separate endpoint close acknowledgement now fences and drains admitted source work, retaining failed cleanup. Node tests cover cooperative cancellation, ordinary I/O failure with successful release, held or failed cleanup, and abandoned acknowledgement chains. Connection and per-fid teardown drain stream endpoints before parent handles. These are Node protocol findings, not reproduced Ironhorse failures. |
-| Cursor stream and rewind cleanup | The former cursor stream wrapper did not forward termination to its backend iterator, while close suppressed failed returns and rewind discarded ownership. The cursor now retains one listing generation through release, fences queued pulls, and prevents stale readers from using a successor. | Sixteen Node cursor tests cover pending pulls, failed or unfinished return, retry, and close during rewind. Resourceful backend iterators must acknowledge completed cleanup honestly and retain failures for retry; this is not an Ironhorse acceptance result. |
-| 9P mounter entrypoint cancellation | Previously, `9p-server/mount-caplet.js` awaited async `resolveCancelled`, which assimilated the caplet lifetime promise. A local Node probe with a pending lifetime left construction pending. The fix boxes the signal while awaiting context acquisition; direct Node entrypoint tests cover live local, presence, and promised contexts and later admission fencing. | Construction now returns before cancellation. These tests exercise no kernel mounts and do not establish native cleanup completion; the separate 9P cleanup gaps remain. Endor/Ironhorse behavior has not been tested. |
-| Native-worker test skips | `testNeedsNodeWorker` in `packages/daemon/test/endo.test.js` skips when `ENDO_BIN` is set without `ENDO_NODE_WORKER_BIN`. `test:rust` and `test:rust-node-workers` in `packages/daemon/package.json` therefore cover different paths. | Record the selected engine, manager, supervisor, native-worker configuration, and skipped cases with each acceptance result. A bare Rust smoke-test pass cannot establish hosted sandbox support. No Endor/Ironhorse acceptance result has been established for this record increment. |
+| Native host modules | The OpenCode provisioner imports `node:fs/promises` and `node:path`; its backend imports native networking/crypto modules. These are intentional Node-hosted services. | Keep native operations behind explicit host powers and test the actual Node-hosted path on the supported Linux/Podman deployment. Porting these modules to a confined JavaScript engine is outside this work. |
+| Worker selection and shared ownership | `provideWorkerId` creates a separate Node worker when an unconfined caplet targets a default locked worker. The older OpenCode draft still uses a module-local registry. The configured daemon owner instead claims the original root and marked records directory independently of backend module caches, and constructs explicit dedicated Node workers; Node owner acceptance covers shared administrative access and sibling survival. | Actual OpenCode backend mints must adopt this daemon boundary; Node owner fixtures do not establish adapter wiring. Verify shared ownership through the real application entrypoints. |
+| Fresh worker acquisition before publication | A Node daemon regression reproduced a failed caplet result-name publication that had already persisted/evaluated its fresh worker. Fresh caplet workers now wait for successful deferred publication, preserving the exact worker identity, kind, shims, and label. | The regression verifies failed publication leaves no fresh worker formula and successful publication selects a dedicated explicit Node worker. Partial names can still refer to unpublished identities and must be reconciled without revival. This ordering does not cover implicit powers creation or substitution for an existing locked worker; session construction must use exact powers and an unspecified worker ID. Actual sandbox-adapter adoption remains unverified. |
+| Eager dependency revival during construction | Marshal evaluation calls `provide` on capability slots before decoding, and the owned sandbox factory constructor opens native storage. The configured owner now supplies slot-free constructor input and gives its controller a retained exact-role resolver only after `starting` is persisted. Node daemon acceptance uses a deliberately effectful dependency in another worker: passive inspection after restart does not increment its revival audit, while explicit start does and reuses the original worker/client IDs. Unit tests cover detached revival drain, activation failure, and cancellation-dependent startup. | The Node boundary is tested; actual sandbox adapters still need to adopt it. These fixture results do not establish native Podman containment, and arbitrary dependency failure still requires its own honest cleanup contract. |
+| Collection during successful record deletion | The new real-daemon `OpenCode records` acceptance fails on the Node path after recovery and cancellation: removing the record reports `Formula "directory" became unreachable by any pet name path and was collected`. `disconnectRetainersHolding` in `packages/daemon/src/residence.js` closes workers retaining collected formula references; the record helper exported child directories to its own worker. | Treat this as a confirmed Node daemon-integration blocker. Put supervisor administration at an appropriate daemon boundary; do not swallow the rejection or count it as containment. Verify deletion succeeds while another session and the supervisor remain usable, including after restart. |
+| Daemon-local ownership acceptance | The original Node collection acceptance passes with clients and cleanup authority in separate workers after restart. The configured construction/activation boundary now also passes 27 owner unit tests and Node daemon acceptance, covering dedicated worker publication, original identities, nested-directory ownership, dependency revival, and sibling survival during removal. | The earlier OpenCode provisioning draft remains uncommitted. Actual native client/factory/provider mount exchanges and outer MCP/broker cleanup still need adapter adoption. |
+| Directory construction pin balance | Node regressions exposed duplicate transient pins: `formulateDirectory` transfers one pin, but directory publication and host/guest dependency construction took another. Fresh directories then survived loss of their final name until restart. The fix adopts the transferred pin once and releases bootstrap pins after durable root publication. | Verify fresh concurrent directory and pet-store collection without restart, plus host/guest directory collection and continued bootstrap access. These Node regressions pass and document a daemon lifetime bug. Failed agent-construction unwinding is outside this pin-balance fix. |
+| Shared 9P mounter lifetime and cleanup | `session-powers.js` exposes the original shared mounter; Claude/OpenCode clients pass workspace/config filesystem formulas into it. `9p-server/mount-caplet.js` and `src/fs-bridge.js` retain those capabilities in the shared worker, leaving the same collection hazard even with a resolved-path sandbox factory. The original mounter dropped some failed shutdown ownership, and the server closed sockets without awaiting admitted filesystem effects and handle closures. The new kit retains staged cleanup and reserves paths; its 31 fake-native mounter tests pass. Unix-socket integration verifies held filesystem work and failed cleanup retain storage, with kernel commands simulated. Per-session native-controller adoption remains pending. | Place mounter/bridges inside the explicit per-session native controller and retain their staged cleanup through failures. Prove A's filesystem collection leaves B alive, and held writes/handle closes prevent storage release. Native cross-worker acceptance through the actual adapters remains pending. |
+| 9P stream release acknowledgement | Adversarial Node probes found that waiting for dispatch before sending stream cancellation can deadlock a cooperative pending read. Existing exo-stream iterators also cache terminal operation errors, while the former pumps could suppress source cleanup errors; a rejected iterator `return()` therefore cannot distinguish an old I/O error from failed release. | Separate endpoint close acknowledgement now fences and drains admitted source work, retaining failed cleanup. Node tests cover cooperative cancellation, ordinary I/O failure with successful release, held or failed cleanup, and abandoned acknowledgement chains. Connection and per-fid teardown drain stream endpoints before parent handles. These are Node protocol findings; live kernel-mount acceptance is separate. |
+| Cursor stream and rewind cleanup | The former cursor stream wrapper did not forward termination to its backend iterator, while close suppressed failed returns and rewind discarded ownership. The cursor now retains one listing generation through release, fences queued pulls, and prevents stale readers from using a successor. | Sixteen Node cursor tests cover pending pulls, failed or unfinished return, retry, and close during rewind. Resourceful backend iterators must acknowledge completed cleanup honestly and retain failures for retry. |
+| 9P mounter entrypoint cancellation | Previously, `9p-server/mount-caplet.js` awaited async `resolveCancelled`, which assimilated the caplet lifetime promise. A local Node probe with a pending lifetime left construction pending. The fix boxes the signal while awaiting context acquisition; direct Node entrypoint tests cover live local, presence, and promised contexts and later admission fencing. | Construction now returns before cancellation. These tests exercise no kernel mounts and do not establish native cleanup completion; the separate 9P cleanup gaps remain. |
+| Native-worker test skips | `testNeedsNodeWorker` in `packages/daemon/test/endo.test.js` skips when `ENDO_BIN` is set without `ENDO_NODE_WORKER_BIN`. `test:rust` and `test:rust-node-workers` in `packages/daemon/package.json` therefore cover different paths. | Record the native-worker configuration and skipped cases with each acceptance result. These optional Rust execution configurations do not gate the Node-hosted sandbox; a skipped test or Rust smoke-test pass cannot replace required Node/Linux/Podman acceptance. |
 | Native 9P/Podman test activation | The local `test:ninep` command reports two passing tests, but its probe records `not linux (darwin)` and `podman --version exit ENOENT`; both native bodies return before exercising mounts. | Count this as unexecuted native acceptance. Run with `NINEP_REQUIRE=1` on the supported Linux/Podman deployment and retain the probe result alongside test totals. Node fake-native mounter tests and Unix-socket bridge tests cover different boundaries. |
-| Worker death versus connection closure | The existing `testWorkerTermination` gate in `packages/daemon/test/endo.test.js` skips whenever `ENDO_BIN` is set. Its comment specifically describes the engo path closing a connection before worker termination is delivered, although the skip gate covers all `ENDO_BIN` paths. That comment is existing evidence, not a newly reproduced Ironhorse defect. | Add supervised acceptance that checks actual native worker/process closure, not only a rejected CapTP call. Exercise emergency stop, failed startup, record deletion, and daemon restart; this remains unverified for the hosted design. |
+| MCP setup ownership and host-call drain | The previous async listener API exposed its cleanup handle only after startup; closing also ignored admitted host calls. Shared transport and OpenCode setup now provide inert kits, fence connections, drain admitted calls and startup work, and retain failed cleanup for retry. OpenCode refuses existing socket paths rather than assuming stale-file deletion authority. | Node Unix-socket tests and simulated late-listen/failed-close tests cover these boundaries. Callers must exclusively own the private socket directory and its stable ancestry. Async wrappers retain a documented failed-startup ownership gap until controller callers adopt the kits; these tests do not establish whole-session cleanup. |
+| Provider runtime and broker initialization ownership | The old broker could lose a listener-runtime cleanup handle when issuer construction and rollback both failed. Retained broker/runtime kits now own initialization before effects, including resolver handles, lock claims, recovery reservations, and required sweeps. Fourteen Node runtime tests and ten broker tests cover initialization/cleanup retries, late acquisition, revoked grant admission, and successful-stage retention. | Podman controls are simulated; listener workers run in Node. Existing PID-based stale-owner detection and native command/descendant uncertainty are unchanged. A successful fixture cleanup is not live Podman crash-recovery evidence. Per-session native-controller adoption remains unverified; async convenience wrappers still have a documented failed-rollback handle gap. |
+| Inert construction cancellation | Before the fix, Node probes reproduced two cancelled-context dependency-registration paths that revived missing controllers, and a held worker-formula load increased worker acquisitions from two to three after cancellation. Original-context checks now fence dependency acquisition before/after the provider, formula evaluation after loading, and unconfined powers after awaiting the worker. Late dependent cancellation consults only existing controllers. The combined 16 context/formula tests pass, including worker and client formula loads and a later intentional revival. | Fresh construction now retains an inert value/cancel kit before effects and reaches cancellation outside the owner queue. Two injected-daemon tests hold successful and failed caplet persistence: original worker cancellation waits for write settlement and acquires no successor. A real Node pending-constructor test verifies PID disappearance, released worker/client references, and a usable sibling. Stalled persistence still retains ownership; prior-ready reconstruction may have native effects and still requires cleanup. Core admission fences and fresh abort do not prove whole-session stop, recovery, or native Podman containment; adapter and pinned-CLI acceptance remain pending. |
+| Worker death versus connection closure | Node termination now waits for the original child’s `close` event. The focused worker/context run passes 19 tests, including a real child that closes its CapTP pipes and ignores SIGTERM until forced termination. Cancellation is retained by the original context before acquisition, including late completion and failed acquisition; the existing grace budget escalates without treating expiry as termination. | The existing `testWorkerTermination` gate in `packages/daemon/test/endo.test.js` still skips whenever `ENDO_BIN` is set. Its engo connection-closure comment is prior evidence about an optional execution path; the Node regression above is independently reproduced. Whole-session emergency stop, descendant containment, failed-startup storage release, record deletion, and restart acceptance remain separate requirements. |
 
 Every newly discovered compatibility issue should include its reproducer or code
 evidence, exact execution configuration, observed versus inferred behavior, affected

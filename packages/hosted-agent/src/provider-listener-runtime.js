@@ -25,6 +25,8 @@ import { promisify } from 'node:util';
 
 import { makeProviderPipe } from './provider-pipe.js';
 
+/** @import { FileHandle } from 'node:fs/promises' */
+
 const execute = promisify(execFile);
 const LABEL = 'io.endo.provider.owner';
 /**
@@ -61,7 +63,12 @@ const readStart = async pid => {
 };
 
 /**
- * Concrete rootless Podman listener owner. The only byte channel to the worker
+ * Construct an inert rootless Podman listener owner. Retain the kit before
+ * open(); close() fences admission and retains failed initialization cleanup
+ * and listener release for retry. The operator owns persistent directory and
+ * resolver contents; this kit releases native handles and ownership markers.
+ * Existing command completion and stale-owner recovery semantics are unchanged.
+ * The only byte channel to the worker
  * is inherited stdin/stdout. The pinned listener image contains no credential.
  * Its process namespaces remain separate from model slices sharing only netns.
  * Host powers are injectable exclusively for controlled tests.
@@ -74,7 +81,7 @@ const readStart = async pid => {
  * @param {any} [options.host] Trusted host powers, never session inputs.
  * @param {boolean} [options.publicInternet] Operator enables optional public listeners.
  */
-export const makePodmanProviderListenerRuntime = async ({
+export const makePodmanProviderListenerRuntimeKit = ({
   imageRef,
   ownerId,
   stateDirectory,
@@ -121,71 +128,38 @@ export const makePodmanProviderListenerRuntime = async ({
       readLink: path => readlink(path),
     });
   const processStart = host.readStart ?? readStart;
-  await mkdir(stateDirectory, { recursive: true, mode: 0o700 });
-  const directory = await lstat(stateDirectory);
-  // eslint-disable-next-line no-bitwise
-  const sharedPermissions = directory.mode & 0o077;
-  (directory.isDirectory() &&
-    directory.uid === process.getuid?.() &&
-    sharedPermissions === 0) ||
-    Fail`Provider runtime state directory is not private`;
-  const start = await processStart(process.pid);
-  start !== null || Fail`Provider runtime requires a procfs process identity`;
-  const identity = `${process.pid}-${start}`;
-  const resolverConfigPath = join(stateDirectory, 'public-resolv.conf');
-  const resolverContents =
-    'nameserver 127.0.0.53\noptions attempts:1 timeout:2\n';
-  if (publicInternet) {
-    try {
-      const file = await open(resolverConfigPath, 'wx', 0o444);
-      try {
-        await file.writeFile(resolverContents);
-        await file.chmod(0o444);
-      } finally {
-        await file.close();
-      }
-    } catch (error) {
-      if (/** @type {NodeJS.ErrnoException} */ (error).code !== 'EEXIST')
-        throw error;
-    }
-    const resolverStat = await lstat(resolverConfigPath);
-    // eslint-disable-next-line no-bitwise
-    const resolverMode = resolverStat.mode & 0o777;
-    (resolverStat.isFile() &&
-      resolverStat.uid === process.getuid?.() &&
-      resolverMode === 0o444 &&
-      (await readFile(resolverConfigPath, 'utf8')) === resolverContents) ||
-      Fail`Public resolver configuration is not immutable`;
-  }
-  const lockPath = join(stateDirectory, `${ownerId}.lock`);
-  try {
-    await symlink(identity, lockPath);
-  } catch (error) {
-    if (/** @type {NodeJS.ErrnoException} */ (error).code !== 'EEXIST')
-      throw error;
-    const recoveryPath = join(stateDirectory, `${ownerId}.recover`);
-    // Serialize stale-owner recovery. An abandoned recovery directory refuses
-    // admission for operator repair; it never licenses two live owners.
-    await mkdir(recoveryPath, { mode: 0o700 });
-    try {
-      const previous = await readlink(lockPath);
-      const match = /^(\d+)-(\d+)$/.exec(previous);
-      if (!match) throw makeError(X`Invalid provider runtime lock`);
-      const previousStart = await processStart(Number(match[1]));
-      previousStart !== match[2] ||
-        Fail`Provider runtime owner is already active`;
-      await unlink(lockPath);
-      await symlink(identity, lockPath);
-    } finally {
-      await rmdir(recoveryPath);
-    }
-  }
   /** @type {Set<() => Promise<void>>} */
   const cleanup = new Set();
   /** @type {Set<() => Promise<void>>} */
   const pendingCleanup = new Set();
-  let released = false;
   let disposed = false;
+  let initialized = false;
+  let lockOwned = false;
+  let recoveryOwned = false;
+  let sweepRequired = false;
+  /** @type {string | undefined} */
+  let identity;
+  /** @type {FileHandle | undefined} */
+  let resolverFile;
+  /** @type {Promise<typeof runtime> | undefined} */
+  let opening;
+  /** @type {Promise<void> | undefined} */
+  let closing;
+  const lockPath = join(stateDirectory, `${ownerId}.lock`);
+  const recoveryPath = join(stateDirectory, `${ownerId}.recover`);
+  const resolverConfigPath = join(stateDirectory, 'public-resolv.conf');
+  const openFile = host.open ?? open;
+  const removeLink = host.unlink ?? unlink;
+  const removeRecovery = host.rmdir ?? rmdir;
+  const assertOpen = () => {
+    !disposed || Fail`Provider runtime disposed`;
+  };
+  const closeResolver = async () => {
+    if (resolverFile) {
+      await resolverFile.close();
+      resolverFile = undefined;
+    }
+  };
   let queue = Promise.resolve();
   /**
    * @template T
@@ -210,7 +184,7 @@ export const makePodmanProviderListenerRuntime = async ({
   const remove = async name => {
     await run(['rm', '-f', '--ignore', '--time', '1', name]);
   };
-  try {
+  const sweep = async () => {
     const old = await run([
       'ps',
       '-aq',
@@ -227,10 +201,84 @@ export const makePodmanProviderListenerRuntime = async ({
       // eslint-disable-next-line no-await-in-loop
       await remove(id);
     }
-  } catch (error) {
-    await unlink(lockPath);
-    throw error;
-  }
+  };
+  const initialize = async () => {
+    assertOpen();
+    await mkdir(stateDirectory, { recursive: true, mode: 0o700 });
+    assertOpen();
+    const directory = await lstat(stateDirectory);
+    // eslint-disable-next-line no-bitwise
+    const sharedPermissions = directory.mode & 0o077;
+    (directory.isDirectory() &&
+      directory.uid === process.getuid?.() &&
+      sharedPermissions === 0) ||
+      Fail`Provider runtime state directory is not private`;
+    assertOpen();
+    const start = await processStart(process.pid);
+    start !== null || Fail`Provider runtime requires a procfs process identity`;
+    identity = `${process.pid}-${start}`;
+    assertOpen();
+    const resolverContents =
+      'nameserver 127.0.0.53\noptions attempts:1 timeout:2\n';
+    if (publicInternet) {
+      try {
+        resolverFile = await openFile(resolverConfigPath, 'wx', 0o444);
+      } catch (error) {
+        if (/** @type {NodeJS.ErrnoException} */ (error).code !== 'EEXIST')
+          throw error;
+      }
+      if (resolverFile) {
+        assertOpen();
+        await resolverFile.writeFile(resolverContents);
+        assertOpen();
+        await resolverFile.chmod(0o444);
+        await closeResolver();
+      }
+      const resolverStat = await lstat(resolverConfigPath);
+      // eslint-disable-next-line no-bitwise
+      const resolverMode = resolverStat.mode & 0o777;
+      (resolverStat.isFile() &&
+        resolverStat.uid === process.getuid?.() &&
+        resolverMode === 0o444 &&
+        (await readFile(resolverConfigPath, 'utf8')) === resolverContents) ||
+        Fail`Public resolver configuration is not immutable`;
+    }
+    assertOpen();
+    try {
+      await symlink(identity, lockPath);
+      lockOwned = true;
+      sweepRequired = true;
+    } catch (error) {
+      if (/** @type {NodeJS.ErrnoException} */ (error).code !== 'EEXIST')
+        throw error;
+      // Serialize stale-owner recovery. An abandoned recovery directory refuses
+      // admission for operator repair; it never licenses two live owners.
+      assertOpen();
+      await mkdir(recoveryPath, { mode: 0o700 });
+      recoveryOwned = true;
+      try {
+        const previous = await readlink(lockPath);
+        const match = /^(\d+)-(\d+)$/.exec(previous);
+        if (!match) throw makeError(X`Invalid provider runtime lock`);
+        const previousStart = await processStart(Number(match[1]));
+        previousStart !== match[2] ||
+          Fail`Provider runtime owner is already active`;
+        assertOpen();
+        await removeLink(lockPath);
+        await symlink(identity, lockPath);
+        lockOwned = true;
+        sweepRequired = true;
+      } finally {
+        await removeRecovery(recoveryPath);
+        recoveryOwned = false;
+      }
+    }
+    assertOpen();
+    await sweep();
+    sweepRequired = false;
+    assertOpen();
+    initialized = true;
+  };
   /** @param {{endpoint:any,limits:any,network?:{endpoint:any}}} configuration */
   const startListener = ({ endpoint, limits, network = undefined }) =>
     serialize(async () => {
@@ -238,8 +286,10 @@ export const makePodmanProviderListenerRuntime = async ({
         (publicInternet && network.endpoint) ||
           Fail`Public network is not configured by the operator`;
       }
-      !disposed || Fail`Provider runtime disposed`;
+      assertOpen();
+      initialized || Fail`Provider runtime is not open`;
       await retryCleanup();
+      assertOpen();
       cleanup.size < maxListeners || Fail`Provider listener capacity exceeded`;
       const name = `endo-provider-${randomUUID()}`;
       let child;
@@ -398,6 +448,7 @@ export const makePodmanProviderListenerRuntime = async ({
             ...(networkEvidence ? { network: networkEvidence } : {}),
           });
         };
+        assertOpen();
         !channelClosed || Fail`Provider listener channel closed`;
         live = true;
         await observe();
@@ -428,6 +479,7 @@ export const makePodmanProviderListenerRuntime = async ({
         }
         !channelClosed || Fail`Provider listener channel closed`;
         void pipe.closed.then(() => stop()).catch(() => {});
+        assertOpen();
         return harden({ observe, stop, closed: pipe.closed });
       } catch (error) {
         await stop().catch(cleanupError => {
@@ -439,20 +491,77 @@ export const makePodmanProviderListenerRuntime = async ({
         throw AggregateError([error], 'Provider listener startup failed');
       }
     });
-  return harden({
-    start: startListener,
-    retryCleanup: () => serialize(retryCleanup),
-    dispose: () =>
-      serialize(async () => {
-        if (released) return;
-        disposed = true;
+  /** @returns {Promise<void>} */
+  const close = () => {
+    disposed = true;
+    if (closing) return closing;
+    const attempt = (async () => {
+      await opening?.catch(() => {});
+      await serialize(async () => {
         for (const clean of cleanup) pendingCleanup.add(clean);
         await retryCleanup();
-        const current = await readlink(lockPath);
-        current === identity || Fail`Provider runtime lock ownership changed`;
-        await unlink(lockPath);
-        released = true;
-      }),
+        await closeResolver();
+        // A failed initialization sweep is retained as cleanup work. Its
+        // historical failure does not prevent a successful explicit retry.
+        if (sweepRequired) {
+          await sweep();
+          sweepRequired = false;
+        }
+        if (lockOwned) {
+          const current = await readlink(lockPath);
+          current === identity || Fail`Provider runtime lock ownership changed`;
+          await removeLink(lockPath);
+          lockOwned = false;
+        }
+        if (recoveryOwned) {
+          await removeRecovery(recoveryPath);
+          recoveryOwned = false;
+        }
+      });
+    })();
+    closing = attempt;
+    void attempt.catch(() => {
+      if (closing === attempt) closing = undefined;
+    });
+    return attempt;
+  };
+  const runtime = harden({
+    start: startListener,
+    retryCleanup: () => serialize(retryCleanup),
+    dispose: close,
   });
+  const openRuntime = () => {
+    assertOpen();
+    opening ??= Promise.resolve().then(async () => {
+      await initialize();
+      return runtime;
+    });
+    return opening;
+  };
+  return harden({ open: openRuntime, close });
+};
+harden(makePodmanProviderListenerRuntimeKit);
+
+/**
+ * Transitional convenience constructor. A failed startup whose rollback also
+ * fails does not return a cleanup handle. Native owners must retain the inert
+ * kit before open() to retain failed cleanup for explicit retry.
+ * @param {Parameters<typeof makePodmanProviderListenerRuntimeKit>[0]} options
+ */
+export const makePodmanProviderListenerRuntime = async options => {
+  const kit = makePodmanProviderListenerRuntimeKit(options);
+  try {
+    return await kit.open();
+  } catch (error) {
+    try {
+      await kit.close();
+    } catch (cleanupError) {
+      throw AggregateError(
+        [error, cleanupError],
+        'Provider runtime startup and cleanup failed',
+      );
+    }
+    throw error;
+  }
 };
 harden(makePodmanProviderListenerRuntime);
