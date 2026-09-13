@@ -30,6 +30,8 @@
     "./iroh.js": "./src/networks/iroh.js",
     "./locator.js": "./locator.js",
     "./pet-name.js": "./src/pet-name.js",
+    "./resource-registry.js": "./src/resource-registry.js",
+    "./session-record-store.js": "./src/session-record-store.js",
     "./type-guards.js": "./src/type-guards.js",
     "./src/interfaces.js": "./src/interfaces.js",
     "./src/mount.js": "./src/mount.js",

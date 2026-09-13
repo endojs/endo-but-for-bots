@@ -72,7 +72,7 @@ both are covered by `test/turn-ledger.test.js`.
 
 ## Session ownership
 
-`session-record-store.js` retains a logical session's approved plan and exact
+`@endo/daemon/session-record-store.js` retains a logical session's approved plan and exact
 dependency identities in a host-private daemon directory.
 The shared supervisor supplies the plan as encoded text and the dependency formula IDs.
 Each reference is a separate directory entry, retaining its formula through GC and
@@ -87,6 +87,9 @@ A failed write leaves an incomplete record with the references acquired so far;
 `inspect` reports an absent plan, and `retain` refuses further construction.
 For a complete record, `retain` adds a newly acquired resource without replacing an
 existing owner; keep any construction name until retention succeeds.
+`release` removes selected incarnation references only after cleanup succeeds,
+keeping the logical plan and stable dependencies for a later incarnation.
+Partial release failures preserve remaining references for retry.
 `remove` passes a passive snapshot to the supervisor's cleanup callback and removes
 the directory only after that callback succeeds.
 Failure retains the original dependencies for retry.
@@ -101,7 +104,10 @@ formula IDs; this store does not start or stop runtimes.
 Keep the directory outside guest powers and prevent other writers from rebinding it.
 The final identity check detects a prior rebind; it is not atomic compare-and-delete
 and does not replace exclusive ownership.
-Shared supervisor and adapter wiring remain pending.
+The store and shared resource registry live in the daemon package so a daemon-local
+supervisor can use them without importing sandbox adapters or native modules.
+Adapter wiring remains pending; running record administration in a shared worker can
+cause collection of a temporary directory to terminate that worker.
 
 ## Session execution powers
 

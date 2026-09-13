@@ -3,7 +3,7 @@
 import { Fail } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 
-import { makeSessionRegistry } from './session-registry.js';
+import { makeResourceRegistry as makeSessionRegistry } from './resource-registry.js';
 
 /**
  * The host-private directory authority used by this store.
@@ -141,6 +141,80 @@ export const makeSessionRecordStore = directory => {
     });
 
   /**
+   * Release selected incarnation references after proven cleanup, retaining
+   * the logical plan and every other dependency. Missing references count as
+   * already released, including a partially completed prior removal. If all
+   * are absent (or the record/expected set is absent/empty), do not run cleanup.
+   * Every present expected reference must match before cleanup and deletion.
+   *
+   * Cleanup must be idempotent and must not reenter this store for this name.
+   * Its passive snapshot reflects the current remaining references; a caller
+   * needing all original IDs on retry must capture them in its cleanup closure.
+   * Partial deletion failure retains the remaining edges for the next attempt.
+   * External-rebind checks are observations, not an atomic compare-and-delete;
+   * the exclusive-owner requirement remains essential.
+   *
+   * @param {string} name
+   * @param {Record<string, string>} expectedReferences
+   * @param {(record: SessionRecord) => Promise<void>} cleanup
+   */
+  const release = (name, expectedReferences, cleanup) => {
+    const expected = Object.entries(expectedReferences);
+    return registry.inOrder(name, async () => {
+      if (expected.length === 0) return;
+      const found = await load(name);
+      if (!found) return;
+      const before = await snapshot(found.identifier, found.record);
+      let remaining = false;
+      for (const [reference, identifier] of expected) {
+        if (Object.hasOwn(before.references, reference)) {
+          before.references[reference] === identifier ||
+            Fail`Session reference ${reference} changed before cleanup`;
+          remaining = true;
+        }
+      }
+      if (!remaining) return;
+      const entriesId = await E(found.record).identify('references');
+      const entries = /** @type {SessionRecordDirectory} */ (
+        await E(found.record).lookup('references')
+      );
+      const assertIdentity = async () => {
+        const currentRecordId = await E(directory).identify(name);
+        currentRecordId === found.identifier ||
+          Fail`Session record ${name} changed during cleanup`;
+        const currentEntriesId = await E(found.record).identify('references');
+        currentEntriesId === entriesId ||
+          Fail`Session references for ${name} changed during cleanup`;
+      };
+      await cleanup(before);
+      await assertIdentity();
+      // Validate the entire set before deleting any member, so a stale
+      // callback cannot release still-matching siblings of a rebound ref.
+      for (const [reference, identifier] of expected) {
+        // eslint-disable-next-line no-await-in-loop
+        const current = await E(entries).identify(reference);
+        current === undefined ||
+          current === identifier ||
+          Fail`Session reference ${reference} changed during cleanup`;
+      }
+      for (const [reference, identifier] of expected) {
+        // Recheck after earlier asynchronous removals. Other writers are
+        // unsupported; refuse a detected successor rather than delete it.
+        // eslint-disable-next-line no-await-in-loop
+        await assertIdentity();
+        // eslint-disable-next-line no-await-in-loop
+        const current = await E(entries).identify(reference);
+        if (current !== undefined) {
+          current === identifier ||
+            Fail`Session reference ${reference} changed during cleanup`;
+          // eslint-disable-next-line no-await-in-loop
+          await E(entries).remove(reference);
+        }
+      }
+    });
+  };
+
+  /**
    * Remove only after the supervisor proves stop and required cleanup complete.
    * A failed callback leaves the record and all retained references available
    * for retry. The callback must tolerate repetition: directory removal can
@@ -161,6 +235,6 @@ export const makeSessionRecordStore = directory => {
       await E(directory).remove(name);
     });
 
-  return harden({ create, inspect, retain, remove });
+  return harden({ create, inspect, retain, release, remove });
 };
 harden(makeSessionRecordStore);
