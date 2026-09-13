@@ -2,6 +2,7 @@
 
 import { E } from '@endo/eventual-send';
 import { Fail, makeError, X } from '@endo/errors';
+import { makePodmanHostEnvironment } from '@endo/sandbox/podman-host-environment.js';
 import {
   readNetworkNamespace,
   readNamespaceIdentities,
@@ -27,7 +28,6 @@ import { makeProviderPipe } from './provider-pipe.js';
 
 /** @import { FileHandle } from 'node:fs/promises' */
 
-const execute = promisify(execFile);
 const LABEL = 'io.endo.provider.owner';
 /**
  * @param {Promise<any>} promise
@@ -80,6 +80,7 @@ const readStart = async pid => {
  * @param {string} options.stateDirectory Private directory for a process lock.
  * @param {number} [options.maxListeners]
  * @param {any} [options.host] Trusted host powers, never session inputs.
+ * @param {Record<string,string>} [options.env] Operator host environment overrides, never guest env.
  * @param {boolean} [options.publicInternet] Operator enables optional public listeners.
  */
 export const makePodmanProviderListenerRuntimeKit = ({
@@ -87,6 +88,7 @@ export const makePodmanProviderListenerRuntimeKit = ({
   ownerId,
   stateDirectory,
   host = {},
+  env = {},
   maxListeners = 16,
   publicInternet = false,
 }) => {
@@ -98,18 +100,15 @@ export const makePodmanProviderListenerRuntimeKit = ({
   const imageDigest = imageRef.slice(imageRef.indexOf('@') + 1);
   typeof publicInternet === 'boolean' ||
     Fail`Invalid public network configuration`;
-  // Host-side rootless Podman configuration, never container environment.
-  // Proxy and credential variables are deliberately excluded.
-  const hostEnvironment = Object.fromEntries(
-    ['PATH', 'HOME', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS']
-      .filter(name => process.env[name] !== undefined)
-      .map(name => [name, process.env[name]]),
-  );
-  hostEnvironment.PATH ??= '/usr/bin:/bin';
+  const hostEnvironment = makePodmanHostEnvironment(process.env, env);
+  // Low-level injection preserves the default argv/environment construction in
+  // tests. High-level run/launch remain trusted complete host implementations.
+  const execute = host.executeFile ?? promisify(execFile);
+  const spawnChild = host.spawn ?? spawn;
   const run =
     host.run ??
     (args =>
-      execute('podman', args, {
+      execute('podman', ['--remote=false', '--syslog=false', ...args], {
         timeout: 30_000,
         maxBuffer: 1024 * 1024,
         killSignal: 'SIGKILL',
@@ -118,7 +117,7 @@ export const makePodmanProviderListenerRuntimeKit = ({
   const launch =
     host.launch ??
     (args =>
-      spawn('podman', args, {
+      spawnChild('podman', ['--remote=false', '--syslog=false', ...args], {
         stdio: ['pipe', 'pipe', 'pipe'],
         env: hostEnvironment,
       }));
@@ -350,6 +349,7 @@ export const makePodmanProviderListenerRuntimeKit = ({
       admitted = true;
       const subprocess = launch([
         'run',
+        '--http-proxy=false',
         '--pull=never',
         '-i',
         '--name',

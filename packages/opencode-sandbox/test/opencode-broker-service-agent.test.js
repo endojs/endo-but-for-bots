@@ -58,11 +58,14 @@ const fixture = t => {
   /** @type {Array<(reason: Error) => void>} */
   const cancellations = [];
   const errors = [];
+  /** @type {Array<Record<string,string> | undefined>} */
+  const environments = [];
   const make = makeOwnedOpencodeBrokerService({
     reportError: error => errors.push(error),
     makeServiceKit: options => {
       t.is(options.secret, secret);
       t.deepEqual(options.models, config.models);
+      environments.push(options.env);
       const state = prepared;
       prepared = next();
       states.push(state);
@@ -117,7 +120,7 @@ const fixture = t => {
     for (const cancel of cancellations) cancel(Error('Test finished'));
     await setImmediate();
   });
-  return { make, context, states, errors, next: () => prepared };
+  return { make, context, states, errors, environments, next: () => prepared };
 };
 
 test('broker configuration is explicit copy data and excludes injected authority', t => {
@@ -163,6 +166,11 @@ test('broker entrypoint returns inert scopes and rejects a live duplicate withou
   const f = fixture(t);
   const owner = f.context();
   const service = await f.make(secret, owner.cap, { env });
+  t.is(
+    f.environments[0],
+    env,
+    'original operator environment reaches broker kit',
+  );
   const a = await E(service).provideScope('a', spec);
   t.is(await E(service).lookupScope('a'), a);
   t.is(f.states[0].opens, 0);

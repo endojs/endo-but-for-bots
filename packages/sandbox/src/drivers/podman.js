@@ -8,6 +8,7 @@ import { makePromiseKit } from '@endo/promise-kit';
 
 import { validateGeneratedFiles } from '../generated-files.js';
 import { makeCgroup2Probe } from '../limits.js';
+import { makePodmanHostEnvironment } from '../podman-host-environment.js';
 import { makeResourceRegistry } from '../resource-registry.js';
 import {
   makeProcReader,
@@ -535,6 +536,7 @@ const assembleCreateArgv = (spec, containerName, netBackend, extras) => {
     // automatic restart would introduce execution outside that lifecycle.
     '--restart=no',
     '--no-healthcheck',
+    '--http-proxy=false',
   ];
 
   if (extras.policyArgv !== undefined) {
@@ -638,8 +640,7 @@ const encodeMount = fields =>
  * Construct the podman driver.
  *
  * @param {object} [input]
- * @param {Record<string, string>} [input.env]                Daemon env
- *                                                            (PATH etc.)
+ * @param {Record<string, string>} [input.env] Captured operator host environment overrides, never guest env.
  * @param {typeof import('child_process')} [input.childProcess] Child-
  *                                                            process module
  *                                                            override
@@ -690,7 +691,7 @@ const encodeMount = fields =>
  * @returns {Omit<SandboxDriver, 'prepareSlice' | 'prepareSliceKit'> & { prepareSlice(spec: SliceSpec): Promise<PodmanSliceContext>, prepareSliceKit(spec: SliceSpec): DriverPreparation<PodmanSliceContext>, closeSlices(): Promise<void>, close(): Promise<void> }}
  */
 export const makePodmanDriver = ({
-  env: _env = {},
+  env = {},
   childProcess: childProcessModule,
   ociRuntime,
   ownerId,
@@ -699,6 +700,7 @@ export const makePodmanDriver = ({
   generatedFileStorage,
   fs: fsPower,
 } = {}) => {
+  const hostEnvironment = makePodmanHostEnvironment(process.env, env);
   if (
     generatedFileStorage !== undefined &&
     (generatedFileStorage === null ||
@@ -754,7 +756,11 @@ export const makePodmanDriver = ({
     if (controlsSealed)
       throw makeError(X`Podman native command owner is closed`);
     if (kind !== 'cleanup') slices.assertOpen();
-    const command = startControlCommand(...args);
+    const [cp, commandName, commandArgs, options = {}] = args;
+    const command = startControlCommand(cp, commandName, commandArgs, {
+      ...options,
+      env: hostEnvironment,
+    });
     trackNative(
       command.closed,
       kind === 'ordinary' ? () => command.abort() : undefined,
@@ -2656,19 +2662,6 @@ export const makePodmanDriver = ({
       /** @type {import('child_process').ChildProcess} */
       let child;
       try {
-        // Rootless podman locates its storage, runtime state, and operator
-        // configuration through these variables. Passing PATH alone can make
-        // this process look in a different store than `prepareSlice`, yielding
-        // an opaque exit 127 even though the container is running.
-        const podmanEnv = Object.fromEntries(
-          [
-            ['PATH', process.env.PATH ?? '/usr/bin:/bin'],
-            ['HOME', process.env.HOME],
-            ['XDG_RUNTIME_DIR', process.env.XDG_RUNTIME_DIR],
-            ['XDG_CONFIG_HOME', process.env.XDG_CONFIG_HOME],
-            ['CONTAINERS_CONF', process.env.CONTAINERS_CONF],
-          ].filter(([, value]) => value !== undefined),
-        );
         assertAdmissionOpen();
         child = cp.spawn('podman', startArgv, {
           stdio: [
@@ -2676,7 +2669,7 @@ export const makePodmanDriver = ({
             opts.captureStdout === false ? 'ignore' : 'pipe',
             opts.captureStderr === false ? 'ignore' : 'pipe',
           ],
-          env: podmanEnv,
+          env: hostEnvironment,
         });
         startAcquired = true;
       } catch (e) {

@@ -137,6 +137,91 @@ const fixture = async (t, publicNetwork = false) => {
   };
 };
 
+test.serial(
+  'default Podman commands retain one sanitized operator environment through listener cleanup',
+  async t => {
+    t.timeout(5000);
+    const f = await fixture(t);
+    /** @type {Array<{command: string, args: string[], env: Record<string,string>}>} */
+    const nativeCalls = [];
+    const env = {
+      PATH: '/operator/bin',
+      HOME: '/operator/home',
+      XDG_CONFIG_HOME: '/operator/config',
+      XDG_DATA_HOME: '/operator/data',
+      XDG_RUNTIME_DIR: '/operator/run',
+      DBUS_SESSION_BUS_ADDRESS: 'unix:path=/operator/bus',
+      CONTAINERS_CONF: '/operator/containers.conf',
+      REGISTRY_AUTH_FILE: '/operator/auth.json',
+      OPENROUTER_API_KEY: 'never-to-child',
+      HTTP_PROXY: 'http://host-proxy',
+      CONTAINER_HOST: 'ssh://remote',
+      CONTAINER_CONNECTION: 'remote',
+    };
+    const { run, launch, ...otherHost } = f.options.host;
+    const kit = makePodmanProviderListenerRuntimeKit({
+      ...f.options,
+      env,
+      host: {
+        ...otherHost,
+        async executeFile(command, args, options) {
+          nativeCalls.push({ command, args, env: options.env });
+          return run(args.slice(2));
+        },
+        spawn(command, args, options) {
+          nativeCalls.push({ command, args, env: options.env });
+          return launch(args.slice(2));
+        },
+      },
+    });
+    t.teardown(kit.close);
+    env.HOME = '/changed/after-capture';
+    const runtime = await kit.open();
+    const listener = await runtime.start({
+      endpoint: Far('unused inference', {}),
+      limits,
+    });
+    await listener.observe();
+    await listener.stop();
+    await kit.close();
+    t.true(nativeCalls.some(call => call.args[2] === 'ps'));
+    t.true(nativeCalls.some(call => call.args[2] === 'inspect'));
+    t.true(nativeCalls.some(call => call.args[2] === 'rm'));
+    const first = nativeCalls[0];
+    if (!first) throw Error('Expected native commands');
+    const captured = first.env;
+    for (const call of nativeCalls) {
+      t.is(call.command, 'podman');
+      t.deepEqual(call.args.slice(0, 2), ['--remote=false', '--syslog=false']);
+      t.is(call.env, captured);
+      t.like(call.env, {
+        HOME: '/operator/home',
+        PATH: '/operator/bin',
+        XDG_DATA_HOME: '/operator/data',
+        XDG_CONFIG_HOME: '/operator/config',
+        CONTAINERS_CONF: '/operator/containers.conf',
+        REGISTRY_AUTH_FILE: '/operator/auth.json',
+      });
+      for (const forbidden of [
+        'OPENROUTER_API_KEY',
+        'HTTP_PROXY',
+        'CONTAINER_HOST',
+        'CONTAINER_CONNECTION',
+      ]) {
+        t.false(Object.hasOwn(call.env, forbidden));
+      }
+    }
+    const started = nativeCalls.find(call => call.args[2] === 'run');
+    if (!started) throw Error('Expected listener run');
+    t.true(started.args.includes('--http-proxy=false'));
+    t.false(started.args.some(arg => arg.startsWith('REGISTRY_AUTH_FILE=')));
+    t.true(
+      started.args.includes('HOME=/home/node'),
+      'guest HOME remains explicit',
+    );
+  },
+);
+
 test('runtime excludes a second live owner and permits reacquisition after disposal', async t => {
   const f = await fixture(t);
   const runtime = await makePodmanProviderListenerRuntime(f.options);

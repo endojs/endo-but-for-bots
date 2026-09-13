@@ -75,6 +75,19 @@ Setup provisioning and controller adoption remain pending.
 The caller must retain the local kit through failures; empty scope lookup after service
 loss is not native release proof.
 
+Podman slice and provider runtimes now capture one allowlisted operator environment
+for native acquisition, observation, attached execution, and cleanup.
+Rootless HOME/XDG/storage configuration remains consistent; ambient provider secrets, proxy
+variables, and remote connection selectors are excluded.
+Both runtimes disable automatic guest proxy propagation while preserving explicitly
+approved guest proxy variables.
+The operator's `REGISTRY_AUTH_FILE` path remains available for authenticated image pulls,
+as documented in [Podman's authfile configuration](https://docs.podman.io/en/v4.9.3/markdown/podman-pull.1.html#authfile-path).
+Operator configuration and authentication files remain trusted authority;
+this change does not prevent Podman from accessing them.
+Controlled native-command tests exercise the default execution builders, including
+provider local-engine flags; actual Linux/Podman acceptance remains pending.
+
 Claude and OpenCode now share the MCP protocol, host-side socket transport, and guest stdio relay.
 The input frame limit covers both complete frames and partial tails before dispatch.
 The shared bridge admits at most 32 simultaneous host tool executions, reusing the
@@ -789,6 +802,7 @@ provider requirements, or an explicit user budget, rather than copied between la
 | Container/process and mount isolation | Host files, processes, other sessions | All guest code | Endo caps govern host APIs, not arbitrary native syscalls | Keep in shared runtime. |
 | Effective provisioning configuration | Private runtime ownership markers and generated files | Guest writes enabled by mismatched retained/current host configuration | Private permissions do not protect a directory explicitly granted as a guest mount; formula environments are immutable but current process settings can differ | Read effective factory/state roots by verified formula ID before provisioning; client execution powers now pin exact dependencies; backend ownership adoption remains pending. |
 | Provider secret isolation | Reusable upstream account credentials | Guest and listener code | Secrets controls storage access, not a secret already delivered | Keep host-only credential service; eliminate materialization into guests. |
+| Podman control environment | Ambient credentials, proxy authority, and the original engine/storage identity | Accidental host-environment inheritance and inconsistent acquisition/cleanup configuration | Guest namespace isolation does not stop Podman from forwarding host proxy variables; operator config and default credential files remain trusted | Capture the same allowlisted operator environment for every native command; disable automatic proxy forwarding and supply approved guest proxies explicitly. This adds no limits and does not claim to remove file-based operator authority. |
 | Fixed provider routes/account binding | Which upstream authority a guest can exercise | Forged guest requests | Secret custody alone does not restrict credential use | Keep in provider service. |
 | Revocation and process reaping | Continued inference, networking, and execution | Stale or hostile guests | Request deadlines end one request, not the session grant | Keep one supervisor and grant owner. |
 | Cleanup completion before deletion | Storage still in use and original cleanup handles | Late acquisitions, failed stops, and callers treating cancellation as containment | A rejected call or removed formula name does not prove native resources ended; successful slice disposal is the client-side containment barrier | Retain failed and uncertain acquisitions; propagate failed stop before replacement/deletion. The uncommitted OpenCode integration exercises original records and cleanup sharing within one worker; daemon collection and cross-worker ownership acceptance remain pending. |
