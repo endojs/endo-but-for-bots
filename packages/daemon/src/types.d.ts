@@ -819,6 +819,8 @@ export interface Context {
    * The identifier for the associated formula.
    */
   id: FormulaIdentifier;
+  /** Refuse further acquisition through this original context after cancellation. */
+  assertActive: () => void;
   /**
    * Cancel the value, preparing it for garbage collection. Cancellation
    * propagates to all values that depend on this value.
