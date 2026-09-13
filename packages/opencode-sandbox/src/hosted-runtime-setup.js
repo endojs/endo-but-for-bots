@@ -1,28 +1,23 @@
 // @ts-check
 
-import { Fail } from '@endo/errors';
+import { Fail, q } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import { assertPrivateDirectory } from '@endo/sandbox/private-directory.js';
 import { readRuntimeConfig } from '@endo/sandbox/runtime-config.js';
+import { execFile as execFileCallback } from 'node:child_process';
 import * as fs from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
+import { promisify } from 'node:util';
 
 import {
   assertCurrentSpecifier,
   toCurrentSpecifier,
 } from './current-specifier.js';
+import { readOpencodeBrokerConfig } from './opencode-broker-service-agent.js';
 
 /** @import { EndoHost } from '@endo/daemon' */
 /** @typedef {Parameters<EndoHost['getFormulaEnvironment']>[0]} FormulaIdentifier */
-
-export const sandboxSpecifier = assertCurrentSpecifier(
-  toCurrentSpecifier(
-    new URL('../../sandbox/src/owned-agent.js', import.meta.url).href,
-  ),
-  'sandbox',
-);
-harden(sandboxSpecifier);
 
 export const stateProviderSpecifier = assertCurrentSpecifier(
   toCurrentSpecifier(
@@ -31,6 +26,33 @@ export const stateProviderSpecifier = assertCurrentSpecifier(
   'state provider',
 );
 harden(stateProviderSpecifier);
+
+/** Host-only native sandbox service; constructed with slot-free null powers. */
+export const nativeSandboxSpecifier = assertCurrentSpecifier(
+  toCurrentSpecifier(
+    new URL('../../sandbox/src/native-agent.js', import.meta.url).href,
+  ),
+  'native sandbox',
+);
+harden(nativeSandboxSpecifier);
+
+/** Owned provider broker; its sole powers dependency is the SecretBlob. */
+export const brokerServiceSpecifier = assertCurrentSpecifier(
+  toCurrentSpecifier(
+    new URL('./opencode-broker-service-agent.js', import.meta.url).href,
+  ),
+  'broker service',
+);
+harden(brokerServiceSpecifier);
+
+/** Durable storage owner; its sole powers dependency is the state provider. */
+export const sessionStorageSpecifier = assertCurrentSpecifier(
+  toCurrentSpecifier(
+    new URL('./opencode-session-storage-module.js', import.meta.url).href,
+  ),
+  'session storage',
+);
+harden(sessionStorageSpecifier);
 
 /**
  * Read one immutable formula by the ID captured from its current binding.
@@ -41,7 +63,7 @@ harden(stateProviderSpecifier);
  */
 const readProvisionedEnvironment = async (host, name, expectedSpecifier) => {
   const identified = await E(host).identify('opencode-sandbox', name);
-  if (!identified) throw Fail`Cannot identify OpenCode ${name}`;
+  if (!identified) throw Fail`Cannot identify OpenCode ${q(name)}`;
   // The daemon returns a formula ID; identify's public type erases its brand.
   const identifier = /** @type {FormulaIdentifier} */ (identified);
   const record = await E(E(host).diagnostics()).getFormula(identifier);
@@ -53,17 +75,6 @@ const readProvisionedEnvironment = async (host, name, expectedSpecifier) => {
   const env = await E(host).getFormulaEnvironment(identifier);
   return harden({ identifier, env });
 };
-
-/** @param {EndoHost} host */
-export const readSandboxRuntime = async host => {
-  const { identifier, env } = await readProvisionedEnvironment(
-    host,
-    'sandbox-factory',
-    sandboxSpecifier,
-  );
-  return harden({ identifier, config: readRuntimeConfig(env) });
-};
-harden(readSandboxRuntime);
 
 /** @param {EndoHost} host */
 export const readStateProvider = async host => {
@@ -79,6 +90,48 @@ export const readStateProvider = async host => {
 };
 harden(readStateProvider);
 
+/** @param {EndoHost} host */
+export const readNativeSandbox = async host => {
+  const { identifier, env } = await readProvisionedEnvironment(
+    host,
+    'native-sandbox',
+    nativeSandboxSpecifier,
+  );
+  return harden({ identifier, config: readRuntimeConfig(env) });
+};
+harden(readNativeSandbox);
+
+/** @param {EndoHost} host */
+export const readBrokerService = async host => {
+  const { identifier, env } = await readProvisionedEnvironment(
+    host,
+    'broker-service',
+    brokerServiceSpecifier,
+  );
+  return harden({ identifier, config: readOpencodeBrokerConfig(env) });
+};
+harden(readBrokerService);
+
+/** @param {EndoHost} host */
+export const readSessionStorage = async host => {
+  const { identifier, env } = await readProvisionedEnvironment(
+    host,
+    'session-storage',
+    sessionStorageSpecifier,
+  );
+  const {
+    OPENCODE_WORKSPACE_BASE_DIR: workspaceDir,
+    OPENCODE_MCP_DIR: mcpDir,
+  } = env;
+  (typeof workspaceDir === 'string' &&
+    workspaceDir.length > 0 &&
+    typeof mcpDir === 'string' &&
+    mcpDir.length > 0) ||
+    Fail`Session storage must have persisted workspace and MCP roots`;
+  return harden({ identifier, roots: harden({ workspaceDir, mcpDir }) });
+};
+harden(readSessionStorage);
+
 /** @param {Record<string, string | undefined>} env */
 export const getHostedStorageRoots = env => {
   const workspaceDir =
@@ -87,9 +140,6 @@ export const getHostedStorageRoots = env => {
   return harden({
     stateDir: env.ENDO_OPENCODE_STATE_DIR || '/var/lib/endo/opencode-state',
     workspaceDir,
-    configDir:
-      env.ENDO_OPENCODE_CONFIG_DIR ||
-      path.join(path.dirname(workspaceDir), 'opencode-configs'),
     mcpDir: env.ENDO_OPENCODE_MCP_DIR || path.join(homedir(), 'opencode-mcp'),
   });
 };
@@ -101,7 +151,7 @@ harden(getHostedStorageRoots);
  * @param {string} name
  * @returns {Promise<string>}
  */
-const resolveFuturePath = async name => {
+export const resolveFuturePath = async name => {
   await null;
   try {
     return await fs.realpath(name);
@@ -119,6 +169,7 @@ const resolveFuturePath = async name => {
     return path.join(await resolveFuturePath(parent), path.basename(name));
   }
 };
+harden(resolveFuturePath);
 
 /**
  * Validate operator placement, including guest roots which do not exist yet.
@@ -163,3 +214,54 @@ export const prepareRuntimeEnv = async (env, ownerId, roots) => {
   });
 };
 harden(prepareRuntimeEnv);
+
+const execFile = promisify(execFileCallback);
+
+/**
+ * The spelling checks of the configured slice image that need no Podman —
+ * the digest the broker kit refuses at construction, and an option-like name
+ * Podman would misparse — so setup refuses them before any mint.
+ * @param {string} rootfs Config rootfs (`oci:<image>` or already pinned).
+ * @returns {{ image: string, imageDigest?: string }}
+ */
+export const readSliceImageReference = rootfs => {
+  const image = rootfs.startsWith('oci:') ? rootfs.slice(4) : rootfs;
+  // A leading dash would be parsed as a podman option rather than an image.
+  !image.startsWith('-') || Fail`Invalid OpenCode sandbox image ${q(image)}`;
+  if (image.includes('@sha256:')) {
+    const imageDigest = image.slice(image.indexOf('@') + 1);
+    /^sha256:[a-f0-9]{64}$/.test(imageDigest) ||
+      Fail`OpenCode sandbox image digest is invalid, got ${q(imageDigest)}`;
+    return harden({ image, imageDigest });
+  }
+  return harden({ image });
+};
+harden(readSliceImageReference);
+
+/**
+ * Resolve a local OCI image reference to its immutable digest form. The
+ * broker binds each grant attestation to the exact slice image, so setup pins
+ * what Podman actually resolved rather than trusting a mutable tag.
+ *
+ * @param {string} rootfs Config rootfs (`oci:<image>` or already pinned).
+ * @param {(file: string, args: string[]) => Promise<{ stdout: string }>} [exec]
+ * @returns {Promise<{ imageRef: string, imageDigest: string }>}
+ */
+export const resolvePinnedImageRef = async (rootfs, exec = execFile) => {
+  const { image, imageDigest: pinned } = readSliceImageReference(rootfs);
+  if (pinned !== undefined) {
+    return harden({ imageRef: image, imageDigest: pinned });
+  }
+  const { stdout } = await exec('podman', [
+    'image',
+    'inspect',
+    '--format',
+    '{{.Digest}}',
+    image,
+  ]);
+  const imageDigest = stdout.trim();
+  /^sha256:[a-f0-9]{64}$/.test(imageDigest) ||
+    Fail`Cannot resolve a digest for OpenCode sandbox image ${q(image)}; build it before setup-hosted`;
+  return harden({ imageRef: `${image}@${imageDigest}`, imageDigest });
+};
+harden(resolvePinnedImageRef);

@@ -19,6 +19,7 @@
   "main": "./src/agent.js",
   "exports": {
     "./owned-native-service.js": "./src/owned-native-service.js",
+    "./native-podman-profile.js": "./src/native-podman-profile.js",
     ".": "./src/agent.js",
     "./types.js": "./src/types.d.ts",
     "./resource-registry.js": "./src/resource-registry.js",

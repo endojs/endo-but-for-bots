@@ -640,6 +640,79 @@ const makeJoinSpec = (overrides = {}) =>
     ...overrides,
   });
 
+const NATIVE_PROFILE = harden({
+  uid: 1000,
+  gid: 1000,
+  memoryBytes: 536_870_912n,
+  pids: 128,
+  cpuQuotaMicros: 200_000n,
+  cpuPeriodMicros: 100_000,
+  maxConcurrentOperations: 1,
+});
+
+/** @type {readonly [string, Record<string, unknown>, RegExp][]} */
+const refusedNativePreparations = harden([
+  [
+    'a declared mount inside the protected image tree',
+    {
+      mounts: [{ hostPath: '/host/lib', innerPath: '/usr/lib', mode: 'ro' }],
+    },
+    /overlaps protected image or kernel path/,
+  ],
+  [
+    'a declared mount that overlaps host scratch',
+    {
+      mounts: [
+        { hostPath: '/host/data', innerPath: '/scratch/data', mode: 'rw' },
+      ],
+      scratchHostPath: '/host/scratch',
+    },
+    /destinations .* overlap/,
+  ],
+  [
+    'a network other than the broker join',
+    { network: 'private', networkRef: undefined },
+    /requires a pinned OCI image, broker network join/,
+  ],
+  ['an exact legacy policy', { policy: POLICY }, /no legacy policy or rlimits/],
+  [
+    'an unpinned image reference',
+    { rootfs: { kind: 'oci', ref: 'alpine:latest' } },
+    /requires a pinned OCI image/,
+  ],
+]);
+
+for (const [name, overrides, message] of refusedNativePreparations) {
+  test(`native profile preparation refuses ${name}`, async t => {
+    const { driver, calls } = makeDriverUnderTest(t);
+    await t.throwsAsync(
+      driver.prepareSlice(
+        /** @type {any} */ (
+          makeJoinSpec({ nativeProfile: NATIVE_PROFILE, ...overrides })
+        ),
+      ),
+      { message },
+    );
+    t.false(
+      calls.some(call => call.args.includes('create')),
+      'refused before any container is created',
+    );
+  });
+}
+
+test('native profile preparation succeeds without an anchor container', async t => {
+  const { driver, calls } = makeDriverUnderTest(t);
+  const slice = await driver.prepareSlice(
+    /** @type {any} */ (makeJoinSpec({ nativeProfile: NATIVE_PROFILE })),
+  );
+  t.teardown(() => driver.teardown(slice));
+  t.deepEqual(slice.spec.nativeProfile, NATIVE_PROFILE);
+  t.false(
+    calls.some(call => call.args.includes('create')),
+    'native slices verify each operation; no sleeping anchor is created',
+  );
+});
+
 test('network join admits a loopback-only target and wires --network container:', async t => {
   const { driver, calls } = makeDriverUnderTest(t);
   const slice = await driver.prepareSlice(/** @type {any} */ (makeJoinSpec()));

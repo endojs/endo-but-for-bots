@@ -20,6 +20,7 @@ import {
   makeFsMounter,
   makeFsMounterKit,
   mountIdentity,
+  readMountPrograms,
 } from '../mount-caplet.js';
 
 // A caller-supplied socketPath must live inside the socket directory
@@ -279,6 +280,33 @@ test('a NINEP_MOUNT_PROGRAM that does not run mount is rejected at construction'
       }),
     { message: /must invoke .*mount/ },
   );
+});
+
+test('readMountPrograms is the construction-time program check, usable ahead of it', t => {
+  t.deepEqual(readMountPrograms(), {
+    mountProgram: ['mount'],
+    umountProgram: ['umount'],
+  });
+  t.deepEqual(readMountPrograms({ NINEP_SUDO: '1' }), {
+    mountProgram: ['sudo', 'mount'],
+    umountProgram: ['sudo', 'umount'],
+  });
+  t.deepEqual(
+    readMountPrograms({
+      NINEP_SUDO: '1',
+      NINEP_MOUNT_PROGRAM: ' sudo -u svc  mount ',
+    }),
+    {
+      mountProgram: ['sudo', '-u', 'svc', 'mount'],
+      umountProgram: ['sudo', 'umount'],
+    },
+  );
+  t.throws(() => readMountPrograms({ NINEP_UMOUNT_PROGRAM: 'rm -rf' }), {
+    message: /"NINEP_UMOUNT_PROGRAM" must invoke "umount"/,
+  });
+  t.throws(() => readMountPrograms({ NINEP_MOUNT_PROGRAM: '   ' }), {
+    message: /"NINEP_MOUNT_PROGRAM" must be a non-empty array/,
+  });
 });
 
 test('a failed mount stops the bridge and leaks no handle', async t => {

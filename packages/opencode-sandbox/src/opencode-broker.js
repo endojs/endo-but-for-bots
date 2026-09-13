@@ -35,7 +35,8 @@ export const DEFAULT_REQUEST_TIMEOUT_MS = 600_000;
 const DIGEST_PATTERN = /^sha256:[a-f0-9]{64}$/;
 // The podman listener runtime caps the owner id at 64 characters and cleans up
 // by exact label; keep the composition inside that bound.
-const OWNER_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+export const BROKER_OWNER_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+harden(BROKER_OWNER_PATTERN);
 
 /**
  * The operator policy for one OpenRouter lease issuer. Exported so the
@@ -132,7 +133,7 @@ export const makeOpencodeBrokerKit = ({
     Fail`OpenCode broker image digest must be pinned, got ${q(imageDigest)}`;
   (typeof imageRef === 'string' && imageRef.endsWith(`@${imageDigest}`)) ||
     Fail`OpenCode broker image ref must match its digest, got ${q(imageRef)}`;
-  OWNER_PATTERN.test(ownerId) ||
+  BROKER_OWNER_PATTERN.test(ownerId) ||
     Fail`OpenCode broker owner id is invalid, got ${q(ownerId)}`;
   (typeof directory === 'string' &&
     directory.startsWith('/') &&

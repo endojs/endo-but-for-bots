@@ -9,6 +9,7 @@
 
 import type { ERef, FarRef } from '@endo/eventual-send';
 import type { DriverPreparation } from './native-factory-types.js';
+import type { NativePodmanProfile } from './native-podman-profile-types.js';
 import type {
   PassableBytesReader,
   PassableBytesWriter,
@@ -512,6 +513,8 @@ export type ResourceLimits = {
  * resolution.
  */
 export type SliceSpec = {
+  /** Host-only Podman profile; never selected by the generic capability API. */
+  nativeProfile?: NativePodmanProfile;
   /** Resolved rootfs source. `null` denotes the host-bind / minimal case. */
   rootfs:
     | { kind: 'host-bind' }
