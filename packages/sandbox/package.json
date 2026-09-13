@@ -18,6 +18,7 @@
   "type": "module",
   "main": "./src/agent.js",
   "exports": {
+    "./owned-native-service.js": "./src/owned-native-service.js",
     ".": "./src/agent.js",
     "./types.js": "./src/types.d.ts",
     "./resource-registry.js": "./src/resource-registry.js",

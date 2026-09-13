@@ -2282,6 +2282,83 @@ const testNeedsNodeManager =
     : test.serial;
 
 testNeedsNodeManager(
+  'native OpenCode broker retains its exact secret after name replacement and restart',
+  async t => {
+    t.timeout(60_000);
+    const { cancelled, config, host } = await prepareHost(t);
+    const importer = await E(host).lookup(['@secrets', 'create']);
+    await E(importer).createBase64(
+      'broker-original',
+      'Original broker credential',
+      encodeBase64(new TextEncoder().encode('original-test-credential')),
+    );
+    await E(importer).createBase64(
+      'broker-replacement',
+      'Replacement broker credential',
+      encodeBase64(new TextEncoder().encode('replacement-test-credential')),
+    );
+    const original = await E(host).identify('secrets', 'broker-original');
+    const replacement = await E(host).identify('secrets', 'broker-replacement');
+    await E(host).storeIdentifier('broker-key', original);
+    const imageDigest = `sha256:${'a'.repeat(64)}`;
+    const directory = path.join(config.statePath, 'broker-runtime');
+    const env = {
+      OPENCODE_BROKER_CONFIG: JSON.stringify({
+        ownerId: 'native-broker-acceptance',
+        directory,
+        imageRef: `localhost/opencode@${imageDigest}`,
+        imageDigest,
+        listenerImageRef: `localhost/provider@${imageDigest}`,
+        models: ['test/model'],
+      }),
+    };
+    const specifier = new URL(
+      '../../opencode-sandbox/src/opencode-broker-service-agent.js',
+      import.meta.url,
+    ).href;
+    const service = await E(host).makeUnconfined('broker-operator', specifier, {
+      powersName: 'broker-key',
+      resultName: 'broker-service',
+      env,
+    });
+    const serviceId = await E(host).identify('broker-service');
+    const formula = readFormulaFromDb(config.statePath, serviceId);
+    t.like(formula, { type: 'make-unconfined', powers: original, env });
+    t.false(JSON.stringify(formula).includes('original-test-credential'));
+    const scopeSpec = harden({
+      providerOrigin: 'https://openrouter.ai',
+      accountRef: 'openrouter',
+      model: 'test/model',
+    });
+    const a = await E(service).provideScope('a', scopeSpec);
+    const b = await E(service).provideScope('b', scopeSpec);
+    await E(a).revoke();
+    t.is(await E(service).lookupScope('b'), b);
+    t.false(fs.existsSync(directory));
+    await E(host).remove('broker-key');
+    await E(host).storeIdentifier('broker-key', replacement);
+    await E(host).remove('secrets', 'broker-original');
+    t.true(formulaExistsInDb(config.statePath, original));
+
+    await restart(config);
+    const { host: recoveredHost } = await makeHost(config, cancelled);
+    t.is(await E(recoveredHost).identify('broker-key'), replacement);
+    t.is(readFormulaFromDb(config.statePath, serviceId).powers, original);
+    const recovered = await E(recoveredHost).lookup('broker-service');
+    // Only inert handles were issued: this does not claim native crash cleanup.
+    const recoveredScope = await E(recovered).provideScope(
+      'after-restart',
+      scopeSpec,
+    );
+    await E(recoveredScope).revoke();
+    t.false(fs.existsSync(directory));
+    t.true(formulaExistsInDb(config.statePath, original));
+    const audit = await E(recoveredHost).lookup(['@secrets', 'audit']);
+    t.false((await E(audit).list()).some(event => event.operation === 'read'));
+  },
+);
+
+testNeedsNodeManager(
   'secret lookup capabilities and values survive restart',
   async t => {
     const { cancelled, config, host } = await prepareHost(t);
