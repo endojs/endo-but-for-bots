@@ -2180,7 +2180,6 @@ impl Interp {
             .locals
             .iter()
             .chain(&frame.args)
-            .chain(&frame.stack_slice)
             .copied()
             .chain([frame.this_val, frame.result])
         {
@@ -2192,6 +2191,55 @@ impl Interp {
                         || self.slots.is_free_index(cell)
                     {
                         return Err(refuse("closure cell is not live"));
+                    }
+                }
+                _ => {
+                    self.validate_restore_value_shape(value, ROW)?;
+                }
+            }
+        }
+        // Suspended expressions may retain assignment targets below the
+        // yielded/awaited operand. These are interpreter stack forms, never
+        // guest values in arguments, locals, or the completion register.
+        for &value in &frame.stack_slice {
+            match (value.kind, value.value) {
+                (Kind::Uninitialized, Payload::None) => {}
+                (Kind::Closure, Payload::Reference(cell)) => {
+                    if cell.is_null()
+                        || cell.0 >= self.slots.capacity()
+                        || self.slots.is_free_index(cell)
+                    {
+                        return Err(refuse("closure cell is not live"));
+                    }
+                }
+                (Kind::At, Payload::At(id, index)) => {
+                    if value.id != 0
+                        || value.flag != 0
+                        || !value.next.is_null()
+                        || if id == crate::value::XS_NO_ID {
+                            index == u32::MAX
+                        } else {
+                            index != 0
+                                || (usize::from(id) > self.symbol_names.len()
+                                    && self.symbol_key_ids.descriptor(id).is_none())
+                        }
+                    {
+                        return Err(refuse("invalid suspended property key"));
+                    }
+                }
+                (Kind::EnvReference, Payload::Reference(receiver)) => {
+                    if value.id != 0 || value.flag != 0 {
+                        return Err(refuse("invalid suspended environment reference"));
+                    }
+                    if receiver.is_null() {
+                        if !value.next.is_null() {
+                            return Err(refuse("sentinel environment reference has a base"));
+                        }
+                    } else if receiver.0 != 0 || !value.next.is_null() {
+                        self.validate_restore_owner(receiver.0, ROW)?;
+                        if !value.next.is_null() {
+                            self.validate_restore_owner(value.next.0, ROW)?;
+                        }
                     }
                 }
                 _ => {

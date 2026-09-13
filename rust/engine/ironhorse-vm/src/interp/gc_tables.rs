@@ -454,7 +454,7 @@ macro_rules! gc_slot_row {
     ($emit:ident, $vm:ident, $row:ident, $visit:ident, $full:expr, queued_frame) => {
         $emit! {
             if let Some(f) = &$row.frame {
-                saved_frame_slots(f, $visit);
+                saved_frame_slots(f, &$vm.symbol_key_ids, $visit);
         }
         for rq in $row.requests.iter().chain($row.active.as_ref()) {
             rq.value.each_ref_slot(&mut *$visit);
@@ -567,7 +567,7 @@ macro_rules! gc_slot_row {
     ($emit:ident, $vm:ident, $row:ident, $visit:ident, $full:expr, frame) => {
         $emit! {
             if let Some(f) = &$row.frame {
-                saved_frame_slots(f, $visit);
+                saved_frame_slots(f, &$vm.symbol_key_ids, $visit);
         }
 
         }
@@ -578,7 +578,7 @@ macro_rules! gc_slot_row {
             $row.resolve_fn.each_ref_slot(&mut *$visit);
             $row.reject_fn.each_ref_slot(&mut *$visit);
             if let Some(f) = &$row.frame {
-                saved_frame_slots(f, $visit);
+                saved_frame_slots(f, &$vm.symbol_key_ids, $visit);
         }
 
         }
@@ -836,7 +836,11 @@ macro_rules! define_weak_walks {
 }
 interp_state!(define_weak_walks);
 
-fn saved_frame_slots(f: &SavedFrame, visit: &mut dyn FnMut(SlotIndex)) {
+fn saved_frame_slots(
+    f: &SavedFrame,
+    symbols: &super::symbol_keys::SymbolKeys,
+    visit: &mut dyn FnMut(SlotIndex),
+) {
     for s in &f.locals {
         s.each_ref_slot(&mut *visit);
     }
@@ -845,6 +849,11 @@ fn saved_frame_slots(f: &SavedFrame, visit: &mut dyn FnMut(SlotIndex)) {
     }
     for s in &f.stack_slice {
         s.each_ref_slot(&mut *visit);
+        if let (Kind::At, Payload::At(id, _)) = (s.kind, s.value) {
+            if let Some(descriptor) = symbols.descriptor(id) {
+                visit(descriptor);
+            }
+        }
     }
     f.this_val.each_ref_slot(&mut *visit);
     f.result.each_ref_slot(&mut *visit);
