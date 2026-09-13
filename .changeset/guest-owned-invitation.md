@@ -4,7 +4,7 @@
 ---
 
 `EndoGuest.invite(guestName)` now exists alongside `EndoHost.invite`, so a guest — not only the top host — can mint a single-use invitation.
-An acceptor binds the inviting guest under its chosen pet name; a guest inviter gains no network authority.
+An acceptor binds the inviting guest under its chosen pet name; a guest inviter gains no dialing or peer-registration authority, though the invitation it mints still discloses this daemon's connection-hint addresses (obtainable via `locate()`), even when the guest's own `@nets` is empty.
 
 The invitation object gains `cancel()`, which revokes exactly that pending invitation, leaving any sibling invitation redeemable and an already-accepted binding intact.
 Invitation redemption is single-use and race-safe: two concurrent or replayed `accept` calls cannot both redeem one invitation, and a `cancel` racing an `accept` cannot un-name the just-accepted guest.

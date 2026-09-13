@@ -6868,13 +6868,35 @@ const makeDaemonCore = async (
     // directory paths (e.g. `team-a/bob` vs `team-b/bob`) retain under distinct
     // keys instead of colliding on a bare `guest-<leaf>` slot — which would let
     // the second accept() clobber the first's retention edge and leave the
-    // first guest collectible. For the common single-segment name the key is
-    // still exactly `guest-<name>` (the operator-navigable `@pins/guest-<name>`
-    // entry callers expect), since joining a one-element path is that element.
-    // The key is a pure function of the guest name path, so it is stable across
-    // a crash-retry of the *same* invitation and the documented
+    // first guest collectible.
+    //
+    // A bare `guestNamePath.join('-')` is NOT an injective encoding of the
+    // path: pet names may themselves contain `-` (`isValidName` forbids only
+    // `/`, `@`, NUL, and the exact names `.`/`..`), so `['team-a','bob']` and
+    // `['team','a-bob']` both flatten to `team-a-bob`, and the single name
+    // `'a-b'` flattens the same as the path `['a','b']`. Any such pair would
+    // silently share one retention key. So a multi-segment path is encoded
+    // with a self-delimiting `<segment-length>_<segment>` per segment, which
+    // is injective across all multi-segment paths regardless of hyphens.
+    //
+    // The common single-segment name keeps its exact `guest-<name>` key (the
+    // operator-navigable `@pins/guest-<name>` entry callers and legacy
+    // databases already hold); joining a one-element path with any encoding
+    // must not perturb that. The only residual ambiguity is a single-segment
+    // name deliberately crafted to equal the length-prefixed encoding of one
+    // of the *same inviter's own* multi-segment paths — a self-inflicted
+    // collision that clobbers only that inviter's own retention pin, never
+    // another principal's. The accidental, cross-purpose collisions the seats
+    // flagged (differing hyphenation) are eliminated.
+    //
+    // The key is a pure function of the guest name path, so it is stable
+    // across a crash-retry of the *same* invitation and the documented
     // retry-overwrites-its-own-pin cleanup (below) is preserved.
-    const guestPinName = `guest-${guestNamePath.join('-')}`;
+    const guestPinName = `guest-${
+      guestNamePath.length === 1
+        ? guestNamePath[0]
+        : guestNamePath.map(segment => `${segment.length}_${segment}`).join('')
+    }`;
 
     // Serialize accept()/cancel() on THIS invitation so its single-use check
     // and the consuming mutation run atomically with respect to each other.
@@ -7053,13 +7075,24 @@ const makeDaemonCore = async (
           } else {
             // Guest formulas deployed before pin directories existed have
             // neither guestPins nor hostPins. Retain their invited connection
-            // through the creating agent's pins instead.
+            // through the creating agent's pins instead. Unlike the per-guest
+            // `hostPins` directory above, this creating agent's `@pins` is
+            // *shared* by every legacy guest under the same host, so the key
+            // must also encode which inviting guest owns the pin — otherwise
+            // two distinct legacy guests inviting the same name would collide
+            // on one `guest-<name>` slot and the second accept() would clobber
+            // the first. The inviting handle's formula number is unique per
+            // inviting guest and stable across a crash-retry.
             const creatingAgent = await provide(
               invitingFormula.hostAgent,
               'agent',
             );
+            const { number: invitingHandleNumber } = parseId(invitingHandleId);
             await E(creatingAgent).storeIdentifier(
-              /** @type {NamePath} */ (['@pins', guestPinName]),
+              /** @type {NamePath} */ ([
+                '@pins',
+                `${guestPinName}-from-${invitingHandleNumber}`,
+              ]),
               localGuestFormula.handle,
             );
           }

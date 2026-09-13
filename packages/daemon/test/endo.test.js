@@ -995,12 +995,12 @@ test('provideGuest rejects a wrong-typed pins reference', async t => {
   const { host } = await prepareHost(t);
   // A read-only view is daemon-minted but is a `readable-directory`, not the
   // plain writable `directory` the pins option requires.
-  const dir = await E(host).makeDirectory('some-dir');
-  const readOnlyDir = await E(dir).readOnly();
+  const directory = await E(host).makeDirectory('some-dir');
+  const readOnlyDirectory = await E(directory).readOnly();
   await t.throwsAsync(
     E(host).provideGuest('guest', {
       agentName: 'guest-agent',
-      pins: /** @type {any} */ (readOnlyDir),
+      pins: /** @type {any} */ (readOnlyDirectory),
     }),
     { message: /pins must be a directory/u },
   );
@@ -1034,36 +1034,36 @@ test('provideGuest rejects a wrong-typed networks reference', async t => {
 
 test('EndoDirectory.readOnly() mirrors reads and rejects every mutator', async t => {
   const { host } = await prepareHost(t);
-  const dir = await E(host).makeDirectory('backing-dir');
+  const directory = await E(host).makeDirectory('backing-dir');
   await E(host).storeValue(1, 'one-src');
   await E(host).storeValue(2, 'two-src');
   const oneId = await E(host).identify('one-src');
   const twoId = await E(host).identify('two-src');
-  await E(dir).storeIdentifier(['one'], oneId);
-  await E(dir).storeIdentifier(['two'], twoId);
+  await E(directory).storeIdentifier(['one'], oneId);
+  await E(directory).storeIdentifier(['two'], twoId);
 
-  const readOnlyDir = await E(dir).readOnly();
+  const readOnlyDirectory = await E(directory).readOnly();
 
   // Reads round-trip against the backing directory.
-  t.deepEqual([...(await E(readOnlyDir).list())].sort(), ['one', 'two']);
-  t.true(await E(readOnlyDir).has('one'));
-  t.false(await E(readOnlyDir).has('absent'));
-  t.is(await E(readOnlyDir).lookup('one'), await E(dir).lookup('one'));
-  t.is(await E(readOnlyDir).maybeLookup('absent'), undefined);
+  t.deepEqual([...(await E(readOnlyDirectory).list())].sort(), ['one', 'two']);
+  t.true(await E(readOnlyDirectory).has('one'));
+  t.false(await E(readOnlyDirectory).has('absent'));
+  t.is(await E(readOnlyDirectory).lookup('one'), await E(directory).lookup('one'));
+  t.is(await E(readOnlyDirectory).maybeLookup('absent'), undefined);
 
   // The read-only view exposes no mutators at all.
   await t.throwsAsync(
-    E(/** @type {any} */ (readOnlyDir)).storeIdentifier(['three'], oneId),
+    E(/** @type {any} */ (readOnlyDirectory)).storeIdentifier(['three'], oneId),
     undefined,
     'storeIdentifier is not available on a read-only view',
   );
   await t.throwsAsync(
-    E(/** @type {any} */ (readOnlyDir)).remove('one'),
+    E(/** @type {any} */ (readOnlyDirectory)).remove('one'),
     undefined,
     'remove is not available on a read-only view',
   );
   await t.throwsAsync(
-    E(/** @type {any} */ (readOnlyDir)).makeDirectory('nested'),
+    E(/** @type {any} */ (readOnlyDirectory)).makeDirectory('nested'),
     undefined,
     'makeDirectory is not available on a read-only view',
   );
@@ -1072,8 +1072,8 @@ test('EndoDirectory.readOnly() mirrors reads and rejects every mutator', async t
   // confirming it is a live attenuation rather than a snapshot.
   await E(host).storeValue(3, 'three-src');
   const threeId = await E(host).identify('three-src');
-  await E(dir).storeIdentifier(['three'], threeId);
-  t.true(await E(readOnlyDir).has('three'));
+  await E(directory).storeIdentifier(['three'], threeId);
+  t.true(await E(readOnlyDirectory).has('three'));
 });
 
 test('move moves value, between different guests', async t => {
@@ -4067,6 +4067,48 @@ test('EndoGuest.invite nests the invitation at a directory path', async t => {
   t.true(await E(guest).has('peers', 'bob'));
   t.false(await E(guest).has('bob'));
 });
+
+testNeedsNodeWorker(
+  'accept keeps distinct retention pins for name paths that a naive join would collide',
+  async t => {
+    const hostA = await prepareHostWithTestNetwork(t);
+    const hostB = await prepareHostWithTestNetwork(t);
+
+    // `['team-a', 'bob']` and `['team', 'a-bob']` both flatten to
+    // `team-a-bob` under a bare `path.join('-')`, so the old retention key
+    // `guest-team-a-bob` was shared and the second accept() silently clobbered
+    // the first guest's pin, leaving it collectible. The injective key
+    // encoding must retain the two under distinct pins.
+    await E(hostA).makeDirectory('team-a');
+    await E(hostA).makeDirectory('team');
+
+    const invitation1 = await E(hostA).invite(['team-a', 'bob']);
+    const invitation2 = await E(hostA).invite(['team', 'a-bob']);
+
+    await E(hostB).accept(await E(invitation1).locate(), 'peer-1');
+    await E(hostB).accept(await E(invitation2).locate(), 'peer-2');
+
+    // Both guests remain reachable at their own paths.
+    t.truthy(await E(hostA).identify('team-a', 'bob'));
+    t.truthy(await E(hostA).identify('team', 'a-bob'));
+
+    // Each accept() retained its connection under its own `@pins` key rather
+    // than the second clobbering the first — two distinct retention pins, not
+    // one shared slot.
+    const retentionPins = [...(await E(hostA).list('@pins'))].filter(name =>
+      name.startsWith('guest-'),
+    );
+    t.is(
+      retentionPins.length,
+      2,
+      'two distinct retention pins, not one clobbered slot',
+    );
+    const [firstPinId, secondPinId] = await Promise.all(
+      retentionPins.map(name => E(hostA).identify('@pins', name)),
+    );
+    t.not(firstPinId, secondPinId);
+  },
+);
 
 test('reverse locate local value', async t => {
   const { host } = await prepareHost(t);

@@ -172,7 +172,7 @@ The back face is divided into a fixed header (formula-type badge, title, help te
 The property list shape is the same across all formula types: an ordered list of rows, each row a `<dt>label</dt><dd>value-or-reference-button</dd>` pair.
 Per-type variations differ only in *which* properties are listed and in the per-property classifier (see § Literal-vs-reference resolution).
 
-The catalog covers all 33 formula types currently in [`packages/daemon/src/formula-type.js`](../packages/daemon/src/formula-type.js).
+The catalog covers the formula types enumerated in [`packages/daemon/src/formula-type.js`](../packages/daemon/src/formula-type.js); the count there grows as new types (such as this PR's `readable-directory`) are added, so this section names the types rather than pinning a total that would silently drift out of date.
 
 | Formula type | Header text | Properties (label → render) |
 |---|---|---|
