@@ -88,6 +88,12 @@ this change does not prevent Podman from accessing them.
 Controlled native-command tests exercise the default execution builders, including
 provider local-engine flags; actual Linux/Podman acceptance remains pending.
 
+Provider stderr no longer disconnects inference after a lifetime byte threshold.
+The runtime continuously drains it and forwards only a copied 4 KiB diagnostic prefix,
+with bookkeeping that stops at zero instead of accumulating a lifetime counter.
+Two regressions inject oversized, repeated stderr into the real child's stream and
+verify continued HTTP inference and explicit cleanup, with and without diagnostics.
+
 Claude and OpenCode now share the MCP protocol, host-side socket transport, and guest stdio relay.
 The input frame limit covers both complete frames and partial tails before dispatch.
 The shared bridge admits at most 32 simultaneous host tool executions, reusing the
@@ -826,6 +832,7 @@ provider requirements, or an explicit user budget, rather than copied between la
 | Queue/inflight/connection caps | Aggregate host memory, FDs, pending work | Flooding or slow peers | One frame cap does not bound many queued frames | Keep with backpressure in shared transport/services. |
 | 10,000 events/16 MiB cumulative turn output | Accumulated output if retained forever | Long or verbose turns | Bounded queues after consumed data is released; separate storage budget | Remove after queues, retained registries, and storage are bounded. |
 | Prompt/request/audit/preview limits | Different encodings and consumers of content | Large user/provider/tool content | Frame cap, storage budget, and model context each cover distinct needs | Derive transport limits; separate previews/context from correctness. |
+| Listener stderr lifetime cutoff | Diagnostic retention and listener availability | Verbose or hostile listener output | Native stderr is continuously drained; only a copied 4 KiB prefix reaches the optional diagnostic callback | Remove inference disconnection based on cumulative log bytes. Keep the preview bound and stop its bookkeeping at zero; logging volume does not revoke inference authority. |
 | Lifetime cumulative traffic reservations | Transfer usage over a session | Sustained legitimate or abusive traffic | No per-session cumulative transfer bound; queue/concurrency caps protect memory only | Remove generic lifetime ceiling; optional explicit bandwidth budget. |
 | Turn-wide/tool-count cutoffs | Duration or amount of requested work | Loops or expensive workflows | No automatic cumulative bound; interruption and emergency stop are explicit actions | No mandatory sandbox default; application policy when required. |
 | Request/I/O and shutdown deadlines | Occupied sockets, stalled control operations, unreaped processes | Slow peers and failed runtimes | Memory limits cannot resolve a stalled operation | Keep with cancellation propagation; distinguish timeout from proven cancellation. |

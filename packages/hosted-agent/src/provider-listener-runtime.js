@@ -397,11 +397,16 @@ export const makePodmanProviderListenerRuntimeKit = ({
         live = false;
         pipe?.close();
       });
-      let errorBytes = 0;
+      // Drain stderr for the child's entire lifetime. Diagnostics get only a
+      // copied prefix; log volume has no authority to close the inference pipe.
+      let diagnosticBytesRemaining = host.onStderr ? 4096 : 0;
       subprocess.stderr.on('data', chunk => {
-        errorBytes += chunk.byteLength;
-        if (errorBytes <= 4096) host.onStderr?.(chunk);
-        if (errorBytes > 4096) pipe?.close();
+        if (diagnosticBytesRemaining === 0) return;
+        const preview = Uint8Array.from(
+          chunk.subarray(0, diagnosticBytesRemaining),
+        );
+        diagnosticBytesRemaining -= preview.byteLength;
+        host.onStderr?.(preview);
       });
       pipe = makeProviderPipe({
         input: subprocess.stdout,
