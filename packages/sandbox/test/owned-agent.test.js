@@ -1,13 +1,17 @@
 // @ts-check
 
 import test from '@endo/ses-ava/prepare-endo.js';
+import { E } from '@endo/eventual-send';
 import { makePromiseKit } from '@endo/promise-kit';
 import * as fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setImmediate } from 'node:timers/promises';
 
-import { makeOwnedSandboxAgent } from '../src/owned-agent.js';
+import {
+  makeOwnedSandboxAgent,
+  makeOwnedNativeSandboxAgent,
+} from '../src/owned-agent.js';
 import { readRuntimeConfig } from '../src/runtime-config.js';
 import { makeSandboxRuntime } from '../src/runtime.js';
 
@@ -59,6 +63,9 @@ const fixture = t => {
       prepared = next();
       runtimes.push(state);
       return harden({
+        openNative: async () => {
+          throw Error('Unexpected native service selection');
+        },
         open: async () => {
           await null;
           state.opened.resolve(undefined);
@@ -377,4 +384,37 @@ test('independent entrypoint registries remain excluded by actual runtime owners
   await second(powers, context().cap, options);
   t.not(await fs.readlink(marker), oldToken);
   t.deepEqual(errors, []);
+});
+
+test('native operator entrypoint exposes scoped authority and retains cancellation', async t => {
+  const directory = await fs.mkdtemp(join(tmpdir(), 'endo-native-agent-'));
+  const token = makePromiseKit();
+  /** @type {ReturnType<typeof makeSandboxRuntime> | undefined} */
+  let retained;
+  t.teardown(async () => {
+    token.reject(Error('test finished'));
+    await setImmediate();
+    await retained?.close();
+    await fs.rm(directory, { recursive: true, force: true });
+  });
+  const make = makeOwnedNativeSandboxAgent({
+    makeRuntime: (config, runtimePowers) => {
+      retained = makeSandboxRuntime(config, runtimePowers);
+      return retained;
+    },
+  });
+  const context = harden({
+    whenCancelled: () => /** @type {Promise<never>} */ (token.promise),
+  });
+  const service = await make(powers, context, {
+    env: { ...env, ENDO_SANDBOX_RUNTIME_DIR: directory },
+  });
+  const scope = await E(service).provideScope('one');
+  t.is(await E(service).lookupScope('one'), scope);
+  await E(scope).close();
+  token.reject(Error('native operator cancelled'));
+  await setImmediate();
+  await retained?.close();
+  await t.throwsAsync(E(service).provideScope('two'), { message: /closing/ });
+  t.deepEqual(await fs.readdir(directory), []);
 });

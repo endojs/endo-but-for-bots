@@ -153,3 +153,19 @@ test('native late preparation shares the factory close fence and failed cleanup 
   await f.close();
   t.deepEqual(f.removed, [context]);
 });
+
+test('native acquisition and spawning refuse imported capabilities', async t => {
+  const f = fixture(t);
+  const foreign = f.factory;
+  const before = f.specs.length;
+  const unexpected = harden({ ...approved, extra: foreign });
+  t.throws(() => f.makeResolved(unexpected), {
+    message: /copy data/,
+  });
+  t.is(f.specs.length, before);
+  const handle = await f.makeResolved(approved);
+  const spawnOpts = harden({ cwd: '/work', stdin: foreign });
+  await t.throwsAsync(E(handle).spawn(['test'], spawnOpts), {
+    message: /stdin|unmatched|unexpected/,
+  });
+});

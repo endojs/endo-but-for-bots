@@ -4,6 +4,8 @@ import type {
   DriverSliceContext,
   SandboxHandle,
   SandboxMakeOpts,
+  SpawnOpts,
+  ProcessHandle,
   SliceSpec,
 } from './types.js';
 
@@ -27,8 +29,13 @@ export type NativeSandboxMakeOpts = Omit<
 export type NativeSandboxHandle = FarRef<
   Pick<
     RemoteFunctions<SandboxHandle>,
-    'help' | 'spawn' | 'policy' | 'reset' | 'dispose'
-  >
+    'help' | 'policy' | 'reset' | 'dispose'
+  > & {
+    spawn(
+      argv: readonly string[],
+      opts?: NativeSpawnOpts,
+    ): Promise<ProcessHandle>;
+  }
 >;
 
 /** Cleanup ownership transferred before an individual driver preparation begins. */
@@ -36,3 +43,6 @@ export type DriverPreparation<Context = DriverSliceContext> = Readonly<{
   value: Promise<Context>;
   close(): Promise<void>;
 }>;
+
+/** Native callers write through the returned process; they cannot import a reader. */
+export type NativeSpawnOpts = Omit<SpawnOpts, 'stdin'>;

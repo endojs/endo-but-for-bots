@@ -1,14 +1,40 @@
 // @ts-check
 
 import { Fail } from '@endo/errors';
+import { makeExo } from '@endo/exo';
+import { M } from '@endo/patterns';
 
 import { makePodmanDriver } from './drivers/podman.js';
 import { makeSandboxFactoryKit } from './factory.js';
+import { NativeSandboxMakeOptsShape } from './interfaces.js';
 import { makeGeneratedFileStorage } from './generated-file-storage.js';
 import { acquireRuntimeOwnership } from './runtime-ownership.js';
 
 /** @import { SandboxDriver, SandboxFactory, SandboxPowers } from './types.js' */
 /** @import { GeneratedFileStorage } from './generated-file-storage-types.js' */
+
+const NativeScopeInterface = harden(
+  M.interface('NativeSandboxScope', {
+    makeResolved: M.call(NativeSandboxMakeOptsShape).returns(M.promise()),
+    close: M.call().returns(M.promise()),
+  }),
+);
+/**
+ * @param {ReturnType<typeof makeSandboxFactoryKit>} kit
+ * @param {() => Promise<void>} close
+ */
+const makeNativeScope = (kit, close) =>
+  makeExo('NativeSandboxScope', NativeScopeInterface, {
+    makeResolved: opts => kit.makeResolved(opts),
+    close,
+  });
+
+const NativeServiceInterface = harden(
+  M.interface('NativeSandboxService', {
+    provideScope: M.call(M.string()).returns(M.remotable()),
+    lookupScope: M.call(M.string()).returns(M.or(M.remotable(), M.undefined())),
+  }),
+);
 
 /**
  * Construct a host-owned Podman runtime before acquiring any resources.
@@ -44,6 +70,8 @@ export const makeSandboxRuntime = (
   let kit;
   /** @type {(SandboxDriver & { close(): Promise<void> }) | undefined} */
   let driver;
+  /** @type {Map<string, { scope: ReturnType<typeof makeNativeScope>, close(): Promise<void> }>} */
+  const scopes = new Map();
   /** @param {{ close(): Promise<void> } | undefined} owner */
   const closeOwner = async owner => owner?.close();
   const assertOpen = () => {
@@ -78,6 +106,35 @@ export const makeSandboxRuntime = (
     })();
     return opening;
   };
+  const service = makeExo('NativeSandboxService', NativeServiceInterface, {
+    provideScope: id => {
+      assertOpen();
+      const selectedDriver = driver;
+      if (selectedDriver === undefined) throw Fail`Sandbox runtime is not open`;
+      const existing = scopes.get(id);
+      if (existing) return existing.scope;
+      const scopedKit = makeSandboxFactoryKit({
+        drivers: [selectedDriver],
+        scratchProvider,
+      });
+      const closeScope = async () => {
+        await scopedKit.close();
+        if (scopes.get(id) === record) scopes.delete(id);
+      };
+      const scope = makeNativeScope(scopedKit, closeScope);
+      const record = { scope, close: closeScope };
+      scopes.set(id, record);
+      return scope;
+    },
+    // Absence is not proof that an earlier service incarnation released native
+    // resources. Recovery must use this lookup, never provision a replacement.
+    lookupScope: id => scopes.get(id)?.scope,
+  });
+  const openNative = async () => {
+    await open();
+    assertOpen();
+    return service;
+  };
   const close = () => {
     closing = true;
     if (closeFlight !== undefined) return closeFlight;
@@ -88,6 +145,7 @@ export const makeSandboxRuntime = (
     const stopped = Promise.allSettled([
       closeOwner(factoryAtClose),
       closeOwner(driverAtClose),
+      ...[...scopes.values()].map(closeOwner),
     ]);
     closeFlight = (async () => {
       // A failed open is historical. Release only the resources it acquired.
@@ -110,6 +168,6 @@ export const makeSandboxRuntime = (
     });
     return closeFlight;
   };
-  return harden({ open, close });
+  return harden({ open, openNative, close });
 };
 harden(makeSandboxRuntime);

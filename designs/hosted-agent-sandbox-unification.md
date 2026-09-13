@@ -229,6 +229,21 @@ release calls cannot remove a successor's marker.
 Existing markers and storage roots refuse startup, without a probe or stale sweep.
 A dead daemon worker is insufficient evidence for recovery: a surviving `podman create`
 can finish after a successor's container sweep.
+The host-only `native-agent.js` entrypoint now exposes inert cleanup scopes over that
+shared driver and generated-file allocator, using the same retained operator lifetime.
+Each scope owns a factory kit and retains its acquisitions through late completion and
+failed cleanup; successful close removes only that scope, while stale handles stay fenced.
+Recovery lookup remains available during failed operator shutdown and never creates a
+replacement; missing ownership is not proof of prior native release.
+Native acquisition and spawn accept copy data, including resolved host paths;
+native spawn excludes an incoming stdin reader and uses the returned process endpoint.
+The existing daemon copy-data validator is shared with these native entry points.
+Callers must validate before crossing workers, because receiver validation cannot undo
+imported capability references.
+Adapter integration must retain the stable operator and serialize session incarnations;
+a scope may own several slices, so retrieving its identity does not deduplicate acquisition.
+Injected-driver tests cover shared budgets, sibling progress, late acquisition, stale
+handles, and failed operator shutdown; real adapter and Podman acceptance remain pending.
 Every Podman invocation now requires the local engine, including probes and cleanup.
 Podman preparation now retains anchor and seccomp-directory cleanup before a context
 can be returned, with a host-only `closeSlices()` fence and retry path.
@@ -740,6 +755,7 @@ provider requirements, or an explicit user budget, rather than copied between la
 | Cleanup completion before deletion | Storage still in use and original cleanup handles | Late acquisitions, failed stops, and callers treating cancellation as containment | A rejected call or removed formula name does not prove native resources ended; successful slice disposal is the client-side containment barrier | Retain failed and uncertain acquisitions; propagate failed stop before replacement/deletion. The uncommitted OpenCode integration exercises original records and cleanup sharing within one worker; daemon collection and cross-worker ownership acceptance remain pending. |
 | Provider initialization ownership | Listener cleanup authority, open resolver handles, and runtime lock/recovery reservations | Failed startup, late acquisitions, and a caller treating rejection as release | Per-listener limits bound live service work, not ownership of partially acquired host resources; persistent configuration remains operator-owned | Retain runtime/broker kits plus scoped listener/grant kits before acquisition; retry the failed issuance and retain its charge and ownership until original child closure and checked removal. This adds no lease or new budget and does not prove descendants stopped after a native crash. |
 | Per-preparation cleanup | Policy anchors, temporary files, and cleanup authority for one slice; sibling availability | Failed or late preparation followed by overly broad shared-driver shutdown | The driver registry already retains failures and the shared allocator retains charges, but both span multiple preparations | Retain `prepareSliceKit` before awaiting acquisition; close and retry that preparation only. Keep shared native-command closure and driver-wide shutdown with the operator owner. No new count, timeout, or lease. |
+| Native service scopes and copy data | Session cleanup, host path authority, and shared-worker lifetime | Broad cleanup, stale callers, guest-supplied paths, and accidental import of disposable formula capabilities | Factory kits already retain acquisitions; the shared driver and allocator own operator resources, while the daemon owner retains original mount authority | Capture one kit per host-only scope and retain failed cleanup. Recover through lookup; only the operator closes the shared driver. Validate copy inputs before sending and on receipt; native spawn accepts no stdin reader and writes through the returned process endpoint. |
 | Filesystem drain acknowledgement | Backing files, directories, and cleanup authority still used by 9P calls | Late I/O, failed source cleanup, or a caller equating socket closure with release | Frame sizes and flow control bound transport work, not the lifetime of admitted filesystem effects; stream terminal errors can repeat an earlier I/O failure | Keep a separate release acknowledgement at the stream provider and await kernel unmount, bridge drain, and retained handle cleanup. Do not add a lease or treat a timeout as release. |
 | Durable session ownership | Original cleanup authority, retained dependencies, and session storage | Retargeting after backend replacement, partial construction, and failed cleanup | Backend defaults and mutable global names do not identify an older session's owner; daemon directory entries already provide durable formula retention | The configured daemon owner retains exact IDs and contexts, publishes before acquisition, and separates native cleanup from original-plan storage removal. Node fixture acceptance passes; actual adapter wiring remains pending. |
 | Transient tool attachment | Endo tool authority and its transcript context | Accidental persistence or rebinding to a different executor during a live incarnation | Floot already captures the originating turn on admission and rejects out-of-turn execution; the MCP bridge owns request admission and drain | Attach the current journaled capability only at explicit start, reserve its resolver role, and require stop before replacement. Closing the resolver prevents new retrieval; it is not revocation of a previously returned capability or process authentication. |

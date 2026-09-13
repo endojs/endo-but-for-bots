@@ -13,14 +13,17 @@ import { makePodmanDriver } from '../src/drivers/podman.js';
 import { acquireRuntimeOwnership } from '../src/runtime-ownership.js';
 import { makeSandboxRuntime } from '../src/runtime.js';
 
+/** @import { SliceSpec } from '../src/types.js' */
 /** @import { GeneratedFileStage } from '../src/generated-file-storage-types.js' */
 
-const opts = harden({
-  rootfs: { kind: 'oci', ref: 'test-image' },
-  generatedFiles: [
-    { innerPath: '/etc/resolv.conf', contents: 'nameserver 127.0.0.53\n' },
-  ],
-});
+const opts = harden(
+  /** @type {const} */ ({
+    rootfs: { kind: 'oci', ref: 'test-image' },
+    generatedFiles: [
+      { innerPath: '/etc/resolv.conf', contents: 'nameserver 127.0.0.53\n' },
+    ],
+  }),
+);
 
 /** @param {import('ava').ExecutionContext} t */
 const fixture = async t => {
@@ -47,6 +50,8 @@ const fixture = async t => {
   let probes = 0;
   let driverCloses = 0;
   let file = '';
+  /** @type {(spec: SliceSpec) => Promise<void>} */
+  let beforeReturn = async () => {};
   const filesystem = {
     ...fs,
     unlink: async path => {
@@ -111,6 +116,7 @@ const fixture = async t => {
               const stage = storage.makeStage(spec.generatedFiles ?? [], []);
               const [mount] = await stage.prepare();
               file = mount?.hostPath ?? '';
+              await beforeReturn(spec);
               return stage;
             },
             spawn: async () => {
@@ -130,6 +136,10 @@ const fixture = async t => {
     directory,
     config,
     make,
+    /** @param {(spec: SliceSpec) => Promise<void>} hook */
+    onPrepared: hook => {
+      beforeReturn = hook;
+    },
     faults,
     unblock,
     probes: () => probes,
@@ -457,6 +467,123 @@ test('synchronous driver close failure still permits factory cleanup and later r
   await fs.access(f.storageRoot);
   await fs.readlink(f.marker);
   f.faults.driverCloseSync = false;
+  await runtime.close();
+  await t.throwsAsync(fs.lstat(f.marker), { message: /ENOENT/ });
+});
+
+test('native scopes share one allocator and retain only their own cleanup', async t => {
+  const f = await fixture(t);
+  const runtime = f.make();
+  const service = await runtime.openNative();
+  const a = await E(service).provideScope('a');
+  const b = await E(service).provideScope('b');
+  t.is(await E(service).provideScope('a'), a);
+  t.is(await E(service).lookupScope('a'), a);
+  t.is(await E(service).lookupScope('missing'), undefined);
+  t.is(f.probes(), 0, 'scope acquisition is inert');
+  await E(a).makeResolved(opts);
+  const aFile = f.file();
+  await E(b).makeResolved(opts);
+  const bFile = f.file();
+  f.faults.teardown = true;
+  await t.throwsAsync(E(a).close(), { message: /factory shutdown pending/ });
+  t.is(await E(service).lookupScope('a'), a);
+  f.faults.teardown = false;
+  await E(a).close();
+  t.is(f.driverCloses(), 0, 'scope cleanup cannot close shared driver');
+  await t.throwsAsync(fs.lstat(aFile), { message: /ENOENT/ });
+  await fs.access(bFile);
+  await E(b).makeResolved(opts);
+  const successor = await E(service).provideScope('a');
+  t.not(successor, a);
+  await E(a).close();
+  t.is(await E(service).lookupScope('a'), successor);
+  await t.throwsAsync(E(a).makeResolved(opts), { message: /cancelled/ });
+  await runtime.close();
+  await t.throwsAsync(E(successor).makeResolved(opts), {
+    message: /cancelled/,
+  });
+  await t.throwsAsync(E(service).provideScope('c'), { message: /closing/ });
+});
+
+test('native scopes cannot each spend a separate generated-file budget', async t => {
+  const f = await fixture(t);
+  const runtime = f.make();
+  const service = await runtime.openNative();
+  const a = await E(service).provideScope('a');
+  const b = await E(service).provideScope('b');
+  const large = harden({
+    ...opts,
+    generatedFiles: [
+      { innerPath: '/etc/resolv.conf', contents: 'x'.repeat(600) },
+    ],
+  });
+  await E(a).makeResolved(large);
+  await t.throwsAsync(E(b).makeResolved(large), {
+    message: /budget|capacity|limit/,
+  });
+  await E(a).close();
+  await E(b).makeResolved(large);
+  await E(b).close();
+});
+
+test('native scope cleanup retains a late acquisition and permits sibling progress', async t => {
+  t.timeout(5000);
+  const f = await fixture(t);
+  const entered = makePromiseKit();
+  const gate = makePromiseKit();
+  f.unblock.push(() => gate.resolve(undefined));
+  f.onPrepared(async spec => {
+    if (spec.env.SESSION === 'a') {
+      entered.resolve(undefined);
+      await gate.promise;
+    }
+  });
+  const runtime = f.make();
+  const service = await runtime.openNative();
+  const a = await E(service).provideScope('a');
+  const starting = t.throwsAsync(
+    E(a).makeResolved({ ...opts, env: { SESSION: 'a' } }),
+    {
+      message: /cancelled/,
+    },
+  );
+  await entered.promise;
+  const aFile = f.file();
+  let closed = false;
+  const closing = E(a)
+    .close()
+    .then(() => {
+      closed = true;
+    });
+  const b = await E(service).provideScope('b');
+  await E(b).makeResolved(opts);
+  const bFile = f.file();
+  t.false(closed);
+  t.is(await E(service).lookupScope('a'), a);
+  await fs.access(aFile);
+  gate.resolve(undefined);
+  await Promise.all([starting, closing]);
+  await t.throwsAsync(fs.lstat(aFile), { message: /ENOENT/ });
+  await fs.access(bFile);
+  t.is(await E(service).lookupScope('a'), undefined);
+  t.is(f.driverCloses(), 0);
+});
+
+test('failed operator shutdown preserves native cleanup lookup without new admission', async t => {
+  const f = await fixture(t);
+  const runtime = f.make();
+  const service = await runtime.openNative();
+  const a = await E(service).provideScope('a');
+  await E(a).makeResolved(opts);
+  f.faults.teardown = true;
+  await t.throwsAsync(runtime.close(), { message: /runtime shutdown pending/ });
+  t.is(await E(service).lookupScope('a'), a);
+  await t.throwsAsync(E(service).provideScope('a'), { message: /closing/ });
+  await fs.readlink(f.marker);
+  f.faults.teardown = false;
+  await E(a).close();
+  t.is(await E(service).lookupScope('a'), undefined);
   await runtime.close();
   await t.throwsAsync(fs.lstat(f.marker), { message: /ENOENT/ });
 });
