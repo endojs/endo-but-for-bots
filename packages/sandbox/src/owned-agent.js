@@ -19,13 +19,18 @@ import { makeSandboxRuntime } from './runtime.js';
  * instance shares this registry across formula reconstructions; another worker
  * or module instance must still acquire the runtime's exclusive on-disk marker.
  * Failed shutdown stays owned until a subsequent construction retries it.
+ * @template Result
+ * @param {(runtime: Runtime) => Promise<Result>} openRuntime
  * @param {{ makeRuntime?: typeof makeSandboxRuntime, reportError?: (error: unknown) => void }} [powers]
  */
-export const makeOwnedSandboxAgent = ({
-  makeRuntime = makeSandboxRuntime,
-  reportError = error =>
-    console.error('Sandbox runtime cleanup pending', error),
-} = {}) => {
+const makeOwnedEntrypoint = (
+  openRuntime,
+  {
+    makeRuntime = makeSandboxRuntime,
+    reportError = error =>
+      console.error('Sandbox runtime cleanup pending', error),
+  } = {},
+) => {
   const ordering = makeResourceRegistry();
   /** @type {Map<string, Owner>} */
   const owners = new Map();
@@ -110,7 +115,7 @@ export const makeOwnedSandboxAgent = ({
       };
       owners.set(ownerId, ownRecord);
       try {
-        const factory = await runtime.open();
+        const factory = await openRuntime(runtime);
         assertLive();
         return factory;
       } catch (error) {
@@ -129,7 +134,16 @@ export const makeOwnedSandboxAgent = ({
   };
   return harden(make);
 };
+/** @param {Parameters<typeof makeOwnedEntrypoint>[1]} [powers] */
+export const makeOwnedSandboxAgent = powers =>
+  makeOwnedEntrypoint(runtime => runtime.open(), powers);
 harden(makeOwnedSandboxAgent);
+
+/** Host-only entrypoint builder with the same retained operator lifetime. */
+/** @param {Parameters<typeof makeOwnedEntrypoint>[1]} [powers] */
+export const makeOwnedNativeSandboxAgent = powers =>
+  makeOwnedEntrypoint(runtime => runtime.openNative(), powers);
+harden(makeOwnedNativeSandboxAgent);
 
 /** Host-only unconfined entrypoint; returns only the public sandbox factory. */
 export const make = makeOwnedSandboxAgent();

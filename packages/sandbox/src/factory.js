@@ -2,6 +2,7 @@
 
 /* global clearTimeout, setTimeout */
 
+import { assertCopyData } from '@endo/daemon/copy-data.js';
 import { makeCancelKit } from '@endo/cancel';
 import { E } from '@endo/eventual-send';
 import { Fail, makeError, q, X } from '@endo/errors';
@@ -15,7 +16,7 @@ import {
   ProcessHandleInterface,
   SandboxFactoryInterface,
   SandboxHandleInterface,
-  SpawnOptsShape,
+  NativeSpawnOptsShape,
 } from './interfaces.js';
 import { makeEagerReader } from './eager-reader.js';
 import { makeResourceRegistry } from './resource-registry.js';
@@ -29,7 +30,7 @@ const NativeHandleInterface = harden(
   M.interface('NativeSandboxHandle', {
     help: M.call().optional(M.string()).returns(M.string()),
     spawn: M.call(M.arrayOf(M.string()))
-      .optional(SpawnOptsShape)
+      .optional(NativeSpawnOptsShape)
       .returns(M.promise()),
     policy: M.call().returns(M.promise()),
     reset: M.call().returns(M.promise()),
@@ -1220,7 +1221,10 @@ export const makeSandboxFactoryKit = (
         nativeOnly
           ? `Native sandbox with static mounts. Methods: help, spawn, policy, reset, dispose.\n${sliceRuntimeReport}`
           : `${HANDLE_HELP_BASE}\n${sliceRuntimeReport}`,
-      spawn: spawnProc,
+      spawn: (argv, spawnOptions = {}) => {
+        if (nativeOnly) assertCopyData(harden(spawnOptions));
+        return spawnProc(argv, spawnOptions);
+      },
       policy: attestPolicy,
       reset: resetSlice,
       dispose: disposeSlice,
@@ -1290,6 +1294,7 @@ export const makeSandboxFactoryKit = (
   /** @param {NativeSandboxMakeOpts} opts */
   const makeResolved = opts => {
     const approved = harden(opts);
+    assertCopyData(approved);
     return makeOwned(
       approved,
       async () =>

@@ -131,40 +131,71 @@ const SlicePolicyRequestShape = M.splitRecord({
   attestationArgv: M.arrayOf(M.string()),
 });
 
+const CommonMakeOptions = harden({
+  generatedFiles: M.arrayOf(GeneratedFileShape),
+  network: NetworkProfileShape,
+  networkRef: M.string(),
+  backend: BackendSelectorShape,
+  seccomp: SeccompPolicyShape,
+  env: EnvShape,
+  cwd: M.string(),
+  limits: ResourceLimitsShape,
+  policy: SlicePolicyRequestShape,
+});
+
 const SandboxMakeOptsShape = M.splitRecord(
+  { rootfs: RootfsSpecShape },
+  { ...CommonMakeOptions, mounts: M.arrayOf(MountSpecShape) },
+);
+
+const NativeSandboxMakeOptsShape = M.splitRecord(
   {
-    rootfs: RootfsSpecShape,
+    rootfs: M.or(
+      M.splitRecord({ kind: 'host-bind' }),
+      M.splitRecord({ kind: 'minimal' }),
+      M.splitRecord({ kind: 'oci', ref: M.string() }),
+      M.splitRecord({
+        kind: 'mount',
+        hostPath: M.string(),
+        mode: MountModeShape,
+      }),
+    ),
   },
   {
-    mounts: M.arrayOf(MountSpecShape),
-    generatedFiles: M.arrayOf(GeneratedFileShape),
-    network: NetworkProfileShape,
-    networkRef: M.string(),
-    backend: BackendSelectorShape,
-    seccomp: SeccompPolicyShape,
-    env: EnvShape,
-    cwd: M.string(),
-    limits: ResourceLimitsShape,
-    policy: SlicePolicyRequestShape,
+    ...CommonMakeOptions,
+    mounts: M.arrayOf(
+      M.splitRecord({
+        hostPath: M.string(),
+        innerPath: M.string(),
+        mode: MountModeShape,
+      }),
+    ),
+    scratchHostPath: M.string(),
   },
 );
+
+const CopySpawnOptions = harden({
+  env: EnvShape,
+  cwd: M.string(),
+  captureStdout: M.boolean(),
+  captureStderr: M.boolean(),
+  stdoutByteLimit: M.and(M.nat(), M.gte(1n)),
+  stderrByteLimit: M.and(M.nat(), M.gte(1n)),
+  // Capped at ~24.8 days by choice, not by the domain: a process
+  // deadline is not inherently a 32-bit quantity, but every timer
+  // implementation we target clamps there, and a single un-rearmed
+  // timer is the simpler mechanism. Lifting the cap means re-arming
+  // across the clamp, not widening this bound alone.
+  timeoutMs: M.and(M.number(), M.gte(1), M.lte(0x7fff_ffff)),
+});
+
+const NativeSpawnOptsShape = M.splitRecord({}, CopySpawnOptions, {});
 
 const SpawnOptsShape = M.splitRecord(
   {},
   {
-    env: EnvShape,
-    cwd: M.string(),
+    ...CopySpawnOptions,
     stdin: M.remotable('Reader'),
-    captureStdout: M.boolean(),
-    captureStderr: M.boolean(),
-    stdoutByteLimit: M.and(M.nat(), M.gte(1n)),
-    stderrByteLimit: M.and(M.nat(), M.gte(1n)),
-    // Capped at ~24.8 days by choice, not by the domain: a process
-    // deadline is not inherently a 32-bit quantity, but every timer
-    // implementation we target clamps there, and a single un-rearmed
-    // timer is the simpler mechanism. Lifting the cap means re-arming
-    // across the clamp, not widening this bound alone.
-    timeoutMs: M.and(M.number(), M.gte(1), M.lte(0x7fff_ffff)),
   },
 );
 
@@ -273,6 +304,8 @@ export {
   MountModeShape,
   MountSpecShape,
   NetworkProfileShape,
+  NativeSpawnOptsShape,
+  NativeSandboxMakeOptsShape,
   ResourceLimitsShape,
   RootfsSpecShape,
   SandboxMakeOptsShape,
