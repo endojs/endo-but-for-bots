@@ -2084,4 +2084,5 @@ using setup.js pattern — Option C instead of Option A from the design doc).
 
 The 2026-09-13 IronHorse update adds single-Realm shared Machine persistence to the
 [engine design](ironhorse-engine.md), including explicit host reattachment and the
-persistent worker lifecycle; its Approved status and scope totals are unchanged.
+persistent worker lifecycle and host-callable registration with persisted ABI identities;
+its Approved status and scope totals are unchanged.

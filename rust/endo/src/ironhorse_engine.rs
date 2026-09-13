@@ -1038,6 +1038,7 @@ pub mod engine {
                     .into_iter()
                     .collect();
                     Ok(ironhorse_vm::MachineRestorePolicy {
+                        host_callables: Default::default(),
                         environments,
                         meter_host: (state.interval != 0).then(|| meter_host(ceiling)),
                     })

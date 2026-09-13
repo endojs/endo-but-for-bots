@@ -671,6 +671,7 @@ mod tests {
             "identity_roots",
             "restored_leases",
             "restored_environment_leases",
+            "host_callbacks",
             "shared_compartments",
             "pending_rejections",
             "detached_buffers",

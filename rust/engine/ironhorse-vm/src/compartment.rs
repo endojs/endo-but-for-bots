@@ -198,6 +198,8 @@ pub struct EnvironmentPolicy {
 /// Exhaustive policy for all restored environments, including those retained
 /// only by guest references. An armed meter requires its callback reattachment.
 pub struct MachineRestorePolicy {
+    pub host_callables:
+        std::collections::BTreeMap<crate::HostCallableId, Rc<dyn crate::HostCallable>>,
     pub environments: std::collections::BTreeMap<EnvironmentId, EnvironmentPolicy>,
     pub meter_host: Option<Box<dyn FnMut(u64) -> bool>>,
 }
@@ -803,6 +805,7 @@ impl Compartment {
 /// is dropped. This is the VM machine; Endo's wrapper adds compilation/budgets,
 /// and PersistentMachine adds the separate store-backed single-Realm lifecycle.
 pub struct Machine {
+    hosts: Rc<crate::interp::host::HostRegistry>,
     compilers: Rc<CompilerRegistry>,
     machine: Rc<MachineState>,
     counter: Rc<Cell<usize>>,
@@ -823,10 +826,13 @@ impl Machine {
     /// Apply a prospective binding policy before installing the start globals.
     /// All ordinary primordials are still created and frozen exactly once.
     pub fn with_start_permit(permit: Option<&[String]>) -> Machine {
-        let interpreter = Interp::new_shared_realm_machine_with_permit(permit);
+        let mut interpreter = Interp::new_shared_realm_machine_with_permit(permit);
+        let hosts = Rc::new(crate::interp::host::HostRegistry::default());
+        interpreter.attach_host_registry(&hosts);
         let realm = Rc::clone(interpreter.realm());
         let compilers = Rc::new(CompilerRegistry::default());
         Machine {
+            hosts,
             compilers: Rc::clone(&compilers),
             machine: Rc::new(MachineState {
                 pending: Default::default(),
@@ -871,6 +877,13 @@ impl Machine {
         if interpreter.meter_state().interval != 0 && policy.meter_host.is_none() {
             return Err(Halt::Refused("machine:missing-restored-meter"));
         }
+        for id in interpreter.required_host_callables() {
+            if !policy.host_callables.contains_key(&id) {
+                return Err(Halt::Refused("host:missing-restored-service"));
+            }
+        }
+        let hosts = Rc::new(RefCell::new(policy.host_callables));
+        interpreter.attach_host_registry(&hosts);
         let compilers = Rc::new(CompilerRegistry::default());
         for (&id, env) in &policy.environments {
             interpreter.attach_environment_policy(
@@ -889,6 +902,7 @@ impl Machine {
         }
         let realm = Rc::clone(interpreter.realm());
         Ok(Self {
+            hosts,
             machine: Rc::new(MachineState {
                 pending: Default::default(),
                 default_modules: interpreter
@@ -973,6 +987,104 @@ impl Machine {
             .map_err(|_| Halt::MachineBusy)?
             .release_restored_roots();
         Ok(())
+    }
+
+    /// Register a stable host service exactly once. Replacing an implementation
+    /// requires a different ABI identity, so existing guest references cannot be
+    /// silently rebound. No callback object is dropped under an engine borrow.
+    pub fn register_host_callable(
+        &self,
+        id: crate::HostCallableId,
+        callback: Rc<dyn crate::HostCallable>,
+    ) -> Result<(), Halt> {
+        let interpreter = self
+            .machine
+            .interpreter
+            .try_borrow()
+            .map_err(|_| Halt::MachineBusy)?;
+        drop(interpreter);
+        let mut registry = self.hosts.borrow_mut();
+        if registry.contains_key(&id) {
+            return Err(Halt::Refused("host:duplicate-service"));
+        }
+        registry.insert(id, callback);
+        Ok(())
+    }
+
+    /// Create a call-only guest function with captures belonging to this Machine.
+    /// The function's ordinary GC edges retain its captures and defining environment.
+    pub fn host_function(
+        &self,
+        compartment: &Compartment,
+        id: &crate::HostCallableId,
+        name: &str,
+        arity: u32,
+        captures: &[RootedValue],
+    ) -> Result<RootedValue, Halt> {
+        // Function length reflection currently uses the engine's signed integer representation.
+        if arity > i32::MAX as u32 {
+            return Err(Halt::Refused("host:arity-out-of-range"));
+        }
+        if !Rc::ptr_eq(&self.machine, &compartment.machine)
+            || captures
+                .iter()
+                .any(|v| !Rc::ptr_eq(&self.machine, &v.machine))
+        {
+            return Err(Halt::Refused("host:foreign-machine-value"));
+        }
+        if !self.hosts.borrow().contains_key(id) {
+            return Err(Halt::Refused("host:missing-service"));
+        }
+        let mut interp = self
+            .machine
+            .interpreter
+            .try_borrow_mut()
+            .map_err(|_| Halt::MachineBusy)?;
+        let previous = interp.current_environment_id();
+        let created = compartment.environment.get().is_none();
+        match compartment.environment.get() {
+            Some(id) => interp.activate_environment(id)?,
+            None => {
+                let id = interp.create_environment(
+                    compartment.intrinsic_permit.as_ref().map(|names| {
+                        names
+                            .iter()
+                            .map(|name| crate::SymbolName::from(name.as_str()))
+                            .collect()
+                    }),
+                    Rc::downgrade(&compartment.lease),
+                    compartment.modules.clone(),
+                )?;
+                compartment.environment.set(Some(id));
+            }
+        }
+        if created {
+            if let Some(compiler) = compartment.source_compiler.borrow().as_ref() {
+                self.compilers
+                    .borrow_mut()
+                    .entry(compartment.environment.get().unwrap())
+                    .or_insert_with(|| compiler.clone());
+                interp.set_shared_compiler(compiler);
+            }
+        }
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let captures = captures
+                .iter()
+                .map(|r| interp.rooted_value(r.root))
+                .collect();
+            interp.create_host_function(id.clone(), name, arity, captures)
+        }));
+        interp.activate_environment(previous)?;
+        let result = match result {
+            Ok(result) => result,
+            Err(payload) => std::panic::resume_unwind(payload),
+        };
+        let (root, lease) = result?;
+        Ok(RootedValue {
+            machine: self.machine.clone(),
+            root,
+            _lease: lease,
+        })
     }
 
     /// Configure the default Realm evaluator service, used by shared dynamic

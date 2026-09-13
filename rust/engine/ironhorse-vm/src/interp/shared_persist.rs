@@ -100,6 +100,25 @@ impl Interp {
                     .map(|(o, p)| (o.0, p.global_env.0))
                     .collect(),
             ),
+            host_functions: {
+                let mut rows: Vec<_> = self
+                    .functions
+                    .iter()
+                    .filter_map(|(owner, info)| {
+                        info.host.as_ref().map(|host| HostFunctionRow {
+                            owner: owner.0,
+                            service: host.id.name.clone(),
+                            abi: host.id.abi,
+                            name: info.name.clone(),
+                            arity: info.arity,
+                            name_chunk: info.name_chunk.0,
+                            captures: host.captures.clone(),
+                        })
+                    })
+                    .collect();
+                rows.sort_by_key(|row| row.owner);
+                rows
+            },
             evaluators,
             roots,
             jobs: self
@@ -235,12 +254,49 @@ impl Interp {
         ] {
             check_pairs(rows)?;
         }
+        for row in &state.host_functions {
+            let owner = crate::SlotIndex(row.owner);
+            if self.proxies.contains_key(&owner)
+                || self.arrays.contains_key(&owner)
+                || self.collections.contains_key(&owner)
+                || self.typed_arrays.contains_key(&owner)
+                || self.data_views.contains_key(&owner)
+                || self.wrapper_data.contains_key(&owner)
+                || self.promises.contains_key(&owner)
+                || self.generators.contains_key(&owner)
+                || self.async_instances.contains_key(&owner)
+                || self.iterators.contains_key(&owner)
+                || self.regexps.contains_key(&owner)
+                || self.disposable_stacks.contains_key(&owner)
+                || self.bound_functions.contains_key(&owner)
+                || self.array_buffers.contains_key(&owner)
+                || self.dates.contains_key(&owner)
+                || self.temporal_instants.contains_key(&owner)
+                || self.temporal_durations.contains_key(&owner)
+                || self.temporal_plains.contains_key(&owner)
+                || self.temporal_zoneds.contains_key(&owner)
+                || self.number_formats.contains_key(&owner)
+                || self.collators.contains_key(&owner)
+                || self.date_time_formats.contains_key(&owner)
+                || self.list_formats.contains_key(&owner)
+                || self.plural_rules.contains_key(&owner)
+                || self.segmenters.contains_key(&owner)
+                || self.segments.contains_key(&owner)
+                || self.segment_iterators.contains_key(&owner)
+                || self.locales.contains_key(&owner)
+                || self.error_data.contains_key(&owner)
+                || self.arguments_objects.contains(&owner)
+            {
+                return Err(refuse("host function owner has conflicting metadata"));
+            }
+        }
         // Every guest function/evaluator must carry its defining environment;
         // omission must not silently turn into the standalone NULL policy.
         let function_env: std::collections::BTreeMap<_, _> =
             state.function_environments.iter().copied().collect();
         for (owner, info) in &self.functions {
-            if (info.body_start.is_some()
+            if (info.host.is_some()
+                || info.body_start.is_some()
                 || matches!(
                     info.native,
                     Some(
@@ -702,5 +758,58 @@ impl Interp {
             self.inactive_environments.get(&id)?
         };
         Some(env.modules.clone())
+    }
+}
+
+impl Interp {
+    pub(super) fn restore_host_functions(
+        &mut self,
+        rows: &[HostFunctionRow],
+    ) -> Result<(), RestoreError> {
+        let refuse = |reason| RestoreError {
+            row: "host_function",
+            reason,
+        };
+        self.validate_restore_owners(rows.iter().map(|r| r.owner), "host_function")?;
+        for row in rows {
+            let owner = crate::SlotIndex(row.owner);
+            if row.arity > i32::MAX as u32 {
+                return Err(refuse("host function arity out of range"));
+            }
+            if owner.0 < self.boot_slot_count || self.functions.contains_key(&owner) {
+                return Err(refuse("host function owner collision"));
+            }
+            self.validate_restore_values(
+                [Slot::of(
+                    Kind::String,
+                    Payload::String(crate::ChunkOffset(row.name_chunk)),
+                )],
+                "host_function",
+            )?;
+            if self.str_units(crate::ChunkOffset(row.name_chunk))
+                != row.name.encode_utf16().collect::<Vec<_>>()
+            {
+                return Err(refuse("host function name mismatch"));
+            }
+            self.validate_restore_values(row.captures.iter().copied(), "host_function")?;
+            self.functions.insert(
+                owner,
+                FuncInfo {
+                    host: Some(host::HostFunctionData {
+                        id: crate::HostCallableId {
+                            name: row.service.clone(),
+                            abi: row.abi,
+                        },
+                        captures: row.captures.clone(),
+                    }),
+                    native: Some(Native::Host),
+                    name: row.name.clone(),
+                    arity: row.arity,
+                    name_chunk: crate::ChunkOffset(row.name_chunk),
+                    ..FuncInfo::default()
+                },
+            );
+        }
+        Ok(())
     }
 }

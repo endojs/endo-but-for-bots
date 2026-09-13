@@ -4132,6 +4132,15 @@ fn generator_body_starts(
 /// Check all stored Slot records through the exhaustive image visitor, then
 /// validate scalar owners, handles and cross-table geometry.
 pub(crate) fn check_machine_image_bounds(image: &MachineImage) -> Result<(), SnapshotError> {
+    if image
+        .function_state
+        .shared
+        .as_ref()
+        .is_some_and(|s| !s.host_functions.is_empty())
+        && image.version.format_version < 22
+    {
+        return Err(SnapshotError::Corrupt("host functions require format 22"));
+    }
     if image.function_state.shared.is_some() && image.version.format_version < 21 {
         return Err(SnapshotError::Corrupt("shared machine requires format 21"));
     }

@@ -341,7 +341,10 @@ impl RestoreSession {
     ) -> Result<(), RestoreError> {
         self.admit("shared_machine")?;
         let result = match &state {
-            Some(state) => self.interp.restore_shared_evaluators(&state.evaluators),
+            Some(state) => self
+                .interp
+                .restore_shared_evaluators(&state.evaluators)
+                .and_then(|()| self.interp.restore_host_functions(&state.host_functions)),
             None => Ok(()),
         };
         self.failed = result.err();

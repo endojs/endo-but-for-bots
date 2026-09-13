@@ -38,6 +38,7 @@ fn roundtrip(m: &Machine) -> Machine {
     Machine::from_restored_interpreter(
         i,
         MachineRestorePolicy {
+            host_callables: Default::default(),
             environments,
             meter_host: None,
         },
@@ -155,6 +156,7 @@ fn host_roots_reacquire_after_source_drop_and_collection() {
 
 fn empty_policy(ids: &[EnvironmentId]) -> MachineRestorePolicy {
     MachineRestorePolicy {
+        host_callables: Default::default(),
         environments: ids
             .iter()
             .map(|id| {
@@ -771,4 +773,336 @@ fn shared_admission_reports_specific_schema_and_queue_errors() {
             "promise cluster: duplicate combinator element"
         ))
     ));
+}
+
+struct PersistedHost;
+impl ironhorse_vm::HostCallable for PersistedHost {
+    fn call<'s>(&self, cx: &mut ironhorse_vm::HostCallContext<'s>) -> ironhorse_vm::HostResult<'s> {
+        cx.charge(12345)?;
+        let function = cx.capture(0).unwrap();
+        let this = cx.receiver();
+        let argument = cx.argument(0);
+        cx.call(function, this, &[argument])
+    }
+}
+fn host_id() -> ironhorse_vm::HostCallableId {
+    ironhorse_vm::HostCallableId {
+        name: "persisted.test".into(),
+        abi: 7,
+    }
+}
+fn host_policy(ids: &[EnvironmentId]) -> MachineRestorePolicy {
+    let mut policy = empty_policy(ids);
+    policy
+        .host_callables
+        .insert(host_id(), std::rc::Rc::new(PersistedHost));
+    policy
+}
+fn host_fixture() -> (Machine, Compartment, Vec<EnvironmentId>) {
+    let m = Machine::new();
+    let a = m.new_compartment();
+    let mut b = m.new_compartment();
+    eval(
+        &a,
+        "var base = 40; function captured(x) { return base + x; } 0",
+    );
+    m.register_host_callable(host_id(), std::rc::Rc::new(PersistedHost))
+        .unwrap();
+    let host = m
+        .host_function(
+            &a,
+            &host_id(),
+            "persisted",
+            1,
+            &[a.global_value("captured").unwrap()],
+        )
+        .unwrap();
+    b.define_global_value("host", &host).unwrap();
+    eval(&b, "var result = 0; var bound = host.bind(null, 2); var proxy = new Proxy(host, {}); var obj = Object.defineProperty({}, 'value', {get:bound}); Promise.resolve(3).then(host).then(x => result = x); 0");
+    drop(host);
+    drop(a);
+    m.collect().unwrap();
+    let ids = m
+        .with_persistence(|i| {
+            i.shared_environment_ids()
+                .into_iter()
+                .map(EnvironmentId)
+                .collect()
+        })
+        .unwrap();
+    (m, b, ids)
+}
+#[test]
+fn host_recipes_restore_before_bound_accessors_and_queued_calls() {
+    let (m, b, ids) = host_fixture();
+    let bid = b.snapshot_id().unwrap();
+    let signature = Signature::new("host-container");
+    let bytes = m
+        .with_persistence(|i| i.write_snapshot(&signature))
+        .unwrap()
+        .unwrap();
+    let restored = ironhorse_snapshot::machine::shared_from_snapshot_bytes(
+        &bytes,
+        &signature,
+        host_policy(&ids),
+    )
+    .unwrap();
+    let rb = restored.claim_compartment(bid).unwrap();
+    let before = m.run_promise_jobs();
+    let after = restored.run_promise_jobs();
+    assert!(
+        before.completed && after.completed,
+        "{:?} {:?}",
+        before.halt,
+        after.halt
+    );
+    assert_eq!(
+        (before.meter_raw, before.meter_raw_this_run),
+        (after.meter_raw, after.meter_raw_this_run)
+    );
+    for c in [&b, &rb] {
+        assert_eq!(
+            eval(
+                c,
+                "result + ':' + bound() + ':' + proxy(4) + ':' + obj.value"
+            ),
+            "43:42:44:42"
+        );
+    }
+    restored.collect().unwrap();
+    assert_eq!(eval(&rb, "host(5)"), "45");
+    assert!(restored
+        .with_persistence(|i| i.write_snapshot(&signature))
+        .unwrap()
+        .is_ok());
+}
+#[test]
+fn host_service_reattachment_requires_exact_abi() {
+    let (m, _, ids) = host_fixture();
+    let signature = Signature::new("host-required");
+    let bytes = m
+        .with_persistence(|i| i.write_snapshot(&signature))
+        .unwrap()
+        .unwrap();
+    for wrong_abi in [false, true] {
+        let mut policy = empty_policy(&ids);
+        if wrong_abi {
+            let mut id = host_id();
+            id.abi += 1;
+            policy
+                .host_callables
+                .insert(id, std::rc::Rc::new(PersistedHost));
+        }
+        let interp = from_snapshot_bytes(&bytes, &signature).unwrap();
+        assert!(matches!(
+            Machine::from_restored_interpreter(interp, policy),
+            Err(ironhorse_vm::Halt::Refused("host:missing-restored-service"))
+        ));
+    }
+}
+#[test]
+fn host_captures_survive_eager_lazy_store_collection_checkpoint_and_rewind() {
+    use ironhorse_snapshot::machine::{
+        begin_shared_store_session, resume_shared_from_store, resume_shared_from_store_lazy,
+    };
+    use ironhorse_snapshot::store::MemoryStore;
+    use std::{cell::RefCell, rc::Rc};
+    for lazy in [false, true] {
+        let (m, b, ids) = host_fixture();
+        let bid = b.snapshot_id().unwrap();
+        let signature = Signature::new("host-store");
+        let store = Rc::new(RefCell::new(MemoryStore::new()));
+        let mut live = begin_shared_store_session(m, &signature, &mut *store.borrow_mut(), 0)
+            .ok()
+            .unwrap();
+        live.checkpoint(&signature, &mut *store.borrow_mut())
+            .unwrap();
+        let mut restored = if lazy {
+            resume_shared_from_store_lazy(store.clone(), &signature, host_policy(&ids)).unwrap()
+        } else {
+            resume_shared_from_store(&*store.borrow(), &signature, host_policy(&ids)).unwrap()
+        };
+        let rb = restored.machine().claim_compartment(bid).unwrap();
+        let expected = live.machine().run_promise_jobs();
+        let actual = restored.machine().run_promise_jobs();
+        assert_eq!(expected.meter_raw, actual.meter_raw);
+        assert!(actual.completed);
+        assert_eq!(eval(&rb, "result + ':' + obj.value"), "43:42");
+        restored
+            .checkpoint(&signature, &mut *store.borrow_mut())
+            .unwrap();
+        restored.full_collect(&*store.borrow()).unwrap();
+        restored
+            .checkpoint(&signature, &mut *store.borrow_mut())
+            .unwrap();
+        let root = rb.global_value("host").unwrap();
+        eval(&rb, "result = 90; 0");
+        let rewound =
+            resume_shared_from_store(&*store.borrow(), &signature, host_policy(&ids)).unwrap();
+        let mut wb = rewound.machine().claim_compartment(bid).unwrap();
+        assert!(wb.define_global_value("old", &root).is_err());
+        assert_eq!(eval(&wb, "result + ':' + host(9)"), "43:49");
+    }
+}
+#[test]
+fn malformed_host_recipes_and_old_format_fail_before_execution() {
+    let (m, _, _) = host_fixture();
+    let signature = Signature::new("host-malformed");
+    let image = m
+        .with_persistence(|i| i.snapshot_image(&signature))
+        .unwrap()
+        .unwrap()
+        .into_image();
+    for case in 0..9 {
+        let mut bad = image.clone();
+        let shared = bad.function_state.shared.as_mut().unwrap();
+        match case {
+            0 => shared.host_functions[0].owner = shared.default_global,
+            1 => shared.host_functions[0].name_chunk = u32::MAX,
+            2 => {
+                shared.host_functions[0].captures[0] = ironhorse_vm::Slot::of(
+                    ironhorse_vm::Kind::Reference,
+                    ironhorse_vm::Payload::Reference(ironhorse_vm::SlotIndex(u32::MAX)),
+                )
+            }
+            3 => shared.host_functions[0].name = "different".into(),
+            4 => {
+                let owner = shared.host_functions[0].owner;
+                shared.function_environments.retain(|(f, _)| *f != owner);
+            }
+            5 => bad.version.format_version = 21,
+            6 => shared.host_functions[0].name_chunk += 1,
+            7 => {
+                let old = shared.host_functions[0].owner;
+                let proxy = bad.proxy_state.proxies[0].owner;
+                shared.host_functions[0].owner = proxy;
+                for (owner, _) in &mut shared.function_environments {
+                    if *owner == old {
+                        *owner = proxy;
+                    }
+                }
+                shared.function_environments.sort_unstable();
+            }
+            8 => shared.host_functions[0].arity = u32::MAX,
+            _ => unreachable!(),
+        }
+        let bytes = ironhorse_snapshot::image::write_machine_unchecked(&bad);
+        if case == 5 {
+            assert!(matches!(
+                from_snapshot_bytes(&bytes, &signature),
+                Err(ironhorse_snapshot::SnapshotError::Corrupt(
+                    "host functions require format 22"
+                ))
+            ));
+        } else {
+            assert!(
+                from_snapshot_bytes(&bytes, &signature).is_err(),
+                "accepted case {case}"
+            );
+        }
+    }
+}
+
+struct CaptureValue;
+impl ironhorse_vm::HostCallable for CaptureValue {
+    fn call<'s>(&self, cx: &mut ironhorse_vm::HostCallContext<'s>) -> ironhorse_vm::HostResult<'s> {
+        Ok(cx
+            .capture(cx.argument(0).as_integer().unwrap() as usize)
+            .unwrap())
+    }
+}
+#[test]
+fn primitive_host_captures_are_relocated_by_collection_and_store_restore() {
+    use ironhorse_snapshot::{
+        machine::{begin_shared_store_session, resume_shared_from_store_lazy},
+        store::MemoryStore,
+    };
+    use std::{cell::RefCell, rc::Rc};
+    let m = Machine::new();
+    let a = m.new_compartment();
+    let mut b = m.new_compartment();
+    eval(
+        &a,
+        r"var garbage='x'.repeat(10000); var text='\ud800kept'; var big=123456789012345678901234567890n; var sym=Symbol('onlyCapture'); garbage=undefined; 0",
+    );
+    let id = ironhorse_vm::HostCallableId {
+        name: "captures".into(),
+        abi: 1,
+    };
+    m.register_host_callable(id.clone(), Rc::new(CaptureValue))
+        .unwrap();
+    let captures = [
+        a.global_value("text").unwrap(),
+        a.global_value("big").unwrap(),
+        a.global_value("sym").unwrap(),
+    ];
+    let h = m.host_function(&a, &id, "capture", 1, &captures).unwrap();
+    b.define_global_value("capture", &h).unwrap();
+    eval(&b, "0");
+    eval(&a, "text=big=sym=undefined; 0");
+    drop(captures);
+    drop(h);
+    drop(a);
+    let bid = b.snapshot_id().unwrap();
+    let ids = m
+        .with_persistence(|i| {
+            i.shared_environment_ids()
+                .into_iter()
+                .map(EnvironmentId)
+                .collect::<Vec<_>>()
+        })
+        .unwrap();
+    m.collect().unwrap();
+    let signature = Signature::new("primitive-host-captures");
+    let store = Rc::new(RefCell::new(MemoryStore::new()));
+    let mut session = begin_shared_store_session(m, &signature, &mut *store.borrow_mut(), 0)
+        .ok()
+        .unwrap();
+    session
+        .checkpoint(&signature, &mut *store.borrow_mut())
+        .unwrap();
+    session.full_collect(&*store.borrow()).unwrap();
+    session
+        .checkpoint(&signature, &mut *store.borrow_mut())
+        .unwrap();
+    let mut policy = empty_policy(&ids);
+    policy.host_callables.insert(id, Rc::new(CaptureValue));
+    let restored = resume_shared_from_store_lazy(store, &signature, policy).unwrap();
+    let rb = restored.machine().claim_compartment(bid).unwrap();
+    for c in [&b, &rb] {
+        assert_eq!(
+            eval(
+                c,
+                r"capture(0)==='\ud800kept' && capture(1)===123456789012345678901234567890n && capture(2).description==='onlyCapture' && capture(2)===capture(2)"
+            ),
+            "true"
+        );
+    }
+}
+
+#[test]
+fn host_functions_created_after_collection_remain_persistable() {
+    let m = Machine::new();
+    let mut c = m.new_compartment();
+    eval(&c, "var value=42; 0");
+    m.collect().unwrap();
+    m.register_host_callable(host_id(), std::rc::Rc::new(CaptureValue))
+        .unwrap();
+    let h = m
+        .host_function(
+            &c,
+            &host_id(),
+            "afterGC",
+            1,
+            &[c.global_value("value").unwrap()],
+        )
+        .unwrap();
+    c.define_global_value("host", &h).unwrap();
+    assert_eq!(eval(&c, "host(0)"), "42");
+    let signature = Signature::new("host-after-gc");
+    let bytes = m
+        .with_persistence(|i| i.write_snapshot(&signature))
+        .unwrap()
+        .unwrap();
+    assert!(from_snapshot_bytes(&bytes, &signature).is_ok());
 }

@@ -156,7 +156,14 @@ macro_rules! gc_chunk {
     };
     ($emit:ident, $vm:ident, $field:ident, $visit:ident, function_names) => {
         $emit! {
-            $vm.$field.update_values(|f| $visit(&mut f.name_chunk));
+            $vm.$field.update_values(|f| {
+                $visit(&mut f.name_chunk);
+                if let Some(host) = &mut f.host {
+                    for capture in &mut host.captures {
+                        slot_chunk(capture, $visit);
+                    }
+                }
+            });
         }
     };
     ($emit:ident, $vm:ident, $field:ident, $visit:ident, buffer_data) => {
@@ -410,6 +417,11 @@ macro_rules! gc_slot_row {
             // detached from a dead class, this is the prototype's
             // only remaining edge.
             $visit($row.home);
+            if let Some(host) = &$row.host {
+                for capture in &host.captures {
+                    capture.each_ref_slot(&mut *$visit);
+                }
+            }
 
         }
     };

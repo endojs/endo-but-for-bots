@@ -350,6 +350,7 @@ impl Interp {
             // `%Error.prototype%`; every subtype gets a prototype chaining to
             // it; the wrapper constructors get a plain `%X.prototype%`.
             let proto = match native {
+                Native::Host => crate::SlotIndex::NULL,
                 Native::Object => object_proto,
                 Native::Function => func_proto,
                 Native::Error => error_proto,
