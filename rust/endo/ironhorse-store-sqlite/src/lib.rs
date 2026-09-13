@@ -1502,9 +1502,10 @@ mod tests {
         );
         assert_ne!(new.root, old.root);
         assert_eq!((new.epoch, new.cranks), (old.epoch, old.cranks));
-        // Verify every metadata-only seal link after the section-tree migration.
+        // Verify every intermediate seal up to the current schema's parent,
+        // including later metadata-only migrations when the schema advances.
         let mut parent_seal = old.seal.clone();
-        for schema in [28, 29, 30] {
+        for schema in 28..ironhorse_snapshot::store::STORE_SCHEMA_VERSION {
             let mut intermediate = new.clone();
             intermediate.store_schema = schema;
             intermediate.parent_seal = parent_seal;
