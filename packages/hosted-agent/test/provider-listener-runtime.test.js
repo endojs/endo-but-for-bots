@@ -2,11 +2,23 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 import { Far } from '@endo/far';
 import { spawn } from 'node:child_process';
-import { mkdtemp, rm, symlink } from 'node:fs/promises';
+import {
+  lstat,
+  mkdtemp,
+  open,
+  readlink,
+  rm,
+  rmdir,
+  symlink,
+  unlink,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { makePodmanProviderListenerRuntime } from '../src/provider-listener-runtime.js';
+import {
+  makePodmanProviderListenerRuntime,
+  makePodmanProviderListenerRuntimeKit,
+} from '../src/provider-listener-runtime.js';
 
 const digest = `sha256:${'b'.repeat(64)}`;
 const limits = harden({
@@ -273,3 +285,270 @@ test.serial(
     t.is(f.removals.length, 1);
   },
 );
+
+test('inert runtime and same-tick close perform no native acquisition', async t => {
+  t.timeout(5000);
+  const f = await fixture(t);
+  const stateDirectory = join(f.options.stateDirectory, 'absent');
+  const kit = makePodmanProviderListenerRuntimeKit({
+    ...f.options,
+    stateDirectory,
+  });
+  t.teardown(kit.close);
+  await t.throwsAsync(() => lstat(stateDirectory), { code: 'ENOENT' });
+  const opening = kit.open();
+  const closing = kit.close();
+  await t.throwsAsync(opening, { message: /disposed/ });
+  await closing;
+  await t.throwsAsync(() => lstat(stateDirectory), { code: 'ENOENT' });
+  t.deepEqual(f.calls, []);
+});
+
+test('close drains a held identity read and fences subsequent lock acquisition', async t => {
+  t.timeout(5000);
+  const f = await fixture(t);
+  let release = () => {};
+  const pending = new Promise(resolve => {
+    release = () => resolve('123');
+  });
+  let entered = () => {};
+  const admission = new Promise(resolve => {
+    entered = () => resolve(undefined);
+  });
+  const kit = makePodmanProviderListenerRuntimeKit({
+    ...f.options,
+    host: {
+      ...f.options.host,
+      readStart: async () => {
+        entered();
+        return pending;
+      },
+    },
+  });
+  t.teardown(async () => {
+    release();
+    await kit.close();
+  });
+  const opening = kit.open();
+  const failedOpen = t.throwsAsync(opening, { message: /disposed/ });
+  await admission;
+  const closing = kit.close();
+  let finished = false;
+  void closing.then(() => {
+    finished = true;
+  });
+  await Promise.resolve();
+  t.false(finished);
+  release();
+  await failedOpen;
+  await closing;
+  await t.throwsAsync(
+    () => readlink(join(f.options.stateDirectory, 'test-owner.lock')),
+    { code: 'ENOENT' },
+  );
+  t.deepEqual(f.calls, []);
+});
+
+test('failed initialization sweep and failed lock release remain retryable', async t => {
+  const f = await fixture(t);
+  let failSweep = true;
+  let failUnlink = true;
+  const lockPath = join(f.options.stateDirectory, 'test-owner.lock');
+  const kit = makePodmanProviderListenerRuntimeKit({
+    ...f.options,
+    host: {
+      ...f.options.host,
+      run: async args => {
+        if (failSweep) throw Error('sweep failed');
+        return f.options.host.run(args);
+      },
+      unlink: async path => {
+        if (failUnlink) throw Error('lock release failed');
+        await unlink(path);
+      },
+    },
+  });
+  t.teardown(async () => {
+    failSweep = false;
+    failUnlink = false;
+    await kit.close();
+  });
+  await t.throwsAsync(kit.open(), { message: /sweep failed/ });
+  await t.throwsAsync(kit.close(), { message: /sweep failed/ });
+  t.truthy(await readlink(lockPath));
+  failSweep = false;
+  await t.throwsAsync(kit.close(), { message: /lock release failed/ });
+  t.truthy(await readlink(lockPath));
+  failUnlink = false;
+  await kit.close();
+  await t.throwsAsync(() => readlink(lockPath), { code: 'ENOENT' });
+  // A successful old owner must not remove a new owner's marker.
+  await symlink('successor', lockPath);
+  await kit.close();
+  t.is(await readlink(lockPath), 'successor');
+});
+
+test('resolver file handle survives failed initialization close for retry', async t => {
+  const f = await fixture(t, true);
+  let failClose = true;
+  let closes = 0;
+  const kit = makePodmanProviderListenerRuntimeKit({
+    ...f.options,
+    host: {
+      ...f.options.host,
+      open: async (path, flags, mode) => {
+        const file = await open(path, flags, mode);
+        return {
+          writeFile: data => file.writeFile(data),
+          chmod: permissions => file.chmod(permissions),
+          close: async () => {
+            closes += 1;
+            if (failClose) throw Error('file close failed');
+            await file.close();
+          },
+        };
+      },
+    },
+  });
+  t.teardown(async () => {
+    failClose = false;
+    await kit.close();
+  });
+  await t.throwsAsync(kit.open(), { message: /file close failed/ });
+  await t.throwsAsync(kit.close(), { message: /file close failed/ });
+  failClose = false;
+  await kit.close();
+  await kit.close();
+  t.is(closes, 3);
+  t.deepEqual(f.calls, []);
+});
+
+test('failed recovery reservation release is retained without removing a live foreign lock', async t => {
+  const f = await fixture(t);
+  const live = await makePodmanProviderListenerRuntime(f.options);
+  t.teardown(live.dispose);
+  let failRelease = true;
+  const reservation = join(f.options.stateDirectory, 'test-owner.recover');
+  const kit = makePodmanProviderListenerRuntimeKit({
+    ...f.options,
+    host: {
+      ...f.options.host,
+      rmdir: async path => {
+        if (failRelease) throw Error('reservation release failed');
+        await rmdir(path);
+      },
+    },
+  });
+  t.teardown(async () => {
+    failRelease = false;
+    await kit.close();
+  });
+  await t.throwsAsync(kit.open(), { message: /reservation release failed/ });
+  await t.throwsAsync(kit.close(), { message: /reservation release failed/ });
+  t.true((await lstat(reservation)).isDirectory());
+  failRelease = false;
+  await kit.close();
+  await t.throwsAsync(() => lstat(reservation), { code: 'ENOENT' });
+  t.truthy(await readlink(join(f.options.stateDirectory, 'test-owner.lock')));
+  await live.dispose();
+});
+
+test.serial(
+  'runtime close owns a listener acquired while shutdown is pending',
+  async t => {
+    t.timeout(5000);
+    const f = await fixture(t);
+    let release = () => {};
+    const pending = new Promise(resolve => {
+      release = () => resolve(undefined);
+    });
+    let entered = () => {};
+    const admission = new Promise(resolve => {
+      entered = () => resolve(undefined);
+    });
+    let held = false;
+    const kit = makePodmanProviderListenerRuntimeKit({
+      ...f.options,
+      host: {
+        ...f.options.host,
+        run: async args => {
+          if (args[0] === 'inspect' && !held) {
+            held = true;
+            entered();
+            await pending;
+          }
+          return f.options.host.run(args);
+        },
+      },
+    });
+    t.teardown(async () => {
+      release();
+      await kit.close();
+    });
+    const runtime = await kit.open();
+    const starting = runtime.start({ endpoint: Far('inference', {}), limits });
+    const rejected = t.throwsAsync(starting, { message: /startup failed/ });
+    await admission;
+    const closing = kit.close();
+    let finished = false;
+    void closing.then(() => {
+      finished = true;
+    });
+    await Promise.resolve();
+    t.false(finished);
+    release();
+    await rejected;
+    await closing;
+    t.is(f.removals.length, 1);
+    await t.throwsAsync(
+      () => readlink(join(f.options.stateDirectory, 'test-owner.lock')),
+      { code: 'ENOENT' },
+    );
+    await t.throwsAsync(
+      () => runtime.start({ endpoint: Far('later', {}), limits }),
+      { message: /disposed/ },
+    );
+  },
+);
+
+test('stale takeover retains its sweep before recovery reservation cleanup can fail', async t => {
+  const f = await fixture(t);
+  const lockPath = join(f.options.stateDirectory, 'test-owner.lock');
+  const recoveryPath = join(f.options.stateDirectory, 'test-owner.recover');
+  await symlink('999999-1', lockPath);
+  f.orphan();
+  let failRecovery = true;
+  let failSweep = true;
+  const kit = makePodmanProviderListenerRuntimeKit({
+    ...f.options,
+    host: {
+      ...f.options.host,
+      rmdir: async path => {
+        if (failRecovery) throw Error('reservation release failed');
+        await rmdir(path);
+      },
+      run: async args => {
+        if (failSweep && args[0] === 'ps') throw Error('sweep failed');
+        return f.options.host.run(args);
+      },
+    },
+  });
+  t.teardown(async () => {
+    failRecovery = false;
+    failSweep = false;
+    await kit.close();
+  });
+  await t.throwsAsync(kit.open(), { message: /reservation release failed/ });
+  const ownedIdentity = await readlink(lockPath);
+  t.not(ownedIdentity, '999999-1');
+  failRecovery = false;
+  await t.throwsAsync(kit.close(), { message: /sweep failed/ });
+  t.is(await readlink(lockPath), ownedIdentity);
+  t.true((await lstat(recoveryPath)).isDirectory());
+  t.deepEqual(f.removals, []);
+  failSweep = false;
+  await kit.close();
+  t.deepEqual(f.removals, ['abcdef123456']);
+  await t.throwsAsync(() => readlink(lockPath), { code: 'ENOENT' });
+  await t.throwsAsync(() => lstat(recoveryPath), { code: 'ENOENT' });
+});
