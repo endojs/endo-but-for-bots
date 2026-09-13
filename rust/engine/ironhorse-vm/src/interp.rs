@@ -39,8 +39,8 @@ mod snapshot_rows;
 pub use snapshot_rows::{
     AccessorRow, ArraySnapshot, AsyncRow, BoundFunctionRow, CollectionSnapshot, CombinatorRow,
     DisposableStackRow, DisposalRecordRow, EnvironmentRow, EvaluatorRow, FunctionRow,
-    FunctionStateSnapshot, GeneratorRow, IndexPropsSnapshot, IntlBoundFunctionRow, IteratorRow,
-    ModuleGraphSnapshot, ModuleRecordRow, PrivateAccessorRow, PrivateElementSnapshot,
+    FunctionStateSnapshot, GeneratorRow, HostFunctionRow, IndexPropsSnapshot, IntlBoundFunctionRow,
+    IteratorRow, ModuleGraphSnapshot, ModuleRecordRow, PrivateAccessorRow, PrivateElementSnapshot,
     PrivateValueRow, PromiseClusterSnapshot, PromiseFnRow, PromiseJobRow, PromiseReactionRow,
     PromiseRow, ProxyRevokerRow, ProxyRow, ProxyStateSnapshot, SavedFrameRow, SavedJumpRow,
     SharedMachineSnapshot,
@@ -66,6 +66,7 @@ mod render;
 mod strings;
 mod unwind;
 
+pub(crate) mod host;
 mod link;
 mod native_try;
 mod natives;
@@ -660,6 +661,7 @@ enum ReadKey {
 
 #[derive(Clone, Debug)]
 struct FuncInfo {
+    host: Option<host::HostFunctionData>,
     /// Captured compartment global; NULL derives the standalone default.
     global_env: crate::value::SlotIndex,
     /// Start offset of the function body in the program code buffer (the
@@ -725,6 +727,7 @@ struct FuncInfo {
 impl Default for FuncInfo {
     fn default() -> Self {
         FuncInfo {
+            host: None,
             global_env: crate::value::SlotIndex::NULL,
             body_start: None,
             body_len: 0,
@@ -2836,6 +2839,7 @@ fn temporal_set_time_args(
 /// attributed to the specific built-in (never a silent mis-execution).
 fn native_unsupported_name(native: Native) -> &'static str {
     match native {
+        Native::Host => "native-call:host",
         Native::Eval => "native-call:eval",
         Native::Locale => "native-call:Locale",
         Native::Collator => "native-call:Collator",

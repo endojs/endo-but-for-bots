@@ -145,7 +145,7 @@ impl Interp {
         Ok(Some(primitive))
     }
 
-    fn validate_restore_values(
+    pub(super) fn validate_restore_values(
         &self,
         values: impl IntoIterator<Item = Slot>,
         row: &'static str,
@@ -663,7 +663,8 @@ impl Interp {
         self.functions.get(&function).is_some_and(|info| {
             (info.native.is_none() && info.method.is_none())
                 || (self.shared_compartments
-                    && matches!(info.native, Some(Native::Eval | Native::Function)))
+                    && (matches!(info.native, Some(Native::Eval | Native::Function))
+                        || (info.native == Some(Native::Host) && info.host.is_some())))
         })
     }
 
@@ -1643,6 +1644,7 @@ impl Interp {
             self.functions.insert(
                 owner,
                 FuncInfo {
+                    host: None,
                     global_env: crate::value::SlotIndex::NULL,
                     body_start: row.body_start.map(|v| v as usize),
                     body_len: row.body_len as usize,

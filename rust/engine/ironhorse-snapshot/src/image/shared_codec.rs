@@ -1,7 +1,8 @@
 //! Format-21 shared Realm extension of the atomic FUNC payload.
 use super::*;
 use ironhorse_vm::snapshot_api::{
-    EnvironmentRow, EvaluatorRow, PromiseJobRow, PromiseReactionRow, SharedMachineSnapshot,
+    EnvironmentRow, EvaluatorRow, HostFunctionRow, PromiseJobRow, PromiseReactionRow,
+    SharedMachineSnapshot,
 };
 
 pub(super) fn encode(state: &SharedMachineSnapshot, out: &mut Vec<u8>) {
@@ -62,6 +63,24 @@ pub(super) fn encode(state: &SharedMachineSnapshot, out: &mut Vec<u8>) {
         word(out, r.b);
     }
     words(out, &state.pending_rejections);
+    if !state.host_functions.is_empty() {
+        out.extend_from_slice(b"HOST");
+        word(out, state.host_functions.len() as u32);
+        for h in &state.host_functions {
+            word(out, h.owner);
+            for text in [&h.service, &h.name] {
+                word(out, text.len() as u32);
+                out.extend_from_slice(text.as_bytes());
+            }
+            word(out, h.abi);
+            word(out, h.arity);
+            word(out, h.name_chunk);
+            word(out, h.captures.len() as u32);
+            for capture in &h.captures {
+                crate::slot_codec::encode_slot(capture, out);
+            }
+        }
+    }
 }
 
 pub(super) fn decode(c: &mut Cursor<'_>) -> Result<SharedMachineSnapshot, SnapshotError> {
@@ -148,6 +167,37 @@ pub(super) fn decode(c: &mut Cursor<'_>) -> Result<SharedMachineSnapshot, Snapsh
         });
     }
     let pending_rejections = words(c)?;
+    let mut host_functions = Vec::new();
+    if c.i < c.p.len() {
+        if c.bytes(4)? != b"HOST" {
+            return Err(SnapshotError::Corrupt("host function extension tag"));
+        }
+        let n = c.u32()?;
+        for _ in 0..n {
+            let owner = c.u32()?;
+            let mut text = || {
+                let n = c.u32()? as usize;
+                String::from_utf8(c.bytes(n)?.to_vec())
+                    .map_err(|_| SnapshotError::Corrupt("host function text is not UTF-8"))
+            };
+            let service = text()?;
+            let name = text()?;
+            let abi = c.u32()?;
+            let arity = c.u32()?;
+            let name_chunk = c.u32()?;
+            let n = c.u32()?;
+            let captures = (0..n).map(|_| c.slot()).collect::<Result<Vec<_>, _>>()?;
+            host_functions.push(HostFunctionRow {
+                owner,
+                service,
+                abi,
+                name,
+                arity,
+                name_chunk,
+                captures,
+            });
+        }
+    }
     Ok(SharedMachineSnapshot {
         default_global,
         current_global,
@@ -161,6 +211,7 @@ pub(super) fn decode(c: &mut Cursor<'_>) -> Result<SharedMachineSnapshot, Snapsh
         roots,
         jobs,
         pending_rejections,
+        host_functions,
     })
 }
 
@@ -332,6 +383,39 @@ mod tests {
         assert_eq!(
             decode_modules(&mut Cursor::new(&bytes, "short")),
             Err(SnapshotError::Corrupt("module boolean"))
+        );
+    }
+}
+
+#[cfg(test)]
+mod host_tests {
+    use super::*;
+    #[test]
+    fn host_extension_rejects_unknown_tags_and_invalid_utf8() {
+        let mut bytes = Vec::new();
+        encode(&SharedMachineSnapshot::default(), &mut bytes);
+        bytes.extend_from_slice(b"NOPE");
+        assert_eq!(
+            decode(&mut Cursor::new(&bytes, "short")),
+            Err(SnapshotError::Corrupt("host function extension tag"))
+        );
+        let mut state = SharedMachineSnapshot::default();
+        state.host_functions.push(HostFunctionRow {
+            owner: 0,
+            service: "service".into(),
+            abi: 1,
+            name: "name".into(),
+            arity: 0,
+            name_chunk: 0,
+            captures: vec![],
+        });
+        bytes.clear();
+        encode(&state, &mut bytes);
+        let offset = bytes.windows(4).position(|w| w == b"HOST").unwrap();
+        bytes[offset + 16] = 0xff;
+        assert_eq!(
+            decode(&mut Cursor::new(&bytes, "short")),
+            Err(SnapshotError::Corrupt("host function text is not UTF-8"))
         );
     }
 }

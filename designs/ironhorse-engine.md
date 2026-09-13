@@ -683,9 +683,11 @@ Old standalone worker stores are explicitly refused before migration writes.
 The snapshot row contract is now `snapshot_api::ROW_SCHEMA_VERSION`, while `interp`
 is private and the arena accessors remain read-only.
 The common `JsMachine` engine trait stays deferred under W6 decision 2.
-Full daemon SES acceptance and host-function registration remain open; the new
-`ironhorse-runtime` compiler adapter supplies dynamic source compilation, not a
-host-callable registration table.
+Host-callable registration now binds stable name/ABI identities to Machine-owned
+services and creates compartment functions with GC-visible captures.
+Scoped call values and the ordinary dispatcher support nested guest calls and callbacks;
+container/store recipes require explicit service reattachment before execution.
+Full daemon SES acceptance remains separate from these implemented seams.
 See the [architecture guide](../rust/engine/ARCHITECTURE.md) for the implemented
 boundary, retained costs and release rules.
 
@@ -898,7 +900,7 @@ Reconciliation with the design cluster, per document:
 | [daemon-xs-worker-metering](daemon-xs-worker-metering.md) | Ironhorse owns `Meter`, `MeterBounds` and per-crank reports. Dynamic compilation and dispatch share the live budget; these are separate Rust entry points, not the XS metering API. |
 | [daemon-xs-worker-snapshot](daemon-xs-worker-snapshot.md) | `MachineSnapshot` and `HeapStore` implement buffered container encoding, CAS/store operations and validated standalone restore. Shared Machine state also round-trips; XS callback streaming remains separate. |
 | [daemon-xs-worker-debugger](daemon-xs-worker-debugger.md) | Centralized VM raises are available; the transport and complete xsbug/supervisor integration remain later work. |
-| [daemon-endo-rust-sqlite](daemon-endo-rust-sqlite.md) and host powers | Arbitrary host-function registration is still missing. Snapshot signatures identify compatibility but do not create a host table or power-registration surface. |
+| [daemon-endo-rust-sqlite](daemon-endo-rust-sqlite.md) and host powers | Machine host-callable registration and persisted name/ABI recipes are implemented. Daemon-specific powers still require service adapters and explicit restore policy. |
 | [endor-run-expanded](endor-run-expanded.md) | Direct source execution exists. Archive/CAS worker execution must be verified through its Ironhorse path; it does not follow automatically from a shared `Machine` API. |
 
 ### Performance and footprint envelope

@@ -2659,7 +2659,6 @@ pub struct SharedStoreSession {
 fn shared_access_error(halt: ironhorse_vm::Halt) -> StoreError {
     match halt {
         ironhorse_vm::Halt::MachineBusy => StoreError::MachineNotQuiescent,
-        ironhorse_vm::Halt::Refused(row) => StoreError::PendingStateUnsupported { row },
         other => StoreError::MachineOperation(format!("{other:?}")),
     }
 }

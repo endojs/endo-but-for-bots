@@ -556,6 +556,7 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
         ironhorse_vm::snapshot_api::FunctionStateSnapshot::default()
     } else {
         ironhorse_vm::snapshot_api::FunctionStateSnapshot {
+            shared: None,
             native_names: None,
             segments: vec![vec![XS_CODE_END; n_body as usize]],
             functions: vec![ironhorse_vm::snapshot_api::FunctionRow {

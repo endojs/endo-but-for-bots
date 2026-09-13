@@ -39,6 +39,9 @@ pub mod diagnostics;
 pub mod gc;
 pub mod halt_labels;
 mod interp;
+pub use interp::host::{
+    HostCallContext, HostCallError, HostCallable, HostCallableId, HostResult, HostValue,
+};
 pub mod intl_number;
 pub mod meter;
 pub mod snapshot_api;

@@ -376,6 +376,7 @@ pub struct SharedMachineSnapshot {
     pub async_environments: Vec<(u32, u32)>,
     pub promise_environments: Vec<(u32, u32)>,
     pub evaluators: Vec<EvaluatorRow>,
+    pub host_functions: Vec<HostFunctionRow>,
     /// Exported host roots, including roots whose Compartment handle was dropped.
     pub roots: Vec<u32>,
     pub jobs: Vec<PromiseJobRow>,
@@ -435,4 +436,16 @@ pub struct ModuleRecordRow {
     pub environment: Vec<(String, u32)>,
     pub dfs_index: u32,
     pub dfs_ancestor_index: u32,
+}
+
+/// Guest function recipe referencing an explicitly reattached host service.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HostFunctionRow {
+    pub owner: u32,
+    pub service: String,
+    pub abi: u32,
+    pub name: String,
+    pub arity: u32,
+    pub name_chunk: u32,
+    pub captures: Vec<Slot>,
 }

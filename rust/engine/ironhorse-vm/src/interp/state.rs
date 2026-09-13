@@ -156,6 +156,17 @@ pub struct Interp {
     #[gc_weak(none)]
     #[snapshot_table(none)]
     restored_environment_leases: std::collections::HashMap<crate::value::SlotIndex, std::rc::Rc<()>>,
+    #[boot_new(Default::default())]
+    #[gc_root(none)]
+    #[quiescent(retained)]
+    #[persist_refs(none)]
+    #[runtime_keys(none)]
+    #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
+    #[gc_slots(none, none)]
+    #[gc_weak(none)]
+    #[snapshot_table(none)]
+    host_callbacks: std::rc::Weak<host::HostRegistry>,
     #[boot_new(false)]
     #[gc_root(none)]
     #[quiescent(retained)]

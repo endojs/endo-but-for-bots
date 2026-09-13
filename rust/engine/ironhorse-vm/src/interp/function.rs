@@ -476,7 +476,7 @@ impl Interp {
             Some(fi) if fi.method.is_some() => false,
             Some(fi) if fi.native.is_some() => !matches!(
                 fi.native,
-                Some(Native::Eval | Native::Symbol | Native::BigInt)
+                Some(Native::Host | Native::Eval | Native::Symbol | Native::BigInt)
             ),
             Some(fi) => !fi.is_generator && self.ctor_prototype.contains_key(&r),
             None => false,

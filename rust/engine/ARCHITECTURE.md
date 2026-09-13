@@ -129,7 +129,7 @@ The optional FUNC extension carries environment associations, scoped evaluators,
 ordered jobs, rejection reports, static module cells and exported host roots.
 Standalone images retain their old row shapes and default environment interpretation.
 Multiple Realms, cross-machine sharing and full SES acceptance remain separate work.
-Host-function registration is the next increment required by PR #1263.
+Host-callable services are registered explicitly on the Machine and reattached on restore.
 
 Restoration requires exhaustive host policy for every environment before Machine adoption.
 Compiler services and armed meter callbacks must be reattached explicitly.
@@ -154,8 +154,23 @@ Read-only invariant-test registries have a separate hidden `diagnostics` surface
 retains the public Machine/Compartment/Intrinsics surface.
 [W6 decision 2](../../designs/ironhorse-w6-decisions.md#2-engine-trait--deferred-and-here-is-the-trigger)
 continues to defer the common engine trait until its stated triggers.
-Host-function registration remains an open seam; neither the closed native enums nor
-the source compiler adapter provide arbitrary host-callable functions.
+`Machine::register_host_callable` binds a stable name/ABI pair to a `HostCallable` service.
+`Machine::host_function` creates a call-only function in a compartment, with same-machine
+rooted captures; its function edges retain captured objects, primitive chunks and context.
+The common native dispatcher handles direct, bound, proxy, accessor and promise calls.
+`HostCallContext` exposes scoped values, lossless UTF-16 strings, explicit work charging,
+and fenced guest calls; a resource stop remains terminal even if the service ignores it.
+Values cannot escape a call or be manufactured from raw arena coordinates.
+The current arity profile is 0 through `i32::MAX`, matching length reflection.
+
+The Machine retains service registrations until its last handle drops.
+Core state holds only a weak registry reference, so services may retain compartments
+without forming an ownership cycle through that registry.
+Captures are guest state; service closures and their external effects are host policy.
+Persisted recipes carry the service name/ABI and require an exact explicit
+`MachineRestorePolicy::host_callables` entry before a restored Machine is exposed.
+Changing service semantics or billing requires a new ABI identity.
+Services do not run during restore, collection or snapshot capture.
 
 ## Seam 1: SourceCompiler
 
@@ -355,9 +370,9 @@ The table covers the review identifiers and the capture/restore row contract.
 |---|---|---|
 | `COST_TABLE_VERSION` | `ironhorse-meter/src/lib.rs`: `ironhorse-meter-5` | Change weights, charging points or admission policy by appending to `releases::PINNED`, changing the release literal and deliberately updating golden vectors together. `METR` requires both matching name and digest; old-meter persisted heaps cannot resume on the new engine. |
 | `PARSE_METER_RELEASE` | `ironhorse-compile/src/meter.rs`: alias of `COST_TABLE_VERSION` | No independent bump. Compiler charge/admission changes follow the shared meter release procedure; do not recreate a second version namespace. |
-| `IRONHORSE_FORMAT_VERSION` | Snapshot `format.rs`: 21 | Change the container encoding/interpretation with a format bump and explicit decoder support/refusal. `MIN_READ` is 1, but decoding an old container is not permission to execute it: boot and meter identity gates still apply. |
-| `STORE_SCHEMA_VERSION` | Snapshot `store.rs`: 32 | Change paged-store/manifest/small-state representation with a schema bump and verified migration step or explicit refusal. `migrate_store` authenticates old state and advances monotonically; it does not translate old meter semantics. |
-| `ROW_SCHEMA_VERSION` | VM `snapshot_api.rs`: 2 | A row field/type/order change requires a new declaration fingerprint in the append-only `row_schema_releases.tsv` ledger and advances both container and store versions, with explicit migration/refusal and carried-state golden checks. Release 2 adds shared Machine rows in format 21/store 32; prior format-20 bytes remain pinned. |
+| `IRONHORSE_FORMAT_VERSION` | Snapshot `format.rs`: 22 | Change the container encoding/interpretation with a format bump and explicit decoder support/refusal. `MIN_READ` is 1, but decoding an old container is not permission to execute it: boot and meter identity gates still apply. |
+| `STORE_SCHEMA_VERSION` | Snapshot `store.rs`: 33 | Change paged-store/manifest/small-state representation with a schema bump and verified migration step or explicit refusal. `migrate_store` authenticates old state and advances monotonically; it does not translate old meter semantics. |
+| `ROW_SCHEMA_VERSION` | VM `snapshot_api.rs`: 3 | A row field/type/order change requires a new declaration fingerprint in the append-only `row_schema_releases.tsv` ledger and advances both container and store versions, with explicit migration/refusal and carried-state golden checks. Release 3 adds host-function recipes in format 22/store 33; format-20 and format-21 bytes remain pinned. |
 | `INTL_DATA_VERSION` | Generated VM `src/intl_profile.rs` | Identifies the in-tree Intl profile plus the locked ICU dependency graph, including data checksums and dependency edges. CI rejects stale generation and root/engine disagreement. The label participates in the boot fingerprint and therefore the persisted SIGN gate. Current dependencies retain an immutable legacy alias; upgrades produce a new identity. |
 
 The derived table digest versions weight/default-key encoding, not every charging point.

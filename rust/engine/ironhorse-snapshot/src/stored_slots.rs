@@ -5,10 +5,10 @@ use crate::image::{ArrayImage, CollectionImage, IndexPropsImage, MachineImage, W
 use crate::store::SmallState;
 use ironhorse_vm::snapshot_api::{
     AccessorRow, AsyncRow, BoundFunctionRow, CombinatorRow, DisposableStackRow, DisposalRecordRow,
-    EnvironmentRow, EvaluatorRow, FunctionStateSnapshot, GeneratorRow, ModuleGraphSnapshot,
-    ModuleRecordRow, PrivateAccessorRow, PrivateElementSnapshot, PrivateValueRow,
-    PromiseClusterSnapshot, PromiseJobRow, PromiseReactionRow, PromiseRow, SavedFrameRow,
-    SavedJumpRow, SharedMachineSnapshot,
+    EnvironmentRow, EvaluatorRow, FunctionStateSnapshot, GeneratorRow, HostFunctionRow,
+    ModuleGraphSnapshot, ModuleRecordRow, PrivateAccessorRow, PrivateElementSnapshot,
+    PrivateValueRow, PromiseClusterSnapshot, PromiseJobRow, PromiseReactionRow, PromiseRow,
+    SavedFrameRow, SavedJumpRow, SharedMachineSnapshot,
 };
 use ironhorse_vm::Slot;
 
@@ -613,7 +613,7 @@ mod tests {
 }
 
 row!(SharedMachineSnapshot {
-    slots: [jobs, environments],
+    slots: [jobs, environments, host_functions],
     metadata: [
         default_global,
         current_global,
@@ -670,3 +670,8 @@ impl VisitSlots for (u8, Slot, u32) {
         f(&self.1);
     }
 }
+
+row!(HostFunctionRow {
+    slots: [captures],
+    metadata: [owner, service, abi, name, arity, name_chunk]
+});

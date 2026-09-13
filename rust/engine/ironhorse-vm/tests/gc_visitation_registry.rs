@@ -33,6 +33,7 @@ use std::collections::BTreeMap;
 
 const SRC: &str = concat!(
     include_str!("../src/interp.rs"),
+    include_str!("../src/interp/host.rs"),
     include_str!("../src/interp/realm.rs"),
     include_str!("../src/interp/metering.rs"),
     include_str!("../src/interp/native_ids.rs"),
@@ -358,6 +359,8 @@ const REGISTRY: &[(&str, &[Req], &str)] = &[
     ("realm", &[Req::GcRoots], "single Realm default global and primordial roots"),
     ("environment", &[Req::GcRoots], "active globals, property index and first rejection report"),
     ("inactive_environments", &[Req::GcRoots, Req::PrunedBothPaths, Req::Edges], "inactive globals, property indexes and first rejection reports"),
+    ("restored_leases", &[Req::BehavioralTwin("unclaimed_environment_and_export_ownership_are_independent")], "provisional exports keep identity_roots weak leases alive"),
+    ("restored_environment_leases", &[Req::BehavioralTwin("unclaimed_environment_and_export_ownership_are_independent")], "provisional compartments keep environment owner weak leases alive independently"),
     ("identity_roots", &[Req::GcRoots], "live host object identity leases"),
     ("intrinsics", &[Req::GcRoots], "every boot constructor — the anchor that transitively keeps boot structure alive"),
     ("well_known_symbols", &[Req::GcRoots], "realm well-known symbol descriptors"),
@@ -609,6 +612,8 @@ fn every_slot_bearing_field_is_classified_and_the_classification_holds() {
                 Req::BehavioralTwin(test) => {
                     let witness = format!("#[test]\nfn {test}(");
                     include_str!("gc_anchor_truth.rs").contains(&witness)
+                        || include_str!("../../ironhorse-snapshot/tests/shared_machine.rs")
+                            .contains(&witness)
                         || include_str!("../src/interp/tests.rs").contains(&witness)
                 }
             };

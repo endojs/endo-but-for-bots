@@ -36,9 +36,9 @@ The preceding checklist records the first follow-up, not completion of this scop
    reacquisition; release unclaimed roots and reattach compiler/permit/loader policy.
 10. [x] Integrate shared Machines with paged HeapStore eager/lazy resume,
     checkpoints, collection, and rewind in the supported persistent consumer.
-11. [ ] Implement F054 host-callable registration through the common dispatcher,
+11. [x] Implement F054 host-callable registration through the common dispatcher,
     with rooted captures, stable persisted identities, and explicit reattachment.
-12. [ ] Add uninterrupted/restored continuity and malformed-state tests, complete
+12. [x] Add uninterrupted/restored continuity and malformed-state tests, complete
     adversarial review loops, reconcile documentation, and publish reviewed commits.
 
 Multiple Realms, cross-machine messaging, and JsMachine (F068/F157) remain deferred.
@@ -51,10 +51,27 @@ prospective intrinsic binding lookup, report ownership, partial-allocation recov
 and independent provisional compartment/export root lifetimes.
 Both adversarial reviewers reported no remaining blocker in this increment.
 Format 21/store 32/row release 2 carry shared state; format-20 byte controls are retained.
-F054 host registration remains the next increment before overall completion.
+F054 host registration was the remaining increment at this checkpoint.
 
 Validation for the shared increment: full ironhorse-snapshot suite; VM unit, realm
 and promise-pump suites; Endo engine unit, meter-bound, runtime-compiler and store-worker
 suites; deterministic-provider shared/golden/metamorphic suites; Rust 1.88 Clippy with
 warnings denied and rustfmt.
 Rust API documentation builds, with existing VM rustdoc warnings.
+
+F054 now has a Machine-owned service registry keyed by stable name/ABI identity,
+scoped call values, rooted captures, common native dispatch and explicit restore policy.
+Both adversarial reviewers cleared the implementation after fixes for swallowed resource
+stops, native-depth recovery, compiler ownership, arity reflection, malformed capture/name
+payloads and conflicting callable owners.
+Format 22/store 33/row release 3 carry host recipes; format-21 byte controls are retained.
+The full validation pass also covers the GC registry and fuzz initializer omissions
+reported by CI on the shared persistence commit.
+
+Final F054 validation: 930 VM unit/integration tests; 615 snapshot tests plus the
+post-collection host-creation regression; 24 Endo engine and 29 integration tests;
+deterministic-provider shared/golden/metamorphic tests; compile-fail scoped-value
+contracts; all-target VM/snapshot Clippy with warnings denied; fuzz compilation;
+Rust documentation build and pinned rustfmt.
+The documentation build retains 27 existing VM rustdoc warnings.
+The expanded scope is implemented; CI/conflict monitoring remains active for the PR.
