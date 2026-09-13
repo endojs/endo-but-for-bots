@@ -156,10 +156,6 @@ export const main = async hostAgent => {
     const envSources = [
       ['NINEP_SUDO', env.NINEP_SUDO ?? process.env.NINEP_SUDO],
       [
-        'NINEP_LAZY_UMOUNT',
-        env.NINEP_LAZY_UMOUNT ?? process.env.NINEP_LAZY_UMOUNT,
-      ],
-      [
         'NINEP_SOCKET_DIR',
         env.NINEP_SOCKET_DIR ?? process.env.NINEP_SOCKET_DIR,
       ],
