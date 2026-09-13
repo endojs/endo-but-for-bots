@@ -775,30 +775,90 @@ export const makeHostMaker = ({
                   assertActive();
                   return value;
                 },
-                construct: async (name, publish) => {
-                  assertActive();
-                  await checkConfiguration(controllerSpecifier);
-                  /** @type {DeferredTasks<MakeCapletDeferredTaskParams>} */
-                  const tasks = makeDeferredTasks();
-                  // One ordered publication callback: deferred tasks otherwise
-                  // execute concurrently, allowing client publication to race.
-                  tasks.push(ids => publish(ids.workerId, ids.capletId));
-                  const result = await formulateUnconfined(
-                    hostId,
-                    handleId,
-                    controllerSpecifier,
-                    tasks,
-                    undefined,
-                    powersId,
-                    {},
-                    undefined,
-                    `session:${name}`,
-                    (id, originalContext) =>
-                      nativeContexts.set(id, originalContext),
-                  );
-                  nativeContexts.set(result.id, result.context);
-                  assertActive();
-                  return result.value;
+                construct: (name, publish) => {
+                  let cancelled = false;
+                  /** @type {Map<FormulaIdentifier, Context>} */
+                  const acquired = new Map();
+                  /** @type {Promise<void> | undefined} */
+                  let cancelling;
+                  const check = () => {
+                    assertActive();
+                    !cancelled || Fail`Native session construction cancelled`;
+                  };
+                  /**
+                   * @param {FormulaIdentifier} id
+                   * @param {Context} originalContext
+                   */
+                  const retain = (id, originalContext) => {
+                    nativeContexts.set(id, originalContext);
+                    acquired.set(id, originalContext);
+                  };
+                  // Keep the boxed formulation result separate from its value:
+                  // an inert module constructor can wait for cancellation.
+                  const formulation = Promise.resolve().then(async () => {
+                    check();
+                    await checkConfiguration(controllerSpecifier);
+                    check();
+                    /** @type {DeferredTasks<MakeCapletDeferredTaskParams>} */
+                    const tasks = makeDeferredTasks();
+                    tasks.push(async ids => {
+                      check();
+                      await publish(ids.workerId, ids.capletId);
+                      check();
+                    });
+                    const result = await formulateUnconfined(
+                      hostId,
+                      handleId,
+                      controllerSpecifier,
+                      tasks,
+                      undefined,
+                      powersId,
+                      {},
+                      undefined,
+                      `session:${name}`,
+                      retain,
+                    );
+                    retain(result.id, result.context);
+                    return result;
+                  });
+                  const value = formulation.then(result => {
+                    check();
+                    return result.value;
+                  });
+                  void value.catch(() => {});
+                  const cancelConstruction = () => {
+                    cancelled = true;
+                    if (cancelling) return cancelling;
+                    cancelling = (async () => {
+                      // Cancelling a worker before caplet formulation settles
+                      // could let that pending formulation provide it again.
+                      await formulation.catch(() => {});
+                      const results = await Promise.allSettled(
+                        [...acquired].map(async ([id, original]) => {
+                          await original.cancel(
+                            Error(`Session ${name} construction cancelled`),
+                          );
+                          acquired.delete(id);
+                          if (nativeContexts.get(id) === original) {
+                            nativeContexts.delete(id);
+                          }
+                        }),
+                      );
+                      const errors = results.flatMap(result =>
+                        result.status === 'rejected' ? [result.reason] : [],
+                      );
+                      if (errors.length)
+                        throw AggregateError(
+                          errors,
+                          'Native construction cleanup pending',
+                        );
+                    })().catch(error => {
+                      cancelling = undefined;
+                      throw error;
+                    });
+                    return cancelling;
+                  };
+                  return harden({ value, cancel: cancelConstruction });
                 },
                 cancel: async (id, reason) => {
                   assertActive();

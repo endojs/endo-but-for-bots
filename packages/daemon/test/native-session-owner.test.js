@@ -22,6 +22,7 @@ const harness = () => {
   /** @type {unknown[][]} */
   const calls = [];
   let construct = async () => {};
+  let cancelConstruction = async () => {};
   let activate = async () => {};
   let terminate = async () => {};
   let retainedResolver;
@@ -62,11 +63,20 @@ const harness = () => {
     },
     native: {
       provideClient: id => powers.provide(id),
-      construct: async (name, publish) => {
-        calls.push(['construct', name, await phase()]);
-        await publish('worker-id', 'client-id');
-        await construct();
-        return target;
+      construct: (name, publish) => {
+        const value = (async () => {
+          calls.push(['construct', name, await phase()]);
+          await publish('worker-id', 'client-id');
+          await construct();
+          return target;
+        })();
+        return {
+          value,
+          cancel: async () => {
+            await cancelConstruction();
+            await value.catch(() => {});
+          },
+        };
       },
       cancel: async id => {
         calls.push(['cancel', id]);
@@ -85,6 +95,9 @@ const harness = () => {
     },
     holdConstruction: fn => {
       construct = fn;
+    },
+    onConstructionCancel: fn => {
+      cancelConstruction = fn;
     },
     holdActivation: fn => {
       activate = fn;
@@ -188,6 +201,72 @@ test('reconstructed owners require explicit start and retain the original contro
     ['activate', 'plan', 'starting'],
     ['provide', 'dependency-id', 'starting'],
   ]);
+});
+
+test('stop reaches a fresh constructor waiting for its cancellation', async t => {
+  t.timeout(5000);
+  const h = harness();
+  const entered = makePromiseKit();
+  const cancelled = makePromiseKit();
+  h.holdConstruction(async () => {
+    entered.resolve(undefined);
+    await cancelled.promise;
+  });
+  let cancellations = 0;
+  h.onConstructionCancel(async () => {
+    cancellations += 1;
+    cancelled.reject(Error('Constructor cancelled'));
+  });
+  t.teardown(() => cancelled.resolve(undefined));
+  await E(h.owner).create('a', 'plan', {});
+  const starting = t.throwsAsync(E(h.owner).start('a'), {
+    message: /Constructor cancelled/,
+  });
+  await entered.promise;
+  await E(h.owner).stop('a');
+  await starting;
+  t.true(cancellations > 0);
+  t.false(h.calls.some(([kind]) => kind === 'activate' || kind === 'provide'));
+  t.deepEqual((await E(h.owner).inspect('a'))?.references, {});
+  t.is(await h.phase(), 'stopped');
+});
+
+test('failed fresh construction cancellation retains identities for retry', async t => {
+  t.timeout(5000);
+  const h = harness();
+  const entered = makePromiseKit();
+  const cancelled = makePromiseKit();
+  let fail = true;
+  h.holdConstruction(async () => {
+    entered.resolve(undefined);
+    await cancelled.promise;
+  });
+  h.onConstructionCancel(async () => {
+    cancelled.reject(Error('Constructor cancelled'));
+    if (fail) throw Error('Original worker cleanup pending');
+  });
+  t.teardown(async () => {
+    fail = false;
+    cancelled.resolve(undefined);
+    await E(h.owner).stop('a');
+  });
+  await E(h.owner).create('a', 'plan', {});
+  const starting = t.throwsAsync(E(h.owner).start('a'), {
+    message: /Constructor cancelled/,
+  });
+  await entered.promise;
+  await t.throwsAsync(E(h.owner).stop('a'), {
+    message: /Original worker cleanup pending/,
+  });
+  await starting;
+  t.deepEqual((await E(h.owner).inspect('a'))?.references, {
+    worker: 'worker-id',
+    client: 'client-id',
+  });
+  t.false(h.calls.some(([kind]) => kind === 'cancel' || kind === 'activate'));
+  fail = false;
+  await E(h.owner).stop('a');
+  t.deepEqual((await E(h.owner).inspect('a'))?.references, {});
 });
 
 test('failed activation requires cleanup before replacement and removal uses original plan', async t => {

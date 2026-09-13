@@ -1194,6 +1194,62 @@ test.serial(
 );
 
 testNeedsNodeWorker.serial(
+  'native session stop closes a worker with a pending inert constructor',
+  async t => {
+    t.timeout(30_000);
+    const { host, config } = await prepareHost(t);
+    const sibling = await E(host).evaluate(
+      '@node',
+      "makeExo('Sibling', M.interface('Sibling', { ping: M.call().returns(M.string()) }), { ping: () => 'alive' })",
+      [],
+      [],
+      'construction-sibling',
+    );
+    const owner = await E(host).provideSessionOwner(
+      'pending-session',
+      new URL('./_native-session-pending.js', import.meta.url).href,
+    );
+    await E(owner).create('one', 'plan', {});
+    const starting = E(owner).start('one');
+    const rejected = t.throwsAsync(starting, {
+      message: /cancel|stopped|disconnect|terminated/i,
+    });
+    let workerId;
+    await waitForCondition(async () => {
+      workerId = await E(host).identify(
+        'pending-session',
+        'sessions',
+        'one',
+        'references',
+        'worker',
+      );
+      return workerId !== undefined;
+    });
+    const { number } = parseId(workerId);
+    await waitForText(
+      path.join(config.statePath, 'worker', number, 'worker.log'),
+      'Native session constructor is pending',
+    );
+    const pidPath = path.join(
+      config.ephemeralStatePath,
+      'worker',
+      number,
+      'worker.pid',
+    );
+    const pid = Number(await fsp.readFile(pidPath, 'utf8'));
+    await E(owner).stop('one');
+    await rejected;
+    t.like(await E(owner).inspect('one'), {
+      phase: 'stopped',
+      references: {},
+    });
+    t.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
+    t.false(formulaExistsInDb(config.statePath, workerId));
+    t.is(await E(sibling).ping(), 'alive');
+  },
+);
+
+testNeedsNodeWorker.serial(
   'static session powers retain exact dependencies across rebinding and restart',
   async t => {
     t.timeout(30_000);
