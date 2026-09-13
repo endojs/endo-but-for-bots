@@ -210,19 +210,22 @@ const buildMountOptionString = options => {
  * `cancelled` promise; `null`/absent means "no teardown signal".
  *
  * @param {Promise<any> | any} context
- * @returns {Promise<Promise<never> | null>}
+ * The record keeps the lifetime promise from being assimilated by this async
+ * helper: construction waits for the context, never for its cancellation.
+ *
+ * @returns {Promise<{cancelledP: Promise<never> | null}>}
  */
 const resolveCancelled = async context => {
-  if (!context) return null;
+  if (!context) return harden({ cancelledP: null });
   const resolved = await context;
-  if (!resolved) return null;
+  if (!resolved) return harden({ cancelledP: null });
   if (typeof resolved.whenCancelled === 'function') {
-    return E(resolved).whenCancelled();
+    return harden({ cancelledP: E(resolved).whenCancelled() });
   }
   if (resolved.cancelled) {
-    return resolved.cancelled;
+    return harden({ cancelledP: resolved.cancelled });
   }
-  return null;
+  return harden({ cancelledP: null });
 };
 
 /**
@@ -541,7 +544,7 @@ harden(makeFsMounter);
  * @param {{ env?: Record<string, string> }} [options]
  */
 export const make = async (_powers, context, options = {}) => {
-  const cancelledP = await resolveCancelled(context);
+  const { cancelledP } = await resolveCancelled(context);
   return makeFsMounter({
     env: options.env ?? {},
     cancelledP,

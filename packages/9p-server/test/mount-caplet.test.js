@@ -15,7 +15,7 @@ import nodePath from 'node:path';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/pass-style';
 
-import { makeFsMounter, mountIdentity } from '../mount-caplet.js';
+import { make, makeFsMounter, mountIdentity } from '../mount-caplet.js';
 
 // A caller-supplied socketPath must live inside the socket directory
 // (defaults to os.tmpdir() when XDG_RUNTIME_DIR is unset), so build the
@@ -26,6 +26,53 @@ const SOCK2 = nodePath.join(os.tmpdir(), 's2.sock');
 const fakeFs = () => Far('FakeFs', {});
 
 const flush = () => new Promise(resolve => setTimeout(resolve, 10));
+
+for (const kind of ['presence', 'local', 'promised']) {
+  test(`make returns with a live ${kind} context and observes later cancellation`, async t => {
+    t.timeout(5000);
+    let cancel;
+    const cancelledP = new Promise((_resolve, reject) => {
+      cancel = () => reject(Error('Test context cancelled'));
+    });
+    cancelledP.catch(() => {});
+    t.teardown(() => cancel());
+    const presence = Far('Context', { whenCancelled: () => cancelledP });
+    const context =
+      kind === 'local'
+        ? harden({ cancelled: cancelledP })
+        : kind === 'promised'
+          ? Promise.resolve(presence)
+          : presence;
+    // This must return while the context is still live. The old async helper
+    // assimilated cancelledP and left this constructor pending forever.
+    const mounter = await make(undefined, context);
+    t.deepEqual(await E(mounter).list(), []);
+    cancel();
+    await flush();
+    // An invalid operator override also prevents native effects if the fence
+    // regresses, so this entrypoint test never needs a kernel mount or socket.
+    await t.throwsAsync(
+      () =>
+        E(mounter).mount(fakeFs(), '/not-mounted', {
+          mountProgram: ['invalid'],
+        }),
+      { message: /mounter is cancelled/ },
+    );
+  });
+}
+
+test('make without a cancellation context returns an open mounter', async t => {
+  t.timeout(5000);
+  const mounter = await make(undefined, undefined);
+  t.deepEqual(await E(mounter).list(), []);
+  await t.throwsAsync(
+    () =>
+      E(mounter).mount(fakeFs(), '/not-mounted', {
+        mountProgram: ['invalid'],
+      }),
+    { message: /operator configuration/ },
+  );
+});
 
 /**
  * @param {object} [opts]
