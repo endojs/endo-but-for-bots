@@ -47,7 +47,7 @@
   },
   "devDependencies": {
     "@lavamoat/lavatube": "^1.0.0",
-    "@vitest/browser": "^4.1.11",
+    "@vitest/browser": "^5.0.0",
     "@vitest/browser-playwright": "^4.1.11",
     "eslint": "catalog:dev",
     "playwright": "^1.62.1",
