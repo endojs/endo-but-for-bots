@@ -75,7 +75,7 @@
     "@endo/space-workflow": "workspace:^",
     "@endo/spaces-util": "workspace:^",
     "@endo/where": "workspace:^",
-    "marked": "^17.0.5",
+    "marked": "^18.0.11",
     "monaco-editor": "^0.56.0",
     "preact": "^10.29.8",
     "react": "^19.2.8",
