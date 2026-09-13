@@ -43,6 +43,23 @@ failed startup and cleanup retry, sibling survival, and delayed native closure.
 Controller adoption, Podman descendant quiescence, and stale-owner recovery proof remain
 pending.
 
+A shared provider-scope facade now returns inert session handles before broker acquisition.
+Each scope starts through the same retained issuer opening, keeps its original `issueKit`,
+and revokes only that issuance, including pending startup and failed cleanup retries.
+Operator close fences all scopes promptly and drains admitted startup and evidence calls;
+it leaves issuer/runtime shutdown with the operator's existing retained kit.
+Successful revoke releases the scope registry entry, while old handles remain fenced.
+Repeated provision of a retained scope requires the same account, origin, model, and
+network specification;
+passive recovery lookup never creates a replacement or treats missing ownership as release.
+The service admits only the defined copy fields and forwards evidence from its trusted
+local issuer contract.
+No disposable session capabilities are accepted; returned scopes expose no operator
+shutdown authority.
+Ten focused tests include the existing grant issuer, sibling isolation, failed and late
+acquisition, stale handles, and held evidence calls.
+OpenCode service composition and controller adoption remain pending.
+
 Claude and OpenCode now share the MCP protocol, host-side socket transport, and guest stdio relay.
 The input frame limit covers both complete frames and partial tails before dispatch.
 The shared bridge admits at most 32 simultaneous host tool executions, reusing the
@@ -753,7 +770,7 @@ provider requirements, or an explicit user budget, rather than copied between la
 | Fixed provider routes/account binding | Which upstream authority a guest can exercise | Forged guest requests | Secret custody alone does not restrict credential use | Keep in provider service. |
 | Revocation and process reaping | Continued inference, networking, and execution | Stale or hostile guests | Request deadlines end one request, not the session grant | Keep one supervisor and grant owner. |
 | Cleanup completion before deletion | Storage still in use and original cleanup handles | Late acquisitions, failed stops, and callers treating cancellation as containment | A rejected call or removed formula name does not prove native resources ended; successful slice disposal is the client-side containment barrier | Retain failed and uncertain acquisitions; propagate failed stop before replacement/deletion. The uncommitted OpenCode integration exercises original records and cleanup sharing within one worker; daemon collection and cross-worker ownership acceptance remain pending. |
-| Provider initialization ownership | Listener cleanup authority, open resolver handles, and runtime lock/recovery reservations | Failed startup, late acquisitions, and a caller treating rejection as release | Per-listener limits bound live service work, not ownership of partially acquired host resources; persistent configuration remains operator-owned | Retain runtime/broker kits plus scoped listener/grant kits before acquisition; retry the failed issuance and retain its charge and ownership until original child closure and checked removal. This adds no lease or new budget and does not prove descendants stopped after a native crash. |
+| Provider initialization ownership | Listener cleanup authority, open resolver handles, and runtime lock/recovery reservations | Failed startup, late acquisitions, and a caller treating rejection as release | Per-listener limits bound live service work, not ownership of partially acquired host resources; persistent configuration remains operator-owned | Retain runtime/broker kits plus scoped listener/grant kits before acquisition; the host-only scope facade returns cleanup authority before remote startup and retains admitted evidence calls. Retry the failed issuance and retain its charge and ownership until original child closure and checked removal. This adds no lease or new budget and does not prove descendants stopped after a native crash. |
 | Per-preparation cleanup | Policy anchors, temporary files, and cleanup authority for one slice; sibling availability | Failed or late preparation followed by overly broad shared-driver shutdown | The driver registry already retains failures and the shared allocator retains charges, but both span multiple preparations | Retain `prepareSliceKit` before awaiting acquisition; close and retry that preparation only. Keep shared native-command closure and driver-wide shutdown with the operator owner. No new count, timeout, or lease. |
 | Native service scopes and copy data | Session cleanup, host path authority, and shared-worker lifetime | Broad cleanup, stale callers, guest-supplied paths, and accidental import of disposable formula capabilities | Factory kits already retain acquisitions; the shared driver and allocator own operator resources, while the daemon owner retains original mount authority | Capture one kit per host-only scope and retain failed cleanup. Recover through lookup; only the operator closes the shared driver. Validate copy inputs before sending and on receipt; native spawn accepts no stdin reader and writes through the returned process endpoint. |
 | Filesystem drain acknowledgement | Backing files, directories, and cleanup authority still used by 9P calls | Late I/O, failed source cleanup, or a caller equating socket closure with release | Frame sizes and flow control bound transport work, not the lifetime of admitted filesystem effects; stream terminal errors can repeat an earlier I/O failure | Keep a separate release acknowledgement at the stream provider and await kernel unmount, bridge drain, and retained handle cleanup. Do not add a lease or treat a timeout as release. |
