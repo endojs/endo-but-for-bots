@@ -153,3 +153,51 @@ test('native late preparation shares the factory close fence and failed cleanup 
   await f.close();
   t.deepEqual(f.removed, [context]);
 });
+
+test('native acquisition and spawning refuse imported capabilities', async t => {
+  const f = fixture(t);
+  const foreign = f.factory;
+  const before = f.specs.length;
+  const unexpected = harden({ ...approved, extra: foreign });
+  t.throws(() => f.makeResolved(unexpected), {
+    message: /copy data/,
+  });
+  t.is(f.specs.length, before);
+  const handle = await f.makeResolved(approved);
+  const spawnOpts = harden({ cwd: '/work', stdin: foreign });
+  await t.throwsAsync(E(handle).spawn(['test'], spawnOpts), {
+    message: /stdin|unmatched|unexpected/,
+  });
+});
+
+test('native factory works without scratch authority and refuses capability construction', async t => {
+  let prepared = 0;
+  const kit = makeSandboxFactoryKit({
+    scratchProvider: null,
+    drivers: [
+      {
+        name: 'bwrap',
+        probe: async () => ({
+          available: true,
+          details: { lifecycle: { available: true } },
+        }),
+        prepareSlice: async () => {
+          prepared += 1;
+          return {};
+        },
+        spawn: async () => {
+          throw Error('unused spawn');
+        },
+        teardown: async () => {},
+      },
+    ],
+  });
+  t.teardown(() => kit.close());
+  const handle = await kit.makeResolved(approved);
+  t.is(prepared, 1);
+  await t.throwsAsync(E(kit.factory).make({ rootfs: { kind: 'minimal' } }), {
+    message: /requires a scratch provider/,
+  });
+  t.is(prepared, 1);
+  await E(handle).dispose();
+});

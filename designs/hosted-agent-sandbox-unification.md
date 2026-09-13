@@ -31,6 +31,63 @@ proofs or complete per-session controller adoption.
 Async convenience wrappers still lose the cleanup handle when startup and rollback both
 fail; native controllers must retain the kits directly.
 
+The shared provider runtime and issuer now expose retained per-listener `startKit()`
+and per-grant `issueKit()` owners before queued acquisition.
+Cancellation fences immediately, waits admitted acquisition, and retains failed cleanup
+for scoped retry without stopping healthy sibling grants or duplicating the operator
+runtime, issuer, capacity, or account policy.
+Listener release waits for the original child process's `close` event;
+a process `error` rejects admission but is not release proof.
+Thirty-six shared lifecycle tests cover cancellation before and during acquisition,
+failed startup and cleanup retry, sibling survival, and delayed native closure.
+Controller adoption, Podman descendant quiescence, and stale-owner recovery proof remain
+pending.
+
+A shared provider-scope facade now returns inert session handles before broker acquisition.
+Each scope starts through the same retained issuer opening, keeps its original `issueKit`,
+and revokes only that issuance, including pending startup and failed cleanup retries.
+Operator close fences all scopes promptly and drains admitted startup and evidence calls;
+it leaves issuer/runtime shutdown with the operator's existing retained kit.
+Successful revoke releases the scope registry entry, while old handles remain fenced.
+Repeated provision of a retained scope requires the same account, origin, model, and
+network specification;
+passive recovery lookup never creates a replacement or treats missing ownership as release.
+The service admits only the defined copy fields and forwards evidence from its trusted
+local issuer contract.
+No disposable session capabilities are accepted; returned scopes expose no operator
+shutdown authority.
+Ten focused tests include the existing grant issuer, sibling isolation, failed and late
+acquisition, stale handles, and held evidence calls.
+OpenCode now composes these scopes with its retained local operator broker kit.
+All scopes share one issuer/runtime and the operator's original secret/configuration.
+Shutdown reaches scope and broker fences independently, including cancellation-dependent
+opening, and requires both cleanup acknowledgements; failed stages remain retryable.
+Seven Node tests compose the real broker, issuer, and scope layers with simulated native
+controls.
+The unconfined broker service now reuses the sandbox's retained native-service owner.
+It receives one SecretBlob as its direct powers dependency and reads its explicit operator
+profile from the persisted `OPENCODE_BROKER_CONFIG` formula environment.
+The daemon resolves `powersName` once; sessions never resolve a mutable credential name.
+A real Node daemon test replaces that name, removes the original name, restarts, and
+revives the actual broker entrypoint with its original persisted powers ID.
+Inert scope construction and revocation cause no credential reads or native startup.
+Setup provisioning and controller adoption remain pending.
+The caller must retain the local kit through failures; empty scope lookup after service
+loss is not native release proof.
+
+Podman slice and provider runtimes now capture one allowlisted operator environment
+for native acquisition, observation, attached execution, and cleanup.
+Rootless HOME/XDG/storage configuration remains consistent; ambient provider secrets, proxy
+variables, and remote connection selectors are excluded.
+Both runtimes disable automatic guest proxy propagation while preserving explicitly
+approved guest proxy variables.
+The operator's `REGISTRY_AUTH_FILE` path remains available for authenticated image pulls,
+as documented in [Podman's authfile configuration](https://docs.podman.io/en/v4.9.3/markdown/podman-pull.1.html#authfile-path).
+Operator configuration and authentication files remain trusted authority;
+this change does not prevent Podman from accessing them.
+Controlled native-command tests exercise the default execution builders, including
+provider local-engine flags; actual Linux/Podman acceptance remains pending.
+
 Claude and OpenCode now share the MCP protocol, host-side socket transport, and guest stdio relay.
 The input frame limit covers both complete frames and partial tails before dispatch.
 The shared bridge admits at most 32 simultaneous host tool executions, reusing the
@@ -200,6 +257,14 @@ and backend probes, and retains every returned driver context before publishing 
 Close stops existing handles without waiting for unrelated pending construction, drains
 late acquisitions, and retains cleanup failures for the host owner to retry.
 Context cancellation uses this same close path; the public factory has no close authority.
+Podman now returns a retained preparation kit before acquisition, and the factory keeps
+it before awaiting the slice.
+Closing a failed preparation fences its admission, drains late acquisition, and retries
+only its own resources, preserving sibling slices and their shared allocator.
+The full sandbox suite passes 439 tests in each of four SES modes, including failed
+cleanup with a live sibling and retained producer uncertainty.
+Shared probes and native-command closure remain owned by the operator driver;
+per-preparation close is not driver-wide shutdown or native Podman containment evidence.
 The host runtime controller now acquires exclusive ownership, shared generated-file
 storage, and this factory kit in that order, then releases them in reverse order.
 It returns its cleanup controller before initialization starts, so cleanup of failed
@@ -209,6 +274,28 @@ release calls cannot remove a successor's marker.
 Existing markers and storage roots refuse startup, without a probe or stale sweep.
 A dead daemon worker is insufficient evidence for recovery: a surviving `podman create`
 can finish after a successor's container sweep.
+The host-only `native-agent.js` entrypoint now exposes inert cleanup scopes over that
+shared driver and generated-file allocator, using the same retained lifetime implementation.
+The native entrypoint requires literal null powers and the internal factory accepts a
+nullable scratch provider for resolved-path acquisition only.
+Capability-based construction still requires its provider before driver acquisition.
+Null validation feeds the existing cancellation race, so a pending powers promise cannot
+prevent cancellation or start a runtime after cancellation.
+Provisioning must retain a marshal of literal null as the constructor input;
+`@none` denotes a denied-method guest capability and is not slot-free null.
+Each scope owns a factory kit and retains its acquisitions through late completion and
+failed cleanup; successful close removes only that scope, while stale handles stay fenced.
+Recovery lookup remains available during failed operator shutdown and never creates a
+replacement; missing ownership is not proof of prior native release.
+Native acquisition and spawn accept copy data, including resolved host paths;
+native spawn excludes an incoming stdin reader and uses the returned process endpoint.
+The existing daemon copy-data validator is shared with these native entry points.
+Callers must validate before crossing workers, because receiver validation cannot undo
+imported capability references.
+Adapter integration must retain the stable operator and serialize session incarnations;
+a scope may own several slices, so retrieving its identity does not deduplicate acquisition.
+Injected-driver tests cover shared budgets, sibling progress, late acquisition, stale
+handles, and failed operator shutdown; real adapter and Podman acceptance remain pending.
 Every Podman invocation now requires the local engine, including probes and cleanup.
 Podman preparation now retains anchor and seccomp-directory cleanup before a context
 can be returned, with a host-only `closeSlices()` fence and retry path.
@@ -715,10 +802,13 @@ provider requirements, or an explicit user budget, rather than copied between la
 | Container/process and mount isolation | Host files, processes, other sessions | All guest code | Endo caps govern host APIs, not arbitrary native syscalls | Keep in shared runtime. |
 | Effective provisioning configuration | Private runtime ownership markers and generated files | Guest writes enabled by mismatched retained/current host configuration | Private permissions do not protect a directory explicitly granted as a guest mount; formula environments are immutable but current process settings can differ | Read effective factory/state roots by verified formula ID before provisioning; client execution powers now pin exact dependencies; backend ownership adoption remains pending. |
 | Provider secret isolation | Reusable upstream account credentials | Guest and listener code | Secrets controls storage access, not a secret already delivered | Keep host-only credential service; eliminate materialization into guests. |
+| Podman control environment | Ambient credentials, proxy authority, and the original engine/storage identity | Accidental host-environment inheritance and inconsistent acquisition/cleanup configuration | Guest namespace isolation does not stop Podman from forwarding host proxy variables; operator config and default credential files remain trusted | Capture the same allowlisted operator environment for every native command; disable automatic proxy forwarding and supply approved guest proxies explicitly. This adds no limits and does not claim to remove file-based operator authority. |
 | Fixed provider routes/account binding | Which upstream authority a guest can exercise | Forged guest requests | Secret custody alone does not restrict credential use | Keep in provider service. |
 | Revocation and process reaping | Continued inference, networking, and execution | Stale or hostile guests | Request deadlines end one request, not the session grant | Keep one supervisor and grant owner. |
 | Cleanup completion before deletion | Storage still in use and original cleanup handles | Late acquisitions, failed stops, and callers treating cancellation as containment | A rejected call or removed formula name does not prove native resources ended; successful slice disposal is the client-side containment barrier | Retain failed and uncertain acquisitions; propagate failed stop before replacement/deletion. The uncommitted OpenCode integration exercises original records and cleanup sharing within one worker; daemon collection and cross-worker ownership acceptance remain pending. |
-| Provider initialization ownership | Listener cleanup authority, open resolver handles, and runtime lock/recovery reservations | Failed startup, late acquisitions, and a caller treating rejection as release | Per-listener limits bound live service work, not ownership of partially acquired host resources; persistent configuration remains operator-owned | Retain inert runtime/broker kits before acquisition and retry failed cleanup. This adds no lease or new budget, and does not prove descendants stopped after a native crash. |
+| Provider initialization ownership | Listener cleanup authority, open resolver handles, and runtime lock/recovery reservations | Failed startup, late acquisitions, and a caller treating rejection as release | Per-listener limits bound live service work, not ownership of partially acquired host resources; persistent configuration remains operator-owned | Retain runtime/broker kits plus scoped listener/grant kits before acquisition; the host-only scope facade returns cleanup authority before remote startup and retains admitted evidence calls. Retry the failed issuance and retain its charge and ownership until original child closure and checked removal. The OpenCode operator composition reaches scope drain and broker/runtime shutdown independently and requires both acknowledgements; session revoke targets only its captured grant. The shared native-service entrypoint now retains that kit through original-context cancellation and failed predecessor cleanup; the broker formula holds one exact SecretBlob powers dependency. This adds no lease or new budget and does not prove descendants stopped after a native crash. |
+| Per-preparation cleanup | Policy anchors, temporary files, and cleanup authority for one slice; sibling availability | Failed or late preparation followed by overly broad shared-driver shutdown | The driver registry already retains failures and the shared allocator retains charges, but both span multiple preparations | Retain `prepareSliceKit` before awaiting acquisition; close and retry that preparation only. Keep shared native-command closure and driver-wide shutdown with the operator owner. No new count, timeout, or lease. |
+| Native service scopes and copy data | Session cleanup, host path authority, and shared-worker lifetime | Broad cleanup, stale callers, guest-supplied paths, and accidental import of disposable formula capabilities | Factory kits already retain acquisitions; the shared driver and allocator own operator resources, while the daemon owner retains original mount authority | Capture one kit per host-only scope and retain failed cleanup. Recover through lookup; only the operator closes the shared driver. Provision the native service with literal null powers, not a daemon host or denied-method guest. Validate copy inputs before sending and on receipt; native spawn accepts no stdin reader and writes through the returned process endpoint. |
 | Filesystem drain acknowledgement | Backing files, directories, and cleanup authority still used by 9P calls | Late I/O, failed source cleanup, or a caller equating socket closure with release | Frame sizes and flow control bound transport work, not the lifetime of admitted filesystem effects; stream terminal errors can repeat an earlier I/O failure | Keep a separate release acknowledgement at the stream provider and await kernel unmount, bridge drain, and retained handle cleanup. Do not add a lease or treat a timeout as release. |
 | Durable session ownership | Original cleanup authority, retained dependencies, and session storage | Retargeting after backend replacement, partial construction, and failed cleanup | Backend defaults and mutable global names do not identify an older session's owner; daemon directory entries already provide durable formula retention | The configured daemon owner retains exact IDs and contexts, publishes before acquisition, and separates native cleanup from original-plan storage removal. Node fixture acceptance passes; actual adapter wiring remains pending. |
 | Transient tool attachment | Endo tool authority and its transcript context | Accidental persistence or rebinding to a different executor during a live incarnation | Floot already captures the originating turn on admission and rejects out-of-turn execution; the MCP bridge owns request admission and drain | Attach the current journaled capability only at explicit start, reserve its resolver role, and require stop before replacement. Closing the resolver prevents new retrieval; it is not revocation of a previously returned capability or process authentication. |

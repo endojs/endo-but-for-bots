@@ -49,27 +49,36 @@ const fixture = ({
   });
   const issuer = makeProviderBrokerGrantIssuer({
     runtime: {
-      async start(input) {
-        endpoint = input.endpoint;
-        listenerLimits = input.limits;
-        listenerNetwork = input.network;
-        if (startBarrier) await startBarrier;
+      startKit(input) {
+        const value = (async () => {
+          endpoint = input.endpoint;
+          listenerLimits = input.limits;
+          listenerNetwork = input.network;
+          if (startBarrier) await startBarrier;
+          return {
+            async observe() {
+              return harden({
+                endpoint: 'http://127.0.0.1:1234',
+                containerName: 'listener',
+                networkNamespaceId: drift ? 'net-2' : 'net-1',
+                listenerImageDigest: digest,
+                ...(observeNetwork ? { network: observeNetwork() } : {}),
+              });
+            },
+            async stop() {
+              stops += 1;
+              if (fails) throw Error('cleanup unavailable');
+              disconnect();
+            },
+            closed,
+          };
+        })();
         return {
-          async observe() {
-            return harden({
-              endpoint: 'http://127.0.0.1:1234',
-              containerName: 'listener',
-              networkNamespaceId: drift ? 'net-2' : 'net-1',
-              listenerImageDigest: digest,
-              ...(observeNetwork ? { network: observeNetwork() } : {}),
-            });
+          value,
+          stop: async () => {
+            const worker = await value;
+            await worker.stop();
           },
-          async stop() {
-            stops += 1;
-            if (fails) throw Error('cleanup unavailable');
-            disconnect();
-          },
-          closed,
         };
       },
     },
@@ -426,4 +435,139 @@ test('an oauth issuer requires a credential bound to its own account', async t =
     { message: /Unprovisioned broker OAuth mode/ },
   );
   t.notThrows(() => fixture({ policy: base, credential: oauthCredential() }));
+});
+
+test('retained issuance revoked before its queue turn acquires no listener', async t => {
+  t.timeout(5000);
+  const f = fixture();
+  t.teardown(f.issuer.dispose);
+  const kit = f.issuer.issueKit(spec);
+  const closing = kit.revoke();
+  await t.throwsAsync(kit.value, { message: /denied/ });
+  await closing;
+  t.is(f.endpoint(), undefined);
+  t.is(f.stops(), 0);
+  const next = await f.issuer({ ...spec, sessionId: 'next' });
+  t.is((await E(next).attestation()).sessionId, 'next');
+});
+
+test('retained issuance revokes authority during acquisition and drains its late listener', async t => {
+  t.timeout(5000);
+  let release = () => {};
+  const startBarrier = new Promise(resolve => {
+    release = () => resolve(undefined);
+  });
+  const f = fixture({ startBarrier });
+  t.teardown(async () => {
+    release();
+    await f.issuer.dispose();
+  });
+  const kit = f.issuer.issueKit(spec);
+  const rejected = t.throwsAsync(kit.value, { message: /admission failed/ });
+  await Promise.resolve();
+  const closing = kit.revoke();
+  t.is(kit.revoke(), closing);
+  let finished = false;
+  void closing.then(() => {
+    finished = true;
+  });
+  await t.throwsAsync(
+    E(f.endpoint()).request(
+      harden({
+        method: 'POST',
+        path: '/v1/responses',
+        body: '{"model":"allowed"}',
+      }),
+    ),
+    { message: /inactive/ },
+  );
+  t.false(finished);
+  release();
+  await rejected;
+  await closing;
+  await kit.revoke();
+  t.is(f.stops(), 1);
+});
+
+test('failed issuance retains A-only cleanup while B remains usable', async t => {
+  let failA = true;
+  const listeners = [];
+  const runtime = {
+    startKit({ endpoint }) {
+      const index = listeners.length;
+      const state = { endpoint, stops: 0 };
+      listeners.push(state);
+      const value =
+        index === 1
+          ? Promise.reject(Error('A listener startup failed'))
+          : Promise.resolve({
+              observe: async () =>
+                harden({
+                  endpoint: 'http://127.0.0.1:1234',
+                  containerName: `listener-${index}`,
+                  networkNamespaceId: `net-${index}`,
+                  listenerImageDigest: digest,
+                }),
+              closed: new Promise(() => {}),
+            });
+      return {
+        value,
+        stop: async () => {
+          state.stops += 1;
+          if (index === 1 && failA) throw Error('A cleanup unavailable');
+        },
+      };
+    },
+    dispose: async () => {
+      throw Error('Unexpected global runtime disposal');
+    },
+    retryCleanup: async () => {
+      throw Error('Unexpected global runtime cleanup');
+    },
+  };
+  const issuer = makeProviderBrokerGrantIssuer({
+    runtime,
+    secret: Far('secret', { readBase64: async () => btoa('secret') }),
+    fetch: async () => new Response('ok'),
+    policy,
+    imageDigest: digest,
+    accountRef: 'account',
+  });
+  t.teardown(async () => {
+    failA = false;
+    await issuer.dispose();
+  });
+  const b = await issuer({ ...spec, sessionId: 'b' });
+  const a = issuer.issueKit({ ...spec, sessionId: 'a' });
+  await t.throwsAsync(a.value, { message: /admission and cleanup failed/ });
+  t.is(listeners[1].stops, 1);
+  t.is(listeners[0].stops, 0);
+  await t.throwsAsync(
+    E(listeners[1].endpoint).request(
+      harden({
+        method: 'POST',
+        path: '/v1/responses',
+        body: '{"model":"allowed"}',
+      }),
+    ),
+    { message: /inactive/ },
+  );
+  failA = false;
+  await a.revoke();
+  await a.revoke();
+  t.is(listeners[1].stops, 2);
+  t.is(listeners[0].stops, 0);
+  t.is((await E(b).attestation()).sessionId, 'b');
+  t.is(
+    (
+      await E(listeners[0].endpoint).request(
+        harden({
+          method: 'POST',
+          path: '/v1/responses',
+          body: '{"model":"allowed"}',
+        }),
+      )
+    ).body,
+    'ok',
+  );
 });

@@ -8,6 +8,7 @@ import { makePromiseKit } from '@endo/promise-kit';
 
 import { validateGeneratedFiles } from '../generated-files.js';
 import { makeCgroup2Probe } from '../limits.js';
+import { makePodmanHostEnvironment } from '../podman-host-environment.js';
 import { makeResourceRegistry } from '../resource-registry.js';
 import {
   makeProcReader,
@@ -34,6 +35,7 @@ import {
 import { DEFAULT_PATH } from './path.js';
 
 /** @import { GeneratedFileStage, GeneratedFileStorage } from '../generated-file-storage-types.js' */
+/** @import { DriverPreparation } from '../native-factory-types.js' */
 /** @import { SandboxDriver, SliceSpec, SpawnOpts, DriverProcess, BackendProbe, BackendProbeDetails, SlicePolicyRequest, SlicePolicyAttestation } from '../types.js' */
 /** @import { PromiseKit } from '@endo/promise-kit' */
 
@@ -534,6 +536,7 @@ const assembleCreateArgv = (spec, containerName, netBackend, extras) => {
     // automatic restart would introduce execution outside that lifecycle.
     '--restart=no',
     '--no-healthcheck',
+    '--http-proxy=false',
   ];
 
   if (extras.policyArgv !== undefined) {
@@ -637,8 +640,7 @@ const encodeMount = fields =>
  * Construct the podman driver.
  *
  * @param {object} [input]
- * @param {Record<string, string>} [input.env]                Daemon env
- *                                                            (PATH etc.)
+ * @param {Record<string, string>} [input.env] Captured operator host environment overrides, never guest env.
  * @param {typeof import('child_process')} [input.childProcess] Child-
  *                                                            process module
  *                                                            override
@@ -686,10 +688,10 @@ const encodeMount = fields =>
  * @param {{observe: (request: {name: string, mountpoint: string}) => Promise<import('../xfs-volume-quota.js').VolumeQuotaEvidence>}} [input.volumeQuota] Trusted host kernel-quota observer; never model-facing.
  * @param {GeneratedFileStorage} [input.generatedFileStorage] Host-owned allocator; required for literal files.
  * @param {SeccompFilePowers} [input.fs] Host filesystem powers; injectable for cleanup failures.
- * @returns {SandboxDriver & { closeSlices(): Promise<void>, close(): Promise<void> }}
+ * @returns {Omit<SandboxDriver, 'prepareSlice' | 'prepareSliceKit'> & { prepareSlice(spec: SliceSpec): Promise<PodmanSliceContext>, prepareSliceKit(spec: SliceSpec): DriverPreparation<PodmanSliceContext>, closeSlices(): Promise<void>, close(): Promise<void> }}
  */
 export const makePodmanDriver = ({
-  env: _env = {},
+  env = {},
   childProcess: childProcessModule,
   ociRuntime,
   ownerId,
@@ -698,6 +700,7 @@ export const makePodmanDriver = ({
   generatedFileStorage,
   fs: fsPower,
 } = {}) => {
+  const hostEnvironment = makePodmanHostEnvironment(process.env, env);
   if (
     generatedFileStorage !== undefined &&
     (generatedFileStorage === null ||
@@ -753,7 +756,11 @@ export const makePodmanDriver = ({
     if (controlsSealed)
       throw makeError(X`Podman native command owner is closed`);
     if (kind !== 'cleanup') slices.assertOpen();
-    const command = startControlCommand(...args);
+    const [cp, commandName, commandArgs, options = {}] = args;
+    const command = startControlCommand(cp, commandName, commandArgs, {
+      ...options,
+      env: hostEnvironment,
+    });
     trackNative(
       command.closed,
       kind === 'ordinary' ? () => command.abort() : undefined,
@@ -1657,8 +1664,13 @@ export const makePodmanDriver = ({
    *
    * @param {typeof import('child_process')} cp
    * @param {'policy anchor' | 'operation'} label
+   * @param {() => void} [assertPreparing]
    */
-  const makeProducerScope = (cp, label) => {
+  const makeProducerScope = (
+    cp,
+    label,
+    assertPreparing = slices.assertOpen,
+  ) => {
     /** @type {Array<{ closed: boolean, completed: boolean, acquired: boolean }>} */
     const commands = [];
     /**
@@ -1666,7 +1678,7 @@ export const makePodmanDriver = ({
      * @param {Parameters<typeof startControlCommand>[3]} [options]
      */
     const run = async (args, options) => {
-      slices.assertOpen();
+      assertPreparing();
       const command = launchControl('producer', cp, 'podman', args, {
         timeoutMs: CONTROL_COMMAND_TIMEOUT_MS,
         ...options,
@@ -1727,6 +1739,7 @@ export const makePodmanDriver = ({
    *   because it removes by that exact owner label and would otherwise
    *   take the anchor it is meant to be evidence about.
    * @param {PreparationResources} resources
+   * @param {() => void} assertPreparing
    * @returns {Promise<{ anchorName: string, fingerprint: string, attestation: SlicePolicyAttestation }>}
    */
   const attestPolicy = async (
@@ -1740,12 +1753,13 @@ export const makePodmanDriver = ({
     cgroup2,
     reconciled,
     resources,
+    assertPreparing,
   ) => {
     if (ownerId === undefined) {
       throw makeError(X`podman driver ownerId is not configured`);
     }
     const anchorName = makeOperationName();
-    const producers = makeProducerScope(cp, 'policy anchor');
+    const producers = makeProducerScope(cp, 'policy anchor', assertPreparing);
     let anchorRemoved = false;
     /** @type {Promise<void> | undefined} */
     let removal;
@@ -1926,54 +1940,61 @@ export const makePodmanDriver = ({
   };
 
   /**
+   * Retain a preparation's cleanup handle before it can acquire anything.
+   * Closing fences this preparation, waits its acquisition to settle, and
+   * retries only its resources. Shared probes and native command accounting
+   * remain owned by the operator driver; close() still drains that lifetime.
+   *
    * @param {SliceSpec} spec
-   * @returns {Promise<PodmanSliceContext>}
    */
-  const prepareSlice = spec => {
+  const prepareSliceKit = spec => {
     const id = makeOperationName();
-    return slices.inOrder(id, async () => {
-      /** @type {PreparationResources} */
-      const resources = { seccompDirectory: null, removeAnchor: undefined };
-      /** @type {PodmanSliceContext | undefined} */
-      let context;
-      /** @type {Promise<void> | undefined} */
-      let cleanupFlight;
-      const releaseOwnership = () => {
-        slices.release(id, cleanup);
-        readyCleanups.delete(cleanup);
-      };
-      const cleanup = () => {
-        cleanupFlight ??= (async () => {
-          await null;
-          if (context === undefined) {
-            await resources.removeAnchor?.();
-            await releasePreparationFiles(resources);
-          } else {
-            await teardown(context);
-          }
-          releaseOwnership();
-        })().catch(error => {
-          cleanupFlight = undefined;
-          throw error;
-        });
-        return cleanupFlight;
-      };
-      // A rejected prepare never hands its context to the factory. Retain
-      // cleanup before any acquisition, including partial file creation.
+    let closing = false;
+    /** @type {PreparationResources} */
+    const resources = { seccompDirectory: null, removeAnchor: undefined };
+    /** @type {PodmanSliceContext | undefined} */
+    let context;
+    /** @type {Promise<void> | undefined} */
+    let cleanupFlight;
+    /** @type {Promise<void> | undefined} */
+    let closePreparationFlight;
+    const assertPreparing = () => {
+      slices.assertOpen();
+      if (closing) throw makeError(X`Podman preparation is closed`);
+    };
+    const releaseOwnership = () => {
+      slices.release(id, cleanup);
+      readyCleanups.delete(cleanup);
+    };
+    const cleanup = () => {
+      cleanupFlight ??= (async () => {
+        await (context === undefined
+          ? resources.removeAnchor?.()
+          : teardown(context));
+        if (context === undefined) await releasePreparationFiles(resources);
+        releaseOwnership();
+      })().catch(error => {
+        cleanupFlight = undefined;
+        throw error;
+      });
+      return cleanupFlight;
+    };
+    const value = slices.inOrder(id, async () => {
+      assertPreparing();
       slices.retain(id, cleanup);
       try {
-        context = await buildSlice(spec, resources);
+        context = await buildSlice(spec, resources, assertPreparing);
         context.releaseOwnership = releaseOwnership;
         // One owner changes from partial resources to the finished context.
         resources.seccompDirectory = null;
         resources.removeAnchor = undefined;
         readyCleanups.add(cleanup);
-        slices.assertOpen();
+        assertPreparing();
         return context;
       } catch (error) {
         readyCleanups.add(cleanup);
         try {
-          // Do not await the preparation chain here: this is that chain.
+          // Internal rollback must not await value: this is that chain.
           await cleanup();
         } catch (cleanupError) {
           throw new AggregateError(
@@ -1984,14 +2005,38 @@ export const makePodmanDriver = ({
         throw error;
       }
     });
+    void value.catch(() => undefined);
+    const closePreparation = () => {
+      closing = true;
+      if (closePreparationFlight !== undefined) return closePreparationFlight;
+      // A returned context must stop accepting operations immediately too.
+      const ready = context === undefined ? undefined : cleanup();
+      closePreparationFlight = (async () => {
+        await Promise.all([value.catch(() => undefined), ready]);
+        await cleanup();
+      })().catch(error => {
+        closePreparationFlight = undefined;
+        throw error;
+      });
+      return closePreparationFlight;
+    };
+    return harden({ value, close: closePreparation });
   };
+
+  /**
+   * Convenience path: failed preparation remains owned by this driver, but
+   * callers needing a scoped retry handle must retain prepareSliceKit instead.
+   * @param {SliceSpec} spec
+   */
+  const prepareSlice = spec => prepareSliceKit(spec).value;
 
   /**
    * @param {SliceSpec} spec
    * @param {PreparationResources} resources
+   * @param {() => void} assertPreparing
    * @returns {Promise<PodmanSliceContext>}
    */
-  const buildSlice = async (spec, resources) => {
+  const buildSlice = async (spec, resources, assertPreparing) => {
     const files = validateGeneratedFiles(spec.generatedFiles ?? [], [
       '/run',
       '/var/tmp',
@@ -2105,11 +2150,13 @@ export const makePodmanDriver = ({
       const fs = await getFs();
       const os = await import('os');
       const path = await import('path');
+      assertPreparing();
       const dir = await fs.mkdtemp(
         path.join(os.tmpdir(), 'endo-sandbox-seccomp-'),
       );
       // Serialization and writing can both fail. Own the directory first.
       resources.seccompDirectory = dir;
+      assertPreparing();
       const file = path.join(dir, 'profile.json');
       const profile = /** @type {{ profile: unknown }} */ (spec.seccomp)
         .profile;
@@ -2212,6 +2259,7 @@ export const makePodmanDriver = ({
         cgroup2,
         reconciled,
         resources,
+        assertPreparing,
       );
       policy = harden({
         request,
@@ -2614,19 +2662,6 @@ export const makePodmanDriver = ({
       /** @type {import('child_process').ChildProcess} */
       let child;
       try {
-        // Rootless podman locates its storage, runtime state, and operator
-        // configuration through these variables. Passing PATH alone can make
-        // this process look in a different store than `prepareSlice`, yielding
-        // an opaque exit 127 even though the container is running.
-        const podmanEnv = Object.fromEntries(
-          [
-            ['PATH', process.env.PATH ?? '/usr/bin:/bin'],
-            ['HOME', process.env.HOME],
-            ['XDG_RUNTIME_DIR', process.env.XDG_RUNTIME_DIR],
-            ['XDG_CONFIG_HOME', process.env.XDG_CONFIG_HOME],
-            ['CONTAINERS_CONF', process.env.CONTAINERS_CONF],
-          ].filter(([, value]) => value !== undefined),
-        );
         assertAdmissionOpen();
         child = cp.spawn('podman', startArgv, {
           stdio: [
@@ -2634,7 +2669,7 @@ export const makePodmanDriver = ({
             opts.captureStdout === false ? 'ignore' : 'pipe',
             opts.captureStderr === false ? 'ignore' : 'pipe',
           ],
-          env: podmanEnv,
+          env: hostEnvironment,
         });
         startAcquired = true;
       } catch (e) {
@@ -2851,6 +2886,7 @@ export const makePodmanDriver = ({
       ? {}
       : { supportsGeneratedFiles: true }),
     probe,
+    prepareSliceKit,
     prepareSlice,
     policy: reportPolicy,
     spawn,

@@ -2,6 +2,7 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 import { Far } from '@endo/far';
 import { spawn } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import {
   lstat,
   mkdtemp,
@@ -135,6 +136,91 @@ const fixture = async (t, publicNetwork = false) => {
     },
   };
 };
+
+test.serial(
+  'default Podman commands retain one sanitized operator environment through listener cleanup',
+  async t => {
+    t.timeout(5000);
+    const f = await fixture(t);
+    /** @type {Array<{command: string, args: string[], env: Record<string,string>}>} */
+    const nativeCalls = [];
+    const env = {
+      PATH: '/operator/bin',
+      HOME: '/operator/home',
+      XDG_CONFIG_HOME: '/operator/config',
+      XDG_DATA_HOME: '/operator/data',
+      XDG_RUNTIME_DIR: '/operator/run',
+      DBUS_SESSION_BUS_ADDRESS: 'unix:path=/operator/bus',
+      CONTAINERS_CONF: '/operator/containers.conf',
+      REGISTRY_AUTH_FILE: '/operator/auth.json',
+      OPENROUTER_API_KEY: 'never-to-child',
+      HTTP_PROXY: 'http://host-proxy',
+      CONTAINER_HOST: 'ssh://remote',
+      CONTAINER_CONNECTION: 'remote',
+    };
+    const { run, launch, ...otherHost } = f.options.host;
+    const kit = makePodmanProviderListenerRuntimeKit({
+      ...f.options,
+      env,
+      host: {
+        ...otherHost,
+        async executeFile(command, args, options) {
+          nativeCalls.push({ command, args, env: options.env });
+          return run(args.slice(2));
+        },
+        spawn(command, args, options) {
+          nativeCalls.push({ command, args, env: options.env });
+          return launch(args.slice(2));
+        },
+      },
+    });
+    t.teardown(kit.close);
+    env.HOME = '/changed/after-capture';
+    const runtime = await kit.open();
+    const listener = await runtime.start({
+      endpoint: Far('unused inference', {}),
+      limits,
+    });
+    await listener.observe();
+    await listener.stop();
+    await kit.close();
+    t.true(nativeCalls.some(call => call.args[2] === 'ps'));
+    t.true(nativeCalls.some(call => call.args[2] === 'inspect'));
+    t.true(nativeCalls.some(call => call.args[2] === 'rm'));
+    const first = nativeCalls[0];
+    if (!first) throw Error('Expected native commands');
+    const captured = first.env;
+    for (const call of nativeCalls) {
+      t.is(call.command, 'podman');
+      t.deepEqual(call.args.slice(0, 2), ['--remote=false', '--syslog=false']);
+      t.is(call.env, captured);
+      t.like(call.env, {
+        HOME: '/operator/home',
+        PATH: '/operator/bin',
+        XDG_DATA_HOME: '/operator/data',
+        XDG_CONFIG_HOME: '/operator/config',
+        CONTAINERS_CONF: '/operator/containers.conf',
+        REGISTRY_AUTH_FILE: '/operator/auth.json',
+      });
+      for (const forbidden of [
+        'OPENROUTER_API_KEY',
+        'HTTP_PROXY',
+        'CONTAINER_HOST',
+        'CONTAINER_CONNECTION',
+      ]) {
+        t.false(Object.hasOwn(call.env, forbidden));
+      }
+    }
+    const started = nativeCalls.find(call => call.args[2] === 'run');
+    if (!started) throw Error('Expected listener run');
+    t.true(started.args.includes('--http-proxy=false'));
+    t.false(started.args.some(arg => arg.startsWith('REGISTRY_AUTH_FILE=')));
+    t.true(
+      started.args.includes('HOME=/home/node'),
+      'guest HOME remains explicit',
+    );
+  },
+);
 
 test('runtime excludes a second live owner and permits reacquisition after disposal', async t => {
   const f = await fixture(t);
@@ -556,3 +642,206 @@ test('stale takeover retains its sweep before recovery reservation cleanup can f
   await t.throwsAsync(() => readlink(lockPath), { code: 'ENOENT' });
   await t.throwsAsync(() => lstat(recoveryPath), { code: 'ENOENT' });
 });
+
+test('retained listener stopped before its queue turn acquires no native child', async t => {
+  t.timeout(5000);
+  const f = await fixture(t);
+  const runtime = await makePodmanProviderListenerRuntime(f.options);
+  t.teardown(runtime.dispose);
+  const kit = runtime.startKit({ endpoint: Far('unused', {}), limits });
+  const stopping = kit.stop();
+  await t.throwsAsync(kit.value, { message: /inactive/ });
+  await stopping;
+  t.is(f.launches.length, 0);
+  t.is(f.removals.length, 0);
+});
+
+test.serial(
+  'failed listener acquisition retains A-only cleanup while B stays live',
+  async t => {
+    t.timeout(5000);
+    const f = await fixture(t);
+    let bName;
+    let failA = false;
+    const runtime = await makePodmanProviderListenerRuntime({
+      ...f.options,
+      host: {
+        ...f.options.host,
+        run: async args => {
+          const name = args.at(-1);
+          if (bName !== undefined && name !== bName) {
+            if (args[0] === 'inspect') throw Error('A admission failed');
+            if (args[0] === 'rm' && failA) throw Error('A removal failed');
+          }
+          return f.options.host.run(args);
+        },
+      },
+    });
+    t.teardown(async () => {
+      failA = false;
+      await runtime.dispose();
+    });
+    const b = await runtime.start({ endpoint: Far('b', {}), limits });
+    bName = (await b.observe()).containerName;
+    failA = true;
+    const a = runtime.startKit({ endpoint: Far('a', {}), limits });
+    await t.throwsAsync(a.value, { message: /startup and cleanup failed/ });
+    t.deepEqual(f.removals, []);
+    await t.throwsAsync(a.stop(), { message: /A removal failed/ });
+    failA = false;
+    await a.stop();
+    await a.stop();
+    t.is(f.removals.length, 1);
+    t.not(f.removals[0], bName);
+    t.is((await b.observe()).containerName, bName);
+    t.truthy(await readlink(join(f.options.stateDirectory, 'test-owner.lock')));
+  },
+);
+
+test.serial(
+  'per-listener stop drains its admitted acquisition before final removal',
+  async t => {
+    t.timeout(5000);
+    const f = await fixture(t);
+    let release = () => {};
+    const pending = new Promise(resolve => {
+      release = () => resolve(undefined);
+    });
+    let entered = () => {};
+    const admission = new Promise(resolve => {
+      entered = () => resolve(undefined);
+    });
+    let held = false;
+    const runtime = await makePodmanProviderListenerRuntime({
+      ...f.options,
+      host: {
+        ...f.options.host,
+        run: async args => {
+          if (args[0] === 'inspect' && !held) {
+            held = true;
+            entered();
+            await pending;
+          }
+          return f.options.host.run(args);
+        },
+      },
+    });
+    t.teardown(async () => {
+      release();
+      await runtime.dispose();
+    });
+    const kit = runtime.startKit({ endpoint: Far('inference', {}), limits });
+    const rejected = t.throwsAsync(kit.value, { message: /startup failed/ });
+    await admission;
+    const stopping = kit.stop();
+    t.is(kit.stop(), stopping);
+    let finished = false;
+    void stopping.then(() => {
+      finished = true;
+    });
+    await Promise.resolve();
+    t.false(finished);
+    t.deepEqual(f.removals, []);
+    release();
+    await rejected;
+    await stopping;
+    await kit.stop();
+    t.is(f.removals.length, 1);
+    t.truthy(await readlink(join(f.options.stateDirectory, 'test-owner.lock')));
+  },
+);
+
+test.serial(
+  'listener error retains native close proof and scoped retry without stopping a sibling',
+  async t => {
+    t.timeout(15_000);
+    const f = await fixture(t);
+    let capture = false;
+    let release = () => {};
+    /** @type {EventEmitter | undefined} */
+    let failedChild;
+    let closed = () => {};
+    const nativeClosed = new Promise(resolve => {
+      closed = () => resolve(undefined);
+    });
+    const runtime = await makePodmanProviderListenerRuntime({
+      ...f.options,
+      host: {
+        ...f.options.host,
+        launch: args => {
+          const child = f.options.host.launch(args);
+          if (!capture) return child;
+          // Keep actual pipes and child teardown, but hold delivery of the
+          // lifecycle acknowledgement to the runtime until explicitly released.
+          const lifecycle = Object.assign(new EventEmitter(), {
+            stdin: child.stdin,
+            stdout: child.stdout,
+            stderr: child.stderr,
+          });
+          child.on('error', error => lifecycle.emit('error', error));
+          child.once('close', (...closeArgs) => {
+            release = () => {
+              lifecycle.emit('close', ...closeArgs);
+            };
+            closed();
+          });
+          failedChild = lifecycle;
+          return lifecycle;
+        },
+      },
+    });
+    t.teardown(async () => {
+      // AVA awaits teardowns in reverse order. Release before asking the
+      // runtime to drain, including when an assertion fails while close waits.
+      capture = false;
+      for (const args of f.launches) {
+        // eslint-disable-next-line no-await-in-loop
+        await f.options.host.run(['rm', args[args.indexOf('--name') + 1]]);
+      }
+      if (failedChild) await nativeClosed;
+      release();
+      await runtime.dispose();
+    });
+    const b = await runtime.start({ endpoint: Far('b', {}), limits });
+    const bName = (await b.observe()).containerName;
+    capture = true;
+    const a = runtime.startKit({ endpoint: Far('a', {}), limits });
+    await a.value;
+    if (failedChild === undefined)
+      throw Error('Listener child was not acquired');
+    failedChild.emit('error', Error('injected child error'));
+    failedChild.emit('error', Error('repeated child error'));
+    await t.throwsAsync(a.stop(), { message: /timed out/ });
+    await nativeClosed;
+    t.is((await b.observe()).containerName, bName);
+    t.false(f.removals.includes(bName));
+    t.truthy(await readlink(join(f.options.stateDirectory, 'test-owner.lock')));
+    release();
+    await a.stop();
+    t.is((await b.observe()).containerName, bName);
+  },
+);
+
+test.serial(
+  'listener error promptly rejects an unfinished handshake',
+  async t => {
+    t.timeout(5000);
+    const f = await fixture(t);
+    const runtime = await makePodmanProviderListenerRuntime({
+      ...f.options,
+      host: {
+        ...f.options.host,
+        launch: args => {
+          const child = f.options.host.launch(args);
+          queueMicrotask(() => child.emit('error', Error('handshake failed')));
+          return child;
+        },
+      },
+    });
+    t.teardown(runtime.dispose);
+    const a = runtime.startKit({ endpoint: Far('a', {}), limits });
+    await t.throwsAsync(a.value, { message: /startup failed/ });
+    await a.stop();
+    t.is(f.removals.length, 1);
+  },
+);

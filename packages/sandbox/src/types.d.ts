@@ -8,6 +8,7 @@
  */
 
 import type { ERef, FarRef } from '@endo/eventual-send';
+import type { DriverPreparation } from './native-factory-types.js';
 import type {
   PassableBytesReader,
   PassableBytesWriter,
@@ -761,6 +762,14 @@ export type SandboxDriver = {
   supportsGeneratedFiles?: true;
   /** Best-effort availability check. */
   probe(): Promise<Omit<BackendProbe, 'name'>>;
+  /**
+   * Optional retained preparation owner, returned before acquisition begins.
+   * close fences publication and operation admission, drains acquisition, and
+   * retries this preparation's cleanup without stopping sibling slices.
+   * Drivers without this kit retain their legacy failed-preparation semantics;
+   * the factory cannot provide scoped failed-acquisition cleanup for them.
+   */
+  prepareSliceKit?(spec: SliceSpec): DriverPreparation;
   /** Materialise a slice from a fully-resolved `SliceSpec`. */
   prepareSlice(spec: SliceSpec): Promise<DriverSliceContext>;
   /**

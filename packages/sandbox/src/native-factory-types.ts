@@ -1,6 +1,15 @@
 import type { FarRef, RemoteFunctions } from '@endo/eventual-send';
 
-import type { SandboxHandle, SandboxMakeOpts, SliceSpec } from './types.js';
+import type {
+  DriverSliceContext,
+  MakeSandboxFactoryInput,
+  SandboxPowers,
+  SandboxHandle,
+  SandboxMakeOpts,
+  SpawnOpts,
+  ProcessHandle,
+  SliceSpec,
+} from './types.js';
 
 /**
  * Host-authorized native paths, resolved before crossing into a shared native
@@ -22,6 +31,26 @@ export type NativeSandboxMakeOpts = Omit<
 export type NativeSandboxHandle = FarRef<
   Pick<
     RemoteFunctions<SandboxHandle>,
-    'help' | 'spawn' | 'policy' | 'reset' | 'dispose'
-  >
+    'help' | 'policy' | 'reset' | 'dispose'
+  > & {
+    spawn(
+      argv: readonly string[],
+      opts?: NativeSpawnOpts,
+    ): Promise<ProcessHandle>;
+  }
 >;
+
+/** Cleanup ownership transferred before an individual driver preparation begins. */
+export type DriverPreparation<Context = DriverSliceContext> = Readonly<{
+  value: Promise<Context>;
+  close(): Promise<void>;
+}>;
+
+/** Native callers write through the returned process; they cannot import a reader. */
+export type NativeSpawnOpts = Omit<SpawnOpts, 'stdin'>;
+
+/** Native construction has resolved paths and imports no scratch capability. */
+export type MakeSandboxFactoryKitInput = Omit<
+  MakeSandboxFactoryInput,
+  'scratchProvider'
+> & { scratchProvider: SandboxPowers | null };

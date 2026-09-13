@@ -2,6 +2,7 @@
 
 import { E } from '@endo/eventual-send';
 import { Fail, makeError, X } from '@endo/errors';
+import { makePodmanHostEnvironment } from '@endo/sandbox/podman-host-environment.js';
 import {
   readNetworkNamespace,
   readNamespaceIdentities,
@@ -27,7 +28,6 @@ import { makeProviderPipe } from './provider-pipe.js';
 
 /** @import { FileHandle } from 'node:fs/promises' */
 
-const execute = promisify(execFile);
 const LABEL = 'io.endo.provider.owner';
 /**
  * @param {Promise<any>} promise
@@ -67,7 +67,8 @@ const readStart = async pid => {
  * open(); close() fences admission and retains failed initialization cleanup
  * and listener release for retry. The operator owns persistent directory and
  * resolver contents; this kit releases native handles and ownership markers.
- * Existing command completion and stale-owner recovery semantics are unchanged.
+ * Direct listener release requires the original child's close event. Other
+ * Podman command completion and stale-owner recovery limits are unchanged.
  * The only byte channel to the worker
  * is inherited stdin/stdout. The pinned listener image contains no credential.
  * Its process namespaces remain separate from model slices sharing only netns.
@@ -79,6 +80,7 @@ const readStart = async pid => {
  * @param {string} options.stateDirectory Private directory for a process lock.
  * @param {number} [options.maxListeners]
  * @param {any} [options.host] Trusted host powers, never session inputs.
+ * @param {Record<string,string>} [options.env] Operator host environment overrides, never guest env.
  * @param {boolean} [options.publicInternet] Operator enables optional public listeners.
  */
 export const makePodmanProviderListenerRuntimeKit = ({
@@ -86,6 +88,7 @@ export const makePodmanProviderListenerRuntimeKit = ({
   ownerId,
   stateDirectory,
   host = {},
+  env = {},
   maxListeners = 16,
   publicInternet = false,
 }) => {
@@ -97,18 +100,15 @@ export const makePodmanProviderListenerRuntimeKit = ({
   const imageDigest = imageRef.slice(imageRef.indexOf('@') + 1);
   typeof publicInternet === 'boolean' ||
     Fail`Invalid public network configuration`;
-  // Host-side rootless Podman configuration, never container environment.
-  // Proxy and credential variables are deliberately excluded.
-  const hostEnvironment = Object.fromEntries(
-    ['PATH', 'HOME', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS']
-      .filter(name => process.env[name] !== undefined)
-      .map(name => [name, process.env[name]]),
-  );
-  hostEnvironment.PATH ??= '/usr/bin:/bin';
+  const hostEnvironment = makePodmanHostEnvironment(process.env, env);
+  // Low-level injection preserves the default argv/environment construction in
+  // tests. High-level run/launch remain trusted complete host implementations.
+  const execute = host.executeFile ?? promisify(execFile);
+  const spawnChild = host.spawn ?? spawn;
   const run =
     host.run ??
     (args =>
-      execute('podman', args, {
+      execute('podman', ['--remote=false', '--syslog=false', ...args], {
         timeout: 30_000,
         maxBuffer: 1024 * 1024,
         killSignal: 'SIGKILL',
@@ -117,7 +117,7 @@ export const makePodmanProviderListenerRuntimeKit = ({
   const launch =
     host.launch ??
     (args =>
-      spawn('podman', args, {
+      spawnChild('podman', ['--remote=false', '--syslog=false', ...args], {
         stdio: ['pipe', 'pipe', 'pipe'],
         env: hostEnvironment,
       }));
@@ -279,218 +279,253 @@ export const makePodmanProviderListenerRuntimeKit = ({
     assertOpen();
     initialized = true;
   };
-  /** @param {{endpoint:any,limits:any,network?:{endpoint:any}}} configuration */
-  const startListener = ({ endpoint, limits, network = undefined }) =>
-    serialize(async () => {
-      if (network !== undefined) {
-        (publicInternet && network.endpoint) ||
-          Fail`Public network is not configured by the operator`;
-      }
+  /**
+   * Retain one listener's cleanup before its queued acquisition. This uses the
+   * runtime's existing admission queue, listener capacity and cleanup sets.
+   * stop() targets only this acquisition, including failed startup; it fences
+   * immediately and never equates rejection with native release.
+   * @param {{endpoint:any,limits:any,network?:{endpoint:any}}} configuration
+   */
+  const startKit = ({ endpoint, limits, network = undefined }) => {
+    const name = `endo-provider-${randomUUID()}`;
+    let child;
+    let pipe;
+    let control;
+    /** @type {Promise<void> | undefined} */
+    let stopping;
+    let admitted = false;
+    let acquiring = true;
+    let inactive = false;
+    let cleaned = false;
+    let live = false;
+    let channelClosed = false;
+    let namespaceId;
+    let networkEvidence;
+    const assertAdmission = () => {
       assertOpen();
-      initialized || Fail`Provider runtime is not open`;
-      await retryCleanup();
-      assertOpen();
-      cleanup.size < maxListeners || Fail`Provider listener capacity exceeded`;
-      const name = `endo-provider-${randomUUID()}`;
-      let child;
-      let pipe;
-      let control;
-      let stopping;
-      let live = false;
-      let channelClosed = false;
-      let namespaceId;
-      let networkEvidence;
-      const stop = () => {
-        if (stopping) return stopping;
-        live = false;
-        pendingCleanup.add(stop);
-        stopping = (async () => {
+      !inactive || Fail`Provider listener inactive`;
+    };
+    /** @returns {Promise<void>} */
+    const stop = () => {
+      inactive = true;
+      live = false;
+      // Closing the private pipe can unblock a pending handshake. The final
+      // removal still waits for this acquisition to settle, not its public
+      // result (whose rejection handler itself requests cleanup).
+      if (acquiring) pipe?.close();
+      if (cleaned) return Promise.resolve();
+      if (stopping) return stopping;
+      if (admitted) pendingCleanup.add(stop);
+      stopping = (async () => {
+        await acquisition.catch(() => {});
+        if (admitted) {
           if (control) await deadline(E(control).stop(), 1000).catch(() => {});
           pipe?.close();
-          // Container removal, not killing only the attached podman CLI, reaps
-          // the isolated worker. Failure retains this closure for a retry.
+          // Retain the runtime's existing native removal/closure contract;
+          // this per-listener owner does not add descendant-quiescence proof.
           await remove(name);
           if (child) await deadline(child.finished, 5000);
           cleanup.delete(stop);
           pendingCleanup.delete(stop);
-        })().catch(error => {
-          stopping = undefined;
-          throw error;
-        });
-        return stopping;
-      };
-      cleanup.add(stop);
-      try {
-        const subprocess = launch([
-          'run',
-          '--pull=never',
-          '-i',
-          '--name',
-          name,
-          '--label',
-          `${LABEL}=${ownerId}`,
-          '--network=none',
-          ...(network
-            ? ['--sysctl=net.ipv4.ip_unprivileged_port_start=0']
-            : []),
-          '--pid=private',
-          '--ipc=private',
-          // Rootless Podman establishes its mapped user namespace; admission
-          // verifies its identity instead of requesting a nested empty map.
-          '--user',
-          '1000:1000',
-          '--read-only',
-          '--read-only-tmpfs=false',
-          '--cap-drop=ALL',
-          '--security-opt=no-new-privileges',
-          '--memory=256m',
-          '--memory-swap=256m',
-          '--pids-limit=64',
-          '--cpus=1',
-          '--ulimit',
-          'nofile=1024:1024',
-          '--ulimit',
-          'core=0:0',
-          '--env',
-          'HOME=/home/node',
-          '--env',
-          'LANG=C.UTF-8',
-          '--env',
-          'LC_ALL=C.UTF-8',
-          '--entrypoint=node',
-          imageRef,
-          '/opt/endo-provider-worker.mjs',
-        ]);
-        const finished = new Promise(resolve => {
-          subprocess.once('error', () => resolve(undefined));
-          subprocess.once('close', () => resolve(undefined));
-        });
-        child = { process: subprocess, finished };
-        let errorBytes = 0;
-        subprocess.stderr.on('data', chunk => {
-          errorBytes += chunk.byteLength;
-          if (errorBytes <= 4096) host.onStderr?.(chunk);
-          if (errorBytes > 4096) pipe?.close();
-        });
-        pipe = makeProviderPipe({
-          input: subprocess.stdout,
-          output: subprocess.stdin,
-          bootstrap: harden({
-            endpoint,
-            limits,
-            ...(network ? { network } : {}),
-          }),
-        });
-        void pipe.closed.then(() => {
-          channelClosed = true;
-          live = false;
-        });
-        control = await deadline(pipe.getBootstrap(), 10_000);
-        const ready = await deadline(E(control).ready(), 10_000);
-        (ready.protocol === 'ProviderListenerV1' &&
-          /^http:\/\/127\.0\.0\.1:\d+$/.test(ready.endpoint)) ||
-          Fail`Provider listener handshake failed`;
-        const observe = async () => {
-          live || Fail`Provider listener inactive`;
-          const { stdout } = await run([
-            'inspect',
-            '--format',
-            '{{json .}}',
-            name,
-          ]);
-          const inspected = JSON.parse(stdout);
-          /** @type {unknown} */
-          const pid = inspected.State?.Pid;
-          if (typeof pid !== 'number')
-            throw makeError(X`Provider listener PID missing`);
-          (inspected.State?.Running === true &&
-            Number.isInteger(pid) &&
-            pid > 0 &&
-            inspected.ImageDigest === imageDigest &&
-            inspected.Config?.Labels?.[LABEL] === ownerId &&
-            inspected.HostConfig?.NetworkMode === 'none' &&
-            inspected.HostConfig?.ReadonlyRootfs === true) ||
-            Fail`Provider listener process identity mismatch`;
-          const [observedNetwork, namespaces, posture] = await Promise.all([
-            readNetworkNamespace(procfs, pid),
-            readNamespaceIdentities(procfs, pid),
-            readProcessStatus(procfs, pid),
-          ]);
-          (observedNetwork.interfaces.length === 1 &&
-            observedNetwork.interfaces[0] === 'lo' &&
-            observedNetwork.routableRoutes === 0 &&
-            Object.values(namespaces).every(value => value.unshared) &&
-            posture.uid === 1000 &&
-            posture.gid === 1000 &&
-            posture.noNewPrivs === true &&
-            posture.seccompMode === 2 &&
-            posture.effectiveCapabilities === 0n &&
-            posture.permittedCapabilities === 0n &&
-            posture.boundingCapabilities === 0n &&
-            (!namespaceId || namespaceId === observedNetwork.namespaceId)) ||
-            Fail`Provider listener isolation is not proved`;
-          const final = JSON.parse(
-            (await run(['inspect', '--format', '{{json .}}', name])).stdout,
-          );
-          (live &&
-            !channelClosed &&
-            final.State?.Running === true &&
-            final.State?.Pid === pid &&
-            final.ImageDigest === imageDigest &&
-            final.Config?.Labels?.[LABEL] === ownerId) ||
-            Fail`Provider listener changed during observation`;
-          namespaceId = observedNetwork.namespaceId;
-          return harden({
-            endpoint: ready.endpoint,
-            containerName: name,
-            networkNamespaceId: namespaceId,
-            listenerImageDigest: imageDigest,
-            ...(networkEvidence ? { network: networkEvidence } : {}),
-          });
-        };
-        assertOpen();
-        !channelClosed || Fail`Provider listener channel closed`;
-        live = true;
-        await observe();
-        if (network) {
-          const activated = await deadline(
-            E(control).activateNetwork(),
-            10_000,
-          );
-          const proxy = new URL(activated.proxyUrl);
-          (activated.policy === 'public-internet' &&
-            activated.dnsHost === '127.0.0.53' &&
-            proxy.protocol === 'http:' &&
-            proxy.hostname === '127.0.0.1' &&
-            proxy.port !== '' &&
-            proxy.username === '' &&
-            proxy.password === '' &&
-            proxy.pathname === '/' &&
-            proxy.search === '' &&
-            proxy.hash === '') ||
-            Fail`Public network listener handshake failed`;
-          networkEvidence = harden({
-            policy: 'public-internet',
-            proxyUrl: proxy.origin,
-            dnsHost: '127.0.0.53',
-            resolverConfigPath,
-          });
-          await observe();
         }
-        !channelClosed || Fail`Provider listener channel closed`;
-        void pipe.closed.then(() => stop()).catch(() => {});
-        assertOpen();
-        return harden({ observe, stop, closed: pipe.closed });
-      } catch (error) {
-        await stop().catch(cleanupError => {
-          throw AggregateError(
-            [error, cleanupError],
-            'Provider listener startup and cleanup failed',
-          );
-        });
-        throw AggregateError([error], 'Provider listener startup failed');
+        cleaned = true;
+      })().catch(error => {
+        stopping = undefined;
+        throw error;
+      });
+      return stopping;
+    };
+    const acquisition = serialize(async () => {
+      if (network !== undefined) {
+        (publicInternet && network.endpoint) ||
+          Fail`Public network is not configured by the operator`;
       }
+      assertAdmission();
+      initialized || Fail`Provider runtime is not open`;
+      await retryCleanup();
+      assertAdmission();
+      cleanup.size < maxListeners || Fail`Provider listener capacity exceeded`;
+      cleanup.add(stop);
+      admitted = true;
+      const subprocess = launch([
+        'run',
+        '--http-proxy=false',
+        '--pull=never',
+        '-i',
+        '--name',
+        name,
+        '--label',
+        `${LABEL}=${ownerId}`,
+        '--network=none',
+        ...(network ? ['--sysctl=net.ipv4.ip_unprivileged_port_start=0'] : []),
+        '--pid=private',
+        '--ipc=private',
+        // Rootless Podman establishes its mapped user namespace; admission
+        // verifies its identity instead of requesting a nested empty map.
+        '--user',
+        '1000:1000',
+        '--read-only',
+        '--read-only-tmpfs=false',
+        '--cap-drop=ALL',
+        '--security-opt=no-new-privileges',
+        '--memory=256m',
+        '--memory-swap=256m',
+        '--pids-limit=64',
+        '--cpus=1',
+        '--ulimit',
+        'nofile=1024:1024',
+        '--ulimit',
+        'core=0:0',
+        '--env',
+        'HOME=/home/node',
+        '--env',
+        'LANG=C.UTF-8',
+        '--env',
+        'LC_ALL=C.UTF-8',
+        '--entrypoint=node',
+        imageRef,
+        '/opt/endo-provider-worker.mjs',
+      ]);
+      const finished = new Promise(resolve => {
+        subprocess.once('close', () => resolve(undefined));
+      });
+      child = { process: subprocess, finished };
+      // A process error rejects admission but does not prove native stdio has
+      // closed. Keep observing errors until the original close event arrives.
+      subprocess.on('error', () => {
+        channelClosed = true;
+        live = false;
+        pipe?.close();
+      });
+      let errorBytes = 0;
+      subprocess.stderr.on('data', chunk => {
+        errorBytes += chunk.byteLength;
+        if (errorBytes <= 4096) host.onStderr?.(chunk);
+        if (errorBytes > 4096) pipe?.close();
+      });
+      pipe = makeProviderPipe({
+        input: subprocess.stdout,
+        output: subprocess.stdin,
+        bootstrap: harden({
+          endpoint,
+          limits,
+          ...(network ? { network } : {}),
+        }),
+      });
+      void pipe.closed.then(() => {
+        channelClosed = true;
+        live = false;
+      });
+      control = await deadline(pipe.getBootstrap(), 10_000);
+      const ready = await deadline(E(control).ready(), 10_000);
+      (ready.protocol === 'ProviderListenerV1' &&
+        /^http:\/\/127\.0\.0\.1:\d+$/.test(ready.endpoint)) ||
+        Fail`Provider listener handshake failed`;
+      const observe = async () => {
+        live || Fail`Provider listener inactive`;
+        const { stdout } = await run([
+          'inspect',
+          '--format',
+          '{{json .}}',
+          name,
+        ]);
+        const inspected = JSON.parse(stdout);
+        /** @type {unknown} */
+        const pid = inspected.State?.Pid;
+        if (typeof pid !== 'number')
+          throw makeError(X`Provider listener PID missing`);
+        (inspected.State?.Running === true &&
+          Number.isInteger(pid) &&
+          pid > 0 &&
+          inspected.ImageDigest === imageDigest &&
+          inspected.Config?.Labels?.[LABEL] === ownerId &&
+          inspected.HostConfig?.NetworkMode === 'none' &&
+          inspected.HostConfig?.ReadonlyRootfs === true) ||
+          Fail`Provider listener process identity mismatch`;
+        const [observedNetwork, namespaces, posture] = await Promise.all([
+          readNetworkNamespace(procfs, pid),
+          readNamespaceIdentities(procfs, pid),
+          readProcessStatus(procfs, pid),
+        ]);
+        (observedNetwork.interfaces.length === 1 &&
+          observedNetwork.interfaces[0] === 'lo' &&
+          observedNetwork.routableRoutes === 0 &&
+          Object.values(namespaces).every(value => value.unshared) &&
+          posture.uid === 1000 &&
+          posture.gid === 1000 &&
+          posture.noNewPrivs === true &&
+          posture.seccompMode === 2 &&
+          posture.effectiveCapabilities === 0n &&
+          posture.permittedCapabilities === 0n &&
+          posture.boundingCapabilities === 0n &&
+          (!namespaceId || namespaceId === observedNetwork.namespaceId)) ||
+          Fail`Provider listener isolation is not proved`;
+        const final = JSON.parse(
+          (await run(['inspect', '--format', '{{json .}}', name])).stdout,
+        );
+        (live &&
+          !channelClosed &&
+          final.State?.Running === true &&
+          final.State?.Pid === pid &&
+          final.ImageDigest === imageDigest &&
+          final.Config?.Labels?.[LABEL] === ownerId) ||
+          Fail`Provider listener changed during observation`;
+        namespaceId = observedNetwork.namespaceId;
+        return harden({
+          endpoint: ready.endpoint,
+          containerName: name,
+          networkNamespaceId: namespaceId,
+          listenerImageDigest: imageDigest,
+          ...(networkEvidence ? { network: networkEvidence } : {}),
+        });
+      };
+      assertAdmission();
+      !channelClosed || Fail`Provider listener channel closed`;
+      live = true;
+      await observe();
+      if (network) {
+        const activated = await deadline(E(control).activateNetwork(), 10_000);
+        const proxy = new URL(activated.proxyUrl);
+        (activated.policy === 'public-internet' &&
+          activated.dnsHost === '127.0.0.53' &&
+          proxy.protocol === 'http:' &&
+          proxy.hostname === '127.0.0.1' &&
+          proxy.port !== '' &&
+          proxy.username === '' &&
+          proxy.password === '' &&
+          proxy.pathname === '/' &&
+          proxy.search === '' &&
+          proxy.hash === '') ||
+          Fail`Public network listener handshake failed`;
+        networkEvidence = harden({
+          policy: 'public-internet',
+          proxyUrl: proxy.origin,
+          dnsHost: '127.0.0.53',
+          resolverConfigPath,
+        });
+        await observe();
+      }
+      !channelClosed || Fail`Provider listener channel closed`;
+      void pipe.closed.then(() => stop()).catch(() => {});
+      assertAdmission();
+      return harden({ observe, stop, closed: pipe.closed });
+    }).finally(() => {
+      acquiring = false;
     });
+    const value = acquisition.catch(async error => {
+      if (!admitted) throw error;
+      await stop().catch(cleanupError => {
+        throw AggregateError(
+          [error, cleanupError],
+          'Provider listener startup and cleanup failed',
+        );
+      });
+      throw AggregateError([error], 'Provider listener startup failed');
+    });
+    // A lifecycle owner may observe stop() without consuming the failed value.
+    void value.catch(() => {});
+    return harden({ value, stop });
+  };
   /** @returns {Promise<void>} */
   const close = () => {
     disposed = true;
@@ -526,7 +561,9 @@ export const makePodmanProviderListenerRuntimeKit = ({
     return attempt;
   };
   const runtime = harden({
-    start: startListener,
+    /** @param {Parameters<typeof startKit>[0]} configuration */
+    start: configuration => startKit(configuration).value,
+    startKit,
     retryCleanup: () => serialize(retryCleanup),
     dispose: close,
   });

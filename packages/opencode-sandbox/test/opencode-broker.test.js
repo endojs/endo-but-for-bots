@@ -52,6 +52,16 @@ const makeFakeRuntime = () => {
         closed: new Promise(() => {}),
       });
     },
+    startKit(input) {
+      const value = this.start(input);
+      return {
+        value,
+        stop: async () => {
+          const worker = await value;
+          await worker.stop();
+        },
+      };
+    },
     async dispose() {
       disposes += 1;
     },

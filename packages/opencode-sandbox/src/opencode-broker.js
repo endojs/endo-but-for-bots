@@ -43,7 +43,7 @@ const OWNER_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/;
  * configured without reproducing the literal.
  *
  * @param {object} options
- * @param {string[]} options.models - provider-scoped model ids the lease admits
+ * @param {readonly string[]} options.models - provider-scoped model ids the lease admits
  * @param {number} [options.maxConcurrentRequests]
  * @param {bigint} [options.maxRequestBytes]
  * @param {bigint} [options.maxResponseBytes]
@@ -94,7 +94,8 @@ export const buildOpencodeBrokerPolicy = ({
  * @param {string} options.imageRef - Pinned slice image ref (used for digest checks)
  * @param {string} options.imageDigest - Slice image digest (`sha256:...`)
  * @param {string} options.listenerImageRef - Pinned listener image ref
- * @param {string[]} options.models - Model ids this broker admits
+ * @param {readonly string[]} options.models - Model ids this broker admits
+ * @param {Record<string,string>} [options.env] Trusted operator host environment overrides.
  * @param {boolean} [options.publicInternet] Operator permits public egress grants.
  * @param {number} [options.maxSessions]
  * @param {any} [options.audit]
@@ -116,6 +117,7 @@ export const makeOpencodeBrokerKit = ({
   listenerImageRef,
   models,
   maxSessions,
+  env,
   publicInternet = false,
   audit,
   onDiagnostic,
@@ -165,6 +167,7 @@ export const makeOpencodeBrokerKit = ({
           ownerId,
           stateDirectory: join(directory, 'listener'),
           publicInternet,
+          env,
           ...(maxSessions === undefined ? {} : { maxListeners: maxSessions }),
         })
       : { open: async () => runtime, close: () => runtime.dispose() });

@@ -214,7 +214,7 @@ const makeProcfs = (fileOverrides = {}, linkOverrides = {}) => {
  * what a concurrency ceiling is about.
  *
  * @param {ExecutionContext} t
- * @param {{ calls: Array<{ command: string, args: string[] }>, responses?: Record<string, { code?: number, stdout?: string }>, holdAttached?: boolean, intercept?: (kind: string, child: any) => boolean }} options
+ * @param {{ calls: Array<{ command: string, args: string[], env?: NodeJS.ProcessEnv }>, responses?: Record<string, { code?: number, stdout?: string }>, holdAttached?: boolean, intercept?: (kind: string, child: any) => boolean }} options
  */
 const makeEngineStub = (
   t,
@@ -288,13 +288,14 @@ const makeEngineStub = (
     /**
      * @param {string} command
      * @param {string[]} args
+     * @param {import('node:child_process').SpawnOptions} spawnOptions
      */
-    spawn(command, args) {
+    spawn(command, args, spawnOptions) {
       if (command === 'podman') {
         t.deepEqual(args.slice(0, 2), ['--remote=false', '--syslog=false']);
         args = args.slice(2);
       }
-      calls.push({ command, args: [...args] });
+      calls.push({ command, args: [...args], env: spawnOptions.env });
       if (args[0] === 'create') {
         createdNames.add(args[args.indexOf('--name') + 1]);
       }
@@ -327,10 +328,10 @@ const makeEngineStub = (
 
 /**
  * @param {ExecutionContext} t
- * @param {{ responses?: Record<string, { code?: number, stdout?: string }>, procfs?: any, holdAttached?: boolean, volumeQuota?: any, intercept?: (kind: string, child: any) => boolean }} [options]
+ * @param {{ responses?: Record<string, { code?: number, stdout?: string }>, procfs?: any, holdAttached?: boolean, volumeQuota?: any, intercept?: (kind: string, child: any) => boolean, env?: Record<string,string> }} [options]
  */
 const makeDriverUnderTest = (t, options = {}) => {
-  /** @type {Array<{ command: string, args: string[] }>} */
+  /** @type {Array<{ command: string, args: string[], env?: NodeJS.ProcessEnv }>} */
   const calls = [];
   const driver = makePodmanDriver({
     childProcess: /** @type {any} */ (
@@ -341,7 +342,7 @@ const makeDriverUnderTest = (t, options = {}) => {
         intercept: options.intercept,
       })
     ),
-    env: {},
+    env: options.env ?? {},
     ownerId: 'formula-policy-owner',
     procfs: options.procfs ?? makeProcfs(),
     volumeQuota: Object.hasOwn(options, 'volumeQuota')
@@ -424,6 +425,82 @@ for (const contents of [
 
 /** @param {Array<{ command: string, args: string[] }>} calls */
 const createCalls = calls => calls.filter(call => call.args[0] === 'create');
+
+for (const policy of [false, true]) {
+  test(`Podman ${policy ? 'policy' : 'generic'} commands share captured host env and explicit guest proxies`, async t => {
+    const env = {
+      PATH: '/operator/bin',
+      HOME: '/operator/home',
+      XDG_RUNTIME_DIR: '/run/operator',
+      XDG_CONFIG_HOME: '/operator/config',
+      XDG_DATA_HOME: '/operator/data',
+      DBUS_SESSION_BUS_ADDRESS: 'unix:path=/run/operator/bus',
+      CONTAINERS_CONF: '/operator/containers.conf',
+      REGISTRY_AUTH_FILE: '/operator/auth.json',
+      OPENAI_API_KEY: 'must-not-inherit',
+      HTTP_PROXY: 'http://host-proxy',
+      CONTAINER_HOST: 'ssh://remote',
+      CONTAINER_CONNECTION: 'remote',
+    };
+    const { driver, calls } = makeDriverUnderTest(t, { env });
+    t.teardown(() => driver.close());
+    env.HOME = '/changed/after-capture';
+    await driver.probe();
+    const spec = makeSpec({
+      ...(!policy ? { policy: undefined, network: 'none' } : {}),
+      env: { HTTP_PROXY: 'http://127.0.0.1:1234' },
+    });
+    const slice = await driver.prepareSlice(/** @type {any} */ (spec));
+    const child = await driver.spawn(slice, ['/bin/true'], {
+      env: { HTTPS_PROXY: 'http://127.0.0.1:5678' },
+    });
+    await child.wait();
+    await driver.teardown(slice);
+    await driver.close();
+    t.true(calls.some(call => call.args.includes('--version')));
+    t.true(
+      calls.some(
+        call => call.args[0] === 'start' && call.args.includes('--attach'),
+      ),
+    );
+    t.true(calls.some(call => call.args[0] === 'rm'));
+    const captured = calls[0]?.env;
+    if (!captured) throw Error('Expected captured native environment');
+    for (const call of calls) {
+      if (!call.env) throw Error('Expected command environment');
+      t.is(
+        call.env,
+        captured,
+        `${call.command} ${call.args[0]} reuses original environment`,
+      );
+      t.like(call.env, {
+        HOME: '/operator/home',
+        PATH: '/operator/bin',
+        XDG_DATA_HOME: '/operator/data',
+        XDG_CONFIG_HOME: '/operator/config',
+        DBUS_SESSION_BUS_ADDRESS: 'unix:path=/run/operator/bus',
+        CONTAINERS_CONF: '/operator/containers.conf',
+        REGISTRY_AUTH_FILE: '/operator/auth.json',
+      });
+      for (const forbidden of [
+        'OPENAI_API_KEY',
+        'HTTP_PROXY',
+        'CONTAINER_HOST',
+        'CONTAINER_CONNECTION',
+      ]) {
+        t.false(Object.hasOwn(call.env, forbidden));
+      }
+    }
+    const creates = createCalls(calls);
+    for (const creation of creates)
+      t.true(creation.args.includes('--http-proxy=false'));
+    const operation = creates.at(-1);
+    if (!operation) throw Error('Expected operation create');
+    t.true(operation.args.includes('HTTP_PROXY=http://127.0.0.1:1234'));
+    t.true(operation.args.includes('HTTPS_PROXY=http://127.0.0.1:5678'));
+    t.false(operation.args.some(arg => arg.startsWith('REGISTRY_AUTH_FILE=')));
+  });
+}
 
 test('a policy slice is attested from the live anchor', async t => {
   const { driver, calls } = makeDriverUnderTest(t);
@@ -582,7 +659,8 @@ test('network join admits a loopback-only target and wires --network container:'
   );
 });
 
-for (const [label, fileOverrides, message] of [
+/** @type {readonly [string, Record<string, string>, RegExp][]} */
+const refusedJoinTargets = harden([
   [
     'a target exposing a non-loopback interface is refused',
     {
@@ -599,7 +677,8 @@ for (const [label, fileOverrides, message] of [
     },
     /must not have routable routes/,
   ],
-]) {
+]);
+for (const [label, fileOverrides, message] of refusedJoinTargets) {
   test(label, async t => {
     const { driver } = makeDriverUnderTest(t, {
       procfs: makeProcfs(fileOverrides),
@@ -1605,3 +1684,90 @@ for (const invalid of [false, true]) {
     t.true(listing?.args.includes('{{.ID}}'));
   });
 }
+
+test('scoped preparation close prevents anchor start without closing sibling admission', async t => {
+  t.timeout(5000);
+  const entered = makePromiseKit();
+  /** @type {any} */
+  let producer;
+  let hold = true;
+  const { driver, calls } = makeDriverUnderTest(t, {
+    intercept: (kind, child) => {
+      if (kind !== 'create' || !hold) return false;
+      hold = false;
+      producer = child;
+      entered.resolve(undefined);
+      return true;
+    },
+  });
+  const finish = () => {
+    if (!producer) return;
+    producer.stdout.end();
+    producer.stderr.end();
+    producer.emit('close', 0, null);
+    producer = undefined;
+  };
+  t.teardown(finish);
+  const kit = driver.prepareSliceKit(/** @type {any} */ (makeSpec()));
+  const rejected = t.throwsAsync(kit.value, {
+    message: /preparation is closed/,
+  });
+  await entered.promise;
+  let closed = false;
+  const closing = kit.close().then(() => {
+    closed = true;
+  });
+  await Promise.resolve();
+  t.false(closed);
+  finish();
+  await rejected;
+  await closing;
+  t.false(calls.some(call => call.args[0] === 'start'));
+  t.is(calls.filter(call => call.args[0] === 'rm').length, 1);
+  const sibling = driver.prepareSliceKit(/** @type {any} */ (makeSpec()));
+  t.teardown(() => sibling.close());
+  await sibling.value;
+  await sibling.close();
+});
+
+test('scoped failed-producer cleanup retains uncertainty without removing a sibling anchor', async t => {
+  t.timeout(5000);
+  let first = true;
+  /** @type {any} */
+  let producer;
+  const { driver, calls } = makeDriverUnderTest(t, {
+    intercept: (kind, child) => {
+      if (kind !== 'create' || !first) return false;
+      first = false;
+      producer = child;
+      queueMicrotask(() => child.emit('error', Error('creator lost')));
+      return true;
+    },
+  });
+  const finish = () => {
+    if (!producer) return;
+    producer.stdout.end();
+    producer.stderr.end();
+    producer.emit('close', null, 'SIGKILL');
+    producer = undefined;
+  };
+  t.teardown(finish);
+  const failed = driver.prepareSliceKit(/** @type {any} */ (makeSpec()));
+  await t.throwsAsync(failed.value, { message: /preparation cleanup pending/ });
+  const sibling = driver.prepareSliceKit(/** @type {any} */ (makeSpec()));
+  t.teardown(() => sibling.close());
+  await sibling.value;
+  await t.throwsAsync(failed.close(), { message: /producer closure pending/ });
+  t.false(calls.some(call => call.args[0] === 'rm'));
+  finish();
+  await Promise.resolve();
+  await t.throwsAsync(failed.close(), { message: /effects remain uncertain/ });
+  const firstAnchor = createCalls(calls)[0].args[2];
+  t.true(
+    calls
+      .filter(call => call.args[0] === 'rm')
+      .every(call => call.args.at(-1) === firstAnchor),
+  );
+  await sibling.close();
+  await t.throwsAsync(failed.close(), { message: /effects remain uncertain/ });
+});

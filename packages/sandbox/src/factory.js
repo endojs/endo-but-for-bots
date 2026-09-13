@@ -2,6 +2,7 @@
 
 /* global clearTimeout, setTimeout */
 
+import { assertCopyData } from '@endo/daemon/copy-data.js';
 import { makeCancelKit } from '@endo/cancel';
 import { E } from '@endo/eventual-send';
 import { Fail, makeError, q, X } from '@endo/errors';
@@ -15,7 +16,7 @@ import {
   ProcessHandleInterface,
   SandboxFactoryInterface,
   SandboxHandleInterface,
-  SpawnOptsShape,
+  NativeSpawnOptsShape,
 } from './interfaces.js';
 import { makeEagerReader } from './eager-reader.js';
 import { makeResourceRegistry } from './resource-registry.js';
@@ -23,13 +24,13 @@ import { resolveLimits } from './limits.js';
 import { validateGeneratedFiles } from './generated-files.js';
 
 /** @import { MakeSandboxFactoryInput, SandboxFactory, SandboxMakeOpts, SandboxDriver, BackendProbe, MountSpec, SliceSpec, MountCap, MountMode, SandboxHandle, ProcessHandle, MountHandle, SpawnOpts, DriverProcess, RootfsSpec, TerminationSignal } from './types.js' */
-/** @import { NativeSandboxMakeOpts, NativeSandboxHandle } from './native-factory-types.js' */
+/** @import { NativeSandboxMakeOpts, NativeSandboxHandle, MakeSandboxFactoryKitInput } from './native-factory-types.js' */
 
 const NativeHandleInterface = harden(
   M.interface('NativeSandboxHandle', {
     help: M.call().optional(M.string()).returns(M.string()),
     spawn: M.call(M.arrayOf(M.string()))
-      .optional(SpawnOptsShape)
+      .optional(NativeSpawnOptsShape)
       .returns(M.promise()),
     policy: M.call().returns(M.promise()),
     reset: M.call().returns(M.promise()),
@@ -319,7 +320,7 @@ const resolveHostPath = async (scratchProvider, cap, context) => {
  * It shares the public factory's admission and cleanup owner, but never
  * acquires daemon mounts and returns a handle with static mounts only.
  *
- * @param {MakeSandboxFactoryInput} input
+ * @param {MakeSandboxFactoryKitInput} input
  * @param {{ makeDelay?: typeof delay }} [powers]
  * @returns {Readonly<{ factory: SandboxFactory, makeResolved(opts: NativeSandboxMakeOpts): Promise<NativeSandboxHandle>, close(reason?: Error): Promise<void> }>}
  */
@@ -327,6 +328,11 @@ export const makeSandboxFactoryKit = (
   { drivers, scratchProvider, context },
   { makeDelay = delay } = {},
 ) => {
+  const requireScratchProvider = () => {
+    if (scratchProvider === null)
+      throw Fail`Sandbox capability construction requires a scratch provider`;
+    return scratchProvider;
+  };
   const driverList = harden([...drivers]);
   const slices = makeResourceRegistry();
   /** @type {Set<() => Promise<void>>} */
@@ -486,7 +492,7 @@ export const makeSandboxFactoryKit = (
     }
     // Otherwise treat it as a Mount cap.
     const hostPath = await resolveHostPath(
-      scratchProvider,
+      requireScratchProvider(),
       /** @type {MountCap} */ (rootfs),
       'rootfs',
     );
@@ -499,7 +505,7 @@ export const makeSandboxFactoryKit = (
    */
   const resolveMount = async mount => {
     const hostPath = await resolveHostPath(
-      scratchProvider,
+      requireScratchProvider(),
       mount.cap,
       `mount ${mount.innerPath}`,
     );
@@ -525,10 +531,11 @@ export const makeSandboxFactoryKit = (
     // Preferred path: mint a scratch mount and resolve it via
     // `provideHostPath`.
     try {
-      const scratchCap =
-        await E(scratchProvider).provideScratchMount('sandbox-scratch');
+      const scratchCap = await E(requireScratchProvider()).provideScratchMount(
+        'sandbox-scratch',
+      );
       return await resolveHostPath(
-        scratchProvider,
+        requireScratchProvider(),
         /** @type {MountCap} */ (scratchCap),
         'scratch upper layer',
       );
@@ -652,11 +659,21 @@ export const makeSandboxFactoryKit = (
     });
 
     assertOwner();
-    const driverSlice = await driver.prepareSlice(sliceSpec);
-    // Retain immediately: even rendering or minting the public handle can fail.
-    // The initial cleanup owns just the returned driver context; once built,
-    // disposal also stops process admission and releases dynamic mounts.
-    let disposeOwned = () => driver.teardown(driverSlice);
+    let preparation;
+    if (driver.prepareSliceKit !== undefined) {
+      preparation = driver.prepareSliceKit(sliceSpec);
+    } else {
+      // Legacy drivers only transfer ownership after successful preparation.
+      // Their failed acquisitions cannot be cleaned up through this factory.
+      const slice = await driver.prepareSlice(sliceSpec);
+      preparation = {
+        value: Promise.resolve(slice),
+        close: () => driver.teardown(slice),
+      };
+    }
+    // Retain before waiting for preparation, rendering, or handle construction.
+    // Once built, disposal also releases processes and dynamic mounts.
+    let disposeOwned = preparation.close;
     /** @type {Promise<void> | undefined} */
     let cleanupFlight;
     const cleanupOwned = () => {
@@ -672,6 +689,7 @@ export const makeSandboxFactoryKit = (
     };
     slices.retain(sliceId, cleanupOwned);
     liveClosers.add(cleanupOwned);
+    const driverSlice = await preparation.value;
     // Drivers may attach a `runtimeDetails` summary to the slice
     // context.  When present, the factory weaves it into the
     // per-slice `help()` text so callers can see which hardening
@@ -1111,7 +1129,7 @@ export const makeSandboxFactoryKit = (
       // Lifecycle is bound to the slice; the daemon's scratch GC
       // sweeps the host directory when the cap is unpinned.
       const scratchCap = /** @type {MountCap} */ (
-        await E(scratchProvider).provideScratchMount(
+        await E(requireScratchProvider()).provideScratchMount(
           `sandbox-scratch-${innerPath.replace(/[^a-zA-Z0-9-]/g, '-')}`,
         )
       );
@@ -1209,7 +1227,10 @@ export const makeSandboxFactoryKit = (
         nativeOnly
           ? `Native sandbox with static mounts. Methods: help, spawn, policy, reset, dispose.\n${sliceRuntimeReport}`
           : `${HANDLE_HELP_BASE}\n${sliceRuntimeReport}`,
-      spawn: spawnProc,
+      spawn: (argv, spawnOptions = {}) => {
+        if (nativeOnly) assertCopyData(harden(spawnOptions));
+        return spawnProc(argv, spawnOptions);
+      },
       policy: attestPolicy,
       reset: resetSlice,
       dispose: disposeSlice,
@@ -1274,11 +1295,15 @@ export const makeSandboxFactoryKit = (
     });
 
   /** @param {SandboxMakeOpts} opts */
-  const make = opts => makeOwned(opts, () => resolvePathsFromCaps(opts), false);
+  const make = opts => {
+    requireScratchProvider();
+    return makeOwned(opts, () => resolvePathsFromCaps(opts), false);
+  };
 
   /** @param {NativeSandboxMakeOpts} opts */
   const makeResolved = opts => {
     const approved = harden(opts);
+    assertCopyData(approved);
     return makeOwned(
       approved,
       async () =>
@@ -1392,6 +1417,9 @@ harden(makeSandboxFactoryKit);
  * @param {{ makeDelay?: typeof delay }} [powers]
  * @returns {SandboxFactory}
  */
-export const makeSandboxFactory = (input, powers) =>
-  makeSandboxFactoryKit(input, powers).factory;
+export const makeSandboxFactory = (input, powers) => {
+  input.scratchProvider !== null ||
+    Fail`Sandbox factory requires a scratch provider`;
+  return makeSandboxFactoryKit(input, powers).factory;
+};
 harden(makeSandboxFactory);

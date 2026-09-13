@@ -10,7 +10,7 @@ const opts = harden({ rootfs: { kind: 'host-bind' } });
 
 /**
  * @param {import('ava').ExecutionContext} t
- * @param {{ prepare?: (index: number) => Promise<unknown>, probe?: () => Promise<void>, teardown?: () => Promise<void>, context?: any }} [options]
+ * @param {{ prepare?: (index: number) => Promise<unknown>, prepareKit?: () => { value: Promise<unknown>, close(): Promise<void> }, probe?: () => Promise<void>, teardown?: () => Promise<void>, context?: any }} [options]
  */
 const fixture = (t, options = {}) => {
   let prepared = 0;
@@ -20,6 +20,7 @@ const fixture = (t, options = {}) => {
     drivers: [
       {
         name: 'bwrap',
+        ...(options.prepareKit ? { prepareSliceKit: options.prepareKit } : {}),
         probe: async () => {
           await options.probe?.();
           return {
@@ -269,4 +270,31 @@ test('public disposal and host close share the same teardown attempt', async t =
   await Promise.all([disposing, closing]);
   t.is(attempts, 1);
   t.is(f.removed.length, 1);
+});
+
+test('factory close retains and fences a driver preparation before awaiting its value', async t => {
+  t.timeout(3000);
+  const entered = makePromiseKit();
+  const value = makePromiseKit();
+  let closeCalls = 0;
+  const f = fixture(t, {
+    prepareKit: () => {
+      entered.resolve(undefined);
+      return {
+        value: value.promise,
+        close: async () => {
+          closeCalls += 1;
+          value.reject(Error('preparation cancelled'));
+        },
+      };
+    },
+  });
+  t.teardown(() => value.reject(Error('test teardown')));
+  const making = E(f.factory).make(opts);
+  const rejected = t.throwsAsync(making, { message: /preparation cancelled/ });
+  await entered.promise;
+  await f.close();
+  await rejected;
+  t.is(closeCalls, 1);
+  t.deepEqual(f.removed, []);
 });
