@@ -213,7 +213,9 @@ pub const IRONHORSE_MAGIC: [u8; 4] = *b"IRON";
 // Version 18 persists relocated boot-native name chunks in the FUNC suffix.
 // Version 19 records code-segment identities in saved exception handlers.
 // Version 20 carries the first reported unhandled rejection in PRMS.
-pub const IRONHORSE_FORMAT_VERSION: u32 = 20;
+// Version 21 adds shared environments, roots, modules, and queued jobs to FUNC.
+/// Format 22 adds host-function recipes to the shared FUNC extension.
+pub const IRONHORSE_FORMAT_VERSION: u32 = 22;
 
 /// The oldest format version this reader still decodes. Version-1
 /// containers predate the version-2 stamp; every version-1 writer in

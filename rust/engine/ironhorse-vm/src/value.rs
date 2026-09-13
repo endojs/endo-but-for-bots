@@ -362,17 +362,18 @@ pub enum Kind {
     Closure = 9,
     /// An environment/reference sentinel produced by `EVAL_REFERENCE`
     /// and friends and consumed by `GET_VARIABLE`/`SET_VARIABLE`. The
-    /// payload's `Reference` names the environment the variable resolves
-    /// against (the global instance, or `SlotIndex::NULL` for the
-    /// active frame's own scope).
+    /// payload's `Reference` is slot 0 for the global environment, or
+    /// `SlotIndex::NULL` for the active frame's own scope. Computed super
+    /// references instead carry the actual receiver and store the base
+    /// prototype in `next`. These forms can survive in a suspended stack.
     EnvReference = 12,
     /// A computed property key produced by `XS_CODE_AT`/`AT_2` (XS's
     /// `XS_AT_KIND`) and consumed by `GET_PROPERTY_AT`/`SET_PROPERTY_AT`/
     /// `NEW_PROPERTY_AT`/`DELETE_PROPERTY_AT`. The payload's [`Payload::At`]
     /// carries the resolved `(id, index)`: a named key sets `id` (a symbol
     /// id) with `index == 0`; an integer/number index key sets `id ==
-    /// XS_NO_ID` with the array index. A transient stack value only (never
-    /// stored in a property slot or snapshotted), so it needs no GC edge.
+    /// XS_NO_ID` with the array index. A stack value only, also carried in
+    /// suspended activations; never stored as an ordinary guest property.
     At = 13,
     /// A BigInt primitive (XS's `XS_BIGINT_KIND`). The payload's
     /// [`Payload::BigInt`] names a chunk holding the arbitrary-precision

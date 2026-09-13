@@ -49,7 +49,6 @@ macro_rules! boundary_predicate {
 macro_rules! define_boundary {
     (() $vis:vis struct $name:ident {
         $(#[boot_new($boot_new:expr)]
-          #[boot_template($boot_template:expr)]
           #[gc_root($root:ident)]
           #[quiescent($boundary:ident)]
           #[persist_refs($persist:ident)]
@@ -62,6 +61,10 @@ macro_rules! define_boundary {
           $(#[$attr:meta])* $field_vis:vis $field:ident: $ty:ty,)*
     } boot_context { $($boot_context:tt)* } external_tables { $($external:tt)* }) => {
         impl Interp {
+            pub(super) fn fields_at_shared_collection_boundary(&self) -> bool {
+                self.shared_compartments && true $(&& (matches!(stringify!($field), "promise_jobs" | "pending_rejections" | "last_crank_completed")
+                    || boundary_predicate!(boundary_run, self, $field, $boundary)))*
+            }
             pub(super) fn fields_are_quiescent(&self) -> bool {
                 true $(&& boundary_predicate!(boundary_run, self, $field, $boundary))*
             }

@@ -364,9 +364,9 @@ LLM-agent stack).*
 | [ironhorse-debugger-recovery-and-uncaught](ironhorse-debugger-recovery-and-uncaught.md) | 2026-08-12 | 2026-08-14 | Proposed |
 | [ironhorse-known-defects](ironhorse-known-defects.md) | 2026-09-04 | 2026-09-07 | Reference |
 | [ironhorse-engine-trait-research](ironhorse-engine-trait-research.md) | 2026-09-08 | — | Reference |
-| [ironhorse-w6-decisions](ironhorse-w6-decisions.md) | 2026-09-09 | 2026-09-10 | Active |
+| [ironhorse-w6-decisions](ironhorse-w6-decisions.md) | 2026-09-09 | 2026-09-13 | Active |
 | [ironhorse-quiescent-gc](ironhorse-quiescent-gc.md) | 2026-09-10 | 2026-09-10 | **Complete** |
-| [ironhorse-engine](ironhorse-engine.md) | 2026-07-02 | 2026-09-10 | Approved |
+| [ironhorse-engine](ironhorse-engine.md) | 2026-07-02 | 2026-09-13 | Approved |
 | [ironhorse-meter-opcode-cost-instrumentation](ironhorse-meter-opcode-cost-instrumentation.md) | 2026-07-05 | 2026-09-09 | In Progress |
 | [ironhorse-test262-convergence](ironhorse-test262-convergence.md) | 2026-07-05 | 2026-09-08 | In Progress |
 | [test262-fixture-consolidation](test262-fixture-consolidation.md) | 2026-08-06 | 2026-08-14 | In Progress |
@@ -2081,3 +2081,8 @@ needed since `followMessages()` replays all historical submissions).
 `familiar-bundled-agents` complete (esbuild bundles for Lal/Fae, resource
 paths, env var passthrough, inline guest provisioning in daemon-node.js
 using setup.js pattern — Option C instead of Option A from the design doc).
+
+The 2026-09-13 IronHorse update adds single-Realm shared Machine persistence to the
+[engine design](ironhorse-engine.md), including explicit host reattachment and the
+persistent worker lifecycle and host-callable registration with persisted ABI identities;
+its Approved status and scope totals are unchanged.

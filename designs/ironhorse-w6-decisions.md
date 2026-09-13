@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-09-09 |
-| **Updated** | 2026-09-10 |
+| **Updated** | 2026-09-13 |
 | **Author** | kumavis (prompted) |
 | **Status** | Active |
 | **Source** | Architecture review workstream W6 (`rust/engine/architecture-review/2026-09-06/ARCHITECTURE-REVIEW.md`) |
@@ -52,6 +52,18 @@ Because the public surface stays, F159 becomes a naming obligation rather than a
 deletion: `ironhorse_vm::Machine` currently occupies the design's `Machine` name
 while being a stateless compartment factory, and that has to be reconciled when
 `Realm` lands rather than left as drift.
+
+**Scope clarification (2026-09-13, PR #1263 review).**
+The extraction supports one Realm per Machine and multiple Compartments within it.
+The Realm's default global environment also serves the start compartment.
+Other compartments have their own globals and evaluators over shared ordinary intrinsics.
+Functions capture defining environments, invocation contexts stack, and the Machine
+pumps one ordered job queue through the same call machinery.
+Rooted values share references within a machine; dropping a compartment cannot
+invalidate functions or callbacks that remain reachable.
+Multiple iframe-style Realms and cross-machine messaging are deferred.
+This supersedes the earlier references to N independent realms as this work unit's scope.
+Full daemon SES acceptance and arbitrary host-function registration remain separate.
 
 ## 2. Engine trait — deferred, and here is the trigger
 

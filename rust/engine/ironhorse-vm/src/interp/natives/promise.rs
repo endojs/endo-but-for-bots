@@ -114,9 +114,11 @@ impl Interp {
             self.meter.tick_slot_alloc();
         }
         let inst = self.slots.alloc(Slot::instance(proto));
+        let global_env = self.capture_global_environment();
         self.promises.insert(
             inst,
             PromiseData {
+                global_env,
                 state: PromiseState::Pending,
                 result: Slot::undefined(),
                 reactions: Vec::new(),
@@ -773,7 +775,7 @@ impl Interp {
             pd.result = value;
             std::mem::take(&mut pd.reactions)
         };
-        if reject && !self.promises[&promise].ever_handled && self.unhandled_rejection.is_none() {
+        if reject && !self.promises[&promise].ever_handled {
             self.pending_rejections.push(promise);
         }
         // Queue one job per registered reaction (XS's `fxQueueJob` per THEN),

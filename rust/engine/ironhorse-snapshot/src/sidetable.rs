@@ -291,9 +291,9 @@ mod tests {
             (
                 5,
                 "GlobalProps",
-                "global_props",
+                "environment.global_props",
                 Coverage::RebuiltAtRestore,
-                Some("global_props"),
+                Some("environment"),
             ),
             (
                 6,
@@ -384,7 +384,7 @@ mod tests {
                 19,
                 "PromiseJobs",
                 "promise_jobs",
-                Coverage::EmptyAtBoundary,
+                Coverage::Serialized,
                 Some("promise_jobs"),
             ),
             (
@@ -518,7 +518,7 @@ mod tests {
                 39,
                 "Modules",
                 "module::ModuleGraph",
-                Coverage::Pending,
+                Coverage::Serialized,
                 None,
             ),
             (
@@ -551,12 +551,12 @@ mod tests {
             assert_eq!(raw.coverage, format!("{:?}", expected.3));
             assert_eq!(raw.primary_field, expected.4);
             if let Some(field) = raw.primary_field {
-                assert!(ironhorse_vm::interp::INTERP_FIELDS
+                assert!(ironhorse_vm::diagnostics::INTERP_FIELDS
                     .iter()
                     .any(|(name, _)| *name == field));
             }
         }
-        assert!(!ironhorse_vm::interp::INTERP_FIELDS
+        assert!(!ironhorse_vm::diagnostics::INTERP_FIELDS
             .iter()
             .any(|(name, _)| *name == "Modules"));
     }
@@ -589,7 +589,7 @@ mod tests {
     #[test]
     fn ledger_classification_reconciles_with_the_interp_struct() {
         let src = include_str!("../../ironhorse-vm/src/interp/boot.rs");
-        let fields: Vec<&str> = ironhorse_vm::interp::INTERP_FIELDS
+        let fields: Vec<&str> = ironhorse_vm::diagnostics::INTERP_FIELDS
             .iter()
             .map(|(name, _)| *name)
             .collect();
@@ -609,7 +609,7 @@ mod tests {
             "proxy_revokers",
             "call_stack",
             "jumps",
-            "global_props",
+            "environment",
             "error_data",
             "accessors",
             "wrapper_data",
@@ -665,8 +665,15 @@ mod tests {
         ];
         const ARENAS: &[&str] = &["slots", "chunks", "stack"];
         const SATELLITES: &[&str] = &[
-            // The PRMS suffix roots a promise whose row already carries its reason.
-            "unhandled_rejection",
+            // FUNC's shared extension carries environment/lease identities and
+            // pending report candidates. Rc/Weak policy is rebuilt on adoption.
+            "inactive_environments",
+            "identity_roots",
+            "restored_leases",
+            "restored_environment_leases",
+            "host_callbacks",
+            "shared_compartments",
+            "pending_rejections",
             "detached_buffers",
             "shared_buffers",
             "deleted_fn_meta",
@@ -679,7 +686,6 @@ mod tests {
             "snapshot_baseline_identity",
         ];
         const TRANSIENTS: &[&str] = &[
-            "pending_rejections",
             // Intrinsic linking is synchronous and restores this guard before
             // control can reach a persistence boundary.
             "installing_intrinsics",
@@ -729,14 +735,13 @@ mod tests {
             // Embedding policy configured outside each activation.
             "eval_program_hoist",
             "meter_host",
-            "source_compiler",
             "cost",
             "step_limit",
             "n_dispatched",
         ];
         const BOOT_DERIVED: &[&str] = &[
+            "realm",
             "intrinsics",
-            "global_obj",
             "intl_object",
             "temporal_object",
             "temporal_now_object",
@@ -911,10 +916,70 @@ mod tests {
         }
     }
 
+    fn realm_fields(source: &str) -> std::collections::BTreeSet<String> {
+        let source = ironhorse_vm::source_scan::code_only(source);
+        let body = source
+            .split("pub struct CompartmentEnvironment {")
+            .nth(1)
+            .unwrap()
+            .split("\n}")
+            .next()
+            .unwrap();
+        body.lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| {
+                let (declaration, _) = line.split_once(':').expect("unclassified Realm field line");
+                declaration
+                    .split_whitespace()
+                    .last()
+                    .expect("Realm field name")
+                    .to_owned()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn realm_fields_have_an_explicit_standalone_persistence_policy() {
+        let source = include_str!("../../ironhorse-vm/src/interp/realm.rs");
+        let fields = realm_fields(source);
+        let extended = source.replacen(
+            "pub struct CompartmentEnvironment {",
+            "pub struct CompartmentEnvironment {\n    private_state: u32,",
+            1,
+        );
+        assert!(realm_fields(&extended).contains("private_state"));
+        assert_ne!(realm_fields(&extended), fields);
+        // Global head is boot-fingerprinted; its derived property map is rebuilt
+        // from slots. PRMS carries the unhandled reason. Owner/permit/compiler
+        // are host configuration; shared boot is explicitly unpersistable.
+        assert_eq!(
+            fields,
+            [
+                "global_obj",
+                "global_props",
+                "binding_names",
+                "modules",
+                "compiler_required",
+                "unhandled_rejection",
+                "owner",
+                "intrinsic_permit",
+                "source_compiler",
+                "shared_compiler"
+            ]
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
+        );
+        let boot = include_str!("../../ironhorse-vm/src/interp/boot.rs");
+        assert!(boot.contains("self.realm.global_object()"));
+        let persist = include_str!("../../ironhorse-vm/src/interp/persist.rs");
+        assert!(persist.contains("if self.shared_compartments {"));
+    }
+
     #[test]
     fn pending_is_derived_from_ledger() {
         let pending = SideTable::pending();
-        assert_eq!(pending.len(), 2, "the design's Remaining ledger count");
+        assert_eq!(pending.len(), 1, "the design's Remaining ledger count");
         // The rich per-instance tables are still pending.
         assert!(!pending.contains(&SideTable::Functions));
         assert!(!pending.contains(&SideTable::BoundFunctions));
@@ -974,14 +1039,17 @@ mod tests {
         assert!(!pending.contains(&SideTable::PromiseGuards));
         assert!(!pending.contains(&SideTable::Combinators));
         assert!(!pending.contains(&SideTable::AsyncInstances));
-        assert!(pending.contains(&SideTable::Modules));
-        // The quiescence-gated run stacks, call chain, catch chain, and
-        // microtask queue are EmptyAtBoundary, not pending: no atom is
+        assert!(!pending.contains(&SideTable::Modules));
+        assert_eq!(
+            SideTable::PromiseJobs.descriptor().coverage,
+            Coverage::Serialized
+        );
+        // The quiescence-gated run stacks, call chain and catch chain
+        // are EmptyAtBoundary, not pending: no atom is
         // ever needed for state the gates prove empty.
         for t in [
             SideTable::CallStack,
             SideTable::Jumps,
-            SideTable::PromiseJobs,
             SideTable::GenRunStack,
             SideTable::AsyncRunStack,
         ] {
@@ -1005,7 +1073,7 @@ mod tests {
         let interp = compact(interp);
         let boundary = compact(boundary);
         assert!(
-            interp.contains("pubfnis_quiescent(&self)->bool{self.fields_are_quiescent()}"),
+            interp.contains("pubfnis_quiescent(&self)->bool{self.fields_are_quiescent()||(self.last_crank_completed&&self.fields_at_shared_collection_boundary())}"),
             "public gate must invoke the generated field predicates"
         );
         assert!(boundary.contains("pub(super)fnfields_are_quiescent(&self)->bool{true$(&&boundary_predicate!(boundary_run,self,$field,$boundary))*}"),
@@ -1032,7 +1100,7 @@ mod tests {
             include_str!("../../ironhorse-vm/src/interp/persist.rs"),
             include_str!("../../ironhorse-vm/src/interp/boundary.rs"),
         );
-        ironhorse_vm::interp::boundary::QUIESCENCE_SOURCE
+        ironhorse_vm::diagnostics::QUIESCENCE_SOURCE
             .lines()
             .map(|line| line.split_whitespace().collect::<String>())
             .collect::<Vec<_>>()
@@ -1094,7 +1162,10 @@ mod tests {
             "this_captures",
             "locals",
             "id_map",
+            // These queues must be empty in the standalone predicate; the
+            // shared completed-script predicate carries them in FUNC instead.
             "pending_rejections",
+            "promise_jobs",
         ];
         const NON_EMPTINESS_CONJUNCTS: &[&str] = &[
             "this_val",

@@ -22,6 +22,7 @@ fn store_backed_worker_lifecycle_through_the_supervisor() {
         signature: "endor-ironhorse-worker-v1".to_string(),
         cadence: CadencePolicy::default(),
         meter: MeterBounds::default(),
+        intrinsic_permit: None,
     };
 
     // --- Fresh open: epoch 1 is the boot machine. -------------------
@@ -152,6 +153,7 @@ fn store_backed_worker_lifecycle_through_the_supervisor() {
         signature: options.signature.clone(),
         cadence: CadencePolicy::default(),
         meter: MeterBounds::default(),
+        intrinsic_permit: None,
     })
     .expect("resume open");
     assert_eq!(
@@ -177,6 +179,7 @@ fn store_backed_worker_lifecycle_through_the_supervisor() {
         signature: "some-other-host-surface".to_string(),
         cadence: CadencePolicy::default(),
         meter: MeterBounds::default(),
+        intrinsic_permit: None,
     }) {
         Err(MachineError::Store(e)) => {
             assert!(
@@ -204,6 +207,7 @@ fn an_empty_first_crank_does_not_link_the_table() {
         signature: "endor-ironhorse-worker-v1".to_string(),
         cadence: CadencePolicy::default(),
         meter: MeterBounds::default(),
+        intrinsic_permit: None,
     };
     let mut machine = PersistentMachine::open(&options).expect("fresh open");
     let outcome = machine.eval("1 + 2").expect("literal crank");
@@ -251,6 +255,7 @@ fn cadence_policy_defers_flushes_and_schedules_collections() {
             collect_every: 0,
         },
         meter: MeterBounds::default(),
+        intrinsic_permit: None,
     };
 
     // --- Deferred flushes. ------------------------------------------
@@ -331,6 +336,7 @@ fn cadence_policy_defers_flushes_and_schedules_collections() {
             collect_every: 0,
         },
         meter: MeterBounds::default(),
+        intrinsic_permit: None,
     };
     let mut base = PersistentMachine::open(&base_opts).expect("open base");
     base.eval(build).expect("baseline garbage crank");
@@ -360,6 +366,7 @@ fn cadence_policy_defers_flushes_and_schedules_collections() {
             collect_every: 2,
         },
         meter: MeterBounds::default(),
+        intrinsic_permit: None,
     };
     let mut sched = PersistentMachine::open(&sched_opts).expect("open sched");
     sched.eval(build).expect("garbage crank");
@@ -397,6 +404,7 @@ fn collect_every_is_not_starved_by_throwing_cranks() {
             collect_every: 2,
         },
         meter: MeterBounds::default(),
+        intrinsic_permit: None,
     };
     let mut machine = PersistentMachine::open(&options).expect("open");
     // Crank 1 (completed): builds reclaimable garbage. epoch 1 -> 2.
@@ -453,6 +461,7 @@ fn checkpoint_every_is_not_starved_by_throwing_cranks() {
             collect_every: 0,
         },
         meter: MeterBounds::default(),
+        intrinsic_permit: None,
     };
     let mut machine = PersistentMachine::open(&options).expect("open");
     let start = machine.epoch().expect("epoch");
@@ -500,6 +509,7 @@ fn a_healthy_machine_reports_no_failed_collections() {
             collect_every: 2,
         },
         meter: MeterBounds::default(),
+        intrinsic_permit: None,
     };
     let mut machine = PersistentMachine::open(&options).expect("open");
     for i in 0..4 {
@@ -556,6 +566,7 @@ fn the_collect_schedule_survives_a_suspend() {
         signature: "ironhorse-worker-v1".to_string(),
         cadence: policy(),
         meter: MeterBounds::default(),
+        intrinsic_permit: None,
     })
     .expect("open A");
     for i in 0..CRANKS {
@@ -573,6 +584,7 @@ fn the_collect_schedule_survives_a_suspend() {
             signature: "ironhorse-worker-v1".to_string(),
             cadence: policy(),
             meter: MeterBounds::default(),
+            intrinsic_permit: None,
         })
         .expect("open B");
         b.eval(&prog(i)).expect("B crank");
@@ -618,6 +630,7 @@ fn collection_policy_and_events_are_durable_and_reopen_refuses_drift() {
             collect_every: 2,
         },
         meter: MeterBounds::default(),
+        intrinsic_permit: None,
     };
     let mut machine = PersistentMachine::open(&options).unwrap();
     machine.eval("var x = 1; x").unwrap();
@@ -653,6 +666,7 @@ fn explicit_full_collection_reclaims_chunk_storage_across_reopen() {
         signature: "full-gc".to_string(),
         cadence: CadencePolicy::default(),
         meter: MeterBounds::default(),
+        intrinsic_permit: None,
     };
     let mut machine = PersistentMachine::open(&options).unwrap();
     machine
@@ -682,6 +696,7 @@ fn scheduled_collection_checkpoint_failure_preserves_the_committed_delivery() {
             collect_every: 1,
         },
         meter: MeterBounds::default(),
+        intrinsic_permit: None,
     };
     let machine = PersistentMachine::open(&options).unwrap();
     machine.close().unwrap();

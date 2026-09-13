@@ -94,7 +94,9 @@ pub use ironhorse_vm::{CHUNK_EXTENT_BYTES, SLOTS_PER_PAGE};
 /// v29: FUNC persists surviving boot-native name chunk locations.
 /// v30: GENR and ASYN may carry explicit saved-handler code segments.
 /// v31: PRMS may carry the first reported unhandled rejection.
-pub const STORE_SCHEMA_VERSION: u32 = 31;
+/// v32: FUNC may carry the shared Realm, environment, module, root and job graph.
+/// v33: shared FUNC may also carry stable host-service identities and captures.
+pub const STORE_SCHEMA_VERSION: u32 = 33;
 /// The oldest schema [`migrate_store`] can upgrade in place. Decode
 /// accepts the whole supported range; validation refuses an
 /// un-migrated older store with [`StoreError::NeedsMigration`], and
@@ -111,6 +113,9 @@ pub enum StoreError {
     /// its last crank halted. Rewind or complete a crank before
     /// persisting.
     MachineNotQuiescent,
+    /// A live Machine operation failed (for example, host-root allocation).
+    /// This does not classify the stored heap as corrupt.
+    MachineOperation(String),
     /// The heap holds unsupported live state identified by
     /// `Interp::stored_unpersistable_row_at_checkpoint`. Persistence
     /// refuses by row name rather than resume with missing state.
@@ -1994,7 +1999,7 @@ pub fn migrate_store(
             (25, _) => migrate_v25_to_v26(store)?,
             (26, _) => migrate_v26_to_v27(store)?,
             (27, _) => migrate_v27_to_v28(store)?,
-            (28 | 29 | 30, _) => migrate_framed_schema_identity(store, schema + 1)?,
+            (28 | 29 | 30 | 31 | 32, _) => migrate_framed_schema_identity(store, schema + 1)?,
             (_, Some(&(target, extra_len))) => {
                 migrate_append_small_section(store, target, extra_len)?;
             }
@@ -3963,17 +3968,17 @@ mod tests {
             wrappers: Vec::new(),
             regexps: Vec::new(),
             dates: Vec::new(),
-            function_state: ironhorse_vm::FunctionStateSnapshot::default(),
-            proxy_state: ironhorse_vm::ProxyStateSnapshot::default(),
+            function_state: ironhorse_vm::snapshot_api::FunctionStateSnapshot::default(),
+            proxy_state: ironhorse_vm::snapshot_api::ProxyStateSnapshot::default(),
             accessors: Vec::new(),
             intl_bound_functions: Vec::new(),
-            private_elements: ironhorse_vm::PrivateElementSnapshot::default(),
+            private_elements: ironhorse_vm::snapshot_api::PrivateElementSnapshot::default(),
             disposable_stacks: Vec::new(),
             generators: Vec::new(),
-            promise_cluster: ironhorse_vm::PromiseClusterSnapshot::default(),
+            promise_cluster: ironhorse_vm::snapshot_api::PromiseClusterSnapshot::default(),
             arguments_brands: Vec::new(),
             temporal: crate::image::TemporalImage::default(),
-            intl: ironhorse_vm::IntlTables::default(),
+            intl: ironhorse_vm::snapshot_api::IntlTables::default(),
             name_floor: None,
             iterators: Vec::new(),
         };
@@ -4004,17 +4009,17 @@ mod tests {
             wrappers: Vec::new(),
             regexps: Vec::new(),
             dates: Vec::new(),
-            function_state: ironhorse_vm::FunctionStateSnapshot::default(),
-            proxy_state: ironhorse_vm::ProxyStateSnapshot::default(),
+            function_state: ironhorse_vm::snapshot_api::FunctionStateSnapshot::default(),
+            proxy_state: ironhorse_vm::snapshot_api::ProxyStateSnapshot::default(),
             accessors: Vec::new(),
             intl_bound_functions: Vec::new(),
-            private_elements: ironhorse_vm::PrivateElementSnapshot::default(),
+            private_elements: ironhorse_vm::snapshot_api::PrivateElementSnapshot::default(),
             disposable_stacks: Vec::new(),
             generators: Vec::new(),
-            promise_cluster: ironhorse_vm::PromiseClusterSnapshot::default(),
+            promise_cluster: ironhorse_vm::snapshot_api::PromiseClusterSnapshot::default(),
             arguments_brands: Vec::new(),
             temporal: crate::image::TemporalImage::default(),
-            intl: ironhorse_vm::IntlTables::default(),
+            intl: ironhorse_vm::snapshot_api::IntlTables::default(),
             name_floor: None,
             iterators: Vec::new(),
         };
@@ -4827,7 +4832,7 @@ mod tests {
         // Function name chunks are external chunk holders. This
         // geometry-only fixture drops the corresponding function rows
         // together with the arena bytes.
-        shrunk.function_state = ironhorse_vm::FunctionStateSnapshot::default();
+        shrunk.function_state = ironhorse_vm::snapshot_api::FunctionStateSnapshot::default();
         let prev = store.manifest().unwrap().seal;
         let mut batch = image_to_batch_unchecked(&shrunk, 2, &prev);
         batch.chunk_extents.clear(); // nothing to write; drop-only

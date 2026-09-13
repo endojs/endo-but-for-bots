@@ -37,8 +37,13 @@ impl Interp {
         // the caller's lexical environment). Captured before the nested-frame
         // setup clears `eval_direct`.
         let is_direct = self.eval_direct;
-        let compiler = match &self.source_compiler {
-            Some(compiler) => compiler.clone(),
+        let compiler = match self.environment.source_compiler.clone().or_else(|| {
+            self.environment
+                .shared_compiler
+                .as_ref()
+                .and_then(std::rc::Weak::upgrade)
+        }) {
+            Some(compiler) => compiler,
             None => return Err(Step::Host(Halt::NotImplemented("eval:no-compiler"))),
         };
         self.charge_and_check(0)?;

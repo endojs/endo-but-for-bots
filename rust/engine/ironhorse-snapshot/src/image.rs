@@ -20,17 +20,21 @@
 //! tables are enumerated in [`crate::sidetable`] with their coverage; the
 //! ones marked `Pending` there are the remaining atoms.
 
+mod shared_codec;
+
 use crate::atom::{AtomReader, AtomWriter};
 use crate::format::{
     Signature, SnapshotError, Version, BLOC, CREA, HEAP, KEYS, METR, NAME, SIGN, STAC, SYMB, VERS,
 };
 use crate::slot_codec::{decode_slots, encode_slots, SLOT_RECORD_BYTES};
+use ironhorse_vm::snapshot_api::{
+    CollatorData, DateTimeFormatData, IntlTables, IteratorRow, ListFormatData, LocaleData,
+    NumberFormatData, PluralRulesData, SegmentIteratorData, SegmenterData, SegmentsData,
+};
 use ironhorse_vm::value::canonicalize_nan;
 use ironhorse_vm::SymbolName;
 use ironhorse_vm::{
-    dtf_component_key_static, ChunkArena, CollatorData, DateTimeFormatData, IntlTables,
-    IteratorRow, Kind, ListFormatData, LocaleData, MeterState, NumberFormatData, Payload,
-    PluralRulesData, SegmentIteratorData, SegmenterData, SegmentsData, Slot, SlotArena,
+    dtf_component_key_static, ChunkArena, Kind, MeterState, Payload, Slot, SlotArena,
     COST_TABLE_VERSION,
 };
 
@@ -431,23 +435,23 @@ pub struct MachineImage {
     /// `DATE`: Date `[[DateValue]]` records, owner-ascending.
     pub dates: Vec<DateImage>,
     /// `FUNC`: retained guest-callability state.
-    pub function_state: ironhorse_vm::FunctionStateSnapshot,
+    pub function_state: ironhorse_vm::snapshot_api::FunctionStateSnapshot,
     /// `PROX`: Proxy internal slots and revoker links.
-    pub proxy_state: ironhorse_vm::ProxyStateSnapshot,
+    pub proxy_state: ironhorse_vm::snapshot_api::ProxyStateSnapshot,
     /// `ACCS`: guest accessor getter/setter mappings.
-    pub accessors: Vec<ironhorse_vm::AccessorRow>,
+    pub accessors: Vec<ironhorse_vm::snapshot_api::AccessorRow>,
     /// `IBFN`: runtime Intl bound-function links.
-    pub intl_bound_functions: Vec<ironhorse_vm::IntlBoundFunctionRow>,
+    pub intl_bound_functions: Vec<ironhorse_vm::snapshot_api::IntlBoundFunctionRow>,
     /// `PRIV`: private values and accessors.
-    pub private_elements: ironhorse_vm::PrivateElementSnapshot,
+    pub private_elements: ironhorse_vm::snapshot_api::PrivateElementSnapshot,
     /// `DISP`: explicit resource-management stacks.
-    pub disposable_stacks: Vec<ironhorse_vm::DisposableStackRow>,
+    pub disposable_stacks: Vec<ironhorse_vm::snapshot_api::DisposableStackRow>,
     /// `GENR`: synchronous generator saved activations.
-    pub generators: Vec<ironhorse_vm::GeneratorRow>,
+    pub generators: Vec<ironhorse_vm::snapshot_api::GeneratorRow>,
     /// `PRMS`: the promise cluster — settlement state, resolving
     /// functions, `[[AlreadyResolved]]` guards, and combinator
     /// accumulators, validated as one unit (the rows cross-reference).
-    pub promise_cluster: ironhorse_vm::PromiseClusterSnapshot,
+    pub promise_cluster: ironhorse_vm::snapshot_api::PromiseClusterSnapshot,
     /// `ARGB`: the arguments-exotic brand owners, ascending.
     pub arguments_brands: Vec<u32>,
     /// `TMPR`: the four Temporal record tables (ledger).
@@ -692,7 +696,7 @@ impl MachineImage {
     /// Attach the atomic retained guest-callability state.
     pub fn with_function_state(
         mut self,
-        function_state: ironhorse_vm::FunctionStateSnapshot,
+        function_state: ironhorse_vm::snapshot_api::FunctionStateSnapshot,
     ) -> MachineImage {
         self.function_state = function_state;
         self
@@ -700,20 +704,23 @@ impl MachineImage {
 
     pub fn with_proxy_state(
         mut self,
-        proxy_state: ironhorse_vm::ProxyStateSnapshot,
+        proxy_state: ironhorse_vm::snapshot_api::ProxyStateSnapshot,
     ) -> MachineImage {
         self.proxy_state = proxy_state;
         self
     }
 
-    pub fn with_accessors(mut self, accessors: Vec<ironhorse_vm::AccessorRow>) -> MachineImage {
+    pub fn with_accessors(
+        mut self,
+        accessors: Vec<ironhorse_vm::snapshot_api::AccessorRow>,
+    ) -> MachineImage {
         self.accessors = accessors;
         self
     }
 
     pub fn with_intl_bound_functions(
         mut self,
-        rows: Vec<ironhorse_vm::IntlBoundFunctionRow>,
+        rows: Vec<ironhorse_vm::snapshot_api::IntlBoundFunctionRow>,
     ) -> MachineImage {
         self.intl_bound_functions = rows;
         self
@@ -721,7 +728,7 @@ impl MachineImage {
 
     pub fn with_private_elements(
         mut self,
-        private_elements: ironhorse_vm::PrivateElementSnapshot,
+        private_elements: ironhorse_vm::snapshot_api::PrivateElementSnapshot,
     ) -> MachineImage {
         self.private_elements = private_elements;
         self
@@ -729,20 +736,23 @@ impl MachineImage {
 
     pub fn with_disposable_stacks(
         mut self,
-        disposable_stacks: Vec<ironhorse_vm::DisposableStackRow>,
+        disposable_stacks: Vec<ironhorse_vm::snapshot_api::DisposableStackRow>,
     ) -> MachineImage {
         self.disposable_stacks = disposable_stacks;
         self
     }
 
-    pub fn with_generators(mut self, generators: Vec<ironhorse_vm::GeneratorRow>) -> MachineImage {
+    pub fn with_generators(
+        mut self,
+        generators: Vec<ironhorse_vm::snapshot_api::GeneratorRow>,
+    ) -> MachineImage {
         self.generators = generators;
         self
     }
 
     pub fn with_promise_cluster(
         mut self,
-        promise_cluster: ironhorse_vm::PromiseClusterSnapshot,
+        promise_cluster: ironhorse_vm::snapshot_api::PromiseClusterSnapshot,
     ) -> MachineImage {
         self.promise_cluster = promise_cluster;
         self
@@ -1291,7 +1301,7 @@ pub(crate) fn decode_collections(p: &[u8]) -> Result<Vec<CollectionImage>, Snaps
             }
         } else {
             if !table_length.is_power_of_two()
-                || table_length < ironhorse_vm::interp::MAP_MIN_TABLE_LENGTH
+                || table_length < ironhorse_vm::snapshot_api::MAP_MIN_TABLE_LENGTH
                 || table_length > TABLE_MAX
             {
                 return Err(SnapshotError::Corrupt(
@@ -1883,7 +1893,9 @@ pub(crate) fn decode_dates(p: &[u8]) -> Result<Vec<DateImage>, SnapshotError> {
 }
 
 /// Encode the atomic retained guest-callability cluster (`FUNC`).
-pub(crate) fn encode_function_state(state: &ironhorse_vm::FunctionStateSnapshot) -> Vec<u8> {
+pub(crate) fn encode_function_state(
+    state: &ironhorse_vm::snapshot_api::FunctionStateSnapshot,
+) -> Vec<u8> {
     let mut v = Vec::new();
     let text = |v: &mut Vec<u8>, value: &str| {
         v.extend_from_slice(&(value.len() as u32).to_be_bytes());
@@ -1946,12 +1958,15 @@ pub(crate) fn encode_function_state(state: &ironhorse_vm::FunctionStateSnapshot)
             v.extend_from_slice(&offset.to_be_bytes());
         }
     }
+    if let Some(shared) = &state.shared {
+        shared_codec::encode(shared, &mut v);
+    }
     v
 }
 
 pub(crate) fn decode_function_state(
     p: &[u8],
-) -> Result<ironhorse_vm::FunctionStateSnapshot, SnapshotError> {
+) -> Result<ironhorse_vm::snapshot_api::FunctionStateSnapshot, SnapshotError> {
     let mut c = Cursor::new(p, "function state");
     let text = |c: &mut Cursor<'_>| -> Result<String, SnapshotError> {
         let len = c.u32()? as usize;
@@ -1975,7 +1990,7 @@ pub(crate) fn decode_function_state(
         let owner = c.u32()?;
         if functions
             .last()
-            .is_some_and(|row: &ironhorse_vm::FunctionRow| owner <= row.owner)
+            .is_some_and(|row: &ironhorse_vm::snapshot_api::FunctionRow| owner <= row.owner)
         {
             return Err(SnapshotError::Corrupt(
                 "function state: owners not strictly ascending",
@@ -2002,7 +2017,7 @@ pub(crate) fn decode_function_state(
             2 => Some(true),
             _ => return Err(SnapshotError::Corrupt("function state: bad class tag")),
         };
-        functions.push(ironhorse_vm::FunctionRow {
+        functions.push(ironhorse_vm::snapshot_api::FunctionRow {
             owner,
             segment,
             body_start,
@@ -2023,7 +2038,7 @@ pub(crate) fn decode_function_state(
         let owner = c.u32()?;
         if bound_functions
             .last()
-            .is_some_and(|row: &ironhorse_vm::BoundFunctionRow| owner <= row.owner)
+            .is_some_and(|row: &ironhorse_vm::snapshot_api::BoundFunctionRow| owner <= row.owner)
         {
             return Err(SnapshotError::Corrupt(
                 "bound-function state: owners not strictly ascending",
@@ -2036,7 +2051,7 @@ pub(crate) fn decode_function_state(
         for _ in 0..arg_count {
             args.push(c.slot()?);
         }
-        bound_functions.push(ironhorse_vm::BoundFunctionRow {
+        bound_functions.push(ironhorse_vm::snapshot_api::BoundFunctionRow {
             owner,
             target,
             this_arg,
@@ -2088,8 +2103,14 @@ pub(crate) fn decode_function_state(
         }
         Some(rows)
     };
+    let shared = if c.i == p.len() {
+        None
+    } else {
+        Some(shared_codec::decode(&mut c)?)
+    };
     c.done()?;
-    Ok(ironhorse_vm::FunctionStateSnapshot {
+    Ok(ironhorse_vm::snapshot_api::FunctionStateSnapshot {
+        shared,
         native_names,
         segments,
         functions,
@@ -2099,7 +2120,9 @@ pub(crate) fn decode_function_state(
     })
 }
 
-pub(crate) fn encode_proxy_state(state: &ironhorse_vm::ProxyStateSnapshot) -> Vec<u8> {
+pub(crate) fn encode_proxy_state(
+    state: &ironhorse_vm::snapshot_api::ProxyStateSnapshot,
+) -> Vec<u8> {
     let mut v = Vec::new();
     v.extend_from_slice(&(state.proxies.len() as u32).to_be_bytes());
     for row in &state.proxies {
@@ -2119,7 +2142,7 @@ pub(crate) fn encode_proxy_state(state: &ironhorse_vm::ProxyStateSnapshot) -> Ve
 
 pub(crate) fn decode_proxy_state(
     p: &[u8],
-) -> Result<ironhorse_vm::ProxyStateSnapshot, SnapshotError> {
+) -> Result<ironhorse_vm::snapshot_api::ProxyStateSnapshot, SnapshotError> {
     let mut c = Cursor::new(p, "proxy state");
     let count = c.u32()? as usize;
     let mut proxies = Vec::with_capacity(count.min(p.len() / 13));
@@ -2127,7 +2150,7 @@ pub(crate) fn decode_proxy_state(
         let owner = c.u32()?;
         if proxies
             .last()
-            .is_some_and(|row: &ironhorse_vm::ProxyRow| owner <= row.owner)
+            .is_some_and(|row: &ironhorse_vm::snapshot_api::ProxyRow| owner <= row.owner)
         {
             return Err(SnapshotError::Corrupt(
                 "proxy state: owners not strictly ascending",
@@ -2140,7 +2163,7 @@ pub(crate) fn decode_proxy_state(
             1 => true,
             _ => return Err(SnapshotError::Corrupt("proxy state: bad boolean byte")),
         };
-        proxies.push(ironhorse_vm::ProxyRow {
+        proxies.push(ironhorse_vm::snapshot_api::ProxyRow {
             owner,
             target,
             handler,
@@ -2153,23 +2176,23 @@ pub(crate) fn decode_proxy_state(
         let owner = c.u32()?;
         if revokers
             .last()
-            .is_some_and(|row: &ironhorse_vm::ProxyRevokerRow| owner <= row.owner)
+            .is_some_and(|row: &ironhorse_vm::snapshot_api::ProxyRevokerRow| owner <= row.owner)
         {
             return Err(SnapshotError::Corrupt(
                 "proxy revokers: owners not strictly ascending",
             ));
         }
-        revokers.push(ironhorse_vm::ProxyRevokerRow {
+        revokers.push(ironhorse_vm::snapshot_api::ProxyRevokerRow {
             owner,
             proxy: c.u32()?,
             name_chunk: c.u32()?,
         });
     }
     c.done()?;
-    Ok(ironhorse_vm::ProxyStateSnapshot { proxies, revokers })
+    Ok(ironhorse_vm::snapshot_api::ProxyStateSnapshot { proxies, revokers })
 }
 
-pub(crate) fn encode_accessors(rows: &[ironhorse_vm::AccessorRow]) -> Vec<u8> {
+pub(crate) fn encode_accessors(rows: &[ironhorse_vm::snapshot_api::AccessorRow]) -> Vec<u8> {
     let mut v = Vec::new();
     v.extend_from_slice(&(rows.len() as u32).to_be_bytes());
     for row in rows {
@@ -2188,7 +2211,9 @@ pub(crate) fn encode_accessors(rows: &[ironhorse_vm::AccessorRow]) -> Vec<u8> {
     v
 }
 
-pub(crate) fn decode_accessors(p: &[u8]) -> Result<Vec<ironhorse_vm::AccessorRow>, SnapshotError> {
+pub(crate) fn decode_accessors(
+    p: &[u8],
+) -> Result<Vec<ironhorse_vm::snapshot_api::AccessorRow>, SnapshotError> {
     let mut c = Cursor::new(p, "accessor state");
     let count = c.u32()? as usize;
     let mut rows = Vec::with_capacity(count.min(p.len() / 8));
@@ -2197,7 +2222,9 @@ pub(crate) fn decode_accessors(p: &[u8]) -> Result<Vec<ironhorse_vm::AccessorRow
         let id = c.u16()?;
         if rows
             .last()
-            .is_some_and(|row: &ironhorse_vm::AccessorRow| (owner, id) <= (row.owner, row.id))
+            .is_some_and(|row: &ironhorse_vm::snapshot_api::AccessorRow| {
+                (owner, id) <= (row.owner, row.id)
+            })
         {
             return Err(SnapshotError::Corrupt(
                 "accessor state: rows not strictly ascending",
@@ -2212,7 +2239,7 @@ pub(crate) fn decode_accessors(p: &[u8]) -> Result<Vec<ironhorse_vm::AccessorRow
         };
         let get = value()?;
         let set = value()?;
-        rows.push(ironhorse_vm::AccessorRow {
+        rows.push(ironhorse_vm::snapshot_api::AccessorRow {
             owner,
             id,
             get,
@@ -2223,7 +2250,9 @@ pub(crate) fn decode_accessors(p: &[u8]) -> Result<Vec<ironhorse_vm::AccessorRow
     Ok(rows)
 }
 
-pub(crate) fn encode_intl_bound_functions(rows: &[ironhorse_vm::IntlBoundFunctionRow]) -> Vec<u8> {
+pub(crate) fn encode_intl_bound_functions(
+    rows: &[ironhorse_vm::snapshot_api::IntlBoundFunctionRow],
+) -> Vec<u8> {
     let mut v = Vec::new();
     v.extend_from_slice(&(rows.len() as u32).to_be_bytes());
     for row in rows {
@@ -2240,7 +2269,7 @@ pub(crate) fn encode_intl_bound_functions(rows: &[ironhorse_vm::IntlBoundFunctio
 
 pub(crate) fn decode_intl_bound_functions(
     p: &[u8],
-) -> Result<Vec<ironhorse_vm::IntlBoundFunctionRow>, SnapshotError> {
+) -> Result<Vec<ironhorse_vm::snapshot_api::IntlBoundFunctionRow>, SnapshotError> {
     let mut c = Cursor::new(p, "Intl bound-function state");
     let count = c.u32()? as usize;
     let mut rows = Vec::with_capacity(count.min(p.len() / 17));
@@ -2254,7 +2283,9 @@ pub(crate) fn decode_intl_bound_functions(
         let function = c.u32()?;
         if rows
             .last()
-            .is_some_and(|row: &ironhorse_vm::IntlBoundFunctionRow| function <= row.function)
+            .is_some_and(|row: &ironhorse_vm::snapshot_api::IntlBoundFunctionRow| {
+                function <= row.function
+            })
         {
             return Err(SnapshotError::Corrupt(
                 "Intl bound-function state: functions not strictly ascending",
@@ -2264,7 +2295,7 @@ pub(crate) fn decode_intl_bound_functions(
         let name_len = c.u32()? as usize;
         let name = String::from_utf8(c.bytes(name_len)?.to_vec())
             .map_err(|_| SnapshotError::Corrupt("Intl bound-function state: name not UTF-8"))?;
-        rows.push(ironhorse_vm::IntlBoundFunctionRow {
+        rows.push(ironhorse_vm::snapshot_api::IntlBoundFunctionRow {
             kind,
             function,
             owner,
@@ -2277,7 +2308,9 @@ pub(crate) fn decode_intl_bound_functions(
     Ok(rows)
 }
 
-pub(crate) fn encode_private_elements(state: &ironhorse_vm::PrivateElementSnapshot) -> Vec<u8> {
+pub(crate) fn encode_private_elements(
+    state: &ironhorse_vm::snapshot_api::PrivateElementSnapshot,
+) -> Vec<u8> {
     let mut v = Vec::new();
     v.extend_from_slice(&(state.values.len() as u32).to_be_bytes());
     for row in &state.values {
@@ -2304,7 +2337,7 @@ pub(crate) fn encode_private_elements(state: &ironhorse_vm::PrivateElementSnapsh
 
 pub(crate) fn decode_private_elements(
     p: &[u8],
-) -> Result<ironhorse_vm::PrivateElementSnapshot, SnapshotError> {
+) -> Result<ironhorse_vm::snapshot_api::PrivateElementSnapshot, SnapshotError> {
     let mut c = Cursor::new(p, "private elements");
     let count = c.u32()? as usize;
     let mut values = Vec::with_capacity(count.min(p.len() / (8 + SLOT_RECORD_BYTES)));
@@ -2313,7 +2346,7 @@ pub(crate) fn decode_private_elements(
         let brand = c.u32()?;
         if values
             .last()
-            .is_some_and(|row: &ironhorse_vm::PrivateValueRow| {
+            .is_some_and(|row: &ironhorse_vm::snapshot_api::PrivateValueRow| {
                 (receiver, brand) <= (row.receiver, row.brand)
             })
         {
@@ -2321,7 +2354,7 @@ pub(crate) fn decode_private_elements(
                 "private values: rows not strictly ascending",
             ));
         }
-        values.push(ironhorse_vm::PrivateValueRow {
+        values.push(ironhorse_vm::snapshot_api::PrivateValueRow {
             receiver,
             brand,
             value: c.slot()?,
@@ -2334,7 +2367,7 @@ pub(crate) fn decode_private_elements(
         let brand = c.u32()?;
         if accessors
             .last()
-            .is_some_and(|row: &ironhorse_vm::PrivateAccessorRow| {
+            .is_some_and(|row: &ironhorse_vm::snapshot_api::PrivateAccessorRow| {
                 (receiver, brand) <= (row.receiver, row.brand)
             })
         {
@@ -2349,7 +2382,7 @@ pub(crate) fn decode_private_elements(
                 _ => Err(SnapshotError::Corrupt("private accessors: bad option tag")),
             }
         };
-        accessors.push(ironhorse_vm::PrivateAccessorRow {
+        accessors.push(ironhorse_vm::snapshot_api::PrivateAccessorRow {
             receiver,
             brand,
             get: value()?,
@@ -2357,10 +2390,12 @@ pub(crate) fn decode_private_elements(
         });
     }
     c.done()?;
-    Ok(ironhorse_vm::PrivateElementSnapshot { values, accessors })
+    Ok(ironhorse_vm::snapshot_api::PrivateElementSnapshot { values, accessors })
 }
 
-pub(crate) fn encode_disposable_stacks(rows: &[ironhorse_vm::DisposableStackRow]) -> Vec<u8> {
+pub(crate) fn encode_disposable_stacks(
+    rows: &[ironhorse_vm::snapshot_api::DisposableStackRow],
+) -> Vec<u8> {
     let mut v = Vec::new();
     v.extend_from_slice(&(rows.len() as u32).to_be_bytes());
     for row in rows {
@@ -2379,7 +2414,7 @@ pub(crate) fn encode_disposable_stacks(rows: &[ironhorse_vm::DisposableStackRow]
 
 pub(crate) fn decode_disposable_stacks(
     p: &[u8],
-) -> Result<Vec<ironhorse_vm::DisposableStackRow>, SnapshotError> {
+) -> Result<Vec<ironhorse_vm::snapshot_api::DisposableStackRow>, SnapshotError> {
     let mut c = Cursor::new(p, "disposable stacks");
     let count = c.u32()? as usize;
     let mut rows = Vec::with_capacity(count.min(p.len() / 10));
@@ -2396,7 +2431,7 @@ pub(crate) fn decode_disposable_stacks(
         let owner = c.u32()?;
         if rows
             .last()
-            .is_some_and(|row: &ironhorse_vm::DisposableStackRow| owner <= row.owner)
+            .is_some_and(|row: &ironhorse_vm::snapshot_api::DisposableStackRow| owner <= row.owner)
         {
             return Err(SnapshotError::Corrupt(
                 "disposable stacks: owners not strictly ascending",
@@ -2408,7 +2443,7 @@ pub(crate) fn decode_disposable_stacks(
         let mut records =
             Vec::with_capacity(record_count.min(p.len() / (2 * SLOT_RECORD_BYTES + 1)));
         for _ in 0..record_count {
-            records.push(ironhorse_vm::DisposalRecordRow {
+            records.push(ironhorse_vm::snapshot_api::DisposalRecordRow {
                 resource: c.slot()?,
                 method: c.slot()?,
                 pass_resource: boolean(&mut c)?,
@@ -2419,7 +2454,7 @@ pub(crate) fn decode_disposable_stacks(
                 "disposable stacks: disposed stack retains records",
             ));
         }
-        rows.push(ironhorse_vm::DisposableStackRow {
+        rows.push(ironhorse_vm::snapshot_api::DisposableStackRow {
             owner,
             disposed,
             asynchronous,
@@ -2448,7 +2483,11 @@ fn encode_frame_id_map(v: &mut Vec<u8>, rows: &[(u16, u64)]) {
 // both container atoms and framed store sections have u32 payload lengths.
 // Within an extended row, u32::MAX denotes legacy implicit segment identity;
 // a serialized segment table cannot contain enough entries to use that index.
-fn encode_saved_frame(v: &mut Vec<u8>, row: &ironhorse_vm::SavedFrameRow, explicit_segments: bool) {
+fn encode_saved_frame(
+    v: &mut Vec<u8>,
+    row: &ironhorse_vm::snapshot_api::SavedFrameRow,
+    explicit_segments: bool,
+) {
     encode_frame_slots(v, &row.locals);
     encode_frame_id_map(v, &row.id_map);
     encode_frame_slots(v, &row.args);
@@ -2476,7 +2515,7 @@ fn encode_saved_frame(v: &mut Vec<u8>, row: &ironhorse_vm::SavedFrameRow, explic
     v.extend_from_slice(&row.resume_pc.to_be_bytes());
 }
 
-pub(crate) fn encode_generators(rows: &[ironhorse_vm::GeneratorRow]) -> Vec<u8> {
+pub(crate) fn encode_generators(rows: &[ironhorse_vm::snapshot_api::GeneratorRow]) -> Vec<u8> {
     let explicit_segments = rows
         .iter()
         .filter_map(|row| row.frame.as_ref())
@@ -2536,7 +2575,7 @@ fn decode_saved_frame(
     c: &mut Cursor<'_>,
     p: &[u8],
     explicit_segments: bool,
-) -> Result<ironhorse_vm::SavedFrameRow, SnapshotError> {
+) -> Result<ironhorse_vm::snapshot_api::SavedFrameRow, SnapshotError> {
     let locals = decode_frame_slots(c, p)?;
     let frame_id_map = decode_frame_id_map(c, p)?;
     let args = decode_frame_slots(c, p)?;
@@ -2551,7 +2590,7 @@ fn decode_saved_frame(
     let jump_count = c.u32()? as usize;
     let mut jumps = Vec::with_capacity(jump_count.min(p.len() / 50));
     for _ in 0..jump_count {
-        jumps.push(ironhorse_vm::SavedJumpRow {
+        jumps.push(ironhorse_vm::snapshot_api::SavedJumpRow {
             target_pc: u64_value(c)?,
             segment: if explicit_segments {
                 let segment = c.u32()?;
@@ -2567,7 +2606,7 @@ fn decode_saved_frame(
             flag: c.u8()?,
         });
     }
-    Ok(ironhorse_vm::SavedFrameRow {
+    Ok(ironhorse_vm::snapshot_api::SavedFrameRow {
         locals,
         id_map: frame_id_map,
         args,
@@ -2586,7 +2625,7 @@ fn decode_saved_frame(
 
 pub(crate) fn decode_generators(
     p: &[u8],
-) -> Result<Vec<ironhorse_vm::GeneratorRow>, SnapshotError> {
+) -> Result<Vec<ironhorse_vm::snapshot_api::GeneratorRow>, SnapshotError> {
     let mut c = Cursor::new(p, "generators");
     let prefix = c.u32()?;
     let explicit_segments = prefix == u32::MAX;
@@ -2596,7 +2635,7 @@ pub(crate) fn decode_generators(
         let owner = c.u32()?;
         if rows
             .last()
-            .is_some_and(|row: &ironhorse_vm::GeneratorRow| owner <= row.owner)
+            .is_some_and(|row: &ironhorse_vm::snapshot_api::GeneratorRow| owner <= row.owner)
         {
             return Err(SnapshotError::Corrupt(
                 "generators: owners not strictly ascending",
@@ -2616,7 +2655,7 @@ pub(crate) fn decode_generators(
                 "generators: state and frame disagree",
             ));
         }
-        rows.push(ironhorse_vm::GeneratorRow {
+        rows.push(ironhorse_vm::snapshot_api::GeneratorRow {
             state,
             owner,
             frame: saved,
@@ -2637,7 +2676,7 @@ pub(crate) fn decode_generators(
 }
 
 /// Async activations (`ASYN`), sharing the generator saved-frame encoding.
-pub(crate) fn encode_async_instances(rows: &[ironhorse_vm::AsyncRow]) -> Vec<u8> {
+pub(crate) fn encode_async_instances(rows: &[ironhorse_vm::snapshot_api::AsyncRow]) -> Vec<u8> {
     let explicit_segments = rows
         .iter()
         .any(|row| row.frame.jumps.iter().any(|jump| jump.segment.is_some()));
@@ -2658,12 +2697,13 @@ pub(crate) fn encode_async_instances(rows: &[ironhorse_vm::AsyncRow]) -> Vec<u8>
 
 pub(crate) fn decode_async_instances(
     p: &[u8],
-) -> Result<Vec<ironhorse_vm::AsyncRow>, SnapshotError> {
+) -> Result<Vec<ironhorse_vm::snapshot_api::AsyncRow>, SnapshotError> {
     let mut c = Cursor::new(p, "async instances");
     let prefix = c.u32()?;
     let explicit_segments = prefix == u32::MAX;
     let count = if explicit_segments { c.u32()? } else { prefix } as usize;
-    let mut rows: Vec<ironhorse_vm::AsyncRow> = Vec::with_capacity(count.min(p.len() / 8));
+    let mut rows: Vec<ironhorse_vm::snapshot_api::AsyncRow> =
+        Vec::with_capacity(count.min(p.len() / 8));
     for _ in 0..count {
         let owner = c.u32()?;
         if rows.last().is_some_and(|row| owner <= row.owner) {
@@ -2671,7 +2711,7 @@ pub(crate) fn decode_async_instances(
                 "async instances: owners not strictly ascending",
             ));
         }
-        rows.push(ironhorse_vm::AsyncRow {
+        rows.push(ironhorse_vm::snapshot_api::AsyncRow {
             owner,
             result_promise: c.u32()?,
             resolve: c.slot()?,
@@ -2695,10 +2735,12 @@ pub(crate) fn decode_async_instances(
 /// Encode the promise cluster (the `PRMS` payload / small-state
 /// promise section): four `u32`-counted lists in the fixed order
 /// promises, resolving functions, guards, combinators. See
-/// [`ironhorse_vm::PromiseClusterSnapshot`] for the row shapes and the
+/// [`ironhorse_vm::snapshot_api::PromiseClusterSnapshot`] for the row shapes and the
 /// compacted-arena canonical form. A present historical rejection adds its
 /// owner as a four-byte suffix; an absent report keeps the legacy payload.
-pub(crate) fn encode_promise_cluster(c: &ironhorse_vm::PromiseClusterSnapshot) -> Vec<u8> {
+pub(crate) fn encode_promise_cluster(
+    c: &ironhorse_vm::snapshot_api::PromiseClusterSnapshot,
+) -> Vec<u8> {
     let mut v = Vec::new();
     v.extend_from_slice(&(c.promises.len() as u32).to_be_bytes());
     for row in &c.promises {
@@ -2768,9 +2810,29 @@ pub(crate) fn encode_promise_cluster(c: &ironhorse_vm::PromiseClusterSnapshot) -
 /// - a live non-`Race` combinator's `remaining` covers its
 ///   pending element reactions — each drain decrements it once, so a
 ///   smaller count would underflow at resume.
-pub(crate) fn decode_promise_cluster(
+#[cfg(test)]
+fn decode_promise_cluster(
     p: &[u8],
-) -> Result<ironhorse_vm::PromiseClusterSnapshot, SnapshotError> {
+) -> Result<ironhorse_vm::snapshot_api::PromiseClusterSnapshot, SnapshotError> {
+    let state = decode_promise_cluster_payload(p)?;
+    let referenced: std::collections::BTreeSet<_> = state
+        .promises
+        .iter()
+        .flat_map(|p| &p.reactions)
+        .filter(|r| r.kind == 2 || r.kind == 12)
+        .map(|r| r.a)
+        .collect();
+    if referenced.len() != state.combinators.len() {
+        return Err(SnapshotError::Corrupt(
+            "promise cluster: combinators not densely referenced",
+        ));
+    }
+    Ok(state)
+}
+
+pub(crate) fn decode_promise_cluster_payload(
+    p: &[u8],
+) -> Result<ironhorse_vm::snapshot_api::PromiseClusterSnapshot, SnapshotError> {
     let mut c = Cursor::new(p, "promise cluster");
     let boolean = |c: &mut Cursor<'_>| -> Result<bool, SnapshotError> {
         match c.u8()? {
@@ -2780,13 +2842,13 @@ pub(crate) fn decode_promise_cluster(
         }
     };
     let count = c.u32()? as usize;
-    let mut promises: Vec<ironhorse_vm::PromiseRow> =
+    let mut promises: Vec<ironhorse_vm::snapshot_api::PromiseRow> =
         Vec::with_capacity(count.min(p.len() / (SLOT_RECORD_BYTES + 10)));
     for _ in 0..count {
         let owner = c.u32()?;
         if promises
             .last()
-            .is_some_and(|row: &ironhorse_vm::PromiseRow| owner <= row.owner)
+            .is_some_and(|row: &ironhorse_vm::snapshot_api::PromiseRow| owner <= row.owner)
         {
             return Err(SnapshotError::Corrupt(
                 "promise cluster: owners not strictly ascending",
@@ -2817,7 +2879,7 @@ pub(crate) fn decode_promise_cluster(
                     "promise cluster: reaction kind does not resume",
                 ));
             }
-            reactions.push(ironhorse_vm::PromiseReactionRow {
+            reactions.push(ironhorse_vm::snapshot_api::PromiseReactionRow {
                 on_fulfilled,
                 on_rejected,
                 resolve,
@@ -2827,7 +2889,7 @@ pub(crate) fn decode_promise_cluster(
                 b: c.u32()?,
             });
         }
-        promises.push(ironhorse_vm::PromiseRow {
+        promises.push(ironhorse_vm::snapshot_api::PromiseRow {
             owner,
             state,
             result,
@@ -2836,19 +2898,19 @@ pub(crate) fn decode_promise_cluster(
         });
     }
     let count = c.u32()? as usize;
-    let mut functions: Vec<ironhorse_vm::PromiseFnRow> =
+    let mut functions: Vec<ironhorse_vm::snapshot_api::PromiseFnRow> =
         Vec::with_capacity(count.min(p.len() / 17));
     for _ in 0..count {
         let function = c.u32()?;
         if functions
             .last()
-            .is_some_and(|row: &ironhorse_vm::PromiseFnRow| function <= row.function)
+            .is_some_and(|row: &ironhorse_vm::snapshot_api::PromiseFnRow| function <= row.function)
         {
             return Err(SnapshotError::Corrupt(
                 "promise cluster: functions not strictly ascending",
             ));
         }
-        functions.push(ironhorse_vm::PromiseFnRow {
+        functions.push(ironhorse_vm::snapshot_api::PromiseFnRow {
             function,
             promise: c.u32()?,
             reject: boolean(&mut c)?,
@@ -2862,7 +2924,7 @@ pub(crate) fn decode_promise_cluster(
         guards.push(boolean(&mut c)?);
     }
     let count = c.u32()? as usize;
-    let mut combinators: Vec<ironhorse_vm::CombinatorRow> =
+    let mut combinators: Vec<ironhorse_vm::snapshot_api::CombinatorRow> =
         Vec::with_capacity(count.min(p.len() / (2 * SLOT_RECORD_BYTES + 9)));
     for _ in 0..count {
         let kind = c.u8()?;
@@ -2871,7 +2933,7 @@ pub(crate) fn decode_promise_cluster(
                 "promise cluster: unknown combinator kind",
             ));
         }
-        combinators.push(ironhorse_vm::CombinatorRow {
+        combinators.push(ironhorse_vm::snapshot_api::CombinatorRow {
             kind,
             resolve: c.slot()?,
             reject: c.slot()?,
@@ -3038,11 +3100,6 @@ pub(crate) fn decode_promise_cluster(
         }
     }
     for (row, &pending) in combinators.iter().zip(&comb_pending) {
-        if pending == 0 {
-            return Err(SnapshotError::Corrupt(
-                "promise cluster: combinators not densely referenced",
-            ));
-        }
         if row.resolve.kind != Kind::Reference || row.reject.kind != Kind::Reference {
             return Err(SnapshotError::Corrupt(
                 "promise cluster: combinator capability names no function",
@@ -3055,7 +3112,7 @@ pub(crate) fn decode_promise_cluster(
             ));
         }
     }
-    Ok(ironhorse_vm::PromiseClusterSnapshot {
+    Ok(ironhorse_vm::snapshot_api::PromiseClusterSnapshot {
         unhandled_rejection,
         promises,
         functions,
@@ -3858,8 +3915,8 @@ macro_rules! define_bounds_tables {
 crate::snapshot_roster::snapshot_payloads!(define_bounds_tables);
 
 #[cfg(test)]
-static EMPTY_PROMISE_CLUSTER: ironhorse_vm::PromiseClusterSnapshot =
-    ironhorse_vm::PromiseClusterSnapshot {
+static EMPTY_PROMISE_CLUSTER: ironhorse_vm::snapshot_api::PromiseClusterSnapshot =
+    ironhorse_vm::snapshot_api::PromiseClusterSnapshot {
         promises: Vec::new(),
         functions: Vec::new(),
         guards: Vec::new(),
@@ -3889,8 +3946,9 @@ static EMPTY_INTL: IntlTables = IntlTables {
     date_time_formats: Vec::new(),
 };
 #[cfg(test)]
-static EMPTY_FUNCTION_STATE: ironhorse_vm::FunctionStateSnapshot =
-    ironhorse_vm::FunctionStateSnapshot {
+static EMPTY_FUNCTION_STATE: ironhorse_vm::snapshot_api::FunctionStateSnapshot =
+    ironhorse_vm::snapshot_api::FunctionStateSnapshot {
+        shared: None,
         native_names: None,
         segments: Vec::new(),
         functions: Vec::new(),
@@ -3899,13 +3957,14 @@ static EMPTY_FUNCTION_STATE: ironhorse_vm::FunctionStateSnapshot =
         deleted_meta: Vec::new(),
     };
 #[cfg(test)]
-static EMPTY_PROXY_STATE: ironhorse_vm::ProxyStateSnapshot = ironhorse_vm::ProxyStateSnapshot {
-    proxies: Vec::new(),
-    revokers: Vec::new(),
-};
+static EMPTY_PROXY_STATE: ironhorse_vm::snapshot_api::ProxyStateSnapshot =
+    ironhorse_vm::snapshot_api::ProxyStateSnapshot {
+        proxies: Vec::new(),
+        revokers: Vec::new(),
+    };
 #[cfg(test)]
-static EMPTY_PRIVATE_ELEMENTS: ironhorse_vm::PrivateElementSnapshot =
-    ironhorse_vm::PrivateElementSnapshot {
+static EMPTY_PRIVATE_ELEMENTS: ironhorse_vm::snapshot_api::PrivateElementSnapshot =
+    ironhorse_vm::snapshot_api::PrivateElementSnapshot {
         values: Vec::new(),
         accessors: Vec::new(),
     };
@@ -4073,6 +4132,18 @@ fn generator_body_starts(
 /// Check all stored Slot records through the exhaustive image visitor, then
 /// validate scalar owners, handles and cross-table geometry.
 pub(crate) fn check_machine_image_bounds(image: &MachineImage) -> Result<(), SnapshotError> {
+    if image
+        .function_state
+        .shared
+        .as_ref()
+        .is_some_and(|s| !s.host_functions.is_empty())
+        && image.version.format_version < 22
+    {
+        return Err(SnapshotError::Corrupt("host functions require format 22"));
+    }
+    if image.function_state.shared.is_some() && image.version.format_version < 21 {
+        return Err(SnapshotError::Corrupt("shared machine requires format 21"));
+    }
     check_stored_bounds(
         &image.slots,
         |f| image.visit_slots(f),
@@ -4543,7 +4614,7 @@ pub fn read_validated_machine(
 mod tests {
     #[test]
     fn native_name_suffix_preserves_legacy_and_rejects_malformed_rows() {
-        use ironhorse_vm::FunctionStateSnapshot;
+        use ironhorse_vm::snapshot_api::FunctionStateSnapshot;
 
         let legacy = FunctionStateSnapshot::default();
         let legacy_bytes = super::encode_function_state(&legacy);
@@ -5130,7 +5201,7 @@ mod tests {
 
     #[test]
     fn intl_decode_refuses_crafted_rows() {
-        use ironhorse_vm::{CollatorData, DateTimeFormatData, SegmentsData};
+        use ironhorse_vm::snapshot_api::{CollatorData, DateTimeFormatData, SegmentsData};
         fn collator(owner: u32) -> (u32, CollatorData) {
             (
                 owner,
@@ -5213,7 +5284,7 @@ mod tests {
         let mut t = IntlTables::default();
         t.locales = vec![(
             1,
-            ironhorse_vm::LocaleData {
+            ironhorse_vm::snapshot_api::LocaleData {
                 tag: "en".into(),
                 language: "en".into(),
                 script: None,
@@ -5318,7 +5389,7 @@ mod tests {
 
     #[test]
     fn intl_bounds_refuse_crafted_iterators_and_owners() {
-        use ironhorse_vm::{SegmentIteratorData, SegmentsData};
+        use ironhorse_vm::snapshot_api::{SegmentIteratorData, SegmentsData};
         let sym = SymbolKeyImage::default();
         let check = |intl: &IntlTables| {
             let tables = BoundsTables {
@@ -6095,14 +6166,14 @@ mod tests {
             wrappers: Vec::new(),
             regexps: Vec::new(),
             dates: Vec::new(),
-            function_state: ironhorse_vm::FunctionStateSnapshot::default(),
-            proxy_state: ironhorse_vm::ProxyStateSnapshot::default(),
+            function_state: ironhorse_vm::snapshot_api::FunctionStateSnapshot::default(),
+            proxy_state: ironhorse_vm::snapshot_api::ProxyStateSnapshot::default(),
             accessors: Vec::new(),
             intl_bound_functions: Vec::new(),
-            private_elements: ironhorse_vm::PrivateElementSnapshot::default(),
+            private_elements: ironhorse_vm::snapshot_api::PrivateElementSnapshot::default(),
             disposable_stacks: Vec::new(),
             generators: Vec::new(),
-            promise_cluster: ironhorse_vm::PromiseClusterSnapshot::default(),
+            promise_cluster: ironhorse_vm::snapshot_api::PromiseClusterSnapshot::default(),
             arguments_brands: Vec::new(),
             temporal: TemporalImage::default(),
             intl: IntlTables::default(),
@@ -6296,14 +6367,14 @@ mod tests {
             wrappers: Vec::new(),
             regexps: Vec::new(),
             dates: Vec::new(),
-            function_state: ironhorse_vm::FunctionStateSnapshot::default(),
-            proxy_state: ironhorse_vm::ProxyStateSnapshot::default(),
+            function_state: ironhorse_vm::snapshot_api::FunctionStateSnapshot::default(),
+            proxy_state: ironhorse_vm::snapshot_api::ProxyStateSnapshot::default(),
             accessors: Vec::new(),
             intl_bound_functions: Vec::new(),
-            private_elements: ironhorse_vm::PrivateElementSnapshot::default(),
+            private_elements: ironhorse_vm::snapshot_api::PrivateElementSnapshot::default(),
             disposable_stacks: Vec::new(),
             generators: Vec::new(),
-            promise_cluster: ironhorse_vm::PromiseClusterSnapshot::default(),
+            promise_cluster: ironhorse_vm::snapshot_api::PromiseClusterSnapshot::default(),
             arguments_brands: Vec::new(),
             temporal: TemporalImage::default(),
             intl: IntlTables::default(),
@@ -6814,14 +6885,14 @@ mod tests {
             wrappers: Vec::new(),
             regexps: Vec::new(),
             dates: Vec::new(),
-            function_state: ironhorse_vm::FunctionStateSnapshot::default(),
-            proxy_state: ironhorse_vm::ProxyStateSnapshot::default(),
+            function_state: ironhorse_vm::snapshot_api::FunctionStateSnapshot::default(),
+            proxy_state: ironhorse_vm::snapshot_api::ProxyStateSnapshot::default(),
             accessors: Vec::new(),
             intl_bound_functions: Vec::new(),
-            private_elements: ironhorse_vm::PrivateElementSnapshot::default(),
+            private_elements: ironhorse_vm::snapshot_api::PrivateElementSnapshot::default(),
             disposable_stacks: Vec::new(),
             generators: Vec::new(),
-            promise_cluster: ironhorse_vm::PromiseClusterSnapshot::default(),
+            promise_cluster: ironhorse_vm::snapshot_api::PromiseClusterSnapshot::default(),
             arguments_brands: Vec::new(),
             temporal: TemporalImage::default(),
             intl: IntlTables::default(),
@@ -7602,7 +7673,7 @@ mod side_table_field_refusals {
 
     #[test]
     fn collection_geometry_and_kind() {
-        let minimum = ironhorse_vm::interp::MAP_MIN_TABLE_LENGTH;
+        let minimum = ironhorse_vm::snapshot_api::MAP_MIN_TABLE_LENGTH;
         let mut row = CollectionImage {
             owner: 1,
             kind: 0,
@@ -7951,7 +8022,7 @@ mod symbol_temporal_refusals {
 #[cfg(test)]
 mod object_state_refusals {
     use super::*;
-    use ironhorse_vm::{
+    use ironhorse_vm::snapshot_api::{
         AccessorRow, DisposableStackRow, DisposalRecordRow, PrivateAccessorRow,
         PrivateElementSnapshot, PrivateValueRow, ProxyRevokerRow, ProxyRow, ProxyStateSnapshot,
     };
@@ -8188,7 +8259,7 @@ mod object_state_refusals {
 #[cfg(test)]
 mod function_decoder_refusals {
     use super::*;
-    use ironhorse_vm::{BoundFunctionRow, FunctionRow, FunctionStateSnapshot};
+    use ironhorse_vm::snapshot_api::{BoundFunctionRow, FunctionRow, FunctionStateSnapshot};
 
     fn row(owner: u32) -> FunctionRow {
         FunctionRow {
@@ -8209,6 +8280,7 @@ mod function_decoder_refusals {
     #[test]
     fn function_cluster_ordering() {
         let valid = FunctionStateSnapshot {
+            shared: None,
             native_names: None,
             segments: vec![],
             functions: vec![row(2), row(3)],
@@ -8466,7 +8538,7 @@ mod function_decoder_refusals {
 #[cfg(test)]
 mod intl_bound_decoder_refusals {
     use super::*;
-    use ironhorse_vm::IntlBoundFunctionRow;
+    use ironhorse_vm::snapshot_api::IntlBoundFunctionRow;
 
     #[test]
     fn bound_function_tags_names_and_order() {
@@ -8526,7 +8598,7 @@ mod intl_bound_decoder_refusals {
 #[cfg(test)]
 mod generator_decoder_refusals {
     use super::*;
-    use ironhorse_vm::{AsyncRow, GeneratorRow, SavedFrameRow, SavedJumpRow};
+    use ironhorse_vm::snapshot_api::{AsyncRow, GeneratorRow, SavedFrameRow, SavedJumpRow};
 
     fn frame() -> SavedFrameRow {
         SavedFrameRow {
@@ -8640,7 +8712,7 @@ mod generator_decoder_refusals {
     }
 
     fn check(
-        functions: &ironhorse_vm::FunctionStateSnapshot,
+        functions: &ironhorse_vm::snapshot_api::FunctionStateSnapshot,
         saved: &SavedFrameRow,
     ) -> Result<(), SnapshotError> {
         let generators = [GeneratorRow {
@@ -8712,7 +8784,8 @@ mod generator_decoder_refusals {
 
     #[test]
     fn saved_frame_requires_function_and_exact_resume_scope() {
-        use ironhorse_vm::{FunctionRow, FunctionStateSnapshot, Opcode};
+        use ironhorse_vm::snapshot_api::{FunctionRow, FunctionStateSnapshot};
+        use ironhorse_vm::Opcode;
         let functions = FunctionStateSnapshot {
             segments: vec![vec![
                 Opcode::XS_CODE_INTEGER_1 as u8,
@@ -8783,12 +8856,14 @@ mod generator_decoder_refusals {
         bound.functions[0].segment = None;
         bound.functions[0].body_start = None;
         bound.functions[0].body_len = 0;
-        bound.bound_functions.push(ironhorse_vm::BoundFunctionRow {
-            owner: 1,
-            target: 3,
-            this_arg: Slot::undefined(),
-            args: vec![],
-        });
+        bound
+            .bound_functions
+            .push(ironhorse_vm::snapshot_api::BoundFunctionRow {
+                owner: 1,
+                target: 3,
+                this_arg: Slot::undefined(),
+                args: vec![],
+            });
         assert_eq!(
             check(&bound, &saved),
             Err(SnapshotError::Corrupt(
@@ -8997,10 +9072,10 @@ mod generator_decoder_refusals {
 #[cfg(test)]
 mod promise_decoder_refusals {
     use super::*;
-    use ironhorse_vm::value::SlotIndex;
-    use ironhorse_vm::{
+    use ironhorse_vm::snapshot_api::{
         CombinatorRow, PromiseClusterSnapshot, PromiseFnRow, PromiseReactionRow, PromiseRow,
     };
+    use ironhorse_vm::value::SlotIndex;
 
     fn reference(index: u32) -> Slot {
         Slot::of(Kind::Reference, Payload::Reference(SlotIndex(index)))
@@ -9187,7 +9262,10 @@ mod promise_decoder_refusals {
 
     #[test]
     fn async_activation_requires_one_anchor_and_a_live_capability_pair() {
-        use ironhorse_vm::{AsyncRow, FunctionRow, FunctionStateSnapshot, Opcode, SavedFrameRow};
+        use ironhorse_vm::snapshot_api::{
+            AsyncRow, FunctionRow, FunctionStateSnapshot, SavedFrameRow,
+        };
+        use ironhorse_vm::Opcode;
         let functions = FunctionStateSnapshot {
             segments: vec![vec![Opcode::XS_CODE_UNDEFINED as u8]],
             functions: vec![FunctionRow {
@@ -9727,11 +9805,11 @@ mod promise_decoder_refusals {
 #[cfg(test)]
 mod object_semantic_refusals {
     use super::*;
-    use ironhorse_vm::value::SlotIndex;
-    use ironhorse_vm::{
+    use ironhorse_vm::snapshot_api::{
         AccessorRow, DisposableStackRow, DisposalRecordRow, PrivateAccessorRow,
         PrivateElementSnapshot, PrivateValueRow, ProxyRevokerRow, ProxyRow, ProxyStateSnapshot,
     };
+    use ironhorse_vm::value::SlotIndex;
 
     fn reference() -> Slot {
         Slot::of(Kind::Reference, Payload::Reference(SlotIndex(7)))
@@ -9813,7 +9891,7 @@ mod object_semantic_refusals {
             )],
             ..IntlTables::default()
         };
-        let valid = ironhorse_vm::IntlBoundFunctionRow {
+        let valid = ironhorse_vm::snapshot_api::IntlBoundFunctionRow {
             kind: 0,
             function: 2,
             owner: 1,
@@ -9831,7 +9909,7 @@ mod object_semantic_refusals {
             Ok(())
         );
         for (owner, kind) in [(3, 0), (1, 1)] {
-            let rows = [ironhorse_vm::IntlBoundFunctionRow {
+            let rows = [ironhorse_vm::snapshot_api::IntlBoundFunctionRow {
                 owner,
                 kind,
                 ..valid.clone()

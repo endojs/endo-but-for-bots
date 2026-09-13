@@ -6,6 +6,7 @@ use super::*;
 // row and requires that verb to admit its own row before doing any work.
 const RESTORE_ROWS: &[&str] = &[
     "snapshot_state",
+    "shared_machine",
     "installed_names_floor",
     "error_data",
     "typed_array_family",
@@ -45,6 +46,7 @@ pub struct RestoreSession {
     interp: Interp,
     failed: Option<RestoreError>,
     seen: u32,
+    shared_pending: Option<SharedMachineSnapshot>,
 }
 
 impl Interp {
@@ -54,6 +56,7 @@ impl Interp {
             interp: Self::new(),
             failed: None,
             seen: 0,
+            shared_pending: None,
         }
     }
 }
@@ -67,7 +70,8 @@ impl RestoreSession {
         // Every row set is explicit, including empty tables. The installed
         // name floor alone is optional for legacy snapshots.
         let required = (u32::MAX >> (u32::BITS as usize - RESTORE_ROWS.len()))
-            & !restore_row_bit("installed_names_floor");
+            & !restore_row_bit("installed_names_floor")
+            & !restore_row_bit("shared_machine");
         if self.seen & required != required {
             return Err(RestoreError {
                 row: "session",
@@ -75,6 +79,8 @@ impl RestoreSession {
             });
         }
         self.validate_callable_graph()?;
+        self.interp
+            .restore_shared_machine(self.shared_pending.take())?;
         self.validate_suspended_cursors()?;
         self.validate_accessor_backing()?;
         self.validate_mapped_arguments()?;
@@ -326,6 +332,25 @@ impl RestoreSession {
             .interp
             .restore_snapshot_state(slots, chunks, stack, symbol_names, meter);
         self.failed = result.err();
+        result
+    }
+    /// Restore compartment contexts after every ordinary side table has arrived.
+    pub fn restore_shared_machine(
+        &mut self,
+        state: Option<SharedMachineSnapshot>,
+    ) -> Result<(), RestoreError> {
+        self.admit("shared_machine")?;
+        let result = match &state {
+            Some(state) => self
+                .interp
+                .restore_shared_evaluators(&state.evaluators)
+                .and_then(|()| self.interp.restore_host_functions(&state.host_functions)),
+            None => Ok(()),
+        };
+        self.failed = result.err();
+        if result.is_ok() {
+            self.shared_pending = state;
+        }
         result
     }
     pub fn restore_installed_names_floor(&mut self, floor: u32) -> Result<(), RestoreError> {
@@ -643,7 +668,10 @@ mod tests {
     #[test]
     fn malformed_initial_state_is_refused_before_boot_reconstruction() {
         let mut session = Interp::begin_restore();
-        let old_root = session.interp.slots.get(session.interp.global_obj);
+        let old_root = session
+            .interp
+            .slots
+            .get(session.interp.environment.global_obj);
         let error = session
             .restore_snapshot_state(
                 SlotArena::new(),
@@ -661,7 +689,10 @@ mod tests {
             }
         );
         assert_eq!(
-            session.interp.slots.get(session.interp.global_obj),
+            session
+                .interp
+                .slots
+                .get(session.interp.environment.global_obj),
             old_root
         );
         assert_eq!(session.restore_native_names(None).unwrap_err(), error);
@@ -672,11 +703,11 @@ mod tests {
             let mut names = vec![];
             let expected = match case {
                 0 => {
-                    source.slots.free(source.global_obj);
+                    source.slots.free(source.environment.global_obj);
                     "global root is a free slot"
                 }
                 1 => {
-                    source.slots.get_mut(source.global_obj).value = Payload::Integer(0);
+                    source.slots.get_mut(source.environment.global_obj).value = Payload::Integer(0);
                     "global root is not an instance"
                 }
                 2 => {
@@ -1529,7 +1560,7 @@ mod tests {
     fn reconstruction_refuses_malformed_property_chains() {
         for case in 0..4 {
             let mut source = Interp::new();
-            let owner = source.global_obj;
+            let owner = source.environment.global_obj;
             let property = source.slots.alloc(Slot::undefined());
             source.slots.get_mut(owner).next = property;
             let expected = match case {

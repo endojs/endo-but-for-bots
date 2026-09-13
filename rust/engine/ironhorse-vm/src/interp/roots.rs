@@ -7,6 +7,35 @@ use super::*;
 use crate::value::SlotIndex;
 
 macro_rules! gc_root {
+    ($emit:ident, $vm:ident, $field:ident, $roots:ident, single_realm) => {
+        $emit! {
+            $roots.push($vm.$field.global_object());
+            $roots.extend($vm.$field.intrinsics().roots.iter().copied());
+        }
+    };
+
+    ($emit:ident, $vm:ident, $field:ident, $roots:ident, leases) => {
+        $emit! {
+            $roots.extend($vm.$field.iter().filter_map(|(owner, lease)|
+                (lease.strong_count() != 0).then_some(*owner)));
+        }
+    };
+    ($emit:ident, $vm:ident, $field:ident, $roots:ident, environments) => {
+        $emit! {
+            for realm in $vm.$field.values().filter(|env| env.unhandled_rejection.is_some() || env.owner.as_ref().is_none_or(|owner| owner.strong_count() != 0)) {
+                $roots.push(realm.global_obj);
+                $roots.extend(realm.global_props.values().copied());
+                $roots.extend(realm.unhandled_rejection);
+            }
+        }
+    };
+    ($emit:ident, $vm:ident, $field:ident, $roots:ident, environment) => {
+        $emit! {
+            $roots.push($vm.$field.global_obj);
+            $roots.extend($vm.$field.unhandled_rejection);
+            $roots.extend($vm.$field.global_props.values().copied());
+        }
+    };
     ($emit:ident, $vm:ident, $field:ident, $roots:ident, none) => {
         $emit! {}
     };
@@ -65,6 +94,7 @@ macro_rules! gc_root {
             slot_roots(&f.this_val, $roots);
             slot_roots(&f.result, $roots);
             slot_roots(&f.env, $roots);
+            $roots.push(f.global_env);
             $roots.push(f.cur_func);
             $roots.push(f.target_func);
         } }
@@ -197,7 +227,6 @@ macro_rules! gc_root {
 macro_rules! define_root_walk {
     (() $vis:vis struct $name:ident {
         $(#[boot_new($boot_new:expr)]
-          #[boot_template($boot_template:expr)]
           #[gc_root($root:ident)]
           #[quiescent($boundary:ident)]
           #[persist_refs($persist:ident)]

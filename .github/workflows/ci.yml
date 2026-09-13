@@ -678,7 +678,7 @@ jobs:
         # cfg(feature = "ironhorse-engine"), so without the pin a
         # default-feature flip would turn this step into a 0-test
         # green pass with no error (wave-3 finding).
-        run: cargo test --locked -p endo --features ironhorse-engine --test ironhorse_store_worker
+        run: cargo test --locked -p endo --features ironhorse-engine --test ironhorse_store_worker --test ironhorse_runtime_compiler
 
   # Skip entire jobs, including the runner matrix, on unrelated PRs/pushes.
   format-ironhorse:
@@ -698,6 +698,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
 
       - name: Verify shared IronHorse dependency resolutions
         run: |
@@ -708,6 +709,13 @@ jobs:
           python3 rust/engine/scripts/check-lockfile-agreement.py
           python3 rust/engine/scripts/test-intl-profile.py
           python3 rust/engine/scripts/intl-profile.py
+
+      - name: Check row-schema history and version transitions
+        env:
+          ROW_SCHEMA_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          python3 rust/engine/scripts/test-row-schema.py
+          python3 rust/engine/scripts/check-row-schema.py --base "${ROW_SCHEMA_BASE:-HEAD^}"
 
       - name: Check generated engine crate diagram and library safety declarations
         run: |
@@ -821,7 +829,7 @@ jobs:
         run: |
           flags=()
           if [ "$PROFILE" = release ]; then flags+=(--release); fi
-          cargo test --locked "${flags[@]}" -p ironhorse-meter -p ironhorse-unicode -p ironhorse-vm -p ironhorse-snapshot -p ironhorse-compile -p ironhorse-regexp --features ironhorse-vm/store-integrity
+          cargo test --locked "${flags[@]}" -p ironhorse-runtime -p ironhorse-meter -p ironhorse-unicode -p ironhorse-vm -p ironhorse-snapshot -p ironhorse-compile -p ironhorse-regexp --features ironhorse-vm/store-integrity
 
       - name: Test deterministic Math configuration (oracle-free)
         working-directory: rust/engine

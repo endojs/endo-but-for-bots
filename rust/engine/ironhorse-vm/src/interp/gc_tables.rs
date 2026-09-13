@@ -156,7 +156,14 @@ macro_rules! gc_chunk {
     };
     ($emit:ident, $vm:ident, $field:ident, $visit:ident, function_names) => {
         $emit! {
-            $vm.$field.update_values(|f| $visit(&mut f.name_chunk));
+            $vm.$field.update_values(|f| {
+                $visit(&mut f.name_chunk);
+                if let Some(host) = &mut f.host {
+                    for capture in &mut host.captures {
+                        slot_chunk(capture, $visit);
+                    }
+                }
+            });
         }
     };
     ($emit:ident, $vm:ident, $field:ident, $visit:ident, buffer_data) => {
@@ -368,7 +375,6 @@ macro_rules! gc_chunk {
 macro_rules! define_chunk_walk {
     (() $vis:vis struct $name:ident {
         $(#[boot_new($boot_new:expr)]
-          #[boot_template($boot_template:expr)]
           #[gc_root($root:ident)]
           #[quiescent($boundary:ident)]
           #[persist_refs($persist:ident)]
@@ -396,16 +402,26 @@ interp_state!(define_chunk_walk);
 // Per-row slot policies are shared by precise full marking and conservative
 // partial-page enumeration. Only collection strength differs between the walks.
 macro_rules! gc_slot_row {
+    ($emit:ident, $vm:ident, $row:ident, $visit:ident, $full:expr, environment) => {
+        $emit! { if let Some(owner) = $row.unhandled_rejection { $visit(owner); } }
+    };
+
     ($emit:ident, $vm:ident, $row:ident, $visit:ident, $full:expr, none) => {
         $emit! {}
     };
     ($emit:ident, $vm:ident, $row:ident, $visit:ident, $full:expr, function) => {
         $emit! {
+            $visit($row.global_env);
             $visit($row.closures);
             // The `super` home object: for a method
             // detached from a dead class, this is the prototype's
             // only remaining edge.
             $visit($row.home);
+            if let Some(host) = &$row.host {
+                for capture in &host.captures {
+                    capture.each_ref_slot(&mut *$visit);
+                }
+            }
 
         }
     };
@@ -450,7 +466,7 @@ macro_rules! gc_slot_row {
     ($emit:ident, $vm:ident, $row:ident, $visit:ident, $full:expr, queued_frame) => {
         $emit! {
             if let Some(f) = &$row.frame {
-                saved_frame_slots(f, $visit);
+                saved_frame_slots(f, &$vm.symbol_key_ids, $visit);
         }
         for rq in $row.requests.iter().chain($row.active.as_ref()) {
             rq.value.each_ref_slot(&mut *$visit);
@@ -510,6 +526,7 @@ macro_rules! gc_slot_row {
     };
     ($emit:ident, $vm:ident, $row:ident, $visit:ident, $full:expr, promise) => {
         $emit! {
+            $visit($row.global_env);
             $row.result.each_ref_slot(&mut *$visit);
             for r in &$row.reactions {
                 r.on_fulfilled.each_ref_slot(&mut *$visit);
@@ -562,7 +579,7 @@ macro_rules! gc_slot_row {
     ($emit:ident, $vm:ident, $row:ident, $visit:ident, $full:expr, frame) => {
         $emit! {
             if let Some(f) = &$row.frame {
-                saved_frame_slots(f, $visit);
+                saved_frame_slots(f, &$vm.symbol_key_ids, $visit);
         }
 
         }
@@ -573,7 +590,7 @@ macro_rules! gc_slot_row {
             $row.resolve_fn.each_ref_slot(&mut *$visit);
             $row.reject_fn.each_ref_slot(&mut *$visit);
             if let Some(f) = &$row.frame {
-                saved_frame_slots(f, $visit);
+                saved_frame_slots(f, &$vm.symbol_key_ids, $visit);
         }
 
         }
@@ -658,7 +675,6 @@ macro_rules! gc_slot_table {
 macro_rules! define_slot_walks {
     (() $vis:vis struct $name:ident {
         $(#[boot_new($boot_new:expr)]
-          #[boot_template($boot_template:expr)]
           #[gc_root($root:ident)]
           #[quiescent($boundary:ident)]
           #[persist_refs($persist:ident)]
@@ -801,7 +817,6 @@ macro_rules! gc_weak {
 macro_rules! define_weak_walks {
     (() $vis:vis struct $name:ident {
         $(#[boot_new($boot_new:expr)]
-          #[boot_template($boot_template:expr)]
           #[gc_root($root:ident)]
           #[quiescent($boundary:ident)]
           #[persist_refs($persist:ident)]
@@ -833,7 +848,11 @@ macro_rules! define_weak_walks {
 }
 interp_state!(define_weak_walks);
 
-fn saved_frame_slots(f: &SavedFrame, visit: &mut dyn FnMut(SlotIndex)) {
+fn saved_frame_slots(
+    f: &SavedFrame,
+    symbols: &super::symbol_keys::SymbolKeys,
+    visit: &mut dyn FnMut(SlotIndex),
+) {
     for s in &f.locals {
         s.each_ref_slot(&mut *visit);
     }
@@ -842,6 +861,11 @@ fn saved_frame_slots(f: &SavedFrame, visit: &mut dyn FnMut(SlotIndex)) {
     }
     for s in &f.stack_slice {
         s.each_ref_slot(&mut *visit);
+        if let (Kind::At, Payload::At(id, _)) = (s.kind, s.value) {
+            if let Some(descriptor) = symbols.descriptor(id) {
+                visit(descriptor);
+            }
+        }
     }
     f.this_val.each_ref_slot(&mut *visit);
     f.result.each_ref_slot(&mut *visit);
@@ -852,6 +876,7 @@ fn saved_frame_slots(f: &SavedFrame, visit: &mut dyn FnMut(SlotIndex)) {
     for j in &f.jumps {
         j.env.each_ref_slot(&mut *visit);
     }
+    visit(f.global_env);
     visit(f.cur_func);
     visit(f.target_func);
 }

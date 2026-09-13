@@ -636,7 +636,9 @@ fn restored_proxy_metadata_takes_precedence_over_a_runnable_body() {
     let (mut interp, state, candidate, target) = callable_overlap_fixture();
     interp.restore_function_state(state).unwrap();
     let handler = *interp.symbol_ids.get("handler").unwrap();
-    let Payload::Reference(handler) = interp.boot_chain_get(interp.global_obj, handler).value
+    let Payload::Reference(handler) = interp
+        .boot_chain_get(interp.environment.global_obj, handler)
+        .value
     else {
         panic!("fixture handler is an object");
     };
@@ -1363,14 +1365,14 @@ fn marker_free_restore_migrates_only_untouched_standard_global_descriptors() {
 
     for name in ["Date", "Array", "globalThis"] {
         let id = *interp.symbol_ids.get(name).unwrap();
-        let property = interp.global_props[&id];
+        let property = interp.environment.global_props[&id];
         interp.slots.get_mut(property).flag = 0;
     }
     let number_id = *interp.symbol_ids.get("Number").unwrap();
-    let number_property = interp.global_props[&number_id];
+    let number_property = interp.environment.global_props[&number_id];
     interp.slots.get_mut(number_property).flag = XS_DONT_SET_FLAG;
     let object_id = *interp.symbol_ids.get("Object").unwrap();
-    let object_property = interp.global_props[&object_id];
+    let object_property = interp.environment.global_props[&object_id];
     interp.slots.get_mut(object_property).flag = 0;
     interp.slots.get_mut(object_property).kind = Kind::Integer;
     interp.slots.get_mut(object_property).value = Payload::Integer(17);
@@ -1379,7 +1381,7 @@ fn marker_free_restore_migrates_only_untouched_standard_global_descriptors() {
 
     for name in ["Date", "Array", "globalThis"] {
         let id = *interp.symbol_ids.get(name).unwrap();
-        let property = interp.global_props[&id];
+        let property = interp.environment.global_props[&id];
         assert_eq!(
             interp.slots.get(property).flag,
             XS_DONT_ENUM_FLAG,
@@ -1887,6 +1889,7 @@ fn every_opcode_decodes_and_dispatches_without_panic_or_decode_error() {
             | Halt::StackOverflow(_)
             | Halt::ReentryLimit { .. } => {}
             Halt::Decode(_) => unreachable!("handled above"),
+            Halt::MachineBusy => unreachable!("standalone interpreter has no competing Realm"),
             Halt::Panic(_) => unreachable!("engine-fault panic escaped the FFI/Machine seam"),
         }
     }
@@ -3363,7 +3366,8 @@ fn call_entry_failures_retire_the_pending_frame_tuple() {
         let mut vm = Interp::new();
         vm.link_intrinsics(&crate::parse_symbols(&symbols));
         assert!(vm.run(&code).completed);
-        let callable = vm.boot_chain_get(vm.global_obj, *vm.symbol_ids.get("f").unwrap());
+        let callable =
+            vm.boot_chain_get(vm.environment.global_obj, *vm.symbol_ids.get("f").unwrap());
         let function = match failure {
             "noncallable" => Slot::integer(7),
             "bodyless" => Slot::of(Kind::Reference, Payload::Reference(vm.intrinsics["Object"])),
@@ -3476,6 +3480,55 @@ fn reserved_symbol_ids_are_refused_without_mutating_the_table() {
     let out = vm.run(&code);
     assert!(out.completed, "{:?}", out.halt);
     assert_eq!(out.result, "42");
+}
+
+#[test]
+fn suspended_symbol_keys_are_retained_only_with_their_activation() {
+    for function in [
+        "function* f(){ obj[Symbol('ephemeral')] += yield 0; } var it = f(); it.next();",
+        "async function f(){ obj[Symbol('ephemeral')] += await gate; } f();",
+        "async function* f(){ obj[Symbol('ephemeral')] += await gate; } var it = f(); it.next();",
+    ] {
+        let mut vm = Interp::new();
+        let (code, names) = ironhorse_compile::compile_atoms(&format!(
+            "var obj = {{}}; var gate = new Promise(() => {{}}); {function}"
+        ))
+        .unwrap();
+        vm.link_intrinsics(&crate::parse_symbols(&names));
+        assert!(vm.run(&code).completed);
+        let key = vm
+            .generators
+            .values()
+            .filter_map(|row| row.frame.as_ref())
+            .chain(
+                vm.async_instances
+                    .values()
+                    .filter_map(|row| row.frame.as_ref()),
+            )
+            .chain(
+                vm.async_generators
+                    .values()
+                    .filter_map(|row| row.frame.as_ref()),
+            )
+            .flat_map(|frame| &frame.stack_slice)
+            .find_map(|slot| match (slot.kind, slot.value) {
+                (Kind::At, Payload::At(id, 0)) => vm.symbol_key_ids.descriptor(id),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("no suspended computed symbol key: {function}"));
+        vm.collect_garbage().unwrap();
+        assert!(vm.symbol_key_ids.contains_key(&key));
+        let (code, names) =
+            ironhorse_compile::compile_atoms("var it; it = null; gate = null; obj = null; 0")
+                .unwrap();
+        let code = vm
+            .relink_crank(&code, &crate::parse_symbols(&names))
+            .unwrap();
+        assert!(vm.run(&code).completed);
+        vm.collect_garbage().unwrap();
+        assert!(!vm.symbol_key_ids.contains_key(&key), "{function}");
+        assert!(vm.slots.is_free_index(key));
+    }
 }
 
 #[test]

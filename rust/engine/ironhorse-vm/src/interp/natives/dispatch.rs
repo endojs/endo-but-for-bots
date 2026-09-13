@@ -41,6 +41,12 @@ impl Interp {
                 .unwrap_or_else(Slot::undefined)
         };
         let result: Slot = match native {
+            Native::Host => {
+                if has_target {
+                    return Err(self.catchable_type_error_msg("new: not a constructor".into()));
+                }
+                self.call_host(base, argc, code)?
+            }
             // `eval`: a non-string input is returned unchanged (the spec's
             // "not a String" fast return); a string is compiled and executed
             // in this realm through the source-execution bridge

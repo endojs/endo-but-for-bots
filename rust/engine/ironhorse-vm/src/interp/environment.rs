@@ -3,7 +3,7 @@ use super::*;
 
 impl Interp {
     /// Allocate a property slot for global key `id`, link it into the
-    /// global object's property list, and record it in [`Self::global_props`].
+    /// global object's property list, and record it in [`Realm`].
     /// Does **not** meter — callers add the allocation metering at the
     /// faithful opcode site. Returns the property slot index.
     pub(super) fn create_global_property(
@@ -14,11 +14,12 @@ impl Interp {
         let mut prop = Slot::property(id, value.1);
         prop.kind = value.0;
         // Insert at the head of the global object's property list.
-        let head = self.slots.get(self.global_obj).next;
+        let head = self.slots.get(self.environment.global_obj).next;
         prop.next = head;
         let idx = self.slots.alloc(prop);
-        self.slots.get_mut(self.global_obj).next = idx;
-        self.global_props.insert(id, idx);
+        self.slots.get_mut(self.environment.global_obj).next = idx;
+        self.environment.global_props.insert(id, idx);
+        self.environment.binding_names.insert(id);
         idx
     }
 
@@ -109,7 +110,7 @@ impl Interp {
                     format!("{}: duplicate variable", self.property_debug_name(id)),
                 ));
             }
-            if self.global_props.contains_key(&id) {
+            if self.environment.global_props.contains_key(&id) {
                 if is_function_declaration && !self.can_declare_global_function(id) {
                     return Err(self.internal_error(
                         "TypeError",
@@ -130,7 +131,7 @@ impl Interp {
                 // the global yet); it is reached by an `eval` whose realm already
                 // sealed its global. An extensible global (the overwhelming common
                 // case) is unaffected, so this never perturbs an existing run.
-                if !self.instance_extensible(self.global_obj) {
+                if !self.instance_extensible(self.environment.global_obj) {
                     return Err(self.internal_error(
                         "TypeError",
                         format!(
@@ -248,7 +249,7 @@ impl Interp {
     /// these, so `function NaN(){}` is rejected. Accessor globals are not
     /// modeled, so every existing global here is a data property.
     pub(super) fn can_declare_global_function(&self, id: u16) -> bool {
-        match self.global_props.get(&id) {
+        match self.environment.global_props.get(&id) {
             None => true,
             Some(&prop) => {
                 let flag = self.slots.get(prop).flag;
@@ -610,7 +611,10 @@ impl Interp {
     /// top-level `this` opcode observes the global rather than the default
     /// `undefined`.
     pub(super) fn bind_program_this(&mut self) {
-        self.this_val = Slot::of(Kind::Reference, Payload::Reference(self.global_obj));
+        self.this_val = Slot::of(
+            Kind::Reference,
+            Payload::Reference(self.environment.global_obj),
+        );
     }
 
     /// `fxRunConstructor` (driven by `begin` in a construct frame): allocate
@@ -648,7 +652,10 @@ impl Interp {
         match self.this_val.kind {
             // `undefined`/`null` bind to the realm global (the sloppy default).
             Kind::Undefined | Kind::Null => {
-                self.this_val = Slot::of(Kind::Reference, Payload::Reference(self.global_obj));
+                self.this_val = Slot::of(
+                    Kind::Reference,
+                    Payload::Reference(self.environment.global_obj),
+                );
             }
             // A primitive `this` in a sloppy callee is ToObject-boxed to its
             // wrapper object (XS's `fxToInstance`; ECMA-262 OrdinaryCallBindThis

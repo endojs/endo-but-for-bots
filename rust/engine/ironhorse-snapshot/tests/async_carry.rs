@@ -205,3 +205,192 @@ fn closures_sharing_bytecode_resume_after_blob_and_store_checkpoints() {
         assert_eq!(crank(&mut continuous, "result").2, "6:7");
     }
 }
+
+#[test]
+fn unobserved_async_result_survives_pending_await_snapshot() {
+    let source = "var release; var gate = new Promise(function (r) { release = r; }); var done; async function f() { done = await gate; } f();";
+    let machine = boot(source);
+    let signature = Signature::new("unobserved-async-carry");
+    let bytes = machine.write_snapshot(&signature).unwrap();
+    let mut resumed = from_snapshot_bytes(&bytes, &signature).unwrap();
+    assert!(crank(&mut resumed, "release(42); 0").0);
+    assert_eq!(crank(&mut resumed, "done").2, "42");
+}
+
+#[test]
+fn suspended_assignment_targets_survive_blob_and_store_restore() {
+    for (setup, body, result) in [
+        ("var done;", "done = await gate", "done"),
+        ("var done;", "var local; local = await gate; done = local", "done"),
+        ("var obj = {value:0}; var key = 'value';", "obj[key] += await gate", "obj.value"),
+        ("var obj = [0,0,0]; var key = 2;", "obj[key] += await gate", "obj[2]"),
+        ("var obj = {}; var key = Symbol('key'); obj[key] = 0;", "obj[key] += await gate", "obj[key]"),
+        // The computed super reference retains both receiver and prototype.
+        ("var key = 'value'; var obj = { __proto__: { set value(v) { this.done = v; } }, async f() { super[key] = await gate; } };", "", "obj.done"),
+    ] {
+        let function = if body.is_empty() {
+            "obj.f();".to_string()
+        } else {
+            format!("async function f() {{ {body}; }} f();")
+        };
+        let source = format!("var release; var gate = new Promise(r => release = r); {setup} {function}");
+        let observations = ["release(42); 0", result];
+        let expected = twin(&source, &observations, &mut MemoryStore::new());
+        assert_eq!(expected.last().unwrap().2, "42", "{source}");
+        let signature = Signature::new("assignment-target-carry");
+        let bytes = boot(&source).write_snapshot(&signature).unwrap();
+        let mut resumed = from_snapshot_bytes(&bytes, &signature).unwrap();
+        for (observation, expected) in observations.into_iter().zip(expected) {
+            assert_eq!(crank(&mut resumed, observation), expected, "{source}");
+        }
+    }
+}
+
+#[test]
+fn malformed_suspended_assignment_targets_are_refused() {
+    use ironhorse_snapshot::image::{read_machine, write_machine_unchecked};
+    use ironhorse_snapshot::store::image_to_batch_unchecked;
+    use ironhorse_vm::{Kind, Payload, Slot, SlotIndex};
+    let signature = Signature::new("assignment-target-refusal");
+    let machine = boot("var release; var gate = new Promise(r => release = r); var done; async function f() { done = await gate; } f();");
+    let original = read_machine(&machine.write_snapshot(&signature).unwrap(), &signature).unwrap();
+    let sentinel = Slot::of(Kind::EnvReference, Payload::Reference(SlotIndex(0)));
+    let mut invalid_base = Slot::of(Kind::EnvReference, Payload::Reference(SlotIndex::NULL));
+    invalid_base.next = SlotIndex(0);
+    let mut invalid_receiver = sentinel;
+    invalid_receiver.value = Payload::Reference(SlotIndex(u32::MAX - 1));
+    let mut invalid_flags = sentinel;
+    invalid_flags.flag = 1;
+    let mut invalid_super_base = sentinel;
+    invalid_super_base.value = Payload::Reference(SlotIndex(
+        original.promise_cluster.async_instances[0].frame.cur_func,
+    ));
+    invalid_super_base.next = SlotIndex(u32::MAX - 1);
+    let mut non_instance_base = invalid_super_base;
+    non_instance_base.next = original.slots[0].next;
+    assert!(!non_instance_base.next.is_null());
+    assert_ne!(
+        original.slots[non_instance_base.next.0 as usize].kind,
+        Kind::Instance
+    );
+    for (label, invalid, guest_position) in [
+        ("sentinel with base", invalid_base, false),
+        ("invalid receiver", invalid_receiver, false),
+        ("invalid flags", invalid_flags, false),
+        ("invalid super base", invalid_super_base, false),
+        ("non-instance super base", non_instance_base, false),
+        (
+            "bad environment payload",
+            Slot::of(Kind::EnvReference, Payload::Integer(0)),
+            false,
+        ),
+        (
+            "out of bounds index",
+            Slot::of(Kind::At, Payload::At(0, u32::MAX)),
+            false,
+        ),
+        (
+            "unknown named key",
+            Slot::of(Kind::At, Payload::At(u16::MAX, 0)),
+            false,
+        ),
+        (
+            "named key with index",
+            Slot::of(Kind::At, Payload::At(1, 1)),
+            false,
+        ),
+        (
+            "bad key payload",
+            Slot::of(Kind::At, Payload::Integer(0)),
+            false,
+        ),
+        ("environment in result", sentinel, true),
+        ("key in result", Slot::of(Kind::At, Payload::At(0, 0)), true),
+    ] {
+        let mut image = original.clone();
+        let frame = &mut image.promise_cluster.async_instances[0].frame;
+        if guest_position {
+            frame.result = invalid;
+        } else {
+            let target = frame
+                .stack_slice
+                .iter_mut()
+                .find(|v| v.kind == Kind::EnvReference)
+                .unwrap();
+            *target = invalid;
+        }
+        assert!(
+            from_snapshot_bytes(&write_machine_unchecked(&image), &signature).is_err(),
+            "blob: {label}"
+        );
+        let mut store = MemoryStore::new();
+        store
+            .commit(&image_to_batch_unchecked(&image, 1, ""))
+            .unwrap();
+        assert!(
+            resume_from_store(&store, &signature).is_err(),
+            "eager store: {label}"
+        );
+        assert!(
+            ironhorse_snapshot::machine::resume_from_store_lazy(
+                std::rc::Rc::new(std::cell::RefCell::new(store)),
+                &signature
+            )
+            .is_err(),
+            "lazy store: {label}"
+        );
+    }
+}
+
+#[test]
+fn computed_super_preserves_receiver_and_delays_null_base_errors() {
+    for (prototype, expected) in [
+        ("{ set value(v) { this.done = v; } }", "42"),
+        ("null", "TypeError"),
+    ] {
+        let source = format!("var release; var gate = new Promise(r => release = r); var done; var key = 'value'; var obj = {{ __proto__: {prototype}, async f() {{ try {{ super[key] = await gate; }} catch (e) {{ done = e.name; }} }} }}; obj.f.call(globalThis);");
+        let signature = Signature::new("super-global-receiver");
+        let bytes = boot(&source).write_snapshot(&signature).unwrap();
+        let mut resumed = from_snapshot_bytes(&bytes, &signature).unwrap();
+        crank(&mut resumed, "release(42); 0");
+        assert_eq!(crank(&mut resumed, "done").2, expected);
+        assert_eq!(
+            twin(
+                &source,
+                &["release(42); 0", "done"],
+                &mut MemoryStore::new()
+            )
+            .last()
+            .unwrap()
+            .2,
+            expected
+        );
+    }
+}
+
+#[test]
+fn suspended_symbol_assignment_keeps_its_key_through_full_collection() {
+    for (function, resume) in [
+        (
+            "async function f() { obj[Symbol('key')] += await gate; } f();",
+            "release(42); 0",
+        ),
+        (
+            "function* f() { obj[Symbol('key')] += yield 0; } var it = f(); it.next();",
+            "it.next(42); 0",
+        ),
+    ] {
+        let source = format!(
+            "var obj = {{}}; var release; var gate = new Promise(r => release = r); {function}"
+        );
+        let signature = Signature::new("suspended-symbol-key");
+        let mut machine = boot(&source);
+        machine.collect_garbage().unwrap();
+        let bytes = machine.write_snapshot(&signature).unwrap();
+        let mut restored = from_snapshot_bytes(&bytes, &signature).unwrap();
+        for machine in [&mut machine, &mut restored] {
+            crank(machine, resume);
+            assert_eq!(crank(machine, "var keys = Reflect.ownKeys(obj); keys.length + ':' + keys[0].description + ':' + obj[keys[0]]").2, "1:key:NaN");
+        }
+    }
+}

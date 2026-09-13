@@ -1,13 +1,32 @@
-//! Machine initialization, intrinsic construction, and pristine realm templates.
+//! Machine initialization and intrinsic construction.
 use super::*;
+// Preserve the released boot identity: compartment associations are derived
+// (NULL) in standalone machines and the shared profile cannot be persisted.
+struct BootFunctionIdentity<'a>(&'a FuncInfo);
+impl std::fmt::Debug for BootFunctionIdentity<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FuncInfo")
+            .field("body_start", &self.0.body_start)
+            .field("body_len", &self.0.body_len)
+            .field("closures", &self.0.closures)
+            .field("native", &self.0.native)
+            .field("method", &self.0.method)
+            .field("name", &self.0.name)
+            .field("arity", &self.0.arity)
+            .field("name_chunk", &self.0.name_chunk)
+            .field("is_generator", &self.0.is_generator)
+            .field("home", &self.0.home)
+            .field("class_derived", &self.0.class_derived)
+            .finish()
+    }
+}
 
 // Constructor policies belong to the same declaration as GC and persistence
-// policies. Both initializers follow declaration order. These are expression
-// macros, so construction keeps its existing call and allocation boundaries.
+// policies. The initializer follows declaration order and retains its
+// call and allocation boundaries.
 macro_rules! define_boot_initializers {
     (($d:tt) $vis:vis struct $name:ident {
         $(#[boot_new($new:expr)]
-          #[boot_template($template:expr)]
           #[gc_root($root:ident)]
           #[quiescent($boundary:ident)]
           #[persist_refs($persist:ident)]
@@ -20,7 +39,6 @@ macro_rules! define_boot_initializers {
           $(#[$attr:meta])* $field_vis:vis $field:ident: $ty:ty,)*
     } boot_context {
         fresh($new_dirt:ident, $slots:ident, $chunks:ident, $global:ident, $static:ident);
-        template($state:ident, $snapshot_dirt:ident, $refs:ident, $arrays:ident, $indexed:ident, $collections:ident);
     } external_tables { $($external:tt)* }) => {
         macro_rules! boot_fresh {
             ($d snapshot_dirt:expr, $d slots:expr, $d chunks:expr, $d global:expr, $d strings:expr) => {{
@@ -32,123 +50,11 @@ macro_rules! define_boot_initializers {
                 Interp { $($field: $new,)* }
             }};
         }
-        macro_rules! boot_template {
-            ($d state:expr, $d snapshot_dirt:expr, $d refs:expr, $d arrays:expr, $d indexed:expr, $d collections:expr) => {{
-                let $state = $d state;
-                let $snapshot_dirt = $d snapshot_dirt;
-                let $refs = $d refs;
-                let $arrays = $d arrays;
-                let $indexed = $d indexed;
-                let $collections = $d collections;
-                Interp { $($field: $template,)* }
-            }};
-        }
     };
 }
 interp_state!(define_boot_initializers, $);
 
-// The child owns its test gate so rustc and recursive source locks agree.
 mod tests;
-
-pub(crate) struct BootTemplate {
-    inner: Interp,
-    link_charge: u64,
-}
-
-impl BootTemplate {
-    /// Carry compilation's live meter into a fresh realm. The caller charges
-    /// linkage after releasing the template cache borrow, since a host callback
-    /// may itself evaluate another compartment using that cache.
-    pub(crate) fn instantiate_continuing_meter(
-        &self,
-        meter: Meter,
-        host: Option<Box<dyn FnMut(u64) -> bool>>,
-    ) -> (Interp, u64) {
-        let mut interp = self.instantiate();
-        interp.meter = meter;
-        interp.meter_host = host;
-        (interp, self.link_charge)
-    }
-
-    pub(crate) fn new(names: &[SymbolName]) -> Self {
-        let mut inner = Interp::new();
-        let before = inner.meter_index();
-        inner.link_intrinsics(names);
-        let link_charge = inner.meter_index() - before;
-        // Only pristine construction reaches this type. These activation
-        // types intentionally do not implement Clone; no guest frame or host
-        // callback may enter the immutable template.
-        assert!(inner.call_stack.is_empty());
-        assert!(inner.gen_run_stack.is_empty());
-        assert!(inner.async_run_stack.is_empty());
-        assert!(inner.async_gen_run_stack.is_empty());
-        assert!(inner.generators.is_empty());
-        assert!(inner.async_instances.is_empty());
-        assert!(inner.async_generators.is_empty());
-        assert!(inner.meter_host.is_none());
-        assert!(inner.source_compiler.is_none());
-        Self { inner, link_charge }
-    }
-
-    pub(crate) fn instantiate_metered(
-        &self,
-        interval: u64,
-        host: Box<dyn FnMut(u64) -> bool>,
-    ) -> Interp {
-        let mut interp = self.instantiate();
-        interp.arm_meter(interval, host);
-        // Match new -> arm -> link, including any linkage charges. Linking
-        // does not dispatch guest code or consult the host callback.
-        interp.meter.tick_raw(self.link_charge);
-        interp
-    }
-
-    pub(crate) fn instantiate(&self) -> Interp {
-        let state = &self.inner;
-        let snapshot_dirt = SnapshotDirt::default();
-        // Copy BULK through its counted mutators: the new arenas own these
-        // references independently, and no bare Clone can bypass accounting.
-        let mut side_refs = SideRefCounts::new();
-        let arrays = copy_arrays(&state.arrays, &mut side_refs);
-        let index_props = copy_arrays(&state.index_props, &mut side_refs);
-        let collections = state
-            .collections
-            .iter()
-            .map(|(&owner, data)| {
-                let mut copy = CollectionData::new(data.kind, data.table_length);
-                for &(key, value) in data.live_entries() {
-                    copy.push_entry(key, value, &mut side_refs);
-                }
-                (owner, copy)
-            })
-            .collect();
-        boot_template!(
-            state,
-            snapshot_dirt,
-            side_refs,
-            arrays,
-            index_props,
-            collections
-        )
-    }
-}
-
-fn copy_arrays(
-    tables: &std::collections::HashMap<crate::value::SlotIndex, ArrayData>,
-    refs: &mut SideRefCounts,
-) -> std::collections::HashMap<crate::value::SlotIndex, ArrayData> {
-    tables
-        .iter()
-        .map(|(&owner, data)| {
-            let mut copy = ArrayData::default();
-            copy.length = data.length;
-            for (&index, &value) in data.items() {
-                copy.insert_item(index, value, refs);
-            }
-            (owner, copy)
-        })
-        .collect()
-}
 
 impl Interp {
     pub fn new() -> Interp {
@@ -220,11 +126,11 @@ impl Interp {
         functions.sort_by_key(|(index, _)| index.0);
         for (index, info) in functions {
             term(&index.0.to_be_bytes());
-            // Derived Debug includes native/method variant names and their
-            // payloads, name/name_chunk, arity, and every FuncInfo field.
+            // Boot identity includes native/method variant names and payloads,
+            // plus every non-derived function field.
             // A variant rename may conservatively refuse compatibility;
             // reordering variants cannot silently remap stored natives.
-            term(format!("{info:?}").as_bytes());
+            term(format!("{:?}", BootFunctionIdentity(info)).as_bytes());
         }
         let mut intrinsics: Vec<_> = self.intrinsics.iter().collect();
         intrinsics.sort_by_key(|(name, _)| **name);
@@ -239,7 +145,7 @@ impl Interp {
         let mut default_keys: Vec<_> = self.default_keys.iter().copied().collect();
         default_keys.sort_unstable();
         term(format!("default_keys={default_keys:?}").as_bytes());
-        term(format!("global_obj={:?}", self.global_obj).as_bytes());
+        term(format!("global_obj={:?}", self.realm.global_object()).as_bytes());
         term(format!("intl_object={:?}", self.intl_object).as_bytes());
         term(format!("temporal_object={:?}", self.temporal_object).as_bytes());
         term(format!("temporal_now_object={:?}", self.temporal_now_object).as_bytes());
@@ -444,6 +350,7 @@ impl Interp {
             // `%Error.prototype%`; every subtype gets a prototype chaining to
             // it; the wrapper constructors get a plain `%X.prototype%`.
             let proto = match native {
+                Native::Host => crate::SlotIndex::NULL,
                 Native::Object => object_proto,
                 Native::Function => func_proto,
                 Native::Error => error_proto,

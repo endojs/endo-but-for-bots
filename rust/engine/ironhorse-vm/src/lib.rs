@@ -10,8 +10,8 @@
 //! [`Halt`] includes [`Halt::HeapExhausted`] and [`Halt::Panic`]; resource stops and
 //! engine faults are not catchable guest exceptions.
 //!
-//! [`Compartment`] currently creates independently owned interpreters from pristine
-//! boot templates, not shared frozen intrinsics; Realm extraction is planned.
+//! [`Machine`] owns one frozen intrinsic graph and shared heap. Each
+//! [`Compartment`] retains a [`Realm`] with independent globals and compiler policy.
 //! `rust/engine/ARCHITECTURE.md` maps the four seams and current acceptance limits.
 //! The opcode tables follow the pinned XS ISA; broad runtime support does not imply
 //! full test262 or daemon SES acceptance.
@@ -34,12 +34,19 @@ pub use snapshot_dirty::{SnapshotBaseline, SnapshotDirty, SnapshotSection};
 pub mod compartment;
 pub mod cost;
 pub mod default_keys;
+#[doc(hidden)]
+pub mod diagnostics;
 pub mod gc;
 pub mod halt_labels;
-pub mod interp;
+mod interp;
+pub use interp::host::{
+    HostCallContext, HostCallError, HostCallable, HostCallableId, HostResult, HostValue,
+};
 pub mod intl_number;
 pub mod meter;
+pub mod snapshot_api;
 pub use ironhorse_meter as cost_table;
+pub use ironhorse_meter::PROGRAM_INVOCATION_COMPUTRONS;
 pub mod module;
 pub mod opcode;
 mod property_index;
@@ -50,24 +57,19 @@ pub mod symbols;
 pub mod value;
 
 pub use compartment::{
-    Compartment, CompartmentId, CompartmentOptions, CompartmentSkip, Intrinsics, Machine,
+    Compartment, CompartmentId, CompartmentOptions, CompartmentSkip, EnvironmentId,
+    EnvironmentPolicy, HostRootId, Intrinsics, Machine, MachineRestorePolicy, ObjectIdentity,
+    RootedValue, UnhandledRejection,
 };
 pub use gc::{GcStats, Heap};
-pub use interp::DecodeError;
 #[doc(hidden)]
 pub use interp::SIDE_TABLES;
 pub use interp::{
-    dtf_component_key_static, error_name_static, AccessorRow, ArraySnapshot, AsyncRow,
-    BoundFunctionRow, CollatorData, CollectionSnapshot, CombinatorRow, CompiledSource,
-    DateTimeFormatData, DisposableStackRow, DisposalRecordRow, FunctionRow, FunctionStateSnapshot,
-    GeneratorRow, Halt, IndexPropsSnapshot, Interp, IntlBoundFunctionRow, IntlTables, IteratorRow,
-    ListFormatData, LocaleData, Native, NumberFormatData, PanicKind, PluralRulesData,
-    PrivateAccessorRow, PrivateElementSnapshot, PrivateValueRow, PromiseClusterSnapshot,
-    PromiseFnRow, PromiseReactionRow, PromiseRow, ProxyRevokerRow, ProxyRow, ProxyStateSnapshot,
-    RelinkError, RestoreError, RestoreSession, RunOutcome, SavedFrameRow, SavedJumpRow,
-    SegmentIteratorData, SegmenterData, SegmentsData, SourceCompileError, SourceCompiler,
-    PROGRAM_INVOCATION_COMPUTRONS, TYPED_ARRAY_TYPES,
+    dtf_component_key_static, error_name_static, CompiledSource, Halt, Interp, Native, PanicKind,
+    RelinkError, RestoreError, RestoreSession, RunOutcome, SourceCompileError, SourceCompiler,
+    TYPED_ARRAY_TYPES,
 };
+pub use interp::{CompartmentEnvironment, DecodeError, Realm};
 pub use interp::{HEAVY_FRAME_COST, LIGHT_FRAME_COST, NATIVE_DEPTH_LIMIT};
 pub use meter::{Meter, MeterCheck, MeterState, COST_TABLE_VERSION};
 pub use module::{
@@ -106,6 +108,11 @@ pub const NATIVE_STACK_BYTES: usize = if cfg!(debug_assertions) {
     8 * 1024 * 1024
 };
 
+/// The implementation module is deliberately private:
+/// ```compile_fail
+/// use ironhorse_vm::interp::Interp;
+/// ```
+///
 /// Run a program bytecode buffer (as emitted by the XS compiler) on
 /// a fresh interpreter, returning the completion value and computrons
 /// in the ORACLE HARNESS's shape ([`RunOutcome::host_coerced`]): these
@@ -258,9 +265,8 @@ mod tests {
 
     #[test]
     fn compartments_do_not_share_globals() {
-        // Intrinsic *sharing* is not delivered by this surface (each
-        // evaluation builds a fresh `Interp`; see `compartment`'s module
-        // documentation), so this pins only the half that is true.
+        // Configured endowments belong to each compartment; the intrinsic
+        // graph identity is covered by the executable Realm tests.
         let m = Machine::new();
         let mut a = m.new_compartment();
         let b = m.new_compartment();

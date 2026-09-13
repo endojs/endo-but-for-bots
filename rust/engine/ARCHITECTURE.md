@@ -2,6 +2,7 @@
 
 Current-state guide audited at `96db92e23` on 2026-09-09.
 GC policy incorporates the W6 decision at `d38196799`.
+Ownership and suspended-activation corrections updated on 2026-09-13.
 This describes the implementation, with explicit limits where it differs from
 [the roadmap](../../designs/ironhorse-engine.md#status).
 [README acceptance status](README.md#acceptance-status) records which bars remain open.
@@ -10,7 +11,7 @@ The architecture review is an independently revised record, not this guide's TOD
 
 ## Workspace and dependency direction
 
-`rust/engine/Cargo.toml` defines an independent workspace with **nine members**.
+`rust/engine/Cargo.toml` defines an independent workspace with **eleven members**.
 The repository's outer Cargo workspace excludes it but consumes its crates by path.
 A dependency arrow means the source crate imports the target crate.
 The [generated crate diagram](CRATE-GRAPH.md) includes optional and development edges.
@@ -22,6 +23,8 @@ is supplied through a trait owned by the VM.
 |---|---|
 | `ironhorse-meter` | Frozen weights, default keys, canonical digest, append-only release identities. |
 | `ironhorse-text` | CESU-8 encoding/decoding for symbol names, including lone surrogates. |
+| `ironhorse-unicode` | Pinned Unicode character classifications shared by compiler and runtime. |
+| `ironhorse-runtime` | Oracle-free compiler adapter installed by production embedders and the conformance harness. |
 | `ironhorse-vm` | Values, arenas, interpreter, built-ins, modules, collector and meter integration. |
 | `ironhorse-compile` | Lexer, parser, scoper, coder and budgeted source compilation. |
 | `ironhorse-regexp` | XSRE-derived regexp compiler and backtracking matcher. |
@@ -64,14 +67,110 @@ Those representations serve different boundaries; neither implies UTF-8-only str
 BigInt, regexp, Intl, Temporal, promises, generators and disposal state are present.
 Their presence does not certify full test262 coverage or persistence of every live state.
 
-`Machine`, `Intrinsics` and `Compartment` are public VM types, but the current
-compartment evaluator creates an independently owned interpreter.
-`BootTemplate` speeds this by copying a pristine template; it is not shared frozen intrinsics.
+`ironhorse_vm::Machine` owns arenas, canonical keys, code storage, the execution
+stack, metering, and one ordered promise queue.
+Its single `Realm` holds the primordial references and the default global environment;
+`Machine::start_compartment()` uses that same environment.
+`Intrinsics` contains primordial references and lockdown state, with no interpreter
+or queue back-reference.
+Boot initializes and freezes the graph once, including non-global generator and
+iterator families, before `is_locked_down()` becomes true.
+The old deep-copy `BootTemplate` is removed.
+
+Every other compartment has its own `CompartmentEnvironment`, globals, evaluator
+identities, compiler policy, and module map.
+Functions and suspended activations capture their defining environment; direct,
+nested, callback, and promise calls restore it through the execution-context stack.
+A checked exclusive Machine borrow excludes host reentry (`Halt::MachineBusy`).
+The property-key namespace and code storage remain shared throughout those calls.
+`RootedValue` carries machine provenance and a GC-managed value cell, preserving
+object identity and relocated string/BigInt payloads across collection.
+Raw heap-backed Slot endowments remain refused.
+Host rebinding updates one property through descriptor semantics and respects integrity.
+An intrinsic permit controls global bindings, not transitive capabilities.
+`HeapStoreOptions::intrinsic_permit` requires an explicit host declaration:
+`None` allows all future intrinsic bindings; a list allows only those names
+and `globalThis`.
+Persistent workers apply it before fresh linking and reapply it after resume
+and rewind, including bindings discovered through runtime property keys.
+This policy is host configuration, agreed out of band; it does not revoke
+existing heap bindings or resurrect deleted bindings.
+
+Compartment evaluation executes only its script and never pumps pending jobs.
+`Machine::run_promise_jobs()` pumps the ordered queue; `resume_promise_jobs(host)`
+reattaches a meter callback without changing accumulated charges or its check window.
+Jobs retain their callbacks even after the originating compartment handle is dropped.
+`discard_promise_jobs()` is the explicit abandonment operation.
+Rejection reports belong to the promise's originating environment.
+Machine exposes rooted reports through `unhandled_rejections()` even after the host
+compartment handle is dropped; `take_unhandled_rejections()` acknowledges them.
+Unacknowledged reports retain their environment until inspected and acknowledged.
+`Machine::collect()` retains environments reachable through handles, functions, and
+jobs, and prunes unreachable environment records and their compiler registrations.
+
+Compiler services are owned by Machine outside the execution core; environments
+hold weak service references, preventing cycles through compilers that capture siblings.
+`Machine::set_source_compiler` configures the default Realm's evaluator service.
+Shared dynamic constructors reached through prototype links use that default global;
+compartment `eval` and `Function` objects are bound to their own globals.
+Dropping Machine releases these services; retained value/compartment handles keep
+heap references alive but cannot keep expired compiler services running.
+Meter callbacks detach after success, refusal, or panic.
+
+Endo's ephemeral Machine wrapper explicitly pumps after a successful script.
+Its next evaluation explicitly discards prior pending work and acknowledges reports,
+then collects prior unreachable environments before compilation.
+It retains the latest heap until a later collection so returned diagnostics stay valid.
+Canonical names and tagged-template cache entries remain machine-owned allocations;
+new names/sites consume the finite key space, preserving the engine's reserved range.
+Shared Machines now use container and eager/lazy HeapStore persistence.
+The persistent worker owns this same Machine through `SharedStoreSession`.
+The optional FUNC extension carries environment associations, scoped evaluators,
+ordered jobs, rejection reports, static module cells and exported host roots.
+Standalone images retain their old row shapes and default environment interpretation.
+Multiple Realms, cross-machine sharing and full SES acceptance remain separate work.
+Host-callable services are registered explicitly on the Machine and reattached on restore.
+
+Restoration requires exhaustive host policy for every environment before Machine adoption.
+Compiler services and armed meter callbacks must be reattached explicitly.
+Compartment and root IDs can reacquire handles on the restored heap; old handles retain
+their original Machine identity and cannot be inserted into the restored graph.
+`release_unclaimed_roots` releases provisional ownership without cancelling guest jobs.
+Completed scripts may snapshot queued work without pumping it; active/incomplete cranks
+remain refused.
+Pending host endowments must first be applied by evaluation; snapshots refuse them.
+The static module model carries primitive cells, namespace aliases and evaluation status;
+active or heap-backed host module records remain an explicit admission refusal.
+Shared checkpoint extraction revisits FUNC each time because weak handle ownership,
+module cells and queue changes are not covered by arena dirty-page tracking.
+Store collection uses the same environment-root normalization as Machine collection.
+The worker explicitly refuses old standalone stores before any migration writes.
+
+`interp` is private; normal execution uses curated crate-root exports.
+Capture/restore rows live in `snapshot_api`, with `ROW_SCHEMA_VERSION` tied to a
+structural fingerprint and container/store release ledger.
+Read-only invariant-test registries have a separate hidden `diagnostics` surface.
 [W6 decision 1](../../designs/ironhorse-w6-decisions.md#1-realm--decided-extract-it)
-requires Realm extraction and retains the public surface meanwhile.
+retains the public Machine/Compartment/Intrinsics surface.
 [W6 decision 2](../../designs/ironhorse-w6-decisions.md#2-engine-trait--deferred-and-here-is-the-trigger)
-defers a common daemon engine trait until its stated consumer/protocol trigger.
-Neither planned abstraction should be presented as already wired.
+continues to defer the common engine trait until its stated triggers.
+`Machine::register_host_callable` binds a stable name/ABI pair to a `HostCallable` service.
+`Machine::host_function` creates a call-only function in a compartment, with same-machine
+rooted captures; its function edges retain captured objects, primitive chunks and context.
+The common native dispatcher handles direct, bound, proxy, accessor and promise calls.
+`HostCallContext` exposes scoped values, lossless UTF-16 strings, explicit work charging,
+and fenced guest calls; a resource stop remains terminal even if the service ignores it.
+Values cannot escape a call or be manufactured from raw arena coordinates.
+The current arity profile is 0 through `i32::MAX`, matching length reflection.
+
+The Machine retains service registrations until its last handle drops.
+Core state holds only a weak registry reference, so services may retain compartments
+without forming an ownership cycle through that registry.
+Captures are guest state; service closures and their external effects are host policy.
+Persisted recipes carry the service name/ABI and require an exact explicit
+`MachineRestorePolicy::host_callables` entry before a restored Machine is exposed.
+Changing service semantics or billing requires a new ABI identity.
+Services do not run during restore, collection or snapshot capture.
 
 ## Seam 1: SourceCompiler
 
@@ -79,6 +178,11 @@ The VM owns `SourceCompiler` in `ironhorse-vm/src/interp.rs`.
 An embedder installs an implementation for dynamic source evaluation.
 This avoids a production VM-to-compiler dependency cycle.
 The compiler itself emits data the VM consumes, not an interpreter instance.
+`ironhorse-runtime::IronhorseSourceCompiler` assembles both crates above that seam.
+The conformance harness re-exports this adapter, and Endo installs it for ephemeral
+compartments and persistent machines at fresh boot, resume, and rewind.
+The adapter preserves UTF-16 source units, live charges, and receipt reconciliation.
+Its oracle-free tests run on the Linux debug/release and macOS engine lanes.
 
 `compile_source` receives source, strictness, a raw budget and an incremental
 charge callback, returning `CompiledSource` or `SourceCompileError`.
@@ -191,6 +295,13 @@ Closures/functions, proxies and accessors are carried.
 A resumed guest function is callable; “functions cannot resume” is not a valid gate rationale.
 `functions_carry.rs`, `proxy_carry.rs` and `accessor_carry.rs` exercise these paths.
 Generators and promises have carried representations subject to their boundary restrictions.
+Suspended expression stacks carry validated assignment targets, including computed
+property keys and `super` receivers, across `await` and generator suspension.
+Symbol keys held only by those stacks keep their descriptors alive through GC;
+unreachable activations do not retain them.
+`async_carry.rs` checks these targets through blob and store restore, and
+`additional_carry.rs` compares values and costs for indexed properties, symbol
+registry entries, errors, DataView aliases, wrappers, and mapped arguments.
 Not every possible live async activation has a portable persistent representation.
 `persist_gates.rs` tests refusals; a refusal is not a silent omission or successful carry.
 
@@ -252,15 +363,16 @@ object-code firewall proof and calibration loop remain planned work.
 
 The source documentation in [`versions.rs`](ironhorse-snapshot/src/versions.rs)
 names the bump rules and upgrade consequences.
-These are the five identifiers named by the review, audited at `96db92e23`.
+The table covers the review identifiers and the capture/restore row contract.
 `PARSE_METER_RELEASE` is now an alias, so they are not five independent counters.
 
 | Identifier | Owner and current value | Bump rule and compatibility cost |
 |---|---|---|
 | `COST_TABLE_VERSION` | `ironhorse-meter/src/lib.rs`: `ironhorse-meter-5` | Change weights, charging points or admission policy by appending to `releases::PINNED`, changing the release literal and deliberately updating golden vectors together. `METR` requires both matching name and digest; old-meter persisted heaps cannot resume on the new engine. |
 | `PARSE_METER_RELEASE` | `ironhorse-compile/src/meter.rs`: alias of `COST_TABLE_VERSION` | No independent bump. Compiler charge/admission changes follow the shared meter release procedure; do not recreate a second version namespace. |
-| `IRONHORSE_FORMAT_VERSION` | Snapshot `format.rs`: 16 | Change the container encoding/interpretation with a format bump and explicit decoder support/refusal. `MIN_READ` is 1, but decoding an old container is not permission to execute it: boot and meter identity gates still apply. |
-| `STORE_SCHEMA_VERSION` | Snapshot `store.rs`: 28 | Change paged-store/manifest/small-state representation with a schema bump and verified migration step or explicit refusal. `migrate_store` authenticates old state and advances monotonically; it does not translate old meter semantics. |
+| `IRONHORSE_FORMAT_VERSION` | Snapshot `format.rs`: 22 | Change the container encoding/interpretation with a format bump and explicit decoder support/refusal. `MIN_READ` is 1, but decoding an old container is not permission to execute it: boot and meter identity gates still apply. |
+| `STORE_SCHEMA_VERSION` | Snapshot `store.rs`: 33 | Change paged-store/manifest/small-state representation with a schema bump and verified migration step or explicit refusal. `migrate_store` authenticates old state and advances monotonically; it does not translate old meter semantics. |
+| `ROW_SCHEMA_VERSION` | VM `snapshot_api.rs`: 3 | A row field/type/order change requires a new declaration fingerprint in the append-only `row_schema_releases.tsv` ledger and advances both container and store versions, with explicit migration/refusal and carried-state golden checks. Release 3 adds host-function recipes in format 22/store 33; format-20 and format-21 bytes remain pinned. |
 | `INTL_DATA_VERSION` | Generated VM `src/intl_profile.rs` | Identifies the in-tree Intl profile plus the locked ICU dependency graph, including data checksums and dependency edges. CI rejects stale generation and root/engine disagreement. The label participates in the boot fingerprint and therefore the persisted SIGN gate. Current dependencies retain an immutable legacy alias; upgrades produce a new identity. |
 
 The derived table digest versions weight/default-key encoding, not every charging point.

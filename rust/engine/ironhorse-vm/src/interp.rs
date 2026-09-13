@@ -32,17 +32,18 @@ mod code;
 mod coerce;
 mod dispatch;
 mod metering;
-pub use metering::*;
+use metering::*;
 mod native_ids;
 pub use native_ids::{MathId, Native, NativeMethod};
 mod snapshot_rows;
 pub use snapshot_rows::{
     AccessorRow, ArraySnapshot, AsyncRow, BoundFunctionRow, CollectionSnapshot, CombinatorRow,
-    DisposableStackRow, DisposalRecordRow, FunctionRow, FunctionStateSnapshot, GeneratorRow,
-    IndexPropsSnapshot, IntlBoundFunctionRow, IteratorRow, PrivateAccessorRow,
-    PrivateElementSnapshot, PrivateValueRow, PromiseClusterSnapshot, PromiseFnRow,
-    PromiseReactionRow, PromiseRow, ProxyRevokerRow, ProxyRow, ProxyStateSnapshot, SavedFrameRow,
-    SavedJumpRow,
+    DisposableStackRow, DisposalRecordRow, EnvironmentRow, EvaluatorRow, FunctionRow,
+    FunctionStateSnapshot, GeneratorRow, HostFunctionRow, IndexPropsSnapshot, IntlBoundFunctionRow,
+    IteratorRow, ModuleGraphSnapshot, ModuleRecordRow, PrivateAccessorRow, PrivateElementSnapshot,
+    PrivateValueRow, PromiseClusterSnapshot, PromiseFnRow, PromiseJobRow, PromiseReactionRow,
+    PromiseRow, ProxyRevokerRow, ProxyRow, ProxyStateSnapshot, SavedFrameRow, SavedJumpRow,
+    SharedMachineSnapshot,
 };
 mod symbol_keys;
 use symbol_keys::SymbolKeys;
@@ -65,10 +66,12 @@ mod render;
 mod strings;
 mod unwind;
 
+pub(crate) mod host;
 mod link;
 mod native_try;
 mod natives;
 mod persist;
+mod shared_persist;
 pub use persist::RestoreError;
 mod restore;
 pub use restore::RestoreSession;
@@ -658,6 +661,9 @@ enum ReadKey {
 
 #[derive(Clone, Debug)]
 struct FuncInfo {
+    host: Option<host::HostFunctionData>,
+    /// Captured compartment global; NULL derives the standalone default.
+    global_env: crate::value::SlotIndex,
     /// Start offset of the function body in the program code buffer (the
     /// byte just past the `code` opcode's operand — where `begin_*` sits).
     ///
@@ -721,6 +727,8 @@ struct FuncInfo {
 impl Default for FuncInfo {
     fn default() -> Self {
         FuncInfo {
+            host: None,
+            global_env: crate::value::SlotIndex::NULL,
             body_start: None,
             body_len: 0,
             closures: crate::value::SlotIndex::NULL,
@@ -881,6 +889,7 @@ struct DataViewData {
 /// gated on `state == Pending` instead.
 #[derive(Clone, Debug)]
 struct PromiseData {
+    global_env: crate::value::SlotIndex,
     state: PromiseState,
     result: Slot,
     reactions: Vec<PromiseReaction>,
@@ -1270,6 +1279,8 @@ pub fn error_name_static(name: &str) -> Option<&'static str> {
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum Halt {
+    /// A host operation tried to borrow a Machine that is already executing.
+    MachineBusy,
     /// Reached RETURN/END: the completion value is in `result`.
     Return,
     /// The meter host refused more computation.
@@ -1727,6 +1738,8 @@ pub fn dtf_component_key_static(name: &str) -> Option<&'static str> {
 /// callee's result, matching XS's `mxStack = mxFrameEnd; *mxStack = *slot`.
 #[cfg_attr(test, derive(Debug))]
 struct CallerState {
+    /// Captured compartment global; NULL derives the standalone default.
+    global_env: crate::value::SlotIndex,
     locals: Vec<Slot>,
     // Shared with catch/suspend checkpoints; binding changes copy on write.
     id_map: std::rc::Rc<std::collections::HashMap<u16, usize>>,
@@ -1812,6 +1825,8 @@ enum GeneratorState {
 /// the resume rebases them onto the live chain), and the resume cursor
 /// (`resume_pc`).
 struct SavedFrame {
+    /// Captured compartment global; NULL derives the standalone default.
+    global_env: crate::value::SlotIndex,
     locals: Vec<Slot>,
     // Shared with catch/suspend checkpoints; binding changes copy on write.
     id_map: std::rc::Rc<std::collections::HashMap<u16, usize>>,
@@ -1972,7 +1987,8 @@ enum ResumeStatus {
 }
 
 mod boot;
-pub(crate) use boot::BootTemplate;
+mod realm;
+pub use realm::{CompartmentEnvironment, Realm};
 
 impl Default for Interp {
     fn default() -> Self {
@@ -2055,7 +2071,7 @@ impl Interp {
         let slot = if self.id_map.contains_key(&id) {
             self.resolve_frame_get(id)?
         } else {
-            let property = self.slots.get(*self.global_props.get(&id)?);
+            let property = self.slots.get(*self.environment.global_props.get(&id)?);
             if property.flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) != 0 {
                 return None;
             }
@@ -2086,22 +2102,33 @@ impl Interp {
     /// not erase a report already delivered. The promise and its reason remain
     /// rooted and travel with snapshots. No guest conversion runs here.
     pub fn unhandled_rejection(&self) -> Option<(crate::value::SlotIndex, Slot)> {
-        self.unhandled_rejection
+        self.environment
+            .unhandled_rejection
             .map(|owner| (owner, self.promises[&owner].result))
     }
 
     fn publish_unhandled_rejection(&mut self) {
-        if self.unhandled_rejection.is_none() {
-            self.unhandled_rejection = self.pending_rejections.iter().copied().find(|owner| {
-                self.promises
-                    .get(owner)
-                    .is_some_and(|promise| !promise.ever_handled)
-            });
-            if self.unhandled_rejection.is_some() {
-                self.snapshot_dirt.mark(SnapshotSection::Promises.mask());
+        let pending = std::mem::take(&mut self.pending_rejections);
+        for owner in pending {
+            let Some(promise) = self
+                .promises
+                .get(&owner)
+                .filter(|promise| !promise.ever_handled)
+            else {
+                continue;
+            };
+            let global = if promise.global_env.is_null() {
+                self.environment.global_obj
+            } else {
+                promise.global_env
+            };
+            if let Some(environment) = self.environment_context_mut(global) {
+                if environment.unhandled_rejection.is_none() {
+                    environment.unhandled_rejection = Some(owner);
+                    self.snapshot_dirt.mark(SnapshotSection::Promises.mask());
+                }
             }
         }
-        self.pending_rejections.clear();
     }
 
     /// The raw bytecode-dispatch count (`n_dispatched`), exposed for the C1
@@ -2138,7 +2165,21 @@ impl Interp {
     /// [`Self::link_intrinsics`]; a string `eval` or the `Function`
     /// constructor is an honest [`Halt::NotImplemented`] until it is armed.
     pub fn set_source_compiler(&mut self, compiler: std::rc::Rc<dyn SourceCompiler>) {
-        self.source_compiler = Some(compiler);
+        self.environment.source_compiler = Some(compiler);
+    }
+
+    /// Declare which intrinsic global bindings may be installed from now on.
+    /// `None` permits all; an empty slice permits only `globalThis`.
+    /// This host policy is not serialized and must be reapplied after restore.
+    /// It neither removes existing bindings nor restricts intrinsic objects
+    /// reached through prototypes, and does not resurrect deleted bindings.
+    pub fn set_intrinsic_permit(&mut self, names: Option<&[String]>) {
+        self.environment.intrinsic_permit = names.map(|names| {
+            names
+                .iter()
+                .map(|name| SymbolName::from(name.as_str()))
+                .collect()
+        });
     }
 
     /// Seed a global binding by id, so a program that reads an
@@ -2146,10 +2187,27 @@ impl Interp {
     /// to the global object) observes it. Used by
     /// [`crate::compartment::Compartment::evaluate`] to bind the
     /// compartment's own globals before running.
-    pub fn define_global_id(&mut self, id: u16, value: Slot) {
+    pub fn define_global_id(&mut self, id: u16, value: Slot) -> bool {
         // Seeding a compartment global happens before the run, so it is
         // not metered (it is not a guest allocation the meter counts).
+        if self
+            .find_property(self.environment.global_obj, id)
+            .is_some()
+        {
+            return self.ordinary_define_own_property(
+                self.environment.global_obj,
+                id,
+                OrdinaryDescriptor {
+                    value: Some(value),
+                    ..Default::default()
+                },
+            );
+        }
+        if !self.instance_extensible(self.environment.global_obj) {
+            return false;
+        }
         self.create_global_property(id, (value.kind, value.value));
+        true
     }
 
     /// Arm metering (`fxBeginMetering`): install a check `interval` — a
@@ -2296,7 +2354,12 @@ impl Interp {
     /// Execute caller-owned immutable bytecode without copying its bytes.
     /// Escaping functions retain this same allocation across later cranks.
     pub fn run_shared(&mut self, shared: std::rc::Rc<[u8]>) -> RunOutcome {
-        self.run_operation(shared, true)
+        self.run_operation(shared, true, true)
+    }
+
+    /// Evaluate a compartment script without pumping the machine's job queue.
+    pub(crate) fn run_script_shared(&mut self, code: std::rc::Rc<[u8]>) -> RunOutcome {
+        self.run_operation(code, true, false)
     }
 
     /// Whether this machine has queued promise jobs. This is distinct from
@@ -2319,13 +2382,18 @@ impl Interp {
             .top_level_code
             .clone()
             .unwrap_or_else(|| std::rc::Rc::from([]));
-        self.run_operation(code, false)
+        self.run_operation(code, false, true)
     }
 
-    fn run_operation(&mut self, shared: std::rc::Rc<[u8]>, execute_script: bool) -> RunOutcome {
+    fn run_operation(
+        &mut self,
+        shared: std::rc::Rc<[u8]>,
+        execute_script: bool,
+        pump_jobs: bool,
+    ) -> RunOutcome {
         let start_raw = self.meter.raw();
         let start_dispatched = self.n_dispatched;
-        let mut outcome = self.run_shared_outcome(shared, execute_script);
+        let mut outcome = self.run_shared_outcome(shared, execute_script, pump_jobs);
         outcome.meter_raw_this_run = outcome.meter_raw.saturating_sub(start_raw);
         outcome.computrons_this_run = outcome.meter_raw_this_run >> 16;
         outcome.dispatched_this_run = outcome.dispatched.saturating_sub(start_dispatched);
@@ -2336,6 +2404,7 @@ impl Interp {
         &mut self,
         shared: std::rc::Rc<[u8]>,
         execute_script: bool,
+        pump_jobs: bool,
     ) -> RunOutcome {
         if self.gc_failed {
             return RunOutcome {
@@ -2354,7 +2423,7 @@ impl Interp {
             };
         }
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.run_inner(shared, execute_script)
+            self.run_inner(shared, execute_script, pump_jobs)
         })) {
             Ok(outcome) => outcome,
             Err(payload) if payload.is::<crate::value::HeapExhausted>() => {
@@ -2377,25 +2446,23 @@ impl Interp {
                     host_render_halt: None,
                 }
             }
-            Err(payload) => std::panic::resume_unwind(payload),
+            Err(payload) => {
+                // The Rust stack has unwound every native activation. Keep
+                // the failed crank and poison latches for inspection, but do
+                // not retain native recursion charges for frames that no
+                // longer exist. A later explicit run resets guest activation.
+                self.native_depth = 0;
+                self.last_crank_completed = false;
+                std::panic::resume_unwind(payload)
+            }
         }
     }
 
-    fn run_inner(&mut self, shared: std::rc::Rc<[u8]>, execute_script: bool) -> RunOutcome {
-        let code: &[u8] = &shared;
-        if self.slots.capacity() > self.slots.ceiling()
-            || self.chunks.byte_size() > self.chunks.ceiling()
-        {
-            crate::value::heap_exhausted();
-        }
-        // A halted crank retains its activation for inspection until the
-        // caller explicitly starts another run. Abandon that activation now:
-        // otherwise its frames make BEGIN treat this program as a callee,
-        // and its operands, handler PCs, or with environment leak into it.
-        // Captured locals and environments already live in arena cells and
-        // retained function records; dropping these transient roots preserves
-        // them. Keep queued jobs, metering, poison latches, and the externally
-        // configured eval_program_hoist policy unchanged.
+    pub(crate) fn reset_activation(&mut self) {
+        self.strict = false;
+        self.gen_run_stack.clear();
+        self.async_run_stack.clear();
+        self.async_gen_run_stack.clear();
         while !self.call_stack.is_empty() {
             let _ = self.leave_call();
         }
@@ -2417,6 +2484,32 @@ impl Interp {
         self.resume_status = ResumeStatus::NoStatus;
         self.eval_direct = false;
         self.direct_eval_hoist = false;
+        self.top_level_code = None;
+        self.active_segment = None;
+        self.strict = false;
+    }
+
+    fn run_inner(
+        &mut self,
+        shared: std::rc::Rc<[u8]>,
+        execute_script: bool,
+        pump_jobs: bool,
+    ) -> RunOutcome {
+        let code: &[u8] = &shared;
+        if self.slots.capacity() > self.slots.ceiling()
+            || self.chunks.byte_size() > self.chunks.ceiling()
+        {
+            crate::value::heap_exhausted();
+        }
+        // A halted crank retains its activation for inspection until the
+        // caller explicitly starts another run. Abandon that activation now:
+        // otherwise its frames make BEGIN treat this program as a callee,
+        // and its operands, handler PCs, or with environment leak into it.
+        // Captured locals and environments already live in arena cells and
+        // retained function records; dropping these transient roots preserves
+        // them. Keep queued jobs, metering, poison latches, and the externally
+        // configured eval_program_hoist policy unchanged.
+        self.reset_activation();
         // Retain the top-level bytecode so an eval-defined function that calls
         // back into a top-level function can be dispatched over the right
         // buffer from a nested segment. Only the cross-segment call path reads
@@ -2455,7 +2548,7 @@ impl Interp {
         // changed by the drain (reactions mutate closure state, not the
         // top-level result). A job that reaches an un-modeled path turns the
         // whole run into an honest `Halt::NotImplemented`.
-        if step == Step::Returned {
+        if pump_jobs && step == Step::Returned {
             let script_result = self.result;
             if let Err(h) = self.drain_promise_jobs(code) {
                 step = h;
@@ -2476,7 +2569,9 @@ impl Interp {
         // either host coercion; rendering reads the captured value and cannot
         // execute guest code or collect the heap.
         if completed {
-            self.publish_unhandled_rejection();
+            if pump_jobs {
+                self.publish_unhandled_rejection();
+            }
             self.result = Slot::undefined();
             self.exception = Slot::undefined();
             self.locals.clear();
@@ -2744,6 +2839,7 @@ fn temporal_set_time_args(
 /// attributed to the specific built-in (never a silent mis-execution).
 fn native_unsupported_name(native: Native) -> &'static str {
     match native {
+        Native::Host => "native-call:host",
         Native::Eval => "native-call:eval",
         Native::Locale => "native-call:Locale",
         Native::Collator => "native-call:Collator",

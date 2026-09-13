@@ -136,6 +136,22 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         "f1557aab3334933b351940ca7b5cbe070ee42d325a440ed61c0820b8d7b38e90"
     );
 
+    let mut format20 = session.machine().snapshot_image(&sig).unwrap().into_image();
+    format20.signature = Signature::decode(&platform_signature).unwrap();
+    format20.version.format_version = 20;
+    assert_eq!(
+        hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&format20)),
+        "e129c2191459e2f228d5fd84f78ca28873c16f36786396ab19ce95db7ec90fce"
+    );
+
+    let mut format21 = session.machine().snapshot_image(&sig).unwrap().into_image();
+    format21.signature = Signature::decode(&platform_signature).unwrap();
+    format21.version.format_version = 21;
+    assert_eq!(
+        hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&format21)),
+        "a3a379424af6e6678900fdf89a7056325b5f54b95e5741381d5f59c740e4e234"
+    );
+
     let blob = session
         .machine()
         .write_snapshot(&sig)
@@ -355,11 +371,12 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Format18 adds the boot-native name table to FUNC.
         // Format19: saved-handler segment identity. Guest result and meter pins stay fixed.
         // Format20 / schema31 carry the first reported rejection.
+        // Format21 / schema32 carry shared Machine state.
         if ironhorse_vm::MATH_PROVIDER == "platform" {
-            "e129c2191459e2f228d5fd84f78ca28873c16f36786396ab19ce95db7ec90fce"
+            "f9323665ee2b91fe305c92c40418476736441709cb82488440715a001d5c209f"
         } else {
             // F189 reserved IDs, with the deterministic provider SIGN.
-            "2fd8758022816889ec2870a839b6ea36c2260b0b9752a111e500beec5724a710"
+            "0387cd7bceca3adea6d7279f65bd6bba334cd7a70338aa15fe9f806f99918207"
         },
         "canonical final blob hash"
     );
@@ -574,10 +591,12 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Store29 and FUNC native-name rows change the authenticated state.
         // Schema30 and format19 authenticate the saved-handler layout.
         // Schema31 / format20 authenticate the rejection-report suffix.
+        // Schema32 / format21 authenticate shared Machine state.
+        // Schema33 / format22 authenticate host-function recipes.
         if ironhorse_vm::MATH_PROVIDER == "platform" {
-            "601fece7ad269cb87dab53afa8d9d79af97f185fd0b43c3c0589578412c3f007"
+            "9a991010e2b5e1cd930917d4b98a2192a9413a57e3234b390ad23d5f08e44dbf"
         } else {
-            "69479e004c7014a252c6e9ff0f701d11ec28564826986c02d82de653e4945834"
+            "37aa0508f6d1371ee5c832e7b720125105460341b3cf4cebd3962b8a8c2d0296"
         },
         "epoch-3 seal chain"
     );

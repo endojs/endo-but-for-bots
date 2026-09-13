@@ -968,6 +968,8 @@ pub enum NativeMethod {
 /// with the builtin's name.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Native {
+    /// Open embedding service dispatch; function metadata carries its stable key.
+    Host,
     /// The realm's intrinsic `eval` function. Direct calls are dispatched by
     /// `XS_CODE_EVAL`; ordinary/indirect calls reach [`Interp::call_native`].
     Eval,
@@ -1071,6 +1073,7 @@ impl Native {
     /// `Function.prototype.toString` and by the completion renderer).
     pub fn display_name(self) -> &'static str {
         match self {
+            Native::Host => "host",
             Native::Eval => "eval",
             Native::Locale => "Locale",
             Native::Collator => "Collator",
@@ -1125,6 +1128,7 @@ impl Native {
     /// ECMAScript `length` of the intrinsic constructor.
     pub(super) fn arity(self) -> u32 {
         match self {
+            Native::Host => 0,
             Native::Eval => 1,
             Native::Locale => 1,
             Native::Collator => 0,

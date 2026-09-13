@@ -78,7 +78,7 @@ impl Interp {
         Ok(())
     }
 
-    fn validate_restore_owners(
+    pub(super) fn validate_restore_owners(
         &self,
         owners: impl IntoIterator<Item = u32>,
         row: &'static str,
@@ -100,7 +100,7 @@ impl Interp {
     /// Check value shape and coordinates without loading chunk contents.
     /// Returns the primitive whose chunk needs content validation, if any;
     /// a Symbol's String descriptor is that primitive rather than the Symbol.
-    fn validate_restore_value_shape(
+    pub(super) fn validate_restore_value_shape(
         &self,
         value: Slot,
         row: &'static str,
@@ -145,7 +145,7 @@ impl Interp {
         Ok(Some(primitive))
     }
 
-    fn validate_restore_values(
+    pub(super) fn validate_restore_values(
         &self,
         values: impl IntoIterator<Item = Slot>,
         row: &'static str,
@@ -254,16 +254,16 @@ impl Interp {
         if symbol_names.len() > usize::from(u16::MAX) {
             return Err(refuse("name table exceeds the property ID space"));
         }
-        if slots.is_free_index(self.global_obj) {
+        if slots.is_free_index(self.environment.global_obj) {
             return Err(refuse("global root is a free slot"));
         }
-        let global = slots.get(self.global_obj);
+        let global = slots.get(self.environment.global_obj);
         if global.kind != Kind::Instance
             || !matches!(global.value, Payload::None | Payload::Reference(_))
         {
             return Err(refuse("global root is not an instance"));
         }
-        validate_restore_chain(&slots, self.global_obj, &mut Default::default())?;
+        validate_restore_chain(&slots, self.environment.global_obj, &mut Default::default())?;
         self.slots = slots;
         self.chunks = chunks;
         self.stack = stack;
@@ -506,6 +506,16 @@ impl Interp {
         &self,
         dirty_heap_only: bool,
     ) -> Option<&'static str> {
+        if std::iter::once(&self.environment)
+            .chain(self.inactive_environments.values())
+            .any(|e| {
+                e.modules
+                    .try_borrow()
+                    .map_or(true, |m| !m.snapshot_admitted())
+            })
+        {
+            return Some("an active or heap-backed host module graph");
+        }
         // The test262 `$262` host ([`Self::install_test262_host`]):
         // harness-only, minted above `boot_slot_count`, carried by no
         // atom, and re-derived by nothing on the resume path — restore
@@ -544,6 +554,10 @@ impl Interp {
             .promises
             .values()
             .flat_map(|p| p.reactions.iter())
+            .chain(self.promise_jobs.iter().filter_map(|job| match job {
+                PromiseJob::Reaction { reaction, .. } => Some(reaction),
+                _ => None,
+            }))
             .any(|r| {
                 !matches!(
                     r.kind,
@@ -646,9 +660,12 @@ impl Interp {
         {
             return true;
         }
-        self.functions
-            .get(&function)
-            .is_some_and(|info| info.native.is_none() && info.method.is_none())
+        self.functions.get(&function).is_some_and(|info| {
+            (info.native.is_none() && info.method.is_none())
+                || (self.shared_compartments
+                    && (matches!(info.native, Some(Native::Eval | Native::Function))
+                        || (info.native == Some(Native::Host) && info.host.is_some())))
+        })
     }
 
     /// Function slots rejected by [`Self::function_persists`], including
@@ -1207,7 +1224,7 @@ impl Interp {
             })
             .collect();
         for (id, intrinsic) in legacy_globals {
-            let Some(&property) = self.global_props.get(&id) else {
+            let Some(&property) = self.environment.global_props.get(&id) else {
                 continue;
             };
             let slot = self.slots.get_mut(property);
@@ -1219,11 +1236,11 @@ impl Interp {
             }
         }
         if let Some(&id) = self.symbol_ids.get("globalThis") {
-            if let Some(&property) = self.global_props.get(&id) {
+            if let Some(&property) = self.environment.global_props.get(&id) {
                 let slot = self.slots.get_mut(property);
                 if slot.flag == 0
                     && slot.kind == Kind::Reference
-                    && slot.value == Payload::Reference(self.global_obj)
+                    && slot.value == Payload::Reference(self.environment.global_obj)
                 {
                     slot.flag |= XS_DONT_ENUM_FLAG;
                 }
@@ -1422,6 +1439,7 @@ impl Interp {
             .collect();
         native_names.sort_unstable();
         FunctionStateSnapshot {
+            shared: self.shared_machine_snapshot(),
             native_names: Some(native_names),
             segments,
             functions,
@@ -1626,6 +1644,8 @@ impl Interp {
             self.functions.insert(
                 owner,
                 FuncInfo {
+                    host: None,
+                    global_env: crate::value::SlotIndex::NULL,
                     body_start: row.body_start.map(|v| v as usize),
                     body_len: row.body_len as usize,
                     closures: crate::value::SlotIndex(row.closures),
@@ -2174,7 +2194,6 @@ impl Interp {
             .locals
             .iter()
             .chain(&frame.args)
-            .chain(&frame.stack_slice)
             .copied()
             .chain([frame.this_val, frame.result])
         {
@@ -2186,6 +2205,55 @@ impl Interp {
                         || self.slots.is_free_index(cell)
                     {
                         return Err(refuse("closure cell is not live"));
+                    }
+                }
+                _ => {
+                    self.validate_restore_value_shape(value, ROW)?;
+                }
+            }
+        }
+        // Suspended expressions may retain assignment targets below the
+        // yielded/awaited operand. These are interpreter stack forms, never
+        // guest values in arguments, locals, or the completion register.
+        for &value in &frame.stack_slice {
+            match (value.kind, value.value) {
+                (Kind::Uninitialized, Payload::None) => {}
+                (Kind::Closure, Payload::Reference(cell)) => {
+                    if cell.is_null()
+                        || cell.0 >= self.slots.capacity()
+                        || self.slots.is_free_index(cell)
+                    {
+                        return Err(refuse("closure cell is not live"));
+                    }
+                }
+                (Kind::At, Payload::At(id, index)) => {
+                    if value.id != 0
+                        || value.flag != 0
+                        || !value.next.is_null()
+                        || if id == crate::value::XS_NO_ID {
+                            index == u32::MAX
+                        } else {
+                            index != 0
+                                || (usize::from(id) > self.symbol_names.len()
+                                    && self.symbol_key_ids.descriptor(id).is_none())
+                        }
+                    {
+                        return Err(refuse("invalid suspended property key"));
+                    }
+                }
+                (Kind::EnvReference, Payload::Reference(receiver)) => {
+                    if value.id != 0 || value.flag != 0 {
+                        return Err(refuse("invalid suspended environment reference"));
+                    }
+                    if receiver.is_null() {
+                        if !value.next.is_null() {
+                            return Err(refuse("sentinel environment reference has a base"));
+                        }
+                    } else if receiver.0 != 0 || !value.next.is_null() {
+                        self.validate_restore_owner(receiver.0, ROW)?;
+                        if !value.next.is_null() {
+                            self.validate_restore_owner(value.next.0, ROW)?;
+                        }
                     }
                 }
                 _ => {
@@ -2228,6 +2296,7 @@ impl Interp {
                     .collect()
             };
             Some(SavedFrame {
+                global_env: crate::value::SlotIndex::NULL,
                 locals: row.locals,
                 id_map: std::rc::Rc::new(map(row.id_map)?),
                 args: row.args,
@@ -2371,14 +2440,8 @@ impl Interp {
             .iter()
             .filter_map(|(_, d)| is_promise_resolving_guard(d.guard).then_some(d.guard))
             .collect();
-        let live_comb: std::collections::BTreeSet<u32> = promises
-            .iter()
-            .flat_map(|(_, p)| p.reactions.iter())
-            .filter_map(|r| match r.kind {
-                ReactionKind::Combine(ci, _) | ReactionKind::CombineDirect(ci, _) => Some(ci),
-                _ => None,
-            })
-            .collect();
+        let live_comb: std::collections::BTreeSet<u32> =
+            self.snapshot_combinator_map().into_keys().collect();
         let guard_map: std::collections::HashMap<usize, u32> = live_guards
             .iter()
             .enumerate()
@@ -2417,7 +2480,11 @@ impl Interp {
             .collect();
         async_instances.sort_unstable_by_key(|row| row.owner);
         PromiseClusterSnapshot {
-            unhandled_rejection: self.unhandled_rejection.map(|owner| owner.0),
+            unhandled_rejection: if self.shared_compartments {
+                None
+            } else {
+                self.environment.unhandled_rejection.map(|owner| owner.0)
+            },
             async_instances,
             promises: promises
                 .into_iter()
@@ -2728,6 +2795,7 @@ impl Interp {
             promises.push((
                 crate::value::SlotIndex(row.owner),
                 PromiseData {
+                    global_env: crate::value::SlotIndex::NULL,
                     state,
                     result: row.result,
                     reactions,
@@ -2904,7 +2972,8 @@ impl Interp {
                 },
             ));
         }
-        self.unhandled_rejection = snap.unhandled_rejection.map(crate::value::SlotIndex);
+        self.environment.unhandled_rejection =
+            snap.unhandled_rejection.map(crate::value::SlotIndex);
         self.promises.extend(promises);
         for (owner, data) in functions {
             self.functions.insert(owner, data);
@@ -2961,8 +3030,13 @@ impl Interp {
                 })
         });
         let mut awaited = std::collections::BTreeSet::new();
-        for promise in self.promises.values() {
-            for reaction in &promise.reactions {
+        for reaction in self.promises.values().flat_map(|p| &p.reactions).chain(
+            self.promise_jobs.iter().filter_map(|job| match job {
+                PromiseJob::Reaction { reaction, .. } => Some(reaction),
+                _ => None,
+            }),
+        ) {
+            {
                 if let ReactionKind::AsyncAwait(owner) = reaction.kind {
                     if !self.async_instances.contains_key(&owner) || !awaited.insert(owner.0) {
                         return false;
@@ -3694,7 +3768,7 @@ impl Interp {
         Ok(())
     }
 
-    /// Rebuild the [`Self::global_props`] id→slot fast index by walking the
+    /// Rebuild the [`Realm`] id→slot fast index by walking the
     /// restored global object's own-property list. `create_global_property`
     /// is the *only* writer of `global_props` (a runtime `globalThis.x = 1`
     /// create and a `delete globalThis.x` route their fast-index mutation
@@ -3706,11 +3780,11 @@ impl Interp {
     ///
     /// Initial adoption validates this chain before installing the arenas.
     pub(super) fn rebuild_global_props(&mut self) {
-        self.global_props.clear();
-        let mut cur = self.slots.get(self.global_obj).next;
+        self.environment.global_props.clear();
+        let mut cur = self.slots.get(self.environment.global_obj).next;
         while !cur.is_null() {
             let s = self.slots.get(cur);
-            self.global_props.insert(s.id, cur);
+            self.environment.global_props.insert(s.id, cur);
             cur = s.next;
         }
     }
@@ -3742,6 +3816,7 @@ impl Interp {
     /// ([`RunOutcome::host_coerced`]).
     pub fn is_quiescent(&self) -> bool {
         self.fields_are_quiescent()
+            || (self.last_crank_completed && self.fields_at_shared_collection_boundary())
     }
 
     /// Sections changed relative to this session's durable acknowledgement.
@@ -3749,6 +3824,9 @@ impl Interp {
         &self,
         baseline: &crate::SnapshotBaseline,
     ) -> crate::SnapshotDirty {
+        if self.shared_compartments {
+            return crate::SnapshotDirty::all();
+        }
         if !std::rc::Rc::ptr_eq(&baseline.identity, &self.snapshot_baseline_identity) {
             return crate::SnapshotDirty::all();
         }

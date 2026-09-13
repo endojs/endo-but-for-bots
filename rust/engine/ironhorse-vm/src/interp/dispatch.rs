@@ -1391,7 +1391,18 @@ impl Interp {
                     // scope and strictness. The flag scopes that signal to this
                     // one native call; `eval_source` clears it for any nested
                     // eval the unit itself performs.
-                    self.eval_direct = true;
+                    self.eval_direct =
+                        self.stack
+                            .get(base + 1)
+                            .is_some_and(|slot| match slot.value {
+                                Payload::Reference(function) => {
+                                    self.functions.get(&function).is_some_and(|info| {
+                                        info.global_env.is_null()
+                                            || info.global_env == self.environment.global_obj
+                                    })
+                                }
+                                _ => false,
+                            });
                     let outcome = self.call_native(Native::Eval, base, argc, false, code);
                     self.eval_direct = false;
                     dispatch_result!(outcome, pc, self, return_depth, code);
@@ -2425,7 +2436,7 @@ impl Interp {
                 // reference to the realm's global object. Dispatch-metered
                 // (no allocation).
                 XS_CODE_GLOBAL => {
-                    let g = self.global_obj;
+                    let g = self.environment.global_obj;
                     self.push(Slot::of(Kind::Reference, Payload::Reference(g)));
                     pc += size as usize;
                 }

@@ -1131,14 +1131,14 @@ macro_rules! snapshot_payloads {
             Intl {
                 image_field: intl,
                 builder: language,
-                live: [intl: ironhorse_vm::IntlTables => (interp, dirty) {
+                live: [intl: ironhorse_vm::snapshot_api::IntlTables => (interp, dirty) {
                     if dirty.contains(ironhorse_vm::SnapshotSection::Intl) {
                         interp.intl_snapshot()
                     } else {
                         Default::default()
                     }
                 }],
-                bounds: [intl: ironhorse_vm::IntlTables = &crate::image::EMPTY_INTL],
+                bounds: [intl: ironhorse_vm::snapshot_api::IntlTables = &crate::image::EMPTY_INTL],
                 gate: [Iterators, [intl], ([], [owned], [], [], [slot_count], [], [], [], [], []) {
                     // The Intl rows: weak owners bounded like every sibling's, and a
                     // segment ITERATOR must name an owner with a segments ROW whose
@@ -1186,7 +1186,7 @@ macro_rules! snapshot_payloads {
                 }],
                 initialize: [NameFloor;
                     #[doc = " The Intl record tables (schema 12; the `INTL` encoding)."]
-                    intl: ironhorse_vm::IntlTables = Default::default()],
+                    intl: ironhorse_vm::snapshot_api::IntlTables = Default::default()],
                 legacy_label: "small state intl section",
                 decode_legacy(state, bytes): {
                     state.intl = if bytes.is_empty() {
@@ -1223,14 +1223,14 @@ macro_rules! snapshot_payloads {
             Iterators {
                 image_field: iterators,
                 builder: none,
-                live: [iterators: Vec<ironhorse_vm::IteratorRow> => (interp, dirty) {
+                live: [iterators: Vec<ironhorse_vm::snapshot_api::IteratorRow> => (interp, dirty) {
                     if dirty.contains(ironhorse_vm::SnapshotSection::Iterators) {
                         interp.iterators_snapshot()
                     } else {
                         Default::default()
                     }
                 }],
-                bounds: [iterators: [ironhorse_vm::IteratorRow] = &[]],
+                bounds: [iterators: [ironhorse_vm::snapshot_api::IteratorRow] = &[]],
                 gate: [End, [iterators], ([tables], [owned], [], [names_len], [], [], [], [], [], []) {
                     // The iterator cursors: weak owner and result slots bounded; a
                     // collection cursor must name a COVERING collections row (its
@@ -1310,7 +1310,7 @@ macro_rules! snapshot_payloads {
                 }],
                 initialize: [End;
                     #[doc = " The built-in iterator cursors (schema 13; the `ITER` encoding)."]
-                    iterators: Vec<ironhorse_vm::IteratorRow> = Default::default()],
+                    iterators: Vec<ironhorse_vm::snapshot_api::IteratorRow> = Default::default()],
                 legacy_label: "small state iterators section",
                 decode_legacy(state, bytes): {
                     state.iterators = if bytes.is_empty() {
@@ -1401,14 +1401,14 @@ macro_rules! snapshot_payloads {
             Functions {
                 image_field: function_state,
                 builder: none,
-                live: [function_state: ironhorse_vm::FunctionStateSnapshot => (interp, dirty) {
+                live: [function_state: ironhorse_vm::snapshot_api::FunctionStateSnapshot => (interp, dirty) {
                     if dirty.contains(ironhorse_vm::SnapshotSection::Functions) {
                         interp.function_state_snapshot()
                     } else {
                         Default::default()
                     }
                 }],
-                bounds: [function_state: ironhorse_vm::FunctionStateSnapshot = &crate::image::EMPTY_FUNCTION_STATE],
+                bounds: [function_state: ironhorse_vm::snapshot_api::FunctionStateSnapshot = &crate::image::EMPTY_FUNCTION_STATE],
                 gate: [Proxies, [function_state], ([], [owned], [], [names_len], [], [chunk_len], [], [], [GATE_OOC], []) {
                     let function_owners: std::collections::BTreeSet<u32> = function_state
                         .functions
@@ -1532,7 +1532,7 @@ macro_rules! snapshot_payloads {
                 }],
                 initialize: [Proxies;
                     #[doc = " Atomic retained guest-callability state (schema 15; `FUNC`)."]
-                    function_state: ironhorse_vm::FunctionStateSnapshot = Default::default()],
+                    function_state: ironhorse_vm::snapshot_api::FunctionStateSnapshot = Default::default()],
                 legacy_label: "small state function section",
                 decode_legacy(state, bytes): {
                     state.function_state = if bytes.is_empty() {
@@ -1552,7 +1552,7 @@ macro_rules! snapshot_payloads {
                             }
                             state
                         }
-                        None => ironhorse_vm::FunctionStateSnapshot::default(),
+                        None => ironhorse_vm::snapshot_api::FunctionStateSnapshot::default(),
                     };
                     function_state
                 }],
@@ -1570,14 +1570,14 @@ macro_rules! snapshot_payloads {
             Proxies {
                 image_field: proxy_state,
                 builder: none,
-                live: [proxy_state: ironhorse_vm::ProxyStateSnapshot => (interp, dirty) {
+                live: [proxy_state: ironhorse_vm::snapshot_api::ProxyStateSnapshot => (interp, dirty) {
                     if dirty.contains(ironhorse_vm::SnapshotSection::Proxies) {
                         interp.proxy_state_snapshot()
                     } else {
                         Default::default()
                     }
                 }],
-                bounds: [proxy_state: ironhorse_vm::ProxyStateSnapshot = &crate::image::EMPTY_PROXY_STATE],
+                bounds: [proxy_state: ironhorse_vm::snapshot_api::ProxyStateSnapshot = &crate::image::EMPTY_PROXY_STATE],
                 gate: [Accessors, [proxy_state], ([], [owned], [], [], [], [chunk_len], [], [], [GATE_OOC], []) {
                     let proxy_owners: std::collections::BTreeSet<u32> = proxy_state
                         .proxies
@@ -1619,7 +1619,7 @@ macro_rules! snapshot_payloads {
                 }],
                 initialize: [Accessors;
                     #[doc = " Proxy internal slots and revoker links (schema 16; `PROX`)."]
-                    proxy_state: ironhorse_vm::ProxyStateSnapshot = Default::default()],
+                    proxy_state: ironhorse_vm::snapshot_api::ProxyStateSnapshot = Default::default()],
                 legacy_label: "small state proxy section",
                 decode_legacy(state, bytes): {
                     state.proxy_state = if bytes.is_empty() {
@@ -1639,7 +1639,7 @@ macro_rules! snapshot_payloads {
                             }
                             state
                         }
-                        None => ironhorse_vm::ProxyStateSnapshot::default(),
+                        None => ironhorse_vm::snapshot_api::ProxyStateSnapshot::default(),
                     };
                     proxy_state
                 }],
@@ -1656,14 +1656,14 @@ macro_rules! snapshot_payloads {
             Accessors {
                 image_field: accessors,
                 builder: none,
-                live: [accessors: Vec<ironhorse_vm::AccessorRow> => (interp, dirty) {
+                live: [accessors: Vec<ironhorse_vm::snapshot_api::AccessorRow> => (interp, dirty) {
                     if dirty.contains(ironhorse_vm::SnapshotSection::Accessors) {
                         interp.accessors_snapshot()
                     } else {
                         Default::default()
                     }
                 }],
-                bounds: [accessors: [ironhorse_vm::AccessorRow] = &[]],
+                bounds: [accessors: [ironhorse_vm::snapshot_api::AccessorRow] = &[]],
                 gate: [IntlBoundFunctions, [accessors], ([tables], [owned], [], [names_len], [], [], [symbols], [], [], []) {
                     let symbol_ids = symbols.id_set();
                     if first_stored_unregistered_id(
@@ -1706,7 +1706,7 @@ macro_rules! snapshot_payloads {
                 }],
                 initialize: [IntlBoundFunctions;
                     #[doc = " Guest accessor getter/setter mappings (schema 17; `ACCS`)."]
-                    accessors: Vec<ironhorse_vm::AccessorRow> = Default::default()],
+                    accessors: Vec<ironhorse_vm::snapshot_api::AccessorRow> = Default::default()],
                 legacy_label: "small state accessor section",
                 decode_legacy(state, bytes): {
                     state.accessors = if bytes.is_empty() {
@@ -1738,14 +1738,14 @@ macro_rules! snapshot_payloads {
             IntlBoundFunctions {
                 image_field: intl_bound_functions,
                 builder: none,
-                live: [intl_bound_functions: Vec<ironhorse_vm::IntlBoundFunctionRow> => (interp, dirty) {
+                live: [intl_bound_functions: Vec<ironhorse_vm::snapshot_api::IntlBoundFunctionRow> => (interp, dirty) {
                     if dirty.contains(ironhorse_vm::SnapshotSection::IntlBoundFunctions) {
                         interp.intl_bound_functions_snapshot()
                     } else {
                         Default::default()
                     }
                 }],
-                bounds: [intl_bound_functions: [ironhorse_vm::IntlBoundFunctionRow] = &[]],
+                bounds: [intl_bound_functions: [ironhorse_vm::snapshot_api::IntlBoundFunctionRow] = &[]],
                 gate: [PrivateElements, [intl_bound_functions], ([tables], [owned], [], [], [], [chunk_len], [], [], [GATE_OOC], []) {
                     for row in intl_bound_functions {
                         owned(row.function)?;
@@ -1797,7 +1797,7 @@ macro_rules! snapshot_payloads {
                 }],
                 initialize: [PrivateElements;
                     #[doc = " Runtime Intl bound-function links (schema 18; `IBFN`)."]
-                    intl_bound_functions: Vec<ironhorse_vm::IntlBoundFunctionRow> = Default::default()],
+                    intl_bound_functions: Vec<ironhorse_vm::snapshot_api::IntlBoundFunctionRow> = Default::default()],
                 legacy_label: "small state Intl bound-function section",
                 decode_legacy(state, bytes): {
                     state.intl_bound_functions = if bytes.is_empty() {
@@ -1830,14 +1830,14 @@ macro_rules! snapshot_payloads {
             PrivateElements {
                 image_field: private_elements,
                 builder: none,
-                live: [private_elements: ironhorse_vm::PrivateElementSnapshot => (interp, dirty) {
+                live: [private_elements: ironhorse_vm::snapshot_api::PrivateElementSnapshot => (interp, dirty) {
                     if dirty.contains(ironhorse_vm::SnapshotSection::PrivateElements) {
                         interp.private_elements_snapshot()
                     } else {
                         Default::default()
                     }
                 }],
-                bounds: [private_elements: ironhorse_vm::PrivateElementSnapshot = &crate::image::EMPTY_PRIVATE_ELEMENTS],
+                bounds: [private_elements: ironhorse_vm::snapshot_api::PrivateElementSnapshot = &crate::image::EMPTY_PRIVATE_ELEMENTS],
                 gate: [DisposableStacks, [private_elements], ([], [owned], [], [], [], [], [], [], [], []) {
                     let private_value_keys: std::collections::BTreeSet<(u32, u32)> = private_elements
                         .values
@@ -1874,7 +1874,7 @@ macro_rules! snapshot_payloads {
                 }],
                 initialize: [DisposableStacks;
                     #[doc = " Private values and accessors (schema 19; `PRIV`)."]
-                    private_elements: ironhorse_vm::PrivateElementSnapshot = Default::default()],
+                    private_elements: ironhorse_vm::snapshot_api::PrivateElementSnapshot = Default::default()],
                 legacy_label: "small state private-element section",
                 decode_legacy(state, bytes): {
                     state.private_elements = if bytes.is_empty() {
@@ -1894,7 +1894,7 @@ macro_rules! snapshot_payloads {
                             }
                             state
                         }
-                        None => ironhorse_vm::PrivateElementSnapshot::default(),
+                        None => ironhorse_vm::snapshot_api::PrivateElementSnapshot::default(),
                     };
                     private_elements
                 }],
@@ -1912,14 +1912,14 @@ macro_rules! snapshot_payloads {
             DisposableStacks {
                 image_field: disposable_stacks,
                 builder: none,
-                live: [disposable_stacks: Vec<ironhorse_vm::DisposableStackRow> => (interp, dirty) {
+                live: [disposable_stacks: Vec<ironhorse_vm::snapshot_api::DisposableStackRow> => (interp, dirty) {
                     if dirty.contains(ironhorse_vm::SnapshotSection::DisposableStacks) {
                         interp.disposable_stacks_snapshot()
                     } else {
                         Default::default()
                     }
                 }],
-                bounds: [disposable_stacks: [ironhorse_vm::DisposableStackRow] = &[]],
+                bounds: [disposable_stacks: [ironhorse_vm::snapshot_api::DisposableStackRow] = &[]],
                 gate: [Generators, [disposable_stacks], ([], [owned], [], [], [], [], [], [], [], []) {
                     for row in disposable_stacks {
                         owned(row.owner)?;
@@ -1938,7 +1938,7 @@ macro_rules! snapshot_payloads {
                 }],
                 initialize: [Generators;
                     #[doc = " Explicit resource-management stacks (schema 20; `DISP`)."]
-                    disposable_stacks: Vec<ironhorse_vm::DisposableStackRow> = Default::default()],
+                    disposable_stacks: Vec<ironhorse_vm::snapshot_api::DisposableStackRow> = Default::default()],
                 legacy_label: "small state disposable-stack section",
                 decode_legacy(state, bytes): {
                     state.disposable_stacks = if bytes.is_empty() {
@@ -1971,14 +1971,14 @@ macro_rules! snapshot_payloads {
             Generators {
                 image_field: generators,
                 builder: none,
-                live: [generators: Vec<ironhorse_vm::GeneratorRow> => (interp, dirty) {
+                live: [generators: Vec<ironhorse_vm::snapshot_api::GeneratorRow> => (interp, dirty) {
                     if dirty.contains(ironhorse_vm::SnapshotSection::Generators) {
                         interp.generators_snapshot()
                     } else {
                         Default::default()
                     }
                 }],
-                bounds: [generators: [ironhorse_vm::GeneratorRow] = &[]],
+                bounds: [generators: [ironhorse_vm::snapshot_api::GeneratorRow] = &[]],
                 gate: [Promises, [generators], ([tables], [owned], [], [names_len], [], [], [], [], [], []) {
                     let mut body_starts: std::collections::HashMap<u32, std::collections::BTreeSet<u64>> =
                         std::collections::HashMap::new();
@@ -2128,7 +2128,7 @@ macro_rules! snapshot_payloads {
                 }],
                 initialize: [Promises;
                     #[doc = " Synchronous generator saved activations (schema 21; `GENR`)."]
-                    generators: Vec<ironhorse_vm::GeneratorRow> = Default::default()],
+                    generators: Vec<ironhorse_vm::snapshot_api::GeneratorRow> = Default::default()],
                 legacy_label: "small state generator section",
                 decode_legacy(state, bytes): {
                     state.generators = if bytes.is_empty() {
@@ -2160,7 +2160,7 @@ macro_rules! snapshot_payloads {
             Promises {
                 image_field: promise_cluster,
                 builder: none,
-                live: [promise_cluster: ironhorse_vm::PromiseClusterSnapshot => (interp, dirty) {
+                live: [promise_cluster: ironhorse_vm::snapshot_api::PromiseClusterSnapshot => (interp, dirty) {
                     if dirty.contains(ironhorse_vm::SnapshotSection::Promises)
                         || dirty.contains(ironhorse_vm::SnapshotSection::AsyncInstances)
                     {
@@ -2169,7 +2169,7 @@ macro_rules! snapshot_payloads {
                         Default::default()
                     }
                 }],
-                bounds: [promise_cluster: ironhorse_vm::PromiseClusterSnapshot = &crate::image::EMPTY_PROMISE_CLUSTER],
+                bounds: [promise_cluster: ironhorse_vm::snapshot_api::PromiseClusterSnapshot = &crate::image::EMPTY_PROMISE_CLUSTER],
                 gate: [ArgumentsBrands, [promise_cluster], ([tables], [owned], [], [], [], [chunk_len], [], [], [GATE_OOC], [heap]) {
                     for row in &promise_cluster.promises {
                         owned(row.owner)?;
@@ -2179,6 +2179,7 @@ macro_rules! snapshot_payloads {
                         .promises
                         .iter()
                         .flat_map(|p| &p.reactions)
+                        .chain(tables.function_state.shared.iter().flat_map(|s| s.jobs.iter()).filter(|j| !j.thenable).map(|j| &j.reaction))
                     {
                         if reaction.kind == 3
                             && (!awaited.insert(reaction.a)
@@ -2275,6 +2276,20 @@ macro_rules! snapshot_payloads {
                         }
                         results_lengths.push(len);
                     }
+                    let mut pending = vec![0u32; promise_cluster.combinators.len()];
+                    let mut elements = std::collections::BTreeSet::new();
+                    for r in promise_cluster.promises.iter().flat_map(|p| &p.reactions)
+                        .chain(tables.function_state.shared.iter().flat_map(|s| &s.jobs).filter(|j| !j.thenable).map(|j| &j.reaction)) {
+                        if r.kind == 2 || r.kind == 12 {
+                            let Some(count) = pending.get_mut(r.a as usize) else { return Err(SnapshotError::Corrupt("promise cluster: combinator index outside table")); };
+                            if !elements.insert((r.a,r.b)) { return Err(SnapshotError::Corrupt("promise cluster: duplicate combinator element")); }
+                            *count += 1;
+                        }
+                    }
+                    for (c, n) in promise_cluster.combinators.iter().zip(pending) {
+                        if n == 0 { return Err(SnapshotError::Corrupt("promise cluster: combinators not densely referenced")); }
+                        if c.kind != 2 && c.remaining < n { return Err(SnapshotError::Corrupt("promise cluster: remaining below its pending reactions")); }
+                    }
                     // A combinator reaction's element index writes the results Array at
                     // the drain (`array_set_dense` grows `length` to cover it) — and on
                     // the `any` path the AggregateError builder then iterates
@@ -2289,6 +2304,7 @@ macro_rules! snapshot_payloads {
                         .promises
                         .iter()
                         .flat_map(|row| row.reactions.iter())
+                        .chain(tables.function_state.shared.iter().flat_map(|s| s.jobs.iter()).filter(|j| !j.thenable).map(|j| &j.reaction))
                     {
                         if (r.kind == 2 || r.kind == 12)
                             && results_lengths
@@ -2317,19 +2333,19 @@ macro_rules! snapshot_payloads {
                 }],
                 initialize: [ArgumentsBrands;
                     #[doc = " The promise cluster (schema 23; `PRMS`)."]
-                    promise_cluster: ironhorse_vm::PromiseClusterSnapshot = Default::default()],
+                    promise_cluster: ironhorse_vm::snapshot_api::PromiseClusterSnapshot = Default::default()],
                 legacy_label: "small state promise section",
                 decode_legacy(state, bytes): {
                     state.promise_cluster = if bytes.is_empty() {
                         Default::default()
                     } else {
-                        crate::image::decode_promise_cluster(bytes)?
+                        crate::image::decode_promise_cluster_payload(bytes)?
                     };
                 },
                 decode_container: [AsyncInstances, replace, (r, [], []) {
                     let promise_cluster = match r.find(crate::format::PRMS) {
                         Some(a) => {
-                            let cluster = decode_promise_cluster(a.payload)?;
+                            let cluster = decode_promise_cluster_payload(a.payload)?;
                             if cluster.is_empty() {
                                 return Err(SnapshotError::Corrupt(
                                     "PRMS atom present but empty; the writer omits it",
@@ -2337,7 +2353,7 @@ macro_rules! snapshot_payloads {
                             }
                             cluster
                         }
-                        None => ironhorse_vm::PromiseClusterSnapshot::default(),
+                        None => ironhorse_vm::snapshot_api::PromiseClusterSnapshot::default(),
                     };
                     promise_cluster
                 }],
@@ -2347,7 +2363,7 @@ macro_rules! snapshot_payloads {
                     crate::image::encode_promise_cluster(&state.promise_cluster)
                 },
                 canonicalize(bytes): {
-                    crate::image::decode_promise_cluster(bytes)
+                    crate::image::decode_promise_cluster_payload(bytes)
                         .map(|value| crate::image::encode_promise_cluster(&value))
                 },
                 slot_visit: slots,
@@ -3584,7 +3600,7 @@ mod tests {
     #[test]
     fn grouped_builders_preserve_public_signatures_and_membership() {
         use crate::image::*;
-        use ironhorse_vm::IntlTables;
+        use ironhorse_vm::snapshot_api::IntlTables;
         let fields = |group| {
             PAYLOADS
                 .iter()
