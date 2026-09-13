@@ -5183,6 +5183,10 @@ const makeDaemonCore = async (
   };
 
   /**
+   * Transfers one transient pin to the caller, acquired before releasing the
+   * formula graph lock. The caller must release it after publishing a durable
+   * reference, or if publication fails.
+   *
    * @type {DaemonCore['formulateDirectory']}
    */
   const formulateDirectory = async (nodeNumber = localNodeNumber) => {
@@ -5411,9 +5415,9 @@ const makeDaemonCore = async (
     // Every agent owns an initially empty `@planes` directory. A data plane is
     // opt-in: only a capability the agent places here can contribute a source
     // hint to its content locators.
-    const planesDirectoryId = pin(
-      (await formulateDirectory(agentNodeNumber)).id,
-    );
+    const { id: planesDirectoryId } = await formulateDirectory(agentNodeNumber);
+    // Adopt the pin transferred by formulateDirectory without taking another.
+    pinned.push(planesDirectoryId);
     /* eslint-enable no-use-before-define */
 
     return harden({
@@ -5575,12 +5579,12 @@ const makeDaemonCore = async (
     );
     // Each guest gets its own (initially empty) networks directory that
     // controls which connection hints appear in locators it produces.
-    const networksDirectoryId = pin(
-      (await formulateDirectory(agentNodeNumber)).id,
-    );
-    const planesDirectoryId = pin(
-      (await formulateDirectory(agentNodeNumber)).id,
-    );
+    const { id: networksDirectoryId } =
+      await formulateDirectory(agentNodeNumber);
+    // Adopt the pins transferred by formulateDirectory without taking more.
+    pinned.push(networksDirectoryId);
+    const { id: planesDirectoryId } = await formulateDirectory(agentNodeNumber);
+    pinned.push(planesDirectoryId);
     return harden({
       guestFormulaNumber,
       guestId,
@@ -6215,14 +6219,14 @@ const makeDaemonCore = async (
         const { id: pinsDirectoryId } = await formulateDirectory();
 
         // Ensure the default host is formulated and persisted.
-        const { id: defaultHostId } = await formulateNumberedHost(
-          await formulateHostDependencies({
-            endoId,
-            networksDirectoryId,
-            pinsDirectoryId,
-            specifiedWorkerId: defaultHostWorkerId,
-          }),
-        );
+        const hostIdentifiers = await formulateHostDependencies({
+          endoId,
+          networksDirectoryId,
+          pinsDirectoryId,
+          specifiedWorkerId: defaultHostWorkerId,
+        });
+        const { id: defaultHostId } =
+          await formulateNumberedHost(hostIdentifiers);
 
         /** @type {EndoFormula} */
         const formula = {
@@ -6236,6 +6240,14 @@ const makeDaemonCore = async (
 
         const result = await formulate(formulaNumber, formula);
         formulaGraph.addRoot(result.id);
+        // The rooted Endo formula now retains these construction dependencies.
+        for (const id of [
+          networksDirectoryId,
+          pinsDirectoryId,
+          ...hostIdentifiers.pinned,
+        ]) {
+          unpinTransient(id);
+        }
         return result;
       })
     );
@@ -6812,7 +6824,6 @@ const makeDaemonCore = async (
     getContentIdentityForId,
     formulateDirectory,
     formulateReadableBlob,
-    pinTransient,
     unpinTransient,
   });
 
