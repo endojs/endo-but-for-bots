@@ -43,13 +43,17 @@ export const make = async (powers, _context, { env = {} } = {}) => {
       },
     );
   }
-  const owner = await E(powers).provideSessionOwner(['owned-sessions']);
+  const owner = await E(powers).provideSessionOwner(
+    ['owned-sessions'],
+    env.CONTROLLER_SPECIFIER,
+  );
   return makeExo(
     'SessionOwnerProbe',
     M.interface('SessionOwnerProbe', {
       create: M.callWhen(M.string(), M.string(), M.record()).returns(M.any()),
       inspect: M.callWhen(M.string()).returns(M.any()),
       revise: M.callWhen(M.string(), M.string()).returns(M.undefined()),
+      start: M.callWhen(M.string()).returns(M.any()),
       client: M.callWhen(M.string()).returns(M.any()),
       stop: M.callWhen(M.string()).returns(M.undefined()),
       remove: M.callWhen(M.string()).returns(M.undefined()),
@@ -60,6 +64,7 @@ export const make = async (powers, _context, { env = {} } = {}) => {
         E(owner).create(name, plan, references),
       inspect: name => E(owner).inspect(name),
       revise: (name, plan) => E(owner).revise(name, plan),
+      start: name => E(owner).start(name),
       client: name => E(owner).client(name),
       stop: name => E(owner).stop(name),
       remove: name => E(owner).remove(name),

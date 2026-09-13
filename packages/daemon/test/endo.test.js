@@ -1028,6 +1028,172 @@ test.serial(
 );
 
 testNeedsNodeWorker.serial(
+  'native session owner activates exact dependencies after inert construction and restart',
+  async t => {
+    t.timeout(60_000);
+    const { cancelled, config } = await prepareConfig(t);
+    const specifier = new URL(
+      './_native-session-controller.js',
+      import.meta.url,
+    ).href;
+    const probeSpecifier = new URL('./_session-owner-probe.js', import.meta.url)
+      .href;
+    const dependencySpecifier = new URL(
+      './_native-session-dependency.js',
+      import.meta.url,
+    ).href;
+    let originalA;
+    let originalB;
+    {
+      const { host } = await makeHost(config, cancelled);
+      await E(host).makeDirectory('audit');
+      const backend = await E(host).makeUnconfined('@node', probeSpecifier, {
+        powersName: '@agent',
+        resultName: 'native-backend',
+        env: { CONTROLLER_SPECIFIER: specifier },
+      });
+      const auditId = await E(host).identify('audit');
+      await E(host).storeIdentifier(
+        'native-records-alias',
+        await E(host).identify('owned-sessions', 'sessions'),
+      );
+      for (const label of ['a', 'b']) {
+        // This dependency has its own worker; its revivals produce an audit
+        // effect and cannot hide in the shared backend's module cache.
+        // eslint-disable-next-line no-await-in-loop
+        await E(host).makeUnconfined(
+          `dependency-${label}`,
+          dependencySpecifier,
+          {
+            powersName: 'audit',
+            resultName: `dependency-${label}-value`,
+            env: { LABEL: label },
+          },
+        );
+        // eslint-disable-next-line no-await-in-loop
+        const dependency = await E(host).identify(`dependency-${label}-value`);
+        // eslint-disable-next-line no-await-in-loop
+        await E(backend).create(label, label, { audit: auditId, dependency });
+        // eslint-disable-next-line no-await-in-loop
+        await E(host).remove(`dependency-${label}-value`);
+      }
+      t.is((await E(backend).inspect('a')).phase, 'planned');
+      await t.throwsAsync(
+        E(host).provideSessionOwner(['owned-sessions'], `${specifier}?changed`),
+        {
+          message: /configuration does not match/,
+        },
+      );
+    }
+    await restart(config);
+    {
+      const { host } = await makeHost(config, cancelled);
+      // The nested records cannot reconstruct a different lifecycle owner,
+      // even when their alias is opened before the configured root.
+      const otherHost = await E(host).provideHost('alias-first-host');
+      await E(otherHost).storeIdentifier(
+        'nested-records',
+        await E(host).identify('native-records-alias'),
+      );
+      await t.throwsAsync(E(otherHost).provideSessionOwner('nested-records'), {
+        message: /configured owner directory/,
+      });
+      await t.throwsAsync(E(host).provideSessionOwner('native-records-alias'), {
+        message: /configured owner directory/,
+      });
+      await t.throwsAsync(
+        E(host).provideSessionOwner('native-records-alias', specifier),
+        { message: /configured owner directory/ },
+      );
+      const backend = await E(host).lookup('native-backend');
+      const audit = await E(host).lookup('audit');
+      await E(backend).inspect('a');
+      t.is(await E(audit).readText('revivals-a'), '1');
+      t.is(await E(backend).client('a'), undefined);
+      const a = await E(backend).start('a');
+      const b = await E(backend).start('b');
+      t.is(await E(a).status(), 'ready');
+      t.is(await E(b).status(), 'ready');
+      t.is(await E(audit).readText('revivals-a'), '2');
+      originalA = (await E(backend).inspect('a')).references;
+      originalB = (await E(backend).inspect('b')).references;
+      t.not(originalA.worker, originalB.worker);
+      t.not(originalA.worker, await E(host).identify('@node'));
+      t.like(readFormulaFromDb(config.statePath, originalA.worker), {
+        type: 'worker',
+        kind: 'node',
+      });
+      t.like(readFormulaFromDb(config.statePath, originalA.client), {
+        type: 'make-unconfined',
+        worker: originalA.worker,
+      });
+    }
+    await restart(config);
+    {
+      const { host } = await makeHost(config, cancelled);
+      const backend = await E(host).lookup('native-backend');
+      const audit = await E(host).lookup('audit');
+      t.deepEqual((await E(backend).inspect('a')).references, originalA);
+      t.is(await E(audit).readText('revivals-a'), '2');
+      await t.throwsAsync(E(backend).client('a'), {
+        message: /Explicit session start/,
+      });
+      await E(backend).start('a');
+      const b = await E(backend).start('b');
+      t.deepEqual((await E(backend).inspect('a')).references, originalA);
+      t.is(await E(audit).readText('revivals-a'), '3');
+      await E(backend).stop('a');
+      await E(backend).remove('a');
+      t.is(await E(audit).readText('stopped-a'), 'yes');
+      t.is(await E(backend).ping(), 'alive');
+      t.is(await E(b).status(), 'ready');
+      t.false(formulaExistsInDb(config.statePath, originalA.client));
+      t.false(formulaExistsInDb(config.statePath, originalA.worker));
+      t.true(formulaExistsInDb(config.statePath, originalB.worker));
+      await E(backend).remove('b');
+      t.is(await E(backend).ping(), 'alive');
+    }
+  },
+);
+
+test.serial(
+  'native owner claims and fences its nested record directory',
+  async t => {
+    t.timeout(30_000);
+    const { host } = await prepareHost(t);
+    const specifier = new URL(
+      './_native-session-controller.js',
+      import.meta.url,
+    ).href;
+    const owner = await E(host).provideSessionOwner(
+      'native-records',
+      specifier,
+    );
+    const recordsId = await E(host).identify('native-records', 'sessions');
+    await E(host).storeIdentifier('record-alias', recordsId);
+    t.is(await E(host).provideSessionOwner('record-alias', specifier), owner);
+    await t.throwsAsync(E(host).provideSessionOwner('record-alias'), {
+      message: /configuration does not match/,
+    });
+    const child = await E(host).provideHost('other-record-host');
+    await E(child).storeIdentifier('record-alias', recordsId);
+    await t.throwsAsync(
+      E(child).provideSessionOwner('record-alias', specifier),
+      { message: /already owned by another host/ },
+    );
+    await E(owner).create('one', 'original plan', {});
+    await E(host).cancel('record-alias', Error('Nested records cancelled'));
+    await t.throwsAsync(E(owner).inspect('one'), {
+      message: /record directory is cancelled/,
+    });
+    await t.throwsAsync(
+      E(host).provideSessionOwner('native-records', specifier),
+      { message: /record directory is cancelled/ },
+    );
+  },
+);
+
+testNeedsNodeWorker.serial(
   'static session powers retain exact dependencies across rebinding and restart',
   async t => {
     t.timeout(30_000);

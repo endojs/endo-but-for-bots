@@ -9,6 +9,7 @@
 /** @import { makeSecretManager } from './secret-manager.js' */
 /** @import { makeTraceAggregator } from './trace-aggregator.js' */
 /** @import { SessionRecordDirectory } from './session-record-store.js' */
+/** @import { NativeSessionConstruction } from './session-owner.js' */
 
 import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
@@ -335,6 +336,7 @@ harden(normalizeHttpClientPolicy);
  * @param {ContentLoadable['loadContent']} args.loadContent
  * @param {DaemonCore['getTypeForId']} args.getTypeForId
  * @param {DaemonCore['getFormulaForId']} args.getFormulaForId
+ * @param {DaemonCore['getActiveContext']} args.getActiveContext
  * @param {MakeMailbox} args.makeMailbox
  * @param {MakeDirectoryNode} args.makeDirectoryNode
  * @param {NodeNumber} args.localNodeNumber
@@ -388,6 +390,7 @@ export const makeHostMaker = ({
   loadContent,
   getTypeForId,
   getFormulaForId,
+  getActiveContext,
   makeMailbox,
   makeDirectoryNode,
   localNodeNumber,
@@ -566,13 +569,13 @@ export const makeHostMaker = ({
       sessionOwnersActive || Fail`Session owner host is cancelled`;
     };
     const sessionOwnerJobs = makeSerialJobs();
-    /** @type {Map<FormulaIdentifier, {owner: ReturnType<typeof makeSessionOwner>, assertActive: () => void}>} */
+    /** @type {Map<FormulaIdentifier, {owner: ReturnType<typeof makeSessionOwner>, assertActive: () => void, checkConfiguration: (specifier: string | undefined) => Promise<void>}>} */
     const sessionOwnersById = new Map();
-    /** @type {Map<string, Promise<{identifier: FormulaIdentifier, owner: ReturnType<typeof makeSessionOwner>, assertActive: () => void}>>} */
+    /** @type {Map<string, Promise<{identifier: FormulaIdentifier, owner: ReturnType<typeof makeSessionOwner>, assertActive: () => void, checkConfiguration: (specifier: string | undefined) => Promise<void>}>>} */
     const sessionOwnersByPath = new Map();
 
     /** @type {EndoHost['provideSessionOwner']} */
-    const provideSessionOwner = async recordsPath => {
+    const provideSessionOwner = async (recordsPath, controllerSpecifier) => {
       const { namePath } = assertPetNamePath(namePathFrom(recordsPath));
       const key = JSON.stringify(namePath);
       assertSessionOwnersActive();
@@ -622,27 +625,201 @@ export const makeHostMaker = ({
           claimedHost === undefined ||
             claimedHost.context === context ||
             Fail`Session owner directory is retained by an earlier host incarnation`;
-          sessionDirectoryHosts.set(identifier, harden({ hostId, context }));
           let retainedOwner = sessionOwnersById.get(identifier);
           if (retainedOwner === undefined) {
             // Capture value and cancellation from the same controller. A
             // separate later lookup could observe a successor incarnation.
             const controller = provideController(identifier);
             let directoryActive = true;
+            let recordsActive = true;
+            /** @type {FormulaIdentifier | undefined} */
+            let recordsIdentifier;
             void controller.context.cancelled.catch(() => {
               directoryActive = false;
             });
             const assertActive = () => {
               assertSessionOwnersActive();
               directoryActive || Fail`Session owner directory is cancelled`;
+              recordsActive || Fail`Session record directory is cancelled`;
             };
-            const records = /** @type {SessionRecordDirectory} */ (
+            const rootRecords = /** @type {SessionRecordDirectory} */ (
               await controller.value
             );
             assertActive();
+            (await E(rootRecords).maybeReadText('controller-owner')) ===
+              undefined ||
+              Fail`Native session records must be opened through their configured owner directory`;
+            // Reading the marker can yield to another host. Claim only after
+            // refusing nested records, and recheck before this synchronous set.
+            const currentClaim = sessionDirectoryHosts.get(identifier);
+            currentClaim === undefined ||
+              (currentClaim.hostId === hostId &&
+                currentClaim.context === context) ||
+              Fail`Session owner directory is already owned`;
+            sessionDirectoryHosts.set(identifier, harden({ hostId, context }));
+            const storedSpecifier = await E(rootRecords).maybeReadText(
+              'controller-specifier',
+            );
+            assertActive();
+            if (
+              storedSpecifier === undefined &&
+              controllerSpecifier !== undefined
+            ) {
+              controllerSpecifier.length > 0 ||
+                Fail`Controller specifier must not be empty`;
+              (await E(rootRecords).list()).length === 0 ||
+                Fail`Native session configuration requires an empty owner directory`;
+              await E(rootRecords).writeText(
+                'controller-specifier',
+                controllerSpecifier,
+              );
+              assertActive();
+            } else {
+              storedSpecifier === controllerSpecifier ||
+                Fail`Session controller configuration does not match its owner`;
+            }
+            /** @param {string | undefined} specifier */
+            const checkConfiguration = async specifier => {
+              assertActive();
+              specifier === controllerSpecifier ||
+                Fail`Session controller configuration does not match its owner`;
+              const currentSpecifier = await E(rootRecords).maybeReadText(
+                'controller-specifier',
+              );
+              assertActive();
+              currentSpecifier === specifier ||
+                Fail`Session controller configuration changed`;
+              if (recordsIdentifier !== undefined) {
+                const currentRecords =
+                  await E(rootRecords).identify('sessions');
+                assertActive();
+                currentRecords === recordsIdentifier ||
+                  Fail`Session record directory changed`;
+              }
+            };
+            let records = rootRecords;
+            /** @type {NativeSessionConstruction | undefined} */
+            let native;
+            /** @type {Map<FormulaIdentifier, Context>} */
+            const nativeContexts = new Map();
+            if (controllerSpecifier !== undefined) {
+              if ((await E(rootRecords).identify('sessions')) === undefined) {
+                await E(rootRecords).makeDirectory('sessions');
+              }
+              const sessionsId = await E(rootRecords).identify('sessions');
+              if (sessionsId === undefined)
+                throw Fail`Missing session record directory`;
+              assertValidId(sessionsId);
+              isLocalKey(parseId(sessionsId).node) ||
+                Fail`Session records must be local`;
+              const sessionsFormula = await getFormulaForId(sessionsId);
+              sessionsFormula.type === 'directory' ||
+                Fail`Session records require a directory`;
+              const previousClaim = sessionDirectoryHosts.get(sessionsId);
+              previousClaim === undefined ||
+                (previousClaim.hostId === hostId &&
+                  previousClaim.context === context) ||
+                Fail`Session record directory is already owned`;
+              !sessionOwnersById.has(sessionsId) ||
+                Fail`Session record directory is already owned`;
+              sessionDirectoryHosts.set(
+                sessionsId,
+                harden({ hostId, context }),
+              );
+              recordsIdentifier = sessionsId;
+              const recordController = provideController(sessionsId);
+              void recordController.context.cancelled.catch(() => {
+                recordsActive = false;
+              });
+              records = /** @type {SessionRecordDirectory} */ (
+                await recordController.value
+              );
+              assertActive();
+              const recordedOwner =
+                await E(records).maybeReadText('controller-owner');
+              if (recordedOwner === undefined) {
+                (await E(records).list()).length === 0 ||
+                  Fail`Native session records require an empty unowned directory`;
+                await E(records).writeText('controller-owner', identifier);
+              } else {
+                recordedOwner === identifier ||
+                  Fail`Native session records belong to another owner directory`;
+              }
+              assertActive();
+              let inputId = await E(rootRecords).identify('constructor-input');
+              if (inputId === undefined) {
+                /** @type {DeferredTasks<MarshalDeferredTaskParams>} */
+                const inputTasks = makeDeferredTasks();
+                inputTasks.push(ids =>
+                  E(rootRecords).storeIdentifier(
+                    'constructor-input',
+                    ids.marshalId,
+                  ),
+                );
+                const input = await formulateMarshalValue(null, inputTasks);
+                inputId = input.id;
+              }
+              assertValidId(inputId);
+              const inputFormula = await getFormulaForId(inputId);
+              (inputFormula.type === 'marshal' &&
+                inputFormula.slots.length === 0) ||
+                Fail`Native controller construction requires copy-only powers`;
+              const powersId = inputId;
+              native = harden({
+                provideClient: async id => {
+                  assertActive();
+                  assertValidId(id);
+                  const original = provideController(id);
+                  nativeContexts.set(id, original.context);
+                  const value = await original.value;
+                  assertActive();
+                  return value;
+                },
+                construct: async (name, publish) => {
+                  assertActive();
+                  await checkConfiguration(controllerSpecifier);
+                  /** @type {DeferredTasks<MakeCapletDeferredTaskParams>} */
+                  const tasks = makeDeferredTasks();
+                  // One ordered publication callback: deferred tasks otherwise
+                  // execute concurrently, allowing client publication to race.
+                  tasks.push(ids => publish(ids.workerId, ids.capletId));
+                  const result = await formulateUnconfined(
+                    hostId,
+                    handleId,
+                    controllerSpecifier,
+                    tasks,
+                    undefined,
+                    powersId,
+                    {},
+                    undefined,
+                    `session:${name}`,
+                    (id, originalContext) =>
+                      nativeContexts.set(id, originalContext),
+                  );
+                  nativeContexts.set(result.id, result.context);
+                  assertActive();
+                  return result.value;
+                },
+                cancel: async (id, reason) => {
+                  assertActive();
+                  assertValidId(id);
+                  // Never provide a formula during cancellation. In particular,
+                  // publication failure can leave an identity with no formula.
+                  const original =
+                    nativeContexts.get(id) ?? getActiveContext(id);
+                  if (original !== undefined) {
+                    nativeContexts.set(id, original);
+                    await original.cancel(reason);
+                    nativeContexts.delete(id);
+                  }
+                  assertActive();
+                },
+              });
+            }
             const owner = makeSessionOwner({
               directory: records,
               assertActive,
+              native,
               provide: async id => {
                 assertActive();
                 assertValidId(id);
@@ -657,8 +834,11 @@ export const makeHostMaker = ({
                 assertActive();
               },
             });
-            retainedOwner = harden({ owner, assertActive });
+            retainedOwner = harden({ owner, assertActive, checkConfiguration });
             sessionOwnersById.set(identifier, retainedOwner);
+            if (recordsIdentifier !== undefined) {
+              sessionOwnersById.set(recordsIdentifier, retainedOwner);
+            }
           }
           retainedOwner.assertActive();
           return harden({ identifier, ...retainedOwner });
@@ -677,6 +857,7 @@ export const makeHostMaker = ({
       current === retained.identifier ||
         Fail`Session owner directory changed while its owner is retained`;
       retained.assertActive();
+      await retained.checkConfiguration(controllerSpecifier);
       return retained.owner;
     };
     /**
