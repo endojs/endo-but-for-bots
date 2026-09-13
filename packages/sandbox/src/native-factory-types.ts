@@ -1,6 +1,11 @@
 import type { FarRef, RemoteFunctions } from '@endo/eventual-send';
 
-import type { SandboxHandle, SandboxMakeOpts, SliceSpec } from './types.js';
+import type {
+  DriverSliceContext,
+  SandboxHandle,
+  SandboxMakeOpts,
+  SliceSpec,
+} from './types.js';
 
 /**
  * Host-authorized native paths, resolved before crossing into a shared native
@@ -25,3 +30,9 @@ export type NativeSandboxHandle = FarRef<
     'help' | 'spawn' | 'policy' | 'reset' | 'dispose'
   >
 >;
+
+/** Cleanup ownership transferred before an individual driver preparation begins. */
+export type DriverPreparation<Context = DriverSliceContext> = Readonly<{
+  value: Promise<Context>;
+  close(): Promise<void>;
+}>;

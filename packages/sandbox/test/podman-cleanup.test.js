@@ -1,5 +1,6 @@
 // @ts-check
 import test from '@endo/ses-ava/prepare-endo.js';
+import { E } from '@endo/eventual-send';
 import { makeCancelKit } from '@endo/cancel';
 import { makePromiseKit } from '@endo/promise-kit';
 import { deepStrictEqual, rejects } from 'node:assert';
@@ -18,6 +19,7 @@ import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 
 import { makePodmanDriver } from '../src/drivers/podman.js';
+import { makeSandboxFactoryKit } from '../src/factory.js';
 import { makeGeneratedFileStorage } from '../src/generated-file-storage.js';
 import { makeResourceRegistry } from '../src/resource-registry.js';
 
@@ -1039,4 +1041,142 @@ test('failed signaling retains native closure without poisoning later removal', 
   f.closeKill();
   await Promise.resolve();
   await f.driver.close();
+});
+
+test('preparation close before admission acquires nothing and leaves the driver open', async t => {
+  const f = fixture(t);
+  const kit = f.driver.prepareSliceKit(f.slice.spec);
+  const rejected = t.throwsAsync(kit.value, {
+    message: /preparation is closed/,
+  });
+  const closing = kit.close();
+  t.is(kit.close(), closing);
+  await closing;
+  await rejected;
+  t.deepEqual(f.calls, []);
+  const sibling = f.driver.prepareSliceKit(f.slice.spec);
+  const context = await sibling.value;
+  const stopped = sibling.close();
+  await t.throwsAsync(async () => f.driver.spawn(context, ['/bin/true'], {}), {
+    message: /shutting down/,
+  });
+  await stopped;
+});
+
+test('factory scopes retry failed preparation without stopping a sibling on the same driver and allocator', async t => {
+  t.timeout(5000);
+  const directory = await mkdtemp(join(tmpdir(), 'podman-factory-scopes-'));
+  t.teardown(() => rm(directory, { recursive: true, force: true }));
+  const storage = await makeGeneratedFileStorage({
+    directory: join(directory, 'generated'),
+    maxBytes: 100n,
+    maxEntries: 3n,
+  });
+  t.teardown(() => storage.close());
+  const fs = await import('node:fs/promises');
+  let denyRemoval = true;
+  const f = fixture(t, storage, {
+    ...fs,
+    mkdtemp: () => mkdtemp(join(directory, 'profile-')),
+    writeFile: async () => {
+      throw Error('profile write failed');
+    },
+    rm: async (...args) => {
+      if (denyRemoval) throw Error('profile removal failed');
+      await rm(...args);
+    },
+  });
+  // Only availability is simulated; both scopes use the same actual driver
+  // preparation, spawn, cleanup, and generated-file storage implementation.
+  const driver = {
+    ...f.driver,
+    probe: async () => ({
+      available: true,
+      details: { lifecycle: { available: true } },
+    }),
+  };
+  const makeFactory = () =>
+    makeSandboxFactoryKit({
+      drivers: [driver],
+      scratchProvider: /** @type {any} */ ({}),
+    });
+  const first = makeFactory();
+  const second = makeFactory();
+  t.teardown(() => second.close());
+  t.teardown(() => first.close());
+  t.teardown(() => {
+    denyRemoval = false;
+    for (const name of f.active) f.finish(name);
+  });
+  await t.throwsAsync(
+    first.makeResolved({
+      rootfs: { kind: 'oci', ref: 'test-image' },
+      seccomp: { profile: {} },
+    }),
+    { message: /construction cleanup pending/ },
+  );
+  const sibling = await second.makeResolved({
+    rootfs: { kind: 'oci', ref: 'test-image' },
+    generatedFiles: [{ innerPath: '/etc/scoped.conf', contents: 'sibling' }],
+  });
+  const process = await E(sibling).spawn(['/bin/true']);
+  t.is(f.active.size, 1);
+  await t.throwsAsync(first.close(), { message: /shutdown pending/ });
+  t.is(f.active.size, 1);
+  t.false(f.calls.some(args => args[0] === 'rm'));
+  denyRemoval = false;
+  await first.close();
+  t.is(f.active.size, 1);
+  const another = await E(sibling).spawn(['/bin/true']);
+  t.is(f.active.size, 2);
+  const names = [...f.active];
+  t.not(names[0], names[1]);
+  // The controlled children finish here; this fixture's signal command does
+  // not simulate guest exit. Native reap/timeout behavior has separate tests.
+  for (const name of names) f.finish(name);
+  await E(process).wait();
+  await E(another).wait();
+  await second.close();
+  t.is(f.active.size, 0);
+  t.deepEqual(await readdir(join(directory, 'generated')), []);
+});
+
+test('preparation close drains a held write and does not publish its late context', async t => {
+  t.timeout(5000);
+  const fs = await import('node:fs/promises');
+  const directory = await mkdtemp(join(tmpdir(), 'podman-scoped-drain-'));
+  t.teardown(() => rm(directory, { recursive: true, force: true }));
+  const entered = makePromiseKit();
+  const resume = makePromiseKit();
+  const f = fixture(t, undefined, {
+    ...fs,
+    mkdtemp: () => mkdtemp(join(directory, 'profile-')),
+    writeFile: async (...args) => {
+      entered.resolve(undefined);
+      await resume.promise;
+      await writeFile(...args);
+    },
+  });
+  t.teardown(() => resume.resolve(undefined));
+  const kit = f.driver.prepareSliceKit({
+    ...f.slice.spec,
+    seccomp: { profile: {} },
+  });
+  const rejected = t.throwsAsync(kit.value, {
+    message: /preparation is closed/,
+  });
+  await entered.promise;
+  let closed = false;
+  const closing = kit.close().then(() => {
+    closed = true;
+  });
+  await Promise.resolve();
+  t.false(closed);
+  t.is((await readdir(directory)).length, 1);
+  resume.resolve(undefined);
+  await rejected;
+  await closing;
+  t.deepEqual(await readdir(directory), []);
+  const sibling = await f.prepare({});
+  await f.driver.teardown(sibling);
 });

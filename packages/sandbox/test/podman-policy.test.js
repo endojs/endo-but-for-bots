@@ -582,7 +582,8 @@ test('network join admits a loopback-only target and wires --network container:'
   );
 });
 
-for (const [label, fileOverrides, message] of [
+/** @type {readonly [string, Record<string, string>, RegExp][]} */
+const refusedJoinTargets = harden([
   [
     'a target exposing a non-loopback interface is refused',
     {
@@ -599,7 +600,8 @@ for (const [label, fileOverrides, message] of [
     },
     /must not have routable routes/,
   ],
-]) {
+]);
+for (const [label, fileOverrides, message] of refusedJoinTargets) {
   test(label, async t => {
     const { driver } = makeDriverUnderTest(t, {
       procfs: makeProcfs(fileOverrides),
@@ -1605,3 +1607,90 @@ for (const invalid of [false, true]) {
     t.true(listing?.args.includes('{{.ID}}'));
   });
 }
+
+test('scoped preparation close prevents anchor start without closing sibling admission', async t => {
+  t.timeout(5000);
+  const entered = makePromiseKit();
+  /** @type {any} */
+  let producer;
+  let hold = true;
+  const { driver, calls } = makeDriverUnderTest(t, {
+    intercept: (kind, child) => {
+      if (kind !== 'create' || !hold) return false;
+      hold = false;
+      producer = child;
+      entered.resolve(undefined);
+      return true;
+    },
+  });
+  const finish = () => {
+    if (!producer) return;
+    producer.stdout.end();
+    producer.stderr.end();
+    producer.emit('close', 0, null);
+    producer = undefined;
+  };
+  t.teardown(finish);
+  const kit = driver.prepareSliceKit(/** @type {any} */ (makeSpec()));
+  const rejected = t.throwsAsync(kit.value, {
+    message: /preparation is closed/,
+  });
+  await entered.promise;
+  let closed = false;
+  const closing = kit.close().then(() => {
+    closed = true;
+  });
+  await Promise.resolve();
+  t.false(closed);
+  finish();
+  await rejected;
+  await closing;
+  t.false(calls.some(call => call.args[0] === 'start'));
+  t.is(calls.filter(call => call.args[0] === 'rm').length, 1);
+  const sibling = driver.prepareSliceKit(/** @type {any} */ (makeSpec()));
+  t.teardown(() => sibling.close());
+  await sibling.value;
+  await sibling.close();
+});
+
+test('scoped failed-producer cleanup retains uncertainty without removing a sibling anchor', async t => {
+  t.timeout(5000);
+  let first = true;
+  /** @type {any} */
+  let producer;
+  const { driver, calls } = makeDriverUnderTest(t, {
+    intercept: (kind, child) => {
+      if (kind !== 'create' || !first) return false;
+      first = false;
+      producer = child;
+      queueMicrotask(() => child.emit('error', Error('creator lost')));
+      return true;
+    },
+  });
+  const finish = () => {
+    if (!producer) return;
+    producer.stdout.end();
+    producer.stderr.end();
+    producer.emit('close', null, 'SIGKILL');
+    producer = undefined;
+  };
+  t.teardown(finish);
+  const failed = driver.prepareSliceKit(/** @type {any} */ (makeSpec()));
+  await t.throwsAsync(failed.value, { message: /preparation cleanup pending/ });
+  const sibling = driver.prepareSliceKit(/** @type {any} */ (makeSpec()));
+  t.teardown(() => sibling.close());
+  await sibling.value;
+  await t.throwsAsync(failed.close(), { message: /producer closure pending/ });
+  t.false(calls.some(call => call.args[0] === 'rm'));
+  finish();
+  await Promise.resolve();
+  await t.throwsAsync(failed.close(), { message: /effects remain uncertain/ });
+  const firstAnchor = createCalls(calls)[0].args[2];
+  t.true(
+    calls
+      .filter(call => call.args[0] === 'rm')
+      .every(call => call.args.at(-1) === firstAnchor),
+  );
+  await sibling.close();
+  await t.throwsAsync(failed.close(), { message: /effects remain uncertain/ });
+});
