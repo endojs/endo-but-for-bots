@@ -20,6 +20,7 @@ import {
   makePodmanProviderListenerRuntime,
   makePodmanProviderListenerRuntimeKit,
 } from '../src/provider-listener-runtime.js';
+import { readHttpText, requestHttp } from './http-client.js';
 
 const digest = `sha256:${'b'.repeat(64)}`;
 const limits = harden({
@@ -221,6 +222,98 @@ test.serial(
     );
   },
 );
+
+for (const diagnosticsEnabled of [false, true]) {
+  test.serial(
+    `listener keeps inference alive after repeated oversized stderr (diagnostics=${diagnosticsEnabled})`,
+    async t => {
+      t.timeout(5000);
+      const f = await fixture(t);
+      /** @type {ReturnType<typeof spawn> | undefined} */
+      let child;
+      /** @type {Uint8Array[]} */
+      const diagnostics = [];
+      const runtime = await makePodmanProviderListenerRuntime({
+        ...f.options,
+        host: {
+          ...f.options.host,
+          launch(args) {
+            child = f.options.host.launch(args);
+            return child;
+          },
+          ...(diagnosticsEnabled
+            ? { onStderr: chunk => diagnostics.push(chunk) }
+            : {}),
+        },
+      });
+      t.teardown(runtime.dispose);
+      let calls = 0;
+      const listener = await runtime.start({
+        endpoint: Far('inference after stderr', {
+          requestStream() {
+            calls += 1;
+            let done = false;
+            return harden({
+              status: 200,
+              contentType: 'text/event-stream',
+              reader: Far('response', {
+                async next() {
+                  if (done) return harden({ done: true, value: '' });
+                  done = true;
+                  return harden({ done: false, value: 'data: healthy\n\n' });
+                },
+                return() {},
+              }),
+            });
+          },
+        }),
+        limits,
+      });
+      if (!child?.stderr) throw Error('Expected listener stderr');
+      // The real worker may have emitted startup diagnostics before ready.
+      const initialChunks = diagnostics.length;
+      const initialBytes = diagnostics.reduce(
+        (total, chunk) => total + chunk.byteLength,
+        0,
+      );
+      const prefix = new Uint8Array(1024).fill(65);
+      const oversized = new Uint8Array(8192).fill(66);
+      child.stderr.emit('data', prefix);
+      child.stderr.emit('data', oversized);
+      for (let i = 0; i < 8; i += 1) child.stderr.emit('data', oversized);
+      t.is(
+        diagnostics.reduce((total, chunk) => total + chunk.byteLength, 0),
+        diagnosticsEnabled ? 4096 : 0,
+      );
+      if (diagnosticsEnabled) {
+        t.deepEqual(
+          diagnostics.slice(initialChunks).map(chunk => chunk.byteLength),
+          [
+            Math.min(1024, 4096 - initialBytes),
+            Math.max(0, 3072 - initialBytes),
+          ].filter(size => size > 0),
+        );
+        t.true(diagnostics.every(chunk => chunk.buffer.byteLength <= 4096));
+        prefix.fill(0);
+        oversized.fill(0);
+        const synthetic = diagnostics.slice(initialChunks);
+        if (synthetic[0]) t.is(synthetic[0][0], 65);
+        if (synthetic[1]) t.is(synthetic[1][0], 66);
+      }
+      const observed = await listener.observe();
+      const response = await requestHttp(`${observed.endpoint}/v1/responses`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{"model":"allowed"}',
+      });
+      t.is(await readHttpText(response), 'data: healthy\n\n');
+      t.is(calls, 1);
+      t.is(f.removals.length, 0);
+      await listener.stop();
+      t.is(f.removals.length, 1);
+    },
+  );
+}
 
 test('runtime excludes a second live owner and permits reacquisition after disposal', async t => {
   const f = await fixture(t);
