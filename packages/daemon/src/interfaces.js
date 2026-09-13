@@ -390,7 +390,9 @@ export const HostInterface = M.interface('EndoHost', {
   // Check in a remote readable-tree Exo, storing content-addressed
   storeTree: M.call(M.remotable(), NameOrPathShape).returns(M.promise()),
   // Administrative session records and lifecycle remain daemon-local.
-  provideSessionOwner: M.call(NameOrPathShape).returns(M.promise()),
+  provideSessionOwner: M.call(NameOrPathShape)
+    .optional(M.string())
+    .returns(M.promise()),
   // Mount an external directory. `deniedSegments` replaces the mount's
   // default restricted-segment set (an empty array disables denial).
   provideMount: M.call(M.string(), NameOrPathShape)

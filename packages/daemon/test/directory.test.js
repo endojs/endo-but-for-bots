@@ -48,6 +48,9 @@ const setup = (publish, cleanup = async () => {}) => {
       created.push(id);
       return {
         id,
+        get context() {
+          return unavailable();
+        },
         value: /** @type {EndoDirectory} */ (
           /** @type {unknown} */ (harden({}))
         ),

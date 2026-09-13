@@ -4470,6 +4470,7 @@ const makeDaemonCore = async (
     return harden({
       id,
       value: controller.value,
+      context,
     });
   };
 
@@ -5977,6 +5978,7 @@ const makeDaemonCore = async (
    * @param {string[]} [trustedShims]
    * @param {string} [workerLabel]
    * @param {'locked' | 'node'} [workerKind]
+   * @param {(id: FormulaIdentifier, context: Context) => void} [retainWorker]
    */
   const formulateCapletDependencies = async (
     hostAgentId,
@@ -5987,6 +5989,7 @@ const makeDaemonCore = async (
     trustedShims = undefined,
     workerLabel = undefined,
     workerKind = undefined,
+    retainWorker = undefined,
   ) => {
     const ownFormulaNumber = /** @type {FormulaNumber} */ (
       await randomHex256()
@@ -6036,11 +6039,12 @@ const makeDaemonCore = async (
     // before we unpin its dependencies.
     await deferredTasks.execute(identifiers);
     if (freshWorkerNumber !== undefined) {
-      await formulateNumberedWorker(freshWorkerNumber, {
+      const worker = await formulateNumberedWorker(freshWorkerNumber, {
         kind: workerKind,
         trustedShims,
         label: workerLabel,
       });
+      retainWorker?.(worker.id, worker.context);
     }
     for (const id of powersPinned) {
       unpinTransient(id);
@@ -6059,6 +6063,7 @@ const makeDaemonCore = async (
     env = {},
     trustedShims = undefined,
     workerLabel = undefined,
+    retainWorker = undefined,
   ) => {
     return withFormulaGraphLock(async () => {
       const { powersId, capletFormulaNumber, workerId, originalWorkerId } =
@@ -6071,6 +6076,7 @@ const makeDaemonCore = async (
           trustedShims,
           workerLabel,
           'node',
+          retainWorker,
         );
 
       /** @type {MakeUnconfinedFormula} */
@@ -6235,7 +6241,7 @@ const makeDaemonCore = async (
 
   /** @type {DaemonCore['formulateNetworksDirectory']} */
   const formulateNetworksDirectory = async () => {
-    const { id, value } = await formulateDirectory();
+    const { id, value, context } = await formulateDirectory();
     // Make default networks.
     const { id: loopbackNetworkId } = await formulateLoopbackNetwork();
     const loopbackType = await getTypeForId(loopbackNetworkId);
@@ -6248,7 +6254,7 @@ const makeDaemonCore = async (
       /** @type {NamePath} */ (['loop']),
       loopbackLocator,
     );
-    return { id, value };
+    return { id, value, context };
   };
 
   /** @type {DaemonCore['formulateEndo']} */
@@ -7286,6 +7292,7 @@ const makeDaemonCore = async (
     provideController,
     provideStoreController,
     cancelValue,
+    getActiveContext: id => controllerForId.get(id)?.context,
     formulateWorker,
     formulateHost,
     formulateGuest,
