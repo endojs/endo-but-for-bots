@@ -114,9 +114,11 @@ impl Interp {
             self.meter.tick_slot_alloc();
         }
         let inst = self.slots.alloc(Slot::instance(proto));
+        let global_env = self.capture_global_environment();
         self.promises.insert(
             inst,
             PromiseData {
+                global_env,
                 state: PromiseState::Pending,
                 result: Slot::undefined(),
                 reactions: Vec::new(),
@@ -775,7 +777,7 @@ impl Interp {
         };
         if reject
             && !self.promises[&promise].ever_handled
-            && self.realm.unhandled_rejection.is_none()
+            && self.environment.unhandled_rejection.is_none()
         {
             self.pending_rejections.push(promise);
         }

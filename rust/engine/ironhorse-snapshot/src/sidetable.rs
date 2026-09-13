@@ -291,9 +291,9 @@ mod tests {
             (
                 5,
                 "GlobalProps",
-                "realm.global_props",
+                "environment.global_props",
                 Coverage::RebuiltAtRestore,
-                Some("realm"),
+                Some("environment"),
             ),
             (
                 6,
@@ -609,7 +609,7 @@ mod tests {
             "proxy_revokers",
             "call_stack",
             "jumps",
-            "realm",
+            "environment",
             "error_data",
             "accessors",
             "wrapper_data",
@@ -728,15 +728,16 @@ mod tests {
             "eval_program_hoist",
             // Shared machines refuse persistence; standalone boots keep these
             // maps empty and the shared-profile bit false.
-            "inactive_realms",
+            "inactive_environments",
             "identity_roots",
-            "intrinsics_frozen",
+            "shared_compartments",
             "meter_host",
             "cost",
             "step_limit",
             "n_dispatched",
         ];
         const BOOT_DERIVED: &[&str] = &[
+            "realm",
             "intrinsics",
             "intl_object",
             "temporal_object",
@@ -915,7 +916,7 @@ mod tests {
     fn realm_fields(source: &str) -> std::collections::BTreeSet<String> {
         let source = ironhorse_vm::source_scan::code_only(source);
         let body = source
-            .split("pub struct Realm {")
+            .split("pub struct CompartmentEnvironment {")
             .nth(1)
             .unwrap()
             .split("\n}")
@@ -939,8 +940,8 @@ mod tests {
         let source = include_str!("../../ironhorse-vm/src/interp/realm.rs");
         let fields = realm_fields(source);
         let extended = source.replacen(
-            "pub struct Realm {",
-            "pub struct Realm {\n    private_state: u32,",
+            "pub struct CompartmentEnvironment {",
+            "pub struct CompartmentEnvironment {\n    private_state: u32,",
             1,
         );
         assert!(realm_fields(&extended).contains("private_state"));
@@ -956,16 +957,17 @@ mod tests {
                 "unhandled_rejection",
                 "owner",
                 "intrinsic_permit",
-                "source_compiler"
+                "source_compiler",
+                "shared_compiler"
             ]
             .into_iter()
             .map(str::to_owned)
             .collect()
         );
         let boot = include_str!("../../ironhorse-vm/src/interp/boot.rs");
-        assert!(boot.contains("self.realm.global_obj"));
+        assert!(boot.contains("self.realm.global_object()"));
         let persist = include_str!("../../ironhorse-vm/src/interp/persist.rs");
-        assert!(persist.contains("if self.intrinsics_frozen {"));
+        assert!(persist.contains("if self.shared_compartments {"));
     }
 
     #[test]

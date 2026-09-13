@@ -1,5 +1,25 @@
 //! Machine initialization and intrinsic construction.
 use super::*;
+// Preserve the released boot identity: compartment associations are derived
+// (NULL) in standalone machines and the shared profile cannot be persisted.
+struct BootFunctionIdentity<'a>(&'a FuncInfo);
+impl std::fmt::Debug for BootFunctionIdentity<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FuncInfo")
+            .field("body_start", &self.0.body_start)
+            .field("body_len", &self.0.body_len)
+            .field("closures", &self.0.closures)
+            .field("native", &self.0.native)
+            .field("method", &self.0.method)
+            .field("name", &self.0.name)
+            .field("arity", &self.0.arity)
+            .field("name_chunk", &self.0.name_chunk)
+            .field("is_generator", &self.0.is_generator)
+            .field("home", &self.0.home)
+            .field("class_derived", &self.0.class_derived)
+            .finish()
+    }
+}
 
 // Constructor policies belong to the same declaration as GC and persistence
 // policies. The initializer follows declaration order and retains its
@@ -106,11 +126,11 @@ impl Interp {
         functions.sort_by_key(|(index, _)| index.0);
         for (index, info) in functions {
             term(&index.0.to_be_bytes());
-            // Derived Debug includes native/method variant names and their
-            // payloads, name/name_chunk, arity, and every FuncInfo field.
+            // Boot identity includes native/method variant names and payloads,
+            // plus every non-derived function field.
             // A variant rename may conservatively refuse compatibility;
             // reordering variants cannot silently remap stored natives.
-            term(format!("{info:?}").as_bytes());
+            term(format!("{:?}", BootFunctionIdentity(info)).as_bytes());
         }
         let mut intrinsics: Vec<_> = self.intrinsics.iter().collect();
         intrinsics.sort_by_key(|(name, _)| **name);
@@ -125,7 +145,7 @@ impl Interp {
         let mut default_keys: Vec<_> = self.default_keys.iter().copied().collect();
         default_keys.sort_unstable();
         term(format!("default_keys={default_keys:?}").as_bytes());
-        term(format!("global_obj={:?}", self.realm.global_obj).as_bytes());
+        term(format!("global_obj={:?}", self.realm.global_object()).as_bytes());
         term(format!("intl_object={:?}", self.intl_object).as_bytes());
         term(format!("temporal_object={:?}", self.temporal_object).as_bytes());
         term(format!("temporal_now_object={:?}", self.temporal_now_object).as_bytes());

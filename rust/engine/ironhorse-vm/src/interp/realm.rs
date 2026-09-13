@@ -1,23 +1,46 @@
-//! Realm-owned state, separate from the machine's heap and intrinsic graph.
+//! The single Realm and the machine's compartment environments.
 use super::*;
+
+/// The machine's single Realm: shared primordials and its default environment.
+/// The default environment is also the start compartment's environment.
+pub struct Realm {
+    intrinsics: std::rc::Rc<crate::Intrinsics>,
+    default_global: crate::SlotIndex,
+}
+impl Realm {
+    pub(super) fn new(default_global: crate::SlotIndex) -> Self {
+        Self {
+            intrinsics: Default::default(),
+            default_global,
+        }
+    }
+    pub fn intrinsics(&self) -> &std::rc::Rc<crate::Intrinsics> {
+        &self.intrinsics
+    }
+    pub fn global_object(&self) -> crate::SlotIndex {
+        self.default_global
+    }
+}
 
 /// A global environment and its host evaluation policy within an interpreter.
 /// Heap coordinates and property-key identities belong to the owning machine.
-pub struct Realm {
+pub struct CompartmentEnvironment {
     pub(super) global_obj: crate::value::SlotIndex,
     pub(super) global_props: std::collections::HashMap<u16, crate::value::SlotIndex>,
     pub(super) owner: Option<std::rc::Weak<()>>,
     pub(super) intrinsic_permit: Option<std::collections::BTreeSet<SymbolName>>,
     pub(super) unhandled_rejection: Option<crate::value::SlotIndex>,
+    pub(super) shared_compiler: Option<std::rc::Weak<dyn SourceCompiler>>,
     pub(super) source_compiler: Option<std::rc::Rc<dyn SourceCompiler>>,
 }
 
-impl Realm {
+impl CompartmentEnvironment {
     pub(super) fn new(global_obj: crate::value::SlotIndex) -> Self {
         Self {
             global_obj,
             global_props: Default::default(),
             source_compiler: None,
+            shared_compiler: None,
             intrinsic_permit: None,
             owner: None,
             unhandled_rejection: None,
@@ -26,8 +49,44 @@ impl Realm {
 }
 
 impl Interp {
-    pub(crate) fn intrinsics_are_frozen(&self) -> bool {
-        self.intrinsics_frozen
+    pub(crate) fn set_default_compiler(&mut self, compiler: &std::rc::Rc<dyn SourceCompiler>) {
+        self.environment_context_mut(self.realm.global_object())
+            .expect("default environment")
+            .shared_compiler = Some(std::rc::Rc::downgrade(compiler));
+    }
+
+    pub(crate) fn set_shared_compiler(&mut self, compiler: &std::rc::Rc<dyn SourceCompiler>) {
+        self.environment.shared_compiler = Some(std::rc::Rc::downgrade(compiler));
+    }
+
+    pub(super) fn compartment_evaluator(&mut self, original: crate::SlotIndex) -> crate::SlotIndex {
+        let Some(mut info) = self.functions.get(&original).cloned() else {
+            return original;
+        };
+        if !self.shared_compartments
+            || !matches!(info.native, Some(Native::Eval | Native::Function))
+        {
+            return original;
+        }
+        info.global_env = self.environment.global_obj;
+        let function = self.slots.alloc(Slot::instance(self.function_proto));
+        self.functions.insert(function, info);
+        if let Some(proto) = self.ctor_prototype.get(&original).copied() {
+            self.ctor_prototype.insert(function, proto);
+            if let Some(id) = self.prototype_key_id {
+                self.set_own_unmetered_with_flag(
+                    function,
+                    id,
+                    Slot::of(Kind::Reference, Payload::Reference(proto)),
+                    XS_DONT_ENUM_FLAG | XS_DONT_DELETE_FLAG | XS_DONT_SET_FLAG,
+                );
+            }
+        }
+        function
+    }
+
+    pub(crate) fn realm(&self) -> &std::rc::Rc<Realm> {
+        &self.realm
     }
 
     /// Build the complete intrinsic graph before any guest can observe it.
@@ -52,21 +111,44 @@ impl Interp {
         // iterator families with no forward edge from a named constructor.
         let roots: Vec<_> = (0..machine.slots.capacity())
             .map(crate::value::SlotIndex)
-            .filter(|&root| root != machine.realm.global_obj && root != machine.template_cache)
+            .filter(|&root| {
+                root != machine.environment.global_obj && root != machine.template_cache
+            })
             .filter(|&root| machine.slots.get(root).kind == Kind::Instance)
             .collect();
-        for root in roots {
+        for &root in &roots {
             machine
                 .do_harden(&[], Slot::of(Kind::Reference, Payload::Reference(root)))
                 .expect("pristine intrinsic graph must admit transitive freezing");
         }
-        machine.intrinsics_frozen = true;
+        machine.realm = std::rc::Rc::new(Realm {
+            intrinsics: std::rc::Rc::new(crate::Intrinsics {
+                roots,
+                locked_down: true,
+            }),
+            default_global: machine.environment.global_obj,
+        });
+        machine.shared_compartments = true;
+        for info in machine.functions.values_mut() {
+            if matches!(
+                info.native,
+                Some(
+                    Native::Eval
+                        | Native::Function
+                        | Native::GeneratorFunction
+                        | Native::AsyncFunction
+                        | Native::AsyncGeneratorFunction
+                )
+            ) {
+                info.global_env = machine.environment.global_obj;
+            }
+        }
         machine.meter = Meter::new();
         machine
     }
 }
 
-impl Realm {
+impl CompartmentEnvironment {
     /// This realm's actual global object, in its owning machine's arena.
     pub fn global_object(&self) -> crate::value::SlotIndex {
         self.global_obj
@@ -74,38 +156,44 @@ impl Realm {
 }
 
 impl Interp {
-    pub(crate) fn activate_realm(&mut self, target: crate::value::SlotIndex) -> Result<(), Halt> {
-        if target == self.realm.global_obj {
-            return Ok(());
+    pub(super) fn capture_global_environment(&self) -> crate::SlotIndex {
+        if self.shared_compartments {
+            self.environment.global_obj
+        } else {
+            crate::SlotIndex::NULL
         }
-        if !self.is_quiescent() {
-            return Err(Halt::RealmBusy);
+    }
+
+    pub(super) fn switch_environment(&mut self, target: crate::SlotIndex) {
+        if target.is_null() || target == self.environment.global_obj {
+            return;
         }
-        let realm = self
-            .inactive_realms
+        let environment = self
+            .inactive_environments
             .remove(&target)
-            .ok_or(Halt::RealmBusy)?;
-        let old = std::mem::replace(&mut self.realm, realm);
-        self.inactive_realms.insert(old.global_obj, old);
+            .expect("captured compartment environment must remain reachable");
+        let old = std::mem::replace(&mut self.environment, environment);
+        self.inactive_environments.insert(old.global_obj, old);
+    }
+
+    pub(crate) fn activate_environment(&mut self, target: crate::SlotIndex) -> Result<(), Halt> {
+        self.switch_environment(target);
         Ok(())
     }
 
-    pub(crate) fn create_realm(
+    pub(crate) fn create_environment(
         &mut self,
         permit: Option<std::collections::BTreeSet<SymbolName>>,
         owner: std::rc::Weak<()>,
     ) -> Result<crate::value::SlotIndex, Halt> {
-        if !self.is_quiescent() {
-            return Err(Halt::RealmBusy);
-        }
         let global = self
             .slots
             .alloc(Slot::instance(crate::value::SlotIndex::NULL));
-        let mut realm = Realm::new(global);
+        let mut realm = CompartmentEnvironment::new(global);
         realm.intrinsic_permit = permit;
         realm.owner = Some(owner);
-        let old = std::mem::replace(&mut self.realm, realm);
-        self.inactive_realms.insert(old.global_obj, old);
+        let old = std::mem::replace(&mut self.environment, realm);
+        self.inactive_environments.insert(old.global_obj, old);
         let names = self.symbol_names.to_vec();
         self.install_intrinsic_bindings(&names, 0, false, |_| true);
         Ok(global)
@@ -126,14 +214,14 @@ impl Interp {
     }
 
     pub(crate) fn detach_realm_compiler(&mut self) -> Option<std::rc::Rc<dyn SourceCompiler>> {
-        self.realm.source_compiler.take()
+        self.environment.source_compiler.take()
     }
 
     pub(crate) fn take_realm_meter(&mut self) -> (Meter, Option<Box<dyn FnMut(u64) -> bool>>) {
         (std::mem::take(&mut self.meter), self.meter_host.take())
     }
 
-    pub(crate) fn realm_symbol(&mut self, name: SymbolName) -> Result<u16, Halt> {
+    pub(crate) fn environment_symbol(&mut self, name: SymbolName) -> Result<u16, Halt> {
         if !self.symbol_ids.contains_key(&name) && !self.has_guest_key_capacity(1) {
             return Err(Halt::HeapExhausted);
         }
@@ -161,7 +249,7 @@ impl Interp {
             if id == 0 {
                 Some(0)
             } else {
-                self.realm_symbol(SymbolName::from(format!("\0bytecode-id-{id}")))
+                self.environment_symbol(SymbolName::from(format!("\0bytecode-id-{id}")))
                     .ok()
             }
         })
@@ -172,15 +260,15 @@ impl Interp {
     }
 
     /// Read-only identity inspection; getters and guest coercions never run.
-    pub(crate) fn realm_global_identity(
+    pub(crate) fn environment_global_identity(
         &self,
         realm: crate::value::SlotIndex,
         name: &str,
     ) -> Option<crate::value::SlotIndex> {
-        let realm = if realm == self.realm.global_obj {
-            &self.realm
+        let realm = if realm == self.environment.global_obj {
+            &self.environment
         } else {
-            self.inactive_realms.get(&realm)?
+            self.inactive_environments.get(&realm)?
         };
         let id = self.symbol_ids.get(name)?;
         let prop = self.slots.get(*realm.global_props.get(id)?);
@@ -195,39 +283,36 @@ impl Interp {
 }
 
 impl Interp {
-    /// Drop unreachable host realms at an idle boundary. An orphaned failed
-    /// Realm has no future caller; discard its queued work before establishing
-    /// a clean boundary, without ever running it against a sibling global.
-    pub(crate) fn reap_realms(&mut self) -> Result<(), Halt> {
-        self.inactive_realms.retain(|_, realm| {
-            realm
-                .owner
-                .as_ref()
-                .is_none_or(|owner| owner.strong_count() != 0)
-        });
+    /// Host entry abandons the previous failed activation, never queued jobs.
+    /// Native reentry remains excluded by the outer Machine borrow.
+    pub(crate) fn reap_environments(&mut self) -> Result<(), Halt> {
+        if self.gc_failed {
+            return Err(Halt::EngineInvariant("gc:previous-collection-failed"));
+        }
+        self.reset_activation();
         self.identity_roots
             .retain(|_, owner| owner.strong_count() != 0);
-        if self
-            .realm
-            .owner
-            .as_ref()
-            .is_some_and(|owner| owner.strong_count() == 0)
-        {
-            self.promise_jobs.clear();
-            self.pending_rejections.clear();
-            self.set_realm_meter(Meter::new(), None);
-            let result = self.run_promise_jobs();
-            if !result.completed {
-                return Err(result.halt);
-            }
-            let root = self
-                .inactive_realms
-                .iter()
-                .find_map(|(id, realm)| realm.owner.is_none().then_some(*id))
-                .expect("machine root Realm");
-            self.realm = self.inactive_realms.remove(&root).unwrap();
-        }
         Ok(())
+    }
+
+    pub(crate) fn discard_promise_jobs(&mut self) {
+        self.reset_activation();
+        self.promise_jobs.clear();
+        self.pending_rejections.clear();
+    }
+
+    pub(crate) fn prepare_collection(&mut self) -> Result<(), Halt> {
+        self.reap_environments()?;
+        self.switch_environment(self.realm.global_object());
+        Ok(())
+    }
+
+    pub(crate) fn live_environment_ids(&self) -> std::collections::HashSet<crate::SlotIndex> {
+        self.inactive_environments
+            .keys()
+            .copied()
+            .chain(std::iter::once(self.environment.global_obj))
+            .collect()
     }
 
     pub(crate) fn pin_identity(&mut self, object: crate::SlotIndex) -> std::rc::Rc<()> {
@@ -244,11 +329,88 @@ impl Interp {
         lease
     }
 
-    pub(crate) fn realm_context(&self, id: crate::SlotIndex) -> Option<&Realm> {
-        if self.realm.global_obj == id {
-            Some(&self.realm)
+    pub(super) fn environment_context_mut(
+        &mut self,
+        id: crate::SlotIndex,
+    ) -> Option<&mut CompartmentEnvironment> {
+        if self.environment.global_obj == id {
+            Some(&mut self.environment)
         } else {
-            self.inactive_realms.get(&id)
+            self.inactive_environments.get_mut(&id)
+        }
+    }
+
+    pub(crate) fn rejection_values(&self) -> Vec<(crate::SlotIndex, crate::SlotIndex, Slot)> {
+        let mut reports: Vec<_> = std::iter::once(&self.environment)
+            .chain(self.inactive_environments.values())
+            .filter_map(|environment| {
+                environment.unhandled_rejection.map(|promise| {
+                    (
+                        environment.global_obj,
+                        promise,
+                        self.promises[&promise].result,
+                    )
+                })
+            })
+            .collect();
+        reports.sort_by_key(|(environment, _, _)| environment.0);
+        reports
+    }
+
+    pub(crate) fn acknowledge_rejections(&mut self) {
+        self.environment.unhandled_rejection = None;
+        for environment in self.inactive_environments.values_mut() {
+            environment.unhandled_rejection = None;
+        }
+    }
+
+    pub(crate) fn root_value(
+        &mut self,
+        mut value: Slot,
+    ) -> Result<(crate::SlotIndex, std::rc::Rc<()>), Halt> {
+        value.next = crate::SlotIndex::NULL;
+        value.flag = 0;
+        value.id = 0;
+        let root = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.slots.alloc(value)
+        })) {
+            Ok(root) => root,
+            Err(payload) if payload.is::<crate::value::HeapExhausted>() => {
+                return Err(Halt::HeapExhausted)
+            }
+            Err(payload) => std::panic::resume_unwind(payload),
+        };
+        let lease = self.pin_identity(root);
+        Ok((root, lease))
+    }
+
+    pub(crate) fn global_value_root(
+        &mut self,
+        environment: crate::SlotIndex,
+        name: &str,
+    ) -> Option<(crate::SlotIndex, std::rc::Rc<()>)> {
+        let id = *self.symbol_ids.get(name)?;
+        let global = self.environment_context(environment)?.global_obj;
+        let prop = self.find_property(global, id)?;
+        let value = self.slots.get(prop);
+        if value.flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) != 0 {
+            return None;
+        }
+        self.root_value(value).ok()
+    }
+
+    pub(crate) fn rooted_value(&self, root: crate::SlotIndex) -> Slot {
+        self.slots.get(root)
+    }
+
+    pub(crate) fn environment_context(
+        &self,
+        id: crate::SlotIndex,
+    ) -> Option<&CompartmentEnvironment> {
+        if self.environment.global_obj == id {
+            Some(&self.environment)
+        } else {
+            self.inactive_environments.get(&id)
         }
     }
 }
@@ -256,6 +418,37 @@ impl Interp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn standalone_context_associations_are_derived_without_wire_fields() {
+        let mut machine = Interp::new();
+        let (code, symbols) = ironhorse_compile::compile_atoms("var release; var p = new Promise(r => release = r); async function f(){await p} f(); function* g(){yield 1} var it = g(); 0").unwrap();
+        machine.link_intrinsics(&crate::parse_symbols(&symbols));
+        assert!(machine.run(&code).completed);
+        assert!(machine
+            .functions
+            .values()
+            .all(|function| function.global_env.is_null()));
+        assert!(machine
+            .promises
+            .values()
+            .all(|promise| promise.global_env.is_null()));
+        let frames: Vec<_> = machine
+            .async_instances
+            .values()
+            .filter_map(|row| row.frame.as_ref())
+            .chain(
+                machine
+                    .generators
+                    .values()
+                    .filter_map(|row| row.frame.as_ref()),
+            )
+            .collect();
+        assert!(frames.len() >= 2);
+        assert!(frames.iter().all(|frame| frame.global_env.is_null()));
+        assert!(!machine.shared_compartments);
+        assert!(machine.inactive_environments.is_empty());
+    }
 
     #[test]
     fn unlinked_template_sites_are_unique_across_compilations() {
@@ -270,7 +463,7 @@ mod tests {
         let second = machine.relink_unlinked_realm_program(&code).unwrap();
         assert_ne!(&first[2..4], &second[2..4]);
         let ordinary = machine
-            .realm_symbol(SymbolName::from("\0bytecode-id-1"))
+            .environment_symbol(SymbolName::from("\0bytecode-id-1"))
             .unwrap();
         assert_ne!(&first[2..4], ordinary.to_le_bytes().as_slice());
     }
@@ -309,7 +502,7 @@ mod tests {
             assert!(machine.test_integrity_level(&[], root, true).unwrap());
         }
         assert!(!machine
-            .test_integrity_level(&[], machine.realm.global_obj, true)
+            .test_integrity_level(&[], machine.environment.global_obj, true)
             .unwrap());
     }
 }

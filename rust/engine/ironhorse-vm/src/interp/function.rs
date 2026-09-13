@@ -209,9 +209,11 @@ impl Interp {
         // [`FUNCTION_DEFINE_METERING`] cluster), so a later `f.name` read is a
         // free own-property read — ironhorse mirrors that by pre-interning here.
         let name_chunk = self.chunks.alloc(&units_to_be16(&fname.to_units()));
+        let global_env = self.capture_global_environment();
         self.functions.insert(
             f,
             FuncInfo {
+                global_env,
                 name: fname.to_string(),
                 name_chunk,
                 ..FuncInfo::default()

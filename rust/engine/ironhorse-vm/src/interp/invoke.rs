@@ -183,9 +183,26 @@ impl Interp {
         // `invoke_value`/`construct_value`; a guest callback's own
         // `dispatch_at` beneath it charges itself) is bounded by
         // [`NATIVE_DEPTH_LIMIT`] rather than by the host stack.
-        self.with_native_frame(HEAVY_FRAME_COST, |vm| {
+        let target = self
+            .stack
+            .get(base + 1)
+            .and_then(|slot| match slot.value {
+                Payload::Reference(function) => {
+                    self.functions.get(&function).map(|info| info.global_env)
+                }
+                _ => None,
+            })
+            .unwrap_or(crate::value::SlotIndex::NULL);
+        let caller = self.capture_global_environment();
+        let depth = self.call_stack.len();
+        self.switch_environment(target);
+        let result = self.with_native_frame(HEAVY_FRAME_COST, |vm| {
             vm.call_native_inner(native, base, argc, has_target, code)
-        })
+        });
+        if self.call_stack.len() >= depth {
+            self.switch_environment(caller);
+        }
+        result
     }
 
     /// Normalize one operation executed behind a native try boundary

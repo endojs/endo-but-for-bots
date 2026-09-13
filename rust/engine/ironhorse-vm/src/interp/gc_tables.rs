@@ -395,11 +395,16 @@ interp_state!(define_chunk_walk);
 // Per-row slot policies are shared by precise full marking and conservative
 // partial-page enumeration. Only collection strength differs between the walks.
 macro_rules! gc_slot_row {
+    ($emit:ident, $vm:ident, $row:ident, $visit:ident, $full:expr, environment) => {
+        $emit! { if let Some(owner) = $row.unhandled_rejection { $visit(owner); } }
+    };
+
     ($emit:ident, $vm:ident, $row:ident, $visit:ident, $full:expr, none) => {
         $emit! {}
     };
     ($emit:ident, $vm:ident, $row:ident, $visit:ident, $full:expr, function) => {
         $emit! {
+            $visit($row.global_env);
             $visit($row.closures);
             // The `super` home object: for a method
             // detached from a dead class, this is the prototype's
@@ -509,6 +514,7 @@ macro_rules! gc_slot_row {
     };
     ($emit:ident, $vm:ident, $row:ident, $visit:ident, $full:expr, promise) => {
         $emit! {
+            $visit($row.global_env);
             $row.result.each_ref_slot(&mut *$visit);
             for r in &$row.reactions {
                 r.on_fulfilled.each_ref_slot(&mut *$visit);
@@ -849,6 +855,7 @@ fn saved_frame_slots(f: &SavedFrame, visit: &mut dyn FnMut(SlotIndex)) {
     for j in &f.jumps {
         j.env.each_ref_slot(&mut *visit);
     }
+    visit(f.global_env);
     visit(f.cur_func);
     visit(f.target_func);
 }

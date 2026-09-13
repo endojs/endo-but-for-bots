@@ -55,7 +55,7 @@ pub mod value;
 
 pub use compartment::{
     Compartment, CompartmentId, CompartmentOptions, CompartmentSkip, Intrinsics, Machine,
-    ObjectIdentity,
+    ObjectIdentity, RootedValue, UnhandledRejection,
 };
 pub use gc::{GcStats, Heap};
 #[doc(hidden)]
@@ -65,7 +65,7 @@ pub use interp::{
     RelinkError, RestoreError, RestoreSession, RunOutcome, SourceCompileError, SourceCompiler,
     TYPED_ARRAY_TYPES,
 };
-pub use interp::{DecodeError, Realm};
+pub use interp::{CompartmentEnvironment, DecodeError, Realm};
 pub use interp::{HEAVY_FRAME_COST, LIGHT_FRAME_COST, NATIVE_DEPTH_LIMIT};
 pub use meter::{Meter, MeterCheck, MeterState, COST_TABLE_VERSION};
 pub use module::{

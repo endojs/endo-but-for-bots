@@ -89,20 +89,8 @@ pub struct Interp {
     /// slot (XS aliases the frame locals through the environment
     /// instance; this map is the behavioral equivalent).
     id_map: std::rc::Rc<std::collections::HashMap<u16, usize>>,
-    #[boot_new(Realm::new(global_obj))]
-    #[gc_root(realm)]
-    #[quiescent(retained)]
-    #[persist_refs(none)]
-    #[runtime_keys(none)]
-    #[gc_hook(unborrowed, direct)]
-    #[gc_chunk(none)]
-    #[gc_slots(none, none)]
-    #[gc_weak(none)]
-    #[snapshot_table(GlobalProps, 5, 5, RebuiltAtRestore, "realm.global_props")]
-    /// The active realm's globals and host evaluation policy.
-    realm: Realm,
-    #[boot_new(Default::default())]
-    #[gc_root(realms)]
+    #[boot_new(std::rc::Rc::new(Realm::new(global_obj)))]
+    #[gc_root(single_realm)]
     #[quiescent(retained)]
     #[persist_refs(none)]
     #[runtime_keys(none)]
@@ -111,7 +99,30 @@ pub struct Interp {
     #[gc_slots(none, none)]
     #[gc_weak(none)]
     #[snapshot_table(none)]
-    inactive_realms: std::collections::HashMap<crate::value::SlotIndex, Realm>,
+    realm: std::rc::Rc<Realm>,
+    #[boot_new(CompartmentEnvironment::new(global_obj))]
+    #[gc_root(environment)]
+    #[quiescent(retained)]
+    #[persist_refs(none)]
+    #[runtime_keys(none)]
+    #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
+    #[gc_slots(none, none)]
+    #[gc_weak(none)]
+    #[snapshot_table(GlobalProps, 5, 5, RebuiltAtRestore, "environment.global_props")]
+    /// The active realm's globals and host evaluation policy.
+    environment: CompartmentEnvironment,
+    #[boot_new(Default::default())]
+    #[gc_root(environments)]
+    #[quiescent(retained)]
+    #[persist_refs(none)]
+    #[runtime_keys(none)]
+    #[gc_hook(late, map)]
+    #[gc_chunk(none)]
+    #[gc_slots(map, environment)]
+    #[gc_weak(none)]
+    #[snapshot_table(none)]
+    inactive_environments: std::collections::HashMap<crate::value::SlotIndex, CompartmentEnvironment>,
     #[boot_new(Default::default())]
     #[gc_root(leases)]
     #[quiescent(retained)]
@@ -133,7 +144,7 @@ pub struct Interp {
     #[gc_slots(none, none)]
     #[gc_weak(none)]
     #[snapshot_table(none)]
-    intrinsics_frozen: bool,
+    shared_compartments: bool,
     #[boot_new(false)]
     #[gc_root(none)]
     #[quiescent(false)]

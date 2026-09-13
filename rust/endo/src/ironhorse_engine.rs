@@ -518,10 +518,11 @@ pub mod engine {
 
         /// Create a fresh machine under an explicit metering policy.
         pub fn with_bounds(bounds: MeterBounds) -> Machine {
-            Machine {
-                inner: VmMachine::new(),
-                bounds,
-            }
+            let inner = VmMachine::new();
+            inner
+                .set_source_compiler(std::rc::Rc::new(ironhorse_runtime::IronhorseSourceCompiler))
+                .expect("fresh machine admits its compiler policy");
+            Machine { inner, bounds }
         }
 
         /// The metering policy every evaluation runs under.
@@ -543,6 +544,15 @@ pub mod engine {
             // The prior Realm was dropped on return. Reclaim it before the
             // next compilation, preserving its raw diagnostics until this
             // later VM operation. The last evaluation lives until machine drop.
+            // Each ephemeral evaluation is an independent delivery. Explicitly
+            // abandon the prior delivery's queued work and acknowledge reports
+            // before collecting; live VM compartments never do this implicitly.
+            self.inner
+                .discard_promise_jobs()
+                .map_err(MachineError::Halt)?;
+            self.inner
+                .discard_unhandled_rejections()
+                .map_err(MachineError::Halt)?;
             self.inner.collect().map_err(MachineError::Halt)?;
             let mut meter = VMeter::new();
             let mut host = match (self.bounds.check_interval(), self.bounds.crank_limit()) {
@@ -566,12 +576,15 @@ pub mod engine {
             };
             let mut comp = self.inner.new_compartment();
             comp.set_source_compiler(std::rc::Rc::new(ironhorse_runtime::IronhorseSourceCompiler));
-            let outcome = comp.evaluate_with_symbols_continuing_meter_shared(
-                bytecode.into(),
-                &symbols,
-                meter,
-                host,
-            );
+            let outcome = self
+                .inner
+                .evaluate_compartment_with_symbols_continuing_meter_shared(
+                    &comp,
+                    bytecode.into(),
+                    &symbols,
+                    meter,
+                    host,
+                );
             Ok(eval_outcome(outcome, 0))
         }
 
@@ -604,8 +617,7 @@ pub mod engine {
             }
         }
 
-        /// This machine's intrinsics marker (not a shared primordial
-        /// graph — see `ironhorse_vm::compartment`).
+        /// This machine's shared frozen primordial graph.
         pub fn intrinsics(&self) -> &Intrinsics {
             self.inner.intrinsics().as_ref()
         }
@@ -1552,6 +1564,21 @@ pub mod engine {
                 }
                 other => panic!("expected charged compile error: {other:?}"),
             }
+        }
+
+        #[test]
+        fn ephemeral_completion_is_rendered_after_machine_jobs() {
+            let machine = Machine::with_bounds(MeterBounds::Unbounded);
+            assert_eq!(
+                machine
+                    .eval("var result = []; Promise.resolve().then(() => result.push(42)); result")
+                    .unwrap(),
+                "42"
+            );
+            assert_eq!(
+                machine.eval("(()=>{}).constructor('return 42')()").unwrap(),
+                "42"
+            );
         }
 
         #[test]

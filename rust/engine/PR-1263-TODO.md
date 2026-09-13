@@ -7,15 +7,15 @@ intrinsics and retaining distinct globals and evaluators.
 Work in this order; complete an adversarial subagent review and resolve its
 findings before every commit.
 
-1. [ ] Fix duplicate global endowments and descriptor/integrity enforcement;
+1. [x] Fix duplicate global endowments and descriptor/integrity enforcement;
    test deletion, frozen globals, and caught native/callback host panics.
-2. [ ] Separate Machine, Realm, Intrinsics, and compartment environment records;
+2. [x] Separate Machine, Realm, Intrinsics, and compartment environment records;
    preserve canonical keys, code storage, and initialization of primordials once.
-3. [ ] Add machine-associated rooted value sharing; capture defining environments
+3. [x] Add machine-associated rooted value sharing; capture defining environments
    for functions and support direct and nested A → B → A guest calls.
-4. [ ] Bind indirect eval and Function to their compartment; expose Machine job
+4. [x] Bind indirect eval and Function to their compartment; expose Machine job
    pumping and preserve callback contexts and queue ordering across compartments.
-5. [ ] Retain environments/code through functions, jobs, and host handles after
+5. [x] Retain environments/code through functions, jobs, and host handles after
    collection and Compartment drop; make queued-work abandonment explicit.
 6. [ ] Check persistent-worker permit policy at open/resume/rewind, rejection and
    meter isolation, carried-state coverage, and the reported async restore issue.

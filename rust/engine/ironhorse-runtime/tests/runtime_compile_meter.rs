@@ -267,3 +267,119 @@ fn sibling_realms_keep_independent_source_compilers() {
     assert!(run(&b, "1").completed);
     assert_eq!(run(&a, "Function('return n+2')()").result, "9");
 }
+
+fn compartment_eval(compartment: &ironhorse_vm::Compartment, source: &str) -> String {
+    let (code, symbols) = ironhorse_compile::compile_atoms(source).unwrap();
+    let result = compartment.evaluate_with_symbols(&code, &symbols);
+    assert!(result.completed, "{source}: {:?}", result.halt);
+    result.result
+}
+
+#[test]
+fn evaluators_retain_target_globals_when_shared_and_after_origin_drop() {
+    let machine = ironhorse_vm::Machine::new();
+    let mut a = machine.new_compartment();
+    let mut b = machine.new_compartment();
+    a.set_source_compiler(Rc::new(IronhorseSourceCompiler));
+    b.set_source_compiler(Rc::new(IronhorseSourceCompiler));
+    compartment_eval(
+        &a,
+        "var answer = 42; var e = eval; var F = Function; var read = () => eval('answer'); 0",
+    );
+    b.define_global_value("evalA", &a.global_value("e").unwrap())
+        .unwrap();
+    b.define_global_value("FunctionA", &a.global_value("F").unwrap())
+        .unwrap();
+    b.define_global_value("readA", &a.global_value("read").unwrap())
+        .unwrap();
+    assert_eq!(compartment_eval(&b, "var answer = 99; evalA('answer') + ':' + FunctionA('return answer')() + ':' + readA() + ':' + eval('answer')"), "42:42:42:99");
+    assert_ne!(
+        a.global_object_identity("e"),
+        b.global_object_identity("eval")
+    );
+    assert_ne!(
+        a.global_object_identity("F"),
+        b.global_object_identity("Function")
+    );
+    drop(a);
+    machine.collect().unwrap();
+    assert_eq!(
+        compartment_eval(
+            &b,
+            "readA() + ':' + evalA('answer') + ':' + FunctionA('return answer')()"
+        ),
+        "42:42:42"
+    );
+}
+
+#[test]
+fn foreign_eval_bound_to_the_name_eval_does_not_capture_caller_locals() {
+    let machine = ironhorse_vm::Machine::new();
+    let mut a = machine.new_compartment();
+    let mut b = machine.new_compartment();
+    a.set_source_compiler(Rc::new(IronhorseSourceCompiler));
+    b.set_source_compiler(Rc::new(IronhorseSourceCompiler));
+    compartment_eval(&a, "var answer = 42; 0");
+    b.define_global_value("eval", &a.global_value("eval").unwrap())
+        .unwrap();
+    assert_eq!(
+        compartment_eval(
+            &b,
+            "var answer = 99; (function(){ var answer = 100; return eval('answer') })()"
+        ),
+        "42"
+    );
+}
+
+#[test]
+fn retained_generator_and_async_frames_keep_their_compartment_globals() {
+    let machine = ironhorse_vm::Machine::new();
+    let a = machine.new_compartment();
+    let mut b = machine.new_compartment();
+    compartment_eval(&a, "var answer = 42; function* values(){yield answer; yield answer + 1} var gen = values(); var resolve; var p = new Promise(r => resolve = r); var state = {n: 0}; async function run(){await p; state.n = answer} run(); 0");
+    b.define_global_value("gen", &a.global_value("gen").unwrap())
+        .unwrap();
+    b.define_global_value("resolve", &a.global_value("resolve").unwrap())
+        .unwrap();
+    b.define_global_value("state", &a.global_value("state").unwrap())
+        .unwrap();
+    drop(a);
+    machine.collect().unwrap();
+    assert_eq!(
+        compartment_eval(&b, "var answer = 99; gen.next().value"),
+        "42"
+    );
+    machine.collect().unwrap();
+    assert_eq!(compartment_eval(&b, "gen.next().value"), "43");
+    compartment_eval(&b, "resolve(); 0");
+    assert!(machine.run_promise_jobs().completed);
+    assert_eq!(compartment_eval(&b, "state.n"), "42");
+}
+
+#[test]
+fn shared_dynamic_constructors_use_the_explicit_default_evaluator_service() {
+    let machine = ironhorse_vm::Machine::new();
+    machine
+        .set_source_compiler(Rc::new(IronhorseSourceCompiler))
+        .unwrap();
+    let a = machine.new_compartment();
+    compartment_eval(&machine.start_compartment(), "var answer = 17; 0");
+    compartment_eval(&a, "var answer = 42; 0");
+    assert_eq!(
+        compartment_eval(&a, "(()=>{}).constructor('return answer')()"),
+        "17"
+    );
+    assert_eq!(
+        compartment_eval(
+            &a,
+            "(function*(){}).constructor('yield answer')().next().value"
+        ),
+        "17"
+    );
+    compartment_eval(
+        &a,
+        "var result; (async function(){}).constructor('return answer')().then(x => result=x); 0",
+    );
+    assert!(machine.run_promise_jobs().completed);
+    assert_eq!(compartment_eval(&a, "result"), "17");
+}
