@@ -118,6 +118,7 @@ import {
   BlobInterface,
   ReadableTreeInterface,
   EndoInterface,
+  ReadableNameHubInterface,
 } from './interfaces.js';
 import { makeTraceAggregator } from './trace-aggregator.js';
 import { getUnredactedStackString } from './unredacted-stack.js';
@@ -128,7 +129,7 @@ import { getUnredactedStackString } from './unredacted-stack.js';
 /** @import { PromiseKit } from '@endo/promise-kit' */
 /** @import { ReadableBlobRange, SnapshotTree } from '@endo/platform/fs/lite/types' */
 /** @import { ArchiveTreeMethods } from './tar-checkin.js' */
-/** @import { AgentDeferredTaskParams, Builtins, CapTpConnectionRegistrar, Context, Controller, DaemonCore, DaemonCoreExternal, DaemonicPowers, DeferredTasks, DirectoryFormula, EndoBootstrap, EndoDirectory, EndoFormula, EndoGateway, EndoGreeter, EndoGuest, EndoHost, EndoInspector, EndoMount, EndoNetwork, EndoPeer, EndoReadable, EndoReadableTree, EndoWorker, EvalFormula, FarContext, Formula, FormulaIdentifier, FormulaNumber, FormulaMakerTable, FormulateResult, GuestFormula, HandleFormula, HostFormula, Invitation, InvitationDeferredTaskParams, InvitationFormula, KnownEndoInspectors, KnownPeersStore, LogChunk, LookupFormula, LoopbackNetworkFormula, MailboxStoreFormula, MailHubFormula, MakeArchiveFormula, MakeCapletDeferredTaskParams, MakeFromTreeFormula, MakeUnconfinedFormula, MarshalDeferredTaskParams, MessageFormula, Name, NameHub, NamePath, NameOrPath, NodeNumber, PetName, PeerFormula, PeerInfo, PetInspectorFormula, PetStore, PetStoreFormula, PromiseFormula, Provide, ReadableBlobDeferredTaskParams, ReadableBlobFormula, ReadableTreeDeferredTaskParams, ResolverFormula, Sha256, Specials, MarshalFormula, WeakMultimap, WorkerDaemonFacet, WorkerFormula, TimerFormula } from './types.js' */
+/** @import { AgentDeferredTaskParams, Builtins, CapTpConnectionRegistrar, Context, Controller, DaemonCore, DaemonCoreExternal, DaemonicPowers, DeferredTasks, DirectoryFormula, EndoAgent, EndoBootstrap, EndoDirectory, EndoFormula, EndoGateway, EndoGreeter, EndoGuest, EndoHost, EndoInspector, EndoMount, EndoNetwork, EndoPeer, EndoReadable, EndoReadableTree, EndoWorker, EvalFormula, FarContext, Formula, FormulaIdentifier, FormulaNumber, FormulaMakerTable, FormulateResult, GuestFormula, HandleFormula, HostFormula, Invitation, InvitationDeferredTaskParams, InvitationFormula, KnownEndoInspectors, KnownPeersStore, LogChunk, LookupFormula, LoopbackNetworkFormula, MailboxStoreFormula, MailHubFormula, MakeArchiveFormula, MakeCapletDeferredTaskParams, MakeFromTreeFormula, MakeUnconfinedFormula, MarshalDeferredTaskParams, MessageFormula, Name, NameHub, NamePath, NameOrPath, NodeNumber, PetName, PeerFormula, PeerInfo, PetInspectorFormula, PetStore, PetStoreFormula, PromiseFormula, Provide, ReadableBlobDeferredTaskParams, ReadableBlobFormula, ReadableNameHub, ReadableTreeDeferredTaskParams, ResolverFormula, Sha256, Specials, MarshalFormula, WeakMultimap, WorkerDaemonFacet, WorkerFormula, TimerFormula } from './types.js' */
 
 /**
  * @typedef {{ kind: 'bearer', token: string } | { kind: 'basic', username: string, password: string }} GitCredentialMaterial
@@ -758,7 +759,19 @@ const makeDaemonCore = async (
           ['worker', formula.worker],
           ['networks', formula.networks],
           ['planes', formula.planes],
+          ...(formula.guestPins
+            ? /** @type {Array<[string, FormulaIdentifier]>} */ ([
+                ['guestPins', formula.guestPins],
+              ])
+            : []),
+          ...(formula.hostPins
+            ? /** @type {Array<[string, FormulaIdentifier]>} */ ([
+                ['hostPins', formula.hostPins],
+              ])
+            : []),
         ];
+      case 'readable-directory':
+        return [['directory', formula.directory]];
       case 'marshal':
         return (formula.slots ?? []).map((s, i) => [`slot${i}`, s]);
       case 'eval':
@@ -869,11 +882,26 @@ const makeDaemonCore = async (
         return [['petStore', formula.petStore]];
       case 'directory':
         return [['petStore', formula.petStore]];
-      case 'invitation':
-        return [
-          ['hostAgent', formula.hostAgent],
-          ['hostHandle', formula.hostHandle],
-        ];
+      case 'invitation': {
+        // Coerce the deprecated hostAgent/hostHandle fallback (records minted
+        // before the rename) exactly as formula-record.js and the incarnation
+        // switch do, so a legacy invitation's dependency edges still appear in
+        // the formula-graph snapshot instead of silently vanishing. Drop an
+        // edge only if it is genuinely absent, rather than emitting an
+        // undefined dependency.
+        /** @type {Array<[string, FormulaIdentifier]>} */
+        const invitationDeps = [];
+        const labeledInvitingAgent = formula.invitingAgent ?? formula.hostAgent;
+        if (labeledInvitingAgent !== undefined) {
+          invitationDeps.push(['invitingAgent', labeledInvitingAgent]);
+        }
+        const labeledInvitingHandle =
+          formula.invitingHandle ?? formula.hostHandle;
+        if (labeledInvitingHandle !== undefined) {
+          invitationDeps.push(['invitingHandle', labeledInvitingHandle]);
+        }
+        return invitationDeps;
+      }
       default:
         return [];
     }
@@ -2783,6 +2811,13 @@ const makeDaemonCore = async (
             readText: notSupported,
             maybeReadText: notSupported,
             writeText: disallowedMutation,
+            // Unlike `EndoDirectory.readOnly()` (which mints a narrow
+            // `ReadableNameHub` view via `formulateReadableDirectory`), this hub
+            // is *already* fully read-only: every mutator above is
+            // `disallowedMutation`/`notSupported`, so there is no writable
+            // surface left to attenuate. `readOnly()` therefore returns the
+            // same already-attenuated hub rather than a distinct narrower exo.
+            readOnly: async () => mailHub,
           }),
         )
       )
@@ -3163,6 +3198,13 @@ const makeDaemonCore = async (
             readText: notSupported,
             maybeReadText: notSupported,
             writeText: disallowedMutation,
+            // Unlike `EndoDirectory.readOnly()` (which mints a narrow
+            // `ReadableNameHub` view via `formulateReadableDirectory`), this hub
+            // is *already* fully read-only: every mutator above is
+            // `disallowedMutation`/`notSupported`, so there is no writable
+            // surface left to attenuate. `readOnly()` therefore returns the
+            // same already-attenuated hub rather than a distinct narrower exo.
+            readOnly: async () => messageHub,
           }),
         )
       )
@@ -3619,6 +3661,8 @@ const makeDaemonCore = async (
         worker: workerId,
         networks: networksDirectoryId,
         planes: planesDirectoryId,
+        guestPins: guestPinsDirectoryId,
+        hostPins: hostPinsDirectoryId,
       } = formula;
 
       if (mailHubId === undefined) {
@@ -3654,6 +3698,8 @@ const makeDaemonCore = async (
         workerId,
         networksDirectoryId,
         planesDirectoryId,
+        guestPinsDirectoryId,
+        hostPinsDirectoryId,
         context,
       );
       const handle = /** @type {any} */ (agent).handle();
@@ -4157,6 +4203,7 @@ const makeDaemonCore = async (
             storeValue: disallowedFn,
             submit: disallowedFn,
             sendValue: disallowedFn,
+            invite: disallowedFn,
             deliver: disallowedSyncFn,
             editMessage: disallowedFn,
             messageHistory: disallowedFn,
@@ -4196,7 +4243,7 @@ const makeDaemonCore = async (
       // Behold, unavoidable forward-reference:
       // eslint-disable-next-line no-use-before-define
       makePetStoreInspector(petStoreId),
-    directory: ({ petStore: petStoreId }, context) => {
+    directory: ({ petStore: petStoreId }, context, id) => {
       // Behold, forward-reference:
       // eslint-disable-next-line no-use-before-define
       return makeIdentifiedDirectory({
@@ -4204,7 +4251,23 @@ const makeDaemonCore = async (
         context,
         agentNodeNumber: localNodeNumber,
         isLocalKey,
+        directoryId: id,
       });
+    },
+    'readable-directory': async ({ directory: directoryId }, context) => {
+      context.thisDiesIfThatDies(directoryId);
+      const directory = await provide(directoryId, 'directory');
+      return makeExo(
+        'ReadableNameHub',
+        ReadableNameHubInterface,
+        /** @type {any} */ ({
+          help: () => /** @type {any} */ (directory).help(),
+          has: (...path) => directory.has(...path),
+          list: (...path) => directory.list(...path),
+          lookup: path => directory.lookup(/** @type {any} */ (path)),
+          maybeLookup: path => directory.maybeLookup(/** @type {any} */ (path)),
+        }),
+      );
     },
     peer: (
       { networks: networksId, node: nodeId, addresses: addressesId },
@@ -4214,7 +4277,16 @@ const makeDaemonCore = async (
       // eslint-disable-next-line no-use-before-define
       makePeer(networksId, nodeId, addressesId, context),
     invitation: (
-      { hostAgent: hostAgentId, hostHandle: hostHandleId, guestName },
+      {
+        invitingAgent: invitingAgentId,
+        invitingHandle: invitingHandleId,
+        // Tolerate and coerce records minted before the
+        // hostAgent/hostHandle -> invitingAgent/invitingHandle rename, so
+        // existing production databases need not be purged.
+        hostAgent: legacyInvitingAgentId,
+        hostHandle: legacyInvitingHandleId,
+        guestName,
+      },
       _context, // eslint-disable-line no-underscore-dangle
       id,
     ) =>
@@ -4222,8 +4294,12 @@ const makeDaemonCore = async (
       // eslint-disable-next-line no-use-before-define
       makeInvitation(
         id,
-        hostAgentId,
-        hostHandleId,
+        /** @type {FormulaIdentifier} */ (
+          invitingAgentId ?? legacyInvitingAgentId
+        ),
+        /** @type {FormulaIdentifier} */ (
+          invitingHandleId ?? legacyInvitingHandleId
+        ),
         /** @type {import('./types.js').NameOrPath} */ (guestName),
       ),
     timer: async ({ intervalMs, label: timerLabel }, context) => {
@@ -4946,14 +5022,20 @@ const makeDaemonCore = async (
   };
 
   /**
-   * @param {FormulaIdentifier} hostAgentId
-   * @param {FormulaIdentifier} hostHandleId
+   * Formulate an invitation minted by an inviting `EndoAgent`. The agent may be
+   * an `EndoHost` (via `EndoHost.invite`) or an `EndoGuest` (via
+   * `EndoGuest.invite`); the resulting invitation's locator `from` names the
+   * inviting agent's handle, and network mediation is supplied internally by the
+   * daemon (see `makeInvitation`), never drawn from the inviting agent, so a
+   * guest inviter gains no network authority.
+   * @param {FormulaIdentifier} invitingAgentId
+   * @param {FormulaIdentifier} invitingHandleId
    * @param {NameOrPath} guestName
    * @param {DeferredTasks<InvitationDeferredTaskParams>} deferredTasks
    */
   const formulateInvitation = async (
-    hostAgentId,
-    hostHandleId,
+    invitingAgentId,
+    invitingHandleId,
     guestName,
     deferredTasks,
   ) => {
@@ -4973,8 +5055,8 @@ const makeDaemonCore = async (
         /** @type {InvitationFormula} */
         const formula = {
           type: 'invitation',
-          hostAgent: hostAgentId,
-          hostHandle: hostHandleId,
+          invitingAgent: invitingAgentId,
+          invitingHandle: invitingHandleId,
           guestName,
         };
 
@@ -5195,6 +5277,21 @@ const makeDaemonCore = async (
         pinTransient(result.id);
         return result;
       })
+    );
+  };
+
+  /** @type {DaemonCore['formulateReadableDirectory']} */
+  const formulateReadableDirectory = async (
+    directoryId,
+    nodeNumber = localNodeNumber,
+  ) => {
+    const formulaNumber = /** @type {FormulaNumber} */ (await randomHex256());
+    return /** @type {FormulateResult<ReadableNameHub>} */ (
+      formulate(
+        formulaNumber,
+        { type: 'readable-directory', directory: directoryId },
+        nodeNumber,
+      )
     );
   };
 
@@ -5493,6 +5590,8 @@ const makeDaemonCore = async (
     hostAgentId,
     hostHandleId,
     workerLabel,
+    specifiedGuestPinsDirectoryId,
+    specifiedNetworksDirectoryId,
   ) => {
     // Pin each dependency formula to protect it from collection until the
     // parent guest formula links them via formulaDeps.
@@ -5567,9 +5666,24 @@ const makeDaemonCore = async (
     // Each guest gets its own (initially empty) networks directory that
     // controls which connection hints appear in locators it produces.
     const networksDirectoryId = pin(
-      (await formulateDirectory(agentNodeNumber)).id,
+      specifiedNetworksDirectoryId ??
+        (await formulateDirectory(agentNodeNumber)).id,
     );
     const planesDirectoryId = pin(
+      (await formulateDirectory(agentNodeNumber)).id,
+    );
+    // A guest-scoped pin directory, the guest's own `@pins`. It mirrors the
+    // host's `@pins`, but it is the guest's own directory (not the daemon's
+    // root pins), so it confers no host authority.
+    const guestPinsDirectoryId = pin(
+      specifiedGuestPinsDirectoryId ??
+        (await formulateDirectory(agentNodeNumber)).id,
+    );
+    // A second pin directory is held by the guest formula but never installed
+    // as a special name. Daemon-owned relationships, such as the local guest
+    // created when an invitation is accepted, can therefore remain durable
+    // without letting the guest or its connected agent remove their pin.
+    const hostPinsDirectoryId = pin(
       (await formulateDirectory(agentNodeNumber)).id,
     );
     return harden({
@@ -5585,6 +5699,8 @@ const makeDaemonCore = async (
       workerId,
       networksDirectoryId,
       planesDirectoryId,
+      guestPinsDirectoryId,
+      hostPinsDirectoryId,
       pinned,
     });
   };
@@ -5603,6 +5719,8 @@ const makeDaemonCore = async (
       worker: identifiers.workerId,
       networks: identifiers.networksDirectoryId,
       planes: identifiers.planesDirectoryId,
+      guestPins: identifiers.guestPinsDirectoryId,
+      hostPins: identifiers.hostPinsDirectoryId,
     };
 
     return /** @type {FormulateResult<EndoGuest>} */ (
@@ -5620,12 +5738,16 @@ const makeDaemonCore = async (
     hostHandleId,
     deferredTasks,
     workerLabel,
+    guestPinsDirectoryId,
+    networksDirectoryId,
   ) => {
     return withFormulaGraphLock(async () => {
       const identifiers = await formulateGuestDependencies(
         hostAgentId,
         hostHandleId,
         workerLabel,
+        guestPinsDirectoryId,
+        networksDirectoryId,
       );
 
       await deferredTasks.execute({
@@ -6248,7 +6370,26 @@ const makeDaemonCore = async (
 
   /** @type {DaemonCore['getAllNetworkAddresses']} */
   const getAllNetworkAddresses = async networksDirectoryId => {
-    const networksDirectory = await provide(networksDirectoryId, 'directory');
+    const networksFormula = await getFormulaForId(networksDirectoryId);
+    // When a guest's `@nets` is a `readable-directory` attenuation, unwrap to
+    // the underlying writable directory rather than reading through the
+    // attenuated exo. This is a deliberate server-side bypass, safe here for
+    // two reasons: (1) `listIdentifiers` is not on `ReadableNameHubInterface`,
+    // so the read-only view cannot enumerate entries and the raw ref is the
+    // only way to walk them; (2) the unwrapped reference never leaves the
+    // daemon -- it is used only to compute this agent's own advertised
+    // addresses and is not handed back to the guest -- so the guest-facing
+    // attenuation boundary is not weakened. A less-trusted call site must NOT
+    // copy this unwrap idiom; it is justified only by this internal,
+    // non-escaping use.
+    const readableNetworksDirectoryId =
+      networksFormula.type === 'readable-directory'
+        ? networksFormula.directory
+        : networksDirectoryId;
+    const networksDirectory = await provide(
+      readableNetworksDirectoryId,
+      'directory',
+    );
     const networkIds = await networksDirectory.listIdentifiers();
     const readyNetworks = networkIds
       .map(id => /** @type {FormulaIdentifier} */ (id))
@@ -6665,23 +6806,113 @@ const makeDaemonCore = async (
   };
 
   /**
+   * The internal network authority for invitations. An invitation minted by an
+   * `EndoGuest` cannot reach the daemon's network powers itself — a guest has no
+   * `getPeerInfo`/`addPeerInfo` and its own `@nets` directory is empty. Rather
+   * than widen the guest, the daemon mediates the only two network operations
+   * minting and redeeming an invitation require — reading this daemon's own
+   * advertised peer info, and registering the accepting peer — through this
+   * narrow broker. It is resolved here, inside daemon-core code, from the root
+   * `endo` bootstrap's network-owning host; both are root formulas, so the
+   * result is identical for every inviting agent (all agents on one daemon share
+   * one node identity, one networks directory, and one known-peers store). The
+   * broker is closed over only by the daemon-incarnated invitation exo and is
+   * never returned to the inviting agent, so a guest inviter receives no
+   * `getPeerInfo`, `addPeerInfo`, host facet, peer enumeration, or outbound
+   * dialing surface — only the invitation's own `locate`/`cancel`/`accept`.
+   */
+  const endoBootstrapId = formatId({
+    number: /** @type {FormulaNumber} */ (rootEntropy),
+    node: localNodeNumber,
+  });
+  const makeInvitationNetworkBroker = async () => {
+    const endoBootstrap = /** @type {FarRef<EndoBootstrap>} */ (
+      await provide(endoBootstrapId)
+    );
+    const networkHost = /** @type {EndoHost} */ (await E(endoBootstrap).host());
+    return harden({
+      /** @type {EndoHost['getPeerInfo']} */
+      getPeerInfo: () => E(networkHost).getPeerInfo(),
+      /** @type {EndoHost['addPeerInfo']} */
+      addPeerInfo: peerInfo => E(networkHost).addPeerInfo(peerInfo),
+    });
+  };
+
+  /**
    * @param {FormulaIdentifier} id
-   * @param {FormulaIdentifier} hostAgentId
-   * @param {FormulaIdentifier} hostHandleId
+   * @param {FormulaIdentifier} invitingAgentId - the inviting `EndoAgent`; an
+   *   `EndoHost` (`EndoHost.invite`, source-compatible) or an `EndoGuest`.
+   * @param {FormulaIdentifier} invitingHandleId - the inviting agent's handle,
+   *   which the locator's `from` names, so an acceptor binds that agent.
    * @param {import('./types.js').NameOrPath} guestName
    */
-  const makeInvitation = async (id, hostAgentId, hostHandleId, guestName) => {
-    const hostAgent = /** @type {EndoHost} */ (await provide(hostAgentId));
+  const makeInvitation = async (
+    id,
+    invitingAgentId,
+    invitingHandleId,
+    guestName,
+  ) => {
+    const invitingAgent = /** @type {EndoAgent} */ (
+      await provide(invitingAgentId)
+    );
+    // Network mediation goes through the internal broker, never the inviting
+    // agent, so the same implementation serves a host or a guest inviter.
+    const networkBroker = await makeInvitationNetworkBroker();
     // The invitation persists the name (or directory path) the redeemed
     // guest should be stored under.  The durable mail-delivery name takes
-    // the full path; the pin and label use the leaf pet name.
+    // the full path; the label uses the leaf pet name.
     const guestNamePath = namePathFrom(guestName);
     const guestLeaf = guestNamePath[guestNamePath.length - 1];
+    // The retention pin key is derived from the *whole* guest name path, not
+    // just its leaf, so two invitations that share a leaf under different
+    // directory paths (e.g. `team-a/bob` vs `team-b/bob`) retain under distinct
+    // keys instead of colliding on a bare `guest-<leaf>` slot — which would let
+    // the second accept() clobber the first's retention edge and leave the
+    // first guest collectible.
+    //
+    // A bare `guestNamePath.join('-')` is NOT an injective encoding of the
+    // path: pet names may themselves contain `-` (`isValidName` forbids only
+    // `/`, `@`, NUL, and the exact names `.`/`..`), so `['team-a','bob']` and
+    // `['team','a-bob']` both flatten to `team-a-bob`, and the single name
+    // `'a-b'` flattens the same as the path `['a','b']`. Any such pair would
+    // silently share one retention key. So a multi-segment path is encoded
+    // with a self-delimiting `<segment-length>_<segment>` per segment, which
+    // is injective across all multi-segment paths regardless of hyphens.
+    //
+    // The common single-segment name keeps its exact `guest-<name>` key (the
+    // operator-navigable `@pins/guest-<name>` entry callers and legacy
+    // databases already hold); joining a one-element path with any encoding
+    // must not perturb that. The only residual ambiguity is a single-segment
+    // name deliberately crafted to equal the length-prefixed encoding of one
+    // of the *same inviter's own* multi-segment paths — a self-inflicted
+    // collision that clobbers only that inviter's own retention pin, never
+    // another principal's. The accidental, cross-purpose collisions the seats
+    // flagged (differing hyphenation) are eliminated.
+    //
+    // The key is a pure function of the guest name path, so it is stable
+    // across a crash-retry of the *same* invitation and the documented
+    // retry-overwrites-its-own-pin cleanup (below) is preserved.
+    const guestPinName = `guest-${
+      guestNamePath.length === 1
+        ? guestNamePath[0]
+        : guestNamePath.map(segment => `${segment.length}_${segment}`).join('')
+    }`;
+
+    // Serialize accept()/cancel() on THIS invitation so its single-use check
+    // and the consuming mutation run atomically with respect to each other.
+    // A per-invitation lock (not `withFormulaGraphLock`) is required: that
+    // lock's reentrancy guard bypasses the serial queue whenever
+    // `formulaGraphLockDepth > 0`, so two concurrent top-level accept() calls
+    // (or an accept racing a cancel) that overlap another graph mutation's
+    // window would both skip serialization and both pass the check. This
+    // queue has no such bypass, so the check-then-consume sequence below is a
+    // genuine critical section for a single invitation.
+    const invitationJobs = makeSerialJobs();
 
     const locate = async () => {
-      const { node, addresses } = await hostAgent.getPeerInfo();
-      const { number: hostHandleNumber, node: hostHandleNode } =
-        parseId(hostHandleId);
+      const { node, addresses } = await networkBroker.getPeerInfo();
+      const { number: invitingHandleNumber, node: invitingHandleNode } =
+        parseId(invitingHandleId);
       const { number } = parseId(id);
       // Build path with `@`-delimited URL-encoded components: the first
       // component is the invitation's formula number, and subsequent
@@ -6691,11 +6922,11 @@ const makeDaemonCore = async (
         .join('@');
       const url = new URL(`endo://${node}/${invitationPath}`);
       url.searchParams.set('type', 'invitation');
-      url.searchParams.set('from', hostHandleNumber);
+      url.searchParams.set('from', invitingHandleNumber);
       // Include the handle's node if it differs from the daemon node
       // (i.e. it uses an agent key).
-      if (hostHandleNode !== node) {
-        url.searchParams.set('fromNode', hostHandleNode);
+      if (invitingHandleNode !== node) {
+        url.searchParams.set('fromNode', invitingHandleNode);
       }
       return url.href;
     };
@@ -6706,6 +6937,8 @@ const makeDaemonCore = async (
      *   pet stores; now unused but retained for protocol compatibility.
      */
     const accept = async (guestHandleLocator, _hostNameFromGuest) => {
+      // Parse the accepted guest handle locator up front.  This is pure and
+      // side-effect-free, so it can happen before the invitation is consumed.
       const url = new URL(guestHandleLocator);
       // Path components are `@`-delimited and URL-encoded.  The first
       // component is the handle's formula address; the rest are
@@ -6730,63 +6963,213 @@ const makeDaemonCore = async (
         node: /** @type {NodeNumber} */ (guestHandleNode),
         number: guestHandleNumber,
       });
+      // The remote guest handle locator that the `guestName` slot is rebound
+      // to.  `storeLocator` internalizes the remote formula identifier for
+      // peer resolution; `formatLocator`/`internalizeLocator` are pure, so this
+      // does not depend on the peer info registered below.
+      const guestHandleLocatorString = formatLocator(guestHandleId, 'remote');
 
-      // Register the guest's agent key so we can route to its daemon.
-      if (guestHandleNode !== guestDaemonNode) {
-        persistencePowers.writeRemoteAgentKey(guestHandleNode, guestDaemonNode);
-      }
+      // Single-use, deterministic and restart-durable.  A pending invitation
+      // is retained by its `guestName` slot, which still names this invitation
+      // until acceptance rebinds that slot to the accepted remote handle.  The
+      // check and the consuming rebind must be atomic: a bare check followed by
+      // unguarded `await`s lets two concurrent (or replayed) accept() calls
+      // both observe the slot still naming the invitation and each redeem it,
+      // minting two guests and registering peer info twice.  We therefore run
+      // the entire acceptance as one critical section on `invitationJobs`: a
+      // concurrent accept() (or a cancel()) queues behind it and observes the
+      // already-consumed slot.
+      //
+      // Ordering within the critical section matters for failure atomicity.
+      // The consume has two irreversible parts -- rebinding the `guestName`
+      // slot to the accepted remote handle, and canceling this invitation's
+      // own controller so a re-provide cannot reincarnate a spent invitation.
+      // If the consume ran first and a later, fallible step (peer registration
+      // or guest formulation) then threw, the invitation would be irrevocably
+      // spent -- slot pointing at a raw remote handle, no peer info, controller
+      // canceled -- with no cleanup path and every future accept() failing the
+      // "already accepted" check permanently.  So we do all the fallible work
+      // first, and perform the consume LAST, as the final mutation.  A failure
+      // in the fallible work leaves the invitation un-consumed and redeemable
+      // (the check is still satisfied on a retry); serialization on
+      // `invitationJobs` guarantees no concurrent accept() can observe the
+      // in-progress, not-yet-consumed state.
+      //
+      // Scope of "restart-durable": the guarantee is that an invitation is
+      // never double-*consumed* -- across concurrency, replay, and a crash at
+      // any point, the `guestName` slot is rebound to an accepted handle at
+      // most once.  It is NOT full mid-accept idempotency across a process
+      // crash: a crash after some fallible work (a `formulateGuest`, a pin
+      // `storeIdentifier`) but before the final consume leaves the invitation
+      // un-consumed and redeemable, so a post-restart retry re-runs the whole
+      // fallible section and mints a *fresh* guest, orphaning the earlier
+      // attempt's partial formula chain (the prior `guestPinName` pin is
+      // overwritten and its guest becomes collectible).  That is the accepted
+      // trade for keeping the invitation redeemable after a crash rather than
+      // stranding it spent; making guest-mint reuse-by-invitation-id idempotent
+      // is possible but deferred, as the orphan is GC-reachable and no
+      // authority leaks.  Callers must therefore treat a crashed accept as
+      // "retry the whole accept", not "resume a half-minted guest".
+      return invitationJobs.enqueue(async () => {
+        const currentSlot = await E(invitingAgent).identify(...guestNamePath);
+        if (currentSlot !== id) {
+          throw makeError(
+            'Invitation has already been accepted, canceled, or superseded',
+          );
+        }
 
-      /** @type {PeerInfo} */
-      const peerInfo = {
-        node: guestDaemonNode,
-        addresses,
-      };
-      await hostAgent.addPeerInfo(peerInfo);
+        // --- Fallible work, before the consume ---
 
-      // TODO ensure that this is sufficient to cancel the previous
-      // incarnation, this invitation, such that it can no longer be redeemed,
-      // and such that overwriting the invitation also revokes the invitation.
-      await withFormulaGraphLock();
-      const controller = provideController(id);
-      await controller.context.cancel(new Error('Invitation accepted'));
+        // Register the guest's agent key so we can route to its daemon.
+        if (guestHandleNode !== guestDaemonNode) {
+          persistencePowers.writeRemoteAgentKey(
+            guestHandleNode,
+            guestDaemonNode,
+          );
+        }
 
-      // Create a local guest with a regular pet store.
-      // Pin the guest handle to protect it from premature collection.
-      /** @type {DeferredTasks<AgentDeferredTaskParams>} */
-      const guestTasks = makeDeferredTasks();
-      guestTasks.push(async identifiers => pinTransient(identifiers.handleId));
-      const { id: localGuestId } = await formulateGuest(
-        hostAgentId,
-        hostHandleId,
-        guestTasks,
-        `guest:${guestLeaf}`,
-      );
+        /** @type {PeerInfo} */
+        const peerInfo = {
+          node: guestDaemonNode,
+          addresses,
+        };
+        await networkBroker.addPeerInfo(peerInfo);
 
-      // Look up the local guest's handle from its formula so we can
-      // name it.  Incarnating the handle transitively incarnates the
-      // guest.
-      const localGuestFormula = /** @type {GuestFormula} */ (
-        await getFormulaForId(localGuestId)
-      );
+        // Create a local guest with a regular pet store.
+        // Pin the guest handle to protect it from premature collection.
+        /** @type {DeferredTasks<AgentDeferredTaskParams>} */
+        const guestTasks = makeDeferredTasks();
+        guestTasks.push(async identifiers =>
+          pinTransient(identifiers.handleId),
+        );
+        const { id: localGuestId } = await formulateGuest(
+          invitingAgentId,
+          invitingHandleId,
+          guestTasks,
+          `guest:${guestLeaf}`,
+        );
 
-      // Name the guest handle inside @pins so it persists.
-      await E(hostAgent).storeIdentifier(
-        /** @type {NamePath} */ (['@pins', `guest-${guestLeaf}`]),
-        localGuestFormula.handle,
-      );
-      await unpinTransient(localGuestFormula.handle);
+        // Look up the local guest's handle from its formula so we can
+        // name it.  Incarnating the handle transitively incarnates the
+        // guest.
+        const localGuestFormula = /** @type {GuestFormula} */ (
+          await getFormulaForId(localGuestId)
+        );
 
-      // Store the remote guest handle under guestName for mail delivery.
-      // Use storeLocator so the directory properly internalizes the
-      // remote formula identifier for peer resolution.
-      const guestHandleLocatorStr = formatLocator(guestHandleId, 'remote');
-      await E(hostAgent).storeLocator(guestNamePath, guestHandleLocatorStr);
+        // Keep a guest-owned connection in the host-only pin directory. That
+        // directory is absent from the guest's special names, so neither the
+        // guest nor its connected agent can see or remove this retention edge.
+        // Host invitations retain their established, operator-visible @pins
+        // behavior.
+        const invitingFormula = await getFormulaForId(invitingAgentId);
+        if (invitingFormula.type === 'guest') {
+          const { hostPins: hostPinsDirectoryId } = invitingFormula;
+          if (hostPinsDirectoryId !== undefined) {
+            const hostPinsDirectory = /** @type {EndoDirectory} */ (
+              await provide(hostPinsDirectoryId, 'directory')
+            );
+            await E(hostPinsDirectory).storeIdentifier(
+              /** @type {NamePath} */ ([guestPinName]),
+              localGuestFormula.handle,
+            );
+          } else {
+            // Guest formulas deployed before pin directories existed have
+            // neither guestPins nor hostPins. Retain their invited connection
+            // through the creating agent's pins instead. Unlike the per-guest
+            // `hostPins` directory above, this creating agent's `@pins` is
+            // *shared* by every legacy guest under the same host, so the key
+            // must also encode which inviting guest owns the pin — otherwise
+            // two distinct legacy guests inviting the same name would collide
+            // on one `guest-<name>` slot and the second accept() would clobber
+            // the first. The inviting handle's formula number is unique per
+            // inviting guest and stable across a crash-retry.
+            const creatingAgent = await provide(
+              invitingFormula.hostAgent,
+              'agent',
+            );
+            const { number: invitingHandleNumber } = parseId(invitingHandleId);
+            await E(creatingAgent).storeIdentifier(
+              /** @type {NamePath} */ ([
+                '@pins',
+                `${guestPinName}-from-${invitingHandleNumber}`,
+              ]),
+              localGuestFormula.handle,
+            );
+          }
+        } else {
+          await E(invitingAgent).storeIdentifier(
+            /** @type {NamePath} */ (['@pins', guestPinName]),
+            localGuestFormula.handle,
+          );
+        }
+        await unpinTransient(localGuestFormula.handle);
 
-      // Return the remote guest's public key for retention tracking.
-      return harden({ guestPublicKey: guestDaemonNode });
+        // --- Consume, last: only now that the fallible work has succeeded ---
+        //
+        // Use storeLocator so the directory properly internalizes the remote
+        // formula identifier for peer resolution.  This rebind is the actual
+        // consume: after it, `identify(...guestNamePath) !== id`, so any
+        // subsequent accept()/cancel() (already serialized behind us) observes
+        // a spent invitation.  It also installs the remote guest handle under
+        // `guestName` for mail delivery.
+        await E(invitingAgent).storeLocator(
+          guestNamePath,
+          guestHandleLocatorString,
+        );
+        await withFormulaGraphLock(async () => {
+          const controller = provideController(id);
+          await controller.context.cancel(new Error('Invitation accepted'));
+        });
+
+        // Return the remote guest's public key for retention tracking.
+        return harden({ guestPublicKey: guestDaemonNode });
+      });
     };
 
-    return makeExo('Invitation', InvitationInterface, { accept, locate });
+    /**
+     * Revoke this pending, unaccepted invitation through the invitation object
+     * in hand.  The invitation formula is retained by the `guestName` slot in
+     * the inviting agent's pet store, so revocation frees that slot — but only
+     * while it still names *this* invitation, so that a sibling invitation and
+     * an already-accepted binding (which `accept` rebinds the slot to) are both
+     * left intact — and then cancels this invitation's own controller.  Once the
+     * retaining reference is gone and the controller canceled, the formula is
+     * collected and can no longer be redeemed.  Revokes exactly this invitation;
+     * an idempotent no-op once accepted.
+     *
+     * Like `accept`, `cancel` is a bare bearer capability: anyone holding the
+     * invitation locator may revoke it (the same trust model under which they
+     * could redeem it), so this is not restricted to the host/inviter. A holder
+     * can thus pre-emptively revoke instead of accepting.
+     * @param {Error} [reason]
+     */
+    const cancelInvitation = async (
+      reason = makeError('Invitation canceled'),
+    ) => {
+      // Serialize against accept() on the same invitation so the check and the
+      // slot removal are atomic: without this, a cancel() racing a mid-flight
+      // accept() could read a stale `current === id`, then `remove()` the slot
+      // that accept() has since rebound to the just-accepted guest handle,
+      // silently un-naming it.  Under the shared lock, once accept() has
+      // rebound the slot, cancel()'s `current !== id` and it is the promised
+      // idempotent no-op.
+      await invitationJobs.enqueue(async () => {
+        const current = await E(invitingAgent).identify(...guestNamePath);
+        if (current === id) {
+          await E(invitingAgent).remove(...guestNamePath);
+        }
+        await withFormulaGraphLock(async () => {
+          const controller = provideController(id);
+          await controller.context.cancel(reason);
+        });
+      });
+    };
+
+    return makeExo('Invitation', InvitationInterface, {
+      accept,
+      locate,
+      cancel: cancelInvitation,
+    });
   };
 
   const makeContext = makeContextMaker({
@@ -6803,6 +7186,7 @@ const makeDaemonCore = async (
     getContentIdentityForId,
     formulateDirectory,
     formulateReadableBlob,
+    formulateReadableDirectory,
     pinTransient,
     unpinTransient,
   });
@@ -6841,6 +7225,7 @@ const makeDaemonCore = async (
     formulateEval,
     formulateReadableBlob,
     formulateMarshalValue,
+    formulateInvitation,
     getFormulaForId,
     getAllNetworkAddresses,
     getAllContentSources,

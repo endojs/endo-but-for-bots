@@ -172,14 +172,14 @@ The back face is divided into a fixed header (formula-type badge, title, help te
 The property list shape is the same across all formula types: an ordered list of rows, each row a `<dt>label</dt><dd>value-or-reference-button</dd>` pair.
 Per-type variations differ only in *which* properties are listed and in the per-property classifier (see § Literal-vs-reference resolution).
 
-The catalog covers all 33 formula types currently in [`packages/daemon/src/formula-type.js`](../packages/daemon/src/formula-type.js).
+The catalog covers the formula types enumerated in [`packages/daemon/src/formula-type.js`](../packages/daemon/src/formula-type.js); the count there grows as new types (such as this PR's `readable-directory`) are added, so this section names the types rather than pinning a total that would silently drift out of date.
 
 | Formula type | Header text | Properties (label → render) |
 |---|---|---|
 | `eval` | "Evaluation": code run inside a worker | `source` literal (code block, monospace), `endowments` record (list-of-references, one button per binding labeled by codeName), `worker` reference |
 | `lookup` | "Lookup": name traversal | `hub` reference, `path` literal (array of names rendered as breadcrumbs) |
-| `guest` | "Guest": sub-agent of a host | `hostAgent` reference, `hostHandle` reference |
-| `host` | "Host": agent identity | `handle`, `hostHandle`, `keypair`, `worker`, `inspector`, `petStore`, `mailboxStore`, `mailHub`, `endo`, `networks`, `pins` (all references) |
+| `guest` | "Guest": sub-agent of a host | `hostAgent`, `hostHandle`, `handle`, `petStore`, `mailboxStore`, `mailHub`, `worker`, `networks`, `planes` references, plus optional `guestPins` (guest-visible `@pins`) and `hostPins` (host-only, hidden) references |
+| `host` | "Host": agent identity | `handle`, `hostHandle`, `mainWorker`, `nodeWorker`, `registry`, `inspector`, `petStore`, `mailboxStore`, `mailHub`, `endo`, `networks`, `planes`, `pins` (all references) |
 | `directory` | "Directory": naming hub | `petStore` reference |
 | `pet-store` | "Pet store": name-to-id table | (no daemon-side metadata; show empty state "No formula properties; this is a leaf store.") |
 | `mailbox-store` | "Mailbox store" | (empty state, as `pet-store`) |
@@ -196,13 +196,14 @@ The catalog covers all 33 formula types currently in [`packages/daemon/src/formu
 | `channel` | "Channel": thread substrate | (per [`daemon-message-streaming.md`](daemon-message-streaming.md); enumerate after that design lands) |
 | `readable-blob` | "Readable blob": immutable bytes | (empty state; the blob is content-addressed and has no retained references) |
 | `readable-tree` | "Readable tree": immutable snapshot | (empty state today; tree-side metadata can surface here when defined) |
+| `readable-directory` | "Readable directory": read-only view of a live directory | `directory` reference (the attenuated directory; used for net attenuation) |
 | `promise` | "Promise": pending result | `store` reference, status (pending / fulfilled / rejected), plus the next-value or rejection-reason affordance (see § Promise-formula view) |
 | `resolver` | "Resolver": write-half of a promise | `store` reference |
 | `worker` | "Worker": execution sandbox | (empty state; the worker is a leaf) |
 | `handle` | "Handle": receive-half of an agent | (empty state) |
 | `keypair` | "Keypair": Ed25519 key material | `publicKey` literal (hex). The private key is **not** displayed; the row shows "Private key not displayed" in its place. |
 | `endo` | "Endo bootstrap" | (lists root references when the formula is loaded; deferred to follow-up) |
-| `invitation` | "Invitation" | `hostAgent` reference, `hostHandle` reference, `guestName` literal |
+| `invitation` | "Invitation" | `invitingAgent` reference (host **or** guest), `invitingHandle` reference, `guestName` literal |
 | `pet-inspector` | "Pet inspector" | `petStore` reference |
 | `least-authority` | "Least authority" | (empty state) |
 | `known-peers-store` | "Known peers store" | (empty state) |
