@@ -2715,6 +2715,7 @@ export interface DaemonCore {
     workerLabel?: string,
   ) => FormulateResult<unknown>;
 
+  /** Transfers one transient pin; release after publication or its failure. */
   formulateDirectory: (
     nodeNumber?: NodeNumber,
   ) => FormulateResult<EndoDirectory>;

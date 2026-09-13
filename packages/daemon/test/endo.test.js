@@ -8141,3 +8141,77 @@ test.serial(
     t.true((await pendingMessage).done);
   },
 );
+
+test.serial(
+  'fresh concurrent directories collect after removal without a restart',
+  async t => {
+    t.timeout(30_000);
+    const { cancelled, config } = await prepareConfig(t, { gcEnabled: true });
+    const { host } = await makeHost(config, cancelled);
+    const directories = await Promise.all(
+      ['first', 'second', 'third'].map(async name => {
+        const directory = await E(host).makeDirectory(name);
+        await E(directory).writeText('value', name);
+        const id = await E(host).identify(name);
+        const formula = readFormulaFromDb(config.statePath, id);
+        const valueId = await E(directory).identify('value');
+        return { name, directory, ids: [id, formula.petStore, valueId] };
+      }),
+    );
+    for (const { ids } of directories) {
+      for (const id of ids) t.true(formulaExistsInDb(config.statePath, id));
+    }
+    const [first, ...siblings] = directories;
+    await E(host).remove(first.name);
+    for (const id of first.ids)
+      t.false(formulaExistsInDb(config.statePath, id));
+    for (const { name, directory, ids } of siblings) {
+      // eslint-disable-next-line no-await-in-loop
+      t.is(await E(directory).readText('value'), name);
+      for (const id of ids) t.true(formulaExistsInDb(config.statePath, id));
+    }
+    await Promise.all(siblings.map(({ name }) => E(host).remove(name)));
+    for (const { ids } of siblings) {
+      for (const id of ids) t.false(formulaExistsInDb(config.statePath, id));
+    }
+  },
+);
+
+test.serial(
+  'fresh agent directory dependencies collect with their owning agents',
+  async t => {
+    t.timeout(30_000);
+    const { cancelled, config } = await prepareConfig(t, { gcEnabled: true });
+    const { host } = await makeHost(config, cancelled);
+    const [child, guest] = await Promise.all([
+      E(host).provideHost('child-handle', { agentName: 'child-agent' }),
+      E(host).provideGuest('guest-handle', { agentName: 'guest-agent' }),
+    ]);
+    const directoryIds = await Promise.all([
+      E(child).identify('@planes'),
+      E(guest).identify('@nets'),
+      E(guest).identify('@planes'),
+    ]);
+    const ids = directoryIds.flatMap(id => [
+      id,
+      readFormulaFromDb(config.statePath, id).petStore,
+    ]);
+    for (const id of ids) t.true(formulaExistsInDb(config.statePath, id));
+    await Promise.all(
+      ['child-handle', 'child-agent', 'guest-handle', 'guest-agent'].map(name =>
+        E(host).remove(name),
+      ),
+    );
+    await waitForCondition(() =>
+      ids.every(id => !formulaExistsInDb(config.statePath, id)),
+    );
+    for (const id of ids) t.false(formulaExistsInDb(config.statePath, id));
+    // Bootstrap dependencies remain retained by the rooted Endo/host formulas.
+    for (const name of ['@planes', '@nets', '@pins']) {
+      // eslint-disable-next-line no-await-in-loop
+      const directory = await E(host).lookup(name);
+      // eslint-disable-next-line no-await-in-loop
+      t.true(Array.isArray(await E(directory).list()));
+    }
+  },
+);
