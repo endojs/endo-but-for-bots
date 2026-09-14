@@ -1,7 +1,23 @@
 // @ts-check
 /** @import { TimerPowers } from '../platform/timers.js' */
+/** @import { PromiseKit } from '@endo/promise-kit' */
+import { Fail, q } from '@endo/errors';
 import { E, Far } from '@endo/far';
 import harden from '@endo/harden';
+import { makePromiseKit, racePromises } from '@endo/promise-kit';
+
+import { MAX_TIMER_DELAY_MS } from '../platform/timers.js';
+
+/**
+ * @param {string} name
+ * @param {number} value
+ */
+const assertDelayMs = (name, value) => {
+  (Number.isInteger(value) && value >= 1 && value <= MAX_TIMER_DELAY_MS) ||
+    Fail`${q(name)} must be whole milliseconds between 1 and ${q(
+      MAX_TIMER_DELAY_MS,
+    )}`;
+};
 
 /**
  * Reconstructible host timer index. The guest clock owns durable registrations.
@@ -24,14 +40,8 @@ export const makeAlarmScheduler = (
     requestTimeoutMs = 30_000,
   },
 ) => {
-  if (!Number.isInteger(retryMs) || retryMs < 1 || retryMs > 2 ** 31 - 1)
-    throw Error('Invalid alarm retry interval');
-  if (
-    !Number.isInteger(requestTimeoutMs) ||
-    requestTimeoutMs < 1 ||
-    requestTimeoutMs > 2 ** 31 - 1
-  )
-    throw Error('Invalid alarm request timeout');
+  assertDelayMs('alarm retry interval', retryMs);
+  assertDelayMs('alarm request timeout', requestTimeoutMs);
   const maximum = 2n ** 63n - 1n;
   /** @type {Map<bigint, {deadline: bigint, busy: boolean, retryAt: bigint}>} */
   const alarms = new Map();
@@ -68,28 +78,39 @@ export const makeAlarmScheduler = (
     client.close();
     cleanup.delete(client);
   };
-  /** @param {(control: any) => Promise<any>} action */
+  /**
+   * Run `action` against the clock vat's control facet, over a client opened
+   * for this one round trip and closed however the trip ends.
+   *
+   * The deadline covers the whole trip rather than any single step, and
+   * shutdown trips it early, so each yield is followed by a fresh liveness
+   * check instead of acting on state read before the await. Two paths close
+   * the client, deliberately: once the deadline has won the race the `finally`
+   * below has already run, so a client that finishes opening after that has to
+   * close itself or it would never be closed at all.
+   *
+   * @param {(control: any) => Promise<any>} action
+   */
   const observe = async action => {
     if (stopped) throw Error('Alarm scheduler stopped');
+    // A close that threw left its client open. Opening another before that one
+    // is retired would let the leak accumulate a client per tick.
     if (cleanup.size) throw Error('Alarm observation cleanup is pending');
     let expired = false;
+    const live = () => !expired && !stopped;
+    /** @type {PromiseKit<never>} */
+    const deadline = makePromiseKit();
+    const expire = () => {
+      expired = true;
+      deadline.reject(
+        Error(stopped ? 'Alarm scheduler stopped' : 'Alarm request timed out'),
+      );
+    };
+    const timeout = setTimer(expire, requestTimeoutMs);
+    cancellations.add(expire);
     /** @type {any} */
     let client;
-    let timeout;
-    let cancel = () => {};
-    const interrupted = new Promise((resolve, reject) => {
-      cancel = () => {
-        expired = true;
-        reject(
-          Error(
-            stopped ? 'Alarm scheduler stopped' : 'Alarm request timed out',
-          ),
-        );
-      };
-      timeout = setTimer(cancel, requestTimeoutMs);
-      cancellations.add(cancel);
-    });
-    const operation = (async () => {
+    const attempt = async () => {
       const opening = Promise.resolve().then(openClient);
       openings.add(opening);
       let opened;
@@ -98,21 +119,23 @@ export const makeAlarmScheduler = (
       } finally {
         openings.delete(opening);
       }
-      if (expired || stopped) {
+      if (!live()) {
         closeClient(opened);
         throw Error('Alarm request expired');
       }
       client = opened;
       const control = await opened.lookup(secret);
-      if (expired || stopped) throw Error('Alarm request expired');
+      if (!live()) throw Error('Alarm request expired');
       return action(control);
-    })();
+    };
     try {
-      return await Promise.race([operation, interrupted]);
+      // racePromises, not Promise.race: the loser is usually the deadline,
+      // and a plain race would leave a reaction on it for the process's life.
+      return await racePromises([attempt(), deadline.promise]);
     } finally {
       expired = true;
       clearTimer(timeout);
-      cancellations.delete(cancel);
+      cancellations.delete(expire);
       if (client !== undefined) closeClient(client);
     }
   };
