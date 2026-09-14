@@ -1,8 +1,10 @@
 // @ts-check
 import '@endo/init';
 import test from 'ava';
+import path from 'node:path';
 
 import {
+  makeSandboxSessionId,
   readNativeProfile,
   readSessionPlan,
 } from '../src/opencode-session-plan.js';
@@ -96,7 +98,7 @@ const refused = harden([
       ...plan,
       workspaceMountPoint: `${plan.workspaceDir}/mount`,
     }),
-    /"workspaceDir" and "workspaceMountPoint" must be disjoint/,
+    /"workspaceMountPoint" and "workspaceDir" must be disjoint/,
   ],
   [
     'no profile',
@@ -139,4 +141,32 @@ test('profile quantities widen exactly and reject every non-canonical spelling',
   t.throws(() => readNativeProfile({ ...profile, seccomp: 'unconfined' }), {
     message: /native Podman profile/,
   });
+});
+
+test('a foreign workspace records no owned directory, and the id derivation is stable', t => {
+  const { workspaceDir: _, ...neither } = plan;
+  t.throws(() => readSessionPlan(JSON.stringify(neither)), {
+    message: /must record an owned or an operator-supplied workspace/,
+  });
+  const foreign = { ...neither, workspaceHostPath: '/srv/worktrees/a' };
+  const parsed = readSessionPlan(JSON.stringify(foreign));
+  t.false('workspaceDir' in parsed);
+  t.is(parsed.workspaceHostPath, '/srv/worktrees/a');
+  t.throws(
+    () => readSessionPlan(JSON.stringify({ ...plan, workspaceHostPath: '/srv/x' })),
+    { message: /cannot record both/ },
+  );
+  // An operator-supplied workspace joins the disjointness rule: exported to
+  // the guest, it must not contain this session's sockets or mount point.
+  t.throws(
+    () =>
+      readSessionPlan(
+        JSON.stringify({ ...neither, workspaceHostPath: path.dirname(plan.mcpDir) }),
+      ),
+    { message: /"mcpDir" and "workspaceHostPath" must be disjoint/ },
+  );
+  t.is(makeSandboxSessionId('session-a'), makeSandboxSessionId('session-a'));
+  t.regex(makeSandboxSessionId('Session A!'), /^session-a-[0-9a-f]{12}$/);
+  t.regex(makeSandboxSessionId('!!!'), /^opencode-[0-9a-f]{12}$/);
+  t.not(makeSandboxSessionId('a'), makeSandboxSessionId('b'));
 });

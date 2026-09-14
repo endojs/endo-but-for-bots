@@ -61,7 +61,7 @@ const mountCapletSpecifier = toCurrentSpecifier(
 // `releases/<id>/` specifier dangles as soon as that release is pruned.
 assertCurrentSpecifier(mountCapletSpecifier, '9p mount caplet');
 
-// Kept in sync with the backend's provisioner defaults and setup-hosted.js.
+// Kept in sync with setup-hosted.js and the backend's session records directory.
 const SANDBOX_DIR = 'opencode-sandbox';
 
 /**

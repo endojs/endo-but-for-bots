@@ -42,7 +42,7 @@ const fixture = async t => {
     rootfs: `oci:example@sha256:${'a'.repeat(64)}`,
     networkPolicy: 'off',
     workspaceDir: path.join(roots.workspaceDir, id),
-    workspaceMountPoint: path.join(base, 'mounts', id),
+    workspaceMountPoint: path.join(roots.mcpDir, id, 'workspace'),
     mcpDir: path.join(roots.mcpDir, id, 'mcp'),
     mounterSocketDir: path.join(roots.mcpDir, id, '9p'),
     nativeProfile: profile,
@@ -162,6 +162,14 @@ const refused = harden([
     /"workspaceDir" .* is outside this session's directory/,
   ],
   [
+    "a mount point recorded outside this session's directory",
+    (plan, f) => ({
+      ...plan,
+      workspaceMountPoint: path.join(f.base, 'mounts', plan.sandboxSessionId),
+    }),
+    /"workspaceMountPoint" .* is outside this session's directory/,
+  ],
+  [
     "a socket directory recorded under another session's directory",
     (plan, f) => ({
       ...plan,
@@ -215,4 +223,52 @@ test('storage roots must be normalized absolute paths', t => {
       { message: /storage root "workspace"/ },
     );
   }
+});
+
+test('a plan without an owned workspace removes only its private directories and state', async t => {
+  const f = await fixture(t);
+  await f.populate();
+  const { workspaceDir: _, ...rest } = f.plan;
+  const foreign = { ...rest, workspaceHostPath: path.join(f.base, 'worktree') };
+  await f.storage.remove(JSON.stringify(foreign));
+  t.true(
+    await f.exists(f.plan.workspaceDir),
+    'an unowned workspace is untouched',
+  );
+  t.false(await f.exists(f.plan.mcpDir));
+  t.false(await f.exists(f.plan.mounterSocketDir));
+  t.deepEqual(f.removedState, [f.plan.sandboxSessionId]);
+});
+
+test('an empty mount point left by unmount is removed with the parent; a populated one is a retained failure', async t => {
+  const f = await fixture(t);
+  await f.populate();
+  await mkdir(f.plan.workspaceMountPoint, { recursive: true, mode: 0o700 });
+  await f.storage.remove(JSON.stringify(f.plan));
+  t.false(await f.exists(f.plan.workspaceMountPoint));
+  t.false(await f.exists(path.dirname(f.plan.mcpDir)), 'parent removed');
+  // A mount point that still holds entries is never removed recursively:
+  // through a live mount that would delete the guest's workspace.
+  const g = await fixture(t);
+  await g.populate();
+  await mkdir(g.plan.workspaceMountPoint, { recursive: true, mode: 0o700 });
+  await writeFile(path.join(g.plan.workspaceMountPoint, 'guest-file'), 'x');
+  await t.throwsAsync(g.storage.remove(JSON.stringify(g.plan)), {
+    code: 'ENOTEMPTY',
+  });
+  t.true(await g.exists(path.join(g.plan.workspaceMountPoint, 'guest-file')));
+  t.true(
+    await g.exists(g.plan.mcpDir),
+    'nothing removed before the mount point',
+  );
+  t.true(
+    await g.exists(g.plan.workspaceDir),
+    'nothing removed before the mount point',
+  );
+  t.true(await g.exists(path.dirname(g.plan.mcpDir)), 'parent retained');
+  t.deepEqual(
+    g.removedState,
+    [],
+    'native state is not released before the mount point',
+  );
 });

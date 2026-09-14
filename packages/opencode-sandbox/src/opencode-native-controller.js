@@ -21,6 +21,7 @@ import {
   makePublicNetworkEnvironment,
 } from '@endo/hosted-agent/public-network.js';
 import { M } from '@endo/patterns';
+import { makeNodeFilesystem } from '@endo/platform/fs/extended/node-fs.js';
 
 import { makeOpencodeClient } from './opencode-client.js';
 import { makeOpencodeConfig, parseModelRef } from './opencode-agent-config.js';
@@ -65,6 +66,11 @@ const ControllerInterface = M.interface('OpencodeNativeController', {
  *
  * @param {object} [powers]
  * @param {(env: Record<string,string>) => ReturnType<typeof makeFsMounterKit>} [powers.makeMounter]
+ * @param {(rootPath: string) => object} [powers.makeFilesystem] Projects the
+ *   recorded workspace directory for the 9P mount. No daemon filesystem
+ *   formula is imported: a worker retaining a disposable formula's value is
+ *   closed when that formula is collected, so the plan's path is the only
+ *   authority that crosses into this worker.
  * @param {typeof makeMcpBridgeForToolSet} [powers.makeBridge]
  * @param {typeof makeMcpSocketServer} [powers.makeMcp]
  * @param {typeof makeOpencodeClient} [powers.makeClient]
@@ -83,6 +89,7 @@ export const makeOpencodeNativeController = ({
       makeBridge: makeFsBridge9p,
       ...mountIdentity(process),
     }),
+  makeFilesystem = rootPath => makeNodeFilesystem({ rootPath }),
   makeBridge = makeMcpBridgeForToolSet,
   makeMcp = makeMcpSocketServer,
   makeClient = makeOpencodeClient,
@@ -191,15 +198,23 @@ export const makeOpencodeNativeController = ({
       );
       assertCopyData(harden(state));
       assertOpen();
-      const filesystem = await E(resolver).get('filesystem');
-      assertOpen();
+      // Exactly one of the two is recorded; the parser enforces it.
+      const filesystem = makeFilesystem(
+        approved.workspaceHostPath ?? /** @type {string} */ (approved.workspaceDir),
+      );
       mounter = makeMounter({
         ...env,
         XDG_RUNTIME_DIR: approved.mounterSocketDir,
         NINEP_SOCKET_DIR: approved.mounterSocketDir,
       });
       closeIfStopping();
-      await E(mounter.mounter).mount(filesystem, approved.workspaceMountPoint);
+      // The mounter creates the mount point and must remove it on unmount;
+      // the storage owner refuses to rm -rf a path that may still be mounted.
+      await E(mounter.mounter).mount(
+        filesystem,
+        approved.workspaceMountPoint,
+        harden({ removeMountPointOnUnmount: true }),
+      );
       assertOpen();
       const mounts = [
         {

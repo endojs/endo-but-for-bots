@@ -167,7 +167,6 @@ const withRuntime = async t => {
     ENDO_SANDBOX_GENERATED_MAX_ENTRIES: '16',
     ENDO_OPENCODE_STATE_DIR: path.join(tmp, 'state'),
     ENDO_OPENCODE_WORKSPACE_DIR: path.join(tmp, 'workspaces'),
-    ENDO_OPENCODE_CONFIG_DIR: path.join(tmp, 'configs'),
     ENDO_OPENCODE_MCP_DIR: path.join(tmp, 'mcp'),
   });
   return { runtimeDir, tmp };
@@ -406,7 +405,7 @@ test.serial(
     await mkdir(other, { mode: 0o700 });
     await withEnv(t, {
       ENDO_SANDBOX_RUNTIME_DIR: other,
-      ENDO_OPENCODE_CONFIG_DIR: path.join(runtimeDir, 'future-guest-config'),
+      ENDO_OPENCODE_MCP_DIR: path.join(runtimeDir, 'future-guest-mcp'),
     });
     await t.throwsAsync(main(fake.host), { message: /must be disjoint/ });
     t.deepEqual(fake.mints, []);

@@ -2351,6 +2351,203 @@ const testNeedsNodeManager =
     : test.serial;
 
 testNeedsNodeManager(
+  'the OpenCode backend records a session through the daemon owner and destroy reaches its storage',
+  async t => {
+    t.timeout(120_000);
+    const { cancelled, config } = await prepareConfig(t);
+    const spec = relative => new URL(`../../${relative}`, import.meta.url).href;
+    const base = config.statePath;
+    const roots = {
+      workspaceDir: path.join(base, 'opencode-workspaces'),
+      mcpDir: path.join(base, 'opencode-private'),
+    };
+    const stateDir = path.join(base, 'opencode-state');
+    const nativeRuntime = path.join(base, 'opencode-native-runtime');
+    const brokerDir = path.join(base, 'opencode-broker');
+    for (const directory of [roots.workspaceDir, roots.mcpDir, nativeRuntime]) {
+      // eslint-disable-next-line no-await-in-loop
+      await fsp.mkdir(directory, { recursive: true, mode: 0o700 });
+    }
+    const digest = `sha256:${'a'.repeat(64)}`;
+    const profile = {
+      uid: 1000,
+      gid: 1000,
+      memoryBytes: '536870912',
+      cpuQuotaMicros: '200000',
+      pids: 128,
+      cpuPeriodMicros: 100_000,
+      maxConcurrentOperations: 1,
+    };
+    const { host } = await makeHost(config, cancelled);
+    await E(host).makeDirectory('opencode-sandbox');
+    // The same services setup-host.js and setup-hosted.js mint, over the
+    // same powers shapes: host powers, a stored null, a SecretBlob, and the
+    // state provider.
+    await E(host).makeUnconfined(
+      '@node',
+      spec('opencode-sandbox/src/opencode-state-provider-module.js'),
+      {
+        powersName: '@agent',
+        resultName: ['opencode-sandbox', 'state-provider'],
+        env: { ENDO_OPENCODE_STATE_DIR: stateDir },
+      },
+    );
+    await E(host).storeValue(null, 'opencode.null-powers');
+    await E(host).makeUnconfined('@node', spec('sandbox/src/native-agent.js'), {
+      powersName: 'opencode.null-powers',
+      resultName: ['opencode-sandbox', 'native-sandbox'],
+      env: {
+        ENDO_SANDBOX_RUNTIME_DIR: nativeRuntime,
+        ENDO_SANDBOX_OWNER_ID: 'opencode-acceptance-native',
+        ENDO_SANDBOX_GENERATED_MAX_BYTES: '4096',
+        ENDO_SANDBOX_GENERATED_MAX_ENTRIES: '16',
+      },
+    });
+    await E(host).remove('opencode.null-powers');
+    const importer = await E(host).lookup(['@secrets', 'create']);
+    await E(importer).createBase64(
+      'opencode-auth',
+      'OpenRouter credential',
+      encodeBase64(new TextEncoder().encode('acceptance-credential')),
+    );
+    await E(host).copy(
+      ['secrets', 'opencode-auth'],
+      ['opencode-auth.broker-read'],
+    );
+    await E(host).makeUnconfined(
+      '@node',
+      spec('opencode-sandbox/src/opencode-broker-service-agent.js'),
+      {
+        powersName: 'opencode-auth.broker-read',
+        resultName: ['opencode-sandbox', 'broker-service'],
+        env: {
+          OPENCODE_BROKER_CONFIG: JSON.stringify({
+            ownerId: 'opencode-acceptance',
+            directory: brokerDir,
+            imageRef: `localhost/opencode@${digest}`,
+            imageDigest: digest,
+            listenerImageRef: `localhost/listener@${digest}`,
+            models: ['deepseek/deepseek-v4.1-flash'],
+          }),
+        },
+      },
+    );
+    await E(host).remove('opencode-auth.broker-read');
+    await E(host).copy(
+      ['opencode-sandbox', 'state-provider'],
+      ['opencode.state-provider-powers'],
+    );
+    await E(host).makeUnconfined(
+      '@node',
+      spec('opencode-sandbox/src/opencode-session-storage-module.js'),
+      {
+        powersName: 'opencode.state-provider-powers',
+        resultName: ['opencode-sandbox', 'session-storage'],
+        env: {
+          OPENCODE_WORKSPACE_BASE_DIR: roots.workspaceDir,
+          OPENCODE_MCP_DIR: roots.mcpDir,
+        },
+      },
+    );
+    await E(host).remove('opencode.state-provider-powers');
+    const backend = await E(host).makeUnconfined(
+      '@node',
+      spec('opencode-sandbox/src/opencode-backend-module.js'),
+      {
+        powersName: '@agent',
+        resultName: ['opencode-sandbox', 'backend'],
+        env: {
+          OPENCODE_WORKSPACE_BASE_DIR: roots.workspaceDir,
+          OPENCODE_MCP_DIR: roots.mcpDir,
+          OPENCODE_NATIVE_PROFILE: JSON.stringify(profile),
+        },
+      },
+    );
+    t.is((await E(backend).describe()).id, 'opencode');
+    const tools = Far('HostedToolSet', {
+      describe: async () =>
+        harden({ dynamicTools: [], toolSetId: 'acceptance' }),
+      execute: async () => 'ok',
+      help: () => 'acceptance tools',
+    });
+    // Starting reaches the native controller in its own worker. Without
+    // Podman the provider listener cannot start, so activation rejects; the
+    // owner keeps the record, its exact dependencies, and the private
+    // directories the backend prepared. This is wiring evidence only.
+    const refused = /procfs process identity/;
+    await t.throwsAsync(
+      E(backend).create(
+        harden({ sessionId: 'one', networkPolicy: 'off' }),
+        tools,
+      ),
+      { message: refused },
+    );
+    // The interrupted start is retried through its own cleanup on the next
+    // request, which then fails at the same native boundary rather than being
+    // refused for an unfinished startup.
+    await t.throwsAsync(
+      E(backend).create(
+        harden({ sessionId: 'one', networkPolicy: 'off' }),
+        tools,
+      ),
+      { message: refused },
+    );
+    const recordPath = [
+      'opencode-sandbox',
+      'session-records',
+      'sessions',
+      'one',
+    ];
+    const record = await E(host).lookup(recordPath);
+    const plan = JSON.parse(await E(record).readText('plan'));
+    t.is(plan.sessionId, 'one');
+    t.is(plan.rootfs, `oci:localhost/opencode@${digest}`);
+    t.deepEqual(plan.nativeProfile, profile);
+    t.is(await E(record).maybeReadText('lifecycle'), 'starting');
+    t.deepEqual([...(await E(record).list('references'))].sort(), [
+      'brokerService',
+      'client',
+      'sandboxService',
+      'stateProvider',
+      'storage',
+      'worker',
+    ]);
+    t.is(
+      await E(host).identify(...recordPath, 'references', 'sandboxService'),
+      await E(host).identify('opencode-sandbox', 'native-sandbox'),
+    );
+    for (const directory of [
+      plan.workspaceDir,
+      plan.mcpDir,
+      plan.mounterSocketDir,
+    ]) {
+      // eslint-disable-next-line no-await-in-loop
+      await fsp.access(directory);
+    }
+    // Destroy stops through the controller, which closes the scopes it
+    // acquired, then the recorded storage owner removes the directories and
+    // the record releases its dependencies.
+    await E(backend).destroy(harden({ sessionId: 'one' }));
+    t.false(await E(host).has(...recordPath));
+    for (const directory of [
+      plan.workspaceDir,
+      plan.mcpDir,
+      plan.mounterSocketDir,
+    ]) {
+      // eslint-disable-next-line no-await-in-loop
+      await t.throwsAsync(fsp.access(directory), { code: 'ENOENT' });
+    }
+    await t.throwsAsync(
+      fsp.access(path.join(roots.mcpDir, plan.sandboxSessionId)),
+      {
+        code: 'ENOENT',
+      },
+    );
+    await E(backend).destroy(harden({ sessionId: 'one' }));
+  },
+);
+
+testNeedsNodeManager(
   'native OpenCode broker retains its exact secret after name replacement and restart',
   async t => {
     t.timeout(60_000);

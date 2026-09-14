@@ -71,7 +71,7 @@ harden(sessionStorageSpecifier);
  */
 const readProvisionedEnvironment = async (host, name, expectedSpecifier) => {
   const identified = await E(host).identify('opencode-sandbox', name);
-  if (!identified) throw Fail`Cannot identify OpenCode ${name}`;
+  if (!identified) throw Fail`Cannot identify OpenCode ${q(name)}`;
   // The daemon returns a formula ID; identify's public type erases its brand.
   const identifier = /** @type {FormulaIdentifier} */ (identified);
   const record = await E(E(host).diagnostics()).getFormula(identifier);
@@ -159,9 +159,6 @@ export const getHostedStorageRoots = env => {
   return harden({
     stateDir: env.ENDO_OPENCODE_STATE_DIR || '/var/lib/endo/opencode-state',
     workspaceDir,
-    configDir:
-      env.ENDO_OPENCODE_CONFIG_DIR ||
-      path.join(path.dirname(workspaceDir), 'opencode-configs'),
     mcpDir: env.ENDO_OPENCODE_MCP_DIR || path.join(homedir(), 'opencode-mcp'),
   });
 };
@@ -173,7 +170,7 @@ harden(getHostedStorageRoots);
  * @param {string} name
  * @returns {Promise<string>}
  */
-const resolveFuturePath = async name => {
+export const resolveFuturePath = async name => {
   await null;
   try {
     return await fs.realpath(name);
@@ -191,6 +188,7 @@ const resolveFuturePath = async name => {
     return path.join(await resolveFuturePath(parent), path.basename(name));
   }
 };
+harden(resolveFuturePath);
 
 /**
  * Validate operator placement, including guest roots which do not exist yet.
@@ -275,6 +273,27 @@ harden(prepareNativeRuntimeEnv);
 const execFile = promisify(execFileCallback);
 
 /**
+ * The spelling checks of the configured slice image that need no Podman —
+ * the digest the broker kit refuses at construction, and an option-like name
+ * Podman would misparse — so setup refuses them before any mint.
+ * @param {string} rootfs Config rootfs (`oci:<image>` or already pinned).
+ * @returns {{ image: string, imageDigest?: string }}
+ */
+export const readSliceImageReference = rootfs => {
+  const image = rootfs.startsWith('oci:') ? rootfs.slice(4) : rootfs;
+  // A leading dash would be parsed as a podman option rather than an image.
+  !image.startsWith('-') || Fail`Invalid OpenCode sandbox image ${q(image)}`;
+  if (image.includes('@sha256:')) {
+    const imageDigest = image.slice(image.indexOf('@') + 1);
+    /^sha256:[a-f0-9]{64}$/.test(imageDigest) ||
+      Fail`OpenCode sandbox image digest is invalid, got ${q(imageDigest)}`;
+    return harden({ image, imageDigest });
+  }
+  return harden({ image });
+};
+harden(readSliceImageReference);
+
+/**
  * Resolve a local OCI image reference to its immutable digest form. The
  * broker binds each grant attestation to the exact slice image, so setup pins
  * what Podman actually resolved rather than trusting a mutable tag.
@@ -284,14 +303,9 @@ const execFile = promisify(execFileCallback);
  * @returns {Promise<{ imageRef: string, imageDigest: string }>}
  */
 export const resolvePinnedImageRef = async (rootfs, exec = execFile) => {
-  const image = rootfs.startsWith('oci:') ? rootfs.slice(4) : rootfs;
-  // A leading dash would be parsed as a podman option rather than an image.
-  !image.startsWith('-') || Fail`Invalid OpenCode sandbox image ${q(image)}`;
-  if (image.includes('@sha256:')) {
-    const imageDigest = image.slice(image.indexOf('@') + 1);
-    /^sha256:[a-f0-9]{64}$/.test(imageDigest) ||
-      Fail`OpenCode sandbox image digest is invalid, got ${q(imageDigest)}`;
-    return harden({ imageRef: image, imageDigest });
+  const { image, imageDigest: pinned } = readSliceImageReference(rootfs);
+  if (pinned !== undefined) {
+    return harden({ imageRef: image, imageDigest: pinned });
   }
   const { stdout } = await exec('podman', [
     'image',
