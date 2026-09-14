@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 import { bundleApplication } from '../../src/control/bundle-application.js';
 import { connectLocalControl } from '../../src/control/local-control.js';
 
-import { makeNodePowers } from '../../src/platform/node-powers.js';
+import { makeNodePowers } from '../../src/platform/node/powers.js';
 
 const nodePowers = makeNodePowers();
 

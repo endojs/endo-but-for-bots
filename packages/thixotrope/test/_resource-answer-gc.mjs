@@ -2,7 +2,7 @@
 const { gc, WeakRef: HostWeakRef } = globalThis;
 if (!gc) throw Error('This fixture requires --expose-gc');
 await import('@endo/init');
-const { makeNodePowers } = await import('../src/platform/node-powers.js');
+const { makeNodePowers } = await import('../src/platform/node/powers.js');
 const nodePowers = makeNodePowers();
 const { E, Far } = await import('@endo/far');
 const { syrupCodec } = await import('@endo/ocapn/syrup');

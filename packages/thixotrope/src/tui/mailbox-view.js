@@ -1,21 +1,21 @@
 // @ts-check
 /** @import { TerminalSession } from '../platform/terminal.js' */
-/** @import { LogPowers } from '../platform/logging.js' */
+/** @import { Logger } from '../platform/logging.js' */
 import harden from '@endo/harden';
 
+import { bindViewSession } from './view-session.js';
+
 /** @import { connectLocalControl } from '../control/local-control.js' */
+
 /**
+ * A line-oriented view of the mailbox: list the inbox, then take an offer
+ * into an inventory key or discard it.
  * @param {TerminalSession} session
- * @param {LogPowers} logging
+ * @param {Logger} logging
  * @param {Awaited<ReturnType<typeof connectLocalControl>>} client
  */
 export const showMailbox = async (session, logging, client) => {
-  const close = () => {
-    session.close();
-    client.close();
-  };
-  session.onClose(close);
-  void client.closed.then(() => session.close());
+  const { close } = bindViewSession(session, client);
   const refresh = async () => {
     const offers = await client.call('inbox');
     // JSON quoting keeps untrusted messages and contact labels from becoming

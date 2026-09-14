@@ -6,7 +6,7 @@ import { makeThixotropeDaemon } from '../src/core/daemon.js';
 import { makePeerJournalReplayEngine } from '../src/core/peer-replay-engine.js';
 import { makeMemoryStore } from '../src/store/store-memory.js';
 
-import { makeNodePowers } from '../src/platform/node-powers.js';
+import { makeNodePowers } from '../src/platform/node/powers.js';
 
 const nodePowers = makeNodePowers();
 

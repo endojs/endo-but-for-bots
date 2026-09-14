@@ -8,7 +8,7 @@ import { makeEphemeralHubClient } from '../src/net/ephemeral-hub-client.js';
 import { makeOcapnHub } from '../src/net/hub.js';
 import { makeWorkerPeer } from '../src/core/worker-peer.js';
 
-import { makeNodePowers } from '../src/platform/node-powers.js';
+import { makeNodePowers } from '../src/platform/node/powers.js';
 
 const nodePowers = makeNodePowers();
 

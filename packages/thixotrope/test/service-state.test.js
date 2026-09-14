@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { makeNodePowers } from '../src/platform/node-powers.js';
+import { makeNodePowers } from '../src/platform/node/powers.js';
 import { makeFileSyncStringAtom } from '../src/store/file-sync-string-atom.js';
 
 test('file string atom preserves raw contents across reopening', async t => {

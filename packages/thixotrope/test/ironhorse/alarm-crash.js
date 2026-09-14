@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { bundleApplication } from '../../src/control/bundle-application.js';
 import { connectLocalControl } from '../../src/control/local-control.js';
 
-import { makeNodePowers } from '../../src/platform/node-powers.js';
+import { makeNodePowers } from '../../src/platform/node/powers.js';
 
 const nodePowers = makeNodePowers();
 
@@ -21,7 +21,7 @@ const supervisorModuleSpecifier = JSON.stringify(
 );
 
 const powersModuleSpecifier = JSON.stringify(
-  new URL('../../src/platform/node-powers.js', import.meta.url).href,
+  new URL('../../src/platform/node/powers.js', import.meta.url).href,
 );
 
 // Hold wall time constant in each process so even a slow CI worker cannot

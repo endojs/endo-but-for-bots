@@ -2,12 +2,12 @@
 const { WeakRef: HostWeakRef, gc } = globalThis;
 if (!gc) throw Error('This fixture requires --expose-gc');
 await import('@endo/init');
-const { makeNodePowers } = await import('../src/platform/node-powers.js');
+const { makeNodePowers } = await import('../src/platform/node/powers.js');
 const nodePowers = makeNodePowers();
 const { Far } = await import('@endo/far');
 const { setImmediate } = await import('node:timers/promises');
 const { makeInventoryViewLifetime } =
-  await import('../src/inventory/inventory-view-lifetime.js');
+  await import('../src/control/inventory-view-lifetime.js');
 
 /** @type {(value: any) => void} */
 let resolveSubscription = () => {

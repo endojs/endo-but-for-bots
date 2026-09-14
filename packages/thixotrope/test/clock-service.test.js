@@ -9,7 +9,7 @@ import { makeFileSyncStringAtom } from '../src/store/file-sync-string-atom.js';
 
 import { makeClockService } from '../src/alarms/clock-service.js';
 
-import { makeNodePowers } from '../src/platform/node-powers.js';
+import { makeNodePowers } from '../src/platform/node/powers.js';
 
 const nodePowers = makeNodePowers();
 

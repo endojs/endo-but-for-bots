@@ -57,19 +57,31 @@ They distinguish intended behavior from current implementation gaps.
   atoms.
 - `alarms/`: the guest clock, its host timer index, and the timer
   resource.
-- `mail/`: the guest mail protocol, contacts, address book, and mail
-  TUI.
-- `inventory/`: the observable workspace inventory and its views.
+- `mail/`: the guest mail protocol, contacts, and address book.
+- `tui/`: the terminal views the CLI opens over a control connection.
+- `observable-map.js`: the string-keyed observable Map that backs both the
+  workspace inventory and the conventional `contacts` address book.
 - `http/`: durable HTTP listener recipes.
 - `ironhorse/`: Ironhorse and XS worker engines and their guest
   fixtures.
-- `platform/`: host capability adapters.
+- `platform/`: capability interfaces, and `platform/node/` for the Node
+  implementations of them.
 
-Only `platform/node-powers.js` imports Node built-ins. It composes
-minimal capability objects (`timers`, `random`, `files`, `processes`,
-`sockets`, and so on) whose methods return plain data, so no host API
-or host handle type reaches core. Every other module receives just the
-objects it names; the root ESLint configuration enforces both rules.
+Each module directly under `platform/` names one capability — `timers`,
+`random`, `files`, `processes`, `sockets`, and so on — whose methods take
+and return plain data, so no host API or host handle type reaches core.
+Only `platform/node/` imports Node built-ins, and `platform/node/powers.js`
+composes those adapters into the record an entry point passes in. Every
+other module receives just the capability objects it names; the root ESLint
+configuration enforces both rules.
+
+The `logging` power carries three channels — `log` for a view's own output,
+`info` for protocol tracing, and `error` for diagnostics — and a `sub(...path)`
+that prefixes each line with a bracketed subsystem path such as
+`[thixotrope:daemon:netlayer]`, so a log can be filtered by substring.
+Whether tracing is emitted at all is the host's decision, made once in
+`platform/node/powers.js`: set `THIXOTROPE_TRACE` to send OCapN's per-frame
+`info` channel to stderr. No module in between silently drops a channel.
 
 ## Local supervisor and workspace
 
@@ -102,9 +114,14 @@ The workspace has `E`, `Far`, `harden`, and a `vats` controller.
 For example, enter each of these as one line:
 
 ```js
-(async () => { globalThis.other = await E(vats).createWorker('counter'); })()
-(async () => { globalThis.counter = await E(other).evaluate("(() => { let count = 0n; return Far('Counter', { incr: () => ++count }); })()"); })()
-E(counter).incr()
+(async () => {
+  globalThis.other = await E(vats).createWorker('counter');
+})()(async () => {
+  globalThis.counter = await E(other).evaluate(
+    "(() => { let count = 0n; return Far('Counter', { incr: () => ++count }); })()",
+  );
+})();
+E(counter).incr();
 ```
 
 Detach, stop and restart the supervisor, then attach and call `E(counter).incr()` again.
@@ -124,9 +141,9 @@ yarn workspace @endo/thixotrope thix inventory ./private-state
 Then use `attach` to modify it:
 
 ```js
-inventory.set('counter', counter)
-inventory.set('note', 'hello')
-inventory.delete('note')
+inventory.set('counter', counter);
+inventory.set('note', 'hello');
+inventory.delete('note');
 ```
 
 The TUI redraws from subscribed snapshots and displays object/capability placeholders;
@@ -201,7 +218,6 @@ it does not cancel work or revoke references already held elsewhere.
 Unused application vats become eligible for ordinary vat collection.
 This initial version provides installation, not live code upgrades.
 
-
 ## Persistent applications serving HTTP
 
 Grant a listener, then install an application with that capability:
@@ -254,8 +270,10 @@ thix attach ./private-state
 In the attached workspace, schedule a reminder using the clock's Unix milliseconds:
 
 ```js
-E(inventory.get('clock')).now().then(now => E(E(apps).get('reminders')).arm(now + 60000n, 'check the oven'))
-E(E(apps).get('reminders')).status()
+E(inventory.get('clock'))
+  .now()
+  .then(now => E(E(apps).get('reminders')).arm(now + 60000n, 'check the oven'));
+E(E(apps).get('reminders')).status();
 ```
 
 Applications receive `now()` and `when(deadline)`.
@@ -451,7 +469,6 @@ Ironhorse's current typed-array copy path. The loopback netlayer is a testing tr
 a fixed public listener, service installation, and remote authentication UX are
 not part of this CLI.
 
-
 ### Compatibility and recovery
 
 `runtime.json` records the worker executable hash, ordered bootstrap hashes,
@@ -501,7 +518,11 @@ import '@endo/init';
 import { E } from '@endo/eventual-send';
 import { makeTcpNetLayer } from '@endo/ocapn/netlayer/tcp-testing';
 import { syrupCodec } from '@endo/ocapn/syrup';
-import { makeFsStore, makeThixotropeDaemon, makeXsEngine } from '@endo/thixotrope';
+import {
+  makeFsStore,
+  makeThixotropeDaemon,
+  makeXsEngine,
+} from '@endo/thixotrope';
 import { makeNodePowers } from '@endo/thixotrope/node-powers.js';
 
 const powers = makeNodePowers();
@@ -547,7 +568,7 @@ under the well-known swissnum `shell`.
 The daemon's side of the session is a durable worker transport
 (`src/core/durable-worker-transport.js`), the durability envelope of the
 worker's hub session: no wire handshake, no client — the OCapN hub
-owns routing, and attaching the transport is the *same* operation for
+owns routing, and attaching the transport is the _same_ operation for
 a fresh worker, a wake from snapshot, and a daemon restart.
 
 Durability is snapshot-keyed frame retention:
@@ -568,6 +589,31 @@ Durability is snapshot-keyed frame retention:
 A crash without sleep restarts from the last snapshot plus the full
 journal suffix; clean shutdown is an optimization, not a correctness
 requirement.
+
+### Durable, transient, and view sessions
+
+Three kinds of session reach the hub, and they differ in what survives.
+
+A **durable session** is what a worker or a remote peer holds.
+Its c-list rows, answer routes, and delivery obligations are persisted, so the session
+outlives its socket, its worker process, and the daemon itself.
+
+A **transient client** is a disposable host-side OCapN session, opened by
+`daemon.openEphemeralClient()` and implemented in `src/net/ephemeral-hub-client.js`.
+The host uses one to make a request into the workspace, as an HTTP request or an
+administrative call does.
+Calls it delivers are durable once accepted, but its own pending answers and imported
+references end with the client.
+Session keys are never reused, including across restarts, so a reference from a dead
+transient client can never designate anything again.
+Daemon shutdown drains client creation and closes the outstanding clients before
+releasing the store.
+
+A **view connection** is a control-socket session held by a terminal view in `src/tui/`.
+It exists so the supervisor has something to release: closing the terminal, losing the
+socket, or restarting the supervisor cancels that view's ephemeral subscriptions and
+nothing else.
+Durable guest listeners registered through it are unaffected.
 
 ## The hub, and how daemon restarts work
 
