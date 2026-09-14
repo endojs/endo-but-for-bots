@@ -373,7 +373,10 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Format20 / schema31 carry the first reported rejection.
         // Format21 / schema32 carry shared Machine state.
         if ironhorse_vm::MATH_PROVIDER == "platform" {
-            "f9323665ee2b91fe305c92c40418476736441709cb82488440715a001d5c209f"
+            // Re-pinned for format version 23, which lets `ASYN` carry
+            // async generator instances (architecture review F127). This
+            // fixture holds none, so only the VERS payload changes.
+            "976a0a8178da3065d60085d157f78f62ec1480dd82181f6e1c11f9a0c42e3d52"
         } else {
             // F189 reserved IDs, with the deterministic provider SIGN.
             "0387cd7bceca3adea6d7279f65bd6bba334cd7a70338aa15fe9f806f99918207"
@@ -594,7 +597,12 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Schema32 / format21 authenticate shared Machine state.
         // Schema33 / format22 authenticate host-function recipes.
         if ironhorse_vm::MATH_PROVIDER == "platform" {
-            "9a991010e2b5e1cd930917d4b98a2192a9413a57e3234b390ad23d5f08e44dbf"
+            // Re-pinned for format version 23 / store schema v34 (the async
+            // generator carry, architecture review F127): the manifest embeds
+            // the `VERS` stamp and the schema, so the seal moves with the blob
+            // while the small state itself is unchanged (this machine holds no
+            // async generator).
+            "20b09ecd60e476cecef2906d0be280e21f7e78b16cc4f14ce90318d276403a6e"
         } else {
             "37aa0508f6d1371ee5c832e7b720125105460341b3cf4cebd3962b8a8c2d0296"
         },

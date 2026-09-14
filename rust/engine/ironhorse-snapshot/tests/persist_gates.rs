@@ -405,15 +405,54 @@ fn a_pending_await_is_now_carried() {
     assert!(begin_store_session(m, &sig(), &mut store).is_ok());
 }
 
+/// The last of the ledger's Pending rows graduated (F127): an async
+/// generator instance travels in `ASYN`, in every state, so no verb
+/// refuses it any more — start-suspended, yield-suspended, awaiting a
+/// body `await`, awaiting a yielded value, and completed with a queued
+/// `return` all persist.
 #[test]
-fn a_live_async_generator_refuses_every_persist_verb() {
-    let (b, n) =
-        compile("var ag = 0; var t = 0; ag = (async function* () { yield 1; })(); t = 7; t");
+fn a_live_async_generator_persists_in_every_verb() {
+    for source in [
+        "var ag = 0; var t = 0; ag = (async function* () { yield 1; })(); t = 7; t",
+        "var ag = 0; var t = 0; ag = (async function* () { yield 1; })(); ag.next(); t = 7; t",
+        "var ag = 0; var t = 0; var gate = new Promise(function () {}); \
+         ag = (async function* () { yield await gate; })(); ag.next(); t = 7; t",
+        "var ag = 0; var t = 0; var gate = new Promise(function () {}); \
+         ag = (async function* () { yield gate; })(); ag.next(); t = 7; t",
+        "var ag = 0; var t = 0; var gate = new Promise(function () {}); \
+         ag = (async function* () {})(); ag.next(); ag.return(gate); ag.next(); t = 7; t",
+    ] {
+        let (b, n) = compile(source);
+        let mut m = Interp::new();
+        m.link_intrinsics(&n);
+        let out = m.run(&b);
+        assert!(out.completed, "fixture crank: {:?}", out.halt);
+        assert_eq!(m.stored_unpersistable_row(), None, "{source}");
+        assert!(m.write_snapshot(&sig()).is_ok(), "{source}");
+        let mut store = MemoryStore::new();
+        assert!(
+            begin_store_session(m, &sig(), &mut store).is_ok(),
+            "{source}"
+        );
+    }
+}
+
+/// The one async-flavored refusal that remains: an `Array.fromAsync`
+/// accumulation mid-flight, anchored by a `FromAsync*` reaction whose
+/// state no atom carries.
+#[test]
+fn a_mid_flight_array_from_async_refuses_every_persist_verb() {
+    let (b, n) = compile(
+        "var p = 0; var t = 0; p = Array.fromAsync([new Promise(function () {})]); t = 7; t",
+    );
     let mut m = Interp::new();
     m.link_intrinsics(&n);
     let out = m.run(&b);
     assert!(out.completed, "fixture crank: {:?}", out.halt);
-    assert_every_persist_verb_refuses(m, "an async generator whose state does not yet persist");
+    assert_every_persist_verb_refuses(
+        m,
+        "a promise reaction that would resume a non-persisted async frame",
+    );
 }
 
 #[test]
@@ -826,14 +865,18 @@ fn the_image_of_a_halted_machine_is_unobtainable() {
         Err(other) => panic!("refused by the wrong gate: {other:?}"),
     }
     // And the pending-row arm refuses the image by name too.
-    let (b, n) =
-        compile("var ag = 0; var t = 0; ag = (async function* () { yield 1; })(); t = 7; t");
+    let (b, n) = compile(
+        "var p = 0; var t = 0; p = Array.fromAsync([new Promise(function () {})]); t = 7; t",
+    );
     let mut m = Interp::new();
     m.link_intrinsics(&n);
     assert!(m.run(&b).completed);
     match m.snapshot_image_for_testing(&sig()) {
         Err(MachineSnapshotError::PendingStateUnsupported { row }) => {
-            assert_eq!(row, "an async generator whose state does not yet persist")
+            assert_eq!(
+                row,
+                "a promise reaction that would resume a non-persisted async frame"
+            )
         }
         other => panic!("the image must refuse by the pending row's name: {other:?}"),
     }

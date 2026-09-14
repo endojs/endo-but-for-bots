@@ -182,11 +182,15 @@ fn carried_state_has_frozen_bytes_seals_costs_and_continuations() {
 }
 
 #[test]
-fn unsupported_async_generator_state_remains_an_explicit_refusal() {
+fn async_generator_state_writes_and_a_from_async_step_remains_an_explicit_refusal() {
     let machine = fresh("async function* g() { yield 10; yield 20; } var it = g(); it.next(); 0");
+    assert!(machine
+        .write_snapshot(&Signature::new("w4-determinism-corpus"))
+        .is_ok());
+    let machine = fresh("var p = Array.fromAsync([new Promise(function () {})]); 0");
     assert!(
         matches!(machine.write_snapshot(&Signature::new("w4-determinism-corpus")),
-        Err(MachineSnapshotError::PendingStateUnsupported { row }) if row == "an async generator whose state does not yet persist")
+        Err(MachineSnapshotError::PendingStateUnsupported { row }) if row == "a promise reaction that would resume a non-persisted async frame")
     );
 }
 

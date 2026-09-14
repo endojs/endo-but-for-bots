@@ -4,11 +4,12 @@
 use crate::image::{ArrayImage, CollectionImage, IndexPropsImage, MachineImage, WrapperImage};
 use crate::store::SmallState;
 use ironhorse_vm::snapshot_api::{
-    AccessorRow, AsyncRow, BoundFunctionRow, CombinatorRow, DisposableStackRow, DisposalRecordRow,
-    EnvironmentRow, EvaluatorRow, FunctionStateSnapshot, GeneratorRow, HostFunctionRow,
-    ModuleGraphSnapshot, ModuleRecordRow, PrivateAccessorRow, PrivateElementSnapshot,
-    PrivateValueRow, PromiseClusterSnapshot, PromiseJobRow, PromiseReactionRow, PromiseRow,
-    SavedFrameRow, SavedJumpRow, SharedMachineSnapshot,
+    AccessorRow, AsyncGeneratorRequestRow, AsyncGeneratorRow, AsyncRow, BoundFunctionRow,
+    CombinatorRow, DisposableStackRow, DisposalRecordRow, EnvironmentRow, EvaluatorRow,
+    FunctionStateSnapshot, GeneratorRow, HostFunctionRow, ModuleGraphSnapshot, ModuleRecordRow,
+    PrivateAccessorRow, PrivateElementSnapshot, PrivateValueRow, PromiseClusterSnapshot,
+    PromiseJobRow, PromiseReactionRow, PromiseRow, SavedFrameRow, SavedJumpRow,
+    SharedMachineSnapshot,
 };
 use ironhorse_vm::Slot;
 
@@ -385,8 +386,16 @@ row!(SavedJumpRow {
     ]
 });
 row!(PromiseClusterSnapshot {
-    slots: [async_instances, promises, combinators],
+    slots: [async_instances, async_generators, promises, combinators],
     metadata: [functions, guards, unhandled_rejection]
+});
+row!(AsyncGeneratorRow {
+    slots: [frame, requests, active],
+    metadata: [owner, state]
+});
+row!(AsyncGeneratorRequestRow {
+    slots: [value, resolve, reject],
+    metadata: [status]
 });
 row!(PromiseRow {
     slots: [result, reactions],
