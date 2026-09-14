@@ -6,6 +6,11 @@ below; record each grooming pass by appending its note to `ARCHIVE.md` — do no
 layer new groom notes at the top of this file.*
 
 *Recently added or revised:
+[daemon-retention-labels](daemon-retention-labels.md) (added 2026-09-14;
+first-class invitation-pin reasons stored on pet-store bindings, additive
+reason data in retention paths and the formula inspector, a host-only
+browse-and-compare-prune surface for guest `hostPins`, mint-time derived-key
+validation, and an explicit deferral of a general durable Set formula),
 [hosted-agent-broker-oauth](hosted-agent-broker-oauth.md) (added 2026-09-08 and
 revised 2026-09-09; credential custody for hosted agent sessions — a broker-held
 refreshing OAuth credential with expiry tracking, single-flight exchange, a
@@ -338,6 +343,7 @@ LLM-agent stack).*
 | [daemon-capability-persona](daemon-capability-persona.md) | 2026-02-16 | 2026-02-24 | Not Started |
 | [daemon-cross-peer-gc](daemon-cross-peer-gc.md) | 2026-03-07 | 2026-04-29 | **Complete** |
 | [daemon-retention-paths](daemon-retention-paths.md) | 2026-04-30 | 2026-05-19 | In Progress (PR #284) |
+| [daemon-retention-labels](daemon-retention-labels.md) | 2026-09-14 | — | Proposed |
 | [retention-path-notation](retention-path-notation.md) | 2026-05-10 | 2026-05-19 | Reference |
 | [runtime-container-fs-mount](runtime-container-fs-mount.md) | 2026-08-10 | 2026-09-08 | **Complete** |
 | [sturdy-refs-endor-syscall](sturdy-refs-endor-syscall.md) | 2026-06-23 | 2026-06-26 | Not Started |
@@ -751,12 +757,16 @@ flowchart TD
         cemui[chat-edit-message-ui]
         cliedit[cli-edit-verb]
         finsp[formula-inspector]
+        dretpath[daemon-retention-paths]
+        dretlabel[daemon-retention-labels]
         invgt[inventory-grouping-by-type]
         dcmd --> cpend
         dmount --> cvedit
         dmount --> cliedit
         dmstream[daemon-message-streaming<br/><i>COMPLETE</i>] --> cemui
         invgt --> finsp
+        dretpath --> dretlabel
+        dretlabel --> finsp
         cicmenu[chat-inventory-create-menu]
         dmount --> cicmenu
         cscheme[chat-color-schemes<br/><i>COMPLETE</i>]
@@ -1383,6 +1393,7 @@ star.)
 | formula-inspector | In Progress | Single Chat surface: a Value modal back face reached via `F` key, modal-header gear icon, or directly from inventory-row gear icon; back face is read-only at this stage. Host-only `getFormula(identifier)` daemon method (replaces `@info` name hub); `endo inspect` CLI; promise-formula view subscribes and integrates with error-tracing. Consolidates the earlier `chat-value-modal-formula-view` proposal. Daemon and CLI cuts shipping in `endojs/endo-but-for-bots#440`; chat-side cut deferred (chat-package shape impasse). |
 | workers-panel | Not Started | Metrics, sparklines (retention-paths section factored out into `daemon-retention-paths`) |
 | daemon-retention-paths | In Progress | Host-only `listRetentionPaths` / `followRetentionPaths`, `endo paths` CLI, Chat paths panel; Phase 1 forwarded as PR #284 (open) |
+| daemon-retention-labels | Proposed | Invitation-pin reasons on pet-store bindings; labeled path and formula views; host-only guest-`hostPins` browse and compare-prune; mint-time key validation; no general Set formula without an authoritative recomputation source |
 | retention-path-notation | Reference | Notation + bulk-collection sketch captured for reference; not a forward-looking proposal |
 | ~~chat-view-edit-commands~~ | **Complete** | `/view` (alias `/cat`) and `/edit` blob commands shipped in `packages/chat/command-registry.js` with the Monaco-backed viewer/editor at `packages/chat/blob-viewer.js`; landed via direct-to-`llm` commit `ae2b074ac` plus typography / language-mode refinements |
 | chat-edit-message-ui | Not Started | `/edit` slash command, `e` focus shortcut, hover pencil for editing previously sent messages; revision-history panel |
@@ -1775,6 +1786,7 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | formula-inspector | M | 4-5 days | 9 | Single Chat surface (Value modal back face, gear icon flip plus direct inventory-row entry, read-only at this stage); host-only `getFormula(identifier)` daemon method (removes `@info`); `endo inspect` CLI; promise-formula view with error-tracing integration |
 | workers-panel | M | 4-6 days | 9 | Metrics, sparklines |
 | daemon-retention-paths | M-L | 1.5 weeks | 9 | Snapshot + subscription daemon API, CLI verb, Chat paths panel; Phase 1 in PR #284 (open) |
+| daemon-retention-labels | M-L | 1-1.5 weeks | 9 | Pet-store binding metadata and migration, labeled retention-path output, host-only management facet, `endo pins` / compare-and-remove `endo unpin`, formula-view table, and mint-time key validation |
 | retention-path-notation | — | — | 9 | Reference; notation + bulk-collection sketch captured for future reference |
 | ~~chat-view-edit-commands~~ | M | — | 9 | ✅ Complete (direct-to-`llm` commit `ae2b074ac` "Blob view and edit" + refinements; `/view` (alias `/cat`) and `/edit` shipped) |
 | chat-edit-message-ui | S-M | 3 days | 9 | `/edit` command, `e` focus shortcut, hover pencil; design merged (PR #88); daemon impl in PR #125 forwarded under bot |
@@ -1831,10 +1843,10 @@ date of this pass.
 | M6: MCP Bridge Hosting (was Milestone B) | 2 net-new (`endo-gateway-mcp` impl, `endo-claude`); cross-milestone slices in M3 (P0) and M5 (P2/P3/P4 gaps) | ~3-3.5 weeks own work (endo-gateway-mcp ~2 weeks + endo-claude ~1-1.5 weeks) + ~6-9 weeks across P0-P4 | gated by M3 gateway-package phases 2/7/8 merge cadence |
 | M7: Weblets & Integrations (was M3) | 12 (`familiar-unified-weblet-server`, `familiar-chat-weblet-hosting`, `cli-store-verb-text-modes`, `cli-edit-verb`, `daemon-weblet-application`, `exo-zip-package`, `endoclaw-oauth`, `exo-google-sheets`, `endoclaw-proactive-messages`, `endoclaw-notifications`, `endoclaw-webhooks`, `endoclaw-voice`) | 6-8 weeks | 8-11 weeks |
 | M8: Peer App Sharing (was Milestone A) | 3 net-new (`familiar-deep-link-invitations`, `endo-app-sharing`, `familiar-app-ui-hosting`); existing constituents counted under M3/M4/M7 | 2-3 weeks | 3-5 weeks |
-| M9: UX & Tooling (was M4) | 13 (`chat-pending-commands`, `chat-slot-slash-commands`, `daemon-commands-as-messages`, `inventory-cancel-and-liveness`, `inventory-grouping-by-type`, `inventory-drag-and-drop`, `formula-inspector`, `workers-panel`, `daemon-retention-paths`, `chat-edit-message-ui`, `chat-inventory-create-menu`, `lal-transcript-memory-management`, `namehub-interface-unification`) | 9-12 weeks | 11-14 weeks |
+| M9: UX & Tooling (was M4) | 14 (`chat-pending-commands`, `chat-slot-slash-commands`, `daemon-commands-as-messages`, `inventory-cancel-and-liveness`, `inventory-grouping-by-type`, `inventory-drag-and-drop`, `formula-inspector`, `workers-panel`, `daemon-retention-paths`, `daemon-retention-labels`, `chat-edit-message-ui`, `chat-inventory-create-menu`, `lal-transcript-memory-management`, `namehub-interface-unification`) | 10-14 weeks | 12-16 weeks |
 | M10: Confinement & Ecosystem (was M5) | 7 (`endo-posix-sandbox`, `daemon-capability-persona`, `daemon-secret-manager`, `daemon-capability-bank`, `endoclaw-browser`, `endoclaw-channel-bridges`, `endoclaw-skill-registry`) | 14-20 weeks | 16-22 weeks |
 | M11: Rust Daemon (`endor`) (was M6) | 6 (`endor-git-bindings`, `endor-registry-proxy-worker`, `daemon-endor-sqlite-iterate-streaming`, `endor-tui`, `endor-bus-tui`, `endor-native-zip-xs`) | 15-22 weeks | 17-24 weeks |
-| **Total remaining** | **65** + 7 M5 rows (4 in-flight + 3 design gaps) + 2 M6 own-work rows | **~61-83 weeks** + M5 4-6 weeks + M6 ~3-3.5 weeks | **~74-101 weeks** |
+| **Total remaining** | **66** + 7 M5 rows (4 in-flight + 3 design gaps) + 2 M6 own-work rows | **~62-85 weeks** + M5 4-6 weeks + M6 ~3-3.5 weeks | **~75-103 weeks** |
 
 The 2026-05-20 reconciliation corrects a counting gap in the prior
 snapshot's narrative: M1, M3, and M4 had absorbed new rows since the
@@ -1881,7 +1893,7 @@ gantt
     Peer App Sharing              :m8, after m7, 3w
 
     section Milestone 9
-    UX & Tooling                  :m9, after m8, 11w
+    UX & Tooling                  :m9, after m8, 13w
 
     section Milestone 10
     Confinement & Ecosystem       :m10, after m9, 20w
@@ -1912,9 +1924,9 @@ dates project from that anchor at the upper-bound effort.
 | M6: MCP Bridge Hosting (was Milestone B) | ~2 weeks own work | 19-24 weeks | Mid October to late November 2026 (gated by M3 gateway-package phases 2/7/8 merge cadence) |
 | M7: Weblets & Integrations (was M3) | 6-8 weeks | 25-32 weeks | Mid December 2026 to mid January 2027 |
 | M8: Peer App Sharing (was Milestone A) | 2-3 weeks | 27-35 weeks | Late December 2026 to early February 2027 |
-| M9: UX & Tooling (was M4) | 9-12 weeks | 36-47 weeks | Mid February to mid April 2027 |
-| M10: Confinement & Ecosystem (was M5) | 14-20 weeks | 50-67 weeks | Late May to early September 2027 |
-| M11: Rust Daemon (`endor`) (was M6) | 15-22 weeks | 65-89 weeks | Q3 to Q4 2027 (research-heavy; may run in parallel) |
+| M9: UX & Tooling (was M4) | 10-14 weeks | 37-49 weeks | Mid February to late April 2027 |
+| M10: Confinement & Ecosystem (was M5) | 14-20 weeks | 51-69 weeks | Late May to mid September 2027 |
+| M11: Rust Daemon (`endor`) (was M6) | 15-22 weeks | 66-91 weeks | Q3 to Q4 2027 (research-heavy; may run in parallel) |
 
 *M3 and M7 (weblets) are less order-dependent and can be interleaved
 once their respective dependencies have landed; the M5/M6 hosted-Gateway
