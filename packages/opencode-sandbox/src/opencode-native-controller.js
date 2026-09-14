@@ -4,7 +4,6 @@
 import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { mkdir, rmdir } from 'node:fs/promises';
-import { isAbsolute, normalize } from 'node:path';
 import { promisify } from 'node:util';
 
 import {
@@ -22,7 +21,6 @@ import {
   makePublicNetworkEnvironment,
 } from '@endo/hosted-agent/public-network.js';
 import { M } from '@endo/patterns';
-import { assertNativePodmanProfile } from '@endo/sandbox/native-podman-profile.js';
 
 import { makeOpencodeClient } from './opencode-client.js';
 import { makeOpencodeConfig, parseModelRef } from './opencode-agent-config.js';
@@ -38,6 +36,7 @@ import {
   makeMcpSocketServer,
 } from './mcp-socket-server.js';
 import { parseRootfs, rootfsLabel } from './parse-rootfs.js';
+import { readSessionPlan } from './opencode-session-plan.js';
 
 const ControllerInterface = M.interface('OpencodeNativeController', {
   activate: M.call(M.string(), M.remotable()).returns(M.promise()),
@@ -46,94 +45,6 @@ const ControllerInterface = M.interface('OpencodeNativeController', {
   status: M.call().returns(M.promise()),
   terminate: M.call(M.string(), M.remotable()).returns(M.promise()),
 });
-
-/**
- * The recorded deployment resource profile. JSON carries no bigint, so the two
- * OCI int64 quantities travel as decimal digit strings and are widened here.
- * @typedef {object} PlanNativeProfile
- * @property {number} uid
- * @property {number} gid
- * @property {string} memoryBytes
- * @property {string} cpuQuotaMicros
- * @property {number} pids
- * @property {number} cpuPeriodMicros
- * @property {number} maxConcurrentOperations
- */
-
-/**
- * @typedef {object} NativePlan
- * @property {string} sessionId
- * @property {string} sandboxSessionId
- * @property {string} rootfs Explicit effective image; no environment fallback.
- * @property {'off' | 'public-internet'} networkPolicy
- * @property {string} workspaceMountPoint Kernel mount, distinct from backing storage.
- * @property {string} mcpDir Private, recorded native socket/relay directory.
- * @property {string} mounterSocketDir Private 9P socket parent.
- * @property {ReturnType<typeof assertNativePodmanProfile>} nativeProfile
- * @property {string} [model]
- * @property {string} [systemPrompt]
- * @property {string} [opencodeSessionId]
- */
-
-const NATURAL_TEXT = /^(0|[1-9][0-9]*)$/;
-
-/**
- * The plan is the parser's input edge for operator resource settings: refuse
- * anything but the exact recorded shape, with no defaults, before any scope
- * is acquired. The sandbox factory checks the same profile again at its own
- * boundary on every actual Podman operation.
- * @param {unknown} value
- */
-const readNativeProfile = value => {
-  (typeof value === 'object' && value !== null) ||
-    Fail`Missing native controller profile`;
-  const { memoryBytes, cpuQuotaMicros, ...counts } =
-    /** @type {Record<string, unknown>} */ (value);
-  for (const quantity of [memoryBytes, cpuQuotaMicros]) {
-    (typeof quantity === 'string' && NATURAL_TEXT.test(quantity)) ||
-      Fail`Native profile quantities must be decimal digit strings`;
-  }
-  return assertNativePodmanProfile(
-    harden({
-      ...counts,
-      memoryBytes: BigInt(/** @type {string} */ (memoryBytes)),
-      cpuQuotaMicros: BigInt(/** @type {string} */ (cpuQuotaMicros)),
-    }),
-  );
-};
-
-/** @param {string} text */
-const readPlan = text => {
-  const value = JSON.parse(text);
-  assertCopyData(harden(value));
-  (typeof value === 'object' && value !== null && !Array.isArray(value)) ||
-    Fail`Native controller plan must be a record`;
-  /** @type {Omit<NativePlan, 'nativeProfile'> & { nativeProfile?: PlanNativeProfile }} */
-  const recorded = value;
-  for (const name of ['sessionId', 'sandboxSessionId', 'rootfs']) {
-    (typeof value[name] === 'string' && value[name] !== '') ||
-      Fail`Missing native controller plan field ${name}`;
-  }
-  /** @type {NativePlan} */
-  const plan = harden({
-    ...recorded,
-    nativeProfile: readNativeProfile(recorded.nativeProfile),
-  });
-  ['off', 'public-internet'].includes(plan.networkPolicy) ||
-    Fail`Unknown native controller network policy`;
-  for (const nativePath of [
-    plan.workspaceMountPoint,
-    plan.mcpDir,
-    plan.mounterSocketDir,
-  ]) {
-    (typeof nativePath === 'string' &&
-      isAbsolute(nativePath) &&
-      normalize(nativePath) === nativePath &&
-      !nativePath.includes('\0')) ||
-      Fail`Native controller requires recorded absolute paths`;
-  }
-  return plan;
-};
 
 /**
  * Inert composition for one dedicated native worker. Resolver capabilities are
@@ -236,7 +147,7 @@ export const makeOpencodeNativeController = ({
     }
     originalText = text;
     activating = (async () => {
-      const approved = readPlan(text);
+      const approved = readSessionPlan(text);
       const sandbox = await E(resolver).get('sandboxService');
       assertOpen();
       sandboxScope = await E(sandbox).provideScope(approved.sandboxSessionId);
@@ -402,7 +313,7 @@ export const makeOpencodeNativeController = ({
     closing = (async () => {
       if (!activating) {
         // Recovery only. Never create substitutes for an earlier owner.
-        const recoveredPlan = readPlan(text);
+        const recoveredPlan = readSessionPlan(text);
         const recovered = await Promise.allSettled([
           (async () => {
             if (sandboxScope) return;

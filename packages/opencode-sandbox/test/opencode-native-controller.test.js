@@ -38,6 +38,7 @@ const planFor = id =>
     sandboxSessionId: `sandbox-${id}`,
     rootfs: `oci:example@sha256:${'a'.repeat(64)}`,
     networkPolicy: 'off',
+    workspaceDir: `/workspaces/${id}`,
     workspaceMountPoint: `/private/${id}/work-mount`,
     mcpDir: `/private/${id}/mcp`,
     mounterSocketDir: `/private/${id}/9p`,
@@ -469,7 +470,7 @@ test('rejected initial plan is an observed activation, not lost cleanup ownershi
   }
   const invalid = JSON.stringify({ sessionId: 'a' });
   await t.throwsAsync(E(controller).activate(invalid, f.resolver), {
-    message: /Missing native controller plan/,
+    message: /Missing session plan field/,
   });
   await E(controller).terminate(invalid, f.resolver);
   t.deepEqual(f.events, []);
@@ -546,7 +547,7 @@ test('public network uses approved proxy environment and literal resolver conten
 
 /** @type {readonly [string, (profile: any) => unknown, RegExp][]} */
 const refusedProfiles = harden([
-  ['missing', () => undefined, /Missing native controller profile/],
+  ['missing', () => undefined, /Missing native profile/],
   [
     'a non-decimal quantity',
     profile => ({ ...profile, memoryBytes: '512M' }),

@@ -30,10 +30,13 @@
 // backend caplet — the one formula whose module path is tied to a release
 // checkout — is re-created on every run and re-bound into the Floot profile.
 
+import { createHash } from 'node:crypto';
 import { chmod, lstat, mkdir, stat } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 
 import { E } from '@endo/eventual-send';
-import { Fail } from '@endo/errors';
+import { Fail, q } from '@endo/errors';
 
 import {
   assertCurrentSpecifier,
@@ -42,10 +45,23 @@ import {
 import { provideManagedCredentials } from './src/managed-credentials.js';
 import {
   assertRuntimePlacement,
+  brokerServiceSpecifier,
   getHostedStorageRoots,
+  readBrokerService,
   readSandboxRuntime,
+  readSessionStorage,
   readStateProvider,
+  resolvePinnedImageRef,
+  sessionStorageSpecifier,
 } from './src/hosted-runtime-setup.js';
+import { parseModelRef } from './src/opencode-agent-config.js';
+import { OPENCODE_MODELS } from './src/opencode-backend-factory.js';
+import { BROKER_OWNER_PATTERN } from './src/opencode-broker.js';
+import { readOpencodeBrokerConfig } from './src/opencode-broker-service-agent.js';
+import {
+  isNormalizedAbsolutePath,
+  readNativeProfile,
+} from './src/opencode-session-plan.js';
 
 /** @import { EndoHost } from '@endo/daemon' */
 
@@ -57,9 +73,60 @@ const backendModuleSpecifier = toCurrentSpecifier(
 const SANDBOX_DIR = 'opencode-sandbox';
 
 /**
- * @param {EndoHost} hostAgent
+ * Ensure a private, symlink-free, daemon-owned directory at `directory`.
+ * @param {string} label
+ * @param {string} directory
  */
-export const main = async hostAgent => {
+const providePrivateDirectory = async (label, directory) => {
+  const info = await lstat(directory).catch(() => undefined);
+  !info?.isSymbolicLink() || Fail`${label} must not be a symlink: ${directory}`;
+  if (info && !info.isDirectory()) {
+    throw Fail`${label} must be a directory: ${directory}`;
+  }
+  if (info) {
+    (await stat(directory)).uid === process.getuid?.() ||
+      Fail`${label} must be owned by the daemon user: ${directory}`;
+    await chmod(directory, 0o700);
+  } else {
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+  }
+};
+
+/**
+ * Mint an unconfined formula whose sole powers is an existing capability
+ * named by path. `powersName` takes one pet name, so alias the capability
+ * under a temporary root name for the mint; the formula retains the
+ * capability's identity, not the alias.
+ * @param {EndoHost} hostAgent
+ * @param {object} options
+ * @param {string[]} options.powersPath
+ * @param {string} options.temporary
+ * @param {string} options.specifier
+ * @param {string[]} options.resultName
+ * @param {Record<string, string>} options.env
+ */
+const mintWithPowersPath = async (
+  hostAgent,
+  { powersPath, temporary, specifier, resultName, env },
+) => {
+  if (await E(hostAgent).has(temporary)) await E(hostAgent).remove(temporary);
+  try {
+    await E(hostAgent).copy(powersPath, [temporary]);
+    await E(hostAgent).makeUnconfined('@main', specifier, {
+      powersName: temporary,
+      resultName,
+      env: harden(env),
+    });
+  } finally {
+    await E(hostAgent).remove(temporary);
+  }
+};
+
+/**
+ * @param {EndoHost} hostAgent
+ * @param {{ exec?: Parameters<typeof resolvePinnedImageRef>[1] }} [powers]
+ */
+export const main = async (hostAgent, { exec = undefined } = {}) => {
   await null;
   const { env } = process;
 
@@ -71,11 +138,24 @@ export const main = async hostAgent => {
       `OpenCode backend name is "${backendName}"; Floot's factory only discovers "opencode-backend" unless its own configuration is changed to match.`,
     );
   }
-  const { workspaceDir, configDir, mcpDir } = getHostedStorageRoots(env);
-  // Private base for per-session MCP Unix sockets; never a world-writable
-  // shared tmp (predictable paths there invite socket hijack).
+  const requestedRoots = getHostedStorageRoots(env);
+  const { configDir } = requestedRoots;
   const rootfs =
     env.ENDO_OPENCODE_SANDBOX_IMAGE || 'oci:localhost/opencode-sandbox:latest';
+  // Daemon-owned sessions require the provider broker; it is minted only when
+  // the listener image is configured, so an unconfigured deployment keeps the
+  // legacy refusal path rather than a half-configured broker.
+  const listenerImageRef = env.ENDO_OPENCODE_BROKER_LISTENER_IMAGE || '';
+  const brokerDir =
+    env.ENDO_OPENCODE_BROKER_DIR || path.join(os.homedir(), 'opencode-broker');
+  const publicInternet = env.ENDO_OPENCODE_PUBLIC_INTERNET === '1';
+  // The deployment resource profile is recorded into each session plan by the
+  // backend. It has no defaults; validate the operator's value before any
+  // mint so a malformed profile cannot reach a formula environment.
+  const nativeProfileText = env.ENDO_OPENCODE_NATIVE_PROFILE;
+  if (nativeProfileText !== undefined) {
+    readNativeProfile(JSON.parse(nativeProfileText));
+  }
 
   // A seed value is used only on first setup, when the secrets catalog has no
   // entry for `credsName`; provideManagedCredentials never overwrites an
@@ -96,6 +176,23 @@ export const main = async hostAgent => {
   }
   const runtime = await readSandboxRuntime(hostAgent);
   const state = await readStateProvider(hostAgent);
+  // Like the state root, a retained storage owner's roots are the effective
+  // ones: the backend must record sessions where that owner can remove them.
+  // The current environment's roots apply only when the owner is minted now.
+  const existingStorage = await E(hostAgent).has(
+    SANDBOX_DIR,
+    'session-storage',
+  );
+  const { workspaceDir, mcpDir } = existingStorage
+    ? (await readSessionStorage(hostAgent)).roots
+    : requestedRoots;
+  // Refuse before any mint what the storage owner would refuse at
+  // construction; a formula that cannot construct is still bound and would be
+  // retained by every later run.
+  isNormalizedAbsolutePath(workspaceDir) ||
+    Fail`ENDO_OPENCODE_WORKSPACE_DIR (or the retained storage owner's root) must be a normalized absolute path: ${q(workspaceDir)}`;
+  isNormalizedAbsolutePath(mcpDir) ||
+    Fail`ENDO_OPENCODE_MCP_DIR (or the retained storage owner's root) must be a normalized absolute path: ${q(mcpDir)}`;
   await assertRuntimePlacement(runtime.config.directory, {
     stateDir: state.stateDir,
     workspaceDir,
@@ -116,18 +213,83 @@ export const main = async hostAgent => {
   await mkdir(configDir, { recursive: true, mode: 0o700 });
   // The MCP socket base must be private and symlink-free: a planted link here
   // would redirect the per-session sockets another process can then squat.
-  const mcpInfo = await lstat(mcpDir).catch(() => undefined);
-  mcpInfo?.isSymbolicLink() &&
-    Fail`ENDO_OPENCODE_MCP_DIR must not be a symlink: ${mcpDir}`;
-  if (mcpInfo && !mcpInfo.isDirectory()) {
-    throw Fail`ENDO_OPENCODE_MCP_DIR must be a directory: ${mcpDir}`;
-  }
-  if (mcpInfo) {
-    (await stat(mcpDir)).uid === process.getuid() ||
-      Fail`ENDO_OPENCODE_MCP_DIR must be owned by the daemon user: ${mcpDir}`;
-    await chmod(mcpDir, 0o700);
+  await providePrivateDirectory('ENDO_OPENCODE_MCP_DIR', mcpDir);
+
+  // Provider broker service — an owned native service whose one exact powers
+  // dependency is the managed credential's SecretBlob. Its operator profile is
+  // persisted in the formula environment; sessions never resolve a mutable
+  // credential name. An existing service is retained with its configuration.
+  if (await E(hostAgent).has(SANDBOX_DIR, 'broker-service')) {
+    await readBrokerService(hostAgent);
+    console.log(
+      'Retaining OpenCode broker service with its persisted configuration.',
+    );
+  } else if (listenerImageRef !== '') {
+    // Refuse what the broker kit would refuse at construction, before any
+    // mint or directory creation, for the same reason as the storage roots.
+    isNormalizedAbsolutePath(brokerDir) ||
+      Fail`ENDO_OPENCODE_BROKER_DIR must be a normalized absolute path: ${q(brokerDir)}`;
+    let ownerId = env.ENDO_OPENCODE_BROKER_OWNER_ID || '';
+    if (ownerId === '') {
+      const hostId = await E(hostAgent).identify('@agent');
+      if (typeof hostId !== 'string' || hostId.length === 0) {
+        throw Fail`Cannot identify the OpenCode broker host`;
+      }
+      ownerId = `opencode-${createHash('sha256').update(hostId).digest('hex').slice(0, 48)}`;
+    }
+    BROKER_OWNER_PATTERN.test(ownerId) ||
+      Fail`ENDO_OPENCODE_BROKER_OWNER_ID must match ${q(BROKER_OWNER_PATTERN)}: ${q(ownerId)}`;
+    // Mirrors the listener runtime's identity check; setup pins the slice
+    // image itself but never rewrites the listener reference.
+    /^[a-z0-9][a-z0-9._:/-]*@sha256:[a-f0-9]{64}$/.test(listenerImageRef) ||
+      Fail`ENDO_OPENCODE_BROKER_LISTENER_IMAGE must be a lowercase, digest-pinned image reference: ${q(listenerImageRef)}`;
+    const { imageRef, imageDigest } = await resolvePinnedImageRef(rootfs, exec);
+    await providePrivateDirectory('ENDO_OPENCODE_BROKER_DIR', brokerDir);
+    const brokerConfig = JSON.stringify({
+      ownerId,
+      directory: brokerDir,
+      imageRef,
+      imageDigest,
+      listenerImageRef,
+      // The broker admits the provider-scoped ids opencode's request bodies
+      // carry, not Floot's `openrouter/...` selection refs.
+      models: OPENCODE_MODELS.map(model => parseModelRef(model.id)),
+      ...(publicInternet ? { publicInternet: true } : {}),
+    });
+    readOpencodeBrokerConfig({ OPENCODE_BROKER_CONFIG: brokerConfig });
+    await mintWithPowersPath(hostAgent, {
+      powersPath: ['secrets', credsName],
+      temporary: `${credsName}.broker-read`,
+      specifier: brokerServiceSpecifier,
+      resultName: [SANDBOX_DIR, 'broker-service'],
+      env: { OPENCODE_BROKER_CONFIG: brokerConfig },
+    });
+    console.log(`Minted ${SANDBOX_DIR}/broker-service`);
   } else {
-    await mkdir(mcpDir, { recursive: true, mode: 0o700 });
+    console.warn(
+      'ENDO_OPENCODE_BROKER_LISTENER_IMAGE is unset; no broker service was minted, and daemon-owned sessions require one.',
+    );
+  }
+
+  // Session storage owner — the `storage` role the daemon owner records with
+  // each session and invokes inside record removal. Its powers is the state
+  // provider, so native state removal keeps that provider's marker checks.
+  if (existingStorage) {
+    console.log(
+      'Retaining OpenCode session storage with its persisted roots; current workspace and MCP roots are not reapplied.',
+    );
+  } else {
+    await mintWithPowersPath(hostAgent, {
+      powersPath: [SANDBOX_DIR, 'state-provider'],
+      temporary: 'opencode.state-provider-powers',
+      specifier: sessionStorageSpecifier,
+      resultName: [SANDBOX_DIR, 'session-storage'],
+      env: {
+        OPENCODE_WORKSPACE_BASE_DIR: workspaceDir,
+        OPENCODE_MCP_DIR: mcpDir,
+      },
+    });
+    console.log(`Minted ${SANDBOX_DIR}/session-storage`);
   }
 
   // The hosted backend factory. It runs with `@agent` host powers (it mints
@@ -157,6 +319,9 @@ export const main = async hostAgent => {
       OPENCODE_CONFIG_BASE_DIR: configDir,
       OPENCODE_MCP_DIR: mcpDir,
       OPENCODE_SANDBOX_IMAGE: rootfs,
+      ...(nativeProfileText !== undefined
+        ? { OPENCODE_NATIVE_PROFILE: nativeProfileText }
+        : {}),
     }),
   });
   if (await E(hostAgent).has(...backendPath)) {
