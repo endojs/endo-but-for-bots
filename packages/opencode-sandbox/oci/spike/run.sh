@@ -10,7 +10,7 @@
 # deploy does not invalidate it.
 set -eu
 
-HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+HERE=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 RELEASE=${ENDO_RELEASE:-/var/lib/endo/current}
 CONTAINERS_CONF=${CONTAINERS_CONF:-$(systemctl show endo-daemon.service -p Environment 2>/dev/null | tr ' ' '\n' | sed -n 's/^CONTAINERS_CONF=//p' | head -1)}
 
@@ -38,7 +38,8 @@ if [ -n "$CONTAINERS_CONF" ]; then
 else
   echo "warning: CONTAINERS_CONF not found; podman may fail on cgroups" >&2
 fi
-export PATH="$PODMAN_BIN:$(dirname "$NODE_BIN"):/run/current-system/sw/bin:/usr/bin:/bin"
+PATH="$PODMAN_BIN:$(dirname "$NODE_BIN"):/run/current-system/sw/bin:/usr/bin:/bin"
+export PATH
 
 exec "$NODE_BIN" "$RELEASE/packages/cli/bin/endo.cjs" \
   run --UNCONFINED "$HERE/run-slice.mjs" --powers @agent

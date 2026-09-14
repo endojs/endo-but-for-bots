@@ -25,7 +25,7 @@ if [ "${1:-}" = "--source" ]; then
   shift
 fi
 
-HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+HERE=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 OPENCODE_REPO=${OPENCODE_REPO:-https://github.com/kumavis/opencode.git}
 OPENCODE_REF=${OPENCODE_REF:-build/v1.18.30-opencode-patched}
 OPENCODE_COMMIT=${OPENCODE_COMMIT:-}
