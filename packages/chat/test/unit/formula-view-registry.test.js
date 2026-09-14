@@ -44,6 +44,7 @@ test('listKnownFormulaTypes covers the canonical daemon formula types', t => {
     'known-peers-store',
     'loopback-network',
     'readable-blob',
+    'readable-directory',
     'promise',
     'resolver',
     'marshal',
@@ -114,6 +115,72 @@ test('forward-looking types fall back to a "not yet exposed" hint', t => {
       `${type} surfaces a not-yet-exposed hint`,
     );
   }
+});
+
+test('the guest spec surfaces the networks, planes, and both pin directories', t => {
+  // These mirror packages/daemon/src/formula-record.js's `guest` record,
+  // which now retains `networks`/`planes` and, when present, the
+  // guest-visible `guestPins` and host-only `hostPins` directories. The
+  // registry must list them so they render in the inspector rather than
+  // being appended blindly below the known list.
+  const spec = getFormulaViewSpec('guest');
+  t.is(spec.header, 'Guest');
+  t.deepEqual(spec.propertyList, [
+    'hostAgent',
+    'hostHandle',
+    'handle',
+    'petStore',
+    'mailboxStore',
+    'mailHub',
+    'worker',
+    'networks',
+    'planes',
+    'guestPins',
+    'hostPins',
+  ]);
+});
+
+test('the host spec surfaces the registry and planes references', t => {
+  // Mirrors the `host` record in formula-record.js, which retains
+  // `registry` (with the `@registry` capability) and `planes` alongside
+  // `networks` and `pins`.
+  const spec = getFormulaViewSpec('host');
+  t.is(spec.header, 'Host');
+  t.deepEqual(spec.propertyList, [
+    'handle',
+    'hostHandle',
+    'mainWorker',
+    'nodeWorker',
+    'registry',
+    'inspector',
+    'petStore',
+    'mailboxStore',
+    'mailHub',
+    'endo',
+    'networks',
+    'planes',
+    'pins',
+  ]);
+});
+
+test('the invitation spec names the inviting agent, not a host specifically', t => {
+  // An invitation may be minted by a host or a guest, so the record
+  // renamed `hostAgent`/`hostHandle` to `invitingAgent`/`invitingHandle`.
+  const spec = getFormulaViewSpec('invitation');
+  t.deepEqual(spec.propertyList, [
+    'invitingAgent',
+    'invitingHandle',
+    'guestName',
+  ]);
+});
+
+test('the readable-directory spec surfaces the backing directory reference', t => {
+  // A read-only view over a live directory (used for net attenuation),
+  // consistent with `readable-tree`/`readable-blob`. Its `directory`
+  // property references the directory it attenuates.
+  const spec = getFormulaViewSpec('readable-directory');
+  t.is(spec.header, 'Readable directory');
+  t.deepEqual(spec.propertyList, ['directory']);
 });
 
 test('the registry is frozen so callers cannot mutate per-type specs', t => {
