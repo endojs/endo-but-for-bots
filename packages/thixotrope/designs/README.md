@@ -6,6 +6,8 @@ This directory holds potential designs and experiments, not additional implement
 possible table designs in more detail.
 [What a host service has to write](host-service-template.md) records what registering a host
 resource costs today and asks whether the repeated parts are worth factoring.
+[Manual persistence vats](manual-persistence-vats.md) explores moving those services into user-space
+vats that reconstruct their own OS resources, and the restorable host promise that lets one wait.
 
 This document records the current hypotheses, requirements, and open questions.
 It is not a claim that the implementation satisfies them.
