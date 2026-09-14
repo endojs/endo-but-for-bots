@@ -1,5 +1,5 @@
 // @ts-check
-/** @import { LogPowers } from '../platform/logging.js' */
+/** @import { Logger } from '../platform/logging.js' */
 /** @import { RandomPowers } from '../platform/random.js' */
 /** @import { TimerPowers } from '../platform/timers.js' */
 import harden from '@endo/harden';
@@ -27,7 +27,7 @@ import { makeWorkerPeer } from './worker-peer.js';
  * @param {object} powers
  * @param {TimerPowers} powers.timers
  * @param {RandomPowers} powers.random
- * @param {LogPowers} powers.logging
+ * @param {Logger} powers.logging
  * @param {object} options
  * @param {string} options.debugName
  * @param {(envelope: Record<string, unknown>) => void} options.onOutbound
@@ -115,7 +115,7 @@ const makePeerIncarnation = (
  * @param {object} powers
  * @param {TimerPowers} powers.timers
  * @param {RandomPowers} powers.random
- * @param {LogPowers} powers.logging
+ * @param {Logger} powers.logging
  * @returns {WorkerEngine}
  */
 export const makePeerJournalReplayEngine = powers =>
@@ -153,7 +153,7 @@ harden(makePeerJournalReplayEngine);
  * @param {object} powers
  * @param {TimerPowers} powers.timers
  * @param {RandomPowers} powers.random
- * @param {LogPowers} powers.logging
+ * @param {Logger} powers.logging
  * @returns {WorkerEngine}
  */
 export const makePeerSnapshottingReplayEngine = powers =>
