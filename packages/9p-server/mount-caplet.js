@@ -164,14 +164,48 @@ const assertExtraMountOptions = extra => {
  */
 const assertProgram = (program, expectedCommand, label) => {
   if (!Array.isArray(program) || program.length === 0) {
-    throw makeError(X`${label} must be a non-empty array of strings`);
+    throw makeError(X`${q(label)} must be a non-empty array of strings`);
   }
   if (baseName(program[program.length - 1]) !== expectedCommand) {
     throw makeError(
-      X`${label} must invoke ${q(expectedCommand)}; got ${q(String(program[program.length - 1]))}`,
+      X`${q(label)} must invoke ${q(expectedCommand)}; got ${q(String(program[program.length - 1]))}`,
     );
   }
 };
+
+/**
+ * The operator's mount/umount programs from caplet env. They are OPERATOR
+ * configuration, never a per-call option: the mounter cap is handed to an
+ * otherwise-untrusted party whose only granted authority is "mount any
+ * files"; letting the caller choose the program would be arbitrary
+ * privileged execution (e.g. `umountProgram: ['rm']` → `rm -- <mountPoint>`).
+ * `NINEP_SUDO=1` routes through sudo; `NINEP_MOUNT_PROGRAM` /
+ * `NINEP_UMOUNT_PROGRAM` (whitespace-separated) name a custom helper.
+ * Exported so a host that records these settings elsewhere can refuse at
+ * record time what the mounter refuses at construction.
+ *
+ * @param {Record<string, string | undefined>} [env]
+ * @returns {{ mountProgram: string[], umountProgram: string[] }}
+ */
+export const readMountPrograms = (env = {}) => {
+  const sudo = env.NINEP_SUDO === '1';
+  /** @param {string} v */
+  const splitProgram = v => v.trim().split(/\s+/).filter(Boolean);
+  const mountProgram = env.NINEP_MOUNT_PROGRAM
+    ? splitProgram(env.NINEP_MOUNT_PROGRAM)
+    : sudo
+      ? ['sudo', 'mount']
+      : ['mount'];
+  const umountProgram = env.NINEP_UMOUNT_PROGRAM
+    ? splitProgram(env.NINEP_UMOUNT_PROGRAM)
+    : sudo
+      ? ['sudo', 'umount']
+      : ['umount'];
+  assertProgram(mountProgram, 'mount', 'NINEP_MOUNT_PROGRAM');
+  assertProgram(umountProgram, 'umount', 'NINEP_UMOUNT_PROGRAM');
+  return harden({ mountProgram, umountProgram });
+};
+harden(readMountPrograms);
 
 /**
  * Build the comma-separated `-o` value for `mount -t 9p`.
@@ -286,26 +320,8 @@ export const makeFsMounterKit = ({
   }
 
   // mount/umount programs are OPERATOR configuration (env), never a
-  // per-call option. The mounter cap is handed to an otherwise-untrusted
-  // party whose only granted authority is "mount any files"; letting the
-  // caller choose the program would be arbitrary privileged execution
-  // (e.g. `umountProgram: ['rm']` → `rm -- <mountPoint>`). `NINEP_SUDO`
-  // routes through sudo; `NINEP_MOUNT_PROGRAM` / `NINEP_UMOUNT_PROGRAM`
-  // (whitespace-separated) let the operator name a custom helper.
-  const sudo = env.NINEP_SUDO === '1';
-  const splitProgram = v => v.trim().split(/\s+/).filter(Boolean);
-  const mountProgram = env.NINEP_MOUNT_PROGRAM
-    ? splitProgram(env.NINEP_MOUNT_PROGRAM)
-    : sudo
-      ? ['sudo', 'mount']
-      : ['mount'];
-  const umountProgram = env.NINEP_UMOUNT_PROGRAM
-    ? splitProgram(env.NINEP_UMOUNT_PROGRAM)
-    : sudo
-      ? ['sudo', 'umount']
-      : ['umount'];
-  assertProgram(mountProgram, 'mount', 'NINEP_MOUNT_PROGRAM');
-  assertProgram(umountProgram, 'umount', 'NINEP_UMOUNT_PROGRAM');
+  // per-call option; see `readMountPrograms`.
+  const { mountProgram, umountProgram } = readMountPrograms(env);
 
   /**
    * @param {ERef<any>} fs - endo-fs `Filesystem` capability to project.

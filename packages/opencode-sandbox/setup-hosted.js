@@ -27,6 +27,14 @@
 //     retained
 //   ENDO_OPENCODE_NATIVE_PROFILE — the deployment resource profile (JSON)
 //     recorded into every session plan; required, no default
+//   ENDO_NINEP_SUDO=1, ENDO_NINEP_MOUNT_PROGRAM, ENDO_NINEP_UMOUNT_PROGRAM
+//     (or their unprefixed spellings; the ENDO_ spelling wins) — rootless
+//     mount settings recorded into every session plan for the session's own
+//     9P mounter. An empty value is unset, like the other optional
+//     variables here;
+//     a present program is checked with the mounter's own program check, and
+//     a present NINEP_SUDO must be exactly `1` (the mounter would silently
+//     treat anything else as off)
 //   ENDO_OPENCODE_BROKER_LISTENER_IMAGE — digest-pinned listener image;
 //     required unless a broker service is retained
 //   ENDO_OPENCODE_BROKER_DIR, ENDO_OPENCODE_BROKER_OWNER_ID,
@@ -70,6 +78,7 @@ import { BROKER_OWNER_PATTERN } from './src/opencode-broker.js';
 import { readOpencodeBrokerConfig } from './src/opencode-broker-service-agent.js';
 import {
   isNormalizedAbsolutePath,
+  readMounterEnv,
   readNativeProfile,
 } from './src/opencode-session-plan.js';
 
@@ -164,6 +173,24 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
     throw Fail`ENDO_OPENCODE_NATIVE_PROFILE is required: the backend records it into every session plan`;
   }
   readNativeProfile(JSON.parse(nativeProfileText));
+  // The rootless mount settings a session's own 9P mounter needs, recorded
+  // into every plan through the backend. A hosted daemon forwards only
+  // ENDO_-prefixed variables to its ENDO_EXTRA subprocesses, so the mounter's
+  // own names are also accepted under their ENDO_ spelling.
+  /** @type {Record<string, string>} */
+  const mounterSettings = {};
+  for (const name of [
+    'NINEP_SUDO',
+    'NINEP_MOUNT_PROGRAM',
+    'NINEP_UMOUNT_PROGRAM',
+  ]) {
+    const value = env[`ENDO_${name}`] || env[name];
+    if (value) mounterSettings[name] = value;
+  }
+  const mounterEnvText =
+    Object.keys(mounterSettings).length === 0
+      ? undefined
+      : JSON.stringify(readMounterEnv(mounterSettings));
 
   // A seed value is used only on first setup, when the secrets catalog has no
   // entry for `credsName`; provideManagedCredentials never overwrites an
@@ -327,6 +354,9 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
       OPENCODE_WORKSPACE_BASE_DIR: workspaceDir,
       OPENCODE_MCP_DIR: mcpDir,
       OPENCODE_NATIVE_PROFILE: nativeProfileText,
+      ...(mounterEnvText === undefined
+        ? {}
+        : { OPENCODE_MOUNTER_ENV: mounterEnvText }),
     }),
   });
   if (await E(hostAgent).has(...backendPath)) {
