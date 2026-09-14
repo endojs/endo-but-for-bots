@@ -111,6 +111,7 @@ pub const STORE_SCHEMA_MIN_SUPPORTED: u32 = 5;
 /// mismatched store fails with exactly the vocabulary the container
 /// reader uses.
 #[derive(Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum StoreError {
     /// The machine is not at a quiescent crank boundary:
     /// its last crank halted. Rewind or complete a crank before
@@ -130,7 +131,33 @@ pub enum StoreError {
     /// An underlying I/O failure, rendered as text so the error stays
     /// `Eq`-comparable in tests (the pattern [`crate::machine`] uses for
     /// its own error split).
+    ///
+    /// Classified [`StoreFailure::Transient`], with one known limitation:
+    /// the `std::io::ErrorKind` is destroyed at construction (`io_err`,
+    /// `store_file.rs`), so a permanent medium failure — `PermissionDenied`,
+    /// `NotFound` — is indistinguishable here from a retryable one. Carrying
+    /// the kind means reshaping this variant across the SQLite backend in the
+    /// other workspace; until then a supervisor should bound its retries
+    /// rather than trust this class to terminate them.
     Io(String),
+    /// A backend that cannot serve this operation at all — an in-place
+    /// migration on a store whose medium does not support one. Deterministic
+    /// and permanent, which is why it is not [`StoreError::Io`]: a retry loop
+    /// over a capability refusal never terminates.
+    Unsupported(&'static str),
+    /// The CALLER's [`CheckpointBatch`] failed validation. The store is not
+    /// implicated: this is a malformed request, and the inner error names
+    /// which check it failed.
+    ///
+    /// Batch validation reuses the same vocabulary as at-rest verification
+    /// (`RowLength`, `SummaryMismatch`, `MissingRow`), so without this
+    /// wrapper a rejected commit would classify as a poisoned store and tell
+    /// a supervisor to tear down a healthy session.
+    BatchRejected(Box<StoreError>),
+    /// The VM reported that its own state is wrong
+    /// (`ironhorse_vm::Halt::EngineInvariant` or `Halt::Panic`). Never a
+    /// refusal: the machine cannot be trusted to continue.
+    EngineInvariant(String),
     /// A decode/validation failure in the shared snapshot vocabulary
     /// (version, signature, cost-table, corrupt payload).
     Snapshot(SnapshotError),
@@ -152,6 +179,16 @@ pub enum StoreError {
     /// seal, or a session whose recorded seal no longer matches the
     /// store — an equal-epoch fork, copy, or foreign store that a bare
     /// epoch counter cannot distinguish.
+    ///
+    /// Classified [`StoreFailure::Refused`], which is right for the lineage
+    /// half and NOT right for the other half this variant currently carries:
+    /// roughly eleven of its construction sites compare content recomputed at
+    /// rest against the root its own manifest seals, which is tamper or
+    /// bit-rot and should tear the session down. Splitting the two needs a
+    /// per-site judgement across `store.rs` and `machine.rs`; until then a
+    /// caller that must distinguish them has to look at the site, and this
+    /// class errs toward "keep running", which is the wrong direction for the
+    /// corruption half.
     BaselineMismatch { expected: String, found: String },
     /// A first (full-write) checkpoint was aimed at a store that
     /// already holds an epoch. Adopting existing content is the resume
@@ -183,20 +220,27 @@ pub enum StoreError {
 /// before this classifier existed it could not tell them apart: every store
 /// failure arrived as one opaque string (review finding F157). The variant
 /// alone is not enough either — a caller would have to re-derive this table
-/// from fourteen variants and keep it in step by hand.
+/// from every variant and keep it in step by hand.
 ///
 /// Classification is a property of the failure, not of the caller, so it lives
-/// beside the variants and [`StoreError::failure`] is an exhaustive match: a
+/// beside the variants and [`StoreError::classify`] is an exhaustive match: a
 /// new variant does not compile until it states its answer.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum StoreFailure {
-    /// The medium failed and the same call may succeed later: I/O. Retrying is
-    /// the only class where retrying is meaningful.
+    /// The medium failed and the same call may succeed later: I/O. This is
+    /// the only class for which a retry is meaningful — but see
+    /// [`StoreError::Io`], which cannot yet separate a permanent medium
+    /// failure from a retryable one, so bound the retries.
     Transient,
-    /// A deterministic refusal. The store and the request are both intact and
-    /// the answer will not change on its own — a gate the caller has to
-    /// satisfy (quiesce, migrate, adopt rather than overwrite), or an identity
-    /// that will never match this engine. Retrying is a busy-loop.
+    /// A deterministic refusal: the answer will not change on its own.
+    /// Either a gate the caller has to satisfy (quiesce, migrate, adopt
+    /// rather than overwrite), an identity that will never match this engine,
+    /// or a malformed request. Retrying is a busy-loop.
+    ///
+    /// [`StoreError::Empty`] lands here and is often not a failure at all —
+    /// a fresh store answering "nothing yet". A caller that can create one
+    /// should test for it by variant rather than by class.
     Refused,
     /// The stored state contradicts itself, so nothing read from it can be
     /// trusted: a container that will not parse, a geometry that promises rows
@@ -208,9 +252,10 @@ pub enum StoreFailure {
 
 impl StoreError {
     /// How a caller should respond to this failure. See [`StoreFailure`].
-    pub fn failure(&self) -> StoreFailure {
+    pub fn classify(&self) -> StoreFailure {
         match self {
-            // The medium, and only the medium.
+            // The medium, and only the medium. A capability the backend does
+            // not have is `Unsupported`, not this.
             StoreError::Io(_) => StoreFailure::Transient,
 
             // Gates the caller can satisfy, and identities that will not
@@ -219,26 +264,44 @@ impl StoreError {
             | StoreError::MachineOperation(_)
             | StoreError::PendingStateUnsupported { .. }
             | StoreError::Empty
+            | StoreError::Unsupported(_)
             | StoreError::EpochMismatch { .. }
             | StoreError::BaselineMismatch { .. }
             | StoreError::NotEmpty { .. }
             | StoreError::NeedsMigration { .. } => StoreFailure::Refused,
 
-            // The store's own content disagrees with its geometry.
+            // The caller's request was malformed. The inner error names which
+            // check failed, but the store itself is uninvolved, so the class
+            // is the wrapper's and not the inner error's.
+            StoreError::BatchRejected(_) => StoreFailure::Refused,
+
+            // The store's own content disagrees with itself.
             StoreError::MissingRow(_, _)
             | StoreError::RowLength { .. }
             | StoreError::SummaryCount { .. }
-            | StoreError::SummaryMismatch { .. } => StoreFailure::Poisoned,
+            | StoreError::SummaryMismatch { .. }
+            | StoreError::EngineInvariant(_) => StoreFailure::Poisoned,
 
             // A decode failure splits the same way one level down: structural
-            // damage poisons, a compatibility answer refuses.
+            // damage poisons, a compatibility answer refuses. `VersionError`
+            // splits again for the same reason — a truncated `VERS` atom is
+            // damage, a version this engine will not read is an answer.
             StoreError::Snapshot(e) => match e {
                 SnapshotError::Atom(_)
                 | SnapshotError::Signature(_)
                 | SnapshotError::MissingAtom(_)
                 | SnapshotError::Corrupt(_) => StoreFailure::Poisoned,
+                SnapshotError::Version(v) => {
+                    use crate::format::VersionError as V;
+                    match v {
+                        V::Truncated | V::TrailingBytes => StoreFailure::Poisoned,
+                        V::NotIronhorse(_)
+                        | V::UnsupportedVersion(_)
+                        | V::SlotWidthMismatch { .. }
+                        | V::UnsupportedEndian(_) => StoreFailure::Refused,
+                    }
+                }
                 SnapshotError::BootLayoutMismatch { .. }
-                | SnapshotError::Version(_)
                 | SnapshotError::SignatureMismatch { .. }
                 | SnapshotError::CostTableMismatch { .. } => StoreFailure::Refused,
             },
@@ -258,7 +321,12 @@ impl std::fmt::Display for StoreError {
             }
             StoreError::Empty => write!(f, "store has no committed epoch"),
             StoreError::Io(what) => write!(f, "store io error: {what}"),
-            StoreError::Snapshot(e) => write!(f, "{e}"),
+            StoreError::Unsupported(what) => write!(f, "backend cannot {what}"),
+            StoreError::BatchRejected(inner) => write!(f, "commit batch rejected: {inner}"),
+            StoreError::EngineInvariant(what) => {
+                write!(f, "engine invariant violated: {what}")
+            }
+            StoreError::Snapshot(e) => write!(f, "store snapshot error: {e}"),
             StoreError::MissingRow(kind, index) => {
                 write!(f, "store is missing {kind} row {index}")
             }
@@ -271,8 +339,14 @@ impl std::fmt::Display for StoreError {
                 f,
                 "{kind} row {index} is {found} bytes, geometry promises {expected}"
             ),
+            // Neutral about which actor holds which value, for the same
+            // reason as `BaselineMismatch` below: `check_epoch`
+            // (`store.rs`) expects the store's next epoch and finds the
+            // batch's, while `checkpoint_to_store_core` (`machine.rs:884`)
+            // expects the SESSION's and finds the STORE's. Naming sides
+            // would be right at one site and reversed at the other.
             StoreError::EpochMismatch { expected, found } => {
-                write!(f, "commit is for epoch {found}, store expects {expected}")
+                write!(f, "epoch mismatch: expected {expected}, found {found}")
             }
             // Deliberately neutral about WHICH side is which. The nine
             // construction sites agree that `expected` is the value the
@@ -308,7 +382,15 @@ impl std::fmt::Display for StoreError {
     }
 }
 
-impl std::error::Error for StoreError {}
+impl std::error::Error for StoreError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            StoreError::Snapshot(e) => Some(e),
+            StoreError::BatchRejected(e) => Some(e.as_ref()),
+            _ => None,
+        }
+    }
+}
 
 impl From<SnapshotError> for StoreError {
     fn from(e: SnapshotError) -> Self {
@@ -1369,6 +1451,40 @@ pub fn combine_root(
 /// `check_batch` as the whole admission gate and then writes rows by
 /// index must range-check them itself, or this function must grow the
 /// index-range check.
+/// Tag a [`check_batch`] failure as the CALLER's, not the store's.
+///
+/// Batch validation reuses the at-rest vocabulary (`RowLength`,
+/// `SummaryMismatch`, `MissingRow`), which read as a poisoned store when they
+/// describe stored content. A rejected commit is a malformed request against a
+/// healthy store, and a supervisor that cannot tell the two apart tears down a
+/// session it should merely have refused.
+fn reject_batch(e: StoreError) -> StoreError {
+    // Already tagged: do not double-wrap.
+    if matches!(e, StoreError::BatchRejected(_)) {
+        return e;
+    }
+    // Store-side, so it passes through unwrapped: relabelling a real desync
+    // as a bad request is the mirror of the defect this wrapper fixes.
+    if e == prior_leaf_desync() {
+        return e;
+    }
+    StoreError::BatchRejected(Box::new(e))
+}
+
+/// The one failure inside [`check_batch`] that describes the STORE rather than
+/// the batch: the caller's prior leaf-vector lengths against the prior
+/// manifest's geometry, both of which are the store's own state.
+///
+/// A single constructor, so [`reject_batch`] can recognise it by value — the
+/// error type is `Eq` — instead of by a nested pattern. That also keeps
+/// exactly one `Corrupt` literal for this label, which is the unit the refusal
+/// registry (`tests/refusal_registry.rs`) inventories.
+fn prior_leaf_desync() -> StoreError {
+    StoreError::Snapshot(SnapshotError::Corrupt(
+        "prior leaf tables disagree with the prior manifest geometry",
+    ))
+}
+
 pub fn check_batch(
     prior: Option<(&StoreManifest, [usize; 3])>,
     batch: &CheckpointBatch,
@@ -1392,9 +1508,7 @@ pub fn check_batch(
             || prior_exts_len != chunk_extent_count(prev.chunk_len) as usize
             || prior_frees_len != free_seg_count(prev.free_len) as usize
         {
-            return Err(StoreError::Snapshot(SnapshotError::Corrupt(
-                "prior leaf tables disagree with the prior manifest geometry",
-            )));
+            return Err(prior_leaf_desync());
         }
     }
 
@@ -1577,7 +1691,8 @@ pub fn apply_batch_with_small_root(
     check_batch(
         prior.map(|p| (p, [pages.len(), exts.len(), frees.len()])),
         batch,
-    )?;
+    )
+    .map_err(reject_batch)?;
     let n_pages = slot_page_count(batch.manifest.slot_count) as usize;
     let n_exts = chunk_extent_count(batch.manifest.chunk_len) as usize;
     let n_frees = free_seg_count(batch.manifest.free_len) as usize;
@@ -1797,7 +1912,7 @@ pub trait HeapStoreCommit: HeapStore {
                     });
                 }
             }
-            check_batch(stored.map(|m| (m, ledger.widths())), batch)?;
+            check_batch(stored.map(|m| (m, ledger.widths())), batch).map_err(reject_batch)?;
             let root = ledger.apply_checkpoint(batch)?;
             if root != batch.manifest.root {
                 return Err(StoreError::BaselineMismatch {
@@ -1927,9 +2042,7 @@ pub trait HeapStore {
         manifest: &StoreManifest,
     ) -> Result<(), StoreError> {
         let _ = manifest;
-        Err(StoreError::Io(
-            "this backend does not support in-place migration".to_string(),
-        ))
+        Err(StoreError::Unsupported("migrate a manifest in place"))
     }
 
     /// Replace the stored manifest AND small state together, verbatim
@@ -1944,9 +2057,7 @@ pub trait HeapStore {
         small: &[u8],
     ) -> Result<(), StoreError> {
         let _ = (manifest, small);
-        Err(StoreError::Io(
-            "this backend does not support in-place migration".to_string(),
-        ))
+        Err(StoreError::Unsupported("migrate a manifest in place"))
     }
 
     /// The subset of `targets` with at least one inbound edge from a
@@ -5076,9 +5187,15 @@ mod tests {
         let mut crafted = image_to_batch_unchecked(&image2, 2, &prev.seal);
         crafted.chunk_extents.retain(|(e, _)| *e != tail_ext);
         reseal_batch(&mut crafted);
+        // Wrapped: the omission is in the CALLER's batch, so the store is
+        // not implicated and a supervisor should refuse the request rather
+        // than tear the session down.
         assert_eq!(
             store.commit(&crafted),
-            Err(StoreError::MissingRow("chunk extent", tail_ext)),
+            Err(StoreError::BatchRejected(Box::new(StoreError::MissingRow(
+                "chunk extent",
+                tail_ext
+            )))),
             "the boundary row must travel when its expected length changes"
         );
     }

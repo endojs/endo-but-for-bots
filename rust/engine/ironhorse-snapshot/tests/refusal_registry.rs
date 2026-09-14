@@ -323,6 +323,26 @@ fn inventory_in(
             continue;
         }
         let end = end_group(tokens, i + 1);
+        // Match ARMS are not call sites either, and are recognisable from the
+        // token that follows the group: `=>` ends the pattern, `|` continues
+        // an or-pattern, and `if` opens a guard. None of the three can follow
+        // a CALL — `f(x) if ..` and `f(x) => ..` are not expressions anywhere
+        // in Rust — so this cannot skip a producer.
+        //
+        // A pattern destructures a value some producer already built, and
+        // that producer is inventoried at ITS own site; counting the arm too
+        // would double-count it, while refusing the arm would force a
+        // classifier to abandon exhaustiveness. Skipping it here keeps the
+        // audited list below to forwarding EXPRESSIONS, which is what a
+        // construction has to be.
+        let after_group = tokens.get(end + 1);
+        let arm = (matches!(after_group, Some(Token::Punct('=')))
+            && matches!(tokens.get(end + 2), Some(Token::Punct('>'))))
+            || matches!(after_group, Some(Token::Punct('|')))
+            || after_group.is_some_and(|t| word(t, "if"));
+        if arm {
+            continue;
+        }
         let all_args = arguments(&tokens[i + 2..end]);
         let label_index = if cursor
             || ["present_and_non_empty", "read_block", "row_len"]
@@ -343,16 +363,8 @@ fn inventory_in(
         } else {
             // These are the complete, audited forwarding expressions. Adding
             // another expression must extend this registry's data-flow model.
-            //
-            // `_` is the one entry that is not a forwarding expression at all:
-            // a wildcard is not an expression in Rust, so `Corrupt(_)` can
-            // only ever be a match ARM, never a construction. Admitting it
-            // lets a classifier match exhaustively over the variant without
-            // the scanner reading the arm as a new named corruption, and it
-            // cannot hide a producer, because no producer can spell itself
-            // that way.
             let dynamic = if direct {
-                ["self.what", "what", "name", "message", "&'static str", "_"]
+                ["self.what", "what", "name", "message", "&'static str"]
                     .iter()
                     .any(|s| args == lex(s))
             } else {
@@ -454,16 +466,11 @@ fn every_named_corruption_is_asserted_or_explicitly_allowlisted() {
         );
         let expected: &[(&str, &str, usize)] = match path.file_name().unwrap().to_str().unwrap() {
             "image.rs" => &[("Corrupt", "self.what", 7), ("Corrupt", "what", 2)],
-            // The `_` entry is the classifier's match arm, not a producer;
-            // see the wildcard note in the dynamic-expression registry above.
-            "store.rs" => &[("Corrupt", "name", 2), ("Corrupt", "_", 1)],
+            "store.rs" => &[("Corrupt", "name", 2)],
             "snapshot_roster.rs" => &[("Corrupt", "name", 2)],
             "store_sections.rs" => &[("Corrupt", "message", 1)],
             "store_file.rs" => &[("Corrupt", "what", 1), ("file_corrupt", "what", 4)],
-            // Two sites, both accounted for: the variant's own declaration,
-            // and the `Display` arm that forwards the name into the message
-            // rather than collapsing it (review finding F157).
-            "format.rs" => &[("Corrupt", "&'static str", 1), ("Corrupt", "what", 1)],
+            "format.rs" => &[("Corrupt", "&'static str", 1)],
             _ => &[],
         };
         let expected: BTreeMap<_, _> = expected
