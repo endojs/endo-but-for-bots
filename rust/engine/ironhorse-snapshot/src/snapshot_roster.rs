@@ -2479,12 +2479,19 @@ macro_rules! snapshot_payloads {
                     state.promise_cluster.async_instances = instances;
                     state.promise_cluster.async_generators = generators;
                 },
-                decode_container: [NameFloor, extend, (r, [], [small]) {
+                decode_container: [NameFloor, extend, (r, [version], [small]) {
                     let (instances, generators) = match r.find(crate::format::ASYN) {
                         Some(a) => {
                             let section = decode_async_section(a.payload)?;
                             if section.0.is_empty() && section.1.is_empty() {
                                 return Err(SnapshotError::Corrupt("ASYN atom present but empty"));
+                            }
+                            // The generator trailer is a format-23 addition:
+                            // a container stamped older cannot carry one.
+                            if !section.1.is_empty() && version.format_version < 23 {
+                                return Err(SnapshotError::Corrupt(
+                                    "async generators: trailer in a pre-format-23 container",
+                                ));
                             }
                             section
                         }

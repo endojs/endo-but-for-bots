@@ -8884,6 +8884,62 @@ mod generator_decoder_refusals {
         );
     }
 
+    /// The generator trailer is a format-23 addition: a container stamped
+    /// older that carries one is refused before its rows are inspected,
+    /// so the writer-side stamp bump has a reader-side twin.
+    #[test]
+    fn async_generator_trailer_is_tied_to_the_format_stamp() {
+        use ironhorse_vm::snapshot_api::AsyncGeneratorRow;
+        let signature = Signature::new("ironhorse-test-sig-v1");
+        let mut image = MachineImage::from_arenas(
+            signature.clone(),
+            &SlotArena::new(),
+            &ChunkArena::new(),
+            &[],
+            vec!["name".into()],
+            Vec::new(),
+            SymbolKeyImage::default(),
+        );
+        let trailer = encode_async_section(
+            &[],
+            &[AsyncGeneratorRow {
+                owner: 3,
+                state: 3,
+                frame: None,
+                requests: vec![],
+                active: None,
+            }],
+        );
+        let mut with_trailer = |version: u32| {
+            image.version.format_version = version;
+            let bytes = write_machine_unchecked(&image);
+            let parsed = AtomReader::parse(&bytes).unwrap();
+            assert!(parsed.find(crate::format::ASYN).is_none());
+            let mut writer = AtomWriter::new();
+            for atom in parsed.atoms() {
+                writer.atom(atom.tag, atom.payload).unwrap();
+            }
+            writer.atom(crate::format::ASYN, &trailer).unwrap();
+            read_machine(&writer.finish().unwrap(), &signature)
+        };
+        assert_eq!(
+            with_trailer(22),
+            Err(SnapshotError::Corrupt(
+                "async generators: trailer in a pre-format-23 container"
+            ))
+        );
+        // At 23 the trailer passes the stamp gate and the crafted owner
+        // fails a later row check instead.
+        let at_23 = with_trailer(23);
+        assert!(at_23.is_err());
+        assert_ne!(
+            at_23,
+            Err(SnapshotError::Corrupt(
+                "async generators: trailer in a pre-format-23 container"
+            ))
+        );
+    }
+
     /// The `ASYN` generator trailer's byte-level refusals: shapes no
     /// honest encoder emits, so they are crafted on the wire.
     #[test]
