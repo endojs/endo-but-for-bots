@@ -1020,6 +1020,76 @@ fn side_ref_parity_sees_an_off_by_one_beside_a_surviving_reference() {
     assert!(bits[page as usize]);
 }
 
+/// The two restored-lease tables appear in no collector visitor: their
+/// only GC effect is through the weak leases they keep alive — an
+/// `identity_roots` lease for a provisional export, an environment
+/// owner lease for a provisional compartment — and the `Rc<()>` values
+/// name no slot. This is the behavioral twin the GC registry names for
+/// both fields: the leased object survives a collection exactly while
+/// the table holds its lease, and dies once the table lets go.
+#[test]
+fn restored_leases_keep_identity_roots_alive_across_a_collection() {
+    let mut interp = Interp::new();
+    let exported = interp.new_object();
+    let lease = interp.pin_identity(exported);
+    interp.restored_leases.insert(exported, lease);
+    let global = interp.new_object();
+    let owner = Rc::new(());
+    let mut env = CompartmentEnvironment::new(global);
+    env.owner = Some(Rc::downgrade(&owner));
+    interp.inactive_environments.insert(global, env);
+    interp.restored_environment_leases.insert(global, owner);
+
+    interp.collect_garbage().unwrap();
+    assert!(
+        !interp.slots.is_free_index(exported),
+        "restored_leases keeps the identity root's lease alive"
+    );
+    assert!(
+        !interp.slots.is_free_index(global),
+        "restored_environment_leases keeps the environment owner's lease alive"
+    );
+
+    interp.release_restored_roots();
+    assert!(interp.restored_leases.is_empty());
+    assert!(interp.restored_environment_leases.is_empty());
+    interp.collect_garbage().unwrap();
+    assert!(
+        interp.slots.is_free_index(exported),
+        "an unclaimed export dies with its lease"
+    );
+    assert!(
+        interp.slots.is_free_index(global),
+        "an unclaimed environment dies with its owner lease"
+    );
+}
+
+/// The GC registry's `TransitivelyRooted` claims are checked through this
+/// probe, so the probe must be able to say no: a null anchor and a swept
+/// one both read back dead, and every anchor is minted at boot.
+#[test]
+fn boot_anchor_liveness_reports_a_null_or_swept_anchor_dead() {
+    let mut interp = Interp::new();
+    let liveness = interp.boot_anchor_liveness();
+    assert!(liveness.iter().all(|(_, alive)| *alive), "{liveness:?}");
+    let alive = |interp: &Interp, name: &str| {
+        interp
+            .boot_anchor_liveness()
+            .into_iter()
+            .find(|(anchor, _)| *anchor == name)
+            .map(|(_, alive)| alive)
+            .expect("probed anchor")
+    };
+    interp.locale_proto = crate::value::SlotIndex::NULL;
+    assert!(!alive(&interp, "locale_proto"));
+    let swept = interp.intl_object;
+    interp.slots.free(swept);
+    assert!(!alive(&interp, "intl_object"));
+    interp.temporal_plain_protos[3] = crate::value::SlotIndex::NULL;
+    assert!(!alive(&interp, "temporal_plain_protos"));
+    assert!(alive(&interp, "collator_proto"));
+}
+
 /// With the net on, the projection itself catches the masked undercount:
 /// every page becomes a root and the checkpoint gate refuses.
 #[cfg(any(debug_assertions, feature = "store-integrity"))]

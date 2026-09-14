@@ -34,6 +34,56 @@ impl Interp {
         roots
     }
 
+    /// The boot anchors that appear in NO collector visitor — the Intl and
+    /// Temporal namespace objects and prototype caches, the generator
+    /// function prototypes — paired with whether each is currently a live,
+    /// non-null slot. They are held only transitively, through the rooted
+    /// `intrinsics` values and proto rows, and the GC ground-truth registry
+    /// (`tests/gc_visitation_registry.rs`) classifies every one of them
+    /// `TransitivelyRooted`; that claim is CHECKED by calling this after a
+    /// full collection, when a swept anchor reads back dead. The two lists
+    /// reconcile both ways, so a field can be neither added here without
+    /// its classification nor classified without being probed.
+    #[doc(hidden)]
+    pub fn boot_anchor_liveness(&self) -> Vec<(&'static str, bool)> {
+        let live = |idx: crate::value::SlotIndex| !idx.is_null() && !self.slots.is_free_index(idx);
+        let mut out: Vec<(&'static str, bool)> = vec![
+            ("intl_object", live(self.intl_object)),
+            ("temporal_object", live(self.temporal_object)),
+            ("temporal_now_object", live(self.temporal_now_object)),
+            ("locale_proto", live(self.locale_proto)),
+            ("collator_proto", live(self.collator_proto)),
+            ("list_format_proto", live(self.list_format_proto)),
+            ("plural_rules_proto", live(self.plural_rules_proto)),
+            ("segmenter_proto", live(self.segmenter_proto)),
+            ("segments_proto", live(self.segments_proto)),
+            ("segment_iterator_proto", live(self.segment_iterator_proto)),
+            ("date_time_format_proto", live(self.date_time_format_proto)),
+            ("number_format_proto", live(self.number_format_proto)),
+            ("temporal_instant_proto", live(self.temporal_instant_proto)),
+            (
+                "temporal_duration_proto",
+                live(self.temporal_duration_proto),
+            ),
+            (
+                "temporal_plain_protos",
+                self.temporal_plain_protos.iter().all(|idx| live(*idx)),
+            ),
+            ("temporal_zoned_proto", live(self.temporal_zoned_proto)),
+            (
+                "generator_function_proto",
+                live(self.generator_function_proto),
+            ),
+            ("async_generator_proto", live(self.async_generator_proto)),
+            (
+                "async_generator_function_proto",
+                live(self.async_generator_function_proto),
+            ),
+        ];
+        out.sort_unstable();
+        out
+    }
+
     /// Collect garbage across the WHOLE machine: arenas plus every
     /// side table. Roots are [`Self::gc_roots`]; a keyed side-table
     /// entry is an EDGE from its object, so dead objects drop their
