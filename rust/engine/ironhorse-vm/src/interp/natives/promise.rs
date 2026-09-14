@@ -1496,9 +1496,22 @@ impl Interp {
         // hide the caller's jump targets so a getter/callback throw escapes to
         // the native boundary as a value instead of synchronously resuming the
         // caller's surrounding `try` statement.
-        self.run_guest_under_native_try(CallerHandlers::Isolate, |machine| {
+        let outcome = self.run_guest_under_native_try(CallerHandlers::Isolate, |machine| {
             machine.promise_combinator_inner(code, kind, iterable, constructor, capability)
-        })
+        });
+        match outcome {
+            // A throw the algorithm's own rejection conversion cannot absorb —
+            // the capability's resolve or reject function throwing while it
+            // is being called — is a synchronous abrupt completion of the
+            // combinator call. Re-raise it through the caller's restored
+            // chain (XS's `mxCatch` and rethrow) exactly as every other
+            // fenced native does: returned verbatim, the throw would leave
+            // every dispatch loop between here and the caller's `catch`
+            // abandoned with its handlers still installed, which the fence
+            // refuses as an engine invariant.
+            Err(Step::Threw { value, .. }) => Err(self.raise_js(value)),
+            outcome => outcome,
+        }
     }
 
     fn promise_combinator_inner(
