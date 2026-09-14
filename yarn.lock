@@ -2623,6 +2623,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/hosted-agent@workspace:packages/hosted-agent"
   dependencies:
+    "@endo/9p-server": "workspace:^"
     "@endo/captp": "workspace:^"
     "@endo/errors": "workspace:^"
     "@endo/eventual-send": "workspace:^"
