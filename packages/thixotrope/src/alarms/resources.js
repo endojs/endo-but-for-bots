@@ -4,9 +4,7 @@ import harden from '@endo/harden';
 import { Fail, q } from '@endo/errors';
 import { Far } from '@endo/far';
 
-// setTimeout treats delays beyond 2^31 - 1 ms (and NaN) as ~1 ms, which
-// would fire a "24.9 day" timer immediately; validate instead.
-const MAX_DELAY_MS = 2 ** 31 - 1;
+import { MAX_TIMER_DELAY_MS } from '../platform/timers.js';
 
 /**
  * Resource maker for a timer capability, the first of the host-provided
@@ -40,9 +38,11 @@ export const makeTimerResource = (timers, _description = null) =>
     /** @param {number} ms */
     delay: async ms => {
       const delayMs = Number(ms);
-      (Number.isFinite(delayMs) && delayMs >= 0 && delayMs <= MAX_DELAY_MS) ||
+      (Number.isFinite(delayMs) &&
+        delayMs >= 0 &&
+        delayMs <= MAX_TIMER_DELAY_MS) ||
         Fail`delay must be a number of milliseconds between 0 and ${q(
-          MAX_DELAY_MS,
+          MAX_TIMER_DELAY_MS,
         )}`;
       return new Promise(resolve =>
         timers.setTimer(() => resolve(timers.now()), delayMs),
