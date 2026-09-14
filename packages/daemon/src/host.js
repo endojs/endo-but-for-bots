@@ -5,7 +5,7 @@
 
 /** @import { ERef } from '@endo/eventual-send' */
 /** @import { PassableBytesReader } from '@endo/exo-stream' */
-/** @import { AgentDeferredTaskParams, ChannelDeferredTaskParams, Context, ContentLoadable, DaemonCore, DeferredTasks, EndoDiagnostics, EndoGuest, EndoHost, EndoMount, EnvRecord, EvalDeferredTaskParams, FormulaIdentifier, FormulaNumber, FormulaRecord, GitCredentialDeferredTaskParams, GitDeferredTaskParams, GitProvisionOptions, GitRemoteDeferredTaskParams, HostToolPowers, HttpClientDeferredTaskParams, InvitationDeferredTaskParams, MakeCapletDeferredTaskParams, MakeCapletOptions, MakeDirectoryNode, MakeHostOrGuestOptions, MakeMailbox, MountDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, PeerInfo, PetName, ReadableBlobDeferredTaskParams, ReadableTreeDeferredTaskParams, MarshalDeferredTaskParams, ScratchMountDeferredTaskParams, ShellDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
+/** @import { AgentDeferredTaskParams, ChannelDeferredTaskParams, Context, ContentLoadable, DaemonCore, DeferredTasks, EndoDiagnostics, EndoDirectory, EndoGuest, EndoHost, EndoMount, EnvRecord, EvalDeferredTaskParams, FormulaIdentifier, FormulaNumber, FormulaRecord, GitCredentialDeferredTaskParams, GitDeferredTaskParams, GitProvisionOptions, GitRemoteDeferredTaskParams, HostToolPowers, HttpClientDeferredTaskParams, InvitationDeferredTaskParams, MakeCapletDeferredTaskParams, MakeCapletOptions, MakeDirectoryNode, MakeGuestOptions, MakeHostOrGuestOptions, MakeMailbox, MountDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, PeerInfo, PetName, ReadableBlobDeferredTaskParams, ReadableNameHub, ReadableTreeDeferredTaskParams, MarshalDeferredTaskParams, ScratchMountDeferredTaskParams, ShellDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
 /** @import { makeSecretManager } from './secret-manager.js' */
 /** @import { makeTraceAggregator } from './trace-aggregator.js' */
 
@@ -78,17 +78,31 @@ const assertPowersNameOrPath = nameOrPath => {
 };
 
 /**
- * Normalizes host or guest options, providing default values.
- * @param {MakeHostOrGuestOptions | undefined} opts
- * @returns {{ introducedNames: Record<Name, PetName>, agentName?: NameOrPath }}
+ * Normalizes options for provisioning either a host or a guest, filling in
+ * default values. Typed against `MakeGuestOptions` — the wider of the two
+ * option shapes — because the guest path (`provideGuest`) may carry the
+ * guest-only `pins`/`networks` fields this function forwards; the host path
+ * (`provideHost`) passes a `MakeHostOrGuestOptions`, which is structurally a
+ * `MakeGuestOptions` with those two fields simply absent and never set. The
+ * parameter type is therefore the guest shape by construction, not in
+ * contradiction with the shared name: it is the widest input this normalizer
+ * must accept, while `pins`/`networks` stay off the shared
+ * `MakeHostOrGuestOptions` type so the host path never advertises an option it
+ * silently drops.
+ * @param {MakeGuestOptions | undefined} opts
+ * @returns {{ introducedNames: Record<Name, PetName>, agentName?: NameOrPath, pins?: EndoDirectory, networks?: EndoDirectory | ReadableNameHub }}
  */
 const normalizeHostOrGuestOptions = opts => {
   const agentName = /** @type {NameOrPath | undefined} */ (opts?.agentName);
+  const pins = opts?.pins;
+  const networks = opts?.networks;
   return {
     introducedNames: /** @type {Record<Name, PetName>} */ (
       opts?.introducedNames ?? Object.create(null)
     ),
     ...(agentName !== undefined && { agentName }),
+    ...(pins !== undefined && { pins }),
+    ...(networks !== undefined && { networks }),
   };
 };
 
@@ -1998,12 +2012,17 @@ export const makeHostMaker = ({
 
     /**
      * @param {NameOrPath} [handleName]
-     * @param {MakeHostOrGuestOptions} [opts]
+     * @param {MakeGuestOptions} [opts]
      * @returns {Promise<{id: FormulaIdentifier, value: Promise<EndoGuest>}>}
      */
     const makeGuest = async (
       handleName,
-      { introducedNames = Object.create(null), agentName = undefined } = {},
+      {
+        introducedNames = Object.create(null),
+        agentName = undefined,
+        pins = undefined,
+        networks = undefined,
+      } = {},
     ) => {
       let guest = await getNamedAgent(handleName, 'guest');
       if (guest === undefined) {
@@ -2012,6 +2031,37 @@ export const makeHostMaker = ({
           : handleName
             ? `guest:${handleName}`
             : 'guest';
+        let guestPinsDirectoryId;
+        if (pins !== undefined) {
+          guestPinsDirectoryId = getIdForRef(pins);
+          if (guestPinsDirectoryId === undefined) {
+            throw makeError(
+              X`provideGuest: pins must be a daemon-minted directory`,
+            );
+          }
+          const formula = await getFormulaForId(guestPinsDirectoryId);
+          if (formula.type !== 'directory') {
+            throw makeError(X`provideGuest: pins must be a directory`);
+          }
+        }
+        let guestNetworksDirectoryId;
+        if (networks !== undefined) {
+          guestNetworksDirectoryId = getIdForRef(networks);
+          if (guestNetworksDirectoryId === undefined) {
+            throw makeError(
+              X`provideGuest: networks must be a daemon-minted directory`,
+            );
+          }
+          const formula = await getFormulaForId(guestNetworksDirectoryId);
+          if (
+            formula.type !== 'directory' &&
+            formula.type !== 'readable-directory'
+          ) {
+            throw makeError(
+              X`provideGuest: networks must be a directory or read-only directory`,
+            );
+          }
+        }
         const { value, id } =
           // Behold, recursion:
           await formulateGuest(
@@ -2022,6 +2072,8 @@ export const makeHostMaker = ({
               /** @type {NameOrPath | undefined} */ (agentName),
             ),
             guestLabel,
+            guestPinsDirectoryId,
+            guestNetworksDirectoryId,
           );
         guest = { value: Promise.resolve(value), id };
       }

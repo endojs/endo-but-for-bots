@@ -417,6 +417,283 @@ export const runMultiplayerSuite = ({ test, network }) => {
     t.true(bobNames.includes('bob'), 'bob persists across restart');
   });
 
+  // Guest-owned invitation primitive (designs/remote-guest-endo-cli.md sect 3):
+  // an EndoGuest — not the top host — mints the invitation. Its locator `from`
+  // names the guest's own handle, network mediation stays internal to the
+  // daemon (the guest never gains getPeerInfo/addPeerInfo), both pet stores end
+  // up with the opposite handle, neither bound handle carries host-only methods,
+  // and a replayed invitation is rejected (single-use).
+  test.serial('EndoGuest (not the top host) mints an invitation', async t => {
+    const { host: hostA } = await prepareHostWithGcAndNetwork(t);
+    const { host: hostB } = await prepareHostWithGcAndNetwork(t);
+
+    // The inviter is a guest on A, driven only through its guest facet.
+    const guestA = await E(hostA).provideGuest('guest-handle', {
+      agentName: 'guest-agent',
+    });
+
+    // Guest-safety: the guest can invite but holds no network administration.
+    await t.throwsAsync(
+      () => E(guestA).getPeerInfo(),
+      undefined,
+      'guest has no getPeerInfo',
+    );
+    await t.throwsAsync(
+      () => E(guestA).addPeerInfo({ node: 'x', addresses: [] }),
+      undefined,
+      'guest has no addPeerInfo',
+    );
+
+    // The guest mints and locates the invitation.
+    const invitation = await E(guestA).invite('bob');
+    const invitationLocator = await E(invitation).locate();
+
+    // The locator `from` names the inviting guest's handle, not the top host's.
+    const guestHandleId = await E(hostA).identify('guest-handle');
+    const hostHandleId = await E(hostA).identify('@self');
+    const fromNumber = new URL(invitationLocator).searchParams.get('from');
+    t.is(
+      fromNumber,
+      parseId(guestHandleId).number,
+      'invitation `from` names the inviting guest handle',
+    );
+    t.not(
+      fromNumber,
+      parseId(hostHandleId).number,
+      'invitation `from` is NOT the top host handle',
+    );
+
+    // The top host on B accepts.
+    await E(hostB).accept(invitationLocator, 'alice');
+
+    // Both pet stores received the opposite handle.
+    const bobId = await E(guestA).identify('bob');
+    t.truthy(bobId, "inviting guest bound the acceptor's handle under 'bob'");
+    const aliceId = await E(hostB).identify('alice');
+    t.truthy(
+      aliceId,
+      "acceptor bound the inviting guest's handle under 'alice'",
+    );
+    t.is(
+      parseId(aliceId).number,
+      parseId(guestHandleId).number,
+      "acceptor's 'alice' is the inviting guest handle, not the top host",
+    );
+
+    // Neither bound handle carries host-only methods.
+    const boundOnB = await E(hostB).lookup('alice');
+    await t.throwsAsync(
+      () => E(boundOnB).addPeerInfo({ node: 'x', addresses: [] }),
+      undefined,
+      "acceptor's handle has no addPeerInfo",
+    );
+    await t.throwsAsync(
+      () => E(boundOnB).invite('x'),
+      undefined,
+      "acceptor's handle has no invite",
+    );
+    const boundOnA = await E(guestA).lookup('bob');
+    await t.throwsAsync(
+      () => E(boundOnA).addPeerInfo({ node: 'x', addresses: [] }),
+      undefined,
+      "inviter's handle has no addPeerInfo",
+    );
+
+    // A replayed invitation fails cleanly (single-use).
+    await t.throwsAsync(
+      () => E(hostB).accept(invitationLocator, 'alice-again'),
+      undefined,
+      'replayed invitation is rejected',
+    );
+  });
+
+  // The invitation object's own cancel() revokes exactly that pending
+  // invitation, leaving a sibling invitation for the same guest redeemable.
+  test.serial(
+    'invitation cancel() revokes exactly one pending invitation',
+    async t => {
+      const { host: hostA } = await prepareHostWithGcAndNetwork(t);
+      const { host: hostB } = await prepareHostWithGcAndNetwork(t);
+      const { host: hostC } = await prepareHostWithGcAndNetwork(t);
+
+      const guestA = await E(hostA).provideGuest('guest-handle', {
+        agentName: 'guest-agent',
+      });
+
+      // Two independent pending invitations from the same guest.
+      const inv1 = await E(guestA).invite('peer1');
+      const inv2 = await E(guestA).invite('peer2');
+      const locator1 = await E(inv1).locate();
+      const locator2 = await E(inv2).locate();
+
+      // Cancel exactly the first.
+      await E(inv1).cancel();
+
+      // The canceled invitation can no longer be redeemed.
+      await t.throwsAsync(
+        () => E(hostB).accept(locator1, 'from-peer1'),
+        undefined,
+        'canceled invitation is not redeemable',
+      );
+
+      // The sibling invitation is untouched and still redeemable.
+      await E(hostC).accept(locator2, 'from-peer2');
+      t.truthy(
+        await E(guestA).identify('peer2'),
+        'sibling invitation still redeemed and bound',
+      );
+
+      // The canceled invitation left its pet name unbound.
+      t.is(
+        await E(guestA).identify('peer1'),
+        undefined,
+        'canceled invitation left its name unbound',
+      );
+    },
+  );
+
+  // Concurrency: two acceptors race the SAME single-use invitation. The
+  // inviter-side `invitationJobs` serial queue exists precisely so the check
+  // and its consuming rebind are atomic, so at most one accept() may redeem
+  // the invitation even when both are in flight together. A sequential replay
+  // test cannot exercise the queue; this one starts both before either
+  // resolves. Deleting the invitationJobs wrapper (reverting to unserialized
+  // check-then-act) is what this test guards against.
+  test.serial(
+    'concurrent accept() on one invitation redeems at most once',
+    async t => {
+      const { host: hostA } = await prepareHostWithGcAndNetwork(t);
+      const { host: hostB } = await prepareHostWithGcAndNetwork(t);
+      const { host: hostC } = await prepareHostWithGcAndNetwork(t);
+
+      const invitation = await E(hostA).invite('bob');
+      const locator = await E(invitation).locate();
+
+      const results = await Promise.allSettled([
+        E(hostB).accept(locator, 'alice'),
+        E(hostC).accept(locator, 'alice'),
+      ]);
+      const fulfilled = results.filter(r => r.status === 'fulfilled');
+      const rejected = results.filter(r => r.status === 'rejected');
+      t.is(fulfilled.length, 1, 'exactly one concurrent accept succeeds');
+      t.is(rejected.length, 1, 'the racing accept is rejected as single-use');
+
+      // The inviter's invitation slot names exactly one accepted remote handle.
+      t.truthy(
+        await E(hostA).identify('bob'),
+        'the winning acceptor bound its handle under the invitation name',
+      );
+    },
+  );
+
+  // Supersession: re-minting an invitation under a name already bound to a
+  // pending invitation rebinds that slot, orphaning the first. The superseded
+  // invitation must fail its single-use check on accept, matching the
+  // "accepted, canceled, or superseded" contract the accept guard asserts.
+  test.serial(
+    'a superseded invitation (its name rebound) is no longer redeemable',
+    async t => {
+      const { host: hostA } = await prepareHostWithGcAndNetwork(t);
+      const { host: hostB } = await prepareHostWithGcAndNetwork(t);
+      const { host: hostC } = await prepareHostWithGcAndNetwork(t);
+
+      const inv1 = await E(hostA).invite('bob');
+      const locator1 = await E(inv1).locate();
+      // Re-mint under the same name; this rebinds 'bob' and supersedes inv1.
+      const inv2 = await E(hostA).invite('bob');
+      const locator2 = await E(inv2).locate();
+
+      await t.throwsAsync(
+        () => E(hostB).accept(locator1, 'alice'),
+        undefined,
+        'the superseded invitation is rejected',
+      );
+
+      // The current invitation still redeems cleanly.
+      await E(hostC).accept(locator2, 'carol');
+      t.truthy(
+        await E(hostA).identify('bob'),
+        'the current invitation redeemed and bound its acceptor',
+      );
+    },
+  );
+
+  // Concurrency: a cancel() racing a mid-flight accept() on the SAME
+  // invitation. This is the harder race the `invitationJobs` serial queue is
+  // built to close (the accept-vs-accept race is covered above); the queue's
+  // whole point is that a cancel() cannot read a stale `current === id` and
+  // remove() the slot accept() has since rebound to the accepted guest. Both
+  // calls funnel through the same per-invitation queue, so exactly one wins and
+  // the loser observes the terminal state rather than corrupting it. A
+  // sequential cancel-then-accept (covered elsewhere) never exercises the
+  // queue; this one starts both before either resolves.
+  test.serial(
+    'a cancel() racing an accept() never un-names an accepted guest',
+    async t => {
+      const { host: hostA } = await prepareHostWithGcAndNetwork(t);
+      const { host: hostB } = await prepareHostWithGcAndNetwork(t);
+
+      const invitation = await E(hostA).invite('bob');
+      const locator = await E(invitation).locate();
+
+      const [acceptResult] = await Promise.allSettled([
+        E(hostB).accept(locator, 'alice'),
+        E(invitation).cancel(),
+      ]);
+
+      const bound = await E(hostA).identify('bob');
+      if (acceptResult.status === 'fulfilled') {
+        // accept() won the race: the slot must still name the accepted guest.
+        // The racing cancel() must have observed `current !== id` and been the
+        // promised idempotent no-op, NOT removed the just-rebound slot.
+        t.truthy(
+          bound,
+          'accept winning the race leaves the guest bound; cancel did not un-name it',
+        );
+      } else {
+        // cancel() won the race: the invitation was revoked before acceptance,
+        // so the slot is unbound and the invitation is no longer redeemable.
+        t.is(
+          bound,
+          undefined,
+          'cancel winning the race leaves the name unbound',
+        );
+        await t.throwsAsync(
+          () => E(hostB).accept(locator, 'alice'),
+          undefined,
+          'a canceled invitation is not redeemable even after a lost accept race',
+        );
+      }
+    },
+  );
+
+  // The docstring on cancelInvitation promises it is "an idempotent no-op once
+  // accepted". Pin that contract: cancelling an already-redeemed invitation
+  // must neither throw nor remove the now-rebound guest slot.
+  test.serial(
+    'invitation cancel() after a successful accept() is an idempotent no-op',
+    async t => {
+      const { host: hostA } = await prepareHostWithGcAndNetwork(t);
+      const { host: hostB } = await prepareHostWithGcAndNetwork(t);
+
+      const invitation = await E(hostA).invite('bob');
+      const locator = await E(invitation).locate();
+
+      await E(hostB).accept(locator, 'alice');
+      const boundBefore = await E(hostA).identify('bob');
+      t.truthy(boundBefore, 'the invitation was accepted and bound');
+
+      // cancel() on the already-accepted invitation is the promised no-op.
+      await E(invitation).cancel();
+      const boundAfter = await E(hostA).identify('bob');
+      t.is(
+        boundAfter,
+        boundBefore,
+        'cancel() after accept did not un-name the accepted guest',
+      );
+    },
+  );
+
   test.serial('three-party invite with partition and recovery', async t => {
     const { host: hostA } = await prepareHostWithGcAndNetwork(t);
     const { host: hostB, config: configB } =

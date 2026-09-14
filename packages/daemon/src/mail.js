@@ -87,6 +87,59 @@ const coerceMessageNumber = value => {
   return undefined;
 };
 
+/**
+ * Incarnate every formula retained by the pin directories of the mailbox's
+ * agent. Hosts have one pin directory. Guests have a guest-visible directory
+ * and a host-only directory.
+ *
+ * @param {object} args
+ * @param {FormulaIdentifier} args.selfId
+ * @param {DaemonCore['getFormulaForId']} args.getFormulaForId
+ * @param {Provide} args.provide
+ */
+export const reincarnateMailboxPins = async ({
+  selfId,
+  getFormulaForId,
+  provide,
+}) => {
+  const handleFormula = await getFormulaForId(selfId);
+  if (handleFormula.type !== 'handle') {
+    throw new Error(`Mailbox self identifier is not a handle: ${q(selfId)}`);
+  }
+  const agentFormula = await getFormulaForId(handleFormula.agent);
+  /** @type {FormulaIdentifier[]} */
+  let pinDirectoryIds;
+  if (agentFormula.type === 'host') {
+    pinDirectoryIds = [agentFormula.pins];
+  } else if (agentFormula.type === 'guest') {
+    pinDirectoryIds = [agentFormula.guestPins, agentFormula.hostPins].filter(
+      id => id !== undefined,
+    );
+  } else {
+    throw new Error(
+      `Mailbox handle does not belong to an agent: ${q(handleFormula.agent)}`,
+    );
+  }
+
+  // Reincarnation is best-effort: a single retained formula that fails to
+  // incarnate (a stale pin, a worker that cannot respawn, a directory entry
+  // reaped out from under the pin) must not reject the delivery on whose crank
+  // this runs, because the message is already durably persisted by the time we
+  // reach here and the caller would otherwise observe an already-committed
+  // delivery as a failure while the live message-received notification is
+  // silently dropped. Tolerate per-pin failures with Promise.allSettled,
+  // matching the established revivePins/reviveNetworks idiom in manager.js.
+  await Promise.allSettled(
+    pinDirectoryIds.map(async pinDirectoryId => {
+      const pins = await provide(pinDirectoryId, 'directory');
+      const retainedIds = await E(pins).listIdentifiers();
+      await Promise.allSettled(
+        retainedIds.map(id => provide(/** @type {FormulaIdentifier} */ (id))),
+      );
+    }),
+  );
+};
+
 const MESSAGE_SPECIAL_NAMES = new Set([
   '@from',
   '@to',
@@ -821,6 +874,27 @@ export const makeMailboxMaker = ({
           messageNumber,
           harden([{ envelope: harden({ ...envelope, done }), done, date }]),
         );
+        // Re-provide the mailbox's retained pins on every delivery, not once
+        // per restart. This is deliberate and load-bearing: the durability
+        // guarantee this feature adds is that a pinned agent-side responder
+        // resurrects on the *next message* after its worker was canceled
+        // mid-life (see the "survives worker cancellation" integration test),
+        // not only after a whole-daemon restart. A worker can die at any point
+        // in the mailbox's lifetime with no restart to reset a once-per-process
+        // gate, so the revive must run on each delivery to catch it before the
+        // message-received notification is published to a now-dead reader.
+        // The steady-state cost is bounded: `provide` memoizes live formulas
+        // via `controllerForId`, so re-providing an already-incarnated pin is
+        // cheap; the residual per-delivery work is one `listIdentifiers` plus an
+        // O(pins) fan-out of memoized provides, acceptable for the small pin
+        // sets a mailbox accumulates. (Amortizing to once-per-restart was
+        // considered and rejected: it silently defeats mid-life worker-cancel
+        // resurrection.)
+        await reincarnateMailboxPins({
+          selfId,
+          getFormulaForId,
+          provide,
+        });
         messagesTopic.publisher.next(message);
       });
     };
