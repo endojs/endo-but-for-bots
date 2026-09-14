@@ -8885,8 +8885,9 @@ mod generator_decoder_refusals {
     }
 
     /// The generator trailer is a format-23 addition: a container stamped
-    /// older that carries one is refused before its rows are inspected,
-    /// so the writer-side stamp bump has a reader-side twin.
+    /// older that carries one is refused by name whatever its rows hold
+    /// (the rows decode first; the stamp check follows), so the
+    /// writer-side stamp bump has a reader-side twin.
     #[test]
     fn async_generator_trailer_is_tied_to_the_format_stamp() {
         use ironhorse_vm::snapshot_api::AsyncGeneratorRow;

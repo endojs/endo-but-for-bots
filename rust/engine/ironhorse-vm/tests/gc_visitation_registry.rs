@@ -124,7 +124,12 @@ fn include_sites(code: &[Token<'_>], file: &Path) -> Vec<(PathBuf, bool)> {
                     .unwrap_or_else(|| {
                         panic!("unsupported include! operand in {file:?}: {literal}")
                     });
-                out.push((dir.join(relative), frames.iter().any(|&test| test)));
+                // Canonical, so a `..` in the operand cannot dodge the
+                // listed-path comparison; a missing target fails loudly.
+                let target = dir.join(relative);
+                let target = std::fs::canonicalize(&target)
+                    .unwrap_or_else(|e| panic!("include! target {target:?} in {file:?}: {e}"));
+                out.push((target, frames.iter().any(|&test| test)));
                 i += 3;
             }
             _ => {}
@@ -365,13 +370,17 @@ fn every_source_file_is_a_declared_module_or_a_listed_test_include() {
     // in sits in a `#[cfg(test)]` module or a test-only file: a production
     // `include!` would compile it into the type graph unseen.
     let mut pulled_in: BTreeSet<PathBuf> = BTreeSet::new();
+    let listed_canonical: BTreeSet<PathBuf> = listed
+        .iter()
+        .map(|p| std::fs::canonicalize(p).expect("listed include exists"))
+        .collect();
     for file in set.production.iter().chain(&set.test_only) {
         let file_is_test_only = set.test_only.contains(file);
         let text = std::fs::read_to_string(file).expect("read module");
         let code = source_scan::code_only(&text);
         let tokens = source_scan::tokens(&code);
         for (target, in_test_module) in include_sites(&tokens, file) {
-            if !listed.contains(&target) {
+            if !listed_canonical.contains(&target) {
                 continue;
             }
             assert!(
@@ -382,7 +391,7 @@ fn every_source_file_is_a_declared_module_or_a_listed_test_include() {
             pulled_in.insert(target);
         }
     }
-    for p in &listed {
+    for p in &listed_canonical {
         assert!(
             pulled_in.contains(p),
             "TEST_ONLY_INCLUDES names a file no #[cfg(test)] `include!` pulls in: {p:?}"
@@ -1392,19 +1401,25 @@ fn transitively_rooted_claims_are_checked_at_runtime() {
 /// field it covers; a twin that merely exists is not a witness.
 #[test]
 fn behavioral_twins_must_name_their_fields() {
+    // Comments blanked, as the registry check reads them: a remark
+    // naming a field is not a witness.
+    let sources: Vec<String> = TWIN_SOURCES
+        .iter()
+        .map(|source| source_scan::code_only(source))
+        .collect();
     let body = test_body(
-        TWIN_SOURCES[0],
+        &sources[0],
         "each_activation_register_independently_refuses_quiescence",
     )
     .expect("twin exists");
     assert!(mentions(body, "this_captures"));
     assert!(mentions(body, "array_iterator_proxy_get_context"));
     assert!(!mentions(body, "restored_leases"));
-    assert!(test_body(TWIN_SOURCES[0], "no_such_test_anywhere").is_none());
+    assert!(test_body(&sources[0], "no_such_test_anywhere").is_none());
     for (name, reqs, _) in REGISTRY {
         for req in *reqs {
             if let Req::BehavioralTwin(test) = req {
-                let bodies: Vec<&str> = TWIN_SOURCES
+                let bodies: Vec<&str> = sources
                     .iter()
                     .filter_map(|source| test_body(source, test))
                     .collect();
