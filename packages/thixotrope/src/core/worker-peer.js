@@ -9,7 +9,7 @@ import { syrupCodec } from '@endo/ocapn/syrup';
 import { makePipeNetwork } from '../net/pipe-network.js';
 
 /** @import { ERef } from '@endo/eventual-send' */
-/** @import { LogPowers } from '../platform/logging.js' */
+/** @import { Logger } from '../platform/logging.js' */
 /** @import { RandomPowers } from '../platform/random.js' */
 
 const IDENTIFIER_PATTERN = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
@@ -40,7 +40,7 @@ const IDENTIFIER_PATTERN = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
  *
  * @param {object} powers
  * @param {RandomPowers} powers.random
- * @param {LogPowers} powers.logging
+ * @param {Logger} powers.logging
  * @param {object} options
  * @param {string} options.workerId
  * @param {(bytes: Uint8Array) => void} options.send outbound OCapN
@@ -102,11 +102,7 @@ export const makeWorkerPeer = async (
 
   const client = await makeOcapn({
     randomBytes: length => random.randomBytes(length),
-    logger: harden({
-      log: logging.error,
-      error: logging.error,
-      info: () => {},
-    }),
+    logger: logging.sub('worker-peer'),
     enableImportCollection,
     codec: syrupCodec,
     network: pipe.network,

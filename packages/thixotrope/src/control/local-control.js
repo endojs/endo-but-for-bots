@@ -8,6 +8,7 @@ import { makeOcapn } from '@endo/ocapn';
 import { syrupCodec } from '@endo/ocapn/syrup';
 
 import { makePipeNetwork } from '../net/pipe-network.js';
+import { silentLogger } from '../platform/logging.js';
 
 // Local admin frames have a four-byte length, capped before allocation.
 const MAX_FRAME = 8 * 1024 * 1024;
@@ -88,7 +89,7 @@ export const makeLocalControl = async (
   });
   client = await makeOcapn({
     randomBytes: length => random.randomBytes(length),
-    logger: harden({ log: () => {}, error: () => {}, info: () => {} }),
+    logger: silentLogger,
     codec: syrupCodec,
     network: pipe.network,
     locator: new Map(admin === undefined ? [] : [['admin', admin]]),

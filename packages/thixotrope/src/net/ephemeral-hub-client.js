@@ -5,6 +5,7 @@ import harden from '@endo/harden';
 import { makeOcapn } from '@endo/ocapn';
 import { encodeSwissnum, swissnumFromBytes } from '@endo/ocapn/client/util';
 
+import { silentLogger } from '../platform/logging.js';
 import { derivePipeResumption } from './pipe-network.js';
 
 /**
@@ -49,7 +50,7 @@ export const makeEphemeralHubClient = async (
   });
   const client = await makeOcapn({
     randomBytes: length => random.randomBytes(length),
-    logger: harden({ log: () => {}, error: () => {}, info: () => {} }),
+    logger: silentLogger,
     codec,
     debugLabel: sessionKey,
     network: (/** @type {any} */ nextHandlers) => {
