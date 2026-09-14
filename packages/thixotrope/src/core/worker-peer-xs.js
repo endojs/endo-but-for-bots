@@ -24,6 +24,7 @@ import '@endo/eventual-send/shim.js';
 import { decodeBase64, encodeBase64 } from '@endo/base64';
 import harden from '@endo/harden';
 
+import { makeLogPowers } from '../platform/logging.js';
 import { makeWorkerPeer } from './worker-peer.js';
 
 const send = /** @type {(json: string) => void} */ (
@@ -49,7 +50,7 @@ const randomBytes = length =>
   cryptoPower.getRandomValues(new Uint8Array(length));
 const powers = harden({
   random: harden({ randomBytes }),
-  logging: harden({ log: trace, error: trace }),
+  logging: makeLogPowers({ log: trace, info: trace, error: trace }),
 });
 
 /** @type {{ deliver: (bytes: Uint8Array) => void } | undefined} */
