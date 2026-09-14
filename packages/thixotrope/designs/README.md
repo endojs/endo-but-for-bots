@@ -4,6 +4,8 @@ The [main design](../../../designs/thixotrope.md) describes the architecture and
 This directory holds potential designs and experiments, not additional implemented guarantees.
 [Vat replacement and SQL heap upgrades](vat-replacement.md) explore upgrade fallback mechanisms and
 possible table designs in more detail.
+[What a host service has to write](host-service-template.md) records what registering a host
+resource costs today and asks whether the repeated parts are worth factoring.
 
 This document records the current hypotheses, requirements, and open questions.
 It is not a claim that the implementation satisfies them.
