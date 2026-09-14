@@ -379,7 +379,8 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
             "976a0a8178da3065d60085d157f78f62ec1480dd82181f6e1c11f9a0c42e3d52"
         } else {
             // F189 reserved IDs, with the deterministic provider SIGN.
-            "0387cd7bceca3adea6d7279f65bd6bba334cd7a70338aa15fe9f806f99918207"
+            // Re-pinned for format version 23 alongside the platform pin.
+            "e3f126ae51a4e38302f94893ddba1c7eed9590d825ab888a8705d8c36cac8459"
         },
         "canonical final blob hash"
     );
@@ -604,7 +605,9 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
             // async generator).
             "20b09ecd60e476cecef2906d0be280e21f7e78b16cc4f14ce90318d276403a6e"
         } else {
-            "37aa0508f6d1371ee5c832e7b720125105460341b3cf4cebd3962b8a8c2d0296"
+            // Re-pinned for format version 23 / store schema v34 alongside
+            // the platform pin.
+            "5c7db9d74d5f358e6e516be644df185dadac1205e92703b26dffb6b56bf69ef1"
         },
         "epoch-3 seal chain"
     );
