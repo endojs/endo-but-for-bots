@@ -27,9 +27,11 @@
  */
 /** @import { NodePowers } from '../platform/node/powers.js' */
 /** @import { FilePowers } from '../platform/files.js' */
+/** @import { PromiseKit } from '@endo/promise-kit' */
 import { E, Far } from '@endo/far';
 import harden from '@endo/harden';
 import { syrupCodec } from '@endo/ocapn/syrup';
+import { makePromiseKit } from '@endo/promise-kit';
 
 import { makeApplicationRegistry } from './application-registry.js';
 import { makeClockService } from '../alarms/clock-service.js';
@@ -164,10 +166,12 @@ export const serveThixotrope = async (
   let controlListener;
   let listening = false;
   let requested = false;
-  let requestStop;
-  const stopped = new Promise(resolveStop => {
-    requestStop = resolveStop;
-  });
+  // Settles when this supervisor has been asked to stop, by `stop`, a signal,
+  // or a fatal condition; `serveThixotrope` hands the promise to its caller.
+  /** @type {PromiseKit<void>} */
+  const stopKit = makePromiseKit();
+  const { promise: stopped } = stopKit;
+  const requestStop = () => stopKit.resolve();
   let daemon;
   /** @type {ReturnType<typeof makeHttpServices> | undefined} */
   let httpServices;
