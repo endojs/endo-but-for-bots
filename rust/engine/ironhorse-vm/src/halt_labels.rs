@@ -306,6 +306,7 @@ pub const ENGINE_INVARIANT_LABELS: &[&str] = &[
     "module:transfer-record",
     "module:transfer-shape",
     "module:transfer-stack",
+    "native-try:handlers-left-behind",
     "native-try:resume-escaped-fence",
     "ordinary-ownKeys:unknown-key",
     "promise:resolving-fn-unexpected",

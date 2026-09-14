@@ -732,7 +732,9 @@ impl Interp {
                     Err(other)
                 }
             };
-            debug_assert!(machine.jumps.is_empty(), "async body left handlers behind");
+            // Every arm above truncated the chain to `jumps_base` (zero behind
+            // the fence); the fence itself refuses a completed or thrown step
+            // that left a handler behind, in every build profile.
             step_result
         })
     }
@@ -966,7 +968,9 @@ impl Interp {
                     Err(other)
                 }
             };
-            debug_assert!(machine.jumps.is_empty(), "async body left handlers behind");
+            // Every arm above truncated the chain to `jumps_base` (zero behind
+            // the fence); the fence itself refuses a completed or thrown step
+            // that left a handler behind, in every build profile.
             step_result
         })
     }
