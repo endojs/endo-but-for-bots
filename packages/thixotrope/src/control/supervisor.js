@@ -33,6 +33,8 @@ import harden from '@endo/harden';
 import { syrupCodec } from '@endo/ocapn/syrup';
 import { makePromiseKit } from '@endo/promise-kit';
 
+import { makeInFlight } from '../in-flight.js';
+
 import { makeApplicationRegistry } from './application-registry.js';
 import { makeClockService } from '../alarms/clock-service.js';
 import { makeThixotropeDaemon } from '../core/daemon.js';
@@ -158,8 +160,7 @@ export const serveThixotrope = async (
     },
   });
   const controlConnections = new Set();
-  /** @type {Set<Promise<void>>} */
-  const pendingDisconnects = new Set();
+  const pendingDisconnects = makeInFlight();
   /** @type {Map<SocketConnection, () => Promise<void>>} */
   const disconnectViews = new Map();
   /** @type {import('../platform/sockets.js').SocketListener | undefined} */
@@ -237,7 +238,7 @@ export const serveThixotrope = async (
     let cleanupTimer;
     try {
       await Promise.race([
-        Promise.all([viewCleanup, ...pendingDisconnects]),
+        Promise.all([viewCleanup, pendingDisconnects.drain()]),
         new Promise(resolveCleanup => {
           cleanupTimer = timers.setTimer(() => resolveCleanup(undefined), 1000);
         }),
@@ -575,8 +576,7 @@ export const serveThixotrope = async (
             // supervisor.
             if (!requested) log.error('inventory disconnect:', error.message);
           });
-          pendingDisconnects.add(cleanup);
-          void cleanup.finally(() => pendingDisconnects.delete(cleanup));
+          pendingDisconnects.track(cleanup);
         });
         const admin = Far('ThixotropeLocalAdmin', {
           ...adminMethods,
