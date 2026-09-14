@@ -1194,6 +1194,75 @@ test.serial(
 );
 
 testNeedsNodeWorker.serial(
+  'native sandbox service mints over slot-free null powers and refuses stale revival after restart',
+  async t => {
+    t.timeout(60_000);
+    const { cancelled, config } = await prepareConfig(t);
+    const specifier = new URL(
+      '../../sandbox/src/native-agent.js',
+      import.meta.url,
+    ).href;
+    const runtimeDir = path.join(config.statePath, 'native-runtime');
+    await fsp.mkdir(runtimeDir, { mode: 0o700 });
+    const env = {
+      ENDO_SANDBOX_RUNTIME_DIR: runtimeDir,
+      ENDO_SANDBOX_OWNER_ID: 'native-null-powers-acceptance',
+      ENDO_SANDBOX_GENERATED_MAX_BYTES: '4096',
+      ENDO_SANDBOX_GENERATED_MAX_ENTRIES: '16',
+    };
+    let serviceId;
+    let powersId;
+    {
+      const { host } = await makeHost(config, cancelled);
+      // The service's powers is a stored literal null: a marshal formula with
+      // no capability slots, which setup names only for the mint.
+      await E(host).storeValue(null, 'null-powers');
+      powersId = await E(host).identify('null-powers');
+      await E(host).makeUnconfined('@node', specifier, {
+        powersName: 'null-powers',
+        resultName: 'native-sandbox',
+        env,
+      });
+      serviceId = await E(host).identify('native-sandbox');
+      t.like(readFormulaFromDb(config.statePath, serviceId), {
+        type: 'make-unconfined',
+        powers: powersId,
+      });
+      t.like(readFormulaFromDb(config.statePath, powersId), {
+        type: 'marshal',
+        slots: [],
+      });
+      await E(host).remove('null-powers');
+      const service = await E(host).lookup('native-sandbox');
+      // Scopes are inert: no probe or Podman command is issued to acquire one.
+      const scope = await E(service).provideScope('a');
+      t.is(await E(service).lookupScope('a'), scope);
+      await E(scope).close();
+      t.is(await E(service).lookupScope('a'), undefined);
+    }
+    await restart(config);
+    {
+      const { host } = await makeHost(config, cancelled);
+      t.is(await E(host).identify('native-sandbox'), serviceId);
+      t.true(formulaExistsInDb(config.statePath, powersId));
+      // The earlier incarnation's exclusive ownership marker survives an
+      // `endo restart`, whose stop escalates to killing workers rather than
+      // awaiting the runtime's release. The owned service opens its runtime
+      // at construction, so revival itself refuses stale takeover, by design
+      // and without a sweep: recovery is operator reconciliation, and the
+      // formula and its powers stay intact meanwhile.
+      await t.throwsAsync(E(host).lookup('native-sandbox'), {
+        message: /EEXIST.*\.owner/,
+      });
+      const markers = (await fsp.readdir(runtimeDir)).filter(name =>
+        name.endsWith('.owner'),
+      );
+      t.deepEqual(markers, ['native-null-powers-acceptance.owner']);
+    }
+  },
+);
+
+testNeedsNodeWorker.serial(
   'native session stop closes a worker with a pending inert constructor',
   async t => {
     t.timeout(30_000);

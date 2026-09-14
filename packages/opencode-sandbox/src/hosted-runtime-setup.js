@@ -1,17 +1,20 @@
 // @ts-check
 
-import { Fail } from '@endo/errors';
+import { Fail, q } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import { assertPrivateDirectory } from '@endo/sandbox/private-directory.js';
 import { readRuntimeConfig } from '@endo/sandbox/runtime-config.js';
+import { execFile as execFileCallback } from 'node:child_process';
 import * as fs from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
+import { promisify } from 'node:util';
 
 import {
   assertCurrentSpecifier,
   toCurrentSpecifier,
 } from './current-specifier.js';
+import { readOpencodeBrokerConfig } from './opencode-broker-service-agent.js';
 
 /** @import { EndoHost } from '@endo/daemon' */
 /** @typedef {Parameters<EndoHost['getFormulaEnvironment']>[0]} FormulaIdentifier */
@@ -31,6 +34,33 @@ export const stateProviderSpecifier = assertCurrentSpecifier(
   'state provider',
 );
 harden(stateProviderSpecifier);
+
+/** Host-only native sandbox service; constructed with slot-free null powers. */
+export const nativeSandboxSpecifier = assertCurrentSpecifier(
+  toCurrentSpecifier(
+    new URL('../../sandbox/src/native-agent.js', import.meta.url).href,
+  ),
+  'native sandbox',
+);
+harden(nativeSandboxSpecifier);
+
+/** Owned provider broker; its sole powers dependency is the SecretBlob. */
+export const brokerServiceSpecifier = assertCurrentSpecifier(
+  toCurrentSpecifier(
+    new URL('./opencode-broker-service-agent.js', import.meta.url).href,
+  ),
+  'broker service',
+);
+harden(brokerServiceSpecifier);
+
+/** Durable storage owner; its sole powers dependency is the state provider. */
+export const sessionStorageSpecifier = assertCurrentSpecifier(
+  toCurrentSpecifier(
+    new URL('./opencode-session-storage-module.js', import.meta.url).href,
+  ),
+  'session storage',
+);
+harden(sessionStorageSpecifier);
 
 /**
  * Read one immutable formula by the ID captured from its current binding.
@@ -78,6 +108,48 @@ export const readStateProvider = async host => {
   return harden({ identifier, stateDir });
 };
 harden(readStateProvider);
+
+/** @param {EndoHost} host */
+export const readNativeSandbox = async host => {
+  const { identifier, env } = await readProvisionedEnvironment(
+    host,
+    'native-sandbox',
+    nativeSandboxSpecifier,
+  );
+  return harden({ identifier, config: readRuntimeConfig(env) });
+};
+harden(readNativeSandbox);
+
+/** @param {EndoHost} host */
+export const readBrokerService = async host => {
+  const { identifier, env } = await readProvisionedEnvironment(
+    host,
+    'broker-service',
+    brokerServiceSpecifier,
+  );
+  return harden({ identifier, config: readOpencodeBrokerConfig(env) });
+};
+harden(readBrokerService);
+
+/** @param {EndoHost} host */
+export const readSessionStorage = async host => {
+  const { identifier, env } = await readProvisionedEnvironment(
+    host,
+    'session-storage',
+    sessionStorageSpecifier,
+  );
+  const {
+    OPENCODE_WORKSPACE_BASE_DIR: workspaceDir,
+    OPENCODE_MCP_DIR: mcpDir,
+  } = env;
+  (typeof workspaceDir === 'string' &&
+    workspaceDir.length > 0 &&
+    typeof mcpDir === 'string' &&
+    mcpDir.length > 0) ||
+    Fail`Session storage must have persisted workspace and MCP roots`;
+  return harden({ identifier, roots: harden({ workspaceDir, mcpDir }) });
+};
+harden(readSessionStorage);
 
 /** @param {Record<string, string | undefined>} env */
 export const getHostedStorageRoots = env => {
@@ -163,3 +235,74 @@ export const prepareRuntimeEnv = async (env, ownerId, roots) => {
   });
 };
 harden(prepareRuntimeEnv);
+
+/**
+ * The native service is a second runtime beside the capability-based factory.
+ * Each runtime claims an exclusive ownership marker in its directory and
+ * reconciles Podman orphans under its own owner label, so the native runtime
+ * gets a private child of the validated runtime directory and a derived label.
+ * The budgets are the factory's; they are aggregate per runtime, not shared.
+ * @param {ReturnType<typeof readRuntimeConfig>} config The factory's persisted policy.
+ * @param {typeof fs} [fsModule]
+ */
+export const prepareNativeRuntimeEnv = async (config, fsModule = fs) => {
+  const directory = path.join(config.directory, 'native');
+  const ownerId = `${config.ownerId}-native`;
+  const existing = await fsModule.lstat(directory).catch(error => {
+    if (/** @type {NodeJS.ErrnoException} */ (error).code !== 'ENOENT')
+      throw error;
+    return undefined;
+  });
+  if (existing === undefined) {
+    // The parent was validated as private when the factory was minted.
+    await fsModule.mkdir(directory, { mode: 0o700 });
+  }
+  !existing?.isSymbolicLink() ||
+    Fail`Native runtime directory must not be a symlink: ${q(directory)}`;
+  const canonical = await assertPrivateDirectory(directory, fsModule);
+  const env = harden({
+    ENDO_SANDBOX_RUNTIME_DIR: canonical,
+    ENDO_SANDBOX_OWNER_ID: ownerId,
+    ENDO_SANDBOX_GENERATED_MAX_BYTES: String(config.maxBytes),
+    ENDO_SANDBOX_GENERATED_MAX_ENTRIES: String(config.maxEntries),
+  });
+  // The runtime's own reader validates the derived owner label and budgets.
+  readRuntimeConfig(env);
+  return env;
+};
+harden(prepareNativeRuntimeEnv);
+
+const execFile = promisify(execFileCallback);
+
+/**
+ * Resolve a local OCI image reference to its immutable digest form. The
+ * broker binds each grant attestation to the exact slice image, so setup pins
+ * what Podman actually resolved rather than trusting a mutable tag.
+ *
+ * @param {string} rootfs Config rootfs (`oci:<image>` or already pinned).
+ * @param {(file: string, args: string[]) => Promise<{ stdout: string }>} [exec]
+ * @returns {Promise<{ imageRef: string, imageDigest: string }>}
+ */
+export const resolvePinnedImageRef = async (rootfs, exec = execFile) => {
+  const image = rootfs.startsWith('oci:') ? rootfs.slice(4) : rootfs;
+  // A leading dash would be parsed as a podman option rather than an image.
+  !image.startsWith('-') || Fail`Invalid OpenCode sandbox image ${q(image)}`;
+  if (image.includes('@sha256:')) {
+    const imageDigest = image.slice(image.indexOf('@') + 1);
+    /^sha256:[a-f0-9]{64}$/.test(imageDigest) ||
+      Fail`OpenCode sandbox image digest is invalid, got ${q(imageDigest)}`;
+    return harden({ imageRef: image, imageDigest });
+  }
+  const { stdout } = await exec('podman', [
+    'image',
+    'inspect',
+    '--format',
+    '{{.Digest}}',
+    image,
+  ]);
+  const imageDigest = stdout.trim();
+  /^sha256:[a-f0-9]{64}$/.test(imageDigest) ||
+    Fail`Cannot resolve a digest for OpenCode sandbox image ${q(image)}; build it before setup-hosted`;
+  return harden({ imageRef: `${image}@${imageDigest}`, imageDigest });
+};
+harden(resolvePinnedImageRef);

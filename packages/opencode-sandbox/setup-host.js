@@ -40,7 +40,10 @@ import {
 import {
   assertRuntimePlacement,
   getHostedStorageRoots,
+  nativeSandboxSpecifier,
+  prepareNativeRuntimeEnv,
   prepareRuntimeEnv,
+  readNativeSandbox,
   readSandboxRuntime,
   readStateProvider,
   sandboxSpecifier,
@@ -145,6 +148,39 @@ export const main = async hostAgent => {
     console.log(`Minted ${SANDBOX_DIR}/sandbox-factory`);
   }
 
+  // 1b. Native sandbox service — the host-only runtime that daemon-owned
+  //     session controllers acquire scopes from. It is constructed with a
+  //     slot-free null value as powers: it imports no host or scratch
+  //     authority, and `@none` would be a denied-method guest capability,
+  //     not null. The stored value is a marshal formula the minted service
+  //     retains as its exact powers dependency; the temporary name is not,
+  //     and its dot keeps it outside the managed-credential name charset.
+  if (await E(hostAgent).has(SANDBOX_DIR, 'native-sandbox')) {
+    const native = await readNativeSandbox(hostAgent);
+    await assertRuntimePlacement(native.config.directory, roots);
+    console.log(
+      'Retaining owned native sandbox service with its persisted configuration.',
+    );
+  } else {
+    const runtimeConfig = (await readSandboxRuntime(hostAgent)).config;
+    const nativeEnv = await prepareNativeRuntimeEnv(runtimeConfig);
+    const powersName = 'opencode.null-powers';
+    if (await E(hostAgent).has(powersName)) {
+      await E(hostAgent).remove(powersName);
+    }
+    await E(hostAgent).storeValue(null, powersName);
+    try {
+      await E(hostAgent).makeUnconfined('@main', nativeSandboxSpecifier, {
+        powersName,
+        resultName: [SANDBOX_DIR, 'native-sandbox'],
+        env: nativeEnv,
+      });
+    } finally {
+      await E(hostAgent).remove(powersName);
+    }
+    console.log(`Minted ${SANDBOX_DIR}/native-sandbox`);
+  }
+
   // 2. 9P mounter — unconfined; ambient Node authority (no Endo powers).
   if (!(await E(hostAgent).has(SANDBOX_DIR, 'fs-mounter'))) {
     /** @type {Record<string, string>} */
@@ -200,7 +236,7 @@ export const main = async hostAgent => {
       throw Fail`ENDO_OPENCODE_STATE_DIR must be a directory: ${stateDir}`;
     }
     if (info) {
-      (await stat(stateDir)).uid === process.getuid() ||
+      (await stat(stateDir)).uid === process.getuid?.() ||
         Fail`ENDO_OPENCODE_STATE_DIR must be owned by the daemon user: ${stateDir}`;
       // Owned by us: normalize permissions rather than trusting the mode the
       // operator (or a stale deploy) left behind.
