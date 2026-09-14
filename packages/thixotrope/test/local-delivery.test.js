@@ -6,7 +6,7 @@ import { makeDurableWorkerTransport } from '../src/core/durable-worker-transport
 import { makeOcapnHub } from '../src/net/hub.js';
 import { makeMemoryStore } from '../src/store/store-memory.js';
 
-import { makeNodePowers } from '../src/platform/node-powers.js';
+import { makeNodePowers } from '../src/platform/node/powers.js';
 
 const nodePowers = makeNodePowers();
 

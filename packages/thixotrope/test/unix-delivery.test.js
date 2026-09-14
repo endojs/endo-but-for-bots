@@ -11,7 +11,7 @@ import { makePeerJournalReplayEngine } from '../src/core/peer-replay-engine.js';
 import { makeMemoryStore } from '../src/store/store-memory.js';
 import { makeUnixNetLayer } from '../src/net/unix-netlayer.js';
 
-import { makeNodePowers } from '../src/platform/node-powers.js';
+import { makeNodePowers } from '../src/platform/node/powers.js';
 
 const nodePowers = makeNodePowers();
 

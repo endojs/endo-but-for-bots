@@ -21,7 +21,7 @@ import { makePipeNetwork } from '../src/net/pipe-network.js';
 import { makeWorkerPeer } from '../src/core/worker-peer.js';
 import { makeTestOcapn } from './_util.js';
 
-import { makeNodePowers } from '../src/platform/node-powers.js';
+import { makeNodePowers } from '../src/platform/node/powers.js';
 
 const nodePowers = makeNodePowers();
 

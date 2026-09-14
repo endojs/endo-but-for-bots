@@ -3,15 +3,15 @@ import { E, Far } from '@endo/far';
 import test from '@endo/ses-ava/test.js';
 import { setImmediate } from 'node:timers/promises';
 
-import { makeObservableInventory } from '../src/inventory/observable-inventory.js';
-import { renderInventory } from '../src/inventory/inventory-view.js';
+import { makeObservableMap } from '../src/observable-map.js';
+import { renderInventory } from '../src/tui/inventory-view.js';
 
 const flush = async () => {
   await setImmediate();
 };
 
 test('inventory Map methods notify real changes and retain capability identity', async t => {
-  const inventory = makeObservableInventory();
+  const inventory = makeObservableMap();
   const updates = [];
   const observer = Far('Observer', {
     changed: snapshot => {
@@ -47,7 +47,7 @@ test('inventory Map methods notify real changes and retain capability identity',
 });
 
 test('slow observers coalesce snapshots and cancellation drops queued updates', async t => {
-  const inventory = makeObservableInventory();
+  const inventory = makeObservableMap();
   /** @type {(() => void) | undefined} */
   let release;
   const pending = new Promise(resolve => {
@@ -80,7 +80,7 @@ test('slow observers coalesce snapshots and cancellation drops queued updates', 
 });
 
 test('failed observers are removed and epoch reset preserves durable subscriptions', async t => {
-  const inventory = makeObservableInventory();
+  const inventory = makeObservableMap();
   inventory.subscribe(
     Far('Broken', {
       changed: () => {

@@ -19,7 +19,7 @@ import {
   makeProcessTestEngine,
 } from './_remote-process-fixture.js';
 
-import { makeNodePowers } from '../src/platform/node-powers.js';
+import { makeNodePowers } from '../src/platform/node/powers.js';
 
 const nodePowers = makeNodePowers();
 

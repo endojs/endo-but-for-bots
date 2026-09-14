@@ -6,12 +6,12 @@ import { setImmediate } from 'node:timers/promises';
 import { makeMailbox as makeProtocolMailbox } from '../src/mail/mailbox.js';
 import { makeMailContact } from '../src/mail/mail-contact.js';
 import { makeMailAddressBook } from '../src/mail/mail-address-book.js';
-import { makeObservableInventory } from '../src/inventory/observable-inventory.js';
+import { makeObservableMap } from '../src/observable-map.js';
 
 const makeMailbox = () =>
   makeMailAddressBook(
     makeProtocolMailbox(),
-    makeObservableInventory(),
+    makeObservableMap(),
     makeMailContact,
   );
 
@@ -372,7 +372,7 @@ test('mailbox sends directly to an identity without any name registry', async t 
 test('renaming a workspace contact preserves identity and pending offers', async t => {
   t.timeout(10_000);
   const mailbox = makeProtocolMailbox();
-  const contacts = makeObservableInventory();
+  const contacts = makeObservableMap();
   const book = makeMailAddressBook(mailbox, contacts, makeMailContact);
   const invitation = await E(book).invite('old name');
   const receiver = await E(invitation).accept(
@@ -423,7 +423,7 @@ test('two mailboxes sharing a correspondent do not reuse delivery sequences', as
 test('invitation ownership survives reassignment of its pet name', async t => {
   t.timeout(10_000);
   const mailbox = makeProtocolMailbox();
-  const contacts = makeObservableInventory();
+  const contacts = makeObservableMap();
   const book = makeMailAddressBook(mailbox, contacts, makeMailContact);
   // Invoke the local factory facet synchronously to reassign the name while
   // it is awaiting the invitation, before the host could publish its result.

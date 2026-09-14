@@ -3,11 +3,21 @@ import { E, Far } from '@endo/far';
 import harden from '@endo/harden';
 
 /**
- * An inventory with ordinary heap reachability and observable mutations.
- * This self-contained factory also runs in a guest compartment with E/Far/harden.
- * Notifications contain display summaries; get()/entries() retain actual values.
+ * A string-keyed Map whose mutations are observable: `subscribe` delivers a
+ * display snapshot of the whole map on every revision, at most one
+ * notification outstanding per listener.
+ *
+ * Entries are held by ordinary heap reference, so membership here is not a
+ * separate lifetime regime — the workspace inventory and the conventional
+ * `contacts` address book are both just instances of this.
+ *
+ * Notifications carry descriptions, never the values themselves, so an
+ * observer can render the map without receiving the capabilities in it.
+ *
+ * This factory is self-contained: the supervisor also ships its source into
+ * a guest compartment, where only E, Far, and harden are in scope.
  */
-export const makeObservableInventory = () => {
+export const makeObservableMap = () => {
   /** @type {Map<string, any>} */
   const values = new Map();
   /** @type {Set<any>} */
@@ -64,11 +74,11 @@ export const makeObservableInventory = () => {
   };
   /** @param {string} key */
   const assertKey = key => {
-    if (typeof key !== 'string') throw Error('Inventory keys must be strings');
+    if (typeof key !== 'string') throw Error('Keys must be strings');
   };
-  const inventory = Far('ObservableInventory', {
+  const observableMap = Far('ObservableMap', {
     help: () =>
-      'Map-like inventory: get, has, set, delete, clear, keys, entries, getSize; subscribe(listener, ephemeral?) sends display snapshots to listener.changed. Subscription.unsubscribe releases it.',
+      'Observable Map: get, has, set, delete, clear, keys, entries, getSize; subscribe(listener, ephemeral?) sends display snapshots to listener.changed. Subscription.unsubscribe releases it.',
     /** @param {string} key */
     get: key => {
       assertKey(key);
@@ -89,7 +99,7 @@ export const makeObservableInventory = () => {
         values.set(key, value);
         changed();
       }
-      return inventory;
+      return observableMap;
     },
     /** @param {string} key */
     delete: key => {
@@ -126,7 +136,9 @@ export const makeObservableInventory = () => {
       };
       subscriptions.add(state);
       pump(state);
-      return Far('InventorySubscription', { unsubscribe: () => cancel(state) });
+      return Far('ObservableMapSubscription', {
+        unsubscribe: () => cancel(state),
+      });
     },
     // Supervisor restart is a lifetime boundary for all old UI connections.
     disconnectEphemeral: () => {
@@ -142,13 +154,10 @@ export const makeObservableInventory = () => {
       return harden({ durable, ephemeral });
     },
   });
-  return inventory;
+  return observableMap;
 };
-harden(makeObservableInventory);
+harden(makeObservableMap);
 
 /**
- * The observable, Map-like inventory a guest exposes to its user.
- * Consumers that only need the Map surface still take the whole
- * inventory so that reads and writes remain observable.
- * @typedef {ReturnType<typeof makeObservableInventory>} ObservableInventory
+ * @typedef {ReturnType<typeof makeObservableMap>} ObservableMap
  */
