@@ -183,6 +183,14 @@ const baseEnv = async t => {
       cpuPeriodMicros: 100_000,
       maxConcurrentOperations: 1,
     }),
+    // The mounter's own operator variables must not leak in from a developer
+    // shell that runs the rootless mounter locally.
+    NINEP_SUDO: undefined,
+    NINEP_MOUNT_PROGRAM: undefined,
+    NINEP_UMOUNT_PROGRAM: undefined,
+    ENDO_NINEP_SUDO: undefined,
+    ENDO_NINEP_MOUNT_PROGRAM: undefined,
+    ENDO_NINEP_UMOUNT_PROGRAM: undefined,
   });
   return base;
 };
@@ -550,6 +558,68 @@ test.serial(
     t.like(JSON.parse(broker?.options.env.OPENCODE_BROKER_CONFIG ?? ''), {
       ownerId: expected,
     });
+  },
+);
+
+test.serial(
+  'rootless mount settings are recorded for the backend and refused before any mint',
+  async t => {
+    await baseEnv(t);
+    await withEnv(t, {
+      ENDO_NINEP_SUDO: '1',
+      ENDO_NINEP_MOUNT_PROGRAM: 'sudo -n mount',
+    });
+    const fake = preflightHost();
+    await main(fake.host);
+    const backend = fake.mints.find(mint =>
+      /opencode-backend-module\.js$/.test(mint.specifier),
+    );
+    t.is(typeof backend?.options.env.OPENCODE_MOUNTER_ENV, 'string');
+    t.deepEqual(JSON.parse(backend?.options.env.OPENCODE_MOUNTER_ENV ?? '{}'), {
+      NINEP_SUDO: '1',
+      NINEP_MOUNT_PROGRAM: 'sudo -n mount',
+    });
+    // An empty ENDO_ spelling falls through to the mounter's own name.
+    await withEnv(t, { ENDO_NINEP_SUDO: '', NINEP_SUDO: '1' });
+    const fallthrough = preflightHost();
+    await main(fallthrough.host);
+    const viaPlain = fallthrough.mints.find(mint =>
+      /opencode-backend-module\.js$/.test(mint.specifier),
+    );
+    t.deepEqual(
+      JSON.parse(viaPlain?.options.env.OPENCODE_MOUNTER_ENV ?? '{}'),
+      {
+        NINEP_SUDO: '1',
+        NINEP_MOUNT_PROGRAM: 'sudo -n mount',
+      },
+    );
+    await withEnv(t, { ENDO_NINEP_SUDO: '1', NINEP_SUDO: undefined });
+    // The mounter's unprefixed spelling is accepted too, and refused as the
+    // mounter would refuse it, before the credential mint.
+    await withEnv(t, {
+      ENDO_NINEP_MOUNT_PROGRAM: undefined,
+      NINEP_UMOUNT_PROGRAM: 'rm -rf',
+    });
+    const bad = preflightHost();
+    await t.throwsAsync(main(bad.host), {
+      message: /"NINEP_UMOUNT_PROGRAM" must invoke "umount"/,
+    });
+    t.deepEqual(bad.mints, [], 'refused before any mint');
+    // A present NINEP_SUDO other than `1` is refused rather than silently off.
+    await withEnv(t, { NINEP_UMOUNT_PROGRAM: undefined, ENDO_NINEP_SUDO: '0' });
+    const off = preflightHost();
+    await t.throwsAsync(main(off.host), {
+      message: /"NINEP_SUDO" must be "1" when present/,
+    });
+    t.deepEqual(off.mints, [], 'refused before any mint');
+    // Empty values are unset: nothing is recorded for the backend.
+    await withEnv(t, { ENDO_NINEP_SUDO: '', ENDO_NINEP_MOUNT_PROGRAM: '' });
+    const unset = preflightHost();
+    await main(unset.host);
+    const plain = unset.mints.find(mint =>
+      /opencode-backend-module\.js$/.test(mint.specifier),
+    );
+    t.false(Object.hasOwn(plain?.options.env ?? {}, 'OPENCODE_MOUNTER_ENV'));
   },
 );
 

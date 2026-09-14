@@ -200,10 +200,14 @@ export const makeOpencodeNativeController = ({
       assertOpen();
       // Exactly one of the two is recorded; the parser enforces it.
       const filesystem = makeFilesystem(
-        approved.workspaceHostPath ?? /** @type {string} */ (approved.workspaceDir),
+        approved.workspaceHostPath ??
+          /** @type {string} */ (approved.workspaceDir),
       );
+      // The recorded mount settings are the operator's; the socket directory
+      // is this session's and is never recorded as a setting.
       mounter = makeMounter({
         ...env,
+        ...approved.mounterEnv,
         XDG_RUNTIME_DIR: approved.mounterSocketDir,
         NINEP_SOCKET_DIR: approved.mounterSocketDir,
       });

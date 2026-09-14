@@ -1,5 +1,6 @@
 // @ts-check
 
+import { readMountPrograms } from '@endo/9p-server/mount-caplet.js';
 import { assertCopyData } from '@endo/daemon/copy-data.js';
 import { Fail, q } from '@endo/errors';
 import { assertNativePodmanProfile } from '@endo/sandbox/native-podman-profile.js';
@@ -24,6 +25,15 @@ import { isAbsolute, normalize } from 'node:path';
  * owner and read again by the native controller at activation and by the
  * storage owner at removal. Every path is host storage this plan owns; none
  * may contain another, and the controller's guest never sees these strings.
+ * @typedef {object} MounterEnv
+ * The operator's rootless mount settings, recorded verbatim as the subset of
+ * the 9P mount caplet's environment a session's own mounter receives.
+ * @property {'1'} [NINEP_SUDO]
+ * @property {string} [NINEP_MOUNT_PROGRAM]
+ * @property {string} [NINEP_UMOUNT_PROGRAM]
+ */
+
+/**
  * @typedef {object} SessionPlan
  * @property {string} sessionId
  * @property {string} sandboxSessionId
@@ -41,6 +51,7 @@ import { isAbsolute, normalize } from 'node:path';
  * @property {string} mcpDir Private, recorded native socket/relay directory.
  * @property {string} mounterSocketDir Private 9P socket parent, never guest-visible.
  * @property {ReturnType<typeof assertNativePodmanProfile>} nativeProfile
+ * @property {MounterEnv} [mounterEnv] Absent means the host's `mount`/`umount`.
  * @property {string} [model]
  * @property {string} [systemPrompt]
  * @property {string} [opencodeSessionId]
@@ -125,6 +136,42 @@ const readRecordedPath = (name, value) => {
   return value;
 };
 
+const MOUNTER_ENV_KEYS = harden([
+  'NINEP_SUDO',
+  'NINEP_MOUNT_PROGRAM',
+  'NINEP_UMOUNT_PROGRAM',
+]);
+
+/**
+ * Validate recorded mounter settings exactly as the mount caplet would at
+ * construction, so setup and the plan writer refuse what a session start
+ * would otherwise fail on. Only the three named keys are admitted: the
+ * per-session socket directory is the controller's, never recorded here.
+ * @param {unknown} value
+ * @returns {MounterEnv}
+ */
+export const readMounterEnv = value => {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw Fail`Mounter settings must be a record`;
+  }
+  const settings = /** @type {Record<string, unknown>} */ (value);
+  for (const [name, setting] of Object.entries(settings)) {
+    MOUNTER_ENV_KEYS.includes(name) || Fail`Unknown mounter setting ${q(name)}`;
+    (typeof setting === 'string' &&
+      setting !== '' &&
+      !setting.includes('\0')) ||
+      Fail`Mounter setting ${q(name)} must be non-empty text`;
+  }
+  settings.NINEP_SUDO === undefined ||
+    settings.NINEP_SUDO === '1' ||
+    Fail`Mounter setting "NINEP_SUDO" must be "1" when present`;
+  /** @type {MounterEnv} */
+  const mounterEnv = harden({ ...settings });
+  readMountPrograms(mounterEnv);
+  return mounterEnv;
+};
+harden(readMounterEnv);
+
 /**
  * Parse recorded plan text. The result is the only plan shape the controller
  * activates and the storage owner removes; both refuse anything else rather
@@ -172,7 +219,17 @@ export const readSessionPlan = text => {
       Fail`Session plan must record an owned or an operator-supplied workspace`;
   }
   const nativeProfile = readNativeProfile(recorded.nativeProfile);
-  return harden(/** @type {SessionPlan} */ ({ ...recorded, nativeProfile }));
+  const mounterEnv =
+    recorded.mounterEnv === undefined
+      ? undefined
+      : readMounterEnv(recorded.mounterEnv);
+  return harden(
+    /** @type {SessionPlan} */ ({
+      ...recorded,
+      nativeProfile,
+      ...(mounterEnv === undefined ? {} : { mounterEnv }),
+    }),
+  );
 };
 harden(readSessionPlan);
 

@@ -5,6 +5,7 @@ import path from 'node:path';
 
 import {
   makeSandboxSessionId,
+  readMounterEnv,
   readNativeProfile,
   readSessionPlan,
 } from '../src/opencode-session-plan.js';
@@ -153,7 +154,8 @@ test('a foreign workspace records no owned directory, and the id derivation is s
   t.false('workspaceDir' in parsed);
   t.is(parsed.workspaceHostPath, '/srv/worktrees/a');
   t.throws(
-    () => readSessionPlan(JSON.stringify({ ...plan, workspaceHostPath: '/srv/x' })),
+    () =>
+      readSessionPlan(JSON.stringify({ ...plan, workspaceHostPath: '/srv/x' })),
     { message: /cannot record both/ },
   );
   // An operator-supplied workspace joins the disjointness rule: exported to
@@ -161,7 +163,10 @@ test('a foreign workspace records no owned directory, and the id derivation is s
   t.throws(
     () =>
       readSessionPlan(
-        JSON.stringify({ ...neither, workspaceHostPath: path.dirname(plan.mcpDir) }),
+        JSON.stringify({
+          ...neither,
+          workspaceHostPath: path.dirname(plan.mcpDir),
+        }),
       ),
     { message: /"mcpDir" and "workspaceHostPath" must be disjoint/ },
   );
@@ -169,4 +174,32 @@ test('a foreign workspace records no owned directory, and the id derivation is s
   t.regex(makeSandboxSessionId('Session A!'), /^session-a-[0-9a-f]{12}$/);
   t.regex(makeSandboxSessionId('!!!'), /^opencode-[0-9a-f]{12}$/);
   t.not(makeSandboxSessionId('a'), makeSandboxSessionId('b'));
+});
+
+test('mounter settings are recorded verbatim and refused as the mounter would refuse them', t => {
+  const settings = { NINEP_SUDO: '1', NINEP_MOUNT_PROGRAM: 'sudo -n mount' };
+  t.deepEqual(
+    readSessionPlan(JSON.stringify({ ...plan, mounterEnv: settings }))
+      .mounterEnv,
+    settings,
+  );
+  t.false(Object.hasOwn(readSessionPlan(JSON.stringify(plan)), 'mounterEnv'));
+  /** @type {[unknown, RegExp][]} */
+  const refusedSettings = [
+    [{ NINEP_SOCKET_DIR: '/x' }, /Unknown mounter setting "NINEP_SOCKET_DIR"/],
+    [{ XDG_RUNTIME_DIR: '/x' }, /Unknown mounter setting "XDG_RUNTIME_DIR"/],
+    [{ NINEP_SUDO: 'yes' }, /"NINEP_SUDO" must be "1"/],
+    [{ NINEP_MOUNT_PROGRAM: '' }, /must be non-empty text/],
+    [
+      { NINEP_UMOUNT_PROGRAM: 'rm -rf' },
+      /"NINEP_UMOUNT_PROGRAM" must invoke "umount"/,
+    ],
+    [['mount'], /must be a record/],
+  ];
+  for (const [mounterEnv, message] of refusedSettings) {
+    t.throws(() => readMounterEnv(mounterEnv), { message });
+    t.throws(() => readSessionPlan(JSON.stringify({ ...plan, mounterEnv })), {
+      message,
+    });
+  }
 });

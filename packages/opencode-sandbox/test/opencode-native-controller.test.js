@@ -353,6 +353,25 @@ test('native controller construction is inert; activation uses copy paths and no
   t.true((await E(controller).status()).stopped);
 });
 
+test('recorded mounter settings reach the session mounter beneath its own socket directory', async t => {
+  const f = fixture(t);
+  const controller = f.makeController();
+  const plan = harden({
+    ...planFor('a'),
+    mounterEnv: { NINEP_SUDO: '1', NINEP_MOUNT_PROGRAM: 'sudo -n mount' },
+  });
+  await E(controller).activate(JSON.stringify(plan), f.resolver);
+  const [, mounterEnv] = f.events.find(
+    event => Array.isArray(event) && event[0] === 'mounter',
+  );
+  t.deepEqual(mounterEnv, {
+    NINEP_SUDO: '1',
+    NINEP_MOUNT_PROGRAM: 'sudo -n mount',
+    XDG_RUNTIME_DIR: plan.mounterSocketDir,
+    NINEP_SOCKET_DIR: plan.mounterSocketDir,
+  });
+});
+
 test('scope cleanup failure retains mounts and permits sibling progress before retry', async t => {
   const f = fixture(t);
   const a = f.makeController();

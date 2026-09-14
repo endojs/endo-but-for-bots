@@ -459,6 +459,10 @@ slice image follows the credential mint and the creation of the workspace and MC
 directories.
 It needs the native sandbox service rather than the 9P mounter, and the superseded provisioner
 modules are deleted.
+The operator's rootless mount settings are validated at setup with the mount caplet's own
+program check (and a present `NINEP_SUDO` must be exactly `1`, stricter than the caplet, which
+silently treats anything else as off), recorded verbatim into every plan, and passed to the
+session's own mounter beneath its private socket directory, which no recorded setting can name.
 A Node daemon test mints the real services and backend in `@node` workers, creates a session,
 observes the provider listener refuse to start without Podman or procfs while the record keeps
 its plan, dependencies, and directories, and then removes everything through destroy.

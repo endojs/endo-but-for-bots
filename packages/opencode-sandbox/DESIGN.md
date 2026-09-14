@@ -92,13 +92,17 @@ live factory holds the marker, which refuses native construction before any such
 Leftovers under any other label are the operator's, including a removed beside-factory native
 service's `native/<owner>-native.owner`, `.files`, and `-native`-labelled containers: setup
 neither probes nor sweeps a label it does not own.
-Host setup no longer reads the shared mounter's rootless mount settings (`NINEP_SUDO`,
-`NINEP_MOUNT_PROGRAM`, `NINEP_UMOUNT_PROGRAM`); a session's own mounter receives its
-controller's formula environment, which nothing populates yet, so a rootless deployment that
-needs them has no route until that plumbing lands.
+The shared mounter's rootless mount settings (`NINEP_SUDO`, `NINEP_MOUNT_PROGRAM`,
+`NINEP_UMOUNT_PROGRAM`, or their `ENDO_`-prefixed spellings) are read by `setup-hosted.js`,
+validated with the mount caplet's own program check before any mint, persisted on the backend
+as `OPENCODE_MOUNTER_ENV`, and recorded verbatim into every session plan as `mounterEnv`;
+the controller passes them to the session's own mounter beneath its private socket directory,
+which is never a recorded setting.
 Environment values remain absent from ordinary diagnostics; the explicit host-only
 reader verifies effective placement without reviving or changing retained formulas.
-Rerunning host setup does not reapply runtime configuration.
+Rerunning `setup-host.js` does not reapply runtime configuration; `setup-hosted.js` re-records
+the mount settings for the backend and re-mints it on every run, while sessions recorded earlier
+keep the settings they were recorded with until their record is revised on a later start.
 Live replacement and reconfiguration require a separate lifecycle operation.
 
 Provisioning for one host must be serialized.

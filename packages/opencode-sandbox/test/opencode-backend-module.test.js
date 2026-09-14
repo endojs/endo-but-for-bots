@@ -238,8 +238,21 @@ test('resolveBackendConfig defaults nothing', t => {
     OPENCODE_NATIVE_PROFILE: JSON.stringify(profile),
   };
   t.deepEqual(resolveBackendConfig(env).nativeProfile, profile);
+  t.false(Object.hasOwn(resolveBackendConfig(env), 'mounterEnv'));
+  t.deepEqual(
+    resolveBackendConfig({
+      ...env,
+      OPENCODE_MOUNTER_ENV: JSON.stringify({ NINEP_SUDO: '1' }),
+    }).mounterEnv,
+    { NINEP_SUDO: '1' },
+  );
   /** @type {[string, string | undefined, RegExp][]} */
   const invalid = [
+    [
+      'OPENCODE_MOUNTER_ENV',
+      JSON.stringify({ NINEP_MOUNT_PROGRAM: 'rm' }),
+      /"NINEP_MOUNT_PROGRAM" must invoke "mount"/,
+    ],
     [
       'OPENCODE_WORKSPACE_BASE_DIR',
       'relative',
@@ -643,4 +656,18 @@ test('a foreign workspace that vanished is refused on the next start rather than
     ['inspect'],
     'refused before any stop or revision',
   );
+});
+
+test('recorded mounter settings reach every plan', async t => {
+  const f = await fixture(t);
+  const mounterEnv = {
+    NINEP_SUDO: '1',
+    NINEP_UMOUNT_PROGRAM: 'sudo -n umount',
+  };
+  const factory = await make(f.host, undefined, {
+    env: harden({ ...f.env, OPENCODE_MOUNTER_ENV: JSON.stringify(mounterEnv) }),
+  });
+  await E(factory).create(harden({ sessionId: 'session-a' }), makeToolSet());
+  const [, , planText] = f.log.find(([kind]) => kind === 'create') ?? [];
+  t.deepEqual(JSON.parse(planText).mounterEnv, mounterEnv);
 });

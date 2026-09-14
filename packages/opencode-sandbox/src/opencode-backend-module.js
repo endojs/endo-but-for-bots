@@ -24,6 +24,10 @@
  *   OPENCODE_NATIVE_PROFILE      The deployment resource profile recorded into
  *                                every plan; JSON with digit-string
  *                                quantities, validated before use.
+ *   OPENCODE_MOUNTER_ENV         Optional JSON: the rootless mount settings
+ *                                (`NINEP_SUDO`, `NINEP_MOUNT_PROGRAM`,
+ *                                `NINEP_UMOUNT_PROGRAM`) recorded into every
+ *                                plan for the session's own 9P mounter.
  *
  * Both roots must equal the recorded storage owner's roots, so every session
  * this backend records lies where that owner can remove it.
@@ -57,6 +61,7 @@ import {
   containsPath,
   isNormalizedAbsolutePath,
   makeSandboxSessionId,
+  readMounterEnv,
   readNativeProfile,
   readSessionPlan,
 } from './opencode-session-plan.js';
@@ -99,7 +104,17 @@ export const resolveBackendConfig = env => {
   /** @type {PlanNativeProfile} */
   const nativeProfile = JSON.parse(profileText);
   readNativeProfile(nativeProfile);
-  return harden({ workspaceBaseDir, mcpBaseDir, nativeProfile });
+  const mounterEnvText = env.OPENCODE_MOUNTER_ENV;
+  const mounterEnv =
+    mounterEnvText === undefined
+      ? undefined
+      : readMounterEnv(JSON.parse(mounterEnvText));
+  return harden({
+    workspaceBaseDir,
+    mcpBaseDir,
+    nativeProfile,
+    ...(mounterEnv === undefined ? {} : { mounterEnv }),
+  });
 };
 harden(resolveBackendConfig);
 
@@ -111,7 +126,7 @@ harden(resolveBackendConfig);
  * @param {{ env?: Record<string, string> }} [options]
  */
 export const make = async (hostAgent, _context, { env = {} } = {}) => {
-  const { workspaceBaseDir, mcpBaseDir, nativeProfile } =
+  const { workspaceBaseDir, mcpBaseDir, nativeProfile, mounterEnv } =
     resolveBackendConfig(env);
   // Exact dependency identities are captured once, by verified entrypoint,
   // for the sessions this incarnation records; an existing record keeps the
@@ -174,6 +189,7 @@ export const make = async (hostAgent, _context, { env = {} } = {}) => {
       mcpDir: path.join(privateDir, 'mcp'),
       mounterSocketDir: path.join(privateDir, '9p'),
       nativeProfile,
+      ...(mounterEnv === undefined ? {} : { mounterEnv }),
       ...(request.model ? { model: request.model } : {}),
       ...(request.systemPrompt ? { systemPrompt: request.systemPrompt } : {}),
     });
