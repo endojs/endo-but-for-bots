@@ -1,5 +1,5 @@
 // @ts-check
-/** @import { LogPowers } from '../platform/logging.js' */
+/** @import { Logger } from '../platform/logging.js' */
 /** @import { TimerHandle, TimerPowers } from '../platform/timers.js' */
 import harden from '@endo/harden';
 import { decodeBase64, encodeBase64 } from '@endo/base64';
@@ -48,7 +48,7 @@ import { WorkerHaltError } from './worker-engine.js';
  *
  * @param {object} powers
  * @param {TimerPowers} powers.timers
- * @param {LogPowers} powers.logging
+ * @param {Logger} powers.logging
  * @param {object} options
  * @param {string} options.workerId
  * @param {WorkerStore} options.store

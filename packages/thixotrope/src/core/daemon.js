@@ -1,5 +1,5 @@
 // @ts-check
-/** @import { LogPowers } from '../platform/logging.js' */
+/** @import { Logger } from '../platform/logging.js' */
 /** @import { RandomPowers } from '../platform/random.js' */
 /** @import { TimerPowers } from '../platform/timers.js' */
 import harden from '@endo/harden';
@@ -18,6 +18,7 @@ import { makeOcapnHub } from '../net/hub.js';
 import { makeDurableWorkerTransport } from './durable-worker-transport.js';
 import { makeEphemeralHubClient } from '../net/ephemeral-hub-client.js';
 import { derivePipeResumption } from '../net/pipe-network.js';
+import { makeLogPowers, silentLogger } from '../platform/logging.js';
 import { isSessionToken } from '../store/store-validators.js';
 import { inspectVatReachability } from './vat-reachability.js';
 import { WorkerHaltError } from './worker-engine.js';
@@ -109,7 +110,7 @@ const ENDPOINT_SESSION = 'endpoint';
  * @param {object} powers
  * @param {TimerPowers} powers.timers
  * @param {RandomPowers} powers.random
- * @param {LogPowers} powers.logging
+ * @param {Logger} powers.logging
  * @param {object} options
  * @param {ThixotropeStore} options.store
  * @param {WorkerEngine} options.engine
@@ -142,9 +143,16 @@ const buildDaemon = async (
     );
   };
 
-  const logError = verbose
-    ? (...args) => logging.error('thixotrope daemon:', ...args)
-    : () => {};
+  // Verbose puts the daemon's own diagnostics and OCapN's protocol tracing
+  // on stderr together. A durable-record write failure is not opt-in, so the
+  // session records below keep the host's own logger.
+  const log = verbose
+    ? makeLogPowers({
+        log: logging.error,
+        info: logging.error,
+        error: logging.error,
+      }).sub('thixotrope', 'daemon')
+    : silentLogger;
 
   const cryptography = makeCryptography(codec, length =>
     random.randomBytes(length),
@@ -217,7 +225,7 @@ const buildDaemon = async (
   const records = makeWorkerSessionRecords({
     store,
     resources: resourceMakers,
-    reportError: error => logging.error('thixotrope worker sessions:', error),
+    reportError: logging.sub('thixotrope', 'worker-sessions').error,
   });
 
   /**
@@ -242,7 +250,7 @@ const buildDaemon = async (
   // Settled cached answers and imports do not independently pin their vats.
   const pendingEndpointAnswers = new Set();
   const endpointClient = await makeOcapn({
-    logger: harden({ log: logError, error: logError, info: () => {} }),
+    logger: log.sub('endpoint'),
     randomBytes: length => random.randomBytes(length),
     codec,
     debugLabel: 'thixotrope-endpoint',
@@ -466,7 +474,7 @@ const buildDaemon = async (
       connection.write(request);
     } catch (error) {
       dialingSessions.delete(sessionKey);
-      logError('handoff dial failed:', error);
+      log.error('handoff dial failed:', error);
       // A committed withdrawal remains an obligation. Local admission or
       // storage failure does not prove that its destination is retired.
       throw error;
@@ -567,7 +575,7 @@ const buildDaemon = async (
         } catch (error) {
           if (verified) throw error;
           pendingOutbound.delete(connection);
-          logError('handoff handshake failed:', error);
+          log.error('handoff handshake failed:', error);
           dialingSessions.delete(dial.sessionKey);
           hub.retireSession(dial.sessionKey);
           connection.end();
@@ -628,7 +636,7 @@ const buildDaemon = async (
         bindConnectionToHub(connection, sessionKey, identity);
       } catch (error) {
         if (verified) throw error;
-        logError('handshake failed:', error);
+        log.error('handshake failed:', error);
         connection.write(
           writeOcapnHandshakeMessage(
             { type: 'op:abort', reason: 'invalid handshake' },
@@ -997,11 +1005,7 @@ const buildDaemon = async (
   // connections: an early resume must never race the restore.
   netlayerRef.netlayer = await makeNetlayer({
     handlers: hubHandlers,
-    logger: harden({
-      log: logError,
-      error: logError,
-      info: logError,
-    }),
+    logger: log.sub('netlayer'),
     resumption,
   });
   for (const token of store.listSessionTokens()) {
@@ -1226,7 +1230,7 @@ const buildDaemon = async (
  * @param {object} powers
  * @param {TimerPowers} powers.timers
  * @param {RandomPowers} powers.random
- * @param {LogPowers} powers.logging
+ * @param {Logger} powers.logging
  * @param {Parameters<typeof buildDaemon>[1]} options
  */
 export const makeThixotropeDaemon = async (powers, options) => {
