@@ -65,9 +65,74 @@ fn src_dir() -> PathBuf {
 /// nevertheless legitimate: each is pulled in by `include!` from a
 /// `#[cfg(test)]` inline module, so it is compiled only into the test
 /// binary and declares no production type. A file that is neither
-/// declared nor listed here is an orphan and fails
+/// declared nor listed here is an orphan, and a listed file that any
+/// production `include!` site pulls in is a violation; both fail
 /// [`every_source_file_is_a_declared_module_or_a_listed_test_include`].
 const TEST_ONLY_INCLUDES: &[&str] = &["meter_consistency.rs"];
+
+/// Every `include!("FILE.rs")` in `code`, as the included path and whether
+/// the site sits inside an inline `#[cfg(test)] mod` block.
+fn include_sites(code: &[Token<'_>], file: &Path) -> Vec<(PathBuf, bool)> {
+    let dir = file.parent().expect("module has a directory");
+    // One flag per open brace: whether it opened a `#[cfg(test)] mod`.
+    let mut frames: Vec<bool> = Vec::new();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < code.len() {
+        match code[i].text {
+            "{" => {
+                let opens_test_mod = i >= 2 && code[i - 2].text == "mod" && {
+                    // Back over `pub`, `pub(crate)` or `pub(in path)` to the
+                    // item start the attributes precede.
+                    let mut start = i - 2;
+                    if start >= 1 && code[start - 1].text == ")" {
+                        let mut depth = 0usize;
+                        loop {
+                            start -= 1;
+                            match code[start].text {
+                                ")" => depth += 1,
+                                "(" => {
+                                    depth -= 1;
+                                    if depth == 0 {
+                                        break;
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    if start >= 1 && code[start - 1].text == "pub" {
+                        start -= 1;
+                    }
+                    preceding_attributes(code, start)
+                        .iter()
+                        .any(|a| a == "cfg(test)")
+                };
+                frames.push(opens_test_mod);
+            }
+            "}" => {
+                frames.pop();
+            }
+            "include"
+                if code.get(i + 1).is_some_and(|t| t.text == "!")
+                    && code.get(i + 2).is_some_and(|t| t.text == "(") =>
+            {
+                let literal = code.get(i + 3).map_or("", |t| t.text);
+                let relative = literal
+                    .strip_prefix('"')
+                    .and_then(|s| s.strip_suffix('"'))
+                    .unwrap_or_else(|| {
+                        panic!("unsupported include! operand in {file:?}: {literal}")
+                    });
+                out.push((dir.join(relative), frames.iter().any(|&test| test)));
+                i += 3;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    out
+}
 
 /// The crate's module tree as the `mod` declarations spell it.
 struct ModuleSet {
@@ -296,6 +361,33 @@ fn every_source_file_is_a_declared_module_or_a_listed_test_include() {
          `mod` (a production module joins the type graph automatically) or, for a file an \
          `include!` in a #[cfg(test)] module pulls in, list it in TEST_ONLY_INCLUDES: {orphans:?}"
     );
+    // A listed file is test-only only while every `include!` that pulls it
+    // in sits in a `#[cfg(test)]` module or a test-only file: a production
+    // `include!` would compile it into the type graph unseen.
+    let mut pulled_in: BTreeSet<PathBuf> = BTreeSet::new();
+    for file in set.production.iter().chain(&set.test_only) {
+        let file_is_test_only = set.test_only.contains(file);
+        let text = std::fs::read_to_string(file).expect("read module");
+        let code = source_scan::code_only(&text);
+        let tokens = source_scan::tokens(&code);
+        for (target, in_test_module) in include_sites(&tokens, file) {
+            if !listed.contains(&target) {
+                continue;
+            }
+            assert!(
+                file_is_test_only || in_test_module,
+                "{target:?} is listed in TEST_ONLY_INCLUDES but {file:?} pulls it in outside a \
+                 #[cfg(test)] module"
+            );
+            pulled_in.insert(target);
+        }
+    }
+    for p in &listed {
+        assert!(
+            pulled_in.contains(p),
+            "TEST_ONLY_INCLUDES names a file no #[cfg(test)] `include!` pulls in: {p:?}"
+        );
+    }
     // Sanity floors: the walk found the crate, not an empty directory.
     let names = |paths: &[PathBuf]| -> Vec<String> {
         paths
@@ -1196,11 +1288,12 @@ fn every_slot_bearing_field_is_classified_and_the_classification_holds() {
                 }
                 // A unit test reaches the field through its own machine
                 // binding (`m.this_captures`), so the word-bounded mention
-                // is the right test here, not the `self.` form.
-                Req::BehavioralTwin(test) => TWIN_SOURCES
-                    .iter()
-                    .filter_map(|source| test_body(source, test))
-                    .any(|body| mentions(body, name)),
+                // is the right test here, not the `self.` form. Comments are
+                // blanked first: a remark naming the field is no coverage.
+                Req::BehavioralTwin(test) => TWIN_SOURCES.iter().any(|source| {
+                    let code = source_scan::code_only(source);
+                    test_body(&code, test).is_some_and(|body| mentions(body, name))
+                }),
             };
             if !ok {
                 violations.push(format!("{name}: requirement {req:?} not satisfied"));
