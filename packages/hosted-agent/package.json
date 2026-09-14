@@ -39,7 +39,10 @@
     "./mcp-bridge.js": "./src/mcp-bridge.js",
     "./mcp-socket.js": "./src/mcp-socket.js",
     "./mcp-stdio-bridge.js": "./src/mcp-stdio-bridge.js",
-    "./secret-rotator.js": "./src/secret-rotator.js"
+    "./secret-rotator.js": "./src/secret-rotator.js",
+    "./session-plan.js": "./src/session-plan.js",
+    "./session-storage.js": "./src/session-storage.js",
+    "./session-state-storage.js": "./src/session-state-storage.js"
   },
   "scripts": {
     "build": "exit 0",
@@ -50,6 +53,7 @@
     "test": "ava"
   },
   "dependencies": {
+    "@endo/9p-server": "workspace:^",
     "@endo/captp": "workspace:^",
     "@endo/errors": "workspace:^",
     "@endo/eventual-send": "workspace:^",

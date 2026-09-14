@@ -463,6 +463,11 @@ The operator's rootless mount settings are validated at setup with the mount cap
 program check (and a present `NINEP_SUDO` must be exactly `1`, stricter than the caplet, which
 silently treats anything else as off), recorded verbatim into every plan, and passed to the
 session's own mounter beneath its private socket directory, which no recorded setting can name.
+The adapter-agnostic session primitives — the plan's path and profile parsers, the mounter
+settings, the sandbox session id, the storage owner over a plan parser, and the per-session
+host-directory state storage with its ownership markers — now live in `@endo/hosted-agent`
+(`session-plan.js`, `session-storage.js`, `session-state-storage.js`); OpenCode's modules
+compose them at their existing paths, so the Claude adapter can adopt them rather than copy them.
 A Node daemon test mints the real services and backend in `@node` workers, creates a session,
 observes the provider listener refuse to start without Podman or procfs while the record keeps
 its plan, dependencies, and directories, and then removes everything through destroy.
