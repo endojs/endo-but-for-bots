@@ -34,6 +34,7 @@ import { syrupCodec } from '@endo/ocapn/syrup';
 import { makePromiseKit } from '@endo/promise-kit';
 
 import { makeInFlight } from '../in-flight.js';
+import { settleWithin, withExpiry } from '../platform/timers.js';
 
 import { makeApplicationRegistry } from './application-registry.js';
 import { makeClockService } from '../alarms/clock-service.js';
@@ -226,26 +227,15 @@ export const serveThixotrope = async (
     );
     // Flush the stop acknowledgement, then bound the wait for clients to close.
     for (const connection of controlConnections) connection.end();
-    const timer = timers.setTimer(closeSocket, 1000);
-    try {
-      await closed;
-    } finally {
-      timers.clearTimer(timer);
-    }
+    await withExpiry(timers, 1000, closeSocket, () => closed);
     // A failed guest may never settle subscription setup or cancellation.
     // Continue to daemon shutdown after a grace period; startup discards any
     // ephemeral registrations that survive in the guest's persistent image.
-    let cleanupTimer;
-    try {
-      await Promise.race([
-        Promise.all([viewCleanup, pendingDisconnects.drain()]),
-        new Promise(resolveCleanup => {
-          cleanupTimer = timers.setTimer(() => resolveCleanup(undefined), 1000);
-        }),
-      ]);
-    } finally {
-      if (cleanupTimer !== undefined) timers.clearTimer(cleanupTimer);
-    }
+    await settleWithin(
+      timers,
+      1000,
+      Promise.all([viewCleanup, pendingDisconnects.drain()]),
+    );
     await files.remove(socketPath, { force: true });
   };
 
