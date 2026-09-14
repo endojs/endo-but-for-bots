@@ -18,6 +18,7 @@ import { makeOcapnHub } from '../net/hub.js';
 import { makeDurableWorkerTransport } from './durable-worker-transport.js';
 import { makeEphemeralHubClient } from '../net/ephemeral-hub-client.js';
 import { derivePipeResumption } from '../net/pipe-network.js';
+import { makeFirstFailure, makeInFlight } from '../in-flight.js';
 import { makeLogPowers, silentLogger } from '../platform/logging.js';
 import { isSessionToken } from '../store/store-validators.js';
 import { inspectVatReachability } from './vat-reachability.js';
@@ -298,8 +299,7 @@ const buildDaemon = async (
   let stopping = false;
   /** @type {Set<Awaited<ReturnType<typeof makeEphemeralHubClient>>>} */
   const transientClients = new Set();
-  /** @type {Set<Promise<Awaited<ReturnType<typeof makeEphemeralHubClient>>>>} */
-  const openingTransientClients = new Set();
+  const openingTransientClients = makeInFlight();
   /** @type {Uint8Array[]} */
   const endpointOutbound = [];
   const endpointConnection = harden({
@@ -1026,14 +1026,13 @@ const buildDaemon = async (
   const stopDaemon = async () => {
     stopping = true;
     // A client still being constructed must finish before releasing the lease.
-    await Promise.allSettled([...openingTransientClients]);
-    /** @type {unknown} */
-    let transientFailure;
+    await openingTransientClients.drain();
+    const transientFailure = makeFirstFailure();
     for (const client of transientClients) {
       try {
         client.close();
       } catch (error) {
-        transientFailure ??= error;
+        transientFailure.record(error);
       }
     }
     transientClients.clear();
@@ -1047,7 +1046,7 @@ const buildDaemon = async (
       for (const result of results) {
         if (result.status === 'rejected') throw result.reason;
       }
-      if (transientFailure !== undefined) throw transientFailure;
+      transientFailure.assertNone();
     } finally {
       stopped = true;
       endpointClient.shutdown();
@@ -1159,13 +1158,7 @@ const buildDaemon = async (
         hub,
         sessionKey: `transient:${randomHex128()}`,
       });
-      openingTransientClients.add(opening);
-      let client;
-      try {
-        client = await opening;
-      } finally {
-        openingTransientClients.delete(opening);
-      }
+      const client = await openingTransientClients.track(opening);
       const wrapped = harden({
         lookup: client.lookup,
         close: () => {
