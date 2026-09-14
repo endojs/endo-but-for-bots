@@ -618,6 +618,24 @@ macro_rules! gc_slot_table {
     ($emit:ident, $mode:ident, $vm:ident, $field:ident, $idx:ident, $visit:ident, none, $row:ident) => {
         $emit! {}
     };
+    // The `bulk` mode enumerates ONLY the counted bulk tables: it is the
+    // parity net's fresh comparand for the standing page counts, and must
+    // not share a term with the tail projection it checks.
+    ($emit:ident, bulk, $vm:ident, $field:ident, $idx:ident, $visit:ident, bulk, $row:ident) => {
+        gc_slot_table!($emit, all, $vm, $field, $idx, $visit, map, $row)
+    };
+    ($emit:ident, bulk, $vm:ident, $field:ident, $idx:ident, $visit:ident, map, $row:ident) => {
+        $emit! {}
+    };
+    ($emit:ident, bulk, $vm:ident, $field:ident, $idx:ident, $visit:ident, owner_pairs, $row:ident) => {
+        $emit! {}
+    };
+    ($emit:ident, bulk, $vm:ident, $field:ident, $idx:ident, $visit:ident, private_pairs, $row:ident) => {
+        $emit! {}
+    };
+    ($emit:ident, bulk, $vm:ident, $field:ident, $idx:ident, $visit:ident, keys, $row:ident) => {
+        $emit! {}
+    };
     ($emit:ident, full, $vm:ident, $field:ident, $idx:ident, $visit:ident, keys, $row:ident) => {
         $emit! {}
     };
@@ -700,6 +718,11 @@ macro_rules! define_slot_walks {
             pub(super) fn each_side_table_ref_tail(&self, visit: &mut dyn FnMut(SlotIndex)) {
                 $(gc_slot_table!(gc_run, tail, self, $field, idx, visit, $shape, $row);)*
             }
+            /// Enumerate ONLY the counted bulk tables — the parity net's fresh
+            /// comparand for the standing page counts (`Self::side_ref_parity`).
+            pub(super) fn each_side_table_ref_bulk(&self, visit: &mut dyn FnMut(SlotIndex)) {
+                $(gc_slot_table!(gc_run, bulk, self, $field, idx, visit, $shape, $row);)*
+            }
         }
         /// Row bodies paired with their generated table call sites.
         pub const ROW_EDGE_SOURCE: &[(&str, &str, &str, &str)] = &[
@@ -718,6 +741,10 @@ macro_rules! define_slot_walks {
         /// Expanded production tail walks, excluding counted bulk tables.
         pub const TAIL_EDGE_SOURCE: &[&str] = &[
             $(gc_slot_table!(gc_text, tail, self, $field, idx, visit, $shape, $row),)*
+        ];
+        /// Expanded production bulk-only walks: the parity net's comparand.
+        pub const BULK_EDGE_SOURCE: &[&str] = &[
+            $(gc_slot_table!(gc_text, bulk, self, $field, idx, visit, $shape, $row),)*
         ];
     };
 }

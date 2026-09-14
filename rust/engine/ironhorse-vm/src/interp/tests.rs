@@ -923,9 +923,11 @@ fn side_ref_parity_mismatch_refuses_reclamation_including_release() {
     assert!(!interp.is_quiescent());
 }
 
-#[test]
-fn side_ref_tail_masked_undercount_poisons_during_page_pruning() {
-    let mut interp = Interp::new();
+/// An array on a fresh page holding a reference to the intrinsic Object
+/// prototype, whose page the tail tables (functions, proto rows) also
+/// pin: the shape in which a page-bit comparison that unions the tail
+/// into both sides can never see a missing bulk count (F038).
+fn tail_masked_bulk_reference(interp: &mut Interp) -> (crate::value::SlotIndex, u32) {
     let next_page = interp
         .slots
         .capacity()
@@ -934,16 +936,25 @@ fn side_ref_tail_masked_undercount_poisons_during_page_pruning() {
     while array.0 / crate::value::SLOTS_PER_PAGE < next_page {
         array = interp.new_array_unmetered();
     }
-    // The intrinsic prototype's page is also rooted by tail tables,
-    // masking a missing bulk count in the union of page bits.
     interp.arrays.get_mut(&array).unwrap().insert_item(
         0,
         Slot::of(Kind::Reference, Payload::Reference(interp.object_proto)),
         &mut interp.side_refs,
     );
+    (array, next_page)
+}
+
+#[test]
+fn side_ref_tail_masked_undercount_poisons_during_page_pruning() {
+    let mut interp = Interp::new();
+    let (array, next_page) = tail_masked_bulk_reference(&mut interp);
+    let masked_page = interp.object_proto.0 / crate::value::SLOTS_PER_PAGE;
     let before = interp.side_table_ref_page_bits();
+    assert!(before[masked_page as usize]);
     interp.side_refs = SideRefCounts::new();
-    assert_eq!(interp.side_table_ref_page_bits(), before);
+    // Without the parity net (a release build with `store-integrity`
+    // off), the projection's page bits are identical — the tail pins
+    // the page either way — and pruning is what detects the undercount.
     assert!(interp.is_quiescent());
     assert!(interp.free_pages(&[next_page]).unwrap() > 0);
     assert!(interp.slots.is_free_index(array));
@@ -956,6 +967,72 @@ fn side_ref_tail_masked_undercount_poisons_during_page_pruning() {
         Err(NotQuiescent),
         "later reclamation is refused"
     );
+}
+
+/// The parity net compares the standing counts against a bulk-only
+/// recount, in every build profile: a tail reference on the same page
+/// no longer masks the missing bulk count (F038).
+#[test]
+fn side_ref_parity_sees_a_tail_masked_undercount_in_every_profile() {
+    let mut interp = Interp::new();
+    let (_array, _next_page) = tail_masked_bulk_reference(&mut interp);
+    let masked_page = interp.object_proto.0 / crate::value::SLOTS_PER_PAGE;
+    assert_eq!(interp.side_ref_parity(), Ok(()));
+    interp.side_refs = SideRefCounts::new();
+    let mismatch = interp.side_ref_parity().unwrap_err();
+    assert_eq!(mismatch.page, masked_page);
+    assert_eq!((mismatch.counted, mismatch.walked), (0, 1));
+    assert!(mismatch.to_string().contains("counted 0, walked 1"));
+}
+
+/// Exact counts, not page bits: a second reference to an already-pinned
+/// page that bypassed the counter leaves every page bit unchanged, and
+/// only the count comparison can see it.
+#[test]
+fn side_ref_parity_sees_an_off_by_one_beside_a_surviving_reference() {
+    let mut interp = Interp::new();
+    let array = interp.new_array_unmetered();
+    let value = interp.new_object();
+    let page = value.0 / crate::value::SLOTS_PER_PAGE;
+    let reference = Slot::of(Kind::Reference, Payload::Reference(value));
+    interp
+        .arrays
+        .get_mut(&array)
+        .unwrap()
+        .insert_item(0, reference, &mut interp.side_refs);
+    assert_eq!(interp.side_ref_parity(), Ok(()));
+    let before = interp.side_table_ref_page_bits();
+    // A mutation that forgot its increment: the same page, one more item.
+    let mut bypassed = SideRefCounts::new();
+    interp
+        .arrays
+        .get_mut(&array)
+        .unwrap()
+        .insert_item(1, reference, &mut bypassed);
+    let mismatch = interp.side_ref_parity().unwrap_err();
+    assert_eq!(
+        (mismatch.page, mismatch.counted, mismatch.walked),
+        (page, 1, 2)
+    );
+    // The page set is unchanged, so a bit-level comparison sees nothing.
+    let mut bits = vec![false; before.len()];
+    interp.side_refs.or_into_bits(&mut bits);
+    assert!(bits[page as usize]);
+}
+
+/// With the net on, the projection itself catches the masked undercount:
+/// every page becomes a root and the checkpoint gate refuses.
+#[cfg(any(debug_assertions, feature = "store-integrity"))]
+#[test]
+fn the_projection_poisons_on_a_tail_masked_undercount() {
+    let mut interp = Interp::new();
+    let (array, next_page) = tail_masked_bulk_reference(&mut interp);
+    interp.side_refs = SideRefCounts::new();
+    let bits = interp.side_table_ref_page_bits();
+    assert!(bits.iter().all(|hit| *hit), "no page can be reclaimed");
+    assert!(!interp.is_quiescent(), "checkpoint gate refuses corruption");
+    assert_eq!(interp.free_pages(&[next_page]), Err(NotQuiescent));
+    assert!(!interp.slots.is_free_index(array));
 }
 
 #[test]

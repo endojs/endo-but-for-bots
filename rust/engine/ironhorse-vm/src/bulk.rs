@@ -50,7 +50,7 @@ impl SideRefCounts {
         }
     }
 
-    fn page_of(r: SlotIndex) -> Option<u32> {
+    pub(crate) fn page_of(r: SlotIndex) -> Option<u32> {
         // The null sentinel and any out-of-arena index are skipped at
         // READ time by the bitmap bound; skip null here so the map
         // never carries a phantom page for it.
@@ -59,6 +59,30 @@ impl SideRefCounts {
         } else {
             Some(r.0 / SLOTS_PER_PAGE)
         }
+    }
+
+    /// The parity net's comparison: the standing counts against a fresh
+    /// per-page recount of the bulk tables (`walked`, keyed like
+    /// [`Self::page_of`]). Exact counts, not page bits: a missed decrement
+    /// on a page another reference still pins, or a missed increment
+    /// beside an existing one, leaves the page SET unchanged and only the
+    /// count can see it. Reports the lowest mismatching page so the
+    /// diagnostic is deterministic.
+    pub(crate) fn mismatch_against(
+        &self,
+        walked: &std::collections::HashMap<u32, u64>,
+    ) -> Option<crate::gc::SideRefParityMismatch> {
+        let pages: std::collections::BTreeSet<u32> =
+            self.counts.keys().chain(walked.keys()).copied().collect();
+        pages.into_iter().find_map(|page| {
+            let counted = u64::from(self.counts.get(&page).copied().unwrap_or(0));
+            let walked = walked.get(&page).copied().unwrap_or(0);
+            (counted != walked).then_some(crate::gc::SideRefParityMismatch {
+                page,
+                counted,
+                walked,
+            })
+        })
     }
 
     fn add_slot(&mut self, s: &Slot) {
@@ -710,6 +734,28 @@ mod tests {
             data.push_entry(refslot(100), Slot::undefined(), &mut refs);
             assert_eq!(data.find(&canonical(&refslot(100)), canonical), Some(0));
         }
+    }
+
+    #[test]
+    fn parity_mismatch_reports_the_lowest_page_and_exact_counts() {
+        let mut refs = SideRefCounts::new();
+        refs.add_slot(&refslot(10)); // page 0
+        refs.add_slot(&refslot(300)); // page 1
+        refs.add_slot(&refslot(300)); // page 1 again
+        let walked = |pages: &[(u32, u64)]| pages.iter().copied().collect();
+        assert_eq!(refs.mismatch_against(&walked(&[(0, 1), (1, 2)])), None);
+        // A missed decrement on a still-pinned page: the page set agrees,
+        // the count does not.
+        let m = refs.mismatch_against(&walked(&[(0, 1), (1, 1)])).unwrap();
+        assert_eq!((m.page, m.counted, m.walked), (1, 2, 1));
+        // A page the walk sees that the counts never learned about, and
+        // the lowest page wins when several disagree.
+        let m = refs
+            .mismatch_against(&walked(&[(0, 1), (1, 2), (2, 1)]))
+            .unwrap();
+        assert_eq!((m.page, m.counted, m.walked), (2, 0, 1));
+        let m = refs.mismatch_against(&walked(&[(1, 2)])).unwrap();
+        assert_eq!((m.page, m.counted, m.walked), (0, 1, 0));
     }
 
     #[test]
