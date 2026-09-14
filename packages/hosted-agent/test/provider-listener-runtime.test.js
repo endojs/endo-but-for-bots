@@ -194,7 +194,9 @@ test.serial(
     for (const call of nativeCalls) {
       t.is(call.command, 'podman');
       t.deepEqual(call.args.slice(0, 2), ['--remote=false', '--syslog=false']);
-      t.is(call.env, captured);
+      // Every command gets a fresh copy of the one captured environment:
+      // the same values, never re-read from the ambient process env.
+      t.deepEqual(call.env, captured);
       t.like(call.env, {
         HOME: '/operator/home',
         PATH: '/operator/bin',

@@ -112,14 +112,17 @@ export const makePodmanProviderListenerRuntimeKit = ({
         timeout: 30_000,
         maxBuffer: 1024 * 1024,
         killSignal: 'SIGKILL',
-        env: hostEnvironment,
+        // A fresh copy per process: Node adds NODE_V8_COVERAGE to the env
+        // object it is handed when coverage is enabled, which the hardened
+        // capture refuses.
+        env: { ...hostEnvironment },
       }));
   const launch =
     host.launch ??
     (args =>
       spawnChild('podman', ['--remote=false', '--syslog=false', ...args], {
         stdio: ['pipe', 'pipe', 'pipe'],
-        env: hostEnvironment,
+        env: { ...hostEnvironment },
       }));
   const procfs =
     host.procfs ??
