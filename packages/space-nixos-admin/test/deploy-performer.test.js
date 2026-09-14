@@ -156,7 +156,12 @@ const makeHarness = async (
   const seen = new Map();
   const nextRequest = async () => {
     await null;
-    for (let i = 0; i < 500; i += 1) {
+    // An upper bound only: a fresh request returns at once. Under a
+    // saturated CI runner each 5 ms poll dilates to hundreds of ms (see
+    // "make deploy-performer watch tests load-robust"), and the former
+    // 500-poll cap expired before a revived caplet had published its
+    // request. A genuine regression still surfaces, only later.
+    for (let i = 0; i < 6000; i += 1) {
       // eslint-disable-next-line no-await-in-loop
       const request = await readRequest().catch(() => undefined);
       if (request !== undefined && seen.has(request.id)) {
