@@ -338,6 +338,9 @@ export default defineConfig(
       'packages/familiar/preload.mjs',
       'packages/git/src/git-askpass-helper.cjs',
       'packages/x402/demo/verify.mjs',
+      // Standalone `endo run` harness for the OCI spike; no TypeScript
+      // project covers it, like the daemon and chat scripts above.
+      'packages/opencode-sandbox/oci/spike/*.mjs',
       'packages/base64/types/',
       'packages/bundle-source/scripts/',
       'packages/familiar/out/',
