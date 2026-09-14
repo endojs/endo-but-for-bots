@@ -6,6 +6,7 @@ import { E, Far } from '@endo/far';
 import harden from '@endo/harden';
 import { makePromiseKit, racePromises } from '@endo/promise-kit';
 
+import { makeFirstFailure, makeInFlight } from '../in-flight.js';
 import { MAX_TIMER_DELAY_MS } from '../platform/timers.js';
 
 /**
@@ -49,10 +50,8 @@ export const makeAlarmScheduler = (
   const cancellations = new Set();
   /** @type {Set<any>} */
   const cleanup = new Set();
-  /** @type {Set<Promise<any>>} */
-  const openings = new Set();
-  /** @type {Set<Promise<any>>} */
-  const observations = new Set();
+  const openings = makeInFlight();
+  const observations = makeInFlight();
   /** @type {Promise<void> | undefined} */
   let stopping;
   let stopped = false;
@@ -111,14 +110,7 @@ export const makeAlarmScheduler = (
     /** @type {any} */
     let client;
     const attempt = async () => {
-      const opening = Promise.resolve().then(openClient);
-      openings.add(opening);
-      let opened;
-      try {
-        opened = await opening;
-      } finally {
-        openings.delete(opening);
-      }
+      const opened = await openings.track(Promise.resolve().then(openClient));
       if (!live()) {
         closeClient(opened);
         throw Error('Alarm request expired');
@@ -140,13 +132,7 @@ export const makeAlarmScheduler = (
     }
   };
   /** @param {(control: any) => Promise<any>} action */
-  const invoke = action => {
-    const observation = observe(action);
-    observations.add(observation);
-    const finished = () => observations.delete(observation);
-    void observation.then(finished, finished);
-    return observation;
-  };
+  const invoke = action => observations.track(observe(action));
   /**
    * @param {bigint} id
    * @param {bigint} deadline
@@ -257,20 +243,20 @@ export const makeAlarmScheduler = (
         // Cancelling observations runs their finally cleanup without waiting
         // for guest promises. Local client creation itself must finish before
         // the caller can release the daemon's store ownership.
-        await Promise.allSettled([...observations]);
-        await Promise.allSettled([...openings]);
+        await observations.drain();
+        await openings.drain();
         // A late opening closes itself before its awaiting continuation yields.
         // Failed closes remain here for one last attempt, and are surfaced if
         // cleanup still cannot commit.
-        let failure;
+        const failure = makeFirstFailure();
         for (const client of cleanup) {
           try {
             closeClient(client);
           } catch (error) {
-            failure ??= error;
+            failure.record(error);
           }
         }
-        if (failure !== undefined) throw failure;
+        failure.assertNone();
       })();
       return stopping;
     },
