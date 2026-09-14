@@ -351,17 +351,22 @@ pub struct Signature {
     boot: Option<[u8; 32]>,
 }
 
+/// The first sixteen hex digits of a 32-byte fingerprint: enough to tell two
+/// boot layouts apart in a log line, while the full value stays in `Debug`.
+/// Infallible by type — the argument is a fixed 32-byte array.
+fn fingerprint_prefix(f: &mut std::fmt::Formatter<'_>, digest: &[u8; 32]) -> std::fmt::Result {
+    for byte in &digest[..8] {
+        write!(f, "{byte:02x}")?;
+    }
+    Ok(())
+}
+
 impl std::fmt::Display for Signature {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.boot {
-            // Sixteen hex digits is enough to tell two boot layouts apart in a
-            // log line; the full fingerprint stays in the Debug rendering.
             Some(boot) => {
                 write!(f, "{} @", self.host)?;
-                for byte in &boot[..8] {
-                    write!(f, "{byte:02x}")?;
-                }
-                Ok(())
+                fingerprint_prefix(f, boot)
             }
             None => write!(f, "{} (no boot fingerprint)", self.host),
         }
@@ -509,18 +514,11 @@ impl std::fmt::Display for SnapshotError {
             SnapshotError::BootLayoutMismatch { expected, found } => {
                 write!(f, "boot layout mismatch: snapshot carries ")?;
                 match found {
-                    Some(found) => {
-                        for byte in &found[..8] {
-                            write!(f, "{byte:02x}")?;
-                        }
-                    }
+                    Some(found) => fingerprint_prefix(f, found)?,
                     None => write!(f, "no fingerprint")?,
                 }
                 write!(f, ", this engine derives ")?;
-                for byte in &expected[..8] {
-                    write!(f, "{byte:02x}")?;
-                }
-                Ok(())
+                fingerprint_prefix(f, expected)
             }
             SnapshotError::Atom(e) => write!(f, "malformed container: {e}"),
             SnapshotError::Version(e) => write!(f, "incompatible container: {e}"),
@@ -541,7 +539,16 @@ impl std::fmt::Display for SnapshotError {
     }
 }
 
-impl std::error::Error for SnapshotError {}
+impl std::error::Error for SnapshotError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            SnapshotError::Atom(e) => Some(e),
+            SnapshotError::Version(e) => Some(e),
+            SnapshotError::Signature(e) => Some(e),
+            _ => None,
+        }
+    }
+}
 
 impl From<AtomError> for SnapshotError {
     fn from(e: AtomError) -> Self {

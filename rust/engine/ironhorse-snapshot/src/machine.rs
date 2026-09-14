@@ -64,7 +64,7 @@ impl std::fmt::Display for MachineSnapshotError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             MachineSnapshotError::Io(e) => write!(f, "snapshot io error: {e}"),
-            MachineSnapshotError::Snapshot(e) => write!(f, "snapshot decode error: {e:?}"),
+            MachineSnapshotError::Snapshot(e) => write!(f, "snapshot decode error: {e}"),
             MachineSnapshotError::NotQuiescent => {
                 write!(f, "machine is not at a quiescent crank boundary")
             }
@@ -78,7 +78,15 @@ impl std::fmt::Display for MachineSnapshotError {
     }
 }
 
-impl std::error::Error for MachineSnapshotError {}
+impl std::error::Error for MachineSnapshotError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            MachineSnapshotError::Io(e) => Some(e),
+            MachineSnapshotError::Snapshot(e) => Some(e),
+            _ => None,
+        }
+    }
+}
 
 impl From<io::Error> for MachineSnapshotError {
     fn from(e: io::Error) -> Self {
@@ -2659,6 +2667,14 @@ pub struct SharedStoreSession {
 fn shared_access_error(halt: ironhorse_vm::Halt) -> StoreError {
     match halt {
         ironhorse_vm::Halt::MachineBusy => StoreError::MachineNotQuiescent,
+        // The VM reporting that its OWN state is wrong is a tear-down, not a
+        // refusal: `Halt::EngineInvariant` is documented as never
+        // skip-eligible, and a panic is not something a retry survives.
+        // Separated here so the classifier can say so; every other halt is a
+        // refusal the caller may be able to act on.
+        other @ (ironhorse_vm::Halt::EngineInvariant(_) | ironhorse_vm::Halt::Panic(_)) => {
+            StoreError::EngineInvariant(format!("{other:?}"))
+        }
         other => StoreError::MachineOperation(format!("{other:?}")),
     }
 }

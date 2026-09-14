@@ -1049,6 +1049,24 @@ and a reader working from it alone will re-do them.
       That work was picked up and finished; the decision record is the last
       place in `designs/` still carrying the 47 figure.
       Not gated on any phase here — it is false now, not false later.
+- [ ] **Split `StoreError::BaselineMismatch` (Phase 0).** Roughly eleven of
+      its construction sites compare content recomputed at rest against the
+      root its own manifest seals — tamper or bit-rot, which should tear a
+      session down — while the other eight are lineage and session-drift
+      guards, which are refusals.
+      One class covers both today, and it is the refusal, so the classifier
+      errs toward "keep running" on the corruption half.
+      Splitting needs a per-site judgement across `store.rs` and `machine.rs`;
+      it was left out of the first Phase 0 increment rather than done in
+      haste, because miscategorising a site is worse than the overload.
+- [ ] **Carry `std::io::ErrorKind` on `StoreError::Io` (Phase 0).** The kind
+      is destroyed at construction, so `PermissionDenied` and `NotFound`
+      classify `Transient` alongside a genuinely retryable write.
+      Reshaping the variant reaches twenty-five construction sites in
+      `rust/endo/ironhorse-store-sqlite`, in the other cargo workspace, which
+      is why it is named here rather than folded into the first increment.
+      Until it lands, a supervisor should bound its retries rather than trust
+      that class to terminate them.
 - [ ] **Decide `ses_boot.js`'s provenance before Phase 4 starts.** The bundle
       is not in the tree, is a ~1 MB rollup artifact over `@endo/*`, and is
       on the record as "out of this engine workspace's scope" and ledgered

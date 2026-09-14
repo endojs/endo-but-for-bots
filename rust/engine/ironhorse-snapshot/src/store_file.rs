@@ -418,8 +418,8 @@ impl HeapStore for FileStore {
         )?) as usize;
         let new_manifest = manifest.encode();
         if new_manifest.len() != old_len {
-            return Err(StoreError::Io(
-                "migration manifest length changed; full rewrite required".to_string(),
+            return Err(StoreError::Unsupported(
+                "migrate a manifest whose encoded length changed; a full rewrite is required",
             ));
         }
         // The header's manifest length is trusted only after the file
@@ -1356,7 +1356,10 @@ mod tests {
         batch.chunk_extents.pop(); // drop the newest extent's row
         crate::store::reseal_batch(&mut batch);
         match store.commit(&batch) {
-            Err(StoreError::MissingRow("chunk extent", _)) => {}
+            // Wrapped: a row missing from the caller's batch is a rejected
+            // request, not a poisoned store.
+            Err(StoreError::BatchRejected(inner))
+                if matches!(*inner, StoreError::MissingRow("chunk extent", _)) => {}
             other => panic!("expected missing grown row, got {other:?}"),
         }
     }
