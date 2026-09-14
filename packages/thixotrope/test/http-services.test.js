@@ -10,7 +10,7 @@ import { makeFileSyncStringAtom } from '../src/store/file-sync-string-atom.js';
 
 import { makeHttpServices } from '../src/http/http-services.js';
 
-import { makeNodePowers } from '../src/platform/node-powers.js';
+import { makeNodePowers } from '../src/platform/node/powers.js';
 
 const nodePowers = makeNodePowers();
 

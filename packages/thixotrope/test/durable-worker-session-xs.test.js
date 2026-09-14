@@ -27,7 +27,7 @@ import { makeFsStore } from '../src/store/store-fs.js';
 import { makeXsEngine } from '../src/ironhorse/xs-engine.js';
 import { makeTestOcapn } from './_util.js';
 
-import { makeNodePowers } from '../src/platform/node-powers.js';
+import { makeNodePowers } from '../src/platform/node/powers.js';
 
 const nodePowers = makeNodePowers();
 

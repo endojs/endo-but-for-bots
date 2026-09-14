@@ -14,21 +14,26 @@ import * as nodeTimers from 'node:timers';
 import * as url from 'node:url';
 import * as util from 'node:util';
 
-import { makeDisplayPowers } from './display.js';
-import { makeEnvironmentPowers, makeUserPowers } from './environment.js';
+// Powers whose implementation is already portable: they take plain
+// functions, so the Node host only has to supply them.
+import { makeDisplayPowers } from '../display.js';
+import { makeEnvironmentPowers, makeUserPowers } from '../environment.js';
+import { makeHashPowers } from '../hashes.js';
+import { makeLogPowers } from '../logging.js';
+import { makePathPowers } from '../paths.js';
+import { makeRandomPowers } from '../random.js';
+import { makeTimerPowers } from '../timers.js';
+
+// Powers with a Node-specific implementation, each the sole module allowed
+// to see the corresponding Node API.
 import { makeFilePowers } from './files.js';
-import { makeHashPowers } from './hashes.js';
 import { makeHttpListenerPowers } from './http-listeners.js';
-import { makeLogPowers } from './logging.js';
-import { makePathPowers } from './paths.js';
 import { makeProcessPowers } from './processes.js';
-import { makeRandomPowers } from './random.js';
 import { makeSocketPowers } from './sockets.js';
 import { makeSyncFilePowers } from './sync-files.js';
 import { makeTerminalPowers } from './terminal.js';
-import { makeTimerPowers } from './timers.js';
 
-/** @typedef {import('./timers.js').TimerHandle} TimerHandle */
+/** @typedef {import('../timers.js').TimerHandle} TimerHandle */
 
 /**
  * Construct the Node host's platform authority at its composition boundary.
@@ -48,8 +53,13 @@ export const makeNodePowers = () => {
   const random = makeRandomPowers({
     randomBytes: length => new Uint8Array(crypto.randomBytes(length)),
   });
+  // OCapN's info channel traces every frame and session step, so it is off
+  // unless the operator asks for it. Nothing below this line gets to make
+  // that decision again: libraries pass the logger through as given.
+  const traced = process.env.THIXOTROPE_TRACE !== undefined;
   const logging = makeLogPowers({
     log: (...args) => console.log(...args),
+    info: traced ? (...args) => console.error(...args) : () => {},
     error: (...args) => console.error(...args),
   });
   const paths = makePathPowers({
@@ -95,7 +105,7 @@ export const makeNodePowers = () => {
     // application, so load it on first use to keep ordinary startup light.
     bundle: async file => {
       const [{ makeBundlerPowers }, { makeReadPowers }] = await Promise.all([
-        import('./bundler.js'),
+        import('../bundler.js'),
         import('@endo/compartment-mapper/node-powers.js'),
       ]);
       const bundlerPowers = makeBundlerPowers({
