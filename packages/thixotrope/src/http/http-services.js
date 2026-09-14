@@ -2,10 +2,12 @@
 import { E, Far } from '@endo/far';
 import { Fail } from '@endo/errors';
 import harden from '@endo/harden';
+import { makePromiseKit } from '@endo/promise-kit';
 
 /** @import { SyncStringAtom } from '../store/sync-string-atom.js' */
 /** @import { HttpAbortSignal, HttpListener, HttpListenerPowers, HttpRequest, HttpRequestDescription } from '../platform/http-listeners.js' */
 /** @import { RandomPowers } from '../platform/random.js' */
+/** @import { PromiseKit } from '@endo/promise-kit' */
 
 /** @typedef {{id: string, port: number, state: 'allocated'|'preparing'|'open'|'closed', secret?: string}} Recipe */
 /** @typedef {{lookup: (secret: string) => any, close: () => void | Promise<void>}} RequestClient */
@@ -78,14 +80,11 @@ export const makeHttpServices = (
     return closing;
   };
   let lifecycle = 'restoring';
-  /** @type {() => void} */
-  let resolveReady = () => {};
-  /** @type {(reason: Error) => void} */
-  let rejectReady = () => {};
-  const ready = new Promise((resolve, reject) => {
-    resolveReady = () => resolve(undefined);
-    rejectReady = reject;
-  });
+  // Settles once the stored listener recipes have been restored; rejects for
+  // the rest of the process if restoration fails or we stop.
+  /** @type {PromiseKit<void>} */
+  const readyKit = makePromiseKit();
+  const { promise: ready } = readyKit;
   void ready.catch(() => {});
   let failedStorage = false;
   /** @param {Recipe[]} listeners */
@@ -340,15 +339,15 @@ export const makeHttpServices = (
             .filter(item => item.state === 'open')
             .map(item => bind(runtimeFor(item.id), item)),
         );
-        resolveReady();
+        readyKit.resolve();
       } catch (error) {
-        rejectReady(/** @type {Error} */ (error));
+        readyKit.reject(error);
         throw error;
       }
     },
     shutdown: async () => {
       lifecycle = 'stopped';
-      rejectReady(Error('HTTP services are shut down'));
+      readyKit.reject(Error('HTTP services are shut down'));
       await Promise.all(
         [...runtimes.values()].map(runtime =>
           enqueue(runtime, () => stop(runtime)),
