@@ -55,10 +55,10 @@ export const makeFilePowers = ({ fsp, createReadStream, dirname }) => {
     readText: path => fsp.readFile(path, 'utf8'),
     readBytes: path => fsp.readFile(path),
     readChunks: path => createReadStream(path),
-    writeTextAtomic: async (path, text) => {
+    writeTextAtomic: async (path, text, { mode } = {}) => {
       const temporary = `${path}.tmp`;
       try {
-        await fsp.writeFile(temporary, text);
+        await fsp.writeFile(temporary, text, { mode });
         await syncPath(temporary);
         await fsp.rename(temporary, path);
         await syncPath(dirname(path));
