@@ -131,3 +131,35 @@ fn suspended_generator_refuses_a_non_persisted_native() {
     assert_eq!(vm.stored_unpersistable_row(), refusal);
     assert_eq!(vm.stored_unpersistable_row_at_checkpoint(), refusal);
 }
+
+#[test]
+fn suspended_async_generator_refuses_a_non_persisted_native() {
+    // An async generator instance (architecture review F127) holds a
+    // suspended frame and a request queue; each is a stored-reference
+    // holder the gate must walk now that the table persists.
+    let gate = "var gate = new Promise(function () {});";
+    for (holder, source) in [
+        (
+            "frame local",
+            "async function* f() { let x = 12345; yield 1; return x; } var box = f(); box.next(); 0;",
+        ),
+        (
+            "active request value",
+            "async function* f() { await gate; } var box = f(); box.next(12345); 0;",
+        ),
+        (
+            "queued request value",
+            "async function* f() { await gate; } var box = f(); box.next(); box.next(12345); 0;",
+        ),
+    ] {
+        let mut vm = stored_native_opcode(&format!("{gate} {source}"), Opcode::XS_CODE_INTEGER_2);
+        vm.collect_garbage().unwrap();
+        let refusal = Some("a stored reference to a non-persisted native function");
+        assert_eq!(vm.stored_unpersistable_row(), refusal, "{holder}");
+        assert_eq!(
+            vm.stored_unpersistable_row_at_checkpoint(),
+            refusal,
+            "{holder}"
+        );
+    }
+}

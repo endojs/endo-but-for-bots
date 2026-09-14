@@ -55,6 +55,12 @@ macro_rules! persist_holder {
         $emit! { $vm.$field.values().any(|a| a.frame.as_ref().is_some_and(|f| saved_frame_contains(f, $names))
             || $names(&a.resolve_fn) || $names(&a.reject_fn)) }
     };
+    // An async generator holds its suspended frame plus a request queue
+    // whose entries carry a value and a resolving-function pair each.
+    ($emit:ident, $vm:ident, $field:ident, $names:ident, $index:ident, async_generators) => {
+        $emit! { $vm.$field.values().any(|g| g.frame.as_ref().is_some_and(|f| saved_frame_contains(f, $names))
+            || g.requests.iter().chain(g.active.as_ref()).any(|r| $names(&r.value) || $names(&r.resolve) || $names(&r.reject))) }
+    };
 }
 
 macro_rules! define_persist_holders {

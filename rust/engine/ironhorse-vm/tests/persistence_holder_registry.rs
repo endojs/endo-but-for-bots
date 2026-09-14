@@ -50,6 +50,7 @@ fn every_persisted_holder_keeps_its_native_reference_checks() {
         ("combinators", &["names(&c.resolve)||names(&c.reject)"]),
         ("generators", &[".frame.as_ref()", "saved_frame_contains(f,names)"]),
         ("async_instances", &[".frame.as_ref().is_some_and(|f|saved_frame_contains(f,names))||names(&a.resolve_fn)||names(&a.reject_fn)"]),
+        ("async_generators", &[".frame.as_ref().is_some_and(|f|saved_frame_contains(f,names))", "g.requests.iter().chain(g.active.as_ref()).any(|r|names(&r.value)||names(&r.resolve)||names(&r.reject))"]),
     ];
     let active: Vec<_> = PERSIST_HOLDER_SOURCE
         .iter()
