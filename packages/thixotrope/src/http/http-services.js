@@ -4,6 +4,8 @@ import { Fail } from '@endo/errors';
 import harden from '@endo/harden';
 import { makePromiseKit } from '@endo/promise-kit';
 
+import { makeFirstFailure, makeInFlight } from '../in-flight.js';
+
 /** @import { SyncStringAtom } from '../store/sync-string-atom.js' */
 /** @import { HttpAbortSignal, HttpListener, HttpListenerPowers, HttpRequest, HttpRequestDescription } from '../platform/http-listeners.js' */
 /** @import { RandomPowers } from '../platform/random.js' */
@@ -62,23 +64,16 @@ export const makeHttpServices = (
   }
   /** @type {Map<string, Runtime>} */
   const runtimes = new Map();
-  /** @type {Set<Promise<void>>} */
-  const closingClients = new Set();
-  /** @type {Set<Promise<RequestClient>>} */
-  const openingClients = new Set();
-  /** @type {unknown} */
-  let clientCloseFailure;
+  const closingClients = makeInFlight();
+  const openingClients = makeInFlight();
+  const clientCloseFailure = makeFirstFailure();
   /** @param {RequestClient} client */
-  const closeClient = client => {
-    const closing = Promise.resolve()
-      .then(() => client.close())
-      .catch(error => {
-        clientCloseFailure = error;
-      });
-    closingClients.add(closing);
-    void closing.then(() => closingClients.delete(closing));
-    return closing;
-  };
+  const closeClient = client =>
+    closingClients.track(
+      Promise.resolve()
+        .then(() => client.close())
+        .catch(clientCloseFailure.record),
+    );
   let lifecycle = 'restoring';
   // Settles once the stored listener recipes have been restored; rejects for
   // the rest of the process if restoration fails or we stop.
@@ -172,14 +167,7 @@ export const makeHttpServices = (
    * @param {HttpAbortSignal} abort
    */
   const dispatch = async (recipe, request, abort) => {
-    const opening = openClient();
-    openingClients.add(opening);
-    let opened;
-    try {
-      opened = await opening;
-    } finally {
-      openingClients.delete(opening);
-    }
+    const opened = await openingClients.track(openClient());
     /** @type {RequestClient | undefined} */
     let client = opened;
     const release = () => {
@@ -353,9 +341,9 @@ export const makeHttpServices = (
           enqueue(runtime, () => stop(runtime)),
         ),
       );
-      await Promise.allSettled([...openingClients]);
-      await Promise.all([...closingClients]);
-      if (clientCloseFailure) throw clientCloseFailure;
+      await openingClients.drain();
+      await closingClients.drain();
+      clientCloseFailure.assertNone();
     },
     list: () => harden(state.listeners.map(recipe => status(recipe.id))),
   });
