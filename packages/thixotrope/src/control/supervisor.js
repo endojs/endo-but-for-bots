@@ -1,4 +1,30 @@
 // @ts-check
+/**
+ * The local supervisor: the process that owns a Thixotrope state directory
+ * and turns it into a running workspace. It is the composition root beneath
+ * `bin/thix.js` — the only module that assembles a daemon, the durable and
+ * Unix netlayers, the application registry, and the host services (clock,
+ * HTTP, mailbox) into one whole, and the only one that holds the engine
+ * lease and the private control socket that authorizes administration.
+ *
+ * Three responsibilities are worth separating when reading it:
+ *
+ * - **Ownership.** One supervisor per state directory. The engine lease
+ *   encloses socket lifetime, so a successor never serves a directory whose
+ *   predecessor can still write it, and shutdown drains transient clients
+ *   before releasing the store.
+ * - **Workspace.** A single durable guest vat holds the user's inventory and
+ *   the bindings an attached terminal evaluates against. Host services are
+ *   provided lazily and granted into that vat by explicit inventory key,
+ *   never ambiently.
+ * - **Administration.** Each control-socket connection gets its own
+ *   `ThixotropeLocalAdmin` facet over an OCapN session. Connection lifetime
+ *   is an observer lifetime only: closing a terminal cancels its ephemeral
+ *   subscriptions and leaves every durable guest listener in place.
+ *
+ * Everything durable lives in the daemon's store or the guest heap; this
+ * file holds only the process-lifetime wiring between them.
+ */
 /** @import { NodePowers } from '../platform/node/powers.js' */
 /** @import { FilePowers } from '../platform/files.js' */
 import { E, Far } from '@endo/far';
