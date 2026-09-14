@@ -1,7 +1,9 @@
 // @ts-check
-/** @import { TimerHandle, TimerPowers } from '../platform/timers.js' */
+/** @import { TimerPowers } from '../platform/timers.js' */
 import { E, Far } from '@endo/far';
 import harden from '@endo/harden';
+
+import { settleWithin } from '../platform/timers.js';
 
 /**
  * Keep pending guest operations in a scope that never contains a socket.
@@ -76,14 +78,11 @@ export const makeInventoryViewLifetime = (
         observer = undefined;
         rejectDelivery?.(Error('Inventory view disconnected'));
         rejectDelivery = undefined;
-        /** @type {TimerHandle | undefined} */
-        let timer;
-        disconnecting = Promise.race([
+        disconnecting = settleWithin(
+          timers,
+          cleanupGraceMs,
           cancelSubscription(),
-          new Promise(resolve => {
-            timer = timers.setTimer(() => resolve(undefined), cleanupGraceMs);
-          }),
-        ]).finally(() => timers.clearTimer(timer));
+        );
       }
       return disconnecting;
     },
