@@ -445,24 +445,23 @@ export interface StreamEndpointClose {
   close(): Promise<void>;
 }
 
-export interface CloseablePassableReader<
+// Intersections rather than `interface … extends`: the code-mode declaration
+// extractor in `@endo/agent-tools` flattens an interface's bases and does not
+// substitute a generic base's type arguments, so these stay type aliases.
+export type CloseablePassableReader<
   TRead extends Passable = Passable,
   TReadReturn extends Passable = Passable,
->
-  extends PassableReader<TRead, TReadReturn>, StreamEndpointClose {}
+> = PassableReader<TRead, TReadReturn> & StreamEndpointClose;
 
-export interface CloseablePassableWriter<
+export type CloseablePassableWriter<
   TWrite extends Passable = Passable,
   TWriteReturn extends Passable = Passable,
->
-  extends PassableWriter<TWrite, TWriteReturn>, StreamEndpointClose {}
+> = PassableWriter<TWrite, TWriteReturn> & StreamEndpointClose;
 
-export interface CloseablePassableBytesReader<
+export type CloseablePassableBytesReader<
   TReadReturn extends Passable = undefined,
->
-  extends PassableBytesReader<TReadReturn>, StreamEndpointClose {}
+> = PassableBytesReader<TReadReturn> & StreamEndpointClose;
 
-export interface CloseablePassableBytesWriter<
+export type CloseablePassableBytesWriter<
   TWriteReturn extends Passable = undefined,
->
-  extends PassableBytesWriter<TWriteReturn>, StreamEndpointClose {}
+> = PassableBytesWriter<TWriteReturn> & StreamEndpointClose;
