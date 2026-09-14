@@ -628,7 +628,7 @@ New package `packages/opencode-sandbox/`.
 | `src/opencode-backend-module.js` | Records each session's plan and exact dependencies with the daemon session owner (`provideSessionOwner`) and starts the native controller; no per-session formulas | replaces the deleted per-session provisioner |
 | `src/opencode-state-provider.js` | Per-session 0700 host directory + daemon mount via `host.provideMount`; destroy-only `removeSession` | daemon `host.js:685-741` |
 | `src/container-mount-bridge.js` | `provideContainerMountBridge`/`release…` (refused in phase 1) | `claude-sandbox/src/container-mount-bridge.js` |
-| `src/opencode-session-plan.js`, `src/opencode-session-storage.js` | The recorded plan parser shared by the controller and the storage owner; storage removal bound to `<root>/<sandboxSessionId>` | new; the client-formula creation module is deleted |
+| `src/opencode-session-plan.js`, `src/opencode-session-storage.js` | OpenCode's field list over the shared primitives in `@endo/hosted-agent/session-plan.js`; the storage owner is `@endo/hosted-agent/session-storage.js` over that parser, bound to `<root>/<sandboxSessionId>` | new; the client-formula creation module is deleted |
 | `src/opencode-client-module.js` | Credentials → slice env; workspace mount; state volume; MCP mount; server child + bridge process | `claude-client-module.js` + `codex-sandbox/src/app-server-transport.js` |
 | `src/opencode-client.js` | Spawn/command the bridge; session-id handoff; pending-call count; terminal barrier | `codex-client.js` + `claude-client.js` |
 | `src/opencode-bridge.mjs` | In-slice: start `opencode serve`, parse listening line, subscribe SSE, nd-JSON commands/events, summary filtering, terminal derivation, turn bounds | new; baked into the image |
