@@ -2473,8 +2473,11 @@ testNeedsNodeManager(
     // Starting reaches the native controller in its own worker. Without
     // Podman the provider listener cannot start, so activation rejects; the
     // owner keeps the record, its exact dependencies, and the private
-    // directories the backend prepared. This is wiring evidence only.
-    const refused = /procfs process identity/;
+    // directories the backend prepared. This is wiring evidence only. On a
+    // host without procfs (macOS) the runtime refuses before admission; on
+    // Linux the grant is admitted and the listener's start failure is
+    // reported as a failed admission.
+    const refused = /procfs process identity|Provider grant admission failed/;
     await t.throwsAsync(
       E(backend).create(
         harden({ sessionId: 'one', networkPolicy: 'off' }),
@@ -2671,8 +2674,11 @@ testNeedsNodeManager(
     // Starting reaches the native controller in its own worker. Without
     // Podman the provider listener cannot start, so activation rejects; the
     // owner keeps the record, its exact dependencies, and the private
-    // directories the backend prepared. This is wiring evidence only.
-    const refused = /procfs process identity/;
+    // directories the backend prepared. This is wiring evidence only. On a
+    // host without procfs (macOS) the runtime refuses before admission; on
+    // Linux the grant is admitted and the listener's start failure is
+    // reported as a failed admission.
+    const refused = /procfs process identity|Provider grant admission failed/;
     await t.throwsAsync(
       E(backend).create(harden({ sessionId: 'one' }), tools),
       { message: refused },
