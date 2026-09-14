@@ -13,12 +13,13 @@
 Nothing here is implemented; this document is an ordering proposal, not a
 record of work.
 
+## Method
+
 PR #1263 landed the Realm extraction, host-callable registration and an
 explicit restore session, then fenced off what it had *not* established:
 full daemon SES and worker-protocol acceptance.
 This document reads that fence against the architecture review's 191
-findings, names the fifteen that sit inside it, and puts them in the only
-order their own dependencies allow.
+findings, names the fourteen that sit inside it, and orders them.
 
 **Read the statuses here, not the review's.**
 The review's status columns stop at `1b130df7` (2026-09-08); PR #1263
@@ -28,6 +29,16 @@ Every finding below was re-verified against tree
 (2026-09-14) by reading the tree, not by carrying a status forward.
 Where a re-verification contradicts the review, or contradicts this
 document's own first draft, the row says so and shows its evidence.
+
+**On "order".** Two of the transitions below are hard gates — one phase
+cannot start until another has landed, and the document says which fact
+makes that true.
+The rest are orderings of preference: cheaper and more constraining work
+before work that would otherwise have to be redone.
+An earlier draft of this document claimed a single dependency order for all
+six phases; that claim did not survive its own re-verification, and where a
+gate turned out not to exist the phase now says so rather than keeping the
+stronger word.
 
 ## What is the Problem Being Solved?
 
@@ -60,9 +71,12 @@ and what may run in parallel.
 
 ## Findings in scope
 
-Fifteen findings.
-Three are open at HEAD, five partial, seven closed or landed — five of
-those seven closed since this document's first draft read them as open work.
+Fourteen findings over fifteen rows: F054's host-functions leg and its SES
+leg are tracked separately because they landed in different phases.
+Three rows are open at HEAD, five partial, seven closed or landed.
+Five of the seven were already closed when this document's first draft read
+them as open work — nothing landed between the two drafts; the first draft
+simply carried statuses it had not checked.
 
 | Finding | Sev | § | State at `65902a8f` | Phase |
 |---|---|---|---|---|
@@ -88,7 +102,10 @@ PR #1263 discharged outright.
 
 ### What the re-verification changed
 
-Five rows moved, and one of the five moves the shape of the whole plan.
+Five rows moved against the first draft, and one pair of them moves the
+shape of the whole plan.
+None of the five moved because the tree moved: both drafts read
+`65902a8f`.
 
 **F056 and F061 are closed, so Phase 2 is discharged.**
 `designs/ironhorse-2a-property-mop-completion.md` — which names F056 and
@@ -181,69 +198,122 @@ obligation: the `daemon-endo-rust-sqlite` row still says daemon powers
 "require service adapters and explicit restore policy", which Phase 3 makes
 false.
 
+## Dependencies
+
+| Design | Relationship |
+|---|---|
+| [ironhorse-engine](ironhorse-engine.md) | Owns the roadmap stage 4 bar (`:37`, `:940`) and the requirement-8 reconciliation table. Phase 6 edits `:37`, `:890`, `:898` and `:903`; Phase 4 is measured against stage 4. |
+| [ironhorse-w6-decisions](ironhorse-w6-decisions.md) | Decision of record for Realm (§1), engine trait (§2, deferred with the trigger Phase 1 fires) and the integrity model (§3, whose F056/F061 residue Phase 2 no longer carries). |
+| [ironhorse-2a-property-mop-completion](ironhorse-2a-property-mop-completion.md) | Closed F056 and F061, and with them Phase 2's confinement content. Its numerical recount is the method this document's re-count reproduces. |
+| [ironhorse-snapshot-store-seam](ironhorse-snapshot-store-seam.md) | Carries the side-table ledger whose HardenState/Modules/Functions rows are Phase 4's acceptance evidence, and the Pending rows behind F127. `ironhorse-snapshot/src/versions.rs` states the bump rules Phases 4 and 6 must follow. |
+| [daemon-endo-rust-sqlite](daemon-endo-rust-sqlite.md) | The reconciliation row that names "service adapters and explicit restore policy"; Phase 3 clears its first half. |
+| [daemon-endor-architecture](daemon-endor-architecture.md) | Names the engine-agnostic supervisor that F068 has no place to attach to. |
+
 ## Phased implementation
 
-The fifteen were two tracks when this document was drafted.
-They are one track now.
+The fifteen rows were two tracks when this document was drafted.
 Track B — `interp.rs` property paths — is discharged except for F062, which
-gates nothing, so the critical path runs straight through `rust/endo`:
+gates nothing.
+What is left is not a second track but a short chain with more slack in it
+than the first draft admitted: only two transitions are hard gates.
 
 ```
-┌───────────┐   ┌──────────────┐   ┌───────────────┐   ┌─────────────┐
-│ 0. Type   ├──►│ 1. Engine    ├──►│ 3. Host       ├──►│ 4. SES bar  │
-│    errors │   │    trait     │   │    adapters   │   └──────┬──────┘
-└───────────┘   └──────────────┘   └───────────────┘          │
-                                                              ▼
-              ┌──────────────┐                         ┌─────────────┐
-  (no gate) ─►│ 2. Intl      │  (gates nothing)        │ 5. Envelope │
-              │    residue   │                         └──────┬──────┘
-              └──────────────┘                                ▼
-                                                       ┌─────────────┐
-                                                       │ 6. Reconcile│
-                                                       └─────────────┘
+  0. Type errors ╌╌╌► 1. Engine trait ═══► 3. Host adapters ═══► 5. Envelope
+                                                                      ╎
+                          4. SES bar  ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╯
+                          (no gate in)
+
+  2. Intl residue        no gate in, no gate out
+  6. Reconcile           three edits, each riding its own phase (1, 3, 4+5)
+
+  ═══►  hard gate                ╌╌╌►  ordering preference
 ```
 
-The SES bar is still the long pole, but for a different reason than the
-first draft gave.
-It is no longer waiting on a second track to converge; it is simply the
-largest single phase, and it now sits behind three sequential predecessors
-with nothing able to run beside them.
+| Transition | Kind | Because |
+|---|---|---|
+| 1 → 3 | **hard gate** | An adapter's verbs need a trait to sit on |
+| 3 → 5 | **hard gate** | The envelope is delivered through the `worker_io.rs` host powers Phase 3 registers |
+| 0 → 1 | preference | Cheap constraining work before expensive structural work; `Unavailable` is already typeable |
+| 4 → 5 | preference | Keeps the envelope off a worker that cannot boot; not a dependency |
+| 1 → 6, 3 → 6, 4+5 → 6 | preference | Each reconciliation edit becomes possible when its own phase lands |
+| — → 2, 2 → — | none | Neither gated nor gating |
+| — → 4 | none | Retracted; see Phase 4 |
+
+**The two hard gates.**
+Phase 1 → Phase 3, because an adapter's verbs need a trait to sit on.
+Phase 3 → Phase 5, because the envelope is delivered through the
+`worker_io.rs` host powers Phase 3 registers; a transport loop with nothing
+to send frames through is the eval-shaped dialect `run_worker` refuses.
+
+**Everything else is preference.**
+Phase 0 before Phase 1 is cheap constraining work before expensive
+structural work.
+Phase 4 before Phase 5 keeps the envelope from shipping onto a worker that
+cannot boot, which is a good idea and not a dependency.
+Phase 2 may be taken at any time or dropped.
+Phase 6's three edits ride their own phases.
+
+The SES bar is still the long pole — a third of the estimate — but it is a
+long pole because it is large, not because anything converges on it.
+It is not gated on Phase 3 at all; see Phase 4, where the first draft's
+claim that it was is retracted with the evidence that refutes it.
 
 ### Phase 0 — Type the error channel
 
-**Gate:** none. This is the coupling everything else attaches to.
+**Gate:** none, and it gates nothing either — this is an ordering
+preference, not a dependency. See *Why first* below, which an earlier draft
+of this document overstated.
 **Size:** M — 2-3 developer days.
 
 - **F157** [medium, high] §3.13, open at HEAD; every coordinate below was
   re-read, and the two the first draft cited are still exact.
   `MachineError::Store(String)` (`ironhorse_engine.rs:58`) and
   `format!("{e:?}")` (`:854`) flatten the `StoreError` taxonomy into one
-  opaque string, at seven construction sites (`:854`, `:1108`, `:1254`,
-  `:1318`, `:1368`, `:1372`, `:1455`).
+  opaque string.
   Transient I/O (retry), deterministic refusal (never retry) and a poisoned
   session (tear down) are indistinguishable at the only boundary that can act
   on them.
   Named by ID in the #1263 deferral.
 
-  Two details have drifted from the review and neither weakens the finding.
+  Three details have drifted from the review and none weakens the finding.
   `StoreError` now carries **fourteen** variants
   (`ironhorse-snapshot/src/store.rs:114-178`), not the sixteen the review
-  counted, and it still derives only `Debug, PartialEq, Eq` — there is no
-  `Display` and no `std::error::Error` impl anywhere in either workspace, so
-  `{e:?}` is the only rendering available to the seam.
-  Separately, `MachineError::Unavailable(String)` (`:54`) already exists,
-  which is the variant Phase 1's trait needs; the work is to make `Store`
-  its equal, not to invent the vocabulary.
+  counted, and it still derives only `Debug, PartialEq, Eq`: there is no
+  `Display` and no `std::error::Error` impl for **`StoreError`** in either
+  workspace, so `{e:?}` is the only rendering available to the seam.
+  (`MachineError` itself has both — `Display` at `:84`, `Error` at `:105` —
+  which is the shape `StoreError` needs and does not have.)
+  `MachineError::Unavailable(String)` (`:54`) already exists, which is the
+  variant Phase 1's trait needs; the work is to make `Store` its equal, not
+  to invent the vocabulary.
+  And the change surface is **twenty-two** `MachineError::Store(`
+  construction sites, not the seven `format!`-shaped ones an earlier draft
+  of this document counted: the other fifteen build `Store` from string
+  literals (`:878`, `:895`, `:1138`, `:1189`, `:1199`, `:1207`, `:1214`,
+  `:1348`, `:1351`, `:1438`, `:1441`, `:1487` among them), and a variant
+  reshaped from `Store(String)` to `Store { kind, source }` touches every
+  one.
 
-**Why first.** F068's trait signature has to carry this error type.
-Extract `JsMachine` over a stringly-typed channel and the review's own
-prescription for the trait — "leaving the verbs it cannot yet serve as
-explicit `Err(Unavailable)` so the gap stays named and typed" — becomes
-untypeable.
-Doing it afterwards is a breaking change to a trait that by then has two
-implementors.
+**Why first, and why that is weaker than the first draft claimed.**
+That draft argued the review's `Err(Unavailable)` prescription — "leaving the
+verbs it cannot yet serve as explicit `Err(Unavailable)` so the gap stays
+named and typed" — "becomes untypeable" without this phase.
+It does not, and this document's own Phase 0 evidence says why:
+`MachineError::Unavailable(String)` already exists at `:54`.
+The trait is typeable today.
 
-**Cost.** Contained and mechanical: `Display` + `Error` on `StoreError`, a
+What survives is an ordering preference, and it is a real one.
+Every trait method returns `Result<T, MachineError>` either way, so doing
+Phase 0 second does not change a single method signature — but it does
+change the payload of a variant that the trait's two implementors and their
+callers will by then be matching on, and the match sites are the whole cost
+of the phase (see the twenty-two construction sites below).
+Cheap, contained, mechanical work that constrains a later structural change
+is worth doing before the structural change, not after.
+That is a scheduling argument, not a dependency, and it is stated as one.
+
+**Cost.** Contained and mechanical, but across twenty-two sites plus the
+`Display` arm at `:97`: `Display` + `Error` on `StoreError`, a
 `StoreFailure { Transient, Refused, Poisoned }` classifier beside the
 variants, `Store { kind, source }` in place of `Store(String)`, and a
 distinct `MachineError::Poisoned { during, source }` for the rewind sites.
@@ -251,12 +321,17 @@ The one non-mechanical cost is the tests that match on the flattened string:
 `ironhorse_engine.rs:1556` asserts
 `Err(MachineError::Store(message)) if message.contains(…)` and has to become
 a match on the classifier.
+M is the right bucket for twenty-two mechanical sites and one test predicate;
+it would not be if the classifier turned out to need per-variant judgement
+the `StoreError` taxonomy does not already encode.
 
 **Clears:** nothing on its own. It is the coupling, not a car.
 
 ### Phase 1 — Extract the engine seam
 
-**Gate:** Phase 0 — the trait's error type must already exist.
+**Gate:** none. Phase 0 first is a preference, for the reason that phase
+gives; the trait is typeable over today's `MachineError`.
+**Gates:** Phase 3, hard — an adapter's verbs need somewhere to sit.
 **Size:** L — 1-1.5 developer weeks.
 
 - **F068** [medium, high] §3.13, open at HEAD.
@@ -290,6 +365,16 @@ a match on the classifier.
 **Order within the phase.** `xsnap::Machine` first — the review is explicit
 that this half is "mechanical and changes no behaviour" and is "what
 actually caps the retrofit cost".
+The decision of record disagrees about the word, and its disagreement is
+carried here rather than quoted selectively: W6 §2's *Accepted cost of
+waiting* records that `PersistentMachine` gained `meter_bounds()` and a
+compile-then-execute budget sequence with no xsnap analogue, that
+`ironhorse_engine.rs` grew 331 lines in the `1b130df7` window alone, and
+that "if the trigger fires, expect the extraction to be larger than the
+review's 'mechanical' estimate."
+That is the reason this phase is sized L rather than M, and the reason its
+first task is to establish the trait's call set rather than to start
+transcribing methods.
 `PersistentMachine` second, with typed `Err(Unavailable)` for every verb it
 cannot yet serve, so the gap stays an honest named skip rather than an
 absence.
@@ -335,14 +420,17 @@ the engine to shipping compact-pattern data it has no other use for.
 
 **What it no longer clears.** The first draft of this document claimed this
 phase was "the honesty precondition for any SES acceptance claim."
-That is now false, and the correction matters more than the claim did: the
-precondition was already met before this document was written.
+That is false: the precondition was already met before this document was
+written.
 Phase 4 may be measured without waiting for F062.
 
 ### Phase 3 — Daemon powers as service adapters
 
-**Gate:** Phase 1 (verbs need a trait to sit on) and Phase 0 (adapters report
-typed failures).
+**Gate:** Phase 1, hard — the adapters' verbs need a trait to sit on.
+Phase 0 first is a preference again: the adapters are the sites that most
+want a typed store failure, but nothing stops them being written against
+`Store(String)` and re-matched later.
+**Gates:** Phase 5, hard — see that phase.
 **Size:** L — 1-1.5 developer weeks.
 
 - **F054 host-functions leg** [medium, high] §3.14, landed in #1263.
@@ -383,14 +471,24 @@ reconciliation row.
 
 ### Phase 4 — Meet the SES bundle bar
 
-**Gate:** Phase 3, and the bundle itself says so.
-`host_aliases.js`'s header states that it "runs after host-power registration
-and before the SES boot", and the names it aliases are the host powers
-themselves — `hostReadFile` → `readFileText` from `powers/fs.rs`,
-`hostSendRawFrame` → `sendRawFrame` from `worker_io.rs`.
-The middle bundle of the three cannot run until Phase 3 has registered what
-it aliases.
-**Size:** XL — 2-3 developer weeks, research-heavy.
+**Gate:** none from Phase 3, and an earlier draft of this document was wrong
+to claim one.
+It argued that `host_aliases.js` "needs host powers" because its header says
+it "runs after host-power registration and before the SES boot".
+The body says otherwise: the shim is a `globalThis` IIFE whose whole loop is
+`var target = globalThis[aliases[key]]; if (typeof target === 'function')`
+(`host_aliases.js:71-76`), so it aliases only powers that already exist and
+is a no-op for the rest.
+The engine states the consequence outright — "`host_aliases.js` is a
+self-contained `globalThis` IIFE that aliases only host functions that exist,
+so with no host powers registered it completes to `undefined` — safe to
+dual-run in the engine" (`ironhorse-262/src/lib.rs:705-707`) — and
+`daemon_boot_bundle_sources` (`:708-725`) already dual-runs `polyfills.js`,
+`host_aliases.js` and the combined prefix today, with no service adapter
+registered at all.
+Two of the three bundles are therefore already at the bar.
+**Size:** XL — 2-3 developer weeks, and the uncertainty is a scoping
+decision, not research. See *The obstacle* below.
 
 - **F054 SES leg** [medium, high] §3.14 — the leg that stays open.
   At `1b130df7` `Intrinsics` held a `BootTemplate` cache; the review's words
@@ -434,12 +532,70 @@ ledger's HardenState/Modules/Functions rows."
 That is the acceptance evidence to produce — not a green suite, those three
 rows.
 
+**The obstacle, which is not the one the first draft implied.**
+Two of the three bundles already dual-run.
+The third is not in the tree: `rust/endo/xsnap/src/ses_boot.js` does not
+exist in a checkout.
+The engine records exactly why, and has ledgered it:
+
+> The third boot step — **`ses_boot.js`** (SES `lockdown()` + the
+> HandledPromise shim) — is **not committed**: it is a ~1 MB build artifact
+> the daemon bundler (`rollup` over `@endo/*`) generates into
+> `src/ses_boot.js` before the `include_str!`, absent in a fresh checkout.
+> Bundling the full SES distribution is out of this engine workspace's
+> scope, so `ses_boot.js` is a **named, ledgered boot-bundle gap**
+> (`boot:ses-lockdown-bundle`), not dual-run here.
+
+(`ironhorse-262/src/lib.rs:699-707`; the ledger row is
+`rust/engine/CHANGELOG.md:900`.)
+`rust/endo/xsnap/src/lib.rs:944` still `include_str!`s it, and the repo
+generates it with `yarn bundle:xs`
+(`packages/daemon/scripts/bundle-bus-worker-xs-ses-boot.mjs`, per
+`rust/endo/README.md:22`).
+
+So the first question of this phase is not a VM question at all.
+It is: **does the engine workspace take a JavaScript-toolchain dependency,
+commit a ~1 MB generated bundle, or generate it in CI?**
+Whoever picks the phase up decides that before writing engine code, because
+the answer decides whether the bar can be run in `ironhorse-262` at all, and
+the current answer on record is "out of this engine workspace's scope".
+The XL size assumes that decision is made and the bundle is reachable; it
+does not price a cross-workspace build change.
+
+**If the bundles do not agree.** The bar is result agreement on three
+programs, and a divergence in `ses_boot.js` is the expected outcome of a
+first run, not a project failure.
+The partial-acceptance definition already exists in the shape of the
+evidence: the side-table ledger's HardenState, Modules and Functions rows
+are three separable claims, and a phase that lands two of them has a
+reportable result.
+Descoping to "`polyfills.js` and `host_aliases.js` at the bar, `ses_boot.js`
+named as a ledgered gap" is the tree's *current* state, so it is a floor
+rather than an outcome — but it is the honest thing to publish if the
+bundling decision goes the other way, and Phase 5 would then ship against a
+named SES gap exactly as `run_worker` already describes.
+
 **Clears:** "full daemon SES acceptance," the clause the fence says freezing
 does not imply.
 
 ### Phase 5 — Ship the worker envelope
 
-**Gate:** Phases 1, 3 and 4. All three; no partial entry.
+**Gate:** Phase 3, genuinely — this is where the host-powers gate the first
+draft put on Phase 4 actually belongs.
+The envelope is delivered through host functions, not around them:
+`host_aliases.js` groups its `worker_io.rs` powers first —
+`hostGetDaemonHandle`, `hostSendRawFrame`, `hostRecvFrame`, `hostSendFrame`,
+`hostIssueCommand`, `hostImportArchive`, `hostTrace` (`:18-25`) — and those
+are the transport verbs, not the `powers/fs.rs` or `powers/sqlite.rs` ones
+below them.
+A CBOR envelope loop with nothing to send frames through is the eval-shaped
+dialect `run_worker` refuses by name.
+Phase 1 as well, since the supervisor drives the loop through the trait.
+Phase 4 is an ordering preference rather than a gate: F127's directive is
+that the async carries land before the envelope, and they have, so an
+envelope shipped ahead of the SES bar would work — it would just ship onto a
+worker that cannot boot `ses_boot.js`, which is the state `run_worker`
+already refuses in prose.
 **Size:** L — 1-1.5 developer weeks.
 
 - **F127** [low, high] §3.9, residue.
@@ -465,13 +621,29 @@ The first draft left this open. It is decided here.
 anchored by exactly one `FromAsync*` reaction on a live promise and that an
 unanchored entry is unreachable and compacted away, which is why refusing by
 kind is the whole gate for it.
-Carrying it means a new serialized side table, a new atom, a format bump, a
-store-schema bump, a migration and its golden corpora — the cost the
-`async_instances` carry actually incurred — for a builtin no daemon vat
-pattern needs.
-The reason the async carries were worth that price was named in F127's own
-impact clause: a vat awaiting a host response is *the* daemon pattern.
-A vat suspended inside `Array.fromAsync` is not.
+Carrying it means the shape the `async_instances` carry took: a row
+graduated from `Pending` to `Serialized`, its own atom, a format bump and a
+store-schema bump, and the golden corpora that go with them.
+The review records that shape for `async_instances` — "`async_instances`
+graduated to `Serialized` (sidetable.rs:575) with its own `ASYN` atom
+(format.rs:128, image.rs:2335 `encode_async_instances`, store schema 24)" —
+and this document asserts by analogy that `from_async` would cost the same
+kind of work, not that anyone has priced it.
+Treat the estimate as a shape, not a number; whoever takes Phase 5 should
+price it before reversing this decision.
+
+What the decision does rest on is a narrower claim than the first draft
+made.
+Not that no daemon vat pattern *needs* `Array.fromAsync` — guest code in a
+locked-down vat may call it, because SES permits it
+(`packages/ses/src/permits.js:1176`, `fromAsync: fn`) — but that no daemon
+vat pattern *currently* suspends inside it, where F127's own impact clause
+names a vat awaiting a host response as *the* daemon pattern, and that
+pattern now checkpoints.
+That is a statement about today's workload, and it is the reason the
+documentation half below is load-bearing rather than cosmetic: the refusal
+is reachable from a permitted builtin and surfaces only at checkpoint
+time.
 
 So: state the limitation where an embedder meets it.
 `PersistentMachine`'s doc comment (`ironhorse_engine.rs:745-778`) currently
@@ -498,8 +670,17 @@ only of the adapter layer Phase 3 builds, not of the registry beneath it.
 
 ### Phase 6 — Reconcile the record
 
-**Gate:** everything above. This phase may only *end* the sequence.
-**Size:** S — 1-2 developer days.
+**Gate:** per edit, not per phase.
+The three edits below are severally gated — the first on Phase 1, the second
+on Phase 3, the third on Phases 4 and 5 — and nothing requires batching them.
+An earlier draft of this document said the phase "may only *end* the
+sequence"; the argument behind that (do not write a reconciliation ahead of
+its seams) permits reconciling each line as its own seam lands just as well
+as it permits one terminal pass.
+Listed as a phase because the edits share a file and an intent, not because
+they share a gate.
+**Size:** S — 1-2 developer days, whether taken together or three times
+apart.
 
 Both findings that filed this phase are closed at HEAD; see *What the
 re-verification changed* above.
@@ -528,8 +709,8 @@ moment Phases 1, 3 and 4 land.
   procedure ("append a release, never replace a historical pin") is the
   thing to follow rather than rediscover.
 
-**The work.** Three edits, all of them consequences of earlier phases and
-none of them possible before those phases land:
+**The work.** Three independent edits, each a consequence of one earlier
+phase and each impossible before that phase lands:
 
 1. `designs/ironhorse-engine.md:890` — "No shared trait makes the XS and
    Ironhorse supervisor APIs interchangeable" becomes false when Phase 1
@@ -561,20 +742,37 @@ not retrospectively.
 Sizes use `designs/README.md` § Size and Time Estimates.
 The review's own W-stream sizes do not map onto these phase boundaries, so
 these are derived from the work each phase names, not carried over.
+The letters are used as the README's own per-design table uses them — as
+shape labels whose durations are stated per row, not as strict LOC brackets.
+`ironhorse-quiescent-gc` is S at "2–4 developer days" against an S bucket
+defined as one day, and `gateway-package` is XL at "6-10 weeks" against an
+XL defined as two to three; the rows below take the same liberty and say
+their durations explicitly.
 
 | Phase | Size | Estimate | Basis |
 |---|---|---|---|
-| 0. Type the error channel | M | 2-3 days | 14 `StoreError` variants gain `Display`/`Error`; one classifier; 7 construction sites; the string-matching tests |
+| 0. Type the error channel | M | 2-3 days | 14 `StoreError` variants gain `Display`/`Error`; one classifier; 22 `MachineError::Store(` construction sites plus the `Display` arm; the string-matching test predicate |
 | 1. Extract the engine seam | L | 1-1.5 weeks | A trait over two implementors; 29 `xsnap::Machine` methods against 9 on `PersistentMachine` and 8 on `ironhorse_engine::Machine`; an `Engine::Ironhorse` variant; typed `Unavailable` for the unserved verbs; the `Realm`/`Machine` rename |
 | 2. The Intl residue | S | 1 day | One refusal at the option reader (M if the CLDR compact patterns are implemented instead) |
 | 3. Daemon powers as service adapters | L | 1-1.5 weeks | sqlite, filesystem and network adapters onto an existing registry, each with its permit row and restore policy; `xsnap/src/powers/` is 2,640 lines over the same ground |
-| 4. Meet the SES bundle bar | XL | 2-3 weeks | Roadmap stage 4; three bundles running identically on both engines, evidenced by the HardenState/Modules/Functions ledger rows; research-heavy |
+| 4. Meet the SES bundle bar | XL | 2-3 weeks | Roadmap stage 4; two of the three bundles already dual-run, the third (`ses_boot.js`) is an uncommitted ~1 MB rollup artifact and a ledgered gap. Assumes the bundling decision is made; does not price a cross-workspace build change |
 | 5. Ship the worker envelope | L | 1-1.5 weeks | The CBOR envelope transport loop against an existing shape — `xsnap`'s `worker_io.rs` (1,559 lines) plus `envelope.rs` (402) — and the `PersistentMachine` refusal docs |
 | 6. Reconcile the record | S | 1-2 days | Three lines of the engine design's status ledger and reconciliation table, plus the `versions.rs` release entries Phases 4 and 5 require |
 
-Critical path — Phases 0, 1, 3, 4, 5, 6 in series, with Phase 2 anywhere —
-is **5.5 to 8.5 developer weeks** (28 to 42.5 developer days at five days a
-week), dominated by Phase 4, which is a third of it.
+Two figures, because `designs/README.md` carries a calibration convention
+and the raw sum is not it.
+
+The raw sum of the buckets above, over Phases 0, 1, 3, 4, 5 and 6 at five
+days a week, is 28 to 42.5 developer days — **5.5 to 8.5 weeks**.
+Applying the README's per-size multipliers (S 0.7, M 1.2, L 1.3, XL 1.3,
+carried forward unchanged since the 2026-05-14 round, `README.md:1501` and
+`:1832`) gives 35.6 to 53.75 days — **7 to 10.75 weeks**.
+
+**The calibrated figure is the planning number**, because those multipliers
+are the house convention and every other XL row in the README's estimate
+table is quoted after the bump.
+Phase 4 is a third of it either way.
+Phase 2 adds a day wherever it is taken and is excluded from both.
 
 This adds no scope to M11.
 Phase 4 is `ironhorse-engine`'s roadmap stage 4, already Approved and
@@ -584,11 +782,15 @@ No milestone total or timeline change is assigned.
 
 ## Design Decisions
 
-1. **F157 before F068.** The trait signature has to carry the error type.
-   Extracting `JsMachine` over `Store(String)` freezes the wrong shape across
-   two engines and makes the review's own `Err(Unavailable)` prescription
-   untypeable; fixing it after is a breaking change to a trait with two
-   implementors.
+1. **F157 before F068, as a preference and not as a gate.** The first draft
+   filed this as a dependency, arguing that the review's `Err(Unavailable)`
+   prescription is untypeable over a stringly-typed channel.
+   It is not: `MachineError::Unavailable(String)` already exists.
+   What is true is narrower and still decides the order — every trait method
+   returns `Result<T, MachineError>` either way, so Phase 0 changes no method
+   signature, but it reshapes a variant that the trait's two implementors and
+   their callers will be matching on across twenty-two construction sites.
+   Cheap constraining work first, so it is not redone.
 
 2. **Phase 2 is a residue, not a track.** This reverses the first draft's
    second decision, which read "Phase 2 has no gate and should start
@@ -597,38 +799,49 @@ No milestone total or timeline change is assigned.
    That was written against a tree where forty-seven sites bypassed the
    property seam.
    They do not, and a source-level gate now fails the build if they come
-   back, so the confinement precondition for Phase 4 is already met.
-   The SES bar is still the long pole — it is simply the largest phase, not
-   a convergence point.
+   back, so the confinement precondition for Phase 4 was already met before
+   this document existed.
+   The SES bar is still the long pole because it is the largest phase, not
+   because anything converges on it.
 
-3. **F033 goes last, not first.** The defect it records is a reconciliation
-   written ahead of its seams. Writing a new one ahead of the same seams
-   reproduces it.
+3. **Phase 4 is not gated on Phase 3.** The first draft said it was, on the
+   strength of a comment in `host_aliases.js`; the file's body and the
+   engine's own dual-run harness both say otherwise, and Phase 4 carries the
+   retraction with its evidence.
+   The host-powers gate is real, but it belongs to Phase 5, where the
+   envelope is delivered through `worker_io.rs`'s registered verbs.
+   Moving a gate is worth more than deleting one: the schedule now has two
+   phases (2 and 4) that can start on day one, where the first draft had one.
 
 4. **`FromAsync*` is documented, not carried.** Set out in full under Phase 5.
-   The short form: the carry costs a side table, an atom, a format bump, a
-   store-schema bump and a migration, and buys persistence for a builtin no
-   daemon vat pattern uses — where the `async_instances` carry bought the
-   daemon's central pattern.
+   The short form: the carry costs what the `async_instances` carry cost — a
+   row graduated to `Serialized`, its atom, a format bump, a store-schema
+   bump and the goldens — and buys checkpointing for a builtin no daemon vat
+   pattern currently suspends inside, where the `async_instances` carry
+   bought the daemon's central pattern.
    F127's Fix offers the alternative itself, and it is the right half to
    take.
+   The cost is a shape argued by analogy, not a measured figure, and the
+   need is a claim about today's workload rather than about the pattern
+   space; both are stated that way in the phase, and both are what to check
+   before reversing this.
 
-5. **The governing principle is F054's own Fix line: "Land the seams before
+5. **Reconciliation rides its phases; it is not a terminal pass.** The first
+   draft made Phase 6 gate on everything, reasoning from F033 that a
+   reconciliation written ahead of its seams reproduces the defect.
+   The reasoning is right and the conclusion was too strong: it forbids
+   writing ahead of a seam, which permits writing *with* each seam.
+   Phase 6's three edits are therefore severally gated, on Phases 1, 3 and
+   4+5.
+
+6. **The governing principle is F054's own Fix line: "Land the seams before
    the features."** Phases 0, 1 and 3 are seams — a typed error channel, an
    engine trait, a service-adapter surface.
-   Phases 4-5 are the features that ride them. Phase 6 is the record catching
-   up. Two things can move without disturbing anything else and nothing else
-   can: Phase 2 may be taken at any time or dropped, and Phase 6 may finish
-   at any time after Phase 5.
-
-6. **Re-verify, do not carry forward.** Five of the fifteen rows moved on
-   re-reading the tree: two inverted a phase (F056, F061), two emptied
-   another (F156, F033), and one removed a work item from a third (F155).
-   A status column is a reading of a commit, not a property of a finding;
-   this document's own first draft demonstrated the cost of treating them as
-   the same thing, in both directions — it carried a review status that was
-   already stale (F155, which the review had itself marked resolved), and it
-   carried four more that had gone stale since (F056, F061, F156, F033).
+   Phases 4 and 5 are the features that ride them; Phase 6 is the record
+   keeping up.
+   The chain that actually constrains the schedule is short: 1 → 3 → 5.
+   Everything else is preference, and the document says which is which
+   rather than presenting six phases as one forced order.
 
 ## Already clear
 
@@ -675,21 +888,10 @@ of them open, and a reader working from the review alone will re-do them.
 - **F143 / F184** — the `$262` host is out of production machines and
   intrinsic globals are no longer enumerable.
 
-## Dependencies
-
-| Design | Relationship |
-|---|---|
-| [ironhorse-engine](ironhorse-engine.md) | Owns the roadmap stage 4 bar (`:37`, `:940`) and the requirement-8 reconciliation table. Phase 6 edits `:37`, `:890`, `:898` and `:903`; Phase 4 is measured against stage 4. |
-| [ironhorse-w6-decisions](ironhorse-w6-decisions.md) | Decision of record for Realm (§1), engine trait (§2, deferred with the trigger Phase 1 fires) and the integrity model (§3, whose F056/F061 residue Phase 2 no longer carries). |
-| [ironhorse-2a-property-mop-completion](ironhorse-2a-property-mop-completion.md) | Closed F056 and F061, and with them Phase 2's confinement content. Its numerical recount is the method this document's re-count reproduces. |
-| [ironhorse-snapshot-store-seam](ironhorse-snapshot-store-seam.md) | Carries the side-table ledger whose HardenState/Modules/Functions rows are Phase 4's acceptance evidence, and the Pending rows behind F127. `ironhorse-snapshot/src/versions.rs` states the bump rules Phases 4 and 6 must follow. |
-| [daemon-endo-rust-sqlite](daemon-endo-rust-sqlite.md) | The reconciliation row that names "service adapters and explicit restore policy"; Phase 3 clears its first half. |
-| [daemon-endor-architecture](daemon-endor-architecture.md) | Names the engine-agnostic supervisor that F068 has no place to attach to. |
-
 ## Known Gaps and TODOs
 
-- [ ] Assign an owner and a start date. The sequence is fixed; the schedule
-      is not.
+- [ ] Assign an owner and a start date. The two hard gates are fixed; the
+      rest of the order, and the whole schedule, are not.
 - [ ] Choose between refusing and implementing compact notation in Phase 2.
       The recommendation is to refuse; the phase is sized both ways.
 - [ ] Confirm that Phase 1's trait subset is the supervisor's actual call
@@ -702,6 +904,21 @@ of them open, and a reader working from the review alone will re-do them.
       That work was picked up and finished; the decision record is the last
       place in `designs/` still carrying the 47 figure.
       Not gated on any phase here — it is false now, not false later.
+- [ ] **Decide `ses_boot.js`'s provenance before Phase 4 starts.** The bundle
+      is not in the tree, is a ~1 MB rollup artifact over `@endo/*`, and is
+      on the record as "out of this engine workspace's scope" and ledgered
+      as `boot:ses-lockdown-bundle`.
+      Take the JS-toolchain dependency in the engine workspace, commit the
+      generated bundle, or generate it in CI — the answer decides whether
+      stage 4's bar can be run in `ironhorse-262` at all, and it is a
+      cross-workspace call, not an engine one.
+      This is the largest genuine unknown in this document, and the XL size
+      on Phase 4 does not price it.
+- [ ] **Own the `FromAsync*` documentation half.** Stating the three
+      checkpoint refusals on `PersistentMachine` is gated on nothing and
+      could land this week; Phase 5 only requires that it has landed by the
+      time the envelope ships.
+      Until someone takes it, it is an obligation with no owner.
 - [ ] Index `designs/ironhorse-2a-property-mop-completion.md`.
       It is the design that closed F056 and F061, this document's
       Dependencies table points at it, and it is in no row of
