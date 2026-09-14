@@ -27,7 +27,9 @@
  * @property {(path: string) => Promise<string>} readText
  * @property {(path: string) => Promise<Uint8Array>} readBytes
  * @property {(path: string) => AsyncIterable<Uint8Array>} readChunks
- * @property {(path: string, text: string) => Promise<void>} writeTextAtomic
+ * @property {(path: string, text: string, options?: { mode?: number }) => Promise<void>} writeTextAtomic
+ *   replace the file's contents as one durable step, optionally with
+ *   permission bits for a newly created file
  * @property {(path: string, options?: { recursive?: boolean, mode?: number }) => Promise<void>} makeDirectory
  *   create the directory, recursively when asked, and persist the new
  *   directory entries up to their nearest existing ancestor
