@@ -343,7 +343,7 @@ LLM-agent stack).*
 | [daemon-capability-persona](daemon-capability-persona.md) | 2026-02-16 | 2026-02-24 | Not Started |
 | [daemon-cross-peer-gc](daemon-cross-peer-gc.md) | 2026-03-07 | 2026-04-29 | **Complete** |
 | [daemon-retention-paths](daemon-retention-paths.md) | 2026-04-30 | 2026-05-19 | In Progress (PR #284) |
-| [daemon-retention-labels](daemon-retention-labels.md) | 2026-09-14 | - | Proposed |
+| [daemon-retention-labels](daemon-retention-labels.md) | 2026-09-14 | — | Proposed |
 | [retention-path-notation](retention-path-notation.md) | 2026-05-10 | 2026-05-19 | Reference |
 | [runtime-container-fs-mount](runtime-container-fs-mount.md) | 2026-08-10 | 2026-09-08 | **Complete** |
 | [sturdy-refs-endor-syscall](sturdy-refs-endor-syscall.md) | 2026-06-23 | 2026-06-26 | Not Started |

@@ -8,6 +8,11 @@
 
 ## What is the Problem Being Solved?
 
+Throughout this design, *inviter* names the local party that **accepts** an
+invitation and hosts the resulting guest (the principal that owns and controls
+the retention decision), not the remote party who issued the invitation. Where
+the issuing side matters it is named explicitly.
+
 Invitation acceptance creates a local guest and retains its handle in the
 inviter's pin directory. For a host inviter this is the visible `@pins`
 directory. For a guest inviter, the proposed guest-owned invitation work in
@@ -19,6 +24,18 @@ injective across live name paths, converges on crash retry, and lets a later
 accept for the same path overwrite and reclaim an abandoned attempt. Replacing
 it with a hash or a newly minted formula identifier would lose legibility or
 the overwrite-as-reclamation property.
+
+Concretely, PR #1125 keeps a single-segment path as its exact `guest-<name>` key
+(so `bob` derives `guest-bob`, the operator-navigable slot callers and legacy
+databases already hold), and encodes a multi-segment path by prefixing each
+segment with its JavaScript string length and an underscore, then joining the
+length-prefixed segments under the `guest-` prefix. The two-segment path
+`team-a/bob` therefore derives `guest-6_team-a3_bob`. The length prefix is what
+makes the multi-segment form injective across hyphen-bearing segments, where a
+bare `join('-')` would collide: `a/b-c` and `a-b/c` both flatten to `a-b-c`, but
+their length-prefixed forms `guest-1_a3_b-c` and `guest-3_a-b1_c` stay distinct.
+This is the exact encoding whose invariants the present design preserves; see
+PR #1125 for its authoritative definition.
 
 The key is still only a pet name. It does not tell an operator who created the
 retention, which invitation binding it belongs to, when it was created, or
@@ -36,6 +53,19 @@ It does not replace the key or change which principal controls retention.
 
 1. **Live bindings do not collide.** The length-prefixed multi-segment encoding
    from PR #1125 remains the source of the pin name.
+
+   > **Unsettled dependency.** PR #1125 is still an open draft, and its encoding
+   > was already revised once mid-review to eliminate cross-purpose collisions.
+   > Its `<len>_<segment>` scheme could change again before it lands. This design
+   > layers on top of that encoding but does not freeze it: Phase 1 (`invitationPinName`
+   > and mint-time validation) lands *with* the guest-owned invitation work of
+   > #1125 and re-verifies against #1125's finally-merged shape before the
+   > `retention_reason` column (Phase 2) and any helper are cut. If #1125's key
+   > format is revised, only the worked example above and the `invitationPinName`
+   > helper move with it. Invariants 1–3 are stated in terms of the encoding's
+   > *properties* (injectivity, retry convergence, overwrite reclamation), which
+   > any successor encoding #1125 adopts must still satisfy, so the reason record,
+   > lifecycle states, and CLI surface are unaffected.
 2. **Retry converges.** The storage key remains a pure function of the
    invitation's request-stable name path. Timestamps, invitation identifiers,
    and minted guest identifiers never participate in the key.
@@ -44,7 +74,9 @@ It does not replace the key or change which principal controls retention.
 4. **The inviter retains authority.** Cross-peer retention is not a substitute
    for this local pin. A guest cannot see or remove its hidden `hostPins`.
 5. **Pruning is compare-and-remove.** An operator who inspected an old entry
-   cannot accidentally remove a successor that reused the same key.
+   cannot accidentally remove a successor that reused the same key. This is a
+   single-statement guarded delete, not a read-then-delete pair; the atomic
+   primitive is named in the *Host browse and prune surface* section below.
 
 ## Design
 
@@ -84,7 +116,11 @@ operations. `storeIdentifier(name, id, reason?)` updates the reason even when
 controller through a daemon-private helper, so this feature does not grant a
 guest a way to attach trusted-looking host metadata.
 
-`accept()` writes the reason with the pin before dropping the transient pin.
+`accept()`'s two-phase write first installs the durable pin naming the
+`invitation` formula, then swaps that binding to the `remoteHandle` once the
+invitation is consumed; the first, pre-swap binding is the *transient pin*
+referred to here. `accept()` writes the reason together with the durable pin in
+the same serialized step, before the swap that clears the transient state.
 The stable pin key still controls overwrite and collection. `pinnedAt` means
 the time this daemon durably installed the pin during the serialized accept;
 it is not a claim that every later step completed.
@@ -147,6 +183,7 @@ methods directly to its already large interface:
 
 ```typescript
 interface InvitationRetentionPins {
+  help(): string;
   list(guestLocator: string): Promise<InvitationRetentionPin[]>;
   prune(
     guestLocator: string,
@@ -164,13 +201,34 @@ type InvitationRetentionPin = {
 };
 ```
 
-`EndoHost.invitationRetentionPins()` returns this facet. Both methods reject a
-non-local locator or a locator that does not identify a `guest` formula.
+`EndoHost.invitationRetentionPins()` returns this facet. `help()` returns the
+facet's self-description, matching every other host-reachable capability
+(`EndoChannel`, `EndoDiagnostics`, `EndoTraces`, `EndoDirectory`), so an agent
+that discovers the facet through the ordinary `E(host).invitationRetentionPins().help()`
+path gets the same introspection it gets everywhere else. Both `list` and `prune`
+reject a non-local locator or a locator that does not identify a `guest` formula.
 `list` resolves that formula's hidden `hostPins`, sorts by pin name, and returns
-all entries. `prune` takes the target locator observed by `list` and removes the
-entry only if the pin still names that exact target. A missing entry is
-idempotent; a reused key that now names a different target returns `changed`
-without mutation.
+all entries.
+
+`prune` takes the target locator observed by `list` and removes the entry only
+if the pin still names that exact target. The compare and the removal are one
+atomic SQLite statement (`DELETE FROM pet_store_entry WHERE store_number = ? AND
+store_type = ? AND name = ? AND formula_id = ?`) with a rows-affected check, not
+a read-then-delete pair. Because `accept()` is serialized under the formula-graph
+lock, a concurrent supersede that overwrites the pin between an operator's `list`
+and their `prune` simply leaves the guarded `DELETE` matching zero rows: `prune`
+reports `changed` and mutates nothing rather than deleting the fresh entry. A
+missing entry likewise matches zero rows and is idempotent (`missing`).
+
+Returning this `'removed' | 'missing' | 'changed'` tri-state rather than throwing
+is a deliberate deviation from the sibling `remove` operations
+(`EndoDirectory.remove`, `PetStore.remove`), which signal "not found" by
+rejecting. Here `missing` and `changed` are the *expected*, non-exceptional
+outcomes of a compare-and-remove issued against a possibly-raced snapshot (they
+are how the operator learns the observed state is stale), so they are surfaced as
+ordinary return values a caller inspects, not as errors it must catch. Genuinely
+exceptional inputs (a non-local or non-`guest` locator) still throw, as the
+surface's convention expects.
 
 Guests created before PR #1125 have no `hostPins`. Their fallback entries live
 in the creating agent's visible `@pins` directory and remain manageable with
@@ -196,17 +254,30 @@ when another retention path exists.
 
 Move the PR #1125 encoding into one exported pure daemon helper,
 `invitationPinName(namePath)`. Both `invite()` and `accept()` call the same
-helper. `invite()` computes the actual storage name before it formulates or
-stores the invitation and calls `assertPetName` on it. For a legacy guest it
-also validates the full fallback name including `-from-<handle-number>`.
+helper. `invite()` computes the actual storage name, calls `assertPetName` on
+it, and only then formulates and stores the invitation, so the check runs before
+anything is persisted.
 
-An overlong result rejects synchronously from the caller's perspective with an
-error that reports the derived length and 255-code-unit limit. No invitation
+A *legacy guest* here is a guest created before PR #1125, which has no hidden
+`hostPins` directory and instead retains handles under a fallback name in the
+creating agent's visible `@pins` directory. That fallback name carries a
+`-from-<handle-number>` suffix (`<handle-number>` being the invited guest's
+handle identifier) to keep it distinct within the shared directory. For such a
+guest, `invite()` validates the full fallback name including that suffix, since
+the suffix contributes to the length that must stay within the pet-name limit.
+
+An overlong result is rejected synchronously from the caller's perspective with
+an error that reports the derived length and 255-code-unit limit. No invitation
 formula or name binding is written. Boundary tests cover 255 and 256 code
 units, multi-segment paths, hyphens, and non-BMP characters because both the
 length prefix and `isValidName` use JavaScript string length.
 
 ### Durable Set/index disposition
+
+The design prompt asks whether this retention work should be built on a **general
+durable Set formula** (a new, reusable daemon formula type that stores a mutable
+collection of identifiers) rather than on the existing pet store. This section
+weighs and rejects that alternative.
 
 Do not add a general durable Set formula for this work. A per-attempt,
 identifier-keyed set breaks retry convergence and supersede reclamation because
@@ -232,6 +303,18 @@ is introduced.
    `endo unpin`.
 5. Add the formula-inspector table when the Chat formula-view surface consumes
    host diagnostics.
+
+Phase 3 is the only phase that stacks on a second unlanded dependency: it extends
+`listRetentionPaths`/`followRetentionPaths` and the `endo paths` renderer from the
+[Retention Paths Inspector](daemon-retention-paths.md) design, whose PR #284 has
+been stalled and unmerged for weeks with an unknown landing timeline. That
+dependency is confined to Phase 3 by construction: Phases 1, 2, and 4 (mint-time
+validation, the `retention_reason` column and reason-aware controller operations,
+and the `InvitationRetentionPins` facet with `endo pins`/`endo unpin`) touch only
+the pet store and the host facet, none of the retention-path surface. If #284
+continues to stall, ship Phases 1–2 and 4 independently and hold Phase 3 (and its
+Phase-5 inspector consumer) until the retention-path surface lands, rather than
+blocking the whole feature on it.
 
 ## Test Plan
 
