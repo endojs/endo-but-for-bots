@@ -9,19 +9,26 @@ import path from 'node:path';
 import { main } from '../setup-hosted.js';
 import {
   brokerServiceSpecifier,
-  sandboxSpecifier,
+  nativeSandboxSpecifier,
   sessionStorageSpecifier,
   stateProviderSpecifier,
 } from '../src/hosted-runtime-setup.js';
+
+// What the fake reports for a persisted formula it has no entry for: a
+// generic entrypoint no service accepts.
+const unsupportedSpecifier = new URL(
+  '../../sandbox/src/agent.js',
+  import.meta.url,
+).href;
 
 /** @import { EndoHost } from '@endo/daemon' */
 
 const key = (...parts) => JSON.stringify(parts.flat());
 
-/** @param {{ failMint?: (specifier: string, options: any) => boolean, factorySpecifier?: string }} [options] */
+/** @param {{ failMint?: (specifier: string, options: any) => boolean, nativeSpecifier?: string }} [options] */
 const makeFakeHost = ({
   failMint,
-  factorySpecifier = sandboxSpecifier,
+  nativeSpecifier = nativeSandboxSpecifier,
 } = {}) => {
   const bindings = new Map();
   const mints = [];
@@ -30,7 +37,7 @@ const makeFakeHost = ({
   /** @type {Map<string, Record<string, string | undefined>>} */
   const environments = new Map();
   environments.set(
-    'sandbox-factory-id',
+    'native-sandbox-id',
     harden({
       ENDO_SANDBOX_OWNER_ID: 'test-owned',
       ENDO_SANDBOX_RUNTIME_DIR: process.env.ENDO_SANDBOX_RUNTIME_DIR,
@@ -44,7 +51,10 @@ const makeFakeHost = ({
   );
   const reads = [];
   /** @type {Map<string, string>} Specifier reported for a persisted formula id. */
-  const specifiers = new Map([['state-provider-id', stateProviderSpecifier]]);
+  const specifiers = new Map([
+    ['state-provider-id', stateProviderSpecifier],
+    ['native-sandbox-id', nativeSpecifier],
+  ]);
   return {
     bindings,
     mints,
@@ -68,7 +78,7 @@ const makeFakeHost = ({
                 properties: {
                   specifier: {
                     kind: 'literal',
-                    value: specifiers.get(id) ?? factorySpecifier,
+                    value: specifiers.get(id) ?? unsupportedSpecifier,
                   },
                 },
               });
@@ -140,7 +150,7 @@ const withEnv = async (t, values) => {
 
 const preflightHost = () => {
   const fake = makeFakeHost();
-  for (const name of ['sandbox-factory', 'state-provider', 'native-sandbox']) {
+  for (const name of ['state-provider', 'native-sandbox']) {
     fake.bindings.set(key('opencode-sandbox', name), 'cap');
   }
   fake.bindings.set(key('floot', 'controller-profile'), 'dir');
@@ -179,33 +189,21 @@ const baseEnv = async t => {
 
 test.serial('requires setup-host.js artifacts', async t => {
   await baseEnv(t);
-  const noFactory = makeFakeHost();
-  await t.throwsAsync(main(noFactory.host), { message: /sandbox-factory/ });
-
   const noProvider = makeFakeHost();
-  noProvider.bindings.set(key('opencode-sandbox', 'sandbox-factory'), 'cap');
   await t.throwsAsync(main(noProvider.host), { message: /state-provider/ });
 
   const noNative = makeFakeHost();
-  noNative.bindings.set(key('opencode-sandbox', 'sandbox-factory'), 'cap');
   noNative.bindings.set(key('opencode-sandbox', 'state-provider'), 'cap');
   await t.throwsAsync(main(noNative.host), { message: /native-sandbox/ });
   t.is(noNative.mints.length, 0, 'no mint precedes the preflight failures');
 });
 
 test.serial(
-  'standalone hosted setup refuses a generic factory before any mutation',
+  'standalone hosted setup refuses a generic runtime before any mutation',
   async t => {
     await baseEnv(t);
-    const fake = makeFakeHost({
-      factorySpecifier: new URL('../../sandbox/src/agent.js', import.meta.url)
-        .href,
-    });
-    for (const name of [
-      'sandbox-factory',
-      'state-provider',
-      'native-sandbox',
-    ]) {
+    const fake = makeFakeHost({ nativeSpecifier: unsupportedSpecifier });
+    for (const name of ['state-provider', 'native-sandbox']) {
       fake.bindings.set(key('opencode-sandbox', name), 'cap');
     }
     await t.throwsAsync(main(fake.host), { message: /Retire the old runtime/ });
@@ -268,8 +266,8 @@ test.serial(
     await main(fake.host);
     t.is(fake.mints.length, 4, 'credential, broker, session storage, backend');
     t.deepEqual(fake.reads, [
-      ['formula', 'sandbox-factory-id'],
-      ['env', 'sandbox-factory-id'],
+      ['formula', 'native-sandbox-id'],
+      ['env', 'native-sandbox-id'],
       ['formula', 'state-provider-id'],
       ['env', 'state-provider-id'],
     ]);
@@ -731,11 +729,7 @@ test.serial(
       key('floot', 'controller-profile', 'opencode-backend'),
       'old-backend',
     );
-    for (const name of [
-      'sandbox-factory',
-      'state-provider',
-      'native-sandbox',
-    ]) {
+    for (const name of ['state-provider', 'native-sandbox']) {
       failing.bindings.set(key('opencode-sandbox', name), 'cap');
     }
     failing.bindings.set(key('floot', 'controller-profile'), 'dir');

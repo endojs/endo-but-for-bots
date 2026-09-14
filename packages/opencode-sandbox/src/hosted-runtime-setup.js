@@ -19,14 +19,6 @@ import { readOpencodeBrokerConfig } from './opencode-broker-service-agent.js';
 /** @import { EndoHost } from '@endo/daemon' */
 /** @typedef {Parameters<EndoHost['getFormulaEnvironment']>[0]} FormulaIdentifier */
 
-export const sandboxSpecifier = assertCurrentSpecifier(
-  toCurrentSpecifier(
-    new URL('../../sandbox/src/owned-agent.js', import.meta.url).href,
-  ),
-  'sandbox',
-);
-harden(sandboxSpecifier);
-
 export const stateProviderSpecifier = assertCurrentSpecifier(
   toCurrentSpecifier(
     new URL('./opencode-state-provider-module.js', import.meta.url).href,
@@ -83,17 +75,6 @@ const readProvisionedEnvironment = async (host, name, expectedSpecifier) => {
   const env = await E(host).getFormulaEnvironment(identifier);
   return harden({ identifier, env });
 };
-
-/** @param {EndoHost} host */
-export const readSandboxRuntime = async host => {
-  const { identifier, env } = await readProvisionedEnvironment(
-    host,
-    'sandbox-factory',
-    sandboxSpecifier,
-  );
-  return harden({ identifier, config: readRuntimeConfig(env) });
-};
-harden(readSandboxRuntime);
 
 /** @param {EndoHost} host */
 export const readStateProvider = async host => {
@@ -233,42 +214,6 @@ export const prepareRuntimeEnv = async (env, ownerId, roots) => {
   });
 };
 harden(prepareRuntimeEnv);
-
-/**
- * The native service is a second runtime beside the capability-based factory.
- * Each runtime claims an exclusive ownership marker in its directory and
- * reconciles Podman orphans under its own owner label, so the native runtime
- * gets a private child of the validated runtime directory and a derived label.
- * The budgets are the factory's; they are aggregate per runtime, not shared.
- * @param {ReturnType<typeof readRuntimeConfig>} config The factory's persisted policy.
- * @param {typeof fs} [fsModule]
- */
-export const prepareNativeRuntimeEnv = async (config, fsModule = fs) => {
-  const directory = path.join(config.directory, 'native');
-  const ownerId = `${config.ownerId}-native`;
-  const existing = await fsModule.lstat(directory).catch(error => {
-    if (/** @type {NodeJS.ErrnoException} */ (error).code !== 'ENOENT')
-      throw error;
-    return undefined;
-  });
-  if (existing === undefined) {
-    // The parent was validated as private when the factory was minted.
-    await fsModule.mkdir(directory, { mode: 0o700 });
-  }
-  !existing?.isSymbolicLink() ||
-    Fail`Native runtime directory must not be a symlink: ${q(directory)}`;
-  const canonical = await assertPrivateDirectory(directory, fsModule);
-  const env = harden({
-    ENDO_SANDBOX_RUNTIME_DIR: canonical,
-    ENDO_SANDBOX_OWNER_ID: ownerId,
-    ENDO_SANDBOX_GENERATED_MAX_BYTES: String(config.maxBytes),
-    ENDO_SANDBOX_GENERATED_MAX_ENTRIES: String(config.maxEntries),
-  });
-  // The runtime's own reader validates the derived owner label and budgets.
-  readRuntimeConfig(env);
-  return env;
-};
-harden(prepareNativeRuntimeEnv);
 
 const execFile = promisify(execFileCallback);
 

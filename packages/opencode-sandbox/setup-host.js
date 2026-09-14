@@ -1,7 +1,6 @@
 // @ts-check
 /* global process */
 // endo run --UNCONFINED setup-host.js --powers @agent
-//   [-E NINEP_SUDO=1]
 //   [-E ENDO_OPENCODE_SANDBOX_OWNER_ID=operator-chosen-stable-id]
 //   [-E ENDO_OPENCODE_STATE_DIR=/var/lib/endo/opencode-state]
 //   -E ENDO_SANDBOX_RUNTIME_DIR=<existing-private-host-directory>
@@ -12,16 +11,32 @@
 // machine that runs the containers (Linux + podman). Idempotent. Mints,
 // nested under `opencode-sandbox/` so the host root stays clean:
 //
-//   sandbox-factory  — the owned `@endo/sandbox` Podman runtime.
-//   fs-mounter       — the `@endo/9p-server` mount caplet. `mount(2)` needs
-//                      `CAP_SYS_ADMIN`; pass `-E NINEP_SUDO=1` to route
-//                      mount/umount through `sudo` on an unprivileged daemon.
+//   native-sandbox   — the owned `@endo/sandbox` native Podman runtime that
+//                      daemon-owned session controllers acquire scopes from.
+//                      It is the primary runtime: it claims the exclusive
+//                      ownership marker of `ENDO_SANDBOX_RUNTIME_DIR`, stages
+//                      generated files there, and reconciles Podman orphans
+//                      under its owner label.
 //   state-provider   — host-backed durable per-session state. opencode forces
 //                      SQLite WAL, which needs same-host shared memory and
 //                      cannot run over the 9P workspace, so each session gets
 //                      a 0700 directory under `ENDO_OPENCODE_STATE_DIR`
 //                      (default `/var/lib/endo/opencode-state`) exposed to the
 //                      slice through a daemon-minted mount.
+//
+// The capability-based `sandbox-factory` and the shared `fs-mounter` are no
+// longer minted: each session mounts its workspace through its controller's
+// own 9P mounter, and the native runtime no longer derives its directory and
+// owner label from the factory's. A deployment that still binds either name
+// keeps it untouched. A new native mint is refused while `sandbox-factory` is
+// bound, and separately while the runtime directory still holds an ownership
+// marker or generated-files root under the native owner label — the paths the
+// retired factory held under the same label, which survive `endo restart` and
+// failed cleanup. Neither condition implies the other, and a formula the
+// daemon binds before construction would otherwise be retained unusable. The
+// rootless mount settings the shared mounter took (`NINEP_SUDO`,
+// `NINEP_MOUNT_PROGRAM`, `NINEP_UMOUNT_PROGRAM`) are not read here any more;
+// nothing routes them to a session's own mounter yet.
 //
 // The hosted backend itself (credentials + `opencode-backend`) belongs on the
 // same machine — see setup-hosted.js.
@@ -31,35 +46,19 @@ import { chmod, lstat, mkdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { E } from '@endo/eventual-send';
-import { Fail } from '@endo/errors';
+import { Fail, q } from '@endo/errors';
 
-import {
-  assertCurrentSpecifier,
-  toCurrentSpecifier,
-} from './src/current-specifier.js';
 import {
   assertRuntimePlacement,
   getHostedStorageRoots,
   nativeSandboxSpecifier,
-  prepareNativeRuntimeEnv,
   prepareRuntimeEnv,
   readNativeSandbox,
-  readSandboxRuntime,
   readStateProvider,
-  sandboxSpecifier,
   stateProviderSpecifier,
 } from './src/hosted-runtime-setup.js';
 
 /** @import { EndoHost } from '@endo/daemon' */
-
-const mountCapletSpecifier = toCurrentSpecifier(
-  new URL('../9p-server/mount-caplet.js', import.meta.url).href,
-);
-
-// Fail closed before minting anything if a release-pinned path could not be
-// rerouted through <stateDir>/current: a formula stored with a
-// `releases/<id>/` specifier dangles as soon as that release is pruned.
-assertCurrentSpecifier(mountCapletSpecifier, '9p mount caplet');
 
 // Kept in sync with setup-hosted.js and the backend's session records directory.
 const SANDBOX_DIR = 'opencode-sandbox';
@@ -101,25 +100,36 @@ export const main = async hostAgent => {
       : requestedRoots.stateDir,
   );
   const roots = harden({ ...requestedRoots, stateDir });
-  const existingFactory = await E(hostAgent).has(
-    SANDBOX_DIR,
-    'sandbox-factory',
-  );
-  /** @type {Record<string, string> | undefined} */
-  let runtimeEnv;
+  const legacyFactory = await E(hostAgent).has(SANDBOX_DIR, 'sandbox-factory');
+  const legacyMounter = await E(hostAgent).has(SANDBOX_DIR, 'fs-mounter');
 
-  // 1. Sandbox factory — `@agent` powers grant the privileged
-  //    `provideHostPath` / `provideScratchMount` surface the factory needs
-  //    to bridge granted Mount caps into the kernel's bind-mount surface.
-  if (existingFactory) {
-    const runtime = await readSandboxRuntime(hostAgent);
-    await assertRuntimePlacement(runtime.config.directory, roots);
+  // 1. Native sandbox service — the host-only primary runtime that
+  //    daemon-owned session controllers acquire scopes from. It is
+  //    constructed with a slot-free null value as powers: it imports no host
+  //    or scratch authority, and `@none` would be a denied-method guest
+  //    capability, not null. The stored value is a marshal formula the minted
+  //    service retains as its exact powers dependency; the temporary name is
+  //    not, and its dot keeps it outside the managed-credential name charset.
+  /** @type {Record<string, string> | undefined} */
+  let nativeEnv;
+  if (await E(hostAgent).has(SANDBOX_DIR, 'native-sandbox')) {
+    const native = await readNativeSandbox(hostAgent);
+    await assertRuntimePlacement(native.config.directory, roots);
     console.log(
-      'Retaining owned sandbox factory with its persisted configuration; current runtime environment is not reapplied.',
+      'Retaining owned native sandbox service with its persisted configuration; current runtime environment is not reapplied.',
     );
   } else {
+    // A bound name says nothing about the marker (a cleanly closed factory
+    // released it; one that failed construction never held it), but the
+    // daemon can revive a bound formula at any lookup or restart, and a
+    // revived factory would compete with the native runtime for the same
+    // label and marker. Refuse before any mint; the marker probe below is
+    // the separate check.
+    if (legacyFactory) {
+      throw Fail`${SANDBOX_DIR}/sandbox-factory is still bound: retire the old runtime (establish that its processes have stopped, then remove the name) before the native runtime takes the primary runtime directory.`;
+    }
     // Podman crash reconciliation must only touch this host's opencode
-    // slices. Persist the identity with the factory so every incarnation uses
+    // slices. Persist the identity with the runtime so every incarnation uses
     // the same exact owner label, independently of release paths and process
     // IDs.
     let ownerId = env.ENDO_OPENCODE_SANDBOX_OWNER_ID;
@@ -133,37 +143,33 @@ export const main = async hostAgent => {
       }
       ownerId = `opencode-${createHash('sha256').update(hostId).digest('hex')}`;
     }
-    runtimeEnv = await prepareRuntimeEnv(env, ownerId, roots);
+    nativeEnv = await prepareRuntimeEnv(env, ownerId, roots);
+    // The runtime claims `<owner>.owner` and `<owner>.files` in its directory
+    // at construction and refuses either if present; a retired runtime under
+    // the same label leaves both behind across restart or failed cleanup.
+    // Neither is adopted or removed here: the operator establishes that the
+    // holder has stopped, then reconciles them, before setup mints anything.
+    for (const suffix of ['owner', 'files']) {
+      const leftover = path.join(
+        nativeEnv.ENDO_SANDBOX_RUNTIME_DIR,
+        `${nativeEnv.ENDO_SANDBOX_OWNER_ID}.${suffix}`,
+      );
+      // eslint-disable-next-line no-await-in-loop
+      const info = await lstat(leftover).catch(error => {
+        if (/** @type {NodeJS.ErrnoException} */ (error).code === 'ENOENT')
+          return undefined;
+        throw error;
+      });
+      if (info !== undefined) {
+        throw Fail`Runtime directory still holds ${q(leftover)}: the native runtime would claim it and be refused at construction. Establish that the runtime that held it has stopped, then reconcile it, before rerunning setup.`;
+      }
+    }
   }
 
   if (!(await E(hostAgent).has(SANDBOX_DIR))) {
     await E(hostAgent).makeDirectory([SANDBOX_DIR]);
   }
-  if (runtimeEnv) {
-    await E(hostAgent).makeUnconfined('@main', sandboxSpecifier, {
-      powersName: '@agent',
-      resultName: [SANDBOX_DIR, 'sandbox-factory'],
-      env: runtimeEnv,
-    });
-    console.log(`Minted ${SANDBOX_DIR}/sandbox-factory`);
-  }
-
-  // 1b. Native sandbox service — the host-only runtime that daemon-owned
-  //     session controllers acquire scopes from. It is constructed with a
-  //     slot-free null value as powers: it imports no host or scratch
-  //     authority, and `@none` would be a denied-method guest capability,
-  //     not null. The stored value is a marshal formula the minted service
-  //     retains as its exact powers dependency; the temporary name is not,
-  //     and its dot keeps it outside the managed-credential name charset.
-  if (await E(hostAgent).has(SANDBOX_DIR, 'native-sandbox')) {
-    const native = await readNativeSandbox(hostAgent);
-    await assertRuntimePlacement(native.config.directory, roots);
-    console.log(
-      'Retaining owned native sandbox service with its persisted configuration.',
-    );
-  } else {
-    const runtimeConfig = (await readSandboxRuntime(hostAgent)).config;
-    const nativeEnv = await prepareNativeRuntimeEnv(runtimeConfig);
+  if (nativeEnv) {
     const powersName = 'opencode.null-powers';
     if (await E(hostAgent).has(powersName)) {
       await E(hostAgent).remove(powersName);
@@ -180,49 +186,21 @@ export const main = async hostAgent => {
     }
     console.log(`Minted ${SANDBOX_DIR}/native-sandbox`);
   }
-
-  // 2. 9P mounter — unconfined; ambient Node authority (no Endo powers).
-  if (!(await E(hostAgent).has(SANDBOX_DIR, 'fs-mounter'))) {
-    /** @type {Record<string, string>} */
-    const mounterEnv = {};
-    // A hosted daemon forwards only ENDO_-prefixed variables to its ENDO_EXTRA
-    // subprocesses, so the mount/umount program overrides a rootless deploy
-    // needs are also accepted under their ENDO_ spelling.
-    /** @type {Array<[string, string | undefined]>} */
-    const envSources = [
-      ['NINEP_SUDO', env.NINEP_SUDO ?? process.env.NINEP_SUDO],
-      [
-        'NINEP_SOCKET_DIR',
-        env.NINEP_SOCKET_DIR ?? process.env.NINEP_SOCKET_DIR,
-      ],
-      [
-        'NINEP_MOUNT_PROGRAM',
-        env.NINEP_MOUNT_PROGRAM ??
-          process.env.NINEP_MOUNT_PROGRAM ??
-          process.env.ENDO_NINEP_MOUNT_PROGRAM,
-      ],
-      [
-        'NINEP_UMOUNT_PROGRAM',
-        env.NINEP_UMOUNT_PROGRAM ??
-          process.env.NINEP_UMOUNT_PROGRAM ??
-          process.env.ENDO_NINEP_UMOUNT_PROGRAM,
-      ],
-    ];
-    for (const [key, value] of envSources) {
-      if (value !== undefined) {
-        mounterEnv[key] = /** @type {string} */ (value);
-      }
+  for (const [name, bound] of [
+    ['sandbox-factory', legacyFactory],
+    ['fs-mounter', legacyMounter],
+  ]) {
+    if (bound) {
+      console.warn(
+        `${SANDBOX_DIR}/${name} is bound but no longer minted or used by sessions; remove it once its processes have stopped.`,
+      );
     }
-    await E(hostAgent).makeUnconfined('@main', mountCapletSpecifier, {
-      powersName: '@none',
-      resultName: [SANDBOX_DIR, 'fs-mounter'],
-      env: harden(mounterEnv),
-    });
-    console.log(`Minted ${SANDBOX_DIR}/fs-mounter`);
   }
 
-  // 3. State provider — `@agent` powers grant `provideMount`, which is the
-  //    only way a Mount cap the sandbox factory will accept is minted.
+  // 2. State provider — `@agent` powers grant `provideMount`, used only by
+  //    the legacy client's Mount facade (`provideSessionMount`); a native
+  //    session controller takes `prepareSessionDirectory`'s host path and
+  //    binds it directly.
   if (!existingState) {
     // Prepare the root only when this run actually mints the provider: an
     // already-minted provider keeps the root baked into its formula, so

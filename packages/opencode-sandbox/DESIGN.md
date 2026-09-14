@@ -50,7 +50,8 @@ Budgets are explicit decimal integers: nonnegative bytes and positive directory 
 There are no default budgets or spending limits.
 `ENDO_OPENCODE_SANDBOX_OWNER_ID` optionally supplies the stable owner ID; otherwise
 setup derives it from the host formula identity.
-The factory formula persists these four values under their `ENDO_SANDBOX_*` names.
+The native runtime formula persists these four values under their `ENDO_SANDBOX_*` names;
+it is the primary runtime and claims the runtime directory's exclusive ownership marker.
 Host setup validates configuration before minting and never adopts or chmods a
 directory for runtime ownership.
 
@@ -66,15 +67,35 @@ The runtime parent and state root are selected independently: retained formulas
 use persisted values, while missing formulas use requested construction settings.
 An existing state provider must have a supported entrypoint and a persisted state
 root; its ambient environment fallback cannot establish stable placement.
-`setup-hosted.js` requires both formulas and uses their persisted roots.
+`setup-hosted.js` requires both formulas (native runtime and state provider) and uses their
+persisted roots.
 Current runtime or state environment values neither override nor need to repeat them.
 
-Both scripts inspect the existing factory formula and refuse a generic or unknown
+Both scripts inspect the existing native runtime formula and refuse a generic or unknown
 entrypoint before provisioning mutations.
 Retire an old generic runtime and establish that its processes have stopped before
 replacing its formula; deleting a name alone does not establish this.
 There is no automatic migration or stale-owner takeover.
-An existing owned factory is retained with its persisted configuration.
+An existing owned native runtime is retained with its persisted configuration, including one
+minted beside the retired capability-based factory in that factory's private `native` child.
+The capability-based `sandbox-factory` and the shared `fs-mounter` are no longer minted; both
+legacy names are left in place and reported.
+A new native mint is refused while `sandbox-factory` is still bound, and separately while the
+runtime directory holds an ownership marker (`<owner>.owner`) or generated-files root
+(`<owner>.files`) under the native owner label: the retired factory held both under the same
+label, they survive `endo restart` and failed cleanup, and binding does not imply either.
+Setup neither adopts nor removes them; the operator establishes that their holder has stopped
+and reconciles them first.
+The native runtime reconciles Podman orphans under that same label, so containers a retired
+factory left behind are removed at the native runtime's first slice make or backend listing; a
+live factory holds the marker, which refuses native construction before any such sweep.
+Leftovers under any other label are the operator's, including a removed beside-factory native
+service's `native/<owner>-native.owner`, `.files`, and `-native`-labelled containers: setup
+neither probes nor sweeps a label it does not own.
+Host setup no longer reads the shared mounter's rootless mount settings (`NINEP_SUDO`,
+`NINEP_MOUNT_PROGRAM`, `NINEP_UMOUNT_PROGRAM`); a session's own mounter receives its
+controller's formula environment, which nothing populates yet, so a rootless deployment that
+needs them has no route until that plumbing lands.
 Environment values remain absent from ordinary diagnostics; the explicit host-only
 reader verifies effective placement without reviving or changing retained formulas.
 Rerunning host setup does not reapply runtime configuration.
@@ -597,7 +618,7 @@ New package `packages/opencode-sandbox/`.
 | File | Responsibility | Model on |
 |---|---|---|
 | `package.json` | `@endo/opencode-sandbox`; setup + client module exports; dependency on `@endo/codex-sandbox` if its volume provider is reused, or a copied helper | `packages/claude-sandbox/package.json` |
-| `setup-host.js` | Mint `opencode-sandbox/sandbox-factory`, `opencode-sandbox/native-sandbox` (null powers), `opencode-sandbox/fs-mounter` (legacy), and the state provider | **claude-sandbox** `setup-host.js` (codex has none) |
+| `setup-host.js` | Mint `opencode-sandbox/native-sandbox` (null powers) as the primary runtime and the state provider; the capability-based factory and shared mounter are no longer minted | **claude-sandbox** `setup-host.js` (codex has none) |
 | `setup-hosted.js` | Session dirs, credential provisioning, mint `opencode-sandbox/backend`, bind at `floot/controller-profile/opencode-backend` | `claude-sandbox/setup-hosted.js:223-256`; Tokyo `provideManagedCredentials` |
 | `src/opencode-backend-factory.js` | `HostedBackendFactoryInterface`; lifecycle ordering, live ownership, teardown barriers | `claude-backend-factory.js` |
 | `src/opencode-backend-module.js` | Records each session's plan and exact dependencies with the daemon session owner (`provideSessionOwner`) and starts the native controller; no per-session formulas | replaces the deleted per-session provisioner |
@@ -637,7 +658,7 @@ New package `packages/opencode-sandbox/`.
    (mirroring `modules/codex-storage.nix` on Tokyo). Every name must be
    `ENDO_`-prefixed.
    Create a dedicated runtime parent owned by the daemon user with mode `0700`,
-   supply `ENDO_SANDBOX_RUNTIME_DIR` when creating the factory, and supply explicit
+   supply `ENDO_SANDBOX_RUNTIME_DIR` when creating the native runtime, and supply explicit
    `ENDO_SANDBOX_GENERATED_MAX_BYTES`/`ENDO_SANDBOX_GENERATED_MAX_ENTRIES` budgets
    to host setup.
    These external deployment changes are not tracked in this repository.

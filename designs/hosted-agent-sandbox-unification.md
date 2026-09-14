@@ -423,9 +423,12 @@ record at the exo boundary instead of admitting it through an unconstrained rest
 Controller adoption by the real backend and setup remains pending.
 
 Host setup now mints the three services the daemon-owned session boundary depends on.
-`setup-host.js` mints the native sandbox service over a stored literal null, in a private
-child of the validated runtime directory under a derived owner label, beside the
-capability-based factory; `setup-hosted.js` mints the broker service from the managed
+`setup-host.js` mints the native sandbox service over a stored literal null as the primary
+runtime: it owns the validated runtime directory under the host-derived owner label, and the
+capability-based `sandbox-factory` and shared `fs-mounter` are no longer minted (a still-bound
+`sandbox-factory` refuses a new native mint because it owns that directory; a service minted
+earlier in the factory's private `native` child is retained where it is); `setup-hosted.js`
+requires the native runtime and the state provider and mints the broker service from the managed
 credential's SecretBlob with its persisted operator profile, and a session-storage owner
 over the state provider that removes one recorded plan's workspace, private socket
 directories, and native state inside record removal, refusing paths outside its roots.
