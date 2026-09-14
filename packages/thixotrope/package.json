@@ -57,6 +57,7 @@
     "@endo/init": "workspace:^",
     "@endo/ironhorse-prelude": "workspace:^",
     "@endo/ocapn": "workspace:^",
+    "@endo/promise-kit": "workspace:^",
     "@endo/stream": "workspace:^",
     "@noble/hashes": "^2.4.0"
   },
