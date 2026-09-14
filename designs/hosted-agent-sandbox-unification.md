@@ -413,6 +413,11 @@ Controlled fixtures cover identity, cgroup, network, starttime, namespace and mo
 refusals, generated-file staging, cancellation after release, sibling user-namespace
 reuse, and preparation refusals; the pinned Podman and crun cgroup placement is live Linux
 acceptance, and refusal on mismatch is the safe outcome, not evidence.
+The OpenCode native controller now records that profile in its plan, widening the two
+OCI quantities from decimal strings, refuses any other shape before acquiring a scope, and
+requests it on every native slice; the native scope's interface guard checks the same
+record at the exo boundary instead of admitting it through an unconstrained rest pattern.
+Controller adoption by the real backend and setup remains pending.
 
 ## Motivation
 

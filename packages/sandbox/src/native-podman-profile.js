@@ -16,7 +16,12 @@ import {
 /** @import { NativePodmanProfile, HostIdentity } from './native-podman-profile-types.js' */
 /** @import { ProcReader } from './observe.js' */
 
-const ProfileShape = harden({
+/**
+ * The exact record an operator profile must be; interface guards use it so a
+ * remote caller's profile is checked at the exo boundary before the driver
+ * checks its ranges again.
+ */
+export const NativePodmanProfileShape = harden({
   uid: M.number(),
   gid: M.number(),
   memoryBytes: M.bigint(),
@@ -44,7 +49,7 @@ const assertIdentity = value => {
  * @returns {NativePodmanProfile}
  */
 export const assertNativePodmanProfile = value => {
-  mustMatch(harden(value), ProfileShape, 'native Podman profile');
+  mustMatch(harden(value), NativePodmanProfileShape, 'native Podman profile');
   const profile = /** @type {NativePodmanProfile} */ (value);
   assertIdentity(profile.uid);
   assertIdentity(profile.gid);
