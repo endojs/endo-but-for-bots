@@ -1992,6 +1992,13 @@ macro_rules! snapshot_payloads {
                                 .iter()
                                 .map(|row| (row.owner, Some(&row.frame))),
                         )
+                        .chain(
+                            tables
+                                .promise_cluster
+                                .async_generators
+                                .iter()
+                                .map(|row| (row.owner, row.frame.as_ref())),
+                        )
                     {
                         owned(owner)?;
                         let Some(frame) = frame else {
@@ -2193,18 +2200,104 @@ macro_rules! snapshot_payloads {
                             ));
                         }
                     }
+                    let function = |slot: &Slot| match slot.value {
+                        Payload::Reference(owner) => promise_cluster
+                            .functions
+                            .binary_search_by_key(&owner.0, |f| f.function)
+                            .ok()
+                            .map(|i| &promise_cluster.functions[i]),
+                        _ => None,
+                    };
+                    // An async-generator reaction (kinds 4-6) resumes exactly one
+                    // instance that is serving a request, in the state the kind
+                    // implies: a body `await` or a yielded value being awaited on
+                    // an `Awaiting` (2) instance, a `return` value being awaited on
+                    // a completed (3) one. One anchor per instance. The converse
+                    // does not hold: an active request may await a promise nobody
+                    // holds, and such an instance is simply stuck, so it is
+                    // carried unanchored.
+                    let mut generator_anchors = std::collections::BTreeSet::new();
+                    for reaction in promise_cluster
+                        .promises
+                        .iter()
+                        .flat_map(|p| &p.reactions)
+                        .chain(tables.function_state.shared.iter().flat_map(|s| s.jobs.iter()).filter(|j| !j.thenable).map(|j| &j.reaction))
+                    {
+                        if !(4..=6).contains(&reaction.kind) {
+                            continue;
+                        }
+                        let expected_state = if reaction.kind == 6 { 3 } else { 2 };
+                        let anchored = promise_cluster
+                            .async_generators
+                            .binary_search_by_key(&reaction.a, |g| g.owner)
+                            .ok()
+                            .map(|i| &promise_cluster.async_generators[i])
+                            .is_some_and(|g| g.active.is_some() && g.state == expected_state);
+                        if !anchored || !generator_anchors.insert(reaction.a) {
+                            return Err(SnapshotError::Corrupt(
+                                "async generator reaction: missing or duplicate instance",
+                            ));
+                        }
+                    }
+                    for row in &promise_cluster.async_generators {
+                        owned(row.owner)?;
+                        // The row's own shape, so an in-memory image is held to
+                        // the same invariants the container reader enforces.
+                        if row.state > 3 {
+                            return Err(SnapshotError::Corrupt("async generators: invalid state"));
+                        }
+                        if row
+                            .requests
+                            .iter()
+                            .chain(row.active.as_ref())
+                            .any(|request| request.status > 2)
+                        {
+                            return Err(SnapshotError::Corrupt(
+                                "async generators: invalid request status",
+                            ));
+                        }
+                        if !row.frame_matches_state() {
+                            return Err(SnapshotError::Corrupt(
+                                "async generators: state and frame disagree",
+                            ));
+                        }
+                        if !row.requests_match_state() {
+                            return Err(SnapshotError::Corrupt(
+                                "async generators: request queue disagrees with state",
+                            ));
+                        }
+                        if !row.start_frame_is_fresh() {
+                            return Err(SnapshotError::Corrupt(
+                                "async generators: start frame is not fresh",
+                            ));
+                        }
+                        // Every request's capability is an ordinary resolving pair
+                        // over a live promise row — the request's own result
+                        // promise — with its `[[AlreadyResolved]]` guard unset.
+                        for request in row.requests.iter().chain(row.active.as_ref()) {
+                            let pair = matches!((function(&request.resolve), function(&request.reject)), (Some(a), Some(b))
+                                if a.promise == b.promise
+                                    && !a.reject && b.reject && a.guard == b.guard
+                                    && (a.guard as usize) < promise_cluster.guards.len()
+                                    && !promise_cluster.guards[a.guard as usize]
+                                    && promise_cluster
+                                        .promises
+                                        .binary_search_by_key(&a.promise, |p| p.owner)
+                                        .is_ok());
+                            if !pair
+                                || request.resolve.kind != Kind::Reference
+                                || request.reject.kind != Kind::Reference
+                            {
+                                return Err(SnapshotError::Corrupt(
+                                    "async generator request: invalid promise capability",
+                                ));
+                            }
+                        }
+                    }
                     for row in &promise_cluster.async_instances {
                         owned(row.owner)?;
                         owned(row.result_promise)?;
 
-                        let function = |slot: &Slot| match slot.value {
-                            Payload::Reference(owner) => promise_cluster
-                                .functions
-                                .binary_search_by_key(&owner.0, |f| f.function)
-                                .ok()
-                                .map(|i| &promise_cluster.functions[i]),
-                            _ => None,
-                        };
                         let pair = matches!((function(&row.resolve), function(&row.reject)), (Some(a), Some(b))
                             if a.promise == row.result_promise && b.promise == row.result_promise
                                 && !a.reject && b.reject && a.guard == b.guard
@@ -2378,29 +2471,41 @@ macro_rules! snapshot_payloads {
                 initialize: [],
                 legacy_label: "small state async section",
                 decode_legacy(state, bytes): {
-                    state.promise_cluster.async_instances = if bytes.is_empty() {
+                    let (instances, generators) = if bytes.is_empty() {
                         Default::default()
                     } else {
-                        crate::image::decode_async_instances(bytes)?
+                        crate::image::decode_async_section(bytes)?
                     };
+                    state.promise_cluster.async_instances = instances;
+                    state.promise_cluster.async_generators = generators;
                 },
                 decode_container: [NameFloor, extend, (r, [], [small]) {
-                    small.promise_cluster.async_instances = match r.find(crate::format::ASYN) {
-                        Some(a) => present_and_non_empty(
-                            decode_async_instances(a.payload)?,
-                            "ASYN atom present but empty",
-                        )?,
-                        None => Vec::new(),
+                    let (instances, generators) = match r.find(crate::format::ASYN) {
+                        Some(a) => {
+                            let section = decode_async_section(a.payload)?;
+                            if section.0.is_empty() && section.1.is_empty() {
+                                return Err(SnapshotError::Corrupt("ASYN atom present but empty"));
+                            }
+                            section
+                        }
+                        None => Default::default(),
                     };
+                    small.promise_cluster.async_instances = instances;
+                    small.promise_cluster.async_generators = generators;
                 }],
                 atom: Some(crate::format::ASYN),
-                present(image): !image.promise_cluster.async_instances.is_empty(),
+                present(image): !image.promise_cluster.async_section_is_empty(),
                 encode(state): {
-                    crate::image::encode_async_instances(&state.promise_cluster.async_instances)
+                    crate::image::encode_async_section(
+                        &state.promise_cluster.async_instances,
+                        &state.promise_cluster.async_generators,
+                    )
                 },
                 canonicalize(bytes): {
-                    crate::image::decode_async_instances(bytes)
-                        .map(|value| crate::image::encode_async_instances(&value))
+                    crate::image::decode_async_section(bytes)
+                        .map(|(instances, generators)| {
+                            crate::image::encode_async_section(&instances, &generators)
+                        })
                 },
                 slot_visit: shared,
             }

@@ -37,12 +37,13 @@ mod native_ids;
 pub use native_ids::{MathId, Native, NativeMethod};
 mod snapshot_rows;
 pub use snapshot_rows::{
-    AccessorRow, ArraySnapshot, AsyncRow, BoundFunctionRow, CollectionSnapshot, CombinatorRow,
-    DisposableStackRow, DisposalRecordRow, EnvironmentRow, EvaluatorRow, FunctionRow,
-    FunctionStateSnapshot, GeneratorRow, HostFunctionRow, IndexPropsSnapshot, IntlBoundFunctionRow,
-    IteratorRow, ModuleGraphSnapshot, ModuleRecordRow, PrivateAccessorRow, PrivateElementSnapshot,
-    PrivateValueRow, PromiseClusterSnapshot, PromiseFnRow, PromiseJobRow, PromiseReactionRow,
-    PromiseRow, ProxyRevokerRow, ProxyRow, ProxyStateSnapshot, SavedFrameRow, SavedJumpRow,
+    AccessorRow, ArraySnapshot, AsyncGeneratorRequestRow, AsyncGeneratorRow, AsyncRow,
+    BoundFunctionRow, CollectionSnapshot, CombinatorRow, DisposableStackRow, DisposalRecordRow,
+    EnvironmentRow, EvaluatorRow, FunctionRow, FunctionStateSnapshot, GeneratorRow,
+    HostFunctionRow, IndexPropsSnapshot, IntlBoundFunctionRow, IteratorRow, ModuleGraphSnapshot,
+    ModuleRecordRow, PrivateAccessorRow, PrivateElementSnapshot, PrivateValueRow,
+    PromiseClusterSnapshot, PromiseFnRow, PromiseJobRow, PromiseReactionRow, PromiseRow,
+    ProxyRevokerRow, ProxyRow, ProxyStateSnapshot, SavedFrameRow, SavedJumpRow,
     SharedMachineSnapshot,
 };
 mod symbol_keys;

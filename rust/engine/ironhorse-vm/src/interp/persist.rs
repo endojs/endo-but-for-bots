@@ -539,17 +539,17 @@ impl Interp {
         if self.intrinsics.contains_key("$262") {
             return Some("a test262 `$262` host object, which no snapshot carries");
         }
-        // A pending reaction whose KIND names suspended async machinery
-        // (an `await`'s resumption, an async generator's, an
-        // `Array.fromAsync` step) points at instance rows the image
-        // does not carry yet (`async_generators`/`from_async` are Pending).
-        // Ordinary async functions carry their frames in ASYN. Every
-        // RESUMABLE async suspension is anchored by exactly such a
-        // reaction on a live promise — an unanchored instance is
-        // unreachable and swept — so refusing by kind here is the whole
-        // gate for those rows, checked before the doomed-set early
-        // return below because it is independent of function slots. The
-        // side tables are walked in full in both variants, as below.
+        // A pending reaction whose KIND names an `Array.fromAsync` step
+        // points at `from_async` state the image does not carry. Every
+        // such in-flight accumulation is anchored by exactly one
+        // `FromAsync*` reaction on a live promise — an unanchored entry is
+        // unreachable and compacted away — so refusing by kind here is the
+        // whole gate for that satellite, checked before the doomed-set
+        // early return below because it is independent of function slots.
+        // Async functions carry their frames in ASYN, and async generators
+        // their instances beside them, so the `AsyncAwait` and
+        // `AsyncGenerator*` kinds resume. The side tables are walked in
+        // full in both variants, as below.
         let async_reaction = self
             .promises
             .values()
@@ -563,6 +563,9 @@ impl Interp {
                     r.kind,
                     ReactionKind::User
                         | ReactionKind::AsyncAwait(_)
+                        | ReactionKind::AsyncGeneratorAwait(_)
+                        | ReactionKind::AsyncGeneratorYield(_)
+                        | ReactionKind::AsyncGeneratorReturn(_)
                         | ReactionKind::FinallyReturn
                         | ReactionKind::FinallyAwait(_)
                         | ReactionKind::Combine(_, _)
@@ -571,18 +574,6 @@ impl Interp {
             });
         if async_reaction {
             return Some("a promise reaction that would resume a non-persisted async frame");
-        }
-        // Async generator rows do not persist. A live instance needs its row
-        // in every state: between yields it can resume without a pending
-        // reaction, and after completion next/return/throw must still observe
-        // completion. Losing the row would leave an ordinary object behind.
-        // Free-listed owners have no live instance to restore.
-        if self
-            .async_generators
-            .keys()
-            .any(|owner| !self.slots.is_free_index(*owner))
-        {
-            return Some("an async generator whose state does not yet persist");
         }
 
         // Compute the functions restore cannot reconstruct before walking
@@ -2415,8 +2406,10 @@ impl Interp {
     /// nothing.
     ///
     /// AsyncAwait reactions name the suspended frames carried alongside
-    /// PRMS in ASYN. Async-generator and Array.fromAsync reactions still
-    /// refuse at the persistence boundary.
+    /// PRMS in ASYN, and the AsyncGenerator reactions name the async
+    /// generator instances carried there too (every live instance,
+    /// completed ones included, owner-ascending). Array.fromAsync
+    /// reactions still refuse at the persistence boundary.
     pub fn promise_cluster_snapshot(&self) -> PromiseClusterSnapshot {
         let mut promises: Vec<(crate::value::SlotIndex, &PromiseData)> = self
             .promises
@@ -2459,11 +2452,47 @@ impl Interp {
                     .frame
                     .as_ref()
                     .is_some_and(|frame| !frame.jumps.is_empty())
+        }) || self.async_generators.values().any(|data| {
+            data.frame
+                .as_ref()
+                .is_some_and(|frame| !frame.jumps.is_empty())
         }) {
             self.snapshot_code_segment_remap()
         } else {
             Default::default()
         };
+        let request_row = |request: &AsyncGeneratorRequest| AsyncGeneratorRequestRow {
+            status: match request.status {
+                GenStatus::Next => 0,
+                GenStatus::Return => 1,
+                GenStatus::Throw => 2,
+            },
+            value: request.value,
+            resolve: request.resolve,
+            reject: request.reject,
+        };
+        let mut async_generators: Vec<AsyncGeneratorRow> = self
+            .async_generators
+            .iter()
+            .filter(|(owner, _)| !self.slots.is_free_index(**owner))
+            .map(|(owner, data)| AsyncGeneratorRow {
+                owner: owner.0,
+                state: match data.state {
+                    AsyncGeneratorState::SuspendedStart => 0,
+                    AsyncGeneratorState::SuspendedYield => 1,
+                    AsyncGeneratorState::Awaiting => 2,
+                    AsyncGeneratorState::Completed => 3,
+                    AsyncGeneratorState::Executing => 4,
+                },
+                frame: data
+                    .frame
+                    .as_ref()
+                    .map(|frame| self.saved_frame_snapshot(frame, &segment_remap)),
+                requests: data.requests.iter().map(request_row).collect(),
+                active: data.active.as_ref().map(request_row),
+            })
+            .collect();
+        async_generators.sort_unstable_by_key(|row| row.owner);
         let mut async_instances: Vec<_> = self
             .async_instances
             .iter()
@@ -2486,6 +2515,7 @@ impl Interp {
                 self.environment.unhandled_rejection.map(|owner| owner.0)
             },
             async_instances,
+            async_generators,
             promises: promises
                 .into_iter()
                 .map(|(owner, data)| PromiseRow {
@@ -2587,6 +2617,7 @@ impl Interp {
         self.validate_restore_owners(snap.promises.iter().map(|row| row.owner), ROW)?;
         self.validate_restore_owners(snap.functions.iter().map(|row| row.function), ROW)?;
         self.validate_restore_owners(snap.async_instances.iter().map(|row| row.owner), ROW)?;
+        self.validate_restore_owners(snap.async_generators.iter().map(|row| row.owner), ROW)?;
         if let Some(owner) = snap.unhandled_rejection {
             if !snap
                 .promises
@@ -2642,6 +2673,16 @@ impl Interp {
             self.validate_restore_value_shape(row.resolve, ROW)?;
             self.validate_restore_value_shape(row.reject, ROW)?;
             self.validate_restore_frame(&row.frame)?;
+        }
+        for row in &snap.async_generators {
+            for request in row.requests.iter().chain(row.active.as_ref()) {
+                self.validate_restore_value_shape(request.value, ROW)?;
+                self.validate_restore_value_shape(request.resolve, ROW)?;
+                self.validate_restore_value_shape(request.reject, ROW)?;
+            }
+            if let Some(frame) = &row.frame {
+                self.validate_restore_frame(frame)?;
+            }
         }
         for row in &snap.combinators {
             self.validate_restore_value_shape(row.resolve, ROW)?;
@@ -2737,6 +2778,23 @@ impl Interp {
                         {
                             ReactionKind::AsyncAwait(crate::value::SlotIndex(r.a))
                         }
+                        // The async-generator kinds carry the instance
+                        // in `a` exactly like an `AsyncAwait`; the row
+                        // they name is checked once every table is in
+                        // place (`restored_promise_capabilities_are_valid`).
+                        kind @ 4..=6
+                            if r.b == 0
+                                && [r.on_fulfilled, r.on_rejected, r.resolve, r.reject]
+                                    .iter()
+                                    .all(|slot| slot.kind == Kind::Undefined) =>
+                        {
+                            let owner = crate::value::SlotIndex(r.a);
+                            match kind {
+                                4 => ReactionKind::AsyncGeneratorAwait(owner),
+                                5 => ReactionKind::AsyncGeneratorYield(owner),
+                                _ => ReactionKind::AsyncGeneratorReturn(owner),
+                            }
+                        }
                         11 if capability_ok(&r.resolve, &r.reject)
                             && r.a <= 1
                             && r.b == 0
@@ -2774,10 +2832,9 @@ impl Interp {
                             comb_pending[r.a as usize] += 1;
                             ReactionKind::CombineDirect(r.a, r.b)
                         }
-                        // The async-flavored kinds name machinery no
-                        // atom carries yet; the decoder refuses them
-                        // and so does this verb — as it does the
-                        // crafted shapes above.
+                        // The `FromAsync*` kinds name machinery no atom
+                        // carries; the decoder refuses them and so does
+                        // this verb — as it does the crafted shapes above.
                         _ => return None,
                     };
                     Some(PromiseReaction {
@@ -2972,6 +3029,73 @@ impl Interp {
                 },
             ));
         }
+        // Async generator rows: the structural invariants every boundary
+        // state satisfies. `Executing` never reaches a boundary (the run
+        // stack must be empty); the frame is present exactly while the
+        // body can still run; a start- or yield-suspended instance is
+        // serving no request; and a queue only ever holds requests behind
+        // an active one, because the kick loop drains it synchronously
+        // until a step suspends. The request capabilities and the
+        // reaction anchors are checked once every table is in place
+        // (`restored_promise_capabilities_are_valid`).
+        let request_from_row = |row: &AsyncGeneratorRequestRow| {
+            Some(AsyncGeneratorRequest {
+                status: match row.status {
+                    0 => GenStatus::Next,
+                    1 => GenStatus::Return,
+                    2 => GenStatus::Throw,
+                    _ => return None,
+                },
+                value: row.value,
+                resolve: row.resolve,
+                reject: row.reject,
+            })
+        };
+        let mut async_generators = Vec::new();
+        for row in snap.async_generators {
+            let owner = crate::value::SlotIndex(row.owner);
+            let state = match row.state {
+                0 => AsyncGeneratorState::SuspendedStart,
+                1 => AsyncGeneratorState::SuspendedYield,
+                2 => AsyncGeneratorState::Awaiting,
+                3 => AsyncGeneratorState::Completed,
+                _ => return Err(refuse("malformed async generator state")),
+            };
+            if self.async_generators.contains_key(&owner)
+                || !row.frame_matches_state()
+                || !row.requests_match_state()
+                || !row.start_frame_is_fresh()
+            {
+                return Err(refuse("malformed async generator state"));
+            }
+            let frame = match row.frame {
+                Some(frame) => match self.restore_saved_frame(frame) {
+                    Ok(frame) => Some(frame),
+                    Err(_) => return Err(refuse("malformed async generator state")),
+                },
+                None => None,
+            };
+            let requests: Option<std::collections::VecDeque<AsyncGeneratorRequest>> =
+                row.requests.iter().map(request_from_row).collect();
+            let active = match row.active.as_ref() {
+                Some(request) => Some(
+                    request_from_row(request).ok_or(refuse("malformed async generator state"))?,
+                ),
+                None => None,
+            };
+            let Some(requests) = requests else {
+                return Err(refuse("malformed async generator state"));
+            };
+            async_generators.push((
+                owner,
+                AsyncGeneratorData {
+                    state,
+                    frame,
+                    requests,
+                    active,
+                },
+            ));
+        }
         self.environment.unhandled_rejection =
             snap.unhandled_rejection.map(crate::value::SlotIndex);
         self.promises.extend(promises);
@@ -2982,6 +3106,7 @@ impl Interp {
             self.promise_functions.insert(owner, data);
         }
         self.async_instances.extend(async_instances);
+        self.async_generators.extend(async_generators);
         *self.promise_guards = snap.guards;
         *self.combinators = snap
             .combinators
@@ -3030,6 +3155,7 @@ impl Interp {
                 })
         });
         let mut awaited = std::collections::BTreeSet::new();
+        let mut generator_anchors = std::collections::BTreeSet::new();
         for reaction in self.promises.values().flat_map(|p| &p.reactions).chain(
             self.promise_jobs.iter().filter_map(|job| match job {
                 PromiseJob::Reaction { reaction, .. } => Some(reaction),
@@ -3042,9 +3168,60 @@ impl Interp {
                         return false;
                     }
                 }
+                // An async-generator reaction resumes exactly one instance
+                // that is serving a request, in the state the kind implies:
+                // a body `await` or a yielded value being awaited on an
+                // `Awaiting` instance, a `return` value being awaited on a
+                // completed one. One anchor per instance: every suspension
+                // registers exactly one reaction.
+                let generator = match reaction.kind {
+                    ReactionKind::AsyncGeneratorAwait(owner)
+                    | ReactionKind::AsyncGeneratorYield(owner) => {
+                        Some((owner, AsyncGeneratorState::Awaiting))
+                    }
+                    ReactionKind::AsyncGeneratorReturn(owner) => {
+                        Some((owner, AsyncGeneratorState::Completed))
+                    }
+                    _ => None,
+                };
+                if let Some((owner, state)) = generator {
+                    let anchored = self
+                        .async_generators
+                        .get(&owner)
+                        .is_some_and(|g| g.active.is_some() && g.state == state);
+                    if !anchored || !generator_anchors.insert(owner.0) {
+                        return false;
+                    }
+                }
             }
         }
-        reactions_valid && self.async_instances.iter().all(|(owner, a)| {
+        // A request's capability is an ordinary resolving pair whose
+        // promise is the request's own result promise; the awaited
+        // promise an active request waits on may be unreachable (a
+        // never-settling promise nobody holds), so an active request is
+        // not required to be anchored.
+        let request_pair_ok = |request: &AsyncGeneratorRequest| {
+            let function = |slot: Slot| match slot.value {
+                Payload::Reference(f) => self.promise_functions.get(&f),
+                _ => None,
+            };
+            matches!((function(request.resolve), function(request.reject)), (Some(r), Some(j))
+                    if r.promise == j.promise && !r.reject && j.reject && r.guard == j.guard
+                        && self.promise_guards.get(r.guard) == Some(&false)
+                        && self.promises.contains_key(&r.promise))
+                && self.is_callable_value(request.resolve)
+                && self.is_callable_value(request.reject)
+        };
+        let generators_valid = self.async_generators.iter().all(|(_, g)| {
+            g.requests
+                .iter()
+                .chain(g.active.as_ref())
+                .all(request_pair_ok)
+                && g.frame
+                    .as_ref()
+                    .is_none_or(|f| self.functions.contains_key(&f.cur_func))
+        });
+        reactions_valid && generators_valid && self.async_instances.iter().all(|(owner, a)| {
             let function = |slot: Slot| match slot.value {
                 Payload::Reference(f) => self.promise_functions.get(&f),
                 _ => None,

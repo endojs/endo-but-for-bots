@@ -2503,7 +2503,11 @@ pub struct Interp {
     /// arm reads the top to snapshot the right instance — the async analog of
     /// [`Self::gen_run_stack`].
     async_run_stack: Vec<AsyncRunFrame>,
-    #[boot_new(std::collections::HashMap::new())]
+    #[boot_new(Tracked::new(
+        std::collections::HashMap::new(),
+        snapshot_dirt.clone(),
+        SnapshotSection::AsyncInstances.mask(),
+    ))]
     #[gc_root(none)]
     #[quiescent(retained)]
     #[persist_refs(none)]
@@ -2512,11 +2516,13 @@ pub struct Interp {
     #[gc_chunk(queued_frame)]
     #[gc_slots(map, queued_frame)]
     #[gc_weak(none)]
-    #[snapshot_table(AsyncGenerators, 27, 28, Pending, "async_generators/async_gen_run_stack")]
+    #[snapshot_table(AsyncGenerators, 27, 28, Serialized, "async_generators/async_gen_run_stack")]
     /// Async-generator instances combine generator suspension with promise
     /// request queues. Each `.next`/`.return`/`.throw` capability is kept in
     /// FIFO order until the currently executing/awaiting request finishes.
-    async_generators: std::collections::HashMap<crate::value::SlotIndex, AsyncGeneratorData>,
+    /// Carried in `ASYN` beside the async-function activations (the same
+    /// checkpoint section), so a mutation here dirties that section.
+    async_generators: Tracked<std::collections::HashMap<crate::value::SlotIndex, AsyncGeneratorData>>,
     #[boot_new(crate::value::SlotIndex::NULL)]
     #[gc_root(none)]
     #[quiescent(retained)]

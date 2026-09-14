@@ -246,6 +246,78 @@ pub struct AsyncRow {
     pub reject: Slot,
 }
 
+/// One queued `next`/`return`/`throw` request on an async generator (the
+/// serialized [`AsyncGeneratorRequest`]): the completion it asks for, its
+/// value, and the resolving-function pair that settles the request's
+/// promise (an ordinary `promise_functions` pair, carried in `PRMS`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct AsyncGeneratorRequestRow {
+    /// 0 = Next, 1 = Return, 2 = Throw.
+    pub status: u8,
+    pub value: Slot,
+    pub resolve: Slot,
+    pub reject: Slot,
+}
+
+/// One async generator instance (the serialized [`AsyncGeneratorData`]),
+/// carried in `ASYN` beside the async-function activations. Unlike an
+/// async function, an async generator is a guest-held object whose row
+/// `.next()` consults in EVERY state — between yields it has no reaction
+/// anchor at all — so every live instance travels, completed ones
+/// included (a completed row is what makes a later `next()` answer
+/// `{done: true}` instead of finding a plain object).
+#[derive(Clone, Debug, PartialEq)]
+pub struct AsyncGeneratorRow {
+    pub owner: u32,
+    /// 0 = SuspendedStart, 1 = SuspendedYield, 2 = Awaiting, 3 = Completed.
+    /// `Executing` never reaches a persistable boundary (quiescence
+    /// requires the async-generator run stack empty) and is refused.
+    pub state: u8,
+    /// The suspended activation: present exactly when the state is not
+    /// Completed. A SuspendedStart frame is a fresh activation, with no
+    /// operand stack and no handlers.
+    pub frame: Option<SavedFrameRow>,
+    /// Requests queued behind the active one, oldest first; empty unless a
+    /// request is active.
+    pub requests: Vec<AsyncGeneratorRequestRow>,
+    /// The request being served: absent while suspended at start or at a
+    /// yield, present while Awaiting (a body `await` or a yielded value),
+    /// and present on a completed instance only while a `return` value is
+    /// being awaited. Its awaited promise is usually held by one pending
+    /// `AsyncGenerator*` reaction naming this instance, but need not be:
+    /// an active request awaiting a promise nobody holds is stuck, not
+    /// malformed, and travels unanchored.
+    pub active: Option<AsyncGeneratorRequestRow>,
+}
+
+impl AsyncGeneratorRow {
+    /// The frame is present exactly when the instance is not Completed.
+    pub fn frame_matches_state(&self) -> bool {
+        (self.state == 3) == self.frame.is_none()
+    }
+
+    /// The request being served matches the state (absent while suspended,
+    /// present while Awaiting), and nothing queues behind no request.
+    pub fn requests_match_state(&self) -> bool {
+        let active_matches = match self.state {
+            0 | 1 => self.active.is_none(),
+            2 => self.active.is_some(),
+            _ => true,
+        };
+        active_matches && (self.active.is_some() || self.requests.is_empty())
+    }
+
+    /// A SuspendedStart frame has not begun the body: no operand stack and
+    /// no handlers, which is all a resume at start supplies.
+    pub fn start_frame_is_fresh(&self) -> bool {
+        self.state != 0
+            || self
+                .frame
+                .as_ref()
+                .is_some_and(|frame| frame.stack_slice.is_empty() && frame.jumps.is_empty())
+    }
+}
+
 /// One registered reaction of a pending [`PromiseRow`] (the serialized
 /// [`PromiseReaction`]). The four handler/capability slots are ordinary
 /// value slots; `kind` is the reaction's drain behavior:
@@ -259,11 +331,12 @@ pub struct AsyncRow {
 /// | 11 | `FinallyAwait` | original rejection boolean | — |
 /// | 12 | `CombineDirect` | combinator index | element index |
 ///
-/// Byte 3 (`AsyncAwait`) names an activation in `ASYN`. Bytes 4–10
-/// (the three `AsyncGenerator*`s and four `FromAsync*`s) name machinery whose rows
-/// are still Pending in the snapshot ledger, so the persist gate
-/// refuses a machine holding one
-/// ([`Interp::stored_unpersistable_row`]) and the decoder refuses the
+/// Byte 3 (`AsyncAwait`) names an async-function activation in `ASYN`;
+/// bytes 4–6 (`AsyncGeneratorAwait`/`Yield`/`Return`) name an async
+/// generator instance carried there too, whose row must hold an active
+/// request. Bytes 7–10 (the four `FromAsync*`s) name `Array.fromAsync`
+/// machinery no row carries, so the persist gate refuses a machine holding
+/// one ([`Interp::stored_unpersistable_row`]) and the decoder refuses the
 /// byte. `FinallyAwait` is resumable from the ordinary promise cluster.
 /// The encoding is total so every refusal lives at the boundary, not in a
 /// lossy encoder.
@@ -350,9 +423,15 @@ pub struct PromiseClusterSnapshot {
     pub functions: Vec<PromiseFnRow>,
     pub guards: Vec<bool>,
     pub combinators: Vec<CombinatorRow>,
+    /// The async generator instances, carried in `ASYN` beside the
+    /// activations. Not part of [`Self::is_empty`]: a `SuspendedStart`
+    /// instance with no request yet names no promise at all, so the
+    /// `PRMS` payload stays absent while `ASYN` carries the row.
+    pub async_generators: Vec<AsyncGeneratorRow>,
 }
 
 impl PromiseClusterSnapshot {
+    /// Whether the `PRMS` payload has nothing to carry.
     pub fn is_empty(&self) -> bool {
         self.unhandled_rejection.is_none()
             && self.promises.is_empty()
@@ -360,6 +439,11 @@ impl PromiseClusterSnapshot {
             && self.functions.is_empty()
             && self.guards.is_empty()
             && self.combinators.is_empty()
+    }
+
+    /// Whether the `ASYN` payload has nothing to carry.
+    pub fn async_section_is_empty(&self) -> bool {
+        self.async_instances.is_empty() && self.async_generators.is_empty()
     }
 }
 

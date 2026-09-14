@@ -617,13 +617,44 @@ fn an_async_flavored_reaction_kind_is_refused_and_the_store_path_shares_the_gate
         .iter_mut()
         .find(|p| !p.reactions.is_empty())
         .expect("the fixture holds a pending reaction");
-    row.reactions[0].kind = 4; // AsyncGeneratorAwait is still refused
+    row.reactions[0].kind = 7; // FromAsyncNext is still refused
     expect_container_refusal(&image, "promise cluster: reaction kind does not resume");
     expect_commit_and_external_store_refusal(
         &read_machine(&bytes, &sig()).unwrap(),
         &image,
         "promise cluster: reaction kind does not resume",
     );
+    // An async-generator kind decodes, but must name a carried instance
+    // that is serving a request; this fixture carries none.
+    let mut image = read_machine(&bytes, &sig()).expect("reads");
+    let row = image
+        .promise_cluster
+        .promises
+        .iter_mut()
+        .find(|p| !p.reactions.is_empty())
+        .expect("the fixture holds a pending reaction");
+    let reaction = &mut row.reactions[0];
+    reaction.kind = 4;
+    reaction.b = 0;
+    reaction.on_fulfilled = ironhorse_vm::Slot::undefined();
+    reaction.on_rejected = ironhorse_vm::Slot::undefined();
+    reaction.resolve = ironhorse_vm::Slot::undefined();
+    reaction.reject = ironhorse_vm::Slot::undefined();
+    expect_container_refusal(
+        &image,
+        "async generator reaction: missing or duplicate instance",
+    );
+    // A cross-table gate: the store admits the payload structurally and
+    // refuses it at adoption, like every other anchor check.
+    let mut store = MemoryStore::new();
+    store
+        .commit(&image_to_batch_unchecked(&image, 1, ""))
+        .unwrap();
+    assert!(matches!(
+        validate_store(&store, &sig()),
+        Err(StoreError::Snapshot(SnapshotError::Corrupt(found)))
+            if found == "async generator reaction: missing or duplicate instance"
+    ));
 }
 
 #[test]

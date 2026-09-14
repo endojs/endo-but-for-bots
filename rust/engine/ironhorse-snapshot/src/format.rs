@@ -130,7 +130,9 @@ pub const IBFN: FourCc = FourCc(*b"IBFN");
 pub const PRIV: FourCc = FourCc(*b"PRIV");
 /// `DISP` — DisposableStack/AsyncDisposableStack state and records.
 pub const DISP: FourCc = FourCc(*b"DISP");
-/// `ASYN` — suspended async-function activations linked from PRMS reactions.
+/// `ASYN` — suspended async-function activations linked from PRMS
+/// reactions, followed (format 23) by the async generator instances:
+/// state, suspended activation, queued requests and the active one.
 pub const ASYN: FourCc = FourCc(*b"ASYN");
 
 /// `GENR` — synchronous generator lifecycle and saved activations.
@@ -215,7 +217,9 @@ pub const IRONHORSE_MAGIC: [u8; 4] = *b"IRON";
 // Version 20 carries the first reported unhandled rejection in PRMS.
 // Version 21 adds shared environments, roots, modules, and queued jobs to FUNC.
 /// Format 22 adds host-function recipes to the shared FUNC extension.
-pub const IRONHORSE_FORMAT_VERSION: u32 = 22;
+/// Format 23 lets `ASYN` carry async generator instances after the
+/// activations, and the `AsyncGenerator*` reaction kinds resume.
+pub const IRONHORSE_FORMAT_VERSION: u32 = 23;
 
 /// The oldest format version this reader still decodes. Version-1
 /// containers predate the version-2 stamp; every version-1 writer in

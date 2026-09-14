@@ -21,9 +21,11 @@
 //! Generated agreement alone cannot establish that an image carries a table.
 //!
 //! Serialized coverage includes callable proxy, accessor, private-element and
-//! Intl-bound links, as well as suspended async instances.
-//! Unsupported reactions and runtime natives still refuse persistence; coverage
-//! does not waive those gates (see `promise_carry`, `async_carry`, and `persist_gates`).
+//! Intl-bound links, as well as suspended async instances and async
+//! generator instances (both in `ASYN`).
+//! Unsupported reactions (`Array.fromAsync` steps) and runtime natives still
+//! refuse persistence; coverage does not waive those gates (see
+//! `promise_carry`, `async_carry`, `async_generator_carry`, and `persist_gates`).
 //!
 //! # Excluded transients — why "enumerated against `Interp`'s actual
 //! fields" does not mean *every* field
@@ -441,7 +443,7 @@ mod tests {
                 27,
                 "AsyncGenerators",
                 "async_generators/async_gen_run_stack",
-                Coverage::Pending,
+                Coverage::Serialized,
                 Some("async_generators"),
             ),
             (
@@ -979,7 +981,11 @@ mod tests {
     #[test]
     fn pending_is_derived_from_ledger() {
         let pending = SideTable::pending();
-        assert_eq!(pending.len(), 1, "the design's Remaining ledger count");
+        assert_eq!(
+            pending.len(),
+            0,
+            "the design's Remaining ledger count: every row is carried"
+        );
         // The rich per-instance tables are still pending.
         assert!(!pending.contains(&SideTable::Functions));
         assert!(!pending.contains(&SideTable::BoundFunctions));
@@ -988,9 +994,14 @@ mod tests {
         // arena property slot) and needs the `functions` table to interpret,
         // so it is honestly Pending — not the false `InArena` it once claimed.
         assert!(!pending.contains(&SideTable::CtorPrototype));
-        // The language-completion sweep's tables joined the ledger Pending,
-        // and the segments row names the store gates' standing refusal.
-        assert!(pending.contains(&SideTable::AsyncGenerators));
+        // The language-completion sweep's tables graduated; the last of
+        // them, the async generator instances, ride `ASYN` (format 23,
+        // store schema 34) beside the async-function activations.
+        assert!(!pending.contains(&SideTable::AsyncGenerators));
+        assert_eq!(
+            SideTable::AsyncGenerators.descriptor().coverage,
+            Coverage::Serialized
+        );
         assert!(!pending.contains(&SideTable::PrivateElements));
         assert!(!pending.contains(&SideTable::DisposableStacks));
         assert!(!pending.contains(&SideTable::Segments));
@@ -1144,8 +1155,9 @@ mod tests {
     /// appears in it, and every field the predicate names is accounted
     /// for — an EmptyAtBoundary row, the value stack (an arena,
     /// serialized empty via `STAC`), `async_gen_run_stack`
-    /// (quiescence-empty, but riding the still-Pending
-    /// `AsyncGenerators` variant for the instance table it names), or
+    /// (quiescence-empty, riding the Serialized `AsyncGenerators`
+    /// variant for the instance table it names, so no atom carries the
+    /// run stack itself), or
     /// one of the NON-emptiness conjuncts listed below, each a
     /// documented transient. The reverse direction reads every
     /// `self.<field>` mention, not only the `is_empty()` ones, and the
