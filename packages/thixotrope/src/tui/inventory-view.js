@@ -3,6 +3,8 @@
 import { Far } from '@endo/far';
 import harden from '@endo/harden';
 
+import { bindViewSession } from './view-session.js';
+
 /** @import { connectLocalControl } from '../control/local-control.js' */
 
 /** @param {string} text */
@@ -26,44 +28,35 @@ export const renderInventory = snapshot => {
 harden(renderInventory);
 
 /**
- * The TUI owns a dedicated connection. Every exit path closes it; the server
- * then explicitly removes the guest subscription before dropping its bridge.
+ * A full-screen view that redraws on every inventory revision. The server
+ * explicitly removes the guest subscription before dropping its bridge, so
+ * every exit path here must release the connection.
  * @param {TerminalSession} session
  * @param {Awaited<ReturnType<typeof connectLocalControl>>} client
  */
 export const showInventory = async (session, client) => {
-  let closing = false;
-  const close = () => {
-    if (closing) return;
-    closing = true;
-    session.close();
-    client.close();
-  };
+  const view = bindViewSession(session, client);
   const observer = Far('InventoryTUI', {
     changed: snapshot => {
-      if (closing) return;
-      const text = renderInventory(snapshot);
+      if (view.isClosing()) return;
       session.clearScreen();
-      return session.write(text);
+      return session.write(renderInventory(snapshot));
     },
   });
   void (async () => {
     for await (const line of session.lines()) {
       if (line.trim() === 'q') break;
     }
-    // 'q', end of input, or session teardown all end the reader; every path
-    // releases the dedicated control connection.
-    close();
+    // 'q', end of input, or session teardown all end the reader.
+    view.close();
   })();
-  session.onClose(close);
-  void client.closed.then(close);
   try {
     await client.call('watchInventory', observer);
     await client.closed;
   } catch (error) {
-    if (!closing) throw error;
+    if (!view.isClosing()) throw error;
   } finally {
-    close();
+    view.close();
   }
 };
 harden(showInventory);

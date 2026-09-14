@@ -1,33 +1,36 @@
 #!/usr/bin/env node
 // @ts-check
 import '@endo/init';
+// The argument vector and exit status are all this entry point takes from
+// Node directly; every other host effect goes through `platform`.
 import process from 'node:process';
-import { join, resolve } from 'node:path';
 
 import { bundleApplication } from '../src/control/bundle-application.js';
 import { connectLocalControl } from '../src/control/local-control.js';
-import { showInventory } from '../src/inventory/inventory-view.js';
-import { showMailbox } from '../src/mail/mailbox-view.js';
 import { serveThixotrope } from '../src/control/supervisor.js';
+import { showAttach } from '../src/tui/attach-view.js';
+import { showInventory } from '../src/tui/inventory-view.js';
+import { showMailbox } from '../src/tui/mailbox-view.js';
 
-import { makeNodePowers } from '../src/platform/node-powers.js';
+import { makeNodePowers } from '../src/platform/node/powers.js';
 
 const platform = makeNodePowers();
+const { logging, paths } = platform;
 
 const [command, directory = './.thix', ...args] = process.argv.slice(2);
-const statePath = resolve(directory);
+const statePath = paths.resolve(directory);
 try {
   if (command === 'serve') {
     const supervisor = await serveThixotrope(platform, statePath);
     const stop = () => {
       void supervisor.close().catch(error => {
-        console.error(error.message);
+        logging.error(error.message);
         process.exitCode = 1;
       });
     };
     process.once('SIGINT', stop);
     process.once('SIGTERM', stop);
-    console.log(`Thixotrope listening at ${supervisor.socketPath}`);
+    logging.log(`Thixotrope listening at ${supervisor.socketPath}`);
     try {
       await supervisor.stopped;
       await supervisor.close();
@@ -63,16 +66,16 @@ try {
   ) {
     const client = await connectLocalControl(
       { sockets: platform.sockets, random: platform.random },
-      join(statePath, 'control.sock'),
+      paths.join(statePath, 'control.sock'),
     );
     try {
       if (command === 'clock-grant') {
-        console.log(JSON.stringify(await client.call('clockGrant', args[0])));
+        logging.log(JSON.stringify(await client.call('clockGrant', args[0])));
       } else if (command === 'alarms') {
-        console.log(JSON.stringify(await client.call('alarmStatus'), null, 2));
+        logging.log(JSON.stringify(await client.call('alarmStatus'), null, 2));
       } else if (command === 'http-grant') {
         const [key, port] = args;
-        console.log(
+        logging.log(
           JSON.stringify(
             await client.call('httpGrant', key, Number(port)),
             null,
@@ -80,7 +83,7 @@ try {
           ),
         );
       } else if (command === 'http-services') {
-        console.log(JSON.stringify(await client.call('httpServices'), null, 2));
+        logging.log(JSON.stringify(await client.call('httpServices'), null, 2));
       } else if (command === 'mail') {
         await showMailbox(platform.terminal.open(), platform.logging, client);
       } else if (
@@ -105,7 +108,7 @@ try {
                 ? 'discardOffer'
                 : command;
         const result = await client.call(method, ...args);
-        console.log(
+        logging.log(
           command === 'invite' ? result : JSON.stringify(result, null, 2),
         );
       } else if (command === 'install') {
@@ -123,7 +126,7 @@ try {
           platform.bundler,
           modulePath,
         );
-        console.log(
+        logging.log(
           JSON.stringify(
             await client.call('install', name, bundle, grants),
             null,
@@ -134,37 +137,13 @@ try {
         await showInventory(platform.terminal.open(), client);
       } else if (command === 'attach') {
         const terminal = platform.terminal.open();
-        const close = () => {
-          terminal.close();
-          client.close();
-        };
-        terminal.onClose(close);
-        void client.closed.then(() => terminal.close());
-        if (terminal.isTTY) {
-          console.log(
-            'Workspace JavaScript; retain bindings with globalThis. Ctrl-D detaches.',
-          );
-          terminal.setPrompt('thix> ');
-          terminal.prompt();
-        }
-        try {
-          for await (const source of terminal.lines()) {
-            // eslint-disable-next-line no-continue
-            if (!source.trim()) continue;
-            try {
-              console.log(await client.call('evaluate', source));
-            } catch (error) {
-              console.error(/** @type {Error} */ (error).message);
-              if (!terminal.isTTY) process.exitCode = 1;
-            }
-            if (terminal.isTTY) terminal.prompt();
-          }
-        } finally {
-          terminal.close();
-        }
+        const failed = await showAttach(terminal, platform.logging, client);
+        // A human at a prompt has already seen the error; a piped script
+        // needs the process to say so.
+        if (failed && !terminal.isTTY) process.exitCode = 1;
       } else {
         const result = await client.call(command);
-        console.log(
+        logging.log(
           ['status', 'applications', 'reachability', 'collect'].includes(
             command,
           )
@@ -177,12 +156,12 @@ try {
       client.close();
     }
   } else {
-    console.log(
+    logging.log(
       'Usage: thix serve|attach|install|applications|inventory|invite|revoke-invite|connect|contacts|send|inbox|outbox|take|discard|mail|clock-grant|alarms|http-grant|http-services|reachability|collect|status|stop [state-directory]',
     );
     process.exitCode = command === undefined || command === 'help' ? 0 : 1;
   }
 } catch (error) {
-  console.error(/** @type {Error} */ (error).message);
+  logging.error(/** @type {Error} */ (error).message);
   process.exitCode = 1;
 }

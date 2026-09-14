@@ -29,7 +29,7 @@ import {
 import { makeMemoryStore } from '../src/store/store-memory.js';
 import { makeTestOcapn } from './_util.js';
 
-import { makeNodePowers } from '../src/platform/node-powers.js';
+import { makeNodePowers } from '../src/platform/node/powers.js';
 
 const nodePowers = makeNodePowers();
 const transportPowers = {
