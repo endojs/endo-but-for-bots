@@ -2,6 +2,16 @@
 import harden from '@endo/harden';
 
 /**
+ * The longest delay `setTimer` accepts. Node's `setTimeout` silently treats a
+ * larger delay — and `NaN` — as about a millisecond, so a "24.9 day" timer
+ * fires immediately instead of failing. Callers validate against this rather
+ * than discover it at run time, and a port for another host must honour the
+ * same bound.
+ */
+export const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
+harden(MAX_TIMER_DELAY_MS);
+
+/**
  * Timer handles are opaque host values. Core passes them back to
  * {@link TimerPowers.clearTimer} and never inspects them.
  *
