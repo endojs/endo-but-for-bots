@@ -878,6 +878,166 @@ fn interp_fields() -> Vec<(String, String)> {
     out
 }
 
+/// `Interp`'s fields with their attribute groups, each `#[...]` kept as
+/// one string (a multi-line group is joined), in declaration order. Read
+/// from the comment-blanked source, so no remark can pose as an attribute.
+fn interp_field_attributes() -> Vec<(String, Vec<String>)> {
+    let body = fn_body("pub struct Interp");
+    let mut out = Vec::new();
+    let mut attrs: Vec<String> = Vec::new();
+    // An attribute group still open across lines, with its paren depth.
+    let mut open: Option<(String, i64)> = None;
+    let paren_delta = |l: &str| -> i64 {
+        l.chars()
+            .map(|c| match c {
+                '(' => 1,
+                ')' => -1,
+                _ => 0,
+            })
+            .sum()
+    };
+    for line in body.lines() {
+        let l = line.trim();
+        if let Some((mut text, depth)) = open.take() {
+            text.push_str(l);
+            let depth = depth + paren_delta(l);
+            if depth > 0 {
+                open = Some((text, depth));
+            } else {
+                attrs.push(text);
+            }
+            continue;
+        }
+        if l.starts_with("#[") {
+            let depth = paren_delta(l);
+            if depth > 0 {
+                open = Some((l.to_string(), depth));
+            } else {
+                attrs.push(l.to_string());
+            }
+            continue;
+        }
+        let decl = l
+            .strip_prefix("pub(crate) ")
+            .or_else(|| l.strip_prefix("pub(super) "))
+            .or_else(|| l.strip_prefix("pub "))
+            .unwrap_or(l);
+        let Some(colon) = decl.find(':') else {
+            continue;
+        };
+        let name = &decl[..colon];
+        if !name.is_empty()
+            && name
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+            && !decl[colon + 1..].starts_with(':')
+        {
+            out.push((name.to_string(), std::mem::take(&mut attrs)));
+        }
+    }
+    out
+}
+
+/// `Serialized` tables whose rows hold slots and whose native-reference
+/// policy is `persist_refs(none)` on purpose: each names why the slots it
+/// carries can never reference a function restore cannot rebuild, or why
+/// a walked holder already refuses the same reference. A table missing
+/// here fails [`every_serialized_slot_bearing_table_is_walked_or_names_its_reason`]
+/// until it gains a holder arm in `persistence.rs` or a reason.
+const PERSIST_REFS_NONE_BY_DESIGN: &[(&str, &str)] = &[
+    ("functions", "global_env and closures are environment records the engine allocates, never a guest callable"),
+    ("collator_compare_functions", "the value is the collator's engine-made bound compare function, carried by intl_bound_functions"),
+    ("ctor_prototype", "mirrors the constructor's `.prototype` heap property, which the heap walk refuses"),
+    ("array_buffers", "a ChunkOffset of byte storage, not an object reference"),
+    ("typed_arrays", "buffer is an ArrayBuffer object, checked at construction"),
+    ("data_views", "buffer is an ArrayBuffer object, checked at construction"),
+    ("symbol_registry", "values are the registered symbols' descriptor objects"),
+    ("symbol_key_ids", "keys and values are symbol descriptor objects and their ids"),
+    ("promise_functions", "promise is the resolving pair's own promise object"),
+];
+
+/// Every `Serialized` table whose row type can hold a slot is a persisted
+/// holder: the native-reference gate walks it through a `persist_refs`
+/// policy, or the table names here why `none` is sound. The async
+/// generator, promise job, and iterator tables each shipped with `none`
+/// and let a doomed native restore as a plain object; this net makes the
+/// next such table a failing test rather than a review finding.
+#[test]
+fn every_serialized_slot_bearing_table_is_walked_or_names_its_reason() {
+    let defs = type_defs(src());
+    let bearing = slot_bearing_types(&defs);
+    let is_bearing = |ty: &str| {
+        mentions(ty, "Slot")
+            || mentions(ty, "SlotIndex")
+            || mentions(ty, "ChunkOffset")
+            || bearing.iter().any(|t| mentions(ty, t))
+    };
+    // A table keyed by its owner's slot holds no reference through the
+    // key; the row type after the map's first top-level comma is what a
+    // row can point at. A non-map type is its own row type.
+    let row_type = |ty: &str| -> String {
+        let Some(map) = ty.find("HashMap<") else {
+            return ty.to_string();
+        };
+        let generics = &ty[map + "HashMap<".len()..];
+        let mut depth = 0i64;
+        for (i, c) in generics.char_indices() {
+            match c {
+                '<' | '(' => depth += 1,
+                '>' | ')' => depth -= 1,
+                ',' if depth == 0 => return generics[i + 1..].to_string(),
+                _ => {}
+            }
+        }
+        panic!("map without a value type: {ty}");
+    };
+    let types: BTreeMap<String, String> = interp_fields().into_iter().collect();
+    let attributes = interp_field_attributes();
+    assert_eq!(attributes.len(), types.len(), "field parsers disagree");
+    let mut unwalked = BTreeSet::new();
+    for (name, attrs) in &attributes {
+        let serialized = attrs
+            .iter()
+            .any(|a| a.starts_with("#[snapshot_table(") && a.contains("Serialized"));
+        let none = attrs.iter().any(|a| a == "#[persist_refs(none)]");
+        if serialized && none && is_bearing(&row_type(&types[name])) {
+            unwalked.insert(name.clone());
+        }
+    }
+    // The row-type cut keeps a row that points at other objects and drops
+    // an owner-keyed scalar.
+    assert!(is_bearing(&row_type(&types["iterators"])));
+    assert!(!is_bearing(&row_type(&types["dates"])));
+    let documented: BTreeSet<String> = PERSIST_REFS_NONE_BY_DESIGN
+        .iter()
+        .map(|(name, _)| name.to_string())
+        .collect();
+    for (name, reason) in PERSIST_REFS_NONE_BY_DESIGN {
+        assert!(reason.len() >= 20, "explain the reason for {name}");
+        assert!(
+            unwalked.contains(*name),
+            "stale reason: {name} is walked, not serialized, or holds no slot"
+        );
+    }
+    let missing: Vec<&String> = unwalked.difference(&documented).collect();
+    assert!(
+        missing.is_empty(),
+        "serialized slot-bearing tables the native-reference gate never walks — give each a \
+         persist_refs policy in persistence.rs or a documented reason: {missing:?}"
+    );
+    // The walked tables this net exists for stay walked.
+    for walked in ["async_generators", "promise_jobs", "iterators"] {
+        let (_, attrs) = attributes
+            .iter()
+            .find(|(name, _)| name == walked)
+            .expect(walked);
+        assert!(
+            !attrs.iter().any(|a| a == "#[persist_refs(none)]"),
+            "{walked} lost its persist_refs policy"
+        );
+    }
+}
+
 // ---------------------------------------------------------------------
 // The registry
 // ---------------------------------------------------------------------
