@@ -731,7 +731,7 @@ impl Scoper<'_> {
             }
             Bind::FunctionBody(function) => {
                 self.fx_scope_bound(function.si);
-                self.scope_counts.insert(function.si, self.scope_maximum);
+                self.record_scope_count(function.si, self.scope_maximum, function.node.line)?;
                 self.scope_maximum = function.maximum;
                 self.scope_level = function.level;
             }
