@@ -57,7 +57,7 @@ import {
   brokerServiceSpecifier,
   getHostedStorageRoots,
   readBrokerService,
-  readSandboxRuntime,
+  readNativeSandbox,
   readSessionStorage,
   readSliceImageReference,
   readStateProvider,
@@ -170,9 +170,6 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
   // existing secret from a possibly stale environment variable.
   const seedApiKey = env.ENDO_OPENROUTER_API_KEY || '';
 
-  if (!(await E(hostAgent).has(SANDBOX_DIR, 'sandbox-factory'))) {
-    throw Fail`${SANDBOX_DIR}/sandbox-factory is missing — run setup-host.js first.`;
-  }
   // Every session's durable state is mounted through this provider; a backend
   // minted without it would fail on first provision.
   if (!(await E(hostAgent).has(SANDBOX_DIR, 'state-provider'))) {
@@ -182,7 +179,7 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
   if (!(await E(hostAgent).has(SANDBOX_DIR, 'native-sandbox'))) {
     throw Fail`${SANDBOX_DIR}/native-sandbox is missing — run setup-host.js first.`;
   }
-  const runtime = await readSandboxRuntime(hostAgent);
+  const runtime = await readNativeSandbox(hostAgent);
   const state = await readStateProvider(hostAgent);
   // Like the state root, a retained storage owner's roots are the effective
   // ones: the backend must record sessions where that owner can remove them.

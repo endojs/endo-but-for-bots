@@ -4,10 +4,11 @@
 /**
  * The `opencode-sandbox/state-provider` caplet: the host-backed durable
  * session-state provider that creates one 0700 host directory per session and
- * returns a daemon Mount cap for it (see `opencode-state-provider.js` for why
- * opencode's SQLite WAL state cannot live on the 9P workspace). Minted by
- * `setup-host.js` with `@agent` powers, because the sandbox factory only
- * accepts Mount caps the daemon itself minted through `provideHostPath`.
+ * returns its host path (see `opencode-state-provider.js` for why opencode's
+ * SQLite WAL state cannot live on the 9P workspace). Minted by `setup-host.js`
+ * with `@agent` powers for `provideMount`, which only the legacy client's
+ * Mount facade (`provideSessionMount`) still uses; native session controllers
+ * bind the prepared directory directly.
  *
  * Formula env (set by `setup-host.js`) and the daemon-process fallback, which
  * must be `ENDO_`-prefixed to survive the daemon's `allowEnvPass` filter:
