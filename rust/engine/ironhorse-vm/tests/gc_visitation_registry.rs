@@ -1,178 +1,555 @@
 //! The independent GC ground-truth net (wave-6 prescribed test class).
 //!
-//! The runtime parity net keeps the FULL collector's walk and the
-//! PARTIAL collector's enumeration honest against each other — but a
-//! SHARED omission (a side table BOTH walks miss) passes it silently,
-//! which is exactly how the wave-6 visitation misses (W6-1..W6-4)
+//! A SHARED omission — a side table that NEITHER collector's walk
+//! visits — is exactly how the wave-6 visitation misses (W6-1..W6-4)
 //! escaped 1093 green tests. This net derives the ground truth from
 //! the STRUCT itself, independently of either collector's visitor:
 //!
-//! 1. It parses `Interp`'s fields and this file's type graph FROM
+//! 1. It parses `Interp`'s fields and the crate's type graph FROM
 //!    SOURCE and computes which fields are SLOT-BEARING (their type
-//!    transitively mentions `Slot`/`SlotIndex`/`ChunkOffset`).
+//!    transitively mentions `Slot`/`SlotIndex`/`ChunkOffset`). The
+//!    source it parses is the crate's whole production module set,
+//!    derived from the `mod` declarations reachable from `lib.rs` —
+//!    not a hand-kept list of files — so a new module joins the type
+//!    graph by being declared, a module that is declared but missing
+//!    fails the build, and a file under `src/` that no declaration
+//!    reaches fails HERE rather than shrinking coverage silently (F053).
 //! 2. Every slot-bearing field must appear in the REGISTRY below with
 //!    an explicit GC classification; a new field fails here until a
 //!    deliberate decision places it.
-//! 3. Each classification is CHECKED, not just recorded: fields
-//!    classified as visited must appear (word-bounded) in the actual
-//!    visitor bodies — `gc_roots`, the full collector's
-//!    `extra_edges`/`ephemeron_edges`/`external_chunk_refs`, and the
-//!    partial enumeration `each_side_table_ref`(`_tail`) — and
-//!    weak-keyed tables must have slot-FREE value types (checked
-//!    mechanically) and prune in BOTH collectors' sweep paths
-//!    (`collect_garbage` and `free_pages`), or a swept-then-reused
-//!    owner slot would read a stale row.
+//! 3. Each classification is CHECKED, not just recorded, against the
+//!    exact tokens the roster generators emit for the real visitor
+//!    bodies — `gc_roots`, the full collector's
+//!    `extra_edges`/`ephemeron_edges`/`external_chunk_refs`, the
+//!    partial enumeration `each_side_table_ref`(`_tail`), and both
+//!    sweep paths — and every check is `self.`-QUALIFIED: a body
+//!    satisfies a claim about `target_func` only by naming
+//!    `self.target_func`, never by pushing some frame's `f.target_func`
+//!    (F089). Weak-keyed tables must have slot-FREE value types (checked
+//!    mechanically) and prune in BOTH collectors' sweep paths, or a
+//!    swept-then-reused owner slot would read a stale row. The boot
+//!    anchors no visitor names are classified `TransitivelyRooted`,
+//!    and that is checked at RUNTIME: every one of them must survive a
+//!    full collection on a booted machine, and the probe list and the
+//!    registry reconcile both ways.
 //!
-//! Textual presence cannot prove a walk visits every SUBFIELD
-//! correctly — that is the runtime parity net's job and the behavioral
-//! twins' (`gc_frame_state.rs`, `gc_side_tables.rs`,
-//! `gc_anchor_truth.rs`) — but it kills the forgot-the-table-entirely
+//! What textual presence cannot prove is that a walk visits every
+//! SUBFIELD of a row correctly. Both collectors' walks are generated
+//! from one per-row policy (`gc_slot_row!`), so a subfield omission is
+//! shared by every walk and is invisible to the runtime counted-ref
+//! parity net too (that net compares the standing bulk counts against a
+//! fresh recount of the SAME three tables; it holds the counting
+//! discipline, not row coverage — F038). The subfield class is held by
+//! the behavioral twins alone: `gc_frame_state.rs`, `gc_side_tables.rs`,
+//! `gc_anchor_truth.rs`. This net kills the forgot-the-table-entirely
 //! class outright, for every future field.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
-const SRC: &str = concat!(
-    include_str!("../src/interp.rs"),
-    include_str!("../src/interp/host.rs"),
-    include_str!("../src/interp/realm.rs"),
-    include_str!("../src/interp/metering.rs"),
-    include_str!("../src/interp/native_ids.rs"),
-    include_str!("../src/interp/snapshot_rows.rs"),
-    include_str!("../src/interp/intl_data.rs"),
-    include_str!("../src/interp/symbol_keys.rs"),
-    include_str!("../src/interp/admission.rs"),
-    include_str!("../src/interp/apply.rs"),
-    include_str!("../src/interp/code.rs"),
-    include_str!("../src/interp/coerce.rs"),
-    include_str!("../src/interp/enumerate.rs"),
-    include_str!("../src/interp/environment.rs"),
-    include_str!("../src/interp/errors.rs"),
-    include_str!("../src/interp/eval.rs"),
-    include_str!("../src/interp/frames.rs"),
-    include_str!("../src/interp/function.rs"),
-    include_str!("../src/interp/invoke.rs"),
-    include_str!("../src/interp/iterable.rs"),
-    include_str!("../src/interp/render.rs"),
-    include_str!("../src/interp/strings.rs"),
-    include_str!("../src/interp/unwind.rs"),
-    "\n",
-    include_str!("../src/interp/dispatch.rs"),
-    include_str!("../src/interp/dispatch/property_read.rs"),
-    include_str!("../src/interp/dispatch/private.rs"),
-    include_str!("../src/interp/dispatch/super_property.rs"),
-    include_str!("../src/interp/dispatch/operators.rs"),
-    include_str!("../src/interp/dispatch/environment.rs"),
-    include_str!("../src/interp/dispatch/iteration.rs"),
-    include_str!("../src/interp/dispatch/property_write.rs"),
-    "\n",
-    include_str!("../src/interp/boot.rs"),
-    "\n",
-    include_str!("../src/interp/gc_tables.rs"),
-    "\n",
-    include_str!("../src/interp/state.rs"),
-    "\n",
-    include_str!("../src/interp/roots.rs"),
-    "\n",
-    include_str!("../src/interp/temporal.rs"),
-    "\n",
-    include_str!("../src/interp/date.rs"),
-    "\n",
-    include_str!("../src/interp/locale.rs"),
-    "\n",
-    include_str!("../src/interp/text.rs"),
-    "\n",
-    include_str!("../src/interp/numeric.rs"),
-    "\n",
-    include_str!("../src/interp/gc.rs"),
-    "\n",
-    include_str!("../src/interp/suspend.rs"),
-    "\n",
-    include_str!("../src/interp/native_try.rs"),
-    "\n",
-    include_str!("../src/interp/natives/regexp.rs"),
-    "\n",
-    include_str!("../src/interp/natives/resource.rs"),
-    "\n",
-    include_str!("../src/interp/natives/reflect.rs"),
-    "\n",
-    include_str!("../src/interp/natives/bigint.rs"),
-    "\n",
-    include_str!("../src/interp/natives/number.rs"),
-    "\n",
-    include_str!("../src/interp/natives/string.rs"),
-    "\n",
-    include_str!("../src/interp/natives/collection.rs"),
-    "\n",
-    include_str!("../src/interp/natives/date.rs"),
-    "\n",
-    include_str!("../src/interp/natives/temporal.rs"),
-    "\n",
-    include_str!("../src/interp/natives/intl.rs"),
-    "\n",
-    include_str!("../src/interp/natives/promise.rs"),
-    "\n",
-    include_str!("../src/interp/natives/buffer.rs"),
-    "\n",
-    include_str!("../src/interp/natives/array.rs"),
-    "\n",
-    include_str!("../src/interp/natives/dispatch.rs"),
-    "\n",
-    include_str!("../src/interp/natives/json.rs"),
-    "\n",
-    include_str!("../src/interp/property.rs"),
-    include_str!("../src/interp/property/descriptors.rs"),
-    include_str!("../src/interp/property/indexed.rs"),
-    include_str!("../src/interp/property/integrity.rs"),
-    include_str!("../src/interp/property/keys.rs"),
-    include_str!("../src/interp/property/object.rs"),
-    include_str!("../src/interp/property/ordinary.rs"),
-    include_str!("../src/interp/property/proxy.rs"),
-    include_str!("../src/interp/property/read_index.rs"),
-    "\n",
-    include_str!("../src/interp/link.rs"),
-    "\n",
-    include_str!("../src/interp/persist.rs"),
-);
+use ironhorse_vm::source_scan::{self, Token};
+use ironhorse_vm::Interp;
 
-/// The body (including braces) of the function that starts at the
-/// first occurrence of `marker`.
-fn fn_body(marker: &str) -> &'static str {
-    body_in(SRC, marker)
+// ---------------------------------------------------------------------
+// The module set (F053)
+// ---------------------------------------------------------------------
+
+/// The crate's `src/` directory, resolved from the manifest so the walk
+/// is independent of the working directory.
+fn src_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("src")
 }
 
-fn body_in<'a>(src: &'a str, marker: &str) -> &'a str {
-    let i = src
-        .find(marker)
-        .unwrap_or_else(|| panic!("marker not found: {marker}"));
-    let j = i + src[i..].find('{').expect("fn body opens");
-    let bytes = src.as_bytes();
-    let mut depth = 0usize;
-    let mut k = j;
-    loop {
-        match bytes[k] {
-            b'{' => depth += 1,
-            b'}' => {
-                depth -= 1;
-                if depth == 0 {
-                    return &src[j..=k];
+/// Files under `src/` that no `mod` declaration reaches and are
+/// nevertheless legitimate: each is pulled in by `include!` from a
+/// `#[cfg(test)]` inline module, so it is compiled only into the test
+/// binary and declares no production type. A file that is neither
+/// declared nor listed here is an orphan and fails
+/// [`every_source_file_is_a_declared_module_or_a_listed_test_include`].
+const TEST_ONLY_INCLUDES: &[&str] = &["meter_consistency.rs"];
+
+/// The crate's module tree as the `mod` declarations spell it.
+struct ModuleSet {
+    /// Modules compiled into the production crate, sorted by path.
+    production: Vec<PathBuf>,
+    /// Modules reached only through `#[cfg(test)]` declarations or
+    /// carrying an inner `#![cfg(test)]`, sorted by path.
+    test_only: Vec<PathBuf>,
+}
+
+/// Attributes immediately preceding the token at `at`, innermost last:
+/// each `#[...]` group's tokens joined without whitespace.
+fn preceding_attributes(code: &[Token<'_>], at: usize) -> Vec<String> {
+    let mut attrs = Vec::new();
+    let mut end = at;
+    while end >= 3 && code[end - 1].text == "]" {
+        // Walk back to the `[` that opens this group.
+        let mut depth = 0usize;
+        let mut open = end - 1;
+        loop {
+            match code[open].text {
+                "]" => depth += 1,
+                "[" => {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
+                _ => {}
+            }
+            assert!(open > 0, "unbalanced attribute brackets");
+            open -= 1;
+        }
+        if open == 0 || code[open - 1].text != "#" {
+            break;
+        }
+        let text: String = code[open + 1..end - 1].iter().map(|t| t.text).collect();
+        attrs.push(text);
+        end = open - 1;
+    }
+    attrs.reverse();
+    attrs
+}
+
+/// Whether a file's head carries the inner `#![cfg(test)]` attribute,
+/// anywhere among its leading inner attributes (`#![allow(..)]` and a
+/// doc `#![doc = ".."]` may precede it).
+fn has_inner_cfg_test(code: &[Token<'_>]) -> bool {
+    let mut at = 0;
+    while code.get(at).is_some_and(|t| t.text == "#")
+        && code.get(at + 1).is_some_and(|t| t.text == "!")
+        && code.get(at + 2).is_some_and(|t| t.text == "[")
+    {
+        let close = source_scan::matching_delimiter(code, at + 2);
+        let text: String = code[at + 3..close].iter().map(|t| t.text).collect();
+        if text == "cfg(test)" {
+            return true;
+        }
+        at = close + 1;
+    }
+    false
+}
+
+/// Resolve every `mod NAME;` declaration in `file`, returning
+/// `(path, test_only)` pairs, and fail loudly on a declaration whose file
+/// cannot be found or is ambiguous.
+fn declared_modules(file: &Path, test_only: bool) -> Vec<(PathBuf, bool)> {
+    let text = std::fs::read_to_string(file).expect("read module");
+    let code = source_scan::code_only(&text);
+    let tokens = source_scan::tokens(&code);
+    let file_is_test_only = test_only || has_inner_cfg_test(&tokens);
+    let dir = file.parent().expect("module has a directory");
+    let stem = file.file_stem().and_then(|s| s.to_str()).expect("stem");
+    // `lib.rs` and `mod.rs` own their directory; any other file owns the
+    // directory named after it.
+    let child_base = if stem == "lib" || stem == "mod" {
+        dir.to_path_buf()
+    } else {
+        dir.join(stem)
+    };
+    let mut out = Vec::new();
+    for i in 0..tokens.len().saturating_sub(2) {
+        if tokens[i].text != "mod" || tokens[i + 2].text != ";" {
+            continue;
+        }
+        let name = tokens[i + 1].text;
+        assert!(
+            name.chars().all(|c| c.is_alphanumeric() || c == '_'),
+            "module name: {name}"
+        );
+        // `pub`, `pub(crate)`, `pub(in some::path)` … precede the keyword;
+        // attributes precede the visibility.
+        let mut vis_start = i;
+        if i > 0 && tokens[i - 1].text == ")" {
+            let mut depth = 0usize;
+            let mut open = i - 1;
+            loop {
+                match tokens[open].text {
+                    ")" => depth += 1,
+                    "(" => {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+                assert!(open > 0, "unbalanced visibility parentheses");
+                open -= 1;
+            }
+            if open > 0 && tokens[open - 1].text == "pub" {
+                vis_start = open - 1;
+            }
+        } else if i > 0 && tokens[i - 1].text == "pub" {
+            vis_start = i - 1;
+        }
+        let attrs = preceding_attributes(&tokens, vis_start);
+        let cfg_test = attrs.iter().any(|a| a == "cfg(test)");
+        let explicit = attrs.iter().find_map(|a| {
+            a.strip_prefix("path=\"")
+                .and_then(|rest| rest.strip_suffix('"'))
+                .map(str::to_owned)
+        });
+        let path = match explicit {
+            // A `#[path]` on an out-of-line module in any file is relative
+            // to the declaring file's directory.
+            Some(p) => dir.join(p),
+            None => {
+                let flat = child_base.join(format!("{name}.rs"));
+                let nested = child_base.join(name).join("mod.rs");
+                match (flat.is_file(), nested.is_file()) {
+                    (true, false) => flat,
+                    (false, true) => nested,
+                    (true, true) => panic!("ambiguous module file for {name} in {file:?}"),
+                    (false, false) => {
+                        panic!("declared module {name} in {file:?} has no file")
+                    }
                 }
             }
-            _ => {}
+        };
+        assert!(path.is_file(), "module file missing: {path:?}");
+        // A child that opens with `#![cfg(test)]` is test-only however it
+        // is declared (`interp/tests.rs` carries its cfg inside).
+        let child_text = std::fs::read_to_string(&path).expect("read child module");
+        let child_code = source_scan::code_only(&child_text);
+        let inner_cfg_test = has_inner_cfg_test(&source_scan::tokens(&child_code));
+        out.push((path, file_is_test_only || cfg_test || inner_cfg_test));
+    }
+    out
+}
+
+/// Walk the module tree from `lib.rs`.
+fn module_set() -> ModuleSet {
+    let root = src_dir().join("lib.rs");
+    let mut production = BTreeSet::new();
+    let mut test_only = BTreeSet::new();
+    let mut queue = vec![(root, false)];
+    while let Some((file, is_test)) = queue.pop() {
+        let set = if is_test {
+            &mut test_only
+        } else {
+            &mut production
+        };
+        if !set.insert(file.clone()) {
+            continue;
         }
-        k += 1;
+        for (child, child_is_test) in declared_modules(&file, is_test) {
+            queue.push((child, child_is_test));
+        }
+    }
+    ModuleSet {
+        production: production.into_iter().collect(),
+        test_only: test_only.into_iter().collect(),
     }
 }
 
-/// Word-bounded mention of `word` in `hay`.
+/// The production module set as one code-only text (comments and raw
+/// strings blanked, literals kept), files in path order, each followed
+/// by a newline so no declaration straddles two files.
+static SRC: LazyLock<String> = LazyLock::new(|| {
+    let set = module_set();
+    let mut out = String::new();
+    for file in &set.production {
+        let text = std::fs::read_to_string(file).expect("read production module");
+        out.push_str(&source_scan::code_only(&text));
+        out.push('\n');
+    }
+    out
+});
+
+fn src() -> &'static str {
+    &SRC
+}
+
+#[test]
+fn every_source_file_is_a_declared_module_or_a_listed_test_include() {
+    let set = module_set();
+    let all: BTreeSet<PathBuf> = source_scan::rs_files(&src_dir()).into_iter().collect();
+    let declared: BTreeSet<PathBuf> = set
+        .production
+        .iter()
+        .chain(&set.test_only)
+        .cloned()
+        .collect();
+    let listed: BTreeSet<PathBuf> = TEST_ONLY_INCLUDES
+        .iter()
+        .map(|p| src_dir().join(p))
+        .collect();
+    for p in &listed {
+        assert!(
+            all.contains(p),
+            "TEST_ONLY_INCLUDES names a file that no longer exists: {p:?}"
+        );
+        assert!(
+            !declared.contains(p),
+            "TEST_ONLY_INCLUDES names a file a `mod` declaration already reaches: {p:?}"
+        );
+    }
+    let orphans: Vec<&PathBuf> = all
+        .iter()
+        .filter(|p| !declared.contains(*p) && !listed.contains(*p))
+        .collect();
+    assert!(
+        orphans.is_empty(),
+        "source files under src/ that no `mod` declaration reaches — declare each with \
+         `mod` (a production module joins the type graph automatically) or, for a file an \
+         `include!` in a #[cfg(test)] module pulls in, list it in TEST_ONLY_INCLUDES: {orphans:?}"
+    );
+    // Sanity floors: the walk found the crate, not an empty directory.
+    let names = |paths: &[PathBuf]| -> Vec<String> {
+        paths
+            .iter()
+            .map(|p| p.strip_prefix(src_dir()).unwrap().display().to_string())
+            .collect()
+    };
+    let production = names(&set.production);
+    for expected in [
+        "lib.rs",
+        "bulk.rs",
+        "value.rs",
+        "interp.rs",
+        "interp/state.rs",
+        "interp/gc_tables.rs",
+        "interp/roots.rs",
+        "interp/boundary.rs",
+        "interp/natives/mod.rs",
+        "interp/property/proxy.rs",
+        "module_snapshot.rs",
+    ] {
+        assert!(
+            production.contains(&expected.to_string()),
+            "missing {expected}"
+        );
+    }
+    assert!(
+        production.len() > 60,
+        "found {} production modules",
+        production.len()
+    );
+    let test_only = names(&set.test_only);
+    for expected in [
+        "interp/tests.rs",
+        "interp/tests/gc_chunk_roster.rs",
+        "interp/boot/tests.rs",
+        "interp/natives/string/slice_tests.rs",
+        "interp/reused_boot_native_tests.rs",
+    ] {
+        assert!(
+            test_only.contains(&expected.to_string()),
+            "missing {expected}"
+        );
+    }
+    for p in &production {
+        assert!(
+            !test_only.contains(p),
+            "{p} is both production and test-only"
+        );
+    }
+}
+
+#[test]
+fn the_module_walk_rejects_a_declared_module_without_a_file() {
+    // A copy of the crate's `lib.rs` declaring one module that does not
+    // exist: the walk must fail loudly rather than skip it.
+    let dir = std::env::temp_dir().join(format!(
+        "ironhorse-registry-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("lib.rs");
+    std::fs::write(&file, "mod present;\n#[cfg(test)]\nmod absent;\n").unwrap();
+    std::fs::write(dir.join("present.rs"), "pub struct P;\n").unwrap();
+    let outcome = std::panic::catch_unwind(|| declared_modules(&file, false));
+    std::fs::remove_dir_all(&dir).ok();
+    assert!(
+        outcome.is_err(),
+        "a declared module without a file was accepted"
+    );
+}
+
+#[test]
+fn the_module_walk_reads_attributes_and_path_overrides() {
+    let dir = std::env::temp_dir().join(format!(
+        "ironhorse-registry-attrs-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(dir.join("owner").join("nested")).unwrap();
+    let file = dir.join("owner.rs");
+    std::fs::write(
+        &file,
+        "// mod commented_out;\n\
+         pub(crate) mod plain;\n\
+         #[cfg(test)]\n#[allow(dead_code)]\npub mod gated;\n\
+         #[path = \"elsewhere.rs\"]\nmod renamed;\n\
+         mod nested;\n\
+         #[cfg(test)]\npub(in crate::owner) mod scoped;\n\
+         #[path = \"aside.rs\"]\npub(in crate::owner) mod pathed;\n\
+         mod stacked;\n\
+         mod inline { }\n\
+         const S: &str = \"mod in_string;\";\n",
+    )
+    .unwrap();
+    std::fs::write(dir.join("owner").join("plain.rs"), "").unwrap();
+    std::fs::write(dir.join("owner").join("gated.rs"), "").unwrap();
+    std::fs::write(dir.join("elsewhere.rs"), "").unwrap();
+    std::fs::write(
+        dir.join("owner").join("nested").join("mod.rs"),
+        "#![cfg(test)]\n",
+    )
+    .unwrap();
+    std::fs::write(dir.join("owner").join("scoped.rs"), "").unwrap();
+    std::fs::write(dir.join("aside.rs"), "").unwrap();
+    // A decoy at the default location must lose to the `#[path]` override.
+    std::fs::write(
+        dir.join("owner").join("pathed.rs"),
+        "pub struct Decoy { s: Slot }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("owner").join("stacked.rs"),
+        "#![allow(dead_code)]\n#![cfg(test)]\n",
+    )
+    .unwrap();
+    let found = declared_modules(&file, false);
+    std::fs::remove_dir_all(&dir).ok();
+    let rel: Vec<(String, bool)> = found
+        .iter()
+        .map(|(p, t)| (p.strip_prefix(&dir).unwrap().display().to_string(), *t))
+        .collect();
+    assert_eq!(
+        rel,
+        [
+            ("owner/plain.rs".to_string(), false),
+            ("owner/gated.rs".to_string(), true),
+            ("elsewhere.rs".to_string(), false),
+            // The inner attribute marks the child test-only however it is declared.
+            ("owner/nested/mod.rs".to_string(), true),
+            // Attributes are found behind a `pub(in path)` visibility too.
+            ("owner/scoped.rs".to_string(), true),
+            ("aside.rs".to_string(), false),
+            // A `#![cfg(test)]` behind another inner attribute still counts.
+            ("owner/stacked.rs".to_string(), true),
+        ]
+    );
+    let nested_tokens = source_scan::tokens("#![cfg(test)]\nuse x;");
+    assert!(has_inner_cfg_test(&nested_tokens));
+    assert!(has_inner_cfg_test(&source_scan::tokens(
+        "#![allow(dead_code)]\n#![doc = \"x\"]\n#![cfg(test)]\nuse x;"
+    )));
+    assert!(!has_inner_cfg_test(&source_scan::tokens(
+        "#[cfg(test)]\nmod t;"
+    )));
+    assert!(!has_inner_cfg_test(&source_scan::tokens(
+        "#![allow(dead_code)]\nuse x;\n#![cfg(test)]"
+    )));
+}
+
+// ---------------------------------------------------------------------
+// Source lookups
+// ---------------------------------------------------------------------
+
+/// The token stream of a code-only text, built once per lookup batch.
+struct Lexed<'a> {
+    code: &'a str,
+    tokens: Vec<Token<'a>>,
+}
+
+impl<'a> Lexed<'a> {
+    fn new(code: &'a str) -> Self {
+        Lexed {
+            code,
+            tokens: source_scan::tokens(code),
+        }
+    }
+
+    /// The brace body (including braces) of the UNIQUE declaration whose
+    /// tokens start with `marker` and continue to a `{` before any `;` —
+    /// so a trait method's declaration (`fn swept(&mut self, idx: SlotIndex);`)
+    /// never impersonates its implementation, and two implementations of
+    /// one spelling fail loudly rather than the first winning.
+    fn body(&self, marker: &str) -> &'a str {
+        let pattern = source_scan::tokens(marker);
+        assert!(
+            pattern.last().is_some_and(|t| t.text != "{"),
+            "marker must stop before the brace: {marker}"
+        );
+        let opens: Vec<usize> = source_scan::token_positions(&self.tokens, marker)
+            .into_iter()
+            .filter_map(|at| {
+                let start = at + pattern.len();
+                self.tokens[start..]
+                    .iter()
+                    .position(|t| t.text == "{" || t.text == ";")
+                    .map(|n| start + n)
+                    .filter(|open| self.tokens[*open].text == "{")
+            })
+            .collect();
+        assert_eq!(
+            opens.len(),
+            1,
+            "declaration must be unique in the production module set: {marker} ({} bodies)",
+            opens.len()
+        );
+        let open = opens[0];
+        let close = source_scan::matching_delimiter(&self.tokens, open);
+        &self.code[self.tokens[open].start..self.tokens[close].start + 1]
+    }
+
+    /// [`Self::body`] with every whitespace character removed.
+    fn compact_body(&self, marker: &str) -> String {
+        compact(self.body(marker))
+    }
+
+    /// A lexer over the unique body that `marker` opens, so a lookup inside
+    /// it cannot be satisfied by a same-named declaration elsewhere — a
+    /// trait's default method body, a test double's implementation.
+    fn scoped(&self, marker: &str) -> Lexed<'a> {
+        Lexed::new(self.body(marker))
+    }
+}
+
+/// The collector's hook implementation on the roster-borrowed `Hooks`
+/// struct: every callback the registry traces is looked up inside it.
+const HOOKS_IMPL: &str = "impl crate::gc::GcHooks for Hooks";
+
+fn compact(text: &str) -> String {
+    text.chars().filter(|c| !c.is_whitespace()).collect()
+}
+
+/// The body of the unique declaration `marker` in the production set.
+fn fn_body(marker: &str) -> &'static str {
+    Lexed::new(src()).body(marker)
+}
+
+/// Whether `body` names the interpreter field `field` through `self` —
+/// the tokens `self . field` in sequence, whitespace-insensitive. A
+/// frame's `f.target_func`, a local named like the field, or the bare
+/// word in a string cannot satisfy it (F089).
+fn names_field(body: &str, field: &str) -> bool {
+    let tokens = source_scan::tokens(body);
+    !source_scan::token_positions(&tokens, &format!("self.{field}")).is_empty()
+}
+
+/// Word-bounded mention of `word` in `hay`: the type-graph relation,
+/// where a type name inside another type's body is the edge.
 fn mentions(hay: &str, word: &str) -> bool {
+    let bytes = hay.as_bytes();
     let mut start = 0;
     while let Some(p) = hay[start..].find(word) {
         let at = start + p;
-        let before_ok = at == 0
-            || !hay.as_bytes()[at - 1].is_ascii_alphanumeric() && hay.as_bytes()[at - 1] != b'_';
+        let before_ok = at == 0 || !bytes[at - 1].is_ascii_alphanumeric() && bytes[at - 1] != b'_';
         let after = at + word.len();
-        let after_ok = after >= hay.len()
-            || !hay.as_bytes()[after].is_ascii_alphanumeric() && hay.as_bytes()[after] != b'_';
+        let after_ok =
+            after >= hay.len() || !bytes[after].is_ascii_alphanumeric() && bytes[after] != b'_';
         if before_ok && after_ok {
             return true;
         }
@@ -181,33 +558,29 @@ fn mentions(hay: &str, word: &str) -> bool {
     false
 }
 
-/// Strip `//` comments so commented-out code never satisfies a check.
-fn strip_comments(s: &str) -> String {
-    s.lines()
-        .map(|l| l.split("//").next().unwrap_or(""))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-/// Parse every top-level `struct`/`enum` body in the source.
+/// Parse every `struct`/`enum` body, tuple-struct field list and `type`
+/// alias right-hand side in the (code-only) source. Two definitions
+/// sharing a name — the crate has several `Hooks`, `Row` and
+/// `tests`-local shapes — are MERGED, so a type is slot-bearing if ANY
+/// definition of that name is: the conservative direction, which can
+/// demand a classification but never exempt a field. A unit struct
+/// (`struct Marker;`) has no body and names no slot.
 fn type_defs(src: &str) -> BTreeMap<&str, String> {
-    let mut out = BTreeMap::new();
+    let mut out: BTreeMap<&str, String> = BTreeMap::new();
     let mut i = 0;
     while i < src.len() {
         let rest = &src[i..];
-        let hit = ["struct ", "enum "]
+        let hit = ["struct ", "enum ", "type "]
             .iter()
             .filter_map(|k| rest.find(k).map(|p| (p, *k)))
             .min();
         let Some((p, kw)) = hit else { break };
         let at = i + p;
-        // Only definitions (line starts with optional pub + the keyword).
+        // Only definitions: the line starts with an optional visibility
+        // (`pub`, `pub(crate)`, `pub(in some::path)`) and the keyword.
         let line_start = src[..at].rfind('\n').map(|n| n + 1).unwrap_or(0);
         let prefix = src[line_start..at].trim();
-        let is_def = prefix.is_empty()
-            || prefix == "pub"
-            || prefix == "pub(crate)"
-            || prefix == "pub(super)";
+        let is_def = prefix.is_empty() || prefix.starts_with("pub");
         i = at + kw.len();
         if !is_def {
             continue;
@@ -220,16 +593,111 @@ fn type_defs(src: &str) -> BTreeMap<&str, String> {
         if name.is_empty() {
             continue;
         }
-        let Some(brace_rel) = src[name_end..].find(['{', ';', '(']) else {
-            continue;
+        let body = if kw == "type " {
+            // `type Name<..> = Rhs;` — the alias's whole right-hand side.
+            let Some(eq) = src[name_end..].find('=') else {
+                continue;
+            };
+            let Some(end) = src[name_end + eq..].find(';') else {
+                continue;
+            };
+            &src[name_end + eq..name_end + eq + end]
+        } else {
+            let Some(open_rel) = src[name_end..].find(['{', ';', '(']) else {
+                continue;
+            };
+            let open = name_end + open_rel;
+            match src.as_bytes()[open] {
+                b'{' => delimited_body_at(src, open, b'{', b'}'),
+                // A tuple struct's field list.
+                b'(' => delimited_body_at(src, open, b'(', b')'),
+                _ => continue,
+            }
         };
-        if src.as_bytes()[name_end + brace_rel] != b'{' {
-            continue; // tuple struct / decl form — rare here, skip
-        }
-        let body = body_in(src, &src[at..name_end + brace_rel + 1]);
-        out.insert(name, strip_comments(body));
+        out.entry(name).or_default().push_str(body);
+        out.get_mut(name).unwrap().push('\n');
     }
     out
+}
+
+/// The balanced body starting at the `open` delimiter at byte `open`.
+fn delimited_body_at(src: &str, open: usize, opener: u8, closer: u8) -> &str {
+    let bytes = src.as_bytes();
+    let mut depth = 0usize;
+    let mut k = open;
+    loop {
+        let b = bytes[k];
+        if b == opener {
+            depth += 1;
+        } else if b == closer {
+            depth -= 1;
+            if depth == 0 {
+                return &src[open..=k];
+            }
+        }
+        k += 1;
+    }
+}
+
+/// The brace-balanced body starting at the `{` at byte `open`.
+fn brace_body_at(src: &str, open: usize) -> &str {
+    delimited_body_at(src, open, b'{', b'}')
+}
+
+/// Whether a weak-keyed table's VALUE half is slot-free. For a map type
+/// the generic arguments are split at their top-level comma and the
+/// value half checked on its own, so `HashMap<K, SlotIndex>` fails even
+/// though its key half names a slot; a set or vector of keys has no
+/// value half, and only what follows the key's own `SlotIndex` is asked.
+fn value_half_is_slot_free(ty: &str, is_bearing: &dyn Fn(&str) -> bool) -> bool {
+    let map_args = ["HashMap<", "BTreeMap<"]
+        .iter()
+        .filter_map(|marker| ty.find(marker).map(|at| at + marker.len()))
+        .min();
+    if let Some(start) = map_args {
+        let mut depth = 0usize;
+        let mut split = None;
+        for (offset, c) in ty[start..].char_indices() {
+            match c {
+                '<' | '(' | '[' => depth += 1,
+                '>' | ')' | ']' => {
+                    if depth == 0 {
+                        break;
+                    }
+                    depth -= 1;
+                }
+                ',' if depth == 0 => {
+                    split = Some(start + offset);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        let Some(comma) = split else {
+            return false;
+        };
+        let mut depth = 0usize;
+        let mut end = ty.len();
+        for (offset, c) in ty[comma + 1..].char_indices() {
+            match c {
+                '<' | '(' | '[' => depth += 1,
+                '>' | ')' | ']' => {
+                    if depth == 0 {
+                        end = comma + 1 + offset;
+                        break;
+                    }
+                    depth -= 1;
+                }
+                _ => {}
+            }
+        }
+        return !is_bearing(&ty[comma + 1..end]);
+    }
+    let after_key = match ty.find("SlotIndex") {
+        Some(p) => &ty[p + "SlotIndex".len()..],
+        None => ty,
+    };
+    !is_bearing(after_key)
 }
 
 /// The transitive slot-bearing type set: a type is slot-bearing when
@@ -262,8 +730,7 @@ fn slot_bearing_types<'s>(defs: &BTreeMap<&'s str, String>) -> Vec<&'s str> {
 /// Parse `Interp`'s fields as `(name, type-text)`, joining multi-line
 /// types until the field's own top-level comma.
 fn interp_fields() -> Vec<(String, String)> {
-    let body = fn_body("pub struct Interp {");
-    let body = strip_comments(body);
+    let body = fn_body("pub struct Interp");
     let mut out = Vec::new();
     let mut lines = body.lines().peekable();
     while let Some(line) = lines.next() {
@@ -310,20 +777,40 @@ fn interp_fields() -> Vec<(String, String)> {
     out
 }
 
-/// What the registry can require of a field.
+// ---------------------------------------------------------------------
+// The registry
+// ---------------------------------------------------------------------
+
+/// What the registry can require of a field. Every requirement is
+/// checked against generated visitor tokens by [`names_field`], i.e. by
+/// a `self.<field>` access, never a bare word.
 #[derive(Copy, Clone, Debug, PartialEq)]
 enum Req {
-    /// Appears in `gc_roots` — a root the mark starts from.
+    /// Named through `self.` in the field's OWN root policy in `gc_roots`
+    /// — a root the mark starts from.
     GcRoots,
-    /// Appears in the full collector's `extra_edges` AND the partial
-    /// enumeration (`each_side_table_ref` or its tail).
+    /// Rooted through ANOTHER field's root policy, which names this field
+    /// through `self.` (a reaction arena reached from the queued jobs that
+    /// index it). The host must itself be `GcRoots`.
+    RootedVia(&'static str),
+    /// Named through `self.` in the field's OWN table walk in both the
+    /// full collector's `extra_edges` and the partial enumeration
+    /// (`each_side_table_ref` or its tail).
     Edges,
-    /// Appears in `ephemeron_edges` and its dead-key pruning pass.
+    /// Edged through ANOTHER table's row policy, which names this field
+    /// through `self.` in both the full and the partial variant (a
+    /// reaction arena the promise rows index). The host's own walk must
+    /// be connected.
+    EdgedVia(&'static str),
+    /// Named through `self.` in the field's own `ephemeron_edges` and
+    /// dead-key pruning policies.
     Ephemeron,
-    /// Appears in the partial enumeration alone (a table the full
-    /// collector reaches through a different, precise mechanism).
+    /// Named through `self.` in the field's own partial-enumeration walk
+    /// alone (a table the full collector reaches through a different,
+    /// precise mechanism).
     PartialWalk,
-    /// Appears in `external_chunk_refs` (compaction remap).
+    /// Named through `self.` in the field's own `external_chunk_refs`
+    /// policy (compaction remap).
     ChunkRemap,
     /// The mapped VALUE type carries no slot references (checked
     /// mechanically from the parsed type), so only the weak KEY names
@@ -332,10 +819,20 @@ enum Req {
     /// Pruned in BOTH sweep paths (`collect_garbage` and
     /// `free_pages`), so a swept owner's row cannot go stale.
     PrunedBothPaths,
-    /// A named behavioral test is required; the note records why (transitively
-    /// rooted through `intrinsics`/proto rows, or a boundary-empty
-    /// transient). `gc_anchor_truth.rs` holds the behavioral twins
-    /// for the transitively-rooted anchors.
+    /// The heap itself: the arena BOTH collectors mark and sweep, named
+    /// through `self.` in `collect_garbage` and `free_pages`.
+    Arena,
+    /// A boot anchor that appears in no visitor and is held only
+    /// transitively (through the rooted `intrinsics` values and proto
+    /// rows). Checked two ways: the named `gc_anchor_truth.rs` twin
+    /// constructs through the cache after churn and a collection, and
+    /// `Interp::boot_anchor_liveness` must report the anchor alive after
+    /// a full collection on a booted machine.
+    TransitivelyRooted(&'static str),
+    /// A named behavioral test in this crate's unit tests is required and
+    /// must name the field itself; the note records why no visitor does
+    /// (a boundary-empty transient, or a lease whose only GC effect is
+    /// through another rooted table).
     BehavioralTwin(&'static str),
 }
 
@@ -344,6 +841,8 @@ enum Req {
 /// the field is classified here — and the classification is checked
 /// against the real visitor bodies, so it cannot be a dead note.
 const REGISTRY: &[(&str, &[Req], &str)] = &[
+    // --- the heap ---
+    ("slots", &[Req::Arena], "the slot heap both collectors mark and sweep"),
     // --- roots: registers, frames, boot anchors, identity tables ---
     ("stack", &[Req::GcRoots], "value-stack slots"),
     ("locals", &[Req::GcRoots], "program-frame locals"),
@@ -359,8 +858,8 @@ const REGISTRY: &[(&str, &[Req], &str)] = &[
     ("realm", &[Req::GcRoots], "single Realm default global and primordial roots"),
     ("environment", &[Req::GcRoots], "active globals, property index and first rejection report"),
     ("inactive_environments", &[Req::GcRoots, Req::PrunedBothPaths, Req::Edges], "inactive globals, property indexes and first rejection reports"),
-    ("restored_leases", &[Req::BehavioralTwin("unclaimed_environment_and_export_ownership_are_independent")], "provisional exports keep identity_roots weak leases alive"),
-    ("restored_environment_leases", &[Req::BehavioralTwin("unclaimed_environment_and_export_ownership_are_independent")], "provisional compartments keep environment owner weak leases alive independently"),
+    ("restored_leases", &[Req::ValueSlotFree, Req::BehavioralTwin("restored_leases_keep_identity_roots_alive_across_a_collection")], "provisional exports keep identity_roots weak leases alive; the Rc<()> value names no slot"),
+    ("restored_environment_leases", &[Req::ValueSlotFree, Req::BehavioralTwin("restored_leases_keep_identity_roots_alive_across_a_collection")], "provisional compartments keep environment owner weak leases alive independently; the Rc<()> value names no slot"),
     ("identity_roots", &[Req::GcRoots], "live host object identity leases"),
     ("intrinsics", &[Req::GcRoots], "every boot constructor — the anchor that transitively keeps boot structure alive"),
     ("well_known_symbols", &[Req::GcRoots], "realm well-known symbol descriptors"),
@@ -437,8 +936,8 @@ const REGISTRY: &[(&str, &[Req], &str)] = &[
     ("segment_iterators", &[Req::Edges, Req::PrunedBothPaths], "cursor→segments-instance edge"),
     ("collator_compare_functions", &[Req::Edges, Req::PrunedBothPaths], "compare-fn→collator owner"),
     ("number_format_bound_functions", &[Req::Edges, Req::PrunedBothPaths], "bound-fn→format owner"),
-    ("combinators", &[Req::GcRoots, Req::Edges], "combinator accumulators (rooted while queued, edged via reactions)"),
-    ("from_async", &[Req::GcRoots, Req::Edges, Req::ChunkRemap], "fromAsync state (W6-3: chunk remap too)"),
+    ("combinators", &[Req::RootedVia("promise_jobs"), Req::EdgedVia("promises")], "combinator accumulators (rooted while queued, edged via reactions)"),
+    ("from_async", &[Req::RootedVia("promise_jobs"), Req::EdgedVia("promises"), Req::ChunkRemap], "fromAsync state (W6-3: chunk remap too)"),
     // --- identity/precision tables ---
     ("symbol_key_ids", &[Req::Ephemeron, Req::PartialWalk, Req::PrunedBothPaths], "symbol-key descriptor identity — full GC retains precisely via the ephemeron pass; the partial walk stays page-conservative"),
     // --- chunk-reference holders (compaction remap) ---
@@ -467,26 +966,27 @@ const REGISTRY: &[(&str, &[Req], &str)] = &[
     // --- transitively rooted boot anchors (via the rooted `intrinsics`
     //     values and the rooted proto_methods/proto_data holders; the
     //     behavioral twins in gc_anchor_truth.rs construct through each
-    //     cache after churn + GC) ---
-    ("intl_object", &[Req::BehavioralTwin("intl_proto_caches_survive_construction_after_a_collection")], "reachable via intrinsics root"),
-    ("temporal_object", &[Req::BehavioralTwin("temporal_proto_caches_survive_construction_after_a_collection")], "reachable via intrinsics root"),
-    ("temporal_now_object", &[Req::BehavioralTwin("temporal_proto_caches_survive_construction_after_a_collection")], "reachable via Temporal's arena property chain"),
-    ("locale_proto", &[Req::BehavioralTwin("intl_proto_caches_survive_construction_after_a_collection")], "reachable via rooted constructor's prototype property"),
-    ("collator_proto", &[Req::BehavioralTwin("intl_proto_caches_survive_construction_after_a_collection")], "reachable via rooted constructor's prototype property"),
-    ("list_format_proto", &[Req::BehavioralTwin("intl_proto_caches_survive_construction_after_a_collection")], "reachable via rooted constructor's prototype property"),
-    ("plural_rules_proto", &[Req::BehavioralTwin("intl_proto_caches_survive_construction_after_a_collection")], "reachable via rooted constructor's prototype property"),
-    ("segmenter_proto", &[Req::BehavioralTwin("intl_proto_caches_survive_construction_after_a_collection")], "reachable via rooted constructor's prototype property"),
-    ("segments_proto", &[Req::BehavioralTwin("intl_proto_caches_survive_construction_after_a_collection")], "reachable via rooted proto rows"),
-    ("segment_iterator_proto", &[Req::BehavioralTwin("intl_proto_caches_survive_construction_after_a_collection")], "reachable via rooted proto rows"),
-    ("date_time_format_proto", &[Req::BehavioralTwin("intl_proto_caches_survive_construction_after_a_collection")], "reachable via rooted constructor's prototype property"),
-    ("number_format_proto", &[Req::BehavioralTwin("intl_proto_caches_survive_construction_after_a_collection")], "reachable via rooted constructor's prototype property"),
-    ("temporal_instant_proto", &[Req::BehavioralTwin("temporal_proto_caches_survive_construction_after_a_collection")], "reachable via rooted constructor's prototype property"),
-    ("temporal_duration_proto", &[Req::BehavioralTwin("temporal_proto_caches_survive_construction_after_a_collection")], "reachable via rooted constructor's prototype property"),
-    ("temporal_plain_protos", &[Req::BehavioralTwin("temporal_proto_caches_survive_construction_after_a_collection")], "reachable via rooted constructors' prototype properties"),
-    ("temporal_zoned_proto", &[Req::BehavioralTwin("temporal_proto_caches_survive_construction_after_a_collection")], "reachable via rooted constructor's prototype property"),
-    ("generator_function_proto", &[Req::BehavioralTwin("generator_function_protos_survive_definition_after_a_collection")], "reachable via rooted proto rows"),
-    ("async_generator_proto", &[Req::BehavioralTwin("generator_function_protos_survive_definition_after_a_collection")], "reachable via rooted proto rows"),
-    ("async_generator_function_proto", &[Req::BehavioralTwin("generator_function_protos_survive_definition_after_a_collection")], "reachable via rooted proto rows"),
+    //     cache after churn + GC, and `boot_anchor_liveness` proves each
+    //     survives a collection) ---
+    ("intl_object", &[Req::TransitivelyRooted("intl_proto_caches_survive_construction_after_a_collection")], "reachable via intrinsics root"),
+    ("temporal_object", &[Req::TransitivelyRooted("temporal_proto_caches_survive_construction_after_a_collection")], "reachable via intrinsics root"),
+    ("temporal_now_object", &[Req::TransitivelyRooted("temporal_proto_caches_survive_construction_after_a_collection")], "reachable via Temporal's arena property chain"),
+    ("locale_proto", &[Req::TransitivelyRooted("intl_proto_caches_survive_construction_after_a_collection")], "reachable via rooted constructor's prototype property"),
+    ("collator_proto", &[Req::TransitivelyRooted("intl_proto_caches_survive_construction_after_a_collection")], "reachable via rooted constructor's prototype property"),
+    ("list_format_proto", &[Req::TransitivelyRooted("intl_proto_caches_survive_construction_after_a_collection")], "reachable via rooted constructor's prototype property"),
+    ("plural_rules_proto", &[Req::TransitivelyRooted("intl_proto_caches_survive_construction_after_a_collection")], "reachable via rooted constructor's prototype property"),
+    ("segmenter_proto", &[Req::TransitivelyRooted("intl_proto_caches_survive_construction_after_a_collection")], "reachable via rooted constructor's prototype property"),
+    ("segments_proto", &[Req::TransitivelyRooted("intl_proto_caches_survive_construction_after_a_collection")], "reachable via rooted proto rows"),
+    ("segment_iterator_proto", &[Req::TransitivelyRooted("intl_proto_caches_survive_construction_after_a_collection")], "reachable via rooted proto rows"),
+    ("date_time_format_proto", &[Req::TransitivelyRooted("intl_proto_caches_survive_construction_after_a_collection")], "reachable via rooted constructor's prototype property"),
+    ("number_format_proto", &[Req::TransitivelyRooted("intl_proto_caches_survive_construction_after_a_collection")], "reachable via rooted constructor's prototype property"),
+    ("temporal_instant_proto", &[Req::TransitivelyRooted("temporal_proto_caches_survive_construction_after_a_collection")], "reachable via rooted constructor's prototype property"),
+    ("temporal_duration_proto", &[Req::TransitivelyRooted("temporal_proto_caches_survive_construction_after_a_collection")], "reachable via rooted constructor's prototype property"),
+    ("temporal_plain_protos", &[Req::TransitivelyRooted("temporal_proto_caches_survive_construction_after_a_collection")], "reachable via rooted constructors' prototype properties"),
+    ("temporal_zoned_proto", &[Req::TransitivelyRooted("temporal_proto_caches_survive_construction_after_a_collection")], "reachable via rooted constructor's prototype property"),
+    ("generator_function_proto", &[Req::TransitivelyRooted("generator_function_protos_survive_definition_after_a_collection")], "reachable via rooted proto rows"),
+    ("async_generator_proto", &[Req::TransitivelyRooted("generator_function_protos_survive_definition_after_a_collection")], "reachable via rooted proto rows"),
+    ("async_generator_function_proto", &[Req::TransitivelyRooted("generator_function_protos_survive_definition_after_a_collection")], "reachable via rooted proto rows"),
     ("string_iterator_method", &[Req::GcRoots], "lazy intrinsic identity must survive before its property is installed"),
     ("async_iterator_identity", &[Req::GcRoots], "lazy intrinsic identity must survive before its property is installed"),
     ("iterator_identity", &[Req::GcRoots], "lazy intrinsic identity must survive before its property is installed"),
@@ -499,10 +999,38 @@ const REGISTRY: &[(&str, &[Req], &str)] = &[
     ("array_iterator_proxy_get_context", &[Req::BehavioralTwin("each_activation_register_independently_refuses_quiescence")], "installed only across one synchronous Proxy trap call, restored on success/throw, and rejected by is_quiescent if leaked"),
 ];
 
+/// The body text of the `#[test] fn NAME(` function in `source`, or
+/// `None` when no such test exists there.
+fn test_body<'a>(source: &'a str, test: &str) -> Option<&'a str> {
+    let witness = format!("#[test]\nfn {test}(");
+    let at = source.find(&witness)?;
+    let open = at + source[at..].find('{')?;
+    Some(brace_body_at(source, open))
+}
+
+/// The unit-test sources a `BehavioralTwin` may live in: this crate's own
+/// tests, where a twin can name the private field it covers.
+const TWIN_SOURCES: &[&str] = &[
+    include_str!("../src/interp/tests.rs"),
+    include_str!("../src/interp/tests/gc_consumer_schedules.rs"),
+];
+
+/// A booted, linked machine that has just completed a full collection —
+/// the state in which every transitively rooted anchor must be alive.
+fn anchors_after_a_collection() -> Vec<(&'static str, bool)> {
+    let (_, s) = ironhorse_compile::compile_atoms("var t = 0; t").expect("compiles");
+    let mut m = Interp::new();
+    m.link_intrinsics(&ironhorse_vm::parse_symbols(&s));
+    m.collect_garbage()
+        .expect("a fresh linked machine is quiescent");
+    m.boot_anchor_liveness()
+}
+
 #[test]
 fn every_slot_bearing_field_is_classified_and_the_classification_holds() {
-    assert_field_emission(SRC);
-    let defs = type_defs(SRC);
+    let src = src();
+    assert_field_emission(src);
+    let defs = type_defs(src);
     let bearing_types = slot_bearing_types(&defs);
     let fields = interp_fields();
     assert!(
@@ -511,18 +1039,13 @@ fn every_slot_bearing_field_is_classified_and_the_classification_holds() {
         fields.len()
     );
 
-    let compact_type = |ty: &str| {
-        ty.chars()
-            .filter(|c| !c.is_whitespace())
-            .collect::<String>()
-    };
     let declared: Vec<_> = fields
         .iter()
-        .map(|(name, ty)| (name.as_str(), compact_type(ty)))
+        .map(|(name, ty)| (name.as_str(), compact(ty)))
         .collect();
     let emitted: Vec<_> = ironhorse_vm::diagnostics::INTERP_FIELDS
         .iter()
-        .map(|(name, ty)| (*name, compact_type(ty)))
+        .map(|(name, ty)| (*name, compact(ty)))
         .collect();
     assert_eq!(
         declared, emitted,
@@ -576,12 +1099,43 @@ fn every_slot_bearing_field_is_classified_and_the_classification_holds() {
         );
     }
 
-    // The checked requirements, against the real visitor bodies.
-    let gc_roots = root_source(SRC);
-    let (extra_edges, partial) = edge_sources(SRC);
-    let (ephemeron, weak_prune) = weak_sources(SRC);
-    let chunk_remap = chunk_source(SRC);
-    let (full_sweep, partial_sweep) = sweep_sources(SRC);
+    // The checked requirements, against the real visitor bodies. Every
+    // generated policy list is emitted in roster order, one entry per
+    // `Interp` field, so a field's OWN policy is the entry at its index.
+    root_source(src);
+    edge_sources(src);
+    weak_sources(src);
+    chunk_source(src);
+    let (full_sweep, partial_sweep) = sweep_sources(src);
+    let anchors = anchors_after_a_collection();
+    let lexed = Lexed::new(src);
+    let full_collector = lexed.body("pub fn collect_garbage(&mut self)");
+    let partial_collector = lexed.body("pub fn free_pages(&mut self, pages: &[u32])");
+    let index_of = |name: &str| -> usize {
+        ironhorse_vm::diagnostics::INTERP_FIELDS
+            .iter()
+            .position(|(field, _)| *field == name)
+            .unwrap_or_else(|| panic!("{name} is not an Interp field"))
+    };
+    let own = |list: &'static [&'static str], name: &str| -> &'static str { list[index_of(name)] };
+    let root_of = |name: &str| -> &'static str {
+        let (field, body) = ironhorse_vm::diagnostics::ROOT_SOURCE[index_of(name)];
+        assert_eq!(field, name, "root policy order");
+        body
+    };
+    let row_of = |name: &str| -> (&'static str, &'static str) {
+        let (field, _, full_row, partial_row) =
+            ironhorse_vm::diagnostics::ROW_EDGE_SOURCE[index_of(name)];
+        assert_eq!(field, name, "row policy order");
+        (full_row, partial_row)
+    };
+    let full_table = |name: &str| own(ironhorse_vm::diagnostics::FULL_EDGE_SOURCE, name);
+    let partial_table = |name: &str| own(ironhorse_vm::diagnostics::PARTIAL_EDGE_SOURCE, name);
+    let classified_as = |host: &str, wanted: Req| {
+        registry
+            .get(host)
+            .is_some_and(|(reqs, _)| reqs.contains(&wanted))
+    };
 
     let value_type_of = |name: &str| -> &str { &fields.iter().find(|(n, _)| n == name).unwrap().1 };
 
@@ -589,37 +1143,79 @@ fn every_slot_bearing_field_is_classified_and_the_classification_holds() {
     for (name, (reqs, _)) in &registry {
         for req in *reqs {
             let ok = match req {
-                Req::GcRoots => mentions(&gc_roots, name),
-                Req::Edges => mentions(&extra_edges, name) && mentions(&partial, name),
-                Req::Ephemeron => mentions(&ephemeron, name) && mentions(&weak_prune, name),
-                Req::PartialWalk => mentions(&partial, name),
-                Req::ChunkRemap => mentions(&chunk_remap, name),
+                Req::GcRoots => names_field(root_of(name), name),
+                Req::RootedVia(host) => {
+                    names_field(root_of(host), name) && classified_as(host, Req::GcRoots)
+                }
+                Req::Edges => {
+                    names_field(full_table(name), name) && names_field(partial_table(name), name)
+                }
+                Req::EdgedVia(host) => {
+                    let (full_row, partial_row) = row_of(host);
+                    names_field(full_row, name)
+                        && names_field(partial_row, name)
+                        && classified_as(host, Req::Edges)
+                        && !full_table(host).trim().is_empty()
+                        && !partial_table(host).trim().is_empty()
+                }
+                Req::Ephemeron => {
+                    names_field(own(ironhorse_vm::diagnostics::EPHEMERON_SOURCE, name), name)
+                        && names_field(
+                            own(ironhorse_vm::diagnostics::WEAK_PRUNE_SOURCE, name),
+                            name,
+                        )
+                }
+                Req::PartialWalk => names_field(partial_table(name), name),
+                Req::ChunkRemap => names_field(
+                    own(ironhorse_vm::diagnostics::CHUNK_WALK_SOURCE, name),
+                    name,
+                ),
                 Req::PrunedBothPaths => {
-                    mentions(&full_sweep, name) && mentions(&partial_sweep, name)
+                    names_field(&full_sweep, name) && names_field(&partial_sweep, name)
                 }
-                Req::ValueSlotFree => {
-                    let ty = value_type_of(name);
-                    // For a map, the VALUE half must not be slot-bearing;
-                    // for a set/vec of keys there is no value half. Check
-                    // by stripping the key's own `SlotIndex` mention and
-                    // asking whether anything slot-bearing remains.
-                    let after_key = match ty.find("SlotIndex") {
-                        Some(p) => &ty[p + "SlotIndex".len()..],
-                        None => ty,
-                    };
-                    !is_bearing(after_key)
+                Req::Arena => {
+                    names_field(full_collector, name) && names_field(partial_collector, name)
                 }
-                Req::BehavioralTwin(test) => {
-                    let witness = format!("#[test]\nfn {test}(");
-                    include_str!("gc_anchor_truth.rs").contains(&witness)
-                        || include_str!("../../ironhorse-snapshot/tests/shared_machine.rs")
-                            .contains(&witness)
-                        || include_str!("../src/interp/tests.rs").contains(&witness)
+                Req::ValueSlotFree => value_half_is_slot_free(value_type_of(name), &is_bearing),
+                Req::TransitivelyRooted(test) => {
+                    if test_body(include_str!("gc_anchor_truth.rs"), test).is_none() {
+                        violations
+                            .push(format!("{name}: twin {test} is not in gc_anchor_truth.rs"));
+                    }
+                    match anchors.iter().find(|(anchor, _)| anchor == name) {
+                        None => violations.push(format!(
+                            "{name}: classified TransitivelyRooted but Interp::boot_anchor_liveness does not probe it"
+                        )),
+                        Some((_, false)) => violations.push(format!(
+                            "{name}: did not survive a full collection on a booted machine"
+                        )),
+                        Some((_, true)) => {}
+                    }
+                    // Reported above by the specific message, never twice.
+                    true
                 }
+                // A unit test reaches the field through its own machine
+                // binding (`m.this_captures`), so the word-bounded mention
+                // is the right test here, not the `self.` form.
+                Req::BehavioralTwin(test) => TWIN_SOURCES
+                    .iter()
+                    .filter_map(|source| test_body(source, test))
+                    .any(|body| mentions(body, name)),
             };
             if !ok {
                 violations.push(format!("{name}: requirement {req:?} not satisfied"));
             }
+        }
+    }
+    // The anchor probe and the registry reconcile the other way too.
+    for (anchor, _) in &anchors {
+        let classified = registry
+            .get(anchor)
+            .is_some_and(|(reqs, _)| reqs.iter().any(|r| matches!(r, Req::TransitivelyRooted(_))));
+        if !classified {
+            violations.push(format!(
+                "{anchor}: probed by Interp::boot_anchor_liveness but not classified TransitivelyRooted"
+            ));
         }
     }
     assert!(
@@ -629,21 +1225,122 @@ fn every_slot_bearing_field_is_classified_and_the_classification_holds() {
     );
 }
 
+/// The `self.`-qualified checks close the hole the review named: a
+/// caller-frame walk that pushes `f.target_func` used to satisfy the
+/// `target_func` root claim by bare word. Now only `self.target_func`
+/// does, and a name that appears only as a frame subfield fails.
+#[test]
+fn a_frame_subfield_mention_does_not_satisfy_a_self_field_claim() {
+    let callers =
+        "for f in &self.call_stack { roots.push(f.cur_func); roots.push(f.target_func); }";
+    assert!(names_field(callers, "call_stack"));
+    assert!(!names_field(callers, "target_func"));
+    assert!(!names_field(callers, "cur_func"));
+    assert!(names_field(
+        "roots . push ( self . target_func ) ;",
+        "target_func"
+    ));
+    assert!(!names_field(
+        "let target_func = 1; roots.push(target_func);",
+        "target_func"
+    ));
+    assert!(!names_field("\"self.target_func\"", "target_func"));
+    assert!(!names_field("self.target_function", "target_func"));
+    // And against the real generated roots: the frame walk names its own
+    // field and no register.
+    let gc_roots = root_source(src());
+    let callers = ironhorse_vm::diagnostics::ROOT_SOURCE
+        .iter()
+        .find(|(field, _)| *field == "call_stack")
+        .unwrap()
+        .1;
+    assert!(callers.contains("target_func"));
+    assert!(!names_field(callers, "target_func"));
+    assert!(names_field(&gc_roots, "target_func"));
+}
+
+/// A `TransitivelyRooted` claim is refused when the anchor is dead, when
+/// it is not probed, and when the probe covers an unclassified field.
+#[test]
+fn transitively_rooted_claims_are_checked_at_runtime() {
+    let anchors = anchors_after_a_collection();
+    assert!(anchors.len() >= 19, "probe sanity: {}", anchors.len());
+    assert!(
+        anchors.iter().all(|(_, alive)| *alive),
+        "a boot anchor did not survive collection: {anchors:?}"
+    );
+    let classified: BTreeSet<&str> = REGISTRY
+        .iter()
+        .filter(|(_, reqs, _)| reqs.iter().any(|r| matches!(r, Req::TransitivelyRooted(_))))
+        .map(|(name, _, _)| *name)
+        .collect();
+    let probed: BTreeSet<&str> = anchors.iter().map(|(name, _)| *name).collect();
+    assert_eq!(classified, probed);
+    // Every named twin exists in the anchor-truth file.
+    for (name, reqs, _) in REGISTRY {
+        for req in *reqs {
+            if let Req::TransitivelyRooted(test) = req {
+                assert!(
+                    test_body(include_str!("gc_anchor_truth.rs"), test).is_some(),
+                    "{name}: twin {test} is not in gc_anchor_truth.rs"
+                );
+            }
+        }
+    }
+    // The probe's negative side (a null or swept anchor reads back dead)
+    // needs private access and lives in the crate's own unit tests:
+    // `boot_anchor_liveness_reports_a_null_or_swept_anchor_dead`.
+    assert!(
+        TWIN_SOURCES[0].contains("fn boot_anchor_liveness_reports_a_null_or_swept_anchor_dead(")
+    );
+}
+
+/// A `BehavioralTwin` must exist in this crate's unit tests AND name the
+/// field it covers; a twin that merely exists is not a witness.
+#[test]
+fn behavioral_twins_must_name_their_fields() {
+    let body = test_body(
+        TWIN_SOURCES[0],
+        "each_activation_register_independently_refuses_quiescence",
+    )
+    .expect("twin exists");
+    assert!(mentions(body, "this_captures"));
+    assert!(mentions(body, "array_iterator_proxy_get_context"));
+    assert!(!mentions(body, "restored_leases"));
+    assert!(test_body(TWIN_SOURCES[0], "no_such_test_anywhere").is_none());
+    for (name, reqs, _) in REGISTRY {
+        for req in *reqs {
+            if let Req::BehavioralTwin(test) = req {
+                let bodies: Vec<&str> = TWIN_SOURCES
+                    .iter()
+                    .filter_map(|source| test_body(source, test))
+                    .collect();
+                assert!(!bodies.is_empty(), "{name}: twin {test} does not exist");
+                assert!(
+                    bodies.iter().any(|b| mentions(b, name)),
+                    "{name}: twin {test} never names the field"
+                );
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------
+// The visitor sources, each traced from its live entry point
+// ---------------------------------------------------------------------
+
 /// Follow the generated calls and inspect the same token templates used by the
 /// executable expansion. A roster entry without an active sweep call is not
 /// evidence of pruning. The registry above remains independent of the roster.
 fn sweep_sources(src: &str) -> (String, String) {
-    fn compact(src: &str) -> String {
-        ironhorse_vm::source_scan::code_only(src)
-            .chars()
-            .filter(|c| !c.is_whitespace())
-            .collect()
-    }
-    let emitter = compact(body_in(src, "macro_rules! gc_run"));
+    let lexed = Lexed::new(src);
+    let emitter = lexed.compact_body("macro_rules! gc_run");
     assert_eq!(emitter, "{($($code:tt)*)=>{{$($code)*}};}");
-    let full = compact(body_in(src, "pub fn collect_garbage(&mut self)"));
-    let swept = compact(body_in(src, "fn swept(&mut self, idx: SlotIndex)"));
-    let partial = compact(body_in(src, "pub fn free_pages(&mut self, pages: &[u32])"));
+    let full = lexed.compact_body("pub fn collect_garbage(&mut self)");
+    let swept = lexed
+        .scoped(HOOKS_IMPL)
+        .compact_body("fn swept(&mut self, idx: SlotIndex)");
+    let partial = lexed.compact_body("pub fn free_pages(&mut self, pages: &[u32])");
     assert!(full.contains("letmuthooks=gc_tables!(borrow_gc_tables,self);"));
     assert!(
         full.contains("crate::gc::collect_full(&mutself.slots,&mutself.chunks,&roots,&muthooks)")
@@ -651,17 +1348,44 @@ fn sweep_sources(src: &str) -> (String, String) {
     assert!(swept.contains("self.prune_swept(idx);"));
     assert!(full.contains("hooks.prune_late(&dead);"));
     assert!(partial.contains("self.prune_dead_tables(&dead);"));
-    let early_template = compact(body_in(src, "fn prune_swept(&mut self, idx: SlotIndex)"));
-    let late_template = compact(body_in(src, "fn prune_late(&mut self,"));
-    let partial_template = compact(body_in(src, "fn prune_dead_tables(&mut self,"));
+    let early_template = lexed.compact_body("fn prune_swept(&mut self, idx: SlotIndex)");
+    let late_template = lexed.compact_body("fn prune_late(&mut self,");
+    let partial_template = lexed.compact_body("fn prune_dead_tables(&mut self,");
     assert!(early_template.contains("$(gc_remove!(gc_run,self,$early,idx,$early_shape);)*"));
     assert!(late_template.contains("$(gc_retain!(gc_run,self,$late,dead,$late_shape);)*"));
     assert!(partial_template.contains("$(gc_retain!(gc_run,self,$early,dead,$early_shape);)*"));
     assert!(partial_template.contains("$(gc_retain!(gc_run,self,$late,dead,$late_shape);)*"));
+    // The sweep lists are emitted early-then-late rather than in roster
+    // order, so the registry reads them joined; that is sound only while
+    // every entry prunes exactly ONE table (plus the counted-reference
+    // side table it decrements), so no entry can vouch for another field.
+    for entry in ironhorse_vm::diagnostics::FULL_SWEEP_SOURCE
+        .iter()
+        .chain(ironhorse_vm::diagnostics::PARTIAL_SWEEP_SOURCE)
+    {
+        let mut named = self_fields_named(entry);
+        named.remove("side_refs");
+        assert_eq!(named.len(), 1, "a sweep entry prunes one table: {entry}");
+    }
     (
         ironhorse_vm::diagnostics::FULL_SWEEP_SOURCE.join("\n"),
         ironhorse_vm::diagnostics::PARTIAL_SWEEP_SOURCE.join("\n"),
     )
+}
+
+/// Every field a body names through `self.`.
+fn self_fields_named(body: &str) -> BTreeSet<String> {
+    let tokens = source_scan::tokens(body);
+    tokens
+        .windows(3)
+        .filter(|w| w[0].text == "self" && w[1].text == ".")
+        .filter(|w| {
+            w[2].text
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+        })
+        .map(|w| w[2].text.to_string())
+        .collect()
 }
 
 #[test]
@@ -675,8 +1399,8 @@ fn generated_sweep_checks_reject_disconnected_calls_and_missing_expansions() {
         "gc_retain!(gc_run, self, $early, dead, $early_shape)",
         "gc_retain!(gc_run, self, $late, dead, $late_shape)",
     ] {
-        assert!(SRC.contains(code), "mutation target missing: {code}");
-        let mutation = SRC.replace(code, "/* removed by mutation */");
+        assert!(src().contains(code), "mutation target missing: {code}");
+        let mutation = src().replace(code, "/* removed by mutation */");
         assert!(
             std::panic::catch_unwind(|| sweep_sources(&mutation)).is_err(),
             "source lock accepted removed sweep code: {code}"
@@ -688,12 +1412,9 @@ fn generated_sweep_checks_reject_disconnected_calls_and_missing_expansions() {
 /// expansion: neither deleting the struct callback nor dropping a repeated field
 /// from the emitter may leave a passing metadata-only test.
 fn assert_field_emission(src: &str) {
-    let code = ironhorse_vm::source_scan::code_only(src);
-    let compact: String = code.chars().filter(|c| !c.is_whitespace()).collect();
-    assert!(compact.contains("interp_state!(define_interp_state);"));
-    let emitter = body_in(src, "macro_rules! define_interp_state");
-    let emitter = ironhorse_vm::source_scan::code_only(emitter);
-    let emitter: String = emitter.chars().filter(|c| !c.is_whitespace()).collect();
+    let lexed = Lexed::new(src);
+    assert!(compact(src).contains("interp_state!(define_interp_state);"));
+    let emitter = lexed.compact_body("macro_rules! define_interp_state");
     assert!(emitter.contains("$visstruct$name{$($(#[$attr])*$field_vis$field:$ty,)*}"));
 }
 
@@ -703,28 +1424,25 @@ fn field_checks_reject_disconnected_or_incomplete_struct_emission() {
         "interp_state!(define_interp_state);",
         "$($(#[$attr])* $field_vis $field: $ty,)*",
     ] {
-        assert!(SRC.contains(target), "missing mutation target: {target}");
-        let mutation = SRC.replace(target, "/* field emission removed */");
+        assert!(src().contains(target), "missing mutation target: {target}");
+        let mutation = src().replace(target, "/* field emission removed */");
         assert!(std::panic::catch_unwind(|| assert_field_emission(&mutation)).is_err());
     }
 }
 
 /// Trace the collector callback to the generated per-field policy expansion.
 fn chunk_source(src: &str) -> String {
-    fn compact(src: &str) -> String {
-        ironhorse_vm::source_scan::code_only(src)
-            .chars()
-            .filter(|c| !c.is_whitespace())
-            .collect()
-    }
+    let lexed = Lexed::new(src);
     assert_eq!(
-        compact(body_in(src, "macro_rules! gc_run")),
+        lexed.compact_body("macro_rules! gc_run"),
         "{($($code:tt)*)=>{{$($code)*}};}"
     );
     assert!(compact(src).contains("interp_state!(define_chunk_walk);"));
-    let callback = compact(body_in(src, "fn external_chunk_refs(&mut self"));
+    let callback = lexed
+        .scoped(HOOKS_IMPL)
+        .compact_body("fn external_chunk_refs(&mut self, visit: &mut dyn FnMut(&mut ChunkOffset))");
     assert!(callback.contains("self.visit_chunks(visit);"));
-    let walk = compact(body_in(src, "fn visit_chunks(&mut self"));
+    let walk = lexed.compact_body("fn visit_chunks(&mut self");
     assert!(walk.contains("$(gc_chunk!(gc_run,self,$field,visit,$chunk);)*"));
     ironhorse_vm::diagnostics::CHUNK_WALK_SOURCE.join("\n")
 }
@@ -737,46 +1455,52 @@ fn chunk_checks_reject_disconnected_calls_and_missing_expansions() {
         "self.visit_chunks(visit);",
         "gc_chunk!(gc_run, self, $field, visit, $chunk)",
     ] {
-        assert!(SRC.contains(target), "missing mutation target: {target}");
-        let mutation = SRC.replace(target, "/* chunk walk removed */");
+        assert!(src().contains(target), "missing mutation target: {target}");
+        let mutation = src().replace(target, "/* chunk walk removed */");
         assert!(std::panic::catch_unwind(|| chunk_source(&mutation)).is_err());
     }
 }
 
 /// Inspect generated table walks only after checking their live entry points.
 fn edge_sources(src: &str) -> (String, String) {
-    fn compact(src: &str) -> String {
-        ironhorse_vm::source_scan::code_only(src)
-            .chars()
-            .filter(|c| !c.is_whitespace())
-            .collect()
-    }
+    let lexed = Lexed::new(src);
     assert_eq!(
-        compact(body_in(src, "macro_rules! gc_run")),
+        lexed.compact_body("macro_rules! gc_run"),
         "{($($code:tt)*)=>{{$($code)*}};}"
     );
     assert!(compact(src).contains("interp_state!(define_slot_walks);"));
-    let callback = compact(body_in(src, "fn extra_edges(&self, idx: SlotIndex"));
+    let callback = lexed
+        .scoped(HOOKS_IMPL)
+        .compact_body("fn extra_edges(&self, idx: SlotIndex, visit: &mut dyn FnMut(SlotIndex))");
     assert!(callback.contains("self.visit_owner_slots(idx,visit);"));
     for (marker, mode) in [
         ("fn visit_owner_slots(&self", "full"),
         ("fn each_side_table_ref(&self", "all"),
         ("fn each_side_table_ref_tail(&self", "tail"),
+        ("fn each_side_table_ref_bulk(&self", "bulk"),
     ] {
-        let walk = compact(body_in(src, marker));
-        assert!(walk.contains(&format!(
-            "$(gc_slot_table!(gc_run,{mode},self,$field,idx,visit,$shape,$row);)*"
-        )));
+        let walk = lexed.compact_body(marker);
+        assert!(
+            walk.contains(&format!(
+                "$(gc_slot_table!(gc_run,{mode},self,$field,idx,visit,$shape,$row);)*"
+            )),
+            "{marker}"
+        );
     }
-    let slots = compact(body_in(src, "pub fn side_table_ref_slots(&self)"));
+    let slots = lexed.compact_body("pub fn side_table_ref_slots(&self)");
     assert!(slots.contains("self.each_side_table_ref(&mut|r|out.push(r));"));
-    let pages = compact(body_in(src, "pub fn side_table_ref_page_bits(&self)"));
+    let pages = lexed.compact_body("pub fn side_table_ref_page_bits(&self)");
     assert!(pages.contains("self.each_side_table_ref_tail(&mut|r|"));
     assert!(pages.contains("self.side_refs.or_into_bits(&mutbits);"));
+    assert!(pages.contains("ifself.side_ref_parity().is_err(){self.side_refs.poison();}"));
+    let parity = lexed.compact_body("pub fn side_ref_parity(&self)");
+    assert!(parity.contains("self.each_side_table_ref_bulk(&mut|r|"));
+    assert!(parity.contains("self.side_refs.mismatch_against(&walked)"));
     let full = expanded_row_edges(ironhorse_vm::diagnostics::FULL_EDGE_SOURCE, true);
     let partial = expanded_row_edges(ironhorse_vm::diagnostics::PARTIAL_EDGE_SOURCE, false);
     let tail = expanded_row_edges(ironhorse_vm::diagnostics::TAIL_EDGE_SOURCE, false);
-    assert_tail_coverage(&partial, &tail);
+    let bulk = expanded_row_edges(ironhorse_vm::diagnostics::BULK_EDGE_SOURCE, false);
+    assert_tail_coverage(&partial, &tail, &bulk);
     (full, partial)
 }
 
@@ -789,13 +1513,20 @@ fn edge_checks_reject_disconnected_calls_and_missing_expansions() {
         "gc_slot_table!(gc_run, full, self, $field, idx, visit, $shape, $row)",
         "gc_slot_table!(gc_run, all, self, $field, idx, visit, $shape, $row)",
         "gc_slot_table!(gc_run, tail, self, $field, idx, visit, $shape, $row)",
+        "gc_slot_table!(gc_run, bulk, self, $field, idx, visit, $shape, $row)",
         "self.each_side_table_ref(&mut |r| out.push(r));",
         "self.each_side_table_ref_tail(&mut |r|",
         "self.side_refs.or_into_bits(&mut bits);",
+        "if self.side_ref_parity().is_err() {",
+        "self.each_side_table_ref_bulk(&mut |r|",
+        "self.side_refs.mismatch_against(&walked)",
     ] {
-        assert!(SRC.contains(target), "missing mutation target: {target}");
-        let mutation = SRC.replace(target, "/* slot walk removed */");
-        assert!(std::panic::catch_unwind(|| edge_sources(&mutation)).is_err());
+        assert!(src().contains(target), "missing mutation target: {target}");
+        let mutation = src().replace(target, "/* slot walk removed */");
+        assert!(
+            std::panic::catch_unwind(|| edge_sources(&mutation)).is_err(),
+            "mutation accepted: {target}"
+        );
     }
 }
 
@@ -808,10 +1539,12 @@ fn expanded_row_edges(tables: &[&str], full: bool) -> String {
     for ((field, policy, full_row, partial_row), table) in rows.iter().zip(tables) {
         let row = if full { full_row } else { partial_row };
         if !row.trim().is_empty() && !table.trim().is_empty() {
-            assert!(mentions(table, field), "{field}: table identity mismatch");
-            let compact: String = table.chars().filter(|c| !c.is_whitespace()).collect();
             assert!(
-                compact.contains(&format!(
+                names_field(table, field),
+                "{field}: table identity mismatch"
+            );
+            assert!(
+                compact(table).contains(&format!(
                     "gc_slot_row!(gc_run,self,row,visit,{full},{policy});"
                 )),
                 "{field}: row policy is disconnected from the table walk"
@@ -822,17 +1555,28 @@ fn expanded_row_edges(tables: &[&str], full: bool) -> String {
     source
 }
 
-fn assert_tail_coverage(partial: &str, tail: &str) {
+/// The counted bulk tables are exactly the ones the tail omits and the
+/// bulk walk enumerates; every other table the partial walk visits is in
+/// the tail and not in the bulk walk.
+fn assert_tail_coverage(partial: &str, tail: &str, bulk: &str) {
     for (field, _) in ironhorse_vm::diagnostics::INTERP_FIELDS {
         if ["arrays", "index_props", "collections"].contains(field) {
             assert!(
-                !mentions(tail, field),
+                !names_field(tail, field),
                 "counted bulk table scanned in tail: {field}"
             );
-        } else if mentions(partial, field) {
             assert!(
-                mentions(tail, field),
+                names_field(bulk, field),
+                "counted bulk table missing from the parity walk: {field}"
+            );
+        } else if names_field(partial, field) {
+            assert!(
+                names_field(tail, field),
                 "nonbulk table missing from tail: {field}"
+            );
+            assert!(
+                !names_field(bulk, field),
+                "nonbulk table scanned by the parity walk: {field}"
             );
         }
     }
@@ -842,7 +1586,8 @@ fn assert_tail_coverage(partial: &str, tail: &str) {
 fn tail_checks_reject_missing_nonbulk_fields_and_added_bulk_fields() {
     let partial = expanded_row_edges(ironhorse_vm::diagnostics::PARTIAL_EDGE_SOURCE, false);
     let tail = expanded_row_edges(ironhorse_vm::diagnostics::TAIL_EDGE_SOURCE, false);
-    assert_tail_coverage(&partial, &tail);
+    let bulk = expanded_row_edges(ironhorse_vm::diagnostics::BULK_EDGE_SOURCE, false);
+    assert_tail_coverage(&partial, &tail, &bulk);
     for field in [
         "functions",
         "promises",
@@ -850,13 +1595,26 @@ fn tail_checks_reject_missing_nonbulk_fields_and_added_bulk_fields() {
         "from_async",
         "symbol_key_ids",
     ] {
-        assert!(mentions(&tail, field));
+        assert!(names_field(&tail, field));
         let mutation = tail.replace(field, "removed_field");
-        assert!(std::panic::catch_unwind(|| assert_tail_coverage(&partial, &mutation)).is_err());
+        assert!(
+            std::panic::catch_unwind(|| assert_tail_coverage(&partial, &mutation, &bulk)).is_err()
+        );
+        let mutation = format!("{bulk} self.{field};");
+        assert!(
+            std::panic::catch_unwind(|| assert_tail_coverage(&partial, &tail, &mutation)).is_err()
+        );
     }
     for field in ["arrays", "index_props", "collections"] {
         let mutation = format!("{tail} self.{field};");
-        assert!(std::panic::catch_unwind(|| assert_tail_coverage(&partial, &mutation)).is_err());
+        assert!(
+            std::panic::catch_unwind(|| assert_tail_coverage(&partial, &mutation, &bulk)).is_err()
+        );
+        assert!(names_field(&bulk, field));
+        let mutation = bulk.replace(field, "removed_field");
+        assert!(
+            std::panic::catch_unwind(|| assert_tail_coverage(&partial, &tail, &mutation)).is_err()
+        );
     }
 }
 
@@ -868,7 +1626,7 @@ fn row_checks_reject_a_disconnected_call_even_when_another_table_uses_the_policy
         .collect();
     let table = tables
         .iter_mut()
-        .find(|table| mentions(table, "ctor_prototype"))
+        .find(|table| names_field(table, "ctor_prototype"))
         .unwrap();
     assert!(table.contains("gc_slot_row"));
     *table = table.replace("gc_slot_row", "removed_row_call");
@@ -877,27 +1635,22 @@ fn row_checks_reject_a_disconnected_call_even_when_another_table_uses_the_policy
 }
 
 fn weak_sources(src: &str) -> (String, String) {
-    fn compact(src: &str) -> String {
-        ironhorse_vm::source_scan::code_only(src)
-            .chars()
-            .filter(|c| !c.is_whitespace())
-            .collect()
-    }
+    let lexed = Lexed::new(src);
     assert_eq!(
-        compact(body_in(src, "macro_rules! gc_run")),
+        lexed.compact_body("macro_rules! gc_run"),
         "{($($code:tt)*)=>{{$($code)*}};}"
     );
     assert!(compact(src).contains("interp_state!(define_weak_walks);"));
-    let trace = compact(body_in(src, "fn ephemeron_edges(&self, slots: &SlotArena"));
+    let hooks = lexed.scoped(HOOKS_IMPL);
+    let trace = hooks.compact_body(
+        "fn ephemeron_edges(&self, slots: &SlotArena, visit: &mut dyn FnMut(SlotIndex))",
+    );
     assert!(trace.contains("self.visit_ephemerons(slots,visit);"));
-    let prune = compact(body_in(
-        src,
-        "fn prune_dead_keyed(&mut self, slots: &SlotArena",
-    ));
+    let prune = hooks.compact_body("fn prune_dead_keyed(&mut self, slots: &SlotArena)");
     assert!(prune.contains("self.prune_ephemerons(slots);"));
-    let trace = compact(body_in(src, "fn visit_ephemerons(&self"));
+    let trace = lexed.compact_body("fn visit_ephemerons(&self");
     assert!(trace.contains("$(gc_weak!(gc_run,trace,self,$field,slots,visit,$weak);)*"));
-    let prune = compact(body_in(src, "fn prune_ephemerons(&mut self"));
+    let prune = lexed.compact_body("fn prune_ephemerons(&mut self");
     assert!(prune.contains("$(gc_weak!(gc_run,prune,self,$field,slots,visit,$weak);)*"));
     (
         ironhorse_vm::diagnostics::EPHEMERON_SOURCE.join("\n"),
@@ -915,35 +1668,30 @@ fn weak_checks_reject_disconnected_callbacks_and_missing_expansions() {
         "gc_weak!(gc_run, trace, self, $field, slots, visit, $weak)",
         "gc_weak!(gc_run, prune, self, $field, slots, visit, $weak)",
     ] {
-        assert!(SRC.contains(target), "missing mutation target: {target}");
-        let mutation = SRC.replace(target, "/* weak walk removed */");
+        assert!(src().contains(target), "missing mutation target: {target}");
+        let mutation = src().replace(target, "/* weak walk removed */");
         assert!(std::panic::catch_unwind(|| weak_sources(&mutation)).is_err());
     }
 }
 
 fn root_source(src: &str) -> String {
-    let compact = |source: &str| {
-        ironhorse_vm::source_scan::code_only(source)
-            .chars()
-            .filter(|c| !c.is_whitespace())
-            .collect::<String>()
-    };
+    let lexed = Lexed::new(src);
     assert_eq!(
-        compact(body_in(src, "macro_rules! gc_run")),
+        lexed.compact_body("macro_rules! gc_run"),
         "{($($code:tt)*)=>{{$($code)*}};}"
     );
     assert_eq!(
-        compact(body_in(src, "macro_rules! gc_text")),
+        lexed.compact_body("macro_rules! gc_text"),
         "{($($code:tt)*)=>{stringify!($($code)*)};}"
     );
-    assert_eq!(compact(body_in(src, "pub fn gc_roots(&self)")),
+    assert_eq!(lexed.compact_body("pub fn gc_roots(&self)"),
         "{letmutroots=Vec::new();self.append_gc_roots(&mutroots);roots.sort_unstable_by_key(|r|r.0);roots.dedup();roots}");
     assert_eq!(
-        compact(body_in(src, "fn append_gc_roots(&self,")),
+        lexed.compact_body("fn append_gc_roots(&self,"),
         "{$(gc_root!(gc_run,self,$field,roots,$root);)*}"
     );
     assert_eq!(
-        compact(body_in(src, "fn slot_roots(s: &Slot,")),
+        lexed.compact_body("fn slot_roots(s: &Slot,"),
         "{s.each_ref_slot(|e|roots.push(e));}"
     );
     let source = compact(src);
@@ -968,7 +1716,7 @@ fn root_source(src: &str) -> String {
 
 #[test]
 fn disconnected_root_walks_cannot_satisfy_the_registry() {
-    root_source(SRC);
+    root_source(src());
     for (before, after) in [
         ("self.append_gc_roots(&mut roots);", ""),
         ("$(gc_root!(gc_run, self, $field, roots, $root);)*", ""),
@@ -978,8 +1726,8 @@ fn disconnected_root_walks_cannot_satisfy_the_registry() {
         ("roots.dedup();", ""),
         ("s.each_ref_slot(|e| roots.push(e));", ""),
     ] {
-        let mutated = SRC.replace(before, after);
-        assert_ne!(mutated, SRC, "mutation must match: {before}");
+        let mutated = src().replace(before, after);
+        assert_ne!(mutated, src(), "mutation must match: {before}");
         assert!(
             std::panic::catch_unwind(|| root_source(&mutated)).is_err(),
             "disconnected roots accepted: {before}"
@@ -987,9 +1735,53 @@ fn disconnected_root_walks_cannot_satisfy_the_registry() {
     }
 }
 
+/// A body lookup fails loudly when its declaration is not unique — the
+/// case a second implementation of a visitor spelling would create — and
+/// a trait method's declaration never stands in for its body.
+#[test]
+fn body_lookups_require_a_unique_declaration_with_a_body() {
+    let lexed = Lexed::new("trait T { fn swept(&mut self, idx: SlotIndex); }\nimpl T for A { fn swept(&mut self, idx: SlotIndex) { a() } }");
+    assert_eq!(
+        compact(lexed.body("fn swept(&mut self, idx: SlotIndex)")),
+        "{a()}"
+    );
+    let two = Lexed::new("impl A { fn f(&self) { 1 } }\nimpl B { fn f(&self) { 2 } }");
+    assert!(std::panic::catch_unwind(|| two.body("fn f(&self)")).is_err());
+    let none = Lexed::new("trait T { fn f(&self); }");
+    assert!(std::panic::catch_unwind(|| none.body("fn f(&self)")).is_err());
+    // Comments and strings cannot impersonate a declaration.
+    let code = source_scan::code_only(
+        "// fn g(&self) { 0 }\nconst S: &str = \"fn g(&self) { 0 }\";\nfn g(&self) { 3 }",
+    );
+    let noisy = Lexed::new(&code);
+    assert_eq!(compact(noisy.body("fn g(&self)")), "{3}");
+    // A scoped lookup sees only its block: the trait's default body is
+    // invisible inside the implementation, and vice versa.
+    let scoped = Lexed::new(
+        "trait T { fn h(&self) { 0 } }\nimpl T for A { fn h(&self) { 1 } }\nimpl T for B { fn h(&self) { 2 } }",
+    );
+    assert!(std::panic::catch_unwind(|| scoped.body("fn h(&self)")).is_err());
+    assert_eq!(
+        compact(scoped.scoped("impl T for A").body("fn h(&self)")),
+        "{1}"
+    );
+    assert_eq!(compact(scoped.scoped("trait T").body("fn h(&self)")), "{0}");
+    // The real hook block is unique and holds every traced callback.
+    let hooks = Lexed::new(src()).scoped(HOOKS_IMPL);
+    for callback in [
+        "fn extra_edges(&self, idx: SlotIndex, visit: &mut dyn FnMut(SlotIndex))",
+        "fn swept(&mut self, idx: SlotIndex)",
+        "fn ephemeron_edges(&self, slots: &SlotArena, visit: &mut dyn FnMut(SlotIndex))",
+        "fn prune_dead_keyed(&mut self, slots: &SlotArena)",
+        "fn external_chunk_refs(&mut self, visit: &mut dyn FnMut(&mut ChunkOffset))",
+    ] {
+        hooks.body(callback);
+    }
+}
+
 #[test]
 fn moved_temporal_records_remain_in_the_slot_bearing_type_graph() {
-    let original = type_defs(SRC);
+    let original = type_defs(src());
     let original_bearing = slot_bearing_types(&original);
     for (record, field) in [
         ("TemporalInstantRecord", "temporal_instants"),
@@ -1003,8 +1795,8 @@ fn moved_temporal_records_remain_in_the_slot_bearing_type_graph() {
         );
         assert!(!original_bearing.contains(&record));
         let declaration = format!("pub(super) struct {record} {{");
-        let changed = SRC.replace(&declaration, &format!("{declaration}\n    retained: Slot,"));
-        assert_ne!(changed, SRC);
+        let changed = src().replace(&declaration, &format!("{declaration}\n    retained: Slot,"));
+        assert_ne!(changed, src());
         let definitions = type_defs(&changed);
         let bearing = slot_bearing_types(&definitions);
         assert!(
@@ -1021,5 +1813,75 @@ fn moved_temporal_records_remain_in_the_slot_bearing_type_graph() {
             .1
             .iter()
             .any(|req| matches!(req, Req::ValueSlotFree)));
+    }
+}
+
+/// The type graph covers every production module: a slot-bearing type
+/// declared OUTSIDE `interp/` — `bulk.rs`'s `ArrayData`, `value.rs`'s
+/// `Slot` itself — is in it, and a second definition sharing a name
+/// merges conservatively rather than shadowing.
+#[test]
+fn the_type_graph_spans_the_whole_production_crate() {
+    let defs = type_defs(src());
+    let bearing = slot_bearing_types(&defs);
+    for (ty, expected) in [
+        ("ArrayData", true),
+        ("CollectionData", true),
+        ("SideRefCounts", false),
+        ("SavedFrame", true),
+        ("FuncInfo", true),
+        ("ModuleGraph", true),
+        ("Meter", false),
+    ] {
+        assert!(defs.contains_key(ty), "{ty} is not in the type graph");
+        assert_eq!(bearing.contains(&ty), expected, "{ty}");
+    }
+    let mut merged = BTreeMap::new();
+    merged.insert("Twice", "{ a: u32 }\n{ b: Slot }\n".to_string());
+    assert!(slot_bearing_types(&merged).contains(&"Twice"));
+    let doubled = format!("{}\nstruct Meter {{ hidden: Slot }}\n", src());
+    assert!(slot_bearing_types(&type_defs(&doubled)).contains(&"Meter"));
+    // Tuple structs, type aliases and `pub(in path)` definitions are in
+    // the graph too: a field typed through any of them cannot be exempt.
+    let shapes = "pub(in crate::x) struct Tuple(u32, Slot);\n\
+                  pub type Alias = std::collections::HashMap<SlotIndex, u32>;\n\
+                  type Plain = Vec<u8>;\n\
+                  struct Unit;\n\
+                  impl T for U {\n    type Assoc = Slot;\n}\n";
+    let defs = type_defs(shapes);
+    let bearing = slot_bearing_types(&defs);
+    assert!(bearing.contains(&"Tuple"));
+    assert!(bearing.contains(&"Alias"));
+    assert!(!bearing.contains(&"Plain"));
+    assert!(!defs.contains_key("Unit"));
+    assert!(bearing.contains(&"Assoc"));
+    // The real crate's aliases and tuple structs are covered.
+    let real = type_defs(src());
+    let real_bearing = slot_bearing_types(&real);
+    for ty in ["ArraySnapshot", "CollectionSnapshot", "PoisonedPage"] {
+        assert!(real_bearing.contains(&ty), "{ty}");
+    }
+}
+
+/// The weak-keyed value check reads the map's VALUE half on its own.
+#[test]
+fn value_slot_free_reads_the_value_half_of_a_map() {
+    let is_bearing = |ty: &str| mentions(ty, "Slot") || mentions(ty, "SlotIndex");
+    for (ty, expected) in [
+        (
+            "Tracked<std::collections::HashMap<crate::value::SlotIndex, ErrorData>>",
+            true,
+        ),
+        ("HashMap<SlotIndex, (bool, bool)>", true),
+        ("HashSet<SlotIndex>", true),
+        ("Vec<crate::value::SlotIndex>", true),
+        ("HashMap<SlotIndex, Slot>", false),
+        ("HashMap<(SlotIndex, u16), Slot>", false),
+        ("BTreeMap<u32, SlotIndex>", false),
+        ("HashMap<Foo, Vec<SlotIndex>>", false),
+        ("HashMap<SlotIndex, Option<Box<Slot>>>", false),
+        ("HashMap<SlotIndex, HashMap<u16, usize>>", true),
+    ] {
+        assert_eq!(value_half_is_slot_free(ty, &is_bearing), expected, "{ty}");
     }
 }
