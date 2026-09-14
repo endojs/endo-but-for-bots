@@ -11,9 +11,11 @@
 Two agents take part in an invitation: one **issues** it and a remote party
 **accepts** it. Throughout this design, *inviter* names the local party that
 **issued** the invitation (the agent that called `invite()`), on whose side
-all retention state lives. The pin, its `hostPins`/`@pins` directory, the
-derived pin name, and the name-path binding that acceptance rebinds all belong
-to the inviting agent's formula (`manager.js`'s invitation exo in
+all retention state lives. A **pin** is the durable pet-store entry the inviter
+keeps so the newly minted local guest handle survives the accept-time garbage
+collection that the next paragraph explains; the pin, the derived pet name it is
+stored under, and the name-path binding that acceptance rebinds all belong to
+the inviting agent's formula (`manager.js`'s invitation exo in
 [PR #1125](https://github.com/endojs/endo-but-for-bots/pull/1125)), not to the
 remote party that redeems the invitation; #1125 leaves the redeeming side
 untouched. This matches the record fields (`invitingAgent`, `invitingHandle`) and
@@ -26,7 +28,7 @@ cases below.
 
 When an invitation is accepted, the daemon collects any formula nothing refers
 to, so the inviter durably pins the newly minted local guest handle under a
-path-derived pet name in its pin directory to keep that connection alive. That
+path-derived pet name to keep that connection alive. That
 pin has two gaps. First, it
 carries no first-class metadata: it does not record who created the retention,
 which invitation binding it belongs to, when it was created, or whether the
@@ -62,26 +64,49 @@ their length-prefixed forms `guest-1_a3_b-c` and `guest-3_a-b1_c` stay distinct.
 This is the exact encoding whose invariants the present design preserves; see
 PR #1125 for its authoritative definition.
 
-One residual collision remains in that encoding and is inherited here, not fixed:
-because a single-segment path is exempt from length-prefixing, a one-segment pet
-name that is itself length-prefix-shaped collides with a real multi-segment path.
+One residual collision lives in that encoding: because a single-segment path is
+exempt from length-prefixing, a one-segment pet name that is itself
+length-prefix-shaped collides with a real multi-segment path.
 `['6_team-a3_bob']` and `['team-a', 'bob']` both derive `guest-6_team-a3_bob`,
 and `isValidName` permits the digit/underscore leaf. This design does not alter
-#1125's encoding, so it carries the risk forward as a test obligation (see the
-Test Plan) and a flag to #1125 rather than silently asserting injectivity;
-length-prefixing the single-segment case too, or rejecting a `^\d+_`-shaped leaf,
-would close it in #1125.
+#1125's length-prefix *encoding*, but it does not carry the collision forward as a
+mere test obligation either: the mint-time validation this design already adds
+(see *Mint-time key validation*) is the natural place to close it, and does. The
+new `invitationPinName` helper is where the encoding is computed, and `invite()`
+already validates its result before persisting anything; rejecting a
+single-segment leaf that matches `^\d+_` there is a one-line addition to a check
+this design introduces regardless, so injectivity is *enforced* at mint rather
+than only asserted. The rejection reports the offending leaf and points at the
+length-prefixed multi-segment form it would otherwise shadow.
+
+A second, already-shipped collision is closed by the same helper. The
+host-inviter `accept()` in `packages/daemon/src/host.js` derives its durable pin
+today as `['@pins', 'guest-<leaf>']` using **only the trailing segment** of the
+guest name path (`host.js:2218`), discarding the rest. Two different invitations
+at `alice/bob` and `carol/bob` therefore both derive `guest-bob` and silently
+overwrite each other's pin today: a live bug in the shipped `endo invite` /
+`endo accept` commands (multi-segment `NameOrPath` is already accepted input,
+`interfaces.js`), independent of #1125. Phase 1 routes this shipped `host.js`
+invite/accept pair through `invitationPinName(namePath)` too (a migration that
+does **not** depend on #1125 merging), so the length-prefixed, path-derived key
+replaces the bare-leaf key and the `alice/bob` vs `carol/bob` collision is
+removed rather than left standing. Invariant 1 and the Test Plan below are stated
+against that migrated behavior.
 
 This design adds metadata and lifecycle surfaces on top of the existing key.
 It does not replace the key or change which principal controls retention.
 
 ## Invariants
 
-1. **Live bindings do not collide (modulo one inherited exemption).** The
-   length-prefixed multi-segment encoding from PR #1125 remains the source of the
-   pin name; injectivity holds across multi-segment paths, with the single known
-   residual (a length-prefix-shaped single-segment leaf) called out in
-   *What is the Problem Being Solved?* above and carried as a test obligation.
+1. **Live bindings do not collide.** The length-prefixed multi-segment encoding
+   from PR #1125 remains the source of the pin name; injectivity holds across
+   multi-segment paths. The one residual case that the bare encoding admits (a
+   length-prefix-shaped single-segment leaf) is closed at mint by the validation
+   in *Mint-time key validation*, which rejects a `^\d+_`-shaped single-segment
+   leaf, and the shipped host-inviter `host.js` path is migrated onto the same
+   `invitationPinName` helper so its former bare-`guest-<leaf>` key (which
+   collided across `alice/bob` and `carol/bob`) no longer applies. Both are
+   covered by the Test Plan.
 
    > **Unsettled dependency.** PR #1125 is still an open draft, and its encoding
    > was already revised once mid-review to eliminate cross-purpose collisions.
@@ -147,24 +172,33 @@ removes the ordinary `invitedName` name makes it collectable while the pin lives
 Any consumer that renders `invitation`, `invitingAgent`, or `remoteHandle` must
 therefore apply the same reverse-name-or-raw-identifier fallback the summary uses,
 and must never assume they resolve. Only `localGuestHandle`, the pin's own target,
-is guaranteed resolvable while the pin exists; it is the identifier `prune`'s
-compare-and-remove guards. The existing pet-store entry remains the sole durable
+is guaranteed resolvable while the pin exists; it is the identifier that
+`prune`'s compare-and-remove guards. The existing pet-store entry remains the sole durable
 edge to the local invited guest handle.
 
 The internal `PetStore` and `StoreController` surfaces gain reason-aware entry
-operations. `storeIdentifier(name, id, reason?)` takes an explicit
-`reason: RetentionReason | null | 'preserve'` rather than a bare optional: `null`
-clears the reason, `'preserve'` leaves an existing reason untouched while
-updating `id`, and a `RetentionReason` value replaces it. A plain overwrite by an
-existing non-invitation caller therefore can neither silently downgrade a pin to
-`unknown` nor silently leave a reason describing a target that has moved.
+operations. At that daemon-private layer `storeIdentifier(name, id, reason)`
+takes the third argument as a **required, non-optional** parameter typed
+`RetentionReason | null | 'preserve'`, deliberately not a bare `reason?`, so
+every caller must state intent: `null` clears the reason, `'preserve'` leaves an
+existing reason untouched while updating `id`, and a `RetentionReason` value
+replaces it. A plain overwrite therefore can neither silently downgrade a pin to
+`unknown` nor silently leave a reason describing a target that has moved. Because
+the parameter is required rather than defaulted, there is no omission case to
+reason about; instead the ~20 existing two-argument internal call sites
+(`directory.js`, `guest.js`, `channel.js`, `mail.js`, `host.js`) are migrated
+mechanically in Phase 2 to pass the explicit `'preserve'` sentinel, which
+reproduces their current "overwrite the identifier, leave any reason alone"
+behavior exactly: a compile-time-checked, enumerated migration, not a silent
+default. Public `EndoDirectory.storeIdentifier` keeps its existing two-argument
+signature and forwards `'preserve'` to the controller, so no code outside the
+daemon changes and the public surface never gains a way to attach a reason.
 `removeIfIdentifier(name, expectedId)` is the guarded compare-and-remove used by
 `prune` (defined under *Host browse and prune surface*); `rename` carries the
-reason; `remove` deletes it; and `listEntries()` returns sorted
-`{ name, id, reason? }` records. Public `EndoDirectory.storeIdentifier` remains
-unchanged. Invitation code reaches the controller through a daemon-private helper,
-so this feature does not grant a guest a way to attach trusted-looking host
-metadata.
+reason; `remove` deletes the entry (reason included); and `listEntries()` returns
+sorted `{ name, id, reason? }` records. Invitation code reaches the controller
+through a daemon-private helper, so this feature does not grant a guest a way to
+attach trusted-looking host metadata.
 
 `accept()` writes the pin **once**, naming the newly minted local guest handle,
 and writes its reason record in the same serialized step. The pin is never
@@ -183,8 +217,17 @@ during the serialized accept; it is not a claim that every later step completed.
 ### Derived lifecycle state
 
 The daemon derives state at list time rather than persisting a second mutable
-status field. It reads the inviting agent's current binding at the reason's
-`invitedName` name path and compares it to the reason's recorded identifiers:
+status field. A single pure function,
+`deriveInvitationRetentionState(reason, observedBinding)`, is the *sole*
+implementation of the table below: it takes the reason record and the observed
+`invitedName` binding and returns one of the four states. Both read surfaces that
+expose lifecycle state, `InvitationRetentionPins.list()`'s
+`InvitationRetentionPin.state` and the retention-path surface's
+`RetentionPathEdgeReason.state`, call this one function rather than each
+re-deriving the comparison, so the two surfaces cannot drift (for example one
+treating a malformed reason as `unknown` while the other throws). It reads the
+inviting agent's current binding at the reason's `invitedName` name path and
+compares it to the reason's recorded identifiers:
 
 | Observed `invitedName` binding | State | Meaning |
 |---|---|---|
@@ -197,7 +240,8 @@ pin's state is reported as `unknown` (legacy or damaged metadata); the target is
 still shown and the pin may be pruned explicitly.
 
 This derived state is **advisory and host-side**, and (importantly) is read
-from a binding a *different* principal may own than the one `prune` mutates. For
+from a binding that may be owned by a *different* principal than the one `prune`
+mutates. For
 a guest inviter the `invitedName` binding lives in the **guest's** own,
 freely renameable pet store, while the pin and its reason live in the host-held
 `hostPins`. A guest that renames or removes its own `invitedName` can therefore
@@ -289,6 +333,11 @@ self-description, matching every other host-reachable capability
 that discovers the facet through the ordinary `E(host).invitationRetentionPins().help()`
 path gets the same introspection it gets everywhere else. Both `list` and `prune`
 reject a non-local locator or a locator that does not identify a `guest` formula.
+Because the surface name `endo pins` gives no hint that it is guest-only, that
+rejection is not a bare "wrong kind" error: its message names the correct
+alternate surface, routing a host locator to `endo list`/`endo remove` (where a
+host inviter's `@pins` entries are already fully manageable), so the operator
+learns where to go from the error rather than only from this design's prose.
 For a guest that has a `hostPins` directory, `list` resolves it, sorts by pin
 name, and returns `{ kind: 'pins', pins }` with all entries. Each pin's `name`
 is the bare `PetName`; the retention-path
@@ -298,13 +347,17 @@ each surface's native form.
 
 `prune` takes the internal formula identifier observed by `list` (its
 `targetId`, not the display `target` locator) and removes the entry only if the
-pin still names that exact identifier. The distinction is load-bearing: in the
-daemon's schema `pet_store_entry.formula_id` stores the bare identifier produced
-by `formatId`, while a locator is the distinct `endo://`-prefixed string produced by
-`formatLocator` (the codebase keeps `internalizeLocator`/`externalizeId` and a
-separate `synced_store_entry.locator` column precisely because the two are not
-interchangeable), so the compare is expressed against the identifier the column
-actually holds and never against the locator. The compare and the removal are
+pin still names that exact identifier. The distinction is load-bearing, and it is
+a distinction between two concrete string forms of the *same* target: the bare
+identifier `formatId` produces (for example `targetId: "abc123"`, stored in
+`pet_store_entry.formula_id`) versus the `endo://`-prefixed locator `formatLocator`
+produces from it (for example `target: "endo://abc123"`, shown to the operator).
+`internalizeLocator` maps the locator form back to the identifier and
+`externalizeId` maps the identifier out to a locator; the codebase keeps both
+directions, plus a separate `synced_store_entry.locator` column, precisely
+because the two are not interchangeable. So the compare is expressed against the
+identifier the column actually holds (`abc123`) and never against the locator
+(`endo://abc123`). The compare and the removal are
 performed by a new reason-aware pet-store operation, `removeIfIdentifier(name,
 expectedId)`, exposed through `StoreController`. Its atomicity primitive is a
 single guarded SQLite statement (`DELETE FROM pet_store_entry WHERE
@@ -314,8 +367,8 @@ is **not** a bare row delete: when the guarded `DELETE` removes a row it then
 discharges the same bookkeeping the existing `StoreController.remove` /
 `PetStore.remove` path does: `idsToPetNames.delete`, `publishNameRemoval` to
 subscribers, and `removeEdgeIfUnreferenced` calling `formulaGraph.onPetStoreRemove`
-(`packages/daemon/src/store-controller.js:73`,
-`packages/daemon/src/pet-store.js:183`). Routing the guarded delete through this
+(`packages/daemon/src/store-controller.js:78`,
+`packages/daemon/src/pet-store.js:194`). Routing the guarded delete through this
 operation is load-bearing: a raw `DELETE` would leave the in-memory
 `idsToPetNames` mapping stale (the pin still resolves until restart), never notify
 subscribers, and orphan the formula-graph edge, so the design's own promise that
@@ -391,7 +444,22 @@ accepts an `endo://` locator and `endo unpin` internalizes it to the stored
 formula identifier (the daemon's existing `internalizeLocator` step) before
 calling `prune` with the resulting `expectedTargetId`. `endo unpin` echoes the
 pin's state, name, and target and asks for confirmation. `--force` skips only the
-prompt; it never skips `--expect` or compare-and-remove. A `changed` result is a
+prompt; it never skips `--expect` or compare-and-remove.
+
+The two guards are not redundant, and this is why `unpin` carries both when its
+plainer sibling `endo remove` carries neither. `--expect` is a *correctness*
+guard against a raced snapshot: it stops the operator from removing a successor
+pin that silently reused the same key between their `list` and their `unpin`
+(Invariant 5). The prompt is a distinct *intent* guard: `unpin` removes a
+retention decision that keeps a live cross-agent connection from being collected,
+so an operator who typed the right (still-current) `--expect` but mistook *which*
+pin they meant still gets one chance to abort. `endo remove` operates on ordinary
+operator-owned names in the operator's own store, where a wrong deletion is
+locally recoverable and no compare-against-a-stale-view hazard exists, so it
+needs neither; the earlier `endo purge` precedent motivates only the prompt, not
+the compare guard (purge has no target to compare against). `--force` exists so a
+scripted caller that has already resolved the exact target can opt out of the
+interactive prompt while keeping the compare guard. A `changed` result is a
 nonzero exit with a message to list again. Removing the last retention path makes
 the target eligible for normal formula collection; neither command promises
 immediate collection when another retention path exists.
@@ -400,9 +468,23 @@ immediate collection when another retention path exists.
 
 The PR #1125 encoding moves into one exported pure daemon helper,
 `invitationPinName(namePath)`. Both `invite()` and `accept()` call the same
-helper. `invite()` computes the actual storage name, validates it with
-`assertPetName`, and only then formulates and stores the invitation, so the check
-runs before anything is persisted.
+helper, and the already-shipped host-inviter `invite()`/`accept()` pair in
+`packages/daemon/src/host.js` is migrated onto it as well (replacing its current
+bare-`guest-<leaf>` key, which discards all but the trailing segment and so
+collides across paths such as `alice/bob` and `carol/bob`). That migration is
+independent of #1125 merging: it is a same-branch change to shipped code, and it
+is why Invariant 1 can claim collision-freedom for the host-inviter path and not
+only for #1125's guest-inviter path. `invite()` computes the actual storage name,
+validates it with `assertPetName`, and only then formulates and stores the
+invitation, so the check runs before anything is persisted.
+
+The helper also closes the one residual collision the bare encoding admits (a
+length-prefix-shaped single-segment leaf, `['6_team-a3_bob']` shadowing the
+multi-segment `['team-a', 'bob']`; see *What is the Problem Being Solved?*):
+`invitationPinName` rejects a single-segment leaf matching `^\d+_` before it is
+persisted, so the collision is enforced away at mint rather than merely asserted
+absent. Because both `invite()` and `accept()` route through the one helper, the
+rejection covers minting and redemption alike.
 
 Both the modern and the legacy pin names are fully determined at mint, so both
 are validated in `invite()`; no second, late validation site in `accept()` is
@@ -454,10 +536,14 @@ is introduced.
 
 ## Phased Implementation
 
-1. Land `invitationPinName` and mint-time validation with the guest-owned
-   invitation work.
-2. Migrate `pet_store_entry`, add reason-aware internal controller operations,
-   and write invitation reasons during accept.
+1. Land `invitationPinName` and mint-time validation, and route the shipped
+   host-inviter `host.js` invite/accept onto the helper (closing the bare-leaf
+   collision, independent of #1125). The guest-inviter encoding lands with the
+   guest-owned invitation work of #1125.
+2. Migrate `pet_store_entry`, add reason-aware internal controller operations
+   (mechanically updating the existing two-argument `storeIdentifier` call sites
+   to pass `'preserve'`, per *Retention reason records*), and write invitation
+   reasons during accept.
 3. Extend retention-path results and the `endo paths` renderer.
 4. Add `InvitationRetentionPins`, `endo pins`, and compare-and-remove
    `endo unpin`.
@@ -496,8 +582,14 @@ the traversal lands, rather than blocking the whole feature on it.
   formula-graph edge and publishes the name removal (a bare row delete would
   leave the pin resolvable until restart).
 - Encoding tests cover the single-segment length-prefix-shaped collision case
-  (`['6_team-a3_bob']` vs `['team-a', 'bob']`) so the injectivity claim is not
-  silently violated, and a concurrent supersede-vs-prune interleaving on one path.
+  (`['6_team-a3_bob']` vs `['team-a', 'bob']`): the mint-time validation rejects
+  the `^\d+_`-shaped single-segment leaf, so the injectivity claim is enforced
+  rather than silently violated. A concurrent supersede-vs-prune interleaving on
+  one path is also covered.
+- A regression test for the previously-shipped host-inviter collision: two
+  invitations at `alice/bob` and `carol/bob` derive distinct pin names once
+  `host.js` routes through `invitationPinName` (they collided on `guest-bob`
+  before this change), proving the migration off the bare-leaf key.
 - CLI tests snapshot prose and JSON output, confirmation refusal, successful
   prune, and the `changed` exit path.
 - Formula-view registry and component tests render labeled rows and target
@@ -524,7 +616,7 @@ the traversal lands, rather than blocking the whole feature on it.
    maintaining a second state machine.
 4. Make prune compare-and-remove against the observed target.
 5. Keep all browse and mutation authority host-only.
-6. Defer a general durable Set primitive until an independently justified,
+6. Defer a general durable Set formula until an independently justified,
    authoritatively recomputable consumer exists.
 
 ## Prompt
