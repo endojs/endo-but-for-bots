@@ -8,6 +8,7 @@ import harden from '@endo/harden';
 import { acquireIronhorseRuntime, hashFile } from './ironhorse-runtime.js';
 
 import { WorkerHaltError } from '../core/worker-engine.js';
+import { withExpiry } from '../platform/timers.js';
 
 /** @import { WorkerEngine } from '../core/worker-engine.js' */
 
@@ -248,10 +249,18 @@ export const makeIronhorseEngine = (
       };
 
       const close = async () => {
-        const timer = setTimer(() => child?.kill('SIGKILL'), requestTimeoutMs);
-        child?.input(0)?.end(`${JSON.stringify({ op: 'close' })}\n`);
-        const code = await exited;
-        clearTimer(timer);
+        // The escalation must be cleared even when the wait fails: a surviving
+        // SIGKILL timer holds the host's event loop and fires at a child that
+        // has already gone.
+        const code = await withExpiry(
+          timers,
+          requestTimeoutMs,
+          () => child?.kill('SIGKILL'),
+          () => {
+            child?.input(0)?.end(`${JSON.stringify({ op: 'close' })}\n`);
+            return exited;
+          },
+        );
         child = undefined;
         if (code !== 0)
           throw Error('Ironhorse failed to close its SQLite heap');
