@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-08-06 |
-| **Updated** | 2026-09-10 |
+| **Updated** | 2026-09-14 |
 | **Author** | Aaron Kumavis (prompted) |
 | **Status** | In Progress |
 | **Builds on** | designs/ironhorse-engine.md (§ Snapshots, requirement 1c) |
@@ -1529,12 +1529,14 @@ rather than work items.
   intact, both refusal edges are pinned, and the worker lifecycle
   test now runs a divergent crank through relink live and after
   reopen.
-  STILL OPEN in this workstream: the 3 `Pending` ledger rows —
-  `async_instances`, `async_generators`/`async_gen_run_stack`, and
-  `modules` (generators graduated in schema 21, the promise cluster
-  in schema 23; the async rows are gated meanwhile by the persist
-  gate's reaction-kind and async-generator arms, refusing by name
-  instead of dropping silently).
+  CLOSED since in this workstream: the 3 `Pending` ledger rows —
+  `async_instances` (`ASYN`, schema 24), `modules` (in the shared
+  `FUNC` extension, schema 32) and, last, `async_generators`/
+  `async_gen_run_stack` (carried in `ASYN` after the activations,
+  format 23 / store schema 34; the run stack is quiescence-empty).
+  Generators graduated in schema 21, the promise cluster in schema
+  23. The persist gate's reaction-kind arm now refuses only the
+  `FromAsync*` kinds, by name instead of dropping silently.
   The old intern gap is NOT among them: runtime string keys live in
   the NAME table and symbol keys travel in `SYMB` (id-space
   unification, 2026-08-26), so no interning gates relink or
@@ -2617,6 +2619,18 @@ field list from source in a build test and diff it against
 `SideTable::ALL` + documented satellite/transient name lists), and a
 GC net that checks against an INDEPENDENTLY DERIVED edge list rather
 than the visitor's own output.
+Status (architecture review F038/F053/F089): the runtime parity net
+now compares the standing bulk counts against a fresh recount of the
+SAME three tables through the roster's `bulk` walk, exact counts and
+no tail term, so a tail reference can neither cancel nor mask a bulk
+discrepancy (`Interp::side_ref_parity`, unconditional and pinned by
+`side_ref_parity.rs` in every build profile); the subfield class it
+still cannot see is held by the behavioral twins. The GC registry
+parses the whole production module set derived from the crate's
+`mod` declarations, checks every claim against the field's OWN
+generated policy through `self.<field>`, and proves each
+transitively-rooted boot anchor alive after a collection through
+`Interp::boot_anchor_liveness`.
 
 **4. Assertions that stop one step short of behavior.**
 `armed_meter_state_survives_suspend` asserts the restored MeterState
@@ -2749,7 +2763,8 @@ bite-checked by reverting the fix under the lock). Statuses:
   (rooted in `gc_roots` / edged in `extra_edges` AND the partial
   enumeration / ephemeron / chunk-remap / weak-keyed with a
   mechanically slot-free value type AND pruning in BOTH sweep
-  paths / documented-transitively-rooted), so a shared omission —
+  paths / transitively-rooted, which `Interp::boot_anchor_liveness`
+  now proves at runtime after a collection), so a shared omission —
   the class the runtime parity net structurally cannot see, and
   exactly how W6-1..4 escaped — fails the moment the field lands;
   `gc_anchor_truth.rs` holds the behavioral GC-vs-plain twins
@@ -2771,10 +2786,11 @@ bite-checked by reverting the fix under the lock). Statuses:
   ACTUAL field list by a mechanical two-way reconciliation test
   (`empty_at_boundary_rows_match_the_quiescence_predicate`,
   bite-checked in both directions), and `async_gen_run_stack`'s
-  quiescence-empty half is documented on the still-Pending
-  `AsyncGenerators` variant it rides. With the schema-11 data-only
-  carries (wrappers, regexps, Temporal records) the count stands at
-  18 honestly-Pending rows.
+  quiescence-empty half is documented on the `AsyncGenerators`
+  variant it rides (Pending until format 23 / store schema 34 carried
+  the instance table in `ASYN`). With the schema-11 data-only
+  carries (wrappers, regexps, Temporal records) the count stood at
+  18 honestly-Pending rows; every row is carried now.
   The lazy backing now carries the attach-time chunk length
   (`SlotArena::lazy_from_parts` takes `chunk_bound`; the resume path
   passes `manifest.chunk_len`), and `ensure_page_resident` refuses a
@@ -3564,6 +3580,17 @@ with segments. The design points that fell out of building it:
   refuse-on-hold arm of its own (the W6-9 pattern). Both new arms are
   locked in `persist_gates.rs`; before them, this state was silently
   DROPPED (hidden behind the promise hole this carry closes).
+  Since format 23 / store schema 34 (architecture review F127) the
+  `AsyncAwait` and `AsyncGenerator*` kinds resume: `ASYN` carries the
+  activations and, after them, every live async generator instance
+  (state, suspended frame, queued requests, the active request), so
+  the row-level arm is gone and the kind arm refuses only the
+  `FromAsync*` kinds. An `AsyncGenerator*` reaction must name a
+  carried instance that is serving a request, in the state the kind
+  implies, one anchor per instance; an active request whose awaited
+  promise nobody holds is carried unanchored (it is stuck, not
+  malformed). `async_generator_carry.rs` drives every boundary state
+  through the seven-way twin and refuses every crafted shape.
 - Locks: `promise_carry.rs` (eleven twins over memory/file/blob —
   the P1 render repro, a post-resume resolver call, a pre-suspend
   reaction, the tripped guard, the thenable second pair, mid-flight
