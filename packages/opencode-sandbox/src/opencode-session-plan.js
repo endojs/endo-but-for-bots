@@ -3,6 +3,7 @@
 import { assertCopyData } from '@endo/daemon/copy-data.js';
 import { Fail, q } from '@endo/errors';
 import { assertNativePodmanProfile } from '@endo/sandbox/native-podman-profile.js';
+import { createHash } from 'node:crypto';
 import { isAbsolute, normalize } from 'node:path';
 
 /**
@@ -28,7 +29,14 @@ import { isAbsolute, normalize } from 'node:path';
  * @property {string} sandboxSessionId
  * @property {string} rootfs Explicit effective image; no environment fallback.
  * @property {'off' | 'public-internet'} networkPolicy
- * @property {string} workspaceDir Backing storage the workspace filesystem serves.
+ * @property {string} [workspaceDir] Owned backing storage the workspace
+ *   filesystem serves; absent when the workspace is an operator-supplied host
+ *   path that this session's storage owner must never remove.
+ * @property {string} [workspaceHostPath] The operator-supplied workspace the
+ *   controller projects instead; recorded so a later request cannot silently
+ *   rebind the session to different storage, and disjoint from every other
+ *   recorded path so the guest never sees its own sockets or mount point.
+ *   Never removed.
  * @property {string} workspaceMountPoint Kernel mount, distinct from backing storage.
  * @property {string} mcpDir Private, recorded native socket/relay directory.
  * @property {string} mounterSocketDir Private 9P socket parent, never guest-visible.
@@ -38,14 +46,20 @@ import { isAbsolute, normalize } from 'node:path';
  * @property {string} [opencodeSessionId]
  */
 
+/**
+ * The plan as recorded: the same fields with the two OCI quantities still in
+ * their decimal-string form. `readSessionPlan` widens it into a `SessionPlan`.
+ * @typedef {Omit<SessionPlan, 'nativeProfile'> & { nativeProfile: PlanNativeProfile }} RecordedSessionPlan
+ */
+
 const NATURAL_TEXT = /^(0|[1-9][0-9]*)$/;
 const NETWORK_POLICIES = harden(['off', 'public-internet']);
 const RECORDED_PATHS = harden([
-  'workspaceDir',
   'workspaceMountPoint',
   'mcpDir',
   'mounterSocketDir',
 ]);
+const OPTIONAL_PATHS = harden(['workspaceDir', 'workspaceHostPath']);
 const OPTIONAL_TEXT = harden(['model', 'systemPrompt', 'opencodeSessionId']);
 
 /**
@@ -74,11 +88,14 @@ export const readNativeProfile = value => {
 harden(readNativeProfile);
 
 /**
+ * Whether `child` is `parent` or lies beneath it, on already-normalized
+ * absolute paths; aliases are the caller's concern.
  * @param {string} parent
  * @param {string} child
  */
-const contains = (parent, child) =>
+export const containsPath = (parent, child) =>
   parent === child || child.startsWith(`${parent}/`);
+harden(containsPath);
 
 /**
  * The one spelling every host path in this package accepts: absolute,
@@ -133,17 +150,50 @@ export const readSessionPlan = text => {
       typeof recorded[name] === 'string' ||
       Fail`Session plan field ${q(name)} must be text`;
   }
-  /** @type {string[]} */
+  /** @type {[string, string][]} */
   const paths = [];
-  for (const name of RECORDED_PATHS) {
-    const nativePath = readRecordedPath(name, recorded[name]);
-    for (const [index, other] of paths.entries()) {
-      (!contains(other, nativePath) && !contains(nativePath, other)) ||
-        Fail`Session plan paths ${q(RECORDED_PATHS[index])} and ${q(name)} must be disjoint`;
+  for (const name of [...RECORDED_PATHS, ...OPTIONAL_PATHS]) {
+    if (OPTIONAL_PATHS.includes(name) && recorded[name] === undefined) {
+      // eslint-disable-next-line no-continue
+      continue;
     }
-    paths.push(nativePath);
+    const nativePath = readRecordedPath(name, recorded[name]);
+    for (const [otherName, other] of paths) {
+      (!containsPath(other, nativePath) && !containsPath(nativePath, other)) ||
+        Fail`Session plan paths ${q(otherName)} and ${q(name)} must be disjoint`;
+    }
+    paths.push([name, nativePath]);
+  }
+  if (recorded.workspaceHostPath !== undefined) {
+    recorded.workspaceDir === undefined ||
+      Fail`Session plan cannot record both an owned and an operator-supplied workspace`;
+  } else {
+    recorded.workspaceDir !== undefined ||
+      Fail`Session plan must record an owned or an operator-supplied workspace`;
   }
   const nativeProfile = readNativeProfile(recorded.nativeProfile);
   return harden(/** @type {SessionPlan} */ ({ ...recorded, nativeProfile }));
 };
 harden(readSessionPlan);
+
+/**
+ * Deterministic sandbox session id: a bounded lowercase path component
+ * derived from the Floot session id, so a later create, destroy, or resume
+ * addresses the same recorded storage and slice names.
+ *
+ * @param {string} name
+ */
+export const makeSandboxSessionId = name => {
+  const slug =
+    String(name)
+      .toLowerCase()
+      .replace(/[^a-z0-9-]/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 64) || 'opencode';
+  const digest = createHash('sha256')
+    .update(String(name))
+    .digest('hex')
+    .slice(0, 12);
+  return `${slug}-${digest}`;
+};
+harden(makeSandboxSessionId);

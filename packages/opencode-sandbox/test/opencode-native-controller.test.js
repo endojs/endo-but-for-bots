@@ -169,7 +169,6 @@ const fixture = (t, { realClient = false } = {}) => {
     sandboxService,
     brokerService,
     stateProvider,
-    filesystem: foreign,
     tools,
   };
   const resolver = Far('Resolver', {
@@ -185,6 +184,10 @@ const fixture = (t, { realClient = false } = {}) => {
       reportError: error => events.push(['cleanup error', error]),
       env: { XDG_RUNTIME_DIR: '/wrong-global' },
       makePassword: () => 'fresh-password',
+      makeFilesystem(rootPath) {
+        events.push(['filesystem', rootPath]);
+        return Far('Filesystem', {});
+      },
       makeMounter(env) {
         let closed = false;
         events.push(['mounter', env]);
@@ -331,6 +334,18 @@ test('native controller construction is inert; activation uses copy paths and no
     event => Array.isArray(event) && event[0] === 'mounter',
   );
   t.is(mounterEnv.XDG_RUNTIME_DIR, plan.mounterSocketDir);
+  // The workspace is projected from the recorded directory in this worker,
+  // and its mount point is the mounter's to remove on unmount.
+  t.deepEqual(
+    f.events.find(event => Array.isArray(event) && event[0] === 'filesystem'),
+    ['filesystem', plan.workspaceDir],
+  );
+  t.false(f.events.includes('resolve filesystem'));
+  const [, , mountPoint, mountOptions] = f.events.find(
+    event => Array.isArray(event) && event[0] === 'mount',
+  );
+  t.is(mountPoint, plan.workspaceMountPoint);
+  t.deepEqual(mountOptions, { removeMountPointOnUnmount: true });
   await E(controller).send('recorded foreground turn');
   await E(controller).interrupt();
   t.is((await E(controller).status()).sessionId, 'a');

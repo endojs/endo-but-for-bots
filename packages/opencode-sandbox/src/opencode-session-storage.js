@@ -51,7 +51,8 @@ const withinSession = (root, child, sessionId) => {
  * Durable storage removal for one recorded plan, invoked by the daemon session
  * owner inside record removal after native cleanup has been acknowledged. The
  * plan names the storage; this owner only checks that each path lies inside
- * the root it was configured with at setup and removes it. A failure retains
+ * the root it was configured with at setup and removes it. The workspace
+ * mount point is only ever removed as an empty directory. A failure retains
  * the record, and every step is safe to repeat.
  *
  * Roots and their ancestors must stay under stable host control, outside guest
@@ -87,9 +88,25 @@ export const makeOpencodeSessionStorage = ({
     const targets = harden([
       ['mounterSocketDir', plan.mounterSocketDir, mcpRoot],
       ['mcpDir', plan.mcpDir, mcpRoot],
-      ['workspaceDir', plan.workspaceDir, workspaceRoot],
+      // An operator-supplied workspace records no owned directory and is
+      // never removed here.
+      ...(plan.workspaceDir === undefined
+        ? []
+        : [
+            /** @type {[string, string, string]} */ ([
+              'workspaceDir',
+              plan.workspaceDir,
+              workspaceRoot,
+            ]),
+          ]),
     ]);
-    for (const [name, target, root] of targets) {
+    // The mount point is bound to the session like the removable targets
+    // but is never removed recursively (below), so it is checked here and
+    // left out of the removal list.
+    for (const [name, target, root] of [
+      ...targets,
+      ['workspaceMountPoint', plan.workspaceMountPoint, mcpRoot],
+    ]) {
       withinSession(root, target, plan.sandboxSessionId) ||
         Fail`Session plan ${q(name)} ${q(target)} is outside this session's directory under ${q(root)}`;
     }
@@ -103,16 +120,26 @@ export const makeOpencodeSessionStorage = ({
       !info?.isSymbolicLink() ||
         Fail`Session plan ${q(name)} is a symbolic link, not recorded storage`;
     }
+    // The mount point is never removed recursively: through a still-mounted
+    // point that would delete the guest's workspace. An empty directory is
+    // what the mounter leaves after unmount; anything else (a live mount, a
+    // populated directory) is a retained failure before any storage is
+    // deleted, so removal can be retried once the mount is gone.
+    await removeEmptyDirectory(plan.workspaceMountPoint).catch(error => {
+      if (/** @type {NodeJS.ErrnoException} */ (error).code !== 'ENOENT')
+        throw error;
+    });
     for (const [, target] of targets) {
       // eslint-disable-next-line no-await-in-loop
       await removeDirectory(target);
     }
-    // The socket and relay directories share one private per-session parent
-    // directly under the MCP root. Remove it once both are gone; anything
-    // else left there is not this plan's to delete.
+    // The socket, relay, and mount-point directories share one private
+    // per-session parent directly under the MCP root. Remove it once all are
+    // gone; anything else left there is not this plan's to delete.
     const parent = dirname(plan.mcpDir);
     if (
       parent === dirname(plan.mounterSocketDir) &&
+      parent === dirname(plan.workspaceMountPoint) &&
       dirname(parent) === mcpRoot
     ) {
       await removeEmptyDirectory(parent).catch(error => {

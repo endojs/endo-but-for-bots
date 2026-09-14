@@ -31,8 +31,6 @@
     "./src/opencode-state-provider-module.js": "./src/opencode-state-provider-module.js",
     "./src/opencode-backend-factory.js": "./src/opencode-backend-factory.js",
     "./src/opencode-backend-module.js": "./src/opencode-backend-module.js",
-    "./src/opencode-session-provisioner.js": "./src/opencode-session-provisioner.js",
-    "./src/provision-opencode-session.js": "./src/provision-opencode-session.js",
     "./src/parse-rootfs.js": "./src/parse-rootfs.js",
     "./src/mcp-socket-server.js": "./src/mcp-socket-server.js",
     "./src/container-mount-bridge.js": "./src/container-mount-bridge.js",

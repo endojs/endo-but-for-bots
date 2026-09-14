@@ -1,5 +1,4 @@
 // @ts-check
-/* global process */
 
 /**
  * The `opencode-backend` caplet: a Floot hosted backend factory for the
@@ -7,287 +6,292 @@
  * bound into the Floot controller profile under the conventional
  * `opencode-backend` name Floot's factory discovers.
  *
- * It composes the per-session provisioner
- * (`opencode-session-provisioner.js`) with the MCP tool bridge
- * (`mcp-bridge.js` over `mcp-socket-server.js`) and the hard-coded model
- * catalog and hands them to `makeOpencodeBackendFactory`. Floot only ever
+ * Sessions belong to the daemon's session owner. For each Floot session this
+ * caplet writes one approved plan and records the exact formula identities of
+ * the services it depends on — the native sandbox service, the provider
+ * broker, the state provider, and the storage owner — then asks the owner to
+ * start the native controller with the tool set Floot pinned. The workspace
+ * is a recorded directory the controller projects itself, not a formula:
+ * this caplet never holds a disposable capability, since the daemon closes a
+ * worker retaining one whose formula is later collected. Floot only ever
  * holds the guarded factory facet; the host powers this caplet runs with
  * never cross that boundary.
  *
- * Formula env (all optional; `process.env` `ENDO_`-spellings are fallbacks):
- *   OPENCODE_CLIENT_NAME        Pet-name base for per-session clients.
- *   OPENCODE_CREDS_NAME         OpenCodeCredentials cap name (default
- *                               opencode-creds).
- *   OPENCODE_WORKSPACE_BASE_DIR Host base directory for per-session
- *                               workspaces.
- *   OPENCODE_CONFIG_BASE_DIR    Host base directory for per-session config
- *                               dirs.
- *   OPENCODE_SANDBOX_IMAGE      OCI rootfs for the slice.
- *   OPENCODE_MCP_DIR            Host base directory for per-session MCP
- *                               sockets.
- *   OPENCODE_BROKER_LISTENER_IMAGE  Digest-pinned provider-listener image.
- *                               When set, `off` sessions run broker-only;
- *                               when absent they keep the refusal path.
- *   OPENCODE_BROKER_DIR         Private host directory for listener state.
- *   OPENCODE_BROKER_OWNER_ID    Cleanup scope for listener containers.
+ * Formula env (set by `setup-hosted.js`; no process fallback):
+ *   OPENCODE_WORKSPACE_BASE_DIR  Root of owned per-session workspaces.
+ *   OPENCODE_MCP_DIR             Root of per-session private directories
+ *                                (socket relay, 9P socket, mount point).
+ *   OPENCODE_NATIVE_PROFILE      The deployment resource profile recorded into
+ *                                every plan; JSON with digit-string
+ *                                quantities, validated before use.
+ *
+ * Both roots must equal the recorded storage owner's roots, so every session
+ * this backend records lies where that owner can remove it.
  *
  * @module
  */
 
-import { execFile as execFileCallback } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { rm } from 'node:fs/promises';
-import os from 'node:os';
+import { lstat, mkdir, realpath } from 'node:fs/promises';
 import path from 'node:path';
-import { promisify } from 'node:util';
 
+import { assertPetNames } from '@endo/daemon/pet-name.js';
 import { Fail, q } from '@endo/errors';
 import { E } from '@endo/eventual-send';
-import { makeMcpBridgeForToolSet } from '@endo/hosted-agent/mcp-bridge.js';
 
-import { parseModelRef } from './opencode-agent-config.js';
-import { makeOpencodeBroker } from './opencode-broker.js';
+import {
+  assertCurrentSpecifier,
+  toCurrentSpecifier,
+} from './current-specifier.js';
+import {
+  readBrokerService,
+  readNativeSandbox,
+  readSessionStorage,
+  readStateProvider,
+  resolveFuturePath,
+} from './hosted-runtime-setup.js';
 import {
   makeOpencodeBackendFactory,
   OPENCODE_MODELS,
 } from './opencode-backend-factory.js';
-import { makeOpencodeSessionProvisioner } from './opencode-session-provisioner.js';
-import { startMcpSocketServer } from './mcp-socket-server.js';
+import {
+  containsPath,
+  isNormalizedAbsolutePath,
+  makeSandboxSessionId,
+  readNativeProfile,
+  readSessionPlan,
+} from './opencode-session-plan.js';
 
-// One provider-listener runtime per daemon worker, shared by every backend
-// incarnation. The backend caplet is both revived (an existing formula) and
-// re-minted (setup-hosted) in the same process; composing a second runtime for
-// the same owner would fail its exclusive owner lock. The runtime's stale-owner
-// recovery sweeps containers left by a previous daemon process.
-/** @type {Map<string, Promise<any>>} */
-const brokerCompositions = new Map();
+/** @import { EndoHost } from '@endo/daemon' */
+/** @import { SessionRequest } from './opencode-backend-factory.js' */
+/** @import { PlanNativeProfile, RecordedSessionPlan } from './opencode-session-plan.js' */
 
-/**
- * Share one in-flight composition per key, and let a failed composition be
- * retried instead of poisoning every later attempt.
- *
- * @template T
- * @param {Map<string, Promise<T>>} cache
- * @param {string} key
- * @param {() => Promise<T>} factory
- * @returns {Promise<T>}
- */
-export const memoizeBrokerComposition = (cache, key, factory) => {
-  if (!cache.has(key)) {
-    cache.set(
-      key,
-      factory().catch(error => {
-        cache.delete(key);
-        throw error;
-      }),
-    );
-  }
-  return /** @type {Promise<T>} */ (cache.get(key));
-};
-harden(memoizeBrokerComposition);
+/** The host-private records directory the session owner is configured on. */
+export const SESSION_RECORDS_PATH = harden([
+  'opencode-sandbox',
+  'session-records',
+]);
+
+export const controllerSpecifier = assertCurrentSpecifier(
+  toCurrentSpecifier(
+    new URL('./opencode-native-controller.js', import.meta.url).href,
+  ),
+  'native controller',
+);
+harden(controllerSpecifier);
 
 /**
- * Resolve the provisioner configuration from the formula env and the daemon's
- * environment.
+ * Read the backend's explicit configuration. Nothing is defaulted: a missing
+ * root or profile is a setup error, not a guess.
  *
  * @param {Record<string, string>} env
  */
 export const resolveBackendConfig = env => {
-  const workspaceBaseDir =
-    env.OPENCODE_WORKSPACE_BASE_DIR ||
-    process.env.ENDO_OPENCODE_WORKSPACE_DIR ||
-    path.join(os.homedir(), 'opencode-workspaces');
-  const brokerDir =
-    env.OPENCODE_BROKER_DIR ||
-    process.env.ENDO_OPENCODE_BROKER_DIR ||
-    path.join(os.homedir(), 'opencode-broker');
-  return harden({
-    clientBase:
-      env.OPENCODE_CLIENT_NAME ||
-      process.env.ENDO_OPENCODE_CLIENT_NAME ||
-      'opencode-client',
-    credentialsName:
-      env.OPENCODE_CREDS_NAME ||
-      process.env.ENDO_OPENCODE_CREDS_NAME ||
-      'openrouter-auth',
-    workspaceBaseDir,
-    configBaseDir:
-      env.OPENCODE_CONFIG_BASE_DIR ||
-      process.env.ENDO_OPENCODE_CONFIG_DIR ||
-      path.join(path.dirname(workspaceBaseDir), 'opencode-configs'),
-    rootfs:
-      env.OPENCODE_SANDBOX_IMAGE ||
-      process.env.ENDO_OPENCODE_SANDBOX_IMAGE ||
-      'oci:localhost/opencode-sandbox:latest',
-    // The socket directory path is stable per session: the persisted client
-    // formula's read-only mount records it, so a revival after a daemon
-    // restart must find the new listener at the same path.
-    mcpBaseDir:
-      env.OPENCODE_MCP_DIR ||
-      process.env.ENDO_OPENCODE_MCP_DIR ||
-      path.join(os.homedir(), 'opencode-mcp'),
-    broker: {
-      listenerImageRef:
-        env.OPENCODE_BROKER_LISTENER_IMAGE ||
-        process.env.ENDO_OPENCODE_BROKER_LISTENER_IMAGE ||
-        '',
-      directory: brokerDir,
-      ownerId:
-        env.OPENCODE_BROKER_OWNER_ID ||
-        process.env.ENDO_OPENCODE_BROKER_OWNER_ID ||
-        '',
-    },
-  });
+  const {
+    OPENCODE_WORKSPACE_BASE_DIR: workspaceBaseDir,
+    OPENCODE_MCP_DIR: mcpBaseDir,
+  } = env;
+  isNormalizedAbsolutePath(workspaceBaseDir) ||
+    Fail`OPENCODE_WORKSPACE_BASE_DIR must be a normalized absolute path`;
+  isNormalizedAbsolutePath(mcpBaseDir) ||
+    Fail`OPENCODE_MCP_DIR must be a normalized absolute path`;
+  const profileText = env.OPENCODE_NATIVE_PROFILE;
+  typeof profileText === 'string' || Fail`OPENCODE_NATIVE_PROFILE is required`;
+  /** @type {PlanNativeProfile} */
+  const nativeProfile = JSON.parse(profileText);
+  readNativeProfile(nativeProfile);
+  return harden({ workspaceBaseDir, mcpBaseDir, nativeProfile });
 };
 harden(resolveBackendConfig);
-
-const execFile = promisify(execFileCallback);
-
-/**
- * Resolve a local OCI image reference to its immutable digest form. A
- * policy-free broker lease still binds the lease attestation to the exact
- * slice image, so setup must pin what podman actually resolved rather than
- * trusting a mutable tag.
- *
- * @param {string} rootfs - Config rootfs (`oci:<image>` or already pinned).
- * @param {(file: string, args: string[]) => Promise<{ stdout: string }>} [exec]
- * @returns {Promise<{ imageRef: string, imageDigest: string }>}
- */
-export const resolvePinnedImageRef = async (rootfs, exec = execFile) => {
-  const image = rootfs.startsWith('oci:') ? rootfs.slice(4) : rootfs;
-  // A leading dash would be parsed as a podman option rather than an image.
-  image.startsWith('-') && Fail`Invalid OpenCode sandbox image ${q(image)}`;
-  if (image.includes('@sha256:')) {
-    const imageDigest = image.slice(image.indexOf('@') + 1);
-    /^sha256:[a-f0-9]{64}$/.test(imageDigest) ||
-      Fail`OpenCode sandbox image digest is invalid, got ${q(imageDigest)}`;
-    return harden({ imageRef: image, imageDigest });
-  }
-  const { stdout } = await exec('podman', [
-    'image',
-    'inspect',
-    '--format',
-    '{{.Digest}}',
-    image,
-  ]);
-  const imageDigest = stdout.trim();
-  /^sha256:[a-f0-9]{64}$/.test(imageDigest) ||
-    Fail`Cannot resolve a digest for OpenCode sandbox image ${q(image)}; build it before setup-hosted`;
-  return harden({ imageRef: `${image}@${imageDigest}`, imageDigest });
-};
-harden(resolvePinnedImageRef);
 
 /**
  * Caplet entry point.
  *
- * @param {any} hostAgent - `@agent` host powers.
+ * @param {EndoHost} hostAgent - `@agent` host powers.
  * @param {unknown} _context
  * @param {{ env?: Record<string, string> }} [options]
  */
 export const make = async (hostAgent, _context, { env = {} } = {}) => {
-  const {
-    clientBase,
-    credentialsName,
-    workspaceBaseDir,
-    configBaseDir,
-    rootfs,
-    mcpBaseDir,
-    broker: brokerConfig,
-  } = resolveBackendConfig(env);
-  // Broker-only egress is composed here, in the same @agent context that
-  // mints the backend. Setting the listener image opts in; every failure is
-  // fatal so a half-configured broker never becomes a silently weaker path.
-  // The slice and the lease must name the same image, so a tag is resolved
-  // once and both use the pinned ref.
-  let broker = null;
-  let sliceRootfs = rootfs;
-  if (brokerConfig.listenerImageRef !== '') {
-    const { imageRef, imageDigest } = await resolvePinnedImageRef(rootfs);
-    sliceRootfs = `oci:${imageRef}`;
-    let ownerId = brokerConfig.ownerId;
-    if (!ownerId) {
-      const hostId = await E(hostAgent).identify('@agent');
-      (typeof hostId === 'string' && hostId.length > 0) ||
-        Fail`Cannot identify the OpenCode broker host`;
-      ownerId = `opencode-${createHash('sha256').update(hostId).digest('hex').slice(0, 48)}`;
+  const { workspaceBaseDir, mcpBaseDir, nativeProfile } =
+    resolveBackendConfig(env);
+  // Exact dependency identities are captured once, by verified entrypoint,
+  // for the sessions this incarnation records; an existing record keeps the
+  // identities it was created with.
+  const [sandbox, broker, state, storage] = await Promise.all([
+    readNativeSandbox(hostAgent),
+    readBrokerService(hostAgent),
+    readStateProvider(hostAgent),
+    readSessionStorage(hostAgent),
+  ]);
+  (storage.roots.workspaceDir === workspaceBaseDir &&
+    storage.roots.mcpDir === mcpBaseDir) ||
+    Fail`Backend roots must equal the recorded session storage owner's roots`;
+  // The slice runs the exact image the broker pinned; the controller checks
+  // the broker's evidence against this reference at activation.
+  const rootfs = `oci:${broker.config.imageRef}`;
+  const recordsPath = [...SESSION_RECORDS_PATH];
+  assertPetNames(recordsPath);
+  const owner = await E(hostAgent).provideSessionOwner(
+    recordsPath,
+    controllerSpecifier,
+  );
+
+  /**
+   * One approved plan for a Floot session. Every path lies under
+   * `<root>/<sandboxSessionId>`, which is what the storage owner requires.
+   *
+   * @param {string} sessionId
+   * @param {SessionRequest} request
+   */
+  const makePlan = (sessionId, request) => {
+    const sandboxSessionId = makeSandboxSessionId(sessionId);
+    const privateDir = path.join(mcpBaseDir, sandboxSessionId);
+    const owned = request.workspaceHostPath === undefined;
+    if (!owned) {
+      // An operator-supplied workspace may not overlap either root: exported
+      // through 9P, it would expose other sessions' storage or this
+      // session's own sockets and mount point. This is the spelling check;
+      // aliases are refused against the canonical roots before the record
+      // is created.
+      const foreign = request.workspaceHostPath;
+      if (!isNormalizedAbsolutePath(foreign)) {
+        throw Fail`workspaceHostPath ${q(foreign)} must be a normalized absolute path`;
+      }
+      for (const root of [workspaceBaseDir, mcpBaseDir]) {
+        (!containsPath(root, foreign) && !containsPath(foreign, root)) ||
+          Fail`workspaceHostPath ${q(foreign)} must be disjoint from the session storage roots`;
+      }
     }
-    const compositionKey = JSON.stringify({
-      ownerId,
-      directory: brokerConfig.directory,
-      listenerImageRef: brokerConfig.listenerImageRef,
-      imageRef,
-      imageDigest,
+    /** @type {RecordedSessionPlan} */
+    const plan = harden({
+      sessionId,
+      sandboxSessionId,
+      rootfs,
+      networkPolicy: request.networkPolicy,
+      ...(owned
+        ? { workspaceDir: path.join(workspaceBaseDir, sandboxSessionId) }
+        : { workspaceHostPath: request.workspaceHostPath }),
+      workspaceMountPoint: path.join(privateDir, 'workspace'),
+      mcpDir: path.join(privateDir, 'mcp'),
+      mounterSocketDir: path.join(privateDir, '9p'),
+      nativeProfile,
+      ...(request.model ? { model: request.model } : {}),
+      ...(request.systemPrompt ? { systemPrompt: request.systemPrompt } : {}),
     });
-    const composed = await memoizeBrokerComposition(
-      brokerCompositions,
-      compositionKey,
-      async () => {
-        // Resolved only on a cache miss: a shared composition must not depend
-        // on a secret lookup that a later make would otherwise repeat.
-        const secret = await E(hostAgent).lookup(['secrets', credentialsName]);
-        return makeOpencodeBroker({
-          secret,
-          ownerId,
-          directory: brokerConfig.directory,
-          imageRef,
-          imageDigest,
-          listenerImageRef: brokerConfig.listenerImageRef,
-          // The broker admits the provider-scoped ids opencode's request
-          // bodies carry, not Floot's `openrouter/...` selection refs.
-          models: OPENCODE_MODELS.map(model => parseModelRef(model.id)),
-        });
-      },
-    );
-    broker = composed.issuer;
-    // Deliberately no dispose on formula cancellation: the composition is
-    // process-scoped and shared, and a cancelled formula may be immediately
-    // re-minted. Containers left by a dead daemon are swept by the runtime's
-    // stale-owner recovery on the next start.
-  }
+    const text = JSON.stringify(plan);
+    // The controller and the storage owner parse exactly this text later;
+    // refuse now what they would refuse then.
+    readSessionPlan(text);
+    return harden({ plan, text, privateDir });
+  };
 
-  const provisioner = makeOpencodeSessionProvisioner(hostAgent, {
-    clientBase,
-    credentialsName,
-    workspaceBaseDir,
-    configBaseDir,
-    rootfs: sliceRootfs,
-  });
-  const socketDirFor = sessionId => path.join(mcpBaseDir, sessionId);
+  /**
+   * Refuse what the guest would only discover on first use, on every request
+   * that will project the path: an operator-supplied workspace must be an
+   * existing real directory in its own canonical spelling, disjoint from the
+   * roots' canonical forms. Like the storage owner's checks, these are
+   * point-in-time: an operator who replaces the directory afterwards, or an
+   * ancestor of it, does so with host authority this backend does not check
+   * again while the session runs.
+   *
+   * @param {RecordedSessionPlan} plan
+   */
+  const assertForeignWorkspace = async plan => {
+    if (plan.workspaceHostPath === undefined) return;
+    // The controller projects this directory as it is; refuse now what
+    // the guest would only discover on first use.
+    const info = await lstat(plan.workspaceHostPath).catch(error => {
+      if (/** @type {NodeJS.ErrnoException} */ (error).code === 'ENOENT')
+        return undefined;
+      throw error;
+    });
+    (info !== undefined && info.isDirectory() && !info.isSymbolicLink()) ||
+      Fail`workspaceHostPath ${q(plan.workspaceHostPath)} must be an existing directory`;
+    // A path spelled through an alias (a symbolic link above its last
+    // component, `/var` for `/private/var`) could resolve inside a root
+    // the spelling check cleared, so the recorded path must be its own
+    // canonical form and disjoint from the roots' canonical forms, which
+    // need not exist yet.
+    const canonical = await realpath(plan.workspaceHostPath);
+    canonical === plan.workspaceHostPath ||
+      Fail`workspaceHostPath ${q(plan.workspaceHostPath)} must be a canonical path; it resolves to ${q(canonical)}`;
+    for (const root of [workspaceBaseDir, mcpBaseDir]) {
+      // eslint-disable-next-line no-await-in-loop
+      const realRoot = await resolveFuturePath(root);
+      (!containsPath(realRoot, canonical) &&
+        !containsPath(canonical, realRoot)) ||
+        Fail`workspaceHostPath ${q(canonical)} must be disjoint from the session storage roots`;
+    }
+  };
 
-  return makeOpencodeBackendFactory({
-    ...(broker ? { broker } : {}),
-    provisionClient: async (sessionId, options) => {
-      // The factory carries the Floot-side `workspaceHostPath`; the
-      // provisioner names the same override `workspaceDir`.
-      const { workspaceHostPath, ...rest } = options;
-      await E(provisioner).provision(
+  /**
+   * @param {string} sessionId
+   * @param {SessionRequest} request
+   * @param {any} toolSet
+   */
+  const provisionSession = async (sessionId, request, toolSet) => {
+    const { plan, text, privateDir } = makePlan(sessionId, request);
+    const record = await E(owner).inspect(sessionId);
+    if (record === undefined) {
+      await assertForeignWorkspace(plan);
+      await E(owner).create(
         sessionId,
+        text,
         harden({
-          ...rest,
-          ...(workspaceHostPath ? { workspaceDir: workspaceHostPath } : {}),
+          sandboxService: sandbox.identifier,
+          brokerService: broker.identifier,
+          stateProvider: state.identifier,
+          storage: storage.identifier,
         }),
       );
-      return E(provisioner).lookup(sessionId);
-    },
-    cancelClient: sessionId => E(provisioner).cancel(sessionId),
-    removeSession: sessionId => E(provisioner).remove(sessionId),
-    startToolBridge: async (sessionId, toolSet) => {
-      const bridge = await makeMcpBridgeForToolSet(toolSet);
-      const server = await startMcpSocketServer({
-        socketDir: socketDirFor(sessionId),
-        bridge,
-      });
-      return harden({
-        socketDir: server.socketDir,
-        innerDir: server.innerDir,
-        configPath: server.innerConfigPath,
-        pendingCalls: bridge.pendingCalls,
-        close: server.close,
-      });
-    },
-    removeToolBridge: async sessionId => {
-      await rm(socketDirFor(sessionId), { recursive: true, force: true });
-    },
+    } else {
+      if (record.plan === undefined) {
+        throw Fail`Session ${q(sessionId)} has an incomplete record; destroy it before reuse`;
+      }
+      const recorded = readSessionPlan(record.plan);
+      // The workspace and the pinned image are recorded with dependencies
+      // that cannot be revised: a request naming different storage or a
+      // broker that now pins a different image is a different session.
+      (recorded.workspaceDir === plan.workspaceDir &&
+        recorded.workspaceHostPath === plan.workspaceHostPath) ||
+        Fail`Session ${q(sessionId)} workspace cannot change; destroy the session first`;
+      recorded.rootfs === plan.rootfs ||
+        Fail`Session ${q(sessionId)} image cannot change; destroy the session first`;
+      // The private directories are bound to the storage owner the record
+      // keeps: revised under a re-rooted backend they would be started here
+      // and later refused by that owner, leaking them under both roots.
+      (recorded.workspaceMountPoint === plan.workspaceMountPoint &&
+        recorded.mcpDir === plan.mcpDir &&
+        recorded.mounterSocketDir === plan.mounterSocketDir) ||
+        Fail`Session ${q(sessionId)} private directories cannot change; destroy the session first`;
+      // Stop before reuse, whatever the record's phase: an interrupted start
+      // is retried through its cleanup here rather than only through
+      // deletion, and a live incarnation from an earlier backend cannot keep
+      // a tool authority this request does not hold.
+      await assertForeignWorkspace(plan);
+      await E(owner).stop(sessionId);
+      if (record.plan !== text) await E(owner).revise(sessionId, text);
+    }
+    // Only a recorded plan owns these; the mounter creates the mount point.
+    // Idempotent on every start, so a record whose directories were never
+    // created, or were removed between incarnations, heals here rather than
+    // failing at the controller until it is destroyed.
+    for (const directory of [
+      privateDir,
+      plan.mcpDir,
+      plan.mounterSocketDir,
+      ...(plan.workspaceDir === undefined ? [] : [plan.workspaceDir]),
+    ]) {
+      // eslint-disable-next-line no-await-in-loop
+      await mkdir(directory, { recursive: true, mode: 0o700 });
+    }
+    return E(owner).start(sessionId, toolSet);
+  };
+
+  return makeOpencodeBackendFactory({
+    models: OPENCODE_MODELS,
+    provisionSession,
+    stopSession: sessionId => E(owner).stop(sessionId),
+    removeSession: sessionId => E(owner).remove(sessionId),
   });
 };
 harden(make);
