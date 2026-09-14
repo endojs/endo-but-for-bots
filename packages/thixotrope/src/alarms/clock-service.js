@@ -1,9 +1,11 @@
 // @ts-check
 /** @import { TimerPowers } from '../platform/timers.js' */
 /** @import { RandomPowers } from '../platform/random.js' */
+/** @import { PromiseKit } from '@endo/promise-kit' */
 import { E, Far } from '@endo/far';
 import { Fail } from '@endo/errors';
 import harden from '@endo/harden';
+import { makePromiseKit } from '@endo/promise-kit';
 
 import { makeAlarmScheduler } from './alarm-scheduler.js';
 import { makeDurableClock } from './durable-clock.js';
@@ -59,15 +61,18 @@ export const makeClockService = (
   let stopped = false;
   /** @type {unknown} */
   let failure;
-  /** @type {() => void} */
-  let resolveReady = () => {};
-  /** @type {(reason: unknown) => void} */
-  let rejectReady = () => {};
-  const ready = new Promise((resolve, reject) => {
-    resolveReady = () => resolve(undefined);
-    rejectReady = reject;
-  });
+  // Settles once the clock vat is selected, initialized, and its scheduler
+  // started; rejects for the rest of the process if that fails or we stop.
+  /** @type {PromiseKit<void>} */
+  const readyKit = makePromiseKit();
+  const { promise: ready } = readyKit;
   void ready.catch(() => {});
+
+  // Every step of initialization yields, and shutdown can land in any of the
+  // gaps; each step re-checks rather than acting on state read before its await.
+  const assertRunning = () => {
+    !stopped || Fail`Clock service is shut down`;
+  };
 
   const provideScheduler = () => {
     if (!config) throw Fail`Clock has not been allocated`;
@@ -89,7 +94,7 @@ export const makeClockService = (
     initializing = (async () => {
       const daemon = getDaemon();
       await null;
-      if (stopped) throw Fail`Clock service is shut down`;
+      assertRunning();
       if (!config) {
         const intent = harden({
           version: /** @type {const} */ (1),
@@ -110,7 +115,7 @@ export const makeClockService = (
         const workerId =
           candidates[0]?.workerId ??
           (await daemon.createWorker({ debugLabel: label })).workerId;
-        if (stopped) throw Fail`Clock service is shut down`;
+        assertRunning();
         const selected = harden({ ...config, workerId });
         // Selection commits before initialization; recovery adopts only the
         // private allocation's vat and preserves its existing clockKit.
@@ -139,19 +144,19 @@ export const makeClockService = (
         `(globalThis.clockKit ??= (${makeDurableClock.toString()})(scheduler))`,
         { scheduler: resource },
       );
-      if (stopped) throw Fail`Clock service is shut down`;
+      assertRunning();
       const control = await E(kit).getControl();
-      if (stopped) throw Fail`Clock service is shut down`;
+      assertRunning();
       daemon.publish(control, selected.secret);
       clock = await E(kit).getClock();
-      if (stopped) throw Fail`Clock service is shut down`;
+      assertRunning();
       await provideScheduler().start();
-      if (stopped) throw Fail`Clock service is shut down`;
+      assertRunning();
       initialized = true;
-      resolveReady();
+      readyKit.resolve();
     })().catch(error => {
       failure = error;
-      rejectReady(error);
+      readyKit.reject(error);
       throw error;
     });
     return initializing;
@@ -177,12 +182,12 @@ export const makeClockService = (
          */
         schedule: async (id, deadline) => {
           await ready;
-          !stopped || Fail`Clock service is shut down`;
+          assertRunning();
           return E(instance.resource()).schedule(id, deadline);
         },
         now: async () => {
           await ready;
-          !stopped || Fail`Clock service is shut down`;
+          assertRunning();
           return E(instance.resource()).now();
         },
       });
@@ -204,7 +209,7 @@ export const makeClockService = (
       }),
     shutdown: async () => {
       stopped = true;
-      rejectReady(Error('Clock service is shut down'));
+      readyKit.reject(Error('Clock service is shut down'));
       const [cleanup] = await Promise.allSettled([
         Promise.resolve().then(() => scheduler?.shutdown()),
         initializing,
