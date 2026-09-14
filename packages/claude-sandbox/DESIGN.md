@@ -410,6 +410,38 @@ LinuxKit kernel 6.12, aarch64) — see [DEMO.md](./DEMO.md).
   - `ClaudeClient.send()` parsed those same three events via
     `parseStreamJsonLines`, validating the client path against real output.
 
+### Phase 3 — daemon-owned sessions (in progress)
+
+The hosted backend path is being moved onto the daemon session owner, the way
+`@endo/opencode-sandbox` already is (see
+`designs/hosted-agent-sandbox-unification.md`). Landed so far, minted by
+nothing yet:
+
+- `src/claude-session-plan.js` — the passive record of one logical session
+  (owned or operator-supplied workspace, mount point, private socket
+  directories, native profile, optional mounter settings, model, system
+  prompt) over the shared primitives in `@endo/hosted-agent/session-plan.js`;
+  the slice network is fixed to the sandbox's `private` profile, as the
+  per-session client's was.
+- `src/claude-native-controller.js` — the record's `client` role: native
+  sandbox scope, persistent config directory from the state provider (bound
+  directly as `CLAUDE_CONFIG_DIR`), the workspace through the session's own 9P
+  mounter, the Endo tool bridge, the credential issued and materialised from
+  the recorded credentials capability into the slice environment, then
+  `makeClaudeClient` over the slice. The controller releases every owner
+  itself after the client has disposed its slice; failed release is retained
+  for retry, and reconstruction after a restart refuses to invent lost local
+  ownership.
+- `src/claude-session-storage-module.js` and `src/claude-state-provider-module.js`
+  — the `storage` role and the state provider over
+  `@endo/hosted-agent/session-storage.js` and `session-state-storage.js`.
+- `src/claude-transcripts.js` — the resume decisions, shared with the legacy
+  client module.
+
+Still pending: the backend rerouted through `provideSessionOwner`, deletion of
+the per-session provisioner path, setup minting the native runtime, state
+provider, and storage owner, and Node daemon acceptance.
+
 ## Environment gotchas
 
 - **Use the `vfs` storage driver under nested Docker, not `fuse-overlayfs`.**
