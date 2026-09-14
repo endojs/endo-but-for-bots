@@ -316,16 +316,51 @@ impl Interp {
         out
     }
 
+    /// The counted-reference parity net: the standing per-page counts the
+    /// bulk tables' counted accessors maintain (`side_refs`) against a
+    /// fresh recount of the SAME three tables — arrays' items, ordinary
+    /// index properties, and collection entries — enumerated through the
+    /// roster's `bulk` walk. The two sides share no term: the tail
+    /// tables take no part, so a tail reference on a page can neither
+    /// cancel nor mask a bulk discrepancy there, and the comparison is
+    /// on exact counts rather than page bits, so a single missed
+    /// increment or decrement beside a surviving reference is a
+    /// finding even though the page set is unchanged. O(live bulk
+    /// entries), in every build profile; the page projection runs it
+    /// only under `debug_assertions` or `store-integrity`, callers that
+    /// want the check elsewhere call it directly.
+    ///
+    /// What this net cannot see: a reference reachable through a
+    /// side-table row whose field is walked but whose SUBFIELD the row
+    /// policy omits. Both collectors' walks are generated from one
+    /// per-row policy (`gc_slot_row!`), so such an omission is shared
+    /// by every walk and is held by the behavioural twins
+    /// (`gc_side_tables.rs`, `gc_frame_state.rs`, `gc_anchor_truth.rs`),
+    /// not by this comparison.
+    pub fn side_ref_parity(&self) -> Result<(), crate::gc::SideRefParityMismatch> {
+        let mut walked: std::collections::HashMap<u32, u64> = std::collections::HashMap::new();
+        self.each_side_table_ref_bulk(&mut |r| {
+            if let Some(page) = crate::bulk::SideRefCounts::page_of(r) {
+                *walked.entry(page).or_insert(0) += 1;
+            }
+        });
+        match self.side_refs.mismatch_against(&walked) {
+            Some(mismatch) => Err(mismatch),
+            None => Ok(()),
+        }
+    }
+
     /// One flag per [`crate::value::SLOTS_PER_PAGE`]-slot page of the
     /// arena: whether any side-table value references a slot on it —
     /// the page-granular projection the summary-driven partial
     /// collector roots from. Bulk tables use standing page counts;
     /// the remaining tables are enumerated directly. In debug builds
-    /// and with `store-integrity`, a full enumeration verifies the
-    /// projection. A mismatch or counted-state underflow/overflow
-    /// permanently prevents quiescence and page freeing, and returns
-    /// all pages as roots. Out-of-arena indices (including the null
-    /// sentinel) fall outside the bitmap and are skipped.
+    /// and with `store-integrity`, [`Self::side_ref_parity`] verifies
+    /// the standing counts against a fresh bulk-only recount. A
+    /// mismatch or counted-state underflow/overflow permanently
+    /// prevents quiescence and page freeing, and returns all pages as
+    /// roots. Out-of-arena indices (including the null sentinel) fall
+    /// outside the bitmap and are skipped.
     pub fn side_table_ref_page_bits(&self) -> Vec<bool> {
         let pages = self.slots.capacity().div_ceil(crate::value::SLOTS_PER_PAGE) as usize;
         let mut bits = vec![false; pages];
@@ -343,23 +378,14 @@ impl Interp {
             }
         });
         self.side_refs.or_into_bits(&mut bits);
-        // Parity net: the standing counts must agree
-        // with a fresh enumeration of every side table — a missed
-        // counted mutation shows up HERE, before the collector can
-        // free a live page or pin a dead one.
+        // Parity net: the standing counts must agree with a fresh
+        // recount of the bulk tables — a missed counted mutation shows
+        // up HERE, before the collector can free a live page or pin a
+        // dead one. Compared without the tail, so a tail reference
+        // cannot mask the finding on a shared page.
         #[cfg(any(debug_assertions, feature = "store-integrity"))]
-        {
-            let mut walked = vec![false; pages];
-            self.each_side_table_ref(&mut |r| {
-                if !r.is_null() {
-                    if let Some(b) = walked.get_mut((r.0 / crate::value::SLOTS_PER_PAGE) as usize) {
-                        *b = true;
-                    }
-                }
-            });
-            if bits != walked {
-                self.side_refs.poison();
-            }
+        if self.side_ref_parity().is_err() {
+            self.side_refs.poison();
         }
         // Preserve the bitmap API conservatively. Store callers check
         // quiescence after this projection and return a refusal; other

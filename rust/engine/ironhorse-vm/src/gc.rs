@@ -39,6 +39,30 @@ impl std::fmt::Display for GcAdmissionError {
 
 impl std::error::Error for GcAdmissionError {}
 
+/// One page on which the standing counted side-table reference count
+/// disagrees with a fresh enumeration of the bulk tables — the
+/// counted-reference parity net's finding (see
+/// `Interp::side_ref_parity`). `counted` is what the incrementally
+/// maintained counts say; `walked` is what the bulk tables actually hold.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SideRefParityMismatch {
+    pub page: u32,
+    pub counted: u64,
+    pub walked: u64,
+}
+
+impl std::fmt::Display for SideRefParityMismatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "counted side-table references on page {} disagree with the bulk tables: counted {}, walked {}",
+            self.page, self.counted, self.walked
+        )
+    }
+}
+
+impl std::error::Error for SideRefParityMismatch {}
+
 /// The machine heap: the slot arena and the chunk arena the collector
 /// operates over together. The interpreter threads one of these as its
 /// object heap; the collector is a method so the two arenas are
