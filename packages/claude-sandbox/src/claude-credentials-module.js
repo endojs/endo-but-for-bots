@@ -24,6 +24,7 @@ import fs from 'node:fs';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { makeError, X, q } from '@endo/errors';
+import { CREDENTIAL_KINDS } from './claude-credential-kinds.js';
 
 const IssuedCredentialInterface = M.interface('IssuedCredential', {
   materialise: M.call().returns(M.promise()),
@@ -38,16 +39,6 @@ const CredentialsInterface = M.interface('ClaudeCredentials', {
   rotate: M.call(M.string()).returns(M.promise()),
   help: M.call().optional(M.string()).returns(M.string()),
 });
-
-/**
- * Credential kinds. `apiKey` is a raw Anthropic API key; `oauthToken`
- * is the short-lived OAuth access token Claude Code accepts headlessly
- * (`claude setup-token`); `subscription` is a Max/Pro subscription value
- * that `@endo/claude` presents to `claude --bare` through an
- * `apiKeyHelper` (settings-file-shaped, not env-var-shaped — see
- * `claude-credentials-factory.js` and `claude-client-module.js`).
- */
-const CREDENTIAL_KINDS = harden(['apiKey', 'oauthToken', 'subscription']);
 
 /**
  * @param {unknown} _powers

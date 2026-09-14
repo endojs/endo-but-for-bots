@@ -108,21 +108,28 @@ test('startup gate accepts a partial marker without consuming workload stdout', 
   t.is(output.join(''), 'application');
 });
 
-/** @type {ReadonlyArray<readonly [string, RegExp]>} */
+/**
+ * Each refusal is observed from the child's output or close, so those rows
+ * get the deadline a slow CI runner needs to spawn a shell; only the script
+ * that blocks forever is refused by the deadline itself, and it keeps a short
+ * one.
+ * @type {ReadonlyArray<readonly [string, RegExp, number]>}
+ */
 const refusedScripts = harden([
-  ['printf wrong', /Unexpected native startup output/],
+  ['printf wrong', /Unexpected native startup output/, 2000],
   [
     "printf 'endo-sandbox-ready-v1\\nextra'",
     /Unexpected native startup output/,
+    2000,
   ],
-  ['exit 0', /startup gate closed/],
-  ['IFS= read -r unused', /startup gate timed out/],
+  ['exit 0', /startup gate closed/, 2000],
+  ['IFS= read -r unused', /startup gate timed out/, 50],
 ]);
-for (const [script, message] of refusedScripts) {
+for (const [script, message, timeoutMs] of refusedScripts) {
   test(`startup gate refuses ${script}`, async t => {
     t.timeout(5000);
     const { child } = start(t, ['-c', script]);
-    const gate = makePodmanStartupGate(child, { timeoutMs: 50 });
+    const gate = makePodmanStartupGate(child, { timeoutMs });
     await t.throwsAsync(gate.ready, { message });
     await t.throwsAsync(gate.release(), { message });
   });

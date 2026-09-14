@@ -784,7 +784,10 @@ export const makePodmanDriver = ({
     const [cp, commandName, commandArgs, options = {}] = args;
     const command = startControlCommand(cp, commandName, commandArgs, {
       ...options,
-      env: hostEnvironment,
+      // A fresh copy per spawn: Node adds NODE_V8_COVERAGE to the env object
+      // it is handed when coverage is enabled, which the hardened capture
+      // refuses.
+      env: { ...hostEnvironment },
     });
     trackNative(
       command.closed,
@@ -2755,7 +2758,8 @@ export const makePodmanDriver = ({
             startupCommand || opts.captureStdout !== false ? 'pipe' : 'ignore',
             opts.captureStderr === false ? 'ignore' : 'pipe',
           ],
-          env: hostEnvironment,
+          // A fresh copy per spawn, as for control commands.
+          env: { ...hostEnvironment },
         });
         startAcquired = true;
       } catch (e) {

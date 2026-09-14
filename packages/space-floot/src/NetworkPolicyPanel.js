@@ -37,25 +37,29 @@ const NetworkRequest = ({ network, controller }) => {
       }),
     ),
     h(
-      'button',
-      {
-        type: 'button',
-        disabled:
-          disabled || !network.supportedPolicies.includes(request.policy),
-        onClick: () =>
-          controller.resolveNetworkPolicyRequest?.(request.id, true, note),
-      },
-      `Approve ${label(request.policy)}`,
-    ),
-    h(
-      'button',
-      {
-        type: 'button',
-        disabled,
-        onClick: () =>
-          controller.resolveNetworkPolicyRequest?.(request.id, false, note),
-      },
-      'Deny request',
+      'div',
+      { class: 'floot-panel-actions' },
+      h(
+        'button',
+        {
+          type: 'button',
+          disabled:
+            disabled || !network.supportedPolicies.includes(request.policy),
+          onClick: () =>
+            controller.resolveNetworkPolicyRequest?.(request.id, true, note),
+        },
+        `Approve ${label(request.policy)}`,
+      ),
+      h(
+        'button',
+        {
+          type: 'button',
+          disabled,
+          onClick: () =>
+            controller.resolveNetworkPolicyRequest?.(request.id, false, note),
+        },
+        'Deny request',
+      ),
     ),
   );
 };
@@ -67,16 +71,23 @@ export const NetworkPolicyPanel = ({ network, controller }) => {
   const selected = network.pendingPolicy || draft || network.policy || '';
   return h(
     'section',
-    { class: 'floot-network-policy', 'aria-label': 'Sandbox network policy' },
+    {
+      class: 'floot-network-policy floot-operator-panel',
+      'aria-label': 'Sandbox network policy',
+    },
     h('h3', null, 'Sandbox network'),
     h(
-      'button',
-      {
-        type: 'button',
-        disabled: network.changing || network.status === 'loading',
-        onClick: () => controller.refreshNetworkPolicy?.(),
-      },
-      'Refresh network policy',
+      'div',
+      { class: 'floot-panel-actions' },
+      h(
+        'button',
+        {
+          type: 'button',
+          disabled: network.changing || network.status === 'loading',
+          onClick: () => controller.refreshNetworkPolicy?.(),
+        },
+        'Refresh network policy',
+      ),
     ),
     network.message
       ? h('p', { role: 'status' }, network.message.slice(0, 8192))
@@ -136,18 +147,23 @@ export const NetworkPolicyPanel = ({ network, controller }) => {
             ),
           ),
           h(
-            'button',
-            {
-              type: 'button',
-              disabled:
-                !network.canSet ||
-                !network.supportedPolicies.includes(selected) ||
-                selected === network.policy,
-              onClick: () => controller.setNetworkPolicy?.(selected),
-            },
-            network.changing
-              ? 'Changing policy…'
-              : `${network.pendingPolicy ? 'Retry' : 'Apply'} ${label(selected)}`,
+            'div',
+            { class: 'floot-panel-actions' },
+            h(
+              'button',
+              {
+                type: 'button',
+                class: 'primary',
+                disabled:
+                  !network.canSet ||
+                  !network.supportedPolicies.includes(selected) ||
+                  selected === network.policy,
+                onClick: () => controller.setNetworkPolicy?.(selected),
+              },
+              network.changing
+                ? 'Changing policy…'
+                : `${network.pendingPolicy ? 'Retry' : 'Apply'} ${label(selected)}`,
+            ),
           ),
           network.request
             ? h(NetworkRequest, {

@@ -25,7 +25,7 @@ test('managed grants read the current secret once and fail closed on revocation'
     },
   );
   const credentials = make(secret, null, {
-    env: { CREDENTIALS_KIND: 'apiKey' },
+    env: { CREDENTIALS_KIND: 'apiKey', CREDENTIALS_LABEL: 'OpenRouter' },
   });
   t.is(credentials.storage(), 'secrets-manager');
   t.is(credentials.kind(), 'apiKey');
@@ -79,7 +79,7 @@ test('bounds outstanding grants', async t => {
     },
   );
   const credentials = make(secret, null, {
-    env: { CREDENTIALS_KIND: 'apiKey' },
+    env: { CREDENTIALS_KIND: 'apiKey', CREDENTIALS_LABEL: 'OpenRouter' },
   });
   await Promise.all(
     Array.from({ length: 128 }, (_unused, index) =>
@@ -116,7 +116,7 @@ test('setup imports into the catalog and delegates only SecretBlob, never the to
       t.deepEqual(options, {
         powersName: 'openrouter-auth-secret-read',
         resultName: 'openrouter-auth',
-        env: { CREDENTIALS_KIND: 'apiKey' },
+        env: { CREDENTIALS_KIND: 'apiKey', CREDENTIALS_LABEL: 'OpenRouter' },
       });
       bindings.set(options.resultName, true);
     },
@@ -140,7 +140,9 @@ test('startup never reimports a managed credential, even if its catalog entry wa
     lookup: async name => {
       lookups += 1;
       t.is(name, 'openrouter-auth');
-      return make({}, null, { env: { CREDENTIALS_KIND: 'apiKey' } });
+      return make({}, null, {
+        env: { CREDENTIALS_KIND: 'apiKey', CREDENTIALS_LABEL: 'OpenRouter' },
+      });
     },
   };
   await provideManagedCredentials(host, {

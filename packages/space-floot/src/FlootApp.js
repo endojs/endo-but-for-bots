@@ -205,23 +205,59 @@ export const FlootApp = ({ controller }) => {
       ? `↑${formatTokens(usage.inputTokens)} ↓${formatTokens(usage.outputTokens)}`
       : '';
 
+  // The journal and a pending network request are labels, not glyphs, so they
+  // render as chips beside the icon buttons. A badge carries the part that
+  // needs the operator (an unknown outcome, an approval to decide) and
+  // collapses to a dot where the header is too narrow for the words.
+  const journalButton = state.recovery
+    ? h(
+        'button',
+        {
+          type: 'button',
+          class: `floot-header-btn chip${recoveryOpen ? ' on' : ''}${
+            needsRecovery ? ' attention' : ''
+          }`,
+          'aria-label': needsRecovery
+            ? 'Turn journal and recovery: recovery needed'
+            : 'Turn journal and recovery',
+          'aria-pressed': recoveryOpen ? 'true' : 'false',
+          title: needsRecovery
+            ? 'A turn has an unknown outcome; acknowledge it in the journal'
+            : 'Turn journal and recovery',
+          onClick: () => {
+            setRecoveryOpen(!recoveryOpen);
+            controller.refreshRecovery?.();
+          },
+        },
+        'Journal',
+        needsRecovery
+          ? h('span', { class: 'floot-header-badge' }, 'recovery needed')
+          : null,
+      )
+    : null;
+  const networkButton = state.network?.request
+    ? h(
+        'button',
+        {
+          type: 'button',
+          class: 'floot-header-btn chip attention',
+          'aria-label': 'Network approval requested',
+          title:
+            'The agent asked for sandbox network access; decide in settings',
+          onClick: () => {
+            setRecoveryOpen(false);
+            if (!state.settingsOpen) controller.toggleSettings();
+            controller.refreshNetworkPolicy?.();
+          },
+        },
+        'Network',
+        h('span', { class: 'floot-header-badge' }, 'approval requested'),
+      )
+    : null;
+
   const header = h(
     'div',
     { class: 'floot-header' },
-    h(
-      'button',
-      {
-        type: 'button',
-        class: 'floot-header-btn',
-        'aria-label': 'Turn journal and recovery',
-        'aria-pressed': recoveryOpen ? 'true' : 'false',
-        onClick: () => {
-          setRecoveryOpen(!recoveryOpen);
-          controller.refreshRecovery?.();
-        },
-      },
-      needsRecovery ? 'Journal: recovery needed' : 'Journal',
-    ),
     h(
       'button',
       {
@@ -258,6 +294,8 @@ export const FlootApp = ({ controller }) => {
           },
           active ? active.title : 'Floot',
         ),
+    networkButton,
+    journalButton,
     h(
       'button',
       {
@@ -283,21 +321,6 @@ export const FlootApp = ({ controller }) => {
       },
       '⚙',
     ),
-    state.network?.request
-      ? h(
-          'button',
-          {
-            type: 'button',
-            class: 'floot-header-btn',
-            onClick: () => {
-              setRecoveryOpen(false);
-              if (!state.settingsOpen) controller.toggleSettings();
-              controller.refreshNetworkPolicy?.();
-            },
-          },
-          'Network approval requested',
-        )
-      : null,
   );
 
   const statusBar = h(

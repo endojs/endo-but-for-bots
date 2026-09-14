@@ -22,7 +22,7 @@ const EvidenceText = ({ text }) => {
     pages > 1
       ? h(
           'div',
-          null,
+          { class: 'floot-panel-actions' },
           h(
             'span',
             null,
@@ -71,7 +71,7 @@ const EvidenceItems = ({ items }) => {
           items.length > 1
             ? h(
                 'div',
-                null,
+                { class: 'floot-panel-actions' },
                 h(
                   'button',
                   {
@@ -106,7 +106,12 @@ const RecoveryTurn = ({ turn, recovery, controller }) => {
   const unknown = turn.state === 'outcome-unknown' && !turn.resolution;
   return h(
     'details',
-    { class: 'floot-recovery-turn', open: expanded },
+    {
+      class: `floot-recovery-turn${unknown ? ' unknown' : ''}${
+        turn.resolution ? ' acknowledged' : ''
+      }`,
+      open: expanded,
+    },
     h(
       'summary',
       {
@@ -119,8 +124,8 @@ const RecoveryTurn = ({ turn, recovery, controller }) => {
     ),
     expanded
       ? h(
-          Fragment,
-          null,
+          'div',
+          { class: 'floot-recovery-turn-body' },
           turn.error ? h(EvidenceText, { text: turn.error }) : null,
           h(
             'p',
@@ -155,29 +160,34 @@ const RecoveryTurn = ({ turn, recovery, controller }) => {
                   }),
                 ),
                 h(
-                  'button',
-                  {
-                    type: 'button',
-                    disabled: recovery.resolving,
-                    'aria-pressed': confirmed ? 'true' : 'false',
-                    onClick: () => setConfirmed(!confirmed),
-                  },
-                  confirmed
-                    ? '✓ External effects checked'
-                    : 'Confirm: I checked external effects',
-                ),
-                h(
-                  'button',
-                  {
-                    type: 'button',
-                    disabled:
-                      !recovery.canResolve || !confirmed || !note.trim(),
-                    onClick: () =>
-                      controller.resolveTurn?.(turn.turnId, note, confirmed),
-                  },
-                  recovery.resolving
-                    ? 'Acknowledging…'
-                    : 'Acknowledge and allow a new turn',
+                  'div',
+                  { class: 'floot-panel-actions' },
+                  h(
+                    'button',
+                    {
+                      type: 'button',
+                      disabled: recovery.resolving,
+                      'aria-pressed': confirmed ? 'true' : 'false',
+                      onClick: () => setConfirmed(!confirmed),
+                    },
+                    confirmed
+                      ? '✓ External effects checked'
+                      : 'Confirm: I checked external effects',
+                  ),
+                  h(
+                    'button',
+                    {
+                      type: 'button',
+                      class: 'primary',
+                      disabled:
+                        !recovery.canResolve || !confirmed || !note.trim(),
+                      onClick: () =>
+                        controller.resolveTurn?.(turn.turnId, note, confirmed),
+                    },
+                    recovery.resolving
+                      ? 'Acknowledging…'
+                      : 'Acknowledge and allow a new turn',
+                  ),
                 ),
               )
             : null,
@@ -203,46 +213,55 @@ export const RecoveryPanel = ({ recovery, controller }) => {
   );
   return h(
     'section',
-    { class: 'floot-recovery', 'aria-label': 'Turn journal and recovery' },
+    {
+      class: 'floot-recovery floot-operator-panel',
+      'aria-label': 'Turn journal and recovery',
+    },
     h('h3', null, 'Turn journal and recovery'),
     h(
-      'button',
-      {
-        type: 'button',
-        disabled: recovery.resolving || recovery.status === 'loading',
-        onClick: () => controller.refreshRecovery?.(),
-      },
-      'Refresh journal',
+      'div',
+      { class: 'floot-panel-actions' },
+      h(
+        'button',
+        {
+          type: 'button',
+          disabled: recovery.resolving || recovery.status === 'loading',
+          onClick: () => controller.refreshRecovery?.(),
+        },
+        'Refresh journal',
+      ),
+      firstUnknown >= 0
+        ? h(
+            'button',
+            {
+              type: 'button',
+              onClick: () =>
+                setPage(Math.floor((count - 1 - firstUnknown) / TURN_PAGE)),
+            },
+            'Show unresolved turn',
+          )
+        : null,
     ),
     recovery.message ? h('p', { role: 'status' }, recovery.message) : null,
     recovery.current
       ? h('p', null, 'A turn is active. Recovery is disabled until it settles.')
       : null,
-    recovery.capacity
+    // The journal's event ceiling is the backend's concern until it is nearly
+    // reached; then the operator has to act, so only then is it shown.
+    recovery.capacity?.nearCapacity
       ? h(
           'p',
-          null,
-          `Journal: ${recovery.capacity.usedEvents}/${recovery.capacity.eventLimit} events (${recovery.capacity.storage}). ${recovery.capacity.nearCapacity ? 'Near capacity: arrange a new session before the journal fills.' : ''}`,
+          { class: 'floot-panel-note warn' },
+          `Near capacity: ${recovery.capacity.usedEvents}/${recovery.capacity.eventLimit} journal events used (${recovery.capacity.storage}). Arrange a new session before the journal fills.`,
         )
       : null,
     recovery.status === 'ready' && !recovery.turns.length
       ? h('p', null, 'No recorded turns.')
       : null,
-    firstUnknown >= 0
-      ? h(
-          'button',
-          {
-            type: 'button',
-            onClick: () =>
-              setPage(Math.floor((count - 1 - firstUnknown) / TURN_PAGE)),
-          },
-          'Show unresolved turn',
-        )
-      : null,
     pages > 1
       ? h(
           'div',
-          null,
+          { class: 'floot-panel-actions' },
           h('p', null, `Turn page ${current + 1}/${pages}, newest first`),
           h(
             'button',

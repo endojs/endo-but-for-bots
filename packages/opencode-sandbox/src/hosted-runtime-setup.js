@@ -1,14 +1,17 @@
 // @ts-check
 
-import { Fail, q } from '@endo/errors';
-import { E } from '@endo/eventual-send';
-import { assertPrivateDirectory } from '@endo/sandbox/private-directory.js';
+import { Fail } from '@endo/errors';
+import {
+  assertRuntimePlacement as assertHostedRuntimePlacement,
+  prepareRuntimeEnv as prepareHostedRuntimeEnv,
+  readProvisionedEnvironment as readHostedProvisionedEnvironment,
+  readSliceImageReference as readHostedSliceImageReference,
+  resolveFuturePath as resolveHostedFuturePath,
+  resolvePinnedImageRef as resolveHostedPinnedImageRef,
+} from '@endo/hosted-agent/hosted-setup.js';
 import { readRuntimeConfig } from '@endo/sandbox/runtime-config.js';
-import { execFile as execFileCallback } from 'node:child_process';
-import * as fs from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import { promisify } from 'node:util';
 
 import {
   assertCurrentSpecifier,
@@ -17,7 +20,6 @@ import {
 import { readOpencodeBrokerConfig } from './opencode-broker-service-agent.js';
 
 /** @import { EndoHost } from '@endo/daemon' */
-/** @typedef {Parameters<EndoHost['getFormulaEnvironment']>[0]} FormulaIdentifier */
 
 export const stateProviderSpecifier = assertCurrentSpecifier(
   toCurrentSpecifier(
@@ -54,27 +56,21 @@ export const sessionStorageSpecifier = assertCurrentSpecifier(
 );
 harden(sessionStorageSpecifier);
 
+const LABEL = 'OpenCode';
+
 /**
- * Read one immutable formula by the ID captured from its current binding.
- * Do not revive it or resolve the mutable pet name again between reads.
+ * Read one immutable formula under `opencode-sandbox/` by its verified
+ * entrypoint; see `@endo/hosted-agent/hosted-setup.js`.
  * @param {EndoHost} host
  * @param {string} name
  * @param {string} expectedSpecifier
  */
-const readProvisionedEnvironment = async (host, name, expectedSpecifier) => {
-  const identified = await E(host).identify('opencode-sandbox', name);
-  if (!identified) throw Fail`Cannot identify OpenCode ${q(name)}`;
-  // The daemon returns a formula ID; identify's public type erases its brand.
-  const identifier = /** @type {FormulaIdentifier} */ (identified);
-  const record = await E(E(host).diagnostics()).getFormula(identifier);
-  const specifier = record.properties.specifier;
-  (record.type === 'make-unconfined' &&
-    specifier?.kind === 'literal' &&
-    specifier.value === expectedSpecifier) ||
-    Fail`OpenCode ${name} has an unsupported entrypoint. Retire the old runtime and prove its processes have stopped before replacing its formula; removing its name alone is insufficient.`;
-  const env = await E(host).getFormulaEnvironment(identifier);
-  return harden({ identifier, env });
-};
+const readProvisionedEnvironment = (host, name, expectedSpecifier) =>
+  readHostedProvisionedEnvironment(host, {
+    label: LABEL,
+    namePath: ['opencode-sandbox', name],
+    expectedSpecifier,
+  });
 
 /** @param {EndoHost} host */
 export const readStateProvider = async host => {
@@ -146,122 +142,39 @@ export const getHostedStorageRoots = env => {
 harden(getHostedStorageRoots);
 
 /**
- * Canonicalize existing ancestors without creating a future guest storage root.
- * The operator must keep these ancestors outside guest rename authority.
+ * The shared setup helpers bound to this package's label; see
+ * `@endo/hosted-agent/hosted-setup.js` for each contract.
  * @param {string} name
- * @returns {Promise<string>}
  */
-export const resolveFuturePath = async name => {
-  await null;
-  try {
-    return await fs.realpath(name);
-  } catch (error) {
-    if (/** @type {NodeJS.ErrnoException} */ (error).code !== 'ENOENT')
-      throw error;
-    const existing = await fs.lstat(name).catch(missing => {
-      if (/** @type {NodeJS.ErrnoException} */ (missing).code !== 'ENOENT')
-        throw missing;
-      return undefined;
-    });
-    !existing || Fail`OpenCode storage path has an unresolved symlink`;
-    const parent = path.dirname(name);
-    if (parent === name) throw error;
-    return path.join(await resolveFuturePath(parent), path.basename(name));
-  }
-};
+export const resolveFuturePath = name => resolveHostedFuturePath(name, LABEL);
 harden(resolveFuturePath);
 
 /**
- * Validate operator placement, including guest roots which do not exist yet.
- * No mkdir/chmod adoption: the runtime parent is provisioned by the deployment.
- * The caller supplies effective persisted roots where a formula already exists.
  * @param {string} directory
  * @param {ReturnType<typeof getHostedStorageRoots>} roots
- * @returns {Promise<string>}
  */
-export const assertRuntimePlacement = async (directory, roots) => {
-  const canonical = await assertPrivateDirectory(directory, fs);
-  for (const root of Object.values(roots)) {
-    path.isAbsolute(root) || Fail`OpenCode storage roots must be absolute`;
-    // eslint-disable-next-line no-await-in-loop
-    const guest = await resolveFuturePath(root);
-    const relative = path.relative(canonical, guest);
-    const reverse = path.relative(guest, canonical);
-    /** @param {string} value */
-    const outside = value =>
-      value === '..' || value.startsWith(`..${path.sep}`);
-    (outside(relative) && outside(reverse)) ||
-      Fail`Sandbox runtime directory must be disjoint from OpenCode guest storage roots`;
-  }
-  return canonical;
-};
+export const assertRuntimePlacement = (directory, roots) =>
+  assertHostedRuntimePlacement(directory, roots, LABEL);
 harden(assertRuntimePlacement);
 
 /**
- * Persist only the explicit runtime construction policy; no ambient credentials.
  * @param {Record<string, string | undefined>} env
  * @param {string} ownerId
  * @param {ReturnType<typeof getHostedStorageRoots>} roots
  */
-export const prepareRuntimeEnv = async (env, ownerId, roots) => {
-  const config = readRuntimeConfig({ ...env, ENDO_SANDBOX_OWNER_ID: ownerId });
-  const directory = await assertRuntimePlacement(config.directory, roots);
-  return harden({
-    ENDO_SANDBOX_RUNTIME_DIR: directory,
-    ENDO_SANDBOX_OWNER_ID: config.ownerId,
-    ENDO_SANDBOX_GENERATED_MAX_BYTES: String(config.maxBytes),
-    ENDO_SANDBOX_GENERATED_MAX_ENTRIES: String(config.maxEntries),
-  });
-};
+export const prepareRuntimeEnv = (env, ownerId, roots) =>
+  prepareHostedRuntimeEnv(env, ownerId, roots, LABEL);
 harden(prepareRuntimeEnv);
 
-const execFile = promisify(execFileCallback);
-
-/**
- * The spelling checks of the configured slice image that need no Podman —
- * the digest the broker kit refuses at construction, and an option-like name
- * Podman would misparse — so setup refuses them before any mint.
- * @param {string} rootfs Config rootfs (`oci:<image>` or already pinned).
- * @returns {{ image: string, imageDigest?: string }}
- */
-export const readSliceImageReference = rootfs => {
-  const image = rootfs.startsWith('oci:') ? rootfs.slice(4) : rootfs;
-  // A leading dash would be parsed as a podman option rather than an image.
-  !image.startsWith('-') || Fail`Invalid OpenCode sandbox image ${q(image)}`;
-  if (image.includes('@sha256:')) {
-    const imageDigest = image.slice(image.indexOf('@') + 1);
-    /^sha256:[a-f0-9]{64}$/.test(imageDigest) ||
-      Fail`OpenCode sandbox image digest is invalid, got ${q(imageDigest)}`;
-    return harden({ image, imageDigest });
-  }
-  return harden({ image });
-};
+/** @param {string} rootfs */
+export const readSliceImageReference = rootfs =>
+  readHostedSliceImageReference(rootfs, LABEL);
 harden(readSliceImageReference);
 
 /**
- * Resolve a local OCI image reference to its immutable digest form. The
- * broker binds each grant attestation to the exact slice image, so setup pins
- * what Podman actually resolved rather than trusting a mutable tag.
- *
- * @param {string} rootfs Config rootfs (`oci:<image>` or already pinned).
- * @param {(file: string, args: string[]) => Promise<{ stdout: string }>} [exec]
- * @returns {Promise<{ imageRef: string, imageDigest: string }>}
+ * @param {string} rootfs
+ * @param {Parameters<typeof resolveHostedPinnedImageRef>[1]} [exec]
  */
-export const resolvePinnedImageRef = async (rootfs, exec = execFile) => {
-  const { image, imageDigest: pinned } = readSliceImageReference(rootfs);
-  if (pinned !== undefined) {
-    return harden({ imageRef: image, imageDigest: pinned });
-  }
-  const { stdout } = await exec('podman', [
-    'image',
-    'inspect',
-    '--format',
-    '{{.Digest}}',
-    image,
-  ]);
-  const imageDigest = stdout.trim();
-  /^sha256:[a-f0-9]{64}$/.test(imageDigest) ||
-    Fail`Cannot resolve a digest for OpenCode sandbox image ${q(image)}; build it before setup-hosted`;
-  return harden({ imageRef: `${image}@${imageDigest}`, imageDigest });
-};
+export const resolvePinnedImageRef = (rootfs, exec = undefined) =>
+  resolveHostedPinnedImageRef(rootfs, exec, LABEL);
 harden(resolvePinnedImageRef);

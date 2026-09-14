@@ -85,6 +85,10 @@ import {
 /** @import { FarRef } from '@endo/eventual-send' */
 
 /**
+ * @typedef {{ broker: false } | { broker: true, baseUrl: string, container: string, apiKey: string }} BrokerTransport
+ */
+
+/**
  * The broker-only transport, when the provisioner supplied one. Both the
  * loopback base URL (where the provider listener answers inside the shared
  * namespace) and the listener container (the namespace this slice joins) are
@@ -95,9 +99,14 @@ import {
  * @returns {{ broker: false } | { broker: true, baseUrl: string, container: string, apiKey: string }}
  */
 export const resolveBrokerTransport = env => {
+  /** @type {BrokerTransport} */
+  let transport;
   const baseUrl = env.OPENCODE_BROKER_BASE_URL || '';
   const container = env.OPENCODE_BROKER_CONTAINER || '';
-  if (!baseUrl && !container) return harden({ broker: false });
+  if (!baseUrl && !container) {
+    transport = harden({ broker: false });
+    return transport;
+  }
   (baseUrl !== '' && container !== '') ||
     Fail`OpenCode broker transport requires both the loopback base URL and the listener container`;
   /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(container) ||
@@ -105,21 +114,34 @@ export const resolveBrokerTransport = env => {
   // Synthesized, never taken from the environment: a deployment must not be
   // able to park a real provider key in the slice under the placeholder's
   // name while still routing through the broker.
-  return harden({
+  transport = harden({
     broker: true,
     baseUrl,
     container,
     apiKey: 'opencode-broker-placeholder',
   });
+  return transport;
 };
 harden(resolveBrokerTransport);
+
+/**
+ * @typedef {object} BrokerClientPlan
+ * @property {boolean} broker
+ * @property {Record<string, unknown>} configOptions
+ * @property {Record<string, string>} credentialEnv
+ * @property {boolean} useCredentialCap
+ * @property {string} network
+ * @property {string} [networkRef] The listener container a broker session
+ *   joins; absent for a direct session.
+ */
 
 /**
  * Everything the broker decision changes, in one place so it can be tested
  * without a slice: the config options, the placeholder env, whether the real
  * credential cap may be used, and the sandbox network to request.
  *
- * @param {{ transport: ReturnType<typeof resolveBrokerTransport>, network: string }} options
+ * @param {{ transport: BrokerTransport, network: string }} options
+ * @returns {BrokerClientPlan}
  */
 export const planBrokerClient = ({ transport, network }) =>
   transport.broker

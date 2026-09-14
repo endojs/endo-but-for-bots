@@ -653,12 +653,13 @@ test('resolveBrokerTransport requires the loopback URL and listener together', t
   );
   // The placeholder is synthesized: an environment value is ignored, so a
   // deployment cannot park a real key in the slice under this name.
+  const placeholder = resolveBrokerTransport({
+    OPENCODE_BROKER_BASE_URL: 'http://127.0.0.1:41337/api/v1',
+    OPENCODE_BROKER_CONTAINER: 'endo-provider-abc',
+    OPENCODE_BROKER_API_KEY: 'sk-or-real-key',
+  });
   t.is(
-    resolveBrokerTransport({
-      OPENCODE_BROKER_BASE_URL: 'http://127.0.0.1:41337/api/v1',
-      OPENCODE_BROKER_CONTAINER: 'endo-provider-abc',
-      OPENCODE_BROKER_API_KEY: 'sk-or-real-key',
-    }).apiKey,
+    placeholder.broker ? placeholder.apiKey : undefined,
     'opencode-broker-placeholder',
   );
   t.throws(

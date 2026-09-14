@@ -48,11 +48,15 @@
 // checkout — is re-created on every run and re-bound into the Floot profile.
 
 import { createHash } from 'node:crypto';
-import { chmod, lstat, mkdir, stat } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
 import { E } from '@endo/eventual-send';
+import {
+  mintWithPowersPath,
+  providePrivateDirectory,
+} from '@endo/hosted-agent/hosted-setup.js';
 import { Fail, q } from '@endo/errors';
 
 import {
@@ -90,56 +94,6 @@ const backendModuleSpecifier = toCurrentSpecifier(
 
 // Kept in sync with setup-host.js and the backend's session records directory.
 const SANDBOX_DIR = 'opencode-sandbox';
-
-/**
- * Ensure a private, symlink-free, daemon-owned directory at `directory`.
- * @param {string} label
- * @param {string} directory
- */
-const providePrivateDirectory = async (label, directory) => {
-  const info = await lstat(directory).catch(() => undefined);
-  !info?.isSymbolicLink() || Fail`${label} must not be a symlink: ${directory}`;
-  if (info && !info.isDirectory()) {
-    throw Fail`${label} must be a directory: ${directory}`;
-  }
-  if (info) {
-    (await stat(directory)).uid === process.getuid?.() ||
-      Fail`${label} must be owned by the daemon user: ${directory}`;
-    await chmod(directory, 0o700);
-  } else {
-    await mkdir(directory, { recursive: true, mode: 0o700 });
-  }
-};
-
-/**
- * Mint an unconfined formula whose sole powers is an existing capability
- * named by path. `powersName` takes one pet name, so alias the capability
- * under a temporary root name for the mint; the formula retains the
- * capability's identity, not the alias.
- * @param {EndoHost} hostAgent
- * @param {object} options
- * @param {string[]} options.powersPath
- * @param {string} options.temporary
- * @param {string} options.specifier
- * @param {string[]} options.resultName
- * @param {Record<string, string>} options.env
- */
-const mintWithPowersPath = async (
-  hostAgent,
-  { powersPath, temporary, specifier, resultName, env },
-) => {
-  if (await E(hostAgent).has(temporary)) await E(hostAgent).remove(temporary);
-  try {
-    await E(hostAgent).copy(powersPath, [temporary]);
-    await E(hostAgent).makeUnconfined('@main', specifier, {
-      powersName: temporary,
-      resultName,
-      env: harden(env),
-    });
-  } finally {
-    await E(hostAgent).remove(temporary);
-  }
-};
 
 /**
  * @param {EndoHost} hostAgent
@@ -200,11 +154,11 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
   // Every session's durable state is mounted through this provider; a backend
   // minted without it would fail on first provision.
   if (!(await E(hostAgent).has(SANDBOX_DIR, 'state-provider'))) {
-    throw Fail`${SANDBOX_DIR}/state-provider is missing — run setup-host.js first.`;
+    throw Fail`${q(`${SANDBOX_DIR}/state-provider`)} is missing — run setup-host.js first.`;
   }
   // The native sandbox service is what session controllers acquire scopes from.
   if (!(await E(hostAgent).has(SANDBOX_DIR, 'native-sandbox'))) {
-    throw Fail`${SANDBOX_DIR}/native-sandbox is missing — run setup-host.js first.`;
+    throw Fail`${q(`${SANDBOX_DIR}/native-sandbox`)} is missing — run setup-host.js first.`;
   }
   const runtime = await readNativeSandbox(hostAgent);
   const state = await readStateProvider(hostAgent);

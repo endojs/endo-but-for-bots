@@ -4,13 +4,13 @@ import '@endo/init';
 import test from 'ava';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
+import { makeProviderBrokerServiceKit } from '@endo/hosted-agent/provider-broker-service.js';
 import { setImmediate } from 'node:timers/promises';
 
 import {
   makeOwnedOpencodeBrokerService,
   readOpencodeBrokerConfig,
 } from '../src/opencode-broker-service-agent.js';
-import { makeOpencodeBrokerServiceKit } from '../src/opencode-broker-service.js';
 
 /** @import { ExecutionContext } from 'ava' */
 
@@ -64,12 +64,15 @@ const fixture = t => {
     reportError: error => errors.push(error),
     makeServiceKit: options => {
       t.is(options.secret, secret);
-      t.deepEqual(options.models, config.models);
+      // The owned service hands the shared kit the OpenCode policy already
+      // built from the persisted profile.
+      t.deepEqual(options.policy.models, config.models);
+      t.is(options.label, 'OpenCode');
       environments.push(options.env);
       const state = prepared;
       prepared = next();
       states.push(state);
-      return makeOpencodeBrokerServiceKit({
+      return makeProviderBrokerServiceKit({
         ...options,
         runtimeKit: {
           open: async () => {

@@ -468,7 +468,9 @@ for (const policy of [false, true]) {
     if (!captured) throw Error('Expected captured native environment');
     for (const call of calls) {
       if (!call.env) throw Error('Expected command environment');
-      t.is(
+      // Every command gets a fresh copy of the one captured environment:
+      // the same values, never re-read from the ambient process env.
+      t.deepEqual(
         call.env,
         captured,
         `${call.command} ${call.args[0]} reuses original environment`,

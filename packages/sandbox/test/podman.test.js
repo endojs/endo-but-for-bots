@@ -115,6 +115,34 @@ const listOwnedContainers = async ownerId => {
 };
 
 /**
+ * Whether a dispose failure carries only the driver's retained uncertain
+ * operation owner, through the factory's `cause` and the registry's
+ * aggregate: a deadline that interrupts `podman create` leaves the producer's
+ * effects uncertain, and one that interrupts `podman start` before the
+ * startup witness leaves the startup's effects uncertain. Any other cause
+ * fails the match.
+ *
+ * @param {unknown} error
+ * @returns {boolean}
+ */
+const hasOnlyUncertainOperation = error => {
+  if (error instanceof AggregateError) {
+    return (
+      error.errors.length > 0 && error.errors.every(hasOnlyUncertainOperation)
+    );
+  }
+  if (!(error instanceof Error)) return false;
+  if (
+    /^Podman operation (producer|startup) effects remain uncertain$/.test(
+      error.message,
+    )
+  ) {
+    return true;
+  }
+  return error.cause !== undefined && hasOnlyUncertainOperation(error.cause);
+};
+
+/**
  * Poll until no containers carry the owner label. A cancelled admission
  * removes its named operation asynchronously (bounded by the driver's
  * control-command deadline), so a containment assertion that races it
@@ -1105,7 +1133,20 @@ test.serial(
       }),
     );
     t.teardown(async () => {
-      await E(handle).dispose();
+      // A deadline that wins while `podman create` runs, or before OCI
+      // startup is witnessed, leaves the removed operation's effects
+      // unresolved. The driver retains that owner for operator reconciliation
+      // rather than claiming containment (see "removal without a startup
+      // witness retains ownership" and the producer cases in
+      // podman-cleanup.test.js), so dispose may report the pending teardown.
+      // Containment itself is proven below by the exact owner label, not by
+      // dispose.
+      await E(handle)
+        .dispose()
+        .catch(error => {
+          if (!hasOnlyUncertainOperation(error)) throw error;
+          t.log('dispose retained an uncertain operation, as designed');
+        });
       cleanupTmpdirs(tmpdirs);
     });
 

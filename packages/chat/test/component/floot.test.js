@@ -115,8 +115,14 @@ test.serial(
       button(text)?.dispatchEvent(
         new testWindow.Event('click', { bubbles: true }),
       );
-    await waitFor(() => button('Network approval requested'));
-    click('Network approval requested');
+    // The header chip's visible text is split across a label and a badge; the
+    // accessible name is the whole phrase.
+    const networkButton = () =>
+      parent.querySelector('button[aria-label="Network approval requested"]');
+    await waitFor(() => networkButton());
+    networkButton()?.dispatchEvent(
+      new testWindow.Event('click', { bubbles: true }),
+    );
     await waitFor(() => parent.querySelector('.floot-network-request'));
     t.true(parent.textContent.includes('<img src=x onerror="alert(1)">'));
     t.falsy(parent.querySelector('img'));
@@ -260,7 +266,7 @@ test.serial(
       () => parent.querySelectorAll('.floot-session-item').length === 2,
     );
     parent
-      .querySelector('button[aria-label="Turn journal and recovery"]')
+      .querySelector('button[aria-label^="Turn journal and recovery"]')
       ?.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
     await waitFor(
       () => parent.querySelectorAll('.floot-recovery-turn').length === 50,

@@ -19,17 +19,21 @@
 // This file is baked into the image at /opt/opencode-bridge/bridge.mjs; it
 // must not import workspace packages.
 
+/* global fetch */
+import { Buffer } from 'node:buffer';
 import { spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { randomBytes } from 'node:crypto';
-import { pathToFileURL } from 'node:url';
+import process from 'node:process';
 import { createInterface } from 'node:readline';
+import { clearTimeout, setImmediate, setTimeout } from 'node:timers';
+import { pathToFileURL } from 'node:url';
 
 // ---- environment knobs -----------------------------------------------------
 
 const LISTEN_TIMEOUT_MS = 30_000;
-const INTERRUPT_GRACE_MS = 5_000;
+const INTERRUPT_GRACE_MS = 5000;
 const API_TIMEOUT_MS = 10_000;
 const STDERR_TAIL_BYTES = 2048;
 const MAX_LINE_BYTES = 1024 * 1024;
@@ -424,12 +428,12 @@ const main = async () => {
       }
     }
     child.kill('SIGTERM');
-    const escalate = setTimeout(() => child.kill('SIGKILL'), 5_000);
+    const escalate = setTimeout(() => child.kill('SIGKILL'), 5000);
     escalate.unref();
     await Promise.race([
       childExit,
       new Promise(resolve => {
-        const timer = setTimeout(resolve, 6_000);
+        const timer = setTimeout(resolve, 6000);
         timer.unref();
       }),
     ]);
@@ -456,9 +460,9 @@ const main = async () => {
     });
   });
 
-  const api = async (path, init = {}) => {
-    const separator = path.includes('?') ? '&' : '?';
-    const url = `${baseUrl}${path}${separator}directory=${encodeURIComponent(directory)}`;
+  const api = async (route, init = {}) => {
+    const separator = route.includes('?') ? '&' : '?';
+    const url = `${baseUrl}${route}${separator}directory=${encodeURIComponent(directory)}`;
     const response = await fetch(url, {
       ...init,
       signal: AbortSignal.timeout(API_TIMEOUT_MS),
@@ -467,7 +471,7 @@ const main = async () => {
     if (!response.ok) {
       const error = /** @type {Error & { status?: number }} */ (
         new Error(
-          `opencode ${init.method ?? 'GET'} ${path} -> ${response.status}`,
+          `opencode ${init.method ?? 'GET'} ${route} -> ${response.status}`,
         )
       );
       error.status = response.status;
@@ -650,18 +654,23 @@ const main = async () => {
           } else {
             pendingError = mapped.error;
           }
+          // eslint-disable-next-line no-continue
           continue;
         }
         if (mapped.type === 'phase' && mapped.phase === 'busy') {
+          // eslint-disable-next-line no-continue
           if (!inFlight) continue;
           sawBusy = true;
           writeEvent(mapped);
+          // eslint-disable-next-line no-continue
           continue;
         }
         if (mapped.type === 'phase' && mapped.phase === 'idle') {
+          // eslint-disable-next-line no-continue
           if (!inFlight) continue;
           // Ignore idles from before this turn started: a trailing idle from a
           // previous turn must not finish a freshly dispatched queued send.
+          // eslint-disable-next-line no-continue
           if (!sawBusy) continue;
           if (outstandingCalls.size > 0) {
             finishTurn({
@@ -673,8 +682,10 @@ const main = async () => {
               deriveTerminal({ pendingError, timedOut: false, interrupted }),
             );
           }
+          // eslint-disable-next-line no-continue
           continue;
         }
+        // eslint-disable-next-line no-continue
         if (!inFlight) continue;
         if (mapped.type === 'tool-call') outstandingCalls.add(mapped.id);
         if (mapped.type === 'tool-result') outstandingCalls.delete(mapped.id);
@@ -682,6 +693,7 @@ const main = async () => {
           writeEvent(mapped);
         } catch {
           finishTurn({ type: 'abort', reason: 'bridge event too large' });
+          // eslint-disable-next-line no-continue
           continue;
         }
       }
