@@ -1,12 +1,25 @@
 //! Ordinary indexed properties must participate in the native-reference gate.
 use ironhorse_vm::opcode::{instruction_len, Opcode};
-use ironhorse_vm::{parse_symbols, Interp};
+use ironhorse_vm::{parse_symbols, Interp, Machine};
 
 fn stored_native(source: &str) -> Interp {
     stored_native_opcode(source, Opcode::XS_CODE_FALSE)
 }
 
 fn stored_native_opcode(source: &str, placeholder: Opcode) -> Interp {
+    let (code, symbols) = minted_native(source, placeholder);
+    let mut vm = Interp::new();
+    vm.link_intrinsics(&parse_symbols(&symbols));
+    let outcome = vm.run_bounded(&code, 10_000);
+    assert!(outcome.completed, "{:?}", outcome.halt);
+    assert!(vm.is_quiescent());
+    vm
+}
+
+/// Compile `source` with its one `placeholder` instruction replaced by
+/// `COPY_OBJECT`, so the value under test is a native minted above the
+/// boot floor: a function restore cannot rebuild.
+fn minted_native(source: &str, placeholder: Opcode) -> (Vec<u8>, Vec<u8>) {
     let (mut code, symbols) = ironhorse_compile::compile_atoms(source).expect("compile");
     // COPY_OBJECT mints an internal native above the boot floor and pushes
     // one value. Preserve the original instruction width with ignored DEBUGGER
@@ -27,12 +40,7 @@ fn stored_native_opcode(source: &str, placeholder: Opcode) -> Interp {
         replaced, 1,
         "fixture must mint exactly one native: {source}"
     );
-    let mut vm = Interp::new();
-    vm.link_intrinsics(&parse_symbols(&symbols));
-    let outcome = vm.run_bounded(&code, 10_000);
-    assert!(outcome.completed, "{:?}", outcome.halt);
-    assert!(vm.is_quiescent());
-    vm
+    (code, symbols)
 }
 
 #[test]
@@ -104,6 +112,16 @@ fn carried_holders_refuse_non_persisted_natives() {
             "class Box { #x; constructor(x) { this.#x = x; } } var box = new Box(false); 0;",
         ),
         ("promise result", "var box = Promise.resolve(false); 0;"),
+        // The iterated object is an iterator's internal slot, mirrored by
+        // no heap property: `ToObject(this)` of the generic array methods.
+        (
+            "array iterator receiver",
+            "var box = Array.prototype.values.call(false); 0;",
+        ),
+        (
+            "array entries iterator receiver",
+            "var box = Array.prototype.entries.call(false); 0;",
+        ),
     ] {
         let mut vm = stored_native(source);
         // Remove abandoned temporaries so only live holders can justify refusal.
@@ -130,6 +148,48 @@ fn suspended_generator_refuses_a_non_persisted_native() {
     let refusal = Some("a stored reference to a non-persisted native function");
     assert_eq!(vm.stored_unpersistable_row(), refusal);
     assert_eq!(vm.stored_unpersistable_row_at_checkpoint(), refusal);
+}
+
+#[test]
+fn pending_shared_compartment_jobs_refuse_a_non_persisted_native() {
+    // Under shared compartments the boundary admits a queued job (the host
+    // pumps between cranks), so the job queue reaches the gate as a
+    // persisted holder: its reaction handlers and settled value travel in
+    // no heap property.
+    for (holder, source) in [
+        ("reaction handler", "Promise.resolve(1).then(false); 0;"),
+        (
+            "reaction value",
+            "Promise.resolve(false).then(function (v) { return v; }); 0;",
+        ),
+        (
+            "thenable job receiver",
+            "(function () { var t = false; t.then = function (r) { r(1); }; Promise.resolve(t); })(); 0;",
+        ),
+    ] {
+        let (code, symbols) = minted_native(source, Opcode::XS_CODE_FALSE);
+        let machine = Machine::new();
+        let compartment = machine.new_compartment();
+        let outcome = compartment.evaluate_with_symbols(&code, &symbols);
+        assert!(outcome.completed, "{holder}: {:?}", outcome.halt);
+        // Remove abandoned temporaries so only the queued job can justify
+        // the refusal.
+        machine.collect().expect("collect at the shared boundary");
+        let (quiescent, pending, full, checkpoint) = machine
+            .with_persistence(|vm| {
+                (
+                    vm.is_quiescent(),
+                    vm.has_pending_jobs(),
+                    vm.stored_unpersistable_row(),
+                    vm.stored_unpersistable_row_at_checkpoint(),
+                )
+            })
+            .expect("persistence borrow");
+        assert!(quiescent && pending, "{holder}: the gate must see a queued job");
+        let refusal = Some("a stored reference to a non-persisted native function");
+        assert_eq!(full, refusal, "{holder}");
+        assert_eq!(checkpoint, refusal, "{holder}");
+    }
 }
 
 #[test]

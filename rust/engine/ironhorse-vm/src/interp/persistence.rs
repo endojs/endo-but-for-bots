@@ -61,6 +61,23 @@ macro_rules! persist_holder {
         $emit! { $vm.$field.values().any(|g| g.frame.as_ref().is_some_and(|f| saved_frame_contains(f, $names))
             || g.requests.iter().chain(g.active.as_ref()).any(|r| $names(&r.value) || $names(&r.resolve) || $names(&r.reject))) }
     };
+    // A queued promise job carries its reaction's four function slots and
+    // the settled value, or a thenable job's four slots. Under shared
+    // compartments the boundary admits queued jobs (the host pumps between
+    // cranks), so the queue is a persisted holder.
+    ($emit:ident, $vm:ident, $field:ident, $names:ident, $index:ident, jobs) => {
+        $emit! { $vm.$field.iter().any(|j| match j {
+            PromiseJob::Reaction { reaction: r, value, .. } => $names(value)
+                || $names(&r.on_fulfilled) || $names(&r.on_rejected) || $names(&r.resolve) || $names(&r.reject),
+            PromiseJob::Thenable { then, thenable, resolve, reject } =>
+                $names(then) || $names(thenable) || $names(resolve) || $names(reject),
+        }) }
+    };
+    // An iterator's iterated object is an internal slot no heap property
+    // mirrors: `Array.prototype.values.call(x)` keeps `ToObject(x)` here.
+    ($emit:ident, $vm:ident, $field:ident, $names:ident, $index:ident, iterators) => {
+        $emit! { $vm.$field.values().any(|s| $index(s.iterable.0)) }
+    };
 }
 
 macro_rules! define_persist_holders {
