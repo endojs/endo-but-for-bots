@@ -519,6 +519,27 @@ fn bind_edges(
     Ok(modules)
 }
 
+/// Add a package's self-reference edge — Node lets a module import
+/// its own package by name (`import { crypto } from
+/// '@noble/hashes/crypto'` inside `@noble/hashes`), routing through
+/// the package's own exports map. A declared dependency of the same
+/// name (not expressible on npm anyway) would win.
+fn bind_self_edge(
+    modules: &mut serde_json::Map<String, serde_json::Value>,
+    name: &str,
+    compartment: &str,
+) {
+    if !modules.contains_key(name) {
+        modules.insert(
+            name.to_string(),
+            serde_json::json!({
+                "compartment": compartment,
+                "module": ".",
+            }),
+        );
+    }
+}
+
 /// Build the compartment map document as canonical (sorted-key)
 /// JSON bytes. One compartment per resolved `(name, major)` plus the
 /// entry compartment; locations are CAS tree URIs; each `modules`
@@ -535,28 +556,33 @@ pub fn build_compartment_map(
 ) -> Result<Vec<u8>, AssembleError> {
     let (root_required, root_optional) = edge_maps(root_edges);
     let mut compartments = serde_json::Map::new();
+    let mut entry_modules = bind_edges(resolution, &root_required, &root_optional, package_name)?;
+    bind_self_edge(&mut entry_modules, package_name, ENTRY_COMPARTMENT);
     compartments.insert(
         ENTRY_COMPARTMENT.to_string(),
         serde_json::json!({
             "name": package_name,
             "location": cas_location(entry_tree_hash),
-            "modules": bind_edges(resolution, &root_required, &root_optional, package_name)?,
+            "modules": entry_modules,
         }),
     );
     for package in resolution.packages() {
         let requirer = format!("{}@{}", package.name, package.version);
+        let key = compartment_key(package);
+        let mut modules = bind_edges(
+            resolution,
+            &package.dependencies,
+            &package.optional_edges,
+            &requirer,
+        )?;
+        bind_self_edge(&mut modules, &package.name, &key);
         compartments.insert(
-            compartment_key(package),
+            key,
             serde_json::json!({
                 "name": package.name,
                 "version": package.version,
                 "location": cas_location(&package.tree_hash),
-                "modules": bind_edges(
-                    resolution,
-                    &package.dependencies,
-                    &package.optional_edges,
-                    &requirer,
-                )?,
+                "modules": modules,
             }),
         );
     }
@@ -882,6 +908,21 @@ mod tests {
         );
         assert_eq!(
             compartments["a-v1.2.0"]["modules"]["b"]["compartment"],
+            "b-v2.3.0"
+        );
+        // Every compartment carries a self-reference edge so a
+        // module may import its own package by name through its
+        // exports map, as Node permits.
+        assert_eq!(
+            compartments[ENTRY_COMPARTMENT]["modules"]["app"]["compartment"],
+            ENTRY_COMPARTMENT
+        );
+        assert_eq!(
+            compartments["a-v1.2.0"]["modules"]["a"]["compartment"],
+            "a-v1.2.0"
+        );
+        assert_eq!(
+            compartments["b-v2.3.0"]["modules"]["b"]["compartment"],
             "b-v2.3.0"
         );
         let a = run.resolution.get("a", 1).unwrap();
