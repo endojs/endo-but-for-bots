@@ -351,6 +351,23 @@ pub struct Signature {
     boot: Option<[u8; 32]>,
 }
 
+impl std::fmt::Display for Signature {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.boot {
+            // Sixteen hex digits is enough to tell two boot layouts apart in a
+            // log line; the full fingerprint stays in the Debug rendering.
+            Some(boot) => {
+                write!(f, "{} @", self.host)?;
+                for byte in &boot[..8] {
+                    write!(f, "{byte:02x}")?;
+                }
+                Ok(())
+            }
+            None => write!(f, "{} (no boot fingerprint)", self.host),
+        }
+    }
+}
+
 // Signature's fields are private; classify them beside their declaration so a
 // future retained Slot cannot bypass the snapshot visitation type check.
 impl crate::stored_slots::Metadata for Signature {}
@@ -449,6 +466,82 @@ pub enum SnapshotError {
     /// A structural payload was malformed (wrong length, bad slot record).
     Corrupt(&'static str),
 }
+
+impl std::fmt::Display for VersionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            VersionError::Truncated => write!(f, "`VERS` payload is shorter than the header"),
+            VersionError::TrailingBytes => write!(f, "`VERS` payload has trailing bytes"),
+            VersionError::NotIronhorse(magic) => write!(
+                f,
+                "`VERS` discriminator is {magic:?}, not an IronHorse snapshot"
+            ),
+            VersionError::UnsupportedVersion(found) => {
+                write!(f, "container format {found} is outside the readable range")
+            }
+            VersionError::SlotWidthMismatch { expected, found } => write!(
+                f,
+                "slot width is {found} bytes, this engine uses {expected}"
+            ),
+            VersionError::UnsupportedEndian(found) => {
+                write!(f, "byte order tag {found} is not supported")
+            }
+        }
+    }
+}
+
+impl std::error::Error for VersionError {}
+
+impl std::fmt::Display for SignatureError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SignatureError::Truncated => write!(f, "`SIGN` payload is truncated"),
+            SignatureError::NotUtf8 => write!(f, "`SIGN` host string is not UTF-8"),
+        }
+    }
+}
+
+impl std::error::Error for SignatureError {}
+
+impl std::fmt::Display for SnapshotError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SnapshotError::BootLayoutMismatch { expected, found } => {
+                write!(f, "boot layout mismatch: snapshot carries ")?;
+                match found {
+                    Some(found) => {
+                        for byte in &found[..8] {
+                            write!(f, "{byte:02x}")?;
+                        }
+                    }
+                    None => write!(f, "no fingerprint")?,
+                }
+                write!(f, ", this engine derives ")?;
+                for byte in &expected[..8] {
+                    write!(f, "{byte:02x}")?;
+                }
+                Ok(())
+            }
+            SnapshotError::Atom(e) => write!(f, "malformed container: {e}"),
+            SnapshotError::Version(e) => write!(f, "incompatible container: {e}"),
+            SnapshotError::Signature(e) => write!(f, "malformed signature: {e}"),
+            SnapshotError::SignatureMismatch { expected, found } => write!(
+                f,
+                "signature mismatch: snapshot carries {found}, this host is {expected}"
+            ),
+            SnapshotError::CostTableMismatch { expected, found } => write!(
+                f,
+                "cost-table mismatch: snapshot carries {found}, this engine is {expected}"
+            ),
+            SnapshotError::MissingAtom(tag) => {
+                write!(f, "required atom `{}` is absent", tag.as_str())
+            }
+            SnapshotError::Corrupt(what) => write!(f, "corrupt payload: {what}"),
+        }
+    }
+}
+
+impl std::error::Error for SnapshotError {}
 
 impl From<AtomError> for SnapshotError {
     fn from(e: AtomError) -> Self {

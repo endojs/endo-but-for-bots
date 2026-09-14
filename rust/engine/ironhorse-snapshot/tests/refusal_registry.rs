@@ -343,8 +343,16 @@ fn inventory_in(
         } else {
             // These are the complete, audited forwarding expressions. Adding
             // another expression must extend this registry's data-flow model.
+            //
+            // `_` is the one entry that is not a forwarding expression at all:
+            // a wildcard is not an expression in Rust, so `Corrupt(_)` can
+            // only ever be a match ARM, never a construction. Admitting it
+            // lets a classifier match exhaustively over the variant without
+            // the scanner reading the arm as a new named corruption, and it
+            // cannot hide a producer, because no producer can spell itself
+            // that way.
             let dynamic = if direct {
-                ["self.what", "what", "name", "message", "&'static str"]
+                ["self.what", "what", "name", "message", "&'static str", "_"]
                     .iter()
                     .any(|s| args == lex(s))
             } else {
@@ -446,11 +454,16 @@ fn every_named_corruption_is_asserted_or_explicitly_allowlisted() {
         );
         let expected: &[(&str, &str, usize)] = match path.file_name().unwrap().to_str().unwrap() {
             "image.rs" => &[("Corrupt", "self.what", 7), ("Corrupt", "what", 2)],
-            "store.rs" => &[("Corrupt", "name", 2)],
+            // The `_` entry is the classifier's match arm, not a producer;
+            // see the wildcard note in the dynamic-expression registry above.
+            "store.rs" => &[("Corrupt", "name", 2), ("Corrupt", "_", 1)],
             "snapshot_roster.rs" => &[("Corrupt", "name", 2)],
             "store_sections.rs" => &[("Corrupt", "message", 1)],
             "store_file.rs" => &[("Corrupt", "what", 1), ("file_corrupt", "what", 4)],
-            "format.rs" => &[("Corrupt", "&'static str", 1)],
+            // Two sites, both accounted for: the variant's own declaration,
+            // and the `Display` arm that forwards the name into the message
+            // rather than collapsing it (review finding F157).
+            "format.rs" => &[("Corrupt", "&'static str", 1), ("Corrupt", "what", 1)],
             _ => &[],
         };
         let expected: BTreeMap<_, _> = expected

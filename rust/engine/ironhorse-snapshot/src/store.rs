@@ -177,6 +177,139 @@ pub enum StoreError {
     SummaryMismatch { page: u32 },
 }
 
+/// What a caller holding a [`StoreError`] should do about it.
+///
+/// A supervisor at the daemon seam has exactly three responses available, and
+/// before this classifier existed it could not tell them apart: every store
+/// failure arrived as one opaque string (review finding F157). The variant
+/// alone is not enough either — a caller would have to re-derive this table
+/// from fourteen variants and keep it in step by hand.
+///
+/// Classification is a property of the failure, not of the caller, so it lives
+/// beside the variants and [`StoreError::failure`] is an exhaustive match: a
+/// new variant does not compile until it states its answer.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum StoreFailure {
+    /// The medium failed and the same call may succeed later: I/O. Retrying is
+    /// the only class where retrying is meaningful.
+    Transient,
+    /// A deterministic refusal. The store and the request are both intact and
+    /// the answer will not change on its own — a gate the caller has to
+    /// satisfy (quiesce, migrate, adopt rather than overwrite), or an identity
+    /// that will never match this engine. Retrying is a busy-loop.
+    Refused,
+    /// The stored state contradicts itself, so nothing read from it can be
+    /// trusted: a container that will not parse, a geometry that promises rows
+    /// the store cannot produce, page summaries that disagree with the rows
+    /// they travel beside. Tear the session down rather than resume; a partial
+    /// read is the failure mode this class exists to prevent.
+    Poisoned,
+}
+
+impl StoreError {
+    /// How a caller should respond to this failure. See [`StoreFailure`].
+    pub fn failure(&self) -> StoreFailure {
+        match self {
+            // The medium, and only the medium.
+            StoreError::Io(_) => StoreFailure::Transient,
+
+            // Gates the caller can satisfy, and identities that will not
+            // change: deterministic either way.
+            StoreError::MachineNotQuiescent
+            | StoreError::MachineOperation(_)
+            | StoreError::PendingStateUnsupported { .. }
+            | StoreError::Empty
+            | StoreError::EpochMismatch { .. }
+            | StoreError::BaselineMismatch { .. }
+            | StoreError::NotEmpty { .. }
+            | StoreError::NeedsMigration { .. } => StoreFailure::Refused,
+
+            // The store's own content disagrees with its geometry.
+            StoreError::MissingRow(_, _)
+            | StoreError::RowLength { .. }
+            | StoreError::SummaryCount { .. }
+            | StoreError::SummaryMismatch { .. } => StoreFailure::Poisoned,
+
+            // A decode failure splits the same way one level down: structural
+            // damage poisons, a compatibility answer refuses.
+            StoreError::Snapshot(e) => match e {
+                SnapshotError::Atom(_)
+                | SnapshotError::Signature(_)
+                | SnapshotError::MissingAtom(_)
+                | SnapshotError::Corrupt(_) => StoreFailure::Poisoned,
+                SnapshotError::BootLayoutMismatch { .. }
+                | SnapshotError::Version(_)
+                | SnapshotError::SignatureMismatch { .. }
+                | SnapshotError::CostTableMismatch { .. } => StoreFailure::Refused,
+            },
+        }
+    }
+}
+
+impl std::fmt::Display for StoreError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StoreError::MachineNotQuiescent => {
+                write!(f, "machine is not at a quiescent crank boundary")
+            }
+            StoreError::MachineOperation(what) => write!(f, "machine operation failed: {what}"),
+            StoreError::PendingStateUnsupported { row } => {
+                write!(f, "heap holds live {row}: that side table does not travel")
+            }
+            StoreError::Empty => write!(f, "store has no committed epoch"),
+            StoreError::Io(what) => write!(f, "store io error: {what}"),
+            StoreError::Snapshot(e) => write!(f, "{e}"),
+            StoreError::MissingRow(kind, index) => {
+                write!(f, "store is missing {kind} row {index}")
+            }
+            StoreError::RowLength {
+                kind,
+                index,
+                expected,
+                found,
+            } => write!(
+                f,
+                "{kind} row {index} is {found} bytes, geometry promises {expected}"
+            ),
+            StoreError::EpochMismatch { expected, found } => {
+                write!(f, "commit is for epoch {found}, store expects {expected}")
+            }
+            // Deliberately neutral about WHICH side is which. The nine
+            // construction sites agree that `expected` is the value the
+            // caller required and `found` is the value it met, but they do
+            // not agree on whose value that is: at `machine.rs:893` the
+            // expectation is a session's tracked seal and the finding is the
+            // store's, at `store.rs:1603` the expectation is a recomputed
+            // root and the finding is the batch's, and at `machine.rs:1184`
+            // both are seals of one store before and after an operation.
+            // Naming a side here would be right at some sites and actively
+            // misleading at others.
+            StoreError::BaselineMismatch { expected, found } => {
+                write!(
+                    f,
+                    "baseline seal mismatch: expected {expected}, found {found}"
+                )
+            }
+            StoreError::NotEmpty { epoch } => write!(
+                f,
+                "first checkpoint aimed at a store already holding epoch {epoch}"
+            ),
+            StoreError::NeedsMigration { found } => {
+                write!(f, "store schema {found} needs migration before use")
+            }
+            StoreError::SummaryCount { expected, found } => write!(
+                f,
+                "page-edge summary vector holds {found} entries, geometry promises {expected}"
+            ),
+            StoreError::SummaryMismatch { page } => {
+                write!(f, "page {page}'s edge summary disagrees with its row")
+            }
+        }
+    }
+}
+
+impl std::error::Error for StoreError {}
+
 impl From<SnapshotError> for StoreError {
     fn from(e: SnapshotError) -> Self {
         StoreError::Snapshot(e)
