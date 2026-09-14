@@ -2548,6 +2548,200 @@ testNeedsNodeManager(
 );
 
 testNeedsNodeManager(
+  'the Claude backend records a session through the daemon owner and destroy reaches its storage',
+  async t => {
+    t.timeout(120_000);
+    const { cancelled, config } = await prepareConfig(t);
+    const spec = relative => new URL(`../../${relative}`, import.meta.url).href;
+    const base = config.statePath;
+    const roots = {
+      workspaceDir: path.join(base, 'claude-workspaces'),
+      mcpDir: path.join(base, 'claude-private'),
+    };
+    const stateDir = path.join(base, 'claude-state');
+    const nativeRuntime = path.join(base, 'claude-native-runtime');
+    const brokerDir = path.join(base, 'claude-broker');
+    for (const directory of [roots.workspaceDir, roots.mcpDir, nativeRuntime]) {
+      // eslint-disable-next-line no-await-in-loop
+      await fsp.mkdir(directory, { recursive: true, mode: 0o700 });
+    }
+    const digest = `sha256:${'a'.repeat(64)}`;
+    const profile = {
+      uid: 1000,
+      gid: 1000,
+      memoryBytes: '536870912',
+      cpuQuotaMicros: '200000',
+      pids: 128,
+      cpuPeriodMicros: 100_000,
+      maxConcurrentOperations: 1,
+    };
+    const { host } = await makeHost(config, cancelled);
+    await E(host).makeDirectory('claude-sandbox');
+    // The same services setup-host.js and setup-hosted.js mint, over the
+    // same powers shapes: no powers, a stored null, a SecretBlob, the state
+    // provider, and host powers for the backend.
+    await E(host).makeUnconfined(
+      '@node',
+      spec('claude-sandbox/src/claude-state-provider-module.js'),
+      {
+        powersName: '@none',
+        resultName: ['claude-sandbox', 'state-provider'],
+        env: { ENDO_CLAUDE_STATE_DIR: stateDir },
+      },
+    );
+    await E(host).storeValue(null, 'claude.null-powers');
+    await E(host).makeUnconfined('@node', spec('sandbox/src/native-agent.js'), {
+      powersName: 'claude.null-powers',
+      resultName: ['claude-sandbox', 'native-sandbox'],
+      env: {
+        ENDO_SANDBOX_RUNTIME_DIR: nativeRuntime,
+        ENDO_SANDBOX_OWNER_ID: 'claude-acceptance-native',
+        ENDO_SANDBOX_GENERATED_MAX_BYTES: '4096',
+        ENDO_SANDBOX_GENERATED_MAX_ENTRIES: '16',
+      },
+    });
+    await E(host).remove('claude.null-powers');
+    const importer = await E(host).lookup(['@secrets', 'create']);
+    await E(importer).createBase64(
+      'claude-creds',
+      'Anthropic oauthToken',
+      encodeBase64(new TextEncoder().encode('sk-ant-oat01-acceptance')),
+    );
+    await E(host).copy(
+      ['secrets', 'claude-creds'],
+      ['claude-creds.broker-read'],
+    );
+    await E(host).makeUnconfined(
+      '@node',
+      spec('claude-sandbox/src/claude-broker-service-agent.js'),
+      {
+        powersName: 'claude-creds.broker-read',
+        resultName: ['claude-sandbox', 'broker-service'],
+        env: {
+          CLAUDE_BROKER_CONFIG: JSON.stringify({
+            ownerId: 'claude-acceptance',
+            directory: brokerDir,
+            imageRef: `localhost/claude@${digest}`,
+            imageDigest: digest,
+            listenerImageRef: `localhost/listener@${digest}`,
+            models: ['claude-sonnet-4-6'],
+            credentialKind: 'oauthToken',
+          }),
+        },
+      },
+    );
+    await E(host).remove('claude-creds.broker-read');
+    await E(host).copy(
+      ['claude-sandbox', 'state-provider'],
+      ['claude.state-provider-powers'],
+    );
+    await E(host).makeUnconfined(
+      '@node',
+      spec('claude-sandbox/src/claude-session-storage-module.js'),
+      {
+        powersName: 'claude.state-provider-powers',
+        resultName: ['claude-sandbox', 'session-storage'],
+        env: {
+          CLAUDE_WORKSPACE_BASE_DIR: roots.workspaceDir,
+          CLAUDE_MCP_DIR: roots.mcpDir,
+        },
+      },
+    );
+    await E(host).remove('claude.state-provider-powers');
+    const backend = await E(host).makeUnconfined(
+      '@node',
+      spec('claude-sandbox/src/claude-backend-module.js'),
+      {
+        powersName: '@agent',
+        resultName: ['claude-sandbox', 'backend'],
+        env: {
+          CLAUDE_WORKSPACE_BASE_DIR: roots.workspaceDir,
+          CLAUDE_MCP_DIR: roots.mcpDir,
+          CLAUDE_NATIVE_PROFILE: JSON.stringify(profile),
+        },
+      },
+    );
+    t.is((await E(backend).describe()).id, 'claude');
+    const tools = Far('HostedToolSet', {
+      describe: async () =>
+        harden({ dynamicTools: [], toolSetId: 'acceptance' }),
+      execute: async () => 'ok',
+      help: () => 'acceptance tools',
+    });
+    // Starting reaches the native controller in its own worker. Without
+    // Podman the provider listener cannot start, so activation rejects; the
+    // owner keeps the record, its exact dependencies, and the private
+    // directories the backend prepared. This is wiring evidence only.
+    const refused = /procfs process identity/;
+    await t.throwsAsync(
+      E(backend).create(harden({ sessionId: 'one' }), tools),
+      { message: refused },
+    );
+    // The interrupted start is retried through its own cleanup on the next
+    // request, which then fails at the same native boundary rather than being
+    // refused for an unfinished startup.
+    await t.throwsAsync(
+      E(backend).create(harden({ sessionId: 'one' }), tools),
+      { message: refused },
+    );
+    const recordPath = ['claude-sandbox', 'session-records', 'sessions', 'one'];
+    const record = await E(host).lookup(recordPath);
+    const plan = JSON.parse(await E(record).readText('plan'));
+    t.is(plan.sessionId, 'one');
+    // The plan carries the broker's pinned image and credential kind and the
+    // request's network policy; no credential and no image reach the backend
+    // environment.
+    t.is(plan.rootfs, `oci:localhost/claude@${digest}`);
+    t.is(plan.networkPolicy, 'off');
+    t.is(plan.credentialKind, 'oauthToken');
+    t.deepEqual(plan.nativeProfile, profile);
+    t.is(await E(record).maybeReadText('lifecycle'), 'starting');
+    t.deepEqual([...(await E(record).list('references'))].sort(), [
+      'brokerService',
+      'client',
+      'sandboxService',
+      'stateProvider',
+      'storage',
+      'worker',
+    ]);
+    t.is(
+      await E(host).identify(...recordPath, 'references', 'brokerService'),
+      await E(host).identify('claude-sandbox', 'broker-service'),
+    );
+    for (const directory of [
+      plan.workspaceDir,
+      plan.mcpDir,
+      plan.mounterSocketDir,
+    ]) {
+      // eslint-disable-next-line no-await-in-loop
+      await fsp.access(directory);
+    }
+    // Activation stops at the broker, before the state provider is asked for
+    // the session's persistent config directory, so none exists yet.
+    await t.throwsAsync(
+      fsp.access(path.join(stateDir, plan.sandboxSessionId)),
+      { code: 'ENOENT' },
+    );
+    // Destroy stops through the controller, which closes the scope and
+    // revokes the grant it acquired, then the recorded storage owner removes
+    // the directories, and the record releases its dependencies.
+    await E(backend).destroy(harden({ sessionId: 'one' }));
+    t.false(await E(host).has(...recordPath));
+    for (const directory of [
+      plan.workspaceDir,
+      plan.mcpDir,
+      plan.mounterSocketDir,
+      path.join(roots.mcpDir, plan.sandboxSessionId),
+      path.join(stateDir, plan.sandboxSessionId),
+    ]) {
+      // eslint-disable-next-line no-await-in-loop
+      await t.throwsAsync(fsp.access(directory), { code: 'ENOENT' });
+    }
+    await E(backend).destroy(harden({ sessionId: 'one' }));
+  },
+);
+
+testNeedsNodeManager(
   'native OpenCode broker retains its exact secret after name replacement and restart',
   async t => {
     t.timeout(60_000);

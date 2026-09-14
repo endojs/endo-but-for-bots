@@ -22,6 +22,8 @@ import {
   readRecordedPath,
 } from '@endo/hosted-agent/session-plan.js';
 
+import { assertCredentialKind } from './claude-credential-kinds.js';
+
 /** @import { assertNativePodmanProfile } from '@endo/sandbox/native-podman-profile.js' */
 /** @typedef {import('@endo/hosted-agent/session-plan.js').PlanNativeProfile} PlanNativeProfile */
 /** @typedef {import('@endo/hosted-agent/session-plan.js').MounterEnv} MounterEnv */
@@ -36,14 +38,17 @@ export {
 /**
  * The approved plan for one logical Claude session. Every path is host
  * storage this plan owns; none may contain another, and the guest never sees
- * these strings. The slice's network is the sandbox's `private` profile: the
- * CLI reaches Anthropic directly with the credential the controller
- * materialises at activation, as the earlier per-session client did.
+ * these strings. The slice joins the broker's network namespace: the CLI
+ * reaches only the listener's loopback endpoint, and the host injects the
+ * credential upstream under the header its kind needs.
  * @typedef {object} ClaudeSessionPlan
  * @property {string} sessionId
  * @property {string} sandboxSessionId
  * @property {string} rootfs Explicit effective image; no environment fallback.
- * @property {'private'} network
+ * @property {'off' | 'public-internet'} networkPolicy
+ * @property {'apiKey' | 'oauthToken'} credentialKind The broker's credential
+ *   kind, recorded so the controller places the CLI's placeholder under the
+ *   variable the CLI reads for that kind.
  * @property {string} [workspaceDir] Owned backing storage the workspace
  *   filesystem serves; absent when the workspace is an operator-supplied host
  *   path that this session's storage owner must never remove.
@@ -65,7 +70,7 @@ export {
  * @typedef {Omit<ClaudeSessionPlan, 'nativeProfile'> & { nativeProfile: PlanNativeProfile }} RecordedClaudeSessionPlan
  */
 
-const NETWORKS = harden(['private']);
+const NETWORK_POLICIES = harden(['off', 'public-internet']);
 const RECORDED_PATHS = harden([
   'workspaceMountPoint',
   'mcpDir',
@@ -92,8 +97,9 @@ export const readClaudeSessionPlan = text => {
     (typeof recorded[name] === 'string' && recorded[name] !== '') ||
       Fail`Missing session plan field ${q(name)}`;
   }
-  NETWORKS.includes(/** @type {string} */ (recorded.network)) ||
-    Fail`Unknown session plan network`;
+  NETWORK_POLICIES.includes(/** @type {string} */ (recorded.networkPolicy)) ||
+    Fail`Unknown session plan network policy`;
+  assertCredentialKind(recorded.credentialKind);
   for (const name of OPTIONAL_TEXT) {
     recorded[name] === undefined ||
       typeof recorded[name] === 'string' ||

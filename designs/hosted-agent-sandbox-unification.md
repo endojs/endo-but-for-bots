@@ -468,13 +468,29 @@ settings, the sandbox session id, the storage owner over a plan parser, and the 
 host-directory state storage with its ownership markers — now live in `@endo/hosted-agent`
 (`session-plan.js`, `session-storage.js`, `session-state-storage.js`); OpenCode's modules
 compose them at their existing paths, so the Claude adapter can adopt them rather than copy them.
-The Claude adapter now has its own daemon-owned session plan, native controller, storage owner,
-and state provider over those primitives (its slice keeps the sandbox's `private` network and
-the credential the controller materialises); nothing mints them until the backend is rerouted.
-A Node daemon test mints the real services and backend in `@node` workers, creates a session,
-observes the provider listener refuse to start without Podman or procfs while the record keeps
-its plan, dependencies, and directories, and then removes everything through destroy.
-Claude and Codex adoption, native recovery semantics, and live acceptance remain pending.
+The Claude adapter now provisions through the daemon session owner too: its plan, native
+controller, storage owner, and state provider compose those primitives, its backend records
+sessions with the same refusals the OpenCode backend applies, its host setup mints the native
+runtime over the runtime directory itself under a derived label, and its per-session
+provisioner path is deleted.
+Claude's credential moved from a sidecar file to the daemon's Secrets manager, and its slice
+reaches Anthropic only through a provider broker of the same shared kind OpenCode uses
+(`@endo/hosted-agent/provider-broker-service.js`, over `@endo/hosted-agent/managed-credentials.js`):
+the broker's persisted profile pins the slice image and the credential kind every plan records,
+the listener sends the real credential upstream as `x-api-key` or as a Bearer token with the
+OAuth beta, the slice joins the broker sidecar's network with a placeholder credential and
+`ANTHROPIC_BASE_URL` at the listener, and the controller checks the broker's evidence against
+the recorded image and network policy (`off` or `public-internet`) before any local effect.
+The setup helpers both adapters need — verified formula reads, runtime placement, leftover
+probes, powers-by-path mints, image pinning — are shared in
+`@endo/hosted-agent/hosted-setup.js`, and the provider broker kit, its owned-service wrapper,
+and the managed-credential caplet are shared in `@endo/hosted-agent` with OpenCode's modules
+composing them at their existing paths.
+A Node daemon test per adapter mints the real services, secret, broker, and backend in `@node`
+workers, creates a session, observes the provider listener refuse to start without Podman or
+procfs while the record keeps its plan, dependencies, and directories, and then removes
+everything through destroy — wiring evidence, not native acceptance.
+Codex adoption, native recovery semantics, and live acceptance remain pending.
 
 ## Motivation
 

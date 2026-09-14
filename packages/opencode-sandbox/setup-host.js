@@ -46,7 +46,8 @@ import { chmod, lstat, mkdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { E } from '@endo/eventual-send';
-import { Fail, q } from '@endo/errors';
+import { Fail } from '@endo/errors';
+import { assertNoRuntimeLeftovers } from '@endo/hosted-agent/hosted-setup.js';
 
 import {
   assertRuntimePlacement,
@@ -144,26 +145,10 @@ export const main = async hostAgent => {
       ownerId = `opencode-${createHash('sha256').update(hostId).digest('hex')}`;
     }
     nativeEnv = await prepareRuntimeEnv(env, ownerId, roots);
-    // The runtime claims `<owner>.owner` and `<owner>.files` in its directory
-    // at construction and refuses either if present; a retired runtime under
-    // the same label leaves both behind across restart or failed cleanup.
-    // Neither is adopted or removed here: the operator establishes that the
-    // holder has stopped, then reconciles them, before setup mints anything.
-    for (const suffix of ['owner', 'files']) {
-      const leftover = path.join(
-        nativeEnv.ENDO_SANDBOX_RUNTIME_DIR,
-        `${nativeEnv.ENDO_SANDBOX_OWNER_ID}.${suffix}`,
-      );
-      // eslint-disable-next-line no-await-in-loop
-      const info = await lstat(leftover).catch(error => {
-        if (/** @type {NodeJS.ErrnoException} */ (error).code === 'ENOENT')
-          return undefined;
-        throw error;
-      });
-      if (info !== undefined) {
-        throw Fail`Runtime directory still holds ${q(leftover)}: the native runtime would claim it and be refused at construction. Establish that the runtime that held it has stopped, then reconcile it, before rerunning setup.`;
-      }
-    }
+    await assertNoRuntimeLeftovers(
+      nativeEnv.ENDO_SANDBOX_RUNTIME_DIR,
+      nativeEnv.ENDO_SANDBOX_OWNER_ID,
+    );
   }
 
   if (!(await E(hostAgent).has(SANDBOX_DIR))) {

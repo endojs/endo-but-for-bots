@@ -21,7 +21,8 @@ const plan = harden({
   sessionId: 'session-a',
   sandboxSessionId: 'session-a-0123456789ab',
   rootfs: `oci:example@sha256:${'a'.repeat(64)}`,
-  network: 'private',
+  networkPolicy: 'off',
+  credentialKind: 'apiKey',
   workspaceDir: '/workspaces/session-a-0123456789ab',
   workspaceMountPoint: '/private/session-a-0123456789ab/workspace',
   mcpDir: '/private/session-a-0123456789ab/mcp',
@@ -40,6 +41,19 @@ test('a recorded plan parses with its profile widened and nothing defaulted', t 
   const { nativeProfile: _, ...recorded } = plan;
   t.deepEqual(rest, recorded);
   t.false(Object.hasOwn(parsed, 'mounterEnv'));
+  // Both broker-attested policies and both credential kinds are recordable.
+  t.is(
+    readClaudeSessionPlan(
+      JSON.stringify({ ...plan, networkPolicy: 'public-internet' }),
+    ).networkPolicy,
+    'public-internet',
+  );
+  t.is(
+    readClaudeSessionPlan(
+      JSON.stringify({ ...plan, credentialKind: 'oauthToken' }),
+    ).credentialKind,
+    'oauthToken',
+  );
   const settings = { NINEP_SUDO: '1' };
   t.deepEqual(
     readClaudeSessionPlan(JSON.stringify({ ...plan, mounterEnv: settings }))
@@ -53,14 +67,24 @@ test('the plan refuses every deviation from its recorded shape', t => {
   const refused = [
     ['a missing session id', { ...plan, sessionId: '' }, /"sessionId"/],
     [
-      'an unknown network',
-      { ...plan, network: 'host-net' },
-      /Unknown session plan network/,
+      'an unknown network policy',
+      { ...plan, networkPolicy: 'private' },
+      /Unknown session plan network policy/,
     ],
     [
-      'a public network',
-      { ...plan, network: 'public-internet' },
-      /Unknown session plan network/,
+      'a missing network policy',
+      { ...plan, networkPolicy: undefined },
+      /Unknown session plan network policy/,
+    ],
+    [
+      'an unknown credential kind',
+      { ...plan, credentialKind: 'password' },
+      /Claude credential kind must be one of/,
+    ],
+    [
+      'a missing credential kind',
+      { ...plan, credentialKind: undefined },
+      /Claude credential kind must be one of/,
     ],
     [
       'a relative path',

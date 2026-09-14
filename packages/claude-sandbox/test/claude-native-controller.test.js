@@ -33,12 +33,15 @@ const nativeProfile = harden({
   maxConcurrentOperations: 1,
 });
 
-const planFor = id =>
+const digest = `sha256:${'a'.repeat(64)}`;
+
+const planFor = (id, overrides = {}) =>
   harden({
     sessionId: id,
     sandboxSessionId: `sandbox-${id}`,
-    rootfs: `oci:example@sha256:${'a'.repeat(64)}`,
-    network: 'private',
+    rootfs: `oci:example@${digest}`,
+    networkPolicy: 'off',
+    credentialKind: 'apiKey',
     workspaceDir: `/workspaces/${id}`,
     workspaceMountPoint: `/private/${id}/workspace`,
     mcpDir: `/private/${id}/mcp`,
@@ -46,29 +49,34 @@ const planFor = id =>
     nativeProfile,
     model: 'claude-sonnet-4',
     systemPrompt: 'You are Floot.',
+    ...overrides,
   });
 
-const fixture = (t, { kind = 'apiKey', realClient = false } = {}) => {
+const fixture = (t, { realClient = false } = {}) => {
   /** @type {any[]} */
   const events = [];
   const scopes = new Map();
+  const grants = new Map();
   /** @type {any[]} */
   const clients = [];
   const faults = {
     sandboxClose: false,
     mcpClose: false,
     mountWait: false,
+    grantWait: false,
     revokeFail: false,
-    materialiseWait: false,
-    materialiseFail: false,
+    badEvidence: false,
+    missingPublic: false,
+    wrongImage: false,
   };
   const mountEntered = gate();
   const mountReleased = gate();
-  const materialiseEntered = gate();
-  const materialiseReleased = gate();
+  const grantEntered = gate();
+  const grantReleased = gate();
   const sandboxClosed = gate();
   const revoked = gate();
   const cleanupReported = gate();
+  const foreign = Far('Filesystem', {});
   const tools = Far('JournaledTools', {});
   const sandboxService = Far('SandboxService', {
     async provideScope(id) {
@@ -102,38 +110,71 @@ const fixture = (t, { kind = 'apiKey', realClient = false } = {}) => {
       return scopes.get(id);
     },
   });
+  // The provider broker: an inert grant per session that starts, attests the
+  // listener endpoint, and reports the sidecar the slice joins.
+  const brokerService = Far('BrokerService', {
+    async provideScope(id, spec) {
+      events.push(['grant', id, spec]);
+      let closed = false;
+      const scope = Far('Grant', {
+        async start() {
+          events.push(`start grant ${id}`);
+          if (faults.grantWait) {
+            grantEntered.resolve();
+            await grantReleased.promise;
+          }
+          if (closed) throw Error('grant closed');
+        },
+        async attestation() {
+          return harden({
+            endpoint: 'http://127.0.0.1:9000',
+            imageDigest: digest,
+          });
+        },
+        async sandboxEvidence() {
+          return harden({
+            brokerSidecar: { container: `sidecar-${id}` },
+            imageDigest: faults.wrongImage
+              ? `sha256:${'b'.repeat(64)}`
+              : digest,
+            ...(spec.networkPolicy === 'public-internet' &&
+            !faults.missingPublic
+              ? {
+                  network: {
+                    policy: 'public-internet',
+                    proxyUrl: 'http://127.0.0.1:9001',
+                    dnsHost: '127.0.0.53',
+                    resolverConfigPath: '/operator/public-resolv.conf',
+                  },
+                }
+              : {}),
+            ...(faults.badEvidence ? { unexpected: foreign } : {}),
+          });
+        },
+        async revoke() {
+          events.push(`revoke ${id}`);
+          if (faults.revokeFail) throw Error('revoke failed');
+          closed = true;
+          grantReleased.resolve();
+          revoked.resolve();
+          if (grants.get(id) === scope) grants.delete(id);
+        },
+      });
+      grants.set(id, scope);
+      return scope;
+    },
+    lookupScope(id) {
+      events.push(`lookup grant ${id}`);
+      return grants.get(id);
+    },
+  });
   const stateProvider = Far('State', {
     async prepareSessionDirectory(id) {
       events.push(`state ${id}`);
       return harden({ directory: `/state/${id}` });
     },
   });
-  const credentials = Far('ClaudeCredentials', {
-    async kind() {
-      return kind;
-    },
-    async issue(tag) {
-      events.push(`issue ${tag}`);
-      return Far('IssuedCredential', {
-        async materialise() {
-          await null;
-          events.push(`materialise ${tag}`);
-          if (faults.materialiseWait) {
-            materialiseEntered.resolve();
-            await materialiseReleased.promise;
-          }
-          if (faults.materialiseFail) throw Error('materialise failed');
-          return `secret-for-${tag}`;
-        },
-      });
-    },
-    async revoke(tag) {
-      events.push(`revoke ${tag}`);
-      if (faults.revokeFail) throw Error('revoke failed');
-      revoked.resolve();
-    },
-  });
-  const roles = { sandboxService, stateProvider, credentials, tools };
+  const roles = { sandboxService, brokerService, stateProvider, tools };
   const resolver = Far('Resolver', {
     async get(role) {
       events.push(`resolve ${role}`);
@@ -249,20 +290,22 @@ const fixture = (t, { kind = 'apiKey', realClient = false } = {}) => {
   t.teardown(() => {
     faults.sandboxClose = false;
     faults.mcpClose = false;
+    faults.revokeFail = false;
     mountReleased.resolve();
-    materialiseReleased.resolve();
+    grantReleased.resolve();
   });
   return {
     events,
     scopes,
+    grants,
     clients,
     faults,
     resolver,
     makeController,
     mountEntered,
     mountReleased,
-    materialiseEntered,
-    materialiseReleased,
+    grantEntered,
+    grantReleased,
     sandboxClosed,
     revoked,
     cleanupReported,
@@ -270,7 +313,13 @@ const fixture = (t, { kind = 'apiKey', realClient = false } = {}) => {
   };
 };
 
-test('activation acquires the scope, state, credential, workspace mount, and tool bridge before the slice and client', async t => {
+const sliceOptions = f => {
+  const [, , options] =
+    f.events.find(event => Array.isArray(event) && event[0] === 'slice') ?? [];
+  return options;
+};
+
+test('activation acquires the scope, the broker grant, state, workspace mount, and tool bridge before the slice and client', async t => {
   const f = fixture(t);
   const controller = f.makeController();
   t.deepEqual(f.events, []);
@@ -278,9 +327,7 @@ test('activation acquires the scope, state, credential, workspace mount, and too
   await E(controller).activate(JSON.stringify(plan), f.resolver);
   t.is(f.clients.length, 1);
   t.false(f.events.some(event => Array.isArray(event) && event[0] === 'send'));
-  const [, , options] = f.events.find(
-    event => Array.isArray(event) && event[0] === 'slice',
-  );
+  const options = sliceOptions(f);
   t.deepEqual(
     options.mounts.map(mount => [mount.hostPath, mount.innerPath, mount.mode]),
     [
@@ -289,10 +336,30 @@ test('activation acquires the scope, state, credential, workspace mount, and too
       [plan.mcpDir, '/endo-mcp', 'ro'],
     ],
   );
-  t.is(options.network, 'private');
+  // The slice joins the broker sidecar's network namespace; only the
+  // listener's loopback endpoint and a placeholder credential reach it.
+  t.is(options.network, 'join');
+  t.is(options.networkRef, 'sidecar-sandbox-a');
   t.is(options.cwd, '/workspace');
-  t.deepEqual(options.env, { ANTHROPIC_API_KEY: 'secret-for-a' });
+  t.deepEqual(options.env, {
+    ANTHROPIC_BASE_URL: 'http://127.0.0.1:9000',
+    ANTHROPIC_API_KEY: 'claude-broker-placeholder',
+  });
+  t.false('generatedFiles' in options);
   t.is(options.nativeProfile.memoryBytes, 536_870_912n);
+  t.false('limits' in options);
+  t.false('policy' in options);
+  // The grant names the Anthropic account and the recorded policy and model.
+  const [, grantId, spec] = f.events.find(
+    event => Array.isArray(event) && event[0] === 'grant',
+  );
+  t.is(grantId, 'sandbox-a');
+  t.deepEqual(spec, {
+    providerOrigin: 'https://api.anthropic.com',
+    accountRef: 'anthropic',
+    networkPolicy: 'off',
+    model: 'claude-sonnet-4',
+  });
   const [, mounterEnv] = f.events.find(
     event => Array.isArray(event) && event[0] === 'mounter',
   );
@@ -321,22 +388,22 @@ test('activation acquires the scope, state, credential, workspace mount, and too
     f.events.find(event => Array.isArray(event) && event[0] === 'resume'),
     ['resume', '/state/sandbox-a', { debug: false }],
   );
-  // The credential is issued and materialised once, before the slice.
+  // The grant is started and its evidence checked before any local effect.
   const order = f.events.filter(
     event =>
       typeof event === 'string' ||
-      (Array.isArray(event) && event[0] === 'slice'),
+      (Array.isArray(event) && ['grant', 'slice'].includes(event[0])),
   );
   t.deepEqual(
-    order.map(event => (Array.isArray(event) ? 'slice' : event)),
+    order.map(event => (Array.isArray(event) ? event[0] : event)),
     [
       'resolve sandboxService',
       'provide sandbox sandbox-a',
+      'resolve brokerService',
+      'grant',
+      'start grant sandbox-a',
       'resolve stateProvider',
       'state sandbox-a',
-      'resolve credentials',
-      'issue a',
-      'materialise a',
       'resolve tools',
       'slice',
     ],
@@ -345,29 +412,75 @@ test('activation acquires the scope, state, credential, workspace mount, and too
   t.like(status, { sessionId: 'a', stopping: false, stopped: false });
 });
 
-test('an oauth credential lands under its own variable; an unknown kind is refused before any grant', async t => {
-  const oauth = fixture(t, { kind: 'oauthToken' });
+test('a subscription token kind lands its placeholder under its own variable; an unknown kind is refused before any acquisition', async t => {
+  const oauth = fixture(t);
   await E(oauth.makeController()).activate(
-    JSON.stringify(planFor('a')),
+    JSON.stringify(planFor('a', { credentialKind: 'oauthToken' })),
     oauth.resolver,
   );
-  const [, , options] = oauth.events.find(
-    event => Array.isArray(event) && event[0] === 'slice',
-  );
-  t.deepEqual(options.env, { CLAUDE_CODE_OAUTH_TOKEN: 'secret-for-a' });
-  const unknown = fixture(t, { kind: 'password' });
+  t.deepEqual(sliceOptions(oauth).env, {
+    ANTHROPIC_BASE_URL: 'http://127.0.0.1:9000',
+    CLAUDE_CODE_OAUTH_TOKEN: 'claude-broker-placeholder',
+  });
+  const unknown = fixture(t);
   await t.throwsAsync(
     E(unknown.makeController()).activate(
-      JSON.stringify(planFor('a')),
+      JSON.stringify(planFor('a', { credentialKind: 'password' })),
       unknown.resolver,
     ),
-    { message: /Unknown credential kind "password"/ },
+    { message: /Claude credential kind must be one of/ },
   );
-  t.false(unknown.events.some(event => event === 'issue a'));
-  t.false(
-    unknown.events.some(event => Array.isArray(event) && event[0] === 'slice'),
-  );
+  t.deepEqual(unknown.events, [], 'refused before any acquisition');
 });
+
+test('a public-internet plan uses the attested proxy environment and literal resolver contents', async t => {
+  const f = fixture(t);
+  const controller = f.makeController();
+  const text = JSON.stringify(
+    planFor('a', { networkPolicy: 'public-internet' }),
+  );
+  await E(controller).activate(text, f.resolver);
+  const options = sliceOptions(f);
+  t.is(options.env.HTTP_PROXY, 'http://127.0.0.1:9001');
+  t.is(options.env.NO_PROXY, '127.0.0.1');
+  t.is(options.env.ANTHROPIC_BASE_URL, 'http://127.0.0.1:9000');
+  t.deepEqual(options.generatedFiles, [
+    { innerPath: '/etc/resolv.conf', contents: 'nameserver 127.0.0.53\n' },
+  ]);
+  const [, , spec] = f.events.find(
+    event => Array.isArray(event) && event[0] === 'grant',
+  );
+  t.is(spec.networkPolicy, 'public-internet');
+  await E(controller).terminate(text, f.resolver);
+});
+
+for (const [fault, message] of /** @type {const} */ ([
+  ['missingPublic', /network evidence/],
+  ['wrongImage', /pinned image/],
+  ['badEvidence', /copy data/],
+])) {
+  test(`the controller refuses ${fault} broker evidence before any local effect`, async t => {
+    const f = fixture(t);
+    f.faults[fault] = true;
+    const controller = f.makeController();
+    const text = JSON.stringify(
+      planFor('a', { networkPolicy: 'public-internet' }),
+    );
+    await t.throwsAsync(E(controller).activate(text, f.resolver), { message });
+    t.false(
+      f.events.some(
+        event =>
+          Array.isArray(event) &&
+          ['mounter', 'mcp', 'slice'].includes(event[0]),
+      ),
+    );
+    t.is(f.clients.length, 0);
+    await E(controller).terminate(text, f.resolver);
+    t.is(f.scopes.size, 0);
+    t.is(f.grants.size, 0);
+    t.like(await E(controller).status(), { stopped: true });
+  });
+}
 
 test('recorded mounter settings reach the session mounter beneath its own socket directory', async t => {
   const f = fixture(t);
@@ -387,7 +500,7 @@ test('recorded mounter settings reach the session mounter beneath its own socket
   });
 });
 
-test('terminate releases the slice, sandbox, mounter, bridge, and credential grant, and is idempotent', async t => {
+test('terminate releases the slice, sandbox, mounter, bridge, and broker grant, and is idempotent', async t => {
   const f = fixture(t);
   const controller = f.makeController();
   const text = JSON.stringify(planFor('a'));
@@ -403,7 +516,7 @@ test('terminate releases the slice, sandbox, mounter, bridge, and credential gra
       'close mounter',
       'close sandbox sandbox-a',
       'dispose slice sandbox-a',
-      'revoke a',
+      'revoke sandbox-a',
     ],
     'every owner is released exactly once',
   );
@@ -444,8 +557,29 @@ test('a terminate during activation fences the acquisition and releases what was
   await termination;
   t.true(f.events.includes('close sandbox sandbox-a'));
   t.true(f.events.includes('close mounter'));
-  t.true(f.events.includes('revoke a'), 'the issued grant is revoked');
+  t.true(f.events.includes('revoke sandbox-a'), 'the grant is revoked');
   t.is(f.clients.length, 0, 'no client was constructed');
+});
+
+test('a terminate while the broker grant is starting revokes it and refuses the activation', async t => {
+  t.timeout(3000);
+  const f = fixture(t);
+  f.faults.grantWait = true;
+  const controller = f.makeController();
+  const text = JSON.stringify(planFor('a'));
+  const failed = t.throwsAsync(E(controller).activate(text, f.resolver), {
+    message: /closed|stopping/,
+  });
+  await f.grantEntered.promise;
+  await E(controller).terminate(text, f.resolver);
+  await failed;
+  t.true(f.events.includes('revoke sandbox-a'));
+  t.true((await E(controller).status()).stopped);
+  t.false(
+    f.events.some(event => Array.isArray(event) && event[0] === 'mounter'),
+    'no mounter was made',
+  );
+  t.is(f.clients.length, 0);
 });
 
 test('failed cleanup is retained and retried, never reported as release', async t => {
@@ -459,27 +593,41 @@ test('failed cleanup is retained and retried, never reported as release', async 
     message: /Claude native cleanup pending/,
   });
   t.like(await E(controller).status(), { stopping: true, stopped: false });
+  t.false(
+    f.events.includes('close mounter'),
+    'the mounter waits for the sandbox',
+  );
   f.faults.sandboxClose = false;
   f.faults.revokeFail = false;
   await E(controller).terminate(text, f.resolver);
   t.like(await E(controller).status(), { stopped: true });
-  t.is(f.events.filter(e => e === 'revoke a').length, 2, 'revoke retried');
+  t.is(
+    f.events.filter(e => e === 'revoke sandbox-a').length,
+    2,
+    'revoke retried',
+  );
+  t.true(f.events.includes('close mounter'));
+  t.is(f.grants.size, 0);
 });
 
-test('reconstruction refuses to invent local cleanup ownership but releases the shared scope', async t => {
+test('reconstruction refuses to invent local cleanup ownership but releases the shared scope and grant', async t => {
   const f = fixture(t);
   const text = JSON.stringify(planFor('a'));
-  const scope = await E(f.resolver)
-    .get('sandboxService')
-    .then(service => E(service).provideScope('sandbox-a'));
-  t.truthy(scope);
+  const sandbox = await E(f.resolver).get('sandboxService');
+  t.truthy(await E(sandbox).provideScope('sandbox-a'));
+  const broker = await E(f.resolver).get('brokerService');
+  t.truthy(await E(broker).provideScope('sandbox-a', harden({})));
   const revived = f.makeController();
   await t.throwsAsync(E(revived).terminate(text, f.resolver), {
     message: /Original local 9P\/MCP cleanup ownership is unavailable/,
   });
   t.true(f.events.includes('lookup sandbox sandbox-a'));
+  t.true(f.events.includes('lookup grant sandbox-a'));
   t.true(f.events.includes('close sandbox sandbox-a'));
-  t.false(f.events.includes('revoke a'), 'no grant was issued to revoke');
+  t.true(f.events.includes('revoke sandbox-a'));
+  t.is(f.scopes.size, 0);
+  t.is(f.grants.size, 0);
+  t.false((await E(revived).status()).stopped);
 });
 
 test('the plan cannot change under a live activation, and the caplet requires null powers', async t => {
@@ -523,6 +671,7 @@ test('lost daemon context fences and releases without claiming completion', asyn
     ),
     'the failed release is reported, not swallowed',
   );
+  t.true(f.events.includes('revoke sandbox-a'));
   t.like(await E(controller).status(), { stopping: true, stopped: false });
 });
 
@@ -548,71 +697,11 @@ test('the real client over a resolved slice disposes it on terminate and leaves 
     'close mounter',
     'close sandbox sandbox-a',
     'dispose slice sandbox-a',
-    'revoke a',
+    'revoke sandbox-a',
   ]);
   t.true(
     after.indexOf('dispose slice sandbox-a') <
       after.indexOf('close sandbox sandbox-a'),
   );
   t.like(await E(controller).status(), { stopped: true, terminated: true });
-});
-
-test('a revoked grant is not revoked again when another release is retried', async t => {
-  const f = fixture(t);
-  const controller = f.makeController();
-  const text = JSON.stringify(planFor('a'));
-  await E(controller).activate(text, f.resolver);
-  f.faults.sandboxClose = true;
-  await t.throwsAsync(E(controller).terminate(text, f.resolver), {
-    message: /Claude native cleanup pending/,
-  });
-  t.is(f.events.filter(e => e === 'revoke a').length, 1);
-  t.false(
-    f.events.includes('close mounter'),
-    'the mounter waits for the sandbox',
-  );
-  f.faults.sandboxClose = false;
-  await E(controller).terminate(text, f.resolver);
-  t.is(f.events.filter(e => e === 'revoke a').length, 1, 'revoked once');
-  t.true(f.events.includes('close mounter'));
-  t.like(await E(controller).status(), { stopped: true });
-});
-
-test('a failed materialisation leaves the grant to terminate, which revokes it', async t => {
-  const f = fixture(t);
-  f.faults.materialiseFail = true;
-  const controller = f.makeController();
-  const text = JSON.stringify(planFor('a'));
-  await t.throwsAsync(E(controller).activate(text, f.resolver), {
-    message: /materialise failed/,
-  });
-  t.true(f.events.includes('issue a'));
-  t.false(f.events.includes('revoke a'), 'nothing is released until terminate');
-  t.is(f.clients.length, 0);
-  await E(controller).terminate(text, f.resolver);
-  t.true(f.events.includes('revoke a'));
-  t.true(f.events.includes('close sandbox sandbox-a'));
-  t.like(await E(controller).status(), { stopped: true });
-});
-
-test('a stop between issue and materialise still revokes the grant', async t => {
-  const f = fixture(t);
-  f.faults.materialiseWait = true;
-  const controller = f.makeController();
-  const text = JSON.stringify(planFor('a'));
-  const activation = E(controller).activate(text, f.resolver);
-  await f.materialiseEntered.promise;
-  const termination = E(controller).terminate(text, f.resolver);
-  // The grant is revoked while materialise is still pending: a stalled
-  // credentials capability cannot keep an issued grant alive.
-  await f.revoked.promise;
-  t.true(f.events.includes('revoke a'), 'revoked while materialise is pending');
-  f.materialiseReleased.resolve();
-  await t.throwsAsync(activation, { message: /is stopping/ });
-  await termination;
-  t.false(
-    f.events.some(event => Array.isArray(event) && event[0] === 'mounter'),
-    'no mounter was made',
-  );
-  t.is(f.clients.length, 0);
 });

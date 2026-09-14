@@ -4,15 +4,17 @@
 /**
  * The per-session native controller the daemon session owner starts for a
  * recorded Claude session: the `client` role of the record. It activates the
- * approved plan by acquiring a scope from the native sandbox service,
- * preparing the session's persistent Claude config directory through the
- * state provider, projecting the recorded workspace through this session's
- * own 9P mounter, starting the Endo tool bridge, materialising the session's
- * credential from the recorded credentials capability into the slice's
- * environment, and only then running the Claude CLI client over the slice.
- * Construction is inert; the daemon supplies every dependency by exact
- * recorded identity through the resolver, and the guest never sees a
- * recorded path.
+ * approved plan by acquiring a scope from the native sandbox service and an
+ * inference grant from the provider broker, checking the broker's evidence
+ * against the recorded image and network policy, preparing the session's
+ * persistent Claude config directory through the state provider, projecting
+ * the recorded workspace through this session's own 9P mounter, starting the
+ * Endo tool bridge, and only then running the Claude CLI client over a slice
+ * that joins the broker's network namespace. The slice never holds the
+ * provider credential: it sees the listener's loopback endpoint and a
+ * placeholder. Construction is inert; the daemon supplies every dependency
+ * by exact recorded identity through the resolver, and the guest never sees
+ * a recorded path.
  *
  * @module
  */
@@ -27,13 +29,18 @@ import {
 } from '@endo/9p-server/mount-caplet.js';
 import { makeFsBridge9p } from '@endo/9p-server/src/fs-bridge.js';
 import { assertCopyData } from '@endo/daemon/copy-data.js';
-import { Fail, q } from '@endo/errors';
+import { Fail } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import { makeMcpBridgeForToolSet } from '@endo/hosted-agent/mcp-bridge.js';
+import {
+  assertPublicNetworkEvidence,
+  makePublicNetworkEnvironment,
+} from '@endo/hosted-agent/public-network.js';
 import { M } from '@endo/patterns';
 import { makeNodeFilesystem } from '@endo/platform/fs/extended/node-fs.js';
 
+import { ANTHROPIC_ORIGIN, CLAUDE_BROKER_ACCOUNT } from './claude-broker.js';
 import { makeClaudeClient } from './claude-client.js';
 import { CREDENTIAL_ENV_VARS } from './claude-credential-kinds.js';
 import { readClaudeSessionPlan } from './claude-session-plan.js';
@@ -44,6 +51,11 @@ import { parseRootfs, rootfsLabel } from './parse-rootfs.js';
 /** Slice-internal paths; the recorded host paths never reach the guest. */
 const WORKSPACE_PATH = '/workspace';
 const CONFIG_PATH = '/claude-config';
+/**
+ * What the CLI holds instead of a credential: it insists on one and sends it
+ * to the listener, which never forwards it upstream.
+ */
+const CREDENTIAL_PLACEHOLDER = 'claude-broker-placeholder';
 
 const ControllerInterface = M.interface('ClaudeNativeController', {
   activate: M.call(M.string(), M.remotable()).returns(M.promise()),
@@ -60,9 +72,9 @@ const ControllerInterface = M.interface('ClaudeNativeController', {
  * terminate retries.
  *
  * The daemon calls terminate without activate when reconstructing a
- * previously started controller. The shared sandbox scope can then be looked
- * up, but the lost local 9P/MCP owners and the issued credential grant cannot
- * be recreated as evidence of release, so that path refuses completion.
+ * previously started controller. The shared sandbox and broker scopes can
+ * then be looked up, but the lost local 9P/MCP owners cannot be recreated as
+ * evidence of release, so that path refuses completion.
  * Fresh inert construction is cancelled by the daemon's construction kit
  * instead. The caller must pre-create and own the private mounterSocketDir
  * and keep all mount/socket paths under stable, disjoint ancestry outside
@@ -114,12 +126,12 @@ export const makeClaudeNativeController = ({
   let closing;
   /** @type {any} */
   let sandboxScope;
+  /** @type {any} */
+  let brokerScope;
   /** @type {ReturnType<typeof makeFsMounterKit> | undefined} */
   let mounter;
   /** @type {Awaited<ReturnType<typeof startMcpSocketServer>> | undefined} */
   let mcp;
-  /** @type {(() => Promise<void>) | undefined} */
-  let revokeCredential;
   /** @type {ReturnType<typeof makeClaudeClient> | undefined} */
   let client;
   const assertOpen = () => {
@@ -128,24 +140,19 @@ export const makeClaudeNativeController = ({
 
   // This operation must be reachable while activation is waiting for a native
   // acquisition. Parents are released only after the sandbox acknowledges
-  // stop; the credential grant is revoked beside them so a failed release of
+  // stop; the broker grant is revoked beside them so a failed release of
   // either is retained for a later terminate. The client's own terminate is
   // best-effort by contract, so this owner never routes its release through
   // it: a failure here rejects, and a later terminate re-invokes every
-  // release — each is idempotent on success — except the revoke, which is
-  // tracked and never repeated once it has succeeded.
+  // release, each idempotent on success.
   const closeResources = async () => {
     const sandboxClosed = sandboxScope
       ? E(sandboxScope).close()
       : Promise.resolve();
-    const revoke = revokeCredential;
     const results = await Promise.allSettled([
       sandboxClosed.then(() => mounter?.close()),
+      brokerScope ? E(brokerScope).revoke() : Promise.resolve(),
       mcp?.close(),
-      revoke?.().then(() => {
-        // A revoked grant is gone; a retry must not revoke it again.
-        if (revokeCredential === revoke) revokeCredential = undefined;
-      }),
     ]);
     const failures = results.flatMap(result =>
       result.status === 'rejected' ? [result.reason] : [],
@@ -174,6 +181,38 @@ export const makeClaudeNativeController = ({
       assertOpen();
       sandboxScope = await E(sandbox).provideScope(approved.sandboxSessionId);
       closeIfStopping();
+      const broker = await E(resolver).get('brokerService');
+      assertOpen();
+      brokerScope = await E(broker).provideScope(
+        approved.sandboxSessionId,
+        harden({
+          providerOrigin: ANTHROPIC_ORIGIN,
+          accountRef: CLAUDE_BROKER_ACCOUNT,
+          networkPolicy: approved.networkPolicy,
+          ...(approved.model ? { model: approved.model } : {}),
+        }),
+      );
+      closeIfStopping();
+      await E(brokerScope).start();
+      assertOpen();
+      const [attestation, evidence] = await Promise.all([
+        E(brokerScope).attestation(),
+        E(brokerScope).sandboxEvidence(),
+      ]);
+      assertCopyData(harden(attestation));
+      assertCopyData(harden(evidence));
+      const rootfs = parseRootfs(approved.rootfs);
+      (rootfs.kind === 'oci' &&
+        typeof evidence.imageDigest === 'string' &&
+        /^sha256:[a-f0-9]{64}$/.test(evidence.imageDigest) &&
+        rootfs.ref.endsWith(`@${evidence.imageDigest}`) &&
+        attestation.imageDigest === evidence.imageDigest) ||
+        Fail`Claude rootfs must match the broker's pinned image`;
+      const publicNetwork = assertPublicNetworkEvidence(evidence.network);
+      (approved.networkPolicy === 'public-internet') ===
+        (publicNetwork !== undefined) ||
+        Fail`Broker network evidence does not match the recorded policy`;
+      assertOpen();
       const stateProvider = await E(resolver).get('stateProvider');
       assertOpen();
       // The persistent Claude config directory: the conversation transcript
@@ -182,26 +221,6 @@ export const makeClaudeNativeController = ({
         approved.sandboxSessionId,
       );
       assertCopyData(harden(state));
-      assertOpen();
-      // The credential is materialised immediately before it flows into the
-      // slice environment; the grant is revoked with the other resources.
-      // `kind()` is interface-guaranteed on the credentials capability; an
-      // unknown kind is refused rather than routed under a coerced name.
-      const credentials = await E(resolver).get('credentials');
-      assertOpen();
-      const kind = await E(credentials).kind();
-      assertOpen();
-      const envVar = Object.hasOwn(CREDENTIAL_ENV_VARS, kind)
-        ? CREDENTIAL_ENV_VARS[/** @type {keyof CREDENTIAL_ENV_VARS} */ (kind)]
-        : undefined;
-      if (envVar === undefined) {
-        throw Fail`Unknown credential kind ${q(kind)}; expected one of ${q(Object.keys(CREDENTIAL_ENV_VARS).join(', '))}`;
-      }
-      const issued = await E(credentials).issue(approved.sessionId);
-      revokeCredential = () => E(credentials).revoke(approved.sessionId);
-      closeIfStopping();
-      const secret = await E(issued).materialise();
-      typeof secret === 'string' || Fail`Credential must materialise as text`;
       assertOpen();
       // Exactly one of the two is recorded; the parser enforces it.
       const filesystem = makeFilesystem(
@@ -231,7 +250,6 @@ export const makeClaudeNativeController = ({
       assertOpen();
       mcp = await startMcp({ socketDir: approved.mcpDir, bridge });
       closeIfStopping();
-      const rootfs = parseRootfs(approved.rootfs);
       const options = harden({
         rootfs,
         mounts: [
@@ -243,11 +261,30 @@ export const makeClaudeNativeController = ({
           { hostPath: state.directory, innerPath: CONFIG_PATH, mode: 'rw' },
           { hostPath: approved.mcpDir, innerPath: mcp.innerDir, mode: 'ro' },
         ],
-        network: approved.network,
+        network: 'join',
+        networkRef: evidence.brokerSidecar.container,
         backend: 'podman',
         nativeProfile: approved.nativeProfile,
         cwd: WORKSPACE_PATH,
-        env: { [envVar]: secret },
+        ...(publicNetwork
+          ? {
+              generatedFiles: [
+                {
+                  innerPath: '/etc/resolv.conf',
+                  contents: `nameserver ${publicNetwork.dnsHost}\n`,
+                },
+              ],
+            }
+          : {}),
+        env: {
+          ...makePublicNetworkEnvironment(publicNetwork),
+          // The CLI reaches the listener's loopback endpoint and holds a
+          // placeholder under the variable its credential kind reads; the
+          // listener never forwards it.
+          ANTHROPIC_BASE_URL: attestation.endpoint,
+          [CREDENTIAL_ENV_VARS[approved.credentialKind]]:
+            CREDENTIAL_PLACEHOLDER,
+        },
       });
       assertCopyData(options);
       const slice = await E(sandboxScope).makeResolved(options);
@@ -317,6 +354,13 @@ export const makeClaudeNativeController = ({
             if (sandboxScope) return;
             const sandbox = await E(resolver).get('sandboxService');
             sandboxScope = await E(sandbox).lookupScope(
+              recoveredPlan.sandboxSessionId,
+            );
+          })(),
+          (async () => {
+            if (brokerScope) return;
+            const broker = await E(resolver).get('brokerService');
+            brokerScope = await E(broker).lookupScope(
               recoveredPlan.sandboxSessionId,
             );
           })(),

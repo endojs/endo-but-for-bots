@@ -410,37 +410,104 @@ LinuxKit kernel 6.12, aarch64) — see [DEMO.md](./DEMO.md).
   - `ClaudeClient.send()` parsed those same three events via
     `parseStreamJsonLines`, validating the client path against real output.
 
-### Phase 3 — daemon-owned sessions (in progress)
+### Phase 3 — daemon-owned sessions
 
-The hosted backend path is being moved onto the daemon session owner, the way
-`@endo/opencode-sandbox` already is (see
-`designs/hosted-agent-sandbox-unification.md`). Landed so far, minted by
-nothing yet:
+The hosted backend path now runs on the daemon session owner, the way
+`@endo/opencode-sandbox` does (see
+`designs/hosted-agent-sandbox-unification.md`):
 
+- `src/claude-broker.js` and `src/claude-broker-service-agent.js` — the
+  Anthropic provider broker over the shared
+  `@endo/hosted-agent/provider-broker-service.js`: one retained operator
+  service (`claude-sandbox/broker-service`) whose only powers dependency is
+  the managed credential's SecretBlob read facet, and whose persisted profile
+  fixes the digest-pinned slice image, the listener image, the model
+  allowlist (the CLI catalog's Anthropic ids), and the credential kind.
+  The policy admits `POST /v1/messages` on `https://api.anthropic.com`,
+  sends the credential upstream as `x-api-key` for an API key or as a Bearer
+  token with the `oauth-2025-04-20` beta for a subscription token
+  (`anthropicBeta` overrides the capability list), and strips whatever
+  credential the CLI insists on sending (`clientAuthorization: 'strip'`).
 - `src/claude-session-plan.js` — the passive record of one logical session
   (owned or operator-supplied workspace, mount point, private socket
   directories, native profile, optional mounter settings, model, system
-  prompt) over the shared primitives in `@endo/hosted-agent/session-plan.js`;
-  the slice network is fixed to the sandbox's `private` profile, as the
-  per-session client's was.
+  prompt) over the shared primitives in `@endo/hosted-agent/session-plan.js`,
+  plus the request's `networkPolicy` (`off` or `public-internet`, attested by
+  the broker) and the broker's `credentialKind`, which selects the variable
+  the CLI reads its placeholder from.
 - `src/claude-native-controller.js` — the record's `client` role: native
-  sandbox scope, persistent config directory from the state provider (bound
-  directly as `CLAUDE_CONFIG_DIR`), the workspace through the session's own 9P
-  mounter, the Endo tool bridge, the credential issued and materialised from
-  the recorded credentials capability into the slice environment, then
-  `makeClaudeClient` over the slice. The controller releases every owner
-  itself after the client has disposed its slice; failed release is retained
-  for retry, and reconstruction after a restart refuses to invent lost local
+  sandbox scope, then the broker grant (started, its attestation and sandbox
+  evidence checked against the recorded image digest and network policy),
+  persistent config directory from the state provider (bound directly as
+  `CLAUDE_CONFIG_DIR`), the workspace through the session's own 9P mounter,
+  the Endo tool bridge, then `makeClaudeClient` over a slice that joins the
+  broker sidecar's network namespace (`network: 'join'`) with
+  `ANTHROPIC_BASE_URL` at the listener's loopback endpoint and a placeholder
+  under `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`; a public-internet
+  grant adds the attested proxy environment and resolver file. The real
+  credential never enters the slice. The controller releases every owner
+  itself after the client has disposed its slice, revoking the grant beside
+  the scope; failed release is retained for retry, and reconstruction after
+  a restart looks up the scope and grant but refuses to invent lost local
   ownership.
+- `src/claude-backend-module.js` — reads the native sandbox, broker service,
+  state provider, and storage owner formulas by verified entrypoint, takes
+  the slice image and credential kind from the broker's persisted profile,
+  reprovides the daemon owner on `claude-sandbox/session-records`, records
+  one plan per Floot session with those exact dependencies, refuses a changed
+  workspace, image, credential kind, or private layout for an existing
+  record, stops and revises it in place otherwise (network policy, model,
+  and persona may change), and heals the session directories on every
+  start. `src/claude-backend-factory.js` wraps the owner's stop/remove behind
+  the unchanged Floot facets, defaults the network policy to `off`, and
+  advertises `supportedNetworkPolicies`; declared container mounts are
+  refused, as the OpenCode backend refuses them.
 - `src/claude-session-storage-module.js` and `src/claude-state-provider-module.js`
   — the `storage` role and the state provider over
   `@endo/hosted-agent/session-storage.js` and `session-state-storage.js`.
-- `src/claude-transcripts.js` — the resume decisions, shared with the legacy
-  client module.
+- `setup-host.js` mints `claude-sandbox/native-sandbox` (slot-free null
+  powers) over `ENDO_SANDBOX_RUNTIME_DIR` itself under the host label with a
+  `-native` suffix — the inbox-form factory keeps no runtime directory, only
+  its Podman label — and `claude-sandbox/state-provider` under
+  `ENDO_CLAUDE_STATE_DIR`. `setup-hosted.js` requires both, seeds the managed
+  credential into the daemon's Secrets manager on first setup only (a
+  subscription token or an API key; the kind is inferred from the token
+  prefix or named with `ENDO_CLAUDE_CREDS_KIND`), pins the slice image
+  through Podman, mints the broker service over the secret's delegated read
+  facet with `ENDO_CLAUDE_BROKER_LISTENER_IMAGE`, refuses before any mint
+  what a minted owner would refuse, retains an existing broker with its
+  persisted kind (a run naming the other kind is refused rather than
+  silently re-credentialed), mints the storage owner over the state
+  provider, and mints the backend under a temporary name before rebinding
+  it. The per-session provisioner, its client-formula creation module, and
+  the sidecar credential file are gone from the hosted path;
+  `src/claude-client-module.js` and `src/claude-credentials-module.js` remain
+  for the inbox-form factory.
+- Shared with the other adapters: `@endo/hosted-agent/hosted-setup.js`
+  (verified formula reads, runtime placement, leftover probes, private
+  directories, powers-by-path mints, image pinning),
+  `@endo/hosted-agent/managed-credentials.js` (the Secrets-backed credential
+  caplet), and `@endo/hosted-agent/provider-broker-service.js`.
 
-Still pending: the backend rerouted through `provideSessionOwner`, deletion of
-the per-session provisioner path, setup minting the native runtime, state
-provider, and storage owner, and Node daemon acceptance.
+A Node daemon test (`packages/daemon/test/endo.test.js`, "the Claude backend
+records a session through the daemon owner and destroy reaches its
+storage") mints these services and the backend in `@node` workers over a
+SecretBlob, creates a session, observes activation fail at the broker's
+listener start (no Podman) while the record keeps its plan, its four exact
+dependencies, and its directories, and then removes everything through
+destroy. It is wiring evidence on the development host, not native
+acceptance.
+
+Still pending: live Linux/rootless Podman acceptance. Points to watch there:
+the per-session 9P socket path `<mcpRoot>/<sandboxSessionId>/9p/endo-9p-…sock`
+must stay under the Unix socket path limit, which a deep
+`ENDO_CLAUDE_MCP_DIR` would breach; the broker's model allowlist is the CLI
+catalog, so a CLI build that issues side requests under another model id is
+refused by the listener until the catalog names it; and the listener forwards
+none of the CLI's own headers, so the beta capabilities the CLI pinned in the
+slice image needs, for either credential kind, must be configured with
+`ENDO_CLAUDE_ANTHROPIC_BETA` (the OAuth capability is the default only for
+subscription tokens).
 
 ## Environment gotchas
 

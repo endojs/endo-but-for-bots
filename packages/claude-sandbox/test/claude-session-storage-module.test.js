@@ -66,7 +66,8 @@ test('the storage caplet requires both roots and removes one recorded plan throu
     sessionId: 'session-a',
     sandboxSessionId: id,
     rootfs: `oci:example@sha256:${'a'.repeat(64)}`,
-    network: 'private',
+    networkPolicy: 'off',
+    credentialKind: 'apiKey',
     workspaceDir: path.join(roots.workspaceDir, id),
     workspaceMountPoint: path.join(roots.mcpDir, id, 'workspace'),
     mcpDir: path.join(roots.mcpDir, id, 'mcp'),
@@ -85,10 +86,8 @@ test('the storage caplet requires both roots and removes one recorded plan throu
   t.deepEqual(removedState, [id]);
   // An OpenCode-shaped plan is not a Claude plan.
   await t.throwsAsync(
-    storage.remove(
-      JSON.stringify({ ...plan, network: undefined, networkPolicy: 'off' }),
-    ),
-    { message: /Unknown session plan network/ },
+    storage.remove(JSON.stringify({ ...plan, credentialKind: undefined })),
+    { message: /Claude credential kind must be one of/ },
   );
 });
 
