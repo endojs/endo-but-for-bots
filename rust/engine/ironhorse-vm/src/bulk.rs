@@ -1,10 +1,10 @@
-//! The BULK side tables — array items and collection entries — behind
-//! counting accessors (store-seam design § Plan: counted side-table
-//! ref-page accessors).
+//! The BULK side tables — array items, index properties and collection
+//! entries — behind counting accessors (store-seam design § Plan:
+//! counted side-table ref-page accessors).
 //!
 //! The partial collector roots from the pages side-table values
 //! reference. Before this module, finding those pages walked every
-//! side-table entry (O(live), ~1 ms at 480k slots); the two BULK
+//! side-table entry (O(live), ~1 ms at 480k slots); the three BULK
 //! tables carry almost all of that weight. Here their maps are
 //! **private to this module**, and the only mutation routes are
 //! methods that apply symmetric per-page refcount deltas via the same

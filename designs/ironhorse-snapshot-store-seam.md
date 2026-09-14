@@ -2623,8 +2623,10 @@ Status (architecture review F038/F053/F089): the runtime parity net
 now compares the standing bulk counts against a fresh recount of the
 SAME three tables through the roster's `bulk` walk, exact counts and
 no tail term, so a tail reference can neither cancel nor mask a bulk
-discrepancy (`Interp::side_ref_parity`, unconditional and pinned by
-`side_ref_parity.rs` in every build profile); the subfield class it
+discrepancy (`Interp::side_ref_parity`, compiled into every build that
+carries debug assertions or the `store-integrity` feature — the shipped
+worker's configuration — and pinned by `side_ref_parity.rs`); the
+subfield class it
 still cannot see is held by the behavioral twins. The GC registry
 parses the whole production module set derived from the crate's
 `mod` declarations, checks every claim against the field's OWN
