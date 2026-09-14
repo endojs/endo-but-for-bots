@@ -2510,7 +2510,7 @@ pub struct Interp {
     ))]
     #[gc_root(none)]
     #[quiescent(retained)]
-    #[persist_refs(none)]
+    #[persist_refs(async_generators)]
     #[runtime_keys(none)]
     #[gc_hook(early, map)]
     #[gc_chunk(queued_frame)]
