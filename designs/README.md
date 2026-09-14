@@ -417,6 +417,7 @@ LLM-agent stack).*
 | [familiar-unified-weblet-server](familiar-unified-weblet-server.md) | 2026-02-14 | 2026-05-06 | In Progress |
 | [formula-inspector](formula-inspector.md) | 2026-02-14 | 2026-06-13 | In Progress |
 | [gateway-bearer-token-auth](gateway-bearer-token-auth.md) | 2026-03-02 | 2026-03-06 | **Implemented** |
+| [guest-owned-attenuated-diagnostics](guest-owned-attenuated-diagnostics.md) | 2026-09-12 | 2026-09-12 | Not Started |
 | [hardened-text-codecs-shim](hardened-text-codecs-shim.md) | 2026-05-04 | 2026-05-04 | Not Started |
 | [hardened-url-shim](hardened-url-shim.md) | 2026-05-04 | 2026-05-04 | Not Started |
 | [inventory-cancel-and-liveness](inventory-cancel-and-liveness.md) | 2026-02-14 | 2026-03-13 | Not Started |
@@ -751,6 +752,8 @@ flowchart TD
         cemui[chat-edit-message-ui]
         cliedit[cli-edit-verb]
         finsp[formula-inspector]
+        gattdiag[guest-owned-attenuated-diagnostics]
+        finsp --> gattdiag
         invgt[inventory-grouping-by-type]
         dcmd --> cpend
         dmount --> cvedit
@@ -1381,6 +1384,7 @@ star.)
 | inventory-grouping-by-type | In Progress | UI grouping, collapsible sections |
 | inventory-drag-and-drop | Not Started | HTML5 DnD handlers |
 | formula-inspector | In Progress | Single Chat surface: a Value modal back face reached via `F` key, modal-header gear icon, or directly from inventory-row gear icon; back face is read-only at this stage. Host-only `getFormula(identifier)` daemon method (replaces `@info` name hub); `endo inspect` CLI; promise-formula view subscribes and integrates with error-tracing. Consolidates the earlier `chat-value-modal-formula-view` proposal. Daemon and CLI cuts shipping in `endojs/endo-but-for-bots#440`; chat-side cut deferred (chat-package shape impasse). |
+| guest-owned-attenuated-diagnostics | Not Started | Adds a `creator` column to the formula store and a self-attenuated `diagnostics()` on the guest facet, scoped to formulas the guest created (host `diagnostics()` stays the unfiltered superset). Marks by creator rather than partitioning by node; grandfathers existing formulas to host-scope. Substrate for a future guest-bound Chat inspector. |
 | workers-panel | Not Started | Metrics, sparklines (retention-paths section factored out into `daemon-retention-paths`) |
 | daemon-retention-paths | In Progress | Host-only `listRetentionPaths` / `followRetentionPaths`, `endo paths` CLI, Chat paths panel; Phase 1 forwarded as PR #284 (open) |
 | retention-path-notation | Reference | Notation + bulk-collection sketch captured for reference; not a forward-looking proposal |
@@ -1773,6 +1777,7 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | inventory-grouping-by-type | S | 1-2 days | 9 | UI grouping |
 | inventory-drag-and-drop | S-M | 3 days | 9 | HTML5 DnD; PR #131 forwarded under bot |
 | formula-inspector | M | 4-5 days | 9 | Single Chat surface (Value modal back face, gear icon flip plus direct inventory-row entry, read-only at this stage); host-only `getFormula(identifier)` daemon method (removes `@info`); `endo inspect` CLI; promise-formula view with error-tracing integration |
+| guest-owned-attenuated-diagnostics | S-M | 3-4 days | 9 | `creator` column + migration, thread creator through `formulate*`, self-attenuated guest `diagnostics()`; depends on formula-inspector |
 | workers-panel | M | 4-6 days | 9 | Metrics, sparklines |
 | daemon-retention-paths | M-L | 1.5 weeks | 9 | Snapshot + subscription daemon API, CLI verb, Chat paths panel; Phase 1 in PR #284 (open) |
 | retention-path-notation | — | — | 9 | Reference; notation + bulk-collection sketch captured for future reference |
@@ -1831,7 +1836,7 @@ date of this pass.
 | M6: MCP Bridge Hosting (was Milestone B) | 2 net-new (`endo-gateway-mcp` impl, `endo-claude`); cross-milestone slices in M3 (P0) and M5 (P2/P3/P4 gaps) | ~3-3.5 weeks own work (endo-gateway-mcp ~2 weeks + endo-claude ~1-1.5 weeks) + ~6-9 weeks across P0-P4 | gated by M3 gateway-package phases 2/7/8 merge cadence |
 | M7: Weblets & Integrations (was M3) | 12 (`familiar-unified-weblet-server`, `familiar-chat-weblet-hosting`, `cli-store-verb-text-modes`, `cli-edit-verb`, `daemon-weblet-application`, `exo-zip-package`, `endoclaw-oauth`, `exo-google-sheets`, `endoclaw-proactive-messages`, `endoclaw-notifications`, `endoclaw-webhooks`, `endoclaw-voice`) | 6-8 weeks | 8-11 weeks |
 | M8: Peer App Sharing (was Milestone A) | 3 net-new (`familiar-deep-link-invitations`, `endo-app-sharing`, `familiar-app-ui-hosting`); existing constituents counted under M3/M4/M7 | 2-3 weeks | 3-5 weeks |
-| M9: UX & Tooling (was M4) | 13 (`chat-pending-commands`, `chat-slot-slash-commands`, `daemon-commands-as-messages`, `inventory-cancel-and-liveness`, `inventory-grouping-by-type`, `inventory-drag-and-drop`, `formula-inspector`, `workers-panel`, `daemon-retention-paths`, `chat-edit-message-ui`, `chat-inventory-create-menu`, `lal-transcript-memory-management`, `namehub-interface-unification`) | 9-12 weeks | 11-14 weeks |
+| M9: UX & Tooling (was M4) | 14 (`chat-pending-commands`, `chat-slot-slash-commands`, `daemon-commands-as-messages`, `inventory-cancel-and-liveness`, `inventory-grouping-by-type`, `inventory-drag-and-drop`, `formula-inspector`, `guest-owned-attenuated-diagnostics`, `workers-panel`, `daemon-retention-paths`, `chat-edit-message-ui`, `chat-inventory-create-menu`, `lal-transcript-memory-management`, `namehub-interface-unification`) | 9-12 weeks | 11-14 weeks |
 | M10: Confinement & Ecosystem (was M5) | 7 (`endo-posix-sandbox`, `daemon-capability-persona`, `daemon-secret-manager`, `daemon-capability-bank`, `endoclaw-browser`, `endoclaw-channel-bridges`, `endoclaw-skill-registry`) | 14-20 weeks | 16-22 weeks |
 | M11: Rust Daemon (`endor`) (was M6) | 6 (`endor-git-bindings`, `endor-registry-proxy-worker`, `daemon-endor-sqlite-iterate-streaming`, `endor-tui`, `endor-bus-tui`, `endor-native-zip-xs`) | 15-22 weeks | 17-24 weeks |
 | **Total remaining** | **65** + 7 M5 rows (4 in-flight + 3 design gaps) + 2 M6 own-work rows | **~61-83 weeks** + M5 4-6 weeks + M6 ~3-3.5 weeks | **~74-101 weeks** |
