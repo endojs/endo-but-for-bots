@@ -1,5 +1,5 @@
 // @ts-check
-/** @import { NodePowers } from '../platform/node-powers.js' */
+/** @import { NodePowers } from '../platform/node/powers.js' */
 /** @import { FilePowers } from '../platform/files.js' */
 import { E, Far } from '@endo/far';
 import harden from '@endo/harden';
@@ -11,9 +11,9 @@ import { makeThixotropeDaemon } from '../core/daemon.js';
 import { makeDurableNetLayer } from '../net/durable-netlayer.js';
 import { makeIronhorseEngine } from '../ironhorse/ironhorse-engine.js';
 import { makeLocalControl } from './local-control.js';
-import { makeInventoryViewLifetime } from '../inventory/inventory-view-lifetime.js';
+import { makeInventoryViewLifetime } from './inventory-view-lifetime.js';
 import { makeHttpServices } from '../http/http-services.js';
-import { makeObservableInventory } from '../inventory/observable-inventory.js';
+import { makeObservableMap } from '../observable-map.js';
 import { makeMailbox } from '../mail/mailbox.js';
 import { makeMailContact } from '../mail/mail-contact.js';
 import { makeMailAddressBook } from '../mail/mail-address-book.js';
@@ -62,6 +62,7 @@ export const serveThixotrope = async (
     user,
     display,
   } = platform;
+  const log = logging.sub('thixotrope', 'supervisor');
   statePath = paths.resolve(statePath);
   await files.makeDirectory(statePath, { mode: 0o700 });
   const stat = await files.stat(statePath);
@@ -313,7 +314,7 @@ export const serveThixotrope = async (
         .find(worker => worker.workerId === config.workerId)?.failure
     ) {
       inventory = await workspace.evaluate(
-        `(globalThis.inventory ??= (${makeObservableInventory.toString()})())`,
+        `(globalThis.inventory ??= (${makeObservableMap.toString()})())`,
       );
       await E(inventory).disconnectEphemeral();
       applications = await workspace.evaluate(
@@ -335,7 +336,7 @@ export const serveThixotrope = async (
             .then(evaluator => E(evaluator).evaluate(${JSON.stringify(`(${makeMailbox.toString()})()`)}));
           const mailbox = await globalThis.mailbox;
           if (!inventory.has('contacts')) {
-            inventory.set('contacts', (${makeObservableInventory.toString()})());
+            inventory.set('contacts', (${makeObservableMap.toString()})());
           }
           return (${makeMailAddressBook.toString()})(
             mailbox, inventory.get('contacts'), (${makeMailContact.toString()})
@@ -542,8 +543,7 @@ export const serveThixotrope = async (
             // A quarantined vat cannot run cancellation; its ephemeral
             // listeners will be discarded if it is ever recovered in a new
             // supervisor.
-            if (!requested)
-              logging.error('Inventory disconnect:', error.message);
+            if (!requested) log.error('inventory disconnect:', error.message);
           });
           pendingDisconnects.add(cleanup);
           void cleanup.finally(() => pendingDisconnects.delete(cleanup));
@@ -563,7 +563,7 @@ export const serveThixotrope = async (
         ).catch(() => connection.destroy());
       },
       onError: error => {
-        logging.error('Control listener failed:', error);
+        log.error('control listener failed:', error);
       },
     });
     listening = true;

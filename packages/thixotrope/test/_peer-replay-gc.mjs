@@ -2,7 +2,7 @@
 const { gc } = globalThis;
 if (!gc) throw Error('This fixture requires --expose-gc');
 await import('@endo/init');
-const { makeNodePowers } = await import('../src/platform/node-powers.js');
+const { makeNodePowers } = await import('../src/platform/node/powers.js');
 const nodePowers = makeNodePowers();
 const { decodeBase64 } = await import('@endo/base64');
 const { Far } = await import('@endo/far');

@@ -4,7 +4,7 @@ import { makeTcpNetLayer } from '@endo/ocapn/netlayer/tcp-testing';
 import { syrupCodec } from '@endo/ocapn/syrup';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join, basename } from 'node:path';
-import { makeNodePowers } from '../src/platform/node-powers.js';
+import { makeNodePowers } from '../src/platform/node/powers.js';
 
 import { makeThixotropeDaemon } from '../src/core/daemon.js';
 import { makeDurableNetLayer } from '../src/net/durable-netlayer.js';

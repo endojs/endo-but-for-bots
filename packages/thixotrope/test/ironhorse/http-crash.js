@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { connectLocalControl } from '../../src/control/local-control.js';
 import { makeFsStore } from '../../src/store/store-fs.js';
 
-import { makeNodePowers } from '../../src/platform/node-powers.js';
+import { makeNodePowers } from '../../src/platform/node/powers.js';
 
 const nodePowers = makeNodePowers();
 

@@ -4,14 +4,14 @@ import harden from '@endo/harden';
 
 /** @import { Mailbox } from './mailbox.js' */
 /** @import { MailContact } from './mail-contact.js' */
-/** @import { ObservableInventory } from '../inventory/observable-inventory.js' */
+/** @import { ObservableMap } from '../observable-map.js' */
 
 /**
  * Workspace convenience API. Pet names live in the user's observable inventory
  * entry, never in the mailbox protocol. Users can retain and send to identities
  * directly without registering names here.
  * @param {Mailbox} mailbox
- * @param {ObservableInventory} contacts
+ * @param {ObservableMap} contacts
  * @param {(mailbox: Mailbox) => MailContact} makeContact
  */
 export const makeMailAddressBook = (mailbox, contacts, makeContact) => {

@@ -17,7 +17,7 @@ import {
 import { makeIronhorseEngine } from '../../src/ironhorse/ironhorse-engine.js';
 import { makeFsStore } from '../../src/store/store-fs.js';
 
-import { makeNodePowers } from '../../src/platform/node-powers.js';
+import { makeNodePowers } from '../../src/platform/node/powers.js';
 
 const nodePowers = makeNodePowers();
 

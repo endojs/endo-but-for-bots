@@ -3,7 +3,7 @@ import harden from '@endo/harden';
 
 import { makeDurableNetLayer } from '../src/net/durable-netlayer.js';
 
-import { makeNodePowers } from '../src/platform/node-powers.js';
+import { makeNodePowers } from '../src/platform/node/powers.js';
 
 const nodePowers = makeNodePowers();
 

@@ -10,7 +10,7 @@ import {
 } from '../src/control/local-control.js';
 import { serveThixotrope } from '../src/control/supervisor.js';
 
-import { makeNodePowers } from '../src/platform/node-powers.js';
+import { makeNodePowers } from '../src/platform/node/powers.js';
 
 const nodePowers = makeNodePowers();
 const controlPowers = {

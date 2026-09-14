@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { makeIronhorseEngine } from '../src/ironhorse/ironhorse-engine.js';
 import { makePeerJournalReplayEngine } from '../src/core/peer-replay-engine.js';
 
-import { makeNodePowers } from '../src/platform/node-powers.js';
+import { makeNodePowers } from '../src/platform/node/powers.js';
 
 const nodePowers = makeNodePowers();
 

@@ -30,7 +30,7 @@ import { makePeerSnapshottingReplayEngine } from '../src/core/peer-replay-engine
 import { makeFsStore } from '../src/store/store-fs.js';
 import { parkWorkers } from './_park-workers.js';
 
-import { makeNodePowers } from '../src/platform/node-powers.js';
+import { makeNodePowers } from '../src/platform/node/powers.js';
 
 const nodePowers = makeNodePowers();
 

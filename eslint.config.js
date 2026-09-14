@@ -70,7 +70,8 @@ export default defineConfig(
   {
     files: ['packages/thixotrope/src/**/*.js', 'packages/thixotrope/index.js'],
     ignores: [
-      'packages/thixotrope/src/platform/node-powers.js',
+      // The Node adapter layer: these modules exist to hold the built-ins.
+      'packages/thixotrope/src/platform/node/**',
       'packages/thixotrope/src/core/worker-peer-xs.js',
     ],
     rules: {
@@ -83,7 +84,7 @@ export default defineConfig(
           })),
           patterns: [
             {
-              group: ['node:*', '**/node-powers.js'],
+              group: ['node:*', '**/node-powers.js', '**/platform/node/*'],
               message:
                 'Receive platform capabilities through explicit powers; core cannot acquire them.',
             },
