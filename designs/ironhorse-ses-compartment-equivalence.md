@@ -225,6 +225,40 @@ Two things the prelude had to get right, both of which are the
   section installs `Object[@harden]`. The file's own section markers make the
   slice exact, as `bundle-ironhorse-worker.mjs` already does it.
 
+### Why SES's own suite is not the gate yet
+
+`packages/ses/test/` is 105 ava files, 15 of them directly on
+lockdown/Compartment/harden semantics.
+They are ESM and import `ava`, so they cannot run inside Ironhorse; the
+portable route is the `ses-xs-parity` corpus, which `test262-runner`'s README
+already describes as holding "additional Hardened JavaScript tests" and which
+the `Compartment/prototype` pair is an instance of.
+Porting from SES's suite into that corpus is the right shape, and it would
+serve a native `lockdown` exactly as well as the shim.
+
+It is blocked on something upstream of Ironhorse.
+**Every `lockdown()`-calling case fails on the node host today.**
+The preludes import `./expose-pass-style-bytes-globals.js`, which pulls
+`@endo/pass-style` and so `@endo/harden`; where the host has no native
+`harden` for its selector to adopt, `@endo/harden` installs its own at
+`Object[Symbol.for('harden')]`, and `repairIntrinsics` refuses to run at all
+when it finds one (`packages/ses/src/lockdown.js:393`).
+The corpus's one such case, `Symbol.toStringTag-lockdown.js`, is red on node
+for that reason — the host reports 14/16 — and three cases ported from
+`lockdown.test.js` and `harden.test.js` failed identically when tried.
+
+Clearing the slot in the prelude, the way it already clears and restores
+`assert`, does **not** work: measured, it regresses the `TextEncoder` and
+`TextDecoder` cases from pass to fail, because `@endo/pass-style` has already
+captured the harden it installed.
+XS is unaffected only because `xst` installs a native `harden` the selector
+adopts instead — the same reason the Ironhorse prelude must leave Ironhorse's
+native one alone.
+
+And nothing would have caught it: `packages/test262-runner`'s `"test"` script
+is `exit 0`, so the whole three-host axis runs in no CI lane.
+That is why a red case sat in the corpus unnoticed.
+
 ## What XS implements
 
 Everything SES-shaped in XS lives in two files.
@@ -555,6 +589,18 @@ The shim is the larger one — and it is the one already running on IronHorse.
 - [ ] Implement the lazy `Iterator` helpers, or decide the engine should not
       advertise them. Today `typeof Iterator.prototype.map` is `"function"` and
       calling it is an uncatchable halt (§ next step 2).
+- [ ] Resolve the prelude's `@endo/harden` interaction so `lockdown()`-calling
+      cases can run on the node host, then port SES's own lockdown/Compartment
+      assertions into the `ses-xs-parity` corpus (§ Why SES's own suite is not
+      the gate yet). Clearing `Object[Symbol.for('harden')]` in the prelude is
+      measured NOT to work.
+- [ ] Put the `ses-xs-parity` axis in a CI lane. `packages/test262-runner`'s
+      `"test"` is `exit 0`, so none of its three hosts gates anything, and the
+      corpus already carries a case that is red on node.
+- [ ] Wire the Ironhorse prelude into `endot-ih` — a `--prelude` flag, and
+      `SesMode::unimplemented_skip` returning `None` when one is supplied — so
+      the axis itself moves rather than a side measurement.
+      `SesMode::prelude()` is currently unreachable on the live path.
 - [ ] The bar does not run `bootstrap_ses`'s closing `run_promise_jobs()`, so
       it cannot see a divergence in how the two engines settle what
       `@endo/eventual-send`'s shim leaves pending.
