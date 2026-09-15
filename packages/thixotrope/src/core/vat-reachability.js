@@ -6,7 +6,7 @@ import { bytesToHex } from '@noble/hashes/utils.js';
 /**
  * Explain the same conservative session graph used for vat collection.
  * Secrets, wire payloads, and individual guest heap objects are not exposed.
- * @param {{ workers: Array<{workerId: string, awake: boolean, debugLabel?: string, pin?: string}>, hubState: any, endpointExports: any, endpointPendingAnswers?: string[], connectedSessions?: string[], keep?: string[] }} options
+ * @param {{ workers: Array<{workerId: string, awake: boolean, debugLabel?: string}>, hubState: any, endpointExports: any, endpointPendingAnswers?: string[], connectedSessions?: string[], keep?: string[] }} options
  */
 export const inspectVatReachability = ({
   workers,
@@ -46,9 +46,6 @@ export const inspectVatReachability = ({
   for (const worker of workers) {
     if (worker.awake) root(worker.workerId, { kind: 'awake' });
     if (kept.has(worker.workerId)) root(worker.workerId, { kind: 'keep' });
-    // Pins are about wakefulness, not retention — but a host configured to
-    // wake a vat at every startup must not also be free to collect it.
-    if (worker.pin !== undefined) root(worker.workerId, { kind: 'pin' });
   }
   /** @type {Record<string, any>} */
   const refs = hubState?.refs ?? {};
