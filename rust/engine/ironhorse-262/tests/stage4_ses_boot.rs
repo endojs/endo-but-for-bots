@@ -200,7 +200,7 @@ fn ses_boot_bundle_agrees_and_installs_only_handled_promise() {
     assert!(
         after.ironhorse_result.contains("lockdown=undefined"),
         "ironhorse is expected to still lack lockdown (named skip \
-         `ses-mode:lockdown-unimplemented`, `ironhorse-vm/src/xst.rs:159`); \
+         `ses-mode:lockdown-unimplemented`, `ironhorse-262/src/xst.rs:159`); \
          if it now has one, this bar must be rewritten to require it: {}",
         after.ironhorse_result
     );

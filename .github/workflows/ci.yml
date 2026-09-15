@@ -1007,7 +1007,14 @@ jobs:
         # same trap the build-xsnap job already documents. Generating it here,
         # plus IRONHORSE_SES_BOOT_REQUIRED on the test step, makes a missing
         # bundle red instead of silent.
-        run: yarn bundle:xs
+        #
+        # The single script rather than `yarn bundle:xs`: that root script
+        # runs three bundlers, and the other two write `worker_bootstrap.js`
+        # (765 KB) and `daemon_bootstrap.js` (2.4 MB), which nothing in the
+        # rust/engine workspace reads. This job already compiles XS, builds
+        # and clippies the whole engine workspace under -D warnings, and runs
+        # two corpus gates inside `timeout-minutes: 30`.
+        run: node packages/daemon/scripts/bundle-bus-worker-xs-ses-boot.mjs
 
       - name: Cache Cargo + targets
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

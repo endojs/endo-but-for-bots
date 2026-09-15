@@ -267,3 +267,151 @@ fn buffer_named_reads_honor_accessor_replacement_deletion_and_shadowing() {
         "true:true:true:true"
     );
 }
+
+/// The guest Hardened-JavaScript surface the ENGINE does not implement, and
+/// the realm profile that decides whether the shim can supply it instead.
+///
+/// `designs/ironhorse-ses-compartment-equivalence.md` measures ironhorse as
+/// having no guest `lockdown` and no guest `Compartment`. Both are true of the
+/// engine's own bindings, and neither is the whole story: the real `ses` shim
+/// installs both, and `packages/thixotrope` already ships that configuration
+/// (`scripts/bundle-ironhorse-worker.mjs` bundles `ses`, deletes
+/// `polyfills.js`'s `harden` so the shim can install its own, and calls
+/// `lockdown({ errorTaming: 'safe', reporting: 'none', overrideTaming: 'min' })`).
+///
+/// The two realm profiles are mutually exclusive, which is the point of this
+/// test. `Interp::new()` leaves the intrinsics mutable and the shim repairs and
+/// then freezes them itself. `Machine::new()` freezes them at construction
+/// (`new_shared_realm_machine_with_permit`), and the shim's `repairIntrinsics`
+/// cannot then rewrite a descriptor it needs to. Choosing ironhorse's native
+/// freeze forecloses the shim; choosing the shim forecloses the native freeze.
+fn thixotrope_ses_boot() -> Option<String> {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../packages/thixotrope/dist-ironhorse/boot.js"
+    );
+    match std::fs::read_to_string(path) {
+        Ok(source) => Some(source),
+        Err(_) => {
+            assert!(
+                std::env::var_os("IRONHORSE_SES_SHIM_REQUIRED").is_none(),
+                "IRONHORSE_SES_SHIM_REQUIRED is set but {path} is absent: the lane \
+                 claims to have run `yarn workspace @endo/thixotrope \
+                 build:ironhorse-bundles` and did not"
+            );
+            eprintln!(
+                "ses-shim: dist-ironhorse/boot.js absent \u{2014} run \
+                 `yarn workspace @endo/thixotrope build:ironhorse-bundles` to run this"
+            );
+            None
+        }
+    }
+}
+
+const SES_CENSUS: &str = "['lockdown','harden','Compartment']\
+    .map(function(n){ return n + '=' + (typeof globalThis[n]); }).join(' ') \
+    + ' frozenObjectProto=' + Object.isFrozen(Object.prototype)";
+
+/// `eval_wrapped`'s shape: an engine halt is not catchable, so a `'ok'` here
+/// means the program ran to completion and threw nothing.
+fn wrapped(source: &str) -> String {
+    format!("var __e; try {{ {source} }} catch(e) {{ __e = e; }} __e ? ('ERROR: ' + __e.message) : 'ok'")
+}
+
+#[test]
+fn the_ses_shim_supplies_the_guest_surface_on_an_unfrozen_realm() {
+    let Some(boot) = thixotrope_ses_boot() else {
+        return;
+    };
+    std::thread::Builder::new()
+        .stack_size(ironhorse_vm::NATIVE_STACK_BYTES)
+        .spawn(move || {
+            let mut machine = Interp::new();
+            machine.set_source_compiler(std::rc::Rc::new(Compiler));
+            let mut crank = |source: &str| {
+                let (code, symbols) = ironhorse_compile::compile_atoms_goal(
+                    source,
+                    ironhorse_compile::Goal::Script,
+                    false,
+                )
+                .expect("compiles");
+                let names = parse_symbols(&symbols);
+                let code = if machine.program_symbol_names().is_empty() {
+                    machine.link_intrinsics(&names);
+                    code
+                } else {
+                    machine.relink_crank(&code, &names).expect("relinks")
+                };
+                let outcome = machine.run(&code);
+                assert!(outcome.completed, "{source:.60}: {:?}", outcome.halt);
+                outcome.result
+            };
+
+            assert_eq!(
+                crank(SES_CENSUS),
+                "lockdown=undefined harden=function Compartment=undefined frozenObjectProto=false",
+                "the engine binds its own harden and neither of the other two"
+            );
+            assert_eq!(crank(&wrapped(&boot)), "ok", "the ses shim must evaluate");
+            assert_eq!(
+                crank(SES_CENSUS),
+                "lockdown=function harden=function Compartment=function frozenObjectProto=true",
+                "the shim must install what the engine does not, and freeze"
+            );
+            // Not merely present: usable, with its own globals and its own
+            // evaluator. The `__options__` sigil selects the modern
+            // constructor signature; a bare object is the legacy
+            // `(globals, modules, options)` positional form
+            // (`packages/ses/src/compartment.js:294-316`).
+            assert_eq!(
+                crank(
+                    "var c = new Compartment({ __options__: true, globals: { x: 5 } }); \
+                     [c.evaluate('x'), c.evaluate('1 + 1'), typeof x].join(':')"
+                ),
+                "5:2:undefined",
+                "a shim Compartment must evaluate against its own globals, and \
+                 must not leak them into the realm that made it"
+            );
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+#[test]
+fn a_natively_frozen_realm_forecloses_the_ses_shim() {
+    let Some(boot) = thixotrope_ses_boot() else {
+        return;
+    };
+    std::thread::Builder::new()
+        .stack_size(ironhorse_vm::NATIVE_STACK_BYTES)
+        .spawn(move || {
+            let machine = ironhorse_vm::Machine::new();
+            machine
+                .set_source_compiler(std::rc::Rc::new(Compiler))
+                .expect("machine takes a compiler");
+            let start = machine.start_compartment();
+            let crank = |source: &str| {
+                let (code, symbols) = ironhorse_compile::compile_atoms(source).expect("compiles");
+                let outcome = start.evaluate_with_symbols(&code, &symbols);
+                assert!(outcome.completed, "{source:.60}: {:?}", outcome.halt);
+                outcome.result
+            };
+            assert!(
+                crank(SES_CENSUS).ends_with("frozenObjectProto=true"),
+                "Machine::new freezes the intrinsic graph at construction"
+            );
+            // `repairIntrinsics` rewrites descriptors on the intrinsics the
+            // native freeze has already sealed.
+            assert_eq!(
+                crank(&wrapped(&boot)),
+                "ERROR: invalid descriptor",
+                "the shim is expected to fail on a pre-frozen realm; if it now \
+                 succeeds, the two profiles have stopped being exclusive and \
+                 designs/ironhorse-ses-compartment-equivalence.md must say so"
+            );
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
