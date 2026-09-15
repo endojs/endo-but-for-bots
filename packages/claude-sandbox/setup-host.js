@@ -111,6 +111,15 @@ export const main = async hostAgent => {
     return `claude-${createHash('sha256').update(hostId).digest('hex')}`;
   };
 
+  // The probes below read names *inside* SANDBOX_DIR, and `has` on a path
+  // resolves its parent, so the directory has to exist before the first one.
+  // On a host that already ran an earlier release it does; on a daemon with no
+  // sandbox state yet every probe threw `Unknown pet name` and neither stack
+  // could bootstrap.
+  if (!(await E(hostAgent).has(SANDBOX_DIR))) {
+    await E(hostAgent).makeDirectory([SANDBOX_DIR]);
+  }
+
   // Validate the state root and the native runtime before any mint. Retained
   // formulas keep their persisted placement; missing ones use the requested
   // construction settings.
@@ -136,10 +145,6 @@ export const main = async hostAgent => {
       await resolveOwnerId(),
       roots,
     );
-  }
-
-  if (!(await E(hostAgent).has(SANDBOX_DIR))) {
-    await E(hostAgent).makeDirectory([SANDBOX_DIR]);
   }
 
   // 1. Sandbox factory — `@agent` powers grant the privileged
