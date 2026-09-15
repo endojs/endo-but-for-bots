@@ -62,7 +62,7 @@ test.serial(
 );
 
 test.serial(
-  'HTTP listener forwards incremental chunks and strips caller headers',
+  'HTTP listener forwards incremental chunks and the caller\u2019s own headers',
   async t => {
     t.timeout(5000);
     /** @type {() => void} */
@@ -75,6 +75,8 @@ test.serial(
     });
     let calls = 0;
     let returned = false;
+    /** @type {any} */
+    let seen;
     const reader = Far('reader', {
       async next() {
         calls += 1;
@@ -92,7 +94,7 @@ test.serial(
       ...options,
       endpoint: Far('endpoint', {
         requestStream(request) {
-          t.deepEqual(request, { method: 'POST', path: '/v1/responses', body });
+          seen = request;
           return harden({
             status: 200,
             contentType: 'text/event-stream',
@@ -104,7 +106,7 @@ test.serial(
     t.teardown(() => listener.dispose());
     const response = await requestHttp(`${listener.url}/v1/responses`, {
       method: 'POST',
-      headers: { ...headers, 'x-secret': 'not-forwarded' },
+      headers: { ...headers, 'anthropic-beta': 'context-management-2026-01-01' },
       body,
     });
     t.is(response.statusCode, 200);
@@ -115,6 +117,25 @@ test.serial(
     finish();
     t.true((await stream.next()).done);
     t.true(returned);
+    // The harness describes its own request, including a capability this
+    // listener has never heard of. What it cannot do is authenticate that
+    // request: a client credential is refused outright before admission (see
+    // the credentials case below), and the broker-owned names the transport
+    // adds — `host` and `content-length` — are dropped here and re-supplied
+    // by the broker against the pinned authority and the body it actually
+    // read.
+    t.is(seen.method, 'POST');
+    t.is(seen.path, '/v1/responses');
+    t.is(seen.body, body);
+    t.is(seen.headers['content-type'], 'application/json');
+    t.is(
+      seen.headers['anthropic-beta'],
+      'context-management-2026-01-01',
+      'a capability the listener has never heard of still reaches the broker',
+    );
+    for (const owned of ['authorization', 'host', 'content-length']) {
+      t.false(owned in seen.headers, `${owned} is the broker's`);
+    }
   },
 );
 
