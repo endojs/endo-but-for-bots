@@ -99,10 +99,14 @@ export const forwardableHeaders = headers => {
   const kept = {};
   for (const [name, value] of Object.entries(headers || {})) {
     const lower = String(name).toLowerCase();
-    if (BROKER_OWNED_HEADERS.includes(lower)) continue;
-    if (!FORWARDABLE_NAME.test(lower)) continue;
-    if (typeof value !== 'string' || !FORWARDABLE_VALUE.test(value)) continue;
-    kept[lower] = value;
+    if (
+      !BROKER_OWNED_HEADERS.includes(lower) &&
+      FORWARDABLE_NAME.test(lower) &&
+      typeof value === 'string' &&
+      FORWARDABLE_VALUE.test(value)
+    ) {
+      kept[lower] = value;
+    }
   }
   return harden(kept);
 };
