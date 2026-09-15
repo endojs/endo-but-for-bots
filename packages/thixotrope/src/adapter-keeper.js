@@ -3,13 +3,20 @@ import { E } from '@endo/far';
 import harden from '@endo/harden';
 
 /**
- * The durable half of a manual-persistence pair: holds a live reference to an
- * ephemeral resource vat, and rebuilds it whenever there isn't one.
+ * A manager's hold on its adapter: a live reference to one, rebuilt whenever
+ * there isn't one.
  *
- * See designs/manual-persistence-vats.md. A manager keeps policy and desired
- * state in its own orthogonally persistent heap; the vat this keeps holds the
- * mechanism — the host capability, the connections, the buffers — and is
- * expected to die with the host process that hosted it.
+ * This is a component of the manager, not a third party to it. The manager is
+ * the durable vat that keeps policy and desired state in its own
+ * orthogonally persistent heap; the adapter is the vat this builds and holds,
+ * which carries the mechanism — the host capability, the connections, the
+ * buffers — and is expected to die with the host process that hosted it.
+ *
+ * The adapter runs in an *ephemeral worker*, which is a separate idea: a
+ * daemon-level mode whose heap is not a recovery baseline. Adapter is the role;
+ * ephemeral is how the worker is configured to serve it.
+ *
+ * See designs/manual-persistence-vats.md.
  *
  * The keeper does not stamp generations. It does not need to: the ephemeral
  * vat's death is a retirement, and the hub's session epoch already makes every
@@ -36,7 +43,7 @@ import harden from '@endo/harden';
  *   remotable answers and a tombstone breaks.
  * @param {string} [options.debugLabel]
  */
-export const makeEphemeralVatKeeper = ({
+export const makeAdapterKeeper = ({
   vats,
   source,
   endowments = () => ({}),
@@ -123,4 +130,4 @@ export const makeEphemeralVatKeeper = ({
       }),
   });
 };
-harden(makeEphemeralVatKeeper);
+harden(makeAdapterKeeper);

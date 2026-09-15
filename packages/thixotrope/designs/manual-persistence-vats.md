@@ -51,10 +51,10 @@ Three things needed from the host, and only three:
    cannot silently land on *n+1*.
 3. **A wake**, because the vat may be asleep when the world wants it.
 
-## The pair: a durable manager and an ephemeral resource vat
+## The pair: a durable manager and an ephemeral adapter
 
 The incarnation should not be host code, and it should not be in the durable
-vat either. It should be a second vat that is expected to die.
+vat either. It should be a second vat that is expected to die — the adapter.
 
 The reason is that orthogonal persistence is indiscriminate.
 A durable vat that handled live connections would persist connection objects,
@@ -62,13 +62,26 @@ half-parsed buffers, and in-flight request closures — state that must not
 survive, and whose non-survival its author would have to reason about case by
 case.
 `http-services.js` avoids the problem by being host code.
-An ephemeral vat makes "everything here dies" structurally true instead, so the
-author does not have to keep deciding.
-The ephemeral vat is a persistence barrier before it is a resource holder, and
-that is what generalises past HTTP: a parser, a connection table, a request
-context, an open descriptor.
+Running it in an ephemeral worker makes "everything here dies" structurally
+true instead, so the author does not have to keep deciding.
+The adapter is a persistence barrier before it is a resource holder, and that is
+what generalises past HTTP: a parser, a connection table, a request context, an
+open descriptor.
 
-**One resource vat per resource kind**, not per instance: a web server, a
+### Three words, used exactly
+
+- **manager** — the durable vat. Desired state and policy.
+- **adapter** — the ephemeral vat. Mechanism: the host capability, the
+  connections, the buffers.
+- **keeper** — a component *of* the manager that builds and holds its adapter.
+  Not a third party to the pair.
+
+*Ephemeral* is a separate idea from *adapter*, and this document keeps them
+apart: an ephemeral worker is a daemon-level mode whose heap is not a recovery
+baseline, and an adapter is a role that runs in one. Earlier drafts also said
+"resource vat" and "ephemeral resource vat" for the adapter; those are gone.
+
+**One adapter per resource kind**, not per instance: a web server, a
 filesystem, a process spawner.
 These map one-to-one onto the ports that already exist under `src/platform/` —
 `http-listeners`, `files`, `sync-files`, `sockets`, `processes`, `terminal` —
@@ -78,9 +91,9 @@ port gets a guest-side adapter, and the adapter is allowed to die.
 
 ### Policy and mechanism
 
-The durable manager holds policy; the ephemeral vat holds mechanism.
+The manager holds policy; the adapter holds mechanism.
 
-Consumers never hold a reference to the ephemeral vat.
+Consumers never hold a reference to the adapter.
 Only its manager does.
 So the manager is where "this consumer may bind these ports" lives, and it
 survives restarts to keep enforcing it, while the vat holding the broad host
@@ -93,8 +106,8 @@ Concentrating the authority in a thing with no policy and no durable state, and
 keeping every consumer a step removed from it, is the trade.
 
 It also contains reference breakage.
-When the ephemeral vat is retired, the only holder left with dangling
-references is the manager — which is the one thing equipped to re-establish.
+When the adapter is retired, the only holder left with dangling references is
+the manager — which is the one thing equipped to re-establish.
 
 ### Retirement is already generation identity
 
@@ -116,7 +129,7 @@ Each consumer holding its own desired state would mean each consumer needs to be
 started by the host.
 With one manager per resource kind, the manager is the only thing the host has
 to notify.
-It then pushes the whole desired set into a fresh ephemeral vat, and consumer
+It then pushes the whole desired set into a fresh adapter, and consumer
 vats stay asleep until the first request reaches them through the handler
 references the manager replayed.
 
@@ -270,7 +283,7 @@ references without help.
 One property only the pair gives: the host holds exactly **one** guest
 reference, the adapter's, rather than one per service.
 Consumers are reached through it, so the host's retention surface is a single
-ephemeral vat and consumers are retained by their manager — which is where that
+adapter and consumers are retained by their manager — which is where that
 responsibility belongs.
 
 The host does still have to notice when the vat serving a port is gone, because
@@ -292,10 +305,10 @@ in worker meta, plus a retention root.
 All three parts turned out to be unnecessary once the pair model was in place,
 and what is left is two much smaller things.
 
-### An ephemeral vat is resident, and does not ask
+### An adapter is resident, and does not ask
 
 There is no residency flag.
-An ephemeral vat never idle-sleeps, because it cannot want to: its state is
+An ephemeral worker never idle-sleeps, because it cannot want to: its state is
 discarded at the next startup regardless, so snapshotting it on idle is I/O
 spent on something already known to be disposable — and a resource adapter that
 sleeps is one that has to be woken by the very traffic it exists to absorb.
@@ -316,7 +329,7 @@ process and restores a heap, and events arriving just slower than the idle
 timeout produce a wake, a snapshot and a sleep apiece.
 
 That is an argument for where per-event work belongs, not for a residency flag.
-An ephemeral vat can decline to sleep for free, because it has no snapshot to
+An ephemeral worker can decline to sleep for free, because it has no snapshot to
 write; a durable vat declining to sleep would be holding a process alive to
 avoid I/O, which is a tuning decision `idleSleepMs` already expresses.
 
@@ -352,10 +365,10 @@ that wants it rather than to any host-side registry.
 
 Guest-side, shipped by source the way `makeObservableMap` is:
 
-- An **ephemeral vat keeper** for the manager: create the resource vat when
-  absent, evaluate the adapter into it, push the desired state, and hand back a
-  live reference. Generation-stamping is not among its jobs; retirement does
-  that.
+- An **adapter keeper** for the manager: build the adapter when there is not a
+  live one, evaluate its source into a fresh ephemeral worker, push the desired
+  state, and hand back a live reference. Generation-stamping is not among its
+  jobs; retirement does that.
 - An effect-intent helper — record intent, act, record outcome — because
   "restarting a process does not establish whether a previous request produced
   an external effect" becomes the vat's problem once the vat owns the resource.
