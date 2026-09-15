@@ -34,22 +34,105 @@ incarnation, and the reconciliation between them.
 
 ## The threshold
 
-A manual-persistence vat holds two things where an ordinary vat holds one.
+Two things where an ordinary vat holds one.
 
 - **Desired state** — durable, ordinary heap. What the user asked for.
-- **An incarnation** — ephemeral, host-side. What currently exists.
+- **An incarnation** — ephemeral. What currently exists.
 
 `http-services.js` already has exactly this shape, as `Recipe[]` against
 `Runtime`; it is simply on the host side of the line, which is why it also has
 to persist the recipes by hand.
 
-Three things such a vat needs from the host, and only three:
+Three things needed from the host, and only three:
 
 1. **A capability to construct the resource**, granted by the user rather than
    ambient, and revocable.
 2. **Generation identity**, so an operation issued against incarnation *n*
    cannot silently land on *n+1*.
 3. **A wake**, because the vat may be asleep when the world wants it.
+
+## The pair: a durable manager and an ephemeral resource vat
+
+The incarnation should not be host code, and it should not be in the durable
+vat either. It should be a second vat that is expected to die.
+
+The reason is that orthogonal persistence is indiscriminate.
+A durable vat that handled live connections would persist connection objects,
+half-parsed buffers, and in-flight request closures — state that must not
+survive, and whose non-survival its author would have to reason about case by
+case.
+`http-services.js` avoids the problem by being host code.
+An ephemeral vat makes "everything here dies" structurally true instead, so the
+author does not have to keep deciding.
+The ephemeral vat is a persistence barrier before it is a resource holder, and
+that is what generalises past HTTP: a parser, a connection table, a request
+context, an open descriptor.
+
+**One resource vat per resource kind**, not per instance: a web server, a
+filesystem, a process spawner.
+These map one-to-one onto the ports that already exist under `src/platform/` —
+`http-listeners`, `files`, `sync-files`, `sockets`, `processes`, `terminal` —
+and each adapter is granted the single port it adapts.
+So the shape is not "manual persistence vats" in general so much as: every host
+port gets a guest-side adapter, and the adapter is allowed to die.
+
+### Policy and mechanism
+
+The durable manager holds policy; the ephemeral vat holds mechanism.
+
+Consumers never hold a reference to the ephemeral vat.
+Only its manager does.
+So the manager is where "this consumer may bind these ports" lives, and it
+survives restarts to keep enforcing it, while the vat holding the broad host
+power holds no policy and no memory of who asked for what.
+
+This is the mitigation for the one real cost of per-kind granularity: a single
+adapter holds the full `listen` authority, where per-instance adapters could
+each have been granted less.
+Concentrating the authority in a thing with no policy and no durable state, and
+keeping every consumer a step removed from it, is the trade.
+
+It also contains reference breakage.
+When the ephemeral vat is retired, the only holder left with dangling
+references is the manager — which is the one thing equipped to re-establish.
+
+### Retirement is already generation identity
+
+Requirement 2 above needs no new mechanism once the incarnation is a vat.
+The hub namespaces sessions by an epoch that bumps on `retireSession`, so
+"retired rows become dead tombstones that keep holders' positions resolving —
+loudly, as breaks — until the holders release them", and `retireSession` takes
+an `expectedEpoch` precisely so an old tombstone cannot retire a replacement
+under the same alias.
+
+That is stronger than the per-binding generation counter sketched in
+`host-listeners.js`, and it arrives for free.
+A stale reference into a dead incarnation breaks; it never silently reaches its
+successor.
+
+### Only managers need pinning
+
+Each consumer holding its own desired state would mean each consumer needs an
+eager pin.
+With one manager per resource kind, the manager is the only thing that must
+wake at host start.
+It then pushes the whole desired set into a fresh ephemeral vat, and consumer
+vats stay asleep until the first request reaches them through the handler
+references the manager replayed.
+
+Pins therefore scale with the number of resource kinds, not with the number of
+things being served.
+
+### The manager retains its consumers
+
+A manager holding a consumer's handler reference retains that consumer's vat,
+and this is correct: a vat that is being served is reachable, and should not be
+collectible merely because nothing else refers to it.
+
+The consequence is that withdrawing the service is the only way to release it.
+`reachability` will report the manager as the retaining root, which is the true
+answer, and a user who expects an idle server vat to be collected should be
+told to stop serving rather than to wait.
 
 ## The mechanism: a restorable host promise
 
@@ -123,14 +206,49 @@ that answer aborts and the caller learns arming did not complete — which is
 true.
 The waiting, which is the long part, is durable.
 
-## HTTP needs no residency either
+## HTTP is the other shape
 
-The host owns the socket, which it must, and the vat owns the handler.
-An inbound request reaches the vat through the existing publication path, which
-wakes it.
-The recipes and the lifecycle move into the vat; what stays host-side is
-`listen(port) -> forward to this published handler`, which `http-listeners`
-almost already is.
+The restorable promise is no use here, and that is the point.
+An HTTP request expects a response, so the host-to-guest direction is an
+*answer*, and an answer aborting when the host dies is exactly right: an
+in-flight request whose host is gone has failed and must not resume against a
+later incarnation.
+
+What HTTP needs instead is the eager pin, which alarms never did.
+Today `http-services.js` re-binds its sockets at start because the host holds
+the recipes.
+Move them into the vat and that inverts: after a restart the desired listener
+set is inside a sleeping vat, and no deadline will wake it.
+Something has to start it.
+
+`src/http/host-listeners.js` and `src/http/guest-http.js` sketch the split, with
+`test/guest-http.test.js` standing a host up, killing it, and letting the vat's
+`reconcile` re-establish the service against a host that knows nothing.
+
+The host side keeps no durable state at all — no metadata file, no recipes, no
+lifecycle, no restore path — and the handler is an ordinary guest reference
+rather than a secret and a publication, because nothing has to find it again.
+122 host lines and 60 guest lines against 279 today, and the removed 97 are
+almost entirely the recipe state machine and its persistence.
+
+Two things stay host-side that might look like vat concerns.
+Admission runs before any body is read, so a denied request costs no guest work;
+moving it into the vat would mean waking a vat to say no, which is a
+denial-of-service lever.
+Transport limits have to be applied while bytes are arriving.
+The vat declares the authority and the host enforces it.
+
+Generation identity earns its place here in a way it did not for alarms.
+A vat's heap outlives the host, so it holds binding handles from incarnations
+that are gone, and a port it knows may have been rebound by someone else.
+The sketch gives each binding a generation counter and refuses a close that does
+not match.
+
+Under the pair model that counter is redundant: the adapter is a vat, its death
+is a retirement, and the hub's session epoch already breaks every stale
+reference into it.
+The sketch should lose its hand-rolled version when the adapter moves into an
+ephemeral vat.
 
 ## Pins
 
@@ -146,6 +264,9 @@ single directory would conflate:
 
 - **eager** — wake at daemon start even with no pending journal.
   Today's rule is `journalLength() > snapshot.cut`.
+  This is what the HTTP sketch is waiting on, and it looks cheap:
+  `getWorker(id).wake()` is already on the worker facade, so an eager pin is a
+  durable set of worker ids the supervisor wakes at startup.
 - **resident** — never idle-sleep.
   Needed only when sleeping would abandon something the vat supervises, such as
   a child process or a stateful outbound connection.
@@ -159,18 +280,32 @@ say which one it means.
 
 Guest-side, shipped by source the way `makeObservableMap` is:
 
-- `makeResident({ desired, incarnate, retire })` — the reconcile loop, with
-  generation-stamped handles so a call against a dead incarnation rejects rather
-  than reaching its replacement.
+- An **ephemeral vat keeper** for the manager: create the resource vat when
+  absent, evaluate the adapter into it, push the desired state, and hand back a
+  live reference. Generation-stamping is not among its jobs; retirement does
+  that.
 - An effect-intent helper — record intent, act, record outcome — because
   "restarting a process does not establish whether a previous request produced
   an external effect" becomes the vat's problem once the vat owns the resource.
 
 Host-side, small and generic:
 
+- **Ephemeral workers**: a worker whose heap is not a recovery baseline and
+  which is retired at the next daemon startup.
 - A durable alarm table offering restorable promise resources.
 - A pins facet granting `eager` and `resident`.
-- `listen(port) -> published handler`.
+
+### Retrying across a break is the caller's decision
+
+The keeper can re-establish an incarnation.
+It must not silently re-issue the call that discovered the old one was dead.
+
+A broken call is an uncertain call: the adapter may have performed its effect
+before dying.
+Re-establishing a listener is idempotent and safe to retry; delivering a request
+is not.
+So the keeper offers liveness and re-establishment, and leaves the retry to the
+operation that knows whether repeating it is harmless.
 
 ## Open questions
 
@@ -189,7 +324,7 @@ recipe.
 Whether that is a plain revoked-capability rejection or needs its own signal is
 open.
 
-Whether `makeResident` is real.
+Whether the keeper's shape is right.
 It is a guess drawn from two examples, one of which does not exist yet.
 The honest sequence is to write the durable alarm first, then a second manual
 vat that owns something genuinely reconstructible — a child process is the
