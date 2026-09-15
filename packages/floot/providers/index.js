@@ -15,7 +15,10 @@
  * SDK supports it. This keeps lal untouched (we import, never modify).
  */
 
-import { createProvider as createLalProvider } from '@endo/lal/providers/index.js';
+import {
+  createProvider as createLalProvider,
+  makeOpenRouterProvider,
+} from '@endo/lal/providers/index.js';
 import { makeStreamingAnthropicProvider } from './anthropic-streaming.js';
 
 /**
@@ -44,7 +47,7 @@ const adaptBufferedProvider = base => ({
  * Create a streaming provider programmatically from an env-shaped config.
  *
  * Selection order:
- *   1. `FLOOT_PROVIDER` if set (`anthropic` | `lal`).
+ *   1. `FLOOT_PROVIDER` if set (`anthropic` | `openrouter` | `lal`).
  *   2. otherwise, if legacy `LAL_HOST` is set (to any host) → `@endo/lal` backend.
  *   3. default → streaming Anthropic API.
  *
@@ -62,6 +65,18 @@ const adaptBufferedProvider = base => ({
  */
 export const createStreamingProvider = env => {
   const kind = env.FLOOT_PROVIDER || (env.LAL_HOST ? 'lal' : 'anthropic');
+
+  if (
+    kind === 'openrouter' ||
+    (kind === 'lal' &&
+      /^https:\/\/openrouter\.ai(?:\/|$)/.test(env.LAL_HOST || ''))
+  ) {
+    return makeOpenRouterProvider({
+      apiKey: env.FLOOT_AUTH_TOKEN || env.LAL_AUTH_TOKEN || '',
+      model: env.FLOOT_MODEL || env.LAL_MODEL || '',
+      maxTokens: Number(env.FLOOT_MAX_TOKENS || env.LAL_MAX_TOKENS || 4096),
+    });
+  }
 
   if (kind === 'anthropic') {
     const apiKey = env.FLOOT_AUTH_TOKEN || env.LAL_AUTH_TOKEN;
