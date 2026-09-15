@@ -989,6 +989,26 @@ jobs:
           done
           test -f c/moddable/xs/sources/xsAll.h
 
+      - run: corepack enable
+
+      - name: Use Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: yarn
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Generate the daemon SES boot bundle
+        # `rust/endo/xsnap/src/ses_boot.js` is gitignored (`.gitignore:35`),
+        # so on a bare checkout `stage4_ses_boot.rs` finds no bundle and
+        # returns early -- a green pass that measured nothing, which is the
+        # same trap the build-xsnap job already documents. Generating it here,
+        # plus IRONHORSE_SES_BOOT_REQUIRED on the test step, makes a missing
+        # bundle red instead of silent.
+        run: yarn bundle:xs
+
       - name: Cache Cargo + targets
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -1025,6 +1045,8 @@ jobs:
         # spawn threads of that size themselves.
         env:
           RUST_MIN_STACK: '33554432'
+          # Assert rather than skip: the bundle was generated above.
+          IRONHORSE_SES_BOOT_REQUIRED: '1'
         run: cargo test --locked -p ironhorse-compile -p ironhorse-regexp -p ironhorse-262 -p ironhorse-fuzz --features ironhorse-compile/parity,ironhorse-regexp/parity
       - name: Gate the committed try/catch expectation slice
         working-directory: rust/engine

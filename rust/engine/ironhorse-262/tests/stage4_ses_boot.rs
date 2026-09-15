@@ -5,13 +5,20 @@
 //! `stage4_daemon_boot_bundle_agrees_with_the_pin` covers the two COMMITTED
 //! bundles (`polyfills.js`, `host_aliases.js`). This covers the third,
 //! `ses_boot.js`, which is generated rather than committed (`.gitignore:35`,
-//! produced by `yarn bundle:xs`), so the bar runs where the bundle exists and
-//! skips where it does not.
+//! produced by `yarn bundle:xs`).
 //!
 //! It runs the sequence `bootstrap_ses` actually runs — `POLYFILLS`, then
 //! `SES_BOOT` through `eval_wrapped`'s try/catch shape, on ONE machine
 //! (`rust/endo/xsnap/src/lib.rs:1260`) — rather than a concatenation of the
-//! three sources, which is not a program either engine accepts.
+//! three sources, which is not a program either engine accepts. It does not
+//! run `bootstrap_ses`'s closing `run_promise_jobs()`, nor the daemon's
+//! `host_aliases.js` and native `TextEncoder` overrides (`:1755`), so it is
+//! the bundle's evaluation and not the daemon's whole boot.
+//!
+//! A census crank brackets each source so the assertions are DELTAS. Without
+//! the pristine crank a probe cannot tell a global the engine binds itself
+//! from one `polyfills.js` installs, and an "after" assertion on a name that
+//! was already present cannot fail.
 use ironhorse_262::dual_run_cranks;
 
 fn bundle(name: &str) -> Option<String> {
@@ -23,22 +30,55 @@ fn bundle(name: &str) -> Option<String> {
     .ok()
 }
 
-/// `eval_wrapped` (`xsnap/src/lib.rs:1077`): the daemon never evaluates the
-/// boot bundle bare, so neither does the bar.
+/// `eval_wrapped` (`xsnap/src/lib.rs:1078`), verbatim: the daemon never
+/// evaluates the boot bundle bare, so neither does the bar.
 fn wrapped(code: &str) -> String {
     format!(
         "var __e = undefined; try {{ {code} }} catch(e) {{ __e = e; }} \
-         __e ? ('ERROR: ' + __e.message) : 'ok'"
+         __e ? ('ERROR: ' + __e.message + '\\nSTACK: ' + __e.stack) : 'ok'"
     )
 }
 
-/// One global's `typeof` on each engine, as a census string.
-const CENSUS: &str = "['lockdown','harden','Compartment','HandledPromise','assert']\
-    .map(function(n){ return n + '=' + (typeof globalThis[n]); }).join(' ')";
+/// The Hardened-JavaScript surface, by `typeof`, plus the frozen-intrinsic
+/// probe. `harden`/`lockdown`/`petrify`/`mutabilities` are EMBEDDER globals in
+/// XS — `xsLockdown.c` implements them but `fxCreateMachine` does not bind
+/// them, so each host installs the subset it wants (`xs/tools/xst.c:429`,
+/// `xs-oracle/csrc/xs_shim.c:373-381`, ironhorse's `create_hardened_globals`
+/// at `ironhorse-vm/src/interp/boot.rs:2086`). `Compartment` is the exception:
+/// XS builds it into every realm (`xsModule.c:207`), so it is the one name
+/// here that no embedder chose.
+const CENSUS: &str = "['lockdown','harden','petrify','mutabilities','Compartment',\
+    'HandledPromise','assert']\
+    .map(function(n){ return n + '=' + (typeof globalThis[n]); }).join(' ') \
+    + ' frozenObjectProto=' + Object.isFrozen(Object.prototype)";
+
+/// The pristine ironhorse census, as `(name, typeof)`. The oracle's own
+/// values are asserted separately below, because where they differ IS the gap.
+const IRONHORSE_PRISTINE: &[(&str, &str)] = &[
+    // Bound by `create_hardened_globals` — ironhorse's own, present before
+    // `polyfills.js` runs, so NOT the polyfill's deep-freeze `harden`.
+    ("harden", "function"),
+    ("petrify", "function"),
+    // The two `create_hardened_globals` declines, with an honest
+    // `Halt::NotImplemented` rather than a wrong value.
+    ("lockdown", "undefined"),
+    ("mutabilities", "undefined"),
+    // XS builds this into the realm; ironhorse has no equivalent.
+    ("Compartment", "undefined"),
+];
 
 #[test]
-fn ses_boot_bundle_runs_identically_and_names_what_it_does_not_install() {
+fn ses_boot_bundle_agrees_and_installs_only_handled_promise() {
     let (Some(polyfills), Some(ses)) = (bundle("polyfills.js"), bundle("ses_boot.js")) else {
+        // A skipping test is a green test, so the lane that generates the
+        // bundle declares that it did: see `.github/workflows/ci.yml`
+        // (`test-ironhorse-oracle`), which runs `yarn bundle:xs` and sets
+        // this. Locally the bar skips until you run `yarn bundle:xs`.
+        assert!(
+            std::env::var_os("IRONHORSE_SES_BOOT_REQUIRED").is_none(),
+            "IRONHORSE_SES_BOOT_REQUIRED is set but rust/endo/xsnap/src/ses_boot.js \
+             is absent: the lane claims to have run `yarn bundle:xs` and did not"
+        );
         eprintln!(
             "stage4-ses: ses_boot.js absent — generate it with `yarn bundle:xs` to run this bar"
         );
@@ -46,74 +86,127 @@ fn ses_boot_bundle_runs_identically_and_names_what_it_does_not_install() {
     };
 
     let boot = wrapped(&ses);
-    let sources = [polyfills.as_str(), CENSUS, boot.as_str(), CENSUS];
+    let sources = [
+        CENSUS,             // 0: pristine
+        polyfills.as_str(), // 1
+        CENSUS,             // 2: after polyfills — the daemon's pre-SES state
+        boot.as_str(),      // 3
+        CENSUS,             // 4: after the bundle
+    ];
     let runs = dual_run_cranks(&sources).expect("the oracle machine starts");
-    let (before, evaluated, after) = (&runs[1], &runs[2], &runs[3]);
-
-    // (1) The bundle itself is at the bar: both engines evaluate it to the
-    //     same completion, and `eval_wrapped`'s contract is that the value is
-    //     `'ok'` exactly when nothing threw.
+    // `dual_run_cranks` BREAKS at the first crank either engine fails to
+    // complete (`src/lib.rs:470`), and an engine-level halt is not a JS throw,
+    // so `wrapped`'s catch cannot turn it into `'ok'`. Report the halt rather
+    // than indexing past the end.
     assert_eq!(
-        evaluated.oracle_result, evaluated.ironhorse_result,
-        "the boot bundle must evaluate to the same value on both engines"
+        runs.len(),
+        sources.len(),
+        "crank {} did not complete on both engines: {:?}",
+        runs.len().saturating_sub(1),
+        runs.last().map(|r| (
+            &r.agreement,
+            &r.oracle_result,
+            &r.ironhorse_result,
+            &r.ironhorse_halt
+        )),
     );
+    let (pristine, pre_ses, evaluated, after) = (&runs[0], &runs[2], &runs[3], &runs[4]);
+
+    // (1) The bundle is at the bar: it evaluates without throwing on BOTH
+    //     engines, `'ok'` being `eval_wrapped`'s contract for that.
     assert_eq!(
         evaluated.ironhorse_result, "ok",
         "the boot bundle must evaluate without throwing on ironhorse"
     );
-
-    // (2) What the bundle actually installs, it installs on BOTH engines.
-    //     `ses_boot.js` bundles `@endo/harden`, `@endo/env-options` and
-    //     `@endo/eventual-send` — not the SES shim — so `harden` and
-    //     `HandledPromise` are its observable effects.
-    for global in ["harden", "HandledPromise"] {
-        let needle = format!("{global}=function");
-        assert!(
-            after.ironhorse_result.contains(&needle),
-            "the bundle must install {global} on ironhorse: {}",
-            after.ironhorse_result
-        );
-        assert!(
-            after.oracle_result.contains(&needle),
-            "the bundle must install {global} on the oracle: {}",
-            after.oracle_result
-        );
-    }
-
-    // (3) The gap, pinned so it cannot widen silently and cannot close
-    //     silently either. `lockdown` and `Compartment` are present on XS
-    //     BEFORE the bundle runs — they are XS's NATIVE SES, which the engine
-    //     design records at `designs/ironhorse-engine.md:201` ("XS implements
-    //     SES natively") — and the bundle does not carry them: it has three
-    //     `globalThis.harden` assignments and no `globalThis.lockdown` or
-    //     `globalThis.Compartment` at all.
-    //
-    //     So stage 4's remaining work is not "make the bundle run". It is that
-    //     ironhorse has no `lockdown` and no `Compartment`, natively or from a
-    //     bundle. When either lands, this assertion fails and the bar is
-    //     rewritten to require it — which is the point of pinning it.
-    for native_ses in ["lockdown", "Compartment"] {
-        assert!(
-            before
-                .oracle_result
-                .contains(&format!("{native_ses}=function")),
-            "XS is expected to provide {native_ses} natively, before the bundle: {}",
-            before.oracle_result
-        );
-        assert!(
-            after
-                .ironhorse_result
-                .contains(&format!("{native_ses}=undefined")),
-            "ironhorse is expected to still lack {native_ses} (ledger row \
-             `boot:ses-lockdown-bundle`); if it now has one, this bar must be \
-             rewritten to require it: {}",
-            after.ironhorse_result
-        );
-    }
-
-    eprintln!(
-        "stage4-ses: bundle agrees; before={}",
-        before.ironhorse_result
+    assert_eq!(
+        evaluated.oracle_result, "ok",
+        "the boot bundle must evaluate without throwing on the oracle"
     );
-    eprintln!("stage4-ses: after ={}", after.ironhorse_result);
+
+    // (2) What the bundle DOES, measured as a delta rather than a presence.
+    //     `ses_boot.js` bundles `@endo/harden`, `@endo/env-options` and
+    //     `@endo/eventual-send` — not the SES shim. Its ONLY `globalThis`
+    //     write is `HandledPromise` (`@endo/harden`'s selector merely READS
+    //     the `harden` `polyfills.js` already installed), so exactly one
+    //     entry may move across the bundle, on both engines alike.
+    for (engine, before, then) in [
+        (
+            "ironhorse",
+            &pre_ses.ironhorse_result,
+            &after.ironhorse_result,
+        ),
+        ("oracle", &pre_ses.oracle_result, &after.oracle_result),
+    ] {
+        // Both strings come from the same `CENSUS`, so a length mismatch
+        // means one engine returned something other than a census — check it
+        // rather than let `zip` truncate the comparison to the shorter one.
+        assert_eq!(
+            before.split(' ').count(),
+            then.split(' ').count(),
+            "on {engine} one census is not a census\n  before: {before}\n  after:  {then}"
+        );
+        let moved: Vec<_> = before
+            .split(' ')
+            .zip(then.split(' '))
+            .filter(|(a, b)| a != b)
+            .collect();
+        assert_eq!(
+            moved,
+            vec![("HandledPromise=undefined", "HandledPromise=function")],
+            "on {engine} the bundle must install HandledPromise and touch \
+             nothing else in the census\n  before: {before}\n  after:  {then}"
+        );
+    }
+
+    // (3) Attribution. `harden` and `petrify` are ironhorse's OWN bindings,
+    //     not the polyfill's and not the bundle's — the pristine census, taken
+    //     before any source runs, is the only crank that can show this.
+    for (name, expected) in IRONHORSE_PRISTINE {
+        let needle = format!("{name}={expected}");
+        assert!(
+            pristine.ironhorse_result.contains(&needle),
+            "ironhorse's pristine census must read {needle}: {}",
+            pristine.ironhorse_result
+        );
+    }
+
+    // (4) The gap, pinned so it can neither widen nor close silently.
+    //
+    //     `Compartment` is the one entry XS builds into every realm, so it is
+    //     the one name the DAEMON's XS actually has that ironhorse lacks:
+    //     `rust/endo/xsnap` declares `fx_lockdown`/`fx_harden` in `ffi.rs:274`
+    //     and calls neither (`lib.rs:917`), so the daemon's realm has no
+    //     `lockdown` either. The oracle's `lockdown`/`mutabilities` below are
+    //     `xs_shim.c`'s installs, present for differential testing — they are
+    //     NOT what the daemon runs on.
+    //
+    //     So stage 4's remaining work is not "make the bundle run", and it is
+    //     not "match the oracle's globals". It is `Compartment`, plus whatever
+    //     guest-visible `lockdown` the daemon decides it needs — neither of
+    //     which any boot bundle here supplies. See
+    //     `designs/ironhorse-ses-compartment-equivalence.md`.
+    assert!(
+        pristine.oracle_result.contains("Compartment=function"),
+        "XS builds Compartment into every realm (xsModule.c:207): {}",
+        pristine.oracle_result
+    );
+    assert!(
+        after.ironhorse_result.contains("Compartment=undefined"),
+        "ironhorse is expected to still lack Compartment (named skip \
+         `compartment:intrinsic-surface`); if it now has one, this bar must \
+         be rewritten to require it: {}",
+        after.ironhorse_result
+    );
+    assert!(
+        after.ironhorse_result.contains("lockdown=undefined"),
+        "ironhorse is expected to still lack lockdown (named skip \
+         `ses-mode:lockdown-unimplemented`, `ironhorse-vm/src/xst.rs:159`); \
+         if it now has one, this bar must be rewritten to require it: {}",
+        after.ironhorse_result
+    );
+
+    eprintln!("stage4-ses: pristine  ih={}", pristine.ironhorse_result);
+    eprintln!("stage4-ses: pre-ses   ih={}", pre_ses.ironhorse_result);
+    eprintln!("stage4-ses: after     ih={}", after.ironhorse_result);
+    eprintln!("stage4-ses: after   xs={}", after.oracle_result);
 }
