@@ -102,6 +102,7 @@ export const nameHubMethodGuards = harden({
   locate: M.call().rest(NamePathShape).returns(M.promise()),
   reverseLocate: M.call(LocatorShape).returns(M.promise()),
   followLocatorNameChanges: M.call(LocatorShape).returns(M.remotable()),
+  listValues: M.call().returns(M.promise()),
   listIdentifiers: M.call().rest(NamePathShape).returns(M.promise()),
   listLocators: M.call().rest(NamePathShape).returns(M.promise()),
   followNameChanges: M.call().returns(M.remotable()),
@@ -231,6 +232,7 @@ export const HandleInterface = M.interface(
 export const DirectoryInterface = M.interface('EndoDirectory', {
   ...nameHubMethodGuards,
   ...directoryFileMethodGuards,
+  readOnly: M.call().returns(M.promise()),
 });
 
 export const GuestInterface = M.interface('EndoGuest', {
@@ -333,6 +335,8 @@ export const GuestInterface = M.interface('EndoGuest', {
   deliver: M.call(M.record()).returns(),
   // Evaluate code directly in a worker
   evaluate: EvaluateMethodGuard,
+  // Mint a guest-owned invitation (network mediation stays internal)
+  invite: M.call(NameOrPathShape).returns(M.promise()),
 });
 
 export const HostInterface = M.interface('EndoHost', {
@@ -685,6 +689,7 @@ harden(AttenuatorInterface);
 export const InvitationInterface = M.interface('EndoInvitation', {
   accept: M.call(IdShape).optional(M.string()).returns(M.promise()),
   locate: M.call().returns(M.promise()),
+  cancel: M.call().optional(M.error()).returns(M.promise()),
 });
 
 export const InspectorHubInterface = M.interface('EndoInspectorHub', {

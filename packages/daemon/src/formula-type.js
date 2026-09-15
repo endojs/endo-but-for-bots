@@ -33,6 +33,7 @@ const formulaTypes = new Set([
   'pet-store',
   'promise',
   'readable-blob',
+  'readable-directory',
   'readable-tree',
   'registry',
   'resolver',

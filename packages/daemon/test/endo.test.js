@@ -856,6 +856,265 @@ test('move renames value, for a single guest', async t => {
   t.true(await E(guest).has('zehn'));
 });
 
+const agentKinds = harden([
+  {
+    kind: 'guest',
+    provideAgent: (host, petName, options) =>
+      E(host).provideGuest(petName, options),
+    pinsProperty: 'guestPins',
+  },
+  {
+    kind: 'host',
+    provideAgent: (host, petName, options) =>
+      E(host).provideHost(petName, options),
+    pinsProperty: 'pins',
+  },
+]);
+
+for (const { kind, provideAgent, pinsProperty } of agentKinds) {
+  test(`provideAgent gives ${kind} a caller-selected pins directory`, async t => {
+    const { host } = await prepareHost(t);
+    const pins = await E(host).makeDirectory(`retained-${kind}-pins`);
+    const agent = await provideAgent(host, kind, {
+      agentName: `${kind}-agent`,
+      pins,
+    });
+
+    await E(host).storeValue(10, 'ten');
+    const tenId = await E(host).identify('ten');
+    await E(agent).storeIdentifier(['@pins', 'ten'], tenId);
+
+    t.is(await E(pins).identify('ten'), tenId);
+    t.deepEqual(await E(agent).list('@pins'), ['ten']);
+
+    const agentId = await E(host).identify(`${kind}-agent`);
+    const agentRecord = await E(E(host).diagnostics()).getFormula(agentId);
+    const pinsId = await E(host).identify(`retained-${kind}-pins`);
+    t.is(agentRecord.properties[pinsProperty].identifier, pinsId);
+  });
+
+  test(`provideAgent gives ${kind} a caller-selected networks directory`, async t => {
+    const { host } = await prepareHost(t);
+    const networks = await E(host).makeDirectory(`delegated-${kind}-nets`);
+    const agent = await provideAgent(host, kind, {
+      agentName: `${kind}-agent`,
+      networks,
+    });
+
+    await E(host).storeValue(10, 'network-marker');
+    const markerId = await E(host).identify('network-marker');
+    await E(networks).storeIdentifier(['loopback'], markerId);
+
+    t.deepEqual(await E(agent).list('@nets'), ['loopback']);
+
+    const agentId = await E(host).identify(`${kind}-agent`);
+    const agentRecord = await E(E(host).diagnostics()).getFormula(agentId);
+    const networksId = await E(host).identify(`delegated-${kind}-nets`);
+    t.is(agentRecord.properties.networks.identifier, networksId);
+  });
+
+  test(`provideAgent introduces ordinary and special names to ${kind}`, async t => {
+    const { host } = await prepareHost(t);
+    await E(host).storeValue(10, 'ten');
+    const agent = await provideAgent(host, kind, {
+      introducedNames: {
+        ten: 'dix',
+        '@pins': 'retained',
+        '@nets': 'connections',
+      },
+    });
+
+    t.is(await E(agent).lookup('dix'), 10);
+    t.is(await E(agent).identify('retained'), await E(host).identify('@pins'));
+    t.is(
+      await E(agent).identify('connections'),
+      await E(host).identify('@nets'),
+    );
+  });
+}
+
+test('provideGuest preserves a read-only networks attenuation', async t => {
+  const { host } = await prepareHost(t);
+  const networks = await E(host).makeDirectory('delegated-nets');
+  const readOnlyNetworks = await E(networks).readOnly();
+  const guest = await E(host).provideGuest('guest', {
+    agentName: 'guest-agent',
+    networks: readOnlyNetworks,
+  });
+
+  await E(host).storeValue(10, 'network-marker');
+  const markerId = await E(host).identify('network-marker');
+  await E(networks).storeIdentifier(['loopback'], markerId);
+
+  t.deepEqual(await E(guest).list('@nets'), ['loopback']);
+  await t.throwsAsync(E(guest).storeIdentifier(['@nets', 'other'], markerId), {
+    message: /storeIdentifier/u,
+  });
+
+  const guestId = await E(host).identify('guest-agent');
+  const guestRecord = await E(E(host).diagnostics()).getFormula(guestId);
+  const readOnlyNetworksRecord = await E(E(host).diagnostics()).getFormula(
+    guestRecord.properties.networks.identifier,
+  );
+  const networksId = await E(host).identify('delegated-nets');
+  t.is(readOnlyNetworksRecord.type, 'readable-directory');
+  t.is(readOnlyNetworksRecord.properties.directory.identifier, networksId);
+});
+
+// Regression guard for the `readable-directory` unwrap in
+// `getAllNetworkAddresses` (manager.js): a guest whose `networks` is a
+// read-only attenuation must still be able to *compute* its advertised
+// addresses, which means `locate()` (the only path that reaches
+// `getAllNetworkAddresses` for a guest) must succeed — not throw the
+// `provide(id, 'directory')` type mismatch it would if the unwrap were
+// reverted to an unconditional `provide`. We also assert the read-only view
+// yields the exact same addresses as a plain writable `networks` directory,
+// so the attenuation is transparent to address computation.
+test('guest with read-only networks locates through the attenuated view', async t => {
+  const { host } = await prepareHost(t);
+
+  // Reuse the host's own ready loopback network so the addresses walk actually
+  // traverses a live network (`refForId` hit), not merely an empty directory.
+  const [loopbackName] = await E(host).list('@nets');
+  const loopbackNetworkId = await E(host).identify('@nets', loopbackName);
+  t.truthy(loopbackNetworkId, 'host has a ready loopback network to delegate');
+
+  // A writable delegated networks directory carrying the same real network.
+  const writableNetworks = await E(host).makeDirectory('writable-nets');
+  await E(writableNetworks).storeIdentifier([loopbackName], loopbackNetworkId);
+
+  // A guest handed the plain writable directory — the baseline.
+  const writableGuest = await E(host).provideGuest('writable-guest', {
+    agentName: 'writable-guest-agent',
+    networks: writableNetworks,
+  });
+
+  // A guest handed a read-only attenuation of the *same* directory.
+  const readOnlyNetworks = await E(writableNetworks).readOnly();
+  const readOnlyGuest = await E(host).provideGuest('read-only-guest', {
+    agentName: 'read-only-guest-agent',
+    networks: readOnlyNetworks,
+  });
+
+  // The discriminating assertion: locate() on the read-only-networks guest
+  // must succeed. Without the `readable-directory` unwrap in
+  // `getAllNetworkAddresses`, this rejects with a `provide(id, 'directory')`
+  // type mismatch against the `readable-directory` formula.
+  const readOnlyLocator = await E(readOnlyGuest).locate('@self');
+  t.truthy(readOnlyLocator, 'read-only-networks guest can locate');
+
+  const writableLocator = await E(writableGuest).locate('@self');
+  t.truthy(writableLocator, 'writable-networks guest can locate');
+
+  // The attenuated view computes the identical advertised addresses as the
+  // writable directory — the unwrap produces the same walk, not a degraded one.
+  t.deepEqual(
+    addressesFromLocator(readOnlyLocator),
+    addressesFromLocator(writableLocator),
+    'read-only networks yields the same advertised addresses as writable',
+  );
+});
+
+test('provideGuest rejects a non-daemon-minted pins reference', async t => {
+  const { host } = await prepareHost(t);
+  const notADaemonRef = Far('not-a-directory', {});
+  await t.throwsAsync(
+    E(host).provideGuest('guest', {
+      agentName: 'guest-agent',
+      pins: /** @type {any} */ (notADaemonRef),
+    }),
+    { message: /pins must be a daemon-minted directory/u },
+  );
+});
+
+test('provideGuest rejects a wrong-typed pins reference', async t => {
+  const { host } = await prepareHost(t);
+  // A read-only view is daemon-minted but is a `readable-directory`, not the
+  // plain writable `directory` the pins option requires.
+  const directory = await E(host).makeDirectory('some-dir');
+  const readOnlyDirectory = await E(directory).readOnly();
+  await t.throwsAsync(
+    E(host).provideGuest('guest', {
+      agentName: 'guest-agent',
+      pins: /** @type {any} */ (readOnlyDirectory),
+    }),
+    { message: /pins must be a directory/u },
+  );
+});
+
+test('provideGuest rejects a non-daemon-minted networks reference', async t => {
+  const { host } = await prepareHost(t);
+  const notADaemonRef = Far('not-a-directory', {});
+  await t.throwsAsync(
+    E(host).provideGuest('guest', {
+      agentName: 'guest-agent',
+      networks: /** @type {any} */ (notADaemonRef),
+    }),
+    { message: /networks must be a daemon-minted directory/u },
+  );
+});
+
+test('provideGuest rejects a wrong-typed networks reference', async t => {
+  const { host } = await prepareHost(t);
+  // A worker is daemon-minted but is neither a directory nor a
+  // readable-directory, so it must be rejected as a networks option.
+  const worker = await E(host).provideWorker('some-worker');
+  await t.throwsAsync(
+    E(host).provideGuest('guest', {
+      agentName: 'guest-agent',
+      networks: /** @type {any} */ (worker),
+    }),
+    { message: /networks must be a directory or read-only directory/u },
+  );
+});
+
+test('EndoDirectory.readOnly() mirrors reads and rejects every mutator', async t => {
+  const { host } = await prepareHost(t);
+  const directory = await E(host).makeDirectory('backing-dir');
+  await E(host).storeValue(1, 'one-src');
+  await E(host).storeValue(2, 'two-src');
+  const oneId = await E(host).identify('one-src');
+  const twoId = await E(host).identify('two-src');
+  await E(directory).storeIdentifier(['one'], oneId);
+  await E(directory).storeIdentifier(['two'], twoId);
+
+  const readOnlyDirectory = await E(directory).readOnly();
+
+  // Reads round-trip against the backing directory.
+  t.deepEqual([...(await E(readOnlyDirectory).list())].sort(), ['one', 'two']);
+  t.true(await E(readOnlyDirectory).has('one'));
+  t.false(await E(readOnlyDirectory).has('absent'));
+  t.is(
+    await E(readOnlyDirectory).lookup('one'),
+    await E(directory).lookup('one'),
+  );
+  t.is(await E(readOnlyDirectory).maybeLookup('absent'), undefined);
+
+  // The read-only view exposes no mutators at all.
+  await t.throwsAsync(
+    E(/** @type {any} */ (readOnlyDirectory)).storeIdentifier(['three'], oneId),
+    undefined,
+    'storeIdentifier is not available on a read-only view',
+  );
+  await t.throwsAsync(
+    E(/** @type {any} */ (readOnlyDirectory)).remove('one'),
+    undefined,
+    'remove is not available on a read-only view',
+  );
+  await t.throwsAsync(
+    E(/** @type {any} */ (readOnlyDirectory)).makeDirectory('nested'),
+    undefined,
+    'makeDirectory is not available on a read-only view',
+  );
+
+  // A live write to the backing directory is observable through the view,
+  // confirming it is a live attenuation rather than a snapshot.
+  await E(host).storeValue(3, 'three-src');
+  const threeId = await E(host).identify('three-src');
+  await E(directory).storeIdentifier(['three'], threeId);
+  t.true(await E(readOnlyDirectory).has('three'));
+});
+
 test('move moves value, between different guests', async t => {
   const { host } = await prepareHost(t);
 
@@ -1177,6 +1436,193 @@ testNeedsNodeWorker('persist confined services and their requests', async t => {
     t.is(number, 42);
   }
 });
+
+// Integration test for endojs/endo-but-for-bots#1125.
+//
+// Story: a guest is serviced by an agent caplet, retained in the guest's pin
+// directory, that answers every message the guest receives and then dismisses
+// it. Whether the worker holding the agent is canceled, or the whole daemon is
+// restarted, the caplet must resume the guest's autonomous responses without an
+// explicit lookup: delivering a message to the guest's mailbox auto-reincarnates
+// its pinned formulas (reincarnateMailboxPins), so the durable formula, not any
+// live process — and not a manual revival — is what carries the behavior across
+// the gap. The tests therefore never look the responder up before the
+// post-gap send; deleting the reincarnateMailboxPins call in deliver() makes
+// them hang for lack of any acknowledgment.
+
+const autoResponderLocation = url.pathToFileURL(
+  path.join(dirname, 'test', 'auto-responder-agent.js'),
+).href;
+
+const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+/**
+ * Provision a guest whose mailbox is serviced by an auto-responder caplet
+ * running in a dedicated named worker. The caplet is retained in the guest's
+ * own pin directory, which is exactly the set `reincarnateMailboxPins` re-warms
+ * on every delivery to the guest — so a message arriving at the guest revives
+ * the responder with no explicit lookup. Returns the guest agent facet (for
+ * inbox inspection).
+ *
+ * @param {any} host
+ */
+const pinGuestResponder = async host => {
+  await E(host).provideWorker(['responder-worker']);
+  // A caller-selected pin directory for the guest, so the test can retain the
+  // responder in the very directory reincarnateMailboxPins walks.
+  const pins = await E(host).makeDirectory('responder-pins');
+  const guest = await E(host).provideGuest('responder', {
+    agentName: 'responder-agent',
+    pins,
+  });
+  await E(host).makeUnconfined('responder-worker', autoResponderLocation, {
+    powersName: 'responder-agent',
+    resultName: 'auto-responder',
+  });
+  // Pin the responder into the guest's pin directory. This is the retention
+  // edge reincarnateMailboxPins follows on delivery: without it, a canceled or
+  // restarted responder would stay dormant until something looked it up.
+  const responderId = await E(host).identify('auto-responder');
+  await E(pins).storeIdentifier(['auto-responder'], responderId);
+  return guest;
+};
+
+/**
+ * Send one prompt to the pinned guest and wait for the auto-responder's
+ * matching acknowledgment (`acknowledged:<prompt>`) to arrive in the sender host's own
+ * inbox. Matching on the echoed prompt skips any backlog a fresh
+ * `followMessages` replays after a restart.
+ *
+ * @param {any} host
+ * @param {AsyncIterator<any>} hostMessages
+ * @param {string} prompt
+ */
+const sendAndAwaitAcknowledgement = async (host, hostMessages, prompt) => {
+  await E(host).send('responder', [prompt], [], []);
+  for (;;) {
+    // eslint-disable-next-line no-await-in-loop
+    const { value: message } = await hostMessages.next();
+    if (
+      message.type === 'package' &&
+      message.replyTo !== undefined &&
+      message.strings?.[0] === `acknowledged:${prompt}`
+    ) {
+      return message;
+    }
+  }
+};
+
+/**
+ * Poll the guest's inbox until the named inbound prompt has been dismissed by
+ * the auto-responder.
+ *
+ * @param {ExecutionContext} t
+ * @param {any} guest
+ * @param {string} prompt
+ */
+const assertDismissed = async (t, guest, prompt) => {
+  await null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    const messages = await E(guest).listMessages();
+    const pending = messages.find(
+      message =>
+        message.type === 'package' &&
+        message.replyTo === undefined &&
+        message.strings?.[0] === prompt,
+    );
+    if (pending === undefined) {
+      t.pass(`inbound ${prompt} was dismissed`);
+      return;
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await delay(20);
+  }
+  t.fail(`inbound ${prompt} was never dismissed`);
+};
+
+testNeedsNodeWorker(
+  'pinned guest responder survives worker cancellation (#1125)',
+  async t => {
+    const { host } = await prepareHost(t);
+    const guest = await pinGuestResponder(host);
+    const hostMessages = iterateReader(E(host).followMessages());
+
+    // Baseline: the pinned agent answers the guest's messages and dismisses
+    // them.
+    const acknowledgement0 = await sendAndAwaitAcknowledgement(
+      host,
+      hostMessages,
+      'ping-0',
+    );
+    t.deepEqual(acknowledgement0.strings, ['acknowledged:ping-0']);
+    await assertDismissed(t, guest, 'ping-0');
+
+    // Cancel the worker containing the agent; its follow loop stops with it.
+    await E(host).cancel('responder-worker');
+
+    // Do NOT look the responder up: an explicit lookup would itself
+    // re-incarnate it and mask the feature under test. Instead, send another
+    // message. Delivering it to the guest's mailbox must auto-reincarnate the
+    // pinned responder (reincarnateMailboxPins), and only a live responder ever
+    // sends the acknowledgment this awaits — so if the reincarnation call is
+    // removed from deliver(), this hangs.
+    const acknowledgement1 = await sendAndAwaitAcknowledgement(
+      host,
+      hostMessages,
+      'ping-1',
+    );
+    t.deepEqual(acknowledgement1.strings, ['acknowledged:ping-1']);
+    await assertDismissed(t, guest, 'ping-1');
+
+    // The revived responder is a fresh incarnation: its counter restarted at
+    // zero and now reads one, proving a new incarnation (not a survivor)
+    // answered the post-cancel message.
+    const responder = await E(host).lookup('auto-responder');
+    t.is(await E(responder).respondedCount(), 1);
+  },
+);
+
+testNeedsNodeWorker(
+  'pinned guest responder survives a daemon restart (#1125)',
+  async t => {
+    const { cancelled, config, host } = await prepareHost(t);
+    const guest = await pinGuestResponder(host);
+    const hostMessages = iterateReader(E(host).followMessages());
+
+    // Baseline: the pinned agent answers and dismisses before the restart.
+    const acknowledgement0 = await sendAndAwaitAcknowledgement(
+      host,
+      hostMessages,
+      'ping-0',
+    );
+    t.deepEqual(acknowledgement0.strings, ['acknowledged:ping-0']);
+    await assertDismissed(t, guest, 'ping-0');
+
+    await restart(config);
+
+    const { host: hostAfter } = await makeHost(config, cancelled);
+    const hostMessagesAfter = iterateReader(E(hostAfter).followMessages());
+
+    // Do NOT look the responder up after the restart. Sending to the guest must
+    // itself auto-reincarnate the pinned responder on delivery; the awaited
+    // acknowledgment can only come from a live, freshly-incarnated responder.
+    const acknowledgement1 = await sendAndAwaitAcknowledgement(
+      hostAfter,
+      hostMessagesAfter,
+      'ping-1',
+    );
+    t.deepEqual(acknowledgement1.strings, ['acknowledged:ping-1']);
+
+    const guestAfter = await E(hostAfter).lookup('responder-agent');
+    await assertDismissed(t, guestAfter, 'ping-1');
+
+    // The counter reads one on the post-restart incarnation, proving a new
+    // incarnation (not a surviving process) answered.
+    const responder = await E(hostAfter).lookup('auto-responder');
+    t.is(await E(responder).respondedCount(), 1);
+  },
+);
 
 test('guest facet receives a message for host', async t => {
   const { host } = await prepareHost(t);
@@ -3572,6 +4018,13 @@ testNeedsNodeWorker('invite, accept, and send mail', async t => {
   const invitationLocator = await E(invitation).locate();
   await E(hostB).accept(invitationLocator, 'alice');
 
+  // Acceptance replaces each invitation-side result name with the remote
+  // handle. It does not need a second, synthetic local guest under @pins.
+  t.truthy(await E(hostA).identify('bob'));
+  t.truthy(await E(hostB).identify('alice'));
+  t.is(await E(hostA).identify('@pins', 'guest-bob'), undefined);
+  t.is(await E(hostB).identify('@pins', 'guest-alice'), undefined);
+
   // create value to share
   await E(hostA).evaluate('@main', '"hello, world!"', [], [], ['salutations']);
   const expectedSalutationsLocator = await E(hostA).locate('salutations');
@@ -3597,6 +4050,104 @@ testNeedsNodeWorker('invite, accept, and send mail', async t => {
   t.is(actualParsed.number, expectedParsed.number);
   t.is(actualParsed.node, expectedParsed.node);
 });
+
+testNeedsNodeWorker('guest invites a guest and they exchange mail', async t => {
+  const hostA = await prepareHostWithTestNetwork(t);
+  const hostB = await prepareHostWithTestNetwork(t);
+
+  const guestA = await E(hostA).provideGuest('guest-a-handle', {
+    agentName: 'guest-a',
+  });
+  const invitation = await E(guestA).invite('guest-b');
+  const invitationLocator = await E(invitation).locate();
+  await E(hostB).accept(invitationLocator, 'guest-a');
+
+  // The invitation's result name is the durable connection edge. Acceptance
+  // replaces the invitation with the remote accepter handle without minting
+  // and pinning an otherwise-unreachable local guest on either side.
+  t.truthy(await E(guestA).identify('guest-b'));
+  t.truthy(await E(hostB).identify('guest-a'));
+  t.is(await E(guestA).identify('@pins', 'guest-guest-b'), undefined);
+  t.is(await E(hostA).identify('@pins', 'guest-guest-b'), undefined);
+  t.is(await E(hostB).identify('@pins', 'guest-guest-a'), undefined);
+
+  // The host-only directory remains available for deliberate hidden pins, but
+  // invitation acceptance no longer adds a redundant synthetic guest to it.
+  const guestAId = await E(hostA).identify('guest-a');
+  const guestARecord = await E(E(hostA).diagnostics()).getFormula(guestAId);
+  const guestPinsId = guestARecord.properties.guestPins.identifier;
+  const hostPinsId = guestARecord.properties.hostPins.identifier;
+  t.not(guestPinsId, hostPinsId);
+  const hostPins = await E(hostA).lookupById(hostPinsId);
+  t.is(await E(hostPins).identify('guest-guest-b'), undefined);
+
+  await E(guestA).send('guest-b', ['Hello from guest A'], [], []);
+  await E(hostB).send('guest-a', ['Hello from guest B'], [], []);
+
+  const messagesForGuestB = await E(hostB).listMessages();
+  t.true(
+    messagesForGuestB.some(
+      message =>
+        message.type === 'package' &&
+        message.strings?.[0] === 'Hello from guest A',
+    ),
+  );
+
+  const messagesForGuestA = await E(guestA).listMessages();
+  t.true(
+    messagesForGuestA.some(
+      message =>
+        message.type === 'package' &&
+        message.strings?.[0] === 'Hello from guest B',
+    ),
+  );
+});
+
+test('EndoGuest.invite nests the invitation at a directory path', async t => {
+  const { host } = await prepareHost(t);
+  const guest = await E(host).provideGuest('guest-handle', {
+    agentName: 'guest-agent',
+  });
+  await E(guest).makeDirectory('peers');
+  const invitation = await E(guest).invite(['peers', 'bob']);
+  t.truthy(await E(invitation).locate());
+  t.true(await E(guest).has('peers', 'bob'));
+  t.false(await E(guest).has('bob'));
+});
+
+testNeedsNodeWorker(
+  'accept keeps distinct result names for paths that a naive join would collide',
+  async t => {
+    const hostA = await prepareHostWithTestNetwork(t);
+    const hostB = await prepareHostWithTestNetwork(t);
+
+    // `['team-a', 'bob']` and `['team', 'a-bob']` flatten to the same string
+    // under a bare `path.join('-')`. Acceptance retains each connection at its
+    // actual directory path, without deriving a second flattened pin key.
+    await E(hostA).makeDirectory('team-a');
+    await E(hostA).makeDirectory('team');
+
+    const invitation1 = await E(hostA).invite(['team-a', 'bob']);
+    const invitation2 = await E(hostA).invite(['team', 'a-bob']);
+
+    await E(hostB).accept(await E(invitation1).locate(), 'peer-1');
+    await E(hostB).accept(await E(invitation2).locate(), 'peer-2');
+
+    const firstId = await E(hostA).identify('team-a', 'bob');
+    const secondId = await E(hostA).identify('team', 'a-bob');
+    t.truthy(firstId);
+    t.truthy(secondId);
+    await E(hostA).remove('team-a', 'bob');
+    t.is(await E(hostA).identify('team-a', 'bob'), undefined);
+    t.is(await E(hostA).identify('team', 'a-bob'), secondId);
+
+    // No implicit invitation-retention pin is necessary or created.
+    const retentionPins = [...(await E(hostA).list('@pins'))].filter(name =>
+      name.startsWith('guest-'),
+    );
+    t.deepEqual(retentionPins, []);
+  },
+);
 
 test('reverse locate local value', async t => {
   const { host } = await prepareHost(t);

@@ -44,6 +44,7 @@ import { DirectoryInterface } from './interfaces.js';
  * @param {DaemonCore['formulateReadableBlob']} args.formulateReadableBlob
  * @param {DaemonCore['pinTransient']} args.pinTransient
  * @param {DaemonCore['unpinTransient']} args.unpinTransient
+ * @param {DaemonCore['formulateReadableDirectory']} args.formulateReadableDirectory
  */
 export const makeDirectoryMaker = ({
   provide,
@@ -55,6 +56,7 @@ export const makeDirectoryMaker = ({
   formulateReadableBlob,
   pinTransient,
   unpinTransient,
+  formulateReadableDirectory,
 }) => {
   /** @type {MakeDirectoryNode} */
   const makeDirectoryNode = (
@@ -207,6 +209,23 @@ export const makeDirectoryMaker = ({
       }
       const hub = /** @type {NameHub} */ (await lookup(petNamePath));
       return E(hub).list();
+    };
+
+    /** @type {EndoDirectory['listValues']} */
+    const listValues = async () => {
+      // Capture every value through the same lookup path clients use, but do
+      // all name enumeration and root lookup synchronously in this exo turn.
+      // This is an atomic snapshot with respect to other directory messages:
+      // no mutation can interleave between list() and the lookup of a name.
+      const names = controller.list();
+      const values = names.map(name => {
+        try {
+          return lookup(name);
+        } catch (error) {
+          return Promise.reject(error);
+        }
+      });
+      return harden(values);
     };
 
     /** @type {EndoDirectory['listIdentifiers']} */
@@ -581,6 +600,7 @@ export const makeDirectoryMaker = ({
       reverseLocate,
       followLocatorNameChanges,
       list,
+      listValues,
       listIdentifiers,
       listLocators,
       locateContent,
@@ -611,12 +631,14 @@ export const makeDirectoryMaker = ({
    * @param {Context} args.context
    * @param {NodeNumber} args.agentNodeNumber
    * @param {(node: string) => boolean} args.isLocalKey
+   * @param {FormulaIdentifier} args.directoryId
    */
   const makeIdentifiedDirectory = async ({
     petStoreId,
     context,
     agentNodeNumber,
     isLocalKey,
+    directoryId,
   }) => {
     // TODO thread context
 
@@ -639,6 +661,7 @@ export const makeDirectoryMaker = ({
       locate,
       reverseLocate,
       list,
+      listValues,
       listIdentifiers,
       listLocators,
       lookup,
@@ -661,6 +684,7 @@ export const makeDirectoryMaker = ({
         followLocatorNameChanges: locator =>
           readerFromIterator(directory.followLocatorNameChanges(locator)),
         list,
+        listValues,
         listIdentifiers,
         listLocators,
         followNameChanges: () => {
@@ -681,6 +705,19 @@ export const makeDirectoryMaker = ({
         readText: directory.readText,
         maybeReadText: directory.maybeReadText,
         writeText: directory.writeText,
+        // Mint a read-only `ReadableNameHub` view. Attenuation is SHALLOW:
+        // the view withholds this directory's mutators, but `lookup`/
+        // `maybeLookup` on it forward to the backing directory and return any
+        // nested directory / agent handle / worker as the live, fully-writable
+        // object — not a further-attenuated view. A holder of the read-only
+        // view can therefore mutate nested directories one level down. This is
+        // documented on `ReadableNameHub.lookup` in types.d.ts; callers needing
+        // a recursively read-only surface must re-attenuate results themselves.
+        readOnly: async () => {
+          await null;
+          const { value } = await formulateReadableDirectory(directoryId);
+          return value;
+        },
       }),
     );
   };
