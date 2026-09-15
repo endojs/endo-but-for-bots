@@ -102,6 +102,7 @@ export const nameHubMethodGuards = harden({
   locate: M.call().rest(NamePathShape).returns(M.promise()),
   reverseLocate: M.call(LocatorShape).returns(M.promise()),
   followLocatorNameChanges: M.call(LocatorShape).returns(M.remotable()),
+  listValues: M.call().returns(M.promise()),
   listIdentifiers: M.call().rest(NamePathShape).returns(M.promise()),
   listLocators: M.call().rest(NamePathShape).returns(M.promise()),
   followNameChanges: M.call().returns(M.remotable()),

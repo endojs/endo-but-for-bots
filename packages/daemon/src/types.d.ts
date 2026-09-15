@@ -1005,6 +1005,13 @@ export interface NameHub {
     locator: string,
   ): AsyncGenerator<LocatorNameChange, undefined, undefined>;
   list(...petNamePath: string[]): Promise<Array<Name>>;
+  /**
+   * Return a snapshot of the values at the directory's immediate pet names.
+   * The names and their values are captured in one directory turn, so a
+   * concurrent mutation cannot shift the association between enumeration and
+   * lookup.
+   */
+  listValues(): Promise<Array<unknown>>;
   listIdentifiers(...petNamePath: string[]): Promise<Array<string>>;
   listLocators(...petNamePath: string[]): Promise<Record<string, string>>;
   followNameChanges(
@@ -1546,20 +1553,10 @@ export interface EndoMountControl {
 
 export interface EndoWorker {}
 
-export type MakeHostOrGuestOptions = {
+export type MakeAgentOptions = {
   agentName?: string | string[];
   introducedNames?: Record<string, string>;
-};
-
-/**
- * Guest-only creation options. `pins`/`networks` are honored solely by
- * `provideGuest` (via `makeGuest`); `makeChildHost` behind `provideHost`
- * neither reads nor validates them, so they must not appear on the shared
- * host/guest options type — declaring them there would advertise an option the
- * host path silently drops.
- */
-export type MakeGuestOptions = MakeHostOrGuestOptions & {
-  /** A caller-selected directory to expose to a new guest as `@pins`. */
+  /** A caller-selected directory to expose to the new agent as `@pins`. */
   pins?: EndoDirectory;
   /** A caller-selected directory or read-only view to expose as `@nets`. */
   networks?: EndoDirectory | ReadableNameHub;
@@ -1977,11 +1974,11 @@ export interface EndoHost extends EndoAgent {
   provideHostPath(cap: unknown): Promise<string>;
   provideGuest(
     petName?: string | string[],
-    opts?: MakeGuestOptions,
+    opts?: MakeAgentOptions,
   ): Promise<EndoGuest>;
   provideHost(
     petName?: string | string[],
-    opts?: MakeHostOrGuestOptions,
+    opts?: MakeAgentOptions,
   ): Promise<EndoHost>;
   makeDirectory(petNamePath: string | string[]): Promise<EndoDirectory>;
   provideWorker(petNamePath: string | string[]): Promise<EndoWorker>;

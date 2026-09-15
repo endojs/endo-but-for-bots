@@ -856,46 +856,82 @@ test('move renames value, for a single guest', async t => {
   t.true(await E(guest).has('zehn'));
 });
 
-test('provideGuest accepts a caller-selected guest pins directory', async t => {
-  const { host } = await prepareHost(t);
-  const pins = await E(host).makeDirectory('retained-guest-pins');
-  const guest = await E(host).provideGuest('guest', {
-    agentName: 'guest-agent',
-    pins,
+const agentKinds = harden([
+  {
+    kind: 'guest',
+    provideAgent: (host, petName, options) =>
+      E(host).provideGuest(petName, options),
+    pinsProperty: 'guestPins',
+  },
+  {
+    kind: 'host',
+    provideAgent: (host, petName, options) =>
+      E(host).provideHost(petName, options),
+    pinsProperty: 'pins',
+  },
+]);
+
+for (const { kind, provideAgent, pinsProperty } of agentKinds) {
+  test(`provideAgent gives ${kind} a caller-selected pins directory`, async t => {
+    const { host } = await prepareHost(t);
+    const pins = await E(host).makeDirectory(`retained-${kind}-pins`);
+    const agent = await provideAgent(host, kind, {
+      agentName: `${kind}-agent`,
+      pins,
+    });
+
+    await E(host).storeValue(10, 'ten');
+    const tenId = await E(host).identify('ten');
+    await E(agent).storeIdentifier(['@pins', 'ten'], tenId);
+
+    t.is(await E(pins).identify('ten'), tenId);
+    t.deepEqual(await E(agent).list('@pins'), ['ten']);
+
+    const agentId = await E(host).identify(`${kind}-agent`);
+    const agentRecord = await E(E(host).diagnostics()).getFormula(agentId);
+    const pinsId = await E(host).identify(`retained-${kind}-pins`);
+    t.is(agentRecord.properties[pinsProperty].identifier, pinsId);
   });
 
-  await E(host).storeValue(10, 'ten');
-  const tenId = await E(host).identify('ten');
-  await E(guest).storeIdentifier(['@pins', 'ten'], tenId);
+  test(`provideAgent gives ${kind} a caller-selected networks directory`, async t => {
+    const { host } = await prepareHost(t);
+    const networks = await E(host).makeDirectory(`delegated-${kind}-nets`);
+    const agent = await provideAgent(host, kind, {
+      agentName: `${kind}-agent`,
+      networks,
+    });
 
-  t.is(await E(pins).identify('ten'), tenId);
-  t.deepEqual(await E(guest).list('@pins'), ['ten']);
+    await E(host).storeValue(10, 'network-marker');
+    const markerId = await E(host).identify('network-marker');
+    await E(networks).storeIdentifier(['loopback'], markerId);
 
-  const guestId = await E(host).identify('guest-agent');
-  const guestRecord = await E(E(host).diagnostics()).getFormula(guestId);
-  const pinsId = await E(host).identify('retained-guest-pins');
-  t.is(guestRecord.properties.guestPins.identifier, pinsId);
-});
+    t.deepEqual(await E(agent).list('@nets'), ['loopback']);
 
-test('provideGuest accepts a caller-selected networks directory', async t => {
-  const { host } = await prepareHost(t);
-  const networks = await E(host).makeDirectory('delegated-nets');
-  const guest = await E(host).provideGuest('guest', {
-    agentName: 'guest-agent',
-    networks,
+    const agentId = await E(host).identify(`${kind}-agent`);
+    const agentRecord = await E(E(host).diagnostics()).getFormula(agentId);
+    const networksId = await E(host).identify(`delegated-${kind}-nets`);
+    t.is(agentRecord.properties.networks.identifier, networksId);
   });
 
-  await E(host).storeValue(10, 'network-marker');
-  const markerId = await E(host).identify('network-marker');
-  await E(networks).storeIdentifier(['loopback'], markerId);
+  test(`provideAgent introduces ordinary and special names to ${kind}`, async t => {
+    const { host } = await prepareHost(t);
+    await E(host).storeValue(10, 'ten');
+    const agent = await provideAgent(host, kind, {
+      introducedNames: {
+        ten: 'dix',
+        '@pins': 'retained',
+        '@nets': 'connections',
+      },
+    });
 
-  t.deepEqual(await E(guest).list('@nets'), ['loopback']);
-
-  const guestId = await E(host).identify('guest-agent');
-  const guestRecord = await E(E(host).diagnostics()).getFormula(guestId);
-  const networksId = await E(host).identify('delegated-nets');
-  t.is(guestRecord.properties.networks.identifier, networksId);
-});
+    t.is(await E(agent).lookup('dix'), 10);
+    t.is(await E(agent).identify('retained'), await E(host).identify('@pins'));
+    t.is(
+      await E(agent).identify('connections'),
+      await E(host).identify('@nets'),
+    );
+  });
+}
 
 test('provideGuest preserves a read-only networks attenuation', async t => {
   const { host } = await prepareHost(t);

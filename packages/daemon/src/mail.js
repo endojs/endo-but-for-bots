@@ -132,10 +132,8 @@ export const reincarnateMailboxPins = async ({
   await Promise.allSettled(
     pinDirectoryIds.map(async pinDirectoryId => {
       const pins = await provide(pinDirectoryId, 'directory');
-      const retainedIds = await E(pins).listIdentifiers();
-      await Promise.allSettled(
-        retainedIds.map(id => provide(/** @type {FormulaIdentifier} */ (id))),
-      );
+      const retainedValues = await E(pins).listValues();
+      await Promise.allSettled(retainedValues);
     }),
   );
 };
@@ -885,9 +883,9 @@ export const makeMailboxMaker = ({
         // message-received notification is published to a now-dead reader.
         // The steady-state cost is bounded: `provide` memoizes live formulas
         // via `controllerForId`, so re-providing an already-incarnated pin is
-        // cheap; the residual per-delivery work is one `listIdentifiers` plus an
-        // O(pins) fan-out of memoized provides, acceptable for the small pin
-        // sets a mailbox accumulates. (Amortizing to once-per-restart was
+        // cheap; the residual per-delivery work is one atomic `listValues`
+        // snapshot, acceptable for the small pin sets a mailbox accumulates.
+        // (Amortizing to once-per-restart was
         // considered and rejected: it silently defeats mid-life worker-cancel
         // resurrection.)
         await reincarnateMailboxPins({
