@@ -618,8 +618,8 @@ is a no-op for the rest.
 The engine states the consequence outright — "`host_aliases.js` is a
 self-contained `globalThis` IIFE that aliases only host functions that exist,
 so with no host powers registered it completes to `undefined` — safe to
-dual-run in the engine" (`ironhorse-262/src/lib.rs:705-707`) — and
-`daemon_boot_bundle_sources` (`:708-725`) already dual-runs `polyfills.js`,
+dual-run in the engine" (`ironhorse-262/src/lib.rs:708-710`) — and
+`daemon_boot_bundle_sources` (`:711-727`) already dual-runs `polyfills.js`,
 `host_aliases.js` and the combined prefix today, with no service adapter
 registered at all.
 Two of the three bundles are therefore already at the bar.
@@ -720,12 +720,13 @@ this engine workspace's scope", and treated that as the phase's blocking
 question.
 Generating it says otherwise.
 `yarn bundle:xs` produces it from a clean checkout in about a minute, and the
-result is **70 KB** — the engine's comment at `ironhorse-262/src/lib.rs:700`
-overstates it by more than tenfold, and is closer to `worker_bootstrap.js`
+result is **70 KB** — the engine's comment overstated it by more than
+tenfold; the ~1 MB figure is closer to `worker_bootstrap.js`
 (750 KB) or `daemon_bootstrap.js` (2.4 MB), which the same command also
 generates.
-Correcting that is a Phase 6 item in its own right; it is recorded here
-because this document repeated the figure and gave it weight the file does
+That comment is corrected in the same change as this block
+(`ironhorse-262/src/lib.rs:708`); it is recorded here because this document
+repeated the figure and gave it weight the file does
 not carry.
 
 What survives is a real but smaller question, and it is a build question
@@ -750,32 +751,43 @@ builds and runs in this tree.
 
 Three results, none of which the phase assumed.
 
-*The bundle is already at the bar.* Both engines evaluate `ses_boot.js` to
-the same value, and `eval_wrapped`'s contract makes that value `'ok'` exactly
-when nothing threw. Both then carry `harden` and `HandledPromise`.
-Concatenating the three sources into one program, which an earlier reading of
-the bar implied, is not a program either engine accepts — both abort it with
+*The bundle does not fault on ironhorse.* Both engines evaluate `ses_boot.js`
+to `'ok'`, which is `eval_wrapped`'s contract for "nothing threw", and across
+the bundle exactly one census entry moves on either engine: `HandledPromise`,
+`undefined` to `function`. That is the first clause of `:940` for this one
+file, not the bar — the second clause, "SES conformance suites pass", is
+`total=2 covered=0` (`rust/engine/CHANGELOG.md:906-925`). Concatenating the
+three sources into one program, which an earlier reading of the bar implied,
+is not a program either engine accepts — both abort it with
 `SyntaxError: invalid directive`, because the daemon evaluates them
 separately.
 
-*`ses_boot.js` is not the SES shim.* Its module list is `@endo/harden`
-(make-hardener, make-selector, index), `@endo/env-options`,
-`@endo/eventual-send` (handled-promise, shim), and the daemon's own boot
-file. It contains three `globalThis.harden` assignments and no
-`globalThis.lockdown` or `globalThis.Compartment` anywhere. That is also why
-it is 70 KB: it was never the full SES distribution.
+*`ses_boot.js` is not the SES shim.* Its modules are `@endo/harden`,
+`@endo/env-options`, `@endo/eventual-send` and the daemon's own boot file. Its
+only `globalThis` write is `HandledPromise`; `@endo/harden`'s selector reads
+`globalThis.harden` and installs nothing, because `polyfills.js` got there
+first. That is also why it is 70 KB: it was never the full SES distribution.
+The tree already said so at `packages/daemon/src/bus-worker-xs-ses-boot.js:16`
+and `rust/endo/xsnap/src/lib.rs:917`; the measurement confirms it, and the
+comment that contradicted it, in this same crate, is corrected in the same
+change.
 
-*`lockdown` and `Compartment` on XS are XS's own.* The census before the
-bundle runs reads `lockdown=function harden=function Compartment=function` on
-the oracle and `lockdown=undefined harden=function Compartment=undefined` on
-ironhorse. XS implements SES natively, which
-`designs/ironhorse-engine.md:201` already says; the bundle never installed
-them on either engine.
+*The gap against the DAEMON's XS is one name, not four.* Only `Compartment` is
+an XS realm intrinsic (`xsModule.c:207`). `lockdown`, `harden`, `petrify` and
+`mutabilities` are embedder-installed globals that `fxCreateMachine` never
+binds — `xst.c:428` installs two, our oracle shim installs all four
+(`xs-oracle/csrc/xs_shim.c:373`), and **the daemon's xsnap installs none**:
+`ffi.rs:274` declares `fx_harden` and `fx_lockdown` and calls neither, as
+`lib.rs:917` already recorded. So the daemon's XS realm has no `lockdown`
+either, and the oracle's is differential-testing scaffolding rather than the
+thing ironhorse must match.
 
-So stage 4's remaining work is **not** "make the boot bundles run", and the
-`boot:ses-lockdown-bundle` ledger row names the right thing for the wrong
-reason. What is missing at the GUEST level is that ironhorse has no
-`lockdown` and no `Compartment`, where XS has both natively.
+So stage 4's remaining work is **not** "make the boot bundles run", and it is
+not "match the oracle's globals". Against the daemon it is `Compartment`,
+plus whatever guest-visible `lockdown` the daemon decides it wants. The
+`boot:ses-lockdown-bundle` ledger row names a real gap for the wrong reason:
+the named skips that track this are `ses-mode:lockdown-unimplemented` and
+`compartment:intrinsic-surface`.
 
 **But the machinery is built; what is absent is the binding layer.**
 Both facilities exist in Rust and are tested:
@@ -812,25 +824,31 @@ closely enough for real SES code. Its own `intrinsic_permit` doc notes it
 "controls bindings, not transitive reachability through endowed objects",
 which is not SES's attenuation model. A binding layer over a seam that
 differs semantically would pass a `typeof` census and fail a conformance
-suite.
+suite. The option-by-option walk against both SES and XS, and the step-by-step
+reading of `fx_lockdown` that sizes the native route, are in
+[ironhorse-ses-compartment-equivalence](ironhorse-ses-compartment-equivalence.md).
 
-`Object.isFrozen(Object.prototype)` is `true` on both engines before any
-lockdown, and `harden` is present on ironhorse before the bundle runs — both
-are ironhorse's own freezing primitives (F015/F057/F058), not evidence of SES
-support. A bar that checked only those would read green and mean nothing.
+*Two traps for anyone re-measuring.* `harden` and `petrify` are present on
+ironhorse before `polyfills.js` runs — they are its own
+`create_hardened_globals` bindings (`interp/boot.rs:2086`), not the polyfill's
+deep-freeze, and a census taken after `polyfills.js` cannot tell them apart
+because `polyfills.js:158` installs one when it finds none. And
+`Object.isFrozen(Object.prototype)` is `false` on BOTH engines throughout this
+sequence: no lockdown runs anywhere in it. A bar that checked either would
+read green and mean nothing.
 
-**If the bundles do not agree.** The bar is result agreement on three
-programs, and a divergence in `ses_boot.js` is the expected outcome of a
-first run, not a project failure.
-The partial-acceptance definition already exists in the shape of the
-evidence: the side-table ledger's HardenState, Modules and Functions rows
-are three separable claims, and a phase that lands two of them has a
-reportable result.
-Descoping to "`polyfills.js` and `host_aliases.js` at the bar, `ses_boot.js`
-named as a ledgered gap" is the tree's *current* state, so it is a floor
-rather than an outcome — but it is the honest thing to publish if the
-bundling decision goes the other way, and Phase 5 would then ship against a
-named SES gap exactly as `run_worker` already describes.
+**If the bundles do not agree.** They agree, as of the measurement above, so
+this is now a regression contingency rather than an expected first-run
+outcome: `stage4_ses_boot.rs` is the gate that would catch it, and the fix
+would be an engine fix rather than a descope.
+
+**Partial acceptance.** The earlier framing here leaned on the side-table
+ledger's "HardenState, Modules and Functions rows" as three separable claims;
+§ Finding 9 of this document establishes there is no `Modules` row in the
+ledger at all. The honest partial result is the one the measurement produced:
+the boot bundles run and agree, `Compartment` is named as the remaining guest
+gap, and Phase 5 ships against that named gap exactly as `run_worker` already
+describes.
 
 **Clears:** "full daemon SES acceptance," the clause the fence says freezing
 does not imply.
@@ -1219,21 +1237,24 @@ and a reader working from it alone will re-do them.
       is why it is named here rather than folded into the first increment.
       Until it lands, a supervisor should bound its retries rather than trust
       that class to terminate them.
-- [ ] **Decide `ses_boot.js`'s provenance before Phase 4 starts.** The bundle
-      is gitignored and generated, not committed.
-      It is 70 KB and `yarn bundle:xs` produces it from a clean checkout in
-      about a minute, so the question is not the artifact — it is whether the
-      engine workspace's CI runs node and yarn over the `@endo/*` graph
-      before `cargo test`, which is what makes the file exist where
-      `ironhorse-262` can `include_str!` it.
-      Commit the bundle, generate it in CI, or keep the bar out of the engine
-      workspace and run it from `rust/endo`.
-      The XL size on Phase 4 does not price that CI change.
-- [ ] **Re-word the `boot:ses-lockdown-bundle` ledger row and the comment it
+- [x] **Decide `ses_boot.js`'s provenance before Phase 4 starts.** Settled
+      2026-09-15. It is a 70 KB `@endo/compartment-mapper` `makeBundle`
+      artifact over `packages/daemon/src/bus-worker-xs-ses-boot.js`,
+      gitignored and generated rather than committed, and it carries no
+      `lockdown`.
+      The CI half is decided too: `test-ironhorse-oracle` now runs node, yarn
+      and `yarn bundle:xs` before `cargo test`, and sets
+      `IRONHORSE_SES_BOOT_REQUIRED=1` so a missing bundle is red rather than a
+      silent skip.
+      What that lane does *not* cover: it triggers on `rust/engine/**` only,
+      so a change to the daemon bundle source alone will not re-run the bar.
+- [x] **Re-word the `boot:ses-lockdown-bundle` ledger row and the comment it
       came from** (`rust/engine/CHANGELOG.md:900`,
-      `ironhorse-262/src/lib.rs:700`). Both call `ses_boot.js` a ~1 MB
-      artifact; it is 70 KB. The ~1 MB figure fits `worker_bootstrap.js`,
-      which the same command generates.
+      `ironhorse-262/src/lib.rs:699`). Done 2026-09-15: both called
+      `ses_boot.js` a ~1 MB rollup artifact carrying SES `lockdown()`; it is
+      70 KB from `@endo/compartment-mapper`'s `makeBundle` and carries no
+      `lockdown`. The ~1 MB figure fits `worker_bootstrap.js`, which the same
+      command generates.
 - [ ] **Own the `FromAsync*` documentation half.** Stating the three
       checkpoint refusals on `PersistentMachine` is gated on nothing and
       could land this week; Phase 5 only requires that it has landed by the
