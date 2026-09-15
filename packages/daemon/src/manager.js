@@ -5693,9 +5693,9 @@ const makeDaemonCore = async (
         (await formulateDirectory(agentNodeNumber)).id,
     );
     // A second pin directory is held by the guest formula but never installed
-    // as a special name. Daemon-owned relationships, such as the local guest
-    // created when an invitation is accepted, can therefore remain durable
-    // without letting the guest or its connected agent remove their pin.
+    // as a special name. Daemon-owned relationships can therefore remain
+    // durable without letting the guest or its connected agent remove their
+    // pin.
     const hostPinsDirectoryId = pin(
       (await formulateDirectory(agentNodeNumber)).id,
     );
@@ -6872,44 +6872,8 @@ const makeDaemonCore = async (
     // agent, so the same implementation serves a host or a guest inviter.
     const networkBroker = await makeInvitationNetworkBroker();
     // The invitation persists the name (or directory path) the redeemed
-    // guest should be stored under.  The durable mail-delivery name takes
-    // the full path; the label uses the leaf pet name.
+    // guest should be stored under.
     const guestNamePath = namePathFrom(guestName);
-    const guestLeaf = guestNamePath[guestNamePath.length - 1];
-    // The retention pin key is derived from the *whole* guest name path, not
-    // just its leaf, so two invitations that share a leaf under different
-    // directory paths (e.g. `team-a/bob` vs `team-b/bob`) retain under distinct
-    // keys instead of colliding on a bare `guest-<leaf>` slot — which would let
-    // the second accept() clobber the first's retention edge and leave the
-    // first guest collectible.
-    //
-    // A bare `guestNamePath.join('-')` is NOT an injective encoding of the
-    // path: pet names may themselves contain `-` (`isValidName` forbids only
-    // `/`, `@`, NUL, and the exact names `.`/`..`), so `['team-a','bob']` and
-    // `['team','a-bob']` both flatten to `team-a-bob`, and the single name
-    // `'a-b'` flattens the same as the path `['a','b']`. Any such pair would
-    // silently share one retention key. So a multi-segment path is encoded
-    // with a self-delimiting `<segment-length>_<segment>` per segment, which
-    // is injective across all multi-segment paths regardless of hyphens.
-    //
-    // The common single-segment name keeps its exact `guest-<name>` key (the
-    // operator-navigable `@pins/guest-<name>` entry callers and legacy
-    // databases already hold); joining a one-element path with any encoding
-    // must not perturb that. The only residual ambiguity is a single-segment
-    // name deliberately crafted to equal the length-prefixed encoding of one
-    // of the *same inviter's own* multi-segment paths — a self-inflicted
-    // collision that clobbers only that inviter's own retention pin, never
-    // another principal's. The accidental, cross-purpose collisions the seats
-    // flagged (differing hyphenation) are eliminated.
-    //
-    // The key is a pure function of the guest name path, so it is stable
-    // across a crash-retry of the *same* invitation and the documented
-    // retry-overwrites-its-own-pin cleanup (below) is preserved.
-    const guestPinName = `guest-${
-      guestNamePath.length === 1
-        ? guestNamePath[0]
-        : guestNamePath.map(segment => `${segment.length}_${segment}`).join('')
-    }`;
 
     // Serialize accept()/cancel() on THIS invitation so its single-use check
     // and the consuming mutation run atomically with respect to each other.
@@ -6997,8 +6961,8 @@ const makeDaemonCore = async (
       // The consume has two irreversible parts -- rebinding the `guestName`
       // slot to the accepted remote handle, and canceling this invitation's
       // own controller so a re-provide cannot reincarnate a spent invitation.
-      // If the consume ran first and a later, fallible step (peer registration
-      // or guest formulation) then threw, the invitation would be irrevocably
+      // If the consume ran first and the later peer registration then threw,
+      // the invitation would be irrevocably
       // spent -- slot pointing at a raw remote handle, no peer info, controller
       // canceled -- with no cleanup path and every future accept() failing the
       // "already accepted" check permanently.  So we do all the fallible work
@@ -7012,17 +6976,10 @@ const makeDaemonCore = async (
       // never double-*consumed* -- across concurrency, replay, and a crash at
       // any point, the `guestName` slot is rebound to an accepted handle at
       // most once.  It is NOT full mid-accept idempotency across a process
-      // crash: a crash after some fallible work (a `formulateGuest`, a pin
-      // `storeIdentifier`) but before the final consume leaves the invitation
-      // un-consumed and redeemable, so a post-restart retry re-runs the whole
-      // fallible section and mints a *fresh* guest, orphaning the earlier
-      // attempt's partial formula chain (the prior `guestPinName` pin is
-      // overwritten and its guest becomes collectible).  That is the accepted
-      // trade for keeping the invitation redeemable after a crash rather than
-      // stranding it spent; making guest-mint reuse-by-invitation-id idempotent
-      // is possible but deferred, as the orphan is GC-reachable and no
-      // authority leaks.  Callers must therefore treat a crashed accept as
-      // "retry the whole accept", not "resume a half-minted guest".
+      // crash: a crash after peer registration but before the final consume
+      // leaves the invitation un-consumed and redeemable, so a post-restart
+      // retry repeats that idempotent registration. Callers must therefore
+      // treat a crashed accept as "retry the whole accept", not "resume".
       return invitationJobs.enqueue(async () => {
         const currentSlot = await E(invitingAgent).identify(...guestNamePath);
         if (currentSlot !== id) {
@@ -7048,75 +7005,6 @@ const makeDaemonCore = async (
         };
         await networkBroker.addPeerInfo(peerInfo);
 
-        // Create a local guest with a regular pet store.
-        // Pin the guest handle to protect it from premature collection.
-        /** @type {DeferredTasks<AgentDeferredTaskParams>} */
-        const guestTasks = makeDeferredTasks();
-        guestTasks.push(async identifiers =>
-          pinTransient(identifiers.handleId),
-        );
-        const { id: localGuestId } = await formulateGuest(
-          invitingAgentId,
-          invitingHandleId,
-          guestTasks,
-          `guest:${guestLeaf}`,
-        );
-
-        // Look up the local guest's handle from its formula so we can
-        // name it.  Incarnating the handle transitively incarnates the
-        // guest.
-        const localGuestFormula = /** @type {GuestFormula} */ (
-          await getFormulaForId(localGuestId)
-        );
-
-        // Keep a guest-owned connection in the host-only pin directory. That
-        // directory is absent from the guest's special names, so neither the
-        // guest nor its connected agent can see or remove this retention edge.
-        // Host invitations retain their established, operator-visible @pins
-        // behavior.
-        const invitingFormula = await getFormulaForId(invitingAgentId);
-        if (invitingFormula.type === 'guest') {
-          const { hostPins: hostPinsDirectoryId } = invitingFormula;
-          if (hostPinsDirectoryId !== undefined) {
-            const hostPinsDirectory = /** @type {EndoDirectory} */ (
-              await provide(hostPinsDirectoryId, 'directory')
-            );
-            await E(hostPinsDirectory).storeIdentifier(
-              /** @type {NamePath} */ ([guestPinName]),
-              localGuestFormula.handle,
-            );
-          } else {
-            // Guest formulas deployed before pin directories existed have
-            // neither guestPins nor hostPins. Retain their invited connection
-            // through the creating agent's pins instead. Unlike the per-guest
-            // `hostPins` directory above, this creating agent's `@pins` is
-            // *shared* by every legacy guest under the same host, so the key
-            // must also encode which inviting guest owns the pin — otherwise
-            // two distinct legacy guests inviting the same name would collide
-            // on one `guest-<name>` slot and the second accept() would clobber
-            // the first. The inviting handle's formula number is unique per
-            // inviting guest and stable across a crash-retry.
-            const creatingAgent = await provide(
-              invitingFormula.hostAgent,
-              'agent',
-            );
-            const { number: invitingHandleNumber } = parseId(invitingHandleId);
-            await E(creatingAgent).storeIdentifier(
-              /** @type {NamePath} */ ([
-                '@pins',
-                `${guestPinName}-from-${invitingHandleNumber}`,
-              ]),
-              localGuestFormula.handle,
-            );
-          }
-        } else {
-          await E(invitingAgent).storeIdentifier(
-            /** @type {NamePath} */ (['@pins', guestPinName]),
-            localGuestFormula.handle,
-          );
-        }
-        await unpinTransient(localGuestFormula.handle);
-
         // --- Consume, last: only now that the fallible work has succeeded ---
         //
         // Use storeLocator so the directory properly internalizes the remote
@@ -7133,9 +7021,6 @@ const makeDaemonCore = async (
           const controller = provideController(id);
           await controller.context.cancel(new Error('Invitation accepted'));
         });
-
-        // Return the remote guest's public key for retention tracking.
-        return harden({ guestPublicKey: guestDaemonNode });
       });
     };
 
