@@ -115,6 +115,18 @@ fn main() {
                 cfg.ses_mode =
                     SesMode::parse(&v).unwrap_or_else(|| fail("--ses-mode must be l, lc, or c"));
             }
+            // `--prelude <file>`: the SHIM route, as `test262-harness --prelude`
+            // does it for the xs and node hosts. Distinct from `-l`, which is
+            // the native route and still fails closed: a prelude does not make
+            // `-l` work, it makes `-l` unnecessary.
+            "--prelude" => {
+                let path = args
+                    .next()
+                    .unwrap_or_else(|| fail("--prelude needs a path"));
+                let source = std::fs::read_to_string(&path)
+                    .unwrap_or_else(|e| fail(&format!("--prelude {path}: {e}")));
+                cfg.prelude = Some(source);
+            }
             "--test262-dir" => {
                 test262_dir = Some(PathBuf::from(
                     args.next()
