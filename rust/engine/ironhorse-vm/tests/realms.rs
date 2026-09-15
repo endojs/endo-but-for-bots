@@ -625,3 +625,122 @@ fn machine_reports_rejections_from_collected_orphan_compartments() {
     );
     assert!(machine.unhandled_rejections().unwrap().is_empty());
 }
+
+/// A dynamic-evaluation compiler, as the 262 harness and the daemon wire one.
+/// Without it every `eval` / `Function` / `GeneratorFunction` call answers
+/// `NotImplemented("eval:no-compiler")`, which hides what this test measures.
+struct TestCompiler;
+impl ironhorse_vm::SourceCompiler for TestCompiler {
+    fn compile_source(
+        &self,
+        source: &str,
+        strict: bool,
+        raw_budget: u64,
+        charge: &mut dyn FnMut(u64) -> bool,
+    ) -> Result<ironhorse_vm::CompiledSource, ironhorse_vm::SourceCompileError> {
+        match ironhorse_compile::compile_atoms_budgeted_with_limit(
+            source,
+            ironhorse_compile::Goal::Eval,
+            strict,
+            raw_budget,
+            charge,
+        ) {
+            Ok(compiled) => Ok(ironhorse_vm::CompiledSource {
+                bytecode: compiled.bytecode,
+                symbols: compiled.symbols,
+                parse_meter_raw: compiled.parse_meter_raw,
+                parse_computrons: compiled.parse_computrons,
+            }),
+            Err(ironhorse_compile::CompileError::MeterAbort) => {
+                Err(ironhorse_vm::SourceCompileError::MeterAbort)
+            }
+            Err(ironhorse_compile::CompileError::Parse(error)) => match error.kind {
+                ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
+                    kind: ironhorse_compile::LexErrorKind::RegExpResourceLimit,
+                    ..
+                }) => Err(ironhorse_vm::SourceCompileError::HeapExhausted),
+                ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
+                    kind: ironhorse_compile::LexErrorKind::RegExpBudgetExceeded,
+                    ..
+                }) => Err(ironhorse_vm::SourceCompileError::MeterAbort),
+                ironhorse_compile::ParseErrorKind::Unsupported => Err(
+                    ironhorse_vm::SourceCompileError::Unsupported(error.to_string()),
+                ),
+                _ => Err(ironhorse_vm::SourceCompileError::Syntax(error.message)),
+            },
+        }
+    }
+}
+
+#[test]
+fn dynamic_function_families_compile_in_the_calling_compartment() {
+    // `%GeneratorFunction%`, `%AsyncFunction%` and `%AsyncGeneratorFunction%`
+    // have no global name: a compartment reaches them only through
+    // `Object.getPrototypeOf(function*(){}).constructor`, off a prototype every
+    // compartment shares and that is frozen. So there is no per-compartment
+    // copy for `compartment_evaluator` to mint, the way there is for `eval` and
+    // the global `Function` -- and whatever `global_env` those three carry is
+    // what `invoke_native` switches to before `create_dynamic_function` runs.
+    //
+    // Pinning them to the default global made that environment the compartment's
+    // for the duration, in BOTH directions: the compiled body read the default
+    // realm's bindings, and an assignment in it defined a global ON the default
+    // realm's global object from inside a compartment.
+    //
+    // Each family's product is unwrapped differently, so the probe is an
+    // assignment rather than a return: an async function body and a (sync or
+    // async) generator body all run their prefix synchronously far enough to
+    // perform one, with no job pump.
+    let machine = Machine::new();
+    machine
+        .set_source_compiler(std::rc::Rc::new(TestCompiler))
+        .expect("machine takes a compiler");
+    let start = machine.start_compartment();
+    assert_eq!(eval(&start, "var answer = 'default'; answer"), "default");
+
+    let mut a = machine.new_compartment();
+    a.set_source_compiler(std::rc::Rc::new(TestCompiler));
+    assert_eq!(eval(&a, "var answer = 'a'; answer"), "a");
+
+    for (family, drive) in [
+        ("Function", ""),
+        (
+            "Object.getPrototypeOf(function*(){}).constructor",
+            ".next()",
+        ),
+        ("Object.getPrototypeOf(async function(){}).constructor", ""),
+        (
+            "Object.getPrototypeOf(async function*(){}).constructor",
+            ".next()",
+        ),
+    ] {
+        // Reads the compartment's `answer`, not the default realm's.
+        assert_eq!(
+            eval(
+                &a,
+                &format!("var seen; {family}('seen = answer')(){drive}; seen")
+            ),
+            "a",
+            "{family} compiled against the wrong global"
+        );
+        // And defines its global in the compartment, not on the default realm.
+        eval(&a, &format!("{family}('escaped = 7')(){drive}; 0"));
+        assert_eq!(eval(&a, "escaped"), "7", "{family}");
+        assert_eq!(
+            eval(&start, "typeof escaped"),
+            "undefined",
+            "{family} defined a global on the default realm from inside a compartment"
+        );
+        eval(&a, "delete globalThis.escaped; 0");
+    }
+
+    // The default environment still resolves its own binding: the fix stops
+    // pinning, it does not re-home.
+    assert_eq!(
+        eval(
+            &start,
+            "var seen; Object.getPrototypeOf(function*(){}).constructor('seen = answer')().next(); seen"
+        ),
+        "default"
+    );
+}
