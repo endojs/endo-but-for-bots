@@ -478,10 +478,16 @@ fn corpus_label(subtrees: &[String]) -> String {
 ///
 /// The pre-skip is honest per case -- each names `ses-mode:*-unimplemented`
 /// -- but the RUN is not: every case skips, nothing fails, and the process
-/// exits 0, so `test262:ironhorse` reports green while testing nothing at
-/// all. That is the same shape as the runner package's `"test": "exit 0"`,
-/// and it is worse here because the lane looks like a third host holding the
-/// others honest.
+/// exits 0, so `test262:ironhorse` reports a clean run while testing nothing
+/// at all.
+///
+/// The `ses-xs-parity` axis is a RATCHET, not a CI gate
+/// (`packages/test262-runner/README.md`): it is read for a pass count that
+/// should go up and never down, and it gates no build. That is precisely why
+/// this refuses rather than exiting 0. A gate can survive a meaningless
+/// green, because something else fails when the code is wrong; a ratchet
+/// cannot survive a meaningless NUMBER, because the number is the whole
+/// signal. 15288 skips reported as success would ratchet against nothing.
 ///
 /// So the mode fails closed: asking for a `lockdown()` that does not exist is
 /// a configuration error, not a skip. A per-case skip stays the right answer
