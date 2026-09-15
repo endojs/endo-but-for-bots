@@ -15,6 +15,7 @@
 
 import { Fail, b, q } from '@endo/errors';
 import { E } from '@endo/eventual-send';
+import { PINNED_IMAGE_REFERENCE_PATTERN } from '@endo/sandbox/policy.js';
 import { assertPrivateDirectory } from '@endo/sandbox/private-directory.js';
 import { readRuntimeConfig } from '@endo/sandbox/runtime-config.js';
 import { execFile as execFileCallback } from 'node:child_process';
@@ -275,6 +276,22 @@ export const resolvePinnedImageRef = async (
   const imageDigest = stdout.trim();
   /^sha256:[a-f0-9]{64}$/.test(imageDigest) ||
     Fail`Cannot resolve a digest for ${b(label)} sandbox image ${q(image)}; build it before hosted setup`;
-  return harden({ imageRef: `${image}@${imageDigest}`, imageDigest });
+  // Drop the tag the image was FOUND under before pinning it. `name:tag@digest`
+  // is valid reference syntax and Podman accepts it, but the native runtime's
+  // PINNED_IMAGE_REFERENCE_PATTERN admits a registry port and no tag, so
+  // appending the digest to the tagged name produced a reference that this
+  // resolver called pinned and that every buildSlice then refused with "Native
+  // profile requires a pinned OCI image". The digest is the pin; the tag it was
+  // reached by is exactly the mutable part being resolved away.
+  const lastSlash = image.lastIndexOf('/');
+  const lastColon = image.lastIndexOf(':');
+  const repository = lastColon > lastSlash ? image.slice(0, lastColon) : image;
+  const imageRef = `${repository}@${imageDigest}`;
+  // Check the rule the runtime will apply, here, where the operator can still
+  // read the message — rather than shipping a value that only fails per
+  // session, deep inside a slice build.
+  PINNED_IMAGE_REFERENCE_PATTERN.test(imageRef) ||
+    Fail`Resolved ${b(label)} sandbox image ${q(imageRef)} is not a pinned reference the native runtime will accept`;
+  return harden({ imageRef, imageDigest });
 };
 harden(resolvePinnedImageRef);
