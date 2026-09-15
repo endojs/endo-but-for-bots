@@ -3,73 +3,149 @@
 | | |
 |---|---|
 | **Created** | 2026-09-15 |
+| **Updated** | 2026-09-15 |
 | **Author** | kumavis (prompted) |
 | **Status** | Proposed |
-| **Source** | Measured against tree `95e7ee99` while working Phase 4 of [ironhorse-daemon-acceptance-sequencing](ironhorse-daemon-acceptance-sequencing.md) |
+| **Source** | Measured while working Phase 4 of [ironhorse-daemon-acceptance-sequencing](ironhorse-daemon-acceptance-sequencing.md) |
 
 ## Status
 
-Nothing here is implemented.
-This is a handoff: what the stage-4 SES gap actually is, measured rather than
-assumed, and what a reader who was not present needs in order to size it.
+Two things landed with this document.
 
-The one thing that did land is the measurement itself —
-`rust/engine/ironhorse-262/tests/stage4_ses_boot.rs`, which dual-runs the
-daemon's own boot sequence against the XS oracle and pins the gap so it can
-neither widen nor close silently.
+`rust/engine/ironhorse-vm/src/interp/realm.rs` no longer pins the three
+non-global evaluator constructors to the default realm, closing a confinement
+hole a compartment could read and write through
+(`tests/realms.rs::dynamic_function_families_compile_in_the_calling_compartment`).
+And `tests/ses_boot_intrinsics.rs` pins the two realm profiles described below,
+in both directions, so the day they stop excluding each other a test says so.
+
+Everything else here is a handoff: what the stage-4 SES gap actually is,
+measured rather than assumed, and what a reader who was not present needs in
+order to size it.
 
 ## What is the Problem Being Solved?
 
 `designs/ironhorse-engine.md:37` records stage 4, Hardened JavaScript, as
-"Partial — bar not met", and `:940` states the bar as "the endor daemon boot
-bundles … running identically on both engines".
-Read literally, that bar is already met and has been for some time.
-It is the wrong bar, and reading it literally hides the real gap.
+"Partial — bar not met".
+Its bar at `:940` has two clauses: "The endor daemon boot bundles
+(`polyfills.js`, `ses_boot.js`, HandledPromise) run identically on both
+engines; SES conformance suites pass."
+The first clause is met for the boot bundles and has been for some time; the
+second is `total=2 covered=0` (`rust/engine/CHANGELOG.md:906-925`).
+Reading the first clause as the whole bar — which the phase that led here did —
+hides the gap, and it also hid something better: most of the second clause's
+machinery is already working in this tree, by a route the bar does not mention.
 
-## What the measurement found
+## Three configurations, not one
 
-`stage4_ses_boot.rs` runs five cranks on one machine through
-`dual_run_cranks`: a census, `polyfills.js`, a census, `ses_boot.js` through
-`eval_wrapped`'s try/catch shape (`rust/endo/xsnap/src/lib.rs:1078`), a census.
-The census brackets are what make the assertions deltas; the earlier reading of
-this bar, taken without a pristine crank, misattributed two globals.
+The tree contains three workers. They get Hardened JavaScript three different
+ways, and only one of them is what the stage-4 bar describes.
 
-**The bundle agrees, and does almost nothing.**
-Both engines evaluate `ses_boot.js` to `'ok'`, and on both engines exactly one
-census entry moves across it: `HandledPromise`, `undefined` to `function`.
+| worker | engine | how it gets SES |
+|---|---|---|
+| endor daemon (`rust/endo`) | XS | **it does not** — nothing in its boot path calls `lockdown()` |
+| `rust/thixotrope-xs-worker` | XS | XS's native `fx_lockdown`, installed by the embedder |
+| `rust/thixotrope-ironhorse-worker` | IronHorse | the real `ses` shim, on an unfrozen realm |
 
-**`ses_boot.js` is not the SES shim.**
+**The endor daemon never locks down.**
+`rust/endo/xsnap/src/ffi.rs:274-275` declares `fx_harden` and `fx_lockdown`;
+nothing in `rust/endo` calls either, and `lib.rs:917` already recorded that.
+Its realm runs on unrepaired intrinsics and `polyfills.js`'s deep-freeze
+`harden`.
+
+**`thixotrope-xs-worker` does.**
+`main.rs:157-158` installs the engine's own `harden` and `lockdown` as globals,
+and its generated boot script ends with `lockdown();`
+(`packages/thixotrope/scripts/bundle-xs-worker.mjs:71-76`) so that "guest
+compartments cannot communicate or interfere through" the intrinsics.
+Its worker bundle then does `new Compartment()`
+(`packages/thixotrope/src/worker-peer.js:52`).
+
+**`thixotrope-ironhorse-worker` gets there without the engine's help.**
+`packages/thixotrope/scripts/bundle-ironhorse-worker.mjs` bundles the real
+`ses` shim, slices `polyfills.js` before its assert polyfill, deletes
+`globalThis.harden` so the shim can install its own, neuters the
+half-implemented `Iterator`, stubs `console`, and calls
+`lockdown({ errorTaming: 'safe', reporting: 'none', overrideTaming: 'min' })`.
+That is a working guest `lockdown` and a working guest `Compartment` on
+IronHorse, in CI, today (`test-thixotrope-ironhorse`).
+
+So the question this document was opened to ask — "does IronHorse need a native
+`lockdown` and `Compartment`?" — already has a partial answer in the tree: for
+the one IronHorse worker that needs them, no. The shim supplies them.
+
+## What the measurements found
+
+### The boot bundle is not the obstacle
+
+`rust/engine/ironhorse-262/tests/stage4_ses_boot.rs` runs five cranks on one
+machine through `dual_run_cranks`: a census, `polyfills.js`, a census,
+`ses_boot.js` through `eval_wrapped`'s try/catch shape, a census.
+Both engines evaluate the bundle to `'ok'`, and on both exactly one census
+entry moves across it: `HandledPromise`, `undefined` to `function`.
+
+`ses_boot.js` is not the SES shim.
 It is `@endo/harden`, `@endo/env-options`, `@endo/eventual-send` and the
-daemon's own boot file — 70 KB, not the "~1 MB" its ledger row claims
-(`rust/engine/CHANGELOG.md:900`).
-The tree already says so in three places, most directly
-`packages/daemon/src/bus-worker-xs-ses-boot.js:16-38`; this measurement
-confirms it rather than discovering it.
-Its only `globalThis` write is `HandledPromise`.
-`@endo/harden`'s selector *reads* `globalThis.harden` and installs nothing,
-because `polyfills.js` got there first.
+daemon's own boot file — 70 KB.
+Its only `globalThis` write is `HandledPromise`; `@endo/harden`'s selector
+reads `Object[Symbol.for('harden')]` first and `globalThis.harden` second, and
+`polyfills.js` installs both, so it installs nothing.
+The tree already said so, most directly at
+`packages/daemon/src/bus-worker-xs-ses-boot.js:16-38`.
 
-**The pristine census**, before any source runs:
+### The engine's own surface, and XS's
+
+The pristine census, before any source runs:
 
 | | `lockdown` | `harden` | `petrify` | `mutabilities` | `Compartment` |
 |---|---|---|---|---|---|
 | XS oracle | `function` | `function` | `function` | `function` | `function` |
 | IronHorse | `undefined` | `function` | `function` | `undefined` | `undefined` |
 
-The table looks like a four-name gap.
-The next section is why it is a one-name gap: four of those five oracle entries
-are not what the daemon runs on.
+Four of those five oracle entries are not what any XS *worker* necessarily has.
+Only `Compartment` is a realm intrinsic, built by `fxBuildModule`
+(`xsModule.c:207`) and installed as a global by `xsAPI.c:1519-1523`.
+The other four are embedder-installed: `fxCreateMachine` binds none of them and
+there is no id for them at all, so each host chooses.
+`xst.c:428-429` installs `harden` and `lockdown`; `xstFuzz.c:491-498` and our
+oracle shim (`xs-oracle/csrc/xs_shim.c:373-381`) install all four;
+`thixotrope-xs-worker` installs `harden` and `lockdown`; the endor daemon
+installs none.
 
-**Two traps for anyone re-measuring.**
+Installing `lockdown` alone is not an option: `fx_lockdown` fetches the *guest*
+`harden` off the global (`xsLockdown.c:141-143`) and calls it about fifty
+times, so a host that installs one without the other has a `lockdown` that
+faults.
+
+Two traps for anyone re-measuring.
 `harden` and `petrify` are present on IronHorse *before* `polyfills.js` runs —
-they are IronHorse's own bindings from `create_hardened_globals`
-(`ironhorse-vm/src/interp/boot.rs:2086`), not the polyfill's deep-freeze and
-not the bundle's.
-A census taken after `polyfills.js` cannot tell those apart, because
-`polyfills.js:158` installs a `harden` of its own when it finds none.
-And `Object.isFrozen(Object.prototype)` is `false` on *both* engines
-throughout — no lockdown runs anywhere in this sequence, so a bar that probed
-it would be asserting the absence of the thing it was meant to check.
+they are its own `create_hardened_globals` bindings
+(`ironhorse-vm/src/interp/boot.rs:2087`), not the polyfill's deep-freeze, and a
+census taken after `polyfills.js` cannot tell them apart because
+`polyfills.js:158` installs one when it finds none.
+And `Object.isFrozen(Object.prototype)` is `false` on both engines throughout
+that sequence: no lockdown runs anywhere in it.
+
+### The two realm profiles exclude each other
+
+This is the finding that matters most, and nothing in the tree said it.
+
+`Interp::new()` leaves the intrinsics mutable.
+The `ses` shim repairs them, installs `lockdown`, `harden` and `Compartment`,
+and freezes them itself. Measured: the 576 KB
+`packages/thixotrope/dist-ironhorse/boot.js` evaluates to `'ok'`, and
+`new Compartment({ __options__: true, globals: { x: 5 } })` evaluates `x` to
+`5` in its own globals without leaking them outward.
+
+`Machine::new()` freezes the intrinsics at construction
+(`new_shared_realm_machine_with_permit`, `interp/realm.rs:108`).
+The shim's `repairIntrinsics` then cannot rewrite a descriptor it needs, and
+the same bundle aborts with `invalid descriptor` — leaving the realm with
+neither the engine's `harden` (the bundle deleted it) nor the shim's.
+
+**Choosing IronHorse's native freeze forecloses the shim. Choosing the shim
+forecloses the native freeze.**
+`tests/ses_boot_intrinsics.rs` asserts both directions.
 
 ## What XS implements
 
@@ -78,28 +154,7 @@ Everything SES-shaped in XS lives in two files.
 | | |
 |---|---|
 | `xs/sources/xsLockdown.c` | `fx_lockdown`, `fx_harden`, `fx_petrify`, `fx_mutabilities` and the `fxVerify*` audit family (974 lines) |
-| `xs/sources/xsModule.c:2864` | `fx_Compartment`, plus `get globalThis`, `evaluate`, `import`, `importNow` on its prototype (`:200-205`) |
-
-**Only `Compartment` is a realm intrinsic.**
-`fxBuildModule` builds it into every realm (`xsModule.c:207`), so every XS
-machine has it.
-The other four are **embedder-installed globals**: `fxCreateMachine` binds none
-of them, and each host picks a subset — `xst.c:428-429` installs `harden` and
-`lockdown`, `xstFuzz.c:494` installs `lockdown` and `mutabilities`, and our
-oracle shim installs all four
-(`rust/engine/xs-oracle/csrc/xs_shim.c:373-381`).
-
-This is the finding that resizes the gap.
-**The daemon's xsnap installs none of them.**
-`rust/endo/xsnap/src/ffi.rs:274-275` declares `fx_harden` and `fx_lockdown` and
-calls neither, as `lib.rs:917` already records.
-So the daemon's XS realm has `Compartment` and no `lockdown`, no native
-`harden`, no `petrify`, no `mutabilities` — the `harden` it runs on is
-`polyfills.js`'s deep-freeze, the same one IronHorse's guests would see.
-
-Measured against the daemon's XS rather than against the oracle's shim, the
-SES surface IronHorse lacks is **exactly one name: `Compartment`.**
-The oracle's other three entries are differential-testing scaffolding.
+| `xs/sources/xsModule.c:2864` | `fx_Compartment`, plus `get globalThis`, `evaluate`, `import`, `importNow` on its prototype (`:200-203`) |
 
 ### `fx_lockdown`, in order
 
@@ -107,237 +162,228 @@ Reading `xsLockdown.c:74-205` as a specification of what a native IronHorse
 `lockdown` would have to do:
 
 1. **Idempotence.** `XS_DONT_MARSHALL_FLAG` on `mxProgram`; a second call is a
-   `TypeError("lockdown already called")` (`:87-89`).
-2. **Remove the evaluators from the shared realm.** `.constructor` on
-   `Function.prototype`, `AsyncFunction.prototype`,
-   `GeneratorFunction.prototype`, `AsyncGeneratorFunction.prototype` and
-   `Compartment.prototype` is replaced with a duplicate of `%ThrowTypeError%`
-   carrying `XS_CAN_CONSTRUCT_FLAG` and a `prototype` property (`:91-103`,
-   `fx_lockdown_aux` at `:52`).
-   After lockdown the only evaluators are the fresh per-compartment ones
-   `fx_Compartment` mints.
-3. **Snapshot a compartment-global template.** An array of every intrinsic,
-   stored as `mxCompartmentGlobal` (`:105-120`), which every later compartment
-   is built from.
-4. **Tame `Date` and `Math` — into the template only.** `fx_Date_secure`,
-   `fx_Date_now_secure`, `fx_Math_random_secure` and `fx_Math_irandom_secure`
-   replace the real ones *in the template array* (`:122-139`), so the host
-   global keeps its powers and every compartment gets powerless versions.
-   This is the one place XS implements ocap attenuation rather than integrity.
-5. **Harden.** The guest `harden` is fetched off the global and called over
-   every intrinsic, the hidden prototypes (arguments, iterators,
-   async-from-sync, host, module, transfer, typed array), the internal helper
-   functions and accessors, `Array.prototype[Symbol.unscopables]`, the
-   compartment template, `harden` itself and `Function` (`:141-201`).
+   `TypeError("lockdown already called")` (`:90-92`).
+2. **Poison the function-family constructors.** `fx_lockdown_aux` (`:52`)
+   replaces a prototype's `.constructor` with a duplicate of
+   `%ThrowTypeError%` carrying `XS_CAN_CONSTRUCT_FLAG` and a `prototype`
+   property. It is called six times: on `AsyncFunction.prototype`,
+   `AsyncGeneratorFunction.prototype`, `Function.prototype`,
+   `GeneratorFunction.prototype` and `Compartment.prototype` (`:94-103`), and
+   on `Date.prototype` (`:127`). These are the **shared realm's** prototypes,
+   so after lockdown `(function(){}).constructor` and
+   `Date.prototype.constructor` throw for the host too; the compartment's own
+   `Function`, `eval` and `Compartment` are fresh instances `fx_Compartment`
+   mints.
+3. **Snapshot a compartment-global template.** `fxNewArray(the, _Compartment)`
+   (`:105`), filled from the intrinsics up to but not including `_Compartment`
+   (`:113-119`) and stored as `mxCompartmentGlobal` (`:139`). The excluded
+   tail — `Compartment`, `Function`, `[ModuleStuff]`, `eval`
+   (`xsCommon.h:857-866`) — is exactly what each compartment gets fresh.
+4. **Tame `Math` into the template only.** `:130-137` duplicates
+   `mxMathObject`, patches `random`/`irandom` on the duplicate, and pulls it
+   into the template, so the host global keeps the real one. `Date` is
+   *half* this: its constructor is duplicated and secured into the template
+   the same way (`:121-125`, `:128`), but step 2's sixth call also poisons the
+   shared `Date.prototype.constructor`. This is the one place XS implements
+   ocap attenuation rather than integrity.
+5. **Harden.** The guest `harden` is called over every intrinsic, the hidden
+   prototypes, the internal helpers and accessors,
+   `Array.prototype[Symbol.unscopables]`, the compartment template, `harden`
+   itself and `Function` (`:141-200`).
 
-Against IronHorse's `Interp::new_shared_realm_machine_with_permit`
-(`ironhorse-vm/src/interp/realm.rs:108-165`), which links intrinsics,
+Against `Interp::new_shared_realm_machine_with_permit`, which links intrinsics,
 `do_harden`s every arena instance except the global and the template cache,
 then sets `locked_down: true` and `shared_compartments = true`:
 
 | `fx_lockdown` step | IronHorse | Note |
 |---|---|---|
 | idempotence throw | — | it is a constructor, so the question does not arise |
-| evaluators removed from the realm | — | frozen in place and still reachable |
-| per-compartment evaluators | partial | `compartment_evaluator` (`realm.rs:72`) re-homes `Eval` and `Function` only, while the `global_env` fixup at `:152-164` covers five natives — `GeneratorFunction`, `AsyncFunction` and `AsyncGeneratorFunction` are re-homed to the *default* global, not the compartment's |
+| constructors poisoned | — | frozen in place and still reachable |
+| per-compartment evaluators | partial | `compartment_evaluator` (`realm.rs:72`) copies `Eval` and `Function`; the other three are non-global and get none. Fixed here by leaving them unpinned rather than by copying |
 | compartment-global template | — | globals are built per compartment from `global_props` |
-| Date/Math taming | — | nothing in `ironhorse-vm` tames either |
+| Math (and half of Date) tamed | — | nothing in `ironhorse-vm` tames either |
 | transitive harden | **yes, wider** | XS hardens an enumerated list; IronHorse hardens every instance in the arena |
 
 Step 5 is done and then some.
-Steps 1–4 are absent, and step 2 is the load-bearing one: without it a
-compartment in IronHorse can reach an evaluator bound to the default global.
+Steps 1–4 are absent, and step 2 cannot be done at machine construction: it is
+correct only *after* a guest asks for it, which is what IronHorse has no
+equivalent of.
 
 ### `fx_harden` and `fx_petrify`
 
 Both are already transliterated, faithfully.
-`Interp::do_harden` (`ironhorse-vm/src/interp/property/integrity.rs:17`) is
-`fx_harden` plus `fx_hardenQueue` plus `fx_hardenFreezeAndTraverse`, including
-the detail that matters: XS clears the visited bit from every queued instance
-when a proxy trap or a property definition throws mid-walk (`xsLockdown.c:385`),
-so a later `harden` retries rather than short-circuiting a half-frozen graph.
+`Interp::do_harden` (`interp/property/integrity.rs:17`) is `fx_harden` plus
+`fx_hardenQueue` plus `fx_hardenFreezeAndTraverse`, including the detail that
+matters: XS clears the visited bit from every queued instance when a proxy trap
+or a property definition throws mid-walk (`xsLockdown.c:394-399`), so a later
+`harden` retries rather than short-circuiting a half-frozen graph.
 IronHorse does the same (`integrity.rs:33-42`).
-`do_petrify` (`:155`) is `fx_petrify`: a single-object freeze that additionally
-marks internal data (ArrayBuffer, Date, Map, Set, WeakMap, WeakSet) and private
-fields read-only.
+`do_petrify` (`:155`) is `fx_petrify`.
 
-Two XS details worth knowing before extending either: `fx_harden`'s second
-argument (`harden(x, "petrify")`) and its "call lockdown before harden" guard
-are both present-but-commented-out in `xsLockdown.c` (`:350-360`, `:348`).
-XS deliberately does not require lockdown before harden.
+XS's `harden(x, "petrify")` second argument and its "call lockdown before
+harden" guard are both present-but-commented-out (`xsLockdown.c:347-348`,
+`:358-366`): XS deliberately does not require lockdown before harden.
 
 ### `fx_mutabilities`
 
-The one piece with no IronHorse counterpart at all and no SES counterpart
-either.
+The one piece with no IronHorse counterpart and no SES counterpart either.
 `fx_mutabilities(x)` (`xsLockdown.c:486`) walks from `x` and returns a sorted
-array of every path that is still mutable, via `fxVerifyInstance` /
-`fxVerifyProperty` / `fxVerifyCode` — including a **bytecode** scan
-(`fxVerifyCode:562`) that finds mutable references reachable from compiled
-function bodies, which no JavaScript-level audit can see.
-It is XS's answer to "did lockdown actually cover everything", and it is the
-reason XS can assert its own hardening rather than assume it.
-`create_hardened_globals` names it as a deliberate decline
-(`boot.rs:2080-2085`): a program referencing it gets `Halt::NotImplemented`.
+array of every path still mutable, via `fxVerifyInstance` / `fxVerifyProperty`
+/ `fxVerifyCode` — including a **bytecode** scan (`:562`) that finds mutable
+references reachable from compiled function bodies, which no JavaScript-level
+audit can see.
+It is XS's answer to "did lockdown actually cover everything".
+`create_hardened_globals` names it a deliberate decline (`boot.rs:2080-2086`):
+a program referencing it gets `Halt::NotImplemented`.
 
 ### `fx_Compartment`
 
 `fx_Compartment` (`xsModule.c:2864`) allocates a program instance, then a fresh
 global object populated by copying intrinsic *references* — from the
 `mxCompartmentGlobal` template when lockdown has run, from the live intrinsics
-otherwise (`:2901-2919`).
-The id enum is the mechanism: `_Infinity`, `_NaN` and `_undefined`
-(`xsCommon.h:854-856`) are installed `XS_GET_ONLY` and everything before them
-`XS_DONT_ENUM_FLAG`, and the copy loop stops at `_Compartment`, which the enum
-follows with `_Function` and `_eval` — the three a compartment gets fresh
-rather than copied.
-It mints those three bound to the new program (`:2921-2955`, plus
-`ModuleStuff` where `mxModuleStuff` is enabled), and after lockdown stamps each
-`XS_DONT_PATCH_FLAG` with every own property non-writable and non-deletable
-(`fxPrepareCompartmentFunction:2849`).
-Finally it builds a `Realm` and adopts the module map's unclaimed modules into
-it (`:2985-2998`).
+otherwise (`:2903-2921`).
+`_Infinity`, `_NaN` and `_undefined` are installed `XS_GET_ONLY` and everything
+before them `XS_DONT_ENUM_FLAG`.
+It mints `Compartment`, `Function` and `eval` fresh, bound to the new program
+(`:2923-2956`, plus `ModuleStuff` where `mxModuleStuff` is enabled), and after
+lockdown stamps each `XS_DONT_PATCH_FLAG` with every own property non-writable
+and non-deletable (`fxPrepareCompartmentFunction:2849`).
+Finally it builds a `Realm` (`:3131`) and adopts the module map's unclaimed
+modules into it (`:3134-3142`).
 
-Note what this means for the intrinsic graph: the compartment's globals are
-*properties of a fresh global object holding references to the one shared
-frozen graph*, not copies.
-That is the same architecture PR #1263 gave IronHorse.
+The compartment's globals are *properties of a fresh global object holding
+references to the one shared frozen graph*, not copies — the same architecture
+PR #1263 gave IronHorse.
 
 ## Equivalence: `Compartment`
 
 SES's constructor options (`packages/ses/src/compartment.js:353-366`), XS's
-(the keys `fx_Compartment` reads, `xsModule.c:2978-3113`), and IronHorse's
-`CompartmentOptions` (`ironhorse-vm/src/compartment.rs:265-288`):
+(the keys `fx_Compartment` reads), and IronHorse's `CompartmentOptions`
+(`ironhorse-vm/src/compartment.rs:265-288`):
 
 | SES option | XS | IronHorse | Assessment |
 |---|---|---|---|
 | `name` | — | `name: Option<String>` | IronHorse matches SES; XS has no name at all |
-| `globals` | `globals` | `endowments`, `endowments_by_id` | all three present; the `_by_id` map is a compiler-era workaround, "until the compiler/symbol table lands" |
-| `modules` | `modules` | `modules: ModuleGraph` | present in shape on all three; IronHorse's semantics unverified |
-| `resolveHook` | `resolveHook`, callable-checked | `has_resolve_hook: bool` | **shape only** on IronHorse — a boolean, not a callable |
-| `importHook` | `importHook`, falling back to `loadHook` | `has_import_hook: bool` | **shape only**, same |
-| `importNowHook` | `importNowHook`, falling back to `loadNowHook` | — | absent |
-| `moduleMapHook` | read as `undefined` (`:3074`) | — | XS declines it explicitly |
-| `importMetaHook` | read as `undefined` (`:3112`) | — | XS declines it explicitly |
+| `globals` | `globals` (`:2978`) | `endowments`, `endowments_by_id` | all three present; the `_by_id` map is a compiler-era workaround |
+| `modules` | `modules` (`:2997`) | `modules: ModuleGraph` | present in shape on all three; IronHorse's semantics unverified |
+| `resolveHook` | callable-checked (`:3066`) | `has_resolve_hook: bool` | **shape only** on IronHorse — a boolean, not a callable |
+| `importHook` | `:3078`, falling back to `loadHook` | `has_import_hook: bool` | **shape only**, same |
+| `importNowHook` | `:3097`, falling back to `loadNowHook` | — | absent |
+| `moduleMapHook` | read as `undefined` (`:3075`) | — | XS declines it explicitly |
+| `importMetaHook` | read as `undefined` (`:3115`) | — | XS declines it explicitly |
 | `transforms`, `__shimTransforms__` | — | — | shim-only |
 | `__noNamespaceBox__`, `noAggregateLoadErrors` | — | — | shim-only |
-| — | `globalLexicals` | — | XS-only; per-name writability from the descriptor (`:3027-3060`) |
+| — | `globalLexicals` (`:3030`) | — | XS-only; per-name writability from the descriptor |
 | — | — | `intrinsic_permit` | IronHorse-only; see below |
 
 The hooks are the load-bearing row.
 `has_resolve_hook` exists so a constructor-shape probe can observe it; it does
 not resolve anything.
 A guest `Compartment` bound over this would answer `typeof` and
-constructor-shape questions and fail the first program that actually imports a
-module.
-XS is the useful reference here precisely because it is honest about the same
+constructor-shape questions and fail the first program that imports a module.
+XS is the useful reference precisely because it is honest about the same
 boundary: it callable-checks the hooks it honours and pushes `undefined` for
 the two it does not.
 
 `intrinsic_permit` is IronHorse's own, and its doc is explicit that it
 "controls bindings, not transitive reachability through endowed objects" —
-which is **not** SES's attenuation model, and not XS's either.
-Binding a guest `Compartment` over it would present an attenuation story no
-layer implements.
+which is not SES's attenuation model, and not XS's either.
+
+Note that SES's own constructor takes a single object argument as the *legacy*
+`(globals, modules, options)` positional form unless it carries the
+`__options__: true` sigil (`compartment.js:294-316`) — an easy way to measure
+an endowment as "not landing" when it landed under a different name.
 
 ## Equivalence: `lockdown`
 
 XS's `fx_lockdown` is not SES's `lockdown()` either, and the difference is
-large enough that "match XS" and "run the shim" are genuinely different
-projects with different costs.
+large enough that "match XS" and "run the shim" are different projects.
 
 `packages/ses/src/lockdown.js` calls, in sequence: `tameDomains`,
 `tameNaNSideChannel`, `tameLocaleMethods`, `tameFauxDataProperties`,
 `removeUnpermittedIntrinsics`, `enablePropertyOverrides`,
 `tameRegeneratorRuntime`, and a tamed `harden` (`:345`, `:363`, `:454`, `:456`,
-`:469`, `:550`, `:558`, `:583`) — over a permits table (`permits.js`,
-`permits-intrinsics.js`, `enablements.js`) and per-intrinsic taming modules for
-Date, Math, RegExp, Symbol, Temporal, URL, Error, the function constructors,
-`Function.prototype.toString` and module source.
-It takes `errorTaming`, `errorTrapping`, `reporting` and
-`unhandledRejectionTrapping`; XS takes no options at all.
+`:469`, `:550`, `:558`, `:583`) — over a permits table and per-intrinsic taming
+modules for Date, Math, RegExp, Symbol, Temporal, URL, Error, the function
+constructors, `Function.prototype.toString` and module source.
+Its options (`:183-251`) are `errorTaming`, `errorTrapping`, `reporting`,
+`unhandledRejectionTrapping`, `localeTaming`, `consoleTaming`, `overrideTaming`,
+`stackFiltering`, `domainTaming`, `evalTaming`,
+`legacyRegeneratorRuntimeTaming`, plus deprecated `dateTaming`/`mathTaming`.
+XS takes none.
 
 | | SES shim | XS native | IronHorse |
 |---|---|---|---|
 | transitive freeze of intrinsics | yes | yes | **yes** |
-| evaluators removed from the locked realm | yes | yes | no |
-| Date/Math attenuated for compartments | yes | yes | no |
+| function-family constructors poisoned | yes | yes | no |
+| Date/Math attenuated for compartments | yes | partly (Date's prototype is poisoned realm-wide) | no |
 | permits table / unpermitted removal | yes | no | no |
-| property-override enablement | yes | no | no |
+| property-override enablement | yes (`overrideTaming`) | no | no |
 | locale, NaN side channel, domains, regenerator | yes | no | no |
 | error taming and trapping options | yes | no | no |
 | mutable-residue audit | no | **yes** (`mutabilities`) | no |
 
 XS's is the smaller, sharper artifact: five steps, no permits table, and an
 audit the shim does not have.
-If the goal is "the daemon's Ironhorse worker behaves like its XS worker", XS
-is the specification, and it is a few hundred lines rather than a package.
+The shim is the larger one — and it is the one already running on IronHorse.
 
 ## What a next step should establish first
 
-In this order, because each answer changes the next question's cost:
-
-1. **Decide what the daemon actually needs.**
-   The measurement above narrows this sharply: the daemon's XS has no
-   `lockdown` either, so the IronHorse-versus-daemon gap is `Compartment`
-   alone.
-   Does the Ironhorse worker path need a guest-visible `Compartment`, or does
-   it need the Rust-level compartment API exposed to `rust/endo` and driven
-   from there?
-   The second is much cheaper and may be sufficient for the worker protocol,
-   which is Phase 5's actual consumer.
-2. **If guest-visible SES is required, decide shim versus native.**
-   Native means implementing `fx_lockdown`'s five steps and `fx_Compartment`,
-   inheriting XS's divergences from the shim — and that is what the daemon
-   would get from an XS worker today, so it is the parity-preserving choice.
-   The shim means implementing what `packages/ses` needs, which is a larger and
-   better-specified surface.
-   One blocker either way: `polyfills.js` installs
+1. **Decide which profile the daemon's Ironhorse worker takes**, because they
+   exclude each other (§ The two realm profiles).
+   The shim profile is proven in-tree by `thixotrope-ironhorse-worker` and
+   costs the native freeze and the `Machine`/`Compartment` Rust API.
+   The native profile keeps those and needs a guest `lockdown` the engine does
+   not have.
+   Nothing else here can be sized before this is answered.
+2. **If the shim profile wins, the work is not in `ironhorse-vm` at all.**
+   It is making the daemon's boot do what
+   `bundle-ironhorse-worker.mjs` already does — and the obstacles that script
+   works around are the real backlog: `polyfills.js` installs
    `Object[Symbol.for('harden')]` non-configurable
    (`designs/worker-rust-xs.md:513-519`), which the shim's own selector notes
-   "will prevent any HardenedJS's lockdown from succeeding" — so bundling the
-   real shim needs `polyfills.js` changed first.
-   And lockdown replaces `globalThis`, dropping the `host<Name>` aliases both
-   bootstraps resolve through (`:520-527`).
-3. **Do not treat `CompartmentOptions` as SES-compatible** without walking the
-   table above.
-   Two of its hook fields are booleans.
-4. **Fix step 2 of the lockdown table regardless.**
-   `compartment_evaluator` re-homing only `Eval` and `Function` while the
-   `global_env` fixup covers five natives is a hole in the existing realm
-   sharing, independent of whether any of this is exposed to guests.
-5. **The ledger row now names the right thing; keep it that way.**
-   `boot:ses-lockdown-bundle` (`rust/engine/CHANGELOG.md:900`) and the comment
-   it came from described `ses_boot.js` as a ~1 MB rollup artifact carrying
-   SES `lockdown()` whose bundling was out of the engine workspace's scope.
-   Four things wrong, all corrected in the change that added this document:
-   it is 70 KB, the bundler is `@endo/compartment-mapper`'s `makeBundle`, it
-   carries no `lockdown`, and `yarn bundle:xs` now runs in the oracle lane.
-   The guest-`lockdown` gap the row was named for is tracked by
-   `ses-mode:lockdown-unimplemented` and `compartment:intrinsic-surface`, and
-   those are the rows a next step should be reading.
+   "will prevent any HardenedJS's lockdown from succeeding"; lockdown replaces
+   `globalThis`, dropping the `host<Name>` aliases both bootstraps resolve
+   through (`:521-525`); `Iterator` is advertised before its helpers exist; and
+   there is no host `console`.
+3. **If the native profile wins**, `fx_lockdown`'s five steps above are the
+   specification, and step 2 needs a guest-callable `lockdown()` separate from
+   machine construction before it can be attempted at all.
+4. **Do not treat `CompartmentOptions` as SES-compatible** without walking the
+   table above. Two of its hook fields are booleans.
+5. **Re-word the `ironhorse-engine.md:940` bar.** Its first clause is about
+   boot bundles that turned out not to be the obstacle, and its second clause
+   ("SES conformance suites pass") is the one this document is about.
 
 ## Dependencies
 
 | Design | Relationship |
 |---|---|
-| [ironhorse-daemon-acceptance-sequencing](ironhorse-daemon-acceptance-sequencing.md) | Phase 4 is where this gap sits; that document carries the measurement and points here for the equivalence detail. |
+| [ironhorse-daemon-acceptance-sequencing](ironhorse-daemon-acceptance-sequencing.md) | Phase 4 is where this gap sits; that document carries the boot-bundle measurement and points here for the equivalence detail. |
 | [ironhorse-engine](ironhorse-engine.md) | Owns stage 4 (`:37`) and its acceptance wording (`:940`). Its `:201` note that XS implements SES natively is true of the implementation and misleading about the bindings — see § What XS implements. |
-| [worker-rust-xs](worker-rust-xs.md) | § Known Gaps (`:501-531`) already carries the three-part dependency between `polyfills.js`, the `host<Name>` aliases and any real lockdown. |
+| [worker-rust-xs](worker-rust-xs.md) | § Known Gaps (`:501-531`) carries the three-part dependency between `polyfills.js`, the `host<Name>` aliases and any real lockdown, which § next step 2 turns into a work list. |
+| [thixotrope](thixotrope.md) | Owns both workers whose configurations this document reads as evidence. |
 | [ironhorse-w6-decisions](ironhorse-w6-decisions.md) | §1 is the Realm decision whose extraction (PR #1263) built the compartment machinery this document inventories. |
 
 ## Known Gaps and TODOs
 
-- [ ] Answer question 1 above — daemon need — before anything else.
+- [ ] Answer question 1 above — which realm profile — before anything else.
       It is the only question whose answer can make the rest unnecessary.
+- [ ] No CI lane runs `ses_boot_intrinsics.rs`'s two profile tests.
+      `test-thixotrope-ironhorse` has the bundle but builds through the root
+      workspace, which excludes `rust/engine`, so running an engine-workspace
+      test there compiles the engine a second time.
+      They skip on a bare checkout; `IRONHORSE_SES_SHIM_REQUIRED` makes a lane
+      that claims to have built the bundle fail instead.
 - [ ] Verify `ModuleGraph` against SES and XS module-map semantics.
       This document checked the option's presence, not its behaviour.
 - [ ] Establish whether `intrinsic_permit` can be made to mean SES attenuation
       or should be renamed so it stops looking like it already does.
-- [ ] `stage4_ses_boot.rs` runs in `test-ironhorse-oracle`, which triggers on
-      `rust/engine/**` only.
-      A change to `packages/daemon/src/bus-worker-xs-ses-boot.js` alone will
-      not re-run the bar; `build-xsnap` covers the daemon side.
+- [ ] `stage4_ses_boot.rs` runs in `test-ironhorse-oracle`, which
+      `scripts/ci-changes.py` triggers on `rust/engine/**`, the Cargo and
+      toolchain files, `c/moddable`, `rust/endo/xsnap/xsnap-platform.*` and the
+      test262 corpus — but **not** on `packages/daemon/src/bus-worker-xs-ses-boot.js`
+      or `rust/endo/xsnap/src/polyfills.js`, which are the bar's real inputs.
 - [ ] The bar does not run `bootstrap_ses`'s closing `run_promise_jobs()`, so
       it cannot see a divergence in how the two engines settle what
       `@endo/eventual-send`'s shim leaves pending.
@@ -349,8 +395,15 @@ In this order, because each answer changes the next question's cost:
 >
 > you can look at what XS implements for reference into what we're trying to
 > provide with SES natively with IronHorse
+>
+> implement IronHorse updates in accordance with
+> designs/ironhorse-ses-compartment-equivalence.md
 
 Written after a session that measured the stage-4 bar rather than reasoning
 about it, prompted by the observation — correct — that "we have support for
 multiple Compartments in a Realm in IronHorse, it must just not be exposed to
 the environment".
+Two adversarial reviews of the first draft produced most of the corrections
+above, including that the repo already contains an XS worker that locks down
+and an IronHorse worker that runs the SES shim — which between them answer the
+question the first draft opened with.
