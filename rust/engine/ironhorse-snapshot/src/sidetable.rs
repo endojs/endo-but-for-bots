@@ -952,7 +952,7 @@ mod tests {
         assert!(realm_fields(&extended).contains("private_state"));
         assert_ne!(realm_fields(&extended), fields);
         // Global head is boot-fingerprinted; its derived property map is rebuilt
-        // from slots. PRMS carries the unhandled reason. Owner/permit/compiler
+        // from slots. PRMS carries the unhandled reason. Owner/global-names/compiler
         // are host configuration; shared boot is explicitly unpersistable.
         assert_eq!(
             fields,
@@ -964,7 +964,7 @@ mod tests {
                 "compiler_required",
                 "unhandled_rejection",
                 "owner",
-                "intrinsic_permit",
+                "global_names",
                 "source_compiler",
                 "shared_compiler"
             ]

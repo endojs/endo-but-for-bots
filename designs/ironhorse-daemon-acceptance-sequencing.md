@@ -91,7 +91,7 @@ statuses they had not checked.
 | F061 | high | 3.7 | **closed** — membrane equivalence asserted for 20 shapes | 2 |
 | F062 | high | 3.7 | partial — compact notation still silently wrong | 2 |
 | F054 (host leg) | medium | 3.14 | landed in #1263 | 3 |
-| F144 | low | 3.7 | landed — `set_intrinsic_permit` | 3 |
+| F144 | low | 3.7 | landed — `set_global_names` | 3 |
 | F155 | medium | 3.13 | **closed** — the review itself resolved it at `1b130df7` | 3 |
 | F054 (SES leg) | medium | 3.14 | open — the leg that stays open | 4 |
 | F059 | high | 3.7 | **closed** — seam built and asserted by guest object identity | 4 |
@@ -579,8 +579,10 @@ want a typed store failure, but nothing stops them being written against
   What the fence defers is the layer *above* it: sqlite, filesystem and
   network as adapters onto that registry.
 - **F144** [low, high] §3.7, landed.
-  `set_intrinsic_permit` (`interp.rs:2177`) is in the tree, exactly as
-  prescribed.
+  `set_global_names` (`interp.rs:2177`) is in the tree, exactly as
+  prescribed — the review names it `set_intrinsic_permit`, which is what it
+  landed as and what that frozen snapshot still says; it has since been
+  renamed, because "permit" collided with SES's `permits.js`.
   It stops being a separate fix and becomes the per-adapter policy surface:
   which powers a given compartment gets.
 - **F155** [medium, high] §3.13, **closed — no work item here.**
@@ -798,7 +800,7 @@ Both facilities exist in Rust and are tested:
   `:1173`). `CompartmentOptions` is modelled on the SES constructor and says
   so — `name` is "the compartment's `name` option (SES `Compartment` name)",
   `has_resolve_hook` a "constructor-shape detail the SES suites probe" —
-  carrying `endowments`, `intrinsic_permit`, `modules` and `has_import_hook`.
+  carrying `endowments`, `global_names`, `modules` and `has_import_hook`.
   `ironhorse-vm/tests/realms.rs:16-42` asserts the seam by guest object
   identity.
 - Lockdown's substance: `Interp::new_shared_realm_machine_with_permit`
@@ -820,7 +822,7 @@ phase's real work item:
 
 **Unverified, and the first thing to check before sizing this as a binding
 exercise:** whether `CompartmentOptions` semantics match SES's constructor
-closely enough for real SES code. Its own `intrinsic_permit` doc notes it
+closely enough for real SES code. Its own `global_names` doc notes it
 "controls bindings, not transitive reachability through endowed objects",
 which is not SES's attenuation model. A binding layer over a seam that
 differs semantically would pass a `typeof` census and fail a conformance
@@ -1192,7 +1194,8 @@ and a reader working from it alone will re-do them.
   is called from `rust/endo` at three sites
   (`ironhorse_engine.rs:523`, `:578`, `:915`), so guest `eval` on the daemon
   path compiles instead of halting `eval:no-compiler`.
-- **F144** — `set_intrinsic_permit` landed, exactly as prescribed.
+- **F144** — `set_global_names` landed, exactly as prescribed
+  (as `set_intrinsic_permit`; since renamed).
 - **F054 (host-functions leg)** — the `HostCallable` registry landed with
   rooted captures and stable persisted identities.
 - **F069 (VM half)** — `has_pending_jobs` is public again after having been

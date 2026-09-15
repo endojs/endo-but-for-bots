@@ -25,7 +25,7 @@ fn options(dir: &std::path::Path, meter: MeterBounds) -> HeapStoreOptions {
         signature: "endor-ironhorse-worker-v1".to_string(),
         cadence: CadencePolicy::default(),
         meter,
-        intrinsic_permit: None,
+        global_names: None,
     }
 }
 

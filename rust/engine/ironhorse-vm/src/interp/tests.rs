@@ -3703,7 +3703,7 @@ fn conflicting_symbol_restore_is_atomic_and_exhaustion_does_not_alias() {
 /// removed -- and must NOT put the pin back, because a re-pinned evaluator
 /// compiles a compartment's dynamic code in the default realm, which is the
 /// escape the pin caused (`interp/realm.rs`,
-/// `new_shared_realm_machine_with_permit`).
+/// `new_shared_realm_machine_with_global_names`).
 #[test]
 fn a_stale_evaluator_environment_row_restores_without_restoring_the_pin() {
     let source = Interp::new_shared_realm_machine();

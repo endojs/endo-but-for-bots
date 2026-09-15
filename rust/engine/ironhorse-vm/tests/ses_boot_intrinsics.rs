@@ -281,7 +281,7 @@ fn buffer_named_reads_honor_accessor_replacement_deletion_and_shadowing() {
 ///
 /// What decides whether the shim can supply it is WHEN the freeze happens, not
 /// which constructor was used. `Interp::new()` and
-/// `Machine::unfrozen_with_start_permit` leave the intrinsics mutable and the
+/// `Machine::unfrozen_with_start_global_names` leave the intrinsics mutable and the
 /// shim repairs and then freezes them itself. `Machine::new()` freezes them at
 /// construction, and the shim's `repairIntrinsics` cannot then rewrite a
 /// descriptor it needs to.
@@ -436,7 +436,7 @@ fn a_natively_frozen_realm_forecloses_the_ses_shim() {
 /// The two profiles stop excluding each other when the freeze is deferred.
 ///
 /// `Machine::new` froze the intrinsics at construction, which is what made the
-/// shim fail on it. `Machine::unfrozen_with_start_permit` builds the same
+/// shim fail on it. `Machine::unfrozen_with_start_global_names` builds the same
 /// shared realm and leaves the graph mutable, so the guest's own `lockdown()`
 /// can repair and freeze it -- and the multi-compartment API survives, which
 /// a bare `Interp` does not offer.
@@ -448,7 +448,7 @@ fn an_unfrozen_machine_takes_the_shim_and_keeps_its_compartments() {
     std::thread::Builder::new()
         .stack_size(ironhorse_vm::NATIVE_STACK_BYTES)
         .spawn(move || {
-            let machine = ironhorse_vm::Machine::unfrozen_with_start_permit(None);
+            let machine = ironhorse_vm::Machine::unfrozen_with_start_global_names(None);
             machine
                 .set_source_compiler(std::rc::Rc::new(Compiler))
                 .expect("machine takes a compiler");
