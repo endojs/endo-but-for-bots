@@ -60,11 +60,10 @@ export const makeHttpListenerPowers = ({ http, setTimeout, clearTimeout }) => {
       const headers = /** @type {HttpHeaders} */ (
         /** @type {unknown} */ (request.headers)
       );
-      const admission = admit({ method, path, headers });
-      if (!admission.allowed) {
-        reject(response, request, admission.status, admission.body);
-        return;
-      }
+      // The cap and the deadline are applied before admission, not after,
+      // because admission may be asynchronous — a guest can hold it — and an
+      // unadmitted request that is neither counted nor timed is a connection
+      // anyone can open and nobody will close.
       if (aborts.size >= maxRequests) {
         reject(response, request, 503, 'Too many requests');
         return;
@@ -108,55 +107,80 @@ export const makeHttpListenerPowers = ({ http, setTimeout, clearTimeout }) => {
       aborts.add(abort);
       response.once('close', abort);
       request.once('error', abort);
-      request.on('data', chunk => {
-        if (finished) return;
-        length += chunk.length;
-        if (length > maxBodyBytes) {
-          finish(413, 'Request body too large');
-          return;
-        }
-        chunks.push(new Uint8Array(chunk));
-      });
-      request.once('end', () => {
-        void (async () => {
-          await null;
+
+      /**
+       * Body listeners attach only once the request is admitted. An
+       * `IncomingMessage` is paused until something reads it, so the bytes
+       * wait in the socket while the decision is outstanding, and a refusal
+       * drains them without ever assembling them.
+       */
+      const readBody = () => {
+        request.on('data', chunk => {
           if (finished) return;
-          const bytes = new Uint8Array(length);
-          let offset = 0;
-          for (const chunk of chunks) {
-            bytes.set(chunk, offset);
-            offset += chunk.length;
-          }
-          chunks = [];
-          let body;
-          try {
-            body = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-          } catch (_error) {
-            finish(400, 'Invalid UTF-8 body');
+          length += chunk.length;
+          if (length > maxBodyBytes) {
+            finish(413, 'Request body too large');
             return;
           }
-          try {
-            const result = await handle(
-              { method, path, headers, body },
-              signal,
-            );
+          chunks.push(new Uint8Array(chunk));
+        });
+        request.once('end', () => {
+          void (async () => {
+            await null;
             if (finished) return;
-            (result &&
-              Number.isInteger(result.status) &&
-              result.status >= 200 &&
-              result.status <= 599 &&
-              typeof result.body === 'string') ||
-              Fail`Invalid HTTP handler response`;
-            (result.body.length <= maxResponseBytes &&
-              new TextEncoder().encode(result.body).length <=
-                maxResponseBytes) ||
-              Fail`HTTP response body too large`;
-            finish(result.status, result.body);
-          } catch (_error) {
-            finish(500, 'Handler failed');
-          }
-        })();
-      });
+            const bytes = new Uint8Array(length);
+            let offset = 0;
+            for (const chunk of chunks) {
+              bytes.set(chunk, offset);
+              offset += chunk.length;
+            }
+            chunks = [];
+            let body;
+            try {
+              body = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+            } catch (_error) {
+              finish(400, 'Invalid UTF-8 body');
+              return;
+            }
+            try {
+              const result = await handle(
+                { method, path, headers, body },
+                signal,
+              );
+              if (finished) return;
+              (result &&
+                Number.isInteger(result.status) &&
+                result.status >= 200 &&
+                result.status <= 599 &&
+                typeof result.body === 'string') ||
+                Fail`Invalid HTTP handler response`;
+              (result.body.length <= maxResponseBytes &&
+                new TextEncoder().encode(result.body).length <=
+                  maxResponseBytes) ||
+                Fail`HTTP response body too large`;
+              finish(result.status, result.body);
+            } catch (_error) {
+              finish(500, 'Handler failed');
+            }
+          })();
+        });
+      };
+
+      void (async () => {
+        let admission;
+        try {
+          admission = await admit({ method, path, headers });
+        } catch (_error) {
+          finish(500, 'Admission failed');
+          return;
+        }
+        if (finished) return;
+        if (!admission.allowed) {
+          finish(admission.status, admission.body);
+          return;
+        }
+        readBody();
+      })();
     };
 
     const server = http.createServer(
