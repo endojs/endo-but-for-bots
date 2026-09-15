@@ -308,9 +308,22 @@ refusal to obey a request: an explicit `sleep` is still honoured.
 The manager does not need to stay awake, because it is not on the request path.
 The host reaches the adapter, the adapter reaches the consumer, and the policy
 the adapter enforces was pushed into it at bind time.
-Keeping policy pushable rather than consulted is what keeps a manager off the
-hot path, and is worth preserving as a rule: a resource whose manager must be
-asked per event would need residency, and should be designed not to need it.
+
+Not that it *could* not be woken — a delivery always wakes a sleeping vat, so a
+manager consulted per event would work.
+What it would pay is latency and churn: the first event after idle spawns a
+process and restores a heap, and events arriving just slower than the idle
+timeout produce a wake, a snapshot and a sleep apiece.
+
+That is an argument for where per-event work belongs, not for a residency flag.
+An ephemeral vat can decline to sleep for free, because it has no snapshot to
+write; a durable vat declining to sleep would be holding a process alive to
+avoid I/O, which is a tuning decision `idleSleepMs` already expresses.
+
+So the rule is: anything consulted per event belongs in the adapter — not
+because the manager cannot be woken, but because the adapter is the side where
+per-event work costs nothing.
+Pushing policy at bind time is how that is arranged.
 
 So the manager sleeps, and needs exactly one thing — to learn that a new host
 incarnation exists.
