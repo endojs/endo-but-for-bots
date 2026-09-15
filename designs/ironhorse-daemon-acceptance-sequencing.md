@@ -755,7 +755,8 @@ to `'ok'`, which is `eval_wrapped`'s contract for "nothing threw", and across
 the bundle exactly one census entry moves on either engine: `HandledPromise`,
 `undefined` to `function`. That is the first clause of `:940` for this one
 file, not the bar — the second clause, "SES conformance suites pass", is
-`total=2 covered=0` (`rust/engine/CHANGELOG.md:906-925`). Concatenating the
+`total=8 covered=6 divergent=0` (`rust/engine/CHANGELOG.md:906`; the two
+uncovered are the pair needing guest `Compartment`/`lockdown`). Concatenating the
 three sources into one program, which an earlier reading of the bar implied,
 is not a program either engine accepts — both abort it with
 `SyntaxError: invalid directive`, because the daemon evaluates them

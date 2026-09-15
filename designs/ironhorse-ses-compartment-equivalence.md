@@ -38,7 +38,11 @@ Its bar at `:940` has two clauses: "The endor daemon boot bundles
 (`polyfills.js`, `ses_boot.js`, HandledPromise) run identically on both
 engines; SES conformance suites pass."
 The first clause is met for the boot bundles and has been for some time; the
-second is `total=2 covered=0` (`rust/engine/CHANGELOG.md:906-925`).
+second is `total=8 covered=6 divergent=0` (`rust/engine/CHANGELOG.md:906`).
+The two it does not reach are exactly the two that need the guest
+`Compartment`/`lockdown` globals, so the second clause is closer than the
+ledger said: an earlier draft of this document quoted a stale "2 files,
+covered=0".
 Reading the first clause as the whole bar — which the phase that led here did —
 hides the gap, and it also hid something better: most of the second clause's
 machinery is already working in this tree, by a route the bar does not mention.
