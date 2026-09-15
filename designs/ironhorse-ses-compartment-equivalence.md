@@ -344,16 +344,33 @@ The shim is the larger one — and it is the one already running on IronHorse.
    (`designs/worker-rust-xs.md:513-519`), which the shim's own selector notes
    "will prevent any HardenedJS's lockdown from succeeding"; lockdown replaces
    `globalThis`, dropping the `host<Name>` aliases both bootstraps resolve
-   through (`:521-525`); `Iterator` is advertised before its helpers exist; and
-   there is no host `console`.
+   through (`:521-525`); `Iterator` is advertised before its helpers exist (see
+   below); and there is no host `console`.
+
+   The `Iterator` one is an engine defect rather than a boot-script detail, and
+   it is worse than the workaround's comment suggests. All twelve helpers are
+   present on `Iterator.prototype` and every one answers `typeof` as
+   `"function"`, but the five lazy ones — `map`, `filter`, `take`, `drop`,
+   `flatMap` — halt the machine with `NotImplemented("Iterator.helper")` when
+   called. That is an engine halt, not a `TypeError`: `try`/`catch` does not
+   recover, and the crank does not complete. The eager helpers (`reduce`,
+   `toArray`, `forEach`, `some`, `every`, `find`) and `Iterator.from` work. So
+   any guest that feature-detects `typeof Iterator.prototype.map === 'function'`
+   and then calls it kills the worker, which is why
+   `bundle-ironhorse-worker.mjs` deletes the whole surface by hand.
+   Un-advertising them in the engine is not a free fix: `Iterator.helper` is a
+   ledgered named skip with several hundred `skip:unsupported-opcode` rows
+   across `ironhorse-262/expectations/whole-tree`, and removing the bindings
+   would convert those into ordinary conformance failures. Implementing the
+   lazy helpers is the honest fix, and it is its own piece of work.
 3. **If the native profile wins**, `fx_lockdown`'s five steps above are the
    specification, and step 2 needs a guest-callable `lockdown()` separate from
    machine construction before it can be attempted at all.
 4. **Do not treat `CompartmentOptions` as SES-compatible** without walking the
    table above. Two of its hook fields are booleans.
-5. **Re-word the `ironhorse-engine.md:940` bar.** Its first clause is about
-   boot bundles that turned out not to be the obstacle, and its second clause
-   ("SES conformance suites pass") is the one this document is about.
+5. ~~**Re-word the `ironhorse-engine.md:940` bar.**~~ Done: its first clause is
+   marked met and its deliverable column now says the native route is a choice
+   rather than the plan, since the shim route reaches the same guest surface.
 
 ## Dependencies
 
@@ -379,11 +396,15 @@ The shim is the larger one — and it is the one already running on IronHorse.
       This document checked the option's presence, not its behaviour.
 - [ ] Establish whether `intrinsic_permit` can be made to mean SES attenuation
       or should be renamed so it stops looking like it already does.
-- [ ] `stage4_ses_boot.rs` runs in `test-ironhorse-oracle`, which
-      `scripts/ci-changes.py` triggers on `rust/engine/**`, the Cargo and
+- [x] `stage4_ses_boot.rs` runs in `test-ironhorse-oracle`, which
+      `scripts/ci-changes.py` triggered on `rust/engine/**`, the Cargo and
       toolchain files, `c/moddable`, `rust/endo/xsnap/xsnap-platform.*` and the
-      test262 corpus — but **not** on `packages/daemon/src/bus-worker-xs-ses-boot.js`
-      or `rust/endo/xsnap/src/polyfills.js`, which are the bar's real inputs.
+      test262 corpus — but not on the bar's own inputs. Fixed 2026-09-15:
+      `polyfills.js`, `host_aliases.js`, `bus-worker-xs-ses-boot.js` and its
+      bundler now trigger the lane.
+- [ ] Implement the lazy `Iterator` helpers, or decide the engine should not
+      advertise them. Today `typeof Iterator.prototype.map` is `"function"` and
+      calling it is an uncatchable halt (§ next step 2).
 - [ ] The bar does not run `bootstrap_ses`'s closing `run_promise_jobs()`, so
       it cannot see a divergence in how the two engines settle what
       `@endo/eventual-send`'s shim leaves pending.
