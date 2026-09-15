@@ -407,7 +407,8 @@ machine.
 **Gate:** none. Phase 0 first is a preference, for the reason that phase
 gives; the trait is typeable over today's `MachineError`.
 **Gates:** Phase 3, hard — an adapter's verbs need somewhere to sit.
-**Size:** L — 1-1.5 developer weeks.
+**Size:** L — 1-1.5 developer weeks, and probably less; see *The seam is a
+program entry point* below, which retires the count the L was derived from.
 
 - **F068** [medium, high] §3.13, open at HEAD.
   Verified: the only traits in `rust/endo/src` are `HttpClient`
@@ -438,6 +439,50 @@ gives; the trait is typeable over today's `MachineError`.
   redesign.
   `ironhorse_vm::Machine` (`compartment.rs:807`) still occupies the design's
   `Machine` name.
+
+**The seam is a program entry point, not a `Machine` API.**
+This is the phase's first deliverable and it overturns the phase's own
+premise, so it is recorded before the ordering that assumed otherwise.
+
+No production code in `rust/endo` calls any method on an `xsnap::Machine`.
+The only two `xsnap::Machine::new` sites in the daemon are inside
+`inproc.rs`'s `#[cfg(test)] mod tests` (`:293`, sites at `:367` and `:395`).
+Every production path hands a transport to a whole-program entry point that
+owns its machine internally:
+
+| verb | XS | Ironhorse |
+|---|---|---|
+| worker over fds | `run_xs_worker()` (`xsnap/src/lib.rs:2150`) | `engine::run_worker()` (`ironhorse_engine.rs:1671`) |
+| run a script | `run_xs_archive(path)` (`:2200`) | `engine::run_script(path)` (`:770`) |
+| worker, in process | `run_xs_worker_inproc(transport)` (`:2184`) | — |
+| manager, in process | `run_xs_manager_inproc(transport)` (`:2166`) | — |
+| a loaded archive | `run_xs_archive_loaded(&archive)` (`:2215`) | — |
+
+`bin/endor.rs` picks between the two columns by string-matching `"xs"` and
+`"ironhorse"` at `:82-84` and `:144-146` — which is the string match F068
+names, sitting one level above where the finding looked for it.
+
+So F068's impact clause is right and its Fix's *shape* is not: "extract the
+slice the daemon actually calls into a `trait JsMachine` … implement it for
+`xsnap::Machine` first" describes a slice that is empty.
+`xsnap::Machine`'s thirty methods are `run_xs_program`'s internals, and
+`PersistentMachine`'s nine are the persistence half a future Ironhorse
+`run_worker` would use behind the same entry point — neither is the
+daemon-facing surface.
+
+The trait to extract is therefore four or five verbs at the program level,
+with `Err(Unavailable)` for the two in-process verbs Ironhorse cannot serve
+yet — the review's own prescription, at the level the callers actually use —
+plus the `Engine::Ironhorse` variant so `engine_for_spawn_request`
+(`engine.rs:25`) selects from the spawn payload and the CLI's string match
+retires.
+
+**This makes the phase smaller than sized, and the sizing is left alone
+pending the work.** L was derived from "thirty methods against nine"; that
+figure is no longer the work. It is not re-estimated here because the
+in-process verbs are the unknown: XS's take a `Box<dyn WorkerTransport>` and
+Ironhorse has no analogue, so whether the trait can carry them honestly or
+has to name them as a gap is the thing the implementation answers.
 
 **Order within the phase.** `xsnap::Machine` first — the review is explicit
 that this half is "mechanical and changes no behaviour" and that "doing the
@@ -1065,9 +1110,10 @@ and a reader working from it alone will re-do them.
       rest of the order, and the whole schedule, are not.
 - [ ] Choose between refusing and implementing compact notation in Phase 2.
       The recommendation is to refuse; the phase is sized both ways.
-- [ ] Confirm that Phase 1's trait subset is the supervisor's actual call
+- [x] Confirm that Phase 1's trait subset is the supervisor's actual call
       set rather than a copy of `xsnap::Machine`'s thirty methods.
-      The size estimate assumes the former.
+      **Answered, and the answer is neither** — see *The seam is a program
+      entry point* under Phase 1.
 - [ ] Correct `designs/ironhorse-w6-decisions.md` §3, which is Active and
       still reads "**F056 and F061 record 47 call sites that still bypass
       it** … they belong to whoever picks up the property/MOP seam work"
