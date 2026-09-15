@@ -303,6 +303,36 @@ cannot take while it freezes at construction rather than on request.
 The doc comment now says so; renaming the field is left to whoever owns the
 API.
 
+### Module resolution: the arity is wrong, not just the type
+
+The `resolveHook` row above says "shape only" because `has_resolve_hook` is a
+boolean.
+The resolver underneath it is a second, independent gap.
+
+| | resolution |
+|---|---|
+| SES | `resolveHook(importSpecifier, referrerSpecifier)` — referrer-relative |
+| XS | the same two arguments (`xsModule.c:2178-2185`, `mxRunCount(2)`), reached after walking the realm parent chain for an inherited hook (`:2160-2169`), with the referrer-aware `fxFindModule` as the no-hook fallback |
+| IronHorse | `ModuleGraph::resolve(&self, specifier: &str)` (`module.rs:283`) — one argument, over a flat `BTreeMap<String, ModuleId>` |
+
+`ImportEntry` carries only `module_request` (`module.rs:106-113`), and all six
+resolution sites pass it alone (`:342`, `:358`, `:401`, `:461`, `:582`,
+`:656`).
+There is no referrer anywhere in the graph, so **a relative specifier cannot be
+expressed at all**: two modules in one compartment that both import
+`'./helper.js'` necessarily get the same module.
+IronHorse's module map is a pre-resolved bundle keyed by absolute specifier,
+not a SES module map.
+
+`CompartmentOptions`'s own doc says as much — "The static resolve hook is the
+map's own specifier→id resolution" — but the consequence is bigger than a
+missing callable.
+Turning `has_resolve_hook: bool` into a real hook means threading a referrer
+through `ImportEntry` and every resolution site first.
+And `Realm` (`interp/realm.rs:6-9`) holds only `intrinsics` and
+`default_global`, with no parent, so XS's inherited-hook walk has no IronHorse
+counterpart either.
+
 Note that SES's own constructor takes a single object argument as the *legacy*
 `(globals, modules, options)` positional form unless it carries the
 `__options__: true` sigil (`compartment.js:294-316`) — an easy way to measure
@@ -406,8 +436,11 @@ The shim is the larger one — and it is the one already running on IronHorse.
       test there compiles the engine a second time.
       They skip on a bare checkout; `IRONHORSE_SES_SHIM_REQUIRED` makes a lane
       that claims to have built the bundle fail instead.
-- [ ] Verify `ModuleGraph` against SES and XS module-map semantics.
-      This document checked the option's presence, not its behaviour.
+- [x] Verify `ModuleGraph` against SES and XS module-map semantics.
+      Done 2026-09-15: the resolver takes no referrer, so relative specifiers
+      are inexpressible and the map is a pre-resolved bundle
+      (§ Module resolution). Threading a referrer is a prerequisite for any
+      real `resolveHook`.
 - [x] Establish whether `intrinsic_permit` can be made to mean SES attenuation
       or should be renamed so it stops looking like it already does.
       Measured 2026-09-15: it cannot, as things stand — every denied intrinsic
