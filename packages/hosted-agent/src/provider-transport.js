@@ -23,6 +23,7 @@ import { isCredentialRejection } from './provider-broker.js';
  * @property {'request' | 'fetch' | 'response' | 'body' | 'timeout'} stage
  * @property {number} [status]
  * @property {string} [refusal]
+ * @property {string} [detail] Host-only: which request-stage check refused.
  */
 
 /** Bounded prefix of a refused body kept for the host observer. */
@@ -139,6 +140,8 @@ export const makeProviderFetchTransport = ({
         let reported = false;
         /** @type {string | undefined} */
         let refusal;
+        /** @type {string | undefined} */
+        let detail;
         const reportFailure = () => {
           if (reported) return;
           reported = true;
@@ -148,6 +151,7 @@ export const makeProviderFetchTransport = ({
               stage,
               ...(status === undefined ? {} : { status }),
               ...(refusal === undefined ? {} : { refusal }),
+              ...(detail === undefined ? {} : { detail }),
             });
             // A host observer must not change request settlement or leak its
             // own exception through the provider capability.
@@ -200,6 +204,7 @@ export const makeProviderFetchTransport = ({
         }, timeoutMs);
         try {
           const url = new URL(request.url);
+          detail = 'request shape';
           (url.protocol === 'https:' &&
             !url.username &&
             !url.password &&
@@ -212,6 +217,7 @@ export const makeProviderFetchTransport = ({
             typeof request.maxResponseBytes === 'bigint' &&
             request.maxResponseBytes > 0n) ||
             Fail`Invalid provider request`;
+          detail = undefined;
           const limit =
             request.maxResponseBytes < maxResponseBytes
               ? request.maxResponseBytes
@@ -233,10 +239,16 @@ export const makeProviderFetchTransport = ({
             // can terminate itself or begin another. Which headers exist at all
             // is decided by the broker, which screens the slice's set against
             // BROKER_OWNED_HEADERS and applies the credential after it.
-            ((subscriptionHeader || /^[a-z0-9][a-z0-9-]{0,63}$/.test(name)) &&
-              typeof value === 'string' &&
-              /^[\x20-\x7e]*$/.test(value)) ||
-              Fail`Invalid provider header`;
+            const nameOk =
+              subscriptionHeader || /^[a-z0-9][a-z0-9-]{0,63}$/.test(name);
+            // HTAB is legal in a field value; the point of the rule is that
+            // CR, LF and NUL are not.
+            const valueOk =
+              typeof value === 'string' && /^[\t\x20-\x7e]*$/.test(value);
+            if (!nameOk || !valueOk) {
+              detail = `header ${name} ${nameOk ? 'value' : 'name'}`;
+            }
+            (nameOk && valueOk) || Fail`Invalid provider header`;
           }
           stage = 'fetch';
           const fetching = Promise.resolve(
