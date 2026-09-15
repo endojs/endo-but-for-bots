@@ -641,6 +641,217 @@ def halts():
     return variants
 
 
+# The heap-snapshot layout. The container is a tagged-atom envelope; the paged
+# store is the same state cut into rows a backend can write one at a time. Both
+# are read from source below, because both carry persisted identities that a
+# transcribed diagram would misreport within one release.
+FORMAT_SRC = "ironhorse-snapshot/src/format.rs"
+ROSTER_SRC = "ironhorse-snapshot/src/snapshot_roster.rs"
+STORE_SRC = "ironhorse-snapshot/src/store.rs"
+SQLITE_SRC = "rust/endo/ironhorse-store-sqlite/src/lib.rs"
+
+# The five atoms `canonical_atom_order()` writes before it walks the payload
+# roster. They are the envelope's own header, not roster rows.
+HEADER_ATOMS = ["VERS", "SIGN", "CREA", "BLOC", "HEAP"]
+
+# Several tables carry no comment in the DDL because their names say what they
+# hold. The map still needs one line for each, so these supply it; the parsed
+# comment wins wherever the source has one.
+SQLITE_ROLES = {
+    "meta": "The manifest and the store stamps, as key and value.",
+    "slot_pages": "One row for each slot page. The row holds the encoded slot records.",
+    "chunk_exts": "One row for each chunk extent. The row holds the arena bytes.",
+    "small_state": "The framed small state, for a store that predates the section split.",
+    "small_sections": "One row for each small-state section, with the section hash.",
+}
+
+ATOM_DECL_RE = re.compile(
+    r"^pub const (?P<tag>[A-Z_0-9]{4}): FourCc = FourCc\(\*b\"(?P<fourcc>....)\"\);", re.MULTILINE)
+ROSTER_ATOM_RE = re.compile(
+    r"atom: Some\(crate::format::(?P<tag>[A-Z_0-9]{4})\),\s*"
+    r"present\((?P<arg>[a-z_]+)\): (?P<present>[^\n]+?),?\n")
+CREATE_TABLE_RE = re.compile(
+    r"CREATE TABLE IF NOT EXISTS (?P<name>\w+)\s*\(", re.IGNORECASE)
+
+
+def atom_docs(text):
+    """Each atom tag with the first sentence of its declaration comment."""
+    docs, pending = {}, []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("///"):
+            pending.append(stripped[3:].strip())
+            continue
+        match = ATOM_DECL_RE.match(line)
+        if match:
+            tag = match.group("tag")
+            role = first_sentence(" ".join(pending), limit=150)
+            # The comments open with "`TAG` — ..."; the tag is already the
+            # heading on the map, so the prefix is noise there.
+            role = re.sub(r"^`%s`\s*[—-]\s*" % re.escape(tag), "", role)
+            docs[tag] = role[:1].upper() + role[1:] if role else ""
+        if not stripped.startswith("#["):
+            pending = []
+    return docs
+
+
+def container_layout():
+    """The container's atom order, taken the way the encoder takes it.
+
+    `canonical_atom_order()` is a const function, so it cannot be evaluated
+    here. It writes the five header atoms and then walks the payload roster in
+    declaration order, so reading that order reproduces the same sequence. The
+    tests compare the result against the list the roster's own test pins.
+    """
+    text = (ENGINE / FORMAT_SRC).read_text(encoding="utf-8")
+    roster = (ENGINE / ROSTER_SRC).read_text(encoding="utf-8")
+    docs = atom_docs(text)
+    atoms = [{"tag": tag, "role": docs.get(tag, ""), "section": "header",
+              "always": True, "condition": ""} for tag in HEADER_ATOMS]
+    for match in ROSTER_ATOM_RE.finditer(roster):
+        condition = match.group("present").strip()
+        always = condition == "true"
+        atoms.append({
+            "tag": match.group("tag"),
+            "role": docs.get(match.group("tag"), ""),
+            "section": "payload",
+            "always": always,
+            # An optional atom is omitted when empty, which is what keeps a
+            # machine's container bytes, and its content hash, unchanged.
+            "condition": "" if always else condition,
+        })
+    return atoms
+
+
+def byte_string(literal):
+    """The text of a Rust byte-string literal such as `*b"IRON"`.
+
+    `const_value` strips surrounding quotes, so the literal can arrive here
+    with its closing quote already removed; both forms are accepted.
+    """
+    match = re.search(r'b"([^"]*)"?', literal or "")
+    return match.group(1) if match else (literal or "")
+
+
+def product(expression):
+    """Evaluate a literal size expression such as `64 * 1024`.
+
+    Sizes are written in the source as a readable product. The map wants the
+    number, and reporting the expression verbatim reads as an extraction bug.
+    """
+    if not expression:
+        return None
+    parts = [p.strip().replace("_", "") for p in expression.split("*")]
+    if not all(p.isdigit() for p in parts):
+        return expression
+    value = 1
+    for part in parts:
+        value *= int(part)
+    return str(value)
+
+
+def const_value(path, name):
+    match = re.search(
+        r"^pub const %s\s*:\s*[^=]+=\s*(?P<value>.+?);" % re.escape(name),
+        (ENGINE / path).read_text(encoding="utf-8"), re.MULTILINE)
+    return match.group("value").strip().strip('"') if match else None
+
+
+def byte_tags(path, prefix):
+    """Domain-separation tags, as the readable characters they are written as."""
+    text = (ENGINE / path).read_text(encoding="utf-8")
+    found = []
+    for match in re.finditer(
+            r"^pub const (?P<name>%s_[A-Z]+): u8 = b'(?P<char>.)';" % prefix,
+            text, re.MULTILINE):
+        found.append({"name": match.group("name"), "char": match.group("char")})
+    return found
+
+
+def sqlite_schema():
+    """The backend's tables, parsed from the DDL it executes at open."""
+    path = ROOT / SQLITE_SRC
+    if not path.is_file():
+        return {"tables": [], "pragmas": [], "transaction": ""}
+    text = path.read_text(encoding="utf-8")
+    tables = []
+    for match in CREATE_TABLE_RE.finditer(text):
+        depth, index = 1, match.end()
+        while index < len(text) and depth:
+            if text[index] == "(":
+                depth += 1
+            elif text[index] == ")":
+                depth -= 1
+            index += 1
+        body = text[match.end():index - 1]
+        columns = []
+        for part in re.split(r",(?![^()]*\))", body):
+            cleaned = " ".join(part.replace("\\\"", '"').split())
+            cleaned = re.sub(r"^--.*?(?=[A-Za-z(]|$)", "", cleaned).strip()
+            if cleaned and not cleaned.startswith("--"):
+                columns.append(cleaned)
+        # A trailing table option such as WITHOUT ROWID follows the body.
+        tail = text[index:index + 40]
+        option = "WITHOUT ROWID" if "WITHOUT ROWID" in tail else ""
+        # The `--` comment block immediately above a table states its purpose.
+        preamble, note_lines = text[:match.start()].splitlines(), []
+        for line in reversed(preamble):
+            stripped = line.strip()
+            if stripped.startswith("--"):
+                note_lines.append(stripped.lstrip("-").strip())
+                continue
+            if stripped:
+                break
+        note = " ".join(reversed(note_lines))
+        name = match.group("name")
+        tables.append({
+            "name": name,
+            "columns": columns,
+            "option": option,
+            "note": (first_sentence(note.replace("\\\"", '"'), limit=200) if note
+                     else SQLITE_ROLES.get(name, "")),
+            "documented": bool(note),
+        })
+    # A pragma is executed in a batch string that may continue into the DDL,
+    # so keep only the first statement and drop the read-back probes and the
+    # format-string placeholders that are not settings.
+    pragmas = set()
+    for match in re.finditer(r'"PRAGMA ([^"]+)"', text):
+        statement = match.group(1).split(";")[0].strip()
+        if "=" in statement and "{" not in statement:
+            pragmas.add(" ".join(statement.split()))
+    pragmas = sorted(pragmas)
+    behavior = re.search(r"TransactionBehavior::(\w+)", text)
+    return {
+        "tables": sorted(tables, key=lambda t: t["name"]),
+        "pragmas": pragmas,
+        "transaction": behavior.group(1) if behavior else "",
+    }
+
+
+def snapshot_layout():
+    return {
+        "container": {
+            "envelope": "XS_M",
+            "magic": byte_string(const_value(FORMAT_SRC, "IRONHORSE_MAGIC")),
+            "format_version": const_value(FORMAT_SRC, "IRONHORSE_FORMAT_VERSION"),
+            "min_read": const_value(FORMAT_SRC, "IRONHORSE_FORMAT_VERSION_MIN_READ"),
+            "slot_record_bytes": const_value(
+                "ironhorse-snapshot/src/slot_codec.rs", "SLOT_RECORD_BYTES"),
+            "atoms": container_layout(),
+        },
+        "store": {
+            "schema_version": const_value(STORE_SRC, "STORE_SCHEMA_VERSION"),
+            "slots_per_page": const_value("ironhorse-vm/src/value.rs", "SLOTS_PER_PAGE"),
+            "chunk_extent_bytes": product(const_value(
+                "ironhorse-vm/src/value.rs", "CHUNK_EXTENT_BYTES")),
+            "leaf_tags": byte_tags(STORE_SRC, "LEAF"),
+            "tree_tags": byte_tags(STORE_SRC, "TREE"),
+        },
+        "sqlite": sqlite_schema(),
+    }
+
+
 def acceptance():
     """The README's per-stage acceptance verdicts.
 
@@ -723,6 +934,7 @@ def build(data):
         # all of these; the taxonomy is where that assumption breaks.
         "halts": halts(),
         "acceptance": acceptance(),
+        "snapshot": snapshot_layout(),
     }
 
 

@@ -8,6 +8,7 @@ Markdown lines.
 """
 
 import importlib.util
+import re
 from pathlib import Path
 import sys
 import unittest
@@ -197,6 +198,29 @@ class RenderTests(unittest.TestCase):
                       {"name": "MeterAbort", "doc": "d", "kind": "host"}],
             "acceptance": [{"stage": "1", "bar": "b", "verdict": "Landed",
                             "evidence": "e", "state": "landed"}],
+            "snapshot": {
+                "container": {
+                    "envelope": "XS_M", "magic": "IRON", "format_version": "23",
+                    "min_read": "1", "slot_record_bytes": "20",
+                    "atoms": [
+                        {"tag": "VERS", "role": "stamp", "section": "header",
+                         "always": True, "condition": ""},
+                        {"tag": "ARRY", "role": "arrays", "section": "payload",
+                         "always": False, "condition": "!image.arrays.is_empty()"},
+                    ],
+                },
+                "store": {
+                    "schema_version": "34", "slots_per_page": "256",
+                    "chunk_extent_bytes": "65536",
+                    "leaf_tags": [{"name": "LEAF_PAGE", "char": "P"}],
+                    "tree_tags": [{"name": "TREE_PAGES", "char": "p"}],
+                },
+                "sqlite": {
+                    "tables": [{"name": "slot_pages", "columns": ["page INTEGER PRIMARY KEY"],
+                                "option": "", "note": "n", "documented": False}],
+                    "pragmas": ["journal_mode=WAL"], "transaction": "Immediate",
+                },
+            },
         }
 
     def test_links_pin_to_the_recorded_commit(self):
@@ -283,6 +307,81 @@ class ProvenanceTests(unittest.TestCase):
         two = '{"commit": "' + "a" * 40 + '", "n": 2}'
         self.assertNotEqual(model.without_provenance(one),
                             model.without_provenance(two))
+
+
+class SnapshotLayoutTests(unittest.TestCase):
+    """The extracted container order must agree with the engine's own list."""
+
+    def pinned_order(self):
+        """The atom order the roster's test pins, read from that test."""
+        source = (model.ENGINE / model.ROSTER_SRC).read_text(encoding="utf-8")
+        start = source.index("canonical_atom_order().map(|tag| tag.0)")
+        body = source[start:source.index("]", source.index("[", start) + 1)]
+        return re.findall(r'\*b"(....)"', body)
+
+    def test_extracted_order_matches_the_engines_pinned_order(self):
+        # `canonical_atom_order()` is a const fn this tool cannot evaluate, so
+        # the order is reconstructed from the roster. If that reconstruction
+        # ever diverges, the map's layout plate is wrong, not merely stale.
+        extracted = [a["tag"] for a in model.container_layout()]
+        self.assertEqual(extracted, self.pinned_order())
+
+    def test_header_atoms_come_first_and_are_always_written(self):
+        atoms = model.container_layout()
+        self.assertEqual([a["tag"] for a in atoms[:5]], model.HEADER_ATOMS)
+        self.assertTrue(all(a["always"] for a in atoms[:5]))
+
+    def test_conditional_atoms_record_their_condition(self):
+        conditional = [a for a in model.container_layout() if not a["always"]]
+        self.assertTrue(conditional)
+        self.assertTrue(all(a["condition"] for a in conditional))
+
+    def test_byte_string_literal_is_read_with_or_without_its_quote(self):
+        self.assertEqual(model.byte_string('*b"IRON"'), "IRON")
+        self.assertEqual(model.byte_string('*b"IRON'), "IRON")
+
+    def test_size_expression_is_evaluated(self):
+        self.assertEqual(model.product("64 * 1024"), "65536")
+        self.assertEqual(model.product("256"), "256")
+        self.assertEqual(model.product("SOME_CONST"), "SOME_CONST")
+
+    def test_sqlite_ddl_parses_into_tables_and_columns(self):
+        schema = model.sqlite_schema()
+        names = {t["name"] for t in schema["tables"]}
+        self.assertTrue({"slot_pages", "chunk_exts", "leaf_hashes"} <= names)
+        pages = next(t for t in schema["tables"] if t["name"] == "slot_pages")
+        self.assertIn("page INTEGER PRIMARY KEY", pages["columns"])
+        self.assertEqual(schema["transaction"], "Immediate")
+
+    def test_check_constraints_stay_with_their_column(self):
+        # A comma inside CHECK(...) must not split one column into two.
+        sections = next(t for t in model.sqlite_schema()["tables"]
+                        if t["name"] == "small_sections")
+        self.assertTrue(any("CHECK" in c and "id" in c for c in sections["columns"]))
+
+    def test_pragmas_exclude_the_ddl_batch_and_placeholders(self):
+        pragmas = model.sqlite_schema()["pragmas"]
+        self.assertIn("journal_mode=WAL", pragmas)
+        self.assertTrue(all("CREATE TABLE" not in p for p in pragmas))
+        self.assertTrue(all("{" not in p for p in pragmas))
+
+
+class FigureFitTests(unittest.TestCase):
+    """Labels built from source values must still fit the figure they sit in."""
+
+    def test_a_long_value_is_refused_rather_than_drawn_outside_its_box(self):
+        data = RenderTests().fixture()
+        data["constants"] = data["constants"] + [{
+            "name": "COST_TABLE_VERSION",
+            "value": "ironhorse-meter-with-a-very-long-name",
+            "type": "&str", "file": "f.rs", "line": 1,
+            "documented": None, "drift": False,
+        }]
+        with self.assertRaises(ValueError):
+            page.gates_figure(data)
+
+    def test_ordinary_values_render(self):
+        self.assertIn("<svg", page.gates_figure(RenderTests().fixture()))
 
 
 if __name__ == "__main__":

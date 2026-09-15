@@ -42,6 +42,7 @@ PLATES = [
     ("seams", "Seams", "The four interfaces in the engine"),
     ("crank", "Execution", "From source to result with one budget"),
     ("persist", "Persistence", "Classification and the restore gates"),
+    ("layout", "Snapshot layout", "The container, the paged store, and SQLite"),
     ("hazards", "Hazards", "Wrong conclusions that the guides correct"),
     ("recipes", "First change", "Steps for the usual tasks"),
     ("checks", "Verification", "The checks that CI does on your branch"),
@@ -57,8 +58,26 @@ def strip_commit(text):
     return COMMIT_RE.sub("0" * 12, text)
 
 
+def plate_no(key):
+    """The printed number of a plate, so a cross-reference cannot go stale."""
+    return f"{[k for k, _, _ in PLATES].index(key):02d}"
+
+
 def esc(text):
     return html.escape(str(text), quote=True)
+
+
+CODE_SPAN_RE = re.compile(r"`([^`]+)`")
+
+
+def rich(text):
+    """Escaped text with backticked spans rendered as code.
+
+    Sentences extracted from Rust comments and Markdown guides mark identifiers
+    with backticks. Escaping happens first, so the substitution can only wrap
+    text that is already inert.
+    """
+    return CODE_SPAN_RE.sub(r"<code>\1</code>", esc(text))
 
 
 def link(model, path, line=None, label=None):
@@ -275,12 +294,14 @@ def gates_figure(model):
         entry = constants.get(name)
         return esc(entry["value"]) if entry else "?"
 
+    # Keep this in step with the box width below.
+    label_budget = 19
     gates = [
         ("Container", f'format {value("IRONHORSE_FORMAT_VERSION")}'),
         ("Store", f'schema {value("STORE_SCHEMA_VERSION")}'),
         ("Rows", f'rows {value("ROW_SCHEMA_VERSION")}'),
         ("Meter", value("COST_TABLE_VERSION")),
-        ("Boot", "intrinsics · Math · ICU"),
+        ("Boot", "layout + providers"),
     ]
     parts = [
         '<svg viewBox="0 0 880 200" class="figure-svg" role="img" aria-label="Five '
@@ -296,6 +317,10 @@ def gates_figure(model):
     ]
     x = 104
     for label, detail in gates:
+        if len(detail) > label_budget:
+            raise ValueError(
+                f"gate label {detail!r} is {len(detail)} characters; the box fits "
+                f"{label_budget}. Shorten it or widen the figure.")
         parts.append(
             f'<rect class="box" x="{x}" y="22" width="124" height="54" rx="2"/>'
             f'<text x="{x + 62}" y="46" text-anchor="middle" class="node-name">{esc(label)}</text>'
@@ -397,11 +422,11 @@ control almost all of the structure in this map.</p>
       <li>Read all of <strong>this map</strong> first. It is the only document for a
         person who has not seen the source tree.</li>
       <li>Read {link(model, 'rust/engine/ARCHITECTURE.md', label='ARCHITECTURE.md')}. It
-        is the approved guide to the current engine. Plate 06 quotes it.</li>
+        is the approved guide to the current engine. Plate {plate_no("hazards")} quotes it.</li>
       <li>Read {link(model, 'rust/engine/README.md', label='README.md')}. It gives the
         acceptance status, the determinism limits, and the oracle build steps.</li>
       <li>Read {link(model, 'designs/ironhorse-engine.md', label='designs/ironhorse-engine.md')}.
-        It is the plan that plate 09 measures.</li>
+        It is the plan that plate {plate_no("status")} measures.</li>
     </ol>
   </div>
   <div>
@@ -410,7 +435,7 @@ control almost all of the structure in this map.</p>
     tells you which conclusion you must not make. Two examples follow. A subsystem in the
     source tree is not an accepted subsystem. A kernel test that passes is not a
     guarantee about production.</p>
-    <p>Plate 06 shows the most important of these statements. The tool extracts each
+    <p>Plate {plate_no("hazards")} shows the most important of these statements. The tool extracts each
     statement from a guide. It does not change the words.</p>
   </div>
 </div>"""
@@ -664,16 +689,227 @@ release <em>name</em> and the digest. If you compare only the digests, the engin
 accepts a heap that is not compatible.</p>"""
 
 
+def cuts_figure(model):
+    """One state, cut two ways: a single container, or addressable store rows."""
+    store = model["snapshot"]["store"]
+    atoms = model["snapshot"]["container"]["atoms"]
+    payloads = sum(1 for a in atoms if a["section"] == "payload")
+    slots = store["slots_per_page"]
+    extent = int(store["chunk_extent_bytes"]) // 1024
+    bands = [
+        ("VERS · SIGN · CREA", "stamps and creation parameters", "meta", "one row"),
+        ("BLOC", "chunk arena bytes", "chunk_exts", f"one row per {extent} KiB extent"),
+        ("HEAP", "slot records and free list", "slot_pages", f"one row per {slots} slots"),
+        (f"{payloads} payload atoms", "side tables and machine state", "small_sections",
+         "one row per section"),
+    ]
+    parts = [
+        '<svg viewBox="0 0 880 300" class="figure-svg" role="img" aria-label="The same '
+        'machine state in two forms. The container holds all atoms in one blob. The '
+        'paged store holds the same state as addressable rows.">',
+        '<defs><marker id="cut-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" '
+        'markerHeight="6" orient="auto-start-reverse">'
+        '<path d="M0 0 L8 4 L0 8 z" fill="currentColor"/></marker></defs>',
+        '<text x="140" y="16" text-anchor="middle" class="edge-label">CONTAINER — ONE BLOB</text>',
+        '<text x="700" y="16" text-anchor="middle" class="edge-label">PAGED STORE — ROWS</text>',
+    ]
+    y = 30
+    for atom, what, table, how in bands:
+        parts.append(
+            f'<rect class="box" x="20" y="{y}" width="240" height="54" rx="2"/>'
+            f'<text x="36" y="{y + 22}" class="node-name">{esc(atom)}</text>'
+            f'<text x="36" y="{y + 40}" class="node-meta">{esc(what)}</text>'
+            f'<path class="flow" d="M264 {y + 27} L{"436" if table else "436"} {y + 27}" '
+            f'marker-end="url(#cut-arrow)"/>'
+            f'<text x="350" y="{y + 20}" text-anchor="middle" class="edge-label">{esc(how)}</text>'
+            f'<rect class="box box-focus" x="440" y="{y}" width="240" height="54" rx="2"/>'
+            f'<text x="456" y="{y + 32}" class="node-name">{esc(table)}</text>')
+        y += 64
+    parts.append(
+        '<rect class="box" x="700" y="30" width="160" height="246" rx="2"/>'
+        '<text x="780" y="54" text-anchor="middle" class="node-name">derived</text>'
+        '<line class="hair" x1="716" y1="66" x2="844" y2="66"/>'
+        '<text x="780" y="90" text-anchor="middle" class="node-meta">leaf_hashes</text>'
+        '<text x="780" y="112" text-anchor="middle" class="node-meta">page_edges</text>'
+        '<text x="780" y="134" text-anchor="middle" class="node-meta">free_segs</text>'
+        '<text x="780" y="156" text-anchor="middle" class="node-meta">edge_pairs</text>'
+        '<text x="780" y="186" text-anchor="middle" class="node-meta">rebuilt from</text>'
+        '<text x="780" y="204" text-anchor="middle" class="node-meta">the rows;</text>'
+        '<text x="780" y="222" text-anchor="middle" class="node-meta">edge_pairs is</text>'
+        '<text x="780" y="240" text-anchor="middle" class="node-meta">never sealed</text>'
+        '<path class="flow flow-dashed" d="M684 150 L696 150" marker-end="url(#cut-arrow)"/>'
+        '</svg>')
+    return "\n".join(parts)
+
+
+def commit_figure(model):
+    """How row bytes become one sealed root inside one SQLite transaction."""
+    store = model["snapshot"]["store"]
+    classes = " · ".join(t["char"] for t in store["tree_tags"])
+    leaves = " · ".join(t["char"] for t in store["leaf_tags"])
+    return f"""
+<svg viewBox="0 0 880 250" class="figure-svg" role="img" aria-label="Row bytes become
+a leaf hash, then a per-class tree root, then one manifest root and seal. The seal
+chains to the previous seal. All of it happens in one SQLite IMMEDIATE transaction.">
+  <defs><marker id="seal-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6"
+    markerHeight="6" orient="auto-start-reverse">
+    <path d="M0 0 L8 4 L0 8 z" fill="currentColor"/></marker></defs>
+
+  <rect class="budget" x="18" y="20" width="844" height="152" rx="2"/>
+  <text x="440" y="40" text-anchor="middle" class="node-accent">one SQLite IMMEDIATE transaction</text>
+
+  <rect class="box" x="34" y="58" width="150" height="58" rx="2"/>
+  <text x="109" y="84" text-anchor="middle" class="node-name">changed rows</text>
+  <text x="109" y="102" text-anchor="middle" class="node-meta">only the dirty ones</text>
+
+  <rect class="box" x="230" y="58" width="164" height="58" rx="2"/>
+  <text x="312" y="84" text-anchor="middle" class="node-name">leaf hash</text>
+  <text x="312" y="102" text-anchor="middle" class="node-meta">tag + index + bytes</text>
+
+  <rect class="box" x="440" y="58" width="164" height="58" rx="2"/>
+  <text x="522" y="84" text-anchor="middle" class="node-name">class tree</text>
+  <text x="522" y="102" text-anchor="middle" class="node-meta">only the dirty paths</text>
+
+  <rect class="box box-focus" x="650" y="58" width="196" height="58" rx="2"/>
+  <text x="748" y="84" text-anchor="middle" class="node-name">manifest root and seal</text>
+  <text x="748" y="102" text-anchor="middle" class="node-meta">chained to the last seal</text>
+
+  <path class="flow" d="M184 87 L226 87" marker-end="url(#seal-arrow)"/>
+  <path class="flow" d="M394 87 L436 87" marker-end="url(#seal-arrow)"/>
+  <path class="flow" d="M604 87 L646 87" marker-end="url(#seal-arrow)"/>
+
+  <text x="109" y="140" text-anchor="middle" class="node-meta">SHA-256 for each row</text>
+  <text x="312" y="140" text-anchor="middle" class="node-meta">domains {esc(leaves)}</text>
+  <text x="522" y="140" text-anchor="middle" class="node-meta">classes {esc(classes)}</text>
+  <text x="748" y="140" text-anchor="middle" class="node-meta">verified before the write</text>
+
+  <path class="flow flow-oxide" d="M440 172 L440 200" marker-end="url(#seal-arrow)"/>
+  <text x="440" y="222" text-anchor="middle" class="node-oxide">any refusal rolls the transaction back and the store keeps the last epoch</text>
+</svg>"""
+
+
+def layout_plate(model):
+    snapshot = model["snapshot"]
+    container, store, sqlite = snapshot["container"], snapshot["store"], snapshot["sqlite"]
+    atoms = container["atoms"]
+    always = [a for a in atoms if a["always"]]
+    optional = [a for a in atoms if not a["always"]]
+
+    stamps = [
+        ("Envelope", container["envelope"], "The outer container tag, from XS."),
+        ("Magic", container["magic"], "The discriminator at the head of VERS."),
+        ("Format version", container["format_version"],
+         f'The reader accepts {container["min_read"]} up to this number and refuses newer.'),
+        ("Slot record", f'{container["slot_record_bytes"]} bytes',
+         "The width of one serialized slot. It is not the in-memory width."),
+        ("Store schema", store["schema_version"], "Page geometry and manifest layout."),
+        ("Slots per page", store["slots_per_page"], "One slot_pages row holds this many."),
+        ("Chunk extent", f'{int(store["chunk_extent_bytes"]) // 1024} KiB',
+         "One chunk_exts row holds this many bytes."),
+    ]
+    stamp_rows = "".join(
+        f'<tr><td>{esc(name)}</td><td class="num"><strong>{esc(value)}</strong></td>'
+        f'<td class="cell-note">{esc(note)}</td></tr>' for name, value, note in stamps)
+
+    atom_cells = "".join(
+        f'<li class="filterable atom{"" if a["always"] else " atom-opt"}" '
+        f'data-text="{esc(a["tag"] + " " + a["role"] + (" optional" if not a["always"] else " always"))}">'
+        f'<span class="atom-tag">{esc(a["tag"])}</span>'
+        f'<span class="atom-n">{esc(str(index))}</span>'
+        f'<span class="cell-note">{rich(a["role"]) or "—"}</span></li>'
+        for index, a in enumerate(atoms))
+
+    table_rows = "".join(
+        f'<tr class="filterable" data-text="{esc(t["name"] + " " + t["note"])}">'
+        f'<td><code>{esc(t["name"])}</code>'
+        f'{" <span class=tag>without rowid</span>" if t["option"] else ""}'
+        f'<span class="cell-note">{rich(t["note"])}</span></td>'
+        f'<td class="cols">{"".join(f"<code>{esc(c)}</code>" for c in t["columns"])}</td></tr>'
+        for t in sqlite["tables"])
+
+    pragmas = "".join(f'<code>{esc(p)}</code>' for p in sqlite["pragmas"])
+
+    return f"""
+<p class="abstract">The engine keeps one machine state in two forms. The
+<strong>container</strong> is one blob of tagged atoms, and the engine writes it
+whole. The <strong>paged store</strong> holds the same state as rows, and the engine
+writes only the rows that changed. The container gives a stable identity for a
+complete image. The store gives a cheap checkpoint after each crank.</p>
+
+{figure(cuts_figure(model),
+        "The two forms hold the same state and cut it differently. The store cut is "
+        "what makes an incremental commit possible, because a crank touches few "
+        "pages.")}
+
+<div class="table-wrap">
+<table>
+  <caption>Stamps and geometry, read from
+    {link(model, 'rust/engine/ironhorse-snapshot/src/format.rs', label='format.rs')},
+    {link(model, 'rust/engine/ironhorse-snapshot/src/store.rs', label='store.rs')} and
+    {link(model, 'rust/engine/ironhorse-vm/src/value.rs', label='value.rs')}.</caption>
+  <thead><tr><th>Item</th><th class="num">Value</th><th>Description</th></tr></thead>
+  <tbody>{stamp_rows}</tbody>
+</table>
+</div>
+
+<h3>Container atoms, in write order</h3>
+<p>The writer emits the first five atoms, and then walks the payload roster in
+declaration order. {len(always)} atoms are always present. The other {len(optional)}
+atoms are written only when they hold data.</p>
+
+<ul class="atoms">{atom_cells}</ul>
+
+<p class="note"><strong>The reason for the optional atoms.</strong> An empty atom is
+not written. Therefore a machine that never used a feature keeps the same container
+bytes as before that feature existed. The bytes give the content hash, and the content
+hash is the identity that the stored images and the golden vectors use.</p>
+
+<h3>How a commit reaches the disk</h3>
+
+{figure(commit_figure(model),
+        "A commit hashes each changed row, updates only the dirty paths of the class "
+        "trees, and binds the combined root into the manifest with a seal. The seal "
+        "chains to the previous seal.")}
+
+<p>The backend takes the writer lock at the start with an <code>IMMEDIATE</code>
+transaction. A second writer then waits, and it does not fail in the middle of a
+read-to-write upgrade. The shared verifier runs inside this transaction, so every
+backend meets the same admission rules.</p>
+
+<div class="table-wrap">
+<table>
+  <caption>SQLite tables, parsed from the DDL in
+    {link(model, 'rust/endo/ironhorse-store-sqlite/src/lib.rs', label='ironhorse-store-sqlite')}.
+    Transaction behaviour: <code>{esc(sqlite["transaction"])}</code>. Pragmas: {pragmas}</caption>
+  <thead><tr><th>Table</th><th>Columns</th></tr></thead>
+  <tbody>{table_rows}</tbody>
+</table>
+</div>
+
+<p class="note"><strong>Two properties to remember.</strong> First,
+<code>edge_pairs</code> is derived from <code>page_edges</code> and is never sealed.
+It exists so that reachability runs as a recursive query inside SQLite, and the backend
+can rebuild it. Second, <code>journal_mode=WAL</code> with
+<code>synchronous=FULL</code> is the durability contract that the machine layer
+assumes. The backend reads both values back after it sets them, and it refuses the
+store if either value is wrong.</p>
+
+<p class="hazard-note"><strong>Caution: the container and the store are different
+representations.</strong> They hold the same machine state, and they carry separate
+version numbers. A change to one does not update the other. Plate
+{plate_no("persist")} lists the identities that a restore checks.</p>"""
+
+
 def hazards_plate(model):
     items = []
     for hazard in model["hazards"]:
-        context = (f'<p class="hazard-context">{esc(hazard["context"])}</p>'
+        context = (f'<p class="hazard-context">{rich(hazard["context"])}</p>'
                    if hazard["context"] else "")
         items.append(f"""
 <li class="hazard filterable" data-text="{esc(hazard['text'] + ' ' + hazard['section'])}">
   <p class="hazard-where">{esc(hazard["section"])}</p>
   {context}
-  <p class="hazard-text">{esc(hazard["text"])}</p>
+  <p class="hazard-text">{rich(hazard["text"])}</p>
   {link(model, f'rust/engine/{hazard["source"]}', hazard["line"],
         label=f'{hazard["source"]}:{hazard["line"]}')}
 </li>""")
@@ -1126,6 +1362,22 @@ th.num { text-align: right; }
 .mod-bar { position: absolute; left: 0; top: 0; bottom: 0; width: 2px; background: var(--accent); opacity: .45; height: var(--w, 4%); min-height: 3px; }
 .mod-n { float: right; font: 400 11.5px "IBM Plex Mono", monospace; color: var(--muted); font-variant-numeric: tabular-nums; }
 
+/* atoms ---------------------------------------------------------------- */
+.atoms {
+  list-style: none;
+  margin: 18px 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(238px, 1fr));
+  gap: 2px 18px;
+}
+.atom { position: relative; padding: 6px 0 6px 10px; border-bottom: 1px solid var(--hair); border-left: 2px solid var(--accent); }
+.atom-opt { border-left-style: dotted; border-left-color: var(--muted); }
+.atom-tag { font: 500 13px "IBM Plex Mono", monospace; }
+.atom-n { float: right; font: 400 11px "IBM Plex Mono", monospace; color: var(--muted); font-variant-numeric: tabular-nums; }
+.cols { line-height: 2; }
+.cols code { margin-right: 4px; }
+
 /* cards ---------------------------------------------------------------- */
 .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(288px, 1fr)); gap: 16px; margin-top: 24px; }
 .card { background: var(--panel); border: 1px solid var(--rule); border-top: 2px solid var(--accent); border-radius: 2px; padding: 16px 18px 18px; }
@@ -1349,7 +1601,8 @@ def render(model):
     builders = {
         "orientation": orientation_plate, "context": context_plate,
         "crates": crates_plate, "seams": seams_plate, "crank": crank_plate,
-        "persist": persist_plate, "hazards": hazards_plate,
+        "persist": persist_plate, "layout": layout_plate,
+        "hazards": hazards_plate,
         "recipes": recipes_plate, "checks": checks_plate, "status": status_plate,
     }
     plates = "\n".join(
@@ -1411,7 +1664,7 @@ def render(model):
   that commit. In a later revision, find the symbol by name instead of the line
   number.</p>
   <p>All text on this page uses Simplified Technical English, except the quoted
-  sentences in plate 06 and the descriptions that the tool copies from source
+  sentences in plate {esc(plate_no("hazards"))} and the descriptions that the tool copies from source
   comments.</p>
 </footer>
 

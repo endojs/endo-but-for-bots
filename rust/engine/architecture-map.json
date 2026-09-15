@@ -325,7 +325,7 @@
       "workflow": "ironhorse-sanitizers.yml"
     }
   ],
-  "commit": "65902a8f8c2e5f198d479ff0d9a77eb25a7c36d3",
+  "commit": "6fe9a8e9845c502fb61053643331e7da52981968",
   "constants": [
     {
       "documented": "ironhorse-meter-5",
@@ -2696,6 +2696,428 @@
       "why": "Each machine field receives one classification for persistence."
     }
   ],
+  "snapshot": {
+    "container": {
+      "atoms": [
+        {
+          "always": true,
+          "condition": "",
+          "role": "Engine version, slot width, endianness, plus the Ironhorse discriminator ([`IRONHORSE_MAGIC`]).",
+          "section": "header",
+          "tag": "VERS"
+        },
+        {
+          "always": true,
+          "condition": "",
+          "role": "Host callback-table signature.",
+          "section": "header",
+          "tag": "SIGN"
+        },
+        {
+          "always": true,
+          "condition": "",
+          "role": "Machine creation parameters.",
+          "section": "header",
+          "tag": "CREA"
+        },
+        {
+          "always": true,
+          "condition": "",
+          "role": "Chunk-heap (byte-arena) data.",
+          "section": "header",
+          "tag": "BLOC"
+        },
+        {
+          "always": true,
+          "condition": "",
+          "role": "Slot-heap images (the flat slot-record array + free list).",
+          "section": "header",
+          "tag": "HEAP"
+        },
+        {
+          "always": true,
+          "condition": "",
+          "role": "The interpreter's live stack slots.",
+          "section": "payload",
+          "tag": "STAC"
+        },
+        {
+          "always": true,
+          "condition": "",
+          "role": "The key table (runtime-interned property keys).",
+          "section": "payload",
+          "tag": "KEYS"
+        },
+        {
+          "always": true,
+          "condition": "",
+          "role": "The name table (program symbol names, id-ordered).",
+          "section": "payload",
+          "tag": "NAME"
+        },
+        {
+          "always": true,
+          "condition": "",
+          "role": "The symbol table (well-known / registered symbol identities).",
+          "section": "payload",
+          "tag": "SYMB"
+        },
+        {
+          "always": true,
+          "condition": "",
+          "role": "Cost-table version and SHA-256 digest, plus the frozen 16.16 fixed-point counters plus the cost-table version that produced them, so a\u2026",
+          "section": "payload",
+          "tag": "METR"
+        },
+        {
+          "always": false,
+          "condition": "!image.arrays.is_empty()",
+          "role": "The arrays side table (side-table ledger `Arrays` row): per-instance spec length + sparse item map.",
+          "section": "payload",
+          "tag": "ARRY"
+        },
+        {
+          "always": false,
+          "condition": "!image.index_props.is_empty()",
+          "role": "An ORDINARY object's integer-indexed properties (ledger `IndexProps` row): per instance, the sparse index\u2192value map XS keeps in an internal\u2026",
+          "section": "payload",
+          "tag": "IDXP"
+        },
+        {
+          "always": false,
+          "condition": "!image.collections.is_empty()",
+          "role": "The collections side table (ledger `Collections` row): Map/Set/WeakMap/WeakSet kind, table geometry, and insertion-ordered entries.",
+          "section": "payload",
+          "tag": "COLL"
+        },
+        {
+          "always": false,
+          "condition": "!image.registry.is_empty()",
+          "role": "The `Symbol.for` registry (ledger `SymbolRegistry` row): key bytes \u2192 descriptor slot, pairwise.",
+          "section": "payload",
+          "tag": "REGY"
+        },
+        {
+          "always": false,
+          "condition": "!image.errors.is_empty()",
+          "role": "The error-data side table (ledger `ErrorData` row): per Error instance, the construction-time constructor name and optional message the\u2026",
+          "section": "payload",
+          "tag": "ERRD"
+        },
+        {
+          "always": false,
+          "condition": "image.errors.iter().any(|error| !error.frames.is_empty())",
+          "role": "The error-frame side table: the call-frame names an Error captured at CONSTRUCTION, which the `stack` accessor renders.",
+          "section": "payload",
+          "tag": "ESTK"
+        },
+        {
+          "always": false,
+          "condition": "!image.buffers.is_empty()",
+          "role": "The array-buffers side table (ledger `ArrayBuffers` row): per instance, the backing chunk offset + byte length + brand flags\u2026",
+          "section": "payload",
+          "tag": "ABUF"
+        },
+        {
+          "always": false,
+          "condition": "!image.typed_arrays.is_empty()",
+          "role": "The typed-arrays side table (ledger `TypedArrays` row): per view, element kind + buffer slot + byte offset + element length.",
+          "section": "payload",
+          "tag": "TARR"
+        },
+        {
+          "always": false,
+          "condition": "!image.data_views.is_empty()",
+          "role": "The data-views side table (ledger `DataViews` row): per view, buffer slot + byte offset + byte length.",
+          "section": "payload",
+          "tag": "DVIW"
+        },
+        {
+          "always": false,
+          "condition": "!image.wrappers.is_empty()",
+          "role": "The primitive-wrapper side table (ledger `WrapperData` row): per wrapper instance, its boxed value slot.",
+          "section": "payload",
+          "tag": "WRAP"
+        },
+        {
+          "always": false,
+          "condition": "!image.regexps.is_empty()",
+          "role": "The regular-expression side table (ledger `RegExps` row): per instance, `(source, flags, legacyLastIndex)`; current lastIndex state rides\u2026",
+          "section": "payload",
+          "tag": "REGX"
+        },
+        {
+          "always": false,
+          "condition": "!image.arguments_brands.is_empty()",
+          "role": "The arguments-exotic brand set (the `Arrays` row's satellite): the branded owners, ascending.",
+          "section": "payload",
+          "tag": "ARGB"
+        },
+        {
+          "always": false,
+          "condition": "!image.temporal.is_empty()",
+          "role": "The four Temporal record tables (ledger `TemporalRecords` row): instants, durations, plains, zoneds, each owner-ascending.",
+          "section": "payload",
+          "tag": "TMPR"
+        },
+        {
+          "always": false,
+          "condition": "!image.intl.is_empty()",
+          "role": "The nine Intl record tables (ledger `IntlRecords` row): locales, collators, list formats, plural rules, number formats, segmenters\u2026",
+          "section": "payload",
+          "tag": "INTL"
+        },
+        {
+          "always": false,
+          "condition": "!image.iterators.is_empty()",
+          "role": "The built-in iterator cursors (ledger `Iterators` row): array/string/for-in/collection cursors, owner-ascending, with the collection cursors\u2026",
+          "section": "payload",
+          "tag": "ITER"
+        },
+        {
+          "always": false,
+          "condition": "!image.dates.is_empty()",
+          "role": "Date `[[DateValue]]` records (ledger `Dates` row): owner plus raw IEEE-754 bits, owner-ascending.",
+          "section": "payload",
+          "tag": "DATE"
+        },
+        {
+          "always": false,
+          "condition": "!image.function_state.is_empty()",
+          "role": "The atomic guest-callability cluster: retained bytecode segments, guest/bound function metadata, constructor\u2192prototype links, and deleted\u2026",
+          "section": "payload",
+          "tag": "FUNC"
+        },
+        {
+          "always": false,
+          "condition": "!image.proxy_state.is_empty()",
+          "role": "Proxy target/handler/revocation records and revoker links.",
+          "section": "payload",
+          "tag": "PROX"
+        },
+        {
+          "always": false,
+          "condition": "!image.accessors.is_empty()",
+          "role": "Guest accessor getter/setter mappings.",
+          "section": "payload",
+          "tag": "ACCS"
+        },
+        {
+          "always": false,
+          "condition": "!image.intl_bound_functions.is_empty()",
+          "role": "Runtime Intl bound compare/format function links.",
+          "section": "payload",
+          "tag": "IBFN"
+        },
+        {
+          "always": false,
+          "condition": "!image.private_elements.is_empty()",
+          "role": "Private value and accessor elements keyed by receiver and lexical brand slots.",
+          "section": "payload",
+          "tag": "PRIV"
+        },
+        {
+          "always": false,
+          "condition": "!image.disposable_stacks.is_empty()",
+          "role": "DisposableStack/AsyncDisposableStack state and records.",
+          "section": "payload",
+          "tag": "DISP"
+        },
+        {
+          "always": false,
+          "condition": "!image.generators.is_empty()",
+          "role": "Synchronous generator lifecycle and saved activations.",
+          "section": "payload",
+          "tag": "GENR"
+        },
+        {
+          "always": false,
+          "condition": "!image.promise_cluster.is_empty()",
+          "role": "The promise cluster: per-instance settlement state and pending reactions, resolving-function links, `[[AlreadyResolved]]` guards, and\u2026",
+          "section": "payload",
+          "tag": "PRMS"
+        },
+        {
+          "always": false,
+          "condition": "!image.promise_cluster.async_section_is_empty()",
+          "role": "Suspended async-function activations linked from PRMS reactions, followed (format 23) by the async generator instances: state, suspended\u2026",
+          "section": "payload",
+          "tag": "ASYN"
+        },
+        {
+          "always": false,
+          "condition": "image.name_floor.is_some()",
+          "role": "The installed-names floor: the id ceiling at or below which partial install passes leave bindings alone.",
+          "section": "payload",
+          "tag": "NFLR"
+        }
+      ],
+      "envelope": "XS_M",
+      "format_version": "23",
+      "magic": "IRON",
+      "min_read": "1",
+      "slot_record_bytes": "20"
+    },
+    "sqlite": {
+      "pragmas": [
+        "foreign_keys=ON",
+        "journal_mode=WAL",
+        "locking_mode=EXCLUSIVE",
+        "synchronous = FULL",
+        "wal_autocheckpoint = 1000"
+      ],
+      "tables": [
+        {
+          "columns": [
+            "ext INTEGER PRIMARY KEY",
+            "bytes BLOB NOT NULL"
+          ],
+          "documented": false,
+          "name": "chunk_exts",
+          "note": "One row for each chunk extent. The row holds the arena bytes.",
+          "option": ""
+        },
+        {
+          "columns": [
+            "target INTEGER NOT NULL",
+            "page INTEGER NOT NULL",
+            "PRIMARY KEY (target, page)"
+          ],
+          "documented": true,
+          "name": "edge_pairs",
+          "note": "Normalized page-edge pairs (the query-driven GC layer, store seam phase 10): one row per (target, page) edge, DERIVED from page_edges \u2014 never sealed, rebuildable \u2014 maintained in the same commit\u2026",
+          "option": "WITHOUT ROWID"
+        },
+        {
+          "columns": [
+            "seg INTEGER PRIMARY KEY",
+            "bytes BLOB NOT NULL"
+          ],
+          "documented": true,
+          "name": "free_segs",
+          "note": "Free-list segments (store seam phase 9): big-endian u32 entries; kind-2 rows in leaf_hashes checksum them.",
+          "option": ""
+        },
+        {
+          "columns": [
+            "kind INTEGER NOT NULL",
+            "idx INTEGER NOT NULL",
+            "hash BLOB NOT NULL",
+            "PRIMARY KEY (kind, idx)"
+          ],
+          "documented": true,
+          "name": "leaf_hashes",
+          "note": "Row-leaf hashes (store seam phase 5): kind 0 = slot page, 1 = chunk extent; 32-byte SHA-256 per row, maintained transactionally with the rows themselves.",
+          "option": ""
+        },
+        {
+          "columns": [
+            "key TEXT PRIMARY KEY",
+            "value BLOB NOT NULL"
+          ],
+          "documented": false,
+          "name": "meta",
+          "note": "The manifest and the store stamps, as key and value.",
+          "option": ""
+        },
+        {
+          "columns": [
+            "page INTEGER PRIMARY KEY",
+            "targets BLOB NOT NULL"
+          ],
+          "documented": true,
+          "name": "page_edges",
+          "note": "Page-edge summaries (store seam phase 6): the sorted outgoing page targets per slot page, as big-endian u32s.",
+          "option": ""
+        },
+        {
+          "columns": [
+            "name TEXT NOT NULL",
+            "key BLOB NOT NULL",
+            "bytes BLOB NOT NULL",
+            "PRIMARY KEY (name, key)"
+          ],
+          "documented": true,
+          "name": "side_tables",
+          "note": "One row set per side-table ledger row, populated as the Pending atoms land paired with their store rows (design \u00a7 Side tables: the ledger governs the schema).",
+          "option": ""
+        },
+        {
+          "columns": [
+            "page INTEGER PRIMARY KEY",
+            "bytes BLOB NOT NULL"
+          ],
+          "documented": false,
+          "name": "slot_pages",
+          "note": "One row for each slot page. The row holds the encoded slot records.",
+          "option": ""
+        },
+        {
+          "columns": [
+            "id INTEGER PRIMARY KEY CHECK (id >= 0 AND id < 32)",
+            "bytes BLOB NOT NULL",
+            "hash BLOB NOT NULL CHECK (length(hash) = 32)"
+          ],
+          "documented": false,
+          "name": "small_sections",
+          "note": "One row for each small-state section, with the section hash.",
+          "option": ""
+        },
+        {
+          "columns": [
+            "name TEXT PRIMARY KEY",
+            "bytes BLOB NOT NULL"
+          ],
+          "documented": false,
+          "name": "small_state",
+          "note": "The framed small state, for a store that predates the section split.",
+          "option": ""
+        }
+      ],
+      "transaction": "Immediate"
+    },
+    "store": {
+      "chunk_extent_bytes": "65536",
+      "leaf_tags": [
+        {
+          "char": "P",
+          "name": "LEAF_PAGE"
+        },
+        {
+          "char": "X",
+          "name": "LEAF_EXT"
+        },
+        {
+          "char": "F",
+          "name": "LEAF_FREE"
+        },
+        {
+          "char": "S",
+          "name": "LEAF_SMALL"
+        }
+      ],
+      "schema_version": "34",
+      "slots_per_page": "256",
+      "tree_tags": [
+        {
+          "char": "p",
+          "name": "TREE_PAGES"
+        },
+        {
+          "char": "x",
+          "name": "TREE_EXTS"
+        },
+        {
+          "char": "f",
+          "name": "TREE_FREES"
+        },
+        {
+          "char": "s",
+          "name": "TREE_EDGES"
+        }
+      ]
+    }
+  },
   "totals": {
     "crates": 11,
     "lines": 183376,

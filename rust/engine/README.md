@@ -52,8 +52,8 @@ with this release.
 The workspace has **eleven members**.
 See [Architecture](ARCHITECTURE.md) for dependency direction and the four seams.
 The generated [architecture map](architecture-map.html) presents the same
-material for a first-time reader, with a selectable crate graph and per-module
-links into the sources.
+material for a first-time reader, with a selectable crate graph, per-module
+links into the sources, and the container/paged-store/SQLite snapshot layout.
 It is generated, not written; regenerate both stages after changing the tree:
 
 ```sh
