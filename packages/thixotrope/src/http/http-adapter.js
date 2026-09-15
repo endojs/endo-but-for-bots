@@ -10,7 +10,7 @@ import harden from '@endo/harden';
  * Everything here is per-host-incarnation: which ports are bound, the host
  * binding handles, the routing from a port to the consumer serving it, and the
  * admission policy in force on each. None of it should survive, and in an
- * ephemeral vat none of it can, so there is nothing to decide and nothing to
+ * ephemeral worker none of it can, so there is nothing to decide and nothing to
  * version. The durable manager re-states it through `restore`.
  *
  * Admission lives here rather than in the host. The host cannot judge a request
@@ -24,8 +24,8 @@ import harden from '@endo/harden';
  * warm, a refused request costs a call into something already running rather
  * than waking a sleeping workspace.
  *
- * This vat is also the only guest reference the host holds. Consumers are
- * reached through it, so the host's retention surface is one ephemeral vat and
+ * This adapter is also the only guest reference the host holds. Consumers are
+ * reached through it, so the host's retention surface is one adapter and
  * consumers are retained by their manager, which is where that belongs.
  *
  * Self-contained: a manager ships this source into the vat it creates, where

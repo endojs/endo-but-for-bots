@@ -20,7 +20,7 @@ import { makeTcpNetLayer } from '@endo/ocapn/netlayer/tcp-testing';
 import { syrupCodec } from '@endo/ocapn/syrup';
 
 import { makeThixotropeDaemon } from '../src/core/daemon.js';
-import { makeEphemeralVatKeeper } from '../src/ephemeral-vat-keeper.js';
+import { makeAdapterKeeper } from '../src/adapter-keeper.js';
 import { makeHttpAdapter } from '../src/http/http-adapter.js';
 import { makeHttpManager } from '../src/http/http-manager.js';
 import { makeHttpPorts } from '../src/http/http-port.js';
@@ -76,7 +76,7 @@ const call = (port, body = '', headers = {}) =>
 /** The manager vat's bootstrap: keeper plus manager, both shipped by source. */
 const MANAGER_SOURCE = `
   (${makeHttpManager.toString()})({
-    makeKeeper: (${makeEphemeralVatKeeper.toString()}),
+    makeKeeper: (${makeAdapterKeeper.toString()}),
     vats,
     adapterSource: ${JSON.stringify(`(${makeHttpAdapter.toString()})()`)},
   })

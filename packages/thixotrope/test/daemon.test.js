@@ -165,7 +165,11 @@ test.serial('a host resource reaches a guest as an endowment', async t => {
   t.is(typeof (await E(clock).read()), 'number');
 
   // The worker sleeps and wakes; the resource endowment still works.
-  await worker.sleep();
+  // `parkWorkers` rather than a bare `sleep`: trailing protocol traffic can
+  // re-wake a worker just after it parks, so one sleep is not always enough —
+  // which is why the helper retries. Under a loaded suite that race is
+  // reachable often enough to matter.
+  await parkWorkers(daemon);
   t.false(worker.isAwake());
   t.is(typeof (await E(clock).read()), 'number');
   t.true(worker.isAwake());
