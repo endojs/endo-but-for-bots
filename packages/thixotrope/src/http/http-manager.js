@@ -30,7 +30,7 @@ import harden from '@endo/harden';
  * @param {string} options.adapterSource `makeHttpAdapter`, as source
  */
 export const makeHttpManager = ({ makeKeeper, vats, adapterSource }) => {
-  /** @type {Map<string, {port: any, consumer: any}>} */
+  /** @type {Map<string, {port: any, consumer: any, policy: any}>} */
   const desired = new Map();
 
   // The keeper is built here rather than passed in because restoring a fresh
@@ -41,8 +41,8 @@ export const makeHttpManager = ({ makeKeeper, vats, adapterSource }) => {
     debugLabel: 'http-adapter',
     restore: adapter =>
       E(adapter).restore(
-        [...desired.values()].map(({ port, consumer }) =>
-          harden([port, consumer]),
+        [...desired.values()].map(({ port, consumer, policy }) =>
+          harden([port, consumer, policy]),
         ),
       ),
   });
@@ -61,17 +61,22 @@ export const makeHttpManager = ({ makeKeeper, vats, adapterSource }) => {
      * @param {string} id
      * @param {any} port an HttpPort capability, granted by the user
      * @param {any} consumer the handler to serve there
+     * @param {{origins?: string[]}} [policy] admission policy for this port;
+     *   same-origin only when omitted
      */
-    serve: async (id, port, consumer) => {
+    serve: async (id, port, consumer, policy = {}) => {
       assertId(id);
       if (desired.has(id)) throw Error('Service id is already declared');
       // The declaration commits before the binding is attempted: a port that
       // cannot be bound right now is a condition to retry, not a reason to
       // forget what was asked for. That difference is the whole of desired
       // versus actual.
-      desired.set(id, harden({ port, consumer }));
+      desired.set(
+        id,
+        harden({ port, consumer, policy: harden({ ...policy }) }),
+      );
       const adapter = await keeper.provide();
-      const number = await E(adapter).bind(port, consumer);
+      const number = await E(adapter).bind(port, consumer, policy);
       return harden({ id, port: number });
     },
 

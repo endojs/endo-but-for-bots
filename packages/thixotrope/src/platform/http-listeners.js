@@ -37,8 +37,11 @@
  * @property {number} maxRequests concurrent requests before 503
  * @property {number} requestDeadlineMs
  * @property {number} keepAliveTimeoutMs
- * @property {(request: HttpRequestDescription) => HttpAdmission} admit
- *   runs before any body is read, so a denied request costs no guest work
+ * @property {(request: HttpRequestDescription) => HttpAdmission | Promise<HttpAdmission>} admit
+ *   decides on the request line and headers alone, before any body is read, so
+ *   a denied request costs whoever it was aimed at nothing. It may answer
+ *   asynchronously — a guest can hold this — which is why the request cap and
+ *   the deadline are applied before it is consulted rather than after
  * @property {(request: HttpRequest, abort: HttpAbortSignal) => Promise<HttpResponse>} handle
  * @property {(error: unknown) => void} onError
  *

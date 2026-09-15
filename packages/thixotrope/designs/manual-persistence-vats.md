@@ -233,13 +233,35 @@ Because it is a resource, a guest's reference to it is re-seated by the endpoint
 after a host restart rather than breaking, which is what lets the durable
 manager go on holding it.
 
-Two things stay host-side, and the first is a constraint rather than a
-preference.
-`HttpListenerPowers.admit` is **synchronous**, so it cannot be a guest callback
-at all — the host has no way to await a vat mid-header.
-That it also runs before any body is read, and so lets a denied request cost no
-guest work, is a second reason rather than the deciding one.
-Transport limits likewise apply while bytes are arriving.
+What stays host-side is only what a guest cannot enforce: the byte and time
+ceilings, applied while bytes are arriving.
+
+Admission is **not** among them, though an earlier draft of this document said
+it was.
+`HttpListenerPowers.admit` was synchronous, and that was read as a constraint —
+the host having no way to await a vat mid-header.
+It was not.
+`respond` is an ordinary event handler, and an `IncomingMessage` is paused until
+something reads it, so the bytes wait in the socket while a decision is
+outstanding.
+What the synchrony really did was let the request cap and the deadline be
+applied *after* admission; making it asynchronous required moving both ahead of
+it, so that an unadmitted request is neither uncounted nor untimed.
+
+With that done, admission belongs to the adapter.
+The host cannot judge a request — it does not know what is being served, or by
+whom — and a user who wants a different policy should not have to change the
+daemon to get one.
+The default is same-origin, because loopback is reachable by any page in the
+user's browser; a vat that wants to serve other origins now says so itself.
+
+Refusing in the adapter is cheap in the way that matters.
+The adapter answers and the consumer behind it is never consulted, so a
+cross-site request costs a call into the vat that is already warm rather than
+waking a sleeping workspace.
+This is the first concrete use for the **resident** pin: the adapter is the vat
+that should not idle-sleep, precisely because it is the one that absorbs
+unadmitted traffic.
 
 The generation counter the single-vat sketch needed is gone, as predicted: the
 adapter is a vat, its death is a retirement, and the session epoch breaks stale
@@ -277,9 +299,10 @@ single directory would conflate:
   `getWorker(id).wake()` is already on the worker facade, so an eager pin is a
   durable set of worker ids the supervisor wakes at startup.
 - **resident** — never idle-sleep.
-  Needed only when sleeping would abandon something the vat supervises, such as
-  a child process or a stateful outbound connection.
-  Notably *not* needed by the clock or by HTTP.
+  Needed when sleeping would abandon something the vat supervises, such as a
+  child process or a stateful outbound connection — and also when the vat is
+  the one absorbing unadmitted traffic, as the HTTP adapter is.
+  Not needed by the clock.
 - **scheduled** — wake at a time, which is the restorable promise above.
 
 Residency is the expensive one and the rarest, and it is worth making a caller
