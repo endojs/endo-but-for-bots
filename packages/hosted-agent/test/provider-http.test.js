@@ -106,7 +106,10 @@ test.serial(
     t.teardown(() => listener.dispose());
     const response = await requestHttp(`${listener.url}/v1/responses`, {
       method: 'POST',
-      headers: { ...headers, 'anthropic-beta': 'context-management-2026-01-01' },
+      headers: {
+        ...headers,
+        'anthropic-beta': 'context-management-2026-01-01',
+      },
       body,
     });
     t.is(response.statusCode, 200);
@@ -212,13 +215,17 @@ test.serial(
     // Admission is still an exact comparison against the whole request target,
     // so this widens what an operator may ALLOWLIST, never what a slice may
     // reach: a request whose target is not listed is refused either way.
-    await t.notThrowsAsync(() =>
-      makeProviderHttpListener({
-        ...options,
-        endpoint,
-        allowedPaths: ['/v1/responses?admin=true'],
-      }),
-    );
+    // Unlike every other case here, this one SUCCEEDS, so it binds a real
+    // server on a real port. Await it for the handle rather than asserting it
+    // does not throw: an undisposed listener keeps the ava worker alive after
+    // the tests pass, which reads as "Failed to exit", not as a failure.
+    const accepted = await makeProviderHttpListener({
+      ...options,
+      endpoint,
+      allowedPaths: ['/v1/responses?admin=true'],
+    });
+    t.teardown(() => accepted.dispose());
+    t.regex(accepted.url, /^http:\/\/127\.0\.0\.1:\d+$/);
     // What stays refused is a target that is not a single exact one: a
     // fragment, a repeated `?`, or a query outside the admitted shape.
     for (const badPath of [

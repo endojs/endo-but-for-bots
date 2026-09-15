@@ -194,7 +194,11 @@ const fixture = (t, { realClient = false } = {}) => {
       // The real reclaim runs a privileged umount against a recorded path;
       // here it only records that it was asked, and for which mount point.
       async reclaimMount(recorded) {
-        events.push(['reclaim', recorded.workspaceMountPoint, recorded.mounterEnv]);
+        events.push([
+          'reclaim',
+          recorded.workspaceMountPoint,
+          recorded.mounterEnv,
+        ]);
         if (faults.reclaimFail) throw Error('umount refused');
       },
       reportError: error => {

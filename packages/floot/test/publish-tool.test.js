@@ -154,6 +154,7 @@ test('a failed projection leaves the previous publication serving', async t => {
   // publish that cannot project would revoke a working URL and replace it
   // with nothing.
   const asset = makeAssetServer();
+  /** @type {any} */
   let workspace = makeFilesystemCap();
   const tool = makePublishTool({
     getAssetServer: async () => asset.server,

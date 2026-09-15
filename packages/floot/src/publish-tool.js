@@ -144,7 +144,7 @@ export const makePublishTool = ({ getAssetServer, getWorkspace }) => {
     try {
       filesystem = await toServableFilesystem(workspace);
     } catch (error) {
-      return `Publishing failed: ${error.message}`;
+      return `Publishing failed: ${/** @type {Error} */ (error).message}`;
     }
     // Refresh: drop any prior mount so a re-publish serves current files and
     // never accumulates listeners.

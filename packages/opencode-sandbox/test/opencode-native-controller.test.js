@@ -194,7 +194,7 @@ const fixture = (t, { realClient = false } = {}) => {
         events.push([
           'reclaim',
           recorded.workspaceMountPoint,
-          recorded.mounterEnv.XDG_RUNTIME_DIR,
+          recorded.mounterEnv?.XDG_RUNTIME_DIR,
         ]);
         if (faults.reclaimFail) throw Error('umount refused');
       },
