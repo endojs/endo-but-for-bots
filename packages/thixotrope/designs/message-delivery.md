@@ -53,8 +53,8 @@ Atomic transactions are one implementation; replayable intermediate records are 
 
 ### 1. Make local handoff acceptance explicit
 
-Audit [hub outbox flushing](../src/hub.js),
-[worker delivery](../src/durable-worker-transport.js), and the Ironhorse output-drain boundary.
+Audit [hub outbox flushing](../src/net/hub.js),
+[worker delivery](../src/core/durable-worker-transport.js), and the Ironhorse output-drain boundary.
 The hub currently removes a queued frame after its synchronous `session.send` returns.
 The worker transport journals before scheduling execution, while some closed write paths return
 without accepting anything.
@@ -90,7 +90,7 @@ A crash between hub commit and inbox cleanup redelivers the same sequence; the h
 suppresses duplicate processing.
 This explicitly separates accepted and processed watermarks.
 
-The current pre-handler `ack` in [durable-netlayer.js](../src/durable-netlayer.js) must no longer
+The current pre-handler `ack` in [durable-netlayer.js](../src/net/durable-netlayer.js) must no longer
 allow payload disposal on the strength of a receive counter alone.
 Resume advertisements must also report durable acceptance, never merely observed receipt.
 Duplicate accepted frames should generate acceptance acknowledgements again, including when the

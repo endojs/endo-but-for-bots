@@ -150,6 +150,10 @@ fn eval(session: &mut StoreSession, source: &str, budget: u64) -> Result<String,
     if !outcome.completed {
         return Err(format!("guest crank halted: {:?}", outcome.halt));
     }
+    // Reclaim completed-crank garbage before persisting the next heap image.
+    // Collection is deterministic and runs only after a successful crank;
+    // an exhausted or otherwise halted crank must remain a fatal failure.
+    m.collect_garbage();
     Ok(outcome.result)
 }
 

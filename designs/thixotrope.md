@@ -59,7 +59,7 @@ Guest-to-guest references, answers, and promise settlements route through the hu
 | Ironhorse VM, snapshot, and SQLite store crates | JavaScript execution, supported machine-state encoding, integrity validation, and heap storage. |
 | `rust/thixotrope-xs-worker` | The alternative XS worker engine. |
 
-The comms hub is internal to Thixotrope at `packages/thixotrope/src/hub.js`.
+The comms hub is internal to Thixotrope at `packages/thixotrope/src/net/hub.js`.
 Its persistence transactions and session lifecycle belong to the host design.
 OCapN no longer exports a hub implementation.
 
@@ -197,6 +197,46 @@ Bounded cleanup prevents a stalled guest cancellation from holding the superviso
 Removing a subscription makes its state eligible for ordinary collection; it does not prove physical
 heap reclamation has already happened.
 
+### Guest-owned HTTP listeners
+
+A granted listener capability lets a persistent guest publish an HTTP handler on a selected loopback port.
+The host records desired listener state and the handler publication before opening the socket.
+Restart reconstructs open listeners; binding failures remain inspectable.
+An explicit close persists the closed state before releasing sockets and the publication.
+Listener identities are single-use, so a stale capability cannot close a replacement on the same port.
+Interrupted initial registration is cancelled when its publication outcome cannot be safely resumed.
+
+HTTP request/response state belongs to a disposable protocol session.
+Socket loss, timeout, response completion, and shutdown release its references and pending answers.
+Startup removes sessions abandoned by a process crash.
+An already accepted guest invocation may complete after the HTTP client disappears; the host does not
+reissue the request or reject unrelated durable guest promise listeners.
+The durable listener recipe and guest handler persist, while sockets and request sessions do not.
+
+The initial HTTP profile bounds bodies, concurrency, and duration, and copies only method, path,
+and text body into the guest.
+Exact Host checks and browser Origin/Fetch Metadata checks reject cross-origin browser access.
+These checks do not authenticate local processes; the guest HTTP interface is available to local clients.
+
+### Durable time promises
+
+The supervisor can grant a public clock backed by a separate persistent guest vat.
+`when(deadline)` allocates a guest promise and records its resolver before requesting a host timer.
+The pending alarm Map is the authoritative state; host timer handles and registration replies are not.
+A private control facet lets the host enumerate pending alarms and deliver due events idempotently.
+Applications receive only time and scheduling authority, not the control facet or host scheduler.
+
+Startup and periodic reconciliation rebuild the host index and repair lost registration answers.
+A missed firing acknowledgment retries the same alarm identity; the guest resolves each alarm once.
+A deadline that passes during downtime settles the original promise after restart, preserving listeners
+in other guest vats through comms.
+Observation sessions are bounded and disposable, and shutdown drains their cleanup before store release.
+
+The initial profile uses absolute bigint Unix milliseconds with a signed 64-bit nonnegative range,
+a shared limit of 1,024 pending alarms, and a one-second host scan interval.
+Wall-clock adjustments affect when deadlines become due; this is not a real-time scheduling guarantee.
+Cancellation and recurring scheduling are not yet provided.
+
 ## Workspace and installed applications
 
 The local supervisor owns a persistent workspace and exposes administration over a private Unix socket.
@@ -224,6 +264,90 @@ The current admission profile limits serialized installation requests to 16 KiB 
 remotable capabilities.
 Interrupted host allocation or evaluator acquisition can require an explicit retry.
 Removing a registry entry releases its reference; it does not revoke references held elsewhere.
+
+## Contacts and capability offers
+
+Local supervisors communicate through private, same-user Unix sockets with durable session recovery.
+The transport fragments large logical messages without imposing a smaller limit after durable admission.
+Publication imports and third-party gift redemptions share one outgoing session per exporter, preserving
+its routing alias and dial location across restart.
+An invitation grants one reciprocal exchange of contact inbox capabilities.
+Contact labels are local names, not authenticated human identities.
+The mailbox owner can cancel an invitation and withdraw its publication without revoking an
+established contact.
+
+Each mailbox lives in a guest vat, separate from the workspace and shared application vats.
+Received offers and delivery listeners persist as ordinary mailbox guest state.
+The mailbox accepts correspondent capabilities directly and has no pet-name registry.
+A separate workspace address book resolves names through the user's observable `contacts` inventory
+entry by convention.
+The same identity can be kept in an ordinary variable and passed to `mailbox.send` without naming it.
+Incoming facets bind the local sender identity; peers cannot supply their own display labels.
+Inbox and outbox records retain identities, while the address book resolves current labels for the UI.
+Renaming a contact therefore does not rewrite mailbox records or replace remote references.
+An offer carries one explicitly selected capability; accepting it may retain it in the user's inventory.
+The recipient's terminal receives descriptions only and disconnects when closed.
+The node outbox handles delivery retries after admission; mailbox code does not resend on reconnect.
+
+## Platform powers and service atoms
+
+Core factories receive their platform powers explicitly.
+Node module imports and ambient host authority are confined to the Node power factory and host
+composition entrypoints; the XS worker bootstrap is a separate platform perimeter.
+Core lint rejects built-in module imports and re-exports, dynamic module acquisition, and ambient
+I/O, randomness, clocks, and scheduling.
+Tests exercise the effective lint configuration with negative authority probes.
+
+The powers include storage, scheduling, entropy, process launch, network listeners, and terminal I/O.
+Calling a core factory does not construct default Node powers or fetch a shared platform singleton.
+An alternative host can supply these capabilities explicitly.
+The current Unix transport and Node worker adapters still implement platform-specific behavior;
+the boundary makes those dependencies replaceable, rather than claiming those adapters already run
+on every operating system.
+
+Persistent service metadata uses a `SyncStringAtom`: a synchronous `read()` returns a string or
+`undefined`, and a successful `write(string)` durably replaces the slot before the next effect.
+The file-backed atom is one implementation.
+HTTP and clock managers perform their own JSON encoding, schema validation, and state transitions
+above this storage interface.
+They do not require a file path as the service-state abstraction.
+
+## Publications and host observation sessions
+
+`daemon.publish(value, secret?)` records a durable swissnum-to-capability mapping in the hub.
+Together, the node location and swissnum form an OCapN sturdy reference: a remote peer fetches
+that swissnum from the node bootstrap to obtain the capability.
+Publication is also a retention root.
+`unpublish(secret)` removes the locator and its root; it does not revoke capabilities already fetched.
+Importing a publication reuses the canonical outgoing peer session, including one previously
+established for a third-party gift.
+An existing connection or in-flight connection attempt is reused rather than handshaken again.
+
+A session is a logical protocol relationship with reference tables, answer routes, and lifecycle
+state; it is not synonymous with a socket.
+Durable peer sessions survive socket loss and daemon restart.
+The host endpoint is a reifying session used by host resources and administration.
+Worker sessions connect the hub to persistent guest heaps.
+
+An ephemeral client is a short-lived, reifying host client with its own hub session.
+Its implementation uses the `transient:` session prefix to mark that the client cannot be restored.
+“Ephemeral client” describes the API owner; “transient session” describes its hub representation.
+HTTP allocates one such client per request; alarm observation also uses disposable clients.
+Closing a client retires its session and releases its references and answer routes.
+The daemon tracks both clients being opened and clients already open, so shutdown cannot miss
+an opening that completes concurrently.
+After a crash, startup removes orphaned transient sessions before resuming ordinary work.
+This cleanup does not retire durable peer sessions or reject their unsettled guest promises.
+
+At the host endpoint, an unresolved computation can become unreachable even while a guest retains
+its separate result promise.
+The guest result does not point back to the host computation or its reaction closures.
+The current restart-abort policy explicitly retains the guest resolver route until settlement,
+so a subsequent host restart can reject that abandoned operation.
+This root retains a protocol obligation, not the original host computation.
+It is specific to ephemeral host operations and does not apply to guest-to-guest pending promises.
+There is currently no caller-abandonment notification to release a never-settling host obligation
+before the endpoint lifetime ends.
 
 ## Retention and retirement
 
