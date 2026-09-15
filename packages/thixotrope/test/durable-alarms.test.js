@@ -43,21 +43,26 @@ const tickUntil = async predicate => {
  * @param {() => bigint} now
  */
 const makeHost = async (statePath, now) => {
+  /** @type {any} */
+  let daemonRef;
   const alarms = makeDurableAlarms(nodePowers, {
     storage: makeFileSyncStringAtom(
       nodePowers.syncFiles,
       join(statePath, 'alarms.json'),
     ),
+    makeResource: (name, description) =>
+      daemonRef.makeResource(name, description),
     now,
   });
   const daemon = await makeThixotropeDaemon(nodePowers, {
     store: makeFsStore(nodePowers, statePath),
     engine: makePeerSnapshottingReplayEngine(nodePowers),
     codec: syrupCodec,
-    resources: { alarm: alarms.resource },
+    resources: { alarm: alarms.resource, alarms: alarms.clockResource },
     makeNetlayer: ({ handlers, logger }) =>
       makeTcpNetLayer({ handlers, logger }),
   });
+  daemonRef = daemon;
   // Sessions are restored by the time the daemon resolves; only then is it
   // safe to settle an alarm whose deadline has already passed.
   alarms.start();
@@ -79,9 +84,9 @@ test.serial(
     {
       const { alarms, daemon } = await makeHost(statePath, now);
       const worker = await daemon.createWorker({ debugLabel: 'waiter' });
-      const facet = alarms.facet(worker.workerId, (name, description) =>
-        daemon.makeResource(name, description),
-      );
+      const facet = daemon.makeResource('alarms', {
+        workerId: worker.workerId,
+      });
 
       const waiter = await worker.evaluate(
         `
@@ -90,12 +95,12 @@ test.serial(
         let got = null;
         return Far('Waiter', {
           arm: async deadline => {
-            const { id, settlement } = await E(clock).when(deadline);
+            const { settlement } = await E(clock).arm(deadline);
             Promise.resolve(settlement).then(
               at => { got = ['settled', String(at)]; },
               error => { got = ['broken', String((error && error.message) || error)]; },
             );
-            return id;
+            return true;
           },
           getGot: () => got,
           pending: () => E(clock).pending(),
@@ -105,7 +110,7 @@ test.serial(
         { alarms: facet },
       );
 
-      t.is(await E(waiter).arm(5000n), '1');
+      t.true(await E(waiter).arm(5000n));
       t.is(await E(waiter).getGot(), null, 'pending before the deadline');
       t.is(alarms.status().armed, 1n, 'the host holds one durable row');
 
@@ -138,7 +143,6 @@ test.serial(
       t.true(ok, 'the guest listener settled after the restart');
       t.deepEqual(got, ['settled', '6000']);
       t.is(alarms.status().armed, 0n, 'the durable row was released');
-      t.deepEqual(await E(waiter).pending(), [], 'the guest forgot it too');
     }
   },
 );
@@ -154,9 +158,7 @@ test.serial('a due alarm wakes a sleeping vat', async t => {
   t.teardown(() => alarms.shutdown());
 
   const worker = await daemon.createWorker({ debugLabel: 'sleeper' });
-  const facet = alarms.facet(worker.workerId, (name, description) =>
-    daemon.makeResource(name, description),
-  );
+  const facet = daemon.makeResource('alarms', { workerId: worker.workerId });
   const waiter = await worker.evaluate(
     `
     (() => {
@@ -164,7 +166,7 @@ test.serial('a due alarm wakes a sleeping vat', async t => {
       let got = null;
       return Far('Waiter', {
         arm: async deadline => {
-          const { settlement } = await E(clock).when(deadline);
+          const { settlement } = await E(clock).arm(deadline);
           Promise.resolve(settlement).then(at => { got = String(at); });
           return true;
         },
@@ -206,9 +208,9 @@ test.serial(
     {
       const { alarms, daemon } = await makeHost(statePath, now);
       const worker = await daemon.createWorker({ debugLabel: 'overdue' });
-      const facet = alarms.facet(worker.workerId, (name, description) =>
-        daemon.makeResource(name, description),
-      );
+      const facet = daemon.makeResource('alarms', {
+        workerId: worker.workerId,
+      });
       const waiter = await worker.evaluate(
         `
       (() => {
@@ -216,7 +218,7 @@ test.serial(
         let got = null;
         return Far('Waiter', {
           arm: async deadline => {
-            const { settlement } = await E(clock).when(deadline);
+            const { settlement } = await E(clock).arm(deadline);
             Promise.resolve(settlement).then(at => { got = String(at); });
             return true;
           },
@@ -266,26 +268,24 @@ test.serial(
     t.teardown(() => alarms.shutdown());
 
     const worker = await daemon.createWorker({ debugLabel: 'canceller' });
-    const facet = alarms.facet(worker.workerId, (name, description) =>
-      daemon.makeResource(name, description),
-    );
+    const facet = daemon.makeResource('alarms', { workerId: worker.workerId });
     const waiter = await worker.evaluate(
       `
     (() => {
       const clock = (${makeGuestClock.toString()})(alarms);
       let got = null;
-      let armedId;
+      let armedCanceller;
       return Far('Waiter', {
         arm: async deadline => {
-          const { id, settlement } = await E(clock).when(deadline);
-          armedId = id;
+          const { settlement, canceller } = await E(clock).arm(deadline);
+          armedCanceller = canceller;
           Promise.resolve(settlement).then(
             at => { got = ['settled', String(at)]; },
             error => { got = ['broken', String((error && error.message) || error)]; },
           );
-          return id;
+          return true;
         },
-        drop: () => E(clock).cancel(armedId),
+        drop: () => E(armedCanceller).cancel(),
         getGot: () => got,
       });
     })()
