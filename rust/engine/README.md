@@ -51,6 +51,20 @@ with this release.
 
 The workspace has **eleven members**.
 See [Architecture](ARCHITECTURE.md) for dependency direction and the four seams.
+The generated [architecture map](architecture-map.html) presents the same
+material for a first-time reader, with a selectable crate graph and per-module
+links into the sources.
+It is generated, not written; regenerate both stages after changing the tree:
+
+```sh
+python3 rust/engine/scripts/engine-map-model.py   # sources -> architecture-map.json
+python3 rust/engine/scripts/engine-map.py         # model   -> architecture-map.html
+```
+
+CI checks drift with the same commands plus `--check`, alongside
+`scripts/test-engine-map.py`.
+The model stage also reports where `ARCHITECTURE.md`'s identifier table has
+fallen behind the constants declared in source.
 
 | Crate | Purpose |
 |---|---|

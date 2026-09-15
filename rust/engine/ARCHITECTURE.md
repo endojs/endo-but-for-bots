@@ -1,5 +1,11 @@
 # IronHorse architecture
 
+New contributors should start with the generated
+[architecture map](architecture-map.html), which orients a reader who has not
+seen the tree and links every claim back to source.
+This guide is the authority; the map is generated from the sources and from
+this file, so a disagreement between them means the map needs regenerating.
+
 Current-state guide audited at `96db92e23` on 2026-09-09.
 GC policy incorporates the W6 decision at `d38196799`.
 Ownership and suspended-activation corrections updated on 2026-09-13.

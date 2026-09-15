@@ -722,6 +722,12 @@ jobs:
           python3 rust/engine/scripts/test-crate-graph.py
           python3 rust/engine/scripts/crate-graph.py --check
 
+      - name: Check generated engine architecture map
+        run: |
+          python3 rust/engine/scripts/test-engine-map.py
+          python3 rust/engine/scripts/engine-map-model.py --check
+          python3 rust/engine/scripts/engine-map.py --check
+
       - name: Install pinned rustfmt
         run: rustup toolchain install 1.88.0 --profile minimal --component rustfmt
 
