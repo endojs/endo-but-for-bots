@@ -37,7 +37,8 @@ import { makeInFlight } from '../in-flight.js';
 import { settleWithin, withExpiry } from '../platform/timers.js';
 
 import { makeApplicationRegistry } from './application-registry.js';
-import { makeClockService } from '../alarms/clock-service.js';
+import { makeDurableAlarms } from '../alarms/durable-alarms.js';
+import { makeGuestClock } from '../alarms/guest-clock.js';
 import { makeThixotropeDaemon } from '../core/daemon.js';
 import { makeDurableNetLayer } from '../net/durable-netlayer.js';
 import { makeIronhorseEngine } from '../ironhorse/ironhorse-engine.js';
@@ -186,22 +187,21 @@ export const serveThixotrope = async (
   // enforce. No metadata file, because what is desired lives in the workspace
   // vat and what is bound lives in an adapter that dies with this process.
   const httpPorts = makeHttpPorts({ httpListeners, logging, timers });
-  /** @type {ReturnType<typeof makeClockService> | undefined} */
-  let clockService;
-  const provideClockService = () => {
-    clockService ??= makeClockService(
-      { timers, random },
-      {
-        storage: makeFileSyncStringAtom(
-          syncFiles,
-          paths.join(statePath, 'clock.json'),
-        ),
-        getDaemon: () => daemon,
-        ...(alarmNow === undefined ? {} : { now: alarmNow }),
-      },
-    );
-    return clockService;
-  };
+  // The host's whole involvement in alarms: a durable table of deadlines and
+  // one timer for the earliest. It calls nothing; settling a promise resource
+  // wakes whichever vat was listening on it.
+  const alarms = makeDurableAlarms(
+    { timers },
+    {
+      storage: makeFileSyncStringAtom(
+        syncFiles,
+        paths.join(statePath, 'alarms.json'),
+      ),
+      makeResource: (name, description) =>
+        daemon.makeResource(name, description),
+      ...(alarmNow === undefined ? {} : { now: alarmNow }),
+    },
+  );
   /** @type {Awaited<ReturnType<typeof makeUnixNetLayer>> | undefined} */
   let peerNetlayer;
   const closePeers = async () => {
@@ -242,8 +242,8 @@ export const serveThixotrope = async (
         codec: syrupCodec,
         idleSleepMs,
         resources: {
-          'alarm-scheduler': description =>
-            provideClockService().resource(description),
+          alarm: alarms.resource,
+          alarms: alarms.clockResource,
           'http-port': httpPorts.resource,
         },
         makeNetlayer: async ({ handlers, logger, resumption }) => {
@@ -270,7 +270,12 @@ export const serveThixotrope = async (
         },
       },
     );
-    await provideClockService().start();
+
+    // Arm the host timer from the durable table, now that every worker session
+    // is seated: an alarm already past its deadline settles immediately, and
+    // its listener must have somewhere to arrive.
+    alarms.start();
+
     const configPath = paths.join(statePath, 'workspace.json');
     let config;
     try {
@@ -369,6 +374,32 @@ export const serveThixotrope = async (
       });
       return opening;
     };
+    /**
+     * The clock lives in the workspace vat, holding its own alarm map and
+     * resolvers. The host keeps only deadlines.
+     *
+     * One clock shared through the inventory, as before: a consumer that wants
+     * its own can be granted the alarm facet directly, but the grant users know
+     * is a clock.
+     *
+     * @type {Promise<any> | undefined}
+     */
+    let workspaceClock;
+    const getClock = () => {
+      if (workspaceClock) return workspaceClock;
+      const opening = workspace.evaluate(
+        `(globalThis.clock ??= (${makeGuestClock.toString()})(alarms))`,
+        {
+          alarms: daemon.makeResource('alarms', { workerId: config.workerId }),
+        },
+      );
+      workspaceClock = opening;
+      void opening.catch(() => {
+        if (workspaceClock === opening) workspaceClock = undefined;
+      });
+      return opening;
+    };
+
     /**
      * The HTTP manager lives in the workspace vat, for the same reason the
      * mail address book does: it is durable policy, and the workspace is the
@@ -494,7 +525,7 @@ export const serveThixotrope = async (
         if (requested) throw Error('Supervisor is stopping');
         if (typeof key !== 'string' || !key.length || key.length > 128)
           throw Error('Invalid inventory key');
-        const clock = await provideClockService().getClock();
+        const clock = await getClock();
         await workspace.evaluate('(inventory.set(key, clock), true)', {
           key,
           clock,
@@ -502,11 +533,15 @@ export const serveThixotrope = async (
         return true;
       },
       alarmStatus: () => {
-        const status = provideClockService().status();
+        const status = alarms.status();
         return harden({
-          ...status,
-          ...status.scheduler,
-          error: status.error ?? status.scheduler?.error,
+          // `pending` is the host's durable row count. There are no host
+          // observations any more — nothing calls into the clock — so the
+          // count that used to track them is reported as the zero it now is.
+          pending: Number(status.armed),
+          observations: 0,
+          materialised: Number(status.materialised),
+          stopped: status.stopped,
         });
       },
       invite: async name => {
@@ -631,7 +666,7 @@ export const serveThixotrope = async (
           try {
             try {
               try {
-                await clockService?.shutdown();
+                alarms.shutdown();
               } finally {
                 await httpPorts.shutdown();
               }
@@ -655,7 +690,7 @@ export const serveThixotrope = async (
       closeSocket();
       try {
         try {
-          await clockService?.shutdown();
+          alarms.shutdown();
         } finally {
           await httpPorts.shutdown();
         }

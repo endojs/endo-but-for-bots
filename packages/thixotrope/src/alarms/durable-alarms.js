@@ -29,6 +29,18 @@ const assertAlarmId = value => {
 
 /**
  * @param {unknown} value
+ * @returns {asserts value is { workerId: string }}
+ */
+const assertClockDescription = value => {
+  (typeof value === 'object' &&
+    value !== null &&
+    'workerId' in value &&
+    typeof (/** @type {any} */ (value).workerId) === 'string') ||
+    Fail`Invalid clock description ${q(value)}`;
+};
+
+/**
+ * @param {unknown} value
  * @returns {asserts value is { workerId: string, alarmId: string }}
  */
 const assertAlarmDescription = value => {
@@ -71,9 +83,15 @@ const alarmDescription = (workerId, alarmId) => harden({ workerId, alarmId });
  * @param {{ timers: TimerPowers }} powers
  * @param {object} options
  * @param {SyncStringAtom} options.storage
+ * @param {(name: string, description?: unknown) => any} options.makeResource
+ *   the daemon's, late-bound because the daemon does not exist yet when this
+ *   is constructed
  * @param {() => bigint} [options.now] milliseconds since the epoch
  */
-export const makeDurableAlarms = ({ timers }, { storage, now }) => {
+export const makeDurableAlarms = (
+  { timers },
+  { storage, makeResource, now },
+) => {
   const readNow = now ?? (() => BigInt(timers.now()));
 
   /** @type {Map<string, {workerId: string, alarmId: string, deadline: bigint}>} */
@@ -193,14 +211,23 @@ export const makeDurableAlarms = ({ timers }, { storage, now }) => {
     resource: provideAlarm,
 
     /**
-     * The facet a guest is granted. `workerId` binds it to one vat, so an
-     * alarm armed for one guest cannot be listened to as another's.
+     * The facet a guest is granted, as a resource keyed by the vat it is for.
      *
-     * @param {string} workerId
-     * @param {(name: string, description: unknown) => unknown} makeResource
+     * A resource rather than a plain `Far`, because a guest holds this across
+     * host restarts: an export the endpoint cannot describe comes back as a
+     * tombstone, and a clock that could never arm another alarm after the first
+     * restart would be worse than no clock at all.
+     *
+     * `workerId` binds it to one vat, so an alarm armed for one guest cannot be
+     * listened to as another's.
+     *
+     * @param {unknown} description
+     * @returns {object}
      */
-    facet: (workerId, makeResource) =>
-      Far('DurableAlarms', {
+    clockResource: description => {
+      assertClockDescription(description);
+      const { workerId } = description;
+      return Far('DurableAlarms', {
         help: () =>
           'arm(alarmId, deadline) returns a promise that settles with the host time at or after the deadline, and survives host restart; cancel(alarmId) breaks it; now() reads host time.',
         /**
@@ -245,7 +272,8 @@ export const makeDurableAlarms = ({ timers }, { storage, now }) => {
           return true;
         },
         now: () => readNow(),
-      }),
+      });
+    },
 
     /** Re-arm the host timer from durable state. Call after sessions restore. */
     start: () => {
