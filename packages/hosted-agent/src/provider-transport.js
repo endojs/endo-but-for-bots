@@ -223,14 +223,17 @@ export const makeProviderFetchTransport = ({
               ((name === 'chatgpt-account-id' &&
                 /^[A-Za-z0-9_-]{1,256}$/.test(value)) ||
                 (name === 'originator' && value === 'codex_cli_rs'));
-            ((subscriptionHeader ||
-              [
-                'authorization',
-                'x-api-key',
-                'anthropic-version',
-                'anthropic-beta',
-                'content-type',
-              ].includes(name)) &&
+            // The last gate before the network checks that a header is SHAPED
+            // safely, not that its name was foreseen. Curating names here was
+            // the fourth copy of the same pinned list — after the route, the
+            // listener's path check and the beta capabilities — and each one
+            // turned a CLI release into an opaque outage. What the shape rules
+            // still guarantee is what matters: a name cannot contain a
+            // separator and a value cannot contain CR, LF or NUL, so no header
+            // can terminate itself or begin another. Which headers exist at all
+            // is decided by the broker, which screens the slice's set against
+            // BROKER_OWNED_HEADERS and applies the credential after it.
+            ((subscriptionHeader || /^[a-z0-9][a-z0-9-]{0,63}$/.test(name)) &&
               typeof value === 'string' &&
               /^[\x20-\x7e]*$/.test(value)) ||
               Fail`Invalid provider header`;
