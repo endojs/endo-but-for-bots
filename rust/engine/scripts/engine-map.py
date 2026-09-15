@@ -20,6 +20,7 @@ import difflib
 import html
 import json
 from pathlib import Path
+import re
 
 ENGINE = Path(__file__).resolve().parents[1]
 MODEL = ENGINE / "architecture-map.json"
@@ -46,6 +47,14 @@ PLATES = [
     ("checks", "Verification", "The checks that CI does on your branch"),
     ("status", "Acceptance", "Accepted, partial, and not accepted"),
 ]
+
+
+COMMIT_RE = re.compile(r"\b[0-9a-f]{12,40}\b")
+
+
+def strip_commit(text):
+    """Blank commit hashes so a drift check compares content, not provenance."""
+    return COMMIT_RE.sub("0" * 12, text)
 
 
 def esc(text):
@@ -1425,9 +1434,13 @@ def main():
     expected = render(json.loads(MODEL.read_text()))
     if args.check:
         actual = OUTPUT.read_text() if OUTPUT.exists() else ""
-        if actual != expected:
+        # The page carries the commit its links point at, in short and long
+        # form, and that changes with every commit to the repository. The
+        # check ignores it so unrelated work does not fail this gate.
+        if strip_commit(actual) != strip_commit(expected):
             print("".join(difflib.unified_diff(
-                actual.splitlines(True), expected.splitlines(True),
+                strip_commit(actual).splitlines(True),
+                strip_commit(expected).splitlines(True),
                 fromfile=str(OUTPUT), tofile="generated")))
             return 1
     else:

@@ -254,5 +254,36 @@ class CheckedInTests(unittest.TestCase):
                          {name for name, _, _ in model.SEAMS})
 
 
+class ProvenanceTests(unittest.TestCase):
+    """The drift check must ignore the commit and still catch real changes."""
+
+    def test_only_the_commit_changing_is_not_drift(self):
+        data = RenderTests().fixture()
+        before = page.render(data)
+        data["commit"] = "f" * 40
+        self.assertNotEqual(before, page.render(data))
+        self.assertEqual(page.strip_commit(before),
+                         page.strip_commit(page.render(data)))
+
+    def test_a_structural_change_is_still_drift(self):
+        data = RenderTests().fixture()
+        before = page.render(data)
+        data["crates"][0]["lines"] = 999
+        self.assertNotEqual(page.strip_commit(before),
+                            page.strip_commit(page.render(data)))
+
+    def test_model_provenance_is_blanked_for_comparison(self):
+        same = '{"commit": "' + "a" * 40 + '", "n": 1}'
+        other = '{"commit": "' + "b" * 40 + '", "n": 1}'
+        self.assertEqual(model.without_provenance(same),
+                         model.without_provenance(other))
+
+    def test_model_content_change_survives_blanking(self):
+        one = '{"commit": "' + "a" * 40 + '", "n": 1}'
+        two = '{"commit": "' + "a" * 40 + '", "n": 2}'
+        self.assertNotEqual(model.without_provenance(one),
+                            model.without_provenance(two))
+
+
 if __name__ == "__main__":
     unittest.main()

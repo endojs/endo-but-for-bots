@@ -730,6 +730,20 @@ def render(model):
     return json.dumps(model, indent=2, sort_keys=True) + "\n"
 
 
+COMMIT_RE = re.compile(r"\b[0-9a-f]{40}\b")
+
+
+def without_provenance(text):
+    """Blank the recorded commit so `--check` compares structure only.
+
+    The model records the commit its links point at, and that changes with
+    every commit to the repository. Comparing it would fail this gate on
+    unrelated work, while ignoring it still catches any change to the
+    structures the map describes.
+    """
+    return COMMIT_RE.sub("0" * 40, text)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true",
@@ -738,9 +752,10 @@ def main():
     expected = render(build(metadata()))
     if args.check:
         actual = OUTPUT.read_text() if OUTPUT.exists() else ""
-        if actual != expected:
+        if without_provenance(actual) != without_provenance(expected):
             print("".join(difflib.unified_diff(
-                actual.splitlines(True), expected.splitlines(True),
+                without_provenance(actual).splitlines(True),
+                without_provenance(expected).splitlines(True),
                 fromfile=str(OUTPUT), tofile="generated")))
             return 1
     else:
