@@ -79,7 +79,7 @@ import { makeWorkerSessionRecords } from './worker-session-records.js';
  *   evaluate in a fresh implicitly-created worker and return the
  *   result; the worker persists like any other (find it via
  *   `listWorkerIds`, retire it via `getWorker(id).retire()`)
- * @property {(options?: { debugLabel?: string }) => Promise<ThixotropeWorkerFacade>} createWorker
+ * @property {(options?: { debugLabel?: string, ephemeral?: boolean }) => Promise<ThixotropeWorkerFacade>} createWorker
  * @property {(workerId: string) => ThixotropeWorkerFacade} getWorker
  * @property {() => Array<string>} listWorkerIds
  * @property {(name: string, description?: unknown) => object} makeResource
@@ -965,7 +965,7 @@ const buildDaemon = async (
   const makeWorkerControllerResource = () =>
     Far('ThixotropeWorkerController', {
       help: () =>
-        'ThixotropeWorkerController: createWorker(debugLabel?) creates a new worker and returns its facade.',
+        'ThixotropeWorkerController: createWorker(debugLabel?) creates a durable worker and returns its facade; createEphemeralWorker(debugLabel?) creates one whose heap the next daemon startup discards.',
       /** @param {string} [debugLabel] */
       createWorker: async debugLabel => {
         debugLabel === undefined ||
@@ -976,6 +976,32 @@ const buildDaemon = async (
           const workerStore = store.provideWorkerStore(workerId);
           workerStore.setMeta({ ...workerStore.getMeta(), debugLabel });
         }
+        provideWorkerSession(workerId);
+        return records.provideResource('worker-facade', { workerId });
+      },
+      /**
+       * A worker whose heap is not a recovery baseline: the next daemon
+       * startup retires it rather than restoring it. For a guest that adapts
+       * an ephemeral host resource and wants its working state — connections,
+       * buffers, descriptors — to die with the process that held them, rather
+       * than reasoning about which of it is safe to persist.
+       *
+       * References into it break when it is retired, and the hub's session
+       * epoch guarantees they can never designate its successor.
+       *
+       * @param {string} [debugLabel]
+       */
+      createEphemeralWorker: async debugLabel => {
+        debugLabel === undefined ||
+          typeof debugLabel === 'string' ||
+          Fail`debugLabel must be a string`;
+        const workerId = randomHex128();
+        const workerStore = store.provideWorkerStore(workerId);
+        workerStore.setMeta({
+          ...workerStore.getMeta(),
+          ...(debugLabel === undefined ? {} : { debugLabel }),
+          ephemeral: true,
+        });
         provideWorkerSession(workerId);
         return records.provideResource('worker-facade', { workerId });
       },
@@ -993,6 +1019,23 @@ const buildDaemon = async (
       endpointHandlers.handleMessageData(endpointConnection, bytes),
   });
   for (const bytes of endpointOutbound.splice(0)) endpointSink.deliver(bytes);
+
+  // An ephemeral worker's heap is not a recovery baseline. Discard it before
+  // anything can reattach to it, so its holders meet a tombstone rather than a
+  // half-restored incarnation of whatever it was adapting. A clean shutdown
+  // could have retired these, but a crash does not, so startup is the path
+  // that has to be right.
+  const ephemeralWorkerIds = store
+    .listWorkerIds()
+    .filter(
+      workerId =>
+        workerId !== ENDPOINT_ID &&
+        store.provideWorkerStore(workerId).getMeta().ephemeral === true,
+    );
+  for (const workerId of ephemeralWorkerIds) {
+    hub.forgetSession(workerId);
+    store.deleteWorker(workerId);
+  }
 
   // Reattach worker transports asleep, after the endpoint can receive frames.
   for (const workerId of store.listWorkerIds()) {
@@ -1120,14 +1163,19 @@ const buildDaemon = async (
       provideWorkerSession(workerId);
       return makeAdminFacade(workerId).evaluate(source, endowments);
     },
-    createWorker: async ({ debugLabel } = {}) => {
+    createWorker: async ({ debugLabel, ephemeral = false } = {}) => {
       debugLabel === undefined ||
         typeof debugLabel === 'string' ||
         Fail`debugLabel must be a string`;
+      typeof ephemeral === 'boolean' || Fail`ephemeral must be a boolean`;
       const workerId = randomHex128();
-      if (debugLabel !== undefined) {
+      if (debugLabel !== undefined || ephemeral) {
         const workerStore = store.provideWorkerStore(workerId);
-        workerStore.setMeta({ ...workerStore.getMeta(), debugLabel });
+        workerStore.setMeta({
+          ...workerStore.getMeta(),
+          ...(debugLabel === undefined ? {} : { debugLabel }),
+          ...(ephemeral ? { ephemeral: true } : {}),
+        });
       }
       provideWorkerSession(workerId);
       return makeAdminFacade(workerId);
