@@ -186,15 +186,38 @@ test.serial(
         makeProviderHttpListener({ ...options, endpoint, allowedPaths: [] }),
       { message: /Invalid inference paths/ },
     );
-    await t.throwsAsync(
-      () =>
-        makeProviderHttpListener({
-          ...options,
-          endpoint,
-          allowedPaths: ['/v1/responses?admin=true'],
-        }),
-      { message: /Invalid inference path/ },
+    // A bounded query is now part of an exact target, because real routes
+    // carry one: Anthropic's subscription route is `/v1/messages?beta=true`.
+    // Admission is still an exact comparison against the whole request target,
+    // so this widens what an operator may ALLOWLIST, never what a slice may
+    // reach: a request whose target is not listed is refused either way.
+    await t.notThrowsAsync(() =>
+      makeProviderHttpListener({
+        ...options,
+        endpoint,
+        allowedPaths: ['/v1/responses?admin=true'],
+      }),
     );
+    // What stays refused is a target that is not a single exact one: a
+    // fragment, a repeated `?`, or a query outside the admitted shape.
+    for (const badPath of [
+      '/v1/responses#admin',
+      '/v1/responses?a=b?c=d',
+      '/v1/responses?',
+      '/v1/responses?admin=%2e%2e',
+    ]) {
+      // eslint-disable-next-line no-await-in-loop
+      await t.throwsAsync(
+        () =>
+          makeProviderHttpListener({
+            ...options,
+            endpoint,
+            allowedPaths: [badPath],
+          }),
+        { message: /Invalid inference path/ },
+        badPath,
+      );
+    }
     await t.throwsAsync(
       () =>
         makeProviderHttpListener({
