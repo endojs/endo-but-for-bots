@@ -95,6 +95,32 @@ impl Interp {
         function
     }
 
+    /// Perform the freeze [`Self::new_shared_realm_machine_configured`] skipped.
+    /// Idempotent: a graph already locked down is left alone, as `fx_lockdown`
+    /// is NOT (it throws `TypeError("lockdown already called")`,
+    /// `xsLockdown.c:90-92`) -- this is the embedder's operation, not the
+    /// guest's, and an embedder that cannot tell is the one calling it twice.
+    pub(crate) fn lock_down_intrinsics(&mut self) -> Result<(), crate::Halt> {
+        if self.realm.intrinsics().locked_down.get() {
+            return Ok(());
+        }
+        let roots = self.realm.intrinsics().roots.clone();
+        for root in roots {
+            // Unlike the construction-time freeze this can legitimately fail:
+            // the graph has been reachable by a guest, which may have made an
+            // intrinsic non-extensible or installed a Proxy that refuses the
+            // definition. `do_harden` rolls its own worklist back on the way
+            // out, so a refused lockdown leaves nothing half-frozen.
+            self.do_harden(&[], Slot::of(Kind::Reference, Payload::Reference(root)))
+                .map_err(|step| match step {
+                    Step::Host(halt) => halt,
+                    _ => crate::Halt::Refused("lockdown:intrinsic-graph"),
+                })?;
+        }
+        self.realm.intrinsics().locked_down.set(true);
+        Ok(())
+    }
+
     pub(crate) fn realm(&self) -> &std::rc::Rc<Realm> {
         &self.realm
     }
@@ -106,6 +132,28 @@ impl Interp {
     }
 
     pub(crate) fn new_shared_realm_machine_with_permit(permit: Option<&[String]>) -> Self {
+        Self::new_shared_realm_machine_configured(permit, true)
+    }
+
+    /// `freeze = false` builds the shared realm and leaves its intrinsic graph
+    /// MUTABLE, for a guest that brings its own `lockdown()` -- the `ses` shim
+    /// repairs intrinsics before freezing them, and cannot do that to a graph
+    /// already frozen (`tests/ses_boot_intrinsics.rs`). Nothing else differs:
+    /// the roots are still enumerated, so [`Self::lock_down_intrinsics`] can
+    /// perform the same freeze later, and `Intrinsics::is_locked_down` reports
+    /// which state the graph is in.
+    ///
+    /// The window this opens is real. Until the freeze happens the primordials
+    /// are shared and writable, so two compartments of the same machine can
+    /// signal through them. A caller that takes this path is responsible for
+    /// locking down -- by guest `lockdown()` or by
+    /// [`Self::lock_down_intrinsics`] -- before it admits a second
+    /// compartment. SES has the same window before its own `lockdown()` and
+    /// the same rule about it.
+    pub(crate) fn new_shared_realm_machine_configured(
+        permit: Option<&[String]>,
+        freeze: bool,
+    ) -> Self {
         let mut machine = Self::new();
         machine.set_intrinsic_permit(permit);
         let mut names: Vec<SymbolName> = crate::default_keys::DEFAULT_KEYS
@@ -131,15 +179,17 @@ impl Interp {
             })
             .filter(|&root| machine.slots.get(root).kind == Kind::Instance)
             .collect();
-        for &root in &roots {
-            machine
-                .do_harden(&[], Slot::of(Kind::Reference, Payload::Reference(root)))
-                .expect("pristine intrinsic graph must admit transitive freezing");
+        if freeze {
+            for &root in &roots {
+                machine
+                    .do_harden(&[], Slot::of(Kind::Reference, Payload::Reference(root)))
+                    .expect("pristine intrinsic graph must admit transitive freezing");
+            }
         }
         machine.realm = std::rc::Rc::new(Realm {
             intrinsics: std::rc::Rc::new(crate::Intrinsics {
                 roots,
-                locked_down: true,
+                locked_down: std::cell::Cell::new(freeze),
             }),
             default_global: machine.environment.global_obj,
         });

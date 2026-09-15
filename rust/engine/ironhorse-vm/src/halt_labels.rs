@@ -147,6 +147,7 @@ pub const REFUSED_LABELS: &[&str] = &[
     "host:service-owner-dropped",
     "join:oversized-array-like",
     "join:oversized-result",
+    "lockdown:intrinsic-graph",
     "machine:compiler-policy-owner-dropped",
     "machine:incomplete-restore-policy",
     "machine:invalid-restored-value-root",
