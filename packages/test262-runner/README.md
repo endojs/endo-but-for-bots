@@ -37,6 +37,11 @@ in their front-matter. The XS and Node suites also exclude the
 one corpus while preventing hosts without Ironhorse's differential and
 metering checks from attempting them. Ironhorse's Rust suites select those
 same cases by their classifiers and apply the supported checks.
+(`ironhorse-meter-exact` is a historical marker no longer emitted by the
+generator: it recorded XS-computron evidence at generation time, which is
+advisory only — XS-computron parity is a non-goal.
+`ironhorse-meter-determinism` — identical costs across repeated runs of the
+same build — is the gating meter classifier.)
 
 ## Justification
 

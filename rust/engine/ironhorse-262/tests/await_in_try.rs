@@ -91,12 +91,12 @@ fn async_body_throw_before_first_await_rejects_not_catches() {
 
 #[test]
 fn async_generator_body_throw_before_first_yield_rejects_not_catches() {
-    // RESULT agreement is the fence's lock. The async-generator REJECT
-    // machinery's metering is not yet oracle-exact — a pre-existing
-    // mainline gap (fxAsyncGeneratorReject's request processing is
-    // uncalibrated; the drain-side twin measures -26): the deltas are
-    // PINNED here so any drift is a visible flip, and the calibration
-    // is recorded in the design's Remaining ledger rather than guessed.
+    // RESULT agreement is the fence's lock. This test formerly PINNED the
+    // exact computron delta against XS (−20) "until calibration"; that pin
+    // is deleted, not deferred — XS-computron parity is a non-goal, and a
+    // pinned XS delta is the same parity requirement with an offset. The
+    // historical delta matrix survives as a record in the snapshot-store
+    // design's Remaining ledger; drift here is advisory telemetry.
     let source = "var g = 0; var it = 0; \
                   async function* ag() { throw 1; } \
                   try { it = ag(); it.next(); g = 'after'; } \
@@ -109,54 +109,33 @@ fn async_generator_body_throw_before_first_yield_rejects_not_catches() {
         a.run.ironhorse_halt
     );
     assert_eq!(a.ironhorse_signal.as_deref(), Some("after"));
-    assert_eq!(
-        a.run.ironhorse_computrons as i64 - a.run.oracle_computrons as i64,
-        -20,
-        "the pinned async-generator reject-metering divergence moved: \
-         re-measure and update the pin (or celebrate the calibration)"
-    );
 }
 
-/// The residue's SHAPE, pinned so drift in any direction is a visible
-/// flip. A 2026-08-27 calibration attempt measured the matrix and
-/// found it is NOT a clean per-operation decomposition (unlike the
-/// resource-management gap, which fell to five whole-unit constants):
-/// each further `next()` on the rejected generator adds -18 then -17,
-/// the NORMAL completion path measures -1, and the return-only path
-/// measures +3 — an OVERcharge — so compensating constants would
-/// overfit these shapes and miswire others. Calibrating it properly
-/// still means tracing XS's fxAsyncGeneratorReject/Resolve request
-/// processing; the matrix is recorded in the design's Remaining
-/// ledger.
+/// The async-generator reject/resolve request-processing paths, gated on
+/// RESULTS across the request matrix (throw, yield-then-throw, normal
+/// completion, return-only). This test formerly pinned each shape's exact
+/// computron delta against XS (−38/−26/−1/+3, the 2026-08-27 calibration
+/// attempt's matrix); those pins are deleted — XS-computron parity is a
+/// non-goal, so an XS delta is not a quantity a test may hem in. Computron
+/// drift is printed as advisory calibration telemetry.
 #[test]
-fn async_generator_reject_residue_shape_is_pinned() {
-    let cases: [(&str, i64); 4] = [
-        (
-            "var g = 0; var it = 0;              async function* ag() { throw 1; }              it = ag(); it.next(); it.next(); g = 'after';",
-            -38,
-        ),
-        (
-            "var g = 0; var it = 0;              async function* ag() { yield 1; throw 2; }              it = ag(); it.next(); it.next(); g = 'after';",
-            -26,
-        ),
-        (
-            "var g = 0; var it = 0;              async function* ag() { yield 1; }              it = ag(); it.next(); it.next(); g = 'after';",
-            -1,
-        ),
-        (
-            "var g = 0; var it = 0;              async function* ag() { return 5; }              it = ag(); it.next(); g = 'after';",
-            3,
-        ),
+fn async_generator_reject_matrix_agrees_on_results() {
+    let cases: [&str; 4] = [
+        "var g = 0; var it = 0;              async function* ag() { throw 1; }              it = ag(); it.next(); it.next(); g = 'after';",
+        "var g = 0; var it = 0;              async function* ag() { yield 1; throw 2; }              it = ag(); it.next(); it.next(); g = 'after';",
+        "var g = 0; var it = 0;              async function* ag() { yield 1; }              it = ag(); it.next(); it.next(); g = 'after';",
+        "var g = 0; var it = 0;              async function* ag() { return 5; }              it = ag(); it.next(); g = 'after';",
     ];
-    for (source, pinned) in cases {
+    for source in cases {
         let a = dual_run_async(source, "g").expect("the XS oracle machine must start");
         assert_eq!(a.run.agreement, Agreement::BothComplete, "{source}");
         assert_eq!(a.ironhorse_signal.as_deref(), Some("after"), "{source}");
-        assert_eq!(
-            a.run.ironhorse_computrons as i64 - a.run.oracle_computrons as i64,
-            pinned,
-            "the async-generator metering residue moved for {source}:              re-measure the matrix and update the pins (or celebrate)"
-        );
+        if !a.run.computrons_agree {
+            eprintln!(
+                "`{source}` computron drift vs XS (advisory): oracle={} ironhorse={}",
+                a.run.oracle_computrons, a.run.ironhorse_computrons,
+            );
+        }
     }
 }
 

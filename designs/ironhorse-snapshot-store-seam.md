@@ -1076,8 +1076,12 @@ objects reachable only via an old array's item map, gen freed 0).
   no computron-agreement assertions.
 - **A throw to a handler live across a suspend undercharges one
   dispatch** (found by fixing the item above — the computron
-  assertions the suspend-in-try arms lacked failed the moment they were
-  added, which is the whole argument for asserting them). A `try`
+  comparisons the suspend-in-try arms lacked flagged it the moment they
+  were added; note, 2026-09-15: the underlying defect was Iron Horse
+  charging *nothing* for real re-establishment work — an own-cost-model
+  fidelity gap for which the XS delta was the measurement instrument.
+  Computron-agreement is advisory telemetry, not a standing assertion —
+  XS-computron parity is a non-goal). A `try`
   entered before a `yield`/`await` has its handler re-established on
   resume, and XS pays one extra bytecode dispatch to land a throw in
   it; ironhorse paid nothing. Attribution measured per THROW through a
@@ -1994,10 +1998,12 @@ rather than work items.
   (`USING_DECL_METERING`) and +1 more for a real resource
   (`USING_RESOURCE_METERING`) — additive across every combination
   probed (defer×2+move measured exactly 3×2 beyond the construct).
-  All ten shapes now measure delta 0 and `resource_management.rs`
-  asserts FULL agreement (results and computrons). The async forms
-  share the arm and the charges, pending their own oracle
-  calibration (no async-`using` differential lock exists yet).
+  All ten shapes measured delta 0 at calibration time;
+  `resource_management.rs` asserts observable agreement (results),
+  with computron drift advisory per the accuracy-over-parity
+  doctrine — the constants are now Iron Horse's own release costs,
+  and their XS-delta provenance is a record, not a requirement. The
+  async forms share the arm and the charges.
 - [x] ~~Symbol-key id-space EXHAUSTION at the meet: symbol keys mint
   top-down from `u16::MAX` while the name table grows bottom-up, and
   the MEET — same class as the old shared counter's saturation —
@@ -2015,8 +2021,16 @@ rather than work items.
   `JSON.parse` fixture; asserted in release mode too). The widened
   id type remains available as a future format decision if ~64k
   combined keys ever binds a real workload.
-- The async-generator START-REJECT boundary is not yet
-  oracle-exact in COMPUTRONS (results agree): −20 versus XS when
+- ~~The async-generator START-REJECT boundary is not yet
+  oracle-exact in COMPUTRONS~~ **RETIRED as a work item 2026-09-15
+  (not deferred — rejected):** XS-computron parity is a non-goal
+  (ironhorse-engine § Metering), so "not oracle-exact in computrons"
+  is not a defect and tracing XS's fxAsyncGeneratorReject dispatch
+  to close the delta is work that will not be scheduled. The
+  delta-matrix pins in `await_in_try.rs` are likewise deleted
+  (results stay gated; drift is advisory telemetry). The measured
+  matrix below is preserved as a historical record only: −20 versus
+  XS when
   the rejecting generator's `next()` is observed directly, −26 on
   the drain-side twin — a pre-existing mainline gap
   (fxAsyncGeneratorReject's request processing is uncalibrated),
@@ -2032,10 +2046,11 @@ rather than work items.
   the opposite direction) — compensating constants would overfit
   these shapes and miswire others. The matrix is PINNED
   (`async_generator_reject_residue_shape_is_pinned` beside the −20
-  pin in `await_in_try.rs`) so drift in ANY direction is a visible
-  flip; calibrating it properly still means tracing XS's
-  fxAsyncGeneratorReject/Resolve request dispatch, deferred until
-  async-generator metering identity is a bar someone holds.
+  pin in `await_in_try.rs` — both pins since deleted with this
+  item's retirement; results stay gated, drift is advisory). No
+  calibration against XS's fxAsyncGeneratorReject/Resolve request
+  dispatch is planned: async-generator metering identity with XS is
+  not a bar anyone holds, and under the doctrine it never will be.
 
 *Tooling and coverage:*
 

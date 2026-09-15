@@ -58,8 +58,10 @@ fn regression_cases_never_diverge() {
         return;
     }
 
-    // Gate meter-exact where a trophy carries the tag; a trophy is not required
-    // to, but if it does its historical computron evidence is held.
+    // The legacy `gate_meter_exact` flag activates only the engine-versioned
+    // `ironhorse-meter-5-raw-N` pins (Iron Horse's OWN frozen costs). XS
+    // computron drift is always advisory and cannot fail a trophy —
+    // XS-computron parity is a non-goal.
     let cfg = Config {
         gate_meter_exact: true,
         ..Config::default()

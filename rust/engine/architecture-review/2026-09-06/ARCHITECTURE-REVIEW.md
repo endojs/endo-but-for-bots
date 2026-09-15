@@ -5672,6 +5672,13 @@ explicit `ironhorse-meter-2` project.
 **Known.** Ledger item 10 records the doctrine drift; the CI-gate consequence and
 the case counts are new.
 
+> **Resolution (2026-09-15, maintainer directive).** Decided: the first arm
+> — demotion — is done, and the second arm (amending the design to make XS
+> computron parity the acceptance bar) is **rejected permanently**, so do
+> not implement it from this record. XS-computron parity is a non-goal, not
+> a deferred goal; XS cost drift is advisory everywhere, and the meter's
+> gates are Iron Horse's own frozen-cost determinism pins.
+
 #### F131 - The string-op cost unit is inconsistent within one release [medium, high]
 
 **Status at 1b130df7 (revision of 2026-09-08).** RESOLVED since the previous

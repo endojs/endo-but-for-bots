@@ -7,10 +7,13 @@
 //! **supported** grammar only (the `i`/`u`/`v` flags and named captures
 //! are out of this increment's scope, so the arm never generates them),
 //! plus a subject over an overlapping small alphabet so matches actually
-//! occur. [`differential_check_regexp`] then pins the matched answer,
-//! every capture's byte offsets, and the per-step match meter bit-exact.
-//! Any divergence is a finding. A pattern the port names `Unsupported`
-//! is skipped honestly (`Ok(())`), never reported as a divergence.
+//! occur. [`differential_check_regexp`] then pins the matched answer and
+//! every capture's byte offsets. Any RESULT divergence is a finding.
+//! Per-step match-meter drift against the pin is advisory calibration
+//! telemetry, never a finding: XS-computron parity is a non-goal
+//! (`designs/ironhorse-engine.md` § Metering). A pattern the port names
+//! `Unsupported` is skipped honestly (`Ok(())`), never reported as a
+//! divergence.
 
 use crate::Divergence;
 
@@ -281,14 +284,13 @@ pub fn differential_check_regexp(case: &RegExpCase) -> Result<bool, Divergence> 
             });
         }
     }
+    // Match-meter drift against the pin is advisory calibration telemetry,
+    // never a finding: XS-computron parity is a non-goal.
     if outcome.match_meter_raw != oracle.match_meter_raw {
-        return Err(Divergence {
-            source,
-            detail: format!(
-                "match meter ironhorse={} pin={}",
-                outcome.match_meter_raw, oracle.match_meter_raw
-            ),
-        });
+        eprintln!(
+            "{source}: match meter drift (advisory) ironhorse={} pin={}",
+            outcome.match_meter_raw, oracle.match_meter_raw
+        );
     }
     // Agreement — report whether it was a real (compiled + matched) hit.
     Ok(outcome.matched)
@@ -299,10 +301,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn generated_regexps_agree_bit_exact_with_the_pin() {
+    fn generated_regexps_agree_with_the_pin() {
         // Structure-aware seed sweep: every generated pattern/subject is
-        // matched on both ironhorse and the XS pin and pinned bit-exact
-        // (matched, captures, and the per-step match meter). Zero
+        // matched on both ironhorse and the XS pin and compared on results
+        // (matched + captures; match-meter drift is advisory). Zero
         // divergence over the sweep is the fuzz-arm bar.
         let mut checked = 0usize;
         let mut matched_any = false;

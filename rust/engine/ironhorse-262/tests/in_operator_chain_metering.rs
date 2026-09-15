@@ -1,5 +1,8 @@
-//! `XS_CODE_IN` over a **prototype chain**: bit-exact agreement with the pinned
-//! XS oracle at every resolution depth, for a hit and for a total miss.
+//! `XS_CODE_IN` over a **prototype chain**: observable agreement with the
+//! pinned XS oracle at every resolution depth, for a hit and for a total
+//! miss. (The metering history below explains why the per-level constant has
+//! the value it has; the oracle comparison gates results only — XS-computron
+//! parity is a non-goal.)
 //!
 //! `fxRunIn` calls `fxHasAt` once and does not re-enter per level, so the
 //! chain walk's per-level cost is one `fxOrdinaryHasProperty` frame — the
@@ -29,12 +32,13 @@
 
 use ironhorse_262::dual_run;
 
-/// The program runs end-to-end bit-exact with the XS oracle (value + computrons).
+/// The program runs end-to-end observably agreeing with the XS oracle
+/// (completion + value; the computrons in the message are diagnostics only).
 fn exact(source: &str) {
     let run = dual_run(source).expect("the XS oracle machine must start");
     assert!(
         run.observables_agree(),
-        "not bit-exact: {source}\n  oracle_result={} ironhorse_result={}\n  oracle_computrons={} ironhorse_computrons={}\n  ironhorse_halt={:?}",
+        "observable divergence: {source}\n  oracle_result={} ironhorse_result={}\n  oracle_computrons={} ironhorse_computrons={}\n  ironhorse_halt={:?}",
         run.oracle_result,
         run.ironhorse_result,
         run.oracle_computrons,
