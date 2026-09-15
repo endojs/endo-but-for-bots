@@ -111,19 +111,28 @@ export const main = async hostAgent => {
     return `claude-${createHash('sha256').update(hostId).digest('hex')}`;
   };
 
-  // The probes below read names *inside* SANDBOX_DIR, and `has` on a path
-  // resolves its parent, so the directory has to exist before the first one.
-  // On a host that already ran an earlier release it does; on a daemon with no
-  // sandbox state yet every probe threw `Unknown pet name` and neither stack
-  // could bootstrap.
-  if (!(await E(hostAgent).has(SANDBOX_DIR))) {
-    await E(hostAgent).makeDirectory([SANDBOX_DIR]);
-  }
+  // `has` on a path resolves its parent, so probing a name inside SANDBOX_DIR
+  // throws `Unknown pet name` on a daemon that has no sandbox state yet — the
+  // first probe below died there, and neither stack could bootstrap. An absent
+  // directory means an absent name. Answering that here, rather than creating
+  // the directory up front, keeps every validation below ahead of the first
+  // provisioning mutation.
+  /** @param {string} name */
+  const hasInSandbox = async name => {
+    await null;
+    try {
+      return await E(hostAgent).has(SANDBOX_DIR, name);
+    } catch (error) {
+      // Only an absent directory excuses the failure; anything else is real.
+      if (await E(hostAgent).has(SANDBOX_DIR)) throw error;
+      return false;
+    }
+  };
 
   // Validate the state root and the native runtime before any mint. Retained
   // formulas keep their persisted placement; missing ones use the requested
   // construction settings.
-  const existingState = await E(hostAgent).has(SANDBOX_DIR, 'state-provider');
+  const existingState = await hasInSandbox('state-provider');
   const requestedRoots = getHostedStorageRoots(env);
   const stateDir = assertStateDir(
     existingState
@@ -133,7 +142,7 @@ export const main = async hostAgent => {
   const roots = harden({ ...requestedRoots, stateDir });
   /** @type {Record<string, string> | undefined} */
   let nativeEnv;
-  if (await E(hostAgent).has(SANDBOX_DIR, 'native-sandbox')) {
+  if (await hasInSandbox('native-sandbox')) {
     const native = await readNativeSandbox(hostAgent);
     await assertRuntimePlacement(native.config.directory, roots);
     console.log(
@@ -147,10 +156,14 @@ export const main = async hostAgent => {
     );
   }
 
+  if (!(await E(hostAgent).has(SANDBOX_DIR))) {
+    await E(hostAgent).makeDirectory([SANDBOX_DIR]);
+  }
+
   // 1. Sandbox factory — `@agent` powers grant the privileged
   //    `provideHostPath` / `provideScratchMount` surface the factory needs
   //    to bridge granted Mount caps into the kernel's bind-mount surface.
-  if (!(await E(hostAgent).has(SANDBOX_DIR, 'sandbox-factory'))) {
+  if (!(await hasInSandbox('sandbox-factory'))) {
     const ownerId = await resolveOwnerId();
     await E(hostAgent).makeUnconfined('@main', sandboxSpecifier, {
       powersName: '@agent',
@@ -161,7 +174,7 @@ export const main = async hostAgent => {
   }
 
   // 2. 9P mounter — unconfined; ambient Node authority (no Endo powers).
-  if (!(await E(hostAgent).has(SANDBOX_DIR, 'fs-mounter'))) {
+  if (!(await hasInSandbox('fs-mounter'))) {
     /** @type {Record<string, string>} */
     const mounterEnv = {};
     // A hosted daemon forwards only ENDO_-prefixed variables to its ENDO_EXTRA
