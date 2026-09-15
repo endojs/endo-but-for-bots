@@ -4116,16 +4116,14 @@ test('EndoGuest.invite nests the invitation at a directory path', async t => {
 });
 
 testNeedsNodeWorker(
-  'accept keeps distinct retention pins for name paths that a naive join would collide',
+  'accept keeps distinct result names for paths that a naive join would collide',
   async t => {
     const hostA = await prepareHostWithTestNetwork(t);
     const hostB = await prepareHostWithTestNetwork(t);
 
-    // `['team-a', 'bob']` and `['team', 'a-bob']` both flatten to
-    // `team-a-bob` under a bare `path.join('-')`, so the old retention key
-    // `guest-team-a-bob` was shared and the second accept() silently clobbered
-    // the first guest's pin, leaving it collectible. The injective key
-    // encoding must retain the two under distinct pins.
+    // `['team-a', 'bob']` and `['team', 'a-bob']` flatten to the same string
+    // under a bare `path.join('-')`. Acceptance retains each connection at its
+    // actual directory path, without deriving a second flattened pin key.
     await E(hostA).makeDirectory('team-a');
     await E(hostA).makeDirectory('team');
 
@@ -4135,25 +4133,19 @@ testNeedsNodeWorker(
     await E(hostB).accept(await E(invitation1).locate(), 'peer-1');
     await E(hostB).accept(await E(invitation2).locate(), 'peer-2');
 
-    // Both guests remain reachable at their own paths.
-    t.truthy(await E(hostA).identify('team-a', 'bob'));
-    t.truthy(await E(hostA).identify('team', 'a-bob'));
+    const firstId = await E(hostA).identify('team-a', 'bob');
+    const secondId = await E(hostA).identify('team', 'a-bob');
+    t.truthy(firstId);
+    t.truthy(secondId);
+    await E(hostA).remove('team-a', 'bob');
+    t.is(await E(hostA).identify('team-a', 'bob'), undefined);
+    t.is(await E(hostA).identify('team', 'a-bob'), secondId);
 
-    // Each accept() retained its connection under its own `@pins` key rather
-    // than the second clobbering the first — two distinct retention pins, not
-    // one shared slot.
+    // No implicit invitation-retention pin is necessary or created.
     const retentionPins = [...(await E(hostA).list('@pins'))].filter(name =>
       name.startsWith('guest-'),
     );
-    t.is(
-      retentionPins.length,
-      2,
-      'two distinct retention pins, not one clobbered slot',
-    );
-    const [firstPinId, secondPinId] = await Promise.all(
-      retentionPins.map(name => E(hostA).identify('@pins', name)),
-    );
-    t.not(firstPinId, secondPinId);
+    t.deepEqual(retentionPins, []);
   },
 );
 
