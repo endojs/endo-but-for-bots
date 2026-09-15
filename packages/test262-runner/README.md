@@ -5,21 +5,72 @@ with a prelude that shims Hardened JavaScript on these platforms.
 
 ## Hosts
 
-The `ses-xs-parity` axis runs against three hosts off one maintained subset:
+The `ses-xs-parity` axis runs against three engines off one maintained subset.
+Ironhorse has two lanes because it is the only engine with a differential
+runner, and the two answer different questions:
 
 * `yarn test262:xs` — XS via `xst` and the SES prelude.
 * `yarn test262:node` — Node.js and the SES prelude.
-* `yarn test262:ironhorse` — Ironhorse, the XS→Rust port, via its `endot-ih`
-  runner in SES lockdown mode (`xst262.c`'s `-l`). endot-ih walks this same
-  `test262/` tree filtered to `ses-xs-parity`, so no separate corpus is
-  needed. Ironhorse's guest `lockdown()`/`Compartment` surface is still landing,
-  so a case that needs it reports an honest named skip today and lights up as
-  the surface lands; the run is green (zero failures) either way. Requires a
-  Rust toolchain and the `c/moddable` submodule (the XS oracle endot-ih
-  diffs against), the same XS dependency the `xs` host already needs.
+* `yarn test262:ironhorse-host` — Ironhorse as a plain test262 host, driven by
+  `test262-harness` exactly as the two lanes above are, through the
+  `ironhorse-xst` binary and the SES prelude. This is the lane that measures
+  Hardened-JavaScript compatibility, and the one the ratchet below tracks.
+  Requires a Rust toolchain.
+* `yarn test262:ironhorse` — the same corpus through `endot-ih`, Ironhorse's
+  DIFFERENTIAL runner, which executes each case on both Ironhorse and an XS
+  oracle and gates on their agreement. It answers "does Ironhorse agree with
+  XS", not "does Ironhorse pass the test", so it is a divergence hunt rather
+  than a compatibility measure. It asks for a native `lockdown()`
+  (`xst262.c`'s `-l`), which Ironhorse does not yet implement, so it currently
+  refuses to start rather than pre-skipping every case and exiting 0 — see
+  "Ratchet, not a gate". Requires a Rust toolchain and the `c/moddable`
+  submodule (the XS oracle it diffs against), the same XS dependency the `xs`
+  host already needs.
+
+`yarn test262` runs `xs`, `node` and `ironhorse` in sequence, so it inherits
+that last refusal until a native `lockdown()` lands or the aggregate is pointed
+at `test262:ironhorse-host` instead.
 
 See `designs/ironhorse-test262-convergence.md` for the convergence that
 makes Ironhorse the third host.
+
+## Ratchet, not a gate
+
+This is a compatibility measurement, not a CI gate.
+No lane here is wired into CI (`"test"` is `exit 0`), and none needs to be:
+a red case does not block a merge.
+
+What it is for is the direction of travel.
+The pass count is expected to go UP and never down, and a drop is the signal
+worth acting on — a regression in the engine, the prelude, or the corpus.
+Read it that way rather than as pass/fail.
+
+Counts at the time of writing, over the 16 runs the corpus produces
+(8 cases, each in sloppy and strict mode):
+
+| lane | passing | notes |
+| --- | --- | --- |
+| `test262:xs` | not measured here | needs `xst`; build the `c/moddable` submodule |
+| `test262:node` | 14 / 16 | the 2 failures are `lockdown()` cases, below |
+| `test262:ironhorse-host` | 6 / 16 | the number this ratchet tracks |
+| `test262:ironhorse` | refuses to start | no native `lockdown()` yet |
+
+Node's two failures are not an engine gap.
+`@endo/harden`'s selector resolves `Object[Symbol.for('harden')]`, then
+`globalThis.harden`, and only failing both installs its own — non-configurably,
+with a comment saying that doing so "will prevent any HardenedJS's lockdown
+from succeeding".
+XS and Ironhorse both supply a host `harden` the selector adopts, so
+`repairIntrinsics` runs; Node supplies none, the slot gets installed, and every
+`lockdown()`-calling case fails.
+
+`test262:ironhorse`'s refusal is the one place an exit code is load-bearing,
+and it is about honesty rather than gating.
+Asking for a SES mode with no implementation used to run all 15288 files,
+pre-skip every one with a truthful `ses-mode:lockdown-unimplemented`, and exit
+0 — a lane that reads as a passing third host while testing nothing.
+A ratchet needs a real number more than a green tick, so the mode refuses
+instead of reporting a number it did not measure.
 
 ## Test262 subset
 

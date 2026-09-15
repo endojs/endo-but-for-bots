@@ -399,9 +399,15 @@ XS is unaffected only because `xst` installs a native `harden` the selector
 adopts instead — the same reason the Ironhorse prelude must leave Ironhorse's
 native one alone.
 
-And nothing would have caught it: `packages/test262-runner`'s `"test"` script
-is `exit 0`, so the whole three-host axis runs in no CI lane.
-That is why a red case sat in the corpus unnoticed.
+And nothing would have caught it — though not because the axis fails to gate
+CI, which it is not meant to do.
+The axis is a **ratchet**: a compatibility measurement whose pass count should
+go up and never down, read for its direction rather than as pass/fail
+(`packages/test262-runner/README.md`, "Ratchet, not a gate").
+A ratchet still has to record a number, and this one recorded none.
+`packages/test262-runner`'s `"test"` script is `exit 0`, nothing captured a
+per-lane count anywhere, and so a red case sat in the corpus unnoticed —
+invisible for want of a baseline, not for want of a gate.
 
 ## What XS implements
 
@@ -757,13 +763,20 @@ The shim is the larger one — and it is the one already running on IronHorse.
       assertions into the `ses-xs-parity` corpus (§ Why SES's own suite is not
       the gate yet). Clearing `Object[Symbol.for('harden')]` in the prelude is
       measured NOT to work.
-- [ ] Put the `ses-xs-parity` axis in a CI lane. `packages/test262-runner`'s
-      `"test"` is `exit 0`, so none of its three hosts gates anything, and the
-      corpus already carries a case that is red on node.
-- [ ] Wire the Ironhorse prelude into `endot-ih` — a `--prelude` flag, and
-      `SesMode::unimplemented_skip` returning `None` when one is supplied — so
-      the axis itself moves rather than a side measurement.
-      `SesMode::prelude()` is currently unreachable on the live path.
+- [ ] Record the `ses-xs-parity` ratchet somewhere a regression is visible.
+      The axis is deliberately not a CI gate and does not need to fail a build;
+      what it needs is a captured per-lane count to ratchet against. Today
+      `packages/test262-runner`'s `"test"` is `exit 0` and the only counts
+      recorded anywhere are the prose baselines in that package's README
+      (node 14/16, `ironhorse-host` 6/16), which nothing checks.
+- [x] Wire the Ironhorse prelude into `endot-ih` — landed as a `--prelude`
+      flag, with `effective_skip_features` dropping `lockdown`/`Compartment`
+      when one is supplied. `SesMode::unimplemented_skip` deliberately still
+      returns `Some` for `-l`: a prelude is the SHIM route and does not make
+      the NATIVE one work, so `-l` keeps failing closed and
+      `SesMode::prelude()` stays unreachable on the live path. The lane that
+      actually moved is `test262:ironhorse-host`, which skips `endot-ih`'s
+      differential entirely.
 - [ ] The bar does not run `bootstrap_ses`'s closing `run_promise_jobs()`, so
       it cannot see a divergence in how the two engines settle what
       `@endo/eventual-send`'s shim leaves pending.
