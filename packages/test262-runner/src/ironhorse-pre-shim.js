@@ -27,13 +27,17 @@ if (globalThis.Iterator) {
   for (const key of Reflect.ownKeys(globalThis.Iterator.prototype)) {
     if (key !== Symbol.iterator) delete globalThis.Iterator.prototype[key];
   }
-  globalThis.Iterator = undefined;
+  // Removing the global is the point, so the cast is the assertion: tsc types
+  // `globalThis.Iterator` as always-present.
+  /** @type {any} */ (globalThis).Iterator = undefined;
 }
 
 // The start realm has no host console. SES expects one even when reporting is
 // disabled; diagnostics confer no external I/O capability.
 if (!globalThis.console) {
-  globalThis.console = {
+  // A deliberate stub, not a `Console`: SES reads only these six, and
+  // supplying the other seventeen would confer diagnostics we do not implement.
+  /** @type {any} */ (globalThis).console = {
     log() {},
     info() {},
     warn() {},

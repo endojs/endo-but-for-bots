@@ -51,10 +51,7 @@ const main = async () => {
   )
     .toString()
     .split('// -- assert polyfill --')[0];
-  await write(
-    'prelude/ironhorse.js',
-    `${polyfills}\n${ironhorsePrelude}\n;\n`,
-  );
+  await write('prelude/ironhorse.js', `${polyfills}\n${ironhorsePrelude}\n;\n`);
 };
 
 main().catch(err => {
