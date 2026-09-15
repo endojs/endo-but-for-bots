@@ -296,7 +296,12 @@ explicit endowments" — a guest still reads `({}).constructor.name` as
 `"Object"` and `({}).constructor.constructor.name` as `"Function"`, and
 evaluates `({}).constructor.constructor('return 1 + 1')()` to `2`.
 The dynamic evaluator is reachable off any object literal.
-That is not SES's attenuation model and not XS's: both close the route by
+There is a second route the field's old doc comment did name and this one
+should keep: `Compartment::define_global_value` shares a `RootedValue` by
+reference on purpose (`compartment.rs:414`), so anything reachable from an
+endowed object is reachable whatever the permit says — only raw heap-backed
+`Slot` endowments are refused.
+Neither route is SES's attenuation model or XS's: both close the first by
 replacing the function-family prototypes' `.constructor` with a throwing stub
 during `lockdown()`, which is `fx_lockdown` step 2 and the one step IronHorse
 cannot take while it freezes at construction rather than on request.
@@ -352,8 +357,12 @@ modules for Date, Math, RegExp, Symbol, Temporal, URL, Error, the function
 constructors, `Function.prototype.toString` and module source.
 Its options (`:183-251`) are `errorTaming`, `errorTrapping`, `reporting`,
 `unhandledRejectionTrapping`, `localeTaming`, `consoleTaming`, `overrideTaming`,
-`stackFiltering`, `domainTaming`, `evalTaming`,
-`legacyRegeneratorRuntimeTaming`, plus deprecated `dateTaming`/`mathTaming`.
+`overrideDebug`, `stackFiltering`, `domainTaming`, `evalTaming`, `regExpTaming`,
+`urlBlobTaming`, `legacyRegeneratorRuntimeTaming` and `__hardenTaming__`, plus
+deprecated `dateTaming`/`mathTaming`.
+Two of those drive rows in the table below: `overrideTaming` is
+property-override enablement and `evalTaming` decides what happens to the
+evaluators.
 XS takes none.
 
 | | SES shim | XS native | IronHorse |
@@ -385,26 +394,27 @@ The shim is the larger one — and it is the one already running on IronHorse.
    `bundle-ironhorse-worker.mjs` already does — and the obstacles that script
    works around are the real backlog: `polyfills.js` installs
    `Object[Symbol.for('harden')]` non-configurable
-   (`designs/worker-rust-xs.md:513-519`), which the shim's own selector notes
+   (`designs/worker-rust-xs.md:515-520`), which the shim's own selector notes
    "will prevent any HardenedJS's lockdown from succeeding"; lockdown replaces
    `globalThis`, dropping the `host<Name>` aliases both bootstraps resolve
    through (`:521-525`); `Iterator` is advertised before its helpers exist (see
    below); and there is no host `console`.
 
    The `Iterator` one is an engine defect rather than a boot-script detail, and
-   it is worse than the workaround's comment suggests. All twelve helpers are
-   present on `Iterator.prototype` and every one answers `typeof` as
-   `"function"`, but the five lazy ones — `map`, `filter`, `take`, `drop`,
-   `flatMap` — halt the machine with `NotImplemented("Iterator.helper")` when
-   called. That is an engine halt, not a `TypeError`: `try`/`catch` does not
-   recover, and the crank does not complete. The eager helpers (`reduce`,
+   it is worse than the workaround's comment suggests. All eleven helpers are
+   present on `Iterator.prototype` (`boot.rs:540-558`) and every one answers
+   `typeof` as `"function"`, but the five lazy ones — `map`, `filter`, `take`,
+   `drop`, `flatMap` — halt the machine with
+   `NotImplemented("Iterator.helper")` when called.
+   That is an engine halt, not a `TypeError`: `try`/`catch` does not recover,
+   and the crank does not complete. The eager helpers (`reduce`,
    `toArray`, `forEach`, `some`, `every`, `find`) and `Iterator.from` work. So
    any guest that feature-detects `typeof Iterator.prototype.map === 'function'`
    and then calls it kills the worker, which is why
    `bundle-ironhorse-worker.mjs` deletes the whole surface by hand.
    Un-advertising them in the engine is not a free fix: `Iterator.helper` is a
-   ledgered named skip with several hundred `skip:unsupported-opcode` rows
-   across `ironhorse-262/expectations/whole-tree`, and removing the bindings
+   ledgered named skip with 326 `skip:unsupported-opcode` rows across fourteen
+   files in `ironhorse-262/expectations/whole-tree`, and removing the bindings
    would convert those into ordinary conformance failures. Implementing the
    lazy helpers is the honest fix, and it is its own piece of work.
 3. **If the native profile wins**, `fx_lockdown`'s five steps above are the
@@ -441,8 +451,8 @@ The shim is the larger one — and it is the one already running on IronHorse.
       are inexpressible and the map is a pre-resolved bundle
       (§ Module resolution). Threading a referrer is a prerequisite for any
       real `resolveHook`.
-- [x] Establish whether `intrinsic_permit` can be made to mean SES attenuation
-      or should be renamed so it stops looking like it already does.
+- [x] Establish whether `intrinsic_permit` can be made to mean SES attenuation.
+      (The rename it suggests is still open — see below.)
       Measured 2026-09-15: it cannot, as things stand — every denied intrinsic
       including `Function` stays reachable through a prototype chain, and
       closing that is `fx_lockdown` step 2, which needs a `lockdown()` separate
@@ -454,6 +464,15 @@ The shim is the larger one — and it is the one already running on IronHorse.
       test262 corpus — but not on the bar's own inputs. Fixed 2026-09-15:
       `polyfills.js`, `host_aliases.js`, `bus-worker-xs-ses-boot.js` and its
       bundler now trigger the lane.
+      Residual, deliberately not closed: `bus-worker-xs-ses-boot.js` is a
+      comment header and one `import '@endo/eventual-send/shim.js'`, so the
+      bundle's actual content comes from `@endo/eventual-send`,
+      `@endo/harden`, `@endo/env-options` and `@endo/compartment-mapper`, none
+      of which trigger this Rust lane. A regression there does redden
+      `build-xsnap`, which regenerates the bundle and runs the daemon's own
+      tests; what it would not do is re-run the dual-run measurement. Widening
+      a Rust lane's triggers across the JS workspace is the wrong trade for
+      that.
 - [ ] Implement the lazy `Iterator` helpers, or decide the engine should not
       advertise them. Today `typeof Iterator.prototype.map` is `"function"` and
       calling it is an uncatchable halt (§ next step 2).

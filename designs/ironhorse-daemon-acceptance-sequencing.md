@@ -722,7 +722,7 @@ Generating it says otherwise.
 `yarn bundle:xs` produces it from a clean checkout in about a minute, and the
 result is **70 KB** — the engine's comment overstated it by more than
 tenfold; the ~1 MB figure is closer to `worker_bootstrap.js`
-(750 KB) or `daemon_bootstrap.js` (2.4 MB), which the same command also
+(765 KB) or `daemon_bootstrap.js` (2.4 MB), which the same command also
 generates.
 That comment (`ironhorse-262/src/lib.rs:699-707`) is corrected in the same
 change as this block; it is recorded here because this document repeated the
@@ -1249,11 +1249,13 @@ and a reader working from it alone will re-do them.
       and `yarn bundle:xs` before `cargo test`, and sets
       `IRONHORSE_SES_BOOT_REQUIRED=1` so a missing bundle is red rather than a
       silent skip.
-      What that lane does *not* cover: `scripts/ci-changes.py` triggers it on
-      `rust/engine/**`, the Cargo and toolchain files, `c/moddable`,
-      `rust/endo/xsnap/xsnap-platform.*` and the test262 corpus — but not on
-      `packages/daemon/src/bus-worker-xs-ses-boot.js` or
-      `rust/endo/xsnap/src/polyfills.js`, which are the bar's real inputs.
+      The lane's triggers were widened on 2026-09-15 to include the bar's own
+      inputs — `polyfills.js`, `host_aliases.js`,
+      `packages/daemon/src/bus-worker-xs-ses-boot.js` and its bundler.
+      What it still does not cover is the `@endo/*` graph the bundle's content
+      actually comes from; see
+      [ironhorse-ses-compartment-equivalence](ironhorse-ses-compartment-equivalence.md)
+      § Known Gaps for why that was left alone.
 - [x] **Re-word the `boot:ses-lockdown-bundle` ledger row and the comment it
       came from** (`rust/engine/CHANGELOG.md:900`,
       `ironhorse-262/src/lib.rs:699`). Done 2026-09-15: both called

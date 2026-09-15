@@ -161,14 +161,14 @@ impl Interp {
         // (`boot.rs:1153`), so they are reachable ONLY that way.
         //
         // A `global_env` set here is therefore observed, not overwritten:
-        // `invoke_native` (`invoke.rs:186`) switches to it before running
+        // `call_native` (`invoke.rs:171`, the switch at `:186`) switches to it before running
         // `create_dynamic_function`. Pinning it to the default global let a
         // compartment compile against the default realm in both directions --
         // `({}).constructor.constructor('return answer')()` read the default
         // `answer` where `Function('return answer')()` read its own, and an
         // assignment in such a body defined its global ON the default realm.
         //
-        // Left NULL, `switch_environment` no-ops (`:187`) and the dynamic
+        // Left NULL, `switch_environment` no-ops (`:201-203`) and the dynamic
         // function is created in whichever environment called for it. That is
         // the only answer that is not arbitrary here: compartments share one
         // realm and one frozen intrinsic graph, so a shared evaluator has no
