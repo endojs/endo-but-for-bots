@@ -3696,3 +3696,42 @@ fn conflicting_symbol_restore_is_atomic_and_exhaustion_does_not_alias() {
     assert_eq!(vm.symbol_key_ids.descriptor(placeholder), None);
     assert_eq!(vm.symbol_key_ids.descriptor(first_id), Some(first));
 }
+
+/// A snapshot written while the shared evaluators were pinned to the default
+/// global carries that pin as a `function_environments` row. Restoring it must
+/// succeed -- refusing would strand every heap written before the pin was
+/// removed -- and must NOT put the pin back, because a re-pinned evaluator
+/// compiles a compartment's dynamic code in the default realm, which is the
+/// escape the pin caused (`interp/realm.rs`,
+/// `new_shared_realm_machine_with_permit`).
+#[test]
+fn a_stale_evaluator_environment_row_restores_without_restoring_the_pin() {
+    let source = Interp::new_shared_realm_machine();
+    let function = source.intrinsics["Function"];
+    assert!(
+        source.functions[&function].global_env.is_null(),
+        "a boot evaluator carries no environment"
+    );
+    let mut state = source.function_state_snapshot();
+    let shared = state.shared.as_mut().expect("shared machine state");
+    assert!(
+        !shared
+            .function_environments
+            .iter()
+            .any(|&(owner, _)| owner == function.0),
+        "and therefore is not persisted"
+    );
+    shared
+        .function_environments
+        .push((function.0, shared.default_global));
+    shared.function_environments.sort_unstable();
+
+    let mut restored = Interp::new_shared_realm_machine();
+    restored
+        .restore_function_state(state)
+        .expect("a stale pin must not strand the heap");
+    assert!(
+        restored.functions[&function].global_env.is_null(),
+        "the stale pin must be dropped, not applied"
+    );
+}

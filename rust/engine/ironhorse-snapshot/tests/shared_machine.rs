@@ -18,7 +18,13 @@ fn roundtrip(m: &Machine) -> Machine {
         .with_persistence(|i| i.write_snapshot(&signature))
         .unwrap()
         .unwrap();
-    let i = from_snapshot_bytes(&bytes, &signature).unwrap();
+    restore(&bytes, &signature)
+}
+
+/// Rebuild a `Machine` from snapshot bytes, restoring every shared
+/// environment with the default policy.
+fn restore(bytes: &[u8], signature: &Signature) -> Machine {
+    let i = from_snapshot_bytes(bytes, signature).unwrap();
     let environments = i
         .shared_environment_ids()
         .into_iter()
@@ -657,15 +663,14 @@ fn contextual_rows_reject_inconsistent_reports_modules_and_thenable_capabilities
         };
         assert_restore_refuses(bad, signature.clone());
     }
-    let mut bad = image;
+    let mut bad = image.clone();
     let shared = bad.function_state.shared.as_mut().unwrap();
-    let guest = a.snapshot_id().unwrap().0;
-    shared
-        .function_environments
-        .iter_mut()
-        .find(|(owner, _)| *owner < shared.evaluators[0].owner)
-        .unwrap()
-        .1 = guest;
+    // A `function_environments` row whose owner is not a function at all.
+    // This used to corrupt a BOOT callable's environment instead, which the
+    // `boot callable environment mismatch` guard refused -- but the shared
+    // evaluators no longer carry rows (their environment is derived, not
+    // persisted), and they were the only boot callables that did.
+    shared.function_environments.first_mut().unwrap().0 = u32::MAX;
     assert_restore_refuses(bad, signature);
 }
 
