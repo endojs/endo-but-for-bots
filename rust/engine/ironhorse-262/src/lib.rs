@@ -696,13 +696,16 @@ pub fn parse_corpus(text: &str) -> Vec<String> {
 /// `include_str!` by `rust/endo/xsnap/src/lib.rs` (`POLYFILLS`,
 /// `HOST_ALIASES`) — read here verbatim from the same paths, so the bar runs
 /// the *actual* bytes the daemon boots, not a copy that could drift. The
-/// third boot step — **`ses_boot.js`** (SES `lockdown()` + the HandledPromise
-/// shim) — is **not committed**: it is a ~1 MB build artifact the daemon
-/// bundler (`rollup` over `@endo/*`) generates into `src/ses_boot.js` before
-/// the `include_str!`, absent in a fresh checkout. Bundling the full SES
-/// distribution is out of this engine workspace's scope, so `ses_boot.js` is
-/// a **named, ledgered boot-bundle gap** (`boot:ses-lockdown-bundle`), not
-/// dual-run here. `host_aliases.js` is a self-contained `globalThis` IIFE
+/// third boot step — **`ses_boot.js`** — is **not committed**: it is a 70 KB
+/// build artifact `yarn bundle:xs` generates into `src/ses_boot.js` via
+/// `@endo/compartment-mapper`'s `makeBundle`, absent in a fresh checkout.
+/// Despite its name it carries no `lockdown` and is not the SES shim: it is
+/// `@endo/harden` + `@endo/env-options` + `@endo/eventual-send` + the daemon's
+/// boot file, whose only `globalThis` write is `HandledPromise`
+/// (`packages/daemon/src/bus-worker-xs-ses-boot.js:16`). Because it is
+/// generated rather than committed it is not dual-run *here*; the integration
+/// test `tests/stage4_ses_boot.rs` covers it in the CI lane that bundles.
+/// `host_aliases.js` is a self-contained `globalThis` IIFE
 /// that aliases only host functions that exist, so with no host powers
 /// registered it completes to `undefined` — safe to dual-run in the engine.
 pub fn daemon_boot_bundle_sources() -> Vec<(&'static str, String)> {
