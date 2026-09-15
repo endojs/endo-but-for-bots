@@ -740,6 +740,85 @@ That is a CI-scope decision, not a ~1 MB artifact problem, and the ledger row
 re-worded to say so once it is made.
 The XL size still does not price that CI change.
 
+**Measured, 2026-09-15.** The bar was run rather than reasoned about, and
+it moves stage 4's remaining work somewhere else entirely.
+`ironhorse-262/tests/stage4_ses_boot.rs` dual-runs the sequence
+`bootstrap_ses` actually runs — `POLYFILLS`, then `SES_BOOT` through
+`eval_wrapped`'s try/catch shape, on one machine
+(`rust/endo/xsnap/src/lib.rs:1260`, `:1077`) — against the XS oracle, which
+builds and runs in this tree.
+
+Three results, none of which the phase assumed.
+
+*The bundle is already at the bar.* Both engines evaluate `ses_boot.js` to
+the same value, and `eval_wrapped`'s contract makes that value `'ok'` exactly
+when nothing threw. Both then carry `harden` and `HandledPromise`.
+Concatenating the three sources into one program, which an earlier reading of
+the bar implied, is not a program either engine accepts — both abort it with
+`SyntaxError: invalid directive`, because the daemon evaluates them
+separately.
+
+*`ses_boot.js` is not the SES shim.* Its module list is `@endo/harden`
+(make-hardener, make-selector, index), `@endo/env-options`,
+`@endo/eventual-send` (handled-promise, shim), and the daemon's own boot
+file. It contains three `globalThis.harden` assignments and no
+`globalThis.lockdown` or `globalThis.Compartment` anywhere. That is also why
+it is 70 KB: it was never the full SES distribution.
+
+*`lockdown` and `Compartment` on XS are XS's own.* The census before the
+bundle runs reads `lockdown=function harden=function Compartment=function` on
+the oracle and `lockdown=undefined harden=function Compartment=undefined` on
+ironhorse. XS implements SES natively, which
+`designs/ironhorse-engine.md:201` already says; the bundle never installed
+them on either engine.
+
+So stage 4's remaining work is **not** "make the boot bundles run", and the
+`boot:ses-lockdown-bundle` ledger row names the right thing for the wrong
+reason. What is missing at the GUEST level is that ironhorse has no
+`lockdown` and no `Compartment`, where XS has both natively.
+
+**But the machinery is built; what is absent is the binding layer.**
+Both facilities exist in Rust and are tested:
+
+- Multiple Compartments in one Realm: `Machine::new_compartment`,
+  `new_compartment_with`, `compartment`, `claim_compartment` and
+  `start_compartment` (`compartment.rs:516`, `:525`, `:1339`, `:923`,
+  `:1173`). `CompartmentOptions` is modelled on the SES constructor and says
+  so — `name` is "the compartment's `name` option (SES `Compartment` name)",
+  `has_resolve_hook` a "constructor-shape detail the SES suites probe" —
+  carrying `endowments`, `intrinsic_permit`, `modules` and `has_import_hook`.
+  `ironhorse-vm/tests/realms.rs:16-42` asserts the seam by guest object
+  identity.
+- Lockdown's substance: `Interp::new_shared_realm_machine_with_permit`
+  (`interp/realm.rs:108`) links intrinsics, collects the intrinsic roots,
+  `do_harden`s each transitively — "pristine intrinsic graph must admit
+  transitive freezing" — then sets `locked_down: true` and
+  `shared_compartments = true` (`:139-151`).
+
+Three things separate that from SES at the guest boundary, and they are the
+phase's real work item:
+
+1. No guest-visible `Compartment` constructor — `"Compartment"` appears
+   nowhere in `ironhorse-vm/src`.
+2. No guest-visible `lockdown`, and the Rust entry point is a CONSTRUCTOR
+   rather than a method on a running machine, so it freezes at creation
+   where SES's `lockdown()` is called by guest code at boot.
+3. Both entry points are `pub(crate)`, so `rust/endo` cannot reach them
+   either.
+
+**Unverified, and the first thing to check before sizing this as a binding
+exercise:** whether `CompartmentOptions` semantics match SES's constructor
+closely enough for real SES code. Its own `intrinsic_permit` doc notes it
+"controls bindings, not transitive reachability through endowed objects",
+which is not SES's attenuation model. A binding layer over a seam that
+differs semantically would pass a `typeof` census and fail a conformance
+suite.
+
+`Object.isFrozen(Object.prototype)` is `true` on both engines before any
+lockdown, and `harden` is present on ironhorse before the bundle runs — both
+are ironhorse's own freezing primitives (F015/F057/F058), not evidence of SES
+support. A bar that checked only those would read green and mean nothing.
+
 **If the bundles do not agree.** The bar is result agreement on three
 programs, and a divergence in `ses_boot.js` is the expected outcome of a
 first run, not a project failure.
