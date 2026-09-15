@@ -211,6 +211,23 @@ export const makeDirectoryMaker = ({
       return E(hub).list();
     };
 
+    /** @type {EndoDirectory['listValues']} */
+    const listValues = async () => {
+      // Capture every value through the same lookup path clients use, but do
+      // all name enumeration and root lookup synchronously in this exo turn.
+      // This is an atomic snapshot with respect to other directory messages:
+      // no mutation can interleave between list() and the lookup of a name.
+      const names = controller.list();
+      const values = names.map(name => {
+        try {
+          return lookup(name);
+        } catch (error) {
+          return Promise.reject(error);
+        }
+      });
+      return harden(values);
+    };
+
     /** @type {EndoDirectory['listIdentifiers']} */
     const listIdentifiers = async (...petNamePath) => {
       assertNames(petNamePath);
@@ -583,6 +600,7 @@ export const makeDirectoryMaker = ({
       reverseLocate,
       followLocatorNameChanges,
       list,
+      listValues,
       listIdentifiers,
       listLocators,
       locateContent,
@@ -643,6 +661,7 @@ export const makeDirectoryMaker = ({
       locate,
       reverseLocate,
       list,
+      listValues,
       listIdentifiers,
       listLocators,
       lookup,
@@ -665,6 +684,7 @@ export const makeDirectoryMaker = ({
         followLocatorNameChanges: locator =>
           readerFromIterator(directory.followLocatorNameChanges(locator)),
         list,
+        listValues,
         listIdentifiers,
         listLocators,
         followNameChanges: () => {

@@ -2705,6 +2705,11 @@ const makeDaemonCore = async (
       return E(hub).list();
     };
 
+    const listValues = async () => {
+      const values = listMessageNames().map(name => lookup(name));
+      return harden(values);
+    };
+
     const listIdentifiers = async (...petNamePath) => {
       assertNames(petNamePath);
       const names = await list(...petNamePath);
@@ -2795,6 +2800,7 @@ const makeDaemonCore = async (
             followLocatorNameChanges: locator =>
               readerFromIterator(followLocatorNameChanges(locator)),
             list,
+            listValues,
             listIdentifiers,
             listLocators,
             followNameChanges: (...petNamePath) =>
@@ -3097,6 +3103,11 @@ const makeDaemonCore = async (
       return E(hub).list();
     };
 
+    const listValues = async () => {
+      const values = orderedNames.map(name => lookup(name));
+      return harden(values);
+    };
+
     const listIdentifiers = async (...petNamePath) => {
       assertNames(petNamePath);
       const listedNames = await list(...petNamePath);
@@ -3182,6 +3193,7 @@ const makeDaemonCore = async (
             followLocatorNameChanges: locator =>
               readerFromIterator(followLocatorNameChanges(locator)),
             list,
+            listValues,
             listIdentifiers,
             listLocators,
             followNameChanges: (...petNamePath) =>
@@ -4168,6 +4180,7 @@ const makeDaemonCore = async (
             loadContent: disallowedFn,
             followLocatorNameChanges: disallowedFn,
             list: disallowedFn,
+            listValues: disallowedFn,
             listIdentifiers: disallowedFn,
             listLocators: disallowedFn,
             followNameChanges: disallowedFn,

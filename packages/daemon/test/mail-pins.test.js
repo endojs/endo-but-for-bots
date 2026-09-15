@@ -20,7 +20,7 @@ test('mail receipt reincarnates both guest pin directories', async t => {
     events.push(id);
     const entries = directoryEntries.get(id);
     if (entries !== undefined) {
-      return harden({ listIdentifiers: async () => entries });
+      return harden({ listValues: async () => entries.map(provide) });
     }
     return harden({ id });
   };
@@ -51,7 +51,7 @@ test('mail receipt reincarnates host pins', async t => {
   const provide = async id => {
     events.push(id);
     if (id === 'host-pins') {
-      return harden({ listIdentifiers: async () => ['retained'] });
+      return harden({ listValues: async () => [provide('retained')] });
     }
     return harden({ id });
   };
@@ -90,7 +90,7 @@ test('mail receipt tolerates a retained formula that fails to reincarnate', asyn
   const provide = async id => {
     const entries = directoryEntries.get(id);
     if (entries !== undefined) {
-      return harden({ listIdentifiers: async () => entries });
+      return harden({ listValues: async () => entries.map(provide) });
     }
     provided.push(id);
     if (id === 'broken') {
