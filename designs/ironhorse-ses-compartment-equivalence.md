@@ -178,6 +178,53 @@ it — lock down before admitting a second compartment.
 `Interp`, its refusal on a realm frozen first, and the unfrozen `Machine` that
 takes it and keeps its compartments.
 
+### How far the shim profile reaches the parity corpus
+
+`packages/test262-runner` runs the `ses-xs-parity` subset against three hosts.
+XS and node evaluate a generated SES prelude; the Ironhorse host drives
+`endot-ih -l`, which expects an ENGINE-side `lockdown()` and therefore
+pre-skips every SES-mode case (`xst.rs`, `SesMode::unimplemented_skip` — note
+that `SesMode::prelude()` is never applied on the live path at all).
+
+There is now a third prelude, `src/ironhorse-prelude.js`, and measuring it
+gives the first real number for the shim route: **3 of the 8 cases pass**
+(`ironhorse-vm/tests/ses_prelude_reach.rs`), against `covered=6` for the
+engine route, which skips the two that need the guest surface.
+The overlap is not the interesting part; the failures are.
+
+| case | node | Ironhorse via the shim prelude |
+|---|---|---|
+| `Compartment/prototype/Symbol.toStringTag.js` | pass | **pass** |
+| `Compartment/prototype/Symbol.toStringTag-lockdown.js` | **fail** | fail |
+| `pass-style-bytes/byte-readers.js` | pass | **pass** |
+| `pass-style-bytes/native-or-emulated-shape.js` | pass | **pass** |
+| `pass-style-bytes/byte-array-brand.js` | pass | fail |
+| `view-behavior-matrix/ses-hosts.js` | pass | fail |
+| `TextEncoder`/`TextDecoder` intersection | pass | fail |
+
+`Symbol.toStringTag-lockdown.js` **fails on node too** — the node host reports
+14/16 today, both failures on that file.
+`@endo/harden` installs `Object[Symbol.for('harden')]` during prelude
+evaluation and `repairIntrinsics` then refuses
+(`packages/ses/src/lockdown.js:393`).
+So one of the two cases the engine route name-skips is one no host currently
+passes, and it is not an Ironhorse gap.
+
+Two things the prelude had to get right, both of which are the
+`worker-rust-xs.md:515-520` dependency in miniature:
+
+- **Do not delete Ironhorse's native `harden`.** `@endo/harden`'s selector
+  takes `Object[Symbol.for('harden')]` first and `globalThis.harden` second,
+  installing its own only if neither exists — and an installed
+  `Object[@harden]` is exactly what makes `repairIntrinsics` refuse. XS relies
+  on the same adoption. `bundle-ironhorse-worker.mjs` does delete it, because
+  there `polyfills.js` has already replaced it with a deep-freeze shim.
+- **Take only `polyfills.js`'s codec section.** Ironhorse has no host
+  `TextEncoder`/`TextDecoder` (node's prelude takes them from `node:util`), but
+  the `assert` section collides with test262's `assert` and the `harden`
+  section installs `Object[@harden]`. The file's own section markers make the
+  slice exact, as `bundle-ironhorse-worker.mjs` already does it.
+
 ## What XS implements
 
 Everything SES-shaped in XS lives in two files.
