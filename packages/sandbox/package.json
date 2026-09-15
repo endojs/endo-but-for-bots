@@ -18,6 +18,7 @@
   "type": "module",
   "main": "./src/agent.js",
   "exports": {
+    "./policy.js": "./src/policy.js",
     "./owned-native-service.js": "./src/owned-native-service.js",
     "./native-podman-profile.js": "./src/native-podman-profile.js",
     ".": "./src/agent.js",

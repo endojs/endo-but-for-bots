@@ -91,18 +91,27 @@ export const main = async hostAgent => {
   await null;
   const { env } = process;
 
-  // The probes below read names *inside* SANDBOX_DIR, and `has` on a path
-  // resolves its parent, so the directory has to exist before the first one.
-  // On a host that already ran an earlier release it does; on a daemon with no
-  // sandbox state yet every probe threw `Unknown pet name` and neither stack
-  // could bootstrap.
-  if (!(await E(hostAgent).has(SANDBOX_DIR))) {
-    await E(hostAgent).makeDirectory([SANDBOX_DIR]);
-  }
+  // `has` on a path resolves its parent, so probing a name inside SANDBOX_DIR
+  // throws `Unknown pet name` on a daemon that has no sandbox state yet — the
+  // first probe below died there, and neither stack could bootstrap. An absent
+  // directory means an absent name. Answering that here, rather than creating
+  // the directory up front, keeps every validation below ahead of the first
+  // provisioning mutation.
+  /** @param {string} name */
+  const hasInSandbox = async name => {
+    await null;
+    try {
+      return await E(hostAgent).has(SANDBOX_DIR, name);
+    } catch (error) {
+      // Only an absent directory excuses the failure; anything else is real.
+      if (await E(hostAgent).has(SANDBOX_DIR)) throw error;
+      return false;
+    }
+  };
 
   // Validate the state root before any mint, so a bad value cannot strand a
   // profile that later writes through it.
-  const existingState = await E(hostAgent).has(SANDBOX_DIR, 'state-provider');
+  const existingState = await hasInSandbox('state-provider');
   const requestedRoots = getHostedStorageRoots(env);
   const stateDir = assertStateDir(
     existingState
@@ -110,8 +119,8 @@ export const main = async hostAgent => {
       : requestedRoots.stateDir,
   );
   const roots = harden({ ...requestedRoots, stateDir });
-  const legacyFactory = await E(hostAgent).has(SANDBOX_DIR, 'sandbox-factory');
-  const legacyMounter = await E(hostAgent).has(SANDBOX_DIR, 'fs-mounter');
+  const legacyFactory = await hasInSandbox('sandbox-factory');
+  const legacyMounter = await hasInSandbox('fs-mounter');
 
   // 1. Native sandbox service — the host-only primary runtime that
   //    daemon-owned session controllers acquire scopes from. It is
@@ -122,7 +131,7 @@ export const main = async hostAgent => {
   //    not, and its dot keeps it outside the managed-credential name charset.
   /** @type {Record<string, string> | undefined} */
   let nativeEnv;
-  if (await E(hostAgent).has(SANDBOX_DIR, 'native-sandbox')) {
+  if (await hasInSandbox('native-sandbox')) {
     const native = await readNativeSandbox(hostAgent);
     await assertRuntimePlacement(native.config.directory, roots);
     console.log(
@@ -158,6 +167,10 @@ export const main = async hostAgent => {
       nativeEnv.ENDO_SANDBOX_RUNTIME_DIR,
       nativeEnv.ENDO_SANDBOX_OWNER_ID,
     );
+  }
+
+  if (!(await E(hostAgent).has(SANDBOX_DIR))) {
+    await E(hostAgent).makeDirectory([SANDBOX_DIR]);
   }
 
   if (nativeEnv) {

@@ -4,18 +4,17 @@ import { join } from 'node:path';
 
 import { Fail } from '@endo/errors';
 import { E } from '@endo/eventual-send';
-import { makeExo } from '@endo/exo';
-import { M } from '@endo/patterns';
+import { providePrivateDirectory } from '@endo/hosted-agent/hosted-setup.js';
 import { makeProviderBrokerGrantIssuer } from '@endo/hosted-agent/provider-grant-issuer.js';
 import { makePodmanProviderListenerRuntime } from '@endo/hosted-agent/provider-listener-runtime.js';
 import { makePublicEgress } from '@endo/hosted-agent/public-egress.js';
 import { makeSecretRotator } from '@endo/hosted-agent/secret-rotator.js';
-import { make as makeSandbox } from '@endo/sandbox';
 
 import { startAppServerTransport } from './app-server-transport.js';
 import { makeCodexBackendFactory } from './backend-factory.js';
 import { makeHostVolumeProvider } from './host-volume-provider.js';
 import { whenHostStops } from './host-lifecycle.js';
+import { readPinnedSliceImage } from './hosted-runtime-setup.js';
 import { makeAttestedCodexResourceProvisioner } from './sandbox-policy.js';
 import { makeCodexSubscriptionCredential } from './subscription-auth.js';
 
@@ -28,11 +27,10 @@ export const makeHostedCodexSubscription = async options => {
   const {
     ownerId,
     directory,
-    imageRef,
     listenerImageRef,
     accountRef,
-    secret,
-    secretAdmin,
+    credential: secret,
+    sandbox,
     models,
     makeAuditJournal,
     loadThreadState,
@@ -41,9 +39,21 @@ export const makeHostedCodexSubscription = async options => {
     context,
     publicInternet = false,
   } = options;
+  // One capability serves both roles the composition below needs of the
+  // credential record: the broker grant reads it, and the refreshing credential
+  // replaces it under a generation check. `makeSecretRotator` attenuates the
+  // second down to that one method, exactly as it did when the admin facet came
+  // from the host agent's catalog.
+  const secretAdmin = secret;
+  sandbox || Fail`Codex host requires a native sandbox runtime`;
   typeof publicInternet === 'boolean' ||
     Fail`Invalid public network configuration`;
-  const imageDigest = imageRef.slice(imageRef.indexOf('@') + 1);
+  // Refuse a tagged, unpinned or malformed reference here, where the operator
+  // can still read the message, rather than one session at a time inside slice
+  // admission. The unchecked `imageRef.slice(imageRef.indexOf('@') + 1)` this
+  // replaces returned the whole reference when there was no `@`, so the image
+  // *name* reached the broker grant and the slice policy as a digest.
+  const { imageRef, imageDigest } = readPinnedSliceImage(options.imageRef);
   const credential = makeCodexSubscriptionCredential({
     secret,
     rotate: makeSecretRotator(secretAdmin),
@@ -53,6 +63,12 @@ export const makeHostedCodexSubscription = async options => {
   });
   // Refuse a stale, fenced or malformed credential before publishing a backend.
   await credential.current();
+  // The volume registry and the listener's process lock both live under this
+  // root, and both would otherwise `mkdir -p` it blind. Refuse a symlink, a
+  // non-directory, or a directory owned by another user once, here, and
+  // normalize its mode — the same treatment the other two adapters give their
+  // operator-supplied roots.
+  await providePrivateDirectory('Codex host directory', directory);
   const storage = await makeHostVolumeProvider({
     ...options,
     directory: join(directory, 'volumes'),
@@ -116,29 +132,15 @@ export const makeHostedCodexSubscription = async options => {
         maxResponseBytes: 16n * 1024n ** 2n,
       },
     });
-    const noScratch = makeExo(
-      'No host scratch',
-      M.interface('NoHostScratch', {
-        provideScratchMount: M.call().rest(M.arrayOf(M.any())).returns(M.any()),
-        provideHostPath: M.call().rest(M.arrayOf(M.any())).returns(M.any()),
-      }),
-      {
-        provideScratchMount() {
-          throw Fail`Host scratch is forbidden`;
-        },
-        provideHostPath() {
-          throw Fail`Host paths are forbidden`;
-        },
-      },
-    );
-    const sandbox = await makeSandbox(
-      /** @type {any} */ (noScratch),
-      undefined,
-      {
-        ownerId,
-        volumeQuota: storage.observer,
-      },
-    );
+    // The sandbox is no longer constructed here. It is the daemon-owned
+    // `codex-sandbox/native-sandbox` formula: it claims the exclusive ownership
+    // marker of its runtime directory, builds its own kernel-quota observer
+    // from configuration, and refuses capability-based construction through a
+    // null scratch provider — which is what the `noScratch` exo that used to
+    // stand here was for. Separating it is what lets this caplet, which is
+    // pinned to a release checkout, be re-minted on every setup run without
+    // re-claiming a marker a live runtime already holds.
+    //
     // The listener lock proves that an earlier host process has exited; the
     // driver probe completes exact-owner descendant reaping before recovery.
     const probes = await E(sandbox).listBackends();

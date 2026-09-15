@@ -76,10 +76,13 @@ test('any well-shaped header reaches the network; the route is not this layer\u2
   t.is(sent['chatgpt-account-id'], 'account-1');
 
   // The same headers on another https route are no longer refused here.
-  t.deepEqual(await E(subject.transport).request({ ...subscription, url: request.url }), {
-    status: 200,
-    body: 'ok',
-  });
+  t.deepEqual(
+    await E(subject.transport).request({ ...subscription, url: request.url }),
+    {
+      status: 200,
+      body: 'ok',
+    },
+  );
 
   // What is still refused is a value that could forge a second header.
   await t.throwsAsync(() =>
@@ -163,7 +166,9 @@ test('a refusal is bounded, and never echoes the credential it carried', async t
       new Response(`denied: Bearer canary-secret ${'x'.repeat(4096)}`, {
         status: 400,
       }),
-    diagnostic => diagnostics.push(diagnostic),
+    diagnostic => {
+      diagnostics.push(diagnostic);
+    },
   );
   t.teardown(echoed.dispose);
   await t.throwsAsync(() => E(echoed.transport).request(request), {
@@ -177,7 +182,9 @@ test('a refusal is bounded, and never echoes the credential it carried', async t
   );
   const bounded = setup(
     async () => new Response('d'.repeat(4096), { status: 400 }),
-    diagnostic => diagnostics.push(diagnostic),
+    diagnostic => {
+      diagnostics.push(diagnostic);
+    },
   );
   t.teardown(bounded.dispose);
   await t.throwsAsync(() => E(bounded.transport).request(request));

@@ -36,6 +36,7 @@
     "./session-registry.js": "./src/session-registry.js",
     "./session-powers.js": "./src/session-powers.js",
     "./cleanup-scope.js": "./src/cleanup-scope.js",
+    "./recorded-cleanup.js": "./src/recorded-cleanup.js",
     "./mcp-bridge.js": "./src/mcp-bridge.js",
     "./mcp-socket.js": "./src/mcp-socket.js",
     "./mcp-stdio-bridge.js": "./src/mcp-stdio-bridge.js",
@@ -47,6 +48,8 @@
     "./current-specifier.js": "./src/current-specifier.js",
     "./managed-credentials.js": "./src/managed-credentials.js",
     "./managed-credentials-module.js": "./src/managed-credentials-module.js",
+    "./managed-renewable-credentials.js": "./src/managed-renewable-credentials.js",
+    "./managed-renewable-credentials-module.js": "./src/managed-renewable-credentials-module.js",
     "./provider-broker-service.js": "./src/provider-broker-service.js"
   },
   "scripts": {

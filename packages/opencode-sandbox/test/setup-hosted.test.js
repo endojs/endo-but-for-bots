@@ -428,7 +428,9 @@ test.serial(
     t.like(config, {
       ownerId: 'operator-broker',
       directory: path.join(base, 'broker'),
-      imageRef: `localhost/opencode:latest@${digest}`,
+      // The tag is resolved AWAY: `name:tag@digest` is a reference the
+      // native runtime refuses, so the pin drops the tag it was found under.
+      imageRef: `localhost/opencode@${digest}`,
       imageDigest: digest,
       listenerImageRef,
       publicInternet: true,

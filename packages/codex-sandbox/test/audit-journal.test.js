@@ -6,7 +6,7 @@ import test from 'ava';
 import {
   canonicalAuditJson,
   makeAuditJournal,
-  makePetstoreAuditJournal,
+  makeStoredAuditJournal,
   verifyAuditEntries,
 } from '../src/audit-journal.js';
 
@@ -375,14 +375,14 @@ test('petstore audit journal survives reconstruction outside the session', async
     });
   const powers = makePowers(values);
   const anchorPowers = makePowers(anchors);
-  const first = makePetstoreAuditJournal(powers, {
+  const first = makeStoredAuditJournal(powers, {
     journalId: 'operator-journal',
     sessionId: 'session-3',
     anchorPowers,
   });
   await first.writer.append('session-open', { policyVersion: 'v1' });
 
-  const recovered = makePetstoreAuditJournal(powers, {
+  const recovered = makeStoredAuditJournal(powers, {
     journalId: 'operator-journal',
     sessionId: 'session-3',
     anchorPowers,
@@ -398,7 +398,7 @@ test('petstore audit journal survives reconstruction outside the session', async
   // One deleted tail entry is restored from the independently protected
   // write-ahead anchor.
   values.delete('codex-audit-session-3-00000000000000000001');
-  const rolledBack = makePetstoreAuditJournal(powers, {
+  const rolledBack = makeStoredAuditJournal(powers, {
     journalId: 'operator-journal',
     sessionId: 'session-3',
     anchorPowers,
@@ -409,7 +409,7 @@ test('petstore audit journal survives reconstruction outside the session', async
   // A longer rollback cannot be mistaken for a single prepared append.
   values.delete('codex-audit-session-3-00000000000000000001');
   values.delete('codex-audit-session-3-00000000000000000002');
-  const longerRollback = makePetstoreAuditJournal(powers, {
+  const longerRollback = makeStoredAuditJournal(powers, {
     journalId: 'operator-journal',
     sessionId: 'session-3',
     anchorPowers,
@@ -440,12 +440,12 @@ test('petstore journals do not cross-select overlapping head prefixes', async t 
     });
   const powers = makePowers(values);
   const anchorPowers = makePowers(anchors);
-  const short = makePetstoreAuditJournal(powers, {
+  const short = makeStoredAuditJournal(powers, {
     journalId: 'short',
     sessionId: 'a',
     anchorPowers,
   });
-  const overlapping = makePetstoreAuditJournal(powers, {
+  const overlapping = makeStoredAuditJournal(powers, {
     journalId: 'overlapping',
     sessionId: 'a-head-z',
     anchorPowers,
@@ -474,7 +474,7 @@ test('petstore audit journal rejects one capability for entries and heads', t =>
   });
   t.throws(
     () =>
-      makePetstoreAuditJournal(powers, {
+      makeStoredAuditJournal(powers, {
         journalId: 'not-separated',
         sessionId: 'same-powers',
         anchorPowers: powers,
@@ -501,7 +501,7 @@ test('petstore anchor storage has an independent durable byte bound', async t =>
         valuesMap.set(name, value);
       },
     });
-  const journal = makePetstoreAuditJournal(makePowers(values), {
+  const journal = makeStoredAuditJournal(makePowers(values), {
     journalId: 'bounded-anchor',
     sessionId: 'anchor-quota',
     anchorPowers: makePowers(anchors),
@@ -540,7 +540,7 @@ test('concurrent readers share one recovery of a prepared append', async t => {
     });
   const powers = makePowers(values, true);
   const anchorPowers = makePowers(anchors);
-  const journal = makePetstoreAuditJournal(powers, {
+  const journal = makeStoredAuditJournal(powers, {
     journalId: 'operator-journal',
     sessionId: 'session-4',
     anchorPowers,
@@ -555,7 +555,7 @@ test('concurrent readers share one recovery of a prepared append', async t => {
 
   // Two readers arrive at once — an operator health check racing the next
   // append. Both used to take the replay branch and both call appendEntry.
-  const reopened = makePetstoreAuditJournal(powers, {
+  const reopened = makeStoredAuditJournal(powers, {
     journalId: 'operator-journal',
     sessionId: 'session-4',
     anchorPowers,

@@ -32,9 +32,9 @@ export const AssetMountInterface = M.interface('AssetMount', {
 });
 
 /**
- * The static asset server. `serve(filesystem, opts)` mints a fresh
- * capability path, registers the Filesystem under it, and returns a
- * record `{ path, url, revoke }`; the mount persists until
+ * The static asset server. `serve(filesystem, opts)` verifies the cap answers
+ * `root()`, mints a fresh capability path, registers the Filesystem under it,
+ * and resolves to a record `{ path, url, revoke }`; the mount persists until
  * `revoke.revoke()` (or the server stops). `getAddress()` reports the
  * bound host/port and public origin.
  *
@@ -44,15 +44,13 @@ export const AssetMountInterface = M.interface('AssetMount', {
 export const AssetServerInterface = M.interface(
   'AssetServer',
   {
+    // Async: the cap is probed for `root()` before a URL is minted, so an
+    // unservable capability is refused at serve time instead of 404ing on
+    // every request. `M.remotable` does not check an interface name, and this
+    // server walks a Filesystem's `root()`, so the probe is the only check.
     serve: M.call(M.eref(M.remotable('Filesystem')))
       .optional(M.record())
-      .returns(
-        M.splitRecord({
-          path: M.string(),
-          url: M.string(),
-          revoke: M.remotable('AssetMount'),
-        }),
-      ),
+      .returns(M.promise()),
     getAddress: M.call().returns(M.record()),
     stop: M.call().returns(M.promise()),
     help: M.call().optional(M.string()).returns(M.string()),

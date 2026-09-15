@@ -1,10 +1,24 @@
 # Experimental hosted Codex subscription
 
-`setup-hosted.js` is an explicit, one-shot operator entry point.
-Without `ENDO_CODEX_HOST_CONFIG` it enables nothing.
-Run it through the Endo CLI with host powers, never session guest powers.
-Provide nonsecret JSON configuration in that environment variable and optionally
-pin `ENDO_CODEX_MODULE_PATH` to a stable, operator-owned deployment path.
+Provisioning is two idempotent scripts, mirroring the other CLI adapters, both
+run through the Endo CLI with host powers and never session guest powers:
+
+- `setup-host.js` mints the host-side formulas under `codex-sandbox/` — the
+  owned native Podman runtime with its XFS quota observer, and the session state
+  provider. They are constructed with slot-free `null` powers and are not
+  re-created on a rerun, because an ownership marker and durable session state
+  must survive one.
+- `setup-hosted.js` mints the renewable credential and the backend caplet, and
+  binds it into Floot's controller profile. Without `ENDO_CODEX_ENABLE=1` it
+  enables nothing. Its configuration is `ENDO_CODEX_*` environment variables,
+  from which it composes the backend's formula configuration; the header of the
+  script lists them.
+
+Both are intended for `ENDO_EXTRA`, so a clean daemon provisions Codex with no
+operator script. This replaces an explicit one-shot entry point that refused an
+existing backend outright, and which therefore had to be re-run by hand after
+every teardown, host rebuild or state restore.
+
 Formula revival requires that code and its dependencies to remain available.
 
 ## Authentication
@@ -13,23 +27,35 @@ On a trusted machine, obtain a fresh Codex ChatGPT login and import its complete
 renewal-bearing `auth.json` into general Secrets at
 `secrets/codex-subscription-auth` (or the configured `secretPath`).
 Do not paste credentials into chat, a command argument, repository, or log.
-The one-shot setup normalizes the full login to `BrokerOAuthStateV1` using a
-generation-checked replacement and pins the selected account in formula config.
+Normalize that login to `BrokerOAuthStateV1` before setup; `setup-hosted.js`
+refuses a record that is not one rather than converting it, because converting a
+credential is not something a script that runs on every daemon start should do.
+It pins the selected account in formula configuration.
 The refresh token remains the renewal authority; a cached access token is only
 usable until expiry and is never copied to the model slice.
 
-Setup refuses an existing backend before reading or changing its credential.
-Reconfiguration requires deliberate operator replacement, not rerunning setup
-and assuming new settings took effect.
-A private per-host installer lock excludes concurrent setup; a crashed installer
-leaves a lock requiring verified operator recovery.
-Raw-login replacement after installation needs explicit normalization before use.
-Changing accounts requires deliberate replacement/migration and new session policy;
-revival never silently adopts a replacement account.
+Setup is idempotent but not silently so. The refusals that mattered in the
+one-shot entry point are kept, and are now about what changed rather than about
+setup having run before:
+
+- A credential pinned to a different Secrets record fails closed
+  (`provideManagedRenewableCredentials`).
+- An existing backend pinned to a different account, or running under a
+  different owner label, is refused before anything is minted.
+- The volume registry records one owner and refuses a changed project-ID range
+  outright, so setup checks the owner against the native runtime's first.
+
+What is gone is the per-host installer lock: setup no longer performs a
+one-time installation, so there is no installation to exclude. Two operators
+running it concurrently is now the same exposure the other two adapters have.
+Changing accounts still requires deliberate replacement/migration and new
+session policy; revival never silently adopts a replacement account.
 
 ## Operator configuration
 
-The JSON record supplies:
+`setup-hosted.js` composes the backend's `CODEX_HOST_CONFIG` from `ENDO_CODEX_*`
+variables and validates it before any mint; an unknown key is refused rather
+than ignored. The record it composes supplies:
 
 - `directory`: private persistent host state directory.
 - `imageRef`, `listenerImageRef`: independently approved immutable OCI references.
@@ -49,15 +75,31 @@ The JSON record supplies:
 - `maxSessions`: bounded concurrent listener capacity.
 - `models`: operator-approved Codex descriptors, including supported reasoning
   efforts; this composition does not automatically enable the full CLI catalog.
-- Optional `secretPath` and `accountRef`; setup selects and pins the account once
-  if it was not explicitly provided.
+- `ownerId`: the Podman reconciliation label, the volume registry's recorded
+  owner and the listener's lock name, derived from the host identity at setup.
+  The registry refuses a change, so this is effectively immutable once a
+  deployment has run one session.
+- Optional `secretPath` and `accountRef`; setup defaults the account to the one
+  the stored credential names, and refuses a value that disagrees with it.
 - Optional `diagnostics: true` enables host-only fixed broker event/count and
   transport failure stage/HTTP-status logging, never request or credential data.
   The listener also emits at most four fixed failure-stage/header-check records;
   their destination depends on the host's container logging configuration.
 
-The backend is published under `codex-subscription-backend`, in a dedicated worker,
-and bound into `floot/controller-profile/codex-backend` only after construction.
+The backend is published under `codex-sandbox/backend` and bound into
+`floot/controller-profile/codex-backend` only after construction. It is minted
+under a temporary name first, so a failed mint leaves the live backend and
+Floot's binding to it working.
+
+Its powers is a stored record of exactly three capabilities — the renewable
+credential, the native sandbox runtime, and the state provider — rather than
+`@agent`. The credential caplet is the one formula in this adapter still minted
+with `@agent`, because the daemon vends a `SecretAdmin` only from
+`@secrets/catalog` and makes no delegable form of it; see the module comment in
+`@endo/hosted-agent/managed-renewable-credentials-module.js`.
+
+Per-session audit entries, journal anchors and the thread checkpoint live in
+host files under the state provider's root, not in the host agent's petstore.
 Floot resolves configured backend bindings at selection time; existing sessions
 retain their current backend until their normal lifecycle ends.
 Codex exposes Floot's guest JavaScript as `endo_exec`, distinct from native `exec`.

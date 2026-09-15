@@ -12,6 +12,8 @@ import {
 import os from 'node:os';
 import path from 'node:path';
 
+import { PINNED_IMAGE_REFERENCE_PATTERN } from '@endo/sandbox/policy.js';
+
 import {
   assertNoRuntimeLeftovers,
   assertRuntimePlacement,
@@ -256,10 +258,20 @@ test('slice image references are checked without Podman and pinned through it', 
     inspected.push([file, ...args]);
     return { stdout: `${digest}\n` };
   };
+  // The tag names where the image was FOUND; the digest is the pin. Keeping
+  // both produces `name:tag@digest`, which Podman accepts and the native
+  // runtime refuses, so a resolver that called it pinned sent every session to
+  // "Native profile requires a pinned OCI image".
   t.deepEqual(await resolvePinnedImageRef('oci:localhost/x:latest', exec), {
-    imageRef: `localhost/x:latest@${digest}`,
+    imageRef: `localhost/x@${digest}`,
     imageDigest: digest,
   });
+  t.true(
+    PINNED_IMAGE_REFERENCE_PATTERN.test(`localhost/x@${digest}`),
+    'what this resolver returns is what the runtime accepts',
+  );
+  t.false(PINNED_IMAGE_REFERENCE_PATTERN.test(`localhost/x:latest@${digest}`));
+  // The tag is still what Podman is asked about.
   t.deepEqual(inspected, [
     [
       'podman',
@@ -270,11 +282,20 @@ test('slice image references are checked without Podman and pinned through it', 
       'localhost/x:latest',
     ],
   ]);
+  // A registry port is not a tag: the colon before the last slash stays.
+  t.deepEqual(
+    await resolvePinnedImageRef('oci:registry.example:5000/x:v2', exec),
+    { imageRef: `registry.example:5000/x@${digest}`, imageDigest: digest },
+  );
+  t.deepEqual(
+    await resolvePinnedImageRef('oci:registry.example:5000/x', exec),
+    { imageRef: `registry.example:5000/x@${digest}`, imageDigest: digest },
+  );
   t.deepEqual(await resolvePinnedImageRef(`oci:localhost/x@${digest}`, exec), {
     imageRef: `localhost/x@${digest}`,
     imageDigest: digest,
   });
-  t.is(inspected.length, 1, 'a pinned reference is not resolved again');
+  t.is(inspected.length, 3, 'a pinned reference is not resolved again');
   await t.throwsAsync(
     resolvePinnedImageRef(
       'oci:localhost/x:latest',

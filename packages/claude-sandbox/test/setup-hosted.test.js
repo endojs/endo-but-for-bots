@@ -572,7 +572,9 @@ test.serial(
       brokerMint(fake.mints)?.options.env.CLAUDE_BROKER_CONFIG ?? '',
     );
     t.like(config, {
-      imageRef: `localhost/claude:latest@${pinned}`,
+      // The tag is resolved AWAY: `name:tag@digest` is a reference the
+      // native runtime refuses, so the pin drops the tag it was found under.
+      imageRef: `localhost/claude@${pinned}`,
       imageDigest: pinned,
       credentialKind: 'oauthToken',
       anthropicBeta: 'oauth-2025-04-20,interleaved-thinking',
