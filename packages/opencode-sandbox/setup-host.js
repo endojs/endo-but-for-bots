@@ -91,6 +91,15 @@ export const main = async hostAgent => {
   await null;
   const { env } = process;
 
+  // The probes below read names *inside* SANDBOX_DIR, and `has` on a path
+  // resolves its parent, so the directory has to exist before the first one.
+  // On a host that already ran an earlier release it does; on a daemon with no
+  // sandbox state yet every probe threw `Unknown pet name` and neither stack
+  // could bootstrap.
+  if (!(await E(hostAgent).has(SANDBOX_DIR))) {
+    await E(hostAgent).makeDirectory([SANDBOX_DIR]);
+  }
+
   // Validate the state root before any mint, so a bad value cannot strand a
   // profile that later writes through it.
   const existingState = await E(hostAgent).has(SANDBOX_DIR, 'state-provider');
@@ -151,9 +160,6 @@ export const main = async hostAgent => {
     );
   }
 
-  if (!(await E(hostAgent).has(SANDBOX_DIR))) {
-    await E(hostAgent).makeDirectory([SANDBOX_DIR]);
-  }
   if (nativeEnv) {
     const powersName = 'opencode.null-powers';
     if (await E(hostAgent).has(powersName)) {
