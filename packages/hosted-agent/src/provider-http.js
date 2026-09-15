@@ -4,7 +4,11 @@ import { Fail } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import { createServer } from 'node:http';
 
-import { INFERENCE_PATHS } from './provider-paths.js';
+import {
+  INFERENCE_PATHS,
+  forwardableHeaders,
+  splitInferenceTarget,
+} from './provider-paths.js';
 
 /** @import { Socket } from 'node:net' */
 /** @import { IncomingMessage, ServerResponse } from 'node:http' */
@@ -20,6 +24,10 @@ import { INFERENCE_PATHS } from './provider-paths.js';
  * inside the operator's isolated broker namespace, with the endpoint supplied
  * over a private capability transport. Loopback binding alone is NOT process
  * isolation and this module issues no confinement attestation.
+ *
+ * The harness's own headers cross to the broker, minus the ones the broker
+ * owns (see BROKER_OWNED_HEADERS); the broker applies its own after them, so a
+ * slice can describe its request but never authenticate it.
  *
  * Each connection serves one request. Deadlines include uploads, upstream
  * inference, and slow consumers. An unresponsive endpoint retains its admission
@@ -80,11 +88,14 @@ export const makeProviderHttpListener = async ({
   (Array.isArray(allowedPaths) && allowedPaths.length > 0) ||
     Fail`Invalid inference paths`;
   // Copy and re-validate: the admission decision must not follow a caller's
-  // later mutation of the array, and only exact canonical paths are admitted.
+  // later mutation of the array, and only exact canonical targets are
+  // admitted. A target may carry a bounded query; matching below stays an
+  // exact comparison against the whole request target either way.
   const paths = harden(
     allowedPaths.map(path => {
-      (typeof path === 'string' &&
-        /^\/[a-zA-Z0-9_-]+(?:\/[a-zA-Z0-9_-]+)*$/.test(path)) ||
+      const target = splitInferenceTarget(path);
+      (target !== undefined &&
+        /^\/[a-zA-Z0-9_-]+(?:\/[a-zA-Z0-9_-]+)*$/.test(target.pathname)) ||
         Fail`Invalid inference path`;
       return path;
     }),
@@ -186,6 +197,7 @@ export const makeProviderHttpListener = async ({
           method: 'POST',
           path: request.url,
           body: parts.join(''),
+          headers: forwardableHeaders(request.headers),
         }),
       );
       reader = result.reader;

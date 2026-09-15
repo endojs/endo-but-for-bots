@@ -563,16 +563,29 @@ test('header injection via secret is rejected without exporting the secret', asy
   t.is(calls.length, 0);
 });
 
-test('caller headers cannot override broker authority or supply cookies', async t => {
+test('caller headers are forwarded, but never the ones the broker owns', async t => {
+  // The seam the broker keeps is authentication and authority, not the API
+  // surface: a caller describes its own request (this is what lets a CLI
+  // release adopt a capability without an outage here), and every header in
+  // BROKER_OWNED_HEADERS is dropped and re-supplied by the broker. `cookie`
+  // is forwarded now — it is the caller's to send to an origin the broker
+  // already pinned — while `authorization` and `host` are not.
   const { endpoint, calls } = setup();
   await E(endpoint).request(
     harden({
       ...request,
-      headers: { authorization: 'evil', cookie: 'ambient', host: 'evil.test' },
+      headers: {
+        authorization: 'evil',
+        cookie: 'ambient',
+        host: 'evil.test',
+        'anthropic-beta': 'context-management-2026-01-01',
+      },
     }),
   );
   t.deepEqual(calls[0].headers, {
     authorization: `Bearer ${credential}`,
+    cookie: 'ambient',
+    'anthropic-beta': 'context-management-2026-01-01',
     'content-type': 'application/json',
   });
 });

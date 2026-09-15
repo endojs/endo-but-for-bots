@@ -8,6 +8,7 @@ import { makeAnthropicProvider } from './anthropic.js';
 import { makeGeminiProvider } from './gemini.js';
 import { makeLlamaCppProvider } from './llamacpp.js';
 import { makeOllamaProvider } from './ollama.js';
+import { makeOpenRouterProvider } from './openrouter.js';
 import { detectProviderKind, resolveModelForHost } from './config.js';
 
 /**
@@ -37,6 +38,14 @@ export const createProvider = env => {
   const baseURL = env.LAL_HOST || 'http://localhost:11434';
   const providerKind = detectProviderKind(baseURL);
   const model = resolveModelForHost(baseURL, env.LAL_MODEL);
+
+  if (providerKind === 'openrouter') {
+    return makeOpenRouterProvider({
+      apiKey: env.LAL_AUTH_TOKEN || '',
+      model: env.LAL_MODEL || '',
+      maxTokens: env.LAL_MAX_TOKENS ? Number(env.LAL_MAX_TOKENS) : 4096,
+    });
+  }
 
   if (providerKind === 'anthropic') {
     const apiKey = env.LAL_AUTH_TOKEN;
@@ -112,3 +121,4 @@ export { makeGeminiProvider } from './gemini.js';
 export { makeLlamaCppProvider } from './llamacpp.js';
 export { findMockTrace, makeMockProvider } from './mock.js';
 export { makeOllamaProvider } from './ollama.js';
+export { makeOpenRouterProvider } from './openrouter.js';

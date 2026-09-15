@@ -4,6 +4,8 @@ An LLM agent manager for Endo. Fae runs as a factory caplet inside the
 Endo daemon, creating named agent instances that process inbox messages
 via an LLM and adopt tool capabilities at runtime.
 
+For the Secrets-backed OpenRouter API provider, see [OpenRouter setup](../floot/OPENROUTER.md#fae).
+
 ## Architecture
 
 Fae uses a three-layer architecture:

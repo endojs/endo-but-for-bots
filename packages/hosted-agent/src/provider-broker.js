@@ -5,7 +5,11 @@ import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 
-import { INFERENCE_PATHS } from './provider-paths.js';
+import {
+  INFERENCE_PATHS,
+  forwardableHeaders,
+  splitInferenceTarget,
+} from './provider-paths.js';
 import { makeSecretRotator } from './secret-rotator.js';
 
 /**
@@ -582,11 +586,14 @@ export const makeProviderBrokerGrant = (
     clientAuthorization === 'strip' ||
     Fail`Unsupported client authorization mode`;
   const routes = policy.routes.map(({ method, path }) => {
-    // Exact paths only: no normalization, query, fragment, percent escaping,
-    // alternate authority or dot segments can affect dispatch.
+    // Exact targets only: no normalization, fragment, percent escaping,
+    // alternate authority or dot segments can affect dispatch. A query is
+    // admitted, but as part of the exact target — never as a wildcard.
+    const target = splitInferenceTarget(path);
     (method === 'POST' &&
-      INFERENCE_PATHS.includes(path) &&
-      /^\/[a-zA-Z0-9_-]+(?:\/[a-zA-Z0-9_-]+)*$/.test(path)) ||
+      target !== undefined &&
+      INFERENCE_PATHS.includes(target.pathname) &&
+      /^\/[a-zA-Z0-9_-]+(?:\/[a-zA-Z0-9_-]+)*$/.test(target.pathname)) ||
       Fail`Invalid inference route`;
     return `${method} ${path}`;
   });
@@ -645,28 +652,38 @@ export const makeProviderBrokerGrant = (
   const endpoint = makeExo(
     'ProviderInferenceGrant',
     M.interface('ProviderInferenceGrant', {
+      // `headers` is optional, not merely nullable: a caller that curates no
+      // headers of its own — every in-process caller before the listener
+      // existed — omits the key, and `M.opt` inside the required half would
+      // still demand it be present.
       request: M.call(
-        M.splitRecord({
-          method: M.string(),
-          path: M.string(),
-          body: BodyShape,
-        }),
+        M.splitRecord(
+          {
+            method: M.string(),
+            path: M.string(),
+            body: BodyShape,
+          },
+          { headers: M.recordOf(M.string(), M.string()) },
+        ),
       ).returns(M.promise()),
 
       requestStream: M.call(
-        M.splitRecord({
-          method: M.string(),
-          path: M.string(),
-          body: BodyShape,
-        }),
+        M.splitRecord(
+          {
+            method: M.string(),
+            path: M.string(),
+            body: BodyShape,
+          },
+          { headers: M.recordOf(M.string(), M.string()) },
+        ),
       ).returns(M.promise()),
     }),
     {
-      /** @param {{method: string, path: string, body: string}} request */
+      /** @param {{method: string, path: string, body: string, headers?: Record<string, string>}} request */
       async request(request) {
         return perform(request, false);
       },
-      /** @param {{method: string, path: string, body: string}} request */
+      /** @param {{method: string, path: string, body: string, headers?: Record<string, string>}} request */
       async requestStream(request) {
         return perform(request, true);
       },
@@ -751,10 +768,13 @@ export const makeProviderBrokerGrant = (
    * @returns {Promise<ProviderStream & {contentType: string}>}
    */
   /**
-   * @param {{method: string, path: string, body: string}} request
+   * @param {{method: string, path: string, body: string, headers?: Record<string, string>}} request
    * @param {boolean} streaming
    */
-  const perform = async ({ method, path, body }, streaming) => {
+  const perform = async ({ method, path, body, headers }, streaming) => {
+    // Re-screen on this side of the seam: the listener already dropped the
+    // owned headers, and the broker does not take its word for it.
+    const forwarded = forwardableHeaders(headers ?? {});
     checkLive();
     routes.includes(`${method} ${path}`) || Fail`Inference route denied`;
     const requestBytes = BigInt(new TextEncoder().encode(body).length);
@@ -823,16 +843,24 @@ export const makeProviderBrokerGrant = (
             : `${origin}${path}`,
         method,
         headers: {
-          ...(credentialHeader === 'bearer'
-            ? { authorization: `Bearer ${token}` }
-            : { 'x-api-key': token }),
-          ...(anthropicVersion === undefined
+          // The harness describes its own request; the broker authenticates it.
+          // Re-screened here rather than trusted from the listener, so the
+          // owned set is enforced on this side of the seam too. Policy values
+          // fill in only what the harness did not send, and the credential is
+          // applied last and unconditionally.
+          ...forwarded,
+          ...(anthropicVersion === undefined ||
+          forwarded['anthropic-version'] !== undefined
             ? {}
             : { 'anthropic-version': anthropicVersion }),
-          ...(anthropicBeta === undefined
+          ...(anthropicBeta === undefined ||
+          forwarded['anthropic-beta'] !== undefined
             ? {}
             : { 'anthropic-beta': anthropicBeta }),
           'content-type': 'application/json',
+          ...(credentialHeader === 'bearer'
+            ? { authorization: `Bearer ${token}` }
+            : { 'x-api-key': token }),
           ...(authMode === 'subscription'
             ? {
                 'chatgpt-account-id': accountRef,

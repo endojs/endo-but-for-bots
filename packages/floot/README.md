@@ -1,5 +1,7 @@
 # @endo/floot
 
+For the Secrets-backed OpenRouter API provider, see [OpenRouter setup](./OPENROUTER.md).
+
 ## Durable turn recovery
 
 Factory-created sessions keep append-only turn journals in factory-owned storage,

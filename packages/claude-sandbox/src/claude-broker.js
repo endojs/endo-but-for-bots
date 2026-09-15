@@ -28,6 +28,13 @@ import { assertCredentialKind } from './claude-credential-kinds.js';
 
 export const ANTHROPIC_ORIGIN = 'https://api.anthropic.com';
 export const ANTHROPIC_MESSAGES_PATH = '/v1/messages';
+/**
+ * Claude Code appends `?beta=true` to the messages route when it authenticates
+ * with an OAuth subscription grant rather than an API key. Admission matches
+ * the whole request target, query included, so this is a distinct allowed path
+ * and not a variant of the one above.
+ */
+export const ANTHROPIC_MESSAGES_BETA_PATH = `${ANTHROPIC_MESSAGES_PATH}?beta=true`;
 export const ANTHROPIC_VERSION = '2023-06-01';
 export const CLAUDE_BROKER_ACCOUNT = 'anthropic';
 harden(ANTHROPIC_ORIGIN);
@@ -93,6 +100,16 @@ export const buildClaudeBrokerPolicy = ({
         method: /** @type {const} */ ('POST'),
         path: ANTHROPIC_MESSAGES_PATH,
       },
+      // Only for a subscription grant: an API-key deployment never sends the
+      // beta target, so admitting it there would widen the policy for nothing.
+      ...(oauth
+        ? [
+            {
+              method: /** @type {const} */ ('POST'),
+              path: ANTHROPIC_MESSAGES_BETA_PATH,
+            },
+          ]
+        : []),
     ],
     clientAuthorization: /** @type {const} */ ('strip'),
     credentialHeader,

@@ -46,6 +46,7 @@ const ConfigShape = M.splitRecord(
     anthropicBeta: M.string(),
     maxSessions: M.number(),
     publicInternet: M.boolean(),
+    diagnostics: M.boolean(),
   },
   harden({}),
 );

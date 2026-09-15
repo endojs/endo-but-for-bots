@@ -4098,14 +4098,26 @@ export const make = (hostPowers, _context, { env } = {}) => {
     let backendId;
     let modelId;
     const selectedModel = options.modelId || options.model || '';
+    const providerConfig = await getProviderConfig().catch(() => undefined);
+    const openRouter = providerConfig?.provider === 'openrouter';
     if (options.backendId && options.backendId !== 'provider') {
       backendId = `${options.backendId}`;
       modelId = `${options.modelId || ''}`;
     } else if (
+      options.backendId !== 'provider' &&
       typeof selectedModel === 'string' &&
+      (!openRouter || !selectedModel.includes('/')) &&
       selectedModel.includes(':')
     ) {
       [backendId, modelId] = selectedModel.split(/:(.*)/s, 2);
+    }
+    if (
+      !backendId &&
+      openRouter &&
+      selectedModel &&
+      (typeof selectedModel !== 'string' || !selectedModel.includes('/'))
+    ) {
+      throw Error('OpenRouter model must include its organization prefix');
     }
     if (backendId) {
       const backend = (await getHostedBackends()).get(backendId);
@@ -4163,7 +4175,12 @@ export const make = (hostPowers, _context, { env } = {}) => {
               ? { reasoningEffort: `${options.reasoningEffort}` }
               : {}),
           }
-        : isKnownModel(selectedModel)
+        : (
+              openRouter
+                ? typeof selectedModel === 'string' &&
+                  selectedModel.includes('/')
+                : isKnownModel(selectedModel)
+            )
           ? { model: selectedModel }
           : {}),
     });
@@ -4541,10 +4558,11 @@ export const make = (hostPowers, _context, { env } = {}) => {
 
     async listBackends() {
       const hosted = await getHostedBackends();
+      const cfg = await getProviderConfig().catch(() => undefined);
       return harden([
         harden({
           id: 'provider',
-          title: 'LLM API',
+          title: cfg?.provider === 'openrouter' ? 'OpenRouter' : 'LLM API',
           kind: 'api',
           continuity: 'explicit',
           toolOwnership: 'endo',
@@ -4584,15 +4602,29 @@ export const make = (hostPowers, _context, { env } = {}) => {
         );
       }
       let defaultModel = '';
+      let openRouter = false;
       try {
         const cfg = await getProviderConfig();
         defaultModel = (cfg && cfg.model) || '';
+        openRouter = cfg?.provider === 'openrouter';
       } catch {
         // Provider config not resolvable yet — fall back to the conventional
         // default so the picker still has a sensible pre-selection.
       }
-      if (!isKnownModel(defaultModel)) defaultModel = DEFAULT_MODEL_ID;
-      const providerModels = MODELS.map(({ id, title, description }) => ({
+      if (!openRouter && !isKnownModel(defaultModel))
+        defaultModel = DEFAULT_MODEL_ID;
+      const catalog = openRouter
+        ? defaultModel
+          ? [
+              {
+                id: defaultModel,
+                title: defaultModel,
+                description: 'Configured OpenRouter model',
+              },
+            ]
+          : []
+        : MODELS;
+      const providerModels = catalog.map(({ id, title, description }) => ({
         id,
         selectionId: id,
         backendId: 'provider',
