@@ -21,7 +21,11 @@ const ConfigShape = M.splitRecord(
     listenerImageRef: M.string(),
     models: M.arrayOf(M.string()),
   },
-  { maxSessions: M.number(), publicInternet: M.boolean(), diagnostics: M.boolean() },
+  {
+    maxSessions: M.number(),
+    publicInternet: M.boolean(),
+    diagnostics: M.boolean(),
+  },
   harden({}),
 );
 

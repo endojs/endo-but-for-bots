@@ -7,7 +7,12 @@ import path from 'node:path';
 
 import { reclaimRecordedMount } from '../src/recorded-cleanup.js';
 
-/** A recorded native placement, rooted in a fresh temporary directory. */
+/**
+ * A recorded native placement, rooted in a fresh temporary directory.
+ *
+ * @param {any} t
+ * @param {{ mounterEnv?: Record<string, string> }} [options]
+ */
 const makeRecorded = async (t, { mounterEnv = undefined } = {}) => {
   const base = await mkdtemp(path.join(os.tmpdir(), 'endo-reclaim-'));
   t.teardown(() => rm(base, { recursive: true, force: true }));
@@ -22,8 +27,14 @@ const makeRecorded = async (t, { mounterEnv = undefined } = {}) => {
   });
 };
 
-/** Record every program invocation instead of running one. */
+/**
+ * Record every program invocation instead of running one. `behaviour` returns
+ * the error a real `umount` would have failed with, or nothing to succeed.
+ *
+ * @param {(file: string, args: string[]) => (Error | undefined)} [behaviour]
+ */
 const makeRunner = (behaviour = () => undefined) => {
+  /** @type {string[][]} */
   const calls = [];
   return {
     calls,
@@ -74,7 +85,10 @@ test('a dead socket directory is reclaimed: unmounted, then removed', async t =>
   // A leftover socket inode whose server has exited: connecting to it is
   // refused, which is what proves the bridge is gone. The ordinary files
   // beside it are not endpoints and must not be probed as though they were.
-  await makeStaleSocket(t, path.join(recorded.mounterSocketDir, 'endo-9p-1.sock'));
+  await makeStaleSocket(
+    t,
+    path.join(recorded.mounterSocketDir, 'endo-9p-1.sock'),
+  );
   await writeFile(path.join(recorded.mounterSocketDir, 'notes.txt'), 'x');
   const runner = makeRunner();
 
@@ -148,7 +162,9 @@ test('the recorded operator settings choose the umount program', async t => {
   ]);
 
   const helper = await makeRecorded(t, {
-    mounterEnv: { NINEP_UMOUNT_PROGRAM: '/run/wrappers/bin/sudo -u endo umount' },
+    mounterEnv: {
+      NINEP_UMOUNT_PROGRAM: '/run/wrappers/bin/sudo -u endo umount',
+    },
   });
   const second = makeRunner();
   await reclaimRecordedMount(helper, { runProgram: second.runProgram });
