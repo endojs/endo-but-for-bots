@@ -179,6 +179,47 @@ it — lock down before admitting a second compartment.
 `Interp`, its refusal on a realm frozen first, and the unfrozen `Machine` that
 takes it and keeps its compartments.
 
+### What the `ses-xs-parity` axis actually runs
+
+Worth stating plainly, because the axis's name and its `-l` flag both suggest
+otherwise: **no host in it tests a native `lockdown`, and no host tests a pure
+shim either.**
+
+`test262:xs` passes `--prelude prelude/xs.js` and **no `-l`**.
+`xst` installs native `harden` (`fx_harden`) and native `lockdown`
+(`fx_lockdown`) as globals at realm setup (`xst.c:428-429`), and the prelude
+then imports `ses/lockdown-shim.js`, which overwrites `globalThis.lockdown`
+with the shim's.
+`harden` is left native.
+So the XS lane is a hybrid: **native `harden`, shim `lockdown`**.
+The node lane is the same shape minus the native half — no `globalThis.harden`
+at all.
+Only the Ironhorse lane asks for a native `lockdown`, via `endot-ih -l`
+(`xst262.c:1269`'s analogue), and Ironhorse does not have one, so every case
+pre-skips.
+Three hosts, three different configurations, none of them either of the two
+coherent ones.
+
+The hybrid is not incidental, and it is why XS can run lockdown cases at all.
+`make-selector.js` resolves harden in order: `Object[Symbol.for('harden')]`,
+then `globalThis.harden`, and only failing both does it install its own —
+non-configurable, with a comment saying that doing so "will prevent any
+HardenedJS's lockdown from succeeding".
+On XS the second step finds `fx_harden` and nothing is installed, so
+`repairIntrinsics` runs.
+On node nothing is found, the slot is installed, and every `lockdown()`-calling
+case fails (below).
+Ironhorse's own native `harden` puts it in XS's position, which is why the
+Ironhorse prelude leaves it alone — deliberately matching XS rather than
+picking a third configuration.
+
+That makes the Ironhorse lane comparable to XS today, which is what the axis is
+for.
+It does not answer which configuration the axis *should* pin, and the two
+coherent answers want different work: a pure-shim lane needs the selector to
+find the shim's harden rather than a host one, and a native lane needs
+`fx_lockdown`'s five steps implemented before it can be run at all.
+
 ### How far the shim profile reaches the parity corpus
 
 `packages/test262-runner` runs the `ses-xs-parity` subset against three hosts.
@@ -249,9 +290,18 @@ for that reason — the host reports 14/16 — and three cases ported from
 `lockdown.test.js` and `harden.test.js` failed identically when tried.
 
 Clearing the slot in the prelude, the way it already clears and restores
-`assert`, does **not** work: measured, it regresses the `TextEncoder` and
-`TextDecoder` cases from pass to fail, because `@endo/pass-style` has already
-captured the harden it installed.
+`assert`, does **not** work, and the reason is simpler than it first looked.
+`make-selector.js` installs it `configurable: false, writable: false` —
+deliberately, its comment says, because "the non-configurability of this
+property will prevent any HardenedJS's lockdown from succeeding" — so in a
+module, which is always strict, `delete Object[Symbol.for('harden')]` throws
+a `TypeError` and takes the whole prelude with it.
+That is why cases which had been passing started failing when it was tried.
+(An earlier draft of this section blamed `@endo/pass-style` having already
+captured the harden; that was inferred, not measured, and it is wrong —
+the delete never gets as far as any captured reference.)
+`delete globalThis.harden` is a different operation and does work, which is
+why `bundle-ironhorse-worker.mjs` can do it.
 XS is unaffected only because `xst` installs a native `harden` the selector
 adopts instead — the same reason the Ironhorse prelude must leave Ironhorse's
 native one alone.
