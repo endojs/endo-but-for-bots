@@ -22,10 +22,11 @@
 //
 // Today endor's guest `lockdown()`/`Compartment` surface is a named scope
 // fold (only the host-side realm API + guest `harden`/`petrify` are landed),
-// so every ses-xs-parity case reports an HONEST named skip
-// (`feature:Compartment` / `ses-mode:lockdown-unimplemented`) and the run is
-// green with zero failures. Coverage lights up automatically when that guest
-// surface lands — no change to this wiring. Prerequisite (as for the xs
+// so `-l` FAILS CLOSED: `endot-ih` refuses to start and this script exits
+// nonzero. Every case would otherwise report an honest named skip while the
+// run exited 0, which reads as a passing third host that is in fact testing
+// nothing. The lane turns green by landing the guest surface, or by handing
+// `endot-ih` a prelude that supplies it — not by skipping. Prerequisite (as for the xs
 // host's `xst`): the `c/moddable` submodule for the XS oracle and a Rust
 // toolchain; `cargo` must be on PATH.
 
