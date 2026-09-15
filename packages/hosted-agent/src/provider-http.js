@@ -6,6 +6,7 @@ import { createServer } from 'node:http';
 
 import {
   INFERENCE_PATHS,
+  forwardableHeaders,
   splitInferenceTarget,
 } from './provider-paths.js';
 
@@ -23,6 +24,10 @@ import {
  * inside the operator's isolated broker namespace, with the endpoint supplied
  * over a private capability transport. Loopback binding alone is NOT process
  * isolation and this module issues no confinement attestation.
+ *
+ * The harness's own headers cross to the broker, minus the ones the broker
+ * owns (see BROKER_OWNED_HEADERS); the broker applies its own after them, so a
+ * slice can describe its request but never authenticate it.
  *
  * Each connection serves one request. Deadlines include uploads, upstream
  * inference, and slow consumers. An unresponsive endpoint retains its admission
@@ -180,6 +185,7 @@ export const makeProviderHttpListener = async ({
           method: 'POST',
           path: request.url,
           body: parts.join(''),
+          headers: forwardableHeaders(request.headers),
         }),
       );
       reader = result.reader;

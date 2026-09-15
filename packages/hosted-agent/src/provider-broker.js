@@ -7,6 +7,7 @@ import { M } from '@endo/patterns';
 
 import {
   INFERENCE_PATHS,
+  forwardableHeaders,
   splitInferenceTarget,
 } from './provider-paths.js';
 import { makeSecretRotator } from './secret-rotator.js';
@@ -656,6 +657,7 @@ export const makeProviderBrokerGrant = (
           method: M.string(),
           path: M.string(),
           body: BodyShape,
+          headers: M.opt(M.recordOf(M.string(), M.string())),
         }),
       ).returns(M.promise()),
 
@@ -668,11 +670,11 @@ export const makeProviderBrokerGrant = (
       ).returns(M.promise()),
     }),
     {
-      /** @param {{method: string, path: string, body: string}} request */
+      /** @param {{method: string, path: string, body: string, headers?: Record<string, string>}} request */
       async request(request) {
         return perform(request, false);
       },
-      /** @param {{method: string, path: string, body: string}} request */
+      /** @param {{method: string, path: string, body: string, headers?: Record<string, string>}} request */
       async requestStream(request) {
         return perform(request, true);
       },
@@ -760,7 +762,10 @@ export const makeProviderBrokerGrant = (
    * @param {{method: string, path: string, body: string}} request
    * @param {boolean} streaming
    */
-  const perform = async ({ method, path, body }, streaming) => {
+  const perform = async ({ method, path, body, headers }, streaming) => {
+    // Re-screen on this side of the seam: the listener already dropped the
+    // owned headers, and the broker does not take its word for it.
+    const forwarded = forwardableHeaders(headers ?? {});
     checkLive();
     routes.includes(`${method} ${path}`) || Fail`Inference route denied`;
     const requestBytes = BigInt(new TextEncoder().encode(body).length);
@@ -829,16 +834,24 @@ export const makeProviderBrokerGrant = (
             : `${origin}${path}`,
         method,
         headers: {
-          ...(credentialHeader === 'bearer'
-            ? { authorization: `Bearer ${token}` }
-            : { 'x-api-key': token }),
-          ...(anthropicVersion === undefined
+          // The harness describes its own request; the broker authenticates it.
+          // Re-screened here rather than trusted from the listener, so the
+          // owned set is enforced on this side of the seam too. Policy values
+          // fill in only what the harness did not send, and the credential is
+          // applied last and unconditionally.
+          ...forwarded,
+          ...(anthropicVersion === undefined ||
+          forwarded['anthropic-version'] !== undefined
             ? {}
             : { 'anthropic-version': anthropicVersion }),
-          ...(anthropicBeta === undefined
+          ...(anthropicBeta === undefined ||
+          forwarded['anthropic-beta'] !== undefined
             ? {}
             : { 'anthropic-beta': anthropicBeta }),
           'content-type': 'application/json',
+          ...(credentialHeader === 'bearer'
+            ? { authorization: `Bearer ${token}` }
+            : { 'x-api-key': token }),
           ...(authMode === 'subscription'
             ? {
                 'chatgpt-account-id': accountRef,
