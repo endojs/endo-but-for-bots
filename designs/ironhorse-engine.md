@@ -34,7 +34,7 @@ extraction, engine-trait deferral, transcendental providers and consumer-owned G
 | 1. Thin slice | Landed | Interpreter, meter and oracle harness exist. The early corpus passed historically; present release costs are pinned by oracle-free golden tests. Shared frozen intrinsics are implemented; full SES boot and parity acceptance remain stage-4 work. |
 | 2. Object model and control flow | Partial | Broad opcode, object, closure and exception support exists. Exact GC exists but is not the production collection path; chunk reclamation remains open. W6 decision 5 assigns GC scheduling to the engine consumer. |
 | 3. Built-ins | Partial | RegExp, promises, BigInt, collections, Intl and Temporal exist. Covered cases are not full built-ins conformance; platform Math is per binary/platform; `deterministic-math` carries cross-host execution. |
-| 4. Hardened JavaScript | Partial — bar not met | Object integrity operations exist. Shared Realm extraction is implemented; complete daemon SES boot and SES parity acceptance remain open; named skips are not passing acceptance. |
+| 4. Hardened JavaScript | Partial — bar not met | Object integrity operations exist (`harden`, `petrify`, faithful to `xsLockdown.c`). Shared Realm extraction is implemented. The boot-bundle half of the acceptance is measured and met (`ironhorse-262/tests/stage4_ses_boot.rs`); SES parity acceptance remains open and named skips are not passing acceptance. The deliverable column assumes the native route, which is now an open choice: `rust/thixotrope-ironhorse-worker` already reaches guest `lockdown` and `Compartment` through the SES shim instead, and the two routes exclude each other — [ironhorse-ses-compartment-equivalence](ironhorse-ses-compartment-equivalence.md). |
 | 5. Compiler port | Landed; full bar not reverified | Lexer, parser, scoper and coder are the default compiler. Historical byte-identity measurements cover named corpora; budgeted compilation and golden costs now share the runtime release identity. No fresh full-conformance oracle run is claimed here. |
 | 6. Snapshots | Partial | Container/store persistence, checked restore and supervisor tests exist. Historically accepted subset expanded substantially; live activations and unsupported side-table states still fail closed. Complete daemon worker protocol integration remains open. |
 | 7. Debugger | Not started as an accepted engine surface | No standalone debugger crate or reproduced xsbug/CapTP acceptance is present. Orchestration labels such as “stage-7 child” in historical evidence do not name this roadmap stage. |
@@ -206,6 +206,17 @@ provides the native `Compartment` constructor with `evaluate`,
 `import`, `importNow`, and a per-compartment `globalThis` over
 shared frozen intrinsics. XS is the only engine with a native
 Hardened JavaScript implementation.
+
+Only `Compartment` is a realm intrinsic, though. `fxCreateMachine`
+binds none of the other four: each embedder installs the subset it
+wants, and `fx_lockdown` fetches the *guest* `harden` off the global,
+so installing `lockdown` without `harden` yields a `lockdown` that
+faults. The endor daemon installs none of them and never calls
+`lockdown()`; `rust/thixotrope-xs-worker` installs `harden` and
+`lockdown` and does. So "XS implements SES natively" is a fact about
+the implementation, not about any particular XS realm in this tree —
+see
+[ironhorse-ses-compartment-equivalence](ironhorse-ses-compartment-equivalence.md).
 
 **Conformance.** On the 2026-07-02 test262.fyi run (53,404 tests),
 XS passes 81.57% overall, but the number is dominated by the
@@ -937,7 +948,7 @@ the Compartment seam, and bootstraps test262, before any breadth.
 | 1. Thin slice: interpreter core + meter + oracle harness | `ironhorse-vm` arenas and value model; interpreter for the arithmetic/logic/branch/call/stack opcode subset; meter with the release-versioned cost table and XS check points; `xs-oracle` compiling source with XS and executing bytecode on both engines; a primordial `Compartment.evaluate` (fresh globals, shared intrinsics seam, no modules); `ironhorse-262` dual-run skeleton with the stage corpus; fuzz targets 1 and 2 | **Result** agreement with the oracle on the stage corpus; meter deterministic per release (identical computrons across repeated runs of the same build); computron-vs-XS recorded as advisory telemetry only; `forbid(unsafe_code)` holds outside `xs-oracle` |
 | 2. Object model and control flow | Objects, prototypes, property ops, closures, exceptions (jump-chain with JS/host flags), full 245-opcode coverage (built-ins stubbed); GC v1 (mark-sweep + chunk compaction) | test262 `language/` dual-run agreement on the covered grammar; ordinary GC test suite (`forbid(unsafe_code)`), no Miri gate |
 | 3. Built-ins | Object/Array/String (built CESU-8; re-based to UTF-16 by the 2026-07-06 revision — § Value and heap model)/Math (canonical NaN)/JSON/Map/Set/TypedArray/BigInt; promises and job queue with the pump-loop latch semantics; RegExp port decision executed (resolved question 6: port `xsre`) | Built-ins sections dual-run **result** agreement; meter deterministic per release (computron-vs-XS advisory); the `mxMeterSome` fast-path annotations, where kept, preserve the meter's internal fast/slow-path consistency within an Ironhorse release rather than matching XS |
-| 4. Hardened JavaScript | `lockdown`, `harden`, `petrify`, `mutabilities`; full native `Compartment` + module machinery (ModuleSource, module maps); async/generators complete | The endor daemon boot bundles (`polyfills.js`, `ses_boot.js`, HandledPromise) run identically on both engines; SES conformance suites pass |
+| 4. Hardened JavaScript | `lockdown`, `harden`, `petrify`, `mutabilities`; full native `Compartment` + module machinery (ModuleSource, module maps); async/generators complete — **or** the equivalent guest surface supplied by the SES shim, which is the open choice | First clause **met**: the endor daemon boot bundles (`polyfills.js`, `ses_boot.js`, HandledPromise) run identically on both engines, measured by `ironhorse-262/tests/stage4_ses_boot.rs`. Second clause open and the live one: SES conformance suites pass |
 | 5. Compiler port | `ironhorse-compile`: lexer, parser, scoper, coder replacing the oracle compiler; parse metering | Byte-identical bytecode versus the oracle compiler on the full conformance corpus; parse metering deterministic per release (parse computrons stable across runs; computron-vs-XS advisory); parser fuzz target armed |
 | 6. Snapshots | `ironhorse-snapshot` atom writer/reader; `Machine` snapshot surface; suspend/resume through the supervisor; meter state across suspend | Round-trip invariance under fuzzing; supervisor suspend/resume integration test passes on `-e ironhorse` |
 | 7. Debugger | xsbug protocol; `DebugTransport` over the envelope bus; instruments; break-on-uncaught | The existing 11 Rust debug-protocol tests and 16 CapTP debugger tests pass unmodified against Ironhorse; xsbug connects |
