@@ -673,19 +673,23 @@ impl ironhorse_vm::SourceCompiler for TestCompiler {
 }
 
 #[test]
-fn dynamic_function_families_compile_in_the_calling_compartment() {
-    // `%GeneratorFunction%`, `%AsyncFunction%` and `%AsyncGeneratorFunction%`
-    // have no global name: a compartment reaches them only through
-    // `Object.getPrototypeOf(function*(){}).constructor`, off a prototype every
-    // compartment shares and that is frozen. So there is no per-compartment
-    // copy for `compartment_evaluator` to mint, the way there is for `eval` and
-    // the global `Function` -- and whatever `global_env` those three carry is
-    // what `invoke_native` switches to before `create_dynamic_function` runs.
+fn every_reachable_evaluator_compiles_in_the_calling_compartment() {
+    // `link_intrinsics` routes each global binding through
+    // `compartment_evaluator`, which mints the compartment its own `eval` and
+    // `Function`. That copy is not the only evaluator a guest can reach, and
+    // the two it misses are the interesting ones.
     //
-    // Pinning them to the default global made that environment the compartment's
-    // for the duration, in BOTH directions: the compiled body read the default
-    // realm's bindings, and an assignment in it defined a global ON the default
-    // realm's global object from inside a compartment.
+    // The ORIGINAL `Function` stays reachable off any object's prototype
+    // chain -- `({}).constructor.constructor`, `(function(){}).constructor` --
+    // and is a different object from the compartment's copy.
+    // `%GeneratorFunction%`, `%AsyncFunction%` and `%AsyncGeneratorFunction%`
+    // have no global binding at all (`boot.rs:1153`), so a prototype chain is
+    // the ONLY way to them.
+    //
+    // Pinning any of these to the default global made that environment the
+    // compartment's for the duration, in both directions: the compiled body
+    // read the default realm's bindings, and an assignment in it defined a
+    // global ON the default realm's global object from inside a compartment.
     //
     // Each family's product is unwrapped differently, so the probe is an
     // assignment rather than a return: an async function body and a (sync or
@@ -702,8 +706,17 @@ fn dynamic_function_families_compile_in_the_calling_compartment() {
     a.set_source_compiler(std::rc::Rc::new(TestCompiler));
     assert_eq!(eval(&a, "var answer = 'a'; answer"), "a");
 
+    // The compartment's own copy is a distinct object from the intrinsic its
+    // prototype chains still reach, so the two must be probed separately.
+    assert_eq!(
+        eval(&a, "Function === ({}).constructor.constructor"),
+        "false"
+    );
+
     for (family, drive) in [
         ("Function", ""),
+        ("({}).constructor.constructor", ""),
+        ("(function(){}).constructor", ""),
         (
             "Object.getPrototypeOf(function*(){}).constructor",
             ".next()",
@@ -741,6 +754,10 @@ fn dynamic_function_families_compile_in_the_calling_compartment() {
             &start,
             "var seen; Object.getPrototypeOf(function*(){}).constructor('seen = answer')().next(); seen"
         ),
+        "default"
+    );
+    assert_eq!(
+        eval(&start, "({}).constructor.constructor('return answer')()"),
         "default"
     );
 }

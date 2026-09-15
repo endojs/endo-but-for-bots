@@ -12,12 +12,15 @@
 
 Two things landed with this document.
 
-`rust/engine/ironhorse-vm/src/interp/realm.rs` no longer pins the three
-non-global evaluator constructors to the default realm, closing a confinement
-hole a compartment could read and write through
-(`tests/realms.rs::dynamic_function_families_compile_in_the_calling_compartment`).
-And `tests/ses_boot_intrinsics.rs` pins the two realm profiles described below,
-in both directions, so the day they stop excluding each other a test says so.
+`rust/engine/ironhorse-vm/src/interp/realm.rs` no longer pins any evaluator to
+the default realm, closing a confinement hole a compartment could read and
+write through
+(`tests/realms.rs::every_reachable_evaluator_compiles_in_the_calling_compartment`).
+`tests/ses_boot_intrinsics.rs` pins the two realm profiles described below, in
+both directions, so the day they stop excluding each other a test says so.
+And `CompartmentOptions::intrinsic_permit`'s doc comment now states what it
+actually does, which is much less than its name suggests (§ Equivalence:
+`Compartment`).
 
 Everything else here is a handoff: what the stage-4 SES gap actually is,
 measured rather than assumed, and what a reader who was not present needs in
@@ -285,9 +288,20 @@ XS is the useful reference precisely because it is honest about the same
 boundary: it callable-checks the hooks it honours and pushes `undefined` for
 the two it does not.
 
-`intrinsic_permit` is IronHorse's own, and its doc is explicit that it
-"controls bindings, not transitive reachability through endowed objects" —
-which is not SES's attenuation model, and not XS's either.
+`intrinsic_permit` is IronHorse's own, and measuring it is worse than its old
+doc comment admitted.
+It controls which names are bound as globals and nothing else.
+Under `intrinsic_permit: Some(vec![])` — documented as "only globalThis and
+explicit endowments" — a guest still reads `({}).constructor.name` as
+`"Object"` and `({}).constructor.constructor.name` as `"Function"`, and
+evaluates `({}).constructor.constructor('return 1 + 1')()` to `2`.
+The dynamic evaluator is reachable off any object literal.
+That is not SES's attenuation model and not XS's: both close the route by
+replacing the function-family prototypes' `.constructor` with a throwing stub
+during `lockdown()`, which is `fx_lockdown` step 2 and the one step IronHorse
+cannot take while it freezes at construction rather than on request.
+The doc comment now says so; renaming the field is left to whoever owns the
+API.
 
 Note that SES's own constructor takes a single object argument as the *legacy*
 `(globals, modules, options)` positional form unless it carries the
@@ -315,7 +329,7 @@ XS takes none.
 | | SES shim | XS native | IronHorse |
 |---|---|---|---|
 | transitive freeze of intrinsics | yes | yes | **yes** |
-| function-family constructors poisoned | yes | yes | no |
+| function-family constructors poisoned | yes | yes | no — which is why `intrinsic_permit` cannot confine |
 | Date/Math attenuated for compartments | yes | partly (Date's prototype is poisoned realm-wide) | no |
 | permits table / unpermitted removal | yes | no | no |
 | property-override enablement | yes (`overrideTaming`) | no | no |
@@ -394,8 +408,13 @@ The shim is the larger one — and it is the one already running on IronHorse.
       that claims to have built the bundle fail instead.
 - [ ] Verify `ModuleGraph` against SES and XS module-map semantics.
       This document checked the option's presence, not its behaviour.
-- [ ] Establish whether `intrinsic_permit` can be made to mean SES attenuation
+- [x] Establish whether `intrinsic_permit` can be made to mean SES attenuation
       or should be renamed so it stops looking like it already does.
+      Measured 2026-09-15: it cannot, as things stand — every denied intrinsic
+      including `Function` stays reachable through a prototype chain, and
+      closing that is `fx_lockdown` step 2, which needs a `lockdown()` separate
+      from machine construction. The doc comment now states this; the rename is
+      left to whoever owns the API.
 - [x] `stage4_ses_boot.rs` runs in `test-ironhorse-oracle`, which
       `scripts/ci-changes.py` triggered on `rust/engine/**`, the Cargo and
       toolchain files, `c/moddable`, `rust/endo/xsnap/xsnap-platform.*` and the

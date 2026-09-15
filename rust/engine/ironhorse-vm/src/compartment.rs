@@ -265,9 +265,23 @@ impl CompartmentSkip {
 pub struct CompartmentOptions {
     /// The compartment's `name` option (SES `Compartment` name).
     pub name: Option<String>,
-    /// Global intrinsic names this compartment may expose. None admits the standard
-    /// set; an empty list starts with only globalThis and explicit endowments.
-    /// This controls bindings, not transitive reachability through endowed objects.
+    /// Global intrinsic names this compartment may expose. None admits the
+    /// standard set; an empty list starts with only globalThis and explicit
+    /// endowments.
+    ///
+    /// **This is not attenuation, and it is not confinement.** It controls
+    /// which names are BOUND as globals, and nothing else. Every denied
+    /// intrinsic stays reachable through any object's prototype chain, the
+    /// dynamic evaluator included: under `Some(vec![])` a guest still reads
+    /// `({}).constructor.name` as `"Object"`,
+    /// `({}).constructor.constructor.name` as `"Function"`, and evaluates
+    /// `({}).constructor.constructor('return 1 + 1')()` to `2`. SES and XS
+    /// close that route by replacing the function-family prototypes'
+    /// `.constructor` with a throwing stub during `lockdown()`
+    /// (`fx_lockdown_aux`, `xsLockdown.c:52`); ironhorse has no `lockdown()`
+    /// and does not. Treat this as a surface-area convenience for cooperative
+    /// guests, not a security boundary --
+    /// `designs/ironhorse-ses-compartment-equivalence.md`.
     pub intrinsic_permit: Option<Vec<String>>,
     /// Endowments copied onto the new global, by display name.
     pub endowments: HashMap<String, Slot>,
