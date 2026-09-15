@@ -1,5 +1,14 @@
 # IronHorse historical implementation and acceptance evidence
 
+> ⚠️ **Superseded metering doctrine throughout this archive.** Entries below
+> repeatedly describe acceptance bars as "bit-exact (result AND computron)
+> against the pin". That was the pre-2026-07-04 bar. Under the standing
+> accuracy-over-parity doctrine (`designs/ironhorse-engine.md` § Metering,
+> reaffirmed 2026-09-15), Iron Horse's meter approximates actual CPU time,
+> MAY diverge from XS's computron counts, and **XS-computron parity is a
+> non-goal — not a deferred goal**. Read every parity claim below as
+> historical evidence of its day, never as a requirement to restore.
+
 ## 2026-09-09 — archive of the README stage narrative
 
 Moved verbatim from the README at `96db92e23`.

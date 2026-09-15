@@ -211,6 +211,17 @@ through `rust/endo` per design § Metering's "`Machine` metering API … preserv
 **other sites:** `ironhorse-262/tests/regressions_dual_run.rs:64`; `ironhorse-262/src/xst.rs:473,497`; `ironhorse-fuzz/src/lib.rs:1722`; 15 `assert_eq!(out.computrons, N, "bit-exact computrons vs XS")` in `interp.rs:42233–42725`; 1,588 `.js` files under `packages/test262-runner/test262/test/ironhorse/` carrying `ironhorse-meter-exact`
 **confidence:** high · **novelty:** partially-known — sharpens store-seam-design-ledger item 10 ("metering doctrine drift … the constants are XS-derived"); the *blocking* consequence and the case count are new
 
+> **Resolution (2026-09-15, maintainer directive).** Decided: the doctrine
+> stands and the code now says it — option "demote", never option "amend the
+> design toward parity". `gate_meter_exact` gates only the engine-versioned
+> `ironhorse-meter-5-raw-N` own-cost pins; XS drift is advisory everywhere
+> (runner, fuzz comparators, regexp differentials); `DualRun::is_bit_exact`
+> is deleted; the 15 interp asserts are relabeled as frozen own-cost pins;
+> `corpus-to-262` no longer requires computron agreement nor emits
+> `ironhorse-meter-exact` (committed tags are inert pending regeneration).
+> The parity-bar amendment sketched in the Fix's second arm is **rejected
+> permanently**: XS-computron parity is a non-goal, not a deferred goal.
+
 **Claim.** XS computron equality is an enforced acceptance gate in CI for 1,588 test262
 cases and in every wired differential fuzz comparator, so recalibrating any weight —
 the only mechanism the accuracy-over-parity doctrine provides — cannot be done without
