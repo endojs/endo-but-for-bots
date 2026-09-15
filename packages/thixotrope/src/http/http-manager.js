@@ -47,6 +47,9 @@ export const makeHttpManager = ({ makeKeeper, vats, adapterSource }) => {
       ),
   });
 
+  /** @type {string | undefined} */
+  let lastStartError;
+
   /** @param {string} id */
   const assertId = id => {
     if (typeof id !== 'string' || id.length === 0 || id.length > 128)
@@ -108,12 +111,31 @@ export const makeHttpManager = ({ makeKeeper, vats, adapterSource }) => {
       return E(adapter).ports();
     },
 
+    /**
+     * What the host calls after honouring an eager pin.
+     *
+     * Waking a vat runs none of its code, so without this a restored manager
+     * would sit there remembering a service nobody had rebound. Send-only from
+     * the host's side, so a failure is reported here rather than thrown at a
+     * caller that does not exist.
+     */
+    started: async () => {
+      try {
+        const adapter = await keeper.provide();
+        return await E(adapter).ports();
+      } catch (error) {
+        lastStartError = String(/** @type {Error} */ (error).message ?? error);
+        throw error;
+      }
+    },
+
     list: () => harden([...desired.keys()]),
 
     status: async () =>
       harden({
         declared: BigInt(desired.size),
         keeper: keeper.status(),
+        lastStartError,
       }),
   });
 };
