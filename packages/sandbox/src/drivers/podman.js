@@ -710,7 +710,7 @@ const encodeMount = fields =>
  *                                                            captured
  *                                                            `procfs` text
  *                                                            in tests.
- * @param {{observe: (request: {name: string, mountpoint: string}) => Promise<import('../xfs-volume-quota.js').VolumeQuotaEvidence>}} [input.volumeQuota] Trusted host kernel-quota observer; never model-facing.
+ * @param {import('@endo/eventual-send').ERef<{observe: (request: {name: string, mountpoint: string}) => Promise<import('../xfs-volume-quota.js').VolumeQuotaEvidence>}>} [input.volumeQuota] Trusted host kernel-quota observer; never model-facing. A promise is accepted: this is only ever eventual-sent to, and an adapter that builds its observer asynchronously (Codex's XFS bridge resolves the quota executable first) would otherwise have to construct the driver inside an await, after the owner already retains its close().
  * @param {GeneratedFileStorage} [input.generatedFileStorage] Host-owned allocator; required for literal files.
  * @param {SeccompFilePowers} [input.fs] Host filesystem powers; injectable for cleanup failures.
  * @returns {Omit<SandboxDriver, 'prepareSlice' | 'prepareSliceKit'> & { prepareSlice(spec: SliceSpec): Promise<PodmanSliceContext>, prepareSliceKit(spec: SliceSpec): DriverPreparation<PodmanSliceContext>, closeSlices(): Promise<void>, close(): Promise<void> }}

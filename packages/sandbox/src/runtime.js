@@ -12,6 +12,13 @@ import { acquireRuntimeOwnership } from './runtime-ownership.js';
 
 /** @import { SandboxDriver, SandboxFactory, SandboxPowers } from './types.js' */
 /** @import { GeneratedFileStorage } from './generated-file-storage-types.js' */
+/** @import { VolumeQuotaEvidence } from './xfs-volume-quota.js' */
+/** @import { ERef } from '@endo/eventual-send' */
+
+/**
+ * @typedef {object} VolumeQuotaObserver
+ * @property {(request: { name: string, mountpoint: string }) => Promise<VolumeQuotaEvidence>} observe
+ */
 
 const NativeScopeInterface = harden(
   M.interface('NativeSandboxScope', {
@@ -51,11 +58,19 @@ const NativeServiceInterface = harden(
  * requires a driver with explicit host-only lifetime cleanup authority.
  *
  * @param {{ directory: string, ownerId: string, maxBytes: bigint, maxEntries: bigint, env?: Record<string, string> }} config
- * @param {{ scratchProvider: SandboxPowers | null, fs?: typeof import('node:fs/promises'), makeDriver?: (storage: GeneratedFileStorage) => SandboxDriver & { close(): Promise<void> } }} powers
+ * `volumeQuota` is the trusted host kernel-quota observer the Podman driver
+ * requires before it admits a durable volume mount. It is configuration-derived
+ * host authority, never model-facing, and an adapter that needs one (Codex's
+ * XFS project quotas) has no other way to supply it: the native service's
+ * `make-unconfined` entry point takes slot-free `null` powers, so an observer
+ * cannot arrive as a constructor argument. A promise is accepted — the driver
+ * only ever eventual-sends to it.
+ *
+ * @param {{ scratchProvider: SandboxPowers | null, fs?: typeof import('node:fs/promises'), makeDriver?: (storage: GeneratedFileStorage) => SandboxDriver & { close(): Promise<void> }, volumeQuota?: ERef<VolumeQuotaObserver> }} powers
  */
 export const makeSandboxRuntime = (
   { directory, ownerId, maxBytes, maxEntries, env = {} },
-  { scratchProvider, fs: fsPower, makeDriver },
+  { scratchProvider, fs: fsPower, makeDriver, volumeQuota },
 ) => {
   let closing = false;
   /** @type {Promise<SandboxFactory> | undefined} */
@@ -98,7 +113,12 @@ export const makeSandboxRuntime = (
       assertOpen();
       driver = makeDriver
         ? makeDriver(storage)
-        : makePodmanDriver({ env, ownerId, generatedFileStorage: storage });
+        : makePodmanDriver({
+            env,
+            ownerId,
+            generatedFileStorage: storage,
+            ...(volumeQuota === undefined ? {} : { volumeQuota }),
+          });
       assertOpen();
       kit = makeSandboxFactoryKit({ drivers: [driver], scratchProvider });
       assertOpen();
