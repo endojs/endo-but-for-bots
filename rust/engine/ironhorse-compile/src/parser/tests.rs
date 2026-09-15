@@ -847,6 +847,39 @@ fn prog_ok(src: &str) {
 }
 
 #[test]
+fn an_arrows_parameter_shape_does_not_escape_it() {
+    // The non-simple-parameter-list flag lives on the SHARED parser flags, and
+    // an arrow's parameters are parsed by the CALLER before
+    // `arrow_expression` snapshots them — so without the save/clear/restore at
+    // both call sites the flag leaked in both directions and made legal
+    // sources Syntax Errors. Found by running the real test262 harness against
+    // ironhorse: eshost's own preamble opens with
+    // `ESHostError.thrower = (...args) => {...}`, which poisoned every
+    // `"use strict"` in every case that followed — all 16 runs of the
+    // `ses-xs-parity` corpus, before a single assertion was reached.
+    //
+    // Outward: a non-simple arrow must not affect what comes after it.
+    prog_ok(r#"var f = (...args) => 1; var g = a => { "use strict"; };"#);
+    prog_ok(r#"var f = (a = 1) => 1; var g = (b) => { "use strict"; };"#);
+    // Inward: an enclosing non-simple list must not affect the arrow, whose
+    // own early error is on ArrowParameters. Both forms are accepted by node
+    // and by XS.
+    prog_ok(r#"function outer(...rest) { var g = (a) => { "use strict"; }; }"#);
+    prog_ok(r#"function outer(...rest) { var g = a => { "use strict"; }; }"#);
+    // And the rule itself still fires for the arrow's OWN parameters.
+    for src in [
+        r#"var f = (...args) => { "use strict"; };"#,
+        r#"var f = (a = 1) => { "use strict"; };"#,
+        r#"var f = ([a]) => { "use strict"; };"#,
+    ] {
+        let err = prog_err(src);
+        assert_eq!(err.kind, ParseErrorKind::Syntax, "src {src:?}");
+        assert!(err.message.contains("invalid directive"), "src {src:?}");
+    }
+    prog_ok(r#"var f = (a) => { "use strict"; };"#);
+}
+
+#[test]
 fn nonsimple_params_with_use_strict_body_is_error() {
     // `fxBody`: a `"use strict"` directive with a non-simple parameter list
     // is a Syntax Error even when the function is ALREADY strict (a class

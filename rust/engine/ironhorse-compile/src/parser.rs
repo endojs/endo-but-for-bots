@@ -1519,7 +1519,19 @@ impl<'a> Parser<'a> {
             self.push_node_struct(2, Token::Arg, line)?;
             self.push_node_list(1)?;
             self.push_node_struct(1, Token::ParamsBinding, line)?;
+            // `x => ...` — a single identifier, so this arrow's parameter list
+            // is always SIMPLE. The check in `parser/stmt.rs` reads the shared
+            // flag, so without clearing it an enclosing non-simple list makes
+            // the arrow's own `"use strict"` a SyntaxError:
+            //
+            //     function outer(...rest) { var g = a => { "use strict"; }; }
+            //
+            // which node and XS both accept — the early error is on
+            // ArrowParameters, and these are simple.
+            let enclosing_non_simple = self.flags & flags::NOT_SIMPLE_PARAMETERS;
+            self.flags &= !flags::NOT_SIMPLE_PARAMETERS;
             self.arrow_expression(flag)?;
+            self.flags = (self.flags & !flags::NOT_SIMPLE_PARAMETERS) | enclosing_non_simple;
             return Ok(());
         }
         if symbol == "arguments" {
@@ -2089,6 +2101,23 @@ impl<'a> Parser<'a> {
             if comma_flag && spread_flag {
                 return Err(self.error("invalid parameters"));
             }
+            // `parameters_binding_from_expressions` raises
+            // `NOT_SIMPLE_PARAMETERS` on the SHARED parser flags, and
+            // `arrow_expression` snapshots `self.flags` into its `saved`
+            // AFTER that — so on exit it restores the flag it was handed and
+            // the arrow's own parameter shape escapes into the enclosing
+            // scope. The next `"use strict"` directive anywhere after it then
+            // fails the `fxBody` non-simple-parameter check that belongs to
+            // this arrow (`parser/stmt.rs`, "invalid directive"):
+            //
+            //     var f = (...args) => 1;
+            //     var g = a => { "use strict"; };  // wrongly a SyntaxError
+            //
+            // A declared function parses its parameters INSIDE its own
+            // save/restore, which is why only arrows leak. Restore the
+            // enclosing function's own value across the arrow.
+            let enclosing_non_simple = self.flags & flags::NOT_SIMPLE_PARAMETERS;
+            self.flags &= !flags::NOT_SIMPLE_PARAMETERS;
             if !self.parameters_binding_from_expressions()? {
                 return Err(self.error("no parameters"));
             }
@@ -2105,6 +2134,7 @@ impl<'a> Parser<'a> {
                 return Err(self.error("invalid yield"));
             }
             self.arrow_expression(flag)?;
+            self.flags = (self.flags & !flags::NOT_SIMPLE_PARAMETERS) | enclosing_non_simple;
             self.flags |= carry;
             return Ok(());
         }
