@@ -221,34 +221,43 @@ Move them into the vat and that inverts: after a restart the desired listener
 set is inside a sleeping vat, and no deadline will wake it.
 Something has to start it.
 
-`src/http/host-listeners.js` and `src/http/guest-http.js` sketch the split, with
-`test/guest-http.test.js` standing a host up, killing it, and letting the vat's
-`reconcile` re-establish the service against a host that knows nothing.
+Built on the pair as `src/http/http-port.js` (host), `src/http/http-adapter.js`
+(ephemeral), and `src/http/http-manager.js` (durable), with
+`test/http-manual-persistence.test.js`.
+128 host lines, 45 adapter, 53 manager, against 279 in `http-services.js`, and
+the difference is almost entirely the recipe state machine and its persistence.
 
-The host side keeps no durable state at all — no metadata file, no recipes, no
-lifecycle, no restore path — and the handler is an ordinary guest reference
-rather than a secret and a publication, because nothing has to find it again.
-122 host lines and 60 guest lines against 279 today, and the removed 97 are
-almost entirely the recipe state machine and its persistence.
+Authority is per port: `makeResource('http-port', { port })` is authority over
+that port and nothing else.
+Because it is a resource, a guest's reference to it is re-seated by the endpoint
+after a host restart rather than breaking, which is what lets the durable
+manager go on holding it.
 
-Two things stay host-side that might look like vat concerns.
-Admission runs before any body is read, so a denied request costs no guest work;
-moving it into the vat would mean waking a vat to say no, which is a
-denial-of-service lever.
-Transport limits have to be applied while bytes are arriving.
-The vat declares the authority and the host enforces it.
+Two things stay host-side, and the first is a constraint rather than a
+preference.
+`HttpListenerPowers.admit` is **synchronous**, so it cannot be a guest callback
+at all — the host has no way to await a vat mid-header.
+That it also runs before any body is read, and so lets a denied request cost no
+guest work, is a second reason rather than the deciding one.
+Transport limits likewise apply while bytes are arriving.
 
-Generation identity earns its place here in a way it did not for alarms.
-A vat's heap outlives the host, so it holds binding handles from incarnations
-that are gone, and a port it knows may have been rebound by someone else.
-The sketch gives each binding a generation counter and refuses a close that does
-not match.
+The generation counter the single-vat sketch needed is gone, as predicted: the
+adapter is a vat, its death is a retirement, and the session epoch breaks stale
+references without help.
 
-Under the pair model that counter is redundant: the adapter is a vat, its death
-is a retirement, and the hub's session epoch already breaks every stale
-reference into it.
-The sketch should lose its hand-rolled version when the adapter moves into an
-ephemeral vat.
+One property only the pair gives: the host holds exactly **one** guest
+reference, the adapter's, rather than one per service.
+Consumers are reached through it, so the host's retention surface is a single
+ephemeral vat and consumers are retained by their manager — which is where that
+responsibility belongs.
+
+The host does still have to notice when the vat serving a port is gone, because
+the socket is on its side and would otherwise stay open in front of a handler
+that can never answer.
+A failed request is the first evidence it has, so that is where the check lives:
+probe the handler, and if it is unreachable, answer 503 and release the port on
+the next turn — closing a listener destroys every socket on it, including the
+one still waiting for that answer.
 
 ## Pins
 
