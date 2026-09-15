@@ -14,7 +14,7 @@ import { makeTcpNetLayer } from '@endo/ocapn/netlayer/tcp-testing';
 import { syrupCodec } from '@endo/ocapn/syrup';
 
 import { makeThixotropeDaemon } from '../src/core/daemon.js';
-import { makeEphemeralVatKeeper } from '../src/ephemeral-vat-keeper.js';
+import { makeAdapterKeeper } from '../src/adapter-keeper.js';
 import { makePeerSnapshottingReplayEngine } from '../src/core/peer-replay-engine.js';
 import { makeFsStore } from '../src/store/store-fs.js';
 import { makeNodePowers } from '../src/platform/node/powers.js';
@@ -92,7 +92,7 @@ test.serial('a manager rebuilds its resource vat after a restart', async t => {
   const managerSource = `
     (() => {
       const desired = new Map();
-      const keeper = (${makeEphemeralVatKeeper.toString()})({
+      const keeper = (${makeAdapterKeeper.toString()})({
         vats,
         source: ${JSON.stringify(ADAPTER_SOURCE)},
         debugLabel: 'adapter',
@@ -179,7 +179,7 @@ test.serial('retiring the adapter builds another on next use', async t => {
     `
     (() => {
       const desired = new Map();
-      const keeper = (${makeEphemeralVatKeeper.toString()})({
+      const keeper = (${makeAdapterKeeper.toString()})({
         vats,
         source: ${JSON.stringify(ADAPTER_SOURCE)},
         debugLabel: 'adapter',
