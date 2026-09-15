@@ -36,6 +36,7 @@
     "./session-registry.js": "./src/session-registry.js",
     "./session-powers.js": "./src/session-powers.js",
     "./cleanup-scope.js": "./src/cleanup-scope.js",
+    "./recorded-cleanup.js": "./src/recorded-cleanup.js",
     "./mcp-bridge.js": "./src/mcp-bridge.js",
     "./mcp-socket.js": "./src/mcp-socket.js",
     "./mcp-stdio-bridge.js": "./src/mcp-stdio-bridge.js",

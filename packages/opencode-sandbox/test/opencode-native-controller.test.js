@@ -53,6 +53,9 @@ const fixture = (t, { realClient = false } = {}) => {
   const grants = new Map();
   const clients = [];
   const faults = {
+    /** @type {string | undefined} */
+    resolverFail: undefined,
+    reclaimFail: false,
     sandboxClose: false,
     mcpClose: false,
     mcpStart: false,
@@ -174,6 +177,8 @@ const fixture = (t, { realClient = false } = {}) => {
   const resolver = Far('Resolver', {
     async get(role) {
       events.push(`resolve ${role}`);
+      // Stands in for a service formula that refuses to revive.
+      if (faults.resolverFail === role) throw Error(`cannot revive ${role}`);
       return roles[role];
     },
   });
@@ -181,6 +186,18 @@ const fixture = (t, { realClient = false } = {}) => {
   const makeController = (context = undefined) => {
     const controller = makeOpencodeNativeController({
       context,
+      // The real reclaim runs a privileged umount against a recorded path;
+      // here it only records that it was asked, and for which mount point.
+      async reclaimMount(recorded) {
+        // The operator's own mounter settings reach the reclamation, so a host
+        // whose mounts go through a privilege helper can unmount with it.
+        events.push([
+          'reclaim',
+          recorded.workspaceMountPoint,
+          recorded.mounterEnv.XDG_RUNTIME_DIR,
+        ]);
+        if (faults.reclaimFail) throw Error('umount refused');
+      },
       reportError: error => events.push(['cleanup error', error]),
       env: { XDG_RUNTIME_DIR: '/wrong-global' },
       makePassword: () => 'fresh-password',
@@ -446,17 +463,46 @@ for (const kind of ['sandbox', 'broker']) {
   });
 }
 
-test('reconstruction uses lookup and refuses to invent local cleanup ownership', async t => {
+test('reconstruction uses lookup, reclaims the recorded mount, and invents nothing', async t => {
   const f = fixture(t);
   const controller = f.makeController();
-  await t.throwsAsync(
-    E(controller).terminate(JSON.stringify(planFor('old')), f.resolver),
-    { message: /Original local 9P\/MCP cleanup ownership is unavailable/ },
-  );
+  await E(controller).terminate(JSON.stringify(planFor('old')), f.resolver);
   t.true(f.events.includes('lookup sandbox sandbox-old'));
   t.true(f.events.includes('lookup grant sandbox-old'));
-  t.false(f.events.some(event => Array.isArray(event)));
+  // The only structured event is the reclamation of the recorded mount: no
+  // mounter, bridge or MCP socket was made to stand in for the lost ones.
+  t.deepEqual(
+    f.events.filter(event => Array.isArray(event)),
+    [['reclaim', '/private/old/work-mount', '/wrong-global']],
+  );
+  t.true((await E(controller).status()).stopped);
+});
+
+test('a mount that cannot be reclaimed keeps the session stoppable, not stopped', async t => {
+  const f = fixture(t);
+  const text = JSON.stringify(planFor('old'));
+  f.faults.reclaimFail = true;
+  const controller = f.makeController();
+  await t.throwsAsync(E(controller).terminate(text, f.resolver), {
+    message: /Original local 9P\/MCP cleanup ownership is unavailable/,
+  });
   t.false((await E(controller).status()).stopped);
+  f.faults.reclaimFail = false;
+  await E(controller).terminate(text, f.resolver);
+  t.true((await E(controller).status()).stopped);
+});
+
+test('a shared service that cannot be revived no longer blocks cleanup', async t => {
+  const f = fixture(t);
+  f.faults.resolverFail = 'sandboxService';
+  const controller = f.makeController();
+  await E(controller).terminate(JSON.stringify(planFor('old')), f.resolver);
+  t.true((await E(controller).status()).stopped);
+  t.true(
+    f.events.some(
+      event => Array.isArray(event) && event[0] === 'cleanup error',
+    ),
+  );
 });
 
 test('MCP drain failure remains retryable after the sandbox has closed', async t => {
@@ -659,18 +705,19 @@ test('context loss fences the active client and starts retained cleanup', async 
   t.is(f.grants.size, 0);
 });
 
-test('reconstructed cleanup releases known shared scopes but still refuses local proof', async t => {
+test('reconstructed cleanup releases known shared scopes and never touches the live owner\u2019s locals', async t => {
   const f = fixture(t);
   const old = f.makeController();
   const text = JSON.stringify(planFor('a'));
   await E(old).activate(text, f.resolver);
   const reconstructed = f.makeController();
   const boundary = f.events.length;
-  await t.throwsAsync(E(reconstructed).terminate(text, f.resolver), {
-    message: /Original local 9P\/MCP cleanup ownership is unavailable/,
-  });
+  await E(reconstructed).terminate(text, f.resolver);
   t.is(f.scopes.size, 0);
   t.is(f.grants.size, 0);
+  // The reconstruction has no mounter or MCP socket of its own and must not
+  // reach for the still-live owner's. (On a live host the reclamation would
+  // refuse here too: that owner's 9P bridge is still serving its socket.)
   t.false(f.events.slice(boundary).includes('close mounter'));
   t.false(f.events.slice(boundary).includes('close mcp'));
   await E(old).terminate(text, f.resolver);

@@ -60,6 +60,9 @@ const fixture = (t, { realClient = false } = {}) => {
   /** @type {any[]} */
   const clients = [];
   const faults = {
+    /** @type {string | undefined} */
+    resolverFail: undefined,
+    reclaimFail: false,
     sandboxClose: false,
     mcpClose: false,
     mountWait: false,
@@ -178,6 +181,8 @@ const fixture = (t, { realClient = false } = {}) => {
   const resolver = Far('Resolver', {
     async get(role) {
       events.push(`resolve ${role}`);
+      // Stands in for a service formula that refuses to revive.
+      if (faults.resolverFail === role) throw Error(`cannot revive ${role}`);
       if (!(role in roles)) throw Error(`no role ${role}`);
       return roles[role];
     },
@@ -186,6 +191,12 @@ const fixture = (t, { realClient = false } = {}) => {
   const makeController = (context = undefined) => {
     const controller = makeClaudeNativeController({
       context,
+      // The real reclaim runs a privileged umount against a recorded path;
+      // here it only records that it was asked, and for which mount point.
+      async reclaimMount(recorded) {
+        events.push(['reclaim', recorded.workspaceMountPoint, recorded.mounterEnv]);
+        if (faults.reclaimFail) throw Error('umount refused');
+      },
       reportError: error => {
         events.push(['cleanup error', error]);
         cleanupReported.resolve();
@@ -288,6 +299,8 @@ const fixture = (t, { realClient = false } = {}) => {
     return controller;
   };
   t.teardown(() => {
+    faults.resolverFail = undefined;
+    faults.reclaimFail = false;
     faults.sandboxClose = false;
     faults.mcpClose = false;
     faults.revokeFail = false;
@@ -610,7 +623,7 @@ test('failed cleanup is retained and retried, never reported as release', async 
   t.is(f.grants.size, 0);
 });
 
-test('reconstruction refuses to invent local cleanup ownership but releases the shared scope and grant', async t => {
+test('reconstruction releases the shared scope and grant, and reclaims the recorded mount', async t => {
   const f = fixture(t);
   const text = JSON.stringify(planFor('a'));
   const sandbox = await E(f.resolver).get('sandboxService');
@@ -618,16 +631,62 @@ test('reconstruction refuses to invent local cleanup ownership but releases the 
   const broker = await E(f.resolver).get('brokerService');
   t.truthy(await E(broker).provideScope('sandbox-a', harden({})));
   const revived = f.makeController();
-  await t.throwsAsync(E(revived).terminate(text, f.resolver), {
-    message: /Original local 9P\/MCP cleanup ownership is unavailable/,
-  });
+  await E(revived).terminate(text, f.resolver);
   t.true(f.events.includes('lookup sandbox sandbox-a'));
   t.true(f.events.includes('lookup grant sandbox-a'));
   t.true(f.events.includes('close sandbox sandbox-a'));
   t.true(f.events.includes('revoke sandbox-a'));
+  // The lost worker's kernel mount is the one resource no other owner will
+  // take down, so cleanup is not complete until it is reclaimed. Nothing is
+  // mounted or minted in its place.
+  const reclaimed = f.events.find(
+    event => Array.isArray(event) && event[0] === 'reclaim',
+  );
+  t.is(reclaimed?.[1], '/private/a/workspace');
+  // The operator's own mounter settings reach the reclamation, so a host
+  // whose mounts go through a privilege helper can unmount with it.
+  t.like(reclaimed?.[2], { XDG_RUNTIME_DIR: '/wrong-global' });
+  t.false(f.events.includes('mount'), 'no mount was created');
   t.is(f.scopes.size, 0);
   t.is(f.grants.size, 0);
+  t.true((await E(revived).status()).stopped);
+});
+
+test('a mount that cannot be reclaimed keeps the session stoppable, not stopped', async t => {
+  // The refusal that survives: if the recorded mount is still served, or the
+  // unmount fails, this owner has established nothing and says so. The
+  // session stays retryable rather than being reported as released.
+  const f = fixture(t);
+  const text = JSON.stringify(planFor('a'));
+  f.faults.reclaimFail = true;
+  const revived = f.makeController();
+  await t.throwsAsync(E(revived).terminate(text, f.resolver), {
+    message: /Original local 9P\/MCP cleanup ownership is unavailable/,
+  });
   t.false((await E(revived).status()).stopped);
+  f.faults.reclaimFail = false;
+  await E(revived).terminate(text, f.resolver);
+  t.true((await E(revived).status()).stopped);
+});
+
+test('a shared service that cannot be revived no longer blocks cleanup', async t => {
+  // Finding 16 in the Tokyo trial: a superseded native-sandbox formula
+  // refused to revive (its ownerId was already held), the lookup rejected,
+  // and the session could never be stopped again. A service that has to be
+  // revived to answer holds no scopes from the lost incarnation anyway, so
+  // its failure is reported, not raised.
+  const f = fixture(t);
+  const text = JSON.stringify(planFor('a'));
+  f.faults.resolverFail = 'sandboxService';
+  const revived = f.makeController();
+  await E(revived).terminate(text, f.resolver);
+  t.true((await E(revived).status()).stopped);
+  t.true(
+    f.events.some(
+      event => Array.isArray(event) && event[0] === 'cleanup error',
+    ),
+    'the refusal is reported to the host, not swallowed',
+  );
 });
 
 test('the plan cannot change under a live activation, and the caplet requires null powers', async t => {

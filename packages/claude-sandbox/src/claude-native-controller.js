@@ -37,6 +37,7 @@ import {
   assertPublicNetworkEvidence,
   makePublicNetworkEnvironment,
 } from '@endo/hosted-agent/public-network.js';
+import { reclaimRecordedMount } from '@endo/hosted-agent/recorded-cleanup.js';
 import { M } from '@endo/patterns';
 import { makeNodeFilesystem } from '@endo/platform/fs/extended/node-fs.js';
 
@@ -72,9 +73,11 @@ const ControllerInterface = M.interface('ClaudeNativeController', {
  * terminate retries.
  *
  * The daemon calls terminate without activate when reconstructing a
- * previously started controller. The shared sandbox and broker scopes can
- * then be looked up, but the lost local 9P/MCP owners cannot be recreated as
- * evidence of release, so that path refuses completion.
+ * previously started controller. The lost local 9P/MCP owners are never
+ * recreated as evidence of release; that path instead reclaims the one
+ * resource the plan recorded and nothing else will take down — the kernel 9P
+ * mount — and completes only when that reclamation is proved. See
+ * `@endo/hosted-agent/recorded-cleanup.js` for the evidence it requires.
  * Fresh inert construction is cancelled by the daemon's construction kit
  * instead. The caller must pre-create and own the private mounterSocketDir
  * and keep all mount/socket paths under stable, disjoint ancestry outside
@@ -90,6 +93,8 @@ const ControllerInterface = M.interface('ClaudeNativeController', {
  *   closed when that formula is collected, so the plan's path is the only
  *   authority that crosses into this worker.
  * @param {typeof makeMcpBridgeForToolSet} [powers.makeBridge]
+ * @param {typeof reclaimRecordedMount} [powers.reclaimMount] Reclaims a lost
+ *   worker's recorded kernel mount. Never mounts anything.
  * @param {typeof startMcpSocketServer} [powers.startMcp]
  * @param {typeof makeClaudeClient} [powers.makeClient]
  * @param {typeof makeTranscriptResume} [powers.makeResume]
@@ -109,6 +114,7 @@ export const makeClaudeNativeController = ({
     }),
   makeFilesystem = rootPath => makeNodeFilesystem({ rootPath }),
   makeBridge = makeMcpBridgeForToolSet,
+  reclaimMount = reclaimRecordedMount,
   startMcp = startMcpSocketServer,
   makeClient = makeClaudeClient,
   makeResume = makeTranscriptResume,
@@ -349,6 +355,15 @@ export const makeClaudeNativeController = ({
       if (!activating) {
         // Recovery only. Never create substitutes for an earlier owner.
         const recoveredPlan = readClaudeSessionPlan(text);
+        // Reaching the shared services is best effort, and never proof either
+        // way: a service revived to answer this call holds no scopes from the
+        // lost incarnation, and one that cannot be reached cannot be asked.
+        // A scope still live in THIS incarnation is found here and closed
+        // below, which is the case worth trying for. A slice left behind by a
+        // lost runtime is reconciled by the driver's own label sweep, so a
+        // failure here is reported, not raised: raising it is what used to
+        // leave a session permanently unstoppable whenever a superseded
+        // service formula refused to revive.
         const recovered = await Promise.allSettled([
           (async () => {
             if (sandboxScope) return;
@@ -365,13 +380,36 @@ export const makeClaudeNativeController = ({
             );
           })(),
         ]);
-        const released = await Promise.allSettled([closeResources()]);
-        throw AggregateError(
-          [...recovered, ...released].flatMap(result =>
-            result.status === 'rejected' ? [result.reason] : [],
-          ),
-          'Original local 9P/MCP cleanup ownership is unavailable',
+        // The kernel mount outlives every process that knew about it, so it
+        // is the one thing this owner must establish. Both run before either
+        // is judged: a failed scope close must not skip the unmount.
+        const released = await Promise.allSettled([
+          closeResources(),
+          // Compose the mounter settings exactly as activation does: the
+          // operator's are this worker's trusted configuration and the plan's
+          // recorded overrides sit on top. Reading only the plan would run a
+          // bare `umount` on a host whose mounts go through a privilege
+          // helper, and refuse every reclamation with EPERM.
+          reclaimMount({
+            ...recoveredPlan,
+            mounterEnv: { ...env, ...recoveredPlan.mounterEnv },
+          }),
+        ]);
+        const failures = released.flatMap(result =>
+          result.status === 'rejected' ? [result.reason] : [],
         );
+        const diagnosed = recovered.flatMap(result =>
+          result.status === 'rejected' ? [result.reason] : [],
+        );
+        if (failures.length) {
+          throw AggregateError(
+            [...diagnosed, ...failures],
+            'Original local 9P/MCP cleanup ownership is unavailable',
+          );
+        }
+        for (const error of diagnosed) reportError(error);
+        stopped = true;
+        return;
       }
       // Fence a still-pending activation by releasing what it has acquired
       // so far; a completed activation is released once, after the client
