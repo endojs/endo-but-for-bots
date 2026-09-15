@@ -110,18 +110,18 @@ That is stronger than the per-binding generation counter sketched in
 A stale reference into a dead incarnation breaks; it never silently reaches its
 successor.
 
-### Only managers need pinning
+### Only managers are notified at start
 
-Each consumer holding its own desired state would mean each consumer needs an
-eager pin.
-With one manager per resource kind, the manager is the only thing that must
-wake at host start.
+Each consumer holding its own desired state would mean each consumer needs to be
+started by the host.
+With one manager per resource kind, the manager is the only thing the host has
+to notify.
 It then pushes the whole desired set into a fresh ephemeral vat, and consumer
 vats stay asleep until the first request reaches them through the handler
 references the manager replayed.
 
-Pins therefore scale with the number of resource kinds, not with the number of
-things being served.
+Start notices therefore scale with the number of resource kinds, not with the
+number of things being served.
 
 ### The manager retains its consumers
 
@@ -281,45 +281,59 @@ probe the handler, and if it is unreachable, answer 503 and release the port on
 the next turn — closing a listener destroys every socket on it, including the
 one still waiting for that answer.
 
-## Pins
+## Wakefulness
 
 Endo daemon gives each agent an `@pins` directory; `revivePins` walks it at
 startup and `provide`s each id, and naming something there also retains it.
 Two jobs in one gesture, because daemon formulas do not sleep.
 
-Thixotrope already separates retention: `keep` in `vat-reachability.js` is a GC
-root and says nothing about wakefulness, and an ordinary reference retains a vat
-anyway.
-So a pin here is about wakefulness, and it is three distinct requests that a
-single directory would conflate:
+A first pass here copied that shape: a `pin` of `eager` or `resident`, durable
+in worker meta, plus a retention root.
+All three parts turned out to be unnecessary once the pair model was in place,
+and what is left is two much smaller things.
 
-- **eager** — wake at daemon start even with no pending journal.
-  Today's rule is `journalLength() > snapshot.cut`.
+### An ephemeral vat is resident, and does not ask
 
-  Waking, on its own, is not enough, and this was the one surprise in building
-  it.
-  Orthogonal persistence resumes a heap exactly where it was, with no callback —
-  the main design is explicit that sleep is host policy and not a guest
-  lifecycle event.
-  So an eagerly pinned manager wakes up still remembering a service that nothing
-  has rebound, and sits there.
+There is no residency flag.
+An ephemeral vat never idle-sleeps, because it cannot want to: its state is
+discarded at the next startup regardless, so snapshotting it on idle is I/O
+spent on something already known to be disposable — and a resource adapter that
+sleeps is one that has to be woken by the very traffic it exists to absorb.
 
-  A pin therefore names a publication as well as a mode, and the host calls
-  `started()` on it once the vat is awake.
-  Send-only, because a manager that cannot restore is something to report rather
-  than a reason to fail startup.
-  That is a deliberate host-to-guest delivery, not a sleep callback: it says a
-  new host incarnation exists, which is exactly the fact a manual-persistence
-  vat needs and cannot otherwise learn.
-- **resident** — never idle-sleep.
-  Needed when sleeping would abandon something the vat supervises, such as a
-  child process or a stateful outbound connection — and also when the vat is
-  the one absorbing unadmitted traffic, as the HTTP adapter is.
-  Not needed by the clock.
-- **scheduled** — wake at a time, which is the restorable promise above.
+Residency is the host declining to park a vat on its own initiative, not a
+refusal to obey a request: an explicit `sleep` is still honoured.
 
-Residency is the expensive one and the rarest, and it is worth making a caller
-say which one it means.
+### A manager is not pinned; it is notified
+
+The manager does not need to stay awake, because it is not on the request path.
+The host reaches the adapter, the adapter reaches the consumer, and the policy
+the adapter enforces was pushed into it at bind time.
+Keeping policy pushable rather than consulted is what keeps a manager off the
+hot path, and is worth preserving as a rule: a resource whose manager must be
+asked per event would need residency, and should be designed not to need it.
+
+So the manager sleeps, and needs exactly one thing — to learn that a new host
+incarnation exists.
+`notifyOnStart(secret)` records a publication in worker meta, and the daemon
+calls `started()` on it at every startup.
+
+Two consequences of that being a delivery rather than a flag.
+The delivery *is* the wake, so nothing needs to start the vat separately — which
+matters, because waking runs none of a vat's code: orthogonal persistence
+resumes the heap exactly where it was, and the main design is explicit that
+sleep is host policy and not a guest lifecycle event.
+And the publication is already a retention root, so a notified vat is retained
+without any rule about pins and collection.
+
+It is send-only.
+A manager that cannot restore its resource is a condition for it to report, not
+a reason to refuse to start the host — and there is no caller at startup to
+receive a rejection.
+
+### What is left of the third kind
+
+A scheduled wake is the restorable host promise above, and belongs to the vat
+that wants it rather than to any host-side registry.
 
 ## Utilities
 
@@ -338,10 +352,8 @@ Host-side, small and generic:
 - **Ephemeral workers**: a worker whose heap is not a recovery baseline and
   which is retired at the next daemon startup.
 - A durable alarm table offering restorable promise resources.
-- **Pins**: `pin('eager' | 'resident', { notify })` on a worker facade, durable
-  in worker meta, honoured at startup, and a retention root — separating pins
-  from retention means one can exist without the other, not that a host may
-  collect a vat it is configured to wake.
+- **Start notices**: `notifyOnStart(secret)` on a worker facade, durable in
+  worker meta, delivered send-only at every startup.
 
 ### Retrying across a break is the caller's decision
 
