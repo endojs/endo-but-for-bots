@@ -10,9 +10,11 @@
 #![cfg(feature = "ironhorse-engine")]
 
 use endo::ironhorse_engine::engine::{
-    CadencePolicy, HeapStoreOptions, MachineError, MeterBounds, PersistentMachine,
+    CadencePolicy, HeapStoreOptions, MachineError, MeterBounds, PersistentMachine, StoreError,
+    StoreFailure,
 };
 use endo::supervisor::Supervisor;
+use ironhorse_snapshot::format::SnapshotError;
 
 #[test]
 fn store_backed_worker_lifecycle_through_the_supervisor() {
@@ -181,11 +183,19 @@ fn store_backed_worker_lifecycle_through_the_supervisor() {
         meter: MeterBounds::default(),
         intrinsic_permit: None,
     }) {
-        Err(MachineError::Store(e)) => {
+        // The signature gate, asserted by structure rather than by a
+        // substring of a Debug rendering: a foreign callback table is an
+        // intact store answering "not mine", so it must classify as a
+        // refusal and not as corruption (review finding F157).
+        Err(MachineError::Store { kind, source }) => {
             assert!(
-                e.contains("Signature"),
-                "refused by the signature gate: {e}"
+                matches!(
+                    source,
+                    StoreError::Snapshot(SnapshotError::SignatureMismatch { .. })
+                ),
+                "refused by the signature gate: {source}"
             );
+            assert_eq!(kind, StoreFailure::Refused);
         }
         Ok(_) => panic!("a foreign signature must be refused"),
         Err(other) => panic!("expected a store refusal, got {other}"),
@@ -647,8 +657,10 @@ fn collection_policy_and_events_are_durable_and_reopen_refuses_drift() {
     assert_eq!(explicit.collections, 2);
     assert_ne!(scheduled.root, explicit.root);
     options.cadence.collect_every = 3;
-    assert!(matches!(PersistentMachine::open(&options),
-        Err(MachineError::Store(message)) if message.contains("collection cadence mismatch")));
+    assert!(matches!(
+        PersistentMachine::open(&options),
+        Err(MachineError::Refused("collection cadence mismatch"))
+    ));
     assert_eq!(read_manifest(&options.path), explicit);
     options.cadence.collect_every = 2;
     let mut reopened = PersistentMachine::open(&options).unwrap();

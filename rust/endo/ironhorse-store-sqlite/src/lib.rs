@@ -1657,9 +1657,15 @@ mod tests {
         let mut crafted = image_to_batch_unchecked(&image2, 2, &prev.seal);
         crafted.chunk_extents.retain(|(e, _)| *e != tail_ext);
         reseal_batch(&mut crafted);
+        // Wrapped: the omission is in the CALLER's batch, so the store is
+        // not implicated and a supervisor refuses the request rather than
+        // tearing the session down (review finding F157).
         assert_eq!(
             store.commit(&crafted),
-            Err(StoreError::MissingRow("chunk extent", tail_ext))
+            Err(StoreError::BatchRejected(Box::new(StoreError::MissingRow(
+                "chunk extent",
+                tail_ext
+            ))))
         );
 
         let after = store.manifest().unwrap();
