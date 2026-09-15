@@ -148,32 +148,35 @@ impl Interp {
             .binding_names
             .extend(machine.environment.global_props.keys().copied());
         machine.shared_compartments = true;
-        // ONLY the two evaluators reachable by a global name. `link_intrinsics`
-        // routes every global binding through `compartment_evaluator`, which
-        // mints each compartment a copy of `eval` and `Function` homed to its
-        // own global — so this value is the *default* environment's, and it is
-        // the one a copy overwrites rather than one a compartment ever runs in.
+        // NO evaluator is pinned to the default global environment.
         //
-        // `%GeneratorFunction%`, `%AsyncFunction%` and `%AsyncGeneratorFunction%`
-        // are deliberately NON-global (`create_intrinsics` registers them
-        // separately, `boot.rs:1153`), reachable only as
-        // `Object.getPrototypeOf(function*(){}).constructor` off a prototype
-        // that every compartment shares and that is frozen. There is no
-        // per-compartment copy to mint and no per-compartment property to mint
-        // it into, so a `global_env` set here is not overwritten — it is
-        // OBSERVED, and `invoke_native` (`invoke.rs:186`) switches to it before
-        // running `create_dynamic_function`. Pinning them to the default global
-        // therefore let a compartment compile against the default realm's
-        // bindings: `GeneratorFunction('return answer')()` read the default
-        // `answer`, where `Function('return answer')()` read its own. Left
-        // NULL, `switch_environment` no-ops (`:187`) and the dynamic function
-        // is created in whichever environment called for it, which is what the
-        // two named evaluators already do by copy.
-        for info in machine.functions.values_mut() {
-            if matches!(info.native, Some(Native::Eval | Native::Function)) {
-                info.global_env = machine.environment.global_obj;
-            }
-        }
+        // `link_intrinsics` routes every global binding through
+        // `compartment_evaluator`, which mints each compartment a copy of
+        // `eval` and `Function` homed to its own global. That copy is not the
+        // only way to reach an evaluator. The ORIGINAL stays reachable through
+        // any object's prototype chain --
+        // `({}).constructor.constructor`, `(function(){}).constructor` -- and
+        // `%GeneratorFunction%`, `%AsyncFunction%` and
+        // `%AsyncGeneratorFunction%` have no global binding at all
+        // (`boot.rs:1153`), so they are reachable ONLY that way.
+        //
+        // A `global_env` set here is therefore observed, not overwritten:
+        // `invoke_native` (`invoke.rs:186`) switches to it before running
+        // `create_dynamic_function`. Pinning it to the default global let a
+        // compartment compile against the default realm in both directions --
+        // `({}).constructor.constructor('return answer')()` read the default
+        // `answer` where `Function('return answer')()` read its own, and an
+        // assignment in such a body defined its global ON the default realm.
+        //
+        // Left NULL, `switch_environment` no-ops (`:187`) and the dynamic
+        // function is created in whichever environment called for it. That is
+        // the only answer that is not arbitrary here: compartments share one
+        // realm and one frozen intrinsic graph, so a shared evaluator has no
+        // realm of its own to belong to. XS instead replaces the
+        // function-family prototypes' `.constructor` with a throwing stub
+        // (`fx_lockdown_aux`, `xsLockdown.c:52`), which is correct only after
+        // a guest calls `lockdown()` -- something ironhorse has no equivalent
+        // of, since it freezes at construction.
         machine.meter = Meter::new();
         machine
     }
