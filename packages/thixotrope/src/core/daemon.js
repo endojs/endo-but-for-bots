@@ -20,6 +20,7 @@ import { makeEphemeralHubClient } from '../net/ephemeral-hub-client.js';
 import { derivePipeResumption } from '../net/pipe-network.js';
 import { makeFirstFailure, makeInFlight } from '../in-flight.js';
 import { makeLogPowers, silentLogger } from '../platform/logging.js';
+import { settleWithin } from '../platform/timers.js';
 import { isSessionToken } from '../store/store-validators.js';
 import { inspectVatReachability } from './vat-reachability.js';
 import { WorkerHaltError } from './worker-engine.js';
@@ -108,6 +109,8 @@ const SHELL_SWISSNUM = swissnumFromBytes(textEncoder.encode('shell'));
 // descriptions, pending answers) live in this worker store.
 const ENDPOINT_ID = 'e'.repeat(32);
 const ENDPOINT_SESSION = 'endpoint';
+// How long startup waits for one notified vat to re-establish whatever it owns.
+const START_NOTICE_MS = 10_000;
 
 /**
  * @param {object} powers
@@ -1178,22 +1181,33 @@ const buildDaemon = async (
 
     // Start notices, after every session is seated and the netlayer is up.
     //
-    // No separate wake: the delivery is the wake. Send-only, because a vat
-    // that fails to act on a new incarnation is a condition for it to report
-    // rather than a reason to refuse to start the host at all — and there is
-    // no caller here to receive a rejection.
+    // No separate wake: the delivery is the wake.
+    //
+    // Awaited, within a bound. A caller that gets a started daemon back is
+    // entitled to assume that whatever a notified vat re-establishes — a bound
+    // socket, say — is in place, which send-only would not give it. But a vat
+    // that cannot restore must not be able to wedge startup, and one that
+    // fails must not abort it: the failure is for that vat to report.
     for (const [workerId] of workers) {
       const { startNotify } = store.provideWorkerStore(workerId).getMeta();
       // eslint-disable-next-line no-continue
       if (startNotify === undefined) continue;
-      // eslint-disable-next-line no-await-in-loop
-      const target = await lookup(startNotify).catch(error => {
+      const report = (/** @type {unknown} */ error) =>
         logging
           .sub('thixotrope', 'daemon')
-          .error('start notice lookup failed:', error);
+          .error('start notice failed:', error);
+      // eslint-disable-next-line no-await-in-loop
+      const target = await lookup(startNotify).catch(error => {
+        report(error);
         return undefined;
       });
-      if (target !== undefined) E.sendOnly(target).started();
+      if (target === undefined) continue; // eslint-disable-line no-continue
+      // eslint-disable-next-line no-await-in-loop
+      await settleWithin(
+        timers,
+        START_NOTICE_MS,
+        E(target).started().catch(report),
+      );
     }
   } catch (error) {
     await stopDaemon();
