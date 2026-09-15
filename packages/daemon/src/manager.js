@@ -6988,8 +6988,6 @@ const makeDaemonCore = async (
           );
         }
 
-        // --- Fallible work, before the consume ---
-
         // Register the guest's agent key so we can route to its daemon.
         if (guestHandleNode !== guestDaemonNode) {
           persistencePowers.writeRemoteAgentKey(
@@ -7005,8 +7003,6 @@ const makeDaemonCore = async (
         };
         await networkBroker.addPeerInfo(peerInfo);
 
-        // --- Consume, last: only now that the fallible work has succeeded ---
-        //
         // Use storeLocator so the directory properly internalizes the remote
         // formula identifier for peer resolution.  This rebind is the actual
         // consume: after it, `identify(...guestNamePath) !== id`, so any
