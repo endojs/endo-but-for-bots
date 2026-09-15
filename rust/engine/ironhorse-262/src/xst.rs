@@ -153,6 +153,12 @@ impl SesMode {
     /// whole-case named skips to real runs when the surface lands — remove a
     /// match arm (and the matching entry in [`DEFAULT_ENDOR_SKIP_FEATURES`])
     /// as each guest builtin is implemented.
+    ///
+    /// `Some` has two consumers, and they want different things from it. The
+    /// per-case gate below records the skip for a library caller. The
+    /// `endot-ih` binary instead REFUSES to start, because a run in which
+    /// every case pre-skips exits 0 and reads as a pass — see
+    /// `bin/endot_ih.rs::refuse_unimplemented_ses_mode`.
     pub fn unimplemented_skip(self) -> Option<&'static str> {
         match self {
             SesMode::None => None,
