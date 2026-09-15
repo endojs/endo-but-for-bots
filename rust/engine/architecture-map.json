@@ -1,0 +1,2706 @@
+{
+  "acceptance": [
+    {
+      "bar": "Covered result agreement and deterministic meter",
+      "evidence": "`ironhorse-vm/tests/golden_computrons.rs`; historical corpus in CHANGELOG. Shared intrinsics are still incomplete.",
+      "stage": "1. Thin slice",
+      "state": "landed",
+      "verdict": "Landed; historical corpus acceptance"
+    },
+    {
+      "bar": "Covered language agreement, GC",
+      "evidence": "`ironhorse-vm/tests/gc_visitation_registry.rs`; production exact-GC/chunk reclamation remains open; W6 decision 5 assigns scheduling to the consumer.",
+      "stage": "2. Object/control flow",
+      "state": "partial",
+      "verdict": "Partial"
+    },
+    {
+      "bar": "Built-ins result agreement",
+      "evidence": "Test262 expectations and runtime golden vectors cover subsets; full conformance is not established.",
+      "stage": "3. Built-ins",
+      "state": "partial",
+      "verdict": "Partial"
+    },
+    {
+      "bar": "Daemon boot and SES suites pass",
+      "evidence": "`ironhorse-vm/tests/ses_boot_intrinsics.rs` and `hardened_js_boundary.rs` cover prerequisites. Complete SES boot/parity and shared Realm remain open.",
+      "stage": "4. Hardened JavaScript",
+      "state": "blocked",
+      "verdict": "BAR NOT MET"
+    },
+    {
+      "bar": "Full-corpus byte identity and parse meter",
+      "evidence": "Historical `compile-diff` measurements in CHANGELOG; compiler golden costs and parity tests are narrower than fresh full-corpus acceptance.",
+      "stage": "5. Compiler",
+      "state": "partial",
+      "verdict": "Implemented; full bar not reverified"
+    },
+    {
+      "bar": "Round-trip, meter and supervisor integration",
+      "evidence": "`ironhorse-snapshot/tests/state_golden.rs`, `supervisor_suspend_resume.rs`, `persist_gates.rs`; unsupported/live state refuses persistence.",
+      "stage": "6. Snapshots",
+      "state": "partial",
+      "verdict": "Partial; historical subset passed"
+    },
+    {
+      "bar": "xsbug and unchanged debugger suites",
+      "evidence": "No reproduced acceptance or debugger crate. Historical child numbering is unrelated.",
+      "stage": "7. Debugger",
+      "state": "partial",
+      "verdict": "Not accepted"
+    },
+    {
+      "bar": "Full result equality, XS-relative envelope",
+      "evidence": "`benches/README.md` describes self-relative gates, not the XS comparison or footprint bar; daemon benchmark arm is blocked.",
+      "stage": "8. Closure/hardening",
+      "state": "blocked",
+      "verdict": "BAR NOT MET"
+    },
+    {
+      "bar": "Zero result divergence on real corpora",
+      "evidence": "No completed daemon/Agoric replay campaign establishes the bar.",
+      "stage": "9. Ecosystem",
+      "state": "partial",
+      "verdict": "Not accepted"
+    }
+  ],
+  "checks": [
+    {
+      "commands": [
+        "cargo test --locked -p endo --features ironhorse-engine --test ironhorse_store_worker --test ironhorse_runtime_compiler"
+      ],
+      "step": "Test the store-backed worker lifecycle (endo crate)",
+      "workflow": "ci.yml"
+    },
+    {
+      "commands": [
+        "python3 rust/engine/scripts/test-math-vectors.py",
+        "python3 rust/engine/scripts/test-lockfile-agreement.py",
+        "python3 rust/engine/scripts/check-lockfile-agreement.py",
+        "python3 rust/engine/scripts/test-intl-profile.py"
+      ],
+      "step": "Verify shared IronHorse dependency resolutions",
+      "workflow": "ci.yml"
+    },
+    {
+      "commands": [
+        "python3 rust/engine/scripts/test-row-schema.py",
+        "python3 rust/engine/scripts/check-row-schema.py --base \"${ROW_SCHEMA_BASE:-HEAD^}\""
+      ],
+      "step": "Check row-schema history and version transitions",
+      "workflow": "ci.yml"
+    },
+    {
+      "commands": [
+        "python3 rust/engine/scripts/test-crate-graph.py",
+        "python3 rust/engine/scripts/crate-graph.py --check"
+      ],
+      "step": "Check generated engine crate diagram and library safety declarations",
+      "workflow": "ci.yml"
+    },
+    {
+      "commands": [
+        "python3 rust/engine/scripts/test-engine-map.py",
+        "python3 rust/engine/scripts/engine-map-model.py --check",
+        "python3 rust/engine/scripts/engine-map.py --check"
+      ],
+      "step": "Check generated engine architecture map",
+      "workflow": "ci.yml"
+    },
+    {
+      "commands": [
+        "python3 rust/engine/scripts/test-compiler-opcodes.py",
+        "python3 rust/engine/scripts/generate-compiler-opcodes.py --check"
+      ],
+      "step": "Check generated compiler opcode table",
+      "workflow": "ci.yml"
+    },
+    {
+      "commands": [
+        "cargo +1.88.0 fmt --manifest-path rust/engine/Cargo.toml --all -- --check"
+      ],
+      "step": "Check ironhorse engine formatting",
+      "workflow": "ci.yml"
+    },
+    {
+      "commands": [
+        "cargo +1.88.0 fmt --manifest-path Cargo.toml --package ironhorse-store-sqlite -- --check"
+      ],
+      "step": "Check SQLite heap-store formatting",
+      "workflow": "ci.yml"
+    },
+    {
+      "commands": [
+        "cargo build --locked --release -p thixotrope-ironhorse-worker"
+      ],
+      "step": "Build real SQLite worker",
+      "workflow": "ci.yml"
+    },
+    {
+      "commands": [
+        "corepack yarn workspace @endo/thixotrope build:ironhorse-bundles"
+      ],
+      "step": "Bundle SES and OCapN peer",
+      "workflow": "ci.yml"
+    },
+    {
+      "commands": [
+        "corepack yarn workspace @endo/thixotrope test:ironhorse"
+      ],
+      "step": "Test two demos and twelve adversarial persistence scenarios",
+      "workflow": "ci.yml"
+    },
+    {
+      "commands": [
+        "cargo test --locked \"${flags[@]}\" -p ironhorse-runtime -p ironhorse-meter -p ironhorse-unicode -p ironhorse-vm -p ironhorse-snapshot -p ironhorse-compile -p ironhorse-regexp --features ironhorse-vm/store-integrity"
+      ],
+      "step": "Test ironhorse engine crates (rust/engine workspace)",
+      "workflow": "ci.yml"
+    },
+    {
+      "commands": [
+        "cargo test --locked \"${flags[@]}\" -p ironhorse-vm -p ironhorse-snapshot --features ironhorse-vm/deterministic-math,ironhorse-vm/store-integrity"
+      ],
+      "step": "Test deterministic Math configuration (oracle-free)",
+      "workflow": "ci.yml"
+    },
+    {
+      "commands": [
+        "cargo test --locked \"${flags[@]}\" -p ironhorse-vm --test math_determinism platform_math_vector"
+      ],
+      "step": "Export platform Math vector (oracle-free)",
+      "workflow": "ci.yml"
+    },
+    {
+      "commands": [
+        "cargo test --locked \"${flags[@]}\" -p ironhorse-vm --test math_provider_comparison"
+      ],
+      "step": "Export candidate Math provider comparison (oracle-free)",
+      "workflow": "ci.yml"
+    },
+    {
+      "commands": [
+        "cargo test --locked \"${flags[@]}\" -p ironhorse-vm --features deterministic-math --test math_determinism platform_math_vector"
+      ],
+      "step": "Export deterministic Math vector (oracle-free)",
+      "workflow": "ci.yml"
+    },
+    {
+      "commands": [
+        "cargo test --locked \"${flags[@]}\" -p ironhorse-store-sqlite --features ironhorse-vm/store-integrity",
+        "cargo test --locked \"${flags[@]}\" -p ironhorse-store-sqlite --features ironhorse-vm/store-integrity --example vat_surgery"
+      ],
+      "step": "Test SQLite heap-store backend (root workspace)",
+      "workflow": "ci.yml"
+    },
+    {
+      "commands": [
+        "cargo test --locked -p ironhorse-vm --features cost-calibration --lib",
+        "cargo test --locked -p ironhorse-vm --features cost-calibration --test golden_computrons",
+        "cargo test --locked -p ironhorse-vm --features consensus --test golden_computrons"
+      ],
+      "step": "Test instrumentation and frozen computrons",
+      "workflow": "ci.yml"
+    },
+    {
+      "commands": [
+        "python3 rust/engine/scripts/compare-math-vectors.py math-vectors/math-test-ironhorse/math-vector.tsv math-vectors/math-test-ironhorse-macos/math-vector.tsv math-platform-differences.tsv rust/engine/ironhorse-vm/tests/fixtures/math-platform-differences.tsv || status=1",
+        "python3 rust/engine/scripts/compare-math-vectors.py math-vectors/math-test-ironhorse/math-vector.tsv math-vectors/math-test-ironhorse-release/math-vector.tsv math-profile-differences.tsv || status=1",
+        "python3 rust/engine/scripts/compare-math-vectors.py math-vectors/math-test-ironhorse/math-vector-libm.tsv math-vectors/math-test-ironhorse-macos/math-vector-libm.tsv math-libm-platform-differences.tsv || status=1",
+        "python3 rust/engine/scripts/compare-math-vectors.py math-vectors/math-test-ironhorse/math-vector-libm.tsv math-vectors/math-test-ironhorse-release/math-vector-libm.tsv math-libm-profile-differences.tsv || status=1"
+      ],
+      "step": "Compare Linux and macOS bits, and debug and release bits",
+      "workflow": "ci.yml"
+    },
+    {
+      "commands": [
+        "cargo test --locked -p ironhorse-compile -p ironhorse-regexp -p ironhorse-262 -p ironhorse-fuzz --features ironhorse-compile/parity,ironhorse-regexp/parity"
+      ],
+      "step": "Test oracle-linked engine crates (rust/engine workspace)",
+      "workflow": "ci.yml"
+    },
+    {
+      "commands": [
+        "cargo run --locked -p ironhorse-262 --bin endot-ih --"
+      ],
+      "step": "Gate the committed try/catch expectation slice",
+      "workflow": "ci.yml"
+    },
+    {
+      "commands": [
+        "cargo run --locked -p ironhorse-262 --bin endot-ih --"
+      ],
+      "step": "Gate the complete Ironhorse corpus expectations",
+      "workflow": "ci.yml"
+    },
+    {
+      "commands": [
+        "python3 -m unittest discover -s rust/engine/benches -p 'test_*.py'"
+      ],
+      "step": "Test report validation",
+      "workflow": "ironhorse-full-test262.yml"
+    },
+    {
+      "commands": [
+        "python3 rust/engine/benches/xs_compare.py --output xs-microbenchmarks.json"
+      ],
+      "step": "Measure XS microbenchmark slice",
+      "workflow": "ironhorse-full-test262.yml"
+    },
+    {
+      "commands": [
+        "python3 -m unittest discover -s rust/engine/benches -p 'test_*.py'"
+      ],
+      "step": "Test benchmark checker",
+      "workflow": "ironhorse-full-test262.yml"
+    },
+    {
+      "commands": [
+        "python3 rust/engine/benches/run.py --reference-baseline --check-baseline --output benchmark-report.json 2>&1 | tee benchmark.log"
+      ],
+      "step": "Check snapshot performance baselines",
+      "workflow": "ironhorse-full-test262.yml"
+    },
+    {
+      "commands": [
+        "cargo test --manifest-path rust/engine/Cargo.toml --locked --release -p ironhorse-snapshot --test scaling_bench -- --ignored --nocapture --test-threads=1 2>&1 | tee scaling.log"
+      ],
+      "step": "Check elapsed time and computron scaling",
+      "workflow": "ironhorse-full-test262.yml"
+    },
+    {
+      "commands": [
+        "cargo test --manifest-path rust/engine/Cargo.toml --locked --release -p ironhorse-snapshot --test checkpoint_scaling_bench -- --ignored --nocapture --test-threads=1 2>&1 | tee checkpoint-scaling.log"
+      ],
+      "step": "Check unchanged checkpoint scaling",
+      "workflow": "ironhorse-full-test262.yml"
+    },
+    {
+      "commands": [
+        "cargo test --manifest-path rust/engine/Cargo.toml --locked --release -p ironhorse-snapshot --test property_lookup_bench -- --ignored --nocapture --test-threads=1 2>&1 | tee property-lookup.log"
+      ],
+      "step": "Check existing-property update scaling",
+      "workflow": "ironhorse-full-test262.yml"
+    },
+    {
+      "commands": [
+        "cargo test --manifest-path rust/engine/Cargo.toml --locked --release --no-fail-fast -p ironhorse-compile --test compiler_growth_policy --test performance_bench --test compile_budget_bench -- --include-ignored --nocapture --test-threads=1 2>&1 | tee compiler-scaling.log"
+      ],
+      "step": "Check compiler scaling",
+      "workflow": "ironhorse-full-test262.yml"
+    },
+    {
+      "commands": [
+        "python3 rust/engine/benches/profile_compile.py 2>&1 | tee compiler-phases.log"
+      ],
+      "step": "Diagnose failed compiler scaling",
+      "workflow": "ironhorse-full-test262.yml"
+    },
+    {
+      "commands": [
+        "cargo test --manifest-path rust/engine/Cargo.toml --locked --release -p ironhorse-snapshot --test lifecycle_bench -- --ignored --nocapture --test-threads=1 2>&1 | tee lifecycle.log"
+      ],
+      "step": "Check shared-bytecode lifecycle scaling",
+      "workflow": "ironhorse-full-test262.yml"
+    },
+    {
+      "commands": [
+        "cargo test --manifest-path rust/engine/Cargo.toml --locked --release -p ironhorse-snapshot --test classification_bench -- --ignored --nocapture --test-threads=1 2>&1 | tee classification.log"
+      ],
+      "step": "Measure property and call classification",
+      "workflow": "ironhorse-full-test262.yml"
+    },
+    {
+      "commands": [
+        "bash rust/engine/scripts/test-oracle-sanitizers.sh --no-run"
+      ],
+      "step": "Build instrumented oracle test targets",
+      "workflow": "ironhorse-sanitizers.yml"
+    },
+    {
+      "commands": [
+        "bash rust/engine/scripts/test-oracle-sanitizers.sh"
+      ],
+      "step": "Run ASAN and UBSAN over the C oracle",
+      "workflow": "ironhorse-sanitizers.yml"
+    }
+  ],
+  "commit": "65902a8f8c2e5f198d479ff0d9a77eb25a7c36d3",
+  "constants": [
+    {
+      "documented": "ironhorse-meter-5",
+      "drift": false,
+      "file": "rust/engine/ironhorse-meter/src/lib.rs",
+      "line": 15,
+      "name": "COST_TABLE_VERSION",
+      "type": "&str",
+      "value": "ironhorse-meter-5"
+    },
+    {
+      "documented": "22",
+      "drift": true,
+      "file": "rust/engine/ironhorse-snapshot/src/format.rs",
+      "line": 222,
+      "name": "IRONHORSE_FORMAT_VERSION",
+      "type": "u32",
+      "value": "23"
+    },
+    {
+      "documented": null,
+      "drift": false,
+      "file": "rust/engine/ironhorse-snapshot/src/format.rs",
+      "line": 230,
+      "name": "IRONHORSE_FORMAT_VERSION_MIN_READ",
+      "type": "u32",
+      "value": "1"
+    },
+    {
+      "documented": "33",
+      "drift": true,
+      "file": "rust/engine/ironhorse-snapshot/src/store.rs",
+      "line": 102,
+      "name": "STORE_SCHEMA_VERSION",
+      "type": "u32",
+      "value": "34"
+    },
+    {
+      "documented": "3",
+      "drift": true,
+      "file": "rust/engine/ironhorse-vm/src/snapshot_api.rs",
+      "line": 11,
+      "name": "ROW_SCHEMA_VERSION",
+      "type": "u32",
+      "value": "4"
+    },
+    {
+      "documented": null,
+      "drift": false,
+      "file": "rust/engine/ironhorse-vm/src/interp.rs",
+      "line": 344,
+      "name": "NATIVE_DEPTH_LIMIT",
+      "type": "usize",
+      "value": "2048"
+    }
+  ],
+  "consumers": [
+    {
+      "lines": 1994,
+      "path": "rust/endo/src/ironhorse_engine.rs",
+      "role": "Endo daemon engine backend"
+    },
+    {
+      "lines": 6242,
+      "path": "rust/endo/ironhorse-store-sqlite",
+      "role": "SQLite HeapStore backend"
+    },
+    {
+      "lines": 355,
+      "path": "rust/thixotrope-ironhorse-worker",
+      "role": "Persistent worker process"
+    },
+    {
+      "lines": 318,
+      "path": "packages/thixotrope/src/ironhorse-engine.js",
+      "role": "Thixotrope engine binding"
+    },
+    {
+      "lines": 205,
+      "path": "packages/thixotrope/src/ironhorse-runtime.js",
+      "role": "Thixotrope runtime binding"
+    }
+  ],
+  "crates": [
+    {
+      "deps": [
+        {
+          "kind": "normal",
+          "name": "ironhorse-compile",
+          "optional": false
+        },
+        {
+          "kind": "normal",
+          "name": "ironhorse-runtime",
+          "optional": false
+        },
+        {
+          "kind": "normal",
+          "name": "ironhorse-vm",
+          "optional": false
+        },
+        {
+          "kind": "normal",
+          "name": "xs-oracle",
+          "optional": false
+        }
+      ],
+      "description": "Dual-run harness: executes each corpus program on ironhorse-vm and on the XS oracle, recording four-valued agreement plus computron agreement (design \u00a7 test262 conformance). #![forbid(unsafe_code)].",
+      "dir": "rust/engine/ironhorse-262",
+      "doc": "ironhorse-262: the dual-run harness (design \u00a7 test262 conformance; requirement 6).",
+      "forbids_unsafe": true,
+      "lib_root": "rust/engine/ironhorse-262/src/lib.rs",
+      "lines": 12468,
+      "module_count": 11,
+      "modules": [
+        {
+          "doc": "`endot-ih`: the xst-analogue test262 runner for the Rust engine (design [`designs/ironhorse-test262-convergence.md`] \u00a7 Part 2, \"Harness -> `endot-ih`\").",
+          "lines": 4537,
+          "module": "xst",
+          "path": "rust/engine/ironhorse-262/src/xst.rs"
+        },
+        {
+          "doc": "Full-run reporting for `endot-ih`: per-case records, run provenance, stable machine-readable JSON, deterministic cross-batch aggregation, and a self-contained static HTML report.",
+          "lines": 2426,
+          "module": "report",
+          "path": "rust/engine/ironhorse-262/src/report.rs"
+        },
+        {
+          "doc": "ironhorse-262: the dual-run harness (design \u00a7 test262 conformance; requirement 6).",
+          "lines": 1678,
+          "module": "lib",
+          "path": "rust/engine/ironhorse-262/src/lib.rs"
+        },
+        {
+          "doc": "The full-corpus byte-identity differential harness (stage-5 child 7/7, the STAGE BAR).",
+          "lines": 908,
+          "module": "compile_diff",
+          "path": "rust/engine/ironhorse-262/src/compile_diff.rs"
+        },
+        {
+          "doc": "Committed, parameterized test262 expectation lists and the two-directional ratchet (design [`designs/test262-fixture-consolidation.md`] \u00a7 The expectation-list mechanism).",
+          "lines": 702,
+          "module": "expectations",
+          "path": "rust/engine/ironhorse-262/src/expectations.rs"
+        },
+        {
+          "doc": "test262 `language/` dual-run runner (design \u00a7 test262 conformance, requirement 6; the stage-2 acceptance bar).",
+          "lines": 616,
+          "module": "test262",
+          "path": "rust/engine/ironhorse-262/src/test262.rs"
+        },
+        {
+          "doc": "`endot-ih`: the xst-analogue test262 runner (design [`designs/ironhorse-test262-convergence.md`] \u00a7 Part 2).",
+          "lines": 510,
+          "module": "bin/endot_ih",
+          "path": "rust/engine/ironhorse-262/src/bin/endot_ih.rs"
+        },
+        {
+          "doc": "`corpus-to-262`: the mechanical corpus \u2192 test262-style case converter (design [`designs/ironhorse-test262-convergence.md`] \u00a7 Part 1, \"Conversion mechanics and corpus retirement\").",
+          "lines": 472,
+          "module": "bin/corpus_to_262",
+          "path": "rust/engine/ironhorse-262/src/bin/corpus_to_262.rs"
+        },
+        {
+          "doc": "`ironhorse-262-report`: the whole-tree sweep's orchestration + reporting CLI It is the deterministic, oracle-free half of the full run \u2014 every subcommand is pure filesystem work\u2026",
+          "lines": 338,
+          "module": "bin/ironhorse_262_report",
+          "path": "rust/engine/ironhorse-262/src/bin/ironhorse_262_report.rs"
+        },
+        {
+          "doc": "Full test262 YAML frontmatter parse (design [`designs/ironhorse-test262-convergence.md`] \u00a7 Part 2: \"a real YAML dependency replaces `test262.rs`'s three-field hand parser\").",
+          "lines": 179,
+          "module": "frontmatter",
+          "path": "rust/engine/ironhorse-262/src/frontmatter.rs"
+        },
+        {
+          "doc": "Full-corpus byte-identity differential runner (stage-5 child 7/7, the STAGE BAR).",
+          "lines": 102,
+          "module": "bin/compile_diff",
+          "path": "rust/engine/ironhorse-262/src/bin/compile_diff.rs"
+        }
+      ],
+      "name": "ironhorse-262",
+      "surface": {
+        "enum": [
+          "Agreement",
+          "BootVerdict",
+          "Compiler",
+          "IronhorseCompile"
+        ],
+        "fn": [
+          "boot_bundle_verdict",
+          "compartment_dual_run",
+          "daemon_boot_bundle_sources",
+          "dual_run",
+          "dual_run_async",
+          "dual_run_cranks",
+          "dual_run_with",
+          "ironhorse_eval_goal_error",
+          "ironhorse_only_run",
+          "parse_corpus"
+        ],
+        "mod": [
+          "compile_diff",
+          "expectations",
+          "frontmatter",
+          "report",
+          "test262",
+          "xst"
+        ],
+        "struct": [
+          "AsyncDualRun",
+          "CompartmentDualRun",
+          "DualRun",
+          "Summary"
+        ]
+      },
+      "tests": {
+        "count": 161,
+        "groups": {
+          "array": 23,
+          "bigint": 5,
+          "error": 17,
+          "intl": 5,
+          "object": 9,
+          "regexp": 9,
+          "temporal": 4,
+          "typed": 7
+        }
+      }
+    },
+    {
+      "deps": [
+        {
+          "kind": "normal",
+          "name": "ironhorse-meter",
+          "optional": false
+        },
+        {
+          "kind": "normal",
+          "name": "ironhorse-regexp",
+          "optional": false
+        },
+        {
+          "kind": "normal",
+          "name": "ironhorse-text",
+          "optional": false
+        },
+        {
+          "kind": "normal",
+          "name": "ironhorse-unicode",
+          "optional": false
+        },
+        {
+          "kind": "normal",
+          "name": "xs-oracle",
+          "optional": true
+        }
+      ],
+      "description": "Oracle-locked transliteration of the XS compiler (lexer -> parser -> scoper -> coder). Stage 5 of the XS->Rust port; replaces the oracle compiler behind a byte-identical-bytecode bar.",
+      "dir": "rust/engine/ironhorse-compile",
+      "doc": "Pure-Rust JavaScript compiler: lexer, parser, scoper and coder.",
+      "forbids_unsafe": true,
+      "lib_root": "rust/engine/ironhorse-compile/src/lib.rs",
+      "lines": 20529,
+      "module_count": 18,
+      "modules": [
+        {
+          "doc": "The coder \u2014 a transliteration of `c/moddable/xs/sources/xsCode.c` at the oracle pin (design \u00a7 roadmap row 5; Design Decisions 4 and 5).",
+          "lines": 6888,
+          "module": "coder",
+          "path": "rust/engine/ironhorse-compile/src/coder.rs"
+        },
+        {
+          "doc": "The scoper \u2014 a transliteration of the AST pass in `c/moddable/xs/sources/xsScope.c` at the oracle pin (design \u00a7 roadmap row 5; Design Decisions 4 and 5).",
+          "lines": 3095,
+          "module": "scoper",
+          "path": "rust/engine/ironhorse-compile/src/scoper.rs"
+        },
+        {
+          "doc": "The statement / declaration grammar \u2014 the second half of the parser (stage-5 child 3), a transliteration of the statement, binding, function, class, and module productions in\u2026",
+          "lines": 2353,
+          "module": "parser/stmt",
+          "path": "rust/engine/ironhorse-compile/src/parser/stmt.rs"
+        },
+        {
+          "doc": "The parser \u2014 a transliteration of the expression grammar in `c/moddable/xs/sources/xsSyntaxical.c` at the oracle pin.",
+          "lines": 2260,
+          "module": "parser",
+          "path": "rust/engine/ironhorse-compile/src/parser.rs"
+        },
+        {
+          "doc": "The scanner, a transliteration of `fxGetNextTokenAux` and friends in `c/moddable/xs/sources/xsLexical.c` at the oracle pin.",
+          "lines": 1547,
+          "module": "lexer",
+          "path": "rust/engine/ironhorse-compile/src/lexer.rs"
+        },
+        {
+          "doc": "AST fixture tests for the expression grammar \u2014 the crate's dump-and-compare bar.",
+          "lines": 951,
+          "module": "parser/tests",
+          "path": "rust/engine/ironhorse-compile/src/parser/tests.rs"
+        },
+        {
+          "doc": "Generated by scripts/generate-compiler-opcodes.py from the VM opcode table.",
+          "lines": 754,
+          "module": "opcodes",
+          "path": "rust/engine/ironhorse-compile/src/opcodes.rs"
+        },
+        {
+          "doc": "Scoper fixture tests \u2014 the numbering / scope-shape contract for the coder child.",
+          "lines": 533,
+          "module": "scoper/tests",
+          "path": "rust/engine/ironhorse-compile/src/scoper/tests.rs"
+        },
+        {
+          "doc": "The abstract-syntax-tree model, mirroring XS's `txNode` kinds and layouts from `c/moddable/xs/sources/xsScript.h` at the oracle pin (design \u00a7 roadmap row 5; Design Decisions 4 and\u2026",
+          "lines": 523,
+          "module": "ast",
+          "path": "rust/engine/ironhorse-compile/src/ast.rs"
+        },
+        {
+          "doc": "Token-stream fixtures over the lexer's edge surface.",
+          "lines": 447,
+          "module": "lexer/tests",
+          "path": "rust/engine/ironhorse-compile/src/lexer/tests.rs"
+        },
+        {
+          "doc": "The token model, mirroring `xsScript.h`'s `XS_TOKEN_*` enumeration EXACTLY (design \u00a7 roadmap row 5).",
+          "lines": 280,
+          "module": "token",
+          "path": "rust/engine/ironhorse-compile/src/token.rs"
+        },
+        {
+          "doc": "The per-token grammar-class bitset, a transliteration of `gxTokenFlags` in `xsSyntaxical.c` at the oracle pin.",
+          "lines": 231,
+          "module": "token_flags",
+          "path": "rust/engine/ironhorse-compile/src/token_flags.rs"
+        },
+        {
+          "doc": "Shared, monotone compilation accounting under the frozen engine cost table.",
+          "lines": 214,
+          "module": "meter",
+          "path": "rust/engine/ironhorse-compile/src/meter.rs"
+        },
+        {
+          "doc": "",
+          "lines": 115,
+          "module": "coder/node_identity_tests",
+          "path": "rust/engine/ironhorse-compile/src/coder/node_identity_tests.rs"
+        },
+        {
+          "doc": "Pure-Rust JavaScript compiler: lexer, parser, scoper and coder.",
+          "lines": 96,
+          "module": "lib",
+          "path": "rust/engine/ironhorse-compile/src/lib.rs"
+        },
+        {
+          "doc": "Structured lexer errors.",
+          "lines": 94,
+          "module": "error",
+          "path": "rust/engine/ironhorse-compile/src/error.rs"
+        },
+        {
+          "doc": "Sparse per-node compiler data, indexed by parser-assigned identities.",
+          "lines": 74,
+          "module": "node_table",
+          "path": "rust/engine/ironhorse-compile/src/node_table.rs"
+        },
+        {
+          "doc": "",
+          "lines": 74,
+          "module": "parser/node_identity_tests",
+          "path": "rust/engine/ironhorse-compile/src/parser/node_identity_tests.rs"
+        }
+      ],
+      "name": "ironhorse-compile",
+      "surface": {
+        "fn": [
+          "parse_computrons",
+          "tokenize"
+        ],
+        "mod": [
+          "meter",
+          "opcodes",
+          "parser"
+        ]
+      },
+      "tests": {
+        "count": 17,
+        "groups": {
+          "coder": 1,
+          "compilation": 1,
+          "compile": 2,
+          "compiler": 1,
+          "corpus": 2,
+          "goal": 1,
+          "integration": 1,
+          "lex": 1
+        }
+      }
+    },
+    {
+      "deps": [
+        {
+          "kind": "normal",
+          "name": "ironhorse-compile",
+          "optional": false
+        },
+        {
+          "kind": "normal",
+          "name": "ironhorse-regexp",
+          "optional": false
+        },
+        {
+          "kind": "normal",
+          "name": "ironhorse-snapshot",
+          "optional": false
+        },
+        {
+          "kind": "normal",
+          "name": "ironhorse-vm",
+          "optional": false
+        },
+        {
+          "kind": "normal",
+          "name": "xs-oracle",
+          "optional": false
+        }
+      ],
+      "description": "cargo-fuzz targets (design \u00a7 Fuzzability): target 1 differential source fuzzing, target 2 bytecode decoder. The comparison and generation logic is a plain, testable lib so it builds without a libFuzzer toolchain. #![forbid(unsafe_code)].",
+      "dir": "rust/engine/ironhorse-fuzz",
+      "doc": "ironhorse-fuzz: the differential and decoder fuzz logic (design \u00a7 Fuzzability).",
+      "forbids_unsafe": true,
+      "lib_root": "rust/engine/ironhorse-fuzz/src/lib.rs",
+      "lines": 5529,
+      "module_count": 4,
+      "modules": [
+        {
+          "doc": "ironhorse-fuzz: the differential and decoder fuzz logic (design \u00a7 Fuzzability).",
+          "lines": 3722,
+          "module": "lib",
+          "path": "rust/engine/ironhorse-fuzz/src/lib.rs"
+        },
+        {
+          "doc": "The snapshot round-trip-invariance and malformed-atom decoder fuzz arms over `ironhorse-snapshot`'s `XS_M` writer/reader.",
+          "lines": 1340,
+          "module": "snapshot",
+          "path": "rust/engine/ironhorse-fuzz/src/snapshot.rs"
+        },
+        {
+          "doc": "Stage-3b XSRE fuzz arm (child 8/9): a structure-aware regexp generator plus a differential check of the [`ironhorse_regexp`] matcher against the XS pin (`fxCompileRegExp` +\u2026",
+          "lines": 339,
+          "module": "regexp",
+          "path": "rust/engine/ironhorse-fuzz/src/regexp.rs"
+        },
+        {
+          "doc": "Pure acceptance policy, testable without building XS.",
+          "lines": 128,
+          "module": "comparison",
+          "path": "rust/engine/ironhorse-fuzz/src/comparison.rs"
+        }
+      ],
+      "name": "ironhorse-fuzz",
+      "surface": {
+        "const": [
+          "DECODER_STEP_LIMIT"
+        ],
+        "enum": [
+          "CompileFuzzOutcome"
+        ],
+        "fn": [
+          "compile_differential_check",
+          "decoder_is_panic_free",
+          "differential_check",
+          "differential_check_meter_v4",
+          "differential_check_result_only",
+          "differential_check_with_symbols",
+          "gen_compile_program",
+          "gen_json_parse_program",
+          "gen_json_structured_program",
+          "gen_program",
+          "gen_stage2b_program",
+          "gen_stage3_array_iterators_program",
+          "gen_stage3_array_methods_program",
+          "gen_stage3_arrays_program",
+          "gen_stage3_bigint_program",
+          "gen_stage3_collections_program",
+          "gen_stage3_for_in_program",
+          "gen_stage3_for_of_program",
+          "gen_stage3_reentrant_program",
+          "gen_stage3_spread_program",
+          "gen_stage3_string_for_of_program",
+          "gen_stage3_text_math_program",
+          "gen_stage3b_binary_program",
+          "gen_stage3b_fundamentals_followup_program",
+          "gen_stage3b_object_statics_program",
+          "gen_stage3b_promise_program",
+          "gen_stage3b_regexp_program",
+          "gen_statement_program",
+          "parse_is_panic_free"
+        ],
+        "mod": [
+          "regexp",
+          "snapshot"
+        ],
+        "struct": [
+          "Divergence"
+        ]
+      },
+      "tests": {
+        "count": 1,
+        "groups": {
+          "nan": 1
+        }
+      }
+    },
+    {
+      "deps": [],
+      "description": "Shared frozen Ironhorse cost table and release identity.",
+      "dir": "rust/engine/ironhorse-meter",
+      "doc": "Ironhorse's own frozen, XS-derived cost table.",
+      "forbids_unsafe": true,
+      "lib_root": "rust/engine/ironhorse-meter/src/lib.rs",
+      "lines": 1183,
+      "module_count": 4,
+      "modules": [
+        {
+          "doc": "The XS default key table (`gxIDStrings`, `xsCommon.c`) at the `c/moddable` pin: every name XS pre-interns into its global symbol table at machine boot.",
+          "lines": 544,
+          "module": "default_keys",
+          "path": "rust/engine/ironhorse-meter/src/default_keys.rs"
+        },
+        {
+          "doc": "Ironhorse's own frozen, XS-derived cost table.",
+          "lines": 358,
+          "module": "lib",
+          "path": "rust/engine/ironhorse-meter/src/lib.rs"
+        },
+        {
+          "doc": "A dependency-free, `#![forbid(unsafe_code)]`-clean SHA-256 for the CAS content addressing the snapshot surface uses (design `designs/daemon-xs-worker-snapshot.md` \u00a7 CAS storage\u2026",
+          "lines": 254,
+          "module": "sha256",
+          "path": "rust/engine/ironhorse-meter/src/sha256.rs"
+        },
+        {
+          "doc": "Append-only release digest ledger.",
+          "lines": 27,
+          "module": "releases",
+          "path": "rust/engine/ironhorse-meter/src/releases.rs"
+        }
+      ],
+      "name": "ironhorse-meter",
+      "surface": {
+        "const": [
+          "COST_TABLE_VERSION"
+        ],
+        "fn": [
+          "chunk_cost",
+          "digest",
+          "string_chunk_cost"
+        ],
+        "mod": [
+          "sha256"
+        ]
+      },
+      "tests": {
+        "count": 0,
+        "groups": {}
+      }
+    },
+    {
+      "deps": [
+        {
+          "kind": "normal",
+          "name": "ironhorse-meter",
+          "optional": false
+        },
+        {
+          "kind": "normal",
+          "name": "ironhorse-unicode",
+          "optional": false
+        },
+        {
+          "kind": "normal",
+          "name": "xs-oracle",
+          "optional": true
+        }
+      ],
+      "description": "Safe transliteration of the XS RegExp engine (xsre.c): the pattern compiler (parser + measure + code emission) and the backtracking match VM, engine-internal (no JavaScript surface). Metering-exact and bit-exact against the c/moddable pin. #![forbid(unsafe_code)].",
+      "dir": "rust/engine/ironhorse-regexp",
+      "doc": "ironhorse-regexp: the safe, engine-internal transliteration of the XS RegExp engine (`c/moddable` pin `xsre.c`), per the design's resolved question 6 (the matcher is ported as an\u2026",
+      "forbids_unsafe": true,
+      "lib_root": "rust/engine/ironhorse-regexp/src/lib.rs",
+      "lines": 19312,
+      "module_count": 12,
+      "modules": [
+        {
+          "doc": "",
+          "lines": 6296,
+          "module": "unicode_properties_generated",
+          "path": "rust/engine/ironhorse-regexp/src/unicode_properties_generated.rs"
+        },
+        {
+          "doc": "",
+          "lines": 5605,
+          "module": "unicode_string_properties_generated",
+          "path": "rust/engine/ironhorse-regexp/src/unicode_string_properties_generated.rs"
+        },
+        {
+          "doc": "The XSRE pattern compiler: a faithful transliteration of the `fxCompileRegExp` pipeline in `xsre.c` \u2014 recursive-descent parse into a term tree, a `measure` pass that assigns each\u2026",
+          "lines": 3021,
+          "module": "compile",
+          "path": "rust/engine/ironhorse-regexp/src/compile.rs"
+        },
+        {
+          "doc": "Case canonicalization for the `i` flag \u2014 a port of `fxCharCaseCanonicalize` (`xsre.c`) and the two tables it needs.",
+          "lines": 2534,
+          "module": "charcase",
+          "path": "rust/engine/ironhorse-regexp/src/charcase.rs"
+        },
+        {
+          "doc": "The backtracking match VM: a faithful port of `fxMatchRegExp` (`xsre.c`).",
+          "lines": 805,
+          "module": "matcher",
+          "path": "rust/engine/ironhorse-regexp/src/matcher.rs"
+        },
+        {
+          "doc": "ironhorse-regexp: the safe, engine-internal transliteration of the XS RegExp engine (`c/moddable` pin `xsre.c`), per the design's resolved question 6 (the matcher is ported as an\u2026",
+          "lines": 620,
+          "module": "lib",
+          "path": "rust/engine/ironhorse-regexp/src/lib.rs"
+        },
+        {
+          "doc": "The subject/pattern byte codec, a faithful port of the XS CESU-8/UTF-8 helpers in `xsCommon.c` that `xsre.c` relies on.",
+          "lines": 206,
+          "module": "encoding",
+          "path": "rust/engine/ironhorse-regexp/src/encoding.rs"
+        },
+        {
+          "doc": "",
+          "lines": 140,
+          "module": "compile/validation_tests",
+          "path": "rust/engine/ironhorse-regexp/src/compile/validation_tests.rs"
+        },
+        {
+          "doc": "The XSRE step opcodes (`cx*Step` enum in `xsre.c`) and the two metering weights.",
+          "lines": 38,
+          "module": "opcode",
+          "path": "rust/engine/ironhorse-regexp/src/opcode.rs"
+        },
+        {
+          "doc": "The `XS_REGEXP_*` flag bits (`xsCommon.h`), the compiled pattern's `code[0]`.",
+          "lines": 24,
+          "module": "flags",
+          "path": "rust/engine/ironhorse-regexp/src/flags.rs"
+        },
+        {
+          "doc": "ECMAScript Unicode property aliases and endpoint sets extracted from the the repository's pinned Moddable XS `xsre.c`.",
+          "lines": 17,
+          "module": "unicode_property",
+          "path": "rust/engine/ironhorse-regexp/src/unicode_property.rs"
+        },
+        {
+          "doc": "Shared XS Unicode identifier classification.",
+          "lines": 6,
+          "module": "unicode",
+          "path": "rust/engine/ironhorse-regexp/src/unicode.rs"
+        }
+      ],
+      "name": "ironhorse-regexp",
+      "surface": {
+        "fn": [
+          "run"
+        ],
+        "mod": [
+          "compile",
+          "matcher",
+          "unicode"
+        ],
+        "struct": [
+          "RunOutcome"
+        ]
+      },
+      "tests": {
+        "count": 12,
+        "groups": {
+          "finding": 6,
+          "parity": 1,
+          "reference": 1,
+          "unicode": 1,
+          "utf16": 1,
+          "validation": 1,
+          "work": 1
+        }
+      }
+    },
+    {
+      "deps": [
+        {
+          "kind": "normal",
+          "name": "ironhorse-compile",
+          "optional": false
+        },
+        {
+          "kind": "normal",
+          "name": "ironhorse-vm",
+          "optional": false
+        }
+      ],
+      "description": "Oracle-free assembly of the IronHorse compiler and VM source-execution seam.",
+      "dir": "rust/engine/ironhorse-runtime",
+      "doc": "Production compiler adapter for the VM\u2019s runtime source-execution seam.",
+      "forbids_unsafe": true,
+      "lib_root": "rust/engine/ironhorse-runtime/src/lib.rs",
+      "lines": 143,
+      "module_count": 1,
+      "modules": [
+        {
+          "doc": "Production compiler adapter for the VM\u2019s runtime source-execution seam.",
+          "lines": 143,
+          "module": "lib",
+          "path": "rust/engine/ironhorse-runtime/src/lib.rs"
+        }
+      ],
+      "name": "ironhorse-runtime",
+      "surface": {
+        "struct": [
+          "IronhorseSourceCompiler"
+        ]
+      },
+      "tests": {
+        "count": 1,
+        "groups": {
+          "runtime": 1
+        }
+      }
+    },
+    {
+      "deps": [
+        {
+          "kind": "normal",
+          "name": "ironhorse-compile",
+          "optional": true
+        },
+        {
+          "kind": "dev",
+          "name": "ironhorse-compile",
+          "optional": false
+        },
+        {
+          "kind": "dev",
+          "name": "ironhorse-snapshot",
+          "optional": false
+        },
+        {
+          "kind": "normal",
+          "name": "ironhorse-vm",
+          "optional": false
+        },
+        {
+          "kind": "dev",
+          "name": "ironhorse-vm",
+          "optional": false
+        }
+      ],
+      "description": "The ironhorse XS_M atom container writer/reader and index-arena heap serializer (design: designs/ironhorse-engine.md \u00a7 Snapshots). Writes/reads the length-prefixed big-endian FourCC atom grammar with an ironhorse VERS discriminator. #![forbid(unsafe_code)].",
+      "dir": "rust/engine/ironhorse-snapshot",
+      "doc": "Validated JavaScript machine persistence: containers and paged heap stores.",
+      "forbids_unsafe": true,
+      "lib_root": "rust/engine/ironhorse-snapshot/src/lib.rs",
+      "lines": 29377,
+      "module_count": 16,
+      "modules": [
+        {
+          "doc": "The `MachineImage` \u2014 the plain-data snapshot of an ironhorse machine's serializable state \u2014 and the [`write_machine`]/[`read_machine`] codec that maps it to and from the `XS_M`\u2026",
+          "lines": 10843,
+          "module": "image",
+          "path": "rust/engine/ironhorse-snapshot/src/image.rs"
+        },
+        {
+          "doc": "The snapshot store seam (design `designs/ironhorse-snapshot-store-seam.md`): the paged logical image and the [`HeapStore`] trait that lets the whole-heap snapshot artifact be\u2026",
+          "lines": 5207,
+          "module": "store",
+          "path": "rust/engine/ironhorse-snapshot/src/store.rs"
+        },
+        {
+          "doc": "Snapshot payload ownership and codec wiring.",
+          "lines": 3836,
+          "module": "snapshot_roster",
+          "path": "rust/engine/ironhorse-snapshot/src/snapshot_roster.rs"
+        },
+        {
+          "doc": "File/CAS snapshots and paged-store checkpoint/restore operations.",
+          "lines": 2806,
+          "module": "machine",
+          "path": "rust/engine/ironhorse-snapshot/src/machine.rs"
+        },
+        {
+          "doc": "[`FileStore`]: the single-file, pure-Rust reference [`HeapStore`] (design `designs/ironhorse-snapshot-store-seam.md` \u00a7 The seam is three layers).",
+          "lines": 1363,
+          "module": "store_file",
+          "path": "rust/engine/ironhorse-snapshot/src/store_file.rs"
+        },
+        {
+          "doc": "Side-table persistence coverage, generated from the VM field roster and checked against independent field and boundary classifications.",
+          "lines": 1317,
+          "module": "sidetable",
+          "path": "rust/engine/ironhorse-snapshot/src/sidetable.rs"
+        },
+        {
+          "doc": "The backend-parameterized store acceptance suite (store seam design, decision 8): the metamorphic determinism runner (seven execution ways), the lazy working-set bound, the\u2026",
+          "lines": 1110,
+          "module": "store_suite",
+          "path": "rust/engine/ironhorse-snapshot/src/store_suite.rs"
+        },
+        {
+          "doc": "Stored Slot visitation.",
+          "lines": 686,
+          "module": "stored_slots",
+          "path": "rust/engine/ironhorse-snapshot/src/stored_slots.rs"
+        },
+        {
+          "doc": "The snapshot format constants: the FourCC atom tags, the Ironhorse `VERS` discriminator, and the host `SIGN` callback-table signature scheme (design `designs/ironhorse-engine.md`\u2026",
+          "lines": 559,
+          "module": "format",
+          "path": "rust/engine/ironhorse-snapshot/src/format.rs"
+        },
+        {
+          "doc": "Stable small-state section identities and incremental integrity primitives.",
+          "lines": 477,
+          "module": "store_sections",
+          "path": "rust/engine/ironhorse-snapshot/src/store_sections.rs"
+        },
+        {
+          "doc": "Format-21 shared Realm extension of the atomic FUNC payload.",
+          "lines": 421,
+          "module": "image/shared_codec",
+          "path": "rust/engine/ironhorse-snapshot/src/image/shared_codec.rs"
+        },
+        {
+          "doc": "The length-prefixed big-endian FourCC atom container (design `designs/ironhorse-engine.md` \u00a7 Snapshots, requirement 1c).",
+          "lines": 297,
+          "module": "atom",
+          "path": "rust/engine/ironhorse-snapshot/src/atom.rs"
+        },
+        {
+          "doc": "The slot-record codec: a [`Slot`] \u2194 fixed-width byte record for the `HEAP` and `STAC` atoms.",
+          "lines": 283,
+          "module": "slot_codec",
+          "path": "rust/engine/ironhorse-snapshot/src/slot_codec.rs"
+        },
+        {
+          "doc": "Validated JavaScript machine persistence: containers and paged heap stores.",
+          "lines": 73,
+          "module": "lib",
+          "path": "rust/engine/ironhorse-snapshot/src/lib.rs"
+        },
+        {
+          "doc": "Release and persistence compatibility: version ownership and upgrade rules.",
+          "lines": 62,
+          "module": "versions",
+          "path": "rust/engine/ironhorse-snapshot/src/versions.rs"
+        },
+        {
+          "doc": "In-crate twin of `tests/common/mod.rs`'s scratch-dir guard, for the src test modules (integration binaries cannot see `cfg(test)` items, and the crate's public surface must not\u2026",
+          "lines": 37,
+          "module": "test_dir",
+          "path": "rust/engine/ironhorse-snapshot/src/test_dir.rs"
+        }
+      ],
+      "name": "ironhorse-snapshot",
+      "surface": {
+        "mod": [
+          "atom",
+          "format",
+          "image",
+          "machine",
+          "sidetable",
+          "slot_codec",
+          "store",
+          "store_file",
+          "store_sections",
+          "store_suite",
+          "versions"
+        ]
+      },
+      "tests": {
+        "count": 65,
+        "groups": {
+          "accessor": 1,
+          "additional": 1,
+          "async": 2,
+          "attached": 1,
+          "gc": 5,
+          "migration": 2,
+          "store": 2,
+          "surrogate": 2
+        }
+      }
+    },
+    {
+      "deps": [],
+      "description": "Lossless JavaScript symbol spellings in XS CESU-8.",
+      "dir": "rust/engine/ironhorse-text",
+      "doc": "Lossless JavaScript symbol spellings.",
+      "forbids_unsafe": true,
+      "lib_root": "rust/engine/ironhorse-text/src/lib.rs",
+      "lines": 206,
+      "module_count": 1,
+      "modules": [
+        {
+          "doc": "Lossless JavaScript symbol spellings.",
+          "lines": 206,
+          "module": "lib",
+          "path": "rust/engine/ironhorse-text/src/lib.rs"
+        }
+      ],
+      "name": "ironhorse-text",
+      "surface": {
+        "struct": [
+          "SymbolName"
+        ]
+      },
+      "tests": {
+        "count": 0,
+        "groups": {}
+      }
+    },
+    {
+      "deps": [],
+      "description": "Shared XS Unicode identifier classification, independent of the compiler and regexp engine.",
+      "dir": "rust/engine/ironhorse-unicode",
+      "doc": "Unicode `ID_Start` / `ID_Continue` classification, ported verbatim from XS's `fxIsIdentifierFirst` / `fxIsIdentifierNext` (`c/moddable/xs/sources/xsCommon.c`).",
+      "forbids_unsafe": true,
+      "lib_root": "rust/engine/ironhorse-unicode/src/lib.rs",
+      "lines": 177,
+      "module_count": 1,
+      "modules": [
+        {
+          "doc": "Unicode `ID_Start` / `ID_Continue` classification, ported verbatim from XS's `fxIsIdentifierFirst` / `fxIsIdentifierNext` (`c/moddable/xs/sources/xsCommon.c`).",
+          "lines": 177,
+          "module": "lib",
+          "path": "rust/engine/ironhorse-unicode/src/lib.rs"
+        }
+      ],
+      "name": "ironhorse-unicode",
+      "surface": {
+        "fn": [
+          "is_identifier_first",
+          "is_identifier_next"
+        ]
+      },
+      "tests": {
+        "count": 1,
+        "groups": {
+          "identifiers": 1
+        }
+      }
+    },
+    {
+      "deps": [
+        {
+          "kind": "dev",
+          "name": "ironhorse-compile",
+          "optional": false
+        },
+        {
+          "kind": "normal",
+          "name": "ironhorse-meter",
+          "optional": false
+        },
+        {
+          "kind": "normal",
+          "name": "ironhorse-regexp",
+          "optional": false
+        },
+        {
+          "kind": "normal",
+          "name": "ironhorse-text",
+          "optional": false
+        }
+      ],
+      "description": "Safe, index-arena transliteration of the XS interpreter core: value/heap model, slot stack, match-dispatch interpreter, and the 16.16 fixed-point meter. #![forbid(unsafe_code)].",
+      "dir": "rust/engine/ironhorse-vm",
+      "doc": "Safe index-arena JavaScript interpreter and runtime.",
+      "forbids_unsafe": true,
+      "lib_root": "rust/engine/ironhorse-vm/src/lib.rs",
+      "lines": 93462,
+      "module_count": 105,
+      "modules": [
+        {
+          "doc": "Native constructor, function, and prototype-method dispatch.",
+          "lines": 6520,
+          "module": "interp/natives/dispatch",
+          "path": "rust/engine/ironhorse-vm/src/interp/natives/dispatch.rs"
+        },
+        {
+          "doc": "Array construction, async drivers, iteration, and native array algorithms.",
+          "lines": 4596,
+          "module": "interp/natives/array",
+          "path": "rust/engine/ironhorse-vm/src/interp/natives/array.rs"
+        },
+        {
+          "doc": "VM image conversion, restore repair, and persistence admission.",
+          "lines": 4074,
+          "module": "interp/persist",
+          "path": "rust/engine/ironhorse-vm/src/interp/persist.rs"
+        },
+        {
+          "doc": "Bytecode dispatch and ownership-aware control-transfer handling.",
+          "lines": 3713,
+          "module": "interp/dispatch",
+          "path": "rust/engine/ironhorse-vm/src/interp/dispatch.rs"
+        },
+        {
+          "doc": "",
+          "lines": 3698,
+          "module": "interp/tests",
+          "path": "rust/engine/ironhorse-vm/src/interp/tests.rs"
+        },
+        {
+          "doc": "Interpreter field inventory.",
+          "lines": 3104,
+          "module": "interp/state",
+          "path": "rust/engine/ironhorse-vm/src/interp/state.rs"
+        },
+        {
+          "doc": "Machine state and execution entry points for the bytecode interpreter.",
+          "lines": 3101,
+          "module": "interp",
+          "path": "rust/engine/ironhorse-vm/src/interp.rs"
+        },
+        {
+          "doc": "Index-arena values and heap storage.",
+          "lines": 2950,
+          "module": "value",
+          "path": "rust/engine/ironhorse-vm/src/value.rs"
+        },
+        {
+          "doc": "Machine initialization and intrinsic construction.",
+          "lines": 2523,
+          "module": "interp/boot",
+          "path": "rust/engine/ironhorse-vm/src/interp/boot.rs"
+        },
+        {
+          "doc": "RegExp execution, lastIndex, and the string/regexp protocol methods.",
+          "lines": 2433,
+          "module": "interp/natives/regexp",
+          "path": "rust/engine/ironhorse-vm/src/interp/natives/regexp.rs"
+        },
+        {
+          "doc": "VM-facing collection builtin algorithms.",
+          "lines": 2282,
+          "module": "interp/natives/collection",
+          "path": "rust/engine/ironhorse-vm/src/interp/natives/collection.rs"
+        },
+        {
+          "doc": "ArrayBuffer, TypedArray, DataView, and Atomics native algorithms.",
+          "lines": 2078,
+          "module": "interp/natives/buffer",
+          "path": "rust/engine/ironhorse-vm/src/interp/natives/buffer.rs"
+        },
+        {
+          "doc": "Promise capabilities, settlement, reaction jobs, and combinators.",
+          "lines": 2024,
+          "module": "interp/natives/promise",
+          "path": "rust/engine/ironhorse-vm/src/interp/natives/promise.rs"
+        },
+        {
+          "doc": "Compartments provide distinct globals and evaluators in one shared Realm.",
+          "lines": 1937,
+          "module": "compartment",
+          "path": "rust/engine/ironhorse-vm/src/compartment.rs"
+        },
+        {
+          "doc": "VM-facing temporal builtin algorithms.",
+          "lines": 1906,
+          "module": "interp/natives/temporal",
+          "path": "rust/engine/ironhorse-vm/src/interp/natives/temporal.rs"
+        },
+        {
+          "doc": "Property keys, descriptors, indexed storage, proxy traps, and object integrity.",
+          "lines": 1834,
+          "module": "interp/property",
+          "path": "rust/engine/ironhorse-vm/src/interp/property.rs"
+        },
+        {
+          "doc": "Public aliases for the canonical meter weights and their execution contracts.",
+          "lines": 1718,
+          "module": "interp/metering",
+          "path": "rust/engine/ironhorse-vm/src/interp/metering.rs"
+        },
+        {
+          "doc": "Exclusive ownership of a machine while snapshot rows are restored.",
+          "lines": 1704,
+          "module": "interp/restore",
+          "path": "rust/engine/ironhorse-vm/src/interp/restore.rs"
+        },
+        {
+          "doc": "The deterministic ECMA-402 `Intl.NumberFormat` number-formatting core.",
+          "lines": 1672,
+          "module": "intl_number",
+          "path": "rust/engine/ironhorse-vm/src/intl_number.rs"
+        },
+        {
+          "doc": "Program names, intrinsic installation, and crank relinking.",
+          "lines": 1494,
+          "module": "interp/link",
+          "path": "rust/engine/ironhorse-vm/src/interp/link.rs"
+        },
+        {
+          "doc": "Temporal records, ISO calendar arithmetic, duration rounding, and text conversion.",
+          "lines": 1483,
+          "module": "interp/temporal",
+          "path": "rust/engine/ironhorse-vm/src/interp/temporal.rs"
+        },
+        {
+          "doc": "JSON parsing, revivers, and stringify traversal and output admission.",
+          "lines": 1422,
+          "module": "interp/natives/json",
+          "path": "rust/engine/ironhorse-vm/src/interp/natives/json.rs"
+        },
+        {
+          "doc": "VM-facing intl builtin algorithms.",
+          "lines": 1420,
+          "module": "interp/natives/intl",
+          "path": "rust/engine/ironhorse-vm/src/interp/natives/intl.rs"
+        },
+        {
+          "doc": "The static half of the XS module machinery (design `designs/ironhorse-engine.md` \u00a7 Hardened JavaScript and Compartment).",
+          "lines": 1350,
+          "module": "module",
+          "path": "rust/engine/ironhorse-vm/src/module.rs"
+        },
+        {
+          "doc": "",
+          "lines": 1253,
+          "module": "opcode",
+          "path": "rust/engine/ironhorse-vm/src/opcode.rs"
+        },
+        {
+          "doc": "Native builtin identities, method tags, display names, and arities.",
+          "lines": 1226,
+          "module": "interp/native_ids",
+          "path": "rust/engine/ironhorse-vm/src/interp/native_ids.rs"
+        },
+        {
+          "doc": "Activation capture, reinstallation, and generator/async resume drivers.",
+          "lines": 1103,
+          "module": "interp/suspend",
+          "path": "rust/engine/ironhorse-vm/src/interp/suspend.rs"
+        },
+        {
+          "doc": "Globals, lexical environments, closure cells, and binding resolution.",
+          "lines": 1055,
+          "module": "interp/environment",
+          "path": "rust/engine/ironhorse-vm/src/interp/environment.rs"
+        },
+        {
+          "doc": "Property indexed operations.",
+          "lines": 1024,
+          "module": "interp/property/indexed",
+          "path": "rust/engine/ironhorse-vm/src/interp/property/indexed.rs"
+        },
+        {
+          "doc": "Locale canonicalization, fixed-data Intl formatting, segmentation, and collation.",
+          "lines": 993,
+          "module": "interp/locale",
+          "path": "rust/engine/ironhorse-vm/src/interp/locale.rs"
+        },
+        {
+          "doc": "Guest-observable coercion, comparison, and arithmetic operations.",
+          "lines": 969,
+          "module": "interp/coerce",
+          "path": "rust/engine/ironhorse-vm/src/interp/coerce.rs"
+        },
+        {
+          "doc": "GC table inventory and generated sweep operations.",
+          "lines": 958,
+          "module": "interp/gc_tables",
+          "path": "rust/engine/ironhorse-vm/src/interp/gc_tables.rs"
+        },
+        {
+          "doc": "Property proxy operations.",
+          "lines": 894,
+          "module": "interp/property/proxy",
+          "path": "rust/engine/ironhorse-vm/src/interp/property/proxy.rs"
+        },
+        {
+          "doc": "The BULK side tables \u2014 array items, index properties and collection entries \u2014 behind counting accessors (store-seam design \u00a7 Plan: counted side-table ref-page accessors).",
+          "lines": 823,
+          "module": "bulk",
+          "path": "rust/engine/ironhorse-vm/src/bulk.rs"
+        },
+        {
+          "doc": "VM-facing string builtin algorithms.",
+          "lines": 819,
+          "module": "interp/natives/string",
+          "path": "rust/engine/ironhorse-vm/src/interp/natives/string.rs"
+        },
+        {
+          "doc": "Shared Realm snapshot capture and transactional context restoration.",
+          "lines": 815,
+          "module": "interp/shared_persist",
+          "path": "rust/engine/ironhorse-vm/src/interp/shared_persist.rs"
+        },
+        {
+          "doc": "Property ordinary operations.",
+          "lines": 807,
+          "module": "interp/property/ordinary",
+          "path": "rust/engine/ironhorse-vm/src/interp/property/ordinary.rs"
+        },
+        {
+          "doc": "Property keys operations.",
+          "lines": 738,
+          "module": "interp/property/keys",
+          "path": "rust/engine/ironhorse-vm/src/interp/property/keys.rs"
+        },
+        {
+          "doc": "VM-facing bigint builtin algorithms.",
+          "lines": 668,
+          "module": "interp/natives/bigint",
+          "path": "rust/engine/ironhorse-vm/src/interp/natives/bigint.rs"
+        },
+        {
+          "doc": "Function identity, prototypes, bound functions, and instance creation.",
+          "lines": 647,
+          "module": "interp/function",
+          "path": "rust/engine/ironhorse-vm/src/interp/function.rs"
+        },
+        {
+          "doc": "Callable dispatch and callbacks that can re-enter the interpreter.",
+          "lines": 625,
+          "module": "interp/invoke",
+          "path": "rust/engine/ironhorse-vm/src/interp/invoke.rs"
+        },
+        {
+          "doc": "Property object operations.",
+          "lines": 604,
+          "module": "interp/property/object",
+          "path": "rust/engine/ironhorse-vm/src/interp/property/object.rs"
+        },
+        {
+          "doc": "The single Realm and the machine's compartment environments.",
+          "lines": 560,
+          "module": "interp/realm",
+          "path": "rust/engine/ironhorse-vm/src/interp/realm.rs"
+        },
+        {
+          "doc": "GC v1: exact, non-generational mark-and-sweep over the slot arena, plus extent-local compaction of the chunk arena (design \u00a7 Value and heap model).",
+          "lines": 552,
+          "module": "gc",
+          "path": "rust/engine/ironhorse-vm/src/gc.rs"
+        },
+        {
+          "doc": "The computation meter (design \u00a7 Metering; requirement 1a).",
+          "lines": 538,
+          "module": "meter",
+          "path": "rust/engine/ironhorse-vm/src/meter.rs"
+        },
+        {
+          "doc": "Persisted row schemas shared by capture and restore.",
+          "lines": 535,
+          "module": "interp/snapshot_rows",
+          "path": "rust/engine/ironhorse-vm/src/interp/snapshot_rows.rs"
+        },
+        {
+          "doc": "Cost-calibration histograms (design `designs/ironhorse-meter-opcode-cost-instrumentation.md`).",
+          "lines": 532,
+          "module": "cost",
+          "path": "rust/engine/ironhorse-vm/src/cost.rs"
+        },
+        {
+          "doc": "Numeric parsing, primitive arithmetic, and canonical property indices.",
+          "lines": 511,
+          "module": "interp/numeric",
+          "path": "rust/engine/ironhorse-vm/src/interp/numeric.rs"
+        },
+        {
+          "doc": "Property write opcode semantics.",
+          "lines": 481,
+          "module": "interp/dispatch/property_write",
+          "path": "rust/engine/ironhorse-vm/src/interp/dispatch/property_write.rs"
+        },
+        {
+          "doc": "BigInt sign/magnitude arithmetic and StringIntegerLiteral parsing.",
+          "lines": 474,
+          "module": "interp/bigint",
+          "path": "rust/engine/ironhorse-vm/src/interp/bigint.rs"
+        },
+        {
+          "doc": "VM-facing number builtin algorithms.",
+          "lines": 467,
+          "module": "interp/natives/number",
+          "path": "rust/engine/ironhorse-vm/src/interp/natives/number.rs"
+        },
+        {
+          "doc": "Function.call, Function.apply, and bound-constructor frame preparation.",
+          "lines": 464,
+          "module": "interp/apply",
+          "path": "rust/engine/ironhorse-vm/src/interp/apply.rs"
+        },
+        {
+          "doc": "Error objects, stack rendering, and catchable error construction.",
+          "lines": 460,
+          "module": "interp/errors",
+          "path": "rust/engine/ironhorse-vm/src/interp/errors.rs"
+        },
+        {
+          "doc": "Whole-machine collection, side-table projections, and arena compaction.",
+          "lines": 448,
+          "module": "interp/gc",
+          "path": "rust/engine/ironhorse-vm/src/interp/gc.rs"
+        },
+        {
+          "doc": "The halt-label registry: the explicit allowlist that decides which `Halt::NotImplemented` labels a differential instrument may treat as an honest skip.",
+          "lines": 443,
+          "module": "halt_labels",
+          "path": "rust/engine/ironhorse-vm/src/halt_labels.rs"
+        },
+        {
+          "doc": "Date value clipping, calendar construction, parsing, and display forms.",
+          "lines": 436,
+          "module": "interp/date",
+          "path": "rust/engine/ironhorse-vm/src/interp/date.rs"
+        },
+        {
+          "doc": "Derived lookup over the authoritative newest-first named-property chains.",
+          "lines": 436,
+          "module": "property_index",
+          "path": "rust/engine/ironhorse-vm/src/property_index.rs"
+        },
+        {
+          "doc": "Property read opcode semantics.",
+          "lines": 389,
+          "module": "interp/dispatch/property_read",
+          "path": "rust/engine/ironhorse-vm/src/interp/dispatch/property_read.rs"
+        },
+        {
+          "doc": "Property read index operations.",
+          "lines": 386,
+          "module": "interp/property/read_index",
+          "path": "rust/engine/ironhorse-vm/src/interp/property/read_index.rs"
+        },
+        {
+          "doc": "The source scanner behind the halt-label registry mirrors: a lexer-aware pass over Rust source that blanks comments and raw strings, keeps string and character literals whole, and\u2026",
+          "lines": 381,
+          "module": "source_scan",
+          "path": "rust/engine/ironhorse-vm/src/source_scan.rs"
+        },
+        {
+          "doc": "Environment opcode semantics.",
+          "lines": 350,
+          "module": "interp/dispatch/environment",
+          "path": "rust/engine/ironhorse-vm/src/interp/dispatch/environment.rs"
+        },
+        {
+          "doc": "Host services have stable identities; call-scoped values never expose arena coordinates.",
+          "lines": 324,
+          "module": "interp/host",
+          "path": "rust/engine/ironhorse-vm/src/interp/host.rs"
+        },
+        {
+          "doc": "Value-stack limits, call-frame entry, and normal return.",
+          "lines": 320,
+          "module": "interp/frames",
+          "path": "rust/engine/ironhorse-vm/src/interp/frames.rs"
+        },
+        {
+          "doc": "Host-facing value and uncaught-exception rendering.",
+          "lines": 312,
+          "module": "interp/render",
+          "path": "rust/engine/ironhorse-vm/src/interp/render.rs"
+        },
+        {
+          "doc": "Property integrity operations.",
+          "lines": 303,
+          "module": "interp/property/integrity",
+          "path": "rust/engine/ironhorse-vm/src/interp/property/integrity.rs"
+        },
+        {
+          "doc": "Safe index-arena JavaScript interpreter and runtime.",
+          "lines": 302,
+          "module": "lib",
+          "path": "rust/engine/ironhorse-vm/src/lib.rs"
+        },
+        {
+          "doc": "UTF-16 storage, CESU-8 decoding, and admitted Unicode transformations.",
+          "lines": 299,
+          "module": "interp/text",
+          "path": "rust/engine/ironhorse-vm/src/interp/text.rs"
+        },
+        {
+          "doc": "Mutation tracking for snapshot section extraction.",
+          "lines": 295,
+          "module": "snapshot_dirty",
+          "path": "rust/engine/ironhorse-vm/src/snapshot_dirty.rs"
+        },
+        {
+          "doc": "Meter checks and fallible admission for temporary allocations.",
+          "lines": 283,
+          "module": "interp/admission",
+          "path": "rust/engine/ironhorse-vm/src/interp/admission.rs"
+        },
+        {
+          "doc": "Independent fresh-constructor order and emitter checks.",
+          "lines": 281,
+          "module": "interp/boot/tests",
+          "path": "rust/engine/ironhorse-vm/src/interp/boot/tests.rs"
+        },
+        {
+          "doc": "Same-realm eval and dynamic function compilation.",
+          "lines": 275,
+          "module": "interp/eval",
+          "path": "rust/engine/ironhorse-vm/src/interp/eval.rs"
+        },
+        {
+          "doc": "VM-facing resource builtin algorithms.",
+          "lines": 266,
+          "module": "interp/natives/resource",
+          "path": "rust/engine/ironhorse-vm/src/interp/natives/resource.rs"
+        },
+        {
+          "doc": "Root walks selected by the interpreter field roster.",
+          "lines": 257,
+          "module": "interp/roots",
+          "path": "rust/engine/ironhorse-vm/src/interp/roots.rs"
+        },
+        {
+          "doc": "Iteration opcode semantics.",
+          "lines": 253,
+          "module": "interp/dispatch/iteration",
+          "path": "rust/engine/ironhorse-vm/src/interp/dispatch/iteration.rs"
+        },
+        {
+          "doc": "Property descriptors operations.",
+          "lines": 242,
+          "module": "interp/property/descriptors",
+          "path": "rust/engine/ironhorse-vm/src/interp/property/descriptors.rs"
+        },
+        {
+          "doc": "Native-owned guest boundaries: handler isolation and caught-throw cleanup.",
+          "lines": 241,
+          "module": "interp/native_try",
+          "path": "rust/engine/ironhorse-vm/src/interp/native_try.rs"
+        },
+        {
+          "doc": "Capture the supported static module model without losing its live cells.",
+          "lines": 237,
+          "module": "module_snapshot",
+          "path": "rust/engine/ironhorse-vm/src/module_snapshot.rs"
+        },
+        {
+          "doc": "Property enumeration and prototype-chain method probes.",
+          "lines": 228,
+          "module": "interp/enumerate",
+          "path": "rust/engine/ironhorse-vm/src/interp/enumerate.rs"
+        },
+        {
+          "doc": "VM-facing reflect builtin algorithms.",
+          "lines": 225,
+          "module": "interp/natives/reflect",
+          "path": "rust/engine/ironhorse-vm/src/interp/natives/reflect.rs"
+        },
+        {
+          "doc": "VM-facing date builtin algorithms.",
+          "lines": 219,
+          "module": "interp/natives/date",
+          "path": "rust/engine/ironhorse-vm/src/interp/natives/date.rs"
+        },
+        {
+          "doc": "String storage access, construction, and primitive formatting.",
+          "lines": 217,
+          "module": "interp/strings",
+          "path": "rust/engine/ironhorse-vm/src/interp/strings.rs"
+        },
+        {
+          "doc": "Intl instance records and retained locale tables.",
+          "lines": 190,
+          "module": "interp/intl_data",
+          "path": "rust/engine/ironhorse-vm/src/interp/intl_data.rs"
+        },
+        {
+          "doc": "Private opcode semantics.",
+          "lines": 178,
+          "module": "interp/dispatch/private",
+          "path": "rust/engine/ironhorse-vm/src/interp/dispatch/private.rs"
+        },
+        {
+          "doc": "Traversal of stored references to natives that restore cannot reconstruct.",
+          "lines": 176,
+          "module": "interp/persistence",
+          "path": "rust/engine/ironhorse-vm/src/interp/persistence.rs"
+        },
+        {
+          "doc": "Materialization of arraylike and iterable argument lists.",
+          "lines": 174,
+          "module": "interp/iterable",
+          "path": "rust/engine/ironhorse-vm/src/interp/iterable.rs"
+        },
+        {
+          "doc": "Operators opcode semantics.",
+          "lines": 147,
+          "module": "interp/dispatch/operators",
+          "path": "rust/engine/ironhorse-vm/src/interp/dispatch/operators.rs"
+        },
+        {
+          "doc": "Retained bytecode segments and dispatch-buffer ownership.",
+          "lines": 146,
+          "module": "interp/code",
+          "path": "rust/engine/ironhorse-vm/src/interp/code.rs"
+        },
+        {
+          "doc": "",
+          "lines": 141,
+          "module": "meter_consistency",
+          "path": "rust/engine/ironhorse-vm/src/meter_consistency.rs"
+        },
+        {
+          "doc": "Super property opcode semantics.",
+          "lines": 133,
+          "module": "interp/dispatch/super_property",
+          "path": "rust/engine/ironhorse-vm/src/interp/dispatch/super_property.rs"
+        },
+        {
+          "doc": "Decoder for the XS script `symbols` atom (the `SYMB` payload the oracle shim hands back alongside the bytecode).",
+          "lines": 125,
+          "module": "symbols",
+          "path": "rust/engine/ironhorse-vm/src/symbols.rs"
+        },
+        {
+          "doc": "",
+          "lines": 114,
+          "module": "interp/natives/string/slice_tests",
+          "path": "rust/engine/ironhorse-vm/src/interp/natives/string/slice_tests.rs"
+        },
+        {
+          "doc": "Exception handler unwinding and guest throw propagation.",
+          "lines": 114,
+          "module": "interp/unwind",
+          "path": "rust/engine/ironhorse-vm/src/interp/unwind.rs"
+        },
+        {
+          "doc": "Symbol property identities with a maintained reverse lookup.",
+          "lines": 89,
+          "module": "interp/symbol_keys",
+          "path": "rust/engine/ironhorse-vm/src/interp/symbol_keys.rs"
+        },
+        {
+          "doc": "Release-selected Math provider, also used by numeric exponentiation.",
+          "lines": 89,
+          "module": "math",
+          "path": "rust/engine/ironhorse-vm/src/math.rs"
+        },
+        {
+          "doc": "Field policies for admitting a completed crank to persistence.",
+          "lines": 79,
+          "module": "interp/boundary",
+          "path": "rust/engine/ironhorse-vm/src/interp/boundary.rs"
+        },
+        {
+          "doc": "Shared checkpoint section roster and inert interpreter table metadata.",
+          "lines": 67,
+          "module": "side_tables",
+          "path": "rust/engine/ironhorse-vm/src/side_tables.rs"
+        },
+        {
+          "doc": "Generated bulk-table chunk walks preserve values and counted slot edges.",
+          "lines": 63,
+          "module": "interp/tests/gc_chunk_roster",
+          "path": "rust/engine/ironhorse-vm/src/interp/tests/gc_chunk_roster.rs"
+        },
+        {
+          "doc": "Consumer triggers choose events; the engine supplies quiescent mechanics.",
+          "lines": 60,
+          "module": "interp/tests/gc_consumer_schedules",
+          "path": "rust/engine/ironhorse-vm/src/interp/tests/gc_consumer_schedules.rs"
+        },
+        {
+          "doc": "",
+          "lines": 39,
+          "module": "interp/reused_boot_native_tests",
+          "path": "rust/engine/ironhorse-vm/src/interp/reused_boot_native_tests.rs"
+        },
+        {
+          "doc": "Deliberate capture/restore row contract for `ironhorse-snapshot`.",
+          "lines": 24,
+          "module": "snapshot_api",
+          "path": "rust/engine/ironhorse-vm/src/snapshot_api.rs"
+        },
+        {
+          "doc": "Native builtin implementations, grouped by JavaScript subsystem.",
+          "lines": 16,
+          "module": "interp/natives/mod",
+          "path": "rust/engine/ironhorse-vm/src/interp/natives/mod.rs"
+        },
+        {
+          "doc": "Read-only source registries for in-tree invariant tests, not execution APIs.",
+          "lines": 11,
+          "module": "diagnostics",
+          "path": "rust/engine/ironhorse-vm/src/diagnostics.rs"
+        },
+        {
+          "doc": "",
+          "lines": 4,
+          "module": "intl_profile",
+          "path": "rust/engine/ironhorse-vm/src/intl_profile.rs"
+        },
+        {
+          "doc": "Default keys participate in the frozen cost-table digest.",
+          "lines": 2,
+          "module": "default_keys",
+          "path": "rust/engine/ironhorse-vm/src/default_keys.rs"
+        },
+        {
+          "doc": "Shared SHA-256 implementation for snapshot content addressing.",
+          "lines": 2,
+          "module": "sha256",
+          "path": "rust/engine/ironhorse-vm/src/sha256.rs"
+        }
+      ],
+      "name": "ironhorse-vm",
+      "surface": {
+        "const": [
+          "NATIVE_STACK_BYTES"
+        ],
+        "fn": [
+          "disassemble",
+          "regexp_source_compiles",
+          "run_program",
+          "run_program_bounded",
+          "run_program_with_symbols"
+        ],
+        "mod": [
+          "compartment",
+          "cost",
+          "default_keys",
+          "diagnostics",
+          "gc",
+          "halt_labels",
+          "intl_number",
+          "meter",
+          "module",
+          "opcode",
+          "sha256",
+          "snapshot_api",
+          "source_scan",
+          "symbols",
+          "value"
+        ]
+      },
+      "tests": {
+        "count": 131,
+        "groups": {
+          "chunk": 3,
+          "compiler": 4,
+          "dispatch": 4,
+          "finding": 18,
+          "gc": 11,
+          "index": 4,
+          "math": 4,
+          "native": 4
+        }
+      }
+    },
+    {
+      "deps": [
+        {
+          "kind": "dev",
+          "name": "ironhorse-vm",
+          "optional": false
+        }
+      ],
+      "description": "Differential oracle: compiles JS to XS bytecode and runs it on XS, returning (bytecode, result, run-only computrons) for parity comparison. Dev/CI only; the sole engine crate that links unsafe C.",
+      "dir": "rust/engine/xs-oracle",
+      "doc": "Safe wrapper over the XS differential oracle.",
+      "forbids_unsafe": false,
+      "lib_root": "rust/engine/xs-oracle/src/lib.rs",
+      "lines": 990,
+      "module_count": 1,
+      "modules": [
+        {
+          "doc": "Safe wrapper over the XS differential oracle.",
+          "lines": 990,
+          "module": "lib",
+          "path": "rust/engine/xs-oracle/src/lib.rs"
+        }
+      ],
+      "name": "xs-oracle",
+      "surface": {
+        "fn": [
+          "compile_module",
+          "is_resource_abort",
+          "regexp",
+          "run",
+          "run_cranks",
+          "run_module_dir",
+          "run_timed"
+        ],
+        "struct": [
+          "ModuleOutcome",
+          "ModuleRunOutcome",
+          "OracleOutcome",
+          "OracleTiming",
+          "RegExpOutcome"
+        ]
+      },
+      "tests": {
+        "count": 2,
+        "groups": {
+          "exit": 1,
+          "timing": 1
+        }
+      }
+    }
+  ],
+  "halts": [
+    {
+      "doc": "A host operation tried to borrow a Machine that is already executing.",
+      "kind": "host",
+      "name": "MachineBusy"
+    },
+    {
+      "doc": "Reached RETURN/END: the completion value is in `result`.",
+      "kind": "guest",
+      "name": "Return"
+    },
+    {
+      "doc": "The meter host refused more computation.",
+      "kind": "host",
+      "name": "MeterAbort"
+    },
+    {
+      "doc": "The configured slot or chunk heap ceiling was exhausted.",
+      "kind": "host",
+      "name": "HeapExhausted"
+    },
+    {
+      "doc": "The interpreter ran past a caller-supplied step ceiling without completing \u2014 a bounded-execution guard for callers that install no metering host (notably the bytecode-decoder fuzz\u2026",
+      "kind": "host",
+      "name": "StepLimit"
+    },
+    {
+      "doc": "An opcode, built-in, or value shape outside the implemented surface.",
+      "kind": "host",
+      "name": "NotImplemented"
+    },
+    {
+      "doc": "A recognized operation deliberately excluded by the execution profile: a resource-size ceiling, key-space limit, or host-policy restriction.",
+      "kind": "host",
+      "name": "Refused"
+    },
+    {
+      "doc": "The engine's own state is wrong: a guard on the interpreter's invariants fired (value-stack or frame underflow, a suspended generator or async instance with no saved frame, a\u2026",
+      "kind": "host",
+      "name": "EngineInvariant"
+    },
+    {
+      "doc": "The bytecode was truncated or an opcode byte was invalid.",
+      "kind": "host",
+      "name": "Decode"
+    },
+    {
+      "doc": "A JS-level throw that escaped every guest handler and reached the host boundary.",
+      "kind": "guest",
+      "name": "Throw"
+    },
+    {
+      "doc": "XS's fixed-geometry value-stack abort (`fxOverflow`).",
+      "kind": "host",
+      "name": "StackOverflow"
+    },
+    {
+      "doc": "The release's implementation-specific native recursion budget was exhausted.",
+      "kind": "host",
+      "name": "ReentryLimit"
+    },
+    {
+      "doc": "A net-new panic with no legacy `Halt` variant (design `ironhorse-panic.md` \u00a7 The Formal `Panic` Category, item 3).",
+      "kind": "host",
+      "name": "Panic"
+    }
+  ],
+  "hazards": [
+    {
+      "context": "It links bundled SQLite through `rusqlite`.",
+      "line": 49,
+      "score": 8,
+      "section": "Workspace and dependency direction",
+      "source": "ARCHITECTURE.md",
+      "text": "The engine library-root unsafe rule therefore does not mean \u201cthe daemon contains no C.\u201d"
+    },
+    {
+      "context": "Remaining MOP bypasses are tracked by the architecture review;",
+      "line": 59,
+      "score": 6,
+      "section": "Execution and ownership",
+      "source": "ARCHITECTURE.md",
+      "text": "a central dispatcher is not evidence that every call site already uses it."
+    },
+    {
+      "context": "BigInt, regexp, Intl, Temporal, promises, generators and disposal state are present.",
+      "line": 74,
+      "score": 8,
+      "section": "Execution and ownership",
+      "source": "ARCHITECTURE.md",
+      "text": "Their presence does not certify full test262 coverage or persistence of every live state."
+    },
+    {
+      "context": "The persistent machine checkpoints completed cranks.",
+      "line": 225,
+      "score": 5,
+      "section": "Seam 2: HeapStore",
+      "source": "ARCHITECTURE.md",
+      "text": "A halted crank is not a valid snapshot boundary simply because some tables are empty."
+    },
+    {
+      "context": "",
+      "line": 256,
+      "score": 5,
+      "section": "Seam 3: GcHooks",
+      "source": "ARCHITECTURE.md",
+      "text": "A side-table edge is not automatically a root."
+    },
+    {
+      "context": "The field reconciliation test is `gc_visitation_registry.rs`.",
+      "line": 262,
+      "score": 8,
+      "section": "Seam 3: GcHooks",
+      "source": "ARCHITECTURE.md",
+      "text": "Behavioral GC tests remain necessary: a source classification alone does not prove reachability."
+    },
+    {
+      "context": "The full collector exists, but production persistence currently uses paged collection rather than calling `Interp::collect_garbage` as its normal collection policy.",
+      "line": 266,
+      "score": 8,
+      "section": "Seam 3: GcHooks",
+      "source": "ARCHITECTURE.md",
+      "text": "Do not infer production weak-collection or chunk-compaction behavior from kernel tests."
+    },
+    {
+      "context": "A resumed guest function is callable;",
+      "line": 301,
+      "score": 7,
+      "section": "Seam 4: side-table ledger",
+      "source": "ARCHITECTURE.md",
+      "text": "\u201cfunctions cannot resume\u201d is not a valid gate rationale."
+    },
+    {
+      "context": "Version changes are distinct from source package versions.",
+      "line": 402,
+      "score": 8,
+      "section": "Compatibility and where X is specified",
+      "source": "ARCHITECTURE.md",
+      "text": "Do not assume an old snapshot can resume merely because a container reader accepts it."
+    },
+    {
+      "context": "it does not cover every harness binary.",
+      "line": 85,
+      "score": 8,
+      "section": "Crates",
+      "source": "README.md",
+      "text": "This does not describe their transitive dependencies."
+    },
+    {
+      "context": "",
+      "line": 302,
+      "score": 6,
+      "section": "Running the fuzzers locally",
+      "source": "README.md",
+      "text": "Fuzzing is no longer part of pull-request CI \u2014 the `fuzz-ironhorse` job was removed so a latent crash never reddens an unrelated PR."
+    }
+  ],
+  "recipes": [
+    {
+      "goal": "Add or fix a built-in",
+      "note": "The engine calls a built-in through the native dispatcher and an id enum. The two must agree, or the method does not run.",
+      "waypoints": [
+        {
+          "exists": true,
+          "kind": "directory",
+          "path": "rust/engine/ironhorse-vm/src/interp/natives",
+          "why": "The built-in families, one module for each"
+        },
+        {
+          "exists": true,
+          "kind": "file",
+          "path": "rust/engine/ironhorse-vm/src/interp/natives/dispatch.rs",
+          "why": "The router for a native call"
+        },
+        {
+          "exists": true,
+          "kind": "file",
+          "path": "rust/engine/ironhorse-vm/src/interp/native_ids.rs",
+          "why": "The native id enum"
+        },
+        {
+          "exists": true,
+          "kind": "directory",
+          "path": "rust/engine/ironhorse-262",
+          "why": "The harness that compares the result"
+        }
+      ]
+    },
+    {
+      "goal": "Add a per-instance machine field",
+      "note": "A new field has five duties. If you do only the codec, the engine stores the field but never traces it, or traces it but refuses to restore it.",
+      "waypoints": [
+        {
+          "exists": true,
+          "kind": "file",
+          "path": "rust/engine/ironhorse-snapshot/src/sidetable.rs",
+          "why": "Give it a persistence classification"
+        },
+        {
+          "exists": true,
+          "kind": "file",
+          "path": "rust/engine/ironhorse-vm/tests/gc_visitation_registry.rs",
+          "why": "Add it to the GC visitation registry"
+        },
+        {
+          "exists": true,
+          "kind": "file",
+          "path": "rust/engine/ironhorse-snapshot/src/image.rs",
+          "why": "Encode and decode it"
+        },
+        {
+          "exists": true,
+          "kind": "file",
+          "path": "rust/engine/ironhorse-vm/src/interp/boot.rs",
+          "why": "Build it again at boot, if it is derived"
+        },
+        {
+          "exists": true,
+          "kind": "file",
+          "path": "rust/engine/ironhorse-vm/src/interp/persist.rs",
+          "why": "Satisfy the quiescence and checkpoint gates"
+        }
+      ]
+    },
+    {
+      "goal": "Change a cost or a charging point",
+      "note": "The weights and the policy share one release identity. Releases 3, 4 and 5 use the same weights and different policy. Therefore the digest cannot separate them.",
+      "waypoints": [
+        {
+          "exists": true,
+          "kind": "file",
+          "path": "rust/engine/ironhorse-meter/src/lib.rs",
+          "why": "The frozen weights and the release literal"
+        },
+        {
+          "exists": true,
+          "kind": "file",
+          "path": "rust/engine/ironhorse-meter/src/releases.rs",
+          "why": "Add a release. Never change an old pin."
+        },
+        {
+          "exists": true,
+          "kind": "file",
+          "path": "rust/engine/ironhorse-vm/tests/golden_computrons.rs",
+          "why": "Update golden vectors in the same commit"
+        }
+      ]
+    },
+    {
+      "goal": "Change a persisted row",
+      "note": "A row change is a schema change, not an edit. It increases the container version and the store version. You must also add a migration step or a refusal.",
+      "waypoints": [
+        {
+          "exists": true,
+          "kind": "file",
+          "path": "rust/engine/ironhorse-vm/src/snapshot_api.rs",
+          "why": "The row declarations and their version"
+        },
+        {
+          "exists": true,
+          "kind": "file",
+          "path": "rust/engine/ironhorse-snapshot/tests/fixtures/row_schema_releases.tsv",
+          "why": "Append-only fingerprint ledger"
+        },
+        {
+          "exists": true,
+          "kind": "file",
+          "path": "rust/engine/scripts/check-row-schema.py",
+          "why": "The check that CI does against your base"
+        },
+        {
+          "exists": true,
+          "kind": "file",
+          "path": "rust/engine/ironhorse-snapshot/src/versions.rs",
+          "why": "The version rules and their effects"
+        }
+      ]
+    },
+    {
+      "goal": "Add a storage backend",
+      "note": "A backend supplies bytes. The codec and the validation stay in the snapshot layer. The commit token keeps one admission path for all backends.",
+      "waypoints": [
+        {
+          "exists": true,
+          "kind": "file",
+          "path": "rust/engine/ironhorse-snapshot/src/store.rs",
+          "why": "HeapStore and HeapStoreCommit"
+        },
+        {
+          "exists": true,
+          "kind": "file",
+          "path": "rust/engine/ironhorse-snapshot/src/store_suite.rs",
+          "why": "The test suite for each backend"
+        },
+        {
+          "exists": true,
+          "kind": "directory",
+          "path": "rust/endo/ironhorse-store-sqlite",
+          "why": "An example backend outside the workspace"
+        }
+      ]
+    },
+    {
+      "goal": "Diagnose a refused restore",
+      "note": "Several identities control adoption, and each one fails independently. Find the identity that refused before you change any code.",
+      "waypoints": [
+        {
+          "exists": true,
+          "kind": "file",
+          "path": "rust/engine/ironhorse-snapshot/src/format.rs",
+          "why": "Container format version"
+        },
+        {
+          "exists": true,
+          "kind": "file",
+          "path": "rust/engine/ironhorse-snapshot/src/store.rs",
+          "why": "Store schema version"
+        },
+        {
+          "exists": true,
+          "kind": "file",
+          "path": "rust/engine/ironhorse-meter/src/lib.rs",
+          "why": "Meter release identity"
+        },
+        {
+          "exists": true,
+          "kind": "file",
+          "path": "rust/engine/ironhorse-snapshot/tests/persist_gates.rs",
+          "why": "Examples of a refusal"
+        }
+      ]
+    }
+  ],
+  "seams": [
+    {
+      "file": "rust/engine/ironhorse-vm/src/interp.rs",
+      "implementors": [
+        {
+          "file": "rust/engine/ironhorse-runtime/src/lib.rs",
+          "in_tests": false,
+          "line": 21,
+          "type": "IronhorseSourceCompiler"
+        },
+        {
+          "file": "rust/thixotrope-ironhorse-worker/src/main.rs",
+          "in_tests": false,
+          "line": 17,
+          "type": "Compiler"
+        },
+        {
+          "file": "rust/engine/ironhorse-runtime/tests/runtime_compile_meter.rs",
+          "in_tests": true,
+          "line": 193,
+          "type": "ExhaustAddressability"
+        },
+        {
+          "file": "rust/engine/ironhorse-runtime/tests/runtime_compile_meter.rs",
+          "in_tests": true,
+          "line": 154,
+          "type": "MisbehavingCompiler"
+        },
+        {
+          "file": "rust/engine/ironhorse-runtime/tests/runtime_compile_meter.rs",
+          "in_tests": true,
+          "line": 10,
+          "type": "ObservedCompiler"
+        },
+        {
+          "file": "rust/engine/ironhorse-snapshot/tests/dynamic_segments.rs",
+          "in_tests": true,
+          "line": 24,
+          "type": "TestCompiler"
+        },
+        {
+          "file": "rust/engine/ironhorse-snapshot/tests/persist_gates.rs",
+          "in_tests": true,
+          "line": 119,
+          "type": "TestCompiler"
+        },
+        {
+          "file": "rust/engine/ironhorse-snapshot/tests/shared_machine.rs",
+          "in_tests": true,
+          "line": 248,
+          "type": "Compiler"
+        },
+        {
+          "file": "rust/engine/ironhorse-snapshot/tests/shared_machine.rs",
+          "in_tests": true,
+          "line": 474,
+          "type": "Counted"
+        },
+        {
+          "file": "rust/engine/ironhorse-vm/tests/catch_scope_restore.rs",
+          "in_tests": true,
+          "line": 5,
+          "type": "Compiler"
+        },
+        {
+          "file": "rust/engine/ironhorse-vm/tests/compilation_meter.rs",
+          "in_tests": true,
+          "line": 9,
+          "type": "Compiler"
+        },
+        {
+          "file": "rust/engine/ironhorse-vm/tests/compiler_lex_error_messages.rs",
+          "in_tests": true,
+          "line": 5,
+          "type": "RejectingCompiler"
+        },
+        {
+          "file": "rust/engine/ironhorse-vm/tests/cross_segment_callee_callability.rs",
+          "in_tests": true,
+          "line": 18,
+          "type": "TestCompiler"
+        },
+        {
+          "file": "rust/engine/ironhorse-vm/tests/engine_throws_are_catchable.rs",
+          "in_tests": true,
+          "line": 18,
+          "type": "TestCompiler"
+        },
+        {
+          "file": "rust/engine/ironhorse-vm/tests/engine_unwind_boundaries.rs",
+          "in_tests": true,
+          "line": 22,
+          "type": "TestCompiler"
+        },
+        {
+          "file": "rust/engine/ironhorse-vm/tests/host_callables.rs",
+          "in_tests": true,
+          "line": 345,
+          "type": "FixedCompiler"
+        },
+        {
+          "file": "rust/engine/ironhorse-vm/tests/native_recursion_budget.rs",
+          "in_tests": true,
+          "line": 582,
+          "type": "IronhorseCompiler"
+        },
+        {
+          "file": "rust/engine/ironhorse-vm/tests/realms.rs",
+          "in_tests": true,
+          "line": 365,
+          "type": "Compiler"
+        },
+        {
+          "file": "rust/engine/ironhorse-vm/tests/relink_preserves_guest_edits.rs",
+          "in_tests": true,
+          "line": 116,
+          "type": "TestCompiler"
+        },
+        {
+          "file": "rust/engine/ironhorse-vm/tests/ses_boot_intrinsics.rs",
+          "in_tests": true,
+          "line": 5,
+          "type": "Compiler"
+        },
+        {
+          "file": "rust/engine/ironhorse-vm/tests/surrogate_values.rs",
+          "in_tests": true,
+          "line": 96,
+          "type": "Compiler"
+        }
+      ],
+      "kind": "trait",
+      "line": 218,
+      "name": "SourceCompiler",
+      "owner": "ironhorse-vm",
+      "production_implementors": [
+        {
+          "file": "rust/engine/ironhorse-runtime/src/lib.rs",
+          "in_tests": false,
+          "line": 21,
+          "type": "IronhorseSourceCompiler"
+        },
+        {
+          "file": "rust/thixotrope-ironhorse-worker/src/main.rs",
+          "in_tests": false,
+          "line": 17,
+          "type": "Compiler"
+        }
+      ],
+      "why": "The VM compiles source at run time. In production the VM does not\n     depend on the compiler."
+    },
+    {
+      "file": "rust/engine/ironhorse-snapshot/src/store.rs",
+      "implementors": [
+        {
+          "file": "rust/endo/ironhorse-store-sqlite/src/lib.rs",
+          "in_tests": false,
+          "line": 574,
+          "type": "SqliteHeapStore"
+        },
+        {
+          "file": "rust/engine/ironhorse-snapshot/src/store.rs",
+          "in_tests": false,
+          "line": 3129,
+          "type": "MemoryStore"
+        },
+        {
+          "file": "rust/engine/ironhorse-snapshot/src/store_file.rs",
+          "in_tests": false,
+          "line": 372,
+          "type": "FileStore"
+        },
+        {
+          "file": "rust/engine/ironhorse-snapshot/tests/migration.rs",
+          "in_tests": true,
+          "line": 492,
+          "type": "CyclingMigrationStore"
+        },
+        {
+          "file": "rust/engine/ironhorse-snapshot/tests/migration.rs",
+          "in_tests": true,
+          "line": 208,
+          "type": "ForeignCostTableStore"
+        },
+        {
+          "file": "rust/engine/ironhorse-snapshot/tests/migration.rs",
+          "in_tests": true,
+          "line": 334,
+          "type": "NoOpMigrationStore"
+        },
+        {
+          "file": "rust/engine/ironhorse-snapshot/tests/store_checkpoint.rs",
+          "in_tests": true,
+          "line": 617,
+          "type": "CountingStore"
+        },
+        {
+          "file": "rust/engine/ironhorse-snapshot/tests/store_checkpoint.rs",
+          "in_tests": true,
+          "line": 899,
+          "type": "FailOnceStore"
+        },
+        {
+          "file": "rust/engine/ironhorse-snapshot/tests/store_checkpoint.rs",
+          "in_tests": true,
+          "line": 366,
+          "type": "InterleavingStore"
+        }
+      ],
+      "kind": "trait",
+      "line": 1692,
+      "name": "HeapStore",
+      "owner": "ironhorse-snapshot",
+      "production_implementors": [
+        {
+          "file": "rust/endo/ironhorse-store-sqlite/src/lib.rs",
+          "in_tests": false,
+          "line": 574,
+          "type": "SqliteHeapStore"
+        },
+        {
+          "file": "rust/engine/ironhorse-snapshot/src/store.rs",
+          "in_tests": false,
+          "line": 3129,
+          "type": "MemoryStore"
+        },
+        {
+          "file": "rust/engine/ironhorse-snapshot/src/store_file.rs",
+          "in_tests": false,
+          "line": 372,
+          "type": "FileStore"
+        }
+      ],
+      "why": "A backend stores bytes. The snapshot layer keeps the codec and the\n     validation."
+    },
+    {
+      "file": "rust/engine/ironhorse-vm/src/gc.rs",
+      "implementors": [
+        {
+          "file": "rust/engine/ironhorse-vm/src/gc.rs",
+          "in_tests": false,
+          "line": 104,
+          "type": "NoHooks"
+        },
+        {
+          "file": "rust/engine/ironhorse-vm/src/interp/gc_tables.rs",
+          "in_tests": false,
+          "line": 936,
+          "type": "Hooks"
+        },
+        {
+          "file": "rust/engine/ironhorse-vm/src/gc.rs",
+          "in_tests": true,
+          "line": 339,
+          "type": "Hooks"
+        },
+        {
+          "file": "rust/engine/ironhorse-vm/tests/gc_invalid_references.rs",
+          "in_tests": true,
+          "line": 13,
+          "type": "Hooks"
+        }
+      ],
+      "kind": "trait",
+      "line": 117,
+      "name": "GcHooks",
+      "owner": "ironhorse-vm",
+      "production_implementors": [
+        {
+          "file": "rust/engine/ironhorse-vm/src/gc.rs",
+          "in_tests": false,
+          "line": 104,
+          "type": "NoHooks"
+        },
+        {
+          "file": "rust/engine/ironhorse-vm/src/interp/gc_tables.rs",
+          "in_tests": false,
+          "line": 936,
+          "type": "Hooks"
+        }
+      ],
+      "why": "The collector cannot see these references, because they are not in\n     the arenas."
+    },
+    {
+      "classification": [
+        {
+          "doc": "Fully serialized and restored by the current image.",
+          "name": "Serialized"
+        },
+        {
+          "doc": "Resident in the slot/chunk arenas themselves (the `HEAP`/`BLOC` atoms), so it round-trips structurally with the arenas \u2014 no separate atom needed.",
+          "name": "InArena"
+        },
+        {
+          "doc": "Deterministically rebuilt at restore by re-running machine boot / intrinsic linking against the same program symbols, so it need not be stored (but must be re-derived, hence\u2026",
+          "name": "BootDerived"
+        },
+        {
+          "doc": "Structurally resident in the restored arena, but reached through a side-table index that is not itself arena state, so restore must re-derive that index.",
+          "name": "RebuiltAtRestore"
+        },
+        {
+          "doc": "Not yet carried.",
+          "name": "Pending"
+        },
+        {
+          "doc": "Provably empty at every persistable boundary, so no atom is ever needed: `Interp::is_quiescent` requires the table empty and EVERY persist verb \u2014 store and blob alike \u2014 gates on\u2026",
+          "name": "EmptyAtBoundary"
+        }
+      ],
+      "file": "rust/engine/ironhorse-snapshot/src/sidetable.rs",
+      "implementors": [],
+      "kind": "enum",
+      "line": 205,
+      "name": "SideTable",
+      "owner": "ironhorse-snapshot",
+      "production_implementors": [],
+      "why": "Each machine field receives one classification for persistence."
+    }
+  ],
+  "totals": {
+    "crates": 11,
+    "lines": 183376,
+    "modules": 174,
+    "tests": 391
+  },
+  "workspace": "rust/engine"
+}
