@@ -295,9 +295,22 @@ single directory would conflate:
 
 - **eager** — wake at daemon start even with no pending journal.
   Today's rule is `journalLength() > snapshot.cut`.
-  This is what the HTTP sketch is waiting on, and it looks cheap:
-  `getWorker(id).wake()` is already on the worker facade, so an eager pin is a
-  durable set of worker ids the supervisor wakes at startup.
+
+  Waking, on its own, is not enough, and this was the one surprise in building
+  it.
+  Orthogonal persistence resumes a heap exactly where it was, with no callback —
+  the main design is explicit that sleep is host policy and not a guest
+  lifecycle event.
+  So an eagerly pinned manager wakes up still remembering a service that nothing
+  has rebound, and sits there.
+
+  A pin therefore names a publication as well as a mode, and the host calls
+  `started()` on it once the vat is awake.
+  Send-only, because a manager that cannot restore is something to report rather
+  than a reason to fail startup.
+  That is a deliberate host-to-guest delivery, not a sleep callback: it says a
+  new host incarnation exists, which is exactly the fact a manual-persistence
+  vat needs and cannot otherwise learn.
 - **resident** — never idle-sleep.
   Needed when sleeping would abandon something the vat supervises, such as a
   child process or a stateful outbound connection — and also when the vat is
@@ -325,7 +338,10 @@ Host-side, small and generic:
 - **Ephemeral workers**: a worker whose heap is not a recovery baseline and
   which is retired at the next daemon startup.
 - A durable alarm table offering restorable promise resources.
-- A pins facet granting `eager` and `resident`.
+- **Pins**: `pin('eager' | 'resident', { notify })` on a worker facade, durable
+  in worker meta, honoured at startup, and a retention root — separating pins
+  from retention means one can exist without the other, not that a host may
+  collect a vat it is configured to wake.
 
 ### Retrying across a break is the caller's decision
 
