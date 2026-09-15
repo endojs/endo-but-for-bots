@@ -10,8 +10,8 @@ import harden from '@endo/harden';
  * This vat holds the desired set — which consumer should be served on which
  * port capability — in an ordinary Map, because its heap is the durable
  * record. No metadata file, no recipe encoding, no version field, no restore
- * path. The three-state recipe machine in `http-services.js` exists only
- * because that information currently lives on the ephemeral side.
+ * path. The three-state recipe machine this replaces existed only because that
+ * information lived on the ephemeral side.
  *
  * It holds policy; the adapter holds mechanism. Consumers never receive the
  * adapter's reference, so the vat carrying the host port capabilities has no
@@ -30,7 +30,20 @@ import harden from '@endo/harden';
  * @param {string} options.adapterSource `makeHttpAdapter`, as source
  */
 export const makeHttpManager = ({ makeKeeper, vats, adapterSource }) => {
-  /** @type {Map<string, {port: any, consumer: any, policy: any}>} */
+  /**
+   * What the user asked for, keyed by port.
+   *
+   * Three states, because a grant that has not been configured yet is not the
+   * same as one that was closed: `allocated` is authority handed out and unused,
+   * `open` is a handler declared, `closed` is released for good. Only `open`
+   * entries are bound into an adapter.
+   *
+   * This is a state machine, and it survives the move into the vat — what does
+   * not survive is serialising it: no metadata file, no version field, no
+   * restore path, because a vat's heap is the durable record.
+   *
+   * @type {Map<string, {port: any, consumer: any, policy: any, state: 'allocated' | 'open' | 'closed'}>}
+   */
   const desired = new Map();
 
   // The keeper is built here rather than passed in because restoring a fresh
@@ -41,19 +54,48 @@ export const makeHttpManager = ({ makeKeeper, vats, adapterSource }) => {
     debugLabel: 'http-adapter',
     restore: adapter =>
       E(adapter).restore(
-        [...desired.values()].map(({ port, consumer, policy }) =>
-          harden([port, consumer, policy]),
-        ),
+        [...desired.values()]
+          .filter(({ state }) => state === 'open')
+          .map(({ port, consumer, policy }) =>
+            harden([port, consumer, policy]),
+          ),
       ),
   });
 
   /** @type {string | undefined} */
   let lastStartError;
 
-  /** @param {string} id */
-  const assertId = id => {
-    if (typeof id !== 'string' || id.length === 0 || id.length > 128)
-      throw Error('Service id must be 1 to 128 characters');
+  /**
+   * Desired and actual, reported together, because they answer different
+   * questions: whether the user asked for this, and whether it is bound in the
+   * host running now.
+   *
+   * @param {string} id
+   */
+  const statusOf = async id => {
+    const entry = desired.get(id);
+    const port =
+      entry === undefined ? Number(id) : await E(entry.port).getPort();
+    let bound = [];
+    try {
+      bound = await E(await keeper.provide()).ports();
+    } catch (error) {
+      return harden({
+        id,
+        port,
+        desired: entry === undefined ? 'closed' : 'open',
+        status: 'failed',
+        error: String(/** @type {Error} */ (error).message ?? error),
+      });
+    }
+    const listening = bound.includes(port);
+    return harden({
+      id,
+      port,
+      desired: entry?.state ?? 'closed',
+      status: listening ? 'listening' : 'inactive',
+      ...(listening ? { url: `http://127.0.0.1:${port}/` } : {}),
+    });
   };
 
   return Far('HttpManager', {
@@ -61,40 +103,55 @@ export const makeHttpManager = ({ makeKeeper, vats, adapterSource }) => {
       'serve(id, port, consumer) declares a service durably and binds it; stop(id) withdraws it; list() reports the desired set; reconcile() re-states everything into the current host and is what an eager pin calls after a restart.',
 
     /**
-     * @param {string} id
-     * @param {any} port an HttpPort capability, granted by the user
-     * @param {any} consumer the handler to serve there
-     * @param {{origins?: string[]}} [policy] admission policy for this port;
-     *   same-origin only when omitted
+     * A per-port facet for a user, shaped like the listener they are used to:
+     * `listen(handler)`, `status()`, `close()`.
+     *
+     * Granting this rather than the raw `HttpPort` is what keeps policy here.
+     * A holder can bind one port and ask about it; it cannot reach the adapter,
+     * enumerate other services, or learn who else is being served.
+     *
+     * @param {any} port an HttpPort capability
      */
-    serve: async (id, port, consumer, policy = {}) => {
-      assertId(id);
-      if (desired.has(id)) throw Error('Service id is already declared');
-      // The declaration commits before the binding is attempted: a port that
-      // cannot be bound right now is a condition to retry, not a reason to
-      // forget what was asked for. That difference is the whole of desired
-      // versus actual.
-      desired.set(
-        id,
-        harden({ port, consumer, policy: harden({ ...policy }) }),
-      );
-      const adapter = await keeper.provide();
-      const number = await E(adapter).bind(port, consumer, policy);
-      return harden({ id, port: number });
-    },
-
-    /** @param {string} id */
-    stop: async id => {
-      const entry = desired.get(id);
-      if (entry === undefined) return false;
-      desired.delete(id);
-      const number = await E(entry.port).getPort();
-      const adapter = await keeper.provide();
-      // A rejection here means the incarnation that held the binding is gone,
-      // which released the port already.
-      return E(adapter)
-        .unbind(number)
-        .catch(() => true);
+    grant: async port => {
+      const number = await E(port).getPort();
+      const id = `${number}`;
+      if (!desired.has(id))
+        desired.set(
+          id,
+          harden({ port, consumer: undefined, policy: {}, state: 'allocated' }),
+        );
+      return Far('HttpListener', {
+        help: () =>
+          'listen(handler) serves this port once; status() inspects it; close() releases it permanently. handler.handle({method,path,body}) must return {status,body}.',
+        /**
+         * @param {any} handler
+         * @param {{origins?: string[]}} [policy]
+         */
+        listen: async (handler, policy = {}) => {
+          const entry = desired.get(id);
+          if (entry === undefined || entry.state !== 'allocated')
+            throw Error('HTTP listener already configured');
+          desired.set(
+            id,
+            harden({ port, consumer: handler, policy, state: 'open' }),
+          );
+          const adapter = await keeper.provide();
+          await E(adapter).bind(port, handler, policy);
+          return statusOf(id);
+        },
+        status: () => statusOf(id),
+        close: async () => {
+          const entry = desired.get(id);
+          if (entry === undefined || entry.state === 'closed')
+            return statusOf(id);
+          desired.set(id, harden({ ...entry, state: 'closed' }));
+          const adapter = await keeper.provide();
+          await E(adapter)
+            .unbind(number)
+            .catch(() => true);
+          return statusOf(id);
+        },
+      });
     },
 
     /**
@@ -120,6 +177,10 @@ export const makeHttpManager = ({ makeKeeper, vats, adapterSource }) => {
      * caller that does not exist.
      */
     started: async () => {
+      // Nothing declared means nothing to rebind, and building an adapter to
+      // discover that would spend a vat on an empty set.
+      if (![...desired.values()].some(({ state }) => state === 'open'))
+        return harden([]);
       try {
         const adapter = await keeper.provide();
         return await E(adapter).ports();
@@ -129,7 +190,7 @@ export const makeHttpManager = ({ makeKeeper, vats, adapterSource }) => {
       }
     },
 
-    list: () => harden([...desired.keys()]),
+    list: () => Promise.all([...desired.keys()].map(statusOf)).then(harden),
 
     status: async () =>
       harden({
