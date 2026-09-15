@@ -312,6 +312,54 @@ been reporting this corpus as an honest set of named skips, exiting 0, for as
 long as the corpus has existed — and underneath it was a parser bug that broke
 every case in the suite.
 
+### The 10 that still fail, and two engine bugs behind them
+
+Two findings from the 6/16, both characterized rather than fixed.
+
+**`passStyleOf`'s first call in argument position throws
+`call: not a function`.**
+Reproducible, and narrow enough to state exactly:
+
+| shape | result |
+|---|---|
+| `passStyleOf(bytes)` bare, any number of times | always passes |
+| `wrap(passStyleOf(bytes))`, first execution | **throws** |
+| the same, second and later executions | passes |
+| a second, distinct call site, after the first | passes |
+| `compareBytes(...)` in argument position, first execution | passes |
+| argument position after one bare warm-up call | passes |
+
+So it is once per FUNCTION, not per call site, and specific to
+`passStyleOf` — `frozenBytes`, `thawedBytes` and `compareBytes` in the same
+position are all fine.
+`passStyleOf` has lazy internal state; its initialization fails only when the
+call sits in an argument list, and a bare warm-up call beforehand is a
+complete workaround.
+It is not simple recursion depth (a synthetic 100-deep call in argument
+position is fine), and it is not `Reflect.apply`, which is correct in every
+shape tested and reports a distinguishable `target: not a function`.
+Root-causing it means reading `@endo/pass-style`'s lazy init against
+ironhorse's call path.
+
+**A thrown object with a prototype `toString` renders as
+`[object Object]`.**
+Inside the engine `String(e)`, `e.toString()` and `"" + e` all produce
+`Test262Error: <message>` correctly.
+Only the HOST boundary loses it: `render_uncaught` goes through the read-only
+`render`, which by contract "must not turn the throw into a halt" and so
+cannot call guest code.
+test262's `Test262Error` is exactly that shape (`sta.js` puts `toString` on
+the prototype), so every assertion failure reaches a host as
+`[object Object]` — which also defeats `eshost`'s `parseError`, whose regex
+needs `Name: message`.
+XS avoids this by calling the guest `toString` from its own catch.
+`endot-ih` has the same limitation, visible in its own divergence output.
+Fixing it needs a guest-semantics coercion the VM does not currently expose
+to hosts.
+
+Neither is a SES or prelude problem; both would bite any host embedding
+ironhorse.
+
 ### Why SES's own suite is not the gate yet
 
 `packages/ses/test/` is 105 ava files, 15 of them directly on
