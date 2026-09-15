@@ -10,8 +10,8 @@
 #![cfg(feature = "ironhorse-engine")]
 
 use endo::ironhorse_engine::engine::{
-    CadencePolicy, HeapStoreOptions, MachineError, MeterBounds, PersistentMachine, StoreError,
-    StoreFailure,
+    CadencePolicy, HeapStoreOptions, MachineError, MeterBounds, PersistentMachine, Refusal,
+    StoreError, StoreFailure,
 };
 use endo::supervisor::Supervisor;
 use ironhorse_snapshot::format::SnapshotError;
@@ -187,15 +187,18 @@ fn store_backed_worker_lifecycle_through_the_supervisor() {
         // substring of a Debug rendering: a foreign callback table is an
         // intact store answering "not mine", so it must classify as a
         // refusal and not as corruption (review finding F157).
-        Err(MachineError::Store { kind, source }) => {
+        Err(error @ MachineError::Store(_)) => {
+            assert_eq!(error.store_failure(), Some(StoreFailure::Refused));
+            let MachineError::Store(source) = &error else {
+                unreachable!()
+            };
             assert!(
                 matches!(
-                    source,
+                    **source,
                     StoreError::Snapshot(SnapshotError::SignatureMismatch { .. })
                 ),
                 "refused by the signature gate: {source}"
             );
-            assert_eq!(kind, StoreFailure::Refused);
         }
         Ok(_) => panic!("a foreign signature must be refused"),
         Err(other) => panic!("expected a store refusal, got {other}"),
@@ -527,11 +530,9 @@ fn a_healthy_machine_reports_no_failed_collections() {
             .eval(&format!("var junk = 0; junk = {{ v: {i} }}; junk = 0; {i}"))
             .expect("crank");
     }
-    assert_eq!(
-        machine.failed_collections(),
-        (0, None),
-        "the scheduled collections all succeeded"
-    );
+    let (failures, last) = machine.failed_collections();
+    assert_eq!(failures, 0, "the scheduled collections all succeeded");
+    assert!(last.is_none(), "{last:?}");
     machine.close().expect("close");
 }
 
@@ -659,7 +660,10 @@ fn collection_policy_and_events_are_durable_and_reopen_refuses_drift() {
     options.cadence.collect_every = 3;
     assert!(matches!(
         PersistentMachine::open(&options),
-        Err(MachineError::Refused("collection cadence mismatch"))
+        Err(MachineError::Refused(Refusal::CadenceMismatch {
+            stored: 2,
+            requested: 3
+        }))
     ));
     assert_eq!(read_manifest(&options.path), explicit);
     options.cadence.collect_every = 2;
@@ -733,11 +737,19 @@ fn scheduled_collection_checkpoint_failure_preserves_the_committed_delivery() {
         "delivery succeeded despite later collection failure"
     );
     assert_eq!(machine.failed_collections().0, 1);
-    assert!(machine
+    // The accessor hands back the error, not a rendering of it: this is the
+    // only way a supervisor observes a failed SCHEDULED collection, so it is
+    // the one place F157 most needed closing. A store fault classifies, and
+    // the store's own error is still reachable underneath.
+    let injected = machine
         .failed_collections()
         .1
-        .unwrap()
-        .contains("injected collection"));
+        .expect("the scheduled collection failed");
+    assert_eq!(injected.store_failure(), Some(StoreFailure::Transient));
+    assert!(
+        injected.to_string().contains("injected collection"),
+        "{injected}"
+    );
     assert_eq!(machine.epoch().unwrap(), 2);
     machine.close().unwrap();
     let committed = read_manifest(&options.path);
