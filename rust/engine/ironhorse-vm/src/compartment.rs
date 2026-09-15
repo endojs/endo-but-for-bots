@@ -1141,8 +1141,6 @@ impl Machine {
         })
     }
 
-    /// Configure the default Realm evaluator service, used by shared dynamic
-    /// constructors. Machine owns the service lifetime; it is not stored in the heap.
     /// Freeze the shared intrinsic graph that
     /// [`Machine::unfrozen_with_start_global_names`] left mutable. Idempotent, and a
     /// no-op on a machine that was built frozen.
@@ -1154,6 +1152,12 @@ impl Machine {
             .lock_down_intrinsics()
     }
 
+    /// Configure the default Realm evaluator service, used by shared dynamic
+    /// constructors. Machine owns the service lifetime; it is not stored in the heap.
+    ///
+    /// This reaches the default realm's environment and no other: a compartment
+    /// needs its own [`Compartment::set_source_compiler`] before `eval`,
+    /// `Function`, or the three unnamed evaluator families resolve in it.
     pub fn set_source_compiler(&self, compiler: Rc<dyn crate::SourceCompiler>) -> Result<(), Halt> {
         let mut machine = self
             .machine
