@@ -87,6 +87,106 @@ export const canonicalAuditJson = (value, depth = 0) => {
 };
 harden(canonicalAuditJson);
 
+/**
+ * The exact inverse of `canonicalAuditJson`.
+ *
+ * A journal kept in an Endo petstore needed no decoder: the daemon marshalled
+ * the entries and gave them back as the copy data they went in as. A journal
+ * kept in host files does, and `JSON.parse` is not it — an entry's `sequence`
+ * is a bigint, which JSON cannot carry. Decoding the canonical form instead of
+ * inventing a second encoding means the bytes on disk are the bytes the hash
+ * chain is computed over, so a file is verifiable against the chain exactly as
+ * written.
+ *
+ * Refuses anything the encoder would not have produced, including a record
+ * whose keys are unsorted or repeated: such a document could re-encode to
+ * different bytes and so to a different hash. `Object.fromEntries` is what
+ * builds records here, because it defines own properties rather than assigning
+ * them — a `__proto__` key stays a key.
+ *
+ * @param {string} text
+ * @param {number} [maxBytes]
+ * @returns {unknown}
+ */
+export const parseCanonicalAuditJson = (text, maxBytes = 16 * 1024 * 1024) => {
+  typeof text === 'string' || Fail`audit data must be text`;
+  new TextEncoder().encode(text).byteLength <= maxBytes ||
+    Fail`audit data exceeded ${maxBytes} bytes`;
+  let document;
+  try {
+    document = JSON.parse(text);
+  } catch {
+    throw makeError(X`audit data is not canonical JSON`);
+  }
+  /**
+   * @param {unknown} node
+   * @param {number} depth
+   * @returns {unknown}
+   */
+  const decode = (node, depth) => {
+    depth <= MAX_DEPTH || Fail`audit data exceeded ${MAX_DEPTH} levels`;
+    (Array.isArray(node) && node.length >= 1 && node.length <= 2) ||
+      Fail`audit data is not canonical JSON`;
+    const tuple = /** @type {unknown[]} */ (node);
+    const [kind, payload] = tuple;
+    switch (kind) {
+      case 'null':
+        tuple.length === 1 || Fail`audit data is not canonical JSON`;
+        return null;
+      case 'boolean':
+        typeof payload === 'boolean' || Fail`audit data is not canonical JSON`;
+        return payload;
+      case 'string':
+        typeof payload === 'string' || Fail`audit data is not canonical JSON`;
+        return payload;
+      case 'number': {
+        typeof payload === 'string' || Fail`audit data is not canonical JSON`;
+        const value = payload === '-0' ? -0 : Number(payload);
+        // Re-encode rather than trust the text: `1e3`, `01` and ` 1` all parse
+        // and none of them is what the encoder writes.
+        (Number.isFinite(value) &&
+          `${Object.is(value, -0) ? '-0' : value}` === payload) ||
+          Fail`audit data is not canonical JSON`;
+        return value;
+      }
+      case 'bigint':
+        (typeof payload === 'string' && /^-?(0|[1-9][0-9]*)$/.test(payload)) ||
+          Fail`audit data is not canonical JSON`;
+        return BigInt(/** @type {string} */ (payload));
+      case 'array':
+        Array.isArray(payload) || Fail`audit data is not canonical JSON`;
+        return harden(
+          /** @type {unknown[]} */ (payload).map(element =>
+            decode(element, depth + 1),
+          ),
+        );
+      case 'record': {
+        Array.isArray(payload) || Fail`audit data is not canonical JSON`;
+        /** @type {[string, unknown][]} */
+        const entries = [];
+        let previous;
+        for (const entry of /** @type {unknown[]} */ (payload)) {
+          (Array.isArray(entry) &&
+            entry.length === 2 &&
+            typeof entry[0] === 'string') ||
+            Fail`audit data is not canonical JSON`;
+          const [key, encoded] = /** @type {[string, unknown]} */ (entry);
+          previous === undefined ||
+            key > previous ||
+            Fail`audit data record keys must be sorted and distinct`;
+          previous = key;
+          entries.push([key, decode(encoded, depth + 1)]);
+        }
+        return harden(Object.fromEntries(entries));
+      }
+      default:
+        throw makeError(X`audit data is not canonical JSON`);
+    }
+  };
+  return decode(document, 0);
+};
+harden(parseCanonicalAuditJson);
+
 /** @param {unknown} value */
 export const hashAuditEntry = value =>
   createHash('sha256').update(canonicalAuditJson(value)).digest('hex');
@@ -433,7 +533,13 @@ export const makeAuditJournal = ({
 harden(makeAuditJournal);
 
 /**
- * Store a journal in an operator-owned Endo petstore namespace.
+ * Store a journal in an operator-owned name-to-value store.
+ *
+ * The whole contract is four methods — `list`, `has`, `lookup`, `storeValue` —
+ * which an Endo petstore answers and so does a directory of files
+ * (`codex-session-store.js`). It was written against a petstore and named for
+ * one; keeping a journal out of the host agent's naming authority is what
+ * replaced that, and nothing here had to change.
  *
  * Pass factory or operator powers, never session guest powers. The returned
  * reader must likewise remain outside the model-facing object graph.
@@ -450,7 +556,7 @@ harden(makeAuditJournal);
  * @param {number} [options.maxAnchorBytes]
  * @param {number} [options.reservedAnchorBytes]
  */
-export const makePetstoreAuditJournal = (
+export const makeStoredAuditJournal = (
   powers,
   {
     journalId,
@@ -561,4 +667,4 @@ export const makePetstoreAuditJournal = (
     ...(maxTotalBytes ? { maxTotalBytes } : {}),
   });
 };
-harden(makePetstoreAuditJournal);
+harden(makeStoredAuditJournal);

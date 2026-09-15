@@ -21,6 +21,7 @@ const base = () =>
     listenerImageRef: `localhost/endo-provider@${listenerDigest}`,
     maxSessions: 2,
     models: [{ id: 'gpt-5.6-sol', isDefault: true }],
+    ownerId: `codex-${'0'.repeat(56)}`,
     projectIds: { first: 42_020, last: 43_019 },
     quotaCommand: '/etc/endo/codex-quota',
     stateBytes: '268435456',
@@ -125,6 +126,18 @@ test('every host path must be normalized, absolute and non-root', t => {
       message: new RegExp(key),
     });
   }
+});
+
+test('an owner label is required and portable', t => {
+  // The Podman reconciliation label and the volume registry's recorded owner.
+  // A registry already recording another owner refuses outright, so a typo
+  // here is a migration, not a restart.
+  t.throws(() => readCodexHostConfig({ ...base(), ownerId: undefined }), {
+    message: /ownerId/,
+  });
+  t.throws(() => readCodexHostConfig({ ...base(), ownerId: 'codex/one' }), {
+    message: /ownerId/,
+  });
 });
 
 test('an account reference is required and pinned', t => {

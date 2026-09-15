@@ -20,9 +20,10 @@
  */
 
 import { Fail, b, q } from '@endo/errors';
+import { PORTABLE_NAME_PATTERN } from '@endo/sandbox/policy.js';
 import { isAbsolute, normalize } from 'node:path';
 
-import { readPinnedSliceImage } from './hosted-runtime-setup.js';
+import { readPinnedSliceImage } from './codex-image-reference.js';
 
 /**
  * Every key a configuration may carry. An unknown key is a typo or a setting
@@ -39,6 +40,7 @@ const KNOWN_KEYS = harden([
   'listenerImageRef',
   'maxSessions',
   'models',
+  'ownerId',
   'projectIds',
   'publicInternet',
   'quotaCommand',
@@ -183,6 +185,7 @@ const assertFlag = (key, value) => {
  *   listenerImageRef: string,
  *   maxSessions: number,
  *   models: readonly any[],
+ *   ownerId: string,
  *   projectIds: { first: number, last: number },
  *   publicInternet: boolean,
  *   quotaCommand: string,
@@ -217,6 +220,16 @@ export const readCodexHostConfig = input => {
     throw Fail`Codex ${b('accountRef')} must pin one account, got ${q(accountRef)}`;
   }
 
+  // The Podman reconciliation label, the volume registry's recorded owner, and
+  // the listener's lock name. Derived from the host identity at setup rather
+  // than in the caplet, because the caplet no longer holds `@agent` to ask. A
+  // registry already recording another owner refuses outright, so this is
+  // effectively immutable once a deployment has run one session.
+  const ownerId = config.ownerId;
+  if (typeof ownerId !== 'string' || !PORTABLE_NAME_PATTERN.test(ownerId)) {
+    throw Fail`Codex ${b('ownerId')} must match ${q(PORTABLE_NAME_PATTERN)}, got ${q(ownerId)}`;
+  }
+
   const maxSessions = config.maxSessions;
   if (
     typeof maxSessions !== 'number' ||
@@ -244,6 +257,7 @@ export const readCodexHostConfig = input => {
     listenerImageRef,
     maxSessions,
     models: assertModels(config.models),
+    ownerId,
     projectIds: assertProjectIds(config.projectIds),
     publicInternet:
       config.publicInternet === undefined

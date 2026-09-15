@@ -9,7 +9,6 @@
  * @module
  */
 
-import { Fail, b, q } from '@endo/errors';
 import {
   assertRuntimePlacement as assertHostedRuntimePlacement,
   prepareRuntimeEnv as prepareHostedRuntimeEnv,
@@ -18,9 +17,49 @@ import {
   resolveFuturePath as resolveHostedFuturePath,
   resolvePinnedImageRef as resolveHostedPinnedImageRef,
 } from '@endo/hosted-agent/hosted-setup.js';
-import { PINNED_IMAGE_REFERENCE_PATTERN } from '@endo/sandbox/policy.js';
+import { readRuntimeConfig } from '@endo/sandbox/runtime-config.js';
+
+import { readCodexHostConfigEnv } from './codex-host-config.js';
+import { readCodexNativeConfig } from './codex-native-agent.js';
+import { assertCodexStateRoot } from './codex-state-provider.js';
+import {
+  assertCurrentSpecifier,
+  toCurrentSpecifier,
+} from './current-specifier.js';
+
+export { readPinnedSliceImage } from './codex-image-reference.js';
 
 const LABEL = 'Codex';
+
+/** Pet-name directory for everything this adapter mints; the host root stays
+ * clean, and the backend's session state is named from here. */
+export const SANDBOX_DIR = 'codex-sandbox';
+
+/** The owned native runtime: a Podman factory with a kernel-quota observer. */
+export const nativeSandboxSpecifier = assertCurrentSpecifier(
+  toCurrentSpecifier(new URL('./codex-native-agent.js', import.meta.url).href),
+  'native sandbox',
+);
+harden(nativeSandboxSpecifier);
+
+/** One host directory per session, with ownership markers. */
+export const stateProviderSpecifier = assertCurrentSpecifier(
+  toCurrentSpecifier(
+    new URL('./codex-state-provider-module.js', import.meta.url).href,
+  ),
+  'state provider',
+);
+harden(stateProviderSpecifier);
+
+/** The hosted backend caplet; its powers is a stored record of the three
+ * capabilities above plus the renewable credential. */
+export const backendSpecifier = assertCurrentSpecifier(
+  toCurrentSpecifier(
+    new URL('./hosted-subscription-module.js', import.meta.url).href,
+  ),
+  'codex backend',
+);
+harden(backendSpecifier);
 
 /**
  * Read one immutable formula under `codex-sandbox/` by its verified
@@ -36,6 +75,46 @@ export const readProvisionedEnvironment = (host, name, expectedSpecifier) =>
     expectedSpecifier,
   });
 harden(readProvisionedEnvironment);
+
+/** @param {any} host */
+export const readNativeSandbox = async host => {
+  const { identifier, env } = await readProvisionedEnvironment(
+    host,
+    'native-sandbox',
+    nativeSandboxSpecifier,
+  );
+  return harden({
+    identifier,
+    config: readRuntimeConfig(env),
+    quota: readCodexNativeConfig(env).quota,
+  });
+};
+harden(readNativeSandbox);
+
+/** @param {any} host */
+export const readStateProvider = async host => {
+  const { identifier, env } = await readProvisionedEnvironment(
+    host,
+    'state-provider',
+    stateProviderSpecifier,
+  );
+  return harden({
+    identifier,
+    stateDir: assertCodexStateRoot(env.ENDO_CODEX_STATE_DIR),
+  });
+};
+harden(readStateProvider);
+
+/** @param {any} host */
+export const readBackend = async host => {
+  const { identifier, env } = await readProvisionedEnvironment(
+    host,
+    'backend',
+    backendSpecifier,
+  );
+  return harden({ identifier, config: readCodexHostConfigEnv(env) });
+};
+harden(readBackend);
 
 /** @param {string} name */
 export const resolveFuturePath = name => resolveHostedFuturePath(name, LABEL);
@@ -70,35 +149,3 @@ harden(readSliceImageReference);
 export const resolvePinnedImageRef = (rootfs, exec = undefined) =>
   resolveHostedPinnedImageRef(rootfs, exec, LABEL);
 harden(resolvePinnedImageRef);
-
-/**
- * Read a slice image reference that must already be pinned, as a Codex host
- * configuration's is: `setup-hosted.js` resolves a tag through Podman before
- * writing the configuration, and nothing downstream of that has Podman or the
- * operator's attention.
- *
- * The digest is not simply the text after `@`. The reference that reaches the
- * slice must satisfy the native runtime's `PINNED_IMAGE_REFERENCE_PATTERN`,
- * which admits a registry port and no tag, so a `name:tag@digest` — valid
- * reference syntax that Podman accepts — is refused here rather than at slice
- * admission, one session at a time. A reference with no `@` at all is the case
- * this replaces: `imageRef.slice(imageRef.indexOf('@') + 1)` returned the whole
- * reference, putting an image *name* where the broker grant and the slice
- * policy expect a digest.
- *
- * @param {string} rootfs Config `imageRef` (`oci:<image>` or already pinned).
- * @param {string} [setting] The configuration key's name, for messages.
- * @returns {{ imageRef: string, imageDigest: string }}
- */
-export const readPinnedSliceImage = (rootfs, setting = 'imageRef') => {
-  (typeof rootfs === 'string' && rootfs.length > 0) ||
-    Fail`${b(LABEL)} ${b(setting)} is required and must be a pinned OCI image reference`;
-  const { image, imageDigest } = readSliceImageReference(rootfs);
-  if (imageDigest === undefined) {
-    throw Fail`${b(LABEL)} ${b(setting)} must be pinned to a digest, got ${q(image)}`;
-  }
-  PINNED_IMAGE_REFERENCE_PATTERN.test(image) ||
-    Fail`${b(LABEL)} ${b(setting)} ${q(image)} is not a pinned reference the native runtime will accept; drop the tag it was reached by and keep the digest`;
-  return harden({ imageRef: image, imageDigest });
-};
-harden(readPinnedSliceImage);
