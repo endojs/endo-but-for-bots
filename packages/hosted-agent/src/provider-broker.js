@@ -5,7 +5,10 @@ import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 
-import { INFERENCE_PATHS } from './provider-paths.js';
+import {
+  INFERENCE_PATHS,
+  splitInferenceTarget,
+} from './provider-paths.js';
 import { makeSecretRotator } from './secret-rotator.js';
 
 /**
@@ -582,11 +585,14 @@ export const makeProviderBrokerGrant = (
     clientAuthorization === 'strip' ||
     Fail`Unsupported client authorization mode`;
   const routes = policy.routes.map(({ method, path }) => {
-    // Exact paths only: no normalization, query, fragment, percent escaping,
-    // alternate authority or dot segments can affect dispatch.
+    // Exact targets only: no normalization, fragment, percent escaping,
+    // alternate authority or dot segments can affect dispatch. A query is
+    // admitted, but as part of the exact target — never as a wildcard.
+    const target = splitInferenceTarget(path);
     (method === 'POST' &&
-      INFERENCE_PATHS.includes(path) &&
-      /^\/[a-zA-Z0-9_-]+(?:\/[a-zA-Z0-9_-]+)*$/.test(path)) ||
+      target !== undefined &&
+      INFERENCE_PATHS.includes(target.pathname) &&
+      /^\/[a-zA-Z0-9_-]+(?:\/[a-zA-Z0-9_-]+)*$/.test(target.pathname)) ||
       Fail`Invalid inference route`;
     return `${method} ${path}`;
   });

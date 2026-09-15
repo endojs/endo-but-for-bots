@@ -4,7 +4,10 @@ import { Fail } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import { createServer } from 'node:http';
 
-import { INFERENCE_PATHS } from './provider-paths.js';
+import {
+  INFERENCE_PATHS,
+  splitInferenceTarget,
+} from './provider-paths.js';
 
 /** @import { Socket } from 'node:net' */
 /** @import { IncomingMessage, ServerResponse } from 'node:http' */
@@ -68,11 +71,14 @@ export const makeProviderHttpListener = async ({
   (Array.isArray(allowedPaths) && allowedPaths.length > 0) ||
     Fail`Invalid inference paths`;
   // Copy and re-validate: the admission decision must not follow a caller's
-  // later mutation of the array, and only exact canonical paths are admitted.
+  // later mutation of the array, and only exact canonical targets are
+  // admitted. A target may carry a bounded query; matching below stays an
+  // exact comparison against the whole request target either way.
   const paths = harden(
     allowedPaths.map(path => {
-      (typeof path === 'string' &&
-        /^\/[a-zA-Z0-9_-]+(?:\/[a-zA-Z0-9_-]+)*$/.test(path)) ||
+      const target = splitInferenceTarget(path);
+      (target !== undefined &&
+        /^\/[a-zA-Z0-9_-]+(?:\/[a-zA-Z0-9_-]+)*$/.test(target.pathname)) ||
         Fail`Invalid inference path`;
       return path;
     }),
