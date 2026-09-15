@@ -4018,6 +4018,13 @@ testNeedsNodeWorker('invite, accept, and send mail', async t => {
   const invitationLocator = await E(invitation).locate();
   await E(hostB).accept(invitationLocator, 'alice');
 
+  // Acceptance replaces each invitation-side result name with the remote
+  // handle. It does not need a second, synthetic local guest under @pins.
+  t.truthy(await E(hostA).identify('bob'));
+  t.truthy(await E(hostB).identify('alice'));
+  t.is(await E(hostA).identify('@pins', 'guest-bob'), undefined);
+  t.is(await E(hostB).identify('@pins', 'guest-alice'), undefined);
+
   // create value to share
   await E(hostA).evaluate('@main', '"hello, world!"', [], [], ['salutations']);
   const expectedSalutationsLocator = await E(hostA).locate('salutations');
@@ -4055,23 +4062,24 @@ testNeedsNodeWorker('guest invites a guest and they exchange mail', async t => {
   const invitationLocator = await E(invitation).locate();
   await E(hostB).accept(invitationLocator, 'guest-a');
 
-  // Accepting an invitation owned by a guest retains the local guest in the
-  // inviting guest formula's host pin directory, not in its mutable @pins.
-  // The host can inspect the formula edge, but the guest has no special name
-  // through which it or its connected agent could remove the pin.
+  // The invitation's result name is the durable connection edge. Acceptance
+  // replaces the invitation with the remote accepter handle without minting
+  // and pinning an otherwise-unreachable local guest on either side.
+  t.truthy(await E(guestA).identify('guest-b'));
+  t.truthy(await E(hostB).identify('guest-a'));
   t.is(await E(guestA).identify('@pins', 'guest-guest-b'), undefined);
   t.is(await E(hostA).identify('@pins', 'guest-guest-b'), undefined);
-  await t.throwsAsync(() => E(guestA).identify('@hostPins'), {
-    message: /Invalid name "@hostPins"/u,
-  });
+  t.is(await E(hostB).identify('@pins', 'guest-guest-a'), undefined);
 
+  // The host-only directory remains available for deliberate hidden pins, but
+  // invitation acceptance no longer adds a redundant synthetic guest to it.
   const guestAId = await E(hostA).identify('guest-a');
   const guestARecord = await E(E(hostA).diagnostics()).getFormula(guestAId);
   const guestPinsId = guestARecord.properties.guestPins.identifier;
   const hostPinsId = guestARecord.properties.hostPins.identifier;
   t.not(guestPinsId, hostPinsId);
   const hostPins = await E(hostA).lookupById(hostPinsId);
-  t.truthy(await E(hostPins).identify('guest-guest-b'));
+  t.is(await E(hostPins).identify('guest-guest-b'), undefined);
 
   await E(guestA).send('guest-b', ['Hello from guest A'], [], []);
   await E(hostB).send('guest-a', ['Hello from guest B'], [], []);
