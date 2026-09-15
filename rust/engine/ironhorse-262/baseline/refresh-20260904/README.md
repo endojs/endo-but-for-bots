@@ -18,9 +18,12 @@ policy and must investigate timeout differences rather than automatically dismis
 The current base reports unexpected throws as conformance failures and escaped
 internal control flow as engine failures, where this historical runner recorded skips.
 
-Result agreement in the differential suites is separate from the exact-metering
-contracts in the [test suites](../../tests/).
-A passing result-only test does not establish computron agreement.
+Result agreement in the differential suites is separate from Iron Horse's
+own frozen-cost determinism pins in the [test suites](../../tests/).
+A passing result-only test does not establish anything about computron
+counts — and nothing requires it to: computron agreement with the XS oracle
+is advisory calibration telemetry, never a contract (XS-computron parity is
+a non-goal — `designs/ironhorse-engine.md` § Metering).
 
 ## What this round changed
 

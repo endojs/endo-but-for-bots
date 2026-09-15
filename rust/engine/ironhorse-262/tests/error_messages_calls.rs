@@ -507,8 +507,10 @@ fn null_prototype_completion_host_coercion_matches_xs() {
     );
     assert_eq!(run.ironhorse_error, run.oracle_error);
     assert!(run.error_agrees, "{run:?}");
-    // Diagnostic-only correction: preserve the existing run-only budgets.
-    // The synthetic post-run throw must not charge guest execution.
+    // Diagnostic-only correction: the synthetic post-run throw must not
+    // charge guest execution, pinned as Iron Horse's OWN frozen run-only
+    // budget (a per-release determinism lock — update deliberately on a
+    // meter recalibration). The oracle's count is not asserted:
+    // XS-computron parity is a non-goal.
     assert_eq!(run.ironhorse_computrons, 14);
-    assert_eq!(run.oracle_computrons, 20);
 }
