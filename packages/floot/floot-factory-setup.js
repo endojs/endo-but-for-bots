@@ -240,7 +240,16 @@ export const main = async agent => {
 
   const provider = env('FLOOT_PROVIDER') || 'anthropic';
   const model = env('FLOOT_MODEL');
-  const authToken = process.env.ANTHROPIC_API_KEY || env('FLOOT_AUTH_TOKEN');
+  const authToken =
+    env('FLOOT_AUTH_TOKEN') ||
+    (provider === 'openrouter'
+      ? process.env.OPENROUTER_API_KEY
+      : process.env.ANTHROPIC_API_KEY);
+  if (provider === 'openrouter' && (!model || !model.includes('/'))) {
+    throw Error(
+      'FLOOT_MODEL must be an organization-qualified OpenRouter model ID.',
+    );
+  }
   const systemPrompt = env('FLOOT_SYSTEM_PROMPT');
   const codePath = resolveCodePath();
   // The factory reads its per-deployment knobs from the caplet env. Optional
@@ -264,11 +273,18 @@ export const main = async agent => {
 
   // A re-provision without the key in env keeps the secret already in the
   // manager: the credential lives in the daemon now, not in this shell.
-  const secretName = `${dir}-auth`;
+  const secretName =
+    env('FLOOT_AUTH_SECRET_NAME') ||
+    (provider === 'openrouter' ? `${dir}-openrouter-auth` : `${dir}-auth`);
   const hasExistingSecret = await hasAuthSecret({
     hostAgent: agent,
     name: secretName,
   });
+  if (provider === 'openrouter' && !authToken && !hasExistingSecret) {
+    throw Error(
+      'Add the OpenRouter API key in Secrets under the configured FLOOT_AUTH_SECRET_NAME, or set OPENROUTER_API_KEY.',
+    );
+  }
   if (provider === 'anthropic' && !authToken && !hasExistingSecret) {
     throw new Error(
       'ANTHROPIC_API_KEY (or FLOOT_AUTH_TOKEN / ENDO_FLOOT_AUTH_TOKEN) is required for the Anthropic provider.',
@@ -335,6 +351,7 @@ export const main = async agent => {
           })
         : { locator: await E(agent).locate('secrets', secretName) });
     } catch (error) {
+      if (provider === 'openrouter') throw error;
       if (!authToken) throw error;
       console.warn(
         `Floot: could not use the secret manager (${
