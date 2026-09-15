@@ -6,6 +6,7 @@ import { Fail } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
+import { providePrivateDirectory } from '@endo/hosted-agent/hosted-setup.js';
 import { makeProviderBrokerGrantIssuer } from '@endo/hosted-agent/provider-grant-issuer.js';
 import { makePodmanProviderListenerRuntime } from '@endo/hosted-agent/provider-listener-runtime.js';
 import { makePublicEgress } from '@endo/hosted-agent/public-egress.js';
@@ -16,6 +17,7 @@ import { startAppServerTransport } from './app-server-transport.js';
 import { makeCodexBackendFactory } from './backend-factory.js';
 import { makeHostVolumeProvider } from './host-volume-provider.js';
 import { whenHostStops } from './host-lifecycle.js';
+import { readPinnedSliceImage } from './hosted-runtime-setup.js';
 import { makeAttestedCodexResourceProvisioner } from './sandbox-policy.js';
 import { makeCodexSubscriptionCredential } from './subscription-auth.js';
 
@@ -28,7 +30,6 @@ export const makeHostedCodexSubscription = async options => {
   const {
     ownerId,
     directory,
-    imageRef,
     listenerImageRef,
     accountRef,
     secret,
@@ -43,7 +44,12 @@ export const makeHostedCodexSubscription = async options => {
   } = options;
   typeof publicInternet === 'boolean' ||
     Fail`Invalid public network configuration`;
-  const imageDigest = imageRef.slice(imageRef.indexOf('@') + 1);
+  // Refuse a tagged, unpinned or malformed reference here, where the operator
+  // can still read the message, rather than one session at a time inside slice
+  // admission. The unchecked `imageRef.slice(imageRef.indexOf('@') + 1)` this
+  // replaces returned the whole reference when there was no `@`, so the image
+  // *name* reached the broker grant and the slice policy as a digest.
+  const { imageRef, imageDigest } = readPinnedSliceImage(options.imageRef);
   const credential = makeCodexSubscriptionCredential({
     secret,
     rotate: makeSecretRotator(secretAdmin),
@@ -53,6 +59,12 @@ export const makeHostedCodexSubscription = async options => {
   });
   // Refuse a stale, fenced or malformed credential before publishing a backend.
   await credential.current();
+  // The volume registry and the listener's process lock both live under this
+  // root, and both would otherwise `mkdir -p` it blind. Refuse a symlink, a
+  // non-directory, or a directory owned by another user once, here, and
+  // normalize its mode — the same treatment the other two adapters give their
+  // operator-supplied roots.
+  await providePrivateDirectory('Codex host directory', directory);
   const storage = await makeHostVolumeProvider({
     ...options,
     directory: join(directory, 'volumes'),

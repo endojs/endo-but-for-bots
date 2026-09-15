@@ -5,6 +5,7 @@ import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { assertPublicNetworkEvidence } from '@endo/hosted-agent/public-network.js';
+import { PINNED_IMAGE_REFERENCE_PATTERN } from '@endo/sandbox/policy.js';
 
 import {
   assertProviderGrantV1,
@@ -86,9 +87,11 @@ export const makeAttestedCodexSliceFactory = powers => {
   const runtimeVerifier = powers.runtimeVerifier ?? makeCodexRuntimeVerifier();
   /^sha256:[0-9a-f]{64}$/.test(imageDigest) ||
     Fail`Image digest must be pinned`;
-  (/^[a-z0-9][a-z0-9._-]*(?::\d{1,5})?(?:\/[a-z0-9][a-z0-9._-]*)*@sha256:[0-9a-f]{64}$/.test(
-    imageRef,
-  ) &&
+  // The runtime's own rule, not a copy of it: a divergent transcription here
+  // would either admit a reference `buildSlice` refuses or refuse one it
+  // accepts, and the copy that used to sit here was written before the pattern
+  // was exported.
+  (PINNED_IMAGE_REFERENCE_PATTERN.test(imageRef) &&
     imageRef.endsWith(`@${imageDigest}`)) ||
     Fail`Image reference must match digest`;
   // Retain cleanup authority even when admission fails before the caller can
