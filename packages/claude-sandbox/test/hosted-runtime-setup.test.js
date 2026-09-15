@@ -48,7 +48,9 @@ test('resolvePinnedImageRef pins tags and accepts already-pinned digests', async
   t.deepEqual(inspected, [], 'a pinned reference is never inspected');
   t.deepEqual(
     await resolvePinnedImageRef('oci:localhost/claude:latest', exec),
-    { imageRef: `localhost/claude:latest@${digest}`, imageDigest: digest },
+    // The tag is resolved AWAY: `name:tag@digest` is a reference the native
+    // runtime refuses, so the pin drops the tag it was found under.
+    { imageRef: `localhost/claude@${digest}`, imageDigest: digest },
   );
   t.deepEqual(inspected, [
     [
