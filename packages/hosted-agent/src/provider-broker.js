@@ -652,21 +652,30 @@ export const makeProviderBrokerGrant = (
   const endpoint = makeExo(
     'ProviderInferenceGrant',
     M.interface('ProviderInferenceGrant', {
+      // `headers` is optional, not merely nullable: a caller that curates no
+      // headers of its own — every in-process caller before the listener
+      // existed — omits the key, and `M.opt` inside the required half would
+      // still demand it be present.
       request: M.call(
-        M.splitRecord({
-          method: M.string(),
-          path: M.string(),
-          body: BodyShape,
-          headers: M.opt(M.recordOf(M.string(), M.string())),
-        }),
+        M.splitRecord(
+          {
+            method: M.string(),
+            path: M.string(),
+            body: BodyShape,
+          },
+          { headers: M.recordOf(M.string(), M.string()) },
+        ),
       ).returns(M.promise()),
 
       requestStream: M.call(
-        M.splitRecord({
-          method: M.string(),
-          path: M.string(),
-          body: BodyShape,
-        }),
+        M.splitRecord(
+          {
+            method: M.string(),
+            path: M.string(),
+            body: BodyShape,
+          },
+          { headers: M.recordOf(M.string(), M.string()) },
+        ),
       ).returns(M.promise()),
     }),
     {
@@ -759,7 +768,7 @@ export const makeProviderBrokerGrant = (
    * @returns {Promise<ProviderStream & {contentType: string}>}
    */
   /**
-   * @param {{method: string, path: string, body: string}} request
+   * @param {{method: string, path: string, body: string, headers?: Record<string, string>}} request
    * @param {boolean} streaming
    */
   const perform = async ({ method, path, body, headers }, streaming) => {
