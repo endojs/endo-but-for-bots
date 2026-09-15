@@ -21,6 +21,9 @@ export { assertWorkerId, isSessionToken } from './store-validators.js';
  * @typedef {object} WorkerMeta
  * @property {string} [debugLabel] optional human-readable label; used
  *   only in diagnostics, never as an identifier
+ * @property {boolean} [ephemeral] this worker's heap is not a recovery
+ *   baseline: the next daemon startup retires it instead of restoring it, so
+ *   whatever it held dies with the process that held it
  * @property {string} [failure] deterministic halt; retained for inspection
  * @property {string} [hubDelivery] highest hub outbox sequence covered by the snapshot
  * @property {{ ref: unknown, cut?: number } | null} [snapshot]
