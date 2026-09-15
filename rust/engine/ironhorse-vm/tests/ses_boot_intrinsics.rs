@@ -279,12 +279,17 @@ fn buffer_named_reads_honor_accessor_replacement_deletion_and_shadowing() {
 /// `polyfills.js`'s `harden` so the shim can install its own, and calls
 /// `lockdown({ errorTaming: 'safe', reporting: 'none', overrideTaming: 'min' })`).
 ///
-/// The two realm profiles are mutually exclusive, which is the point of this
-/// test. `Interp::new()` leaves the intrinsics mutable and the shim repairs and
-/// then freezes them itself. `Machine::new()` freezes them at construction
-/// (`new_shared_realm_machine_with_permit`), and the shim's `repairIntrinsics`
-/// cannot then rewrite a descriptor it needs to. Choosing ironhorse's native
-/// freeze forecloses the shim; choosing the shim forecloses the native freeze.
+/// What decides whether the shim can supply it is WHEN the freeze happens, not
+/// which constructor was used. `Interp::new()` and
+/// `Machine::unfrozen_with_start_permit` leave the intrinsics mutable and the
+/// shim repairs and then freezes them itself. `Machine::new()` freezes them at
+/// construction, and the shim's `repairIntrinsics` cannot then rewrite a
+/// descriptor it needs to.
+///
+/// That used to make the two mutually exclusive -- the multi-compartment
+/// `Machine` API came only with the construction-time freeze. Deferring the
+/// freeze removes the exclusion: see
+/// `an_unfrozen_machine_takes_the_shim_and_keeps_its_compartments`.
 fn thixotrope_ses_boot() -> Option<String> {
     let path = concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -406,8 +411,8 @@ fn a_natively_frozen_realm_forecloses_the_ses_shim() {
             assert_eq!(
                 crank(&wrapped(&boot)),
                 "ERROR: invalid descriptor",
-                "the shim is expected to fail on a pre-frozen realm; if it now \
-                 succeeds, the two profiles have stopped being exclusive and \
+                "the shim is expected to fail on a realm frozen before it runs; \
+                 if it now succeeds, the repair path has changed and \
                  designs/ironhorse-ses-compartment-equivalence.md must say so"
             );
             // `invalid descriptor` is the engine's generic rejected-
@@ -422,6 +427,65 @@ fn a_natively_frozen_realm_forecloses_the_ses_shim() {
                 "lockdown=undefined harden=undefined Compartment=undefined \
                  frozenObjectProto=true"
             );
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+/// The two profiles stop excluding each other when the freeze is deferred.
+///
+/// `Machine::new` froze the intrinsics at construction, which is what made the
+/// shim fail on it. `Machine::unfrozen_with_start_permit` builds the same
+/// shared realm and leaves the graph mutable, so the guest's own `lockdown()`
+/// can repair and freeze it -- and the multi-compartment API survives, which
+/// a bare `Interp` does not offer.
+#[test]
+fn an_unfrozen_machine_takes_the_shim_and_keeps_its_compartments() {
+    let Some(boot) = thixotrope_ses_boot() else {
+        return;
+    };
+    std::thread::Builder::new()
+        .stack_size(ironhorse_vm::NATIVE_STACK_BYTES)
+        .spawn(move || {
+            let machine = ironhorse_vm::Machine::unfrozen_with_start_permit(None);
+            machine
+                .set_source_compiler(std::rc::Rc::new(Compiler))
+                .expect("machine takes a compiler");
+            assert!(!machine.intrinsics().is_locked_down());
+            let start = machine.start_compartment();
+            let crank = |c: &ironhorse_vm::Compartment, source: &str| {
+                let (code, symbols) = ironhorse_compile::compile_atoms(source).expect("compiles");
+                let outcome = c.evaluate_with_symbols(&code, &symbols);
+                assert!(outcome.completed, "{source:.60}: {:?}", outcome.halt);
+                outcome.result
+            };
+            assert_eq!(
+                crank(&start, SES_CENSUS),
+                "lockdown=undefined harden=function Compartment=undefined \
+                 frozenObjectProto=false"
+            );
+            assert_eq!(
+                crank(&start, &wrapped(&boot)),
+                "ok",
+                "the shim must evaluate"
+            );
+            assert_eq!(
+                crank(&start, SES_CENSUS),
+                "lockdown=function harden=function Compartment=function \
+                 frozenObjectProto=true",
+                "the guest's own lockdown must install and freeze"
+            );
+            // The engine's multi-compartment API still works, and the guest's
+            // freeze reached the graph the sibling shares.
+            let sibling = machine.new_compartment();
+            assert_eq!(
+                crank(&sibling, "Object.isFrozen(Object.prototype)"),
+                "true",
+                "a sibling sees the graph the guest froze"
+            );
+            assert_eq!(crank(&start, "var here = 1; here"), "1");
+            assert_eq!(crank(&sibling, "typeof here"), "undefined");
         })
         .unwrap()
         .join()

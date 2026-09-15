@@ -16,8 +16,12 @@ Two things landed with this document.
 the default realm, closing a confinement hole a compartment could read and
 write through
 (`tests/realms.rs::every_reachable_evaluator_compiles_in_the_calling_compartment`).
-`tests/ses_boot_intrinsics.rs` pins the two realm profiles described below, in
-both directions, so the day they stop excluding each other a test says so.
+
+`Machine::unfrozen_with_start_permit` and `Machine::lock_down` separate the
+intrinsic freeze from machine construction, which is what made the two ways of
+getting a guest SES surface look mutually exclusive (§ What decides the
+profile). `tests/ses_boot_intrinsics.rs` pins all three shapes.
+
 And `CompartmentOptions::intrinsic_permit`'s doc comment now states what it
 actually does, which is much less than its name suggests (§ Equivalence:
 `Compartment`).
@@ -129,7 +133,7 @@ census taken after `polyfills.js` cannot tell them apart because
 And `Object.isFrozen(Object.prototype)` is `false` on both engines throughout
 that sequence: no lockdown runs anywhere in it.
 
-### The two realm profiles exclude each other
+### What decides the profile is *when* the freeze happens
 
 This is the finding that matters most, and nothing in the tree said it.
 
@@ -141,14 +145,34 @@ and freezes them itself. Measured: the 576 KB
 `5` in its own globals without leaking them outward.
 
 `Machine::new()` freezes the intrinsics at construction
-(`new_shared_realm_machine_with_permit`, `interp/realm.rs:108`).
+(`new_shared_realm_machine_with_permit`, `interp/realm.rs`).
 The shim's `repairIntrinsics` then cannot rewrite a descriptor it needs, and
 the same bundle aborts with `invalid descriptor` — leaving the realm with
 neither the engine's `harden` (the bundle deleted it) nor the shim's.
 
-**Choosing IronHorse's native freeze forecloses the shim. Choosing the shim
-forecloses the native freeze.**
-`tests/ses_boot_intrinsics.rs` asserts both directions.
+That made the two look mutually exclusive: the multi-compartment `Machine` API
+came only with the construction-time freeze, and the shim came only with a
+bare `Interp`.
+**It was the timing, not the API.**
+`Machine::unfrozen_with_start_permit` builds the same shared realm and leaves
+the graph mutable; the guest's own `lockdown()` then repairs and freezes it,
+and the compartment API survives.
+Measured: on such a machine the shim evaluates to `'ok'`, the census goes from
+`lockdown=undefined … frozenObjectProto=false` to
+`lockdown=function harden=function Compartment=function frozenObjectProto=true`,
+a compartment created afterwards sees the graph the guest froze, and global
+isolation between compartments still holds.
+`Machine::lock_down` performs the same freeze from the host side for a caller
+that wants it without a guest `lockdown()`.
+
+The window this opens is real and is the caller's to close: until something
+freezes the graph the primordials are shared and writable, so two compartments
+of one machine can signal through them.
+SES has the same window before its own `lockdown()` and the same rule about
+it — lock down before admitting a second compartment.
+`tests/ses_boot_intrinsics.rs` pins all three shapes: the shim on a bare
+`Interp`, its refusal on a realm frozen first, and the unfrozen `Machine` that
+takes it and keeps its compartments.
 
 ## What XS implements
 
@@ -382,13 +406,17 @@ The shim is the larger one — and it is the one already running on IronHorse.
 
 ## What a next step should establish first
 
-1. **Decide which profile the daemon's Ironhorse worker takes**, because they
-   exclude each other (§ The two realm profiles).
-   The shim profile is proven in-tree by `thixotrope-ironhorse-worker` and
-   costs the native freeze and the `Machine`/`Compartment` Rust API.
-   The native profile keeps those and needs a guest `lockdown` the engine does
-   not have.
-   Nothing else here can be sized before this is answered.
+1. **Decide which profile the daemon's Ironhorse worker takes.**
+   This is no longer either/or: with the freeze deferred, the shim profile
+   keeps the `Machine`/`Compartment` Rust API, so the choice is about which
+   `lockdown` the daemon wants rather than about which API it can have.
+   The shim profile is proven in-tree by `thixotrope-ironhorse-worker`, is
+   what `packages/ses` specifies, and costs the four boot-script workarounds
+   in step 2.
+   The native profile would match XS instead, and needs `fx_lockdown`'s steps
+   1–4, which the engine does not have.
+   Remaining cost difference: the shim is ~576 KB of guest code evaluated at
+   every boot.
 2. **If the shim profile wins, the work is not in `ironhorse-vm` at all.**
    It is making the daemon's boot do what
    `bundle-ironhorse-worker.mjs` already does — and the obstacles that script

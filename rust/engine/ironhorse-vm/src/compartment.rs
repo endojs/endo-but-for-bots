@@ -33,13 +33,13 @@ use crate::value::{Kind, Payload, Slot};
 #[derive(Default)]
 pub struct Intrinsics {
     pub(crate) roots: Vec<crate::SlotIndex>,
-    pub(crate) locked_down: bool,
+    pub(crate) locked_down: std::cell::Cell<bool>,
 }
 
 impl Intrinsics {
     /// True after the complete primordial graph has been frozen.
     pub fn is_locked_down(&self) -> bool {
-        self.locked_down
+        self.locked_down.get()
     }
 }
 
@@ -847,7 +847,30 @@ impl Machine {
     /// Apply a prospective binding policy before installing the start globals.
     /// All ordinary primordials are still created and frozen exactly once.
     pub fn with_start_permit(permit: Option<&[String]>) -> Machine {
-        let mut interpreter = Interp::new_shared_realm_machine_with_permit(permit);
+        Self::configured(permit, true)
+    }
+
+    /// A machine whose shared intrinsic graph is built but NOT frozen, for a
+    /// guest that brings its own `lockdown()`.
+    ///
+    /// The `ses` shim repairs intrinsics before freezing them and cannot do
+    /// that to a graph already frozen, so [`Machine::new`] and the shim
+    /// exclude each other. This is the way to have both: build unfrozen, let
+    /// the guest's `lockdown()` repair and freeze, and keep the multi-
+    /// compartment API. `packages/thixotrope` already runs that shape on a
+    /// bare `Interp`; this offers it a `Machine`.
+    ///
+    /// **The caller owns the window.** Until something freezes the graph the
+    /// primordials are shared and writable, so two compartments of this
+    /// machine can signal through them. Lock down -- by guest `lockdown()` or
+    /// by [`Machine::lock_down`] -- before admitting a second compartment.
+    /// [`Intrinsics::is_locked_down`] reports the current state.
+    pub fn unfrozen_with_start_permit(permit: Option<&[String]>) -> Machine {
+        Self::configured(permit, false)
+    }
+
+    fn configured(permit: Option<&[String]>, freeze: bool) -> Machine {
+        let mut interpreter = Interp::new_shared_realm_machine_configured(permit, freeze);
         let hosts = Rc::new(crate::interp::host::HostRegistry::default());
         interpreter.attach_host_registry(&hosts);
         let realm = Rc::clone(interpreter.realm());
@@ -1110,6 +1133,17 @@ impl Machine {
 
     /// Configure the default Realm evaluator service, used by shared dynamic
     /// constructors. Machine owns the service lifetime; it is not stored in the heap.
+    /// Freeze the shared intrinsic graph that
+    /// [`Machine::unfrozen_with_start_permit`] left mutable. Idempotent, and a
+    /// no-op on a machine that was built frozen.
+    pub fn lock_down(&self) -> Result<(), Halt> {
+        self.machine
+            .interpreter
+            .try_borrow_mut()
+            .map_err(|_| Halt::MachineBusy)?
+            .lock_down_intrinsics()
+    }
+
     pub fn set_source_compiler(&self, compiler: Rc<dyn crate::SourceCompiler>) -> Result<(), Halt> {
         let mut machine = self
             .machine
