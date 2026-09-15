@@ -223,12 +223,6 @@ export const makeProviderFetchTransport = ({
               ? request.maxResponseBytes
               : maxResponseBytes;
           for (const [name, value] of Object.entries(request.headers)) {
-            const subscriptionHeader =
-              request.url ===
-                'https://chatgpt.com/backend-api/codex/responses' &&
-              ((name === 'chatgpt-account-id' &&
-                /^[A-Za-z0-9_-]{1,256}$/.test(value)) ||
-                (name === 'originator' && value === 'codex_cli_rs'));
             // The last gate before the network checks that a header is SHAPED
             // safely, not that its name was foreseen. Curating names here was
             // the fourth copy of the same pinned list — after the route, the
@@ -238,9 +232,13 @@ export const makeProviderFetchTransport = ({
             // separator and a value cannot contain CR, LF or NUL, so no header
             // can terminate itself or begin another. Which headers exist at all
             // is decided by the broker, which screens the slice's set against
-            // BROKER_OWNED_HEADERS and applies the credential after it.
-            const nameOk =
-              subscriptionHeader || /^[a-z0-9][a-z0-9-]{0,63}$/.test(name);
+            // BROKER_OWNED_HEADERS and applies the credential after it, and
+            // which ROUTE they may reach is decided by the broker too: the
+            // subscription headers used to be admitted here only for the fixed
+            // ChatGPT route, but the general name rule matches both of their
+            // names, so keeping that branch would only have read as a binding
+            // this layer no longer makes.
+            const nameOk = /^[a-z0-9][a-z0-9-]{0,63}$/.test(name);
             // HTAB is legal in a field value; the point of the rule is that
             // CR, LF and NUL are not.
             const valueOk =
