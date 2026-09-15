@@ -356,30 +356,58 @@ fn retained_generator_and_async_frames_keep_their_compartment_globals() {
     assert_eq!(compartment_eval(&b, "state.n"), "42");
 }
 
+/// The three evaluator families with no global name -- `%GeneratorFunction%`,
+/// `%AsyncFunction%` and `%AsyncGeneratorFunction%`, reached only as
+/// `Object.getPrototypeOf(function*(){}).constructor` -- were pinned to the
+/// DEFAULT realm, so a compartment's dynamic function was compiled and run
+/// against the default global. That was a cross-compartment leak, and leaving
+/// them unpinned is the fix (`ironhorse-vm/tests/realms.rs` drives all four
+/// families in both directions).
+///
+/// This test previously asserted the leak from the other side. With `answer`
+/// bound to 17 in the start compartment and 42 in `a`, it expected **17** from
+/// inside `a`, and it only found a compiler at all because the body ran in the
+/// default realm -- which is the one environment `Machine::set_source_compiler`
+/// reaches. Both halves of that were the leak, so both change together.
+///
+/// Now the unnamed families behave exactly like the named ones: they run in
+/// the CALLING compartment, see its globals, and use its evaluator service.
+/// A compartment needs its own compiler for any of them, which is the same
+/// rule `sibling_realms_keep_independent_source_compilers` pins for `eval`.
 #[test]
-fn shared_dynamic_constructors_use_the_explicit_default_evaluator_service() {
+fn shared_dynamic_constructors_use_the_calling_compartments_evaluator_service() {
     let machine = ironhorse_vm::Machine::new();
-    machine
-        .set_source_compiler(Rc::new(IronhorseSourceCompiler))
-        .unwrap();
-    let a = machine.new_compartment();
-    compartment_eval(&machine.start_compartment(), "var answer = 17; 0");
+    let mut start = machine.start_compartment();
+    start.set_source_compiler(Rc::new(IronhorseSourceCompiler));
+    let mut a = machine.new_compartment();
+    a.set_source_compiler(Rc::new(IronhorseSourceCompiler));
+    compartment_eval(&start, "var answer = 17; 0");
     compartment_eval(&a, "var answer = 42; 0");
+
+    // The named evaluator, which was always homed to the caller by the
+    // per-compartment copy `compartment_evaluator` mints, and is the reference
+    // the other three now match.
+    assert_eq!(compartment_eval(&a, "Function('return answer')()"), "42");
+
     assert_eq!(
         compartment_eval(&a, "(()=>{}).constructor('return answer')()"),
-        "17"
+        "42"
     );
     assert_eq!(
         compartment_eval(
             &a,
             "(function*(){}).constructor('yield answer')().next().value"
         ),
-        "17"
+        "42"
     );
     compartment_eval(
         &a,
         "var result; (async function(){}).constructor('return answer')().then(x => result=x); 0",
     );
     assert!(machine.run_promise_jobs().completed);
-    assert_eq!(compartment_eval(&a, "result"), "17");
+    assert_eq!(compartment_eval(&a, "result"), "42");
+
+    // The default realm keeps its own binding: nothing the compartment did
+    // reached it.
+    assert_eq!(compartment_eval(&start, "answer"), "17");
 }
