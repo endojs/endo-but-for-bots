@@ -42,11 +42,22 @@ const freePort = async () => {
   return address.port;
 };
 
-/** @param {number} port @param {string} [body] */
-const call = (port, body = '') =>
+/**
+ * @param {number} port
+ * @param {string} [body]
+ * @param {Record<string, string>} [headers]
+ */
+const call = (port, body = '', headers = {}) =>
   new Promise(resolve => {
     const outgoing = request(
-      { host: '127.0.0.1', port, path: '/', method: 'POST', agent: false },
+      {
+        host: '127.0.0.1',
+        port,
+        path: '/',
+        method: 'POST',
+        agent: false,
+        headers,
+      },
       response => {
         response.setEncoding('utf8');
         let text = '';
@@ -229,4 +240,86 @@ test.serial('the host releases a port whose adapter vat is gone', async t => {
   const answer = /** @type {any} */ (await call(port, 'b'));
   t.is(answer.status, 503, 'the request is refused');
   t.is(ports.status().bound, 0n, 'and the port was released');
+});
+
+test.serial(
+  "admission is the adapter's, and the consumer never sees a refusal",
+  async t => {
+    t.timeout(60_000);
+    const statePath = await mkdtemp(join(tmpdir(), 'thixotrope-http-admit-'));
+    t.teardown(() => rm(statePath, { recursive: true, force: true }));
+    const port = await freePort();
+
+    const ports = makeHttpPorts(nodePowers);
+    const daemon = await makeDaemon(statePath, ports);
+    t.teardown(() => ports.shutdown());
+    t.teardown(() => daemon.shutdown());
+
+    const managerVat = await daemon.createWorker({
+      debugLabel: 'http-manager',
+    });
+    const manager = await managerVat.evaluate(MANAGER_SOURCE, {
+      vats: daemon.makeResource('worker-controller'),
+    });
+    const consumerVat = await daemon.createWorker({ debugLabel: 'consumer' });
+    const consumer = await consumerVat.evaluate(CONSUMER_SOURCE);
+
+    await E(manager).serve(
+      'demo',
+      daemon.makeResource('http-port', { port }),
+      consumer,
+    );
+
+    // A cross-site request: the adapter refuses on headers alone.
+    const refused = /** @type {any} */ (
+      await call(port, 'x', { origin: 'http://evil.example' })
+    );
+    t.is(refused.status, 403);
+    t.is(
+      await E(consumer).seen(),
+      0,
+      'the consumer was never consulted for a refused request',
+    );
+
+    // Same-origin still works, and only now does the consumer see anything.
+    const served = /** @type {any} */ (await call(port, 'ok'));
+    t.deepEqual(served, { status: 200, body: 'ok:1' });
+    t.is(await E(consumer).seen(), 1);
+  },
+);
+
+test.serial('a vat can widen its own admission policy', async t => {
+  t.timeout(60_000);
+  const statePath = await mkdtemp(join(tmpdir(), 'thixotrope-http-origins-'));
+  t.teardown(() => rm(statePath, { recursive: true, force: true }));
+  const port = await freePort();
+
+  const ports = makeHttpPorts(nodePowers);
+  const daemon = await makeDaemon(statePath, ports);
+  t.teardown(() => ports.shutdown());
+  t.teardown(() => daemon.shutdown());
+
+  const managerVat = await daemon.createWorker({ debugLabel: 'http-manager' });
+  const manager = await managerVat.evaluate(MANAGER_SOURCE, {
+    vats: daemon.makeResource('worker-controller'),
+  });
+  const consumerVat = await daemon.createWorker({ debugLabel: 'consumer' });
+  const consumer = await consumerVat.evaluate(CONSUMER_SOURCE);
+
+  // Policy is guest-side now, so this needs no daemon change at all.
+  await E(manager).serve(
+    'demo',
+    daemon.makeResource('http-port', { port }),
+    consumer,
+    { origins: ['http://allowed.example'] },
+  );
+
+  const allowed = /** @type {any} */ (
+    await call(port, 'y', { origin: 'http://allowed.example' })
+  );
+  t.is(allowed.status, 200);
+  const denied = /** @type {any} */ (
+    await call(port, 'z', { origin: 'http://other.example' })
+  );
+  t.is(denied.status, 403);
 });

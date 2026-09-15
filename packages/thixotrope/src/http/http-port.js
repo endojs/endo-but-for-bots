@@ -1,5 +1,5 @@
 // @ts-check
-/** @import { HttpListenerPowers, HttpRequestDescription } from '../platform/http-listeners.js' */
+/** @import { HttpListenerPowers } from '../platform/http-listeners.js' */
 /** @import { Logger } from '../platform/logging.js' */
 /** @import { TimerPowers } from '../platform/timers.js' */
 import { Fail, q } from '@endo/errors';
@@ -8,89 +8,73 @@ import harden from '@endo/harden';
 
 import { makeInFlight } from '../in-flight.js';
 
-const BODY_LIMIT = 64 * 1024;
-const HEADER_LIMIT = 16 * 1024;
+// Ceilings, not policy. A guest may ask for less; it may not ask for more,
+// because these are enforced while bytes are arriving and nothing on the guest
+// side is in a position to do that.
+const MAX_BODY_BYTES = 64 * 1024;
+const MAX_HEADER_BYTES = 16 * 1024;
 const MAX_REQUESTS = 16;
-const DEADLINE_MS = 5000;
+const MAX_DEADLINE_MS = 30_000;
 
 /**
- * SKETCH — see designs/manual-persistence-vats.md.
+ * @param {unknown} value @param {number} ceiling @param {number} fallback
+ * @param ceiling
+ * @param fallback
+ */
+const clamp = (value, ceiling, fallback) =>
+  typeof value === 'number' && Number.isInteger(value) && value > 0
+    ? Math.min(value, ceiling)
+    : fallback;
+
+/**
+ * Authority to listen on one loopback port, granted to a guest.
  *
- * Authority over one loopback port, as a host resource.
+ * This is the whole of the host's involvement in HTTP. It opens the socket,
+ * enforces the byte and time ceilings that can only be enforced while bytes
+ * are arriving, and forwards both decisions — who is admitted, and what the
+ * answer is — to the guest that holds it. No origin policy, no routing, no
+ * knowledge of what is being served: those moved to the adapter vat, where a
+ * user can change them.
  *
  * Granted by description, so `makeResource('http-port', { port })` is authority
- * over that port and nothing else, and — being a resource — a guest's reference
- * to it is re-seated by the endpoint after a host restart rather than breaking.
- * That is what lets the durable manager keep holding it.
- *
- * Two things stay on this side because they cannot move:
- *
- * - **Admission.** `HttpListenerPowers.admit` is synchronous, so it cannot be a
- *   guest callback at all — the host has no way to await a vat mid-header. That
- *   it also runs before any body is read, and so lets a denied request cost no
- *   guest work, is a second reason rather than the deciding one.
- * - **Transport limits.** Body, header and request caps apply while bytes are
- *   arriving.
- *
- * Everything else — which ports are currently served, and by whom — belongs to
- * the ephemeral adapter vat, which is why nothing here is written down.
+ * over that port and nothing else. Being a resource, a guest's reference to it
+ * is re-seated by the endpoint after a host restart rather than breaking, which
+ * is what lets a durable manager go on holding it across incarnations.
  *
  * @param {{ httpListeners: HttpListenerPowers, logging: Logger, timers: TimerPowers }} powers
  */
 export const makeHttpPorts = ({ httpListeners, logging, timers }) => {
   const log = logging.sub('thixotrope', 'http');
 
-  /** @type {Map<number, {handler: any, listener: any}>} */
+  /** @type {Map<number, {guest: any, listener: any}>} */
   const bound = new Map();
   const requests = makeInFlight();
   let stopped = false;
 
   /**
-   * @param {number} port
-   * @param {HttpRequestDescription} request
-   */
-  const admit = (port, request) => {
-    const authority = `127.0.0.1:${port}`;
-    const origin = request.headers.origin;
-    const site = request.headers['sec-fetch-site'];
-    if (
-      request.headers.host !== authority ||
-      (origin !== undefined && origin !== `http://${authority}`) ||
-      (site !== undefined && site !== 'same-origin' && site !== 'none')
-    ) {
-      return /** @type {const} */ ({
-        allowed: false,
-        status: 403,
-        body: 'Request origin is not permitted',
-      });
-    }
-    return /** @type {const} */ ({ allowed: true });
-  };
-
-  /**
    * Release a port whose serving vat has gone.
    *
-   * The adapter is ephemeral, so its retirement is expected, not exceptional —
-   * but the socket is on this side and would otherwise stay open in front of a
-   * handler that can never answer. A failed request is the first evidence the
-   * host has, so it is where the check belongs.
+   * The adapter is ephemeral, so its death is expected rather than
+   * exceptional — but the socket is on this side, and would otherwise stay open
+   * in front of a guest that can never answer. A failed call is the first
+   * evidence the host has, so it is where the check belongs.
    *
    * @param {number} port
-   * @param {any} handler
+   * @param {any} guest
    */
-  const releaseIfGone = async (port, handler) => {
+  const releaseIfGone = async (port, guest) => {
     try {
       // eslint-disable-next-line no-underscore-dangle
-      await E(handler).__getMethodNames__();
+      await E(guest).__getMethodNames__();
       return false;
     } catch (_error) {
       const standing = bound.get(port);
-      if (standing === undefined || standing.handler !== handler) return false;
+      if (standing === undefined || standing.guest !== guest) return false;
       // Bookkeeping now, socket on the next turn. Closing a listener destroys
       // every socket on it, including the one still waiting for the answer
       // this request is about to return.
       bound.delete(port);
-      log.info('releasing port', port, 'whose handler vat is gone');
+      log.info('releasing port', port, 'whose guest vat is gone');
       timers.setTimer(() => {
         void standing.listener
           .close()
@@ -111,45 +95,61 @@ export const makeHttpPorts = ({ httpListeners, logging, timers }) => {
 
     return Far('HttpPort', {
       help: () =>
-        'listen(handler) binds this port for the host process lifetime and returns {binding}; binding.close() releases it. handler.handle({method,path,body}) must return {status,body}.',
+        'listen(guest, limits?) binds this port and returns {binding}; the guest must answer admit({method,path,headers}) with {allowed} and handle({method,path,body}) with {status,body}. binding.close() releases the port.',
       getPort: () => port,
 
-      /** @param {any} handler */
-      listen: async handler => {
+      /**
+       * @param {any} guest answers `admit` and `handle`
+       * @param {{maxBodyBytes?: number, maxRequests?: number, requestDeadlineMs?: number}} [limits]
+       */
+      listen: async (guest, limits = {}) => {
         !stopped || Fail`HTTP ports are shut down`;
-        (handler && handler[Symbol.for('passStyle')] === 'remotable') ||
-          Fail`Expected a remotable handler`;
-        const standing = bound.get(port);
-        standing === undefined || Fail`Port ${q(port)} is already bound`;
+        (guest && guest[Symbol.for('passStyle')] === 'remotable') ||
+          Fail`Expected a remotable listener guest`;
+        bound.has(port) === false || Fail`Port ${q(port)} is already bound`;
 
-        const entry = /** @type {any} */ ({ handler });
+        const maxBodyBytes = clamp(
+          limits.maxBodyBytes,
+          MAX_BODY_BYTES,
+          MAX_BODY_BYTES,
+        );
+        const entry = /** @type {any} */ ({ guest });
         entry.listener = await httpListeners.listen({
           port,
           host: '127.0.0.1',
-          maxBodyBytes: BODY_LIMIT,
-          maxResponseBytes: BODY_LIMIT,
-          maxHeaderBytes: HEADER_LIMIT,
-          maxRequests: MAX_REQUESTS,
-          requestDeadlineMs: DEADLINE_MS,
+          maxBodyBytes,
+          maxResponseBytes: maxBodyBytes,
+          maxHeaderBytes: MAX_HEADER_BYTES,
+          maxRequests: clamp(limits.maxRequests, MAX_REQUESTS, MAX_REQUESTS),
+          requestDeadlineMs: clamp(
+            limits.requestDeadlineMs,
+            MAX_DEADLINE_MS,
+            5000,
+          ),
           keepAliveTimeoutMs: 1,
-          admit: request => admit(port, request),
+          // Both decisions are the guest's. Admission reaches it before any
+          // body is read, so refusing costs whoever the request was aimed at
+          // nothing — the adapter answers, not the consumer behind it.
+          admit: async request => {
+            try {
+              return await E(guest).admit(request);
+            } catch (error) {
+              if (await releaseIfGone(port, guest))
+                return harden({
+                  allowed: false,
+                  status: 503,
+                  body: 'Service is no longer available',
+                });
+              throw error;
+            }
+          },
           handle: request =>
             requests.track(
               (async () => {
                 try {
-                  const result = await E(handler).handle(
-                    harden({
-                      method: request.method,
-                      path: request.path,
-                      body: request.body,
-                    }),
-                  );
-                  return harden({
-                    status: /** @type {number} */ (result.status),
-                    body: /** @type {string} */ (result.body),
-                  });
+                  return await E(guest).handle(request);
                 } catch (error) {
-                  if (await releaseIfGone(port, handler))
+                  if (await releaseIfGone(port, guest))
                     return harden({
                       status: 503,
                       body: 'Service is no longer available',
