@@ -13,19 +13,19 @@ import harden from '@endo/harden';
  * path. The three-state recipe machine in `http-services.js` exists only
  * because that information currently lives on the ephemeral side.
  *
- * It holds policy and the ephemeral vat holds mechanism. Consumers never
- * receive the adapter's reference, so the vat carrying the host port
- * capabilities has no memory of who asked for what, and this vat — which does
- * — survives to keep enforcing it.
+ * It holds policy; the adapter holds mechanism. Consumers never receive the
+ * adapter's reference, so the vat carrying the host port capabilities has no
+ * memory of who asked for what, and this one — which does — survives to keep
+ * enforcing it.
  *
  * Holding a consumer's handler retains that consumer's vat. That is correct: a
  * vat being served is reachable, and `stop` is how it is released.
  *
  * Self-contained: the supervisor ships this source into the manager vat,
- * along with `makeEphemeralVatKeeper` and the adapter's source.
+ * along with `makeAdapterKeeper` and the adapter's source.
  *
  * @param {object} options
- * @param {any} options.makeKeeper `makeEphemeralVatKeeper`
+ * @param {any} options.makeKeeper `makeAdapterKeeper`
  * @param {any} options.vats a ThixotropeWorkerController
  * @param {string} options.adapterSource `makeHttpAdapter`, as source
  */
