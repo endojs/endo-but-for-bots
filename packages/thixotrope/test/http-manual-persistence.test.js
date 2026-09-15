@@ -130,9 +130,12 @@ test.serial('a served vat survives a host restart it never saw', async t => {
     d1.publish(consumer, 'consumer-cap');
 
     const portCap = d1.makeResource('http-port', { port });
-    t.deepEqual(await E(manager).serve('demo', portCap, consumer), {
-      id: 'demo',
+    const listener = await E(manager).grant(portCap);
+    t.like(await E(listener).listen(consumer), {
+      id: `${port}`,
       port,
+      desired: 'open',
+      status: 'listening',
     });
     t.deepEqual(await call(port, 'one'), { status: 200, body: 'one:1' });
     t.is(ports.status().bound, 1n, 'the host holds one socket');
@@ -158,7 +161,11 @@ test.serial('a served vat survives a host restart it never saw', async t => {
     t.is(d2.listWorkerIds().length, 2, 'the adapter did not come back');
 
     const manager = await d2.lookup('manager-cap');
-    t.deepEqual(await E(manager).list(), ['demo'], 'the manager remembers');
+    t.like(
+      (await E(manager).list())[0],
+      { id: `${port}`, port, desired: 'open' },
+      'the manager remembers what was asked for',
+    );
 
     // What an eager pin would call on wake.
     t.deepEqual(await E(manager).reconcile(), [port]);
@@ -189,11 +196,9 @@ test.serial('reconcile is idempotent within one host lifetime', async t => {
   const consumerVat = await daemon.createWorker({ debugLabel: 'consumer' });
   const consumer = await consumerVat.evaluate(CONSUMER_SOURCE);
 
-  await E(manager).serve(
-    'demo',
-    daemon.makeResource('http-port', { port }),
-    consumer,
-  );
+  await E(
+    await E(manager).grant(daemon.makeResource('http-port', { port })),
+  ).listen(consumer);
   t.deepEqual(await E(manager).reconcile(), [port]);
   t.deepEqual(await E(manager).reconcile(), [port]);
   t.is(ports.status().bound, 1n, 'still one socket, not three');
@@ -219,11 +224,9 @@ test.serial('the host releases a port whose adapter vat is gone', async t => {
   const consumerVat = await daemon.createWorker({ debugLabel: 'consumer' });
   const consumer = await consumerVat.evaluate(CONSUMER_SOURCE);
 
-  await E(manager).serve(
-    'demo',
-    daemon.makeResource('http-port', { port }),
-    consumer,
-  );
+  await E(
+    await E(manager).grant(daemon.makeResource('http-port', { port })),
+  ).listen(consumer);
   t.deepEqual(await call(port, 'a'), { status: 200, body: 'a:1' });
 
   // Retire the adapter out from under the host, as a crash would.
@@ -264,11 +267,9 @@ test.serial(
     const consumerVat = await daemon.createWorker({ debugLabel: 'consumer' });
     const consumer = await consumerVat.evaluate(CONSUMER_SOURCE);
 
-    await E(manager).serve(
-      'demo',
-      daemon.makeResource('http-port', { port }),
-      consumer,
-    );
+    await E(
+      await E(manager).grant(daemon.makeResource('http-port', { port })),
+    ).listen(consumer);
 
     // A cross-site request: the adapter refuses on headers alone.
     const refused = /** @type {any} */ (
@@ -307,12 +308,9 @@ test.serial('a vat can widen its own admission policy', async t => {
   const consumer = await consumerVat.evaluate(CONSUMER_SOURCE);
 
   // Policy is guest-side now, so this needs no daemon change at all.
-  await E(manager).serve(
-    'demo',
-    daemon.makeResource('http-port', { port }),
-    consumer,
-    { origins: ['http://allowed.example'] },
-  );
+  await E(
+    await E(manager).grant(daemon.makeResource('http-port', { port })),
+  ).listen(consumer, { origins: ['http://allowed.example'] });
 
   const allowed = /** @type {any} */ (
     await call(port, 'y', { origin: 'http://allowed.example' })
@@ -344,11 +342,9 @@ test.serial(
       const consumerVat = await d1.createWorker({ debugLabel: 'consumer' });
       const consumer = await consumerVat.evaluate(CONSUMER_SOURCE);
 
-      await E(manager).serve(
-        'demo',
-        d1.makeResource('http-port', { port }),
-        consumer,
-      );
+      await E(
+        await E(manager).grant(d1.makeResource('http-port', { port })),
+      ).listen(consumer);
       t.deepEqual(await call(port, 'one'), { status: 200, body: 'one:1' });
 
       // A start notice, not a pin: the manager is off the request path, so it
