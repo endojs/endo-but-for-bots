@@ -709,35 +709,36 @@ Fixing `run_worker`'s refusal text is Phase 5's job (it is stale about the
 host-function surface too); choosing what replaces this clause is Phase 4's
 first deliverable after the bundling decision.
 
-**The obstacle, which is not the one the first draft implied.**
+**The obstacle, measured rather than quoted.**
 Two of the three bundles already dual-run.
-The third is not in the tree: `rust/endo/xsnap/src/ses_boot.js` does not
-exist in a checkout.
-The engine records exactly why, and has ledgered it:
+The third, `rust/endo/xsnap/src/ses_boot.js`, is not in a checkout: it is
+gitignored (`.gitignore:35`) and generated.
 
-> The third boot step — **`ses_boot.js`** (SES `lockdown()` + the
-> HandledPromise shim) — is **not committed**: it is a ~1 MB build artifact
-> the daemon bundler (`rollup` over `@endo/*`) generates into
-> `src/ses_boot.js` before the `include_str!`, absent in a fresh checkout.
-> Bundling the full SES distribution is out of this engine workspace's
-> scope, so `ses_boot.js` is a **named, ledgered boot-bundle gap**
-> (`boot:ses-lockdown-bundle`), not dual-run here.
+An earlier draft of this document described it, on the strength of the
+engine's own comment, as "a ~1 MB build artifact" whose bundling is "out of
+this engine workspace's scope", and treated that as the phase's blocking
+question.
+Generating it says otherwise.
+`yarn bundle:xs` produces it from a clean checkout in about a minute, and the
+result is **70 KB** — the engine's comment at `ironhorse-262/src/lib.rs:700`
+overstates it by more than tenfold, and is closer to `worker_bootstrap.js`
+(750 KB) or `daemon_bootstrap.js` (2.4 MB), which the same command also
+generates.
+Correcting that is a Phase 6 item in its own right; it is recorded here
+because this document repeated the figure and gave it weight the file does
+not carry.
 
-(`ironhorse-262/src/lib.rs:699-707`; the ledger row is
-`rust/engine/CHANGELOG.md:900`.)
-`rust/endo/xsnap/src/lib.rs:944` still `include_str!`s it, and the repo
-generates it with `yarn bundle:xs`
-(`packages/daemon/scripts/bundle-bus-worker-xs-ses-boot.mjs`, per
-`rust/endo/README.md:22`).
-
-So the first question of this phase is not a VM question at all.
-It is: **does the engine workspace take a JavaScript-toolchain dependency,
-commit a ~1 MB generated bundle, or generate it in CI?**
-Whoever picks the phase up decides that before writing engine code, because
-the answer decides whether the bar can be run in `ironhorse-262` at all, and
-the current answer on record is "out of this engine workspace's scope".
-The XL size assumes that decision is made and the bundle is reachable; it
-does not price a cross-workspace build change.
+What survives is a real but smaller question, and it is a build question
+rather than a VM one: **`ironhorse-262`'s dual-run harness `include_str!`s
+`polyfills.js` and `host_aliases.js` straight out of `rust/endo/xsnap/src/`
+(`daemon_boot_bundle_sources`, `:708-725`), so adding `ses_boot.js` is the
+same mechanism — but only when the file exists, which means the engine
+workspace's CI would have to run `yarn bundle:xs` (node, yarn, and the
+`@endo/*` graph) before `cargo test`.**
+That is a CI-scope decision, not a ~1 MB artifact problem, and the ledger row
+`boot:ses-lockdown-bundle` (`rust/engine/CHANGELOG.md:900`) should be
+re-worded to say so once it is made.
+The XL size still does not price that CI change.
 
 **If the bundles do not agree.** The bar is result agreement on three
 programs, and a divergence in `ses_boot.js` is the expected outcome of a
@@ -1140,15 +1141,20 @@ and a reader working from it alone will re-do them.
       Until it lands, a supervisor should bound its retries rather than trust
       that class to terminate them.
 - [ ] **Decide `ses_boot.js`'s provenance before Phase 4 starts.** The bundle
-      is not in the tree, is a ~1 MB rollup artifact over `@endo/*`, and is
-      on the record as "out of this engine workspace's scope" and ledgered
-      as `boot:ses-lockdown-bundle`.
-      Take the JS-toolchain dependency in the engine workspace, commit the
-      generated bundle, or generate it in CI — the answer decides whether
-      stage 4's bar can be run in `ironhorse-262` at all, and it is a
-      cross-workspace call, not an engine one.
-      This is the largest genuine unknown in this document, and the XL size
-      on Phase 4 does not price it.
+      is gitignored and generated, not committed.
+      It is 70 KB and `yarn bundle:xs` produces it from a clean checkout in
+      about a minute, so the question is not the artifact — it is whether the
+      engine workspace's CI runs node and yarn over the `@endo/*` graph
+      before `cargo test`, which is what makes the file exist where
+      `ironhorse-262` can `include_str!` it.
+      Commit the bundle, generate it in CI, or keep the bar out of the engine
+      workspace and run it from `rust/endo`.
+      The XL size on Phase 4 does not price that CI change.
+- [ ] **Re-word the `boot:ses-lockdown-bundle` ledger row and the comment it
+      came from** (`rust/engine/CHANGELOG.md:900`,
+      `ironhorse-262/src/lib.rs:700`). Both call `ses_boot.js` a ~1 MB
+      artifact; it is 70 KB. The ~1 MB figure fits `worker_bootstrap.js`,
+      which the same command generates.
 - [ ] **Own the `FromAsync*` documentation half.** Stating the three
       checkpoint refusals on `PersistentMachine` is gated on nothing and
       could land this week; Phase 5 only requires that it has landed by the
