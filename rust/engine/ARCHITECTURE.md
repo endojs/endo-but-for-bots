@@ -87,8 +87,8 @@ The property-key namespace and code storage remain shared throughout those calls
 object identity and relocated string/BigInt payloads across collection.
 Raw heap-backed Slot endowments remain refused.
 Host rebinding updates one property through descriptor semantics and respects integrity.
-An intrinsic permit controls global bindings, not transitive capabilities.
-`HeapStoreOptions::intrinsic_permit` requires an explicit host declaration:
+A global-names list controls global bindings, not transitive capabilities.
+`HeapStoreOptions::global_names` requires an explicit host declaration:
 `None` allows all future intrinsic bindings; a list allows only those names
 and `globalThis`.
 Persistent workers apply it before fresh linking and reapply it after resume

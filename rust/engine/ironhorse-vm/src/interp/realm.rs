@@ -30,7 +30,26 @@ pub struct CompartmentEnvironment {
     pub(super) binding_names: std::collections::BTreeSet<u16>,
     pub(super) global_props: std::collections::HashMap<u16, crate::value::SlotIndex>,
     pub(super) owner: Option<std::rc::Weak<()>>,
-    pub(super) intrinsic_permit: Option<std::collections::BTreeSet<SymbolName>>,
+    /// Which intrinsic names may be BOUND as globals in this environment --
+    /// the live filter, and the authority: `interp/link.rs` consults exactly
+    /// this, at initial linking and at every later relink. `None` binds the
+    /// standard set; `Some(list)` binds only those names, plus `globalThis`.
+    ///
+    /// It is per-environment, and environments DO NOT INHERIT. Each
+    /// compartment creates its own environment and `create_environment`
+    /// assigns this outright, so a compartment declaring `None` is
+    /// unrestricted however narrow the machine's start realm is, and one
+    /// declaring a list may name something the start realm omitted
+    /// (`tests/realms.rs`). A machine-wide list looks like a ceiling and is
+    /// not one.
+    ///
+    /// The mechanism is the whole of it, and it is small: the binding is
+    /// created or it is not. Nothing leaves the intrinsic graph, so every
+    /// denied intrinsic stays reachable by any route that is not a bare name
+    /// -- `({}).constructor.constructor` still reaches `Function` under
+    /// `Some(vec![])`. This is not SES's `permits.js`, which governs which
+    /// PROPERTIES of intrinsics survive lockdown and is enforced by deletion.
+    pub(super) global_names: Option<std::collections::BTreeSet<SymbolName>>,
     pub(super) unhandled_rejection: Option<crate::value::SlotIndex>,
     pub(super) compiler_required: bool,
     pub(super) shared_compiler: Option<std::rc::Weak<dyn SourceCompiler>>,
@@ -47,7 +66,7 @@ impl CompartmentEnvironment {
             source_compiler: None,
             shared_compiler: None,
             compiler_required: false,
-            intrinsic_permit: None,
+            global_names: None,
             owner: None,
             unhandled_rejection: None,
         }
@@ -128,11 +147,13 @@ impl Interp {
     /// Build the complete intrinsic graph before any guest can observe it.
     /// Program-local symbol operands will be relinked to this machine table.
     pub(crate) fn new_shared_realm_machine() -> Self {
-        Self::new_shared_realm_machine_with_permit(None)
+        Self::new_shared_realm_machine_with_global_names(None)
     }
 
-    pub(crate) fn new_shared_realm_machine_with_permit(permit: Option<&[String]>) -> Self {
-        Self::new_shared_realm_machine_configured(permit, true)
+    pub(crate) fn new_shared_realm_machine_with_global_names(
+        global_names: Option<&[String]>,
+    ) -> Self {
+        Self::new_shared_realm_machine_configured(global_names, true)
     }
 
     /// `freeze = false` builds the shared realm and leaves its intrinsic graph
@@ -151,11 +172,11 @@ impl Interp {
     /// compartment. SES has the same window before its own `lockdown()` and
     /// the same rule about it.
     pub(crate) fn new_shared_realm_machine_configured(
-        permit: Option<&[String]>,
+        global_names: Option<&[String]>,
         freeze: bool,
     ) -> Self {
         let mut machine = Self::new();
-        machine.set_intrinsic_permit(permit);
+        machine.set_global_names(global_names);
         let mut names: Vec<SymbolName> = crate::default_keys::DEFAULT_KEYS
             .iter()
             .copied()
@@ -271,7 +292,7 @@ impl Interp {
 
     pub(crate) fn create_environment(
         &mut self,
-        permit: Option<std::collections::BTreeSet<SymbolName>>,
+        global_names: Option<std::collections::BTreeSet<SymbolName>>,
         owner: std::rc::Weak<()>,
         modules: std::rc::Rc<std::cell::RefCell<crate::ModuleGraph>>,
     ) -> Result<crate::value::SlotIndex, Halt> {
@@ -282,7 +303,7 @@ impl Interp {
                 .slots
                 .alloc(Slot::instance(crate::value::SlotIndex::NULL));
             let mut realm = CompartmentEnvironment::new(global);
-            realm.intrinsic_permit = permit;
+            realm.global_names = global_names;
             realm.owner = Some(owner);
             realm.modules = modules;
             let old = std::mem::replace(&mut self.environment, realm);

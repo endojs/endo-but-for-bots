@@ -298,7 +298,7 @@ impl Interp {
         // `%AsyncFunction%` or `%AsyncGeneratorFunction%` deliberately has NO
         // environment, so that it compiles in whichever compartment calls it
         // rather than in the realm that happened to build it
-        // (`interp/realm.rs`, `new_shared_realm_machine_with_permit`). Their
+        // (`interp/realm.rs`, `new_shared_realm_machine_with_global_names`). Their
         // environment is derived, not persisted. The per-compartment `eval`
         // and `Function` copies `compartment_evaluator` mints ARE persisted
         // the ordinary way: they are not boot callables, so they fall through
@@ -661,7 +661,7 @@ impl Interp {
     pub(crate) fn attach_environment_policy(
         &mut self,
         global: u32,
-        permit: Option<&[String]>,
+        global_names: Option<&[String]>,
         compiler: Option<&std::rc::Rc<dyn SourceCompiler>>,
     ) -> Result<(), Halt> {
         let env = self
@@ -670,8 +670,8 @@ impl Interp {
         if env.compiler_required && compiler.is_none() {
             return Err(Halt::Refused("machine:missing-restored-compiler"));
         }
-        env.intrinsic_permit =
-            permit.map(|names| names.iter().map(|n| SymbolName::from(n.as_str())).collect());
+        env.global_names =
+            global_names.map(|names| names.iter().map(|n| SymbolName::from(n.as_str())).collect());
         env.shared_compiler = compiler.map(std::rc::Rc::downgrade);
         env.compiler_required = compiler.is_some();
         Ok(())

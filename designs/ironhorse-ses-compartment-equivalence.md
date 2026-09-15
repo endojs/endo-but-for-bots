@@ -17,14 +17,15 @@ the default realm, closing a confinement hole a compartment could read and
 write through
 (`tests/realms.rs::every_reachable_evaluator_compiles_in_the_calling_compartment`).
 
-`Machine::unfrozen_with_start_permit` and `Machine::lock_down` separate the
+`Machine::unfrozen_with_start_global_names` and `Machine::lock_down` separate the
 intrinsic freeze from machine construction, which is what made the two ways of
 getting a guest SES surface look mutually exclusive (§ What decides the
 profile). `tests/ses_boot_intrinsics.rs` pins all three shapes.
 
-And `CompartmentOptions::intrinsic_permit`'s doc comment now states what it
-actually does, which is much less than its name suggests (§ Equivalence:
-`Compartment`).
+And `CompartmentOptions::global_names` — renamed from `intrinsic_permit`,
+whose "permit" read as SES's `permits.js`, the table
+`removeUnpermittedIntrinsics` *deletes* against — now says in its name and its
+doc comment what it actually does (§ Equivalence: `Compartment`).
 
 Everything else here is a handoff: what the stage-4 SES gap actually is,
 measured rather than assumed, and what a reader who was not present needs in
@@ -158,7 +159,7 @@ That made the two look mutually exclusive: the multi-compartment `Machine` API
 came only with the construction-time freeze, and the shim came only with a
 bare `Interp`.
 **It was the timing, not the API.**
-`Machine::unfrozen_with_start_permit` builds the same shared realm and leaves
+`Machine::unfrozen_with_start_global_names` builds the same shared realm and leaves
 the graph mutable; the guest's own `lockdown()` then repairs and freezes it,
 and the compartment API survives.
 Measured: on such a machine the shim evaluates to `'ok'`, the census goes from
@@ -386,7 +387,7 @@ SES's constructor options (`packages/ses/src/compartment.js:353-366`), XS's
 | `transforms`, `__shimTransforms__` | — | — | shim-only |
 | `__noNamespaceBox__`, `noAggregateLoadErrors` | — | — | shim-only |
 | — | `globalLexicals` (`:3030`) | — | XS-only; per-name writability from the descriptor |
-| — | — | `intrinsic_permit` | IronHorse-only; see below |
+| — | — | `global_names` | IronHorse-only; see below |
 
 The hooks are the load-bearing row.
 `has_resolve_hook` exists so a constructor-shape probe can observe it; it does
@@ -397,10 +398,10 @@ XS is the useful reference precisely because it is honest about the same
 boundary: it callable-checks the hooks it honours and pushes `undefined` for
 the two it does not.
 
-`intrinsic_permit` is IronHorse's own, and measuring it is worse than its old
+`global_names` is IronHorse's own, and measuring it is worse than its old
 doc comment admitted.
 It controls which names are bound as globals and nothing else.
-Under `intrinsic_permit: Some(vec![])` — documented as "only globalThis and
+Under `global_names: Some(vec![])` — documented as "only globalThis and
 explicit endowments" — a guest still reads `({}).constructor.name` as
 `"Object"` and `({}).constructor.constructor.name` as `"Function"`, and
 evaluates `({}).constructor.constructor('return 1 + 1')()` to `2`.
@@ -408,13 +409,32 @@ The dynamic evaluator is reachable off any object literal.
 There is a second route the field's old doc comment did name and this one
 should keep: `Compartment::define_global_value` shares a `RootedValue` by
 reference on purpose (`compartment.rs:414`), so anything reachable from an
-endowed object is reachable whatever the permit says — only raw heap-backed
+endowed object is reachable whatever the list says — only raw heap-backed
 `Slot` endowments are refused.
-Neither route is SES's attenuation model or XS's: both close the first by
+
+And a third, found while renaming the field and now pinned by
+`tests/realms.rs`: **`global_names` is per-environment, and environments do
+not inherit.**
+`Machine::with_start_global_names` configures the start realm, but a
+compartment does not run in that realm — `Compartment::evaluate` calls
+`create_environment`, which assigns `realm.global_names` outright.
+So on a machine declaring `Some(["Object"])`, a compartment declaring `None`
+reads `typeof Math` as `"object"` and `typeof eval` as `"function"`: fully
+unrestricted.
+Nor is the machine's list a ceiling the compartment narrows from — a
+compartment may name something the machine omitted.
+A machine-wide list looks like a boundary around everything on that machine
+and is not one, which is the same point as the two routes above, reached from
+a different direction.
+No route here is SES's attenuation model or XS's: both close the first by
 replacing the function-family prototypes' `.constructor` with a throwing stub
 during `lockdown()`, which is `fx_lockdown` step 2 and the one step IronHorse
 cannot take while it freezes at construction rather than on request.
-The doc comment now says so; renaming the field is left to whoever owns the
+The doc comment now says so, and the field has since been renamed from
+`intrinsic_permit` to `global_names`, whose old "permit" read as SES's
+`permits.js` — the table `removeUnpermittedIntrinsics` deletes against,
+which is the opposite of what this does.
+What remains is left to whoever owns the
 API.
 
 ### Module resolution: the arity is wrong, not just the type
@@ -477,7 +497,7 @@ XS takes none.
 | | SES shim | XS native | IronHorse |
 |---|---|---|---|
 | transitive freeze of intrinsics | yes | yes | **yes** |
-| function-family constructors poisoned | yes | yes | no — which is why `intrinsic_permit` cannot confine |
+| function-family constructors poisoned | yes | yes | no — which is why `global_names` cannot confine |
 | Date/Math attenuated for compartments | yes | partly (Date's prototype is poisoned realm-wide) | no |
 | permits table / unpermitted removal | yes | no | no |
 | property-override enablement | yes (`overrideTaming`) | no | no |
@@ -564,7 +584,7 @@ The shim is the larger one — and it is the one already running on IronHorse.
       are inexpressible and the map is a pre-resolved bundle
       (§ Module resolution). Threading a referrer is a prerequisite for any
       real `resolveHook`.
-- [x] Establish whether `intrinsic_permit` can be made to mean SES attenuation.
+- [x] Establish whether `global_names` can be made to mean SES attenuation.
       (The rename it suggests is still open — see below.)
       Measured 2026-09-15: it cannot, as things stand — every denied intrinsic
       including `Function` stays reachable through a prototype chain, and

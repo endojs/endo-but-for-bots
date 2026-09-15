@@ -30,7 +30,7 @@ fn persistent_compiler_is_attached_at_boot_resume_and_rewind() {
         signature: "runtime-compiler-test".to_string(),
         cadence: CadencePolicy::default(),
         meter: MeterBounds::per_crank(200_000),
-        intrinsic_permit: None,
+        global_names: None,
     };
     let mut machine = PersistentMachine::open(&options).unwrap();
     assert_eq!(
@@ -70,14 +70,14 @@ fn ephemeral_dynamic_source_stays_under_the_crank_budget() {
 }
 
 #[test]
-fn persistent_intrinsic_permit_survives_boot_resume_and_rewind() {
+fn persistent_global_names_survive_boot_resume_and_rewind() {
     let dir = tempfile::tempdir().unwrap();
     let mut options = HeapStoreOptions {
-        path: dir.path().join("intrinsic-permit.sqlite"),
-        signature: "intrinsic-permit-test".to_string(),
+        path: dir.path().join("global-names.sqlite"),
+        signature: "global-names-test".to_string(),
         cadence: CadencePolicy::default(),
         meter: MeterBounds::per_crank(200_000),
-        intrinsic_permit: Some(vec!["JSON".to_string()]),
+        global_names: Some(vec!["JSON".to_string()]),
     };
     fn assert_denied(machine: &mut PersistentMachine, name: &str) {
         // The first crank interns the denied name through JSON's runtime key
@@ -106,7 +106,7 @@ fn persistent_intrinsic_permit_survives_boot_resume_and_rewind() {
 
     // The supervisor explicitly chooses full binding authority on a later
     // open. Existing bindings and deletions are untouched; new names may bind.
-    options.intrinsic_permit = None;
+    options.global_names = None;
     let mut machine = PersistentMachine::open(&options).unwrap();
     assert_eq!(machine.eval("typeof Date").unwrap().result, "function");
     machine.close().unwrap();

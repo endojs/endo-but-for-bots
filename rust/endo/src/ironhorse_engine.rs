@@ -826,7 +826,7 @@ pub mod engine {
         /// `globalThis`. This host policy is not stored: replicas must agree
         /// out of band. It cannot revoke bindings already in the heap or
         /// capabilities reachable through prototypes.
-        pub intrinsic_permit: Option<Vec<String>>,
+        pub global_names: Option<Vec<String>>,
     }
 
     /// The checkpoint/collect cadence a [`PersistentMachine`] runs
@@ -968,7 +968,7 @@ pub mod engine {
         /// an armed meter with none. There is no path through this type
         /// that runs a crank without the policy in force.
         meter: MeterBounds,
-        intrinsic_permit: Option<Vec<String>>,
+        global_names: Option<Vec<String>>,
         /// The absolute computron ceiling the CURRENT crank runs under,
         /// shared with the installed host callback and re-pointed at
         /// every crank start to `meter index at start + crank_limit`.
@@ -1063,7 +1063,7 @@ pub mod engine {
                     // to the store, so the very first crank runs
                     // bounded and epoch 1 already carries the armed
                     // meter state.
-                    let boot = VmMachine::with_start_permit(options.intrinsic_permit.as_deref());
+                    let boot = VmMachine::with_start_global_names(options.global_names.as_deref());
                     boot.set_source_compiler(std::rc::Rc::new(
                         ironhorse_runtime::IronhorseSourceCompiler,
                     ))
@@ -1096,7 +1096,7 @@ pub mod engine {
                         collect_failures: 0,
                         last_collect_error: None,
                         meter: options.meter.clone(),
-                        intrinsic_permit: options.intrinsic_permit.clone(),
+                        global_names: options.global_names.clone(),
                         crank_ceiling,
                     })
                 }
@@ -1106,7 +1106,7 @@ pub mod engine {
                         store.clone(),
                         &signature,
                         &options.meter,
-                        &options.intrinsic_permit,
+                        &options.global_names,
                         &crank_ceiling,
                     )?;
                     // The durable crank total the store already carries:
@@ -1126,7 +1126,7 @@ pub mod engine {
                         collect_failures: 0,
                         last_collect_error: None,
                         meter: options.meter.clone(),
-                        intrinsic_permit: options.intrinsic_permit.clone(),
+                        global_names: options.global_names.clone(),
                         crank_ceiling,
                     })
                 }
@@ -1158,7 +1158,7 @@ pub mod engine {
             store: std::rc::Rc<std::cell::RefCell<ironhorse_store_sqlite::SqliteHeapStore>>,
             signature: &ironhorse_snapshot::Signature,
             meter: &MeterBounds,
-            permit: &Option<Vec<String>>,
+            global_names: &Option<Vec<String>>,
             ceiling: &std::rc::Rc<std::cell::Cell<u64>>,
         ) -> Result<(ironhorse_snapshot::machine::SharedStoreSession, Compartment), MachineError>
         {
@@ -1178,7 +1178,7 @@ pub mod engine {
                     let environments = [(
                         ids[0],
                         ironhorse_vm::EnvironmentPolicy {
-                            intrinsic_permit: permit.clone(),
+                            global_names: global_names.clone(),
                             source_compiler: Some(std::rc::Rc::new(
                                 ironhorse_runtime::IronhorseSourceCompiler,
                             )),
@@ -1246,7 +1246,7 @@ pub mod engine {
                 self.store.clone(),
                 &self.signature,
                 &self.meter,
-                &self.intrinsic_permit,
+                &self.global_names,
                 &self.crank_ceiling,
             )?;
             self.start = Some(start);
@@ -1819,7 +1819,7 @@ pub mod engine {
                 signature: "standalone-profile".into(),
                 cadence: CadencePolicy::default(),
                 meter: MeterBounds::default(),
-                intrinsic_permit: None,
+                global_names: None,
             };
             let mut store = ironhorse_store_sqlite::SqliteHeapStore::open(&options.path).unwrap();
             let vm = ironhorse_vm::Interp::new();
@@ -1853,7 +1853,7 @@ pub mod engine {
                 signature: "collector-panic".to_string(),
                 cadence: CadencePolicy::default(),
                 meter: MeterBounds::default(),
-                intrinsic_permit: None,
+                global_names: None,
             };
             let mut machine = PersistentMachine::open(&options).unwrap();
             machine
@@ -1909,7 +1909,7 @@ pub mod engine {
                     collect_every: 1,
                 },
                 meter: MeterBounds::default(),
-                intrinsic_permit: None,
+                global_names: None,
             };
             let mut machine = PersistentMachine::open(&options).unwrap();
             let outcome = machine.eval(

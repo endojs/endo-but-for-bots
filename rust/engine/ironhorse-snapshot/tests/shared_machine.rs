@@ -32,7 +32,7 @@ fn restore(bytes: &[u8], signature: &Signature) -> Machine {
             (
                 EnvironmentId(id),
                 EnvironmentPolicy {
-                    intrinsic_permit: None,
+                    global_names: None,
                     source_compiler: None,
                     name: None,
                     has_resolve_hook: false,
@@ -169,7 +169,7 @@ fn empty_policy(ids: &[EnvironmentId]) -> MachineRestorePolicy {
                 (
                     *id,
                     EnvironmentPolicy {
-                        intrinsic_permit: None,
+                        global_names: None,
                         source_compiler: None,
                         name: None,
                         has_resolve_hook: false,
@@ -391,7 +391,7 @@ fn restored_prospective_permit_applies_to_computed_names_and_preserves_deletions
     for delete in [false, true] {
         let m = Machine::new();
         let a = m.compartment(CompartmentOptions {
-            intrinsic_permit: Some(vec![]),
+            global_names: Some(vec![]),
             ..Default::default()
         });
         let mut b = m.new_compartment();
@@ -405,7 +405,7 @@ fn restored_prospective_permit_applies_to_computed_names_and_preserves_deletions
             );
         }
         let id = a.snapshot_id().unwrap();
-        let restored = roundtrip(&m); // Explicitly reattach an unrestricted prospective permit.
+        let restored = roundtrip(&m); // Explicitly reattach an unrestricted prospective global-names list.
         let a = restored.claim_compartment(id).unwrap();
         assert_eq!(
             eval(&a, "typeof globalThis['Da' + 'te']"),

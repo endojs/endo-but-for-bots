@@ -159,14 +159,14 @@ fn caught_native_callback_panics_do_not_strand_siblings() {
 }
 
 #[test]
-fn realm_permit_applies_at_creation_and_later_relinking() {
+fn realm_global_names_apply_at_creation_and_later_relinking() {
     let machine = Machine::new();
     let empty = machine.compartment(CompartmentOptions {
-        intrinsic_permit: Some(vec![]),
+        global_names: Some(vec![]),
         ..Default::default()
     });
     let selective = machine.compartment(CompartmentOptions {
-        intrinsic_permit: Some(vec!["Object".into()]),
+        global_names: Some(vec!["Object".into()]),
         ..Default::default()
     });
     assert_eq!(
@@ -776,5 +776,45 @@ fn every_reachable_evaluator_compiles_in_the_calling_compartment() {
     assert_eq!(
         eval(&start, "({}).constructor.constructor('return answer')()"),
         "default"
+    );
+}
+
+/// `global_names` is PER-ENVIRONMENT, and environments do not inherit.
+///
+/// `Machine::with_start_global_names` configures the START realm. A
+/// compartment does not run in that realm -- `Compartment::evaluate` calls
+/// `create_environment`, which assigns `realm.global_names = global_names`
+/// outright -- so a compartment constructed with `None` is UNRESTRICTED no
+/// matter how narrow the machine's own list is.
+///
+/// This is worth a test rather than a comment because the shape invites the
+/// opposite reading: a machine-wide list looks like a ceiling and is not one.
+/// It is another face of the same point as `global_names` not confining at
+/// all (see `designs/ironhorse-ses-compartment-equivalence.md`): the list is a
+/// convenience over which names get bound, never a boundary.
+#[test]
+fn a_compartment_declaring_no_global_names_is_unrestricted_whatever_the_machine_declared() {
+    let machine = Machine::with_start_global_names(Some(&["Object".to_string()]));
+
+    let unrestricted = machine.compartment(CompartmentOptions {
+        global_names: None,
+        ..Default::default()
+    });
+    assert_eq!(
+        eval(&unrestricted, "typeof Math + ':' + typeof eval"),
+        "object:function",
+        "a `None` compartment takes the standard set, not the machine's list"
+    );
+
+    // The machine's list is not a ceiling the compartment's list narrows from
+    // either: a compartment may name something the machine's list omits.
+    let wider = machine.compartment(CompartmentOptions {
+        global_names: Some(vec!["Math".into()]),
+        ..Default::default()
+    });
+    assert_eq!(
+        eval(&wider, "typeof Math + ':' + typeof Object"),
+        "object:undefined",
+        "the compartment's own list decides, including names the machine omitted"
     );
 }
