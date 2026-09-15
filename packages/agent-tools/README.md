@@ -66,7 +66,7 @@ This package still does not map the tool record to MCP `outputSchema` or
 | Path | Purpose |
 | --- | --- |
 | `src/tool.js` | Provider-independent `makeTool` and `ToolRecord`. |
-| `src/json-tools/` | Parked JSON wrappers for Git, mounts, filesystem, shell, and HTTP. |
+| `src/json-tools/` | Parked JSON wrappers for Git, mounts, filesystem, shell, HTTP, and the package manager. |
 | `src/code-mode/` | Evaluation tool, Compartment host, daemon host, and declaration formatting. |
 | `src/code-mode-globals/` | Per-capability global descriptor factories for the local filesystem, Shell, HTTP, Git, and GitRemote, plus the workspace seam helpers. |
 | `src/adapters/` | Pi and SmallCaps bridges; MCP, Codex, and Claude Code shapes are planned. |
@@ -95,8 +95,18 @@ import {
   makeMountFsTools,
   makeShellTool,
   makeHttpTool,
+  makePackageManagerTools,
 } from '@endo/agent-tools';
 ```
+
+`makePackageManagerTools` projects the actually granted package-manager facet.
+A reader yields `detectPackageManager` and `listPackageScripts`; a safe
+installer also yields `installDependencies`, whose schema cannot enable
+lifecycle execution; only a project executor yields `runPackageScript`.
+Unrecognized capabilities fail closed to the reader catalog.
+The package-manager group is a peer of the filesystem, Git, remote, and shell
+groups in `makeWorkspaceTools`, so granting it does not grant any sibling
+group.
 
 Scoped imports expose each layer:
 

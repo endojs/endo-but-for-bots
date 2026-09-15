@@ -82,6 +82,7 @@ test('agent-tools scoped exports resolve the relocated surfaces', async t => {
       'makeMountListTool',
       'makeMountReadTool',
       'makeMountStatTool',
+      'makePackageManagerTools',
       'makeShellTool',
       'makeTool',
       'makeWorkspaceTools',
@@ -153,6 +154,7 @@ test('agent-tools scoped exports resolve the relocated surfaces', async t => {
     '@endo/agent-tools/json-tools/http.js export surface',
   );
 
+  t.is(typeof root.makePackageManagerTools, 'function');
   // Pin the public runtime surface of the nested code-mode support modules.
   t.is(typeof evaluate.makeEvaluateTool, 'function');
   t.is(typeof evaluate.EVALUATE_PARAMETERS, 'object');
@@ -298,6 +300,7 @@ test('agent-tools scoped exports resolve the relocated surfaces', async t => {
       'makeMountListTool',
       'makeMountReadTool',
       'makeMountStatTool',
+      'makePackageManagerTools',
       'makeShellTool',
       'makeTool',
       'makeWorkspaceTools',
