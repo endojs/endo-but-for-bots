@@ -42,6 +42,10 @@
 //     9P mounter. An empty value is unset; a present program is checked with
 //     the mounter's own program check, and a present NINEP_SUDO must be
 //     exactly `1`
+//   ENDO_CLAUDE_DIAGNOSTICS=1 — log host-side broker upstream failures
+//     and admission events. Off by default. The slice only ever sees a
+//     bare 502, so this is the only way to learn why one happened;
+//     applied only when a broker service is minted
 //   ENDO_CLAUDE_BROKER_LISTENER_IMAGE — digest-pinned listener image;
 //     required unless a broker service is retained
 //   ENDO_CLAUDE_BROKER_DIR, ENDO_CLAUDE_BROKER_OWNER_ID,
@@ -147,6 +151,10 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
   const brokerDir =
     env.ENDO_CLAUDE_BROKER_DIR || path.join(os.homedir(), 'claude-broker');
   const publicInternet = env.ENDO_CLAUDE_PUBLIC_INTERNET === '1';
+  // Host-side broker diagnostics. Off by default: the hooks log every
+  // upstream failure and admission event, which is operator-visible detail
+  // about a credentialed request path.
+  const diagnostics = env.ENDO_CLAUDE_DIAGNOSTICS === '1';
   const anthropicBeta = env.ENDO_CLAUDE_ANTHROPIC_BETA || '';
   // The deployment resource profile is recorded into each session plan by the
   // backend. It has no defaults; validate the operator's value before any
@@ -318,6 +326,7 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
       credentialKind: credsKind,
       ...(anthropicBeta ? { anthropicBeta } : {}),
       ...(publicInternet ? { publicInternet: true } : {}),
+      ...(diagnostics ? { diagnostics: true } : {}),
     });
     readClaudeBrokerConfig({ CLAUDE_BROKER_CONFIG: brokerConfig });
     await mintWithPowersPath(hostAgent, {

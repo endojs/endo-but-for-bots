@@ -316,7 +316,7 @@ harden(makeProviderBrokerServiceKit);
  * the original. Separate processes still depend on the broker runtime's
  * native ownership checks, and process loss is not a cleanup acknowledgement.
  *
- * @template {{ ownerId: string, directory: string, imageRef: string, imageDigest: string, listenerImageRef: string, publicInternet?: boolean, maxSessions?: number }} Config
+ * @template {{ ownerId: string, directory: string, imageRef: string, imageDigest: string, listenerImageRef: string, publicInternet?: boolean, maxSessions?: number, diagnostics?: boolean }} Config
  * @param {object} options
  * @param {string} options.label
  * @param {(env: Record<string, string>) => Config} options.readConfig The
@@ -341,6 +341,23 @@ export const makeOwnedProviderBrokerService = ({
    */
   const makeKit = (config, secret, env) => {
     const { policy, accountRef } = makePolicy(config);
+    // Runtime hooks are not configuration fields: the operator profile carries
+    // only a boolean, and the hooks are constructed here. Without them an
+    // upstream failure reaches the slice as a bare 502 and reaches the operator
+    // as nothing at all — provider-http.js deliberately refuses to echo the
+    // cause, so this is the only channel that can carry it.
+    const hooks =
+      config.diagnostics === true
+        ? {
+            onDiagnostic: diagnostic =>
+              console.error(
+                `${label} upstream failure`,
+                JSON.stringify(diagnostic),
+              ),
+            audit: ({ event, requests }) =>
+              console.error(`${label} broker event`, event, String(requests)),
+          }
+        : {};
     const kit = makeServiceKit({
       ...config,
       label,
@@ -348,6 +365,7 @@ export const makeOwnedProviderBrokerService = ({
       accountRef,
       secret,
       env,
+      ...hooks,
     });
     return harden({ open: async () => kit.service, close: kit.close });
   };
