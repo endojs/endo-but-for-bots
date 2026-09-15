@@ -32,6 +32,9 @@ pub mod engine {
     use std::path::Path;
 
     pub use ironhorse_compile::compile_atoms_with;
+    // Re-exported: `MachineError::Store` carries them, so a supervisor
+    // matching on the class does not need a second dependency to name it.
+    pub use ironhorse_snapshot::store::{StoreError, StoreFailure};
     pub use ironhorse_vm::Machine as VmMachine;
     pub use ironhorse_vm::{
         Compartment, GcStats, Halt, Heap, Intrinsics, Meter as VMeter, MeterCheck, MeterState,
@@ -54,8 +57,38 @@ pub mod engine {
         Unavailable(String),
         /// The heap store refused an operation (open, checkpoint,
         /// resume, collect, or close). Store errors are fail-closed by
-        /// design; the message carries the store's own taxonomy.
-        Store(String),
+        /// design, and this carries the store's own error rather than a
+        /// rendering of it, so a supervisor can act instead of grep
+        /// (review finding F157).
+        ///
+        /// `kind` is [`StoreError::classify`]'s answer, cached here so a
+        /// caller matching on the class does not have to re-derive it:
+        /// [`StoreFailure::Transient`] may be retried, [`StoreFailure::Refused`]
+        /// never will succeed, [`StoreFailure::Poisoned`] means the stored
+        /// state is not trustworthy.
+        Store {
+            kind: StoreFailure,
+            source: StoreError,
+        },
+        /// The machine's own state is indeterminate and it must not be
+        /// reused: a rewind failed, a collection panicked, or a session is
+        /// absent because an earlier rewind already failed. Neither the old
+        /// state nor the new one is in force, which is what distinguishes
+        /// this from every refusal — there is nothing to retry and nothing
+        /// to resume. Tear the machine down and open a fresh one from the
+        /// store's last checkpoint.
+        Poisoned {
+            /// What was in progress when the machine was lost.
+            during: &'static str,
+            /// The failure that lost it, and the one that was being
+            /// recovered from when it did.
+            detail: String,
+        },
+        /// A deterministic engine-side refusal that is not the store's: an
+        /// exhausted counter, a cadence or heap-profile mismatch, a store
+        /// still shared at close. The store is intact and so is the machine;
+        /// the request will answer the same way every time.
+        Refused(&'static str),
         /// A later crank's compiled symbol table could not be
         /// RELINKED onto the machine's persisted one (side-table
         /// ledger G2 lifted the old exact-alignment requirement:
@@ -94,7 +127,11 @@ pub mod engine {
                 MachineError::Unavailable(what) => {
                     write!(f, "not built yet on the Ironhorse engine: {what}")
                 }
-                MachineError::Store(e) => write!(f, "heap store error: {e}"),
+                MachineError::Store { source, .. } => write!(f, "heap store error: {source}"),
+                MachineError::Poisoned { during, detail } => {
+                    write!(f, "machine lost during {during}: {detail}")
+                }
+                MachineError::Refused(what) => write!(f, "refused: {what}"),
                 MachineError::SymbolMismatch(e) => {
                     write!(f, "crank symbol table mismatch: {e}")
                 }
@@ -102,7 +139,16 @@ pub mod engine {
         }
     }
 
-    impl std::error::Error for MachineError {}
+    impl std::error::Error for MachineError {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                // The store's taxonomy, and everything it wraps, stays
+                // reachable through the chain rather than stopping here.
+                MachineError::Store { source, .. } => Some(source),
+                _ => None,
+            }
+        }
+    }
 
     /// Render a halt the way the port's ledger names it, so an
     /// unsupported opcode reads as the exact thing to implement next.
@@ -850,8 +896,11 @@ pub mod engine {
         crank_ceiling: std::rc::Rc<std::cell::Cell<u64>>,
     }
 
-    fn store_err(e: ironhorse_snapshot::store::StoreError) -> MachineError {
-        MachineError::Store(format!("{e:?}"))
+    fn store_err(e: StoreError) -> MachineError {
+        MachineError::Store {
+            kind: e.classify(),
+            source: e,
+        }
     }
 
     impl PersistentMachine {
@@ -875,9 +924,7 @@ pub mod engine {
             // fresh or already-current store is a no-op.
             match store.manifest() {
                 Ok(manifest) if manifest.collect_every != options.cadence.collect_every => {
-                    return Err(MachineError::Store(
-                        "collection cadence mismatch".to_string(),
-                    ));
+                    return Err(MachineError::Refused("collection cadence mismatch"));
                 }
                 Ok(manifest) => {
                     // The shared worker cannot adopt the old standalone profile.
@@ -892,9 +939,8 @@ pub mod engine {
                         .shared
                         .is_none()
                     {
-                        return Err(MachineError::Store(
-                            "incompatible standalone heap profile; shared Machine store required"
-                                .to_owned(),
+                        return Err(MachineError::Refused(
+                            "incompatible standalone heap profile; shared Machine store required",
                         ));
                     }
                 }
@@ -1105,9 +1151,10 @@ pub mod engine {
         fn rewind_preparation_error(&mut self, error: MachineError) -> MachineError {
             match self.rewind_to_last_checkpoint() {
                 Ok(()) => error,
-                Err(rewind) => MachineError::Store(format!(
-                    "rewind failed after crank preparation ({error}): {rewind}"
-                )),
+                Err(rewind) => MachineError::Poisoned {
+                    during: "crank preparation",
+                    detail: format!("rewind failed after {error}: {rewind}"),
+                },
             }
         }
 
@@ -1134,8 +1181,9 @@ pub mod engine {
             let state = self
                 .session
                 .as_ref()
-                .ok_or_else(|| {
-                    MachineError::Store("machine has no session (a rewind failed)".into())
+                .ok_or_else(|| MachineError::Poisoned {
+                    during: "a meter read",
+                    detail: "machine has no session: an earlier rewind failed".to_string(),
                 })?
                 .machine()
                 .with_persistence(|i| i.meter_state())
@@ -1185,9 +1233,10 @@ pub mod engine {
             // identical points. `checkpoint_every` is 1-normalized;
             // a due collection forces the flush (the collector needs a
             // checkpoint boundary).
-            let pending_after = self.pending_cranks.checked_add(1).ok_or_else(|| {
-                MachineError::Store("pending crank counter exhausted".to_string())
-            })?;
+            let pending_after = self
+                .pending_cranks
+                .checked_add(1)
+                .ok_or_else(|| MachineError::Refused("pending crank counter exhausted"))?;
             // The absolute completed-crank total this crank would reach.
             // Deriving the schedule from a durable ABSOLUTE number is
             // what makes it resume-invariant: two replicas at the same
@@ -1196,22 +1245,27 @@ pub mod engine {
             let total_after = self
                 .durable_cranks
                 .checked_add(pending_after as u64)
-                .ok_or_else(|| MachineError::Store("crank counter exhausted".to_string()))?;
+                .ok_or_else(|| MachineError::Refused("crank counter exhausted"))?;
             let collect_due = self.cadence.collect_every > 0
                 && total_after % self.cadence.collect_every as u64 == 0;
             let checkpoint_due = pending_after >= self.cadence.checkpoint_every.max(1)
                 || collect_due
                 || self.checkpoint_after_rewind;
             let prepared = (|| -> Result<_, MachineError> {
-                let session = self.session.as_mut().ok_or_else(|| {
-                    MachineError::Store("machine has no session (a rewind failed)".to_string())
-                })?;
+                let session = self
+                    .session
+                    .as_mut()
+                    .ok_or_else(|| MachineError::Poisoned {
+                        during: "crank preparation",
+                        detail: "machine has no session: an earlier rewind failed".to_string(),
+                    })?;
                 // The store's durable counter is the schedule's input,
                 // so it must travel with the commit that makes these
                 // cranks durable. The session cannot derive it.
                 session.set_cranks(total_after);
-                let start = self.start.as_ref().ok_or_else(|| {
-                    MachineError::Store("machine has no start compartment".into())
+                let start = self.start.as_ref().ok_or_else(|| MachineError::Poisoned {
+                    during: "crank preparation",
+                    detail: "machine has no start compartment".to_string(),
                 })?;
                 let outcome = session
                     .machine()
@@ -1251,10 +1305,13 @@ pub mod engine {
                 // (architecture review F030, closed).
                 let halt = outcome.halt;
                 if let Err(rewind_err) = self.rewind_to_last_checkpoint() {
-                    return Err(MachineError::Store(format!(
-                        "rewind failed after a crank halt ({}): {rewind_err}",
-                        describe_halt(&halt)
-                    )));
+                    return Err(MachineError::Poisoned {
+                        during: "a crank",
+                        detail: format!(
+                            "rewind failed after {}: {rewind_err}",
+                            describe_halt(&halt)
+                        ),
+                    });
                 }
                 // The meter is the machine-lifetime count; report what
                 // THIS crank spent, from the raw index so the fractional
@@ -1315,9 +1372,10 @@ pub mod engine {
                     // failure visible inside the compound error
                     // instead of swallowing it (wave-3 finding).
                     if let Err(rewind_err) = self.rewind_to_last_checkpoint() {
-                        return Err(MachineError::Store(format!(
-                            "rewind failed after a failed checkpoint ({e:?}): {rewind_err}"
-                        )));
+                        return Err(MachineError::Poisoned {
+                            during: "a checkpoint",
+                            detail: format!("rewind failed after {e}: {rewind_err}"),
+                        });
                     }
                     Err(store_err(e))
                 }
@@ -1344,12 +1402,17 @@ pub mod engine {
         pub fn collect(&mut self) -> Result<u32, MachineError> {
             self.flush_pending()?;
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let session = self.session.as_mut().ok_or_else(|| {
-                    MachineError::Store("machine has no session (a rewind failed)".to_string())
-                })?;
-                let collections = session.collections().checked_add(1).ok_or_else(|| {
-                    MachineError::Store("collection counter exhausted".to_string())
-                })?;
+                let session = self
+                    .session
+                    .as_mut()
+                    .ok_or_else(|| MachineError::Poisoned {
+                        during: "collection",
+                        detail: "machine has no session: an earlier rewind failed".to_string(),
+                    })?;
+                let collections = session
+                    .collections()
+                    .checked_add(1)
+                    .ok_or_else(|| MachineError::Refused("collection counter exhausted"))?;
                 let stats = session
                     .full_collect(&*self.store.borrow())
                     .map_err(store_err)?;
@@ -1365,13 +1428,19 @@ pub mod engine {
                     .cloned()
                     .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
                     .unwrap_or_else(|| "non-string collection panic".to_string());
-                Err(MachineError::Store(format!("collection failed: {message}")))
+                // A collection that panicked left the heap mid-sweep: the
+                // machine is not a refusal, it is gone.
+                Err(MachineError::Poisoned {
+                    during: "collection",
+                    detail: format!("collection panicked: {message}"),
+                })
             });
             if let Err(error) = &result {
                 if let Err(rewind_err) = self.rewind_to_last_checkpoint() {
-                    return Err(MachineError::Store(format!(
-                        "rewind failed after collection failure ({error:?}): {rewind_err}"
-                    )));
+                    return Err(MachineError::Poisoned {
+                        during: "collection",
+                        detail: format!("rewind failed after {error}: {rewind_err}"),
+                    });
                 }
             }
             result
@@ -1435,11 +1504,15 @@ pub mod engine {
             let total = self
                 .durable_cranks
                 .checked_add(self.pending_cranks as u64)
-                .ok_or_else(|| MachineError::Store("crank counter exhausted".to_string()))?;
+                .ok_or_else(|| MachineError::Refused("crank counter exhausted"))?;
             let r = {
-                let session = self.session.as_mut().ok_or_else(|| {
-                    MachineError::Store("machine has no session (a rewind failed)".to_string())
-                })?;
+                let session = self
+                    .session
+                    .as_mut()
+                    .ok_or_else(|| MachineError::Poisoned {
+                        during: "a flush",
+                        detail: "machine has no session: an earlier rewind failed".to_string(),
+                    })?;
                 session.set_cranks(total);
                 session.checkpoint(&self.signature, &mut *self.store.borrow_mut())
             };
@@ -1452,9 +1525,10 @@ pub mod engine {
                 }
                 Err(e) => {
                     if let Err(rewind_err) = self.rewind_to_last_checkpoint() {
-                        return Err(MachineError::Store(format!(
-                            "rewind failed after a failed flush ({e:?}): {rewind_err}"
-                        )));
+                        return Err(MachineError::Poisoned {
+                            during: "a flush",
+                            detail: format!("rewind failed after {e}: {rewind_err}"),
+                        });
                     }
                     Err(store_err(e))
                 }
@@ -1484,9 +1558,7 @@ pub mod engine {
                 // but a failed flush means acknowledged cranks were
                 // never durable, and that outranks it (review wave 5).
                 Err(_) => {
-                    return flush.and(Err(MachineError::Store(
-                        "store still shared at close".to_string(),
-                    )))
+                    return flush.and(Err(MachineError::Refused("store still shared at close")))
                 }
             };
             let close = store.close().map_err(store_err);
@@ -1525,6 +1597,98 @@ pub mod engine {
     mod tests {
         use super::*;
 
+        /// The seam a supervisor actually reads. F157's complaint was that
+        /// every store failure arrived as one opaque string, so a supervisor
+        /// could not tell a retryable write from a permanent refusal from a
+        /// store it must stop using. These are the three answers, and they
+        /// have to stay distinguishable by matching rather than by grep.
+        #[test]
+        fn the_seam_reports_a_class_a_supervisor_can_act_on() {
+            // A store error arrives with the store's own error intact and
+            // with the class already derived from it.
+            let refused = store_err(StoreError::NeedsMigration { found: 30 });
+            assert!(matches!(
+                refused,
+                MachineError::Store {
+                    kind: StoreFailure::Refused,
+                    source: StoreError::NeedsMigration { found: 30 }
+                }
+            ));
+            let transient = store_err(StoreError::Io("device busy".into()));
+            assert!(matches!(
+                transient,
+                MachineError::Store {
+                    kind: StoreFailure::Transient,
+                    ..
+                }
+            ));
+            let poisoned = store_err(StoreError::SummaryMismatch { page: 4 });
+            assert!(matches!(
+                poisoned,
+                MachineError::Store {
+                    kind: StoreFailure::Poisoned,
+                    ..
+                }
+            ));
+
+            // The cached class is the store's own answer, never a second
+            // opinion that could drift from it.
+            for e in [
+                StoreError::Empty,
+                StoreError::Io("disk".into()),
+                StoreError::MissingRow("page", 1),
+                StoreError::Unsupported("migrate a manifest in place"),
+            ] {
+                let expected = e.classify();
+                match store_err(e) {
+                    MachineError::Store { kind, source } => {
+                        assert_eq!(kind, expected);
+                        assert_eq!(kind, source.classify());
+                    }
+                    other => panic!("expected a store error, got {other:?}"),
+                }
+            }
+        }
+
+        /// A lost machine is not a refusal. `Poisoned` exists so a supervisor
+        /// does not retry, resume, or keep using a machine whose state is
+        /// neither the old one nor the new one, and it names the operation
+        /// that lost it rather than folding every site into one message.
+        #[test]
+        fn a_lost_machine_is_distinguishable_from_a_refusal() {
+            let poisoned = MachineError::Poisoned {
+                during: "a checkpoint",
+                detail: "rewind failed after store io error: disk: disk".to_string(),
+            };
+            assert!(!matches!(poisoned, MachineError::Refused(_)));
+            assert!(poisoned
+                .to_string()
+                .contains("machine lost during a checkpoint"));
+
+            let refused = MachineError::Refused("crank counter exhausted");
+            assert_eq!(refused.to_string(), "refused: crank counter exhausted");
+        }
+
+        /// The cause has to survive the seam, which is the whole of F157: a
+        /// supervisor walking the chain reaches the store's own taxonomy
+        /// instead of a string that once described it.
+        #[test]
+        fn the_store_error_survives_as_a_source() {
+            let error = store_err(StoreError::Snapshot(
+                ironhorse_snapshot::format::SnapshotError::CostTableMismatch {
+                    expected: "ironhorse-meter-5".into(),
+                    found: "ironhorse-meter-4".into(),
+                },
+            ));
+            let rendered = error.to_string();
+            assert!(rendered.contains("ironhorse-meter-4"), "{rendered}");
+            let source = std::error::Error::source(&error).expect("the store error");
+            assert!(
+                source.to_string().contains("cost-table mismatch"),
+                "{source}"
+            );
+        }
+
         #[test]
         fn standalone_store_profile_refusal_preserves_the_heap() {
             use ironhorse_snapshot::{
@@ -1552,9 +1716,12 @@ pub mod engine {
             let small = store.read_small_state().unwrap();
             drop(session);
             store.close().unwrap();
-            assert!(
-                matches!(PersistentMachine::open(&options), Err(MachineError::Store(message)) if message.contains("incompatible standalone heap profile"))
-            );
+            assert!(matches!(
+                PersistentMachine::open(&options),
+                Err(MachineError::Refused(
+                    "incompatible standalone heap profile; shared Machine store required"
+                ))
+            ));
             let store = ironhorse_store_sqlite::SqliteHeapStore::open(&options.path).unwrap();
             assert_eq!(store.manifest().unwrap(), manifest);
             assert_eq!(store.read_small_state().unwrap(), small);
@@ -1592,9 +1759,13 @@ pub mod engine {
                     assert!(vm.is_quiescent());
                 })
                 .unwrap();
-            assert!(
-                matches!(machine.collect(), Err(MachineError::Store(message)) if message.contains("collection failed"))
-            );
+            assert!(matches!(
+                machine.collect(),
+                Err(MachineError::Poisoned {
+                    during: "collection",
+                    ..
+                })
+            ));
             assert_eq!(machine.epoch().unwrap(), epoch);
             assert_eq!(machine.session.as_ref().unwrap().collections(), 0);
             assert!(machine
