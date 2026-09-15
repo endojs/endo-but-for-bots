@@ -70,6 +70,9 @@ import { makeWorkerSessionRecords } from './worker-session-records.js';
  * @property {() => Promise<void>} wake
  * @property {() => Promise<void>} sleep
  * @property {() => Promise<void>} retire
+ * @property {(mode: 'eager' | 'resident', options?: { notify?: string }) => 'eager' | 'resident' | undefined} pin
+ * @property {() => 'eager' | 'resident' | undefined} unpin
+ * @property {() => 'eager' | 'resident' | undefined} getPin
  *
  * @typedef {object} ThixotropeDaemon
  * @property {any} location this daemon's OCapN location; combine with a
@@ -79,7 +82,7 @@ import { makeWorkerSessionRecords } from './worker-session-records.js';
  *   evaluate in a fresh implicitly-created worker and return the
  *   result; the worker persists like any other (find it via
  *   `listWorkerIds`, retire it via `getWorker(id).retire()`)
- * @property {(options?: { debugLabel?: string, ephemeral?: boolean }) => Promise<ThixotropeWorkerFacade>} createWorker
+ * @property {(options?: { debugLabel?: string, ephemeral?: boolean, pin?: 'eager' | 'resident' }) => Promise<ThixotropeWorkerFacade>} createWorker
  * @property {(workerId: string) => ThixotropeWorkerFacade} getWorker
  * @property {() => Array<string>} listWorkerIds
  * @property {(name: string, description?: unknown) => object} makeResource
@@ -191,6 +194,7 @@ const buildDaemon = async (
           engine,
           idleSleepMs,
           debugLabel: workerStore.getMeta().debugLabel,
+          isResident: () => workerStore.getMeta().pin === 'resident',
           onFatal: () => hub.retireSession(workerId),
           onFrame: (
             /** @type {Uint8Array} */ bytes,
@@ -901,6 +905,40 @@ const buildDaemon = async (
   };
 
   /** @param {string} workerId */
+  /**
+   * Record the wakefulness the host owes a worker.
+   *
+   * Durable, because the request outlives the process that was asked: an
+   * eager pin means nothing unless the *next* startup honours it.
+   *
+   * @param {string} workerId
+   * @param {'eager' | 'resident' | undefined} mode
+   * @param {string} [notify] publication secret to call `started()` on
+   */
+  const pinWorker = (workerId, mode, notify) => {
+    mode === undefined ||
+      mode === 'eager' ||
+      mode === 'resident' ||
+      Fail`pin must be 'eager' or 'resident', got ${q(mode)}`;
+    notify === undefined ||
+      typeof notify === 'string' ||
+      Fail`pin notify must be a publication secret, got ${q(notify)}`;
+    workers.has(workerId) || Fail`unknown worker ${q(workerId)}`;
+    const workerStore = store.provideWorkerStore(workerId);
+    const { pin: _pin, pinNotify: _notify, ...meta } = workerStore.getMeta();
+    workerStore.setMeta(
+      mode === undefined
+        ? meta
+        : {
+            ...meta,
+            pin: mode,
+            ...(notify === undefined ? {} : { pinNotify: notify }),
+          },
+    );
+    return mode;
+  };
+
+  /** @param {string} workerId */
   const retireWorkerNow = async workerId => {
     const entry = workers.get(workerId);
     if (entry !== undefined) {
@@ -939,6 +977,9 @@ const buildDaemon = async (
       wake: async () => entryOf().transport.wake(),
       sleep: async () => entryOf().transport.sleep(),
       retire: async () => retireWorkerNow(workerId),
+      pin: (mode, options) => pinWorker(workerId, mode, options?.notify),
+      unpin: () => pinWorker(workerId, undefined),
+      getPin: () => store.provideWorkerStore(workerId).getMeta().pin,
     });
   };
 
@@ -960,6 +1001,17 @@ const buildDaemon = async (
         return E(shell).evaluate(source, harden({ ...endowments }));
       },
       retire: async () => retireWorkerNow(workerId),
+      /**
+       * Ask the host for wakefulness. `eager` wakes this worker at daemon
+       * startup even with nothing pending; `resident` additionally exempts it
+       * from idle sleep, for a vat that should absorb traffic rather than be
+       * woken by it.
+       *
+       * @param {'eager' | 'resident'} mode
+       */
+      pin: (mode, options) => pinWorker(workerId, mode, options?.notify),
+      unpin: () => pinWorker(workerId, undefined),
+      getPin: () => store.provideWorkerStore(workerId).getMeta().pin,
     });
   };
   const makeWorkerControllerResource = () =>
@@ -1112,12 +1164,28 @@ const buildDaemon = async (
       [...workers].map(async ([workerId, entry]) => {
         const workerStore = store.provideWorkerStore(workerId);
         const meta = workerStore.getMeta();
+        // Pending journal, or an eager pin. The first resumes work already
+        // accepted; the second starts a vat that nothing has asked for yet,
+        // which is the only way a manager of an ephemeral resource can
+        // re-establish it before any traffic arrives to prompt it.
         if (
           meta.failure === undefined &&
-          workerStore.journalLength() > (meta.snapshot?.cut ?? 0)
+          (meta.pin !== undefined ||
+            workerStore.journalLength() > (meta.snapshot?.cut ?? 0))
         ) {
           try {
             await entry.transport.wake();
+            // Waking runs nothing: orthogonal persistence resumes the heap
+            // exactly where it was, with no callback. A vat that has to *act*
+            // on a new host incarnation — re-establishing an ephemeral
+            // resource, say — needs a delivery, so a pin may name a
+            // publication to notify. Send-only: a manager that fails to
+            // restore is a condition to report, not a reason to abort
+            // startup.
+            if (meta.pinNotify !== undefined) {
+              const target = await lookup(meta.pinNotify);
+              E.sendOnly(target).started();
+            }
           } catch (error) {
             // Fatal guest replay quarantines only that worker, just as live
             // delivery does. Infrastructure failures still abort startup.
@@ -1138,11 +1206,12 @@ const buildDaemon = async (
   /** @param {{keep?: string[]}} [options] */
   const inspectReachability = ({ keep = [] } = {}) =>
     inspectVatReachability({
-      workers: [...workers].map(([workerId, entry]) => ({
-        workerId,
-        awake: entry.transport.isAwake(),
-        debugLabel: store.provideWorkerStore(workerId).getMeta().debugLabel,
-      })),
+      workers: [...workers].map(([workerId, entry]) => {
+        const { debugLabel, pin } = store
+          .provideWorkerStore(workerId)
+          .getMeta();
+        return { workerId, awake: entry.transport.isAwake(), debugLabel, pin };
+      }),
       hubState: store.getHubState(),
       endpointExports: store.provideWorkerStore(ENDPOINT_ID).getTablesRecord()
         ?.exports,
@@ -1163,7 +1232,7 @@ const buildDaemon = async (
       provideWorkerSession(workerId);
       return makeAdminFacade(workerId).evaluate(source, endowments);
     },
-    createWorker: async ({ debugLabel, ephemeral = false } = {}) => {
+    createWorker: async ({ debugLabel, ephemeral = false, pin } = {}) => {
       debugLabel === undefined ||
         typeof debugLabel === 'string' ||
         Fail`debugLabel must be a string`;
@@ -1178,6 +1247,7 @@ const buildDaemon = async (
         });
       }
       provideWorkerSession(workerId);
+      if (pin !== undefined) pinWorker(workerId, pin);
       return makeAdminFacade(workerId);
     },
     getWorker: workerId => {

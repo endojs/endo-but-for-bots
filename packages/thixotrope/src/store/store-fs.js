@@ -21,6 +21,15 @@ export { assertWorkerId, isSessionToken } from './store-validators.js';
  * @typedef {object} WorkerMeta
  * @property {string} [debugLabel] optional human-readable label; used
  *   only in diagnostics, never as an identifier
+ * @property {'eager' | 'resident'} [pin] wakefulness the host owes this
+ *   worker: `eager` wakes it at daemon startup even with nothing pending, and
+ *   `resident` additionally exempts it from idle sleep. Distinct from
+ *   retention — `keep` is what stops a vat being collected — though a pinned
+ *   vat is a retention root too, since waking one the collector may retire is
+ *   incoherent
+ * @property {string} [pinNotify] publication secret the host calls `started()`
+ *   on after honouring an eager pin, because waking a vat runs none of its
+ *   code — a vat that must act on a new host incarnation needs a delivery
  * @property {boolean} [ephemeral] this worker's heap is not a recovery
  *   baseline: the next daemon startup retires it instead of restoring it, so
  *   whatever it held dies with the process that held it
