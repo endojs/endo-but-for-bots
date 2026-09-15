@@ -106,42 +106,15 @@ test('reads an empty file as the empty string', async t => {
   t.is(await tool.invoke({ path: 'empty.txt' }), '');
 });
 
-test('truncates content beyond the 50k-char cap', async t => {
+test('mountReadText returns the exact UTF-8 text without a presentation cap', async t => {
   const rootPath = makeTempRoot(t);
-  const big = 'x'.repeat(50_001);
+  const big = 'é'.repeat(30_001);
   fs.writeFileSync(path.join(rootPath, 'big.txt'), big);
   const filesystem = readOnly(makeNodeFilesystem({ rootPath }));
 
   const tool = makeMountReadTool(filesystem);
   const result = /** @type {string} */ (await tool.invoke({ path: 'big.txt' }));
-  t.true(result.startsWith('x'.repeat(50_000)));
-  t.true(result.includes('truncated at 50000 chars'));
-  t.is(result.indexOf('\n\n... (truncated'), 50_000);
-});
-
-test('truncates at a caller-supplied maxChars', async t => {
-  const rootPath = makeTempRoot(t);
-  const big = 'x'.repeat(20);
-  fs.writeFileSync(path.join(rootPath, 'big.txt'), big);
-  const filesystem = readOnly(makeNodeFilesystem({ rootPath }));
-
-  const tool = makeMountReadTool(filesystem, { maxChars: 8 });
-  const result = /** @type {string} */ (await tool.invoke({ path: 'big.txt' }));
-  t.true(result.startsWith('x'.repeat(8)));
-  t.true(result.includes('truncated at 8 chars'));
-  t.is(result.indexOf('\n\n... (truncated'), 8);
-});
-
-test('maxChars: 0 disables the limit and returns full contents', async t => {
-  const rootPath = makeTempRoot(t);
-  const big = 'x'.repeat(60_000);
-  fs.writeFileSync(path.join(rootPath, 'big.txt'), big);
-  const filesystem = readOnly(makeNodeFilesystem({ rootPath }));
-
-  const tool = makeMountReadTool(filesystem, { maxChars: 0 });
-  const result = /** @type {string} */ (await tool.invoke({ path: 'big.txt' }));
   t.is(result, big);
-  t.false(result.includes('truncated'));
 });
 
 test('normalizes leading, trailing, and doubled slashes to "." no-op steps', async t => {
@@ -157,7 +130,7 @@ test('normalizes leading, trailing, and doubled slashes to "." no-op steps', asy
   t.is(await tool.invoke({ path: 'sub/d.txt/' }), 'normalized');
 });
 
-test('bounds the underlying file read before draining bytes', async t => {
+test('reads the exact file contents before draining bytes', async t => {
   await null;
   const filesystem = Far('BoundedReadFilesystem', {
     root() {
@@ -170,7 +143,7 @@ test('bounds the underlying file read before draining bytes', async t => {
               return Far('BoundedReadOpenFile', {
                 read(offset, length) {
                   t.is(offset, 0n);
-                  t.is(length, 50_001n);
+                  t.is(length, undefined);
                   return makeFakeBytesReader(
                     new TextEncoder().encode('x'.repeat(50_001)),
                   );
@@ -187,7 +160,7 @@ test('bounds the underlying file read before draining bytes', async t => {
     /** @type {ERef<Filesystem>} */ (/** @type {unknown} */ (filesystem)),
   );
   const result = /** @type {string} */ (await tool.invoke({ path: 'big.txt' }));
-  t.is(result.indexOf('\n\n... (truncated'), 50_000);
+  t.is(result, 'x'.repeat(50_001));
 });
 
 test('emits a canonical ToolRecord with a one-line description', t => {
