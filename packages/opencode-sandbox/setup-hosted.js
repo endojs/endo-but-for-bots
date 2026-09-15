@@ -35,6 +35,10 @@
 //     a present program is checked with the mounter's own program check, and
 //     a present NINEP_SUDO must be exactly `1` (the mounter would silently
 //     treat anything else as off)
+//   ENDO_OPENCODE_DIAGNOSTICS=1 — log host-side broker upstream failures
+//     and admission events. Off by default. The slice only ever sees a
+//     bare 502, so this is the only way to learn why one happened;
+//     applied only when a broker service is minted
 //   ENDO_OPENCODE_BROKER_LISTENER_IMAGE — digest-pinned listener image;
 //     required unless a broker service is retained
 //   ENDO_OPENCODE_BROKER_DIR, ENDO_OPENCODE_BROKER_OWNER_ID,
@@ -119,6 +123,10 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
   const brokerDir =
     env.ENDO_OPENCODE_BROKER_DIR || path.join(os.homedir(), 'opencode-broker');
   const publicInternet = env.ENDO_OPENCODE_PUBLIC_INTERNET === '1';
+  // Host-side broker diagnostics. Off by default: the hooks log every
+  // upstream failure and admission event, which is operator-visible detail
+  // about a credentialed request path.
+  const diagnostics = env.ENDO_OPENCODE_DIAGNOSTICS === '1';
   // The deployment resource profile is recorded into each session plan by the
   // backend. It has no defaults; validate the operator's value before any
   // mint so a malformed profile cannot reach a formula environment.
@@ -252,6 +260,7 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
       // carry, not Floot's `openrouter/...` selection refs.
       models: OPENCODE_MODELS.map(model => parseModelRef(model.id)),
       ...(publicInternet ? { publicInternet: true } : {}),
+      ...(diagnostics ? { diagnostics: true } : {}),
     });
     readOpencodeBrokerConfig({ OPENCODE_BROKER_CONFIG: brokerConfig });
     await mintWithPowersPath(hostAgent, {
