@@ -270,18 +270,25 @@ pub struct CompartmentOptions {
     /// endowments.
     ///
     /// **This is not attenuation, and it is not confinement.** It controls
-    /// which names are BOUND as globals, and nothing else. Every denied
-    /// intrinsic stays reachable through any object's prototype chain, the
-    /// dynamic evaluator included: under `Some(vec![])` a guest still reads
-    /// `({}).constructor.name` as `"Object"`,
-    /// `({}).constructor.constructor.name` as `"Function"`, and evaluates
-    /// `({}).constructor.constructor('return 1 + 1')()` to `2`. SES and XS
-    /// close that route by replacing the function-family prototypes'
+    /// which names are BOUND as globals, and nothing else. Denied intrinsics
+    /// stay reachable two ways.
+    ///
+    /// Through any object's prototype chain, the dynamic evaluator included:
+    /// under `Some(vec![])` a guest still reads `({}).constructor.name` as
+    /// `"Object"`, `({}).constructor.constructor.name` as `"Function"`, and
+    /// evaluates `({}).constructor.constructor('return 1 + 1')()` to `2`. SES
+    /// and XS close that route by replacing the function-family prototypes'
     /// `.constructor` with a throwing stub during `lockdown()`
     /// (`fx_lockdown_aux`, `xsLockdown.c:52`); ironhorse has no `lockdown()`
-    /// and does not. Treat this as a surface-area convenience for cooperative
-    /// guests, not a security boundary --
-    /// `designs/ironhorse-ses-compartment-equivalence.md`.
+    /// and does not.
+    ///
+    /// And transitively through an endowed object. Raw heap-backed `Slot`
+    /// endowments are refused, but [`Compartment::define_global_value`] shares
+    /// a [`RootedValue`] by reference on purpose, so anything reachable from
+    /// it is reachable here whatever this list says.
+    ///
+    /// Treat this as a surface-area convenience for cooperative guests, not a
+    /// security boundary -- `designs/ironhorse-ses-compartment-equivalence.md`.
     pub intrinsic_permit: Option<Vec<String>>,
     /// Endowments copied onto the new global, by display name.
     pub endowments: HashMap<String, Slot>,

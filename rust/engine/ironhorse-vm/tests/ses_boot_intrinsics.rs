@@ -410,6 +410,18 @@ fn a_natively_frozen_realm_forecloses_the_ses_shim() {
                  succeeds, the two profiles have stopped being exclusive and \
                  designs/ironhorse-ses-compartment-equivalence.md must say so"
             );
+            // `invalid descriptor` is the engine's generic rejected-
+            // `defineProperty` message (`property/object.rs`), so the message
+            // alone would also match an unrelated shim bug that passed a
+            // malformed descriptor. Pin the outcome too: the shim installed
+            // nothing, and `harden` is gone because the bundle deletes
+            // `polyfills.js`'s before the shim runs -- so a realm that takes
+            // this path is left with neither implementation.
+            assert_eq!(
+                crank(SES_CENSUS),
+                "lockdown=undefined harden=undefined Compartment=undefined \
+                 frozenObjectProto=true"
+            );
         })
         .unwrap()
         .join()

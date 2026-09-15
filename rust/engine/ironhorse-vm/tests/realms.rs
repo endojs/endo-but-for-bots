@@ -708,9 +708,18 @@ fn every_reachable_evaluator_compiles_in_the_calling_compartment() {
 
     // The compartment's own copy is a distinct object from the intrinsic its
     // prototype chains still reach, so the two must be probed separately.
+    // The two prototype-chain routes below reach the SAME intrinsic, so the
+    // six probes cover five distinct evaluators over six routes.
     assert_eq!(
         eval(&a, "Function === ({}).constructor.constructor"),
         "false"
+    );
+    assert_eq!(
+        eval(
+            &a,
+            "({}).constructor.constructor === (function(){}).constructor"
+        ),
+        "true"
     );
 
     for (family, drive) in [
@@ -728,10 +737,18 @@ fn every_reachable_evaluator_compiles_in_the_calling_compartment() {
         ),
     ] {
         // Reads the compartment's `answer`, not the default realm's.
+        //
+        // `globalThis.seen = undefined` rather than `var seen`: a `var`
+        // redeclaration does not reset an existing global, so the first
+        // iteration's value would satisfy every later one and this assertion
+        // could never fire.
         assert_eq!(
             eval(
                 &a,
-                &format!("var seen; {family}('seen = answer')(){drive}; seen")
+                &format!(
+                    "globalThis.seen = undefined; {family}('seen = answer')(){drive}; \
+                     String(seen)"
+                )
             ),
             "a",
             "{family} compiled against the wrong global"
