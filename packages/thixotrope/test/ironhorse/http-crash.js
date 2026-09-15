@@ -166,11 +166,12 @@ test.serial(
     }
     t.true(accepted, 'guest handler committed its effect before the crash');
     const store = makeFsStore(nodePowers, path);
-    t.true(
+    t.false(
       Object.keys(store.getHubState().sessions).some(key =>
         key.startsWith('transient:'),
       ),
-      'the pending HTTP request has a persisted transient hub session',
+      'an in-flight HTTP request creates no transient hub session: the host ' +
+        'reaches the guest through its adapter, so there is nothing to orphan',
     );
     first.child.kill('SIGKILL');
     t.deepEqual(await first.exited, [null, 'SIGKILL']);
@@ -184,7 +185,7 @@ test.serial(
       Object.keys(store.getHubState().sessions).some(key =>
         key.startsWith('transient:'),
       ),
-      'orphaned HTTP sessions must be forgotten before startup returns',
+      'and none appears across the restart either',
     );
     t.is(
       await recovered.client.call('evaluate', "E(E(apps).get('site')).read()"),

@@ -21,6 +21,13 @@ export { assertWorkerId, isSessionToken } from './store-validators.js';
  * @typedef {object} WorkerMeta
  * @property {string} [debugLabel] optional human-readable label; used
  *   only in diagnostics, never as an identifier
+ * @property {string} [startNotify] publication secret the host calls
+ *   `started()` on at every daemon startup. The delivery is the wake — nothing
+ *   else is needed, because waking a vat runs none of its code anyway, and the
+ *   publication is already a retention root
+ * @property {boolean} [ephemeral] this worker's heap is not a recovery
+ *   baseline: the next daemon startup retires it instead of restoring it, so
+ *   whatever it held dies with the process that held it
  * @property {string} [failure] deterministic halt; retained for inspection
  * @property {string} [hubDelivery] highest hub outbox sequence covered by the snapshot
  * @property {{ ref: unknown, cut?: number } | null} [snapshot]

@@ -37,13 +37,17 @@ import { makeInFlight } from '../in-flight.js';
 import { settleWithin, withExpiry } from '../platform/timers.js';
 
 import { makeApplicationRegistry } from './application-registry.js';
-import { makeClockService } from '../alarms/clock-service.js';
+import { makeDurableAlarms } from '../alarms/durable-alarms.js';
+import { makeGuestClock } from '../alarms/guest-clock.js';
 import { makeThixotropeDaemon } from '../core/daemon.js';
 import { makeDurableNetLayer } from '../net/durable-netlayer.js';
 import { makeIronhorseEngine } from '../ironhorse/ironhorse-engine.js';
 import { makeLocalControl } from './local-control.js';
 import { makeInventoryViewLifetime } from './inventory-view-lifetime.js';
-import { makeHttpServices } from '../http/http-services.js';
+import { makeAdapterKeeper } from '../adapter-keeper.js';
+import { makeHttpAdapter } from '../http/http-adapter.js';
+import { makeHttpManager } from '../http/http-manager.js';
+import { makeHttpPorts } from '../http/http-port.js';
 import { makeObservableMap } from '../observable-map.js';
 import { makeMailbox } from '../mail/mailbox.js';
 import { makeMailContact } from '../mail/mail-contact.js';
@@ -94,6 +98,10 @@ export const serveThixotrope = async (
     display,
   } = platform;
   const log = logging.sub('thixotrope', 'supervisor');
+  const randomId = () =>
+    Array.from(random.randomBytes(16), byte =>
+      byte.toString(16).padStart(2, '0'),
+    ).join('');
   statePath = paths.resolve(statePath);
   await files.makeDirectory(statePath, { mode: 0o700 });
   const stat = await files.stat(statePath);
@@ -175,39 +183,25 @@ export const serveThixotrope = async (
   const { promise: stopped } = stopKit;
   const requestStop = () => stopKit.resolve();
   let daemon;
-  /** @type {ReturnType<typeof makeHttpServices> | undefined} */
-  let httpServices;
-  const provideHttpServices = () => {
-    httpServices ??= makeHttpServices(
-      { httpListeners, random },
-      {
-        storage: makeFileSyncStringAtom(
-          syncFiles,
-          paths.join(statePath, 'http-services.json'),
-        ),
-        publish: (handler, secret) => daemon.publish(handler, secret),
-        unpublish: secret => daemon.unpublish(secret),
-        openClient: () => daemon.openEphemeralClient(),
-      },
-    );
-    return httpServices;
-  };
-  /** @type {ReturnType<typeof makeClockService> | undefined} */
-  let clockService;
-  const provideClockService = () => {
-    clockService ??= makeClockService(
-      { timers, random },
-      {
-        storage: makeFileSyncStringAtom(
-          syncFiles,
-          paths.join(statePath, 'clock.json'),
-        ),
-        getDaemon: () => daemon,
-        ...(alarmNow === undefined ? {} : { now: alarmNow }),
-      },
-    );
-    return clockService;
-  };
+  // The host's whole involvement in HTTP: sockets and the ceilings only it can
+  // enforce. No metadata file, because what is desired lives in the workspace
+  // vat and what is bound lives in an adapter that dies with this process.
+  const httpPorts = makeHttpPorts({ httpListeners, logging, timers });
+  // The host's whole involvement in alarms: a durable table of deadlines and
+  // one timer for the earliest. It calls nothing; settling a promise resource
+  // wakes whichever vat was listening on it.
+  const alarms = makeDurableAlarms(
+    { timers },
+    {
+      storage: makeFileSyncStringAtom(
+        syncFiles,
+        paths.join(statePath, 'alarms.json'),
+      ),
+      makeResource: (name, description) =>
+        daemon.makeResource(name, description),
+      ...(alarmNow === undefined ? {} : { now: alarmNow }),
+    },
+  );
   /** @type {Awaited<ReturnType<typeof makeUnixNetLayer>> | undefined} */
   let peerNetlayer;
   const closePeers = async () => {
@@ -248,10 +242,9 @@ export const serveThixotrope = async (
         codec: syrupCodec,
         idleSleepMs,
         resources: {
-          'alarm-scheduler': description =>
-            provideClockService().resource(description),
-          'http-listener': description =>
-            provideHttpServices().resource(description),
+          alarm: alarms.resource,
+          alarms: alarms.clockResource,
+          'http-port': httpPorts.resource,
         },
         makeNetlayer: async ({ handlers, logger, resumption }) => {
           // makeThixotropeDaemon already holds the exclusive engine lease.
@@ -277,8 +270,12 @@ export const serveThixotrope = async (
         },
       },
     );
-    await provideHttpServices().start();
-    await provideClockService().start();
+
+    // Arm the host timer from the durable table, now that every worker session
+    // is seated: an alarm already past its deadline settles immediately, and
+    // its listener must have somewhere to arrive.
+    alarms.start();
+
     const configPath = paths.join(statePath, 'workspace.json');
     let config;
     try {
@@ -303,6 +300,9 @@ export const serveThixotrope = async (
         version: 1,
         workerId,
         publication: `workspace-${workerId}`,
+        // Unguessable, because a publication secret is a bearer capability and
+        // this one names the object the host calls `started()` on.
+        httpNotice: randomId(),
         initialized: false,
       };
       await save(files, configPath, config);
@@ -311,6 +311,8 @@ export const serveThixotrope = async (
       config?.version !== 1 ||
       !daemon.listWorkerIds().includes(config.workerId) ||
       config.publication !== `workspace-${config.workerId}` ||
+      typeof config.httpNotice !== 'string' ||
+      !/^[0-9a-f]{32}$/.test(config.httpNotice) ||
       typeof config.initialized !== 'boolean'
     )
       throw Error('Invalid workspace metadata');
@@ -372,6 +374,66 @@ export const serveThixotrope = async (
       });
       return opening;
     };
+    /**
+     * The clock lives in the workspace vat, holding its own alarm map and
+     * resolvers. The host keeps only deadlines.
+     *
+     * One clock shared through the inventory, as before: a consumer that wants
+     * its own can be granted the alarm facet directly, but the grant users know
+     * is a clock.
+     *
+     * @type {Promise<any> | undefined}
+     */
+    let workspaceClock;
+    const getClock = () => {
+      if (workspaceClock) return workspaceClock;
+      const opening = workspace.evaluate(
+        `(globalThis.clock ??= (${makeGuestClock.toString()})(alarms))`,
+        {
+          alarms: daemon.makeResource('alarms', { workerId: config.workerId }),
+        },
+      );
+      workspaceClock = opening;
+      void opening.catch(() => {
+        if (workspaceClock === opening) workspaceClock = undefined;
+      });
+      return opening;
+    };
+
+    /**
+     * The HTTP manager lives in the workspace vat, for the same reason the
+     * mail address book does: it is durable policy, and the workspace is the
+     * durable thing a user already owns. Its adapter is a separate vat, which
+     * the keeper builds.
+     *
+     * @type {Promise<any> | undefined}
+     */
+    let httpManager;
+    const getHttpManager = () => {
+      if (httpManager) return httpManager;
+      const opening = workspace
+        .evaluate(
+          `(globalThis.httpManager ??= (${makeHttpManager.toString()})({
+            makeKeeper: (${makeAdapterKeeper.toString()}),
+            vats,
+            adapterSource: ${JSON.stringify(`(${makeHttpAdapter.toString()})()`)},
+          }))`,
+        )
+        .then(async manager => {
+          // Publish under the persisted notice secret and ask the host to call
+          // `started()` there at every startup: waking the workspace would
+          // restore its heap and rebind nothing.
+          daemon.publish(manager, config.httpNotice);
+          workspace.notifyOnStart(config.httpNotice);
+          return manager;
+        });
+      httpManager = opening;
+      void opening.catch(() => {
+        if (httpManager === opening) httpManager = undefined;
+      });
+      return opening;
+    };
+
     /** @param {unknown} text */
     const parseInvitation = text => {
       if (typeof text !== 'string' || text.length > 4096)
@@ -449,20 +511,21 @@ export const serveThixotrope = async (
         if (requested) throw Error('Supervisor is stopping');
         if (typeof key !== 'string' || !key.length)
           throw Error('Expected inventory key');
-        const description = provideHttpServices().allocate(port);
-        const listener = daemon.makeResource('http-listener', description);
+        const listener = await E(await getHttpManager()).grant(
+          daemon.makeResource('http-port', { port }),
+        );
         await workspace.evaluate('(inventory.set(key, listener), true)', {
           key,
           listener,
         });
         return E(listener).status();
       },
-      httpServices: () => provideHttpServices().list(),
+      httpServices: async () => E(await getHttpManager()).list(),
       clockGrant: async key => {
         if (requested) throw Error('Supervisor is stopping');
         if (typeof key !== 'string' || !key.length || key.length > 128)
           throw Error('Invalid inventory key');
-        const clock = await provideClockService().getClock();
+        const clock = await getClock();
         await workspace.evaluate('(inventory.set(key, clock), true)', {
           key,
           clock,
@@ -470,11 +533,15 @@ export const serveThixotrope = async (
         return true;
       },
       alarmStatus: () => {
-        const status = provideClockService().status();
+        const status = alarms.status();
         return harden({
-          ...status,
-          ...status.scheduler,
-          error: status.error ?? status.scheduler?.error,
+          // `pending` is the host's durable row count. There are no host
+          // observations any more — nothing calls into the clock — so the
+          // count that used to track them is reported as the zero it now is.
+          pending: Number(status.armed),
+          observations: 0,
+          materialised: Number(status.materialised),
+          stopped: status.stopped,
         });
       },
       invite: async name => {
@@ -599,9 +666,9 @@ export const serveThixotrope = async (
           try {
             try {
               try {
-                await clockService?.shutdown();
+                alarms.shutdown();
               } finally {
-                await httpServices?.shutdown();
+                await httpPorts.shutdown();
               }
             } finally {
               await closePeers();
@@ -623,9 +690,9 @@ export const serveThixotrope = async (
       closeSocket();
       try {
         try {
-          await clockService?.shutdown();
+          alarms.shutdown();
         } finally {
-          await httpServices?.shutdown();
+          await httpPorts.shutdown();
         }
       } finally {
         await closePeers();

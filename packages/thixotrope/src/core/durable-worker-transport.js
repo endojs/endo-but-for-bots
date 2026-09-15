@@ -65,6 +65,9 @@ import { WorkerHaltError } from './worker-engine.js';
  *   it. If a future engine surfaces its own dormancy signal, it can
  *   feed this same seam.
  * @param {string} [options.debugLabel]
+ * @param {boolean} [options.resident] never park this worker on the host's own
+ *   initiative. An explicit `sleep` is still honoured: residency is the host
+ *   declining to take that decision, not a refusal to obey one
  * @param {() => void} [options.onFatal] retire the failed logical session
  */
 export const makeDurableWorkerTransport = (
@@ -76,6 +79,7 @@ export const makeDurableWorkerTransport = (
     onFrame,
     idleSleepMs = undefined,
     debugLabel = undefined,
+    resident = false,
     onFatal = () => {},
   },
 ) => {
@@ -127,7 +131,12 @@ export const makeDurableWorkerTransport = (
   };
 
   const armIdleTimer = () => {
-    if (idleSleepMs === undefined || destroyed || incarnation === undefined) {
+    if (
+      idleSleepMs === undefined ||
+      destroyed ||
+      incarnation === undefined ||
+      resident
+    ) {
       return;
     }
     if (idleTimer !== undefined) {
