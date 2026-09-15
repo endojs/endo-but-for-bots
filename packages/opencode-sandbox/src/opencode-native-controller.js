@@ -20,6 +20,7 @@ import {
   assertPublicNetworkEvidence,
   makePublicNetworkEnvironment,
 } from '@endo/hosted-agent/public-network.js';
+import { reclaimRecordedMount } from '@endo/hosted-agent/recorded-cleanup.js';
 import { M } from '@endo/patterns';
 import { makeNodeFilesystem } from '@endo/platform/fs/extended/node-fs.js';
 
@@ -72,6 +73,8 @@ const ControllerInterface = M.interface('OpencodeNativeController', {
  *   closed when that formula is collected, so the plan's path is the only
  *   authority that crosses into this worker.
  * @param {typeof makeMcpBridgeForToolSet} [powers.makeBridge]
+ * @param {typeof reclaimRecordedMount} [powers.reclaimMount] Reclaims a lost
+ *   worker's recorded kernel mount. Never mounts anything.
  * @param {typeof makeMcpSocketServer} [powers.makeMcp]
  * @param {typeof makeOpencodeClient} [powers.makeClient]
  * @param {() => string} [powers.makePassword]
@@ -91,6 +94,7 @@ export const makeOpencodeNativeController = ({
     }),
   makeFilesystem = rootPath => makeNodeFilesystem({ rootPath }),
   makeBridge = makeMcpBridgeForToolSet,
+  reclaimMount = reclaimRecordedMount,
   makeMcp = makeMcpSocketServer,
   makeClient = makeOpencodeClient,
   makePassword = () => randomBytes(24).toString('hex'),
@@ -333,6 +337,15 @@ export const makeOpencodeNativeController = ({
       if (!activating) {
         // Recovery only. Never create substitutes for an earlier owner.
         const recoveredPlan = readSessionPlan(text);
+        // Reaching the shared services is best effort, and never proof either
+        // way: a service revived to answer this call holds no scopes from the
+        // lost incarnation, and one that cannot be reached cannot be asked.
+        // A scope still live in THIS incarnation is found here and closed
+        // below, which is the case worth trying for. A slice left behind by a
+        // lost runtime is reconciled by the driver's own label sweep, so a
+        // failure here is reported, not raised: raising it is what used to
+        // leave a session permanently unstoppable whenever a superseded
+        // service formula refused to revive.
         const recovered = await Promise.allSettled([
           (async () => {
             if (sandboxScope) return;
@@ -349,13 +362,36 @@ export const makeOpencodeNativeController = ({
             );
           })(),
         ]);
-        const released = await Promise.allSettled([closeResources()]);
-        throw AggregateError(
-          [...recovered, ...released].flatMap(result =>
-            result.status === 'rejected' ? [result.reason] : [],
-          ),
-          'Original local 9P/MCP cleanup ownership is unavailable',
+        // The kernel mount outlives every process that knew about it, so it
+        // is the one thing this owner must establish. Both run before either
+        // is judged: a failed scope close must not skip the unmount.
+        const released = await Promise.allSettled([
+          closeResources(),
+          // Compose the mounter settings exactly as activation does: the
+          // operator's are this worker's trusted configuration and the plan's
+          // recorded overrides sit on top. Reading only the plan would run a
+          // bare `umount` on a host whose mounts go through a privilege
+          // helper, and refuse every reclamation with EPERM.
+          reclaimMount({
+            ...recoveredPlan,
+            mounterEnv: { ...env, ...recoveredPlan.mounterEnv },
+          }),
+        ]);
+        const failures = released.flatMap(result =>
+          result.status === 'rejected' ? [result.reason] : [],
         );
+        const diagnosed = recovered.flatMap(result =>
+          result.status === 'rejected' ? [result.reason] : [],
+        );
+        if (failures.length) {
+          throw AggregateError(
+            [...diagnosed, ...failures],
+            'Original local 9P/MCP cleanup ownership is unavailable',
+          );
+        }
+        for (const error of diagnosed) reportError(error);
+        stopped = true;
+        return;
       }
       const early = client ? E(client).terminate() : closeResources();
       await Promise.allSettled([activating, early]);
