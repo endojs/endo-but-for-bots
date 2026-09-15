@@ -1890,12 +1890,13 @@ fn unarmed_meter_accumulates_without_checking() {
 }
 
 #[test]
-fn user_function_call_runs_and_meters_bit_exact() {
+fn user_function_call_runs_and_meters_deterministically() {
     // The exact XS bytecode for `(function(x){return x+1})(5)`
     // (captured from the oracle), run oracle-free: the frame machinery
     // (`constructor_function`/`code`/`function_environment`/`call`/
     // `run_1`/`argument`/`end`) must produce the completion `6` and the
-    // XS computron count `30` — a standing lock on the definition-site
+    // frozen own cost `30` (captured from XS at bring-up; now Iron
+    // Horse's own release cost) — a standing lock on the definition-site
     // allocation metering and dispatch-metered stack frames, so a
     // regression is caught without linking C.
     let code: [u8; 44] = [
@@ -1907,14 +1908,17 @@ fn user_function_call_runs_and_meters_bit_exact() {
     assert_eq!(out.halt, Halt::Return);
     assert!(out.completed);
     assert_eq!(out.result, "6", "the call returns x+1 with x=5");
-    assert_eq!(out.computrons, 30, "bit-exact computrons vs XS");
+    assert_eq!(
+        out.computrons, 30,
+        "frozen own computron cost (release determinism pin)"
+    );
 }
 
 #[test]
-fn nested_user_function_calls_run_and_meter_bit_exact() {
+fn nested_user_function_calls_run_and_meter_deterministically() {
     // `(function(){return (function(){return 1})()})()`, captured from
     // the oracle: two definitions and two nested calls, completion `1`,
-    // XS computrons `36`.
+    // frozen own cost `36` (captured from XS at bring-up).
     let code: [u8; 51] = [
         0x0b, 0x00, 0x4b, 0xe0, 0x38, 0x00, 0x00, 0x2e, 0x1c, 0x0b, 0x00, 0xe0, 0x38, 0x00, 0x00,
         0x2e, 0x06, 0x0b, 0x00, 0x72, 0x01, 0xbb, 0x44, 0x58, 0x92, 0x42, 0xe0, 0x89, 0x01, 0x00,
@@ -1925,11 +1929,14 @@ fn nested_user_function_calls_run_and_meter_bit_exact() {
     assert_eq!(out.halt, Halt::Return);
     assert!(out.completed);
     assert_eq!(out.result, "1");
-    assert_eq!(out.computrons, 36, "bit-exact computrons vs XS");
+    assert_eq!(
+        out.computrons, 36,
+        "frozen own computron cost (release determinism pin)"
+    );
 }
 
 #[test]
-fn closure_capture_and_mutation_run_and_meter_bit_exact() {
+fn closure_capture_and_mutation_run_and_meter_deterministically() {
     // The exact XS bytecode for
     // `var mk=function(){var c=0; return function(){c=c+1; return c}};
     //  var f=mk(); f(); f()` (captured from the oracle), run
@@ -1937,7 +1944,7 @@ fn closure_capture_and_mutation_run_and_meter_bit_exact() {
     // (`new_closure`/`store`/`function_environment`/`retrieve`/
     // `get_closure`/`pull_closure`) shares one heap cell between the
     // factory frame and the returned closure, so the two `f()` calls
-    // mutate `c` to `2`, and the computron count matches XS's `87` —
+    // mutate `c` to `2`, and the frozen own cost is `87` (captured from XS at bring-up) —
     // a standing lock on the cell-allocation metering without linking C.
     let code: [u8; 131] = [
         0x0b, 0x00, 0x9e, 0x02, 0x86, 0x02, 0x00, 0xe0, 0xe6, 0x01, 0x92, 0x86, 0x03, 0x00, 0xe0,
@@ -1957,7 +1964,10 @@ fn closure_capture_and_mutation_run_and_meter_bit_exact() {
         out.result, "2",
         "the shared closure cell mutates across the two f() calls"
     );
-    assert_eq!(out.computrons, 87, "bit-exact computrons vs XS");
+    assert_eq!(
+        out.computrons, 87,
+        "frozen own computron cost (release determinism pin)"
+    );
 }
 
 #[test]
@@ -2043,12 +2053,13 @@ fn every_opcode_decodes_and_dispatches_without_panic_or_decode_error() {
 }
 
 #[test]
-fn caught_throw_runs_and_meters_bit_exact() {
+fn caught_throw_runs_and_meters_deterministically() {
     // The exact XS bytecode for `try { throw 7 } catch (e) { e }`
     // (captured from the oracle), run oracle-free: `catch` pushes a
     // jump, `throw` unwinds to it restoring the stack/scope cuts,
     // `exception` binds the thrown 7 into `e`, and the completion is
-    // `7` with the XS computron count `38` — a standing lock on the
+    // `7` at the frozen own cost `38` (captured from XS at bring-up) —
+    // a standing lock on the
     // jump-chain semantics and dispatch-only exception metering.
     let code: [u8; 59] = [
         0x0b, 0x00, 0x4b, 0x9e, 0x04, 0x8b, 0x8b, 0x8b, 0x72, 0x00, 0xb5, 0x02, 0x92, 0x29, 0x08,
@@ -2063,15 +2074,18 @@ fn caught_throw_runs_and_meters_bit_exact() {
         out.result, "7",
         "the catch binds and returns the thrown value"
     );
-    assert_eq!(out.computrons, 38, "bit-exact computrons vs XS");
+    assert_eq!(
+        out.computrons, 38,
+        "frozen own computron cost (release determinism pin)"
+    );
 }
 
 #[test]
-fn uncaught_throw_escapes_to_host_and_meters_bit_exact() {
+fn uncaught_throw_escapes_to_host_and_meters_deterministically() {
     // The exact XS bytecode for `throw 7` (captured from the oracle),
     // run oracle-free: with no handler on the jump chain the throw
     // escapes to the host as `Halt::Throw("7")`, and the computron
-    // count is XS's `6` — the escaping opcode is un-metered and the
+    // count is the frozen own cost `6` — the escaping opcode is un-metered and the
     // host-boundary constant `THROW_HOST_ESCAPE_METERING` is accrued
     // (`begin`, `eval_environment`, `integer` = 3 metered opcodes plus
     // the 3-dispatch invocation baseline, the escaping `throw` dropped).
@@ -2083,7 +2097,10 @@ fn uncaught_throw_escapes_to_host_and_meters_bit_exact() {
         "no handler ⇒ escape to host"
     );
     assert!(!out.completed);
-    assert_eq!(out.computrons, 6, "bit-exact host-escape computrons vs XS");
+    assert_eq!(
+        out.computrons, 6,
+        "frozen own host-escape computron cost (release determinism pin)"
+    );
 }
 
 #[test]
@@ -2092,7 +2109,7 @@ fn bare_intrinsic_reference_renders_as_native_function() {
     // begin_sloppy, eval_environment, eval_reference #1,
     // get_variable #1, set_result, return. With the intrinsic linked to
     // symbol id 1 the completion is the native function, rendered by
-    // Function.prototype.toString's host-function form, at XS's 9
+    // Function.prototype.toString's host-function form, at the frozen own cost of 9
     // computrons (pure dispatch + program setup).
     let code: [u8; 11] = [
         0x0b, 0x00, 0x4b, 0x4d, 0x01, 0x00, 0x67, 0x01, 0x00, 0xbb, 0xa9,
@@ -2103,14 +2120,17 @@ fn bare_intrinsic_reference_renders_as_native_function() {
     assert_eq!(out.halt, Halt::Return);
     assert!(out.completed);
     assert_eq!(out.result, "function [\"Boolean\"] (){[native code]}");
-    assert_eq!(out.computrons, 9, "bit-exact computrons vs XS");
+    assert_eq!(
+        out.computrons, 9,
+        "frozen own computron cost (release determinism pin)"
+    );
 }
 
 #[test]
-fn native_boolean_call_coerces_and_meters_bit_exact() {
+fn native_boolean_call_coerces_and_meters_deterministically() {
     // The exact XS bytecode for `Boolean(1)` (captured from the
     // oracle): the native call path runs ToBoolean and returns `true`
-    // at XS's 13 computrons — the native adds no metering beyond the
+    // at the frozen own cost of 13 computrons — the native adds no metering beyond the
     // call's dispatch.
     let code: [u8; 17] = [
         0x0b, 0x00, 0x4b, 0xe0, 0x4d, 0x01, 0x00, 0x66, 0x01, 0x00, 0x28, 0x72, 0x01, 0xab, 0x01,
@@ -2122,16 +2142,19 @@ fn native_boolean_call_coerces_and_meters_bit_exact() {
     assert_eq!(out.halt, Halt::Return);
     assert!(out.completed);
     assert_eq!(out.result, "true");
-    assert_eq!(out.computrons, 13, "bit-exact computrons vs XS");
+    assert_eq!(
+        out.computrons, 13,
+        "frozen own computron cost (release determinism pin)"
+    );
 }
 
 #[test]
-fn user_constructor_new_runs_and_meters_bit_exact() {
+fn user_constructor_new_runs_and_meters_deterministically() {
     // The exact XS bytecode for `function F(a){this.x=a}; (new F(5)).x`
     // (captured from the oracle): the construct path — `new` reshaping the
     // frame with the uninitialized `this` placeholder, `begin`'s
     // fxRunConstructor allocating the fresh instance, the body setting
-    // `this.x`, `end` returning `this` — yields `5` at XS's 43
+    // `this.x`, `end` returning `this` — yields `5` at the frozen own cost of 43
     // computrons, a standing lock on the construct frame geometry and its
     // fixed host-frame metering without linking C.
     let code: [u8; 69] = [
@@ -2145,14 +2168,17 @@ fn user_constructor_new_runs_and_meters_bit_exact() {
     assert_eq!(out.halt, Halt::Return);
     assert!(out.completed);
     assert_eq!(out.result, "5", "new F(5).x reads the constructed property");
-    assert_eq!(out.computrons, 43, "bit-exact computrons vs XS");
+    assert_eq!(
+        out.computrons, 43,
+        "frozen own computron cost (release determinism pin)"
+    );
 }
 
 #[test]
-fn symbol_create_and_typeof_meters_bit_exact() {
+fn symbol_create_and_typeof_meters_deterministically() {
     // The exact XS bytecode for `typeof Symbol()` (captured from the
     // oracle): `Symbol()` creates a fresh symbol primitive, `typeof`
-    // reads "symbol", at XS's 13 computrons (the symbol-creation cost
+    // reads "symbol", at the frozen own cost of 13 computrons (the symbol-creation cost
     // plus dispatch).
     let code: [u8; 16] = [
         0x0b, 0x00, 0x4b, 0xe0, 0x4d, 0x01, 0x00, 0x66, 0x01, 0x00, 0x28, 0xab, 0x00, 0xde, 0xbb,
@@ -2164,7 +2190,10 @@ fn symbol_create_and_typeof_meters_bit_exact() {
     assert_eq!(out.halt, Halt::Return);
     assert!(out.completed);
     assert_eq!(out.result, "symbol");
-    assert_eq!(out.computrons, 13, "bit-exact computrons vs XS");
+    assert_eq!(
+        out.computrons, 13,
+        "frozen own computron cost (release determinism pin)"
+    );
 }
 
 #[test]
@@ -2205,11 +2234,11 @@ fn bare_symbol_completion_is_a_completion_the_harness_coerces_to_a_typeerror() {
 }
 
 #[test]
-fn object_prototype_method_dispatch_meters_bit_exact() {
+fn object_prototype_method_dispatch_meters_deterministically() {
     // The exact XS bytecode for `({a:1}).hasOwnProperty('a')` (captured
     // from the oracle): `.hasOwnProperty` resolves up the prototype chain
     // to %Object.prototype%'s native method, which is dispatched with the
-    // object as receiver and answers `true` at XS's 21 computrons.
+    // object as receiver and answers `true` at the frozen own cost of 21 computrons.
     let code: [u8; 33] = [
         0x0b, 0x00, 0x4b, 0x9e, 0x01, 0x8b, 0x90, 0xb5, 0x01, 0x5c, 0x01, 0x72, 0x01, 0x89, 0x01,
         0x00, 0x72, 0x00, 0xe2, 0x01, 0x42, 0x60, 0x02, 0x00, 0x28, 0xc9, 0x02, 0x61, 0x00, 0xab,
@@ -2221,14 +2250,17 @@ fn object_prototype_method_dispatch_meters_bit_exact() {
     assert_eq!(out.halt, Halt::Return);
     assert!(out.completed);
     assert_eq!(out.result, "true");
-    assert_eq!(out.computrons, 21, "bit-exact computrons vs XS");
+    assert_eq!(
+        out.computrons, 21,
+        "frozen own computron cost (release determinism pin)"
+    );
 }
 
 #[test]
-fn instanceof_prototype_chain_walk_meters_bit_exact() {
+fn instanceof_prototype_chain_walk_meters_deterministically() {
     // The exact XS bytecode for `({}) instanceof Object` (captured from
     // the oracle): the object's prototype chain reaches %Object.prototype%
-    // = Object.prototype, so the result is `true` at XS's 19 computrons
+    // = Object.prototype, so the result is `true` at the frozen own cost of 19 computrons
     // (the fxOrdinaryHasInstance host-frame call + the object-chain walk,
     // 4 computrons over the dispatch).
     let code: [u8; 20] = [
@@ -2241,15 +2273,18 @@ fn instanceof_prototype_chain_walk_meters_bit_exact() {
     assert_eq!(out.halt, Halt::Return);
     assert!(out.completed);
     assert_eq!(out.result, "true");
-    assert_eq!(out.computrons, 19, "bit-exact computrons vs XS");
+    assert_eq!(
+        out.computrons, 19,
+        "frozen own computron cost (release determinism pin)"
+    );
 }
 
 #[test]
-fn new_error_constructs_renders_and_meters_bit_exact() {
+fn new_error_constructs_renders_and_meters_deterministically() {
     // The exact XS bytecode for `new Error('boom')` (captured from the
     // oracle): the native Error constructor builds an error object whose
     // completion stringifies `Error: boom` (Error.prototype.toString) at
-    // XS's 13 computrons.
+    // the frozen own cost of 13 computrons.
     let code: [u8; 21] = [
         0x0b, 0x00, 0x4b, 0x4d, 0x01, 0x00, 0x67, 0x01, 0x00, 0x84, 0xc9, 0x05, 0x62, 0x6f, 0x6f,
         0x6d, 0x00, 0xab, 0x01, 0xbb, 0xa9,
@@ -2260,7 +2295,10 @@ fn new_error_constructs_renders_and_meters_bit_exact() {
     assert_eq!(out.halt, Halt::Return);
     assert!(out.completed);
     assert_eq!(out.result, "Error: boom");
-    assert_eq!(out.computrons, 13, "bit-exact computrons vs XS");
+    assert_eq!(
+        out.computrons, 13,
+        "frozen own computron cost (release determinism pin)"
+    );
 }
 
 /// Build a small ordinary-object graph `{a:1, b:{c:2}}` in a fresh arena
@@ -2361,11 +2399,11 @@ fn harden_transitive_freeze_worklist_completes() {
 }
 
 #[test]
-fn uncaught_thrown_error_escapes_with_real_error_value_bit_exact() {
+fn uncaught_thrown_error_escapes_with_real_error_value() {
     // The exact XS bytecode for `throw new TypeError('nope')` (captured
     // from the oracle): an uncaught real Error escapes to the host as
     // `TypeError: nope` (graduating abort-value parity from primitive
-    // throws) at XS's 12 computrons.
+    // throws) at the frozen own cost of 12 computrons.
     let code: [u8; 21] = [
         0x0b, 0x00, 0x4b, 0x4d, 0x01, 0x00, 0x67, 0x01, 0x00, 0x84, 0xc9, 0x05, 0x6e, 0x6f, 0x70,
         0x65, 0x00, 0xab, 0x01, 0xd7, 0xa9,
@@ -2375,14 +2413,17 @@ fn uncaught_thrown_error_escapes_with_real_error_value_bit_exact() {
     let out = interp.run(&code);
     assert_eq!(out.halt.thrown_rendering(), Some("TypeError: nope"));
     assert!(!out.completed);
-    assert_eq!(out.computrons, 12, "bit-exact host-escape computrons vs XS");
+    assert_eq!(
+        out.computrons, 12,
+        "frozen own host-escape computron cost (release determinism pin)"
+    );
 }
 
 #[test]
-fn native_object_construct_allocates_and_meters_bit_exact() {
+fn native_object_construct_allocates_and_meters_deterministically() {
     // The exact XS bytecode for `new Object()` (captured from the
     // oracle): the native Object constructor allocates a fresh empty
-    // object (rendered `[object Object]`) at XS's 11 computrons — one
+    // object (rendered `[object Object]`) at the frozen own cost of 11 computrons — one
     // fxNewObject plus one built-in step, the fractional gap over a bare
     // object literal.
     let code: [u8; 14] = [
@@ -2394,13 +2435,16 @@ fn native_object_construct_allocates_and_meters_bit_exact() {
     assert_eq!(out.halt, Halt::Return);
     assert!(out.completed);
     assert_eq!(out.result, "[object Object]");
-    assert_eq!(out.computrons, 11, "bit-exact computrons vs XS");
+    assert_eq!(
+        out.computrons, 11,
+        "frozen own computron cost (release determinism pin)"
+    );
 }
 
 #[test]
 fn value_global_undefined_resolves_pure_dispatch() {
     // The exact XS bytecode for `undefined` (captured from the
-    // oracle): the value global resolves to `undefined` at XS's 9
+    // oracle): the value global resolves to `undefined` at the frozen own cost of 9
     // computrons (pure dispatch — a global read meters no built-in step).
     let code: [u8; 11] = [
         0x0b, 0x00, 0x4b, 0x4d, 0x01, 0x00, 0x67, 0x01, 0x00, 0xbb, 0xa9,

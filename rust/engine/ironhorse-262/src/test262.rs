@@ -16,10 +16,12 @@
 //! tests are **skipped** the instant ironhorse reaches an opcode outside the
 //! covered subset, and each such skip is **named by the opcode** that
 //! stopped it — never folded into a pass rate. A test is **covered** only
-//! when ironhorse runs it end-to-end to an outcome that is **bit-exact**
-//! (result/thrown-value AND computron, four-valued completion) with the
-//! oracle. A **divergence** — ironhorse completing with a wrong value/computron,
-//! or accepting a program XS rejects — is a real failure the bar forbids.
+//! when ironhorse runs it end-to-end to an outcome that **observably
+//! agrees** (result/thrown-value, four-valued completion) with the oracle;
+//! computron drift against XS is advisory telemetry (XS-computron parity
+//! is a non-goal). A **divergence** — ironhorse completing with a wrong
+//! value, or accepting a program XS rejects — is a real failure the bar
+//! forbids.
 //!
 //! The split is the deliverable: it states exactly how much of real
 //! `language/` the covered grammar reaches today, growing as later stages
@@ -33,7 +35,8 @@ use std::path::{Path, PathBuf};
 /// How one assembled test classified.
 #[derive(Debug, Clone)]
 pub enum Class {
-    /// Ran end-to-end, bit-exact with the oracle (the covered grammar).
+    /// Ran end-to-end, observably agreeing with the oracle (the covered
+    /// grammar); computron drift is advisory.
     Covered,
     /// Ran end-to-end but disagreed with the oracle — a real failure.
     Divergent(Box<DualRun>),
@@ -173,7 +176,7 @@ pub(crate) fn classify_run(r: DualRun) -> Class {
             if r.observables_agree() {
                 Class::Covered
             } else {
-                Class::Skipped("abort-value-or-cost-differs".into())
+                Class::Skipped("abort-value-differs".into())
             }
         }
         // ironhorse completed a program the oracle rejected: a real
@@ -427,8 +430,8 @@ mod tests {
         // (charCodeAt/codePointAt/charAt/slice/substring — the code-unit
         // index/slice surface the swap re-implemented), dual-run each against
         // the pin, and require ZERO divergence on RESULTS. A test whose value
-        // agrees but whose computrons shift under the recalibration is a NAMED
-        // `builtin-coercion-computron-gap` skip (classify()), NOT a divergence —
+        // agrees is COVERED however far its computrons shift under the
+        // recalibration — computron drift against XS is advisory telemetry,
         // exactly the accuracy-over-parity split the swap adopted. Whole-tree
         // `built-ins/String` (1111 files) is the `endot-ih` binary; this
         // in-`cargo test` slice stays bounded so the oracle RSS is contained.
@@ -480,7 +483,7 @@ mod tests {
         // walk the covered-grammar-adjacent sections (expressions and
         // statements the 2b subset touches), assemble each the standard
         // test262 way, dual-run, and require ZERO divergence — every test
-        // ironhorse runs end-to-end agrees bit-exactly with XS; everything
+        // ironhorse runs end-to-end agrees observably with XS; everything
         // else is honestly skipped by a NAMED reason (the unsupported
         // opcode, a parse-negative, a built-in abort). The covered count is
         // reported, not asserted to a target: it states how far the covered

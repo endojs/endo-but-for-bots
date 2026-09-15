@@ -1,16 +1,20 @@
 //! The XSRE matcher parity suite: every supported pattern/input is
-//! checked **bit-exact** against the XS pin (`fxCompileRegExp` +
+//! checked for **result parity** against the XS pin (`fxCompileRegExp` +
 //! `fxMatchRegExp`, reached through the `xs-oracle` shim) — the
-//! matched/not-matched answer, every capture's `(from, to)` byte
-//! offsets, and the matcher's per-step meter (`match_meter_raw`).
+//! matched/not-matched answer and every capture's `(from, to)` byte
+//! offsets.
 //!
-//! The compile meter is deliberately *not* asserted here: the shim's
-//! compile number folds in `fxNewChunk`'s `XS_CHUNK_ALLOCATION_METERING`
-//! over the code and data buffers — a C-allocator artifact the safe-Rust
-//! port (which uses `Vec`, not the GC heap) structurally does not incur,
-//! and which the design already excludes from the parity number ("run
-//! metering excludes parse/allocation metering"). The matcher's per-step
-//! meter is the consensus-relevant cost, and *that* is pinned exactly.
+//! Neither meter is asserted against the pin. The compile meter folds in
+//! `fxNewChunk`'s `XS_CHUNK_ALLOCATION_METERING` over the code and data
+//! buffers — a C-allocator artifact the safe-Rust port (which uses `Vec`,
+//! not the GC heap) structurally does not incur. The per-step match meter
+//! was historically pinned equal to XS's; that gate is retired — Iron
+//! Horse's metering objective is to approximate actual CPU time, it MAY
+//! diverge from XS's counts, and XS-computron parity is a non-goal
+//! (`designs/ironhorse-engine.md` § Metering). What consensus needs is
+//! determinism of Iron Horse's OWN meter, which the oracle-free
+//! `finding_*` regression tests and golden vectors pin. Match-meter drift
+//! against the pin is printed as advisory calibration telemetry.
 //!
 //! A pattern the oracle compiles but this increment names
 //! [`CompileError::Unsupported`] (inline modifiers, …) is an HONEST NAMED
@@ -23,7 +27,7 @@ use xs_oracle::regexp as oracle_regexp;
 /// One parity case: `(pattern, flags, subject, start_byte_offset)`.
 type Case = (&'static str, &'static str, &'static str, i32);
 
-/// Compare one case bit-exact; returns `Ok(true)` on a checked match,
+/// Compare one case's observables; returns `Ok(true)` on a checked match,
 /// `Ok(false)` on an honest named skip, or `Err(msg)` on a divergence.
 fn check(case: Case) -> Result<bool, String> {
     let (pattern, flags, subject, start) = case;
@@ -91,12 +95,15 @@ fn check(case: Case) -> Result<bool, String> {
                     oracle.captures.len()
                 ));
             }
-            // The metering bar: per-step match meter, bit-exact.
+            // Per-step match-meter drift against the pin is advisory
+            // calibration telemetry, never a failure: XS-computron parity is
+            // a non-goal. Iron Horse's own match-meter determinism is pinned
+            // by the oracle-free finding_* regression tests.
             if outcome.match_meter_raw != oracle.match_meter_raw {
-                return Err(format!(
-                    "/{}/{} on {:?}@{}: match meter ironhorse={} oracle={}",
+                eprintln!(
+                    "/{}/{} on {:?}@{}: match meter drift (advisory) ironhorse={} oracle={}",
                     pattern, flags, subject, start, outcome.match_meter_raw, oracle.match_meter_raw
-                ));
+                );
             }
             Ok(true)
         }
@@ -110,7 +117,8 @@ fn check(case: Case) -> Result<bool, String> {
 /// `\u{...}` escapes, unicode (lower-ward) case fold, and unicode-aware
 /// classes/quantifiers/backreferences, Unicode properties, and unicodeSets
 /// expressions/string alternatives. Every entry is fully ported (checked
-/// bit-exact); the still-deferred surface is pinned separately in
+/// for result parity; meter drift is advisory); the still-deferred surface
+/// is pinned separately in
 /// [`inline_modifiers_remain_a_named_skip`].
 fn corpus() -> Vec<Case> {
     let mut v: Vec<Case> = Vec::new();
@@ -197,8 +205,8 @@ fn corpus() -> Vec<Case> {
     v.push(("(a)(b)\\2\\1", "", "abba", 0));
 
     // Named capture groups. A `(?<name>…)` group codegens identically to
-    // its numbered peer, so the whole-match / capture offsets AND the
-    // per-step meter must stay bit-exact with XS; a `\k<name>` reference
+    // its numbered peer, so the whole-match / capture offsets stay exact
+    // against XS (meter drift is advisory); a `\k<name>` reference
     // resolves through the runtime `names[]` array like `\N`.
     for &s in &["2026-08-14", "abcd", "", "x"] {
         v.push(("(?<year>\\d{4})-(?<month>\\d{2})-(?<day>\\d{2})", "", s, 0));
@@ -252,8 +260,8 @@ fn corpus() -> Vec<Case> {
     v.push(("\\d+(?=px)", "", "10px", 0));
 
     // Pathological backtracking (deterministic step behavior matters —
-    // the meter must match the pin's exact backtrack count, not a
-    // ReDoS-shortcut). Inputs are kept SMALL: the oracle shim leaves the
+    // the matcher must take real backtracking steps, not a ReDoS-shortcut;
+    // the advisory meter telemetry makes a shortcut visible). Inputs are kept SMALL: the oracle shim leaves the
     // C matcher's meter interval unset, so a catastrophic pattern would
     // backtrack unbounded on both engines; small inputs exercise the
     // exact backtrack count without the exponential blowup.
@@ -288,7 +296,7 @@ fn corpus() -> Vec<Case> {
     //
     // Every case here is fully ported, so it is `checked` (never a named
     // skip). The subjects are standard UTF-8; XS is fed the same bytes and
-    // the offsets are compared bit-exact, meter included.
+    // the offsets are compared exactly (meter drift is advisory).
     let grin = "\u{1F600}"; // U+1F600, 4 UTF-8 bytes
     let grinning = "\u{1F600}\u{1F601}\u{1F602}";
     // Plain BMP grammar under `u` behaves as without it.
@@ -376,8 +384,9 @@ fn corpus() -> Vec<Case> {
 
     // `\p{…}` is a property escape in NON-Unicode mode too (XS dispatches
     // `p`/`P` unconditionally — a legacy `\p` is not an identity escape of
-    // `p`). Locked bit-exact on ASCII/BMP subjects so the matcher path (byte
-    // oriented for non-`u`) agrees with the pin, not just the accept verdict.
+    // `p`). Locked on ASCII/BMP subjects so the matcher path (byte oriented
+    // for non-`u`) agrees with the pin on results, not just the accept
+    // verdict.
     for &flags in &["", "i", "g", "m"] {
         v.push(("\\p{L}", flags, "A", 0));
         v.push(("\\p{L}", flags, "5", 0));
@@ -449,7 +458,7 @@ fn corpus() -> Vec<Case> {
     // Inline modifiers `(?ims-ims:...)`: scoped case-fold, dot-all, multiline,
     // and their restoration at the group boundary, over inputs that exercise
     // both the added and the removed flag. Every one is fully ported, so the
-    // emitted program, captures, and per-step meter all pin bit-exact.
+    // emitted program and captures pin exactly (meter drift is advisory).
     for &s in &["a", "A", "ab", "Ab", "AB", "aB", "a\nb", "A\nB", ""] {
         // Add ignoreCase only inside the group.
         v.push(("(?i:a)b", "", s, 0));
@@ -490,7 +499,7 @@ fn corpus() -> Vec<Case> {
 
     // Duplicate named-capture groups (ES2025): legal across mutually-exclusive
     // disjunction alternatives (shared name slot), a SyntaxError within one
-    // alternative. Accept/reject, captures, and the per-step meter pin exact.
+    // alternative. Accept/reject and captures pin exactly.
     for &s in &["x", "y", "z", "xy", "yx", "ab", "", "a"] {
         v.push(("(?<a>x)|(?<a>y)", "", s, 0));
         v.push(("(?<a>x)|(?<b>y)", "", s, 0));
@@ -589,10 +598,10 @@ fn unicode_sets_syntax_and_execution_match_the_pin() {
     }
 }
 
-/// Inline modifiers are now fully ported: the emitted program, captures, and
-/// per-step meter all pin bit-exact against the XS pin (they used to be a
-/// named `Unsupported` skip). A spread of scoped/nested cases is asserted here
-/// in addition to the corpus sweep, to lock the parity explicitly.
+/// Inline modifiers are now fully ported: the emitted program and captures
+/// pin exactly against the XS pin (they used to be a named `Unsupported`
+/// skip). A spread of scoped/nested cases is asserted here in addition to
+/// the corpus sweep, to lock the result parity explicitly.
 #[test]
 fn inline_modifiers_execute_and_match_the_pin() {
     let cases: &[Case] = &[

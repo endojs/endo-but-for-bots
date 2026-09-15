@@ -1,5 +1,25 @@
 # Ironhorse engine (rust/engine)
 
+## Metering objective
+
+**Iron Horse's metering objective is to approximate actual CPU time.** The
+meter is Iron Horse's own deterministic, release-versioned cost model
+(`ironhorse-meter-N`); to serve that objective it **MAY diverge from XS's
+computron counts. XS-computron parity is a non-goal — not a deferred goal.**
+Two things are required and gated, and neither is XS parity:
+
+- **Determinism:** identical computrons across repeated runs of the same
+  binary on the same platform (the Agoric-consensus requirement), locked by
+  `--repeat` runs and oracle-free golden own-cost vectors.
+- **Result parity with XS:** same values, same completions, same errors —
+  the differential oracle gates *observables* only.
+
+Do not add tests, defect items, or harness predicates that fail when Iron
+Horse's computron counts differ from XS's; computron comparison against the
+oracle is advisory calibration telemetry. Authoritative statement:
+[`designs/ironhorse-engine.md`](../../designs/ironhorse-engine.md)
+§ Metering.
+
 <!-- W4 metering policy -->
 Ironhorse metering uses its own frozen, XS-derived cost table.
 Oracle computron comparisons, including the legacy `--gate-meter-exact` flag,

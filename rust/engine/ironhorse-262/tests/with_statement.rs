@@ -4,17 +4,19 @@
 //! scopable object-environment walk (`fxIsScopableSlot` = `HasProperty` +
 //! `@@unscopables`), and `GET_VARIABLE`/`GET_THIS_VARIABLE`/`SET_VARIABLE`
 //! resolving against the object the reference op selected. Each asserts
-//! **bit-exact** agreement with the pinned XS oracle — same completion value AND
-//! same computrons — so a metering or semantics drift fails the build.
+//! **observable** agreement with the pinned XS oracle — same completion and
+//! value — so a semantics drift fails the build. Computron counts are
+//! advisory diagnostics only (XS-computron parity is a non-goal).
 
 use ironhorse_262::dual_run;
 
-/// The program runs end-to-end bit-exact with the XS oracle (value + computrons).
+/// The program runs end-to-end observably agreeing with the XS oracle
+/// (completion + value; the computrons in the message are diagnostics only).
 fn exact(source: &str) {
     let run = dual_run(source).expect("the XS oracle machine must start");
     assert!(
         run.observables_agree(),
-        "not bit-exact: {source}\n  oracle_result={} ironhorse_result={}\n  oracle_computrons={} ironhorse_computrons={}",
+        "observable divergence: {source}\n  oracle_result={} ironhorse_result={}\n  oracle_computrons={} ironhorse_computrons={}",
         run.oracle_result,
         run.ironhorse_result,
         run.oracle_computrons,

@@ -384,11 +384,17 @@ that geometry.
 
 ### Metering (requirement 1a)
 
-**Doctrine (2026-07-04, maintainer directive): accuracy over
-parity.** The meter's purpose is to be the best available
-**deterministic proxy for real (wall-clock) execution cost**, not
-to reproduce XS's computron counts. XS-computron parity is an
-explicit non-goal. Two properties are separated:
+**Doctrine (2026-07-04, maintainer directive; reaffirmed
+2026-09-15): accuracy over parity.** The meter's purpose is to be
+the best available **deterministic proxy for real (wall-clock)
+execution cost**, not to reproduce XS's computron counts. To that
+end Iron Horse's meter MAY diverge from XS's computron counts.
+XS-computron parity is an explicit **non-goal — not a deferred
+goal**: no future stage, defect item, or test may reintroduce it as
+a bar (an optional XS-compatible meter *version* remains possible
+under § Agoric consensus compatibility, conditional (c), which is a
+compatibility surface, not a parity requirement on the native
+meter). Two properties are separated:
 
 - **Determinism within a release binary and platform.**
   The frozen increment points and integer weights determine the charge for a
@@ -949,25 +955,31 @@ deliberate: interpreter behavior and compiler behavior are separated
 so a *result* divergence (or a flagged advisory computron/allocation
 drift) always has exactly one suspect.
 
-**Doctrine-transition note (2026-07-04).** The acceptance bars above
-are restated to **result agreement + a deterministic-per-release
-meter**, per the accuracy-over-parity doctrine (§ Metering),
-superseding the earlier "(result, computron) parity against XS"
-framing. The landed-stage records below (stage 2a, stage 2b, and the
-in-flight stage 3) were built and accepted under the *superseded*
-parity doctrine, and did in fact achieve bit-exact computron
-agreement with XS on their covered grammars. That evidence is
-**retained** — as a strong *result*-correctness and
-allocation-faithfulness signal and as free calibration data — but it
-is no longer the bar: those stages already satisfy, a fortiori, the
-weaker result-agreement bar, and future stages are held only to
-result agreement plus meter determinism. No landed work is
-invalidated by the doctrine change; the historical amendment prose
-below is preserved as written, with its "bit-exact computron parity"
-language read as the (now advisory) evidence it produced, not as a
-standing requirement.
+> ⚠️ **SUPERSEDED DOCTRINE BELOW — read this fence first
+> (2026-07-04; hardened 2026-09-15).** The acceptance bars above are
+> restated to **result agreement + a deterministic-per-release
+> meter**, per the accuracy-over-parity doctrine (§ Metering),
+> superseding the earlier "(result, computron) parity against XS"
+> framing. The landed-stage records below (stage 2a, stage 2b, and
+> the then-in-flight stage 3) were built and accepted under the
+> *superseded* parity doctrine, and did in fact achieve bit-exact
+> computron agreement with XS on their covered grammars. That
+> evidence is **retained** — as a strong *result*-correctness and
+> allocation-faithfulness signal and as free calibration data — but
+> it is no longer the bar: those stages already satisfy, a fortiori,
+> the weaker result-agreement bar, and future stages are held only
+> to result agreement plus meter determinism. No landed work is
+> invalidated by the doctrine change; the historical amendment prose
+> below is preserved as written, **as a record, not as doctrine**.
+> Every mention of "bit-exact computron parity", "to be matched
+> exactly", or a "bit-exact corpus" in the fenced records below
+> describes the superseded bar and the (now advisory) evidence it
+> produced. **Do not derive new requirements, tests, or defect items
+> from the fenced text.** XS-computron parity is a non-goal, not a
+> deferred goal.
 
-**Stage-2 amendment (supervisor, 2026-07-02).** Stage 2 executes as two
+**Stage-2 amendment (supervisor, 2026-07-02 — historical, fenced
+above).** Stage 2 executes as two
 sub-stages on this PR, because the stage-2 build established — and the
 supervisor verified against the pin's `xsMemory.c` — that bit-exact
 computron parity on *any* program that allocates at run time requires
@@ -995,7 +1007,8 @@ END/RETURN exits to the C caller, and `fxBeginMetering` scales the
 host's interval `<<16` and resets `meterIndex` — both to be matched
 exactly (stage-2a review findings 1 and 2).
 
-**Stage-2b complete (2026-07-03).** The three-part 2b orchestration landed:
+**Stage-2b complete (2026-07-03 — historical, fenced above).** The
+three-part 2b orchestration landed:
 child 1 the allocation-faithful object heap, child 2 call/return frame
 switching and closures via heap cells, child 3 exceptions (the XS
 jump-buffer chain with the JS/host flag reduced to a structural predicate:
