@@ -21,6 +21,7 @@ import type {
   TreeEntry,
 } from '@endo/platform/fs/lite/types';
 import type { ContentKind, ContentSourceHint } from './locator.js';
+import type { makeSessionOwner } from './session-owner.js';
 
 // Branded string types for pet names and special names
 declare const PetNameBrand: unique symbol;
@@ -818,6 +819,8 @@ export interface Context {
    * The identifier for the associated formula.
    */
   id: FormulaIdentifier;
+  /** Refuse further acquisition through this original context after cancellation. */
+  assertActive: () => void;
   /**
    * Cancel the value, preparing it for garbage collection. Cancellation
    * propagates to all values that depend on this value.
@@ -1686,6 +1689,21 @@ export interface SecretManagerDirectory {
 export type FarEndoGuest = FarRef<EndoGuest>;
 
 export interface EndoHost extends EndoAgent {
+  /**
+   * Provide a daemon-local administrative owner for a private directory.
+   * Creates missing directory parents; refuses a changed retained binding.
+   * Disposable record/client capabilities are not exported to the caller.
+   * Another host cannot claim the same directory in this daemon incarnation.
+   * A revived host formula also cannot take over its earlier incarnation's
+   * claim; cancellation does not prove that admitted cleanup has drained.
+   * Owners and their client forwarding facets are fenced when this host or
+   * the original directory incarnation is cancelled; that fence is not native
+   * cleanup proof.
+   */
+  provideSessionOwner(
+    recordsPath: NameOrPath,
+    controllerSpecifier?: string,
+  ): Promise<ReturnType<typeof makeSessionOwner>>;
   form(
     recipientNameOrPath: string | string[],
     description: string,
@@ -1979,6 +1997,17 @@ export interface EndoHost extends EndoAgent {
    * `EndoInspector` already denotes the per-formula reference walker.)
    */
   diagnostics(): Promise<EndoDiagnostics>;
+  /**
+   * Read the stored construction environment of a local make-unconfined,
+   * make-archive, or make-from-tree formula without reviving it.
+   * Returns an empty record when the supported formula has no stored env.
+   * Rejects other formula types and cross-peer identifiers.
+   * Values may contain credentials: this method is available only on EndoHost,
+   * not on guests, diagnostics, or ordinary formula inspection records.
+   */
+  getFormulaEnvironment(
+    identifier: FormulaIdentifier,
+  ): Promise<Record<string, string>>;
   /**
    * Snapshot every retention path from a GC root to the target,
    * identified by an endo:// locator. Pet-store edges along the
@@ -2578,6 +2607,7 @@ export type DaemonicPowers = {
 export type FormulateResult<T> = Promise<{
   id: FormulaIdentifier;
   value: T;
+  context: Context;
 }>;
 
 export type DeferredTask<T extends Record<string, string | string[]>> = (
@@ -2704,6 +2734,7 @@ export interface DaemonCore {
     workerLabel?: string,
   ) => FormulateResult<unknown>;
 
+  /** Transfers one transient pin; release after publication or its failure. */
   formulateDirectory: (
     nodeNumber?: NodeNumber,
   ) => FormulateResult<EndoDirectory>;
@@ -2810,6 +2841,8 @@ export interface DaemonCore {
 
   getFormulaForId: (id: FormulaIdentifier) => Promise<Formula>;
 
+  getActiveContext: (id: FormulaIdentifier) => Context | undefined;
+
   formulateNumberedGuest: (
     identifiers: FormulateNumberedGuestParams,
   ) => FormulateResult<EndoGuest>;
@@ -2904,6 +2937,7 @@ export interface DaemonCore {
     env?: Record<string, string>,
     trustedShims?: string[],
     workerLabel?: string,
+    retainWorker?: (id: FormulaIdentifier, context: Context) => void,
   ) => FormulateResult<unknown>;
 
   formulateWorker: (

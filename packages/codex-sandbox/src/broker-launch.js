@@ -1,6 +1,29 @@
 // @ts-check
 
 import { Fail, makeError, X } from '@endo/errors';
+import {
+  assertPublicNetworkEvidence,
+  makePublicNetworkEnvironment,
+} from '@endo/hosted-agent/public-network.js';
+
+/**
+ * @param {any} [network]
+ * @returns {Readonly<Record<string, string>>}
+ */
+export const makeBrokerEnvironment = (network = undefined) => {
+  return harden({
+    CODEX_HOME: '/codex-home',
+    HOME: '/home/node',
+    LANG: 'C.UTF-8',
+    LC_ALL: 'C.UTF-8',
+    TEMP: '/tmp',
+    TMP: '/tmp',
+    TMPDIR: '/tmp',
+    TZ: 'UTC',
+    ...makePublicNetworkEnvironment(network),
+  });
+};
+harden(makeBrokerEnvironment);
 
 /**
  * Validate the credential-free listener address, never an upstream URL.
@@ -26,14 +49,26 @@ export const assertBrokerEndpoint = endpoint => {
 harden(assertBrokerEndpoint);
 
 /**
- * This is configuration, not evidence that the OS applied an inner sandbox.
+ * The outer container confines the CLI and all of its commands as one domain.
+ * Codex 0.152.0 has no external-sandbox configuration/thread mode; use its
+ * unrestricted baseline inside that container and explicit externalSandbox
+ * policies for turns. Configuration alone is not evidence of containment.
  * CLI overrides merge home configuration; admission must also call
  * assertBrokerRuntimeConfig against the pinned runtime's config/read response.
  * @param {string} endpoint
  * @param {string} [executable]
+ * @param {any} [network]
  */
-export const makeBrokerAppServerArgv = (endpoint, executable = 'codex') => {
+export const makeBrokerAppServerArgv = (
+  endpoint,
+  executable = 'codex',
+  network = undefined,
+) => {
   const origin = assertBrokerEndpoint(endpoint);
+  assertPublicNetworkEvidence(network);
+  !network ||
+    new URL(origin).hostname === '127.0.0.1' ||
+    Fail`Public network requires IPv4 loopback broker`;
   return harden([
     executable,
     '-c',
@@ -41,17 +76,11 @@ export const makeBrokerAppServerArgv = (endpoint, executable = 'codex') => {
     '-c',
     `model_providers.endo_broker={name="Endo broker",base_url="${origin}/v1",wire_api="responses",requires_openai_auth=false}`,
     '-c',
-    'sandbox_mode="workspace-write"',
+    'sandbox_mode="danger-full-access"',
     '-c',
     'approval_policy="never"',
     '-c',
-    'sandbox_workspace_write.writable_roots=["/workspace","/tmp","/run","/scratch"]',
-    '-c',
-    'sandbox_workspace_write.exclude_slash_tmp=true',
-    '-c',
-    'sandbox_workspace_write.exclude_tmpdir_env_var=true',
-    '-c',
-    'sandbox_workspace_write.network_access=false',
+    'features.network_proxy.enabled=false',
     'app-server',
     '--listen',
     'stdio://',
@@ -61,20 +90,22 @@ harden(makeBrokerAppServerArgv);
 
 /**
  * Reject inherited provider credentials and alternate routes after CLI merges.
- * This attests configuration only, not the provider listener or tool isolation.
+ * This checks configuration only; the outer sandbox confines all guest processes.
  * @param {any} config
  * @param {string} endpoint
+ * @param {any} [network]
  */
-export const assertBrokerRuntimeConfig = (config, endpoint) => {
+export const assertBrokerRuntimeConfig = (
+  config,
+  endpoint,
+  network = undefined,
+) => {
   const origin = assertBrokerEndpoint(endpoint);
+  assertPublicNetworkEvidence(network);
   (config?.model_provider === 'endo_broker' &&
     config.approval_policy === 'never' &&
-    config.sandbox_mode === 'workspace-write' &&
-    config.sandbox_workspace_write?.network_access === false &&
-    config.sandbox_workspace_write?.exclude_slash_tmp === true &&
-    config.sandbox_workspace_write?.exclude_tmpdir_env_var === true &&
-    JSON.stringify(config.sandbox_workspace_write?.writable_roots) ===
-      JSON.stringify(['/workspace', '/tmp', '/run', '/scratch'])) ||
+    config.sandbox_mode === 'danger-full-access' &&
+    config.features?.network_proxy?.enabled === false) ||
     Fail`Codex broker runtime configuration mismatch`;
   const provider = config.model_providers?.endo_broker;
   const expected = {

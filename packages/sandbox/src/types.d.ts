@@ -8,10 +8,23 @@
  */
 
 import type { ERef, FarRef } from '@endo/eventual-send';
+import type { DriverPreparation } from './native-factory-types.js';
+import type { NativePodmanProfile } from './native-podman-profile-types.js';
 import type {
   PassableBytesReader,
   PassableBytesWriter,
 } from '@endo/exo-stream';
+
+import type {
+  GeneratedFile,
+  ValidatedGeneratedFile,
+} from './generated-file-types.js';
+export type { GeneratedFile } from './generated-file-types.js';
+export type {
+  GeneratedFileMount,
+  GeneratedFileStage,
+  GeneratedFileStorage,
+} from './generated-file-storage-types.js';
 
 // ---------------------------------------------------------------------------
 // Network policy
@@ -41,7 +54,8 @@ export type NetworkProfile =
   | 'private'
   | 'host-loopback'
   | 'host-lan'
-  | 'host-net';
+  | 'host-net'
+  | 'join';
 
 // ---------------------------------------------------------------------------
 // Backend driver names and probe results
@@ -190,7 +204,17 @@ export type SeccompPolicy = 'default' | 'unconfined' | { profile: unknown };
 export type SandboxMakeOpts = {
   rootfs: RootfsSpec;
   mounts?: readonly MountSpec[];
+  /** Literal read-only files; requires explicit driver support. */
+  generatedFiles?: readonly GeneratedFile[];
   network?: NetworkProfile;
+  /**
+   * Container whose network namespace this slice joins. Required with
+   * `network: 'join'` and rejected for every other profile. The driver
+   * observes the shared namespace is loopback-only (interfaces exactly
+   * `lo`, zero routable routes) before admitting the slice, so a networkless
+   * provider broker can front the slice without giving it egress.
+   */
+  networkRef?: string;
   backend?: BackendSelector;
   seccomp?: SeccompPolicy;
   env?: Record<string, string>;
@@ -226,6 +250,13 @@ export type SandboxMakeOpts = {
  * already have recorded because nothing can impose one afterwards.
  */
 export type SlicePolicyMount =
+  | {
+      role: 'resolver';
+      kind: 'resolver';
+      source: string;
+      destination: '/etc/resolv.conf';
+      mode: 'ro';
+    }
   | {
       role: string;
       kind: 'tmpfs';
@@ -396,6 +427,7 @@ export type ObservedSliceState = {
    * `null` when nothing is mounted at it. May be absent when the policy
    * declares no attaches; an attach with no entry here is not proved.
    */
+  resolverContents?: string;
   attachMounts?: ReadonlyMap<
     string,
     { fstype: string; root: string; options: readonly string[] } | null
@@ -481,6 +513,8 @@ export type ResourceLimits = {
  * resolution.
  */
 export type SliceSpec = {
+  /** Host-only Podman profile; never selected by the generic capability API. */
+  nativeProfile?: NativePodmanProfile;
   /** Resolved rootfs source. `null` denotes the host-bind / minimal case. */
   rootfs:
     | { kind: 'host-bind' }
@@ -489,10 +523,14 @@ export type SliceSpec = {
     | { kind: 'oci'; ref: string };
   /** Resolved bind-mount triples. */
   mounts: Array<{ hostPath: string; innerPath: string; mode: MountMode }>;
+  /** Validated literal configuration, staged privately by a supporting driver. */
+  generatedFiles?: readonly ValidatedGeneratedFile[];
   /** Writable scratch host path provided by the daemon's scratch service. */
   scratchHostPath: string;
   /** Network policy. */
   network: NetworkProfile;
+  /** Container to join for `network: 'join'`; absent otherwise. */
+  networkRef?: string;
   /** Seccomp policy. */
   seccomp: SeccompPolicy;
   /**
@@ -723,8 +761,18 @@ export type DriverSpawnControls = {
 export type SandboxDriver = {
   /** Stable name (matches `BackendName`). */
   name: BackendName;
+  /** Advertised only when private staging, bounds, and cleanup are enforced. */
+  supportsGeneratedFiles?: true;
   /** Best-effort availability check. */
   probe(): Promise<Omit<BackendProbe, 'name'>>;
+  /**
+   * Optional retained preparation owner, returned before acquisition begins.
+   * close fences publication and operation admission, drains acquisition, and
+   * retries this preparation's cleanup without stopping sibling slices.
+   * Drivers without this kit retain their legacy failed-preparation semantics;
+   * the factory cannot provide scoped failed-acquisition cleanup for them.
+   */
+  prepareSliceKit?(spec: SliceSpec): DriverPreparation;
   /** Materialise a slice from a fully-resolved `SliceSpec`. */
   prepareSlice(spec: SliceSpec): Promise<DriverSliceContext>;
   /**
@@ -741,7 +789,12 @@ export type SandboxDriver = {
     opts: SpawnOpts,
     controls?: DriverSpawnControls,
   ): Promise<DriverProcess>;
-  /** Tear down the slice's namespace / container. */
+  /**
+   * Fence admission and release the slice's processes and resources.
+   * Success accounts for pending acquisitions: none can later produce unowned
+   * execution. Failure retains cleanup ownership so teardown can be retried.
+   * Process wait failures describe historical outcomes, not release proof.
+   */
   teardown(slice: DriverSliceContext): Promise<void>;
 };
 

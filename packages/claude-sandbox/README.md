@@ -123,10 +123,10 @@ factory discovers on its own; a Floot session then selects it as the model
 
 | method | behavior |
 |--------|----------|
-| `describe()` | `{ id: 'claude', title: 'Claude Code', kind: 'hosted', continuity: 'transcript', toolOwnership: 'endo' }` |
+| `describe()` | `{ id: 'claude', title: 'Claude Code', kind: 'hosted', continuity: 'transcript', toolOwnership: 'endo', supportedNetworkPolicies: ['off', 'public-internet'] }` |
 | `listModels()` | the Anthropic models `claude --model` accepts, as hosted model descriptors (no reasoning efforts) |
-| `create(spec, toolSet)` | one isolated session: a per-session MCP socket server pinned to `toolSet`, a `ClaudeClient` formula provisioned with that socket mounted read-only, the session's model, and (for a new-project session) the guest's git worktree as `/workspace`; returns `{ run, admin }` |
-| `destroy(spec)` | idempotently remove the session's client formula, filesystems, backing directories, and socket directory |
+| `create(spec, toolSet)` | one recorded session with the daemon session owner: a plan naming the session's workspace (owned, or the guest's git worktree as `/workspace`), its private socket directories, the broker's pinned image and credential kind, and the requested `networkPolicy` (default `off`); the owner starts the native controller with `toolSet` pinned; returns `{ run, admin }` |
+| `destroy(spec)` | idempotently stop the session and remove its record, workspace, private directories, and persistent config directory through the recorded storage owner |
 
 `run.send(prompt, { systemPrompt })` returns a reader of provider-neutral
 hosted turn events ([`src/claude-hosted-events.js`](./src/claude-hosted-events.js)
@@ -135,17 +135,17 @@ persona on every spawn. `run.interrupt()` kills the in-flight `claude -p`
 and tolerates an idle client. `run.acknowledge()` is a no-op: continuity is
 the CLI's own transcript, which the descriptor declares as
 `continuity: 'transcript'` so Floot mirrors a stopped or failed turn into its
-history rather than dropping it. `admin.terminate()` refuses under an
-unsettled Endo tool call, then closes the tool bridge and cancels the client
-formula — the slice, mounts, and credential grant go; the workspace and
-transcript stay for the next revival.
+history rather than dropping it. `admin.terminate()` stops the session through
+the daemon owner: the controller ends the CLI, disposes the slice, releases
+the sandbox scope, the 9P mounter, the tool bridge, and the broker grant; the
+workspace and transcript stay for the next revival.
 
 **Endo tools over MCP.** The tool set Floot pins for the session reaches the
 CLI through a per-session MCP server
-([`src/mcp-bridge.js`](./src/mcp-bridge.js) over a Unix socket,
+([shared MCP protocol](../hosted-agent/src/mcp-bridge.js) over a Unix socket,
 [`src/mcp-socket-server.js`](./src/mcp-socket-server.js)) whose directory the
 slice mounts read-only at `/endo-mcp`; a plain-node relay
-([`src/mcp-stdio-bridge.mjs`](./src/mcp-stdio-bridge.mjs)) runs inside the
+([shared stdio relay](../hosted-agent/src/mcp-stdio-bridge.js)) runs inside the
 slice and pipes Claude Code's stdio to the socket, and `claude -p` gets
 `--mcp-config /endo-mcp/mcp.json --strict-mcp-config`. Only JSON crosses the
 socket: `tools/list` serves the pinned catalog, `tools/call` is refused for
@@ -153,47 +153,41 @@ any name outside it and otherwise dispatched to the tool set's `execute`,
 which runs against the session guest in Floot's worker. The CLI's own
 built-in tools keep running inside the slice.
 
-**What this backend does not do.** The credential is still materialised into
-the slice's environment at spawn time (`ANTHROPIC_API_KEY` or
-`CLAUDE_CODE_OAUTH_TOKEN`), as the standalone `ClaudeClient` has always
-done; there is no broker lease keeping the token out of the container, and
-the slice keeps its `private` network profile so the CLI can reach Anthropic.
-Discovery as `claude-backend` is an operator decision made by running
-`setup-hosted.js`, not a certification against the token-free hosted
-contract described in
-[`@endo/codex-sandbox`'s deployment acceptance](../codex-sandbox/DEPLOYMENT-ACCEPTANCE.md).
+**The credential stays on the host.** The slice never holds the Anthropic
+credential. `setup-hosted.js` seeds it into the daemon's Secrets manager and
+mints an Anthropic provider broker (`claude-sandbox/broker-service`, the
+shared `@endo/hosted-agent` broker under the Anthropic Messages policy) whose
+only powers dependency is that secret's delegated read facet. Each session's
+controller takes a grant from the broker, checks the broker's attestation and
+sandbox evidence against the plan's pinned image digest and network policy,
+and runs the slice joined to the broker sidecar's network namespace with
+`ANTHROPIC_BASE_URL` at the listener's loopback endpoint and a placeholder
+under `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`. The listener admits
+only `POST /v1/messages`, strips whatever credential the CLI sends, and
+injects the real one upstream: as `x-api-key` for an API key, or as a Bearer
+token with the `oauth-2025-04-20` beta for a subscription token from
+`claude setup-token`. Only the request body crosses the listener: upstream
+it sends the credential header, `anthropic-version`, the operator's
+`anthropic-beta` list (`ENDO_CLAUDE_ANTHROPIC_BETA`; the OAuth capability is
+the default for subscription tokens only), and `content-type`. The CLI's own
+beta capabilities and user agent are not forwarded for either kind, so a CLI
+build that needs betas needs them configured there. A subscription session
+keeps its subscription billing without the token entering the container. A
+retained broker also keeps the model allowlist it was minted with: a model
+added to the catalog later is listed but refused by the listener until the
+broker is re-minted. `off` gives the slice no route but the listener;
+`public-internet` adds the broker's attested proxy and resolver.
+See [DESIGN.md § Phase 3](./DESIGN.md#phase-3--daemon-owned-sessions).
 
-### A deliberate, time-boxed exception (recorded 2026-09-08)
-
-This posture contradicts `@endo/codex-sandbox`'s
-[merge blockers](../codex-sandbox/MERGE-BLOCKERS.md), which rule out
-`CLAUDE_CODE_OAUTH_TOKEN` environment injection.
-It is kept, for now, because the alternative removes the feature rather than
-securing it: Anthropic documents that a gateway credential "replaces the
-subscription login for that session, and the subscription's usage limits don't
-apply", so putting this backend behind the broker converts a subscription
-session into a per-token billed one.
-Token-free and subscription-backed are mutually exclusive for Claude Code
-today; this backend chooses the subscription and says so, rather than claiming
-both.
-The reasoning and its sources are in
+The time-boxed exception recorded here on 2026-09-08 (credential
+materialisation into the slice, contradicting `@endo/codex-sandbox`'s
+[merge blockers](../codex-sandbox/MERGE-BLOCKERS.md)) is retired by this
+path: the broker presents the subscription credential upstream itself, which
+was the condition for retiring it. Whether Anthropic's gateway accepts a
+subscription Bearer token presented by the broker exactly as it accepts one
+from the CLI is a live-acceptance question that the fixtures here do not
+answer; the reasoning and sources remain in
 [`designs/hosted-agent-broker-oauth.md`](../../designs/hosted-agent-broker-oauth.md).
-
-The box, so this does not become permanent by inattention:
-
-- It applies to `@endo/claude-sandbox` only.
-  Nothing here may be reused to reintroduce credential materialization into the
-  Codex hosted path, and this backend must not be described as satisfying the
-  token-free hosted contract.
-- Review by **2026-12-08**, or sooner if Anthropic documents a gateway
-  credential that does not displace the claude.ai login, or a way for a gateway
-  to present a subscription credential upstream.
-  Either one retires the exception by making the broker path keep the
-  subscription.
-- If neither has appeared at review, the choice is explicit: move this backend
-  behind the broker as an API-key backend and drop the subscription mode, or
-  re-book the exception with a fresh reason.
-  Letting the review date pass unremarked is not one of the options.
 
 ## Setup
 
@@ -216,13 +210,23 @@ endo run --UNCONFINED packages/claude-sandbox/setup-peer.js --powers @agent
 endo inbox
 endo submit <n> ...
 
-# HOSTED (single machine, no forms; after floot-factory-setup.js): mints
-# ClaudeCredentials from a subscription token or API key and the
-# claude-sandbox/backend hosted backend, bound into floot/controller-profile
-# as claude-backend so Floot sessions can select `claude:<model>`.
+# HOSTED (single machine, no forms; after setup-host.js and
+# floot-factory-setup.js): seeds the managed Anthropic credential into Secrets
+# from a subscription token or API key (first run only), mints the Anthropic
+# broker over it, the session storage owner, and the claude-sandbox/backend
+# hosted backend, bound into floot/controller-profile as claude-backend so
+# Floot sessions can select `claude:<model>`.
 ENDO_CLAUDE_OAUTH_TOKEN=... \
+ENDO_CLAUDE_SANDBOX_IMAGE=oci:localhost/claude-sandbox:latest \
+ENDO_CLAUDE_BROKER_LISTENER_IMAGE=localhost/endo-provider@sha256:... \
+ENDO_CLAUDE_NATIVE_PROFILE='{"uid":1000,...}' \
 endo run --UNCONFINED packages/claude-sandbox/setup-hosted.js --powers @agent
 ```
+
+The hosted variables (`ENDO_CLAUDE_*`, `ENDO_NINEP_*`, `ENDO_SANDBOX_*`) are
+documented in the headers of [`setup-host.js`](./setup-host.js) and
+[`setup-hosted.js`](./setup-hosted.js). The table below is the inbox-form
+factory's configuration.
 
 Configuration env (threaded into the factory formula by `setup-host.js` /
 `factory.js`):

@@ -70,8 +70,73 @@ state keeps loading.
 Both defects this module exists to prevent were found in a real adapter, and
 both are covered by `test/turn-ledger.test.js`.
 
+## Session ownership
+
+`@endo/daemon/session-record-store.js` retains a logical session's approved plan and exact
+dependency identities in a host-private daemon directory.
+The shared supervisor supplies the plan as encoded text and the dependency formula IDs.
+Each reference is a separate directory entry, retaining its formula through GC and
+restart without reviving it during inspection.
+Storing IDs only inside plan text would not retain those formulas.
+Storing capabilities inside a marshal record would eagerly revive them when reading
+the record, making cleanup metadata depend on a healthy client.
+
+`create` refuses an existing session name and publishes the plan only after all
+initial references have been retained.
+A failed write leaves an incomplete record with the references acquired so far;
+`inspect` reports an absent plan, and `retain` refuses further construction.
+For a complete record, `retain` adds a newly acquired resource without replacing an
+existing owner; keep any construction name until retention succeeds.
+`release` removes selected incarnation references only after cleanup succeeds,
+keeping the logical plan and stable dependencies for a later incarnation.
+Partial release failures preserve remaining references for retry.
+`remove` passes a passive snapshot to the supervisor's cleanup callback and removes
+the directory only after that callback succeeds.
+Failure retains the original dependencies for retry.
+The cleanup callback must tolerate repetition, including when it succeeded but
+the subsequent directory removal failed.
+
+One supervisor must own the directory and store instance.
+The store serializes mutations and inspection for each session; cleanup callbacks
+must not reenter it for that session.
+The supervisor owns admission, stop ordering, and intentional resolution of recorded
+formula IDs; this store does not start or stop runtimes.
+Keep the directory outside guest powers and prevent other writers from rebinding it.
+The final identity check detects a prior rebind; it is not atomic compare-and-delete
+and does not replace exclusive ownership.
+The store and shared resource registry live in the daemon package so a daemon-local
+supervisor can use them without importing sandbox adapters or native modules.
+Adapter wiring remains pending; running record administration in a shared worker can
+cause collection of a temporary directory to terminate that worker.
+
+## Session execution powers
+
+`session-powers.js` replaces generated powers source in Claude and OpenCode.
+The host resolves selected capabilities once and persists them with `storeValue`.
+A static daemon formula turns that bundle into resource accessors, exact mount
+path/name registration, and optional state access restricted to one session ID.
+Neither the host agent nor host lookup is exposed to the client.
+The input bundle and powers construction names remain until the client formula
+retains the chain of dependencies.
+
+This is an active execution bundle: reading it revives its capability references.
+It must not contain the client or replace the passive ownership records above.
+Real daemon tests cover name rebinding, GC, restart, and scoped state access.
+The module does not provide runtime reconciliation or ownership across failed
+client construction; those still belong to the session supervisor.
+
 ## Account visibility
 
 `account.js` and `account-oracle.js` answer what plan a credential is on, how
 much of the rate limit is left, and what a token count costs — without holding
 the credential. See [ACCOUNT-ORACLE.md](./ACCOUNT-ORACLE.md).
+
+## Session inference grants
+
+`makeProviderBrokerGrant` and `makeProviderBrokerGrantIssuer` grant inference until
+explicit revocation or owner/transport shutdown, independently of credential expiry.
+The host keeps credentials and refresh authority and fixes provider routes and models.
+Request and response size bounds and simultaneous request slots protect host resources;
+completed requests do not exhaust a lifetime budget.
+An open stream holds its slot until upstream EOF, cancellation, or failure.
+Token and dollar spending limits are future application policy, not implicit defaults.

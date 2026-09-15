@@ -7,7 +7,10 @@ import { E } from '@endo/eventual-send';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { Far } from '@endo/far';
 
-import { makeBrokerAppServerArgv } from '../src/broker-launch.js';
+import {
+  makeBrokerAppServerArgv,
+  makeBrokerEnvironment,
+} from '../src/broker-launch.js';
 import { makeCodexRuntimeVerifier } from '../src/runtime-verifier.js';
 
 // Controlled process doubles test admission and cleanup, not Linux enforcement.
@@ -69,7 +72,7 @@ const fixture = ({
     brokerEndpoint: 'http://127.0.0.1:1234',
     launchArgv: makeBrokerAppServerArgv('http://127.0.0.1:1234'),
     sessionId: 'session',
-    leaseId: 'lease',
+    grantId: 'lease',
     imageDigest: `sha256:${'a'.repeat(64)}`,
     networkNamespaceId: 'namespace',
   });
@@ -84,13 +87,48 @@ const fixture = ({
   };
 };
 
+test('public preflight binds proxy evidence without asserting an inner tool boundary', async t => {
+  const f = fixture();
+  const network = harden({
+    policy: 'public-internet',
+    proxyUrl: 'http://127.0.0.1:23457',
+    dnsHost: '127.0.0.53',
+    resolverConfigPath: '/private/provider/public-resolv.conf',
+  });
+  const context = harden({
+    ...f.context,
+    network,
+    launchEnvironment: makeBrokerEnvironment(network),
+    launchArgv: makeBrokerAppServerArgv(
+      f.context.brokerEndpoint,
+      'codex',
+      network,
+    ),
+  });
+  const result = await E(f.verifier).attest(context);
+  t.is(result.executionDomain, 'guest');
+  t.is(result.environment, 'credential-free-proxy');
+  t.deepEqual(result.network, network);
+  const payload = JSON.parse(f.call().argv[4]);
+  t.deepEqual(payload.network, network);
+  t.false(Object.hasOwn(payload, 'inner'));
+  // Compile the probe without pretending this is a kernel-isolation test.
+  const encoded = JSON.stringify([f.call().argv[3]]);
+  execFileSync('python3', [
+    '-I',
+    '-c',
+    'import json,sys; [compile(source,"probe","exec") for source in json.loads(sys.argv[1])]',
+    encoded,
+  ]);
+});
+
 test('controlled probe success binds evidence and launches exact bounded preflight', async t => {
   const f = fixture();
   const result = await E(f.verifier).attest(f.context);
   t.like(result, {
     version: 'CodexRuntimeEvidenceV1',
     sessionId: 'session',
-    leaseId: 'lease',
+    grantId: 'lease',
     networkNamespaceId: 'namespace',
     environment: 'credential-and-proxy-free',
     codexHomeAuthFile: 'absent',
@@ -105,10 +143,7 @@ test('controlled probe success binds evidence and launches exact bounded preflig
     stderrByteLimit: 4096n,
   });
   const payload = JSON.parse(argv[4]);
-  t.deepEqual(payload.sandboxArgv, [
-    ...f.context.launchArgv.slice(0, -3),
-    'sandbox',
-  ]);
+  t.false(Object.hasOwn(payload, 'sandboxArgv'));
   t.is(payload.port, 1234);
   t.is(f.kills(), 0);
   t.is(f.waits(), 1);
@@ -223,21 +258,15 @@ def fake_codex(argv,**kwargs):
     children.append(argv)
     if argv==["codex","--version"]:
         code="print('codex-cli 0.152.0')"
-    else:
-        assert argv[:len(payload["sandboxArgv"])]==payload["sandboxArgv"]
-        inner=json.loads(argv[-1])
-        assert all(os.path.isdir(inner[k]) for k in ("workspace","home","tmp","run","scratch"))
-        assert open(inner["home"]+"/sentinel").read()=="sentinel"
-        assert os.path.samefile(inner["home"]+"/sentinel",inner["home"]+"/hardlink")
-        assert os.path.islink(inner["workspace"]+"/alias")
-        code="print('INNER_OK')"
-    return popen([sys.executable,"-I","-c",code],**kwargs)
+        return popen([sys.executable,"-I","-c",code],**kwargs)
+    assert argv[:3]==[sys.executable,"-I","-c"]
+    return popen(argv,**kwargs)
 subprocess.Popen=fake_codex
 with tempfile.TemporaryDirectory(prefix="endo-probe-control-") as root:
     tempfile.mkdtemp=lambda **kwargs: mkdtemp(prefix=kwargs["prefix"],dir=root)
     sys.argv=["probe",json.dumps(payload)]
     exec(compile(source,"runtime-probe","exec"),{})
-    assert len(children)==2
+    assert len(children)==6
     assert os.listdir(root)==[], "probe did not clean up"
 `;
   const output = execFileSync('python3', ['-I', '-c', harness], {

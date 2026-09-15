@@ -206,6 +206,28 @@ try {
 
 ## API
 
+### Endpoint resource cleanup
+
+The four `*FromIterator` adapters return endpoints with a separate `close()` method.
+The callable reader and writer pumps also expose this method as `pump.close` for custom Exos.
+It fences all stream invocations sharing that source, interrupts pending reader pulls through
+`cancelPending` when supplied, and waits for admitted source calls and source cleanup.
+Without an interruption hook, a pending source operation must settle naturally.
+New stream calls and source pulls are refused after the fence.
+
+A stream's `return()` retains its original data, validation, or terminal error.
+Endpoint `close()` acknowledges resource release independently: an earlier I/O failure does
+not prevent successful cleanup, and failed cleanup remains available for explicit retry.
+Only a fulfilled source `return()` with `done: true` acknowledges release.
+An unfinished return result remains owned even if the ordinary stream protocol accepts its value.
+A source with no `return()` must have no separately owned resource to release.
+Source adapters must forward this acknowledgement to any underlying resources they own.
+
+The `CloseablePassableReader`, `CloseablePassableWriter`, and corresponding bytes types express
+this additional authority and contract.
+The base stream-only types, including buffered event channels, do not promise resource cleanup.
+
+
 ### Reader Modules
 
 #### `readerFromIterator(iterator, options?)`

@@ -4,6 +4,20 @@ import test from '@endo/ses-ava/prepare-endo.js';
 
 import { makeRotatingProvider } from '../src/provider-cache.js';
 
+test('Fae constructs OpenRouter with a rotating secret and fails after revocation', async t => {
+  let token = 'first-test-key';
+  const provider = makeRotatingProvider({
+    config: { host: 'https://openrouter.ai/api/v1', model: 'vendor/model' },
+    provideAuthToken: async () => token,
+  });
+  const first = await provider();
+  t.is(typeof first.chat, 'function');
+  token = 'second-test-key';
+  t.not(await provider(), first);
+  token = '';
+  await t.throwsAsync(provider, { message: /key/ });
+});
+
 test('an injected provider is used as-is and no token is read', async t => {
   const injected = harden({ chat: async () => harden({ message: {} }) });
   let reads = 0;

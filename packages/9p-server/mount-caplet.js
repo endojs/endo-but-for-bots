@@ -29,22 +29,24 @@
  * **Teardown.** The caplet wires the daemon's cancellation context
  * (`context.whenCancelled()`): when the caplet formula is cancelled
  * (worker terminated, formula removed, daemon shutdown) every live
- * mount is `umount`ed and its bridge stopped on a best-effort basis.
+ * mount begins cleanup. Native owners retain `makeFsMounterKit().close` and
+ * await it before releasing storage; worker death is not proof of cleanup.
  *
  * **Privilege.** `mount(2)` / `umount(2)` need `CAP_SYS_ADMIN`.  The
  * daemon worker is rarely root, so by default this will fail with a
- * permission error unless the daemon runs privileged.  Supply
- * `options.mountProgram` / `options.umountProgram` (e.g.
- * `['sudo', 'mount']`) — or set `NINEP_SUDO=1` in the caplet's env —
+ * permission error unless the daemon runs privileged. Set operator environment
+ * `NINEP_MOUNT_PROGRAM` / `NINEP_UMOUNT_PROGRAM` — or `NINEP_SUDO=1` —
  * to route through a privilege helper.
  *
  * @module
  */
 
+import { makeResourceRegistry } from '@endo/daemon/resource-registry.js';
+import { makeError, q, X } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
-import { makeError, q, X } from '@endo/errors';
+import { makePromiseKit } from '@endo/promise-kit';
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -162,14 +164,48 @@ const assertExtraMountOptions = extra => {
  */
 const assertProgram = (program, expectedCommand, label) => {
   if (!Array.isArray(program) || program.length === 0) {
-    throw makeError(X`${label} must be a non-empty array of strings`);
+    throw makeError(X`${q(label)} must be a non-empty array of strings`);
   }
   if (baseName(program[program.length - 1]) !== expectedCommand) {
     throw makeError(
-      X`${label} must invoke ${q(expectedCommand)}; got ${q(String(program[program.length - 1]))}`,
+      X`${q(label)} must invoke ${q(expectedCommand)}; got ${q(String(program[program.length - 1]))}`,
     );
   }
 };
+
+/**
+ * The operator's mount/umount programs from caplet env. They are OPERATOR
+ * configuration, never a per-call option: the mounter cap is handed to an
+ * otherwise-untrusted party whose only granted authority is "mount any
+ * files"; letting the caller choose the program would be arbitrary
+ * privileged execution (e.g. `umountProgram: ['rm']` → `rm -- <mountPoint>`).
+ * `NINEP_SUDO=1` routes through sudo; `NINEP_MOUNT_PROGRAM` /
+ * `NINEP_UMOUNT_PROGRAM` (whitespace-separated) name a custom helper.
+ * Exported so a host that records these settings elsewhere can refuse at
+ * record time what the mounter refuses at construction.
+ *
+ * @param {Record<string, string | undefined>} [env]
+ * @returns {{ mountProgram: string[], umountProgram: string[] }}
+ */
+export const readMountPrograms = (env = {}) => {
+  const sudo = env.NINEP_SUDO === '1';
+  /** @param {string} v */
+  const splitProgram = v => v.trim().split(/\s+/).filter(Boolean);
+  const mountProgram = env.NINEP_MOUNT_PROGRAM
+    ? splitProgram(env.NINEP_MOUNT_PROGRAM)
+    : sudo
+      ? ['sudo', 'mount']
+      : ['mount'];
+  const umountProgram = env.NINEP_UMOUNT_PROGRAM
+    ? splitProgram(env.NINEP_UMOUNT_PROGRAM)
+    : sudo
+      ? ['sudo', 'umount']
+      : ['umount'];
+  assertProgram(mountProgram, 'mount', 'NINEP_MOUNT_PROGRAM');
+  assertProgram(umountProgram, 'umount', 'NINEP_UMOUNT_PROGRAM');
+  return harden({ mountProgram, umountProgram });
+};
+harden(readMountPrograms);
 
 /**
  * Build the comma-separated `-o` value for `mount -t 9p`.
@@ -210,26 +246,35 @@ const buildMountOptionString = options => {
  * `cancelled` promise; `null`/absent means "no teardown signal".
  *
  * @param {Promise<any> | any} context
- * @returns {Promise<Promise<never> | null>}
+ * The record keeps the lifetime promise from being assimilated by this async
+ * helper: construction waits for the context, never for its cancellation.
+ *
+ * @returns {Promise<{cancelledP: Promise<never> | null}>}
  */
 const resolveCancelled = async context => {
-  if (!context) return null;
+  if (!context) return harden({ cancelledP: null });
   const resolved = await context;
-  if (!resolved) return null;
+  if (!resolved) return harden({ cancelledP: null });
   if (typeof resolved.whenCancelled === 'function') {
-    return E(resolved).whenCancelled();
+    return harden({ cancelledP: E(resolved).whenCancelled() });
   }
   if (resolved.cancelled) {
-    return resolved.cancelled;
+    return harden({ cancelledP: resolved.cancelled });
   }
-  return null;
+  return harden({ cancelledP: null });
 };
 
 /**
- * Build the mounter exo from injected effects.  `make()` wires the real
+ * Build a public mounter and host-only close control from injected effects.  `make()` wires the real
  * Node bindings (`execFile`, `fs.mkdir`/`rmdir`, `makeFsBridge9p`);
  * tests inject fakes so the privileged `mount(2)` path can be exercised
  * without root or a real kernel.
+ *
+ * The caller owns each mount point and socket path exclusively. Native session
+ * controllers must supply a private socket directory, stop all filesystem users
+ * (including sandbox bind mounts) before close, and retain close across failures.
+ * makeBridge must be inert until start, and runProgram must settle only after
+ * the command has exited. Hung effects remain pending; this is not crash recovery.
  *
  * @param {object} deps
  * @param {Record<string, string>} [deps.env] - caplet env (e.g. NINEP_SUDO).
@@ -241,7 +286,7 @@ const resolveCancelled = async context => {
  * @param {number} [deps.uid]
  * @param {number} [deps.gid]
  */
-export const makeFsMounter = ({
+export const makeFsMounterKit = ({
   env = {},
   cancelledP = null,
   runProgram,
@@ -254,65 +299,29 @@ export const makeFsMounter = ({
   /** @type {Set<{ unmount: () => Promise<void> }>} */
   const handles = new Set();
 
-  // Monotonic per-caplet counter so concurrent mount() calls never
-  // collide on the default socket name (handles.size is read before a
-  // handle is registered, so two interleaved calls would otherwise
-  // compute the same path within the same millisecond).
-  let mountCounter = 0;
-
-  // Set once the caplet's context is cancelled, so a mount() that
-  // races (or follows) teardown refuses rather than leaking a kernel
-  // mount + socket the sweeper has already run past.
+  const resources = makeResourceRegistry();
+  /** @type {Set<string>} */
+  const mountPoints = new Set();
+  /** @type {Set<string>} */
+  const socketPaths = new Set();
+  let mountCounter = 0n;
   let cancelled = false;
-
-  const unmountAll = async () => {
-    await Promise.all(
-      [...handles].map(handle =>
-        handle.unmount().catch(err => {
-          // Best-effort during teardown — surface but don't reject.
-          // eslint-disable-next-line no-console
-          console.error('[9p mount-caplet] teardown unmount failed', err);
-        }),
-      ),
-    );
+  const close = () => {
+    cancelled = true;
+    return resources.shutdown();
   };
-
   if (cancelledP) {
-    // The cancelled promise is reject-only; attach to both arms so a
-    // future resolve-style trigger still sweeps.
-    Promise.resolve(cancelledP).then(
-      () => {
-        cancelled = true;
-        return unmountAll();
-      },
-      () => {
-        cancelled = true;
-        return unmountAll();
-      },
-    );
+    void Promise.resolve(cancelledP)
+      .then(close, close)
+      .catch(error => {
+        // Cancellation starts cleanup; only an awaited close proves completion.
+        console.error('[9p mount-caplet] cleanup remains pending', error);
+      });
   }
 
   // mount/umount programs are OPERATOR configuration (env), never a
-  // per-call option. The mounter cap is handed to an otherwise-untrusted
-  // party whose only granted authority is "mount any files"; letting the
-  // caller choose the program would be arbitrary privileged execution
-  // (e.g. `umountProgram: ['rm']` → `rm -- <mountPoint>`). `NINEP_SUDO`
-  // routes through sudo; `NINEP_MOUNT_PROGRAM` / `NINEP_UMOUNT_PROGRAM`
-  // (whitespace-separated) let the operator name a custom helper.
-  const sudo = env.NINEP_SUDO === '1';
-  const splitProgram = v => v.trim().split(/\s+/).filter(Boolean);
-  const mountProgram = env.NINEP_MOUNT_PROGRAM
-    ? splitProgram(env.NINEP_MOUNT_PROGRAM)
-    : sudo
-      ? ['sudo', 'mount']
-      : ['mount'];
-  const umountProgram = env.NINEP_UMOUNT_PROGRAM
-    ? splitProgram(env.NINEP_UMOUNT_PROGRAM)
-    : sudo
-      ? ['sudo', 'umount']
-      : ['umount'];
-  assertProgram(mountProgram, 'mount', 'NINEP_MOUNT_PROGRAM');
-  assertProgram(umountProgram, 'umount', 'NINEP_UMOUNT_PROGRAM');
+  // per-call option; see `readMountPrograms`.
+  const { mountProgram, umountProgram } = readMountPrograms(env);
 
   /**
    * @param {ERef<any>} fs - endo-fs `Filesystem` capability to project.
@@ -336,7 +345,7 @@ export const makeFsMounter = ({
       harden({ ...mountOptions })
     );
 
-    mountCounter += 1;
+    mountCounter += 1n;
     const resolvedMountPoint = nodePath.resolve(mountPoint);
     // The UDS path is internal plumbing, not a free-form caller input:
     // the bridge `unlink()`s it before binding, so an arbitrary
@@ -371,124 +380,144 @@ export const makeFsMounter = ({
       );
     }
     const removeMountPointOnUnmount = opts.removeMountPointOnUnmount === true;
-    // Lazy detach (`umount -l`) so an unattended teardown can release a
-    // busy mount instead of leaving a live mount over a dead bridge
-    // socket.  Off by default; opt in per-call or via NINEP_LAZY_UMOUNT.
-    const lazyUnmount =
-      opts.lazyUnmount === true || env.NINEP_LAZY_UMOUNT === '1';
-
-    // 1. Ensure the mount point exists (unless told not to).
-    if (opts.makeMountPoint !== false) {
-      await makeDir(resolvedMountPoint, { recursive: true });
+    // Lazy detach can leave kernel users holding the filesystem after umount
+    // succeeds. It cannot establish the release barrier this owner promises.
+    if (opts.lazyUnmount === true || env.NINEP_LAZY_UMOUNT === '1') {
+      throw makeError(X`lazyUnmount cannot prove filesystem release`);
     }
-
-    // 2. Serve the FS cap on the per-mount UDS.  Thread the caplet's
-    //    cancellation in so in-flight 9P dispatchers short-circuit on
-    //    teardown rather than blocking on the socket-close cascade.
-    const bridge = makeBridge({
-      fs,
-      socketPath,
-      ...(cancelledP ? { cancelled: cancelledP } : {}),
-      ...(uid === undefined ? {} : { uid }),
-      ...(gid === undefined ? {} : { gid }),
-    });
-    try {
-      await E(bridge).start();
-    } catch (cause) {
-      // start() may have partially set up (created the net.Server,
-      // bound the socket, etc.) before rejecting; stop() so we never
-      // leak a half-open listener / socket file.
-      await E(bridge)
-        .stop()
-        .catch(() => {});
-      const reason = /** @type {Error} */ (cause).message;
-      throw makeError(
-        X`9p bridge failed to start on ${q(socketPath)}: ${q(reason)}`,
-      );
-    }
-
-    // 3. Attach the socket to the kernel.  `trans=unix` is the v9fs
-    //    transport that connects to a UNIX-domain socket whose path is
-    //    the mount "device" (kernel docs: `mount -t 9p -o trans=unix
-    //    /run/9p/srv mnt`).  `version=9p2000.L` is mandatory — the
-    //    bridge only speaks the .L dialect.  `--` terminates options so
-    //    a socketPath/mountPoint beginning with `-` can't be parsed as
-    //    a flag by `mount`.
     const optionString = buildMountOptionString(opts);
-    const [mountBin, ...mountPre] = mountProgram;
-    const mountArgv = [
-      ...mountPre,
-      '-t',
-      '9p',
-      '-o',
-      optionString,
-      '--',
-      socketPath,
-      resolvedMountPoint,
-    ];
-    try {
-      await runProgram(mountBin, mountArgv);
-    } catch (cause) {
-      // Don't leak a listening socket if the mount itself failed.
-      await E(bridge)
-        .stop()
-        .catch(() => {});
-      const reason = /** @type {Error} */ (cause).message;
-      const stderr = /** @type {{ stderr?: string }} */ (cause).stderr || '';
+    if (mountPoints.has(resolvedMountPoint)) {
       throw makeError(
-        X`9p mount of ${q(socketPath)} onto ${q(resolvedMountPoint)} failed: ${q(reason)} ${q(stderr)}`,
+        X`mount point is already owned: ${q(resolvedMountPoint)}`,
       );
     }
+    if (socketPaths.has(socketPath)) {
+      throw makeError(X`socket path is already owned: ${q(socketPath)}`);
+    }
+    const resourceId = String(mountCounter);
+    /** @type {any} */
+    let bridge;
+    /** @type {any} */
+    let handle;
+    let needsUnmount = false;
+    let removeDirectory = false;
+    let released = false;
+    /** @type {Promise<void> | undefined} */
+    let cleanupFlight;
+    const { promise: acquisitionDone, resolve: acquired } = makePromiseKit();
 
-    let unmounted = false;
-    /** @type {Promise<void> | null} */
-    let unmountInFlight = null;
-
-    const doUnmount = async () => {
-      // Detach the kernel mount FIRST and only commit the rest on
-      // success.  If `umount` fails (e.g. EBUSY), we deliberately leave
-      // the bridge running and the handle registered: tearing the
-      // socket out from under a still-mounted tree would leave a live
-      // mount over a dead transport (every I/O then errors).  The
-      // caller can free the mount and retry, or pass lazyUnmount.
-      const [umountBin, ...umountPre] = umountProgram;
-      const umountArgv = [
-        ...umountPre,
-        ...(lazyUnmount ? ['-l'] : []),
-        '--',
-        resolvedMountPoint,
-      ];
-      try {
-        await runProgram(umountBin, umountArgv);
-      } catch (cause) {
-        const reason = /** @type {Error} */ (cause).message;
-        const stderr = /** @type {{ stderr?: string }} */ (cause).stderr || '';
+    const doCleanup = async () => {
+      // Acquisition settles before rollback calls this function, so waiting here
+      // does not wait on the outer mount operation that itself needs cleanup.
+      await acquisitionDone;
+      if (needsUnmount) {
+        const [bin, ...prefix] = umountProgram;
+        await runProgram(bin, [...prefix, '--', resolvedMountPoint]);
+        needsUnmount = false;
+      }
+      if (bridge) {
+        await E(bridge).stop();
+        bridge = undefined;
+      }
+      if (removeDirectory) {
+        try {
+          await removeDir(resolvedMountPoint);
+        } catch (error) {
+          if (/** @type {{code?: string}} */ (error).code !== 'ENOENT') {
+            throw error;
+          }
+        }
+        removeDirectory = false;
+      }
+      released = true;
+      handles.delete(handle);
+      mountPoints.delete(resolvedMountPoint);
+      socketPaths.delete(socketPath);
+      resources.release(resourceId, cleanup);
+    };
+    const cleanup = () => {
+      if (released) return Promise.resolve();
+      if (!cleanupFlight) {
+        cleanupFlight = doCleanup().finally(() => {
+          cleanupFlight = undefined;
+        });
+      }
+      return cleanupFlight;
+    };
+    const assertAcquiring = () => {
+      if (cancelled) {
         throw makeError(
-          X`umount of ${q(resolvedMountPoint)} failed (mount may be busy; retry or pass lazyUnmount): ${q(reason)} ${q(stderr)}`,
+          X`mounter cancelled during mount of ${q(resolvedMountPoint)}`,
         );
       }
-      unmounted = true;
-      handles.delete(handle);
-      await E(bridge)
-        .stop()
-        .catch(() => {});
-      if (removeMountPointOnUnmount) {
-        await removeDir(resolvedMountPoint).catch(() => {});
-      }
     };
-
-    const handle = makeExo('Fs9pMountHandle', MountHandleInterface, {
-      async unmount() {
-        if (unmounted) return;
-        // Dedupe concurrent callers onto one attempt; on failure clear
-        // the latch so a later call can retry.
-        if (!unmountInFlight) {
-          unmountInFlight = doUnmount().finally(() => {
-            unmountInFlight = null;
-          });
+    // Ownership precedes the first native effect, including mkdir/start failures
+    // that may have acquired something before reporting failure.
+    mountPoints.add(resolvedMountPoint);
+    socketPaths.add(socketPath);
+    resources.retain(resourceId, cleanup);
+    try {
+      try {
+        removeDirectory = removeMountPointOnUnmount;
+        if (opts.makeMountPoint !== false) {
+          await makeDir(resolvedMountPoint, { recursive: true });
+          assertAcquiring();
         }
-        await unmountInFlight;
-      },
+        // Mounter cleanup orders kernel unmount before bridge shutdown. Passing
+        // its cancellation signal to the bridge would bypass that ordering.
+        bridge = makeBridge({
+          fs,
+          socketPath,
+          ...(uid === undefined ? {} : { uid }),
+          ...(gid === undefined ? {} : { gid }),
+        });
+        try {
+          await E(bridge).start();
+        } catch (cause) {
+          throw makeError(
+            X`9p bridge failed to start on ${q(socketPath)}: ${q(/** @type {Error} */ (cause).message)}`,
+          );
+        }
+        assertAcquiring();
+        const [bin, ...prefix] = mountProgram;
+        // A failed command can have partially mounted the tree. Require a
+        // successful unmount before releasing its transport or storage.
+        needsUnmount = true;
+        try {
+          await runProgram(bin, [
+            ...prefix,
+            '-t',
+            '9p',
+            '-o',
+            optionString,
+            '--',
+            socketPath,
+            resolvedMountPoint,
+          ]);
+        } catch (cause) {
+          throw makeError(
+            X`9p mount of ${q(socketPath)} onto ${q(resolvedMountPoint)} failed: ${q(/** @type {Error} */ (cause).message)}`,
+          );
+        }
+        assertAcquiring();
+      } finally {
+        acquired(undefined);
+      }
+    } catch (cause) {
+      try {
+        await cleanup();
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [cause, cleanupError],
+          '9p mount failed and cleanup remains pending',
+          { cause: cleanupError },
+        );
+      }
+      throw cause;
+    }
+
+    handle = makeExo('Fs9pMountHandle', MountHandleInterface, {
+      unmount: cleanup,
       mountPoint() {
         return resolvedMountPoint;
       },
@@ -496,38 +525,32 @@ export const makeFsMounter = ({
         return socketPath;
       },
       help() {
-        return `9P2000.L mount of an endo-fs Filesystem.\n  mountPoint: ${resolvedMountPoint}\n  socket:     ${socketPath}\n  options:    ${optionString}\nCall unmount() to detach and stop the bridge; the caplet also unmounts on teardown.`;
+        return `9P2000.L mount at ${resolvedMountPoint}. Call unmount() to detach and drain its bridge. Failed cleanup remains retryable.`;
       },
     });
     handles.add(handle);
-    // Close the mount-vs-teardown race: if cancellation fired while we
-    // were awaiting (makeDir / start / mount), the one-shot teardown
-    // sweep ran before this handle was registered and will never run
-    // again. `handles.add` and this `cancelled` read are synchronous,
-    // so they cannot interleave with the teardown turn (which sets
-    // `cancelled` and snapshots `handles` in one turn) — either it
-    // already ran (we see `cancelled` and unmount here) or it runs
-    // later and sees this handle in the set. `unmount()` is idempotent,
-    // so a double with the sweep is harmless.
-    if (cancelled) {
-      await handle.unmount().catch(() => {});
-      throw makeError(
-        X`mounter cancelled during mount of ${q(resolvedMountPoint)}`,
-      );
-    }
     return handle;
   };
 
-  return makeExo('Fs9pMounter', MounterInterface, {
+  const mounter = makeExo('Fs9pMounter', MounterInterface, {
     mount,
     list() {
       return harden([...handles]);
     },
     help() {
-      return `endo-fs → 9P mounter.\n  mount(fs, mountPoint, options?) -> MountHandle\nCaller options: { socketPath, msize=131072, cache='none', readOnly=false, extraMountOptions, makeMountPoint=true, removeMountPointOnUnmount=false, lazyUnmount=false }.\nThe trans/version/access options are pinned (extraMountOptions may not override them); the mount/umount program is operator config, not a caller option.\nmount(2) needs CAP_SYS_ADMIN — the operator sets NINEP_SUDO=1 (or NINEP_MOUNT_PROGRAM/NINEP_UMOUNT_PROGRAM) when the daemon is unprivileged.\nunmount() leaves the bridge up if umount fails (EBUSY) so the mount never outlives its transport; lazyUnmount (or NINEP_LAZY_UMOUNT=1) force-detaches a busy mount on teardown.\nEvery live mount is unmounted when this caplet is cancelled.`;
+      return `endo-fs → 9P mounter. mount(fs, mountPoint, options?) returns a handle with retryable unmount(). The operator owns mount/umount programs. Paths are reserved until cleanup succeeds; the caller must prevent overlapping owners outside this kit. Cancellation starts cleanup; the native owner must await the kit's close() before releasing storage.`;
     },
   });
+  return harden({ mounter, close });
 };
+harden(makeFsMounterKit);
+
+/**
+ * Capability-only convenience entrypoint. Native session owners must retain the
+ * kit instead, so failed acquisition cleanup has an explicit retry path.
+ * @param {Parameters<typeof makeFsMounterKit>[0]} deps
+ */
+export const makeFsMounter = deps => makeFsMounterKit(deps).mounter;
 harden(makeFsMounter);
 
 /**
@@ -541,7 +564,7 @@ harden(makeFsMounter);
  * @param {{ env?: Record<string, string> }} [options]
  */
 export const make = async (_powers, context, options = {}) => {
-  const cancelledP = await resolveCancelled(context);
+  const { cancelledP } = await resolveCancelled(context);
   return makeFsMounter({
     env: options.env ?? {},
     cancelledP,

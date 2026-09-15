@@ -42,7 +42,6 @@ import { DirectoryInterface } from './interfaces.js';
  * @param {DaemonCore['getContentIdentityForId']} args.getContentIdentityForId
  * @param {DaemonCore['formulateDirectory']} args.formulateDirectory
  * @param {DaemonCore['formulateReadableBlob']} args.formulateReadableBlob
- * @param {DaemonCore['pinTransient']} args.pinTransient
  * @param {DaemonCore['unpinTransient']} args.unpinTransient
  */
 export const makeDirectoryMaker = ({
@@ -53,7 +52,6 @@ export const makeDirectoryMaker = ({
   getContentIdentityForId,
   formulateDirectory,
   formulateReadableBlob,
-  pinTransient,
   unpinTransient,
 }) => {
   /** @type {MakeDirectoryNode} */
@@ -519,11 +517,12 @@ export const makeDirectoryMaker = ({
     /** @type {EndoDirectory['makeDirectory']} */
     const makeDirectory = async directoryPetNamePath => {
       const { value: newDirectory, id } = await formulateDirectory();
-      pinTransient(id);
+      // Formulation transfers one transient pin, protecting the directory
+      // until its pet name has been stored (or publication has failed).
       try {
         await storeIdentifier(directoryPetNamePath, id);
       } finally {
-        unpinTransient(id);
+        await unpinTransient(id);
       }
       return newDirectory;
     };

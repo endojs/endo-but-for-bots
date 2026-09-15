@@ -4,6 +4,7 @@ import '@endo/init';
 import test from 'ava';
 import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
+import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import {
   HostedToolSetInterface,
   assertHostedBackendDescriptor,
@@ -12,7 +13,7 @@ import {
 
 import {
   HOSTED_AGENT_POLICY_V1,
-  assertBrokerLeaseV1,
+  assertProviderGrantV1,
   assertContainerMounts,
   assertHostedAgentPolicyV1,
   makeCodexBackendFactory,
@@ -79,8 +80,8 @@ const validLeaseRequirements = () => ({
 
 const validLease = () =>
   harden({
-    version: 'BrokerLeaseV1',
-    leaseId: 'lease-session-1',
+    version: 'ProviderGrantV1',
+    grantId: 'lease-session-1',
     sessionId: 'session-1',
     imageDigest,
     networkNamespaceId: 'netns-session-1',
@@ -88,13 +89,7 @@ const validLease = () =>
     endpoint: 'http://127.0.0.1:4317/',
     accountRef,
     authMode: 'api-key',
-    expiresAt: '2999-01-01T00:00:00.000Z',
     modelAllowlist: harden(['gpt-test']),
-    limits: harden({
-      requests: 100,
-      bytes: 1_000_000n,
-      costMicrounits: 1_000_000n,
-    }),
   });
 
 const makeToolSet = () =>
@@ -109,6 +104,139 @@ const makeToolSet = () =>
       return 'Test hosted tool set.';
     },
   });
+
+test('successive turns retain the same runtime and acknowledged conversation', async t => {
+  t.timeout(5000);
+  const lifecycle = [];
+  const protocol = [];
+  let saved = {};
+  let generation = 0;
+  let turnCount = 0;
+  const factory = makeCodexBackendFactory({
+    imageDigest,
+    listModels: async () => [],
+    destroy: async () => undefined,
+    provision: async spec => {
+      generation += 1;
+      const number = generation;
+      lifecycle.push(`provision-${number}`);
+      const inbound = [];
+      const waiters = [];
+      let closed = false;
+      const push = value => {
+        inbound.push(value);
+        while (waiters.length) waiters.shift()();
+      };
+      const transport = {
+        messages: {
+          async *[Symbol.asyncIterator]() {
+            for (;;) {
+              if (inbound.length) yield inbound.shift();
+              else if (closed) return;
+              // eslint-disable-next-line no-await-in-loop
+              else await new Promise(resolve => waiters.push(resolve));
+            }
+          },
+        },
+        send: async message => {
+          if (!('id' in message) || !('method' in message)) return;
+          protocol.push(message);
+          let result;
+          if (message.method === 'initialize') {
+            result = {
+              codexHome: '/codex-home',
+              platformFamily: 'unix',
+              platformOs: 'linux',
+              userAgent: 'test',
+            };
+          } else if (message.method === 'account/read') {
+            result = {
+              account: { type: 'apiKey' },
+              requiresOpenaiAuth: true,
+            };
+          } else if (
+            ['thread/start', 'thread/resume'].includes(message.method)
+          ) {
+            result = { thread: { id: 'durable-thread' } };
+          } else if (message.method === 'thread/turns/list') {
+            result = {
+              data: turnCount ? [{ id: `turn-${turnCount}` }] : [],
+              nextCursor: null,
+            };
+          } else if (message.method === 'turn/start') {
+            turnCount += 1;
+            const id = `turn-${turnCount}`;
+            push({
+              id: message.id,
+              result: { turn: { id, status: 'inProgress' } },
+            });
+            push({
+              method: 'turn/started',
+              params: {
+                threadId: 'durable-thread',
+                turn: { id, status: 'inProgress' },
+              },
+            });
+            push({
+              method: 'turn/completed',
+              params: {
+                threadId: 'durable-thread',
+                turn: { id, status: 'completed' },
+              },
+            });
+            return;
+          } else {
+            throw Error(`Unexpected request ${message.method}`);
+          }
+          push({ id: message.id, result });
+        },
+        close: async () => {
+          lifecycle.push(`close-${number}`);
+          closed = true;
+          while (waiters.length) waiters.shift()();
+        },
+      };
+      return {
+        policy: validPolicy(),
+        auditWriter: harden({ append: async () => undefined }),
+        threadId: saved.threadId,
+        savedToolSetId: saved.toolSetId,
+        savedRecovery: saved.recovery,
+        saveThreadState: async value => {
+          saved = value;
+        },
+        start: async () => transport,
+        dispose: async () => {
+          lifecycle.push(`dispose-${number}`);
+        },
+      };
+    },
+  });
+  const session = await E(factory).create(
+    harden({ sessionId: 'session-1' }),
+    makeToolSet(),
+  );
+  t.teardown(() => E(session.admin).terminate());
+  const drain = async reader => {
+    const events = [];
+    for await (const event of iterateReader(reader)) events.push(event);
+    return events;
+  };
+  const first = await drain(await E(session.run).send('first', harden({})));
+  t.deepEqual(first.at(-1), { type: 'end', checkpoint: 'turn-1' });
+  await E(session.run).acknowledge('turn-1');
+  const second = await drain(await E(session.run).send('second', harden({})));
+  t.deepEqual(second.at(-1), { type: 'end', checkpoint: 'turn-2' });
+  t.deepEqual(lifecycle, ['provision-1']);
+  t.is(protocol.filter(message => message.method === 'thread/start').length, 1);
+  t.is(
+    protocol.filter(message => message.method === 'thread/resume').length,
+    0,
+  );
+  t.false(protocol.some(message => message.method === 'thread/revert'));
+  await E(session.admin).terminate();
+  t.deepEqual(lifecycle, ['provision-1', 'close-1', 'dispose-1']);
+});
 
 test('sandbox contract rejects a tag and an unenforced resource limit', t => {
   t.throws(
@@ -239,9 +367,9 @@ test('Codex model schema is translated at the backend boundary', t => {
   );
 });
 
-test('broker lease is bound to session, namespace, model, and quotas', t => {
+test('broker lease is bound to session, namespace, and model', t => {
   t.deepEqual(
-    assertBrokerLeaseV1(validLease(), {
+    assertProviderGrantV1(validLease(), {
       ...validLeaseRequirements(),
       model: 'gpt-test',
     }),
@@ -249,7 +377,7 @@ test('broker lease is bound to session, namespace, model, and quotas', t => {
   );
   t.throws(
     () =>
-      assertBrokerLeaseV1(
+      assertProviderGrantV1(
         harden({ ...validLease(), networkNamespaceId: 'shared-netns' }),
         validLeaseRequirements(),
       ),
@@ -261,7 +389,7 @@ test('broker lease is bound to session, namespace, model, and quotas', t => {
   ]) {
     t.throws(
       () =>
-        assertBrokerLeaseV1(
+        assertProviderGrantV1(
           harden({ ...validLease(), endpoint }),
           validLeaseRequirements(),
         ),
@@ -274,7 +402,7 @@ test('broker lease is bound to session, namespace, model, and quotas', t => {
   ]) {
     t.throws(
       () =>
-        assertBrokerLeaseV1(
+        assertProviderGrantV1(
           harden({ ...validLease(), ...replacement }),
           validLeaseRequirements(),
         ),
@@ -320,6 +448,129 @@ test('backend factory requires an approved image and exact workspace cwd', async
       message: /bounded portable path component/,
     });
   }
+});
+
+test('Codex advertises only proved off networking and refuses others before effects', async t => {
+  const specs = [];
+  const factory = makeCodexBackendFactory({
+    imageDigest,
+    destroy: async () => t.fail('must not destroy'),
+    listModels: async () => [],
+    provision: async spec => {
+      specs.push(spec);
+      throw Error('reached safe provisioning');
+    },
+  });
+  t.deepEqual((await E(factory).describe()).supportedNetworkPolicies, ['off']);
+  const toolSet = makeToolSet();
+  for (const networkPolicy of ['public-internet', 'private', '', null, true]) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(
+      E(factory).create(
+        harden({ sessionId: 'session-1', networkPolicy }),
+        toolSet,
+      ),
+      { message: /only the off network policy/ },
+    );
+  }
+  t.deepEqual(specs, []);
+  for (const spec of [
+    { sessionId: 'session-1' },
+    { sessionId: 'session-1', networkPolicy: 'off' },
+  ]) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(E(factory).create(harden(spec), toolSet), {
+      message: /safe provisioning/,
+    });
+  }
+  t.is(specs.length, 2);
+  t.true(specs.every(spec => spec.networkPolicy === 'off'));
+});
+
+test('direct resource provisioning refuses public networking before cleanup or acquisition', async t => {
+  const effects = [];
+  const unexpected = async () => {
+    effects.push('unexpected');
+    throw Error('must not acquire');
+  };
+  const provision = makeCodexResourceProvisioner({
+    imageDigest,
+    providerOrigin,
+    accountRef,
+    makeWorkspace: unexpected,
+    mountWorkspace: unexpected,
+    issueProviderGrant: unexpected,
+    makeSlice: unexpected,
+    startTransport: unexpected,
+    loadThreadState: unexpected,
+    saveThreadState: unexpected,
+    retrySliceCleanup: async () => {
+      effects.push('cleanup');
+    },
+    makeAuditJournal: async () => {
+      effects.push('audit');
+      throw Error('must not acquire');
+    },
+  });
+  await t.throwsAsync(
+    () =>
+      provision({ sessionId: 'session-1', networkPolicy: 'public-internet' }),
+    { message: /only the off network policy/ },
+  );
+  t.deepEqual(effects, []);
+});
+
+test('only an operator-enabled factory advertises and retains public policy', async t => {
+  const specs = [];
+  const factory = makeCodexBackendFactory({
+    imageDigest,
+    publicInternetEnabled: true,
+    listModels: async () => [],
+    destroy: async () => {},
+    provision: async spec => {
+      specs.push(spec);
+      throw Error('provision');
+    },
+  });
+  t.deepEqual((await E(factory).describe()).supportedNetworkPolicies, [
+    'off',
+    'public-internet',
+  ]);
+  await t.throwsAsync(
+    E(factory).create(
+      { sessionId: 'session-1', networkPolicy: 'public-internet' },
+      makeToolSet(),
+    ),
+    { message: /provision/ },
+  );
+  t.is(specs[0].networkPolicy, 'public-internet');
+  const policy = harden({
+    ...validPolicy(),
+    networkPolicy: 'public-internet',
+    mounts: [
+      ...validPolicy().mounts,
+      {
+        role: 'resolver',
+        source: 'resolver:public',
+        destination: '/etc/resolv.conf',
+        mode: 'ro',
+        options: ['nosuid', 'nodev'],
+      },
+    ],
+  });
+  t.notThrows(() =>
+    assertHostedAgentPolicyV1(policy, { networkPolicy: 'public-internet' }),
+  );
+  t.throws(() => assertHostedAgentPolicyV1(policy), {
+    message: /unknown or missing/,
+  });
+  t.throws(
+    () =>
+      assertHostedAgentPolicyV1(validPolicy(), {
+        networkPolicy: 'public-internet',
+      }),
+    { message: /public network policy/ },
+  );
 });
 
 test('failed attestation disposes provisioned resources', async t => {
@@ -511,7 +762,7 @@ test('resource provisioner unwinds every completed stage in reverse order', asyn
           cleanup.push('mount');
         },
       }),
-    issueBrokerLease: async () =>
+    issueProviderGrant: async () =>
       harden({
         attestation: async () => validLease(),
         revoke: async () => {
@@ -555,7 +806,7 @@ test('resource provisioner journals rollback failures', async t => {
     }),
     makeWorkspace: async () => harden({ remove: async () => undefined }),
     mountWorkspace: async () => harden({ unmount: async () => undefined }),
-    issueBrokerLease: async () =>
+    issueProviderGrant: async () =>
       harden({
         attestation: async () => validLease(),
         revoke: async () => undefined,
@@ -622,7 +873,7 @@ for (const failedStage of [
             if (failing && failedStage === 'mount') throw Error('mount failed');
           },
         }),
-      issueBrokerLease: async () =>
+      issueProviderGrant: async () =>
         harden({
           attestation: async () => validLease(),
           revoke: async () => {
@@ -720,7 +971,7 @@ test('resource disposal retries only unfinished cleanup stages', async t => {
           calls.mount += 1;
         },
       }),
-    issueBrokerLease: async () =>
+    issueProviderGrant: async () =>
       harden({
         attestation: async () => validLease(),
         revoke: async () => {
@@ -750,6 +1001,11 @@ test('resource disposal retries only unfinished cleanup stages', async t => {
 });
 
 test('an unsettled tool call blocks teardown without destroying the session', async t => {
+  t.timeout(10_000);
+  /** @type {() => Promise<void>} */
+  let shutdown = async () => {
+    throw Error('shutdown not registered');
+  };
   let disposed = 0;
   /** @type {(value: string) => void} */
   let releaseTool = () => {};
@@ -847,6 +1103,9 @@ test('an unsettled tool call blocks teardown without destroying the session', as
 
   const factory = makeCodexBackendFactory({
     imageDigest,
+    registerShutdown: stop => {
+      shutdown = stop;
+    },
     destroy: async () => undefined,
     listModels: async () => [],
     provision: async () => ({
@@ -886,6 +1145,14 @@ test('an unsettled tool call blocks teardown without destroying the session', as
     /unsettled Endo tool call/,
   );
   t.is(disposed, 0, 'the session was left intact for a lifecycle retry');
+  await t.throwsAsync(() => shutdown(), { message: /shutdown pending/ });
+  t.is(disposed, 0, 'host shutdown also honors the pending tool barrier');
+  await t.throwsAsync(
+    () => E(factory).create({ sessionId: 'other' }, toolSet),
+    {
+      message: /shutting down/,
+    },
+  );
 
   releaseTool('done');
   for (let tries = 0; tries < 200; tries += 1) {
@@ -895,7 +1162,7 @@ test('an unsettled tool call blocks teardown without destroying the session', as
     // eslint-disable-next-line no-await-in-loop
     await Promise.resolve();
   }
-  await session.admin.terminate();
+  await shutdown();
   t.is(disposed, 1, 'and the retry tears it down');
 });
 
@@ -1047,7 +1314,7 @@ test('the provisioner declares attaches to the slice and keeps them out of the l
     }),
     makeWorkspace: async () => harden({}),
     mountWorkspace: async () => harden({ unmount: async () => undefined }),
-    issueBrokerLease: async spec => {
+    issueProviderGrant: async spec => {
       seen.lease = spec;
       return harden({
         revoke: async () => undefined,
@@ -1088,7 +1355,7 @@ test('the provisioner declares attaches to the slice and keeps them out of the l
     }),
     makeWorkspace: async () => harden({}),
     mountWorkspace: async () => harden({ unmount: async () => undefined }),
-    issueBrokerLease: async () =>
+    issueProviderGrant: async () =>
       harden({
         revoke: async () => undefined,
         attestation: async () => validLease(),

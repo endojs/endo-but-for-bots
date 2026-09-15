@@ -43,6 +43,10 @@ export const makeContextMaker = ({
     /** @type {Array<() => void | Promise<void>>} */
     const hooks = [];
 
+    const assertActive = () => {
+      if (cancellationReason !== undefined) throw cancellationReason;
+    };
+
     /**
      * Triggers cancellation of this context and all registered dependents.
      *
@@ -96,7 +100,10 @@ export const makeContextMaker = ({
      * @param {FormulaIdentifier} dependentId - The identifier of the dependent formula.
      */
     const thatDiesIfThisDies = dependentId => {
-      const dependentController = provideController(dependentId);
+      const dependentController = done
+        ? controllerForId.get(dependentId)
+        : provideController(dependentId);
+      if (dependentController === undefined) return;
       if (done) {
         dependentController.context.cancel(cancellationReason, ' *').catch(
           // The dependent exposes hook failures through its `disposed` promise.
@@ -113,7 +120,9 @@ export const makeContextMaker = ({
      * @param {FormulaIdentifier} dependencyId - The identifier of the formula this context depends on.
      */
     const thisDiesIfThatDies = dependencyId => {
+      assertActive();
       const dependencyController = provideController(dependencyId);
+      assertActive();
       dependencyController.context.thatDiesIfThisDies(id);
     };
 
@@ -135,6 +144,7 @@ export const makeContextMaker = ({
       cancel,
       cancelled,
       disposed,
+      assertActive,
       thatDiesIfThisDies,
       thisDiesIfThatDies,
       onCancel,
@@ -143,3 +153,4 @@ export const makeContextMaker = ({
 
   return makeContext;
 };
+harden(makeContextMaker);

@@ -3,6 +3,7 @@
 import net from 'node:net';
 import { chmod, unlink } from 'node:fs/promises';
 
+import { makeError, X } from '@endo/errors';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 
@@ -31,12 +32,13 @@ const BridgeInterface = M.interface('FsBridge9p', {
  * (`@endo/platform/fs/extended/DESIGN.md` §4.10). `src/server.js` has the 9P
  * message → cap call mapping.
  *
- * Cancellation: callers may pass a `cancelled` promise. Its
- * settlement is the signal to shut down — in-flight dispatchers
- * inside `serveConnection` short-circuit instead of waiting for
- * the socket-close cascade. The default is a permanently-deferred
- * promise (never settles → never cancels). Composing additional
- * triggers is `Promise.race([cancelled, ownTrigger])`.
+ * Cancellation or stop fences input and closes the native listener immediately.
+ * Completion additionally waits for admitted filesystem work and acquired handle
+ * cleanup. Failed cleanup remains retained for a later stop retry.
+ *
+ * The caller exclusively owns this private, unique socket path and its ancestry
+ * throughout the bridge lifetime. Successful stop is cached so an old owner
+ * cannot unlink a successor. This bridge does not reconcile abandoned paths.
  *
  * @param {{
  *   fs: import('@endo/eventual-send').ERef<any>,
@@ -55,94 +57,153 @@ export const makeFsBridge9p = ({
 }) => {
   /** @type {import('node:net').Server | null} */
   let server = null;
-  /** @type {Set<import('node:net').Socket>} */
-  const sockets = new Set();
-  let started = false;
-  let stopped = false;
-  // Bridge-internal stop trigger: `stop()` resolves it. The
-  // `cancelled` we hand to each serveConnection is the race of
-  // the caller's `cancelled` and our own stop trigger, so a
-  // settlement on either side propagates to every in-flight
-  // dispatcher.
-  /** @type {(value?: unknown) => void} */
-  let stopResolve;
-  const stopPromise = new Promise(resolve => {
-    stopResolve = resolve;
-  });
-  const composedCancelled = Promise.race([cancelled, stopPromise]);
-  // Don't leave the race promise unhandled if the caller's
-  // `cancelled` ever rejects.
-  composedCancelled.catch(() => {});
+  /** @type {Map<import('node:net').Socket, ReturnType<typeof serveConnection>>} */
+  const connections = new Map();
+  /** @type {Promise<void> | undefined} */
+  let starting;
+  /** @type {Promise<void> | undefined} */
+  let listening;
+  /** @type {Promise<void> | undefined} */
+  let closingServer;
+  /** @type {Promise<void> | undefined} */
+  let stopping;
+  let stopRequested = false;
+  let socketOwned = false;
 
-  return makeExo('FsBridge9p', BridgeInterface, {
-    async start() {
-      if (started) return;
-      started = true;
-      await unlink(socketPath).catch(() => {});
-      server = net.createServer({ allowHalfOpen: false }, sock => {
-        sockets.add(sock);
-        sock.on('close', () => sockets.delete(sock));
-        serveConnection({
+  const assertOpen = () => {
+    if (stopRequested) throw makeError(X`9P bridge is stopped`);
+  };
+
+  const unlinkSocket = () =>
+    unlink(socketPath).catch(error => {
+      if (/** @type {NodeJS.ErrnoException} */ (error).code !== 'ENOENT') {
+        throw error;
+      }
+    });
+
+  const closeServer = () => {
+    if (!server) return Promise.resolve();
+    if (closingServer) return closingServer;
+    const retainedServer = server;
+    const attempt = (async () => {
+      // A close before listen settles can otherwise miss a late bound handle.
+      await listening?.catch(() => {});
+      await new Promise((resolve, reject) => {
+        retainedServer.close(error => {
+          if (
+            error &&
+            /** @type {NodeJS.ErrnoException} */ (error).code !==
+              'ERR_SERVER_NOT_RUNNING'
+          ) {
+            reject(error);
+          } else {
+            resolve(undefined);
+          }
+        });
+      });
+      server = null;
+    })();
+    closingServer = attempt;
+    void attempt.catch(() => {
+      if (closingServer === attempt) closingServer = undefined;
+    });
+    return attempt;
+  };
+
+  const stop = () => {
+    // Fence before waiting for startup or cleanup. Connection callbacks that
+    // arrive after this point cannot acquire filesystem authority.
+    stopRequested = true;
+    if (stopping) return stopping;
+    const connectionAttempts = [...connections.values()].map(async control =>
+      control.close(),
+    );
+    const serverAttempt = closeServer();
+    const attempt = (async () => {
+      const results = await Promise.allSettled([
+        // Failed startup is not a cleanup failure; its retained effects are
+        // handled independently by server/connection closure and path unlink.
+        starting?.catch(() => {}),
+        serverAttempt,
+        ...connectionAttempts,
+      ]);
+      const failures = results
+        .filter(result => result.status === 'rejected')
+        .map(result => /** @type {PromiseRejectedResult} */ (result).reason);
+      if (failures.length > 0) {
+        throw new AggregateError(failures, '9P bridge cleanup failed');
+      }
+      if (socketOwned) {
+        await unlinkSocket();
+        socketOwned = false;
+      }
+    })();
+    stopping = attempt;
+    void attempt.catch(() => {
+      // Observe background cancellation failure without discarding ownership.
+      // An explicit stop retries only resources that have not been released.
+      if (stopping === attempt) stopping = undefined;
+    });
+    return attempt;
+  };
+
+  const requestStop = () => {
+    if (!stopRequested) void stop().catch(() => {});
+  };
+  void cancelled.then(requestStop, requestStop);
+
+  const start = async () => {
+    assertOpen();
+    socketOwned = true;
+    await unlinkSocket();
+    assertOpen();
+    const retainedServer = net.createServer(
+      { allowHalfOpen: false },
+      socket => {
+        if (stopRequested) {
+          socket.destroy();
+          return;
+        }
+        const control = serveConnection({
           fs,
-          socket: sock,
-          cancelled: composedCancelled,
+          socket,
           uid,
           gid,
+          // Native socket closure alone is not proof that filesystem effects or
+          // acquired handles have finished. Only successful drain releases this.
+          onClose: () => connections.delete(socket),
         });
+        connections.set(socket, control);
+      },
+    );
+    server = retainedServer;
+    // Runtime errors trigger retained cleanup instead of an unhandled native
+    // error event. Startup errors also reject the original start call below.
+    retainedServer.on('error', requestStop);
+    listening = new Promise((resolve, reject) => {
+      /** @param {Error} error */
+      const onStartupError = error => reject(error);
+      retainedServer.once('error', onStartupError);
+      retainedServer.listen(socketPath, () => {
+        retainedServer.removeListener('error', onStartupError);
+        resolve(undefined);
       });
-      // Install a startup-only error listener that we explicitly
-      // remove on success — otherwise its `once` registration sits
-      // around resolved-promise-already, swallowing every later
-      // server-level error event with no observable effect.
-      await new Promise((resolve, reject) => {
-        const srv = /** @type {import('node:net').Server} */ (server);
-        /** @param {Error} err */
-        const onStartupError = err => reject(err);
-        srv.once('error', onStartupError);
-        srv.listen(socketPath, () => {
-          srv.removeListener('error', onStartupError);
-          resolve(undefined);
-        });
-      });
-      // After listen() resolved, install a long-lived error handler
-      // so post-startup `'error'` events surface (and don't crash
-      // the process via Node's default unhandled-error throw).
-      server?.on('error', err => {
-        // eslint-disable-next-line no-console
-        console.error('[9p] fs-bridge server error', err);
-      });
-      // 0600: the 9P bridge exposes the full authority of the FS
-      // capability projected through it. Anyone who can connect can
-      // exercise that authority; restrict to the owning UID only.
-      //
-      // There is a small window between `listen()` creating the socket
-      // (at the process umask) and this `chmod`. The atomic fix would be
-      // a restrictive umask across the bind, but `process.umask()` is
-      // unsupported in worker threads (where bridges may run), so we
-      // narrow exposure two other ways instead: callers place the socket
-      // in a private dir (`mount-caplet.js` prefers `XDG_RUNTIME_DIR`,
-      // which is 0700), and the socket name is unpredictable, so a local
-      // user can't pre-position to connect during the window even on the
-      // world-writable `os.tmpdir()` fallback.
-      await chmod(socketPath, 0o600);
-    },
+    });
+    await listening;
+    assertOpen();
+    // Socket ancestry must be private: chmod follows bind, so it cannot close
+    // the exposure window of a socket created in a shared directory.
+    await chmod(socketPath, 0o600);
+    assertOpen();
+  };
 
-    async stop() {
-      if (stopped) return;
-      stopped = true;
-      // Settle the bridge-internal stop trigger first so every
-      // active connection's `cancelled` resolves and dispatches in
-      // flight see `closed = true` on the next await, *before* we
-      // tear the sockets out from under them.
-      stopResolve();
-      for (const sock of sockets) sock.destroy();
-      sockets.clear();
-      if (server) {
-        await new Promise(resolve => server?.close(() => resolve(undefined)));
-        server = null;
-      }
-      await unlink(socketPath).catch(() => {});
+  return makeExo('FsBridge9p', BridgeInterface, {
+    start: () => {
+      assertOpen();
+      if (!starting) starting = start();
+      return starting;
     },
+    stop,
   });
 };
 harden(makeFsBridge9p);

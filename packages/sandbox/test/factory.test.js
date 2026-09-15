@@ -5,7 +5,7 @@ import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import { M, matches } from '@endo/patterns';
 
-import { makeSandboxFactory } from '../src/factory.js';
+import { makeSandboxFactory, makeSandboxFactoryKit } from '../src/factory.js';
 import {
   BackendProbeShape,
   NetworkProfileShape,
@@ -31,6 +31,22 @@ test('listBackends returns an empty array when no drivers are registered', async
   const backends = await E(factory).listBackends();
   t.deepEqual(backends, [], 'no drivers ⇒ empty backend list');
   t.true(Array.isArray(backends));
+});
+
+test('make() enforces the join/networkRef biconditional before any backend', async t => {
+  const factory = makeSandboxFactory({
+    drivers: harden([]),
+    scratchProvider: /** @type {any} */ (stubScratchProvider),
+  });
+  const rootfs = harden({ kind: 'host-bind' });
+  await t.throwsAsync(
+    () => E(factory).make(harden({ rootfs, network: 'join' })),
+    { message: /requires a networkRef container/ },
+  );
+  await t.throwsAsync(
+    () => E(factory).make(harden({ rootfs, network: 'none', networkRef: 'x' })),
+    { message: /no other profile accepts one/ },
+  );
 });
 
 test('make() throws a structured "no backend available" error in Phase 0', async t => {
@@ -196,6 +212,8 @@ test('NetworkProfileShape accepts the documented profiles and rejects others', t
 const makeContainmentFixture = () => {
   let spawnCalls = 0;
   let teardownCalls = 0;
+  let stopping = false;
+  const exits = new Set();
 
   const driver = harden({
     name: /** @type {const} */ ('bwrap'),
@@ -207,6 +225,7 @@ const makeContainmentFixture = () => {
      */
     spawn: async (_slice, argv) => {
       await null;
+      if (stopping) throw Error('driver is stopping');
       spawnCalls += 1;
       const stubborn = argv[0] === '/bin/stubborn';
       /** @type {(status: { code: number | null, signal: string | null }) => void} */
@@ -215,6 +234,7 @@ const makeContainmentFixture = () => {
       const exit = new Promise(resolve => {
         reportExit = resolve;
       });
+      exits.add(reportExit);
       return harden({
         pid: 4242,
         stdin: null,
@@ -232,7 +252,11 @@ const makeContainmentFixture = () => {
       });
     },
     teardown: async () => {
+      stopping = true;
       teardownCalls += 1;
+      for (const resolve of exits)
+        resolve(harden({ code: null, signal: 'SIGKILL' }));
+      exits.clear();
     },
   });
 
@@ -272,10 +296,6 @@ test('a containment failure fails the whole slice, not just one process', async 
   await t.throwsAsync(() => E(stubborn).kill(), {
     message: /could not prove containment.*synthetic signal refusal/,
   });
-  t.true(
-    fixture.counts().teardownCalls >= 1,
-    'forced backend teardown must have run',
-  );
 
   // The slice was torn down under everyone on it, so it must stop
   // accepting work rather than run the next spawn without the
@@ -296,8 +316,10 @@ test('a containment failure fails the whole slice, not just one process', async 
   await t.throwsAsync(() => siblingWait, {
     message: /torn down after a containment failure/,
   });
-  await t.throwsAsync(() => E(handle).dispose(), {
-    message: /dispose could not prove containment/,
+  await E(handle).dispose();
+  t.is(fixture.counts().teardownCalls, 1);
+  await t.throwsAsync(() => E(stubborn).wait(), {
+    message: /could not prove containment/,
   });
 });
 
@@ -387,6 +409,27 @@ test('a policy reaches the driver and its attestation reaches the caller', async
   const attestation = await E(handle).policy();
   t.is(attestation.version, 'SlicePolicyAttestationV1');
   t.is(attestation.imageDigest, stubPolicyRequest.imageDigest);
+});
+
+test('native preparation refuses scratch outside an exact policy', async t => {
+  const kit = makeSandboxFactoryKit({
+    drivers: [makePolicyStubDriver()],
+    scratchProvider: /** @type {any} */ (stubScratchProvider),
+  });
+  t.teardown(() => kit.close());
+  const nativeOptions = harden({
+    rootfs: { kind: /** @type {const} */ ('oci'), ref: 'image' },
+    network: /** @type {const} */ ('broker-only'),
+    policy: stubPolicyRequest,
+  });
+  await t.throwsAsync(
+    () => kit.makeResolved({ ...nativeOptions, scratchHostPath: '/scratch' }),
+    { message: /Scratch cannot extend an exact slice policy/ },
+  );
+  const handle = await kit.makeResolved(nativeOptions);
+  const attestation = await E(handle).policy();
+  t.is(attestation.imageDigest, stubPolicyRequest.imageDigest);
+  await E(handle).dispose();
 });
 
 test('a backend that cannot attest a policy is refused the slice', async t => {
@@ -534,4 +577,22 @@ test('a policy slice refuses to hand out mounts outside its own table', async t 
   await t.throwsAsync(E(handle).mount(stubMount, '/data'), {
     message: /not available on a policy slice/,
   });
+});
+
+test('generated files cannot silently extend an exact policy mount table', async t => {
+  const factory = makeSandboxFactory({
+    drivers: harden([]),
+    scratchProvider: /** @type {any} */ (stubScratchProvider),
+  });
+  await t.throwsAsync(
+    E(factory).make(
+      harden({
+        rootfs: { kind: 'oci', ref: 'image' },
+        network: 'broker-only',
+        policy: stubPolicyRequest,
+        generatedFiles: [{ innerPath: '/etc/resolv.conf', contents: '' }],
+      }),
+    ),
+    { message: /cannot extend an exact slice policy/ },
+  );
 });

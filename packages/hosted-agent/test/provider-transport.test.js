@@ -5,6 +5,8 @@ import { E } from '@endo/eventual-send';
 import { isCredentialRejection } from '../src/provider-broker.js';
 import { makeProviderFetchTransport } from '../src/provider-transport.js';
 
+/** @import { ProviderTransportDiagnostic } from '../src/provider-transport.js' */
+
 const request = harden({
   url: 'https://api.example.test/v1/responses',
   method: 'POST',
@@ -14,11 +16,15 @@ const request = harden({
   maxResponseBytes: 10n,
 });
 
-/** @param {any} fetch */
-const setup = fetch => {
+/**
+ * @param {any} fetch
+ * @param {(diagnostic: ProviderTransportDiagnostic) => void | Promise<void>} [onDiagnostic]
+ */
+const setup = (fetch, onDiagnostic = undefined) => {
   const timers = new Set();
   const transport = makeProviderFetchTransport({
     fetch,
+    onDiagnostic,
     timeoutMs: 100,
     maxRequestBytes: 100n,
     maxResponseBytes: 10n,
@@ -38,6 +44,203 @@ const setup = fetch => {
     },
   };
 };
+
+test('any well-shaped header reaches the network; the route is not this layer\u2019s to bind', async t => {
+  // The subscription headers were once admitted only for the fixed ChatGPT
+  // route. The general name rule matches both of their names, so that binding
+  // is gone: which route a session may reach is the broker's decision (it
+  // pins the origin and the inference path per grant), and this layer's job
+  // is that no header can terminate itself or begin another.
+  let dispatched = 0;
+  /** @type {any} */
+  let sent;
+  const subject = setup(async (_url, options) => {
+    dispatched += 1;
+    sent = options.headers;
+    return new Response('ok');
+  });
+  t.teardown(subject.dispose);
+  const subscription = {
+    ...request,
+    url: 'https://chatgpt.com/backend-api/codex/responses',
+    headers: {
+      ...request.headers,
+      'chatgpt-account-id': 'account-1',
+      originator: 'codex_cli_rs',
+    },
+  };
+  t.deepEqual(await E(subject.transport).request(subscription), {
+    status: 200,
+    body: 'ok',
+  });
+  t.is(sent['chatgpt-account-id'], 'account-1');
+
+  // The same headers on another https route are no longer refused here.
+  t.deepEqual(
+    await E(subject.transport).request({ ...subscription, url: request.url }),
+    {
+      status: 200,
+      body: 'ok',
+    },
+  );
+
+  // What is still refused is a value that could forge a second header.
+  await t.throwsAsync(() =>
+    E(subject.transport).request({
+      ...subscription,
+      headers: {
+        ...subscription.headers,
+        'chatgpt-account-id': 'bad\r\nheader',
+      },
+    }),
+  );
+  // ...and a name that could carry a separator.
+  await t.throwsAsync(() =>
+    E(subject.transport).request({
+      ...subscription,
+      headers: { ...subscription.headers, 'bad name': 'x' },
+    }),
+  );
+  t.is(dispatched, 2, 'only the two well-shaped requests reached fetch');
+});
+
+test('host diagnostics contain only fixed stages and bounded HTTP status', async t => {
+  const diagnostics = [];
+  const capture = diagnostic => {
+    t.true(Object.isFrozen(diagnostic));
+    diagnostics.push(diagnostic);
+  };
+  const denied = setup(
+    async () =>
+      new Response('body-canary-secret', {
+        status: 429,
+        headers: { 'www-authenticate': 'header-canary-secret' },
+      }),
+    capture,
+  );
+  t.teardown(denied.dispose);
+  await t.throwsAsync(() => E(denied.transport).request(request), {
+    message: 'Provider transport failed',
+  });
+  const broken = setup(async () => {
+    throw Error('exception-canary-secret');
+  }, capture);
+  t.teardown(broken.dispose);
+  await t.throwsAsync(() => E(broken.transport).request(request), {
+    message: 'Provider transport failed',
+  });
+  const invalid = setup(async () => {
+    t.fail('invalid requests must not dispatch');
+  }, capture);
+  t.teardown(invalid.dispose);
+  await t.throwsAsync(() =>
+    E(invalid.transport).request({
+      ...request,
+      body: 'body-canary'.repeat(20),
+    }),
+  );
+  // A refused body's bounded prefix is the ONE response content a host
+  // observer sees, and only for a response that was refused. It is what turns
+  // "502, usually temporary" into a cause an operator can act on: a status
+  // alone cannot distinguish an unentitled model from an undeclared beta
+  // capability. `detail` names which request-stage check refused, and is a
+  // fixed string, never request data.
+  t.deepEqual(diagnostics, [
+    { stage: 'response', status: 429, refusal: 'body-canary-secret' },
+    { stage: 'fetch' },
+    { stage: 'request', detail: 'request shape' },
+  ]);
+  // Everything else still stays out: the upstream's response HEADERS, and the
+  // text of an exception thrown by fetch.
+  const rendered = JSON.stringify(diagnostics);
+  t.false(rendered.includes('header-canary-secret'));
+  t.false(rendered.includes('exception-canary-secret'));
+  // The oversized request's own body never becomes a diagnostic.
+  t.false(rendered.includes('body-canary-body-canary'));
+});
+
+test('a refusal is bounded, and never echoes the credential it carried', async t => {
+  const diagnostics = [];
+  const echoed = setup(
+    async () =>
+      new Response(`denied: Bearer canary-secret ${'x'.repeat(4096)}`, {
+        status: 400,
+      }),
+    diagnostic => {
+      diagnostics.push(diagnostic);
+    },
+  );
+  t.teardown(echoed.dispose);
+  await t.throwsAsync(() => E(echoed.transport).request(request), {
+    message: 'Provider transport failed',
+  });
+  t.is(diagnostics.length, 1);
+  const [{ refusal }] = diagnostics;
+  t.false(
+    `${refusal}`.includes('canary-secret'),
+    'a body echoing the credential is withheld entirely',
+  );
+  const bounded = setup(
+    async () => new Response('d'.repeat(4096), { status: 400 }),
+    diagnostic => {
+      diagnostics.push(diagnostic);
+    },
+  );
+  t.teardown(bounded.dispose);
+  await t.throwsAsync(() => E(bounded.transport).request(request));
+  t.true(`${diagnostics[1].refusal}`.length <= 1024);
+});
+
+test('diagnostic observer failures cannot change provider outcomes', async t => {
+  for (const observer of [
+    () => {
+      throw Error('observer-canary-secret');
+    },
+    async () => {
+      throw Error('observer-canary-secret');
+    },
+  ]) {
+    const denied = setup(
+      async () => new Response('secret', { status: 401 }),
+      observer,
+    );
+    t.teardown(denied.dispose);
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(() => E(denied.transport).request(request), {
+      message: 'Provider credential rejected',
+    });
+  }
+});
+
+test('body failures and idle deadlines emit one sanitized diagnostic', async t => {
+  t.timeout(1000);
+  const diagnostics = [];
+  const { response } = streamResponse([new Uint8Array([0xff])]);
+  const invalid = setup(
+    async () => response,
+    value => {
+      diagnostics.push(value);
+    },
+  );
+  t.teardown(invalid.dispose);
+  await t.throwsAsync(() => E(invalid.transport).request(request), {
+    message: 'Provider transport failed',
+  });
+  const idle = setup(
+    async () => new Response(new ReadableStream()),
+    value => {
+      diagnostics.push(value);
+    },
+  );
+  t.teardown(idle.dispose);
+  const streaming = await E(idle.transport).requestStream(request);
+  idle.timeout();
+  await t.throwsAsync(() => E(streaming.reader).next(), { message: /stopped/ });
+  t.deepEqual(diagnostics, [
+    { stage: 'body', status: 200 },
+    { stage: 'timeout', status: 200 },
+  ]);
+});
 
 /**
  * @param {Uint8Array[]} chunks
@@ -221,7 +424,7 @@ test('request bounds, header smuggling and redirects are rejected', async t => {
     { ...request, url: 'http://api.example.test' },
     { ...request, body: 'x'.repeat(101) },
     { ...request, headers: { authorization: 'token\r\nInjected: yes' } },
-    { ...request, headers: { cookie: 'ambient' } },
+    { ...request, headers: { 'in valid': 'x' } },
   ]) {
     // eslint-disable-next-line no-await-in-loop
     await t.throwsAsync(() => E(lease.transport).request(harden(bad)), {

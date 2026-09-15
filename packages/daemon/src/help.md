@@ -380,6 +380,22 @@ Create or retrieve another host agent.
 Create or retrieve a worker for running code.
 Workers are isolated JavaScript environments.
 
+## provideSessionOwner(recordsPath) -> Promise<SessionOwner>
+
+Provide an administrative session owner backed by a private local directory.
+Missing directory parents are created inside the daemon.
+Repeated calls share the owner and refuse a changed directory binding.
+Another host cannot claim the same directory during this daemon incarnation.
+A revived host formula cannot take over its earlier incarnation's claim either:
+cancellation does not establish that admitted cleanup has drained.
+The owner provides create, inspect, revise, client, stop, and remove methods.
+It retains exact formula identifiers; disposable directories and raw client
+capabilities stay inside the daemon.
+The client method returns a forwarding facet for one session incarnation.
+Re-provide the owner after a daemon restart.
+Cancelling its host or original directory fences the owner and its client facets,
+but does not prove that native resources have been cleaned up.
+
 ## evaluate(workerName, source, codeNames, petNames, resultName?) -> Promise<any>
 
 Evaluate JavaScript code in a worker with named endowments.
@@ -391,6 +407,16 @@ Evaluate JavaScript code in a worker with named endowments.
 
 Example: evaluate(undefined, "x + y", ["x", "y"], ["a", "b"], ["result"])
   Runs "x + y" where x=lookup("a"), y=lookup("b"), stores result as "result"
+
+## getFormulaEnvironment(identifier) -> Promise<Record<string, string>>
+
+Read a local caplet formula's persisted construction environment without reviving it.
+Supports make-unconfined, make-archive, and make-from-tree formulas, returning an
+empty record when no environment was stored.
+Other formula types and cross-peer identifiers are rejected.
+This host-only method can reveal environment credentials; it is absent from the
+guest and diagnostics facets, and ordinary formula inspection omits these values.
+Use the formula identifier rather than a mutable pet name when verifying configuration.
 
 ## makeUnconfined(workerName, specifier, options?) -> Promise<any>
 

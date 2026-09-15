@@ -260,6 +260,44 @@
 .floot-header-btn.on {
   color: var(--fl-accent);
 }
+/* Labeled header controls (the journal, a pending network request). A label
+   is wider than the icon square, so the chip sizes to its text instead of
+   clipping to 34px. The badge carries the part that needs the operator and
+   collapses to a dot on narrow screens, where the words would crowd out the
+   session title. */
+.floot-header-btn.chip {
+  width: auto;
+  gap: 0.4rem;
+  padding: 0 0.6rem;
+  border: 1px solid var(--fl-border);
+  background: var(--fl-surface2);
+  font-size: 0.78rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.floot-header-btn.chip:hover {
+  border-color: var(--fl-border-strong);
+  background: var(--fl-surface3);
+}
+.floot-header-btn.chip.on {
+  color: var(--fl-accent);
+  border-color: var(--fl-accent);
+}
+.floot-header-btn.chip.attention {
+  color: var(--fl-amber);
+  border-color: rgba(245, 158, 11, 0.45);
+}
+.floot-header-btn.chip.attention.on {
+  border-color: var(--fl-amber);
+}
+.floot-header-badge {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(245, 158, 11, 0.16);
+  color: var(--fl-amber);
+  font-size: 0.68rem;
+  font-weight: 500;
+}
 
 .floot-messages {
   flex: 1;
@@ -984,7 +1022,19 @@
     justify-content: center;
   }
   .floot-header {
+    gap: 0.4rem;
     padding: 0.6rem 0.75rem;
+  }
+  .floot-header-btn.chip {
+    padding: 0 0.5rem;
+  }
+  .floot-header-badge {
+    width: 8px;
+    height: 8px;
+    padding: 0;
+    border-radius: 50%;
+    background: var(--fl-amber);
+    font-size: 0;
   }
   .floot-messages {
     padding: 0.75rem;
@@ -1038,4 +1088,225 @@
   .floot-pending-input {
     width: 100%;
   }
+}
+/* ── Operator panels ─────────────────────────────────────────────────────────
+   The turn journal and the sandbox-network panel are prose and small forms
+   over evidence text. They render inside the chat shell, whose global
+   `button`, `textarea` and `select` rules would otherwise dress them in the
+   shell's theme; the rules below keep them in Floot's, and outrank the shell's
+   pseudo-class rules by carrying the panel class. */
+.floot-operator-panel {
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+.floot-operator-panel h3 {
+  margin: 0 0 0.6rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+.floot-operator-panel h4 {
+  margin: 1rem 0 0.4rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fl-text-muted);
+}
+.floot-operator-panel p {
+  margin: 0.5rem 0;
+  max-width: 72ch;
+  color: var(--fl-text-muted);
+}
+.floot-operator-panel p[role='status'] {
+  color: var(--fl-text);
+}
+.floot-operator-panel .floot-panel-note.warn {
+  color: var(--fl-amber);
+}
+.floot-operator-panel pre {
+  margin: 0.5rem 0;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--fl-border);
+  border-radius: 8px;
+  background: var(--fl-surface2);
+  color: var(--fl-text);
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 0.78rem;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow: auto;
+}
+.floot-operator-panel label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin: 0.6rem 0;
+  max-width: 40rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fl-text-muted);
+}
+.floot-operator-panel textarea,
+.floot-operator-panel select {
+  width: 100%;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--fl-border);
+  border-radius: 8px;
+  background: var(--fl-surface2);
+  color: var(--fl-text);
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 400;
+  letter-spacing: normal;
+  text-transform: none;
+  outline: none;
+  box-shadow: none;
+}
+.floot-operator-panel textarea {
+  min-height: 4rem;
+  resize: vertical;
+}
+.floot-operator-panel select {
+  background-image: none;
+  -webkit-appearance: auto;
+  appearance: auto;
+}
+.floot-operator-panel textarea:focus,
+.floot-operator-panel select:focus {
+  border-color: var(--fl-accent);
+  box-shadow: none;
+}
+.floot-operator-panel button {
+  padding: 0.4rem 0.75rem;
+  border: 1px solid var(--fl-border);
+  border-radius: 8px;
+  background: var(--fl-surface2);
+  color: var(--fl-text);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background 0.12s,
+    border-color 0.12s;
+}
+.floot-operator-panel button:hover {
+  border-color: var(--fl-border-strong);
+  background: var(--fl-surface3);
+}
+.floot-operator-panel button:active {
+  transform: none;
+}
+.floot-operator-panel button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  border-color: var(--fl-border);
+  background: var(--fl-surface2);
+}
+.floot-operator-panel button[aria-pressed='true'] {
+  color: var(--fl-accent);
+  border-color: var(--fl-accent);
+}
+.floot-operator-panel button.primary {
+  border-color: var(--fl-accent);
+  background: var(--fl-accent);
+  color: #fff;
+}
+.floot-operator-panel button.primary:hover {
+  border-color: #2563eb;
+  background: #2563eb;
+}
+.floot-operator-panel button.primary:disabled {
+  border-color: var(--fl-accent);
+  background: var(--fl-accent);
+}
+.floot-panel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.6rem 0;
+}
+.floot-panel-actions > p,
+.floot-panel-actions > span {
+  margin: 0;
+}
+
+/* The journal itself: a full pane in place of the transcript. */
+.floot-recovery {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 1rem;
+}
+.floot-recovery pre {
+  max-height: 20rem;
+}
+.floot-recovery-turn {
+  margin: 0.5rem 0;
+  border: 1px solid var(--fl-border);
+  border-radius: 8px;
+  background: var(--fl-surface);
+}
+.floot-recovery-turn > summary {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.55rem 0.75rem;
+  border-radius: 8px;
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+  font-weight: 500;
+}
+.floot-recovery-turn > summary::-webkit-details-marker {
+  display: none;
+}
+.floot-recovery-turn > summary::before {
+  content: '▸';
+  width: 0.8rem;
+  font-size: 0.85rem;
+  line-height: 1;
+  color: var(--fl-text-muted);
+}
+.floot-recovery-turn[open] > summary::before {
+  content: '▾';
+}
+.floot-recovery-turn > summary:hover {
+  background: var(--fl-surface2);
+}
+.floot-recovery-turn.unknown {
+  border-color: rgba(245, 158, 11, 0.45);
+}
+.floot-recovery-turn.unknown > summary {
+  color: var(--fl-amber);
+}
+.floot-recovery-turn.acknowledged > summary {
+  color: var(--fl-text-muted);
+}
+.floot-recovery-turn-body {
+  padding: 0 0.75rem 0.75rem;
+}
+
+/* The sandbox-network panel: a section at the top of settings. */
+.floot-network-policy {
+  padding-block: 0.5rem 1rem;
+  border-bottom: 1px solid var(--fl-border);
+}
+.floot-network-policy pre {
+  max-height: 12rem;
+}
+.floot-network-request {
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  border-radius: 8px;
+  background: rgba(245, 158, 11, 0.06);
+}
+.floot-network-request h4 {
+  margin-top: 0;
+  color: var(--fl-amber);
 }

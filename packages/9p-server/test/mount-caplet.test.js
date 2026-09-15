@@ -15,7 +15,13 @@ import nodePath from 'node:path';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/pass-style';
 
-import { makeFsMounter, mountIdentity } from '../mount-caplet.js';
+import {
+  make,
+  makeFsMounter,
+  makeFsMounterKit,
+  mountIdentity,
+  readMountPrograms,
+} from '../mount-caplet.js';
 
 // A caller-supplied socketPath must live inside the socket directory
 // (defaults to os.tmpdir() when XDG_RUNTIME_DIR is unset), so build the
@@ -26,6 +32,53 @@ const SOCK2 = nodePath.join(os.tmpdir(), 's2.sock');
 const fakeFs = () => Far('FakeFs', {});
 
 const flush = () => new Promise(resolve => setTimeout(resolve, 10));
+
+for (const kind of ['presence', 'local', 'promised']) {
+  test(`make returns with a live ${kind} context and observes later cancellation`, async t => {
+    t.timeout(5000);
+    let cancel;
+    const cancelledP = new Promise((_resolve, reject) => {
+      cancel = () => reject(Error('Test context cancelled'));
+    });
+    cancelledP.catch(() => {});
+    t.teardown(() => cancel());
+    const presence = Far('Context', { whenCancelled: () => cancelledP });
+    const context =
+      kind === 'local'
+        ? harden({ cancelled: cancelledP })
+        : kind === 'promised'
+          ? Promise.resolve(presence)
+          : presence;
+    // This must return while the context is still live. The old async helper
+    // assimilated cancelledP and left this constructor pending forever.
+    const mounter = await make(undefined, context);
+    t.deepEqual(await E(mounter).list(), []);
+    cancel();
+    await flush();
+    // An invalid operator override also prevents native effects if the fence
+    // regresses, so this entrypoint test never needs a kernel mount or socket.
+    await t.throwsAsync(
+      () =>
+        E(mounter).mount(fakeFs(), '/not-mounted', {
+          mountProgram: ['invalid'],
+        }),
+      { message: /mounter is cancelled/ },
+    );
+  });
+}
+
+test('make without a cancellation context returns an open mounter', async t => {
+  t.timeout(5000);
+  const mounter = await make(undefined, undefined);
+  t.deepEqual(await E(mounter).list(), []);
+  await t.throwsAsync(
+    () =>
+      E(mounter).mount(fakeFs(), '/not-mounted', {
+        mountProgram: ['invalid'],
+      }),
+    { message: /operator configuration/ },
+  );
+});
 
 /**
  * @param {object} [opts]
@@ -45,11 +98,11 @@ const makeHarness = (opts = {}) => {
   };
   const makeDir = (p, o) => {
     calls.makeDir.push({ p, o });
-    return Promise.resolve();
+    return opts.makeDirBehavior?.() ?? Promise.resolve();
   };
   const removeDir = p => {
     calls.removeDir.push(p);
-    return Promise.resolve();
+    return opts.removeDirBehavior?.() ?? Promise.resolve();
   };
   const makeBridge = ({ fs, socketPath, cancelled, uid, gid }) => {
     const rec = { fs, socketPath, cancelled, uid, gid, started: 0, stopped: 0 };
@@ -57,13 +110,15 @@ const makeHarness = (opts = {}) => {
     return Far('FakeBridge', {
       async start() {
         rec.started += 1;
+        await opts.startBehavior?.();
       },
       async stop() {
         rec.stopped += 1;
+        await opts.stopBehavior?.();
       },
     });
   };
-  const mounter = makeFsMounter({
+  const { mounter, close } = makeFsMounterKit({
     env: opts.env ?? {},
     cancelledP: opts.cancelledP ?? null,
     runProgram,
@@ -73,7 +128,7 @@ const makeHarness = (opts = {}) => {
     uid: opts.uid,
     gid: opts.gid,
   });
-  return { mounter, calls };
+  return { mounter, close, calls };
 };
 
 test("mountIdentity reports the worker's own uid/gid", t => {
@@ -227,6 +282,33 @@ test('a NINEP_MOUNT_PROGRAM that does not run mount is rejected at construction'
   );
 });
 
+test('readMountPrograms is the construction-time program check, usable ahead of it', t => {
+  t.deepEqual(readMountPrograms(), {
+    mountProgram: ['mount'],
+    umountProgram: ['umount'],
+  });
+  t.deepEqual(readMountPrograms({ NINEP_SUDO: '1' }), {
+    mountProgram: ['sudo', 'mount'],
+    umountProgram: ['sudo', 'umount'],
+  });
+  t.deepEqual(
+    readMountPrograms({
+      NINEP_SUDO: '1',
+      NINEP_MOUNT_PROGRAM: ' sudo -u svc  mount ',
+    }),
+    {
+      mountProgram: ['sudo', '-u', 'svc', 'mount'],
+      umountProgram: ['sudo', 'umount'],
+    },
+  );
+  t.throws(() => readMountPrograms({ NINEP_UMOUNT_PROGRAM: 'rm -rf' }), {
+    message: /"NINEP_UMOUNT_PROGRAM" must invoke "umount"/,
+  });
+  t.throws(() => readMountPrograms({ NINEP_MOUNT_PROGRAM: '   ' }), {
+    message: /"NINEP_MOUNT_PROGRAM" must be a non-empty array/,
+  });
+});
+
 test('a failed mount stops the bridge and leaks no handle', async t => {
   const { mounter, calls } = makeHarness({
     runBehavior: bin =>
@@ -353,17 +435,23 @@ test('a failed umount (EBUSY) keeps the bridge up and the handle, and is retryab
   t.is((await E(mounter).list()).length, 0);
 });
 
-test('lazyUnmount adds -l to the umount argv', async t => {
-  const { mounter, calls } = makeHarness();
-  const h = await E(mounter).mount(
-    fakeFs(),
-    '/mnt/x',
-    harden({ socketPath: SOCK, lazyUnmount: true }),
-  );
-  await E(h).unmount();
-  const umount = calls.run.find(c => c.bin === 'umount');
-  t.deepEqual(umount.argv, ['-l', '--', '/mnt/x']);
-});
+for (const env of [{}, { NINEP_LAZY_UMOUNT: '1' }]) {
+  test(`lazy unmount is rejected before native effects (${JSON.stringify(env)})`, async t => {
+    const { mounter, calls, close } = makeHarness({ env });
+    t.teardown(close);
+    await t.throwsAsync(
+      E(mounter).mount(
+        fakeFs(),
+        '/mnt/x',
+        harden(env.NINEP_LAZY_UMOUNT ? {} : { lazyUnmount: true }),
+      ),
+      { message: /cannot prove filesystem release/ },
+    );
+    t.is(calls.makeDir.length, 0);
+    t.is(calls.bridges.length, 0);
+    t.is(calls.run.length, 0);
+  });
+}
 
 test('default socket paths are distinct across concurrent-ish mounts', async t => {
   const { mounter } = makeHarness();
@@ -392,4 +480,256 @@ test('cancellation unmounts live mounts and refuses new ones', async t => {
     E(mounter).mount(fakeFs(), '/mnt/y', harden({ socketPath: SOCK2 })),
     { message: /cancelled/ },
   );
+});
+
+// These held effects model cleanup barriers; no kernel mount is performed.
+const deferred = () => {
+  let resolve;
+  const promise = new Promise(r => {
+    resolve = r;
+  });
+  return { promise, resolve };
+};
+
+test('bridge stop failure retains handle and retries without repeating umount', async t => {
+  let attempts = 0;
+  const { mounter, calls, close } = makeHarness({
+    stopBehavior: async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error('bridge still draining');
+    },
+  });
+  t.teardown(close);
+  const handle = await E(mounter).mount(fakeFs(), '/mnt/x');
+  await t.throwsAsync(E(handle).unmount(), { message: /still draining/ });
+  t.is((await E(mounter).list()).length, 1);
+  await close();
+  t.is(calls.run.filter(c => c.bin === 'umount').length, 1);
+  t.is(calls.bridges[0].stopped, 2);
+  t.is((await E(mounter).list()).length, 0);
+});
+
+test('directory removal failure remains owned after bridge drain', async t => {
+  let attempts = 0;
+  const { mounter, calls, close } = makeHarness({
+    removeDirBehavior: async () => {
+      attempts += 1;
+      if (attempts === 1)
+        throw Object.assign(new Error('directory busy'), { code: 'EBUSY' });
+    },
+  });
+  t.teardown(close);
+  const handle = await E(mounter).mount(
+    fakeFs(),
+    '/mnt/x',
+    harden({ removeMountPointOnUnmount: true }),
+  );
+  await t.throwsAsync(E(handle).unmount(), { message: /directory busy/ });
+  t.is((await E(mounter).list()).length, 1);
+  await close();
+  t.is(calls.bridges[0].stopped, 1);
+  t.is(calls.removeDir.length, 2);
+  t.is((await E(mounter).list()).length, 0);
+});
+
+test('failed acquisition retains uncertain kernel mount for host close retry', async t => {
+  let busy = true;
+  const { mounter, calls, close } = makeHarness({
+    runBehavior: async bin => {
+      if (bin === 'mount')
+        throw new Error('mount command failed after attachment');
+      if (busy) throw new Error('still mounted');
+    },
+  });
+  t.teardown(() => {
+    busy = false;
+    return close();
+  });
+  await t.throwsAsync(E(mounter).mount(fakeFs(), '/mnt/x'), {
+    instanceOf: AggregateError,
+    message: /cleanup remains pending/,
+  });
+  t.is(calls.bridges[0].stopped, 0);
+  await t.throwsAsync(close(), { instanceOf: AggregateError });
+  t.is(calls.bridges[0].stopped, 0);
+  busy = false;
+  await close();
+  t.is(calls.bridges[0].stopped, 1);
+  await t.throwsAsync(E(mounter).mount(fakeFs(), '/mnt/y'), {
+    message: /cancelled/,
+  });
+});
+
+test('close waits for admitted mount and bridge drain before directory release', async t => {
+  t.timeout(2000);
+  const mounting = deferred();
+  const mounted = deferred();
+  const stopping = deferred();
+  const stopped = deferred();
+  const { mounter, calls, close } = makeHarness({
+    runBehavior: async bin => {
+      if (bin === 'mount') {
+        mounting.resolve();
+        await mounted.promise;
+      }
+    },
+    stopBehavior: async () => {
+      stopping.resolve();
+      await stopped.promise;
+    },
+  });
+  t.teardown(() => {
+    mounted.resolve();
+    stopped.resolve();
+    return close();
+  });
+  const result = t.throwsAsync(
+    E(mounter).mount(
+      fakeFs(),
+      '/mnt/x',
+      harden({ removeMountPointOnUnmount: true }),
+    ),
+    { message: /cancelled during mount/ },
+  );
+  await mounting.promise;
+  let closed = false;
+  const closing = close().then(() => {
+    closed = true;
+  });
+  await flush();
+  t.false(closed);
+  t.is(calls.bridges[0].stopped, 0);
+  t.is(calls.bridges[0].cancelled, undefined);
+  mounted.resolve();
+  await stopping.promise;
+  t.false(closed);
+  t.is(calls.removeDir.length, 0);
+  t.is(calls.run.filter(c => c.bin === 'umount').length, 1);
+  stopped.resolve();
+  await Promise.all([result, closing]);
+  t.true(closed);
+  t.is(calls.removeDir.length, 1);
+});
+
+test('close during mkdir fences bridge construction and waits for directory cleanup', async t => {
+  t.timeout(2000);
+  const entered = deferred();
+  const ready = deferred();
+  const { mounter, calls, close } = makeHarness({
+    makeDirBehavior: async () => {
+      entered.resolve();
+      await ready.promise;
+    },
+  });
+  t.teardown(() => {
+    ready.resolve();
+    return close();
+  });
+  const result = t.throwsAsync(
+    E(mounter).mount(
+      fakeFs(),
+      '/mnt/x',
+      harden({ removeMountPointOnUnmount: true }),
+    ),
+    { message: /cancelled during mount/ },
+  );
+  await entered.promise;
+  const closing = close();
+  ready.resolve();
+  await Promise.all([result, closing]);
+  t.is(calls.bridges.length, 0);
+  t.is(calls.run.length, 0);
+  t.is(calls.removeDir.length, 1);
+});
+
+test('invalid mount options cannot acquire native resources', async t => {
+  const { mounter, calls, close } = makeHarness();
+  t.teardown(close);
+  await t.throwsAsync(
+    E(mounter).mount(
+      fakeFs(),
+      '/mnt/x',
+      harden({ extraMountOptions: 'trans=tcp' }),
+    ),
+    { message: /pinned option/ },
+  );
+  t.is(calls.makeDir.length, 0);
+  t.is(calls.bridges.length, 0);
+  t.is(calls.run.length, 0);
+});
+
+test('path reservations survive failed cleanup and prevent successor interference', async t => {
+  let busy = true;
+  const { mounter, calls, close } = makeHarness({
+    stopBehavior: async () => {
+      if (busy) throw new Error('still draining');
+    },
+  });
+  t.teardown(() => {
+    busy = false;
+    return close();
+  });
+  const first = await E(mounter).mount(
+    fakeFs(),
+    '/mnt/x',
+    harden({ socketPath: SOCK }),
+  );
+  await t.throwsAsync(E(first).unmount(), { message: /still draining/ });
+  await t.throwsAsync(
+    E(mounter).mount(fakeFs(), '/mnt/./x', harden({ socketPath: SOCK2 })),
+    { message: /mount point is already owned/ },
+  );
+  await t.throwsAsync(
+    E(mounter).mount(fakeFs(), '/mnt/y', harden({ socketPath: SOCK })),
+    { message: /socket path is already owned/ },
+  );
+  t.is(calls.bridges.length, 1);
+  busy = false;
+  await E(first).unmount();
+  const second = await E(mounter).mount(
+    fakeFs(),
+    '/mnt/x',
+    harden({ socketPath: SOCK }),
+  );
+  await E(first).unmount();
+  t.is(
+    calls.bridges[1].stopped,
+    0,
+    'released predecessor cannot affect successor',
+  );
+  await E(second).unmount();
+});
+
+test('pending acquisition reserves its paths before native effects', async t => {
+  t.timeout(2000);
+  const entered = deferred();
+  const ready = deferred();
+  const { mounter, calls, close } = makeHarness({
+    makeDirBehavior: async () => {
+      entered.resolve();
+      await ready.promise;
+    },
+  });
+  t.teardown(() => {
+    ready.resolve();
+    return close();
+  });
+  const first = E(mounter).mount(
+    fakeFs(),
+    '/mnt/x',
+    harden({ socketPath: SOCK }),
+  );
+  await entered.promise;
+  await t.throwsAsync(
+    E(mounter).mount(fakeFs(), '/mnt/x', harden({ socketPath: SOCK2 })),
+    { message: /mount point is already owned/ },
+  );
+  await t.throwsAsync(
+    E(mounter).mount(fakeFs(), '/mnt/y', harden({ socketPath: SOCK })),
+    { message: /socket path is already owned/ },
+  );
+  t.is(calls.makeDir.length, 1);
+  ready.resolve();
+  const handle = await first;
+  await E(handle).unmount();
 });

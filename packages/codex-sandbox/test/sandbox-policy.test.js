@@ -15,7 +15,7 @@ const imageDigest = `sha256:${'a'.repeat(64)}`;
 const identity = harden({
   sessionId: 's1',
   imageDigest,
-  leaseId: 'lease1',
+  grantId: 'lease1',
   networkNamespaceId: 'netns1',
 });
 
@@ -61,9 +61,14 @@ const fixture = (changes = {}) => {
               ? `volume:${mount.source}`
               : mount.kind === 'attach'
                 ? `attach:${mount.source}`
-                : 'tmpfs',
+                : mount.kind === 'resolver'
+                  ? `resolver:${mount.source}`
+                  : 'tmpfs',
           destination: mount.destination,
-          mode: mount.kind === 'attach' ? mount.mode : 'rw',
+          mode:
+            mount.kind === 'attach' || mount.kind === 'resolver'
+              ? mount.mode
+              : 'rw',
           options: ['nodev', 'nosuid'],
         })),
         ...outerOverrides,
@@ -108,7 +113,11 @@ const fixture = (changes = {}) => {
         if (context.slice !== slice) throw Error('wrong slice');
         if (
           context.launchArgv.join('\n') !==
-          makeBrokerAppServerArgv('http://127.0.0.1:1234/').join('\n')
+          makeBrokerAppServerArgv(
+            'http://127.0.0.1:1234/',
+            'codex',
+            changes.network,
+          ).join('\n')
         ) {
           throw Error('wrong launch');
         }
@@ -117,33 +126,37 @@ const fixture = (changes = {}) => {
         return harden({
           version: 'CodexRuntimeEvidenceV1',
           ...identity,
-          toolSandbox: 'codex-workspace-write',
-          toolCodexHomeAccess: 'read-only',
-          toolBrokerAccess: 'denied',
-          environment: 'credential-and-proxy-free',
+          executionDomain: 'guest',
+          environment: changes.network
+            ? 'credential-free-proxy'
+            : 'credential-and-proxy-free',
+          ...(changes.network ? { network: changes.network } : {}),
           codexHomeAuthFile: 'absent',
           ...changes.runtime,
         });
       },
     }),
   };
-  const makeSlice = makeAttestedCodexSliceFactory(powers);
+  const makeSlice = makeAttestedCodexSliceFactory({
+    ...powers,
+    volumeLimits: changes.volumeLimits,
+  });
   const brokerLease = Far('lease', {
     attestation: () =>
       harden({
-        version: 'BrokerLeaseV1',
+        version: 'ProviderGrantV1',
+        ...(changes.network ? { network: changes.network } : {}),
         ...identity,
         providerOrigin: 'https://api.example.com',
         accountRef: 'account1',
         authMode: 'api-key',
         endpoint: 'http://127.0.0.1:1234/',
-        expiresAt: new Date(Date.now() + 60_000).toISOString(),
         modelAllowlist: ['model1'],
-        limits: { requests: 10, bytes: 1024n, costMicrounits: 100n },
       }),
     sandboxEvidence: () =>
       harden({
         version: 'CodexBrokerSandboxEvidenceV1',
+        ...(changes.network ? { network: changes.network } : {}),
         ...identity,
         brokerSidecar: { container: 'broker-s1' },
         credentialInjection: 'broker-only',
@@ -169,6 +182,67 @@ const fixture = (changes = {}) => {
   };
 };
 
+test('operator disk reductions reach the actual slice mount request', async t => {
+  const volumeLimits = {
+    workspaceBytes: 512n * 1024n ** 2n,
+    stateBytes: 256n * 1024n ** 2n,
+  };
+  const f = fixture({ volumeLimits });
+  const slice = await f.create();
+  t.teardown(() => E(slice).dispose());
+  const mounts = f.request().policy.mounts;
+  const actualWritable = mounts.reduce(
+    (sum, mount) => sum + mount.sizeBytes * (mount.kind === 'tmpfs' ? 2n : 1n),
+    2n * f.request().policy.resources.shmBytes,
+  );
+  t.is(f.request().policy.resources.writableBytes, actualWritable);
+  t.is((await E(slice).policy()).limits.writableBytes, Number(actualWritable));
+  t.is(
+    mounts.find(mount => mount.destination === '/workspace').sizeBytes,
+    volumeLimits.workspaceBytes,
+  );
+  t.is(
+    mounts.find(mount => mount.destination === '/codex-home').sizeBytes,
+    volumeLimits.stateBytes,
+  );
+});
+
+test('public slice binds resolver, proxy environment, and unchanged broker denial to its lease', async t => {
+  const network = harden({
+    policy: 'public-internet',
+    proxyUrl: 'http://127.0.0.1:23457',
+    dnsHost: '127.0.0.53',
+    resolverConfigPath: '/private/provider/public-resolv.conf',
+  });
+  const f = fixture({ network });
+  const slice = await f.create({ networkPolicy: 'public-internet' });
+  t.teardown(() => E(slice).dispose());
+  const policy = await E(slice).policy();
+  t.is(policy.networkPolicy, 'public-internet');
+  t.is(policy.executionDomain, 'guest');
+  t.deepEqual(
+    f.request().policy.mounts.find(mount => mount.role === 'resolver'),
+    {
+      role: 'resolver',
+      kind: 'resolver',
+      source: network.resolverConfigPath,
+      destination: '/etc/resolv.conf',
+      mode: 'ro',
+    },
+  );
+  await t.throwsAsync(
+    E(slice).spawn(
+      makeBrokerAppServerArgv('http://127.0.0.1:1234/', 'codex', network),
+      { cwd: '/workspace', env: {} },
+    ),
+    { message: /spawn environment/ },
+  );
+  const off = fixture({ network });
+  await t.throwsAsync(off.create(), {
+    message: /grant attestation is not exact/,
+  });
+});
+
 test('composes independently verified evidence with exact aggregate budgets', async t => {
   const f = fixture();
   const slice = await f.create();
@@ -192,7 +266,7 @@ test('composes independently verified evidence with exact aggregate budgets', as
 });
 
 for (const [name, changes] of [
-  ['missing runtime proof', { runtime: { toolBrokerAccess: undefined } }],
+  ['missing runtime proof', { runtime: { executionDomain: undefined } }],
   ['mismatched runtime identity', { runtime: { sessionId: 'other' } }],
   ['unattested environment', { runtime: { environment: undefined } }],
   [
@@ -253,7 +327,7 @@ test('default runtime verifier executes probes and refuses unavailable evidence'
 
 test('rollback failure retains both errors', async t => {
   const f = fixture({
-    runtime: { toolBrokerAccess: 'allowed' },
+    runtime: { executionDomain: 'inner-controller' },
     cleanupError: true,
   });
   const error = await t.throwsAsync(f.create, { instanceOf: AggregateError });
@@ -264,7 +338,7 @@ test('rollback failure retains both errors', async t => {
 test('failed admission retains cleanup authority and blocks new admission until reaped', async t => {
   t.timeout(2000);
   const f = fixture({
-    runtime: { toolBrokerAccess: 'allowed' },
+    runtime: { executionDomain: 'inner-controller' },
     cleanupFailures: 2,
   });
   await t.throwsAsync(f.create, { instanceOf: AggregateError });
@@ -373,7 +447,7 @@ test('attested resource provisioner wires verification into lifecycle and teardo
           f.events.push('unmount');
         },
       }),
-    issueBrokerLease: async () =>
+    issueProviderGrant: async () =>
       Far('owned lease', {
         attestation: () => E(f.brokerLease).attestation(),
         sandboxEvidence: () => E(f.brokerLease).sandboxEvidence(),

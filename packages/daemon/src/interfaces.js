@@ -389,6 +389,10 @@ export const HostInterface = M.interface('EndoHost', {
   storeValue: M.call(M.any(), NameOrPathShape).returns(M.promise()),
   // Check in a remote readable-tree Exo, storing content-addressed
   storeTree: M.call(M.remotable(), NameOrPathShape).returns(M.promise()),
+  // Administrative session records and lifecycle remain daemon-local.
+  provideSessionOwner: M.call(NameOrPathShape)
+    .optional(M.string())
+    .returns(M.promise()),
   // Mount an external directory. `deniedSegments` replaces the mount's
   // default restricted-segment set (an empty array disables denial).
   provideMount: M.call(M.string(), NameOrPathShape)
@@ -598,6 +602,9 @@ export const HostInterface = M.interface('EndoHost', {
   // `EndoInspector` already denotes the per-formula reference walker.)
   // See `designs/formula-inspector.md`.
   diagnostics: M.call().returns(M.promise()),
+  // Read sensitive stored caplet environment. This is deliberately excluded
+  // from the separately delegable read-only diagnostics facet.
+  getFormulaEnvironment: M.call(IdShape).returns(M.promise()),
   // Snapshot every retention path from a GC root to the target locator
   listRetentionPaths: M.call(LocatorShape).returns(M.promise()),
   // Subscribe to retention-path changes for a target locator

@@ -1,5 +1,12 @@
 # Merge blockers and external dependencies
 
+Codex status update, 2026-09-10: an explicit experimental subscription composition
+now has live Floot acceptance with host-held renewable Secrets credentials.
+See [HOSTED-SUBSCRIPTION.md](./HOSTED-SUBSCRIPTION.md) for its bounded lifecycle
+and remaining deployment limitations.
+Earlier blanket statements below that Codex subscription mode is disabled are
+historical; they must not be read as acceptance of general-purpose deployment.
+
 This branch does not cherry-pick the exploratory PR #994 hosted-management
 stack.
 Its shared writable Codex home, one-process-per-turn client, ambient thread
@@ -47,13 +54,13 @@ asserts claims the outer sandbox cannot observe:
 - `credentialInjection: "broker-only"` and `brokerTransport:
   "loopback-sidecar"` are the broker's claims.
   The sandbox proves the namespace holds nothing routable; it does not prove
-  what the listener inside it is, that it is credential-free, or that its route
-  is denied to model-launched descendants.
-- `toolSandbox`, `toolCodexHomeAccess`, and `toolBrokerAccess` require the pinned
-  runtime's inner `workspaceWrite` policy.
-  The default runtime verifier now probes these controls using that CLI and
-  the same launch policy, including direct and indirect control-state mutations.
-  The pinned runtime remains trusted to apply this policy to later commands.
+  what the listener inside it is or that it is credential-free.
+  Guest commands deliberately share inference reachability.
+- `executionDomain: "guest"` describes the common CLI/command domain.
+  The runtime verifier checks the pinned version, environment, and child writes
+  to granted mounts; merged app-server configuration is checked separately.
+  Real pinned app-server native-command acceptance under `externalSandbox`
+  remains outstanding, as described in [network policy](./NETWORK-POLICY.md).
 - The default verifier also measures the probe's effective environment and
   rejects unexpected credential or proxy settings, and looks in the session's
   `CODEX_HOME` for the `auth.json` a ChatGPT login would be cached in,
@@ -79,7 +86,7 @@ A separate unconfined broker must own the selected vendor-supported upstream
 credential: individual ChatGPT or Claude.ai OAuth refresh state, or supported
 enterprise access-token/workload-identity material.
 It issues revocable, quota-bound, provider-only session endpoints.
-This branch defines and validates the exact `BrokerLeaseV1` attestation at the
+This branch defines and validates the exact `ProviderGrantV1` attestation at the
 provisioning seam.
 The inference broker, incremental HTTP adapter, pinned namespace worker,
 private-pipe CapTP transport, and observed lease issuer are implemented.
@@ -129,7 +136,7 @@ saying so and the next holder refuses rather than replaying.
 An intent that cannot be persisted means no exchange is dispatched at all.
 That refusal is fail-closed by design: recovering a provider response nobody
 received is not possible, so a lost exchange needs a fresh grant.
-`BrokerLeaseV1` now carries `authMode`, so an operator can pin the mode it
+`ProviderGrantV1` now carries `authMode`, so an operator can pin the mode it
 accepts and refuse a lease issued in the other.
 The claim it carries is narrow: the broker core refuses to exist in `oauth` mode
 without a refreshing credential bound to the lease's account, and it is

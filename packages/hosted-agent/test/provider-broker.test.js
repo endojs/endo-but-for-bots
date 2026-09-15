@@ -6,8 +6,9 @@ import { Fail } from '@endo/errors';
 
 import {
   makeBrokerOAuthCredential,
-  makeProviderBrokerLease,
+  makeProviderBrokerGrant,
 } from '../src/provider-broker.js';
+import { makeProviderFetchTransport } from '../src/provider-transport.js';
 
 /** @import { BrokerPolicy } from '../src/provider-broker.js' */
 
@@ -15,13 +16,9 @@ const policy = harden({
   origin: 'https://api.example.test',
   routes: [{ method: 'POST', path: '/v1/responses' }],
   models: ['allowed'],
-  expiresAt: 1000,
-  maxRequests: 2n,
+  maxConcurrentRequests: 4,
   maxRequestBytes: 1000n,
   maxResponseBytes: 100n,
-  maxTotalBytes: 3000n,
-  maxCostMicrounits: 20n,
-  maxCostMicrounitsPerRequest: 10n,
 });
 const request = harden({
   method: 'POST',
@@ -31,6 +28,73 @@ const request = harden({
 const credential = 'canary-secret';
 const accessToken = 'canary-access';
 const refreshToken = 'canary-refresh';
+
+for (const streaming of [false, true]) {
+  test(`large legitimate prompt crosses broker and fetch transport (streaming=${streaming})`, async t => {
+    let dispatched = 0;
+    let secretReads = 0;
+    const largeBody = JSON.stringify({
+      model: 'allowed',
+      input: 'x'.repeat(100_100),
+    });
+    const transport = makeProviderFetchTransport({
+      fetch: async (_url, options) => {
+        dispatched += 1;
+        t.is(options?.body, largeBody);
+        return new Response('ok');
+      },
+      timeoutMs: 1000,
+      maxRequestBytes: 200_000n,
+      maxResponseBytes: 100n,
+    });
+    t.teardown(transport.dispose);
+    const broker = makeProviderBrokerGrant(
+      { ...policy, maxRequestBytes: 200_000n },
+      {
+        transport: transport.transport,
+        secret: Far('secret', {
+          async readBase64() {
+            secretReads += 1;
+            return globalThis.btoa(credential);
+          },
+        }),
+      },
+    );
+    t.teardown(() => E(broker.admin).revoke());
+    const result = streaming
+      ? await E(broker.endpoint).requestStream(
+          harden({ ...request, body: largeBody }),
+        )
+      : await E(broker.endpoint).request(
+          harden({ ...request, body: largeBody }),
+        );
+    t.is(result.status, 200);
+    if ('reader' in result) {
+      const parts = [];
+      for (;;) {
+        // eslint-disable-next-line no-await-in-loop
+        const chunk = await E(result.reader).next();
+        if (chunk.done) break;
+        parts.push(chunk.value);
+      }
+      t.is(parts.join(''), 'ok');
+    } else t.is(result.body, 'ok');
+    for (const input of ['x'.repeat(200_001), '€'.repeat(80_000)]) {
+      const excessive = harden({
+        ...request,
+        body: JSON.stringify({ model: 'allowed', input }),
+      });
+      // eslint-disable-next-line no-await-in-loop
+      await t.throwsAsync(
+        streaming
+          ? E(broker.endpoint).requestStream(excessive)
+          : E(broker.endpoint).request(excessive),
+      );
+    }
+    t.is(dispatched, 1);
+    t.is(secretReads, 1);
+  });
+}
 
 /** @param {Partial<import('../src/provider-broker.js').BrokerOAuthState>} [overrides] */
 const oauthState = (overrides = {}) =>
@@ -210,7 +274,7 @@ const setup = ({
     },
   };
   if (record) Object.assign(powers, { credential: record.credential });
-  const lease = makeProviderBrokerLease({ ...policy, ...limits }, powers);
+  const lease = makeProviderBrokerGrant({ ...policy, ...limits }, powers);
   return {
     ...lease,
     calls,
@@ -228,6 +292,62 @@ const setup = ({
     },
   };
 };
+
+const subscriptionLimits = harden({
+  authMode: /** @type {const} */ ('subscription'),
+  origin: 'https://chatgpt.com',
+  accountRef: 'account-1',
+});
+
+test('subscription profile fixes the upstream route and account header', async t => {
+  const subject = setup({ limits: subscriptionLimits, oauth: true });
+  await E(subject.endpoint).request({
+    ...request,
+    body: JSON.stringify({ model: 'allowed', stream: true, store: false }),
+  });
+  t.is(subject.calls.length, 1);
+  t.is(subject.calls[0].url, 'https://chatgpt.com/backend-api/codex/responses');
+  t.is(subject.calls[0].headers['chatgpt-account-id'], 'account-1');
+  t.is(subject.calls[0].headers.authorization, `Bearer ${accessToken}`);
+  t.false(JSON.stringify(subject.calls[0].headers).includes(refreshToken));
+  t.false(subject.calls[0].body.includes(refreshToken));
+});
+
+test('subscription profile refuses alternate origins, routes, and API credentials', t => {
+  for (const limits of [
+    { origin: 'https://api.openai.com' },
+    { routes: [{ method: 'POST', path: '/v1/messages' }] },
+    { anthropicVersion: '2023-06-01' },
+    { credentialHeader: 'x-api-key' },
+  ]) {
+    t.throws(() =>
+      setup({
+        limits: {
+          ...subscriptionLimits,
+          .../** @type {Partial<BrokerPolicy>} */ (limits),
+        },
+        oauth: true,
+      }),
+    );
+  }
+  t.throws(() => setup({ limits: subscriptionLimits }));
+});
+
+test('subscription profile refuses storage, nonstreaming, and account routes before dispatch', async t => {
+  const subject = setup({ limits: subscriptionLimits, oauth: true });
+  await t.throwsAsync(() => E(subject.endpoint).request(request), {
+    message: /non-stored streaming/,
+  });
+  await t.throwsAsync(
+    () =>
+      E(subject.endpoint).request({
+        ...request,
+        path: '/backend-api/accounts',
+      }),
+    { message: /route denied/ },
+  );
+  t.is(subject.calls.length, 0);
+});
 
 test('broker injects credentials only into fixed transport and canonicalizes JSON', async t => {
   const { endpoint, calls, audit } = setup();
@@ -277,14 +397,14 @@ test('method, paths, models and request bytes fail before touching secret', asyn
   t.is(calls.length, 0);
 });
 
-test('concurrent requests reserve all quotas before asynchronous secret reads', async t => {
+test('concurrent requests reserve slots before asynchronous secret reads', async t => {
   t.timeout(5000);
   let release = () => {};
   const held = new Promise(resolve => {
     release = () => resolve(undefined);
   });
   const { endpoint, admin } = setup({
-    limits: { maxCostMicrounits: 10n },
+    limits: { maxConcurrentRequests: 1 },
     read: async () => {
       await held;
       return globalThis.btoa(credential);
@@ -293,27 +413,82 @@ test('concurrent requests reserve all quotas before asynchronous secret reads', 
   t.teardown(() => release());
   const first = E(endpoint).request(request);
   await t.throwsAsync(() => E(endpoint).request(request), {
-    message: /quota exhausted/,
+    message: /concurrency limit/,
   });
   release();
   await first;
   t.like(await E(admin).getStatus(), {
     requests: 1n,
-    reservedCostMicrounits: 10n,
+    activeRequests: 0,
   });
 });
 
-test('request count and byte reservations independently bound admission', async t => {
-  for (const limits of [{ maxRequests: 1n }, { maxTotalBytes: 119n }]) {
-    const { endpoint } = setup({ limits });
+test('completed requests do not consume a lifetime budget', async t => {
+  const { endpoint, admin } = setup({ limits: { maxConcurrentRequests: 1 } });
+  t.teardown(() => E(admin).revoke());
+  for (let index = 0; index < 100; index += 1) {
     // eslint-disable-next-line no-await-in-loop
-    await E(endpoint).request(request);
-    // eslint-disable-next-line no-await-in-loop
-    await t.throwsAsync(() => E(endpoint).request(request), {
-      message: /quota exhausted/,
-    });
+    t.is((await E(endpoint).request(request)).status, 200);
   }
-  t.pass();
+  t.like(await E(admin).getStatus(), { requests: 100n, activeRequests: 0 });
+});
+
+test('open streams retain admission slots until EOF or cancellation', async t => {
+  const grant = setup({
+    limits: { maxConcurrentRequests: 1 },
+    respondStream: async () =>
+      harden({
+        status: 200,
+        reader: Far('stream', {
+          next: async () => harden({ done: true, value: '' }),
+          return() {},
+        }),
+      }),
+  });
+  t.teardown(() => E(grant.admin).revoke());
+  const first = await E(grant.endpoint).requestStream(request);
+  await t.throwsAsync(E(grant.endpoint).request(request), {
+    message: /concurrency limit/,
+  });
+  t.true((await E(first.reader).next()).done);
+  const second = await E(grant.endpoint).requestStream(request);
+  await E(second.reader).return();
+  t.is((await E(grant.endpoint).request(request)).status, 200);
+  t.is((await E(grant.admin).getStatus()).activeRequests, 0);
+});
+
+test('transport deadline releases an abandoned stream without another pull', async t => {
+  t.timeout(5000);
+  let expire = () => {};
+  let fetches = 0;
+  const transport = makeProviderFetchTransport({
+    fetch: async () => {
+      fetches += 1;
+      return new Response(fetches === 1 ? new ReadableStream() : 'ok');
+    },
+    timeoutMs: 1000,
+    maxRequestBytes: policy.maxRequestBytes,
+    maxResponseBytes: policy.maxResponseBytes,
+    setTimer: callback => {
+      expire = callback;
+      return undefined;
+    },
+    clearTimer: () => {},
+  });
+  t.teardown(transport.dispose);
+  const grant = makeProviderBrokerGrant(
+    { ...policy, maxConcurrentRequests: 1 },
+    {
+      secret: Far('secret', { readBase64: async () => btoa(credential) }),
+      transport: transport.transport,
+    },
+  );
+  t.teardown(() => E(grant.admin).revoke());
+  await E(grant.endpoint).requestStream(request);
+  t.is((await E(grant.admin).getStatus()).activeRequests, 1);
+  expire();
+  t.is((await E(grant.admin).getStatus()).activeRequests, 0);
+  t.is((await E(grant.endpoint).request(request)).body, 'ok');
 });
 
 test('revocation during secret read prevents transport dispatch', async t => {
@@ -336,17 +511,17 @@ test('revocation during secret read prevents transport dispatch', async t => {
   t.is(calls.length, 0);
 });
 
-test('expiry denies new requests and response delivery', async t => {
-  const lease = setup({
-    respond: async () => {
-      lease.expire();
-      return { status: 200, body: 'ok' };
-    },
+test('session authority does not expire as the credential clock advances', async t => {
+  const grant = setup({
+    oauth: true,
+    state: oauthState({ expiresAt: 48 * 60 * 60 * 1000 }),
+    limits: { authMode: 'oauth', accountRef: 'account-1' },
   });
-  await t.throwsAsync(() => E(lease.endpoint).request(request), {
-    message: /Provider request failed/,
-  });
-  await t.throwsAsync(() => E(lease.endpoint).request(request), {
+  t.teardown(() => E(grant.admin).revoke());
+  grant.advance(24 * 60 * 60 * 1000);
+  t.is((await E(grant.endpoint).request(request)).status, 200);
+  await E(grant.admin).revoke();
+  await t.throwsAsync(E(grant.endpoint).request(request), {
     message: /inactive/,
   });
 });
@@ -388,16 +563,29 @@ test('header injection via secret is rejected without exporting the secret', asy
   t.is(calls.length, 0);
 });
 
-test('caller headers cannot override broker authority or supply cookies', async t => {
+test('caller headers are forwarded, but never the ones the broker owns', async t => {
+  // The seam the broker keeps is authentication and authority, not the API
+  // surface: a caller describes its own request (this is what lets a CLI
+  // release adopt a capability without an outage here), and every header in
+  // BROKER_OWNED_HEADERS is dropped and re-supplied by the broker. `cookie`
+  // is forwarded now — it is the caller's to send to an origin the broker
+  // already pinned — while `authorization` and `host` are not.
   const { endpoint, calls } = setup();
   await E(endpoint).request(
     harden({
       ...request,
-      headers: { authorization: 'evil', cookie: 'ambient', host: 'evil.test' },
+      headers: {
+        authorization: 'evil',
+        cookie: 'ambient',
+        host: 'evil.test',
+        'anthropic-beta': 'context-management-2026-01-01',
+      },
     }),
   );
   t.deepEqual(calls[0].headers, {
     authorization: `Bearer ${credential}`,
+    cookie: 'ambient',
+    'anthropic-beta': 'context-management-2026-01-01',
     'content-type': 'application/json',
   });
 });
@@ -463,7 +651,24 @@ test('operator chooses Anthropic authorization without caller headers', async t 
   );
 });
 
-test('operator configuration cannot enable administrative routes or subscription auth', t => {
+test('broker admits the OpenRouter OpenAI-compatible route and validates client auth mode', async t => {
+  const { endpoint, calls } = setup({
+    limits: {
+      origin: 'https://openrouter.ai',
+      routes: [{ method: 'POST', path: '/api/v1/chat/completions' }],
+      clientAuthorization: 'strip',
+    },
+  });
+  await E(endpoint).request(
+    harden({ ...request, path: '/api/v1/chat/completions' }),
+  );
+  t.is(calls[0].url, 'https://openrouter.ai/api/v1/chat/completions');
+  t.throws(() =>
+    setup({ limits: /** @type {any} */ ({ clientAuthorization: 'forward' }) }),
+  );
+});
+
+test('operator configuration cannot enable administrative routes or unprovisioned subscription auth', t => {
   t.throws(
     () =>
       setup({
@@ -471,13 +676,10 @@ test('operator configuration cannot enable administrative routes or subscription
       }),
     { message: /Invalid inference route/ },
   );
-  // Still refused, now for a recorded reason rather than for want of an
-  // implementation: neither vendor documents a configuration in which the
-  // broker holds an individual subscription credential and the slice holds
-  // none. See packages/codex-sandbox/SUBSCRIPTION-AUTH.md.
+  // Naming subscription mode alone cannot conjure renewal authority.
   t.throws(
     () => setup({ limits: /** @type {any} */ ({ authMode: 'subscription' }) }),
-    { message: /Unsupported broker authentication mode/ },
+    { message: /Unprovisioned broker OAuth mode/ },
   );
   // The mode that *is* implemented is refused until it is provisioned, so a
   // policy naming `oauth` without the capabilities that make refresh and
@@ -523,7 +725,7 @@ const streamingSetup = chunks => {
       cancelled = true;
     },
   });
-  const lease = makeProviderBrokerLease(policy, {
+  const lease = makeProviderBrokerGrant(policy, {
     secret: Far('secret', {
       async readBase64() {
         return btoa(credential);
@@ -537,7 +739,6 @@ const streamingSetup = chunks => {
         return harden({ status: 200, reader });
       },
     }),
-    now: () => 0,
   });
   return { ...lease, cancelled: () => cancelled };
 };
@@ -607,7 +808,7 @@ test('cancel suppresses a pending delivery even if upstream ignores cancellation
   const pending = new Promise(resolve => {
     deliver = resolve;
   });
-  const lease = makeProviderBrokerLease(policy, {
+  const lease = makeProviderBrokerGrant(policy, {
     secret: Far('secret', {
       async readBase64() {
         return btoa(credential);
@@ -629,7 +830,6 @@ test('cancel suppresses a pending delivery even if upstream ignores cancellation
         });
       },
     }),
-    now: () => 0,
   });
   const response = await E(lease.endpoint).requestStream(request);
   const pull = E(response.reader).next();
@@ -653,7 +853,7 @@ for (const termination of ['return', 'read failure', 'invalid status', 'EOF']) {
         return returns;
       },
     });
-    const lease = makeProviderBrokerLease(policy, {
+    const lease = makeProviderBrokerGrant(policy, {
       secret: Far('secret', {
         async readBase64() {
           return btoa(credential);
@@ -670,7 +870,6 @@ for (const termination of ['return', 'read failure', 'invalid status', 'EOF']) {
           });
         },
       }),
-      now: () => 0,
     });
     if (termination === 'invalid status') {
       await t.throwsAsync(() => E(lease.endpoint).requestStream(request), {
@@ -691,6 +890,7 @@ for (const termination of ['return', 'read failure', 'invalid status', 'EOF']) {
         await E(response.reader).return();
       }
     }
+    t.is((await E(lease.admin).getStatus()).activeRequests, 0);
     await E(lease.admin).revoke();
     await E(lease.admin).revoke();
     // Drain eventual sends to the same upstream target before checking count.
@@ -762,7 +962,7 @@ test('concurrent turns share one refresh rather than racing the rotation', async
     release = () => resolve(undefined);
   });
   const lease = setup({
-    limits: { ...oauthLimits, maxRequests: 4n, maxCostMicrounits: 100n },
+    limits: { ...oauthLimits },
     oauth: true,
     state: oauthState({ expiresAt: 10_000 }),
     exchange: async () => {
@@ -1031,7 +1231,7 @@ test('the guard re-reads, so a credential refreshed elsewhere is not re-exchange
     accountRef: 'account-1',
     now: () => 0,
   });
-  const lease = makeProviderBrokerLease(
+  const lease = makeProviderBrokerGrant(
     { ...policy, ...oauthLimits },
     {
       secret: record.secret,
@@ -1041,7 +1241,6 @@ test('the guard re-reads, so a credential refreshed elsewhere is not re-exchange
           return { status: 200, body: 'ok' };
         },
       }),
-      now: () => 0,
       credential: credentialOverWatched,
     },
   );
@@ -1102,7 +1301,7 @@ test('a refresh response cannot store a mark of its own', async t => {
 test('a refresh that does not advance expiry is refused', async t => {
   // Otherwise every subsequent request refreshes again, silently, forever.
   const lease = setup({
-    limits: { ...oauthLimits, maxRequests: 4n, maxCostMicrounits: 100n },
+    limits: { ...oauthLimits },
     oauth: true,
     state: oauthState({ expiresAt: 10_000 }),
     exchange: async () => oauthState({ expiresAt: 10_000 }),
