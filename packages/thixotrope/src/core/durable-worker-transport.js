@@ -65,6 +65,9 @@ import { WorkerHaltError } from './worker-engine.js';
  *   it. If a future engine surfaces its own dormancy signal, it can
  *   feed this same seam.
  * @param {string} [options.debugLabel]
+ * @param {() => boolean} [options.isResident] asked each time the idle timer
+ *   would be armed, rather than read once, because a pin can be added or
+ *   removed while the worker is running
  * @param {() => void} [options.onFatal] retire the failed logical session
  */
 export const makeDurableWorkerTransport = (
@@ -76,6 +79,7 @@ export const makeDurableWorkerTransport = (
     onFrame,
     idleSleepMs = undefined,
     debugLabel = undefined,
+    isResident = () => false,
     onFatal = () => {},
   },
 ) => {
@@ -127,7 +131,15 @@ export const makeDurableWorkerTransport = (
   };
 
   const armIdleTimer = () => {
-    if (idleSleepMs === undefined || destroyed || incarnation === undefined) {
+    if (
+      idleSleepMs === undefined ||
+      destroyed ||
+      incarnation === undefined ||
+      // A resident worker is exempt from the idle *policy* only. An explicit
+      // `sleep` still parks it: residency is the host declining to park a vat
+      // on its own initiative, not a refusal to honour a request.
+      isResident()
+    ) {
       return;
     }
     if (idleTimer !== undefined) {

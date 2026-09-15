@@ -323,3 +323,63 @@ test.serial('a vat can widen its own admission policy', async t => {
   );
   t.is(denied.status, 403);
 });
+test.serial(
+  'an eager pin restores the service with nothing calling in',
+  async t => {
+    t.timeout(60_000);
+    const statePath = await mkdtemp(join(tmpdir(), 'thixotrope-http-pin-'));
+    t.teardown(() => rm(statePath, { recursive: true, force: true }));
+    const port = await freePort();
+
+    {
+      const ports = makeHttpPorts(nodePowers);
+      const d1 = await makeDaemon(statePath, ports);
+      t.teardown(() => ports.shutdown());
+      t.teardown(() => d1.shutdown().catch(() => {}));
+
+      const managerVat = await d1.createWorker({ debugLabel: 'http-manager' });
+      const manager = await managerVat.evaluate(MANAGER_SOURCE, {
+        vats: d1.makeResource('worker-controller'),
+      });
+      const consumerVat = await d1.createWorker({ debugLabel: 'consumer' });
+      const consumer = await consumerVat.evaluate(CONSUMER_SOURCE);
+
+      await E(manager).serve(
+        'demo',
+        d1.makeResource('http-port', { port }),
+        consumer,
+      );
+      t.deepEqual(await call(port, 'one'), { status: 200, body: 'one:1' });
+
+      // The pin names a publication the host calls `started()` on. Waking the
+      // vat alone would restore its heap and run none of its code.
+      d1.publish(manager, 'manager-start');
+      managerVat.pin('eager', { notify: 'manager-start' });
+
+      await parkWorkers(d1);
+      await ports.shutdown();
+      await d1.crash();
+    }
+
+    {
+      const ports = makeHttpPorts(nodePowers);
+      const d2 = await makeDaemon(statePath, ports);
+      t.teardown(() => ports.shutdown());
+      t.teardown(() => d2.shutdown());
+
+      // Nothing below touches the manager. The socket coming back is the host
+      // honouring the pin and the manager reconciling on its own.
+      let restored = false;
+      for (let i = 0; i < 400; i += 1) {
+        if (ports.status().bound === 1n) {
+          restored = true;
+          break;
+        }
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      t.true(restored, 'the pin restored the listener with no caller');
+      t.deepEqual(await call(port, 'two'), { status: 200, body: 'two:2' });
+    }
+  },
+);
