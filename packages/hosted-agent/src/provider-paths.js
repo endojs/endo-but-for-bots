@@ -49,3 +49,61 @@ export const splitInferenceTarget = target => {
   return harden({ pathname, query });
 };
 harden(splitInferenceTarget);
+
+/**
+ * Inbound headers the broker owns, and the only ones it refuses to forward.
+ *
+ * The credential headers are the seam itself. `host` must name the authority
+ * the policy pinned. `content-length` is recomputed from the body the listener
+ * actually read. The rest are hop-by-hop and meaningless past the listener.
+ * Everything else the harness sends goes upstream unchanged: the CLI tracks
+ * the API it was built against, and an allowlist maintained here cannot.
+ */
+export const BROKER_OWNED_HEADERS = harden([
+  'authorization',
+  'x-api-key',
+  'host',
+  'content-length',
+  'connection',
+  'keep-alive',
+  'proxy-authorization',
+  'te',
+  'trailer',
+  'transfer-encoding',
+  'upgrade',
+]);
+
+/** A header name in the lowercase spelling Node delivers. */
+const FORWARDABLE_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
+/**
+ * A header value of visible ASCII and tabs only: no CR, LF or NUL, so a
+ * forwarded value can neither terminate its own header nor begin a second one.
+ */
+const FORWARDABLE_VALUE = /^[\t\x20-\x7e]{0,4096}$/;
+
+/**
+ * Keep the headers a slice may forward and drop the rest.
+ *
+ * Dropping rather than refusing is deliberate: a slice cannot be expected to
+ * know this list, and a hop-by-hop header arriving here is normal traffic, not
+ * an attack. What must not happen — a slice setting its own credential, or
+ * smuggling a second header through a value — is prevented by the two shapes
+ * above and by the broker applying its own headers after these.
+ *
+ * @param {Record<string, string | string[] | undefined>} headers
+ * @returns {Record<string, string>}
+ */
+export const forwardableHeaders = headers => {
+  /** @type {Record<string, string>} */
+  const kept = {};
+  for (const [name, value] of Object.entries(headers || {})) {
+    const lower = String(name).toLowerCase();
+    if (BROKER_OWNED_HEADERS.includes(lower)) continue;
+    if (!FORWARDABLE_NAME.test(lower)) continue;
+    if (typeof value !== 'string' || !FORWARDABLE_VALUE.test(value)) continue;
+    kept[lower] = value;
+  }
+  return harden(kept);
+};
+harden(forwardableHeaders);
