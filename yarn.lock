@@ -2435,6 +2435,7 @@ __metadata:
     "@endo/lal": "workspace:^"
     "@endo/pass-style": "workspace:^"
     "@endo/patterns": "workspace:^"
+    "@endo/platform": "workspace:^"
     "@endo/ses-ava": "workspace:^"
     "@endo/workflow": "workspace:^"
     ava: "catalog:dev"
