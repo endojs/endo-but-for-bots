@@ -374,6 +374,32 @@ M is the right bucket for nineteen mechanical sites and four test predicates;
 it would not be if the classifier turned out to need per-variant judgement
 the `StoreError` taxonomy does not already encode.
 
+**What shipped, and where it departs from the prescription.** Phase 0 landed
+in two increments (`6d85b6f0`/`f9b35c06` for the store, `219cd8e7` and its
+correction for the seam), and two of its decisions differ from the text
+above and from F157's Fix.
+
+F157 prescribes `MachineError::Poisoned { during, source }`, and this
+document repeated it.
+What shipped carries `lost_to` and `recovering_from` instead of one `source`,
+because a failed rewind has two causes worth keeping: the rewind failure that
+lost the machine, and the failure it was recovering from when it did.
+`source()` returns the first.
+
+F157 and this document both name only `Store` and `Poisoned`.
+Three further variants were needed because the eighteen sites were not two
+families but five, and collapsing them reproduces the finding one level down:
+`Refused(Refusal)` for deterministic engine-side refusals, carrying the values
+the refusing site holds rather than a message a reword can silently break;
+`CollectionPanicked` for a collection that panicked and *was* rewound, where
+the machine is demonstrably still usable; and `SessionLost` for the calls that
+merely discover a machine an earlier rewind already lost.
+An earlier draft of the increment did fold the middle two into `Poisoned`, and
+a test in the same file — `collector_panic_rewinds_to_the_committed_heap`,
+which collects and cranks again afterwards — showed that a supervisor obeying
+that variant's "tear the machine down" contract would destroy a healthy
+machine.
+
 **Clears:** nothing on its own. It is the coupling, not a car.
 
 ### Phase 1 — Extract the engine seam
