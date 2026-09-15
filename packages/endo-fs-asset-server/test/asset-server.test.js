@@ -9,6 +9,8 @@ import test from 'ava';
 import { E } from '@endo/eventual-send';
 import { iterateBytesWriter } from '@endo/exo-stream/iterate-bytes-writer.js';
 
+import { makeExo } from '@endo/exo';
+import { M } from '@endo/patterns';
 import { makeInMemoryFilesystem } from '@endo/platform/fs/extended';
 import { makeNodeHttpBackend } from '@endo/platform/http/node';
 import { makeAssetServer } from '../src/asset-server.js';
@@ -241,3 +243,45 @@ test.serial('rejects path traversal in the request', async t => {
   const res = await httpGet(`${origin}${path}..%2f..%2fetc`);
   t.true(res.status === 400 || res.status === 404);
 });
+
+test.serial('a cap that cannot answer root() is refused, not mounted', async t => {
+  // Regression: `serve()` accepted any non-null cap and returned a URL, so
+  // handing it a Mount or an `@endo/exo-git` workspace — neither of which has
+  // `root()` — produced a link that 404'd on every request, indistinguishably
+  // from a revoked or mistyped one. The mismatch belongs at serve time.
+  const server = await startServer(t);
+
+  const sloppy = (label, methods) =>
+    makeExo(label, M.interface(label, {}, { defaultGuards: 'passable' }), methods);
+
+  // A daemon Mount: `lookup` but no `root`.
+  await t.throwsAsync(
+    () =>
+      E(server).serve(
+        sloppy('EndoMount', {
+          kind: () => 'directory',
+          lookup: () => undefined,
+          list: () => harden([]),
+        }),
+      ),
+    { message: /root\(\) method/ },
+  );
+
+  // An `@endo/exo-git` workspace: `worktree` but no `root`.
+  await t.throwsAsync(
+    () =>
+      E(server).serve(
+        sloppy('Git', {
+          worktree: () => undefined,
+          status: () => harden({}),
+          commit: () => '',
+        }),
+      ),
+    { message: /root\(\) method/ },
+  );
+
+  // Nothing was registered, so no token leaked into the mount table.
+  const { url } = await E(server).serve(await makeSiteFs());
+  t.is((await httpGet(url)).status, 200);
+});
+
