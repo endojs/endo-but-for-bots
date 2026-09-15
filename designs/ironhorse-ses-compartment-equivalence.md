@@ -267,6 +267,51 @@ Two things the prelude had to get right, both of which are the
   section installs `Object[@harden]`. The file's own section markers make the
   slice exact, as `bundle-ironhorse-worker.mjs` already does it.
 
+### Running the real harness, and what it found immediately
+
+The axis's other two hosts are driven by `test262-harness`: it assembles the
+case, writes it to a file, runs the host binary on it, and reads an uncaught
+throw off stderr.
+Ironhorse had no such binary — only `endot-ih`, which is a DIFFERENTIAL runner
+answering "does ironhorse agree with XS".
+Every verdict it reaches is a function of that agreement, so it cannot award
+coverage without the oracle's assent, and feeding XS an ironhorse-shaped
+prelude (which a dual-run must) makes XS fail cases it passes under its own.
+
+`ironhorse-xst` is that binary, and it is deliberately tiny: `--host-type xs`
+is `eshost`'s "a binary that takes JS files and runs them" adapter, so being
+one is most of the work.
+The corpus is test262; its own `Test262Error` assertions already encode pass
+and fail, and no second engine is needed to read them.
+
+It found a parser bug on the first run, before a single assertion was reached:
+**all 16 runs failed with `SyntaxError: invalid directive`.**
+
+`eshost`'s own preamble — prepended to every case it runs — opens with
+`ESHostError.thrower = (...args) => {...}`.
+Ironhorse's non-simple-parameter-list flag lives on the shared parser flags,
+and an arrow's parameters are parsed by the CALLER before `arrow_expression`
+snapshots them, so the flag leaked in both directions:
+
+- **Outward.** `var f = (...args) => 1;` poisoned every later `"use strict"`
+  in the program, which is why one line of eshost's preamble failed the entire
+  corpus.
+- **Inward.** `function outer(...rest) { var g = a => { "use strict"; }; }`
+  was rejected, though the early error is on ArrowParameters and those are
+  simple.
+
+Node accepts both; ironhorse rejected both.
+A declared function parses its parameters inside its own save/restore, which is
+why only arrows leaked.
+Fixed at both arrow call sites, with the differential against node recorded in
+`ironhorse-compile`'s parser tests.
+The corpus went from **0/16 to 6/16** on that fix alone.
+
+That is the argument for the lane in one paragraph: the differential runner had
+been reporting this corpus as an honest set of named skips, exiting 0, for as
+long as the corpus has existed — and underneath it was a parser bug that broke
+every case in the suite.
+
 ### Why SES's own suite is not the gate yet
 
 `packages/ses/test/` is 105 ava files, 15 of them directly on

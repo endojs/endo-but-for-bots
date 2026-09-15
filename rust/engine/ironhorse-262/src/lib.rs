@@ -64,6 +64,27 @@ fn run_program_with_symbols(bytecode: &[u8], symbols: &[u8]) -> RunOutcome {
         .host_coerced()
 }
 
+/// Compile and run one test262 script source the way a HOST does: on a realm
+/// with the runtime source bridge and `$262` installed, with no oracle and no
+/// differential.
+///
+/// This is the whole of what `node` and `xst` do for the other two hosts of
+/// the `ses-xs-parity` axis -- run the assembled source, and let an uncaught
+/// throw be the failure. [`xst`] is the differential runner and answers a
+/// different question (does ironhorse AGREE with XS); this answers "does
+/// ironhorse pass the test", which is what the corpus's own `Test262Error`
+/// assertions already encode.
+///
+/// `Err` is a compile failure, rendered; `Ok` carries the run outcome, whose
+/// [`Halt::Throw`] renders as `Name: message` -- the shape `eshost` parses
+/// off stderr.
+pub fn run_script_source(source: &str) -> Result<RunOutcome, String> {
+    let (bytecode, symbols) =
+        ironhorse_compile::compile_atoms_goal(source, ironhorse_compile::Goal::Script, false)
+            .map_err(|e| format!("{e}"))?;
+    Ok(run_program_with_symbols(&bytecode, &symbols))
+}
+
 pub mod compile_diff;
 pub mod expectations;
 pub mod frontmatter;

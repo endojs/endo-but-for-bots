@@ -31,6 +31,10 @@ path = "src/bin/compile_diff.rs"
 # endot-ih: the xst-analogue test262 runner (design § Part 2). Subsumes the
 # dual-run harness and the `test262-language` subtree walker.
 [[bin]]
+name = "ironhorse-xst"
+path = "src/bin/ironhorse_xst.rs"
+
+[[bin]]
 name = "endot-ih"
 path = "src/bin/endot_ih.rs"
 
