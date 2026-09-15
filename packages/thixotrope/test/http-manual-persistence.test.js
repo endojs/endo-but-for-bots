@@ -324,7 +324,7 @@ test.serial('a vat can widen its own admission policy', async t => {
   t.is(denied.status, 403);
 });
 test.serial(
-  'an eager pin restores the service with nothing calling in',
+  'a start notice restores the service with nothing calling in',
   async t => {
     t.timeout(60_000);
     const statePath = await mkdtemp(join(tmpdir(), 'thixotrope-http-pin-'));
@@ -351,10 +351,10 @@ test.serial(
       );
       t.deepEqual(await call(port, 'one'), { status: 200, body: 'one:1' });
 
-      // The pin names a publication the host calls `started()` on. Waking the
-      // vat alone would restore its heap and run none of its code.
+      // A start notice, not a pin: the manager is off the request path, so it
+      // may sleep. It only has to learn that a new host incarnation exists.
       d1.publish(manager, 'manager-start');
-      managerVat.pin('eager', { notify: 'manager-start' });
+      managerVat.notifyOnStart('manager-start');
 
       await parkWorkers(d1);
       await ports.shutdown();
@@ -378,7 +378,7 @@ test.serial(
         // eslint-disable-next-line no-await-in-loop
         await new Promise(resolve => setTimeout(resolve, 10));
       }
-      t.true(restored, 'the pin restored the listener with no caller');
+      t.true(restored, 'the notice restored the listener with no caller');
       t.deepEqual(await call(port, 'two'), { status: 200, body: 'two:2' });
     }
   },
