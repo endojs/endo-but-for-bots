@@ -724,10 +724,9 @@ result is **70 KB** — the engine's comment overstated it by more than
 tenfold; the ~1 MB figure is closer to `worker_bootstrap.js`
 (750 KB) or `daemon_bootstrap.js` (2.4 MB), which the same command also
 generates.
-That comment is corrected in the same change as this block
-(`ironhorse-262/src/lib.rs:708`); it is recorded here because this document
-repeated the figure and gave it weight the file does
-not carry.
+That comment (`ironhorse-262/src/lib.rs:699-707`) is corrected in the same
+change as this block; it is recorded here because this document repeated the
+figure and gave it weight the file does not carry.
 
 What survives is a real but smaller question, and it is a build question
 rather than a VM one: **`ironhorse-262`'s dual-run harness `include_str!`s
@@ -827,6 +826,10 @@ differs semantically would pass a `typeof` census and fail a conformance
 suite. The option-by-option walk against both SES and XS, and the step-by-step
 reading of `fx_lockdown` that sizes the native route, are in
 [ironhorse-ses-compartment-equivalence](ironhorse-ses-compartment-equivalence.md).
+That document also supersedes the framing of this block's third result: the
+real choice is not native-versus-nothing but between two mutually exclusive
+realm profiles, and `thixotrope-ironhorse-worker` already runs the SES shim on
+ironhorse and gets a working guest `lockdown` and `Compartment` from it.
 
 *Two traps for anyone re-measuring.* `harden` and `petrify` are present on
 ironhorse before `polyfills.js` runs — they are its own
@@ -1246,8 +1249,11 @@ and a reader working from it alone will re-do them.
       and `yarn bundle:xs` before `cargo test`, and sets
       `IRONHORSE_SES_BOOT_REQUIRED=1` so a missing bundle is red rather than a
       silent skip.
-      What that lane does *not* cover: it triggers on `rust/engine/**` only,
-      so a change to the daemon bundle source alone will not re-run the bar.
+      What that lane does *not* cover: `scripts/ci-changes.py` triggers it on
+      `rust/engine/**`, the Cargo and toolchain files, `c/moddable`,
+      `rust/endo/xsnap/xsnap-platform.*` and the test262 corpus — but not on
+      `packages/daemon/src/bus-worker-xs-ses-boot.js` or
+      `rust/endo/xsnap/src/polyfills.js`, which are the bar's real inputs.
 - [x] **Re-word the `boot:ses-lockdown-bundle` ledger row and the comment it
       came from** (`rust/engine/CHANGELOG.md:900`,
       `ironhorse-262/src/lib.rs:699`). Done 2026-09-15: both called
