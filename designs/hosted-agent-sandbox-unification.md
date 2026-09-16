@@ -1126,6 +1126,120 @@ host-bind kind for that row. The post-rotation replay threat this design names
 is removed rather than mitigated, because nothing the guest wrote outlives the
 guest.
 
+### Transcript restoration — decided 2026-09-16
+
+The stack owns the transcript, so it must be able to reproduce a CLI's native
+conversation faithfully. **Restored tool calls are tool calls with their
+results; the restored transcript is not a different transcript.** A
+conversation is always restored, on every revival, until the conversation is
+deleted — there is no size, age or count threshold at which the stack declines.
+
+**What the source already has.** Floot's tree stores messages in
+chat-completions shape: `role` of `user` / `assistant` / `tool`, `content`,
+`tool_calls: [{ id, function: { name, arguments } }]`, and `tool_call_id` on
+results. Fidelity is present at the source. It is lost one layer later:
+`projectHistory` flattens a call and its result into a single pseudo-message
+carrying `name`, `args` and `result`, and `makeHostedContinuityOptions`
+serializes that to text. Restoration must read the tree's own shape, not
+`projectHistory`'s output.
+
+**The gap that blocks this: compaction is invisible to the stack.** OpenCode
+models a compaction as a *message* — `SessionMessageTable.type === 'compaction'`
+— and assembles the model's context from messages at or after the latest one
+(`packages/core/src/session/history.ts`), with a separate context-epoch
+baseline for system messages. So a session's full history and its active
+context are two different spans of the same table. Floot cannot represent
+either boundary: `projectHistory` admits only `user`, `assistant` and `tool`,
+and `makeHostedContinuityOptions` refuses anything else outright — *"history
+contains an unsupported role"* — and the pinned fork filters summary messages
+out of the event stream before Floot ever sees them.
+
+The consequence is concrete. Restore a compacted OpenCode session from the
+journal as it exists today and the CLI receives the whole pre-compaction
+history with no compaction marker, so all of it becomes active context and the
+session may overflow on its first turn. **Floot must record compaction
+boundaries as first-class journal entries before any adapter can restore
+faithfully.** This is the first piece of work, not a detail of the last.
+
+**The neutral format.** One canonical, append-only record stream — JSON Lines:
+one self-describing object per line, no enclosing array, so appending never
+rewrites a closing character and a truncated tail costs one record rather than
+the file. The same format for every model; each adapter translates it into its
+CLI's native form, and that translation is the per-adapter work.
+
+The repo already has the discipline to reuse: `canonicalAuditJson` /
+`parseCanonicalAuditJson` give deterministic bytes for tagged values, which is
+what lets the audit journal hash-chain itself. A transcript encoded the same
+way can be chained the same way, which is worth having for a record the stack
+now claims to own.
+
+Record kinds, at minimum:
+
+| kind | fields |
+|---|---|
+| `message` | `role` (`user` / `assistant`), `content` |
+| `tool-call` | `id`, `name`, `args` |
+| `tool-result` | `id`, `content`, `failed?` |
+| `compaction` | `summary`, and what it supersedes |
+
+Pairing stays by `id` rather than by flattening, because that is what makes a
+restored tool call a tool call. System prompts are deliberately absent: they
+are harness-supplied per incarnation, so the adapter contributes the current
+one rather than replaying a stale one.
+
+**Per-adapter translation, and what is still unknown.**
+
+- **Codex** already consumes `continuityContext` and is the natural first
+  adopter: it proves the record stream against a real CLI before the other two
+  commit to it. Its work is replacing single-prompt injection with turn
+  reconstruction over the app-server protocol.
+- **Claude** needs a JSONL writer. The repo knows the layout —
+  `projects/<project>/<session-uuid>.jsonl`, per `claude-transcripts.js` — but
+  only reads names and mtimes, never record contents, so **the record schema is
+  unresearched** and must be captured from a live transcript.
+- **OpenCode** needs the fork patch: an endpoint that appends historical
+  messages, since `CreateInput` is `{id?, agent?, model?, location}` and no
+  route appends one. The patch must accept compaction records too, or the
+  boundary cannot be restored.
+
+### Step 4 order and tests — 2026-09-16
+
+1. **Verify Claude Code's HTTP/SSE MCP support on Tokyo.** It gates the MCP
+   row: OpenCode's `{ type: 'remote', url, headers }` is confirmed, Claude's is
+   assumed. Assume it works, but prove it before the bind is deleted.
+2. **Record compaction boundaries in Floot's journal**, and define the neutral
+   record stream. Nothing downstream is faithful until this exists.
+3. **Codex restoration** — native reconstruction, no preamble, no bound. First
+   because it already consumes the history and so tests the format soonest.
+4. **Claude restoration** — capture the JSONL schema, write it, drop the config
+   directory onto tmpfs, delete `makeTranscriptResume` and its helpers.
+5. **OpenCode restoration** — fork patch, then `OPENCODE_DB=:memory:`, then
+   delete the `opencodeSessionId` resume path and its unhandled not-found case.
+6. **MCP onto loopback** with a bearer token; delete the bind, the stdio bridge
+   script and the MCP directory.
+7. **Claude and OpenCode onto the attested policy**, which is also what gives
+   them runtime attaches.
+
+Steps 3–5 each move a descriptor off `continuity: 'transcript'` to
+`opaque-reconciled` and delete a state provider.
+
+Tests that must exist before each adapter is called done:
+
+- **Round trip.** Journal → neutral stream → native transcript → the CLI
+  reports the same turns, in order, with the same tool calls and results.
+  Shared, in the conformance suite beside `cli-cleanup-conformance.js`.
+- **Tool-call fidelity.** A restored tool call arrives as a tool call with its
+  result, never as flattened text. This is the property most likely to
+  regress silently.
+- **Compaction round trip.** A compacted session restores with its boundary,
+  and its active context is the post-compaction span rather than the whole
+  history.
+- **Restore on a wiped store.** A session whose native store is gone restores
+  from the journal and reports the prior turns — the case that today has no
+  handling at all on OpenCode's resume path.
+- **Image pin bump.** Bumping any CLI image runs the round-trip conformance, so
+  a private format changing under us fails loudly instead of resuming empty.
+
 ## Protection and limit justification
 
 For every protection ask: **what resource or authority does this protect, from
