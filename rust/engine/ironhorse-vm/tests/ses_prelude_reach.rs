@@ -80,26 +80,38 @@ use std::path::Path;
 /// Pinned reach, by file name. `true` is "the case passes on Ironhorse
 /// through the shim prelude".
 ///
-/// `Symbol.toStringTag-lockdown.js` is false on Ironhorse AND on node -- the
-/// node host reports 14/16 today, with both failures on that one file -- but
-/// for DIFFERENT reasons, so do not read node's as an alibi for this one.
+/// `Symbol.toStringTag-lockdown.js` is the whole corpus's lockdown case, and
+/// it passes here while still failing on node -- the two hosts were red on it
+/// for DIFFERENT reasons, which is why node's number is not a ceiling for this
+/// one.
 ///
 /// On node, `@endo/harden` finds no host `harden`, installs its own at
 /// `Object[Symbol.for('harden')]`, and `repairIntrinsics` refuses outright.
-/// On Ironhorse that slot stays `undefined`: the selector adopts the native
-/// `globalThis.harden`, as `ironhorse-pre-shim.js` intends. `lockdown()`
-/// instead throws `invalid descriptor` from `tame-function-constructors.js`,
-/// because the native `harden` deep-freezes `Function.prototype` -- one
-/// `harden({})` turns `constructor` from the spec's `configurable: true` into
-/// `{writable: false, configurable: false}` -- so SES can no longer swap in
-/// its inert constructor. That rejection is spec-correct; the freeze that
-/// provoked it is the Ironhorse gap. See
-/// `designs/ironhorse-ses-compartment-equivalence.md`.
+/// Ironhorse used to fail it the other way: the selector adopted the NATIVE
+/// `globalThis.harden`, a faithful port of XS's `fx_hardenFreezeAndTraverse`
+/// that walks prototype chains, so one `harden({})` during prelude evaluation
+/// turned `Function.prototype.constructor` from the spec's
+/// `configurable: true` into `{writable: false, configurable: false}` and
+/// `tame-function-constructors.js` could no longer install its inert
+/// constructor -- `lockdown()` died with `invalid descriptor`.
+///
+/// `ironhorse-pre-shim.js` now hands the selector `@endo/harden`'s
+/// `makeHardener({ traversePrototypes: false })` instead, which is present (so
+/// nothing installs into the poisoning slot) and gentle (so the intrinsics
+/// lockdown still has to tame survive). The rejection was always spec-correct;
+/// the freeze was the problem, and it is the pre-lockdown harden that had to
+/// change.
+///
+/// XS needs none of this: it has a native `lockdown` (`fx_lockdown`,
+/// `c/moddable/xs/sources/xsLockdown.c`) that rewires those constructors with
+/// direct slot writes, below `[[DefineOwnProperty]]`. A native `lockdown` for
+/// Ironhorse is future work; until then this shim route is the SES profile.
+/// See `designs/ironhorse-ses-compartment-equivalence.md`.
 const REACH: &[(&str, bool)] = &[
     ("byte-readers.js", true),
     ("native-or-emulated-shape.js", true),
     ("Symbol.toStringTag.js", true),
-    ("Symbol.toStringTag-lockdown.js", false),
+    ("Symbol.toStringTag-lockdown.js", true),
     // Passes since the `END` frame-base restore (xsRun.c:1063's
     // `mxStack = mxFrameEnd`): `passStyleOf` reaches this case's
     // `assert.sameValue(passStyleOf(bytes), 'byteArray')` through a `return`
