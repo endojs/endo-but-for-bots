@@ -71,6 +71,14 @@ export const makePodmanSessionVolumes = ({
     }
     record !== undefined || Fail`Created volume is missing`;
     const observed = await identity(record, request);
+    // The identity a slice runs as, written the way `podman unshare` reports
+    // it. The slice policy requests `--userns keep-id`, which maps this
+    // daemon's own uid onto the uid the policy declares, so the identity the
+    // slice has inside its container is this daemon — and inside the
+    // daemon's user namespace, this daemon is 0:0. A volume Podman created
+    // already has it; the chown below is for one created before this mapping
+    // was, whose data belongs to a subordinate id the slice no longer is.
+    const SLICE_OWNER = '0:0';
     const ownership = async () => {
       const result = await run([
         'unshare',
@@ -83,18 +91,23 @@ export const makePodmanSessionVolumes = ({
       result.code === 0 || Fail`Cannot observe volume user-namespace ownership`;
       return result.stdout.trim();
     };
-    if ((await ownership()) !== '1000:1000') {
-      (await readdir(observed.mountpoint)).length === 0 ||
-        Fail`Cannot change ownership of a nonempty session volume`;
+    if ((await ownership()) !== SLICE_OWNER) {
+      // A volume holding a session's work is re-owned rather than refused:
+      // the alternative is a session that can never start again because the
+      // mapping changed under it, which loses the work this is protecting.
+      // The recursive form is what matters — the entries inside carry the
+      // old ownership too, and a writable root the slice cannot write into
+      // is the defect this whole path exists to prevent.
       const changed = await run([
         'unshare',
         'chown',
-        '1000:1000',
+        '-R',
+        SLICE_OWNER,
         '--',
         observed.mountpoint,
       ]);
       changed.code === 0 || Fail`Cannot initialize session volume ownership`;
-      (await ownership()) === '1000:1000' ||
+      (await ownership()) === SLICE_OWNER ||
         Fail`Session volume ownership did not verify`;
     }
     return observed;

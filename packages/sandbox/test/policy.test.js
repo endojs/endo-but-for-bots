@@ -397,6 +397,25 @@ test('brokerNetworkArg joins the namespace the operator named', t => {
   );
 });
 
+test('the slice is mapped onto the identity that owns its declared mounts', t => {
+  // The whole reason `--userns keep-id` is here: a bind or 9P projection
+  // belongs to the daemon, so the slice's declared uid has to be the
+  // container id the daemon maps to. Without the mapping the daemon lands
+  // on container uid 0, the slice runs as an unmapped subordinate id, and
+  // every declared mount reads back root-owned — the slice cannot read its
+  // MCP configuration or write its workspace. Pinned against a uid other
+  // than the default so a literal cannot pass for the policy's own value.
+  const policy = assertSlicePolicyRequest(
+    makeRequest({ uid: 1234, gid: 5678 }),
+  );
+  const argv = assemblePolicyArgv(policy);
+  const valueAfter = flag => argv[argv.indexOf(flag) + 1];
+  t.is(valueAfter('--user'), '1234:5678');
+  t.is(valueAfter('--userns'), 'keep-id:uid=1234,gid=5678');
+  // `private` would ask a rootless engine to nest a second namespace.
+  t.false(argv.includes('private') && valueAfter('--userns') === 'private');
+});
+
 test('policy argv carries every ceiling the request named', t => {
   const policy = assertSlicePolicyRequest(makeRequest());
   const argv = assemblePolicyArgv(policy);
@@ -405,6 +424,8 @@ test('policy argv carries every ceiling the request named', t => {
     [
       '--user',
       '1000:1000',
+      '--userns',
+      'keep-id:uid=1000,gid=1000',
       '--pid',
       'private',
       '--ipc',

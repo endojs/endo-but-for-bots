@@ -448,6 +448,8 @@ export const makeOpencodeClient = ({
   // conversation the CLI is now holding, so repeating the history would
   // duplicate it.
   let restorationPending = !resumePriorConversation;
+  /** Whether the bridge in this slice's image understands `op: 'import'`. */
+  let bridgeImports = false;
 
   const handleEvent = event => {
     if (event.type === 'imported') {
@@ -455,6 +457,9 @@ export const makeOpencodeClient = ({
       return;
     }
     if (event.type === 'ready') {
+      // An older bridge sends no feature list and does not answer `import`.
+      bridgeImports =
+        Array.isArray(event.features) && event.features.includes('import');
       // A resume that came back under a different id did not resume: the
       // store no longer held the session this plan recorded, and the bridge
       // started a fresh one. That case had no handling at all — the session
@@ -725,12 +730,33 @@ export const makeOpencodeClient = ({
    * @returns {Promise<string>} text to prepend, empty when the import took it.
    */
   const restoreOnce = async turn => {
-    if (!restorationPending) return '';
+    // One line per incarnation, counts only. A restored conversation that
+    // comes back empty is otherwise indistinguishable from one that was
+    // never offered, and the difference is which side to look at.
+    const describe = (outcome, extra = {}) =>
+      console.error(
+        '[opencode-sandbox] restore',
+        JSON.stringify({
+          sessionId,
+          outcome,
+          pending: restorationPending,
+          records: Array.isArray(turn.transcript) ? turn.transcript.length : 0,
+          resumePriorConversation,
+          ...extra,
+        }),
+      );
+    if (!restorationPending) {
+      describe('skipped: conversation already live');
+      return '';
+    }
     restorationPending = false;
     const records = Array.isArray(turn.transcript) ? turn.transcript : [];
-    if (records.length === 0) return '';
+    if (records.length === 0) {
+      describe('skipped: nothing to restore');
+      return '';
+    }
     const turns = importedTurnsFor(records);
-    if (turns.length > 0 && importModel !== undefined) {
+    if (turns.length > 0 && importModel !== undefined && bridgeImports) {
       const imported = new Promise(resolve => {
         resolveImported = resolve;
       });
@@ -747,14 +773,19 @@ export const makeOpencodeClient = ({
             setTimeout(() => resolve(false), IMPORT_TIMEOUT_MS);
           }),
         ]);
-        if (ok) return '';
+        if (ok) {
+          describe('imported', { turns: turns.length });
+          return '';
+        }
       } catch {
         // Fall through to reading the conversation into the prompt.
       } finally {
         resolveImported = undefined;
       }
     }
-    return `${renderTranscriptDialogue(records)}\n\n`;
+    const dialogue = `${renderTranscriptDialogue(records)}\n\n`;
+    describe('dialogue fallback', { turns: turns.length, chars: dialogue.length });
+    return dialogue;
   };
 
   const createClient = () => {

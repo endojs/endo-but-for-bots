@@ -206,6 +206,28 @@ for (const [name, overrides, message] of refused) {
   });
 }
 
+test('send() carries the turn\u2019s options, not just the persona', async t => {
+  // The factory used to rebuild this record from named fields, so every
+  // continuity option the stack added was dropped on the way to the client —
+  // which then had nothing to restore from and started the conversation over.
+  const { factory, turns } = makeHarness();
+  const { run } = await E(factory).create(
+    harden({ sessionId: 'session-t', systemPrompt: 'persona' }),
+    makeToolSet(),
+  );
+  const transcript = harden([
+    { kind: 'message', role: 'user', content: 'remember ALPENGLOW' },
+    { kind: 'message', role: 'assistant', content: 'noted' },
+  ]);
+  void E(run).send('what was the word?', harden({ transcript }));
+  for (let tries = 0; turns.length === 0 && tries < 50; tries += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await null;
+  }
+  t.deepEqual(turns[0].opts.transcript, transcript);
+  t.is(turns[0].opts.systemPrompt, 'persona');
+});
+
 test('send() forwards the session persona and passes the reader through', async t => {
   const { factory, turns } = makeHarness();
   const { run } = await E(factory).create(
@@ -217,7 +239,7 @@ test('send() forwards the session persona and passes the reader through', async 
     // eslint-disable-next-line no-await-in-loop
     await null;
   }
-  t.deepEqual(turns[0].opts, { systemPrompt: 'persona' });
+  t.is(turns[0].opts.systemPrompt, 'persona');
   turns[0].push({ type: 'text-delta', text: 'hi' });
   turns[0].push({ type: 'end' });
   t.deepEqual(await drain(await readerP), [
@@ -229,7 +251,7 @@ test('send() forwards the session persona and passes the reader through', async 
     // eslint-disable-next-line no-await-in-loop
     await null;
   }
-  t.deepEqual(turns[1].opts, { systemPrompt: 'override' });
+  t.is(turns[1].opts.systemPrompt, 'override');
   t.deepEqual(await E(run).status(), {
     sessionId: 'x',
     turnActive: true,

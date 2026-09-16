@@ -219,6 +219,25 @@ test('persisted lease blocks another provider until explicit recovery', async t 
   await second.makeWorkspace(spec);
 });
 
+test('a persisted lease blocks mountWorkspace too, so both paths must recover', async t => {
+  // `mountWorkspace` reaches `ensure` on its own, so a session reopened
+  // through it alone hits the dead incarnation's lease exactly as
+  // `makeWorkspace` does. The deployment wired recovery onto only one of
+  // them, and the session failed with an outstanding durable lease for the
+  // rest of the host's life.
+  const f = fixture();
+  const first = f.reopen();
+  const spec = { sessionId: 's1' };
+  const workspace = await first.makeWorkspace(spec);
+  await first.mountWorkspace(workspace, spec);
+  const second = f.reopen();
+  await t.throwsAsync(() => second.mountWorkspace(workspace, spec), {
+    message: /outstanding durable lease/,
+  });
+  await second.recoverLease(spec);
+  await t.notThrowsAsync(() => second.mountWorkspace(workspace, spec));
+});
+
 test('failed deletion stays tombstoned and retries without project ID reuse', async t => {
   const f = fixture();
   const provider = f.reopen();

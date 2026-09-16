@@ -670,16 +670,32 @@ export const assemblePolicyArgv = policy => {
   const argv = [
     '--user',
     `${policy.uid}:${policy.gid}`,
-    // The user namespace is deliberately *not* requested here.
-    // `--userns private` asks a rootless engine to nest a second one
-    // inside its own, which needs subordinate id ranges to map from and
-    // fails outright on a host that has none — while adding nothing:
-    // rootless containers already run outside the daemon's user
-    // namespace, and `attestSlicePolicy` proves that from
-    // `/proc/<pid>/ns/user` rather than from any flag. The driver
-    // additionally refuses a namespace another of its live slices
+    // `--userns private` is still refused: it asks a rootless engine to
+    // nest a second namespace inside its own, which needs subordinate id
+    // ranges to map from and fails outright on a host that has none —
+    // while adding nothing, because rootless containers already run
+    // outside the daemon's user namespace and `attestSlicePolicy` proves
+    // that from `/proc/<pid>/ns/user` rather than from any flag. The
+    // driver additionally refuses a namespace another of its live slices
     // holds. Both are observations, which is the point.
     //
+    // `keep-id` is a different request, and this policy does need it: it
+    // maps the daemon's own uid to the slice's declared one. Without it
+    // the default rootless mapping puts the daemon at container uid 0
+    // and the slice at an unmapped subordinate id, so every bind and 9P
+    // projection — all of them owned by the daemon — reads back as
+    // root-owned and the slice can neither read its MCP configuration
+    // nor write its workspace. A declared uid that does not own the
+    // declared mounts is not a policy, it is a slice that cannot run.
+    //
+    // The alternative, chowning each source into the subordinate range
+    // (`U=true`, as the tmpfs rows below do), is right for a root the
+    // slice alone uses and wrong for every root here: these are shared
+    // with the daemon, which holds the MCP listening socket and writes
+    // the transcript, and the chown is one-way — it takes the directory
+    // away from the daemon permanently.
+    '--userns',
+    `keep-id:uid=${policy.uid},gid=${policy.gid}`,
     // The two below are named explicitly because they cost nothing and
     // let the attestation read a definite value back instead of an
     // empty string meaning "whatever this host does".
@@ -920,9 +936,17 @@ const attestMounts = (policy, state) => {
   const declaredDestinations = new Set(
     policy.mounts.map(mount => mount.destination),
   );
+  // Every destination the table says may be a bind. An attach is a 9P
+  // projection, the resolver is the fixed read-only generated file, and a
+  // `bind` is host storage declared as such.
   const attachDestinations = new Set(
     policy.mounts
-      .filter(mount => mount.kind === 'attach' || mount.kind === 'resolver')
+      .filter(
+        mount =>
+          mount.kind === 'attach' ||
+          mount.kind === 'bind' ||
+          mount.kind === 'resolver',
+      )
       .map(mount => mount.destination),
   );
   // An undeclared mount is the failure this table exists to exclude, so
@@ -950,11 +974,18 @@ const attestMounts = (policy, state) => {
       !attachDestinations.has(destination)
     ) {
       // A bind is the only mount shape that can reach host state — a
-      // home directory, a credential store, a runtime socket. The only
-      // binds are declared 9P projections or the fixed, read-only generated
-      // resolver whose exact effective contents are checked below, so
-      // `hostHome` and `hostSockets` still follow from the absence of any
-      // other bind rather than from a path blocklist.
+      // home directory, a credential store, a runtime socket — so an
+      // undeclared one is refused here.
+      //
+      // `hostHome` and `hostSockets` used to follow from there being no
+      // bind at all beyond 9P projections and the generated resolver. They
+      // now follow from something narrower but still not a path blocklist:
+      // every bind in the table is declared, and `assertSlicePolicyRequest`
+      // admits a declared `bind` only when its source lies under one of the
+      // request's `bindRoots`. So the question "can this slice see the
+      // operator's home directory" is answered by the roots the request
+      // named, which the attestation restates, rather than by hoping no
+      // path matched a list.
       return unproved('mount table', `host bind mount at ${destination}`);
     }
   }

@@ -47,22 +47,27 @@ test('empty context is explicit and text/tool evidence survives without powers',
   );
 });
 
-test('the complete serialized limit is exact and oversized history is not truncated', t => {
+test('a long history is carried, not refused for being long', t => {
+  // There is no length ceiling. The one that used to be here refused a
+  // conversation for being long, which is the opposite of what continuity is
+  // for, and the number was this stack's own rather than one any model or
+  // protocol imposes.
   const emptySize = JSON.stringify([{ role: 'user', content: '' }]).length;
-  const result = makeHostedContinuityOptions([
-    { role: 'user', content: 'x'.repeat(256 * 1024 - emptySize) },
-  ]);
-  if (!('continuityContext' in result))
-    throw Error('Expected complete context');
-  t.is(result.continuityContext?.length, 256 * 1024);
-  t.deepEqual(
-    makeHostedContinuityOptions([
-      { role: 'user', content: 'x'.repeat(256 * 1024 - emptySize + 1) },
-    ]),
-    { continuityContextUnavailable: 'history exceeds replay limit' },
-  );
+  for (const size of [256 * 1024 - emptySize, 256 * 1024, 4 * 1024 * 1024]) {
+    const result = makeHostedContinuityOptions([
+      { role: 'user', content: 'x'.repeat(size) },
+    ]);
+    if (!('continuityContext' in result))
+      throw Error(`Expected complete context at ${size}`);
+    t.is(result.continuityContext?.length, size + emptySize);
+  }
+  // What remains refused is what the dialogue *is*, never how much there is.
   t.deepEqual(
     makeHostedContinuityOptions([{ role: 'system', content: 'invented role' }]),
     { continuityContextUnavailable: 'history contains an unsupported role' },
+  );
+  t.deepEqual(
+    makeHostedContinuityOptions([{ role: 'user', content: 42 }]),
+    { continuityContextUnavailable: 'history contains non-text dialogue' },
   );
 });

@@ -21,9 +21,12 @@ const identity = harden({
   inode: '42',
 });
 
-const podmanFixture = (contents = []) => {
+// `podman unshare` reports ids inside the daemon's own user namespace, where
+// the daemon itself is 0:0. That is the identity a `keep-id` slice runs as, so
+// it is what a volume Podman just created already has; `1000:1000` there is a
+// subordinate id, which is what volumes created before that mapping carry.
+const podmanFixture = (contents = [], owner = '0:0') => {
   const calls = [];
-  let owner = '0:0';
   const volumes = makePodmanSessionVolumes({
     volumeRoot: '/volumes',
     realpath: async p => p,
@@ -50,26 +53,39 @@ const podmanFixture = (contents = []) => {
         };
       if (argv[0] === 'unshare' && argv[1] === 'stat')
         return { code: 0, stdout: owner };
-      if (argv[0] === 'unshare' && argv[1] === 'chown') owner = '1000:1000';
+      if (argv[0] === 'unshare' && argv[1] === 'chown') owner = argv[3];
       return { code: 0, stdout: '' };
     },
   });
   return { volumes, calls };
 };
 
-test('empty volume ownership is initialized nonrecursively and verified', async t => {
+test('a volume Podman just created is already the slice identity and is left alone', async t => {
   const { volumes, calls } = podmanFixture();
+  t.deepEqual(await volumes.ensure(request), identity);
+  t.false(calls.some(args => args.includes('chown')));
+});
+
+test('a volume from before the keep-id mapping is re-owned rather than stranded', async t => {
+  // Observed on the deployment: a session created under the old mapping
+  // carries a subordinate id, and its next turn failed with "Cannot change
+  // ownership of a nonempty session volume" — a session that can never start
+  // again. The volume's labels already proved it is this session's own, so
+  // re-owning it is restoring access to its work, not taking a stranger's.
+  const { volumes, calls } = podmanFixture(['user-data'], '1000:1000');
   t.deepEqual(await volumes.ensure(request), identity);
   t.deepEqual(
     calls.find(args => args.includes('chown')),
-    ['unshare', 'chown', '1000:1000', '--', mountpoint],
+    ['unshare', 'chown', '-R', '0:0', '--', mountpoint],
   );
 });
 
-test('nonempty volume with unexpected ownership is never chowned', async t => {
-  const { volumes, calls } = podmanFixture(['user-data']);
-  await t.throwsAsync(() => volumes.ensure(request), {
-    message: /nonempty session volume/,
+test('an unverifiable volume is refused before any ownership change', async t => {
+  // The label check is what establishes whose volume this is; the chown above
+  // is only safe because it runs after that.
+  const { volumes, calls } = podmanFixture([], '1000:1000');
+  await t.throwsAsync(() => volumes.ensure({ ...request, ownerId: 'someone-else' }), {
+    message: /ownership or backing mismatch/,
   });
   t.false(calls.some(args => args.includes('chown')));
 });

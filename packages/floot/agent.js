@@ -179,6 +179,7 @@ const FlootSessionInterface = M.interface('FlootSession', {
   startTurn: M.call(M.any()).returns(M.remotable()),
   getCurrentTurn: M.callWhen().returns(M.or(M.null(), M.record())),
   getHistory: M.callWhen().returns(M.any()),
+  getTranscript: M.callWhen().returns(M.any()),
   getTurns: M.callWhen().returns(M.any()),
   getJournalStatus: M.callWhen().returns(M.any()),
   getNetworkPolicy: M.callWhen().returns(M.any()),
@@ -919,6 +920,7 @@ const provisionPresetObjects = async (
  *     onStart?: (history: Array<Record<string, any>>) => void,
  *   ) => Promise<void>,
  *   getHistory: () => Promise<Array<Record<string, any>>>,
+ *   getTranscript: () => Promise<Array<Record<string, any>>>,
  *   getTurns: () => Promise<Array<Record<string, any>>>,
  *   getJournalStatus: () => Promise<Record<string, any>>,
  *   resolveTurn: (turnId: string, note: string) => Promise<void>,
@@ -2534,6 +2536,7 @@ export const makeStreamingAgent = async (
   return harden({
     converse,
     getHistory,
+    getTranscript,
     getTurns,
     getJournalStatus,
     resolveTurn,
@@ -3873,6 +3876,16 @@ export const make = (hostPowers, _context, { env } = {}) => {
           await assertSessionReady(id);
           const agent = await getAgent(id);
           return agent.getHistory();
+        },
+        // The same records a hosted adapter is handed to rebuild its CLI's
+        // own store. Readable because the stack owns the transcript: when a
+        // restored conversation comes back wrong, the first question is
+        // whether what was handed over was right, and that should not need a
+        // daemon log to answer.
+        async getTranscript() {
+          await assertSessionReady(id);
+          const agent = await getAgent(id);
+          return agent.getTranscript();
         },
         async getTurns() {
           await assertSessionReady(id);

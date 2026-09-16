@@ -1406,6 +1406,128 @@ take on its own authority.
 Steps 3–5 each move a descriptor off `continuity: 'transcript'` to
 `opaque-reconciled` and delete a state provider.
 
+### What the deploy found — 2026-09-16
+
+Seven defects. The first three are properties of the host's kernel and
+container runtime rather than of the code's reasoning about them, which is
+why no unit test could have produced them. The rest are ordinary bugs that
+the deploy found only because each was hidden behind the one above it: every
+fix uncovered the next, and the last of them is the one that decides whether
+this design does what it says.
+
+1. **A slice with no host scratch still needs a scratch provider.**
+   `factory.make` requires one where `makeResolved` never did, so an owned
+   runtime minted with no host powers passed `null` and failed construction.
+   `makeNoHostScratch()` is the refusing provider that says so.
+
+2. **The attestation refused the bind it had just been taught to declare.**
+   The mount-table control admitted attaches and the resolver and nothing
+   else, so declaring the MCP row as a `bind` made the slice fail its own
+   policy. The control now admits a declared bind whose source is under a
+   declared `bindRoot`, which is also what keeps the `hostHome`/`hostSockets`
+   argument standing.
+
+3. **The declared uid did not own the declared mounts.** The policy asks for
+   `uid: 1000` and, under the default rootless mapping, gets a slice running
+   as an unmapped subordinate id while the daemon — the owner of every bind
+   and 9P projection — appears as container uid 0. Claude could not open
+   `/endo-mcp/mcp.json`, Codex could not create a file in `/workspace`, and
+   OpenCode answered out of a context it had failed to load. Measured on the
+   deployment, the three available mappings are:
+
+   | mapping | slice sees the bind as | slice can use it | daemon keeps it |
+   | --- | --- | --- | --- |
+   | default rootless | `0:0` | no | yes |
+   | `--userns keep-id:uid=N,gid=N` | `N:N` | yes | yes |
+   | bind option `U=true` | `N:N` | yes | **no** |
+
+   `U=true` is what the tmpfs rows already use and is right for a root the
+   slice alone owns; it is wrong for all three of these, because they are
+   shared with the daemon — which holds the MCP listening socket and writes
+   the transcript — and its chown is one-way. `keep-id` is the mapping the
+   policy now requests. It is not the `private` nesting the argv still
+   refuses: the namespace is proved from `/proc/<pid>/ns/user` either way,
+   and `keep-id` only settles which container id the daemon appears as.
+
+   Codex hid this until now because its workspace was a Podman volume, which
+   the runtime chowns to the container user on creation. Step 4's move to a
+   9P projection took that chown away and left the mismatch exposed — the
+   convergence found a latent disagreement between two adapters rather than
+   introducing one.
+
+   **The residual trade this records:** `keep-id` puts the slice's process at
+   the daemon's own host uid, so a namespace escape reaches the daemon user
+   rather than a subordinate id that owns nothing. That is the posture Claude
+   and OpenCode already shipped under, and a regression for Codex, which ran
+   at a subordinate id while its only shared writable root was a volume.
+   Recovering the stronger posture means giving every shared root an
+   ownership the daemon and the slice can both hold — a group-mapped
+   `keep-id:uid=<unmapped>,gid=<daemon>` over `0770` roots, or moving the MCP
+   endpoint off a shared directory onto the loopback listener of option 2.
+   Neither is scheduled here; both are recorded so the choice is a decision
+   rather than an omission.
+
+4. **A session must survive the incarnation that made it.** Restarting the
+   daemon and asking each session to recall its first turn found two adapters
+   that could not start again at all: Codex refused its own volume
+   (`Cannot change ownership of a nonempty session volume` — the ownership
+   literal was the pre-`keep-id` slice identity, and the guard refused to
+   re-own a volume that by definition has data in it), and OpenCode refused
+   its own MCP socket (`MCP socket path already exists` — the bound path
+   outlives the process that bound it, so after any restart it is always
+   there). Both are the same shape as the mount defects above: state a dead
+   incarnation left behind, treated as a stranger's.
+
+5. **The backend dropped the transcript before the client ever saw it.** Both
+   the Claude and OpenCode factories rebuilt the turn's options from named
+   fields — model and persona — so the records this design exists to hand
+   down were discarded one layer above the adapter. `restoreOnce` always saw
+   an empty transcript. Codex spreads its options and was never affected: the
+   two adapters converging onto it each lost the field on the way in.
+
+   **This is also the correction to a result recorded too early.** Claude
+   appeared to restore correctly across three separate restarts. It was
+   remembering out of its own store — the config directory is a host bind
+   that outlives the daemon, so `--continue` found the conversation — which
+   is exactly the behaviour this design set out to replace. The stack's
+   record was not what carried it, and nothing in the observable outcome said
+   so. OpenCode, whose store is now `:memory:`, had no such fallback and is
+   what made the defect visible: asked after a restart what word it had been
+   given, it answered that the conversation had not started.
+
+   Two lessons worth keeping. A conversation that survives is not evidence
+   that it survived *through this stack* — the test has to remove the CLI's
+   own store, which is what the design's "restore on a wiped store" case is
+   for, and it must be the case that runs on every adapter rather than the
+   one that was assumed to be covered. And the OpenCode factory's existing
+   test asserted `deepEqual(opts, { systemPrompt })` — an exact match on the
+   rebuilt record, which encoded the omission as the expected result. A test
+   that pins a whole structure pins its gaps too.
+
+6. **The bridge could only be asked by waiting.** The OpenCode image carries
+   its own copy of the in-slice bridge, so a slice running one built before
+   the import route ignores `op: 'import'` and answers nothing. The client
+   discovered that by timing out — thirty seconds on the first turn of every
+   incarnation, for as long as the deployed image predated the route. `ready`
+   now carries a bounded feature list and the fallback is taken immediately;
+   an older bridge sends none, which is why the field is optional. Measured
+   before the fix: 40s for the restored OpenCode turn against Claude's 7s.
+
+7. **Recovery was wired to one of two doors.** A durable volume lease belongs
+   to the process that took it, so one left in the registry is a dead
+   incarnation's. Recovery ran on `makeWorkspace` and not on `mountWorkspace`,
+   which reaches the same guard, so a session reopened through the latter was
+   refused for the rest of the host's life.
+
+**Verified on the deploy, 2026-09-16.** A session is given a word, the daemon
+is restarted, and the session is asked for the word back. OpenCode answers it
+with `OPENCODE_DB=:memory:`, and Claude answers it with
+`/var/lib/endo/claude-state` deleted between the turns — so in neither case
+could the CLI's own store have carried it, and the stack's records are the
+only thing that could have. This is the case the list below calls "restore on
+a wiped store", and running it is what separated a working restoration from a
+CLI that happened to still have its own copy.
+
 Tests that must exist before each adapter is called done:
 
 - **Round trip.** Journal → neutral stream → native transcript → the CLI

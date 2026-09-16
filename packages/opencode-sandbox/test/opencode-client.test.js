@@ -168,7 +168,11 @@ const drain = async reader => {
   return events;
 };
 
-const readyLine = sessionId =>
+// The bridge names what it understands. An image built before the import
+// route carries a bridge that sends no list and answers no `import`.
+const readyLine = (sessionId, features = ['import']) =>
+  JSON.stringify({ type: 'ready', sessionId, port: 4096, features });
+const legacyReadyLine = sessionId =>
   JSON.stringify({ type: 'ready', sessionId, port: 4096 });
 
 test('send spawns the baked bridge, writes a send command, and yields hosted events', async t => {
@@ -808,6 +812,34 @@ test('a resume that missed restores rather than continuing context-free', async 
   t.true(first.text.endsWith('carry on'));
 });
 
+test('a bridge that cannot import is not waited on', async t => {
+  // The image carries the bridge, so a slice running one built before the
+  // import route ignores the command and answers nothing. Discovering that by
+  // timeout would stall the first turn of every incarnation for the full
+  // import deadline; the bridge names what it understands instead, and an
+  // older one names nothing.
+  const bridge = makeFakeBridge();
+  const fake = makeFakeSlice(bridge);
+  const client = makeOpencodeClient(
+    baseArgs(fake, { model: 'openrouter/deepseek/v4' }),
+  );
+  bridge.push(legacyReadyLine('ses_1'));
+  const transcript = harden([
+    { kind: 'message', role: 'user', content: 'remember ALPENGLOW' },
+  ]);
+  const reader = await client.send('what was the word?', { transcript });
+  await waitFor(() => bridge.commands.length >= 1);
+  // Straight to the prompt: no import command was sent, so nothing is
+  // outstanding to time out.
+  const sent = JSON.parse(bridge.commands[0]);
+  t.is(sent.op, 'send');
+  t.true(sent.text.includes('user: remember ALPENGLOW'));
+  t.true(sent.text.endsWith('what was the word?'));
+  t.is(bridge.commands.length, 1);
+  bridge.push(JSON.stringify({ type: 'end' }));
+  await drain(reader);
+});
+
 test('restoration prefers the structured import, and reads it in when unavailable', async t => {
   const transcript = harden([
     { kind: 'message', role: 'user', content: 'build the page' },
@@ -853,9 +885,9 @@ test('restoration prefers the structured import, and reads it in when unavailabl
     await drain(reader);
   }
 
-  // An image built before the route says so, and the conversation is read
-  // into the prompt instead — lossy, but a conversation the model can see
-  // beats one it cannot.
+  // A bridge that has the command but whose server refuses it says so, and
+  // the conversation is read into the prompt instead — lossy, but a
+  // conversation the model can see beats one it cannot.
   {
     const bridge = makeFakeBridge();
     const fake = makeFakeSlice(bridge);

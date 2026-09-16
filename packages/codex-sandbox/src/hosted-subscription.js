@@ -152,18 +152,30 @@ export const makeHostedCodexSubscription = async options => {
     // An abandoned registry transaction remains fenced: container reaping
     // alone cannot prove that old privileged host operations have stopped.
     const recovered = new Set();
+    // Once per session per incarnation, before anything that reaches `ensure`.
+    // A lease belongs to the process that took it, so one left in the registry
+    // is a dead incarnation's and has to be cleared before the session can be
+    // opened again — otherwise the session is refused for the rest of the
+    // host's life. Both entry points below reach `ensure`, so both recover:
+    // `mountWorkspace` used to be passed through untouched, and a session
+    // reopened through it alone failed with an outstanding durable lease.
+    const recoverOnce = async spec => {
+      if (recovered.has(spec.sessionId)) return;
+      await storage.provider.recoverLease(spec);
+      recovered.add(spec.sessionId);
+    };
     provision = makeAttestedCodexResourceProvisioner({
       publicInternetEnabled: publicInternet,
       sandbox,
       volumeProvider: storage.provider.volumeProvider,
       makeWorkspace: async spec => {
-        if (!recovered.has(spec.sessionId)) {
-          await storage.provider.recoverLease(spec);
-          recovered.add(spec.sessionId);
-        }
+        await recoverOnce(spec);
         return storage.provider.makeWorkspace(spec);
       },
-      mountWorkspace: storage.provider.mountWorkspace,
+      mountWorkspace: async (workspace, spec) => {
+        await recoverOnce(spec);
+        return storage.provider.mountWorkspace(workspace, spec);
+      },
       issueProviderGrant: issuer,
       imageRef,
       imageDigest,

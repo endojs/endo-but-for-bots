@@ -181,8 +181,22 @@ export const makeMcpSocketServer = ({
       assertOpen();
       await setPermissions(socketDir, 0o700);
       assertOpen();
-      if (await inspect(socketPath))
-        throw Error('MCP socket path already exists');
+      // A socket here is this session's own from a previous incarnation: the
+      // daemon restarted and the path outlived the process that bound it.
+      // Refusing it makes a session unable to start ever again, which is the
+      // opposite of what continuity across incarnations is for. A *live*
+      // listener is not silently displaced — bind fails with EADDRINUSE,
+      // which is the kernel's answer rather than a guess made here.
+      // Anything that is not a socket is refused as before: a regular file,
+      // a directory or a symlink at this path is not something this server
+      // left behind, and removing it would be destroying a stranger's data.
+      const existingSocket = await inspect(socketPath);
+      if (existingSocket) {
+        if (!existingSocket.isSocket()) {
+          throw Error('MCP socket path is not a socket');
+        }
+        await rm(socketPath, { force: true });
+      }
       assertOpen();
       await installBridge(
         STDIO_BRIDGE_SPECIFIER,
