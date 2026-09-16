@@ -993,12 +993,38 @@ Two ways out, and the choice is not obvious:
    and no bridge script, and all three adapters converge on `volume`, `attach`
    and `tmpfs` with no new kind at all.
 
-The objection to (2), unresolved: the provider sidecar shares that namespace
-and holds the upstream credential, so a loopback MCP port is reachable by it —
-a new authority path from the credential holder to the session's Endo tools,
-where a unix-socket bind is reachable only by the slice that has the bind.
-Weigh that before choosing; (1) is the conservative option and (2) is the one
-that actually ends the divergence.
+**(2) is the recommendation.** An earlier draft of this section objected that
+the sidecar sharing that namespace holds the upstream credential, so a loopback
+MCP port would hand the credential holder a path to the session's tools. That
+is not what the sidecar is. `startProviderListenerWorker` is the *credential-free*
+worker — *"No SecretBlob or upstream transport crosses here"* — and the listener
+runtime says in as many words that *"the pinned listener image contains no
+credential"*. The credential stays in the host-side broker worker; the
+sidecar's only channel out is inherited stdin/stdout. It launches with
+`--network=none`, so the namespace has no egress at all, and it runs
+`--read-only --cap-drop=ALL --security-opt=no-new-privileges --user 1000:1000
+--pid=private --ipc=private` under 256 MiB, pinned by digest. The namespace's
+occupants are that sidecar and the slice.
+
+What (2) actually costs is narrower, and worth stating exactly:
+
+- **The bind is the current access control.** The MCP endpoint has no
+  authentication — *"this socket does not identify which guest process issued a
+  request"* — because reaching the socket inode required being in the slice's
+  mount namespace. A loopback port replaces that with namespace membership, so
+  the transport needs a bearer token of its own. There is in-tree precedent:
+  OpenCode's own server already takes a `randomBytes(24)` password.
+- **The sidecar gains reach it does not have today.** That matters only if the
+  sidecar is compromised, and a compromised sidecar already relays every prompt
+  and completion, so it can already forge a completion that induces any tool
+  call. A direct call changes attribution more than reach, and it does not
+  bypass the gate that matters: *"turn admission and authoritative effect
+  records belong to its executor"*.
+
+So (1) adds a mount kind that exists to describe a bind nothing can attest,
+and (2) removes the row, removes the stdio bridge script with it, and lands all
+three adapters on `volume`, `attach` and `tmpfs` with no new kind — at the cost
+of one bearer token on a transport that should arguably have had one anyway.
 
 Landing step 4 also changes what these two slices get at `/tmp`, `/run` and
 `/dev`: today `--read-only-tmpfs=true` gives them Podman's defaults with no
