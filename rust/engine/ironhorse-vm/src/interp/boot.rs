@@ -662,6 +662,8 @@ impl Interp {
             // is this list's position, so an insertion renumbers every entry
             // after it.
             ("at", 1),
+            ("findLast", 1),
+            ("findLastIndex", 1),
         ]
         .into_iter()
         .enumerate()

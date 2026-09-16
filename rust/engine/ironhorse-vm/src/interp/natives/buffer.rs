@@ -987,7 +987,7 @@ impl Interp {
             .copied()
             .unwrap_or_else(Slot::undefined);
 
-        if matches!(operation, 0..=4 | 8..=9) && !self.is_callable_value(arg0) {
+        if matches!(operation, 0..=4 | 8..=9 | 11..=12) && !self.is_callable_value(arg0) {
             return Err(self.catchable_type_error_msg("callback: not a function".into()));
         }
 
@@ -1018,9 +1018,19 @@ impl Interp {
                     Slot::boolean(answer)
                 })
             }
-            // find / findIndex
-            3..=4 => {
-                for index in 0..length {
+            // find / findIndex / findLast / findLastIndex: one scan, told
+            // which end to start from, the way `reduce`/`reduceRight` below
+            // share a body. The backward pair visits every index too, so only
+            // the order and the empty-result differ.
+            3..=4 | 11..=12 => {
+                let backward = operation >= 11;
+                let wants_value = matches!(operation, 3 | 11);
+                for cursor in 0..length {
+                    let index = if backward {
+                        length - 1 - cursor
+                    } else {
+                        cursor
+                    };
                     let value = self.ta_indexed_element_get(ta, index as f64);
                     let result = self.run_callback(
                         code,
@@ -1029,14 +1039,14 @@ impl Interp {
                         &[value, Slot::integer(index as i32), this],
                     )?;
                     if self.truthy(&result) {
-                        return Ok(if operation == 3 {
+                        return Ok(if wants_value {
                             value
                         } else {
                             Slot::integer(index as i32)
                         });
                     }
                 }
-                Ok(if operation == 3 {
+                Ok(if wants_value {
                     Slot::undefined()
                 } else {
                     Slot::integer(-1)
