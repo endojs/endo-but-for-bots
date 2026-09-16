@@ -1016,6 +1016,22 @@ jobs:
         # two corpus gates inside `timeout-minutes: 30`.
         run: node packages/daemon/scripts/bundle-bus-worker-xs-ses-boot.mjs
 
+      - name: Generate the SES shim and prelude the realm-profile tests read
+        # Same trap as the bundle above, two more artifacts. `dist-ironhorse/
+        # boot.js` and `test262-runner/prelude/ironhorse.js` are both build
+        # output, so on a bare checkout `ses_boot_intrinsics.rs` and
+        # `ses_prelude_reach.rs` return early and report a green pass that
+        # measured nothing. They are generated here, and the test step below
+        # sets the matching *_REQUIRED vars so a missing one is red.
+        #
+        # This lane rather than `test-ironhorse`: that job is a 3-way matrix
+        # (debug, release, macos), so a Node toolchain and `yarn install`
+        # there would be paid three times, once on a macOS runner. This job
+        # already has both, and already builds the workspace.
+        run: |
+          corepack yarn workspace @endo/thixotrope build:ironhorse-bundles
+          corepack yarn workspace @endo/test262-runner build
+
       - name: Cache Cargo + targets
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -1055,6 +1071,17 @@ jobs:
           # Assert rather than skip: the bundle was generated above.
           IRONHORSE_SES_BOOT_REQUIRED: '1'
         run: cargo test --locked -p ironhorse-compile -p ironhorse-regexp -p ironhorse-262 -p ironhorse-fuzz --features ironhorse-compile/parity,ironhorse-regexp/parity
+      - name: Test the SES realm profiles and prelude reach (artifacts above)
+        working-directory: rust/engine
+        # The only lane where these two run rather than skip. Carries the same
+        # parity features as the step above so both share one build of the
+        # crates they have in common.
+        env:
+          RUST_MIN_STACK: '33554432'
+          # Assert rather than skip: both artifacts were generated above.
+          IRONHORSE_SES_SHIM_REQUIRED: '1'
+          IRONHORSE_SES_PRELUDE_REQUIRED: '1'
+        run: cargo test --locked -p ironhorse-vm --test ses_boot_intrinsics --test ses_prelude_reach --features ironhorse-compile/parity,ironhorse-regexp/parity
       - name: Gate the committed try/catch expectation slice
         working-directory: rust/engine
         env:
