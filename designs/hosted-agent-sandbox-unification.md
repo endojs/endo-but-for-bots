@@ -954,20 +954,9 @@ state, and the MCP socket directory. Only the third is a real obstacle.
 `kind: 'attach'` with nothing to build — this is where the shared projection
 helper pays off.
 
-**The CLI's native state** can be `kind: 'volume'`, exactly as Codex's
-`codex-state` is. It is worth being precise about why, because the obvious
-reading of the constraint is wrong: OpenCode forces SQLite WAL and so its state
-*"must not run on 9P/FUSE"*, and both adapters use the same host-directory
-provider (`@endo/hosted-agent/session-state-storage.js`) — Claude is not in a
-different position here. But that constraint rules out one of the two
-attestable kinds, not both. A Podman named volume is a plain local filesystem;
-WAL works on it. The cost is real and should be stated rather than discovered:
-`assertPolicyMount` requires `sizeBytes` on a volume row and the attestation
-reads the quota back from the kernel — refusing a volume backed by a host path,
-so a directory cannot masquerade as one — which means genuine XFS project
-quotas for both adapters and one project ID per session against a
-host-lifetime budget. Against that, these two adapters bound their state bytes
-by nothing at all today.
+**The CLI's native state** is the subject of its own section below. The short
+version: the question is not which mount kind carries it, but whether it should
+be durable at all.
 
 **The MCP socket directory** is the obstacle. The guest connects to a unix
 socket the worker serves and runs a small stdio bridge script beside it, both
@@ -981,12 +970,12 @@ Two ways out, and the choice is not obvious:
 
 1. **A third mount kind: a host bind**, attested as what it is — a bind of a
    host path, at a declared destination, in a declared mode, with `nosuid` and
-   `nodev` — making no projection claim. That is strictly more than these
-   adapters attest today, which is nothing, and it keeps `attach` meaningful
-   rather than diluting it into "some bind we did". If this is taken, the
-   sub-decision is whether such a bind may name any host path or only one under
-   a root the adapter's profile declares; the second is what makes the row
-   worth attesting, and is the shape the runtime-attach registrar already has.
+   `nodev` — making no projection claim. If this is taken, the sub-decision is
+   whether such a bind may name any host path or only one under a root the
+   adapter's profile declares. Note that *Session state storage* below removes
+   the other reason to want this kind, so taking it here would be for the MCP
+   row alone — one row, in two adapters, to justify a kind that attests
+   nothing.
 2. **Delete the row.** Both slices already `network: 'join'` the broker
    sidecar's namespace, and the CLI already reaches the provider over a
    loopback endpoint inside it. An MCP listener on loopback there needs no bind
@@ -1046,6 +1035,91 @@ file tools, the guest's workspace capability, and the publisher all read. The
 state volume keeps its quota, so the unbounded surface is the same one Claude
 and OpenCode already have, and `writableBytes` must stop claiming a workspace
 ceiling it no longer enforces rather than attesting a number nothing bounds.
+
+### Session state storage — open, 2026-09-16
+
+Step 4 stalled on which attested mount kind carries the CLI's native state.
+That was the wrong question. The right one is whether that state should be
+durable at all, and the answer turns on facts about the pinned fork rather than
+about mount policy.
+
+**What the store is.** OpenCode's adapter sets `XDG_DATA_HOME=/opencode-state`
+and binds a host directory there read-write. `Global.Path` in the fork
+(`packages/core/src/global.ts`) resolves that to `$XDG_DATA_HOME/opencode`,
+holding `opencode.db` with its `-wal` and `-shm` files, plus `log/` and
+`repos/`. Nothing else durable lives there: `state`, `cache` and `tmp` come
+from `XDG_STATE_HOME`, `XDG_CACHE_HOME` and `os.tmpdir()`, none of which the
+adapter sets, so they already fall back under `HOME=/tmp/opencode-home` — which
+is tmpfs. Claude is the same shape with a JSONL transcript at `/claude-config`.
+
+**Why it is durable.** Not because SQLite requires it. Because the adapter
+declares `continuity: 'transcript'`, which promotes the CLI's internal store
+into the conversation's record of truth, and because the backend factory
+persists `opencodeSessionId` and hands it back on revival — *"the persisted
+opencode session id to resume when this client revives"*. Cross-incarnation
+resume works today and would be lost if the store became ephemeral. Since this
+deployment restarts the daemon on every deploy, "incarnation" is not a rare
+boundary.
+
+**What the fork already allows, with no patch.** `Database.path()`
+(`packages/core/src/database/database.ts`) honours an `OPENCODE_DB` environment
+variable: `:memory:`, or any absolute path, before falling back to
+`$XDG_DATA_HOME`. So relocating the database onto tmpfs — or out of the
+filesystem entirely — is a configuration change, not a fork change. tmpfs
+implements `mmap` and `fcntl` locking, so WAL is correct there; this also
+disposes of the 9P/WAL discussion, which was never about the workspace mount to
+begin with.
+
+**What the fork does not allow.** The session route group
+(`server/routes/instance/httpapi/groups/session.ts`) exposes `create`,
+`messages`/`message` (GET), `prompt`/`promptAsync`, `command`, `shell`, `fork`,
+`revert`/`unrevert`, `summarize`, `abort`, `deleteMessage`, `deletePart` and
+`updatePart`. There is no endpoint that appends a historical message. So Floot
+cannot rebuild a prior conversation into a fresh session through the API, and
+`fork` cannot help because it forks a session the database no longer holds.
+
+**The security property at stake.** Durable state the guest can write is
+durable state the guest can attack later. The adapter's own design already
+names it (`packages/opencode-sandbox/DESIGN.md`): a compromised turn can plant
+instructions, tool results, or a captured token that later incarnations replay
+*after credential rotation*. Rotation is meant to be a recovery action; replay
+defeats it. Judge each option against that, not against mount aesthetics.
+
+| | Continuity | Replay threat | Mount table | Fork change |
+|---|---|---|---|---|
+| **A** ephemeral DB | within one incarnation | eliminated | row deleted | none |
+| **B** ephemeral + history as one prompt | preserved, unstructured | eliminated | row deleted | none |
+| **C** durable host bind (status quo) | preserved | retained | needs a host-bind kind | none |
+| **D** durable in the harness, imported on start | preserved, structured | moved to where it can be checked | row deleted | an import endpoint |
+| **E** tmpfs DB, harness snapshots it | preserved | retained but inspectable | row deleted | none |
+
+**A** is the strongest security answer and the cheapest to build — one
+environment variable and a deleted mount — and it costs a conversation on every
+deploy. **B** buys continuity back without a fork change but sends the history
+as a single prompt, losing role and tool-call structure, which for a
+tool-calling agent is a real regression. **C** is what exists, and it is the
+only option that requires inventing a mount kind that attests nothing.
+
+**D is the principled end state**, and it is where this design was already
+heading: the adapter's milestone 4 lists *"resume bounds, a ledger/provenance
+check or scrub on resume"*, which is exactly what becomes possible once the
+harness — not the guest's filesystem — owns the history and decides what is
+replayed into a fresh session. It is the one option that improves on the status
+quo rather than trading against it. It needs a fork patch, which this project
+prefers to avoid, so it should be taken only if cross-incarnation continuity is
+load-bearing enough to pay for it.
+
+**E** is the compromise that needs no patch: keep the database on tmpfs, have
+the harness copy it out on clean teardown and back in on start. The slice loses
+its durable mount, the bytes become the harness's to bound and inspect, and a
+crash without clean teardown loses the session unless a periodic checkpoint is
+added. It retains the replay threat, but makes it something a check can reach.
+
+**Decision needed:** whether cross-incarnation continuity is load-bearing. If
+it is not, take **A** now — it deletes the row, the state provider, the quota
+question and the threat. If it is, **E** is the no-patch path and **D** is the
+one worth patching for. In all four non-status-quo cases the attested mount
+table needs no host-bind kind, which is what unblocks step 4.
 
 ## Protection and limit justification
 
