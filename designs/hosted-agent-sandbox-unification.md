@@ -1262,8 +1262,10 @@ around a verbatim Anthropic API message. A field this writer omits is a field
 Claude Code did not need; an extra one is ignored. A transcript that is
 slightly wrong still loads, and the conformance suite catches the rest.
 
-**OpenCode's store is decoded, strictly.** `session_message.data` is JSON
-decoded through effect-schema structs — `Session.Message.User`,
+**OpenCode's store is derived, then decoded strictly.** Its rows are
+projections of a durable event log, so writing them directly desynchronizes the
+projection from the log it comes from. Even setting that aside,
+`session_message.data` is JSON decoded through effect-schema structs — `Session.Message.User`,
 `Session.Message.Assistant.Tool`, a `ToolState` tagged union, ids shaped
 `msg_…`, timestamps as `DateTimeUtcFromMillis` — and a row that does not match
 is a decode error, not a lenient read. The codebase names such failures
@@ -1285,19 +1287,41 @@ because an endpoint inside opencode builds these rows with opencode's own
 schema code, which is the only thing that can be right by construction. And it
 is why Codex's answer cannot be "write the store" at all.
 
-**The OpenCode patch, specified.** Add one route to the session group
-(`packages/opencode/src/server/routes/instance/httpapi/groups/session.ts`):
+**The OpenCode patch, specified against the source.** The first draft of this
+said "insert rows into `session_message`". Reading `session/projector.ts`
+shows that is wrong twice over, and the correction is the whole point of the
+rule above.
 
-- `POST /session/:sessionID/messages/import`, payload an array of
-  `Session.Message` values plus their parts, decoded by the same schemas the
-  server already uses for its own writes.
-- It appends at the session's current `seq`, refuses a session that already has
-  messages, and accepts a `compaction`-typed message so the context boundary
-  survives — without it a restored conversation puts its whole pre-compaction
-  history back into live context.
-- The adapter then creates a session through the existing `POST /session`,
-  imports, and prompts; `OPENCODE_DB` moves to `:memory:` and the durable state
-  row leaves the mount table.
+A message row is not a record the server writes. It is a **projection of a
+durable event**: `insertMessage` is reached only from
+`SessionMessageUpdater.update`, driven by `events.project(…)`, and it takes its
+`seq` from `event.durable.seq`. Writing rows directly would leave the event log
+and its projection disagreeing — a session whose history exists in the table
+and not in the log it is derived from, which is worse than one that fails to
+load, because it fails later and quietly.
+
+So the import emits events, not rows:
+
+- Add `POST /session/:sessionID/messages/import` to the session group
+  (`server/routes/instance/httpapi/groups/session.ts`) with its handler in
+  `handlers/session.ts`, taking a payload decoded by the schemas the server
+  already uses.
+- The handler appends to the event log through `EventV2`, replaying the
+  vocabulary the projector already understands:
+  `SessionEvent.Prompted` for a user turn, `Text.Started`/`Text.Ended` for
+  assistant text, `Tool.Called` then `Tool.Success` or `Tool.Failed` for a tool
+  call and its result, and the compaction event for the boundary. Each becomes
+  a message through the projector that already exists, with the seq the log
+  assigns — so nothing here reconstructs a schema, and a version that changes
+  those events changes the import with them.
+- It refuses a session that already has messages, so an import can only
+  establish a conversation and never interleave with one.
+- `Session.Interface` gains the matching method, since the handler reaches the
+  service rather than the database.
+
+The adapter then creates a session through the existing `POST /session`,
+imports, and prompts; `OPENCODE_DB` moves to `:memory:` and the durable state
+row leaves the mount table.
 
 **What Codex is left with.** Its protocol admits history only as the next
 turn's input, so a tool call can only arrive as a line describing one. The
