@@ -481,6 +481,18 @@ test('native scopes share one allocator and retain only their own cleanup', asyn
   t.is(await E(service).lookupScope('a'), a);
   t.is(await E(service).lookupScope('missing'), undefined);
   t.is(f.probes(), 0, 'scope acquisition is inert');
+  // A scope offers both paths. `makeResolved` hands the runtime host paths
+  // and asks it to bind them, with nothing proving what it built — which is
+  // why an adapter on it must refuse runtime attaches. `make` takes a policy
+  // and returns a slice whose table is verified against the anchor's own.
+  t.deepEqual(
+    /** @type {string[]} */ (
+      await E(/** @type {any} */ (a)).__getMethodNames__()
+    )
+      .filter(name => !name.startsWith('__'))
+      .sort(),
+    ['close', 'make', 'makeResolved'],
+  );
   await E(a).makeResolved(opts);
   const aFile = f.file();
   await E(b).makeResolved(opts);
