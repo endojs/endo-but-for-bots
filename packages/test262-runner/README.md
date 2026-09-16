@@ -88,6 +88,15 @@ pre-skip every one with a truthful `ses-mode:lockdown-unimplemented`, and exit
 A ratchet needs a real number more than a green tick, so the mode refuses
 instead of reporting a number it did not measure.
 
+`ironhorse-xst` answers to the same principle in the other direction.
+A negative parse-phase case passes when the host prints `SyntaxError` on
+stderr, so reporting every compile failure under that name would let a
+construct Ironhorse has not ported yet — or an exhausted work allowance, or a
+regexp resource ceiling — count as a passing case.
+The host reports those as `InternalError` instead, which fails the case
+honestly, and only the grammar's own early errors claim `SyntaxError`.
+The ratchet can then only go up for something Ironhorse actually does.
+
 ## Test262 subset
 
 The `test262` directory contains

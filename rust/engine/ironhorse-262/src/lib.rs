@@ -75,14 +75,50 @@ fn run_program_with_symbols(bytecode: &[u8], symbols: &[u8]) -> RunOutcome {
 /// ironhorse pass the test", which is what the corpus's own `Test262Error`
 /// assertions already encode.
 ///
-/// `Err` is a compile failure, rendered; `Ok` carries the run outcome, whose
+/// `Err` is the compile failure ITSELF, not a rendered string: the caller has
+/// to know which error name to print, and [`compile_failure_name`] can only
+/// decide that from the kind. `Ok` carries the run outcome, whose
 /// [`Halt::Throw`] renders as `Name: message` -- the shape `eshost` parses
 /// off stderr.
-pub fn run_script_source(source: &str) -> Result<RunOutcome, String> {
+pub fn run_script_source(source: &str) -> Result<RunOutcome, ironhorse_compile::ParseError> {
     let (bytecode, symbols) =
-        ironhorse_compile::compile_atoms_goal(source, ironhorse_compile::Goal::Script, false)
-            .map_err(|e| format!("{e}"))?;
+        ironhorse_compile::compile_atoms_goal(source, ironhorse_compile::Goal::Script, false)?;
     Ok(run_program_with_symbols(&bytecode, &symbols))
+}
+
+/// The error name a compile failure must be reported under.
+///
+/// `SyntaxError` is a CLAIM, not a label: a test262 case carrying
+/// `negative: { phase: parse, type: SyntaxError }` PASSES when the host prints
+/// that name, because `eshost` matches it off stderr. So only a failure that is
+/// really the grammar's early error may use it. A construct we have not ported
+/// (`Unsupported`), an exhausted work allowance (`MeterLimit`, `MeterAbort`) or
+/// a regexp resource ceiling are all engine gaps, and reporting them as
+/// `SyntaxError` would turn each one into a green case and walk the ratchet up
+/// on our own shortfall. They report as `InternalError`, which fails the case
+/// honestly.
+///
+/// The dual-run runner already draws this line (it keys on the kind, and
+/// `ironhorse_negative_ok` only credits a real throw); this is that judgment,
+/// for the plain host.
+pub fn compile_failure_name(error: &ironhorse_compile::ParseError) -> &'static str {
+    use ironhorse_compile::{LexErrorKind, ParseErrorKind};
+    match &error.kind {
+        ParseErrorKind::Syntax => "SyntaxError",
+        // Both say "ironhorse stopped", not "the source is invalid".
+        ParseErrorKind::Unsupported | ParseErrorKind::MeterLimit => "InternalError",
+        ParseErrorKind::Lex(lex) => match lex.kind {
+            // Resource ceilings, not grammar. `RegExpBudgetExceeded`'s own doc
+            // says it is "never a guest SyntaxError".
+            LexErrorKind::MeterLimit
+            | LexErrorKind::RegExpBudgetExceeded
+            | LexErrorKind::RegExpResourceLimit
+            | LexErrorKind::Overflow => "InternalError",
+            // Every other lex kind IS the grammar rejecting the source: an
+            // unterminated string, a bad escape, a strict-mode octal.
+            _ => "SyntaxError",
+        },
+    }
 }
 
 pub mod compile_diff;
