@@ -58,13 +58,17 @@ export const makeWorkerSessionRecords = ({
   const resourceInstances = new Map();
   /** @type {Map<string, any>} workerId -> ResumedSession controls */
   const resumedByWorkerId = new Map();
-  // This is an explicit host restart-abort obligation, not a correction to GC.
-  // A guest's result promise does not retain the producer's host promise or
-  // its reaction closures. If the host drops an unresolved promise, its reaction
-  // and guest resolver presence can all collect legitimately. Durable slot
-  // descriptions alone do not retain that presence or its hub route.
-  // Keep the resolver route until settlement so restart can still reject the
-  // abandoned answer. This does not retain or revive the host computation.
+  // Local unreachability is the wrong test here. An unrooted host promise,
+  // such as a resource method returning `new Promise(() => {})`, leaves no
+  // reaction holding the guest's resolver, so the weak import table collects
+  // it. That collection is not a local event: the FinalizationRegistry fires
+  // `slotCollected`, which sends op:gc-exports, and the guest retires the
+  // very position `pendingResolvers` recorded. Nothing in this heap holds
+  // the resolver, but the guest awaiting that answer lives in a heap that
+  // outlives this process, so local reachability does not bound the
+  // obligation. Pin the import until settlement and a restart can still
+  // reject the abandoned answer. This retains the route, never the promise
+  // or its computation. test/resource-answer-gc.test.js fails without it.
   /** @type {Map<string, object>} */
   const pendingResolverReferences = new Map();
   /** True while re-seating exports, whose re-fired hooks are echoes. */
