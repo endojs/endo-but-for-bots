@@ -29,6 +29,7 @@
       "test-endo-harden": "./noop.js"
     },
     "./is-noop.js": "./is-noop.js",
+    "./make-hardener.js": "./make-hardener.js",
     "./package.json": "./package.json"
   },
   "scripts": {
