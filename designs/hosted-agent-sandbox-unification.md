@@ -1462,6 +1462,43 @@ of the code's own reasoning about them.
    Neither is scheduled here; both are recorded so the choice is a decision
    rather than an omission.
 
+4. **A session must survive the incarnation that made it.** Restarting the
+   daemon and asking each session to recall its first turn found two adapters
+   that could not start again at all: Codex refused its own volume
+   (`Cannot change ownership of a nonempty session volume` — the ownership
+   literal was the pre-`keep-id` slice identity, and the guard refused to
+   re-own a volume that by definition has data in it), and OpenCode refused
+   its own MCP socket (`MCP socket path already exists` — the bound path
+   outlives the process that bound it, so after any restart it is always
+   there). Both are the same shape as the mount defects above: state a dead
+   incarnation left behind, treated as a stranger's.
+
+5. **The backend dropped the transcript before the client ever saw it.** Both
+   the Claude and OpenCode factories rebuilt the turn's options from named
+   fields — model and persona — so the records this design exists to hand
+   down were discarded one layer above the adapter. `restoreOnce` always saw
+   an empty transcript. Codex spreads its options and was never affected: the
+   two adapters converging onto it each lost the field on the way in.
+
+   **This is also the correction to a result recorded too early.** Claude
+   appeared to restore correctly across three separate restarts. It was
+   remembering out of its own store — the config directory is a host bind
+   that outlives the daemon, so `--continue` found the conversation — which
+   is exactly the behaviour this design set out to replace. The stack's
+   record was not what carried it, and nothing in the observable outcome said
+   so. OpenCode, whose store is now `:memory:`, had no such fallback and is
+   what made the defect visible: asked after a restart what word it had been
+   given, it answered that the conversation had not started.
+
+   Two lessons worth keeping. A conversation that survives is not evidence
+   that it survived *through this stack* — the test has to remove the CLI's
+   own store, which is what the design's "restore on a wiped store" case is
+   for, and it must be the case that runs on every adapter rather than the
+   one that was assumed to be covered. And the OpenCode factory's existing
+   test asserted `deepEqual(opts, { systemPrompt })` — an exact match on the
+   rebuilt record, which encoded the omission as the expected result. A test
+   that pins a whole structure pins its gaps too.
+
 Tests that must exist before each adapter is called done:
 
 - **Round trip.** Journal → neutral stream → native transcript → the CLI
