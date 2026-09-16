@@ -1209,9 +1209,24 @@ test('assertContainerMounts admits a bounded declaration and nothing else', t =>
       /host mountpoint/,
     ],
     [
-      'a destination outside /mnt/',
+      'a destination that shadows a fixed role',
       { ...ATTACH_DECLARED, destination: '/workspace' },
-      /under \/mnt\//,
+      /shadows the "workspace" role/,
+    ],
+    [
+      'a destination inside a fixed role',
+      { ...ATTACH_DECLARED, destination: '/codex-home/config' },
+      /shadows the "codex-state" role/,
+    ],
+    [
+      'a relative destination',
+      { ...ATTACH_DECLARED, destination: 'mnt/project' },
+      /destination must be an absolute normal path/,
+    ],
+    [
+      'a destination with a traversal segment',
+      { ...ATTACH_DECLARED, destination: '/mnt/../etc' },
+      /destination must be an absolute normal path/,
     ],
     ['an unknown mode', { ...ATTACH_DECLARED, mode: 'rwx' }, /mode must be/],
   ];
@@ -1419,17 +1434,21 @@ test('the backend factory attests the declared attaches at the authority handoff
   t.deepEqual(attested?.payload.containerMounts, [
     { key: 'a1', destination: '/mnt/project', mode: 'rw' },
   ]);
-  // A malformed declaration is refused before anything is provisioned.
+  // A malformed declaration is refused before anything is provisioned. An
+  // attach outside `/mnt/` is no longer malformed on its own — `/etc` is a
+  // legal destination now that the rule is non-nesting rather than a prefix
+  // — so the case is the one the prefix rule stood in for: a destination
+  // that would shadow a role the profile fixes.
   await t.throwsAsync(
     () =>
       factory.create(
         harden({
           sessionId: 'session-2',
-          containerMounts: [{ ...ATTACH_DECLARED, destination: '/etc' }],
+          containerMounts: [{ ...ATTACH_DECLARED, destination: '/workspace' }],
         }),
         makeToolSet(),
       ),
-    { message: /under \/mnt\// },
+    { message: /shadows the "workspace" role/ },
   );
 });
 
