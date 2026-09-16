@@ -11,14 +11,14 @@
  * The `tree` is a `SnapshotTree`-shaped eref: `lookup(name | segments)`
  * resolves to a `SnapshotBlob` (a file) or a sub-`SnapshotTree` (a directory).
  * This is the surface `E(mount).snapshot()` / `checkin` produce
- * (`SnapshotBlobInterface` = `streamBase64` / `text` / `json` / `getInfo` /
+ * (`SnapshotBlobInterface` = `stream` / `text` / `json` / `getInfo` /
  * `sha256`; `SnapshotTreeInterface` = `has` / `list` / `lookup` / `getInfo` /
- * `sha256`). A leaf's bytes are read by driving its `streamBase64` responder
+ * `sha256`). A leaf's bytes are read by driving its `stream` responder
  * through `iterateBytesReader`; its size and content hash come from
  * `getInfo()`.
  *
  * Because both blobs and trees expose `getInfo`, a resolved node is confirmed
- * to be a *file* by the presence of `streamBase64` (introspected via
+ * to be a *file* by the presence of `stream` (introspected via
  * `__getMethodNames__`) — never by `getInfo`. A path that resolves to a
  * directory with no readable index is a `404`, never a `200` we cannot fulfil.
  *
@@ -117,24 +117,21 @@ const ifNoneMatchMatches = (headerValue, etag) => {
 
 /**
  * Stream a blob's bytes as an async iterable suitable for an
- * {@link HttpResponse} body, by driving the blob's `streamBase64` responder.
+ * {@link HttpResponse} body, by driving the blob's `stream` responder.
  * The snapshot is immutable and content-addressed, so its size cannot drift
  * between the `getInfo()` stat and this read — the streamed length always
  * matches the advertised `Content-Length`.
  *
- * @param {object} blob  a `SnapshotBlob` eref (`streamBase64`).
+ * @param {object} blob  a `SnapshotBlob` eref (`stream`).
  * @param {bigint} size
  * @returns {AsyncGenerator<Uint8Array>}
  */
 const readBlobBody = async function* readBlobBody(blob, size) {
-  // Accommodate backings that emit the whole payload in one base64 frame;
-  // without this the default 100 KB cap on `M.string()` rejects larger blobs.
-  const stringLengthLimit = Math.max(
-    100_000,
-    Math.ceil((Number(size) * 4) / 3) + 1024,
-  );
+  // Accommodate backings that emit the whole payload in one frame;
+  // without this the default 100 KB cap on `M.byteArray()` rejects larger blobs.
+  const byteLengthLimit = Math.max(100_000, Number(size) + 1024);
   for await (const chunk of iterateBytesReader(/** @type {any} */ (blob), {
-    stringLengthLimit,
+    byteLengthLimit,
   })) {
     yield chunk;
   }
@@ -142,12 +139,12 @@ const readBlobBody = async function* readBlobBody(blob, size) {
 
 /**
  * @param {object} node  a resolved tree node (eref).
- * @returns {Promise<boolean>} whether it is a readable blob (has streamBase64).
+ * @returns {Promise<boolean>} whether it is a readable blob (has stream).
  */
 const isBlob = async node => {
   // eslint-disable-next-line no-underscore-dangle
   const methods = await E(node).__getMethodNames__();
-  return methods.includes('streamBase64');
+  return methods.includes('stream');
 };
 
 /**
@@ -214,7 +211,7 @@ export const makeTreeRequestHandler = ({ tree, index = 'index.html' }) => {
     // Resolve to a readable blob; a directory selects its index. Any failure
     // (missing path, directory with no readable index, index that is itself a
     // directory) is a 404 — we never emit a 200 we cannot fulfil. A file is
-    // confirmed by the presence of `streamBase64`, not `getInfo` (both blobs
+    // confirmed by the presence of `stream`, not `getInfo` (both blobs
     // and trees expose `getInfo`).
     let blob;
     let fileName = pathSegments[pathSegments.length - 1] || index;
