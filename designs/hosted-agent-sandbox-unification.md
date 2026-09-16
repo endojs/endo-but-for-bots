@@ -983,13 +983,35 @@ Two ways out, and the choice is not obvious:
    and no bridge script, and all three adapters converge on `volume`, `attach`
    and `tmpfs` with no new kind at all.
 
-   Feasibility, partly checked. OpenCode's config takes a remote MCP server —
-   `{ type: 'remote', url, headers?, oauth?, timeout? }` in
-   `packages/core/src/config/mcp.ts` — so a loopback URL with a bearer header
-   needs no patch there. **Claude Code's HTTP/SSE MCP support is not yet
-   verified**, and this option depends on it; check before committing to it,
-   because if Claude is stdio-only the bind comes back for one adapter and
-   option 1 returns with it.
+   Feasibility, now checked, and it is **more expensive than it first looks**.
+
+   OpenCode's config does take a remote MCP server — `{ type: 'remote', url,
+   headers?, oauth?, timeout? }` in `packages/core/src/config/mcp.ts` — so a
+   loopback URL with a bearer header needs no patch there, and Claude Code's
+   HTTP/SSE support is assumed pending a Tokyo check. That is not the
+   expensive part.
+
+   The expensive part is *where* a loopback port would have to live. The
+   namespace the slice joins is created by the provider sidecar with
+   `--network=none`, and the only thing already listening in it is
+   `makeProviderHttpListener`, which runs inside the **pinned listener image**
+   (`provider-worker.js`, reached from `provider-worker-entry.js`) and relays
+   to the host worker over inherited stdin/stdout. The MCP bridge holds the
+   session's Endo tool capability and therefore has to stay in the host
+   worker, which is in a different network namespace. So an MCP port in the
+   slice's namespace means:
+
+   - the listener image grows an MCP HTTP endpoint beside its inference one;
+   - a second relay channel over the same stdio transport;
+   - an MCP Streamable-HTTP transport implementation, where today the bridge
+     speaks NDJSON over a unix socket and the guest runs a small stdio shim;
+   - and a bearer token, since the bind is no longer the access control.
+
+   Against that, option 1 is a mount kind and a validator — tens of lines. The
+   comparison that made option 2 look obviously better assumed a port could
+   simply be opened where the slice could reach it; it cannot. **Option 1 is
+   now the cheaper answer, and option 2 is the cleaner end state**, so the
+   choice is a real trade rather than a formality.
 
 **(2) is the recommendation.** An earlier draft of this section objected that
 the sidecar sharing that namespace holds the upstream credential, so a loopback
