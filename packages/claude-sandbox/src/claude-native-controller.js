@@ -37,12 +37,21 @@ import {
   makeDefaultMounter,
   makeWorkspaceProjection,
 } from '@endo/hosted-agent/workspace-projection.js';
+import {
+  HOSTED_SLICE_RESOURCES,
+  sliceWritableBytes,
+} from '@endo/hosted-agent/hosted-agent-policy.js';
 import { M } from '@endo/patterns';
+import { SLICE_POLICY_PROFILE } from '@endo/sandbox/policy.js';
 
 import { ANTHROPIC_ORIGIN, CLAUDE_BROKER_ACCOUNT } from './claude-broker.js';
 import { makeClaudeClient } from './claude-client.js';
 import { CREDENTIAL_ENV_VARS } from './claude-credential-kinds.js';
 import { readClaudeSessionPlan } from './claude-session-plan.js';
+import {
+  assertHostedAgentPolicyV1,
+  hostedPolicyFromSlice,
+} from './claude-hosted-policy.js';
 import { writeClaudeTranscript } from './claude-transcript-writer.js';
 import { makeTranscriptResume } from './claude-transcripts.js';
 import { startMcpSocketServer } from './mcp-socket-server.js';
@@ -260,32 +269,89 @@ export const makeClaudeNativeController = ({
       assertOpen();
       mcp = await startMcp({ socketDir: approved.mcpDir, bridge });
       closeIfStopping();
+      // The attested mount table. The workspace is the 9P projection this
+      // controller just established, so the sandbox can prove the slice sees
+      // a projection rather than host data; the CLI's own home and the MCP
+      // socket directory are binds attested as binds, each held to the
+      // deployment-owned root its session directory sits under. `/tmp` and
+      // `/run` are declared with ceilings rather than left to whatever
+      // `--read-only-tmpfs` gives, which matters because `HOME` is on `/tmp`.
+      const mounts = [
+        {
+          role: 'workspace',
+          kind: /** @type {const} */ ('attach'),
+          source: approved.workspaceMountPoint,
+          destination: WORKSPACE_PATH,
+          mode: /** @type {const} */ ('rw'),
+        },
+        {
+          role: 'claude-state',
+          kind: /** @type {const} */ ('bind'),
+          source: state.directory,
+          destination: CONFIG_PATH,
+          mode: /** @type {const} */ ('rw'),
+        },
+        {
+          role: 'mcp',
+          kind: /** @type {const} */ ('bind'),
+          source: approved.mcpDir,
+          destination: mcp.innerDir,
+          mode: /** @type {const} */ ('ro'),
+        },
+        {
+          role: 'tmp',
+          kind: /** @type {const} */ ('tmpfs'),
+          destination: '/tmp',
+          sizeBytes: 1024n ** 3n,
+        },
+        {
+          role: 'run',
+          kind: /** @type {const} */ ('tmpfs'),
+          destination: '/run',
+          sizeBytes: 256n * 1024n ** 2n,
+        },
+      ];
+      // A public-network session gets the operator's generated nameserver
+      // file as a declared mount, the way Codex does, rather than as a
+      // `generatedFiles` entry the attested table has no row for. The
+      // hosted contract expects this row whenever the policy is
+      // public-internet, so writing the file some other way would leave the
+      // handoff check looking for a mount that is not there.
+      if (publicNetwork) {
+        /** @type {any[]} */ (mounts).unshift({
+          role: /** @type {const} */ ('resolver'),
+          kind: /** @type {const} */ ('resolver'),
+          source: publicNetwork.resolverConfigPath,
+          destination: /** @type {const} */ ('/etc/resolv.conf'),
+          mode: /** @type {const} */ ('ro'),
+        });
+      }
       const options = harden({
         rootfs,
-        mounts: [
-          {
-            hostPath: approved.workspaceMountPoint,
-            innerPath: WORKSPACE_PATH,
-            mode: 'rw',
-          },
-          { hostPath: state.directory, innerPath: CONFIG_PATH, mode: 'rw' },
-          { hostPath: approved.mcpDir, innerPath: mcp.innerDir, mode: 'ro' },
-        ],
-        network: 'join',
-        networkRef: evidence.brokerSidecar.container,
-        backend: 'podman',
-        nativeProfile: approved.nativeProfile,
+        // The policy path derives the namespace from the attested sidecar
+        // rather than being handed a container to join.
+        network: 'broker-only',
         cwd: WORKSPACE_PATH,
-        ...(publicNetwork
-          ? {
-              generatedFiles: [
-                {
-                  innerPath: '/etc/resolv.conf',
-                  contents: `nameserver ${publicNetwork.dnsHost}\n`,
-                },
-              ],
-            }
-          : {}),
+        policy: {
+          profile: SLICE_POLICY_PROFILE,
+          imageDigest: evidence.imageDigest,
+          uid: 1000,
+          gid: 1000,
+          brokerSidecar: { container: evidence.brokerSidecar.container },
+          resources: {
+            ...HOSTED_SLICE_RESOURCES,
+            writableBytes: sliceWritableBytes(mounts),
+          },
+          mounts,
+          // The parents of this session's own directories: the roots this
+          // deployment owns and allocates under. A bind outside them is
+          // refused, which is what makes the row worth attesting.
+          bindRoots: [
+            path.dirname(state.directory),
+            path.dirname(approved.mcpDir),
+          ],
+          attestationArgv: ['/bin/sleep', 'infinity'],
+        },
         env: {
           ...makePublicNetworkEnvironment(publicNetwork),
           // The CLI reaches the listener's loopback endpoint and holds a
@@ -297,7 +363,31 @@ export const makeClaudeNativeController = ({
         },
       });
       assertCopyData(options);
-      const slice = await E(sandboxScope).makeResolved(options);
+      // `make`, not `makeResolved`: the runtime returns a slice only once its
+      // mount table verifies against the anchor's own, which is also what
+      // lets this adapter take runtime attaches it previously had to refuse.
+      const slice = await E(sandboxScope).make(options);
+      // Checked twice. The runtime proved the slice's confinement to itself;
+      // this proves the slice it returned is the one this session was
+      // promised — the hosted contract's controls, this profile's roles, and
+      // no mount the table did not declare. Codex has always done this at its
+      // authority handoff; the other two did not, because they had no
+      // attestation to restate.
+      assertHostedAgentPolicyV1(
+        hostedPolicyFromSlice({
+          attestation: await E(slice).policy(),
+          sessionId: approved.sandboxSessionId,
+          credentialInjection: 'broker-only',
+          brokerTransport: 'loopback-sidecar',
+          executionDomain: 'guest',
+          ...(publicNetwork ? { networkPolicy: 'public-internet' } : {}),
+        }),
+        {
+          imageDigest: evidence.imageDigest,
+          sessionId: approved.sandboxSessionId,
+          ...(publicNetwork ? { networkPolicy: 'public-internet' } : {}),
+        },
+      );
       closeIfStopping();
       const resume = makeResume(state.directory, {
         debug: Boolean(process.env.ENDO_CLAUDE_DEBUG_RESUME),

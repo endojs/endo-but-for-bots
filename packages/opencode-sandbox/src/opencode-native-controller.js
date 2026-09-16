@@ -16,8 +16,20 @@ import {
   makeDefaultMounter,
   makeWorkspaceProjection,
 } from '@endo/hosted-agent/workspace-projection.js';
+import {
+  HOSTED_SLICE_RESOURCES,
+  sliceWritableBytes,
+} from '@endo/hosted-agent/hosted-agent-policy.js';
 import { M } from '@endo/patterns';
+import { SLICE_POLICY_PROFILE } from '@endo/sandbox/policy.js';
 
+import path from 'node:path';
+
+import {
+  STATE_PATH,
+  assertHostedAgentPolicyV1,
+  hostedPolicyFromSlice,
+} from './opencode-hosted-policy.js';
 import { makeOpencodeClient } from './opencode-client.js';
 import { makeOpencodeConfig, parseModelRef } from './opencode-agent-config.js';
 import {
@@ -205,13 +217,37 @@ export const makeOpencodeNativeController = ({
       closeIfStopping();
       await mounter.mount();
       assertOpen();
+      // The attested table. The workspace is the 9P projection this
+      // controller just established; the CLI's own data directory is a bind
+      // rather than a projection because opencode forces SQLite WAL, which
+      // needs a local filesystem.
       const mounts = [
         {
-          hostPath: approved.workspaceMountPoint,
-          innerPath: '/workspace',
-          mode: 'rw',
+          role: 'workspace',
+          kind: /** @type {const} */ ('attach'),
+          source: approved.workspaceMountPoint,
+          destination: '/workspace',
+          mode: /** @type {const} */ ('rw'),
         },
-        { hostPath: state.directory, innerPath: '/opencode-state', mode: 'rw' },
+        {
+          role: 'opencode-state',
+          kind: /** @type {const} */ ('bind'),
+          source: state.directory,
+          destination: STATE_PATH,
+          mode: /** @type {const} */ ('rw'),
+        },
+        {
+          role: 'tmp',
+          kind: /** @type {const} */ ('tmpfs'),
+          destination: '/tmp',
+          sizeBytes: 1024n ** 3n,
+        },
+        {
+          role: 'run',
+          kind: /** @type {const} */ ('tmpfs'),
+          destination: '/run',
+          sizeBytes: 256n * 1024n ** 2n,
+        },
       ];
       const tools = await E(resolver).get('tools');
       assertOpen();
@@ -221,29 +257,55 @@ export const makeOpencodeNativeController = ({
       closeIfStopping();
       await mcp.start();
       assertOpen();
-      mounts.push({
-        hostPath: approved.mcpDir,
-        innerPath: DEFAULT_INNER_DIR,
-        mode: 'ro',
+      // The bridge's socket and its stdio shim. Read-only: the guest connects
+      // to the socket, and nothing it does should replace the shim it runs.
+      /** @type {any[]} */ (mounts).splice(2, 0, {
+        role: 'mcp',
+        kind: /** @type {const} */ ('bind'),
+        source: approved.mcpDir,
+        destination: DEFAULT_INNER_DIR,
+        mode: /** @type {const} */ ('ro'),
       });
+      // A public-network session gets the operator's generated nameserver
+      // file as a declared mount, the way Codex does, rather than as a
+      // `generatedFiles` entry the attested table has no row for. The
+      // hosted contract expects this row whenever the policy is
+      // public-internet, so writing the file some other way would leave the
+      // handoff check looking for a mount that is not there.
+      if (publicNetwork) {
+        /** @type {any[]} */ (mounts).unshift({
+          role: /** @type {const} */ ('resolver'),
+          kind: /** @type {const} */ ('resolver'),
+          source: publicNetwork.resolverConfigPath,
+          destination: /** @type {const} */ ('/etc/resolv.conf'),
+          mode: /** @type {const} */ ('ro'),
+        });
+      }
       const options = harden({
         rootfs,
-        mounts,
-        network: 'join',
-        networkRef: evidence.brokerSidecar.container,
-        backend: 'podman',
-        nativeProfile: approved.nativeProfile,
+        // The policy path derives the namespace from the attested sidecar
+        // rather than being handed a container to join.
+        network: 'broker-only',
         cwd: '/workspace',
-        ...(publicNetwork
-          ? {
-              generatedFiles: [
-                {
-                  innerPath: '/etc/resolv.conf',
-                  contents: `nameserver ${publicNetwork.dnsHost}\n`,
-                },
-              ],
-            }
-          : {}),
+        policy: {
+          profile: SLICE_POLICY_PROFILE,
+          imageDigest: evidence.imageDigest,
+          uid: 1000,
+          gid: 1000,
+          brokerSidecar: { container: evidence.brokerSidecar.container },
+          resources: {
+            ...HOSTED_SLICE_RESOURCES,
+            writableBytes: sliceWritableBytes(mounts),
+          },
+          mounts,
+          // The parents of this session's own directories: the roots this
+          // deployment owns and allocates under.
+          bindRoots: [
+            path.dirname(state.directory),
+            path.dirname(approved.mcpDir),
+          ],
+          attestationArgv: ['/bin/sleep', 'infinity'],
+        },
         env: {
           ...makePublicNetworkEnvironment(publicNetwork),
           OPENROUTER_API_KEY: 'opencode-broker-placeholder',
@@ -281,7 +343,30 @@ export const makeOpencodeNativeController = ({
         },
       });
       assertCopyData(options);
-      const slice = await E(sandboxScope).makeResolved(options);
+      // `make`, not `makeResolved`: the runtime returns a slice only once its
+      // mount table verifies against the anchor's own.
+      const slice = await E(sandboxScope).make(options);
+      // Checked twice. The runtime proved the slice's confinement to itself;
+      // this proves the slice it returned is the one this session was
+      // promised — the hosted contract's controls, this profile's roles, and
+      // no mount the table did not declare. Codex has always done this at its
+      // authority handoff; the other two did not, because they had no
+      // attestation to restate.
+      assertHostedAgentPolicyV1(
+        hostedPolicyFromSlice({
+          attestation: await E(slice).policy(),
+          sessionId: approved.sandboxSessionId,
+          credentialInjection: 'broker-only',
+          brokerTransport: 'loopback-sidecar',
+          executionDomain: 'guest',
+          ...(publicNetwork ? { networkPolicy: 'public-internet' } : {}),
+        }),
+        {
+          imageDigest: evidence.imageDigest,
+          sessionId: approved.sandboxSessionId,
+          ...(publicNetwork ? { networkPolicy: 'public-internet' } : {}),
+        },
+      );
       closeIfStopping();
       client = makeClient({
         sessionId: approved.sessionId,

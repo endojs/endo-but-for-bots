@@ -1,12 +1,16 @@
 // @ts-check
 
 import { Fail } from '@endo/errors';
+import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 
 import { makePodmanDriver } from './drivers/podman.js';
 import { makeSandboxFactoryKit } from './factory.js';
-import { NativeSandboxMakeOptsShape } from './interfaces.js';
+import {
+  NativeSandboxMakeOptsShape,
+  SandboxMakeOptsShape,
+} from './interfaces.js';
 import { makeGeneratedFileStorage } from './generated-file-storage.js';
 import { acquireRuntimeOwnership } from './runtime-ownership.js';
 
@@ -22,6 +26,13 @@ import { acquireRuntimeOwnership } from './runtime-ownership.js';
 
 const NativeScopeInterface = harden(
   M.interface('NativeSandboxScope', {
+    // The attested path. `makeResolved` hands the runtime already-resolved
+    // host paths and asks it to bind them; `make` hands it a policy and asks
+    // it to prove what it built — the mount table verified against the
+    // anchor's own, which is the difference between a slice that claims its
+    // confinement and one that demonstrates it. An adapter on `makeResolved`
+    // also cannot take runtime attaches, because nothing attests them.
+    make: M.call(SandboxMakeOptsShape).returns(M.promise()),
     makeResolved: M.call(NativeSandboxMakeOptsShape).returns(M.promise()),
     close: M.call().returns(M.promise()),
   }),
@@ -32,6 +43,7 @@ const NativeScopeInterface = harden(
  */
 const makeNativeScope = (kit, close) =>
   makeExo('NativeSandboxScope', NativeScopeInterface, {
+    make: opts => E(kit.factory).make(opts),
     makeResolved: opts => kit.makeResolved(opts),
     close,
   });

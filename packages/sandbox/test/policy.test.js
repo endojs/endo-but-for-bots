@@ -78,6 +78,7 @@ const makeRequest = (overrides = {}) =>
         sizeBytes: 1n * GIB,
       }),
     ]),
+    bindRoots: harden([]),
     attestationArgv: harden(['/bin/sleep', 'infinity']),
     ...overrides,
   });
@@ -1388,4 +1389,117 @@ test('an attach attests the hardening the kernel shows, not the one the runtime 
   const attach = attestation.mounts.find(mount => mount.role === 'attach-a1');
   t.deepEqual(attach?.options, ['nodev', 'nosuid']);
   t.false(attach?.options.includes('noexec'));
+});
+
+test('a bind is attested as a bind, and only from a declared root', t => {
+  const bind = harden({
+    role: 'cli-state',
+    kind: 'bind',
+    source: '/var/lib/endo/claude-state/s1',
+    destination: '/claude-config',
+    mode: 'rw',
+  });
+  const request = makeRequest({
+    bindRoots: harden(['/var/lib/endo/claude-state']),
+    mounts: harden([...makeRequest().mounts, bind]),
+  });
+  const policy = assertSlicePolicyRequest(request);
+  t.deepEqual(policy.mounts.at(-1), bind);
+  // A bind claims no projection and adds no local writable storage: the
+  // ceiling the other mounts sum to is unchanged by it.
+  t.is(policy.resources.writableBytes, request.resources.writableBytes);
+
+  // The root is what makes the row worth attesting. Without it a table could
+  // say "and also this", for any host path, with the attestation agreeing.
+  t.throws(
+    () =>
+      assertSlicePolicyRequest(
+        makeRequest({
+          bindRoots: harden(['/var/lib/endo/claude-state']),
+          mounts: harden([
+            ...makeRequest().mounts,
+            { ...bind, source: '/etc/shadow' },
+          ]),
+        }),
+      ),
+    { message: /outside every declared bind root/ },
+  );
+  t.throws(
+    () =>
+      assertSlicePolicyRequest(
+        makeRequest({
+          bindRoots: harden([]),
+          mounts: harden([...makeRequest().mounts, bind]),
+        }),
+      ),
+    { message: /outside every declared bind root/ },
+  );
+  // A sibling whose name merely starts with the root is not under it.
+  t.throws(
+    () =>
+      assertSlicePolicyRequest(
+        makeRequest({
+          bindRoots: harden(['/var/lib/endo/claude']),
+          mounts: harden([...makeRequest().mounts, bind]),
+        }),
+      ),
+    { message: /outside every declared bind root/ },
+  );
+});
+
+test('a bind obeys the same shape and non-nesting rules as every other mount', t => {
+  const base = makeRequest().mounts;
+  const bind = harden({
+    role: 'cli-state',
+    kind: 'bind',
+    source: '/srv/state/s1',
+    destination: '/config',
+    mode: 'rw',
+  });
+  const withBind = overrides =>
+    makeRequest({
+      bindRoots: harden(['/srv/state']),
+      mounts: harden([...base, { ...bind, ...overrides }]),
+    });
+  t.throws(() => assertSlicePolicyRequest(withBind({ mode: 'rwx' })), {
+    message: /mode must be/,
+  });
+  t.throws(() => assertSlicePolicyRequest(withBind({ source: 'srv/state' })), {
+    message: /absolute normal host mountpoint/,
+  });
+  t.throws(
+    () => assertSlicePolicyRequest(withBind({ destination: '/workspace/in' })),
+    { message: /nests with/ },
+  );
+  t.throws(
+    () =>
+      assertSlicePolicyRequest(
+        makeRequest({
+          bindRoots: harden(['/srv/state']),
+          mounts: harden([
+            ...base,
+            bind,
+            { ...bind, role: 'cli-cache', destination: '/other' },
+          ]),
+        }),
+      ),
+    { message: /mounted twice/ },
+  );
+  t.throws(
+    () =>
+      assertSlicePolicyRequest(
+        makeRequest({ bindRoots: 'srv', mounts: harden([...base, bind]) }),
+      ),
+    { message: /bindRoots must be an array/ },
+  );
+  t.throws(
+    () =>
+      assertSlicePolicyRequest(
+        makeRequest({
+          bindRoots: harden(['srv/state']),
+          mounts: harden([...base, bind]),
+        }),
+      ),
+    { message: /bind root must be an absolute normal path/ },
+  );
 });

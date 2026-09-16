@@ -1860,6 +1860,7 @@ const makeLivePolicy = async sidecarName => {
         sizeBytes: 16n * mib,
       }),
     ]),
+    bindRoots: harden([]),
     attestationArgv: harden(['/bin/sleep', '600']),
   });
   return harden({ policy, ref });

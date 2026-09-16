@@ -44,6 +44,57 @@ export const HOSTED_AGENT_POLICY_V1 = harden({
 });
 harden(HOSTED_AGENT_POLICY_V1);
 
+const GiB = 1024n ** 3n;
+const MiB = 1024n ** 2n;
+
+/**
+ * The slice resource profile every hosted adapter runs under.
+ *
+ * One policy anchor and one admitted operation have independent cgroups, so
+ * each reserves half the aggregate memory, PID and CPU budget — which is why
+ * the attested `limits` are these doubled, and why an adapter cannot pick its
+ * own numbers without the hosted contract noticing.
+ *
+ * `writableBytes` is deliberately absent: it is not a profile constant but a
+ * sum over the mount table, and `sliceWritableBytes` computes it.
+ */
+export const HOSTED_SLICE_RESOURCES = harden({
+  memoryBytes: 2n * GiB,
+  pids: 256,
+  cpuCores: 2,
+  openFiles: 4096,
+  coreBytes: 0n,
+  shmBytes: 64n * MiB,
+  maxConcurrentOperations: 1,
+});
+harden(HOSTED_SLICE_RESOURCES);
+
+/**
+ * What a slice can actually write, summed over what it was given.
+ *
+ * A tmpfs counts twice because the anchor and an admitted operation each get
+ * one; shm likewise. A volume counts once — it is shared. An `attach` or a
+ * `bind` counts for nothing: those bytes belong to a capability or to the
+ * host, which bounds them where they live, and attesting a ceiling here would
+ * attest one nothing enforces.
+ *
+ * The attestation recomputes this from the table it observed, so a number that
+ * disagrees is refused rather than believed.
+ *
+ * @param {readonly {kind: string, sizeBytes?: bigint}[]} mounts
+ * @param {bigint} [shmBytes]
+ */
+export const sliceWritableBytes = (
+  mounts,
+  shmBytes = HOSTED_SLICE_RESOURCES.shmBytes,
+) =>
+  mounts.reduce(
+    (sum, mount) =>
+      sum + (mount.sizeBytes ?? 0n) * (mount.kind === 'tmpfs' ? 2n : 1n),
+    2n * shmBytes,
+  );
+harden(sliceWritableBytes);
+
 /**
  * The key a declared runtime attach is known by. It names the attach's row
  * in the attested table (`attach:<key>`) and its mount role
@@ -448,10 +499,83 @@ export const makeHostedAgentPolicyVerifier = profile => {
   };
   harden(assertHostedAgentPolicyV1);
 
+  /**
+   * Restate a slice's own attestation as this profile's hosted policy, so it
+   * can be checked a second time at the authority handoff.
+   *
+   * The slice proves its confinement to the runtime. This proves the same
+   * slice is the one this session was promised: the same controls, this
+   * session's roles, and limits that are the per-cgroup halves the runtime
+   * reported, doubled — one cgroup for the policy anchor and one for an
+   * admitted operation.
+   *
+   * Sources are renamed by role rather than carried across. A durable role
+   * becomes `<role>:<sessionId>` and an attach becomes `attach:<key>`, so the
+   * hosted record holds no host path: where the bytes sit is the host's
+   * business, and the role is what an audit entry refers to.
+   *
+   * @param {object} input
+   * @param {any} input.attestation The slice's `policy()`.
+   * @param {string} input.sessionId
+   * @param {string} input.credentialInjection From the broker's evidence.
+   * @param {string} input.brokerTransport From the broker's evidence.
+   * @param {string} input.executionDomain From runtime verification.
+   * @param {string} [input.networkPolicy]
+   */
+  const hostedPolicyFromSlice = ({
+    attestation,
+    sessionId,
+    credentialInjection,
+    brokerTransport,
+    executionDomain,
+    networkPolicy,
+  }) => {
+    const { limits, mounts } = attestation;
+    const controls = Object.fromEntries(
+      Object.entries(attestation).filter(
+        ([key]) => !['version', 'profile', 'limits', 'mounts'].includes(key),
+      ),
+    );
+    const durable = new Set(
+      fixedMounts
+        .filter(mount => mount.kind === 'session')
+        .map(mount => mount.role),
+    );
+    return harden({
+      ...controls,
+      version: HOSTED_AGENT_POLICY_V1.version,
+      sessionId,
+      ...(networkPolicy ? { networkPolicy } : {}),
+      credentialInjection,
+      brokerTransport,
+      executionDomain,
+      limits: {
+        memoryBytes: Number(limits.memoryBytes * 2n),
+        pids: limits.pids * 2,
+        cpuCores: limits.cpuCores * 2,
+        openFiles: limits.openFiles,
+        coreBytes: Number(limits.coreBytes),
+        writableBytes: Number(limits.writableBytes),
+      },
+      mounts: mounts.map((/** @type {any} */ mount) => ({
+        ...mount,
+        source: durable.has(mount.role)
+          ? `${mount.role}:${sessionId}`
+          : mount.role === 'resolver'
+            ? 'resolver:public'
+            : mount.role.startsWith('attach-')
+              ? `attach:${mount.role.slice('attach-'.length)}`
+              : mount.source,
+      })),
+    });
+  };
+  harden(hostedPolicyFromSlice);
+
   return harden({
     fixedMounts,
     assertContainerMounts,
     assertHostedAgentPolicyV1,
+    hostedPolicyFromSlice,
   });
 };
 harden(makeHostedAgentPolicyVerifier);

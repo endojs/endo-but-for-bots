@@ -366,6 +366,7 @@ const stubPolicyRequest = harden({
       sizeBytes: 1024n * 1024n,
     }),
   ]),
+  bindRoots: harden([]),
   attestationArgv: harden(['/bin/sleep', 'infinity']),
 });
 

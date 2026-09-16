@@ -1250,11 +1250,97 @@ starts — not an import API, which none of the three offers.
   the preamble and the arbitrary bound both go — and its restoration is
   honestly marked as prepended rather than reconstructed.
 
+### Writing a CLI's store: why one adapter can and two cannot — 2026-09-16
+
+Claude's restoration is written and its round trip is proved. The obvious next
+move is the same trick for the other two, and the schemas are readable, so it
+looks like a matter of effort. It is not. The difference is how each store is
+*read back*, and it decides which adapter the stack may write for.
+
+**Claude's transcript is a log, read leniently.** Each line is an envelope
+around a verbatim Anthropic API message. A field this writer omits is a field
+Claude Code did not need; an extra one is ignored. A transcript that is
+slightly wrong still loads, and the conformance suite catches the rest.
+
+**OpenCode's store is derived, then decoded strictly.** Its rows are
+projections of a durable event log, so writing them directly desynchronizes the
+projection from the log it comes from. Even setting that aside,
+`session_message.data` is JSON decoded through effect-schema structs — `Session.Message.User`,
+`Session.Message.Assistant.Tool`, a `ToolState` tagged union, ids shaped
+`msg_…`, timestamps as `DateTimeUtcFromMillis` — and a row that does not match
+is a decode error, not a lenient read. The codebase names such failures
+(`ContextSnapshotDecodeError`). So a transcript written from the outside is
+correct only if every struct is reconstructed exactly, and the failure mode for
+getting one field wrong is a session that will not load at all. There is also
+migration state: `DatabaseMigration.apply` runs at every open, so a database
+this stack created rather than opencode is a database opencode will try to
+migrate.
+
+**Codex is the same, with no fork.** `thread_history_1.sqlite` is a versioned
+schema inside a stock `@openai/codex` binary, and nothing in this project can
+read its decoder, let alone patch it.
+
+So the rule that falls out is: **the stack may write a store it can read back
+leniently, and must go through the CLI's own encoder otherwise.** That is why
+OpenCode's answer is the fork patch — not because a patch is easier, but
+because an endpoint inside opencode builds these rows with opencode's own
+schema code, which is the only thing that can be right by construction. And it
+is why Codex's answer cannot be "write the store" at all.
+
+**The OpenCode patch, specified against the source.** The first draft of this
+said "insert rows into `session_message`". Reading `session/projector.ts`
+shows that is wrong twice over, and the correction is the whole point of the
+rule above.
+
+A message row is not a record the server writes. It is a **projection of a
+durable event**: `insertMessage` is reached only from
+`SessionMessageUpdater.update`, driven by `events.project(…)`, and it takes its
+`seq` from `event.durable.seq`. Writing rows directly would leave the event log
+and its projection disagreeing — a session whose history exists in the table
+and not in the log it is derived from, which is worse than one that fails to
+load, because it fails later and quietly.
+
+So the import emits events, not rows:
+
+- Add `POST /session/:sessionID/messages/import` to the session group
+  (`server/routes/instance/httpapi/groups/session.ts`) with its handler in
+  `handlers/session.ts`, taking a payload decoded by the schemas the server
+  already uses.
+- The handler appends to the event log through `EventV2`, replaying the
+  vocabulary the projector already understands:
+  `SessionEvent.Prompted` for a user turn, `Text.Started`/`Text.Ended` for
+  assistant text, `Tool.Called` then `Tool.Success` or `Tool.Failed` for a tool
+  call and its result, and the compaction event for the boundary. Each becomes
+  a message through the projector that already exists, with the seq the log
+  assigns — so nothing here reconstructs a schema, and a version that changes
+  those events changes the import with them.
+- It refuses a session that already has messages, so an import can only
+  establish a conversation and never interleave with one.
+- `Session.Interface` gains the matching method, since the handler reaches the
+  service rather than the database.
+
+The adapter then creates a session through the existing `POST /session`,
+imports, and prompts; `OPENCODE_DB` moves to `:memory:` and the durable state
+row leaves the mount table.
+
+**What Codex is left with.** Its protocol admits history only as the next
+turn's input, so a tool call can only arrive as a line describing one. The
+preamble and the bounds are gone, which is everything its protocol allows.
+Making it faithful needs either an upstream `codex` able to import a thread, or
+a decision to reverse-engineer a vendor's private schema — a different kind of
+risk from the one accepted for Claude's JSONL, and one this design does not
+take on its own authority.
+
 ### Step 4 order and tests — 2026-09-16
 
-1. **Verify Claude Code's HTTP/SSE MCP support on Tokyo.** It gates the MCP
-   row: OpenCode's `{ type: 'remote', url, headers }` is confirmed, Claude's is
-   assumed. Assume it works, but prove it before the bind is deleted.
+1. **Done — verified on Tokyo, 2026-09-16.** The pinned
+   `localhost/claude-code` image's own help documents
+   `claude mcp add --transport http <name> <url> --header "Authorization:
+   Bearer ..."`, so both CLIs can take a loopback MCP endpoint with a bearer
+   header. That removes the CLI-side doubt from option 2 below. It is not what
+   makes option 2 expensive — the listener image is — so the decision recorded
+   there stands, and this is the gate that would otherwise have to be reopened
+   if it is ever revisited.
 2. **Record compaction boundaries in Floot's journal**, and define the neutral
    record stream. Nothing downstream is faithful until this exists.
 3. **Claude restoration** — write the JSONL from the record stream, drop the
@@ -1263,10 +1349,17 @@ starts — not an import API, which none of the three offers.
    it proves the record stream against a real CLI soonest.
 4. **Codex** — drop the preamble and the bound now; decide separately whether
    to write `thread_history_1.sqlite` or accept prepended history.
-5. **OpenCode restoration** — fork patch, then `OPENCODE_DB=:memory:`, then
-   delete the `opencodeSessionId` resume path and its unhandled not-found case.
-6. **MCP onto loopback** with a bearer token; delete the bind, the stdio bridge
-   script and the MCP directory.
+5. **Open — the only step not landed, and it is in another repository.**
+   OpenCode restoration needs the import route specified above written in
+   `kumavis/opencode` and the image rebuilt; then `OPENCODE_DB=:memory:`, and
+   the `opencodeSessionId` resume path and its unhandled not-found case go.
+   Until then OpenCode's state stays a durable bind — attested, but still the
+   guest's store rather than the stack's record.
+6. **Answered by option 1 instead.** The cost check found a loopback port
+   would have to live in the pinned listener image and relay over its stdio
+   transport, so `@endo/sandbox` gained the `bind` kind and the MCP row is
+   attested as the host bind it is. Option 2 stays the cleaner end state and
+   is now unblocked on both CLIs; it is not scheduled.
 7. **Claude and OpenCode onto the attested policy**, which is also what gives
    them runtime attaches.
 
@@ -1479,10 +1572,22 @@ landed:
    provider retires its workspace volume in place rather than reusing its
    project ID. For Claude and OpenCode the same move is step 4's work, since
    they do not yet declare an attested table at all.
-4. **Open, and blocked on one decision — about MCP, not about storage.**
-   Claude and OpenCode off `makeResolved` onto the attested policy, which is
-   also what enables runtime attaches for them. See *What step 4 needs first*
-   below.
+4. **Landed.** `@endo/sandbox` gained the `bind` kind (option 1 below, which
+   the cost check made the cheaper answer) and offers `make` on a native
+   scope; Claude and OpenCode declare their fixed mount tables, bind the
+   shared verifier, and build their slices through the policy path. All three
+   adapters now call one API, declare tables in one vocabulary, and are
+   checked by one verifier; `makeResolved` has no hosted caller left.
+
+   Two consequences to carry into the deploy. The namespace now comes from the
+   attested sidecar rather than a container joined by name, and the operator's
+   per-adapter `nativeProfile` no longer selects a slice's limits — all three
+   run `HOSTED_SLICE_RESOURCES`, which is what makes the contract comparable
+   rather than three contracts sharing a name. The recorded profile is still
+   parsed and still validated; it simply no longer reaches the runtime.
+
+   What no unit test can settle is whether the attestation passes against a
+   live kernel. That is the deploy's job, and the first thing to check.
 Converge Podman and listener launch paths, runtime ownership, and cleanup.
 Move generic public egress to the shared service.
 Make OpenCode's public mode retain brokered inference and enforce the advertised
