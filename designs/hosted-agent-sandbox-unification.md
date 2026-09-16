@@ -1583,16 +1583,32 @@ nothing — afterwards `thread_items` held the `userMessage` and the
 `agentMessage`, and the cursor had advanced to the end of the file.
 
 So restoring Codex needs no SQLite writing, no schema agreement, and no byte
-offsets of our own: write the rollout and let Codex project it. What remains
-is format fidelity of a rollout this stack synthesizes, which is the same
-class of problem as `claude-transcript-writer.js` and is bounded by a format
-the file documents — not the private-schema coupling this design rejected for
-OpenCode.
+offsets of our own: write the rollout and let Codex project it.
 
-This does not replace `thread/inject_items`, which stays the mechanism for
-adding to a thread that is already live. It does mean Codex has a
-write-then-resume path for a session with no thread yet, and that the two
-adapters with a durable store now restore the same way.
+**It is still not the better path, and the comparison is not the one it first
+appears to be.** There is no case in this design of adding to a thread that
+is already live: `inject_items` runs only when `readLatestTurnId()` is null,
+Claude restores only into an empty store, and OpenCode's import route refuses
+a session that has messages. All three restore into an empty conversation and
+nothing else, because editing a conversation underneath the model holding it
+is the hazard this design was built to avoid. The two mechanisms therefore do
+the same single job, and differ only in what they cost:
+
+| | `thread/inject_items` | writing a rollout |
+| --- | --- | --- |
+| when | after boot, over RPC | before boot, into the volume |
+| needs | the method, present in stock 0.152.0 | nothing |
+| format | Responses API items — public and stable | Codex's own rollout envelope |
+
+The format row decides it. `inject_items` takes a public, documented format;
+a rollout couples this stack to a private one, which is the coupling this
+design rejected for OpenCode's SQLite and should not adopt here for less
+reason. The rollout's one advantage is needing no method, and the pinned
+image has the method.
+
+So this is recorded as a fallback that exists, not a plan: if a future image
+ever drops `inject_items`, Codex can still be restored by writing its store,
+and the projection experiment above is the evidence that it would work.
 
 **Verified on the deploy, 2026-09-16.** A session is given a word, the daemon
 is restarted, and the session is asked for the word back. OpenCode answers it
