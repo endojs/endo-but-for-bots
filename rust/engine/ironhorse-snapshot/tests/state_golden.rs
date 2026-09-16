@@ -29,6 +29,46 @@ fn platform_signature(sig: &Signature) -> Signature {
     Signature::decode(&encoded).unwrap()
 }
 
+/// A historical format / meter stamp, as a way of asking what identity the
+/// CURRENT heap encodes under it. These controls describe today's heap under
+/// yesterday's markers; they are not reconstructions of historical bytes.
+#[derive(Clone, Copy)]
+enum Marker {
+    Format16,
+    Format19,
+    Format20,
+    Format21,
+    Meter4Format16,
+}
+
+/// The digest `marker` stamps onto `machine`'s heap — the compute half of the
+/// `assert_*_bytes` pairs below, split out so
+/// [`regenerate_persistence_identities`] writes exactly what they read. One
+/// definition, so a regenerated fixture cannot drift from its assertion.
+fn marker_bytes(machine: &Interp, sig: &Signature, marker: Marker) -> String {
+    let mut image = machine.snapshot_image(sig).unwrap().into_image();
+    image.signature = platform_signature(sig);
+    match marker {
+        Marker::Format19 => image.version.format_version = 19,
+        Marker::Format20 => image.version.format_version = 20,
+        Marker::Format21 => image.version.format_version = 21,
+        // Format-marker control in the current namespace: omit both the later
+        // format stamp and the format18 boot-native name table.
+        Marker::Format16 => {
+            image.version.format_version = 16;
+            image.function_state.native_names = None;
+        }
+        // Meter/version-marker control in the current reserved-id namespace.
+        // Historical corpora independently pin unchanged execution costs.
+        Marker::Meter4Format16 => {
+            image.meter.cost_table_version = "ironhorse-meter-4".into();
+            image.version.format_version = 16;
+            image.function_state.native_names = None;
+        }
+    }
+    hex_sha256(&ironhorse_snapshot::image::write_machine_unchecked(&image))
+}
+
 fn fresh(source: &str) -> Interp {
     let (code, names) = ironhorse_compile::compile_atoms(source).unwrap();
     let mut m = Interp::new();
@@ -194,93 +234,177 @@ fn async_generator_state_writes_and_a_from_async_step_remains_an_explicit_refusa
     );
 }
 
+/// An identity fixture, read back so regeneration rewrites only the digest
+/// columns the assertions actually consume and leaves every other byte of the
+/// file alone.
+struct Table {
+    name: &'static str,
+    header: String,
+    rows: Vec<Vec<String>>,
+}
+
+impl Table {
+    fn read(dir: &std::path::Path, name: &'static str) -> Self {
+        let text = std::fs::read_to_string(dir.join(name)).unwrap();
+        let mut lines = text.lines();
+        let header = lines.next().unwrap().to_owned();
+        let rows = lines
+            .map(|line| line.split('\t').map(str::to_owned).collect())
+            .collect();
+        Self { name, header, rows }
+    }
+
+    fn set(&mut self, label: &str, column: usize, value: String) {
+        let row = self
+            .rows
+            .iter_mut()
+            .find(|row| row[0] == label)
+            .unwrap_or_else(|| panic!("{}: no row for {label}", self.name));
+        row[column] = value;
+    }
+
+    fn write(&self, dir: &std::path::Path) {
+        let mut out = format!("{}\n", self.header);
+        for row in &self.rows {
+            out.push_str(&row.join("\t"));
+            out.push('\n');
+        }
+        std::fs::write(dir.join(self.name), out).unwrap();
+    }
+}
+
 /// Explicit format/schema/boot-layout identity regeneration tool. Runtime costs and continuation
 /// results must remain unchanged; only persisted byte/seal identities move.
+///
+/// That sentence is the whole review. A digest is not reviewable by reading it,
+/// so what makes rewriting one safe is that this re-derives each row and
+/// ASSERTS the columns that carry meaning — the continuation result and both
+/// meter indices — before it writes the columns that carry none. Hand-editing a
+/// failing hash to whatever the code now produces asserts nothing and will
+/// absorb a bug; this cannot.
+///
+/// `state_golden_meter_4.tsv` and `state_golden_format_16.tsv` are deliberately
+/// NOT written. The corpus test reads only their execution-cost columns, as the
+/// control saying a format or boot change left runtime costs alone, so
+/// rewriting them would retire that check rather than satisfy it. For the same
+/// reason nothing here touches `ironhorse-vm`'s `computrons.tsv`, whose values
+/// are costs a human can actually read.
+///
+/// Run it for BOTH providers — plain, then with
+/// `--features ironhorse-vm/deterministic-math` — since each writes only its
+/// own corpus and the platform fingerprint is derivable under `platform` alone.
 #[test]
 #[ignore = "regenerates persisted identities after a reviewed format/schema/boot change"]
 fn regenerate_persistence_identities() {
-    let corpus = corpus();
-    let mut lines = corpus.lines();
-    let mut output = format!("{}\n", lines.next().unwrap());
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
     let sig = Signature::new("w4-determinism-corpus");
-    for line in lines {
-        let mut f: Vec<String> = line.split('\t').map(str::to_owned).collect();
-        assert_eq!(f.len(), 10);
-        let machine = fresh(&f[1]);
-        assert_eq!(machine.meter_index(), f[7].parse::<u64>().unwrap());
-        f[5] = hex_sha256(&machine.write_snapshot(&sig).unwrap());
-        let mut store = MemoryStore::new();
-        let session = begin_store_session(machine, &sig, &mut store)
-            .map_err(|(_, e)| e)
-            .unwrap();
-        f[6] = store.manifest().unwrap().seal;
-        let mut machine = session.into_machine();
-        crank(&mut machine, &f[2]);
-        assert_eq!(crank(&mut machine, &f[3]), f[4]);
-        assert_eq!(machine.meter_index(), f[8].parse::<u64>().unwrap());
-        f[9] = hex_sha256(&machine.write_snapshot(&sig).unwrap());
-        output.push_str(&f.join("\t"));
-        output.push('\n');
-    }
-    let file = if ironhorse_vm::MATH_PROVIDER == "platform" {
+    let main_name = if ironhorse_vm::MATH_PROVIDER == "platform" {
         "state_golden.tsv"
     } else {
         "state_golden_libm.tsv"
     };
-    std::fs::write(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures")
-            .join(file),
-        output,
-    )
-    .unwrap();
+    let mut main = Table::read(&dir, main_name);
+    let mut format_21 = Table::read(&dir, "state_golden_format_21.tsv");
+    let mut format_20 = Table::read(&dir, "state_golden_format_20.tsv");
+    let mut format_19 = Table::read(&dir, "state_golden_format_19.tsv");
+    let mut controls = Table::read(&dir, "state_golden_reserved_ids.tsv");
+    // The cost controls, read to re-check rather than to rewrite.
+    let prior = Table::read(&dir, "state_golden_meter_4.tsv");
+    let format_16 = Table::read(&dir, "state_golden_format_16.tsv");
+
+    for index in 0..main.rows.len() {
+        let f = main.rows[index].clone();
+        assert_eq!(f.len(), 10);
+        let label = f[0].as_str();
+
+        // Costs are the invariant, in this row and in both historical corpora.
+        for (control, name) in [(&prior, "meter-4"), (&format_16, "format-16")] {
+            let row = control
+                .rows
+                .iter()
+                .find(|row| row[0] == label)
+                .unwrap_or_else(|| panic!("{}: no row for {label}", control.name));
+            assert_eq!(
+                (&f[7], &f[8]),
+                (&row[7], &row[8]),
+                "{label}: {name} execution-only charges stay fixed"
+            );
+        }
+
+        let machine = fresh(&f[1]);
+        assert_eq!(
+            machine.meter_index(),
+            f[7].parse::<u64>().unwrap(),
+            "{label}: initial meter"
+        );
+        format_21.set(label, 5, marker_bytes(&machine, &sig, Marker::Format21));
+        format_20.set(label, 5, marker_bytes(&machine, &sig, Marker::Format20));
+        format_19.set(label, 5, marker_bytes(&machine, &sig, Marker::Format19));
+        controls.set(
+            label,
+            1,
+            marker_bytes(&machine, &sig, Marker::Meter4Format16),
+        );
+        controls.set(label, 2, marker_bytes(&machine, &sig, Marker::Format16));
+        main.rows[index][5] = hex_sha256(&machine.write_snapshot(&sig).unwrap());
+
+        let mut store = MemoryStore::new();
+        let session = begin_store_session(machine, &sig, &mut store)
+            .map_err(|(_, e)| e)
+            .unwrap();
+        main.rows[index][6] = store.manifest().unwrap().seal;
+
+        let mut machine = session.into_machine();
+        crank(&mut machine, &f[2]);
+        assert_eq!(crank(&mut machine, &f[3]), f[4], "{label}: continuation");
+        assert_eq!(
+            machine.meter_index(),
+            f[8].parse::<u64>().unwrap(),
+            "{label}: final meter"
+        );
+        format_21.set(label, 9, marker_bytes(&machine, &sig, Marker::Format21));
+        format_20.set(label, 9, marker_bytes(&machine, &sig, Marker::Format20));
+        format_19.set(label, 9, marker_bytes(&machine, &sig, Marker::Format19));
+        controls.set(
+            label,
+            3,
+            marker_bytes(&machine, &sig, Marker::Meter4Format16),
+        );
+        controls.set(label, 4, marker_bytes(&machine, &sig, Marker::Format16));
+        main.rows[index][9] = hex_sha256(&machine.write_snapshot(&sig).unwrap());
+    }
+
+    main.write(&dir);
+    for table in [&format_21, &format_20, &format_19, &controls] {
+        table.write(&dir);
+    }
+    // The platform boot fingerprint the historical corpora normalize to. It is
+    // bytes 4..36 of any signature, and only derivable under the provider it
+    // names — under `libm` the committed bytes are the whole point and stand.
+    if ironhorse_vm::MATH_PROVIDER == "platform" {
+        std::fs::write(
+            dir.join("math-platform-boot.bin"),
+            &Signature::new("boot-fingerprint").encode()[4..36],
+        )
+        .unwrap();
+    }
+    println!("fixtures written under {} — commit them", dir.display());
 }
 
-// Format-marker control in the current namespace: omit both the later
-// format stamp and the format18 boot-native name table from these comparisons.
 fn assert_format_16_bytes(machine: &Interp, sig: &Signature, expected: &str) {
-    let mut image = machine.snapshot_image(sig).unwrap().into_image();
-    image.signature = platform_signature(sig);
-    image.version.format_version = 16;
-    image.function_state.native_names = None;
-    assert_eq!(
-        hex_sha256(&ironhorse_snapshot::image::write_machine_unchecked(&image)),
-        expected
-    );
+    assert_eq!(marker_bytes(machine, sig, Marker::Format16), expected);
 }
 
-// Meter/version-marker control in the current reserved-id namespace.
-// Historical corpora independently pin unchanged execution costs.
 fn assert_previous_bytes(machine: &Interp, sig: &Signature, expected: &str) {
-    let mut image = machine.snapshot_image(sig).unwrap().into_image();
-    image.signature = platform_signature(sig);
-    image.meter.cost_table_version = "ironhorse-meter-4".into();
-    image.version.format_version = 16;
-    image.function_state.native_names = None;
-    assert_eq!(
-        hex_sha256(&ironhorse_snapshot::image::write_machine_unchecked(&image)),
-        expected
-    );
+    assert_eq!(marker_bytes(machine, sig, Marker::Meter4Format16), expected);
 }
 
 fn assert_format_20_bytes(machine: &Interp, sig: &Signature, expected: &str) {
-    let mut image = machine.snapshot_image(sig).unwrap().into_image();
-    image.signature = platform_signature(sig);
-    image.version.format_version = 20;
-    assert_eq!(
-        hex_sha256(&ironhorse_snapshot::image::write_machine_unchecked(&image)),
-        expected
-    );
+    assert_eq!(marker_bytes(machine, sig, Marker::Format20), expected);
 }
 
 fn assert_format_19_bytes(machine: &Interp, sig: &Signature, expected: &str) {
-    let mut image = machine.snapshot_image(sig).unwrap().into_image();
-    image.signature = platform_signature(sig);
-    image.version.format_version = 19;
-    assert_eq!(
-        hex_sha256(&ironhorse_snapshot::image::write_machine_unchecked(&image)),
-        expected
-    );
+    assert_eq!(marker_bytes(machine, sig, Marker::Format19), expected);
 }
 
 #[test]
@@ -303,11 +427,5 @@ fn math_profile_refuses_a_platform_snapshot_in_deterministic_configuration() {
 }
 
 fn assert_format_21_bytes(machine: &Interp, sig: &Signature, expected: &str) {
-    let mut image = machine.snapshot_image(sig).unwrap().into_image();
-    image.signature = platform_signature(sig);
-    image.version.format_version = 21;
-    assert_eq!(
-        hex_sha256(&ironhorse_snapshot::image::write_machine_unchecked(&image)),
-        expected
-    );
+    assert_eq!(marker_bytes(machine, sig, Marker::Format21), expected);
 }
