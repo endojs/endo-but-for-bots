@@ -717,3 +717,71 @@ test('planBrokerClient maps a broker lease to join/placeholder and direct to pas
   t.deepEqual(direct.credentialEnv, {});
   t.true(direct.useCredentialCap);
 });
+
+test('a new incarnation restores the stack\u2019s record before its first turn', async t => {
+  const bridge = makeFakeBridge();
+  const fake = makeFakeSlice(bridge);
+  const client = makeOpencodeClient(baseArgs(fake));
+  bridge.push(readyLine('ses_1'));
+  const transcript = harden([
+    { kind: 'message', role: 'user', content: 'build the page' },
+    { kind: 'tool-call', id: 'c1', name: 'write', args: '{"path":"a"}' },
+    { kind: 'tool-result', id: 'c1', content: 'wrote a' },
+    { kind: 'message', role: 'assistant', content: 'done' },
+  ]);
+  const reader = await client.send('and now the footer', { transcript });
+  bridge.push(JSON.stringify({ type: 'end' }));
+  await drain(reader);
+  const first = JSON.parse(bridge.commands[0]);
+  // The conversation arrives ahead of the turn, tool traffic included, and
+  // the new prompt is still the last thing the model reads.
+  t.true(first.text.includes('user: build the page'));
+  t.true(first.text.includes('write({"path":"a"})'));
+  t.true(first.text.includes('wrote a'));
+  t.true(first.text.endsWith('and now the footer'));
+
+  // Only once per incarnation. A later turn continues the conversation
+  // opencode now holds, so repeating the history would duplicate it.
+  const next = await client.send('and a header', { transcript });
+  bridge.push(JSON.stringify({ type: 'end' }));
+  await drain(next);
+  t.is(JSON.parse(bridge.commands[1]).text, 'and a header');
+});
+
+test('a resumed session is not given a history it already has', async t => {
+  const bridge = makeFakeBridge();
+  const fake = makeFakeSlice(bridge);
+  const client = makeOpencodeClient(
+    baseArgs(fake, { resumePriorConversation: true }),
+  );
+  bridge.push(readyLine('ses_1'));
+  const reader = await client.send('carry on', {
+    transcript: [{ kind: 'message', role: 'user', content: 'earlier' }],
+  });
+  bridge.push(JSON.stringify({ type: 'end' }));
+  await drain(reader);
+  t.is(JSON.parse(bridge.commands[0]).text, 'carry on');
+});
+
+test('a resume that missed restores rather than continuing context-free', async t => {
+  const bridge = makeFakeBridge();
+  const fake = makeFakeSlice(bridge);
+  const client = makeOpencodeClient(
+    baseArgs(fake, {
+      resumePriorConversation: true,
+      opencodeSessionId: 'ses_gone',
+    }),
+  );
+  // The store no longer holds the recorded session, so the bridge started a
+  // fresh one. That case had no handling: the session simply continued
+  // context-free, which is the silent version of losing a conversation.
+  bridge.push(readyLine('ses_new'));
+  const reader = await client.send('carry on', {
+    transcript: [{ kind: 'message', role: 'user', content: 'earlier work' }],
+  });
+  bridge.push(JSON.stringify({ type: 'end' }));
+  await drain(reader);
+  const first = JSON.parse(bridge.commands[0]);
+  t.true(first.text.includes('user: earlier work'));
+  t.true(first.text.endsWith('carry on'));
+});

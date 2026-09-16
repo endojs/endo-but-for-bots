@@ -39,6 +39,7 @@ import { E } from '@endo/eventual-send';
 import { Buffer } from 'node:buffer';
 import { clearTimeout, setTimeout } from 'node:timers';
 import { makeExo } from '@endo/exo';
+import { renderTranscriptDialogue } from '@endo/hosted-agent/transcript-records.js';
 import { M } from '@endo/patterns';
 import { makeError, q, X } from '@endo/errors';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
@@ -136,6 +137,8 @@ const defaultMakeStdinWriter = async proc =>
 /**
  * @typedef {object} Turn
  * @property {string} text
+ * @property {readonly any[] | undefined} transcript - The stack's record of
+ *   this conversation, used only when this incarnation has none of its own.
  * @property {string | undefined} systemPrompt
  * @property {object} reader - Buffered reply reader handed to the caller.
  * @property {(event: any) => void} push
@@ -389,8 +392,26 @@ export const makeOpencodeClient = ({
    *
    * @param {any} event
    */
+  // Restoration happens once per incarnation, before the first turn of a
+  // session this process did not start. A later turn continues the
+  // conversation the CLI is now holding, so repeating the history would
+  // duplicate it.
+  let restorationPending = !resumePriorConversation;
+
   const handleEvent = event => {
     if (event.type === 'ready') {
+      // A resume that came back under a different id did not resume: the
+      // store no longer held the session this plan recorded, and the bridge
+      // started a fresh one. That case had no handling at all — the session
+      // simply continued context-free, which is the silent version of losing
+      // a conversation. Restoring instead is what the stack's record is for.
+      if (
+        resumePriorConversation &&
+        initialOpencodeSessionId &&
+        event.sessionId !== initialOpencodeSessionId
+      ) {
+        restorationPending = true;
+      }
       opencodeSessionId = event.sessionId;
       if (resolveReady) resolveReady();
       return;
@@ -551,7 +572,13 @@ export const makeOpencodeClient = ({
             activeBytes = 0;
             try {
               // eslint-disable-next-line no-await-in-loop
-              await writeCommand({ op: 'send', text: turn.text });
+              // Composed here, not at `send`: the bridge starts lazily on
+              // the first turn, so whether this incarnation has a
+              // conversation to continue is only known once it says so.
+              await writeCommand({
+                op: 'send',
+                text: `${restoreOnce(turn)}${turn.text}`,
+              });
             } catch (error) {
               if (active === turn) active = null;
               turn.push({
@@ -570,7 +597,7 @@ export const makeOpencodeClient = ({
 
   /**
    * @param {string} text
-   * @param {{ systemPrompt?: string }} [opts]
+   * @param {{ systemPrompt?: string, transcript?: readonly any[] }} [opts]
    * @returns {Turn}
    */
   const enqueueTurn = (text, opts = {}) => {
@@ -582,6 +609,7 @@ export const makeOpencodeClient = ({
     /** @type {Turn} */
     const turn = {
       text,
+      transcript: opts.transcript,
       systemPrompt: opts.systemPrompt,
       reader,
       push,
@@ -609,6 +637,14 @@ export const makeOpencodeClient = ({
     pendingTurns.push(turn);
     void dispatchNext();
     return turn;
+  };
+
+  const restoreOnce = turn => {
+    if (!restorationPending) return '';
+    restorationPending = false;
+    const records = Array.isArray(turn.transcript) ? turn.transcript : [];
+    if (records.length === 0) return '';
+    return `${renderTranscriptDialogue(records)}\n\n`;
   };
 
   const createClient = () => {
@@ -680,7 +716,7 @@ export const makeOpencodeClient = ({
        * followed by exactly one terminal (`end` or `abort`).
        *
        * @param {string} prompt
-       * @param {{ systemPrompt?: string }} [opts]
+       * @param {{ systemPrompt?: string, transcript?: readonly any[] }} [opts]
        */
       async send(prompt, opts = {}) {
         guardLive();
@@ -697,6 +733,17 @@ export const makeOpencodeClient = ({
             X`OpencodeClient(${q(sessionId)}): a turn cannot change the session persona; the opencode agent prompt is fixed at config load`,
           );
         }
+        // A new incarnation with no opencode session of its own would
+        // otherwise start context-free: the store is the guest's, and a
+        // conversation it no longer holds is one the model cannot see. The
+        // stack's record goes in front of the first turn instead.
+        //
+        // Not faithful, and not pretending to be: opencode's own store is the
+        // only place a tool call can be a tool call, and reaching it needs an
+        // import path that does not enter the prompt lifecycle
+        // (`designs/hosted-agent-sandbox-unification.md`). Until that exists,
+        // the conversation arrives as the conversation, read rather than
+        // replayed — which is what Codex does for the same reason.
         return enqueueTurn(String(prompt), opts).reader;
       },
 

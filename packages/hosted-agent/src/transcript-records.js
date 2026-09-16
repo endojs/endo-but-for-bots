@@ -270,3 +270,37 @@ export const pairToolCalls = records => {
   });
 };
 harden(pairToolCalls);
+
+/**
+ * Render records as the conversation they are, for a CLI that cannot be
+ * handed a conversation any other way.
+ *
+ * A conversation is always restored — there is no length at which the stack
+ * declines to hand a session its own history — so nothing here truncates or
+ * refuses. What the app-server's input channel cannot carry is a tool call as
+ * a tool call, so one is written as the line it would read as.
+ *
+ * @param {readonly TranscriptRecord[]} records
+ */
+export const renderTranscriptDialogue = records => {
+  const lines = [];
+  /** @type {Map<string, string>} */
+  const calledNames = new Map();
+  for (const record of records) {
+    if (record.kind === 'message') {
+      lines.push(`${record.role}: ${record.content}`);
+    } else if (record.kind === 'tool-call') {
+      calledNames.set(record.id, record.name);
+      lines.push(`assistant called ${record.name}(${record.args})`);
+    } else if (record.kind === 'tool-result') {
+      const name = calledNames.get(record.id) || 'tool';
+      lines.push(`${name} returned: ${record.content}`);
+    } else if (record.kind === 'compaction') {
+      // Everything above this point was replaced by the summary it carries.
+      lines.length = 0;
+      lines.push(record.summary);
+    }
+  }
+  return lines.join('\n');
+};
+harden(renderTranscriptDialogue);
