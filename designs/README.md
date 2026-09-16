@@ -6,6 +6,12 @@ below; record each grooming pass by appending its note to `ARCHIVE.md` — do no
 layer new groom notes at the top of this file.*
 
 *Recently added or revised:
+[endor-git-windows](endor-git-windows.md) (added 2026-09-16; the deferred
+Windows follow-up to [endor-git-bindings](endor-git-bindings.md) — a
+data-driven decision between the GNU/MinGW ABI via Zig cross-compilation and a
+native MSVC lane, the cross-build + native-execution validation sequence and
+escalation trigger for the Windows target, and the fold-back edits into the
+parent design's Resolved decisions, Verification gates, and Phased delivery),
 [hosted-agent-broker-oauth](hosted-agent-broker-oauth.md) (added 2026-09-08 and
 revised 2026-09-09; credential custody for hosted agent sessions — a broker-held
 refreshing OAuth credential with expiry tracking, single-flight exchange, a
