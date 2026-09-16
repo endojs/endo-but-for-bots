@@ -17,6 +17,10 @@ import {
   mapSet,
   weakmapGet,
 } from './commons.js';
+import {
+  EMPTY_ATTRIBUTES,
+  attributesMemoKey,
+} from './module-attributes.js';
 
 const { Fail, quote: q } = assert;
 
@@ -31,13 +35,15 @@ export const link = (
   moduleAliases,
   compartment,
   moduleSpecifier,
+  attributes = EMPTY_ATTRIBUTES,
 ) => {
   const { name: compartmentName, moduleRecords } = weakmapGet(
     compartmentPrivateFields,
     compartment,
   );
 
-  const moduleRecord = mapGet(moduleRecords, moduleSpecifier);
+  const memoKey = attributesMemoKey(moduleSpecifier, attributes);
+  const moduleRecord = mapGet(moduleRecords, memoKey);
   if (moduleRecord === undefined) {
     throw ReferenceError(
       `Missing link to module ${q(moduleSpecifier)} from compartment ${q(
@@ -106,13 +112,22 @@ export const instantiate = (
   moduleAliases,
   moduleRecord,
 ) => {
-  const { compartment, moduleSpecifier, resolvedImports, moduleSource } =
-    moduleRecord;
+  const {
+    compartment,
+    moduleSpecifier,
+    resolvedImports,
+    moduleSource,
+    attributes = EMPTY_ATTRIBUTES,
+  } = moduleRecord;
   const { instances } = weakmapGet(compartmentPrivateFields, compartment);
 
+  // Instances share the module records' extended memo key so two attribute
+  // variants of one specifier instantiate separately.
+  const memoKey = attributesMemoKey(moduleSpecifier, attributes);
+
   // Memoize.
-  if (mapHas(instances, moduleSpecifier)) {
-    return mapGet(instances, moduleSpecifier);
+  if (mapHas(instances, memoKey)) {
+    return mapGet(instances, memoKey);
   }
 
   validateModuleSource(moduleSource, moduleSpecifier);
@@ -136,13 +151,14 @@ export const instantiate = (
       moduleAliases,
       moduleSpecifier,
       resolvedImports,
+      attributes,
     );
   } else {
     throw TypeError(`Invalid module source, got ${q(moduleSource)}`);
   }
 
   // Memoize.
-  mapSet(instances, moduleSpecifier, moduleInstance);
+  mapSet(instances, memoKey, moduleInstance);
 
   // Link dependency modules.
   for (const [importSpecifier, resolvedSpecifier] of entries(resolvedImports)) {

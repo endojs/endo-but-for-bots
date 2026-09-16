@@ -19,13 +19,54 @@ import {
   mapSet,
   promiseThen,
   setAdd,
+  stringifyJson,
   values,
   weakmapGet,
   weakmapHas,
 } from './commons.js';
 import { makeError, annotateError, q, b, X } from './error/assert.js';
+import {
+  EMPTY_ATTRIBUTES,
+  attributesMemoKey,
+  isEmptyAttributes,
+} from './module-attributes.js';
 
 const noop = () => {};
+
+/**
+ * Invokes an `importHook` / `importNowHook` with arity-based backward
+ * compatibility.  A hook declared with a single parameter (`hook.length === 1`)
+ * predates import attributes; it is called with the specifier alone when the
+ * attributes are empty or request `{ type: 'js' }`, and otherwise the loader
+ * throws the documented TypeError rather than silently letting a legacy hook
+ * serve a non-JS content type as JavaScript.  A hook declared with two or more
+ * parameters (or zero, doing its own argument parsing) receives the normalized
+ * attributes object.
+ *
+ * See `designs/ses-import-attributes.md` § importHook signature.
+ *
+ * @param {(specifier: string, attributes?: Record<string, string>) => any} hook
+ * @param {string} hookName - `'importHook'` or `'importNowHook'`.
+ * @param {string} moduleSpecifier - the full specifier.
+ * @param {Record<string, string>} attributes - normalized attributes.
+ * @returns {any}
+ */
+const callModuleHook = (hook, hookName, moduleSpecifier, attributes) => {
+  if (hook.length === 1) {
+    if (!isEmptyAttributes(attributes) && attributes.type !== 'js') {
+      throw makeError(
+        `${hookName} for ${stringifyJson(
+          moduleSpecifier,
+        )} does not accept attributes;\n  request was with { type: ${stringifyJson(
+          attributes.type,
+        )} }\n  (hook arity 1; expected 2+ to honor non-JS attributes)`,
+        TypeError,
+      );
+    }
+    return hook(moduleSpecifier);
+  }
+  return hook(moduleSpecifier, attributes);
+};
 
 const asyncTrampoline = async (generatorFunc, args, errorWrapper) => {
   await null;
@@ -86,6 +127,7 @@ const loadModuleSource = (
   selectImplementation,
   moduleLoads,
   importMeta,
+  attributes = EMPTY_ATTRIBUTES,
 ) => {
   const { resolveHook, name: compartmentName } = weakmapGet(
     compartmentPrivateFields,
@@ -110,9 +152,12 @@ const loadModuleSource = (
     moduleSpecifier,
     resolvedImports,
     importMeta,
+    attributes,
   });
 
   // Enqueue jobs to load this module's shallow dependencies.
+  // Static imports carry empty attributes in this revision; a follow-up threads
+  // `with` clauses captured by the parser through `resolvedImports`.
   for (const fullSpecifier of values(resolvedImports)) {
     // Behold: recursion.
     // eslint-disable-next-line no-use-before-define
@@ -121,6 +166,7 @@ const loadModuleSource = (
       moduleAliases,
       compartment,
       fullSpecifier,
+      EMPTY_ATTRIBUTES,
       enqueueJob,
       selectImplementation,
       moduleLoads,
@@ -135,6 +181,7 @@ function* loadWithoutErrorAnnotation(
   moduleAliases,
   compartment,
   moduleSpecifier,
+  attributes,
   enqueueJob,
   selectImplementation,
   moduleLoads,
@@ -144,33 +191,49 @@ function* loadWithoutErrorAnnotation(
     importNowHook,
     moduleMap,
     moduleMapHook,
+    modulesWithAttributes,
     moduleRecords,
     parentCompartment,
   } = weakmapGet(compartmentPrivateFields, compartment);
 
-  if (mapHas(moduleRecords, moduleSpecifier)) {
-    return mapGet(moduleRecords, moduleSpecifier);
+  // The memo key collapses to the bare specifier when attributes are empty (the
+  // legacy shape), and is the JSON `[specifier, attributes]` tuple otherwise.
+  const memoKey = attributesMemoKey(moduleSpecifier, attributes);
+  const emptyAttributes = isEmptyAttributes(attributes);
+
+  if (mapHas(moduleRecords, memoKey)) {
+    return mapGet(moduleRecords, memoKey);
   }
 
-  // Follow moduleMap, or moduleMapHook if present.
-  let moduleDescriptor = moduleMap[moduleSpecifier];
-  if (moduleDescriptor === undefined && moduleMapHook !== undefined) {
-    moduleDescriptor = moduleMapHook(moduleSpecifier);
+  // For an unattributed import, follow the specifier-keyed moduleMap /
+  // moduleMapHook (the legacy-collapse slot).  For an attribute-bearing import,
+  // consult the `modulesWithAttributes` priming map (the extended slot) instead;
+  // the two never collide.  Both fall through to the hook when unprimed.
+  let moduleDescriptor;
+  if (emptyAttributes) {
+    moduleDescriptor = moduleMap[moduleSpecifier];
+    if (moduleDescriptor === undefined && moduleMapHook !== undefined) {
+      moduleDescriptor = moduleMapHook(moduleSpecifier);
+    }
+  } else if (modulesWithAttributes !== undefined) {
+    moduleDescriptor = mapGet(modulesWithAttributes, memoKey);
   }
   if (moduleDescriptor === undefined) {
     const moduleHook = selectImplementation(importHook, importNowHook);
+    const moduleHookName = selectImplementation('importHook', 'importNowHook');
     if (moduleHook === undefined) {
-      const moduleHookName = selectImplementation(
-        'importHook',
-        'importNowHook',
-      );
       throw makeError(
         X`${b(moduleHookName)} needed to load module ${q(
           moduleSpecifier,
         )} in compartment ${q(compartment.name)}`,
       );
     }
-    moduleDescriptor = moduleHook(moduleSpecifier);
+    moduleDescriptor = callModuleHook(
+      moduleHook,
+      moduleHookName,
+      moduleSpecifier,
+      attributes,
+    );
     // Uninitialized module namespaces throw if we attempt to coerce them into
     // promises.
     if (!weakmapHas(moduleAliases, moduleDescriptor)) {
@@ -222,11 +285,12 @@ function* loadWithoutErrorAnnotation(
           moduleAliases,
           aliasCompartment,
           aliasSpecifier,
+          EMPTY_ATTRIBUTES,
           enqueueJob,
           selectImplementation,
           moduleLoads,
         );
-        mapSet(moduleRecords, moduleSpecifier, aliasRecord);
+        mapSet(moduleRecords, memoKey, aliasRecord);
         return aliasRecord;
       }
 
@@ -266,8 +330,9 @@ function* loadWithoutErrorAnnotation(
             selectImplementation,
             moduleLoads,
             importMeta,
+            attributes,
           );
-          mapSet(moduleRecords, moduleSpecifier, moduleRecord);
+          mapSet(moduleRecords, memoKey, moduleRecord);
           return moduleRecord;
         }
       } else {
@@ -306,6 +371,7 @@ function* loadWithoutErrorAnnotation(
           moduleAliases,
           loaderCompartment,
           loaderSpecifier,
+          EMPTY_ATTRIBUTES,
           enqueueJob,
           selectImplementation,
           moduleLoads,
@@ -328,7 +394,7 @@ function* loadWithoutErrorAnnotation(
           moduleLoads,
           importMeta,
         );
-        mapSet(moduleRecords, moduleSpecifier, moduleRecord);
+        mapSet(moduleRecords, memoKey, moduleRecord);
         return moduleRecord;
       } else {
         // { source: ModuleSource, importMeta?, specifier?: string }
@@ -352,8 +418,9 @@ function* loadWithoutErrorAnnotation(
           selectImplementation,
           moduleLoads,
           importMeta,
+          attributes,
         );
-        mapSet(moduleRecords, moduleSpecifier, aliasRecord);
+        mapSet(moduleRecords, memoKey, aliasRecord);
         return aliasRecord;
       }
     }
@@ -392,7 +459,7 @@ function* loadWithoutErrorAnnotation(
         moduleLoads,
         importMeta,
       );
-      mapSet(moduleRecords, moduleSpecifier, aliasRecord);
+      mapSet(moduleRecords, memoKey, aliasRecord);
       mapSet(moduleRecords, aliasSpecifier, aliasRecord);
       return aliasRecord;
     }
@@ -420,11 +487,12 @@ function* loadWithoutErrorAnnotation(
         moduleAliases,
         moduleDescriptor.compartment,
         moduleDescriptor.specifier,
+        EMPTY_ATTRIBUTES,
         enqueueJob,
         selectImplementation,
         moduleLoads,
       );
-      mapSet(moduleRecords, moduleSpecifier, aliasRecord);
+      mapSet(moduleRecords, memoKey, aliasRecord);
       return aliasRecord;
     }
 
@@ -440,9 +508,11 @@ function* loadWithoutErrorAnnotation(
       enqueueJob,
       selectImplementation,
       moduleLoads,
+      undefined,
+      attributes,
     );
     // Memoize.
-    mapSet(moduleRecords, moduleSpecifier, moduleRecord);
+    mapSet(moduleRecords, memoKey, moduleRecord);
     return moduleRecord;
   } else {
     throw makeError(
@@ -458,6 +528,7 @@ const memoizedLoadWithErrorAnnotation = (
   moduleAliases,
   compartment,
   moduleSpecifier,
+  attributes,
   enqueueJob,
   selectImplementation,
   moduleLoads,
@@ -467,13 +538,17 @@ const memoizedLoadWithErrorAnnotation = (
     compartment,
   );
 
+  // The in-flight dedup map is keyed by the same extended memo key as the
+  // module records, so two attribute variants of one specifier load separately.
+  const memoKey = attributesMemoKey(moduleSpecifier, attributes);
+
   // Prevent data-lock from recursion into branches visited in dependent loads.
   let compartmentLoading = mapGet(moduleLoads, compartment);
   if (compartmentLoading === undefined) {
     compartmentLoading = new Map();
     mapSet(moduleLoads, compartment, compartmentLoading);
   }
-  let moduleLoading = mapGet(compartmentLoading, moduleSpecifier);
+  let moduleLoading = mapGet(compartmentLoading, memoKey);
   if (moduleLoading !== undefined) {
     return moduleLoading;
   }
@@ -485,6 +560,7 @@ const memoizedLoadWithErrorAnnotation = (
       moduleAliases,
       compartment,
       moduleSpecifier,
+      attributes,
       enqueueJob,
       selectImplementation,
       moduleLoads,
@@ -500,7 +576,7 @@ const memoizedLoadWithErrorAnnotation = (
     },
   );
 
-  mapSet(compartmentLoading, moduleSpecifier, moduleLoading);
+  mapSet(compartmentLoading, memoKey, moduleLoading);
 
   return moduleLoading;
 };
@@ -624,6 +700,8 @@ const preferAsync = (asyncImpl, _syncImpl) => asyncImpl;
  * @param {Compartment} compartment
  * @param {string} moduleSpecifier - The module specifier to load.
  * @param {{ noAggregateErrors?: boolean | undefined}} options
+ * @param {Record<string, string>} [attributes] - normalized import attributes
+ *   for the entry module (empty by default; supplied by the dynamic-import path).
  */
 export const load = async (
   compartmentPrivateFields,
@@ -631,6 +709,7 @@ export const load = async (
   compartment,
   moduleSpecifier,
   { noAggregateErrors = false } = {},
+  attributes = EMPTY_ATTRIBUTES,
 ) => {
   const { name: compartmentName } = weakmapGet(
     compartmentPrivateFields,
@@ -649,6 +728,7 @@ export const load = async (
     moduleAliases,
     compartment,
     moduleSpecifier,
+    attributes,
     enqueueJob,
     preferAsync,
     moduleLoads,
@@ -675,6 +755,8 @@ export const load = async (
  * @param {Compartment} compartment
  * @param {string} moduleSpecifier - The module specifier to load.
  * @param {{ noAggregateErrors?: boolean | undefined}} options
+ * @param {Record<string, string>} [attributes] - normalized import attributes
+ *   for the entry module (empty by default; supplied by the dynamic-import path).
  */
 
 export const loadNow = (
@@ -683,6 +765,7 @@ export const loadNow = (
   compartment,
   moduleSpecifier,
   { noAggregateErrors = false } = {},
+  attributes = EMPTY_ATTRIBUTES,
 ) => {
   const { name: compartmentName } = weakmapGet(
     compartmentPrivateFields,
@@ -701,6 +784,7 @@ export const loadNow = (
     moduleAliases,
     compartment,
     moduleSpecifier,
+    attributes,
     enqueueJob,
     preferSync,
     moduleLoads,
