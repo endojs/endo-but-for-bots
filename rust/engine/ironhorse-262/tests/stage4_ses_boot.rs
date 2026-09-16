@@ -59,9 +59,17 @@ const IRONHORSE_PRISTINE: &[(&str, &str)] = &[
     // `polyfills.js` runs, so NOT the polyfill's deep-freeze `harden`.
     ("harden", "function"),
     ("petrify", "function"),
-    // The two `create_hardened_globals` declines, with an honest
-    // `Halt::NotImplemented` rather than a wrong value.
-    ("lockdown", "undefined"),
+    // Also `create_hardened_globals`'s, since the native `lockdown()` landed
+    // (`ironhorse-vm::Interp::do_lockdown`,
+    // `designs/ironhorse-native-lockdown.md`). Like its two siblings it is
+    // present BEFORE `polyfills.js` and before the boot bundle, which is what
+    // this census is for: attribution, not availability.
+    ("lockdown", "function"),
+    // The one remaining `create_hardened_globals` decline. Unbound, with no
+    // dispatch: a reference is a plain `ReferenceError`. An earlier revision
+    // of this table said both this and `lockdown` declined "with an honest
+    // `Halt::NotImplemented` rather than a wrong value", which was never
+    // measured and was not true of either.
     ("mutabilities", "undefined"),
     // XS builds this into the realm; ironhorse has no equivalent.
     ("Compartment", "undefined"),
@@ -172,18 +180,20 @@ fn ses_boot_bundle_agrees_and_installs_only_handled_promise() {
 
     // (4) The gap, pinned so it can neither widen nor close silently.
     //
-    //     `Compartment` is the one entry XS builds into every realm, so it is
-    //     the one name the DAEMON's XS actually has that ironhorse lacks:
-    //     `rust/endo/xsnap` declares `fx_lockdown`/`fx_harden` in `ffi.rs:274`
-    //     and calls neither (`lib.rs:917`), so the daemon's realm has no
-    //     `lockdown` either. The oracle's `lockdown`/`mutabilities` below are
-    //     `xs_shim.c`'s installs, present for differential testing — they are
-    //     NOT what the daemon runs on.
+    //     `Compartment` is now the WHOLE of it, and it is the one entry XS
+    //     builds into every realm — so it is also the one name the DAEMON's XS
+    //     actually has that ironhorse lacks. `rust/endo/xsnap` declares
+    //     `fx_lockdown`/`fx_harden` in `ffi.rs:274` and calls neither
+    //     (`lib.rs:917`), so the daemon's realm has no `lockdown` either. The
+    //     oracle's `lockdown`/`mutabilities` are `xs_shim.c`'s installs,
+    //     present for differential testing — they are NOT what the daemon runs
+    //     on.
     //
-    //     So stage 4's remaining work is not "make the bundle run", and it is
-    //     not "match the oracle's globals". It is `Compartment`, plus whatever
-    //     guest-visible `lockdown` the daemon decides it needs — neither of
-    //     which any boot bundle here supplies. See
+    //     So stage 4's remaining work is not "make the bundle run", it is not
+    //     "match the oracle's globals", and it is no longer "plus whatever
+    //     guest-visible `lockdown` the daemon decides it needs" — ironhorse
+    //     binds one (`designs/ironhorse-native-lockdown.md`). It is
+    //     `Compartment`, which no boot bundle here supplies. See
     //     `designs/ironhorse-ses-compartment-equivalence.md`.
     assert!(
         pristine.oracle_result.contains("Compartment=function"),
@@ -197,11 +207,15 @@ fn ses_boot_bundle_agrees_and_installs_only_handled_promise() {
          be rewritten to require it: {}",
         after.ironhorse_result
     );
+    // Rewritten to REQUIRE it, as the previous revision of this assertion
+    // asked whoever landed it to do. `ses-mode:lockdown-unimplemented` is gone
+    // from `SesMode::unimplemented_skip` and `lockdown` from
+    // `DEFAULT_ENDOR_SKIP_FEATURES`; a regression that unbinds the global has
+    // to fail here rather than quietly reopening the gap.
     assert!(
-        after.ironhorse_result.contains("lockdown=undefined"),
-        "ironhorse is expected to still lack lockdown (named skip \
-         `ses-mode:lockdown-unimplemented`, `ironhorse-262/src/xst.rs:159`); \
-         if it now has one, this bar must be rewritten to require it: {}",
+        after.ironhorse_result.contains("lockdown=function"),
+        "ironhorse binds its own guest lockdown (`Interp::do_lockdown`), and \
+         the boot bundle must not disturb it: {}",
         after.ironhorse_result
     );
 

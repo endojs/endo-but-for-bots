@@ -150,6 +150,168 @@ impl Interp {
         Ok(())
     }
 
+    /// The guest `lockdown()` (`fx_lockdown`, `xsLockdown.c:74-205`), bound by
+    /// [`Self::create_hardened_globals`] as [`NativeMethod::GlobalLockdown`].
+    ///
+    /// Three of `fx_lockdown`'s five steps, in XS's order. The two that are
+    /// absent presuppose a guest `Compartment`, which ironhorse does not have:
+    /// the compartment-global template (`:105-119`, `:139`) and the `Math`
+    /// duplicate that is pulled into it (`:130-137`). `Date`'s half of step 4
+    /// survives as `Date.prototype.constructor`, which step 2 below covers;
+    /// `Math.random` is not implemented on ironhorse, so there is nothing
+    /// there to secure. `designs/ironhorse-native-lockdown.md` § Scope
+    /// boundary states both, and what they cost.
+    ///
+    /// **The order is the contract.** Rewire, then harden. `do_harden` walks
+    /// prototype chains, so once ANY harden has run
+    /// `Function.prototype.constructor` is `{writable: false,
+    /// configurable: false}` and no `[[DefineOwnProperty]]` can replace it --
+    /// which is exactly how the SES shim's `lockdown()` fails on ironhorse,
+    /// with `TypeError: invalid descriptor` out of
+    /// `tame-function-constructors.js`. XS sidesteps it by writing the
+    /// constructor slot directly before hardening anything
+    /// (`fx_lockdown_aux`, `:52`); [`Self::install_locked_down_constructor`]
+    /// is that write.
+    pub(super) fn do_lockdown(&mut self, code: &[u8]) -> Result<Slot, Step> {
+        // Step 1, idempotence (`:88-92`). XS throws; the HOST-side
+        // [`Self::lock_down_intrinsics`] deliberately does not, because it is
+        // the embedder's operation and an embedder that cannot tell whether it
+        // has run is the one calling it twice. A guest can tell, so the guest
+        // boundary takes XS's answer. The two share one flag and differ only
+        // here; `designs/ironhorse-native-lockdown.md` § Decisions, as taken
+        // records the split as deliberate.
+        if self.realm.intrinsics().locked_down.get() {
+            return Err(self.catchable_type_error_msg("lockdown already called".into()));
+        }
+
+        // Step 2, poison the function-family constructors (`:94-103`, `:127`).
+        // XS calls `fx_lockdown_aux` six times; five of those prototypes exist
+        // here (`Compartment.prototype` does not), and the `length` each
+        // inert constructor carries is the one the constructor it replaces
+        // carried -- 1 for the function family, 7 for `Date`.
+        //
+        // These are collected rather than hardened inline: they are minted
+        // AFTER the root enumeration below took its snapshot, so step 5 would
+        // not otherwise reach them, and an inert constructor left mutable
+        // would be a writable edge out of a realm that claims to be frozen.
+        let mut minted = Vec::new();
+        for (prototype, arity) in [
+            (self.async_function_proto, 1),
+            (self.async_generator_function_proto, 1),
+            (self.function_proto, 1),
+            (self.generator_function_proto, 1),
+            (self.date_proto, 7),
+        ] {
+            if prototype == crate::value::SlotIndex::NULL {
+                continue;
+            }
+            minted.push(self.install_locked_down_constructor(prototype, arity));
+        }
+
+        // Step 5, harden (`:141-200`). XS walks an enumerated list of
+        // intrinsics; ironhorse hardens every primordial instance, which is
+        // wider, and is the same set
+        // [`Self::new_shared_realm_machine_configured`] freezes when it
+        // freezes at construction.
+        //
+        // A shared-realm machine already carries that enumeration in
+        // `Intrinsics::roots`. A plain `Interp::new()` machine -- what
+        // `endot-ih`, `ironhorse-xst` and the conformance harness run -- does
+        // not: `Realm::new` gives it an empty one. Deriving it here from
+        // `boot_slot_count` rather than from `slots.capacity()` is the whole
+        // difference between "freeze the primordials" and "freeze every object
+        // the guest has allocated so far", because by the time a guest calls
+        // `lockdown()` the arena is full of guest objects and the
+        // construction-time filter no longer discriminates.
+        let mut roots = self.realm.intrinsics().roots.clone();
+        if roots.is_empty() {
+            roots = (0..self.boot_slot_count)
+                .map(crate::value::SlotIndex)
+                .filter(|&root| root != self.environment.global_obj && root != self.template_cache)
+                .filter(|&root| self.slots.get(root).kind == Kind::Instance)
+                .collect();
+        }
+        roots.extend(minted);
+        for root in roots {
+            // Not atomic, exactly as `lock_down_intrinsics` documents: the
+            // roots are hardened one at a time, so a refusal at root `k`
+            // returns with `0..k` already frozen and `locked_down` still
+            // false. A guest that catches this TypeError is holding a realm
+            // that is partly frozen AND still reports itself unlocked. XS has
+            // the same shape -- its harden calls are a straight-line sequence
+            // with no rollback -- so this is fidelity rather than an
+            // oversight, and calling `lockdown()` again completes the freeze
+            // because a hardened root is idempotent on the retry.
+            self.do_harden(code, Slot::of(Kind::Reference, Payload::Reference(root)))?;
+        }
+        self.realm.intrinsics().locked_down.set(true);
+        Ok(Slot::undefined())
+    }
+
+    /// `fx_lockdown_aux` (`xsLockdown.c:52-72`): replace `prototype`'s
+    /// `constructor` with an inert stand-in that throws on call AND on
+    /// construct, carrying `length` = `arity` and a `prototype` property
+    /// pointing back at `prototype`. Returns the instance it minted.
+    ///
+    /// The write goes through `set_own_unmetered_with_flag`, which overwrites
+    /// a property's kind, value and flag without consulting the descriptor it
+    /// is replacing. That is deliberate and it is the point of the function:
+    /// XS assigns the slot directly (`slot->kind = constructor->kind`),
+    /// bypassing `[[DefineOwnProperty]]`, so the step still works on a
+    /// prototype a guest has already frozen. Nothing reaches this path except
+    /// `lockdown()` itself.
+    ///
+    /// The existing property's FLAG is preserved, because XS writes only kind
+    /// and value. So `Function.prototype.constructor` stays
+    /// `{writable: true, enumerable: false, configurable: true}` across the
+    /// rewiring and becomes non-writable only when step 5 hardens it -- which
+    /// is the order a `verifyProperty` case observes.
+    fn install_locked_down_constructor(
+        &mut self,
+        prototype: crate::value::SlotIndex,
+        arity: u32,
+    ) -> crate::value::SlotIndex {
+        let inert = self.slots.alloc(Slot::instance(self.function_proto));
+        let name_chunk = self.alloc_str_text("");
+        self.functions.insert(
+            inert,
+            FuncInfo {
+                native: Some(Native::LockedDownConstructor),
+                name_chunk,
+                arity,
+                ..FuncInfo::default()
+            },
+        );
+        // `ctor_prototype` plus the own `prototype` property are what make an
+        // instance answer `instanceof` and `new`; `slot_is_constructor` reads
+        // `native.is_some()`, so the entry here is for the prototype lookup
+        // rather than for constructability.
+        self.ctor_prototype.insert(inert, prototype);
+        let prototype_id = self.intern_static_key_unmetered("prototype");
+        self.prototype_key_id.get_or_insert(prototype_id);
+        // XS_GET_ONLY (`xsAll.h:2126`), the flags `fx_lockdown_aux` passes to
+        // `fxNextSlotProperty`.
+        self.set_own_unmetered_with_flag(
+            inert,
+            prototype_id,
+            Slot::of(Kind::Reference, Payload::Reference(prototype)),
+            XS_DONT_ENUM_FLAG | XS_DONT_DELETE_FLAG | XS_DONT_SET_FLAG,
+        );
+
+        let constructor_id = self.intern_static_key_unmetered("constructor");
+        self.constructor_id.get_or_insert(constructor_id);
+        let flag = self
+            .find_property(prototype, constructor_id)
+            .map_or(XS_DONT_ENUM_FLAG, |p| self.slots.get(p).flag);
+        self.set_own_unmetered_with_flag(
+            prototype,
+            constructor_id,
+            Slot::of(Kind::Reference, Payload::Reference(inert)),
+            flag,
+        );
+        inert
+    }
+
     pub(crate) fn realm(&self) -> &std::rc::Rc<Realm> {
         &self.realm
     }

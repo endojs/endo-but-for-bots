@@ -554,17 +554,23 @@ then sets `locked_down: true` and `shared_compartments = true`:
 
 | `fx_lockdown` step | IronHorse | Note |
 |---|---|---|
-| idempotence throw | — | it is a constructor, so the question does not arise |
-| constructors poisoned | — | frozen in place and still reachable |
+| idempotence throw | **yes** | `do_lockdown` throws `TypeError("lockdown already called")`; the host-side `lock_down_intrinsics` stays idempotent |
+| constructors poisoned | **yes** | five of XS's six prototypes; `Compartment.prototype` does not exist here |
 | per-compartment evaluators | partial | `compartment_evaluator` (`realm.rs:72`) copies `Eval` and `Function`; the other three are non-global and get none. Fixed here by leaving them unpinned rather than by copying |
 | compartment-global template | — | globals are built per compartment from `global_props` |
-| Math (and half of Date) tamed | — | nothing in `ironhorse-vm` tames either |
-| transitive harden | **yes, wider** | XS hardens an enumerated list; IronHorse hardens every instance in the arena |
+| Math (and half of Date) tamed | partial | `Date.prototype.constructor` is poisoned with the rest; nothing tames `Math`, which has no `random` to tame |
+| transitive harden | **yes, wider** | XS hardens an enumerated list; IronHorse hardens every primordial instance |
 
-Step 5 is done and then some.
-Steps 1–4 are absent, and step 2 cannot be done at machine construction: it is
-correct only *after* a guest asks for it, which is what IronHorse has no
-equivalent of.
+Steps 1, 2 and 5 are done, the last of them and then some.
+Step 3 and the compartment-template half of step 4 are absent because they
+presuppose a guest `Compartment`.
+
+This section's earlier revision said steps 1–4 were absent and that step 2
+"cannot be done at machine construction: it is correct only *after* a guest
+asks for it, which is what IronHorse has no equivalent of". The diagnosis was
+right and the last clause is no longer true —
+[ironhorse-native-lockdown](ironhorse-native-lockdown.md) is that equivalent,
+and the guest `lockdown()` it defines is where step 2 now runs.
 
 ### `fx_harden` and `fx_petrify`
 
@@ -741,8 +747,8 @@ XS takes none.
 | | SES shim | XS native | IronHorse |
 |---|---|---|---|
 | transitive freeze of intrinsics | yes | yes | **yes** |
-| function-family constructors poisoned | yes | yes | no — which is why `global_names` cannot confine |
-| Date/Math attenuated for compartments | yes | partly (Date's prototype is poisoned realm-wide) | no |
+| function-family constructors poisoned | yes | yes | **yes, at `lockdown()`** — before that, `global_names` still cannot confine |
+| Date/Math attenuated for compartments | yes | partly (Date's prototype is poisoned realm-wide) | Date's prototype only; no compartments to attenuate for |
 | permits table / unpermitted removal | yes | no | no |
 | property-override enablement | yes (`overrideTaming`) | no | no |
 | locale, NaN side channel, domains, regenerator | yes | no | no |
@@ -794,9 +800,14 @@ The shim is the larger one — and it is the one already running on IronHorse.
    files in `ironhorse-262/expectations/whole-tree`, and removing the bindings
    would convert those into ordinary conformance failures. Implementing the
    lazy helpers is the honest fix, and it is its own piece of work.
-3. **If the native profile wins**, `fx_lockdown`'s five steps above are the
+3. ~~**If the native profile wins**, `fx_lockdown`'s five steps above are the
    specification, and step 2 needs a guest-callable `lockdown()` separate from
-   machine construction before it can be attempted at all.
+   machine construction before it can be attempted at all.~~
+   Partly done, and it does not decide question 1. The guest-callable
+   `lockdown()` landed with steps 1, 2 and 5
+   ([ironhorse-native-lockdown](ironhorse-native-lockdown.md)), measured to
+   agree with `fx_lockdown` across 6053 corpus files under `endot-ih -l`. What
+   remains for a native profile is `Compartment`, which is the larger half.
 4. **Do not treat `CompartmentOptions` as SES-compatible** without walking the
    table above. Two of its hook fields are booleans.
 5. ~~**Re-word the `ironhorse-engine.md:940` bar.**~~ Done: its first clause is
@@ -835,6 +846,13 @@ The shim is the larger one — and it is the one already running on IronHorse.
       closing that is `fx_lockdown` step 2, which needs a `lockdown()` separate
       from machine construction. The doc comment now states this; the rename is
       left to whoever owns the API.
+      Updated 2026-09-16: that `lockdown()` now exists, so the reach IS
+      closable — `({}).constructor.constructor('return 1+1')()` throws
+      `TypeError: secure mode` after a guest calls it
+      (`ironhorse-vm/tests/native_lockdown.rs`). `global_names` still does not
+      confine on its own, and a machine whose guest never calls `lockdown()` is
+      exactly as reachable as before, so the doc comment's claim stands as
+      written.
 - [x] `stage4_ses_boot.rs` runs in `test-ironhorse-oracle`, which
       `scripts/ci-changes.py` triggered on `rust/engine/**`, the Cargo and
       toolchain files, `c/moddable`, `rust/endo/xsnap/xsnap-platform.*` and the

@@ -646,6 +646,31 @@ pub enum NativeMethod {
     /// Returns `x`. Allocation-driven metering (the one `fxNewInstance` ownKeys
     /// holder + its at-slots).
     GlobalPetrify,
+    /// The global `lockdown()` (`fx_lockdown`, `xsLockdown.c:74`): rewire the
+    /// function-family (and `Date`) prototypes' `constructor` to an inert
+    /// stand-in, then transitively harden the intrinsic graph. Returns
+    /// `undefined`; a second call is a `TypeError`, as XS's is
+    /// (`xsLockdown.c:90-92`).
+    ///
+    /// Scoped in `designs/ironhorse-native-lockdown.md`. Two of
+    /// `fx_lockdown`'s five steps are deliberately absent because ironhorse
+    /// has no guest `Compartment`: the compartment-global template (`:105`)
+    /// and the `Math`/`Date` duplicates that are pulled INTO that template
+    /// (`:121-137`). What survives of step 4 is `Date.prototype.constructor`,
+    /// which step 2 covers, and `Math.random`, which ironhorse does not
+    /// implement and so has nothing to secure.
+    ///
+    /// **Order is load-bearing: rewire, then harden.** [`Self::GlobalHarden`]
+    /// walks prototype chains, so a single `harden({})` anywhere leaves
+    /// `Function.prototype.constructor` `{writable: false, configurable: false}`
+    /// and a later `[[DefineOwnProperty]]` cannot replace it. XS avoids this
+    /// by writing the slot directly (`fx_lockdown_aux`, `:52`) before it
+    /// hardens anything, and this does the same through
+    /// `set_own_unmetered_with_flag`.
+    ///
+    /// Allocation-driven metering, like its `harden` sibling — `xsLockdown.c`
+    /// calls no `mxMeter`.
+    GlobalLockdown,
     /// `$262.detachArrayBuffer(buffer)`, the test262 host hook.
     Test262DetachArrayBuffer,
     /// `JSON.stringify(value[, replacer[, space]])` serializes through
@@ -1066,6 +1091,24 @@ pub enum Native {
     /// generator** function constructor, reachable as
     /// `(async function*(){}).constructor`.
     AsyncGeneratorFunction,
+    /// The inert stand-in `lockdown()` installs as the function-family and
+    /// `Date` prototypes' `constructor` (`fx_lockdown_aux`, `xsLockdown.c:52`,
+    /// which duplicates `%ThrowTypeError%` and stamps it
+    /// `XS_CAN_CONSTRUCT_FLAG`). Callable AND constructable, and both throw:
+    /// being constructable is the point, since `new
+    /// Function.prototype.constructor(src)` must fail as a secure-mode refusal
+    /// rather than as "not a constructor".
+    ///
+    /// The message is XS's. `fxThrowTypeError` (`xsArguments.c:220`) branches
+    /// on `XS_CAN_CONSTRUCT_FLAG` and says **"secure mode"** for exactly this
+    /// instance, reserving "strict mode" for the arguments-object poison. The
+    /// oracle compares thrown messages, so this is not a free choice.
+    ///
+    /// Minted at `lockdown()` time, never at boot, so no snapshot carries one
+    /// and [`Interp::boot_fingerprint`] does not see it. (Binding
+    /// [`NativeMethod::GlobalLockdown`] *does* move the fingerprint; that is a
+    /// separate consequence, recorded on `create_hardened_globals`.)
+    LockedDownConstructor,
 }
 
 impl Native {
@@ -1122,6 +1165,11 @@ impl Native {
             Native::GeneratorFunction => "GeneratorFunction",
             Native::AsyncFunction => "AsyncFunction",
             Native::AsyncGeneratorFunction => "AsyncGeneratorFunction",
+            // XS's is anonymous: `fx_lockdown_aux` sets the duplicate's code
+            // ID to `XS_NO_ID` (`xsLockdown.c:61`). SES's shim names each one
+            // after the constructor it replaces; XS does not, and this follows
+            // XS because the oracle compares what it can see.
+            Native::LockedDownConstructor => "",
         }
     }
 
@@ -1149,6 +1197,11 @@ impl Native {
             // `%GeneratorFunction%`/`%AsyncFunction%`/`%AsyncGeneratorFunction%`
             // each have `length` 1 (their sole formal is `...args`).
             Native::GeneratorFunction | Native::AsyncFunction | Native::AsyncGeneratorFunction => 1,
+            // Only the DEFAULT. `fx_lockdown_aux` takes the length from the
+            // constructor it replaces — 1 for the function family, 7 for
+            // `Date` — so `Interp::do_lockdown` sets `FuncInfo::arity` per
+            // instance and this value is never the one a guest reads.
+            Native::LockedDownConstructor => 1,
             Native::TypedArray(_) => 3,
             Native::DataView => 1,
             Native::Date => 7,

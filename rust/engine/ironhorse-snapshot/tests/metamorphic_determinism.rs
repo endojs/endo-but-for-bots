@@ -111,6 +111,11 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
     // `%TypedArray%.prototype.at` moves all five of them together: it is a
     // boot-heap content move, so each marker restamps the same changed heap.
     // `findLast`/`findLastIndex` move all five again, for the same reason.
+    // The guest `lockdown()` global moves all five once more, and the final
+    // blob below with them: `create_hardened_globals` mints a third native
+    // instance, which is boot-heap content. The inert constructors `lockdown()`
+    // installs are NOT in this move -- they are minted when a guest calls it,
+    // and this fixture never does.
     let mut previous = session.machine().snapshot_image(&sig).unwrap().into_image();
     // Historical hashes describe the platform profile. Normalize only SIGN.
     let mut platform_signature = sig.encode();
@@ -122,13 +127,13 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
     assert_eq!(
         hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&previous)),
         // F189 reserves MAX for environments; symbol IDs now start at MAX-1.
-        "c39ddaf28e67b97a069252022e1580dbdfc187e1218f536060ae39694566a8f2"
+        "34081da8da8d4db186c3f7162c82bfdd7f3c544484309a86b1d5e0000e001135"
     );
     previous.meter.cost_table_version = "ironhorse-meter-5".into();
     assert_eq!(
         hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&previous)),
         // F189 reserves MAX for environments; symbol IDs now start at MAX-1.
-        "18f6529b828aa5b4e1fa238f2eedfa65bd6985f6d07551665d456826fbf1a91e"
+        "6226dfa6f23504cc7faa9ea765ccd270ebed6cf431440609a05e100764cdbf6f"
     );
 
     let mut format19 = session.machine().snapshot_image(&sig).unwrap().into_image();
@@ -136,7 +141,7 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
     format19.version.format_version = 19;
     assert_eq!(
         hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&format19)),
-        "b59074a495b1321d1f71b9d8a6c512ea838649f09127d869f1fabef79d6be901"
+        "08de6cf2299f35cf09c47bcb173e46f0d239928dfbe392d16e2334ba98cb8b16"
     );
 
     let mut format20 = session.machine().snapshot_image(&sig).unwrap().into_image();
@@ -144,7 +149,7 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
     format20.version.format_version = 20;
     assert_eq!(
         hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&format20)),
-        "445aa203d3d16d15a13d09a1312ae192ca97e9d751b4890843ac707b55f467f2"
+        "584c21f04473e98f4eeb09769e334d3027065652de0bf65e12b106db1fdd5f4b"
     );
 
     let mut format21 = session.machine().snapshot_image(&sig).unwrap().into_image();
@@ -152,7 +157,7 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
     format21.version.format_version = 21;
     assert_eq!(
         hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&format21)),
-        "4bbf354e941403fbbc6e7c9f87aacc3dcb39a2155e847bfe92b7bf5ec0a78d2d"
+        "a1c898648ece592a644028fcb7386021f30e37e08ca2af1899429b1baa1fe4bb"
     );
 
     let blob = session
@@ -385,7 +390,7 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
             // Re-pinned for format version 23, which lets `ASYN` carry
             // async generator instances (architecture review F127). This
             // fixture holds none, so only the VERS payload changes.
-            "02b51e051e57e0b739f6896c8f76f99a819ed918cde690ce639bffa217fb6436"
+            "1725371ae5bcdaf0980bd6b4ce2bfa000d96f26421869ec5024ac4152d9c64ae"
         } else {
             // F189 reserved IDs, with the deterministic provider SIGN.
             // Re-pinned for format version 23 alongside the platform pin.
@@ -463,6 +468,9 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // the blob — the one other deliberate exception to the two-pin
         // independence, exercised by a version field doing its job.
         // Re-pinned with the blob after the 2026-08-29 llm rebase.
+        // Re-pinned with the blob again for the guest `lockdown()` global: a
+        // third `create_hardened_globals` native is boot-heap content, so the
+        // blob moved and the manifest that stamps it moved with it.
         // Re-pinned for schema 14 and format 3: the manifest and small
         // state gain the Date carry, while VERS marks its atom.
         // Re-pinned for schema 15 and format 4: the small state gains
@@ -632,7 +640,7 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
             // the `VERS` stamp and the schema, so the seal moves with the blob
             // while the small state itself is unchanged (this machine holds no
             // async generator).
-            "194acf3cdedd0b5ad68c2b5817570c7dabc32fb3bf341bbbf4a5b9e1e51f307c"
+            "17a68586063b71f10febaf4f4ffc93755d50a0022bd1a7c7406954551c34a44e"
         } else {
             // Re-pinned for format version 23 / store schema v34 alongside
             // the platform pin.

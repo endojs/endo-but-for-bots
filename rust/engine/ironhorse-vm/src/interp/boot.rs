@@ -434,6 +434,12 @@ impl Interp {
                 // iterated here — it has no `.prototype`. Unreachable in this loop.
                 Native::Proxy => unreachable!("Proxy is not a create_intrinsics loop entry"),
                 Native::Eval => unreachable!("eval is not a constructor-loop entry"),
+                // `lockdown()` mints these one at a time and gives each its own
+                // `prototype` (`Interp::do_lockdown`); none is ever an
+                // `intrinsics()` entry, so this loop never sees one.
+                Native::LockedDownConstructor => {
+                    unreachable!("the locked-down constructor is minted by lockdown(), not at boot")
+                }
                 // `%GeneratorFunction%` / `%AsyncFunction%` /
                 // `%AsyncGeneratorFunction%` are non-global and created
                 // separately (below), never yielded by `intrinsics()`.
@@ -2082,29 +2088,37 @@ impl Interp {
     }
 
     /// Bind the Hardened-JavaScript global functions (`xsLockdown.c`) the
-    /// embedder installs — `harden`/`petrify` — as native function instances in
-    /// `intrinsics`, so [`Self::link_intrinsics`] binds them into the global
-    /// object under the program-local id the XS compiler assigned each name
-    /// (`typeof harden === "function"`). `lockdown` (transitively freezing the
-    /// shared intrinsics, taming Date/Math, the idempotence throw) and
-    /// `mutabilities` (the `fxVerify*` mutable-residue report) are NOT bound
-    /// here and have no dispatch at all: `typeof lockdown` answers
-    /// `"undefined"` and calling it is an ordinary
-    /// `ReferenceError: get lockdown: undefined variable`.
+    /// embedder installs — `harden`, `petrify` and `lockdown` — as native
+    /// function instances in `intrinsics`, so [`Self::link_intrinsics`] binds
+    /// them into the global object under the program-local id the XS compiler
+    /// assigned each name (`typeof harden === "function"`).
     ///
-    /// An earlier revision of this comment claimed both were a "reported scope
-    /// fold" that self-names an honest `Halt::NotImplemented`, and pointed at
-    /// "their dispatch". Measured 2026-09-16: there is no such dispatch, no
-    /// `NativeMethod` variant for either name, and the loop below inserts only
-    /// two entries. The `ReferenceError` is arguably the better answer of the
-    /// two — an absent global reads as absent — so this is the comment being
-    /// corrected, not the behaviour. A native `lockdown` is scoped in
-    /// `designs/ironhorse-native-lockdown.md`; note that binding one moves
-    /// [`Self::boot_fingerprint`], which hashes this map.
+    /// `lockdown` is [`Interp::do_lockdown`], scoped in
+    /// `designs/ironhorse-native-lockdown.md`. `mutabilities` (the `fxVerify*`
+    /// mutable-residue report, `xsLockdown.c:486`) is still NOT bound and has
+    /// no dispatch at all: `typeof mutabilities` answers `"undefined"` and
+    /// calling it is an ordinary
+    /// `ReferenceError: get mutabilities: undefined variable`.
+    ///
+    /// An earlier revision of this comment claimed `lockdown` and
+    /// `mutabilities` were a "reported scope fold" that self-names an honest
+    /// `Halt::NotImplemented`, and pointed at "their dispatch". Measured
+    /// 2026-09-16: there was no such dispatch and no `NativeMethod` variant for
+    /// either name. `lockdown` now has both; `mutabilities` still answers with
+    /// a `ReferenceError`, which is the better of the two — an absent global
+    /// reads as absent — so it stays as it is.
+    ///
+    /// **Adding a name here moves [`Self::boot_fingerprint`]**, which hashes
+    /// this map's names and slot indices and every `functions` entry including
+    /// its `NativeMethod` variant. `Signature::check_boot` then refuses any
+    /// snapshot written by a build with a different set, so the
+    /// `ironhorse-snapshot` golden identity fixtures are regenerated whenever
+    /// this loop changes.
     fn create_hardened_globals(&mut self) {
         for (name, m) in [
             ("harden", NativeMethod::GlobalHarden),
             ("petrify", NativeMethod::GlobalPetrify),
+            ("lockdown", NativeMethod::GlobalLockdown),
         ] {
             let mf = self.alloc_method(m);
             self.intrinsics.insert(name, mf);
