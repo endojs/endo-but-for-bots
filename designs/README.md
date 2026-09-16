@@ -6,6 +6,11 @@ below; record each grooming pass by appending its note to `ARCHIVE.md` — do no
 layer new groom notes at the top of this file.*
 
 *Recently added or revised:
+[slots-ocapn-op-lanes](slots-ocapn-op-lanes.md) (added 2026-09-16;
+promotes slot-machine field access from a private `__get__` delivery to a
+first-class `get` verb and adds distinct `index` / `untag` lanes, the matching
+`HandledPromise` and `E` surfaces, dedicated canonical-CBOR payloads, and
+strict JavaScript/Rust supervisor parity),
 [hosted-agent-broker-oauth](hosted-agent-broker-oauth.md) (added 2026-09-08 and
 revised 2026-09-09; credential custody for hosted agent sessions — a broker-held
 refreshing OAuth credential with expiry tracking, single-flight exchange, a
@@ -426,6 +431,7 @@ LLM-agent stack).*
 | [lal-reply-chain-transcripts](lal-reply-chain-transcripts.md) | 2026-02-26 | 2026-03-05 | **Complete** |
 | [lal-transcript-memory-management](lal-transcript-memory-management.md) | 2026-03-05 | 2026-03-05 | Not Started |
 | [ocapn-iroh-netlayer](ocapn-iroh-netlayer.md) | 2026-07-13 | 2026-07-13 | **Complete** |
+| [slots-ocapn-op-lanes](slots-ocapn-op-lanes.md) | 2026-09-16 | — | In Progress |
 | [ocapn-network-transport-separation](ocapn-network-transport-separation.md) | 2026-02-14 | 2026-02-24 | In Progress |
 | [ocapn-noise-cryptographic-review](ocapn-noise-cryptographic-review.md) | 2026-02-14 | 2026-02-24 | Not Started |
 | [ocapn-noise-key-only-session-boundary](ocapn-noise-key-only-session-boundary.md) | 2026-07-18 | 2026-07-19 | Proposed |
@@ -512,6 +518,12 @@ The same pass also gains
 hosted-agent broker's OAuth credential lifecycle and the record of why both
 vendor subscription modes stay closed; its buckets are left to #1146 for the
 same reason.
+
+The 2026-09-16 pass adds
+[slots-ocapn-op-lanes](slots-ocapn-op-lanes.md) as an In Progress M4 item.
+Draft PR #990 already carries a candidate implementation, so this addition does
+not change the roadmap's critical path or timeline; the unreconciled aggregate
+status buckets remain deferred to #1146.
 
 The 2026-08-25 update adds [hardener-indexed-cardinality](hardener-indexed-cardinality.md) (Proposed), increasing Proposed from 36 to 37 and the design count from 191 to 192.
 
@@ -719,11 +731,14 @@ flowchart TD
     end
 
     subgraph OCapN
+        ocbor[cbor-codec<br/><i>PHASE 1 IMPLEMENTED</i>]
+        oslots[slots-ocapn-op-lanes<br/><i>IN PROGRESS</i>]
         onet[ocapn-network-transport-separation<br/><i>IN PROGRESS</i>]
         otcp[ocapn-tcp-for-test-extraction]
         orev[ocapn-noise-cryptographic-review]
         onoise[ocapn-noise-network<br/><i>COMPLETE</i>]
         oiroh[ocapn-iroh-netlayer<br/><i>COMPLETE</i>]
+        ocbor --> oslots
         onet --> oiroh
         okey[ocapn-noise-key-only-session-boundary]
         oreconn[ocapn-noise-session-reconnect]
@@ -1096,6 +1111,7 @@ finalized.
 | syrups | Deprecated | Consolidated with PR 29's `@endo/syrups` (same shape: `Uint8Array` chunks in, `Uint8Array`-delimited messages out); see [`ocapn-tcp-syrup-framing.md`](ocapn-tcp-syrup-framing.md) |
 | cbor-frame | Implemented (PR #288) | `@endo/cbor-frame` reader/writer for length-prefixed CBOR byte strings; peer of `@endo/syrup-frame` and `@endo/netstring` |
 | cbor-codec | Phase 1 implemented | Shared canonical-CBOR primitive codec (`@endo/cbor`) extracted from `packages/ocapn/src/cbor` and PR #124's `packages/slots/src/cbor.js`; also serves the M11 `endor` slot-machine line; complement of the framing package `@endo/cbor-frame` (impl PR #288) |
+| slots-ocapn-op-lanes | In Progress | Seven-verb slot-machine protocol: distinct get/index/untag operations, matching Eventual Send surfaces, dedicated scalar payloads, and JavaScript/Rust supervisor parity; candidate implementation in draft PR #990 |
 | cbor-encode-decode | Not Started | Split `@endo/cbor` into `@endo/cbor/encode` and `@endo/cbor/decode` subpath exports with an internal `internals.js` for the shared `canonicalInfo`/`CANONICAL_NAN`/bounds; root `.` re-export preserved; follow-up to kriskowal's review of #885 |
 | ocapn-noise-cryptographic-review | Not Started | External review coordination |
 | daemon-agent-network-identity | Not Started | Per-agent keypairs for network identity |
@@ -1739,6 +1755,7 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | ~~syrup-frame~~ | — | — | 4 | Consolidated into `ocapn-tcp-syrup-framing` (PR 29); see [`syrup-frame.md`](syrup-frame.md) |
 | ~~cbor-frame~~ | — | — | 4 | New `@endo/cbor-frame` package (implemented, PR #288); design merged with syrup framing in PR #86 |
 | cbor-codec | S | 2-3 days | 4 | New `@endo/cbor` package plus ocapn and slots migrations; slots adoption gated on PR #124 landing |
+| slots-ocapn-op-lanes | S | 1-2 days to reconcile the candidate | 4 | Separate get/index/untag lanes across Eventual Send, JavaScript slots, and the Rust supervisor; implementation exists in draft PR #990 but needs dedicated payloads and fail-closed translation parity |
 | ocapn-noise-cryptographic-review | S | 1 day | 4 | External review coordination |
 | thixotrope | M | Not re-estimated | 4 | XS and Ironhorse engines, comms hub, supervisor, and application installation are implemented. Remaining delivery-contract work and package experiments need a new estimate; the earlier XS-adapter estimate is obsolete. |
 | daemon-agent-network-identity | S-M | 3 days | 4 | Network registration, locator construction |
@@ -1826,7 +1843,7 @@ date of this pass.
 | M1: AI Agent Experience (was M0) | 0 | **Complete** | — |
 | M2: Project Hygiene (was M½) | 0 | **Complete** | — |
 | M3: Remote Access & Tools (was M1) | 19 (`gateway-package`, `daemon-docker-selfhost`, `daemon-agent-tools`, `endo-agent-tools`, `agentry-agent-builder`, `agentry-git-verb-gaps`, `agentry-git-eval-scenarios`, `exo-git-follow-root-advancement`, `daemon-mount`, `daemon-worker-import-from-mount`, `npm-registry-as-directory-tree`, `mvs-resolver`, `snapshot-mapper`, `filesystem-watchers`, `daemon-locator-terminology`, `daemon-rename-to-manager`, `daemon-xs-worker-snapshot`, `endoclaw-timer`, `endoclaw-network-fetch`) | 9-13 weeks | 11-15 weeks |
-| M4: Networking (was M2) | 8 (`ocapn-network-transport-separation`, `ocapn-tcp-for-test-extraction`, `ocapn-tcp-syrup-framing`, `cbor-frame`, `cbor-codec`, `ocapn-noise-cryptographic-review`, `daemon-agent-network-identity`, `thixotrope`) | 5-6 weeks | 6-8 weeks |
+| M4: Networking (was M2) | 9 (`ocapn-network-transport-separation`, `ocapn-tcp-for-test-extraction`, `ocapn-tcp-syrup-framing`, `cbor-frame`, `cbor-codec`, `slots-ocapn-op-lanes`, `ocapn-noise-cryptographic-review`, `daemon-agent-network-identity`, `thixotrope`) | 5-6 weeks; operation-lane reconciliation is already in flight | 6-8 weeks |
 | M5: Public Hosting & Billing (was M7) | 4 in-flight on PR #356 stack (`gateway-package` counted under M3; `gateway-packaging-ci`, `gateway-aws-deployment`, `gateway-aws-attuned` counted here) + 3 design gaps (`gateway-oauth-bonding`, `gateway-key-recovery`, `gateway-stripe-adapter`) | 4-6 weeks design + impl | merge cadence of PRs #343 and #356 |
 | M6: MCP Bridge Hosting (was Milestone B) | 2 net-new (`endo-gateway-mcp` impl, `endo-claude`); cross-milestone slices in M3 (P0) and M5 (P2/P3/P4 gaps) | ~3-3.5 weeks own work (endo-gateway-mcp ~2 weeks + endo-claude ~1-1.5 weeks) + ~6-9 weeks across P0-P4 | gated by M3 gateway-package phases 2/7/8 merge cadence |
 | M7: Weblets & Integrations (was M3) | 12 (`familiar-unified-weblet-server`, `familiar-chat-weblet-hosting`, `cli-store-verb-text-modes`, `cli-edit-verb`, `daemon-weblet-application`, `exo-zip-package`, `endoclaw-oauth`, `exo-google-sheets`, `endoclaw-proactive-messages`, `endoclaw-notifications`, `endoclaw-webhooks`, `endoclaw-voice`) | 6-8 weeks | 8-11 weeks |
