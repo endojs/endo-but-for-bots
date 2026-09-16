@@ -521,9 +521,11 @@ same reason.
 
 The 2026-09-16 pass adds
 [slots-ocapn-op-lanes](slots-ocapn-op-lanes.md) as an In Progress M4 item.
-Draft PR #990 already carries a candidate implementation, so this addition does
-not change the roadmap's critical path or timeline; the unreconciled aggregate
-status buckets remain deferred to #1146.
+Draft [endojs/endo-but-for-bots#990](https://github.com/endojs/endo-but-for-bots/pull/990)
+already carries a candidate implementation, so this addition does not change
+the roadmap's critical path or timeline; the unreconciled aggregate status
+buckets remain deferred to
+[endojs/endo-but-for-bots#1146](https://github.com/endojs/endo-but-for-bots/pull/1146).
 
 The 2026-08-25 update adds [hardener-indexed-cardinality](hardener-indexed-cardinality.md) (Proposed), increasing Proposed from 36 to 37 and the design count from 191 to 192.
 
@@ -1111,7 +1113,7 @@ finalized.
 | syrups | Deprecated | Consolidated with PR 29's `@endo/syrups` (same shape: `Uint8Array` chunks in, `Uint8Array`-delimited messages out); see [`ocapn-tcp-syrup-framing.md`](ocapn-tcp-syrup-framing.md) |
 | cbor-frame | Implemented (PR #288) | `@endo/cbor-frame` reader/writer for length-prefixed CBOR byte strings; peer of `@endo/syrup-frame` and `@endo/netstring` |
 | cbor-codec | Phase 1 implemented | Shared canonical-CBOR primitive codec (`@endo/cbor`) extracted from `packages/ocapn/src/cbor` and PR #124's `packages/slots/src/cbor.js`; also serves the M11 `endor` slot-machine line; complement of the framing package `@endo/cbor-frame` (impl PR #288) |
-| slots-ocapn-op-lanes | In Progress | Seven-verb slot-machine protocol: distinct get/index/untag operations, matching Eventual Send surfaces, dedicated scalar payloads, and JavaScript/Rust supervisor parity; candidate implementation in draft PR #990 |
+| slots-ocapn-op-lanes | In Progress | Seven-verb slot-machine protocol: distinct get/index/untag operations, matching Eventual Send surfaces, dedicated scalar payloads, and JavaScript/Rust supervisor parity; candidate implementation in draft [endojs/endo-but-for-bots#990](https://github.com/endojs/endo-but-for-bots/pull/990) |
 | cbor-encode-decode | Not Started | Split `@endo/cbor` into `@endo/cbor/encode` and `@endo/cbor/decode` subpath exports with an internal `internals.js` for the shared `canonicalInfo`/`CANONICAL_NAN`/bounds; root `.` re-export preserved; follow-up to kriskowal's review of #885 |
 | ocapn-noise-cryptographic-review | Not Started | External review coordination |
 | daemon-agent-network-identity | Not Started | Per-agent keypairs for network identity |
@@ -1755,7 +1757,7 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | ~~syrup-frame~~ | — | — | 4 | Consolidated into `ocapn-tcp-syrup-framing` (PR 29); see [`syrup-frame.md`](syrup-frame.md) |
 | ~~cbor-frame~~ | — | — | 4 | New `@endo/cbor-frame` package (implemented, PR #288); design merged with syrup framing in PR #86 |
 | cbor-codec | S | 2-3 days | 4 | New `@endo/cbor` package plus ocapn and slots migrations; slots adoption gated on PR #124 landing |
-| slots-ocapn-op-lanes | S | 1-2 days to reconcile the candidate | 4 | Separate get/index/untag lanes across Eventual Send, JavaScript slots, and the Rust supervisor; implementation exists in draft PR #990 but needs dedicated payloads and fail-closed translation parity |
+| slots-ocapn-op-lanes | S | 1-2 days to reconcile the candidate | 4 | Separate get/index/untag lanes across Eventual Send, JavaScript slots, and the Rust supervisor; implementation exists in draft [endojs/endo-but-for-bots#990](https://github.com/endojs/endo-but-for-bots/pull/990) but needs dedicated payloads and fail-closed translation parity |
 | ocapn-noise-cryptographic-review | S | 1 day | 4 | External review coordination |
 | thixotrope | M | Not re-estimated | 4 | XS and Ironhorse engines, comms hub, supervisor, and application installation are implemented. Remaining delivery-contract work and package experiments need a new estimate; the earlier XS-adapter estimate is obsolete. |
 | daemon-agent-network-identity | S-M | 3 days | 4 | Network registration, locator construction |
