@@ -1366,20 +1366,42 @@ take on its own authority.
    it proves the record stream against a real CLI soonest.
 4. **Codex** — drop the preamble and the bound now; decide separately whether
    to write `thread_history_1.sqlite` or accept prepended history.
-5. **Landed in its lesser form; the faithful form is in another repository.**
-   OpenCode restores the stack's record when a session has none of its own,
-   the same way Codex does, and it now notices a resume that came back under a
-   different id rather than continuing context-free — a case that previously
-   had no handling at all. Both adapters therefore never start a conversation
-   the stack holds without handing it over.
+5. **Landed for OpenCode; open for Codex.**
 
-   What is still lesser is fidelity: a tool call arrives as a line describing
-   one, because the only place it can be a tool call is the CLI's own store,
-   and reaching that needs the import route specified above written in
-   `kumavis/opencode` and the image rebuilt. Only then can
-   `OPENCODE_DB=:memory:` follow and the durable state bind leave the table.
-   Until then OpenCode's state stays a bind — attested, and no longer the sole
-   copy of the conversation.
+   The import route is written and typechecked against the pinned fork, and
+   this repo's image build applies it
+   (`packages/opencode-sandbox/oci/patches/`). A user turn is imported as a
+   `synthetic` message rather than a prompt — the answer to the question this
+   section previously recorded as opencode's to make. `Synthetic` has exactly
+   one consumer, the projector, so it describes a turn without provoking one;
+   the assistant-side events are the same, and the runner module that names
+   them is their producer.
+
+   The adapter restores through that route, and falls back to reading the
+   conversation into the next prompt when the route is absent — which is what
+   lets this land without the image being rebuilt first. It also notices a
+   resume that came back under a different id, a case that previously had no
+   handling and simply continued context-free.
+
+   With the stack holding the record, the store is a cache:
+   `OPENCODE_DB=:memory:` and the data directory on the slice's tmpfs, so the
+   durable row leaves the attested table. That retires the SQLite/WAL
+   constraint entirely — with no file there is no shared-memory index.
+
+   **Codex remains open, and it is a decision rather than work.** Stock
+   `@openai/codex`, no fork, no app-server method that appends a historical
+   turn, and a conversation in a versioned SQLite schema this project cannot
+   read the decoder for. Its restoration is the lesser form the other two have
+   outgrown: the conversation read into the next turn's input, without the
+   preamble and without the bound. Making it faithful needs either upstream
+   support or a decision to reverse-engineer a vendor's private store — a
+   different class of risk from the JSONL coupling accepted for Claude, and
+   not one this design takes on its own authority.
+
+   **Still to verify on a deploy:** the rebuilt image applying the patch, the
+   import working against a live server, and `:memory:` carrying a real
+   session. The fallback means a failure of the first two degrades rather than
+   breaks.
 6. **Answered by option 1 instead.** The cost check found a loopback port
    would have to live in the pinned listener image and relay over its stdio
    transport, so `@endo/sandbox` gained the `bind` kind and the MCP row is
