@@ -237,9 +237,16 @@ export const makeClaudeBackendFactory = ({
        */
       async send(prompt, options = {}) {
         const systemPrompt = options.systemPrompt || spec.systemPrompt;
+        // Forward the turn's options rather than rebuilding them. Naming the
+        // fields here meant every continuity option the stack added — the
+        // transcript above all — was dropped on the way to the client. The
+        // session still remembered, because Claude's own store survives on a
+        // host bind and `--continue` found it, so the stack's record was
+        // never what was carrying the conversation.
         const raw = await E(client).send(
           prompt,
           harden({
+            ...options,
             ...(spec.model ? { model: spec.model } : {}),
             ...(systemPrompt ? { systemPrompt } : {}),
           }),

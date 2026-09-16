@@ -203,6 +203,34 @@ test('create() refuses an unknown model, a network policy, a reasoning effort, d
   t.deepEqual(log, [], 'nothing reached the owner');
 });
 
+test('send() carries the turn\u2019s options, not just the model and persona', async t => {
+  // The factory used to rebuild this record from named fields, so the stack's
+  // transcript never reached the client. The session still remembered —
+  // Claude's own store survives on a host bind and `--continue` finds it — so
+  // the loss was invisible until an adapter without a durable store needed it.
+  const { factory, turns } = makeHarness();
+  const { run } = await E(factory).create(
+    harden({
+      sessionId: 'session-t',
+      model: 'claude-opus-5',
+      systemPrompt: 'persona',
+    }),
+    makeToolSet(),
+  );
+  const transcript = harden([
+    { kind: 'message', role: 'user', content: 'remember ALPENGLOW' },
+    { kind: 'message', role: 'assistant', content: 'noted' },
+  ]);
+  void E(run).send('what was the word?', harden({ transcript }));
+  for (let tries = 0; turns.length === 0 && tries < 50; tries += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await null;
+  }
+  t.deepEqual(turns[0].opts.transcript, transcript);
+  t.is(turns[0].opts.systemPrompt, 'persona');
+  t.is(turns[0].opts.model, 'claude-opus-5');
+});
+
 test('send() forwards the session model and persona and translates the CLI stream', async t => {
   const { factory, turns } = makeHarness();
   const { run } = await E(factory).create(

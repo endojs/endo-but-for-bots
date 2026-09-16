@@ -214,9 +214,13 @@ export const makeOpencodeBackendFactory = ({
        */
       async send(prompt, options = {}) {
         const systemPrompt = options.systemPrompt || spec.systemPrompt;
+        // Forward the turn's options rather than rebuilding them. Naming the
+        // fields here meant every continuity option the stack added — the
+        // transcript above all — was dropped on the way to the client, which
+        // then had nothing to restore from and started context-free.
         return E(client).send(
           prompt,
-          harden({ ...(systemPrompt ? { systemPrompt } : {}) }),
+          harden({ ...options, ...(systemPrompt ? { systemPrompt } : {}) }),
         );
       },
       models: listModels,
