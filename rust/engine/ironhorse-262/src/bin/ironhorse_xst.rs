@@ -28,7 +28,7 @@
 //! stderr with `/^(\w+):? ?(.*)$/m`. `Halt::Throw` already renders as
 //! `Name: message`, so that is printed verbatim.
 
-use ironhorse_262::run_script_source;
+use ironhorse_262::{compile_failure_name, run_script_source};
 use ironhorse_vm::Halt;
 
 fn main() {
@@ -83,9 +83,12 @@ fn run(source: &str) -> i32 {
     let outcome = match run_script_source(source) {
         Ok(o) => o,
         Err(e) => {
-            // A compile failure is how a syntax-error case reports, and
-            // test262 negative-syntax cases expect exactly that.
-            eprintln!("SyntaxError: {e}");
+            // A compile failure is how a negative parse-phase case reports --
+            // but ONLY when it is really the grammar's early error. An
+            // unported construct or an exhausted allowance reported as
+            // `SyntaxError` would pass such a case on our own gap, so
+            // `compile_failure_name` decides which name this is.
+            eprintln!("{}: {e}", compile_failure_name(&e));
             return 1;
         }
     };
