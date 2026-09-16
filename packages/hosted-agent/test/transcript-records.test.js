@@ -7,6 +7,7 @@ import {
   encodeTranscriptRecord,
   pairToolCalls,
   parseTranscript,
+  responsesApiItems,
   splitAtLastCompaction,
 } from '../src/transcript-records.js';
 
@@ -173,5 +174,59 @@ test('tool calls pair with their results by id, earliest unanswered first', t =>
         }),
       ]),
     { message: /answers no call/ },
+  );
+});
+
+test('records become raw Responses API items', t => {
+  const items = responsesApiItems(conversation);
+  t.deepEqual(items, [
+    {
+      type: 'message',
+      role: 'user',
+      content: [{ type: 'input_text', text: 'build the page' }],
+    },
+    {
+      type: 'message',
+      role: 'assistant',
+      content: [{ type: 'output_text', text: 'reading the workspace' }],
+    },
+    // The property the whole exercise is for: a call restores as a call.
+    {
+      type: 'function_call',
+      call_id: 'call_1',
+      name: 'readFile',
+      arguments: '{"path":"a"}',
+    },
+    {
+      type: 'function_call_output',
+      call_id: 'call_1',
+      output: 'contents of a',
+    },
+    {
+      type: 'message',
+      role: 'assistant',
+      content: [{ type: 'output_text', text: 'done' }],
+    },
+  ]);
+});
+
+test('an unsettled call still gets an output, and a compaction drops what it replaced', t => {
+  // A `function_call` with no answering output is a history the provider
+  // rejects, so an interrupted turn must restore as interrupted rather than
+  // as a conversation that cannot load.
+  const interrupted = responsesApiItems([
+    { kind: 'tool-call', id: 'c1', name: 'build', args: '{}' },
+  ]);
+  t.is(interrupted.length, 2);
+  t.regex(String(interrupted[1].output), /did not complete/);
+
+  const compacted = responsesApiItems([
+    ...conversation,
+    { kind: 'compaction', summary: 'we built the page' },
+    { kind: 'message', role: 'user', content: 'now the footer' },
+  ]);
+  t.deepEqual(
+    compacted.map(item => item.content?.[0]?.text ?? item.type),
+    ['we built the page', 'now the footer'],
   );
 });
