@@ -499,10 +499,83 @@ export const makeHostedAgentPolicyVerifier = profile => {
   };
   harden(assertHostedAgentPolicyV1);
 
+  /**
+   * Restate a slice's own attestation as this profile's hosted policy, so it
+   * can be checked a second time at the authority handoff.
+   *
+   * The slice proves its confinement to the runtime. This proves the same
+   * slice is the one this session was promised: the same controls, this
+   * session's roles, and limits that are the per-cgroup halves the runtime
+   * reported, doubled — one cgroup for the policy anchor and one for an
+   * admitted operation.
+   *
+   * Sources are renamed by role rather than carried across. A durable role
+   * becomes `<role>:<sessionId>` and an attach becomes `attach:<key>`, so the
+   * hosted record holds no host path: where the bytes sit is the host's
+   * business, and the role is what an audit entry refers to.
+   *
+   * @param {object} input
+   * @param {any} input.attestation The slice's `policy()`.
+   * @param {string} input.sessionId
+   * @param {string} input.credentialInjection From the broker's evidence.
+   * @param {string} input.brokerTransport From the broker's evidence.
+   * @param {string} input.executionDomain From runtime verification.
+   * @param {string} [input.networkPolicy]
+   */
+  const hostedPolicyFromSlice = ({
+    attestation,
+    sessionId,
+    credentialInjection,
+    brokerTransport,
+    executionDomain,
+    networkPolicy,
+  }) => {
+    const { limits, mounts } = attestation;
+    const controls = Object.fromEntries(
+      Object.entries(attestation).filter(
+        ([key]) => !['version', 'profile', 'limits', 'mounts'].includes(key),
+      ),
+    );
+    const durable = new Set(
+      fixedMounts
+        .filter(mount => mount.kind === 'session')
+        .map(mount => mount.role),
+    );
+    return harden({
+      ...controls,
+      version: HOSTED_AGENT_POLICY_V1.version,
+      sessionId,
+      ...(networkPolicy ? { networkPolicy } : {}),
+      credentialInjection,
+      brokerTransport,
+      executionDomain,
+      limits: {
+        memoryBytes: Number(limits.memoryBytes * 2n),
+        pids: limits.pids * 2,
+        cpuCores: limits.cpuCores * 2,
+        openFiles: limits.openFiles,
+        coreBytes: Number(limits.coreBytes),
+        writableBytes: Number(limits.writableBytes),
+      },
+      mounts: mounts.map((/** @type {any} */ mount) => ({
+        ...mount,
+        source: durable.has(mount.role)
+          ? `${mount.role}:${sessionId}`
+          : mount.role === 'resolver'
+            ? 'resolver:public'
+            : mount.role.startsWith('attach-')
+              ? `attach:${mount.role.slice('attach-'.length)}`
+              : mount.source,
+      })),
+    });
+  };
+  harden(hostedPolicyFromSlice);
+
   return harden({
     fixedMounts,
     assertContainerMounts,
     assertHostedAgentPolicyV1,
+    hostedPolicyFromSlice,
   });
 };
 harden(makeHostedAgentPolicyVerifier);

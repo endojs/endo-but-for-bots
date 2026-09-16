@@ -12,6 +12,59 @@ import {
 } from '../src/opencode-native-controller.js';
 import { makeOpencodeClient } from '../src/opencode-client.js';
 
+/**
+ * What a slice reports about itself, synthesized from the policy it was asked
+ * for. The controller restates this as its hosted policy and checks it at the
+ * authority handoff, so a stub that echoed the request would prove nothing:
+ * the limits are the per-cgroup halves a runtime reports, and each source
+ * carries the prefix its kind gets.
+ */
+const sliceAttestationFor = policy =>
+  harden({
+    version: 'SlicePolicyAttestationV1',
+    profile: policy.profile,
+    backend: 'rootless-podman',
+    imageDigest: policy.imageDigest,
+    network: 'broker-only',
+    networkNamespaceId: policy.brokerSidecar.container,
+    uid: policy.uid,
+    gid: policy.gid,
+    readOnlyRoot: true,
+    noNewPrivileges: true,
+    dropAllCapabilities: true,
+    seccomp: true,
+    devices: 'none',
+    hostSockets: 'none',
+    hostHome: 'none',
+    descendantReaping: true,
+    namespaces: {
+      user: 'private',
+      pid: 'private',
+      ipc: 'private',
+      mount: 'private',
+    },
+    limits: {
+      memoryBytes: policy.resources.memoryBytes,
+      pids: policy.resources.pids,
+      cpuCores: policy.resources.cpuCores,
+      openFiles: policy.resources.openFiles,
+      coreBytes: policy.resources.coreBytes,
+      writableBytes: policy.resources.writableBytes,
+    },
+    mounts: policy.mounts.map(mount => ({
+      role: mount.role,
+      source:
+        mount.kind === 'tmpfs'
+          ? 'tmpfs'
+          : mount.kind === 'volume'
+            ? `volume:${mount.source}`
+            : `${mount.kind}:${mount.source}`,
+      destination: mount.destination,
+      mode: mount.mode ?? 'rw',
+      options: ['nosuid', 'nodev'],
+    })),
+  });
+
 const gate = () => {
   /** @type {(() => void) | undefined} */
   let resolve;
@@ -80,19 +133,27 @@ const fixture = (t, { realClient = false } = {}) => {
       events.push(`provide sandbox ${id}`);
       if (scopes.has(id)) return scopes.get(id);
       let closed = false;
+      /** @param {any} options */
+      const makeSlice = options => {
+        if (closed) throw Error('scope closed');
+        // Captured before `assertCopyData` narrows the value to its copy-data
+        // union, which has no named fields to read back.
+        const requested = options.policy;
+        assertCopyData(options);
+        events.push(['slice', id, options]);
+        return Far('NativeSlice', {
+          async policy() {
+            return sliceAttestationFor(requested);
+          },
+        });
+      };
       const scope = Far('Scope', {
         /** @param {any} options */
         async make(options) {
-          if (closed) throw Error('scope closed');
-          assertCopyData(options);
-          events.push(['slice', id, options]);
-          return Far('NativeSlice', {});
+          return makeSlice(options);
         },
         async makeResolved(options) {
-          if (closed) throw Error('scope closed');
-          assertCopyData(options);
-          events.push(['slice', id, options]);
-          return Far('NativeSlice', {});
+          return makeSlice(options);
         },
         async close() {
           events.push(`close sandbox ${id}`);
@@ -627,9 +688,17 @@ test('public network uses approved proxy environment and literal resolver conten
   );
   t.is(options.env.HTTP_PROXY, 'http://127.0.0.1:9001');
   t.is(options.env.NO_PROXY, '127.0.0.1');
-  t.deepEqual(options.generatedFiles, [
-    { innerPath: '/etc/resolv.conf', contents: 'nameserver 127.0.0.53\n' },
-  ]);
+  // The operator's generated nameserver file is a declared mount, the way
+  // Codex has always had it, not a `generatedFiles` entry the attested table
+  // would have no row for.
+  t.false('generatedFiles' in options);
+  t.deepEqual(options.policy.mounts[0], {
+    role: 'resolver',
+    kind: 'resolver',
+    source: '/operator/public-resolv.conf',
+    destination: '/etc/resolv.conf',
+    mode: 'ro',
+  });
   // The operator's per-adapter native profile no longer selects the slice's
   // limits: every hosted adapter runs the one shared resource profile, which
   // is what makes the attested contract comparable across the three.

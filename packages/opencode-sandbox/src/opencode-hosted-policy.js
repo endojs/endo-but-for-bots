@@ -52,3 +52,6 @@ const opencodePolicy = makeHostedAgentPolicyVerifier({
 export const assertContainerMounts = opencodePolicy.assertContainerMounts;
 export const assertHostedAgentPolicyV1 =
   opencodePolicy.assertHostedAgentPolicyV1;
+
+/** Restate a slice's attestation as this profile's hosted policy. */
+export const hostedPolicyFromSlice = opencodePolicy.hostedPolicyFromSlice;

@@ -48,6 +48,10 @@ import { ANTHROPIC_ORIGIN, CLAUDE_BROKER_ACCOUNT } from './claude-broker.js';
 import { makeClaudeClient } from './claude-client.js';
 import { CREDENTIAL_ENV_VARS } from './claude-credential-kinds.js';
 import { readClaudeSessionPlan } from './claude-session-plan.js';
+import {
+  assertHostedAgentPolicyV1,
+  hostedPolicyFromSlice,
+} from './claude-hosted-policy.js';
 import { writeClaudeTranscript } from './claude-transcript-writer.js';
 import { makeTranscriptResume } from './claude-transcripts.js';
 import { startMcpSocketServer } from './mcp-socket-server.js';
@@ -307,6 +311,21 @@ export const makeClaudeNativeController = ({
           sizeBytes: 256n * 1024n ** 2n,
         },
       ];
+      // A public-network session gets the operator's generated nameserver
+      // file as a declared mount, the way Codex does, rather than as a
+      // `generatedFiles` entry the attested table has no row for. The
+      // hosted contract expects this row whenever the policy is
+      // public-internet, so writing the file some other way would leave the
+      // handoff check looking for a mount that is not there.
+      if (publicNetwork) {
+        /** @type {any[]} */ (mounts).unshift({
+          role: /** @type {const} */ ('resolver'),
+          kind: /** @type {const} */ ('resolver'),
+          source: publicNetwork.resolverConfigPath,
+          destination: /** @type {const} */ ('/etc/resolv.conf'),
+          mode: /** @type {const} */ ('ro'),
+        });
+      }
       const options = harden({
         rootfs,
         // The policy path derives the namespace from the attested sidecar
@@ -333,16 +352,6 @@ export const makeClaudeNativeController = ({
           ],
           attestationArgv: ['/bin/sleep', 'infinity'],
         },
-        ...(publicNetwork
-          ? {
-              generatedFiles: [
-                {
-                  innerPath: '/etc/resolv.conf',
-                  contents: `nameserver ${publicNetwork.dnsHost}\n`,
-                },
-              ],
-            }
-          : {}),
         env: {
           ...makePublicNetworkEnvironment(publicNetwork),
           // The CLI reaches the listener's loopback endpoint and holds a
@@ -358,6 +367,27 @@ export const makeClaudeNativeController = ({
       // mount table verifies against the anchor's own, which is also what
       // lets this adapter take runtime attaches it previously had to refuse.
       const slice = await E(sandboxScope).make(options);
+      // Checked twice. The runtime proved the slice's confinement to itself;
+      // this proves the slice it returned is the one this session was
+      // promised — the hosted contract's controls, this profile's roles, and
+      // no mount the table did not declare. Codex has always done this at its
+      // authority handoff; the other two did not, because they had no
+      // attestation to restate.
+      assertHostedAgentPolicyV1(
+        hostedPolicyFromSlice({
+          attestation: await E(slice).policy(),
+          sessionId: approved.sandboxSessionId,
+          credentialInjection: 'broker-only',
+          brokerTransport: 'loopback-sidecar',
+          executionDomain: 'guest',
+          ...(publicNetwork ? { networkPolicy: 'public-internet' } : {}),
+        }),
+        {
+          imageDigest: evidence.imageDigest,
+          sessionId: approved.sandboxSessionId,
+          ...(publicNetwork ? { networkPolicy: 'public-internet' } : {}),
+        },
+      );
       closeIfStopping();
       const resume = makeResume(state.directory, {
         debug: Boolean(process.env.ENDO_CLAUDE_DEBUG_RESUME),

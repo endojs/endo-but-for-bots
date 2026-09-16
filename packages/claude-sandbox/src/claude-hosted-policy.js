@@ -47,3 +47,6 @@ const claudePolicy = makeHostedAgentPolicyVerifier({
 
 export const assertContainerMounts = claudePolicy.assertContainerMounts;
 export const assertHostedAgentPolicyV1 = claudePolicy.assertHostedAgentPolicyV1;
+
+/** Restate a slice's attestation as this profile's hosted policy. */
+export const hostedPolicyFromSlice = claudePolicy.hostedPolicyFromSlice;

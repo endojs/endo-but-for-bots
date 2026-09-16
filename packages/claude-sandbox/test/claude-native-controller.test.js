@@ -16,6 +16,59 @@ import {
   makeClaudeNativeController,
 } from '../src/claude-native-controller.js';
 
+/**
+ * What a slice reports about itself, synthesized from the policy it was asked
+ * for. The controller restates this as its hosted policy and checks it at the
+ * authority handoff, so a stub that echoed the request would prove nothing:
+ * the limits are the per-cgroup halves a runtime reports, and each source
+ * carries the prefix its kind gets.
+ */
+const sliceAttestationFor = policy =>
+  harden({
+    version: 'SlicePolicyAttestationV1',
+    profile: policy.profile,
+    backend: 'rootless-podman',
+    imageDigest: policy.imageDigest,
+    network: 'broker-only',
+    networkNamespaceId: policy.brokerSidecar.container,
+    uid: policy.uid,
+    gid: policy.gid,
+    readOnlyRoot: true,
+    noNewPrivileges: true,
+    dropAllCapabilities: true,
+    seccomp: true,
+    devices: 'none',
+    hostSockets: 'none',
+    hostHome: 'none',
+    descendantReaping: true,
+    namespaces: {
+      user: 'private',
+      pid: 'private',
+      ipc: 'private',
+      mount: 'private',
+    },
+    limits: {
+      memoryBytes: policy.resources.memoryBytes,
+      pids: policy.resources.pids,
+      cpuCores: policy.resources.cpuCores,
+      openFiles: policy.resources.openFiles,
+      coreBytes: policy.resources.coreBytes,
+      writableBytes: policy.resources.writableBytes,
+    },
+    mounts: policy.mounts.map(mount => ({
+      role: mount.role,
+      source:
+        mount.kind === 'tmpfs'
+          ? 'tmpfs'
+          : mount.kind === 'volume'
+            ? `volume:${mount.source}`
+            : `${mount.kind}:${mount.source}`,
+      destination: mount.destination,
+      mode: mount.mode ?? 'rw',
+      options: ['nosuid', 'nodev'],
+    })),
+  });
+
 const gate = () => {
   /** @type {(() => void) | undefined} */
   let resolve;
@@ -100,7 +153,7 @@ const fixture = (t, { realClient = false } = {}) => {
         const attested = /** @type {any} */ (options).policy;
         return Far('NativeSlice', {
           async policy() {
-            return attested;
+            return sliceAttestationFor(attested);
           },
           async dispose() {
             events.push(`dispose slice ${id}`);
@@ -508,9 +561,17 @@ test('a public-internet plan uses the attested proxy environment and literal res
   t.is(options.env.HTTP_PROXY, 'http://127.0.0.1:9001');
   t.is(options.env.NO_PROXY, '127.0.0.1');
   t.is(options.env.ANTHROPIC_BASE_URL, 'http://127.0.0.1:9000');
-  t.deepEqual(options.generatedFiles, [
-    { innerPath: '/etc/resolv.conf', contents: 'nameserver 127.0.0.53\n' },
-  ]);
+  // The operator's generated nameserver file is a declared mount, the way
+  // Codex has always had it, not a `generatedFiles` entry the attested table
+  // would have no row for.
+  t.false('generatedFiles' in options);
+  t.deepEqual(options.policy.mounts[0], {
+    role: 'resolver',
+    kind: 'resolver',
+    source: '/operator/public-resolv.conf',
+    destination: '/etc/resolv.conf',
+    mode: 'ro',
+  });
   const [, , spec] = f.events.find(
     event => Array.isArray(event) && event[0] === 'grant',
   );

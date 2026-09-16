@@ -25,7 +25,11 @@ import { SLICE_POLICY_PROFILE } from '@endo/sandbox/policy.js';
 
 import path from 'node:path';
 
-import { STATE_PATH } from './opencode-hosted-policy.js';
+import {
+  STATE_PATH,
+  assertHostedAgentPolicyV1,
+  hostedPolicyFromSlice,
+} from './opencode-hosted-policy.js';
 import { makeOpencodeClient } from './opencode-client.js';
 import { makeOpencodeConfig, parseModelRef } from './opencode-agent-config.js';
 import {
@@ -262,6 +266,21 @@ export const makeOpencodeNativeController = ({
         destination: DEFAULT_INNER_DIR,
         mode: /** @type {const} */ ('ro'),
       });
+      // A public-network session gets the operator's generated nameserver
+      // file as a declared mount, the way Codex does, rather than as a
+      // `generatedFiles` entry the attested table has no row for. The
+      // hosted contract expects this row whenever the policy is
+      // public-internet, so writing the file some other way would leave the
+      // handoff check looking for a mount that is not there.
+      if (publicNetwork) {
+        /** @type {any[]} */ (mounts).unshift({
+          role: /** @type {const} */ ('resolver'),
+          kind: /** @type {const} */ ('resolver'),
+          source: publicNetwork.resolverConfigPath,
+          destination: /** @type {const} */ ('/etc/resolv.conf'),
+          mode: /** @type {const} */ ('ro'),
+        });
+      }
       const options = harden({
         rootfs,
         // The policy path derives the namespace from the attested sidecar
@@ -287,16 +306,6 @@ export const makeOpencodeNativeController = ({
           ],
           attestationArgv: ['/bin/sleep', 'infinity'],
         },
-        ...(publicNetwork
-          ? {
-              generatedFiles: [
-                {
-                  innerPath: '/etc/resolv.conf',
-                  contents: `nameserver ${publicNetwork.dnsHost}\n`,
-                },
-              ],
-            }
-          : {}),
         env: {
           ...makePublicNetworkEnvironment(publicNetwork),
           OPENROUTER_API_KEY: 'opencode-broker-placeholder',
@@ -337,6 +346,27 @@ export const makeOpencodeNativeController = ({
       // `make`, not `makeResolved`: the runtime returns a slice only once its
       // mount table verifies against the anchor's own.
       const slice = await E(sandboxScope).make(options);
+      // Checked twice. The runtime proved the slice's confinement to itself;
+      // this proves the slice it returned is the one this session was
+      // promised — the hosted contract's controls, this profile's roles, and
+      // no mount the table did not declare. Codex has always done this at its
+      // authority handoff; the other two did not, because they had no
+      // attestation to restate.
+      assertHostedAgentPolicyV1(
+        hostedPolicyFromSlice({
+          attestation: await E(slice).policy(),
+          sessionId: approved.sandboxSessionId,
+          credentialInjection: 'broker-only',
+          brokerTransport: 'loopback-sidecar',
+          executionDomain: 'guest',
+          ...(publicNetwork ? { networkPolicy: 'public-internet' } : {}),
+        }),
+        {
+          imageDigest: evidence.imageDigest,
+          sessionId: approved.sandboxSessionId,
+          ...(publicNetwork ? { networkPolicy: 'public-internet' } : {}),
+        },
+      );
       closeIfStopping();
       client = makeClient({
         sessionId: approved.sessionId,
