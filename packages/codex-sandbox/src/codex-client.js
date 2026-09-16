@@ -1832,7 +1832,7 @@ export const makeCodexClient = ({
     },
     help(method = '') {
       const methods = harden({
-        send: 'send(prompt, options?) -> streamed provider-neutral events. continuityContext is complete historical conversation text (at most 262144 characters), restored only into an empty/new native thread; continuityContextUnavailable refuses required restoration without disrupting an existing conversation.',
+        send: 'send(prompt, options?) -> streamed provider-neutral events. continuityContext is complete historical conversation text, restored only into an empty/new native thread; continuityContextUnavailable refuses required restoration without disrupting an existing conversation.',
         models: 'models() -> app-server model catalog',
         interrupt: 'interrupt() -> interrupt the active turn',
         acknowledge:
