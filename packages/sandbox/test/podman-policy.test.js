@@ -550,10 +550,11 @@ test('the anchor is created under the whole policy prefix', async t => {
 
   t.deepEqual(valuesOf('--user'), ['1000:1000']);
   t.deepEqual(valuesOf('--pid'), ['private']);
-  // Deliberately absent: see `assemblePolicyArgv`. The user namespace
-  // is proved from the kernel, not asked for with a flag a rootless
-  // engine cannot satisfy.
-  t.deepEqual(valuesOf('--userns'), []);
+  // `keep-id`, never `private`: see `assemblePolicyArgv`. The namespace
+  // itself is still proved from the kernel rather than asked for; this
+  // flag only maps the daemon's uid onto the slice's declared one, so
+  // that the mounts the policy declares are mounts the slice can use.
+  t.deepEqual(valuesOf('--userns'), ['keep-id:uid=1000,gid=1000']);
   t.deepEqual(valuesOf('--ipc'), ['private']);
   t.deepEqual(valuesOf('--cap-drop'), ['ALL']);
   t.deepEqual(valuesOf('--network'), ['container:broker-sidecar-s1']);
