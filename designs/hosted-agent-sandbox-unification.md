@@ -945,6 +945,44 @@ Four consequences, in the order they land:
    session rather than two, against a range that is a host-lifetime budget
    (`CODEX-SANDBOX-MIGRATION-PLAN.md`).
 
+#### What step 4 needs first — open, 2026-09-16
+
+Three of Claude's and OpenCode's four mounts can move onto the attested table
+as they stand. The other two cannot, and neither can be made to by projecting
+them:
+
+- **The CLI's native state.** OpenCode forces SQLite WAL, which needs same-host
+  shared memory; the adapter already says so in as many words — *"Durable
+  session state, host-backed (NOT 9P)"* — and this design already rules the
+  projection out above. Claude's transcript directory is host-backed for the
+  same reason its provider is: it is the state provider's directory, not a tree
+  the session brought.
+- **The MCP socket directory.** The guest connects to a unix socket in a
+  read-only bind and runs a small stdio bridge beside it. A 9P projection
+  cannot carry a connectable socket inode, so this row is a host bind by
+  construction. Codex has no equivalent — it reaches its tools over the app
+  server's transport — which is why the profile lifted from it has no row for
+  one.
+
+So the attested table needs a third mount kind: a **host bind**, attested as
+what it is — a bind of a host path, at a declared destination, in a declared
+mode, with `nosuid` and `nodev` — and making no projection claim. That is
+strictly more than these two adapters attest today, which is nothing, and it
+keeps the 9P claim meaningful for the rows that can make it rather than
+diluting `attach` into "some bind we did".
+
+The decision to take before writing it: whether an attested host bind may name
+any host path, or only one under a root the adapter's profile declares. The
+second is what makes the row worth attesting — it is the difference between
+"this is a bind" and "this is a bind of something this deployment owns" — and
+it is the shape the runtime-attach registrar already has for its mountpoints.
+
+Landing step 4 also changes what these two slices get at `/tmp`, `/run` and
+`/dev`: today `--read-only-tmpfs=true` gives them Podman's defaults with no
+declared size, and the attested profile declares each and counts it in
+`writableBytes`. Claude puts `HOME` on `/tmp`, so that ceiling is a real
+change, not a formality.
+
 **Deployment note (2026-09-16).** Landing 3 changes the Codex backend's
 recorded configuration: `workspaceBytes` is gone and `mounterEnv` is new. Setup
 refuses a changed configuration beside a live backend by design, so the first
@@ -1149,8 +1187,9 @@ landed:
    provider retires its workspace volume in place rather than reusing its
    project ID. For Claude and OpenCode the same move is step 4's work, since
    they do not yet declare an attested table at all.
-4. **Open.** Claude and OpenCode off `makeResolved` onto the attested policy,
-   which is also what enables runtime attaches for them.
+4. **Open, and blocked on one decision.** Claude and OpenCode off
+   `makeResolved` onto the attested policy, which is also what enables runtime
+   attaches for them. See *What step 4 needs first* below.
 Converge Podman and listener launch paths, runtime ownership, and cleanup.
 Move generic public egress to the shared service.
 Make OpenCode's public mode retain brokered inference and enforce the advertised
