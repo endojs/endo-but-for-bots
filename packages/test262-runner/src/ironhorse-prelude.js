@@ -20,6 +20,13 @@ import './expose-pass-style-bytes-globals.js';
 const test262AssertSymbol = Symbol.for('test262Assert');
 const test262Assert = globalThis[test262AssertSymbol];
 delete globalThis[test262AssertSymbol];
+// The directive below is load-bearing HERE, though `node-prelude.js` and
+// `xs-prelude.js` read the same global without one: removing it fails
+// `lint:types` with `TS2565: Property 'lockdown' is used before being
+// assigned`. Confirmed by removing it and running `tsc`, with and without the
+// `ironhorse-pre-shim.js` import, which is not the cause. All three preludes
+// are in the same tsc program, so this is not a scope artifact -- do not tidy
+// it away to match the siblings.
 // @ts-expect-error lockdown-shim initializes this global at module evaluation.
 const sesLockdown = globalThis.lockdown;
 globalThis.assert = test262Assert;
