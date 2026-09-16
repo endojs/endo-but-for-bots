@@ -629,10 +629,11 @@ fn machine_reports_rejections_from_collected_orphan_compartments() {
     assert!(machine.unhandled_rejections().unwrap().is_empty());
 }
 
-/// A dynamic-evaluation compiler, as the 262 harness and the daemon wire one.
-/// Without it every `eval` / `Function` / `GeneratorFunction` call answers
-/// `NotImplemented("eval:no-compiler")`, which hides what this test measures.
-
+/// Needs a dynamic-evaluation compiler wired in, as the 262 harness and the
+/// daemon wire one: without it every `eval` / `Function` /
+/// `GeneratorFunction` call answers `NotImplemented("eval:no-compiler")`,
+/// which would hide what this test measures. `common::TestCompiler` is that
+/// compiler.
 #[test]
 fn every_reachable_evaluator_compiles_in_the_calling_compartment() {
     // `link_intrinsics` routes each global binding through
