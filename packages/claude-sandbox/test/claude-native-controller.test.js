@@ -1,6 +1,10 @@
 // @ts-check
 
 import '@endo/init';
+
+import path from 'node:path';
+
+import { HOSTED_SLICE_RESOURCES } from '@endo/hosted-agent/hosted-agent-policy.js';
 import test from 'ava';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
@@ -86,16 +90,31 @@ const fixture = (t, { realClient = false } = {}) => {
       events.push(`provide sandbox ${id}`);
       if (scopes.has(id)) return scopes.get(id);
       let closed = false;
+      /** @param {any} options */
+      const makeSlice = options => {
+        if (closed) throw Error('scope closed');
+        assertCopyData(options);
+        events.push(['slice', id, options]);
+        // Captured before `assertCopyData` narrows the value to its copy-data
+        // union, which has no named fields to read back.
+        const attested = /** @type {any} */ (options).policy;
+        return Far('NativeSlice', {
+          async policy() {
+            return attested;
+          },
+          async dispose() {
+            events.push(`dispose slice ${id}`);
+          },
+        });
+      };
       const scope = Far('Scope', {
+        // The attested path: the runtime returns a slice only once its mount
+        // table verifies against the anchor's own.
+        async make(options) {
+          return makeSlice(options);
+        },
         async makeResolved(options) {
-          if (closed) throw Error('scope closed');
-          assertCopyData(options);
-          events.push(['slice', id, options]);
-          return Far('NativeSlice', {
-            async dispose() {
-              events.push(`dispose slice ${id}`);
-            },
-          });
+          return makeSlice(options);
         },
         async close() {
           events.push(`close sandbox ${id}`);
@@ -345,27 +364,55 @@ test('activation acquires the scope, the broker grant, state, workspace mount, a
   t.is(f.clients.length, 1);
   t.false(f.events.some(event => Array.isArray(event) && event[0] === 'send'));
   const options = sliceOptions(f);
+  // The attested table. The workspace is the 9P projection this controller
+  // established, so the sandbox can prove the slice sees a projection rather
+  // than host data; the CLI's home and the MCP socket directory are binds
+  // attested as binds; `/tmp` and `/run` carry declared ceilings rather than
+  // whatever `--read-only-tmpfs` gives, which matters because HOME is on /tmp.
   t.deepEqual(
-    options.mounts.map(mount => [mount.hostPath, mount.innerPath, mount.mode]),
+    options.policy.mounts.map(mount => [
+      mount.role,
+      mount.kind,
+      mount.source,
+      mount.destination,
+      mount.mode,
+    ]),
     [
-      [plan.workspaceMountPoint, '/workspace', 'rw'],
-      ['/state/sandbox-a', '/claude-config', 'rw'],
-      [plan.mcpDir, '/endo-mcp', 'ro'],
+      ['workspace', 'attach', plan.workspaceMountPoint, '/workspace', 'rw'],
+      ['claude-state', 'bind', '/state/sandbox-a', '/claude-config', 'rw'],
+      ['mcp', 'bind', plan.mcpDir, '/endo-mcp', 'ro'],
+      ['tmp', 'tmpfs', undefined, '/tmp', undefined],
+      ['run', 'tmpfs', undefined, '/run', undefined],
     ],
   );
-  // The slice joins the broker sidecar's network namespace; only the
-  // listener's loopback endpoint and a placeholder credential reach it.
-  t.is(options.network, 'join');
-  t.is(options.networkRef, 'sidecar-sandbox-a');
+  // A bind may only name a path under a root this deployment owns.
+  t.deepEqual(options.policy.bindRoots, ['/state', path.dirname(plan.mcpDir)]);
+  t.is(
+    options.policy.resources.writableBytes,
+    2n * HOSTED_SLICE_RESOURCES.shmBytes +
+      2n * (1024n ** 3n + 256n * 1024n ** 2n),
+    'the ceiling is the sum its own table makes, not a constant',
+  );
+  // The policy path derives the namespace from the attested sidecar rather
+  // than being handed a container to join; only the listener's loopback
+  // endpoint and a placeholder credential reach the slice.
+  t.is(options.network, 'broker-only');
+  t.is(options.policy.brokerSidecar.container, 'sidecar-sandbox-a');
   t.is(options.cwd, '/workspace');
   t.deepEqual(options.env, {
     ANTHROPIC_BASE_URL: 'http://127.0.0.1:9000',
     ANTHROPIC_API_KEY: 'claude-broker-placeholder',
   });
   t.false('generatedFiles' in options);
-  t.is(options.nativeProfile.memoryBytes, 536_870_912n);
+  // The operator's per-adapter native profile no longer selects the slice's
+  // limits: every hosted adapter runs the one shared resource profile, which
+  // is what makes the attested contract comparable across the three.
+  t.false('nativeProfile' in options);
   t.false('limits' in options);
-  t.false('policy' in options);
+  t.deepEqual(
+    Object.keys(options.policy.resources).sort(),
+    [...Object.keys(HOSTED_SLICE_RESOURCES), 'writableBytes'].sort(),
+  );
   // The grant names the Anthropic account and the recorded policy and model.
   const [, grantId, spec] = f.events.find(
     event => Array.isArray(event) && event[0] === 'grant',
