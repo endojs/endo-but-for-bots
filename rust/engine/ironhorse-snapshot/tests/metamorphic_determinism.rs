@@ -110,6 +110,7 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
     // This fixture does not generate reusable chunk blocks.
     // `%TypedArray%.prototype.at` moves all five of them together: it is a
     // boot-heap content move, so each marker restamps the same changed heap.
+    // `findLast`/`findLastIndex` move all five again, for the same reason.
     let mut previous = session.machine().snapshot_image(&sig).unwrap().into_image();
     // Historical hashes describe the platform profile. Normalize only SIGN.
     let mut platform_signature = sig.encode();
@@ -121,13 +122,13 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
     assert_eq!(
         hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&previous)),
         // F189 reserves MAX for environments; symbol IDs now start at MAX-1.
-        "66f7d1a7dd95e5e7027d59cb0c67ae38b11cad0e1ce961451339ef46c38bf1a6"
+        "c39ddaf28e67b97a069252022e1580dbdfc187e1218f536060ae39694566a8f2"
     );
     previous.meter.cost_table_version = "ironhorse-meter-5".into();
     assert_eq!(
         hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&previous)),
         // F189 reserves MAX for environments; symbol IDs now start at MAX-1.
-        "b77a973e30d3ab413994b504660c0a68a8028aa3e401248e20e9eea3bca2c1fd"
+        "18f6529b828aa5b4e1fa238f2eedfa65bd6985f6d07551665d456826fbf1a91e"
     );
 
     let mut format19 = session.machine().snapshot_image(&sig).unwrap().into_image();
@@ -135,7 +136,7 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
     format19.version.format_version = 19;
     assert_eq!(
         hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&format19)),
-        "13c028d04b1be4e39fdca3a4425043301eebb233c775e6e2e669c24cff19818f"
+        "b59074a495b1321d1f71b9d8a6c512ea838649f09127d869f1fabef79d6be901"
     );
 
     let mut format20 = session.machine().snapshot_image(&sig).unwrap().into_image();
@@ -143,7 +144,7 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
     format20.version.format_version = 20;
     assert_eq!(
         hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&format20)),
-        "e21f1cc6d383f26730422b092262a7d125e2cfe48e9985427d9e9bd26f0637e7"
+        "445aa203d3d16d15a13d09a1312ae192ca97e9d751b4890843ac707b55f467f2"
     );
 
     let mut format21 = session.machine().snapshot_image(&sig).unwrap().into_image();
@@ -151,7 +152,7 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
     format21.version.format_version = 21;
     assert_eq!(
         hex_sha256(&ironhorse_snapshot::write_machine_unchecked(&format21)),
-        "e401f2ec10e8d207ce8201f5c6a2ebd40015acf4aba6daff07c844003a24ebf7"
+        "4bbf354e941403fbbc6e7c9f87aacc3dcb39a2155e847bfe92b7bf5ec0a78d2d"
     );
 
     let blob = session
@@ -374,11 +375,17 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Format19: saved-handler segment identity. Guest result and meter pins stay fixed.
         // Format20 / schema31 carry the first reported rejection.
         // Format21 / schema32 carry shared Machine state.
+        // Re-pinned for a boot-heap CONTENT move, not a format change:
+        // `%TypedArray%.prototype` gained `findLast` and `findLastIndex`,
+        // the last two absences in its readonly family, so the shared
+        // prototype carries two more methods and every boot's canonical
+        // bytes move together (`typed_array_find_last.rs`). Both provider
+        // arms below move, and both are re-pinned here.
         if ironhorse_vm::MATH_PROVIDER == "platform" {
             // Re-pinned for format version 23, which lets `ASYN` carry
             // async generator instances (architecture review F127). This
             // fixture holds none, so only the VERS payload changes.
-            "ee3ea8a72340acddf43f00413cdf834f92359af1e880dd4c6e33fb77f42081a3"
+            "02b51e051e57e0b739f6896c8f76f99a819ed918cde690ce639bffa217fb6436"
         } else {
             // F189 reserved IDs, with the deterministic provider SIGN.
             // Re-pinned for format version 23 alongside the platform pin.
@@ -386,7 +393,7 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
             // platform arm above, which moved in the same commit. This arm
             // is only evaluated under the deterministic provider, so a run
             // under the default provider alone never checks it.
-            "77ce1c5bed83674f0a1fc8c038a67f634a0d67f6187a4d4aa042b553625f5c7b"
+            "e6f05396fd7f352cf603b672caa40c1ad8f3dad8b97420c4b19988700fe9adb6"
         },
         "canonical final blob hash"
     );
@@ -610,13 +617,19 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // already present; only the TypedArray one was missing, and an
         // emulated immutable view answers no other read
         // (`typed_array_at.rs`, `test262:ironhorse-host`'s `ses-hosts.js`).
+        // Re-pinned for a boot-heap CONTENT move, not a format change:
+        // `%TypedArray%.prototype` gained `findLast` and `findLastIndex`,
+        // the last two absences in its readonly family, so the shared
+        // prototype carries two more methods and every boot's canonical
+        // bytes move together (`typed_array_find_last.rs`). Both provider
+        // arms below move, and both are re-pinned here.
         if ironhorse_vm::MATH_PROVIDER == "platform" {
             // Re-pinned for format version 23 / store schema v34 (the async
             // generator carry, architecture review F127): the manifest embeds
             // the `VERS` stamp and the schema, so the seal moves with the blob
             // while the small state itself is unchanged (this machine holds no
             // async generator).
-            "0968978b2dca98c7946c5006ee3174d5dcd93389938fdadeecab868ff024349c"
+            "194acf3cdedd0b5ad68c2b5817570c7dabc32fb3bf341bbbf4a5b9e1e51f307c"
         } else {
             // Re-pinned for format version 23 / store schema v34 alongside
             // the platform pin.
@@ -624,7 +637,7 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
             // platform arm above, which moved in the same commit. This arm
             // is only evaluated under the deterministic provider, so a run
             // under the default provider alone never checks it.
-            "7bf588905dd42ad131474178dcc88453f538d535150a20302767b867d470f613"
+            "5b0e98e36dddc7e2408adefb80bdffe552979034deb34a534b96e4a0bb257361"
         },
         "epoch-3 seal chain"
     );
