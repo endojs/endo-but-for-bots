@@ -63,9 +63,9 @@ paid on every `Tread`, since the handler always breaks out of the
 drain once it has `count` bytes. Higher values only add sync nodes
 this producer never uses.
 
-The chunk's `stringLengthLimit` is derived from the `Tread`'s own
-`count` rather than left to @endo/patterns' 100_000-character
-default — that default caps a base64 chunk at 75_000 bytes, which is
+The chunk's `byteLengthLimit` is derived from the `Tread`'s own
+`count` rather than left to @endo/patterns' 100_000-byte
+default — that default caps a chunk at 100_000 bytes, which is
 narrower than a 128 KiB `msize` promises and surfaces to the client
 as a bare `EIO`. So the negotiated `msize` (a per-mount option on
 [`mount-caplet.js`](./mount-caplet.js)) is what governs I/O size.

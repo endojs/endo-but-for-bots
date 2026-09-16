@@ -455,11 +455,11 @@ const negotiateFullMsize = async c => {
   return makeReader(rep.payload).u32();
 };
 
-// A chunk crosses the backing Filesystem as base64, which `iterateBytesReader`
-// validates with `M.string()`. Left to @endo/patterns' default
-// `stringLengthLimit` of 100_000 characters that caps a chunk at 75_000 bytes
+// A chunk crosses the backing Filesystem as raw bytes, which
+// `iterateBytesReader` validates with `M.byteArray()`. Left to @endo/patterns'
+// default `byteLengthLimit` of 100_000 bytes that caps a chunk at 100_000 bytes
 // and rejects anything past it, which reaches the client as a bare EIO — so
-// with a 128 KiB msize any file over ~75 KiB was unreadable through a mount.
+// with a 128 KiB msize any file over ~100 KiB was unreadable through a mount.
 // GNU `cat` and Node's `fs.readFile` both issue one big read, so this was the
 // common path, not an edge case.
 test.serial(
