@@ -1555,6 +1555,45 @@ session cannot open, so the restoration path is never reached. Claude and
 OpenCode are verified below; Codex is not, and the reason is volume
 lifecycle rather than anything in the transcript path.
 
+### Codex's store is a rollout file, and the index is derived — 2026-09-17
+
+Measured on Tokyo, because this design recorded `thread/inject_items` as the
+only way to give Codex a conversation it did not have. That is not the only
+way: Codex can be written to before it boots, the same shape of path Claude
+takes.
+
+`CODEX_HOME` is a durable Podman volume (`codex-state`, not tmpfs), holding:
+
+- `sessions/<YYYY>/<MM>/<DD>/rollout-<ISO>-<uuid>.jsonl` — the conversation.
+  Ordinal-numbered lines of `{timestamp, ordinal, type, payload}`, opening
+  with a `session_meta` payload that carries `session_id`, `cwd`,
+  `originator`, `cli_version` and the base instructions.
+- `thread_history_1.sqlite` — `thread_turns`, `thread_items`, and
+  `thread_history_projection_state(thread_id, next_rollout_byte_offset,
+  next_rollout_ordinal)`. Managed by sqlx migrations.
+
+That last table names the relationship: it is a **resumable cursor into the
+rollout**, so the database is a projection and the file is the source.
+
+**The experiment.** Two copies of one Codex home; the second had
+`thread_history_1.sqlite*` deleted, leaving only the rollout. Both were given
+the same `thread/resume` over the app-server's stdio. Both returned the same
+thread, with its real `preview` text. The second rebuilt its database from
+nothing — afterwards `thread_items` held the `userMessage` and the
+`agentMessage`, and the cursor had advanced to the end of the file.
+
+So restoring Codex needs no SQLite writing, no schema agreement, and no byte
+offsets of our own: write the rollout and let Codex project it. What remains
+is format fidelity of a rollout this stack synthesizes, which is the same
+class of problem as `claude-transcript-writer.js` and is bounded by a format
+the file documents — not the private-schema coupling this design rejected for
+OpenCode.
+
+This does not replace `thread/inject_items`, which stays the mechanism for
+adding to a thread that is already live. It does mean Codex has a
+write-then-resume path for a session with no thread yet, and that the two
+adapters with a durable store now restore the same way.
+
 **Verified on the deploy, 2026-09-16.** A session is given a word, the daemon
 is restarted, and the session is asked for the word back. OpenCode answers it
 with `OPENCODE_DB=:memory:`, and Claude answers it with
