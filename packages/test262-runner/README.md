@@ -55,8 +55,10 @@ Counts at the time of writing, over the 16 runs the corpus produces
 | `test262:ironhorse-host` | 14 / 16 | the number this ratchet tracks |
 | `test262:ironhorse` | refuses to start | no native `lockdown()` yet |
 
-Ironhorse now matches the node host's 14/16, and on the same two cases: both
-remaining failures are the `lockdown()` ones node fails too, described below.
+Ironhorse now matches the node host's 14/16, and on the same file:
+`Symbol.toStringTag-lockdown.js`, whose sloppy and strict runs are the two.
+Both hosts fail it, but not for the same reason — see "The `lockdown()` case"
+below, and do not read node's failure as an alibi for Ironhorse's.
 
 It went 6/16 to 14/16 in four steps, each of which this lane surfaced:
 
@@ -71,14 +73,33 @@ It went 6/16 to 14/16 in four steps, each of which this lane surfaced:
 
 `designs/ironhorse-ses-compartment-equivalence.md` has the measurements.
 
-Node's two failures are not an engine gap.
+### The `lockdown()` case
+
+One file is red on both hosts, for two different reasons. Both are `harden`
+running before `lockdown`, which is why it is tempting to file them as one;
+they part company on what `harden` did.
+
+Node's failure is not an engine gap.
 `@endo/harden`'s selector resolves `Object[Symbol.for('harden')]`, then
 `globalThis.harden`, and only failing both installs its own — non-configurably,
 with a comment saying that doing so "will prevent any HardenedJS's lockdown
 from succeeding".
 XS and Ironhorse both supply a host `harden` the selector adopts, so
-`repairIntrinsics` runs; Node supplies none, the slot gets installed, and every
-`lockdown()`-calling case fails.
+`repairIntrinsics` starts; Node supplies none, the slot gets installed, and
+every `lockdown()`-calling case fails before `repairIntrinsics` does anything.
+
+Ironhorse's failure IS an engine gap, and starting `repairIntrinsics` is as far
+as it gets. The native `harden` is a deep freeze that reaches shared
+intrinsics: at boot `Function.prototype.constructor` carries the spec's
+`{writable: true, enumerable: false, configurable: true}`, and a single
+`harden({})` — which `@endo/pass-style` performs while the prelude is still
+evaluating — leaves it `{writable: false, configurable: false}`. `lockdown()`
+then reaches `tame-function-constructors.js`, tries to redefine that
+`constructor` to its inert stand-in, and is refused with
+`TypeError: invalid descriptor`. The refusal is spec-correct — a
+non-configurable, non-writable data property cannot be redefined to a different
+value — so the bug is the freeze, not the rejection. A native `lockdown()`
+escapes node's problem but still has to answer this one.
 
 `test262:ironhorse`'s refusal is the one place an exit code is load-bearing,
 and it is about honesty rather than gating.

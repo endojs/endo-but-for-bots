@@ -246,12 +246,47 @@ The overlap is not the interesting part; the failures are.
 | `TextEncoder`/`TextDecoder` intersection | pass | **pass** |
 
 `Symbol.toStringTag-lockdown.js` **fails on node too** — the node host reports
-14/16 today, both failures on that file.
-`@endo/harden` installs `Object[Symbol.for('harden')]` during prelude
-evaluation and `repairIntrinsics` then refuses
+14/16 today, both failures on that file (one file, sloppy and strict).
+It fails on BOTH hosts, but **for two different reasons**, and an earlier
+revision of this section asserted node's reason for Ironhorse as well and
+concluded "it is not an Ironhorse gap".
+That was an inference from a shared symptom, never a measurement, and it is
+wrong. Both reasons are `harden` running before `lockdown`, which is why the
+inference looked safe; they part company on what `harden` did.
+
+| | node | Ironhorse |
+| --- | --- | --- |
+| `Object[Symbol.for('harden')]` after the prelude | `function` | **`undefined`** |
+| `globalThis.harden` after the prelude | `undefined` | **`function`** (native) |
+| what `lockdown()` throws | `Cannot lockdown (repairIntrinsics) if a prior harden implementation has been used and installed` | **`TypeError: invalid descriptor`** |
+
+On node the selector finds no host `harden`, installs its own at
+`Object[Symbol.for('harden')]`, and `repairIntrinsics` refuses outright
 (`packages/ses/src/lockdown.js:393`).
-So one of the two cases the engine route name-skips is one no host currently
-passes, and it is not an Ironhorse gap.
+
+On Ironhorse the selector adopts the native `globalThis.harden` exactly as
+`ironhorse-pre-shim.js` intends, and the slot stays empty — so that refusal
+never fires. What fails instead is
+`tame-function-constructors.js:102`:
+
+```js
+defineProperties(FunctionPrototype, { constructor: { value: InertConstructor } });
+```
+
+Ironhorse's native `harden` is a deep freeze that reaches shared intrinsics.
+At boot `Function.prototype.constructor` is the spec's
+`{writable: true, enumerable: false, configurable: true}`, but a single
+`harden({})` anywhere — and `@endo/pass-style` does one during prelude
+evaluation — leaves it `{writable: false, configurable: false}`.
+SES then cannot swap in its inert constructor, and the redefine is rejected.
+The rejection is spec-CORRECT: redefining a non-configurable, non-writable
+data property to a DIFFERENT value must fail, and re-running the same define
+with the identical value is accepted.
+
+So this IS an Ironhorse gap, and a sharper one than "no host passes it": the
+engine's own `harden` freezes intrinsics that a later `lockdown()` still needs
+to tame. A native `lockdown()` would not inherit the node problem, but it does
+have to answer this one.
 
 Two things the prelude had to get right, both of which are the
 `worker-rust-xs.md:515-520` dependency in miniature:
@@ -424,7 +459,8 @@ the `Compartment/prototype` pair is an instance of.
 Porting from SES's suite into that corpus is the right shape, and it would
 serve a native `lockdown` exactly as well as the shim.
 
-It is blocked on something upstream of Ironhorse.
+It is blocked on something upstream of Ironhorse — and, separately, on
+something inside it.
 **Every `lockdown()`-calling case fails on the node host today.**
 The preludes import `./expose-pass-style-bytes-globals.js`, which pulls
 `@endo/pass-style` and so `@endo/harden`; where the host has no native
@@ -434,6 +470,12 @@ when it finds one (`packages/ses/src/lockdown.js:393`).
 The corpus's one such case, `Symbol.toStringTag-lockdown.js`, is red on node
 for that reason — the host reports 14/16 — and three cases ported from
 `lockdown.test.js` and `harden.test.js` failed identically when tried.
+
+Ironhorse is red on the same case for a DIFFERENT reason, measured above: its
+native `harden` deep-freezes `Function.prototype`, so SES's
+`tame-function-constructors.js` can no longer install the inert constructor and
+`lockdown()` throws `invalid descriptor`. Porting SES's own suite therefore
+needs both answers, not one.
 
 Clearing the slot in the prelude, the way it already clears and restores
 `assert`, does **not** work, and the reason is simpler than it first looked.
