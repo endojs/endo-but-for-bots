@@ -115,3 +115,19 @@ test('empty and malformed dialogue is skipped rather than fabricated', t => {
     [],
   );
 });
+
+test('a compaction segment reaches the tree in its own place', t => {
+  // The shape `agent.js` writes for a `compaction` segment, projected back
+  // out: a turn that compacted mid-way keeps the boundary between the text
+  // that preceded it and the turn that followed.
+  const records = projectTranscript([
+    { role: 'user', content: 'a long conversation' },
+    { role: 'assistant', content: 'working' },
+    { role: 'compaction', content: 'summary of everything so far' },
+    { role: 'assistant', content: 'continuing' },
+  ]);
+  t.deepEqual(
+    records.map(record => record.kind),
+    ['message', 'message', 'compaction', 'message'],
+  );
+});

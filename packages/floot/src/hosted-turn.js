@@ -28,8 +28,17 @@ harden(UNSETTLED_TOOL_RESULT);
  * in order, so text that preceded a tool call stays before it instead of
  * being concatenated onto the final answer.
  *
+ * A `compaction` segment is where the backend replaced the conversation it
+ * was carrying with a summary of it. Its position is the boundary: what
+ * precedes it is history the model no longer holds. The stack records it
+ * because the stack owns the transcript — restore a compacted conversation
+ * without the boundary and the whole pre-compaction history becomes live
+ * context again, which can overflow the model on the first turn after a
+ * revival.
+ *
  * @typedef {{ type: 'text', text: string }
- *   | { type: 'tools', calls: Array<{ id: string, name: string, args: string, result: string | null }> }} HostedTurnSegment
+ *   | { type: 'tools', calls: Array<{ id: string, name: string, args: string, result: string | null }> }
+ *   | { type: 'compaction', summary: string }} HostedTurnSegment
  */
 
 /**
@@ -76,23 +85,28 @@ const failTurn = (reason, partial, error = Error(reason)) => {
 };
 
 /**
+ * @param {HostedTurnSegment} segment
+ * @returns {HostedTurnSegment}
+ */
+const freezeSegment = segment => {
+  if (segment.type === 'text')
+    return harden({ type: 'text', text: segment.text });
+  if (segment.type === 'compaction')
+    return harden({ type: 'compaction', summary: segment.summary });
+  return harden({
+    type: 'tools',
+    calls: segment.calls.map(call => harden({ ...call })),
+  });
+};
+
+/**
  * Copy a mutable segment list into a hardened, self-contained value. Call
  * objects are shared with the caller's `toolCalls`, so copy before freezing.
  *
  * @param {HostedTurnSegment[]} segments
  * @returns {HostedTurnSegment[]}
  */
-const freezeSegments = segments =>
-  harden(
-    segments.map(segment =>
-      segment.type === 'text'
-        ? harden({ type: 'text', text: segment.text })
-        : harden({
-            type: 'tools',
-            calls: segment.calls.map(call => harden({ ...call })),
-          }),
-    ),
-  );
+const freezeSegments = segments => harden(segments.map(freezeSegment));
 
 /**
  * What a failed hosted turn had already done, when the error came from
@@ -317,6 +331,18 @@ export const runHostedTurn = async ({
             name: `${event.name || 'tool'}`,
             result,
           });
+          break;
+        }
+        case 'compaction': {
+          // The backend replaced the conversation it was carrying with a
+          // summary. Recorded as a segment so it keeps its place in the turn:
+          // the boundary is a position, not a fact about the turn as a whole.
+          flushText();
+          segments.push({
+            type: 'compaction',
+            summary: `${event.summary || ''}`,
+          });
+          writer.setPhase('summarizing the conversation so far');
           break;
         }
         case 'usage':

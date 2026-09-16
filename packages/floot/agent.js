@@ -1265,7 +1265,7 @@ export const makeStreamingAgent = async (
      * @param {{ inputTokens: number, outputTokens: number } | undefined} turnUsage
      * @param {string | undefined} backendCheckpoint
      * @param {Array<{ id: string, name: string, args: string, result: string | null }>} [toolCalls]
-     * @param {Array<{ type: 'text', text: string } | { type: 'tools', calls: Array<{ id: string, name: string, args: string, result: string | null }> }>} [segments]
+     * @param {Array<{ type: 'text', text: string } | { type: 'tools', calls: Array<{ id: string, name: string, args: string, result: string | null }> } | { type: 'compaction', summary: string }>} [segments]
      */
     const commitExternalTurn = async (
       replyText,
@@ -1311,6 +1311,14 @@ export const makeStreamingAgent = async (
             if (segment.text) {
               messages.push({ role: 'assistant', content: segment.text });
             }
+          } else if (segment.type === 'compaction') {
+            // The boundary the backend drew, kept in place. `projectTranscript`
+            // carries it into the record stream, where its position is what
+            // tells a restored session which span is still live context.
+            messages.push({
+              role: 'compaction',
+              content: segment.summary || '',
+            });
           } else {
             appendToolRound(segment.calls);
           }
@@ -1375,7 +1383,7 @@ export const makeStreamingAgent = async (
     /**
      * @param {string} replyText
      * @param {Array<{ id: string, name: string, args: string, result: string | null }>} [toolCalls]
-     * @param {Array<{ type: 'text', text: string } | { type: 'tools', calls: Array<{ id: string, name: string, args: string, result: string | null }> }>} [segments]
+     * @param {Array<{ type: 'text', text: string } | { type: 'tools', calls: Array<{ id: string, name: string, args: string, result: string | null }> } | { type: 'compaction', summary: string }>} [segments]
      */
     const commitDeliveredTurn = async (
       replyText,
@@ -1409,6 +1417,14 @@ export const makeStreamingAgent = async (
             if (segment.text) {
               messages.push({ role: 'assistant', content: segment.text });
             }
+          } else if (segment.type === 'compaction') {
+            // The boundary the backend drew, kept in place. `projectTranscript`
+            // carries it into the record stream, where its position is what
+            // tells a restored session which span is still live context.
+            messages.push({
+              role: 'compaction',
+              content: segment.summary || '',
+            });
           } else {
             appendToolRound(segment.calls);
           }
