@@ -31,23 +31,6 @@ const distDir = path.resolve(dirname, '../dist-xs');
 const xsnapSrcDir = path.resolve(dirname, '../../../rust/endo/xsnap/src');
 fs.mkdirSync(distDir, { recursive: true });
 
-// Node-only packages that must not enter an XS bundle. Mirrors the
-// exclusion convention of bundle-bus-daemon-rust-xs.mjs.
-const EXCLUDED_PACKAGES = new Set(['ses', '@endo/init', '@endo/lockdown']);
-
-const packageDependenciesHook = ({ canonicalName, dependencies }) => {
-  const filtered = new Set(
-    [...dependencies].filter(dep => !EXCLUDED_PACKAGES.has(dep)),
-  );
-  if (filtered.size !== dependencies.size) {
-    const removed = [...dependencies].filter(d => !filtered.has(d));
-    console.log(
-      `  ${canonicalName}: excluded ${removed.length} dep(s): ${removed.join(', ')}`,
-    );
-  }
-  return { dependencies: filtered };
-};
-
 // --- Boot script: xsnap's committed polyfills, then lockdown ---
 // XS implements Hardened JavaScript natively: thixotrope-xs-worker
 // registers the engine's own `harden` and `lockdown` as globals
@@ -82,9 +65,7 @@ console.log(`Wrote ${bootDist} (${bootScript.length} bytes)`);
 const peerUrl = url.pathToFileURL(
   path.resolve(dirname, '../src/worker-peer-xs.js'),
 ).href;
-const peerBundle = await makeBundle(readPowers, peerUrl, {
-  packageDependenciesHook,
-});
+const peerBundle = await makeBundle(readPowers, peerUrl);
 const peerDist = path.join(distDir, 'worker-peer.js');
 fs.writeFileSync(peerDist, peerBundle);
 console.log(`Wrote ${peerDist} (${peerBundle.length} bytes)`);
