@@ -1,6 +1,6 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 
-import { chooseModel } from '../model-detect.js';
+import { chooseModel } from '@endo/agentry/model-detect';
 
 test('chooseModel keeps the default when it is installed', t => {
   t.is(

@@ -1,6 +1,6 @@
 // @ts-nocheck — E() generics don't work well with JSDoc types for remote objects
 import { E } from '@endo/eventual-send';
-import { extractToolCallsFromContent } from '@endo/fae/src/extract-tool-calls.js';
+import { extractToolCallsFromContent } from '@endo/agentry/tool-call-content';
 import { createLogger } from './logger.js';
 
 // eslint-disable-next-line no-shadow

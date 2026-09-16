@@ -23,10 +23,9 @@ The Endo capability tool surface (the `help`, `list`, `lookup`, `send`,
 are SmallCaps-decoded per call so BigInt-shaped strings (`"+5"`) and
 `"#undefined"` continue to round-trip correctly.
 
-`packages/lal/providers/` remains in place as a stable surface for downstream
-consumers (jaine, fae).
-It is no longer used by lal's own agent loop, which now goes through pi-ai's
-multi-provider registry.
+The former `packages/lal/providers/` compatibility layer has been removed.
+Lal and the sibling Fae, Jaine, and Floot agents now share agentry's pi-ai
+model and credential seams.
 
 ## Configuration
 

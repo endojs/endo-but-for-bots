@@ -14,6 +14,10 @@ test('agentry subpaths resolve through package exports', async t => {
     endoCodeModePiExtensionModule,
     evalModule,
     editTextModule,
+    chatModule,
+    modelDetectModule,
+    toolCallContentModule,
+    mockPowersModule,
   ] = await Promise.all([
     import('@endo/agentry'),
     import('@endo/agentry/harness'),
@@ -26,6 +30,10 @@ test('agentry subpaths resolve through package exports', async t => {
     // eslint-disable-next-line import/no-unresolved, import/no-extraneous-dependencies
     import('@endo/agentry/eval'),
     import('@endo/agentry/edit-text'),
+    import('@endo/agentry/chat'),
+    import('@endo/agentry/model-detect'),
+    import('@endo/agentry/tool-call-content'),
+    import('@endo/agentry/test/mock-powers'),
   ]);
 
   // Pin the public runtime surface of the package's primary entry points.
@@ -133,4 +141,9 @@ test('agentry subpaths resolve through package exports', async t => {
     ['applyEdits', 'computeUnifiedDiff', 'normalizeEdits'],
     '@endo/agentry/edit-text export surface',
   );
+
+  t.is(typeof chatModule.createChatProvider, 'function');
+  t.is(typeof modelDetectModule.resolveModel, 'function');
+  t.is(typeof toolCallContentModule.extractToolCallsFromContent, 'function');
+  t.is(typeof mockPowersModule.makeMockPowers, 'function');
 });

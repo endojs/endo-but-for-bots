@@ -17,7 +17,7 @@ import {
   makeListDirTool,
 } from '@endo/fae/src/tool-makers.js';
 import { discoverTools, executeTool } from '@endo/fae/src/tools.js';
-import { extractToolCallsFromContent } from '@endo/fae/src/extract-tool-calls.js';
+import { extractToolCallsFromContent } from '@endo/agentry/tool-call-content';
 import { createLogger } from './logger.js';
 
 // eslint-disable-next-line no-shadow

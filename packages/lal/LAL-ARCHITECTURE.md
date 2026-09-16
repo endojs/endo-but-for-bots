@@ -15,8 +15,8 @@ messages using tool calls and can evaluate code directly.
 > The Endo capability tool surface (`help`, `list`, `lookup`, `send`, `reply`,
 > `evaluate`, `define`, and the rest) is preserved in name and semantics; only
 > the harness driving them has changed.
-> `packages/lal/providers/` remains as a stable surface for downstream
-> consumers (jaine, fae) but is no longer used by lal itself.
+> The former `packages/lal/providers/` compatibility layer is gone; sibling
+> agents use `@endo/agentry/chat` over the same pi-ai model layer.
 
 ---
 
@@ -365,18 +365,20 @@ const transcript = [{ role: 'system', content: systemPrompt }];
 
 ## Provider System
 
-Lal defines its own provider system in `providers/`, which is also reused by
-Fae via `@endo/lal/providers/index.js`.
+Lal resolves models through `@endo/agentry/harness` and pi-ai. Fae, Jaine, and
+Floot use `@endo/agentry/chat`, which adapts their common chat-message contract
+to the same pi-ai model layer.
 
 ### Provider Selection
 
 Based on the `LAL_HOST` environment variable:
 
-| Host URL pattern | Provider | SDK | Default model |
-|------------------|----------|-----|---------------|
-| Contains `anthropic.com` | `makeAnthropicProvider` | `@anthropic-ai/sdk` | `claude-opus-4-5-20251101` |
-| Contains `/v1` | `makeLlamaCppProvider` | `openai` | `qwen3` |
-| Other | `makeOllamaProvider` | `ollama` | `qwen3` |
+| Host URL pattern | pi-ai provider | Default model |
+|------------------|----------------|---------------|
+| Contains `anthropic.com` | `anthropic` | `claude-sonnet-4-6-20250514` |
+| Google generative-language endpoint | `google` | `gemini-2.5-pro` |
+| Contains `/v1` | OpenAI-compatible | `qwen3` |
+| Other | Ollama-compatible | `qwen3.6` |
 
 ### Provider Interface
 

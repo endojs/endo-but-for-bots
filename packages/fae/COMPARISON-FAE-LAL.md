@@ -1,9 +1,8 @@
 # Fae vs Lal — Architecture Comparison
 
-A side-by-side comparison of `@endo/fae` and `@endo/lal`, both LLM agent
-caplets for the Endo daemon. They share the same runtime environment and
-provider system but differ significantly in their tool architecture, security
-model, and extensibility.
+A historical side-by-side comparison of `@endo/fae` and `@endo/lal`, both LLM agent
+caplets for the Endo daemon. The component counts below describe the original
+implementations; both now share agentry's pi-ai provider layer.
 
 ---
 
@@ -18,7 +17,7 @@ model, and extensibility.
 | Tool count | 8 built-in + unlimited adopted tools | 16 fixed tools |
 | Code execution | Direct (via adopted tool caplets) | Mediated (eval-proposal → HOST approval) |
 | Filesystem access | Via optional tool caplets | None |
-| Provider system | Imports from `@endo/lal` | Defines providers (Ollama, llama.cpp, Anthropic) |
+| Provider system | `@endo/agentry/chat` | `@endo/agentry/harness` |
 | TypeScript types | JSDoc only | Full `.d.ts` type definitions |
 | Test suite | None | Ava tests + simulator |
 | Agent communication | Tool-based (send/dismiss) | Tool-based (send/dismiss/request/resolve/reject) |
@@ -251,24 +250,24 @@ encoding, the eval-proposal lifecycle, and the stricter response protocol
 
 ## Provider System
 
-Both use the same provider implementations:
+Both use pi-ai through agentry:
 
 ```
-@endo/lal/providers/index.js
-├── anthropic.js    (Anthropic SDK)
-├── llamacpp.js     (OpenAI SDK, OpenAI-compatible)
-└── ollama.js       (Ollama SDK)
+@endo/agentry
+├── chat             (common-chat adapter for Fae)
+└── harness          (PiAgent and model resolver for Lal)
 ```
 
-Fae imports this as a dependency: `import { createProvider } from '@endo/lal/providers/index.js'`.
+Fae now imports `createChatProvider` from `@endo/agentry/chat`.
 
 Provider selection logic is identical in both:
 
 | `LAL_HOST` pattern | Provider | Default model |
 |-------|----------|---------------|
-| Contains `anthropic.com` | Anthropic | `claude-opus-4-5-20251101` |
-| Contains `/v1` | llama.cpp | `qwen3` |
-| Other | Ollama | `qwen3` |
+| Contains `anthropic.com` | Anthropic | `claude-sonnet-4-6-20250514` |
+| Google generative-language endpoint | Google | `gemini-2.5-pro` |
+| Contains `/v1` | OpenAI-compatible | `qwen3` |
+| Other | Ollama-compatible | `qwen3.6` |
 
 ---
 
@@ -312,7 +311,7 @@ Both follow the same pattern:
 | SmallCaps decode | Fallback to `{}` | Fallback to `{}` |
 | Tool call extraction | `extractToolCallsFromContent()` | Inline `extractToolCallsFromContent()` |
 
-Note: Fae imports `extractToolCallsFromContent` from `src/extract-tool-calls.js`.
+The parser now lives at `@endo/agentry/tool-call-content`.
 Lal has the same function defined inline in `agent.js` (code duplication).
 
 ---
@@ -324,9 +323,9 @@ Lal has the same function defined inline in `agent.js` (code duplication).
 | Entry point | `agent.js` (410 lines) | `agent.js` (1507 lines) |
 | Tool definitions | `src/tool-makers.js` (833 lines) | Inline in `agent.js` (~525 lines of schemas) |
 | Tool discovery | `src/tools.js` (90 lines) | None |
-| Tool call parser | `src/extract-tool-calls.js` (66 lines) | Inline in `agent.js` (~45 lines) |
+| Tool call parser | `@endo/agentry/tool-call-content` | Inline in `agent.js` (~45 lines) |
 | Interface guard | `src/fae-tool-interface.js` (15 lines) | None (no tool interface) |
-| Providers | Imported from `@endo/lal` | `providers/` directory (4 files) |
+| Providers | `@endo/agentry/chat` | `@endo/agentry/harness` |
 | Type definitions | JSDoc annotations | `agent.types.d.ts` (117 lines) |
 | Tests | None | `test/` directory with Ava tests + simulator |
 | Setup scripts | 4 scripts | 1 script |
@@ -350,7 +349,7 @@ Fae was designed as the successor to Lal. Key improvements:
    capability model rather than exhaustive tool documentation.
 5. **Shared tool call parser** — `extractToolCallsFromContent` moved to a
    reusable module.
-6. **Provider reuse** — imports `@endo/lal/providers/index.js` instead of
+6. **Provider reuse** — imports `@endo/agentry/chat` instead of
    duplicating provider code.
 
 What Fae dropped from Lal:

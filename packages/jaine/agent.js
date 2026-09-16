@@ -8,7 +8,7 @@ import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { E } from '@endo/eventual-send';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
-import { createProvider } from '@endo/lal/providers/index.js';
+import { createChatProvider } from '@endo/agentry/chat';
 
 import { makeRouter } from './router.js';
 import { makeComposer } from './composer.js';
@@ -175,7 +175,7 @@ export const spawnWorkerLoop = async (
     return null;
   };
 
-  const provider = createProvider({
+  const provider = createChatProvider({
     LAL_HOST: providerConfig.host,
     LAL_MODEL: providerConfig.model,
     LAL_AUTH_TOKEN: providerConfig.authToken,
@@ -183,7 +183,7 @@ export const spawnWorkerLoop = async (
 
   // Optional fast provider for lightweight decisions (routing, triage)
   const fastProvider = fastProviderConfig
-    ? createProvider({
+    ? createChatProvider({
         LAL_HOST: fastProviderConfig.host,
         LAL_MODEL: fastProviderConfig.model,
         LAL_AUTH_TOKEN: fastProviderConfig.authToken,

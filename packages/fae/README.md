@@ -38,7 +38,8 @@ config and agent guest from the driver's namespace, and restarts
 
 ## Configuration
 
-Fae uses the same LLM provider configuration as `@endo/lal`.
+Fae uses `@endo/agentry/chat`, sharing pi-ai model resolution with the other
+Endo agents while retaining the existing `LAL_*` configuration names.
 
 | Variable | Description | Default |
 |----------|-------------|---------|
@@ -214,7 +215,7 @@ packages/fae/
 ├── setup-fs-tools.js         # Create filesystem tools (FAE_CWD)
 ├── setup-with-tools.js       # All-in-one: provider + factory + tools
 ├── src/
-│   ├── extract-tool-calls.js # XML tool call parser
+│   ├── provider-cache.js     # Rotating agentry chat provider
 │   ├── fae-tool-interface.js # FaeTool M.interface guard
 │   ├── subagent.js           # Delegation registry and subagent tools
 │   ├── subagent-host.js      # Agent provisioning, teardown, and the spawner

@@ -17,9 +17,6 @@
   },
   "type": "module",
   "exports": {
-    "./model-detect.js": "./model-detect.js",
-    "./providers/index.js": "./providers/index.js",
-    "./tools/mock-powers.js": "./tools/mock-powers.js",
     "./package.json": "./package.json"
   },
   "scripts": {
@@ -35,7 +32,6 @@
     "test:xs": "exit 0"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.124.0",
     "@earendil-works/pi-agent-core": "^0.85.1",
     "@earendil-works/pi-ai": "^0.85.1",
     "@endo/agent-tools": "workspace:^",
@@ -49,9 +45,7 @@
     "@endo/marshal": "workspace:^",
     "@endo/patterns": "workspace:^",
     "@endo/platform": "workspace:^",
-    "@endo/promise-kit": "workspace:^",
-    "ollama": "^0.6.3",
-    "openai": "^7.10.0"
+    "@endo/promise-kit": "workspace:^"
   },
   "devDependencies": {
     "@endo/cli": "workspace:^",

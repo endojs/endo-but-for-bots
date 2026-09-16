@@ -23,6 +23,11 @@ Each surface is opt-in via its own subpath export.
 - `@endo/agentry/code-mode-provisioning` — Pi-independent translation from a
   plain provisioning policy to a retained daemon guest, matching lexical
   global descriptors, and non-secret reconstruction data.
+- `@endo/agentry/chat` — the pi-ai-backed common chat adapter used by Fae,
+  Jaine, and Floot, including legacy host/model configuration translation.
+- `@endo/agentry/model-detect` — model-catalog probing for setup flows.
+- `@endo/agentry/tool-call-content` — recovery for models that emit tool calls
+  as XML text instead of through the structured provider channel.
 - `@endo/agentry/endo-code-mode-pi-extension` — a directly loadable Pi extension that binds
   one retained daemon guest to each Pi session and exposes only `evaluate`.
 

@@ -56,6 +56,10 @@
       "types": "./src/edit-text.js",
       "default": "./src/edit-text.js"
     },
+    "./chat": "./src/chat.js",
+    "./model-detect": "./src/model-detect.js",
+    "./test/mock-powers": "./src/mock-powers.js",
+    "./tool-call-content": "./src/tool-call-content.js",
     "./package.json": "./package.json"
   },
   "bin": {
@@ -82,15 +86,16 @@
     "@endo/errors": "workspace:^",
     "@endo/eventual-send": "workspace:^",
     "@endo/exo-git": "workspace:^",
+    "@endo/exo-stream": "workspace:^",
     "@endo/far": "workspace:^",
     "@endo/harden": "workspace:^",
     "@endo/marshal": "workspace:^",
     "@endo/platform": "workspace:^",
+    "@endo/promise-kit": "workspace:^",
     "@endo/where": "workspace:^",
     "ses": "workspace:^"
   },
   "devDependencies": {
-    "@endo/exo-stream": "workspace:^",
     "@endo/git": "workspace:^",
     "@endo/init": "workspace:^",
     "@endo/lockdown": "workspace:^",

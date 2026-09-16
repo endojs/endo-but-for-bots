@@ -847,7 +847,7 @@ const sendOnce = async (t, prompt) => {
 // Tests run in parallel within the file, which can briefly push past
 // the LLM provider's per-second / per-minute rate-limit bucket
 // (e.g. ≈ 1 req/s on free-tier OpenRouter, 50 req/min on Anthropic
-// free tier).  Provider clients in `packages/lal/providers/` do not
+// free tier). The agentry chat adapter does not
 // retry on 429 — the error propagates straight into the reply text.
 // We classify the reply and retry transient hits with exponential
 // backoff + jitter; permanent errors (auth, invalid key) fail

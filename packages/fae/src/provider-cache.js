@@ -1,6 +1,6 @@
 // @ts-check
 
-import { createProvider } from '@endo/lal/providers/index.js';
+import { createChatProvider } from '@endo/agentry/chat';
 
 /**
  * A provider that follows the credential instead of pinning it.
@@ -26,7 +26,7 @@ import { createProvider } from '@endo/lal/providers/index.js';
 export const makeRotatingProvider = ({
   config,
   provideAuthToken,
-  buildProvider = createProvider,
+  buildProvider = createChatProvider,
 }) => {
   /** @type {any} */
   let cachedProvider = config.provider;

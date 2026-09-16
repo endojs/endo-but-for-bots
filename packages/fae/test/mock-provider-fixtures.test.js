@@ -6,14 +6,14 @@ import test from 'ava';
 import fs from 'node:fs';
 import url from 'node:url';
 
-import { findMockTrace, makeMockProvider } from '@endo/lal/providers/index.js';
-import { makeMockPowers } from '@endo/lal/tools/mock-powers.js';
+import { findMockTrace, makeMockProvider } from './mock-provider.js';
+import { makeMockPowers } from '@endo/agentry/test/mock-powers';
 
 import { spawnWorkerLoop } from '../agent.js';
 import { make as makeRealMathTool } from '../tools/math.js';
 
 const fixturePath = url.fileURLToPath(
-  new URL('../../lal/test/fixtures/llm-provider-traces.json', import.meta.url),
+  new URL('fixtures/llm-provider-traces.json', import.meta.url),
 );
 
 const loadFixtures = () => JSON.parse(fs.readFileSync(fixturePath, 'utf8'));
