@@ -81,6 +81,13 @@ const fixture = (t, { realClient = false } = {}) => {
       if (scopes.has(id)) return scopes.get(id);
       let closed = false;
       const scope = Far('Scope', {
+        /** @param {any} options */
+        async make(options) {
+          if (closed) throw Error('scope closed');
+          assertCopyData(options);
+          events.push(['slice', id, options]);
+          return Far('NativeSlice', {});
+        },
         async makeResolved(options) {
           if (closed) throw Error('scope closed');
           assertCopyData(options);
@@ -338,10 +345,21 @@ test('native controller construction is inert; activation uses copy paths and no
   const [, , options] = f.events.find(
     event => Array.isArray(event) && event[0] === 'slice',
   );
+  // The attested table: a projection for the workspace, binds attested as
+  // binds for the CLI's own data directory and the MCP socket directory, and
+  // declared ceilings for the writable scratch.
   t.deepEqual(
-    options.mounts.map(mount => mount.hostPath),
-    [plan.workspaceMountPoint, '/state/sandbox-a', plan.mcpDir],
+    options.policy.mounts.map(mount => [mount.role, mount.kind, mount.source]),
+    [
+      ['workspace', 'attach', plan.workspaceMountPoint],
+      ['opencode-state', 'bind', '/state/sandbox-a'],
+      ['mcp', 'bind', plan.mcpDir],
+      ['tmp', 'tmpfs', undefined],
+      ['run', 'tmpfs', undefined],
+    ],
   );
+  t.is(options.network, 'broker-only');
+  t.is(options.policy.brokerSidecar.container, 'sandbox-a');
   t.is(options.env.OPENROUTER_API_KEY, 'opencode-broker-placeholder');
   t.is(
     JSON.parse(options.env.OPENCODE_CONFIG_CONTENT).mcp.endo.command[2],
@@ -612,16 +630,12 @@ test('public network uses approved proxy environment and literal resolver conten
   t.deepEqual(options.generatedFiles, [
     { innerPath: '/etc/resolv.conf', contents: 'nameserver 127.0.0.53\n' },
   ]);
-  // The recorded profile reaches native acquisition widened, with no legacy
-  // rlimit or attestation policy beside it.
-  t.deepEqual(options.nativeProfile, {
-    ...nativeProfile,
-    memoryBytes: 536_870_912n,
-    cpuQuotaMicros: 200_000n,
-  });
-  t.is(options.backend, 'podman');
+  // The operator's per-adapter native profile no longer selects the slice's
+  // limits: every hosted adapter runs the one shared resource profile, which
+  // is what makes the attested contract comparable across the three.
+  t.false('nativeProfile' in options);
   t.false('limits' in options);
-  t.false('policy' in options);
+  t.is(options.policy.profile, 'hosted-agent-v1');
   await E(controller).terminate(text, f.resolver);
 });
 
