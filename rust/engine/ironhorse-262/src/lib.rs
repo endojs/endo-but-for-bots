@@ -107,6 +107,13 @@ pub fn compile_failure_name(error: &ironhorse_compile::ParseError) -> &'static s
         ParseErrorKind::Syntax => "SyntaxError",
         // Both say "ironhorse stopped", not "the source is invalid".
         ParseErrorKind::Unsupported | ParseErrorKind::MeterLimit => "InternalError",
+        // No wildcard, deliberately. `SyntaxError` is the name that makes a
+        // negative parse-phase case PASS, so a `_` arm defaulting to it would
+        // credit the ratchet for whatever lex kind someone adds next --
+        // reintroducing, silently, the bug this function exists to fix.
+        // `LexErrorKind` carries no `#[non_exhaustive]`, so naming all sixteen
+        // makes a seventeenth a compile error HERE and forces whoever adds it
+        // to classify it. Same discipline as `Refusal`'s `Display`.
         ParseErrorKind::Lex(lex) => match lex.kind {
             // Resource ceilings, not grammar. `RegExpBudgetExceeded`'s own doc
             // says it is "never a guest SyntaxError".
@@ -114,9 +121,20 @@ pub fn compile_failure_name(error: &ironhorse_compile::ParseError) -> &'static s
             | LexErrorKind::RegExpBudgetExceeded
             | LexErrorKind::RegExpResourceLimit
             | LexErrorKind::Overflow => "InternalError",
-            // Every other lex kind IS the grammar rejecting the source: an
-            // unterminated string, a bad escape, a strict-mode octal.
-            _ => "SyntaxError",
+            // The grammar rejecting the source: an unterminated string, a bad
+            // escape, a strict-mode octal, and the rest.
+            LexErrorKind::InvalidCharacter(_)
+            | LexErrorKind::InvalidEscape
+            | LexErrorKind::InvalidNumber
+            | LexErrorKind::StrictOctal
+            | LexErrorKind::UnterminatedString
+            | LexErrorKind::LineTerminatorInString
+            | LexErrorKind::UnterminatedComment
+            | LexErrorKind::UnterminatedRegExp
+            | LexErrorKind::LineTerminatorInRegExp
+            | LexErrorKind::InvalidRegExp
+            | LexErrorKind::InvalidAtSign
+            | LexErrorKind::UnexpectedCharacter(_) => "SyntaxError",
         },
     }
 }

@@ -5,6 +5,12 @@
 //! PASSES on that name alone. Reporting an unported construct or an exhausted
 //! allowance under it would credit the ratchet for our own shortfall, which is
 //! the opposite of what the ratchet measures.
+//!
+//! These lists are LITERAL, so they pin today's sixteen `LexErrorKind`
+//! variants and would not notice a seventeenth. That is deliberate: the
+//! guard against a new variant is the match in `compile_failure_name`
+//! itself, which names all sixteen with no wildcard, so adding one is a
+//! compile error there rather than a silently-credited pass here.
 
 use ironhorse_262::compile_failure_name;
 use ironhorse_compile::{LexError, LexErrorKind, ParseError, ParseErrorKind};
