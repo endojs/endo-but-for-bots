@@ -6,6 +6,11 @@ below; record each grooming pass by appending its note to `ARCHIVE.md` — do no
 layer new groom notes at the top of this file.*
 
 *Recently added or revised:
+[mutable-blob-formula](mutable-blob-formula.md) (added 2026-09-16;
+proposes the `readable-blob` / `blob` / `appendable-blob` formula trio,
+operation-scoped read generations across resize, explicit read-only and
+append-only attenuation, and distinct crash-safe persistence layouts for
+general mutation and cheap prefix-stable append),
 [ironhorse-daemon-acceptance-sequencing](ironhorse-daemon-acceptance-sequencing.md)
 (added 2026-09-14; the ordering proposal for the daemon SES and worker-protocol
 acceptance scope PR #1263 fenced off — fifteen architecture-review findings in
@@ -491,6 +496,7 @@ LLM-agent stack).*
 | [notifier-pubsub-migration](notifier-pubsub-migration.md) | 2026-06-23 | 2026-06-26 | Proposed |
 | [platform-range-and-tree-reads](platform-range-and-tree-reads.md) | 2026-07-12 | 2026-07-12 | In Progress |
 | [readableblob-range-attenuation](readableblob-range-attenuation.md) | 2026-07-22 | 2026-07-22 | Proposed |
+| [mutable-blob-formula](mutable-blob-formula.md) | 2026-09-16 | — | Proposed |
 | [unredacted-stack-sanctioned-ses-api](unredacted-stack-sanctioned-ses-api.md) | 2026-07-02 | 2026-07-10 | Proposed |
 | [worker-rust-xs](worker-rust-xs.md) | 2026-03-23 | 2026-03-23 | Not Started |
 | [outliner-design-doc-2](outliner-design-doc-2.md) | 2026-07-22 | 2026-07-22 | Proposed (research note) |
@@ -519,7 +525,14 @@ totals from the table is the subject of a separate pass
 ([#1146](https://github.com/endojs/endo-but-for-bots/pull/1146)); this entry
 deliberately leaves the arithmetic to it rather than adjusting numbers it cannot
 reproduce.
-The same pass also gains
+
+The 2026-09-16 pass adds
+[mutable-blob-formula](mutable-blob-formula.md) (Proposed) to M3, its dependency
+graph, and the estimates table. Its M-L estimate is not added to the milestone
+or Gantt totals until the design's two maintainer-facing questions select the
+read-during-resize model and confirm the separate append-only formula. The
+already-drifted status buckets above remain for #1146 to recount.
+The 2026-09-08 pass also gains
 [hosted-agent-broker-oauth](hosted-agent-broker-oauth.md) (In Progress), the
 hosted-agent broker's OAuth credential lifecycle and the record of why both
 vendor subscription modes stay closed; its buckets are left to #1146 for the
@@ -594,7 +607,7 @@ inventing implementation commitments.
 | Design | Roadmap home | Role in that work |
 |---|---|---|
 | `inter-package-plain-re-exports`, `intra-package-plain-re-exports` | M2 | Package-hygiene cleanup before cross-package capability work. |
-| `http-confine`, `platform-range-and-tree-reads`, `endo-fs-seam-review-followups` | M3 | HTTP and readable-tree foundations for tools and daemon guests. |
+| `http-confine`, `platform-range-and-tree-reads`, `endo-fs-seam-review-followups`, `mutable-blob-formula` | M3 | HTTP, readable-tree, and durable mutable-blob foundations for tools and daemon guests. |
 | `captp-error-identification`, `daemon-locator-reference` | M4 | CapTP identity and locator semantics for federation. |
 | `notifier-pubsub-migration`, `unredacted-stack-sanctioned-ses-api` | M10 | Shared ecosystem surface and confinement diagnostics. |
 | `hosted-agent-broker-oauth` | M5 | Which credential bills a hosted agent session, and who holds it. Records why both vendor subscription modes stay closed. |
@@ -798,6 +811,7 @@ flowchart TD
         dgitnext[daemon-git-next-steps]
         dfsw[filesystem-watchers]
         dcsgc[daemon-content-store-gc]
+        mblob[mutable-blob-formula<br/><i>PROPOSED</i>]
         dpers[daemon-capability-persona]
         dsecret["daemon-secret-manager<br/><i>IMPLEMENTED (LOCAL)</i>"]
         dbank[daemon-capability-bank]
@@ -834,6 +848,8 @@ flowchart TD
         enetfetch -.-> dtools
         enetfetch --> dgitremote
         dmount --> dcsgc
+        pfs --> mblob
+        dcsgc --> mblob
         dsecret --> dbank
         dsand --> dbank
         dfs --> dbank
@@ -1050,6 +1066,7 @@ docker-selfhost, the rest of agent-tools) keep their places behind them.
 | ~~platform-fs~~ | **Complete** | `@endo/platform/fs` — shared types, content store, tree adapters; landed on `llm` (initial commit `e0dda06fb` + PR #122 review cycle fixups) |
 | daemon-capability-filesystem | Reference | `Dir`/`File` capabilities sketch retained as reference; narrower mount slice ships via daemon-mount |
 | ~~daemon-content-store-gc~~ | **Complete** | Content-store pruning and scratch-mount directory cleanup at GC time; landed in PR #99 |
+| mutable-blob-formula | Proposed | Durable resizable binary formula plus append-only sibling; common reads capture one committed generation, explicit facets preserve readable/append-only authority, and formula-number-keyed backing storage is reclaimed with formula GC. The two maintainer choices on temporal reads and whether append-only remains a separate formula are open. |
 | daemon-mount | In Progress | Phases 1-3, 5 on `llm` (commit `e22f71327`); symlink confinement, 20 integration tests; Phase 4 (sub-mounts, snapshot) in PR #135 open, mount extensions in PR #127 open, `followNameChanges` in PR #277 open |
 | daemon-mount-capabilities | Proposed | Complete `EndoMount`: snapshot bridge, mount-scoped descriptors, `makeFile` sibling, entry overloads on `has`/`stat`/`lookup`, trusted backing provenance |
 | daemon-worker-import-from-mount | Proposed | **Integration layer** of a four-layer stack (decomposed 2026-06-02 per kriskowal CHANGES_REQUESTED on #358). `makeFromPackage(mountName)` daemon-worker entry that runs a `package.json`-rooted `EndoMount` through `compartment-mapper.importLocation`; this layer carries `makeFromMount` dispatcher, worker dispatch body, CLI shape, XS bridging, architecture diagram. Sibling of `daemon-make-archive` § Phase 7 (`makeFromTree` for `compartment-map.json`-rooted trees) |
@@ -1734,6 +1751,7 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | ~~platform-fs~~ | S-M | — | 3 | ✅ Complete; `@endo/platform` package landed on `llm` (commit `e0dda06fb`); PR #122 carried review-cycle fixups |
 | daemon-capability-filesystem | L | — | 3 | Reference sketch; narrower mount slice ships via daemon-mount |
 | ~~daemon-content-store-gc~~ | S | — | 3 | ✅ Complete (PR #99, ~2 days actual vs 1 day estimate) |
+| mutable-blob-formula | M-L | 1-1.5 weeks | 3 | Two formula and Exo surfaces, generation/append persistence backends, shared readable conformance, crash recovery, GC, and Node/Rust state-directory coverage. No critical-path or milestone-total change is assigned until its two open questions are resolved. |
 | daemon-mount | M-L | 1.5 weeks | 3 | Mount exo, symlink confinement; Phase 4 in PR #135 forwarded under bot |
 | daemon-worker-import-from-mount | S-M | 3-4 days | 3 | **Integration layer** of the four-layer stack (decomposed 2026-06-02). `makeFromPackage` host method + `makeFromMount` dispatcher + CLI `endo run <mount>` / `endo make <mount>` + XS bridging deferral. Driven by the three preceding layers (`registry-capability`, `mvs-resolver`, `snapshot-mapper`); first cut limited to MVS; lockfile honoring deferred. Does not depend on the Rust subsystem (separate lane). |
 | ~~registry-capability~~ | S-M | n/a | 3 | Deprecated method-call capability shape; implementation is the compatibility source for the directory-tree adapters |
@@ -1849,7 +1867,7 @@ date of this pass.
 |-----------|-----------------|-----------------|----------------------------------|
 | M1: AI Agent Experience (was M0) | 0 | **Complete** | — |
 | M2: Project Hygiene (was M½) | 0 | **Complete** | — |
-| M3: Remote Access & Tools (was M1) | 19 (`gateway-package`, `daemon-docker-selfhost`, `daemon-agent-tools`, `endo-agent-tools`, `agentry-agent-builder`, `agentry-git-verb-gaps`, `agentry-git-eval-scenarios`, `exo-git-follow-root-advancement`, `daemon-mount`, `daemon-worker-import-from-mount`, `npm-registry-as-directory-tree`, `mvs-resolver`, `snapshot-mapper`, `filesystem-watchers`, `daemon-locator-terminology`, `daemon-rename-to-manager`, `daemon-xs-worker-snapshot`, `endoclaw-timer`, `endoclaw-network-fetch`) | 9-13 weeks | 11-15 weeks |
+| M3: Remote Access & Tools (was M1) | 20 (`gateway-package`, `daemon-docker-selfhost`, `daemon-agent-tools`, `endo-agent-tools`, `agentry-agent-builder`, `agentry-git-verb-gaps`, `agentry-git-eval-scenarios`, `exo-git-follow-root-advancement`, `daemon-mount`, `mutable-blob-formula`, `daemon-worker-import-from-mount`, `npm-registry-as-directory-tree`, `mvs-resolver`, `snapshot-mapper`, `filesystem-watchers`, `daemon-locator-terminology`, `daemon-rename-to-manager`, `daemon-xs-worker-snapshot`, `endoclaw-timer`, `endoclaw-network-fetch`) | 9-13 weeks | 11-15 weeks |
 | M4: Networking (was M2) | 8 (`ocapn-network-transport-separation`, `ocapn-tcp-for-test-extraction`, `ocapn-tcp-syrup-framing`, `cbor-frame`, `cbor-codec`, `ocapn-noise-cryptographic-review`, `daemon-agent-network-identity`, `thixotrope`) | 5-6 weeks | 6-8 weeks |
 | M5: Public Hosting & Billing (was M7) | 4 in-flight on PR #356 stack (`gateway-package` counted under M3; `gateway-packaging-ci`, `gateway-aws-deployment`, `gateway-aws-attuned` counted here) + 3 design gaps (`gateway-oauth-bonding`, `gateway-key-recovery`, `gateway-stripe-adapter`) | 4-6 weeks design + impl | merge cadence of PRs #343 and #356 |
 | M6: MCP Bridge Hosting (was Milestone B) | 2 net-new (`endo-gateway-mcp` impl, `endo-claude`); cross-milestone slices in M3 (P0) and M5 (P2/P3/P4 gaps) | ~3-3.5 weeks own work (endo-gateway-mcp ~2 weeks + endo-claude ~1-1.5 weeks) + ~6-9 weeks across P0-P4 | gated by M3 gateway-package phases 2/7/8 merge cadence |
