@@ -40,6 +40,26 @@ fn at_reads_by_relative_index() {
     check("new Uint8Array([11,22,33]).at('1')", "22");
     check("new Uint8Array([11,22,33]).at(1.9)", "22");
     check("new Uint8Array([11,22,33]).at(NaN)", "11");
+    // ToIntegerOrInfinity yields a MATHEMATICAL integer, so -0 and everything
+    // in (-1, 0) mean index 0, not an out-of-range read. `trunc` keeps the
+    // sign of a negative zero and `ta_valid_index` rejects one (it implements
+    // property-key semantics, where `ta['-0']` really is `undefined`), so `at`
+    // must resolve `k` before the read rather than lean on that rejection.
+    check("new Uint8Array([11,22,33]).at(-0)", "11");
+    check("new Uint8Array([11,22,33]).at(-0.5)", "11");
+    check("new Uint8Array([11,22,33]).at(-0.9)", "11");
+    // The same value through the Array one, which has always resolved `k` in
+    // integer arithmetic; the two must agree.
+    check("[11,22,33].at(-0.5)", "11");
+    // -Infinity is still out of range, and so is a whole negative step past 0.
+    check(
+        "String(new Uint8Array([11,22,33]).at(-Infinity))",
+        "undefined",
+    );
+    check(
+        "String(new Uint8Array([11,22,33]).at(Infinity))",
+        "undefined",
+    );
 }
 
 #[test]
