@@ -1250,6 +1250,63 @@ starts — not an import API, which none of the three offers.
   the preamble and the arbitrary bound both go — and its restoration is
   honestly marked as prepended rather than reconstructed.
 
+### Writing a CLI's store: why one adapter can and two cannot — 2026-09-16
+
+Claude's restoration is written and its round trip is proved. The obvious next
+move is the same trick for the other two, and the schemas are readable, so it
+looks like a matter of effort. It is not. The difference is how each store is
+*read back*, and it decides which adapter the stack may write for.
+
+**Claude's transcript is a log, read leniently.** Each line is an envelope
+around a verbatim Anthropic API message. A field this writer omits is a field
+Claude Code did not need; an extra one is ignored. A transcript that is
+slightly wrong still loads, and the conformance suite catches the rest.
+
+**OpenCode's store is decoded, strictly.** `session_message.data` is JSON
+decoded through effect-schema structs — `Session.Message.User`,
+`Session.Message.Assistant.Tool`, a `ToolState` tagged union, ids shaped
+`msg_…`, timestamps as `DateTimeUtcFromMillis` — and a row that does not match
+is a decode error, not a lenient read. The codebase names such failures
+(`ContextSnapshotDecodeError`). So a transcript written from the outside is
+correct only if every struct is reconstructed exactly, and the failure mode for
+getting one field wrong is a session that will not load at all. There is also
+migration state: `DatabaseMigration.apply` runs at every open, so a database
+this stack created rather than opencode is a database opencode will try to
+migrate.
+
+**Codex is the same, with no fork.** `thread_history_1.sqlite` is a versioned
+schema inside a stock `@openai/codex` binary, and nothing in this project can
+read its decoder, let alone patch it.
+
+So the rule that falls out is: **the stack may write a store it can read back
+leniently, and must go through the CLI's own encoder otherwise.** That is why
+OpenCode's answer is the fork patch — not because a patch is easier, but
+because an endpoint inside opencode builds these rows with opencode's own
+schema code, which is the only thing that can be right by construction. And it
+is why Codex's answer cannot be "write the store" at all.
+
+**The OpenCode patch, specified.** Add one route to the session group
+(`packages/opencode/src/server/routes/instance/httpapi/groups/session.ts`):
+
+- `POST /session/:sessionID/messages/import`, payload an array of
+  `Session.Message` values plus their parts, decoded by the same schemas the
+  server already uses for its own writes.
+- It appends at the session's current `seq`, refuses a session that already has
+  messages, and accepts a `compaction`-typed message so the context boundary
+  survives — without it a restored conversation puts its whole pre-compaction
+  history back into live context.
+- The adapter then creates a session through the existing `POST /session`,
+  imports, and prompts; `OPENCODE_DB` moves to `:memory:` and the durable state
+  row leaves the mount table.
+
+**What Codex is left with.** Its protocol admits history only as the next
+turn's input, so a tool call can only arrive as a line describing one. The
+preamble and the bounds are gone, which is everything its protocol allows.
+Making it faithful needs either an upstream `codex` able to import a thread, or
+a decision to reverse-engineer a vendor's private schema — a different kind of
+risk from the one accepted for Claude's JSONL, and one this design does not
+take on its own authority.
+
 ### Step 4 order and tests — 2026-09-16
 
 1. **Verify Claude Code's HTTP/SSE MCP support on Tokyo.** It gates the MCP
