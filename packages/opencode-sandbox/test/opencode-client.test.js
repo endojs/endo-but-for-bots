@@ -112,6 +112,13 @@ const makeStdinWriter = async proc => ({
   },
 });
 
+/**
+ * A partial client fixture. The exo's argument type is complete and these
+ * tests supply only what they exercise, so the cast belongs here rather than
+ * at every call site.
+ *
+ * @returns {any}
+ */
 const baseArgs = (fake, extra = {}) => ({
   sessionId: 'sess-0001',
   createdAt: '2026-01-01T00:00:00.000Z',
@@ -129,6 +136,16 @@ const baseArgs = (fake, extra = {}) => ({
 
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 
+/** Wait for a condition the client reaches asynchronously. */
+const waitFor = async (predicate, attempts = 200) => {
+  for (let i = 0; i < attempts; i += 1) {
+    if (predicate()) return;
+    // eslint-disable-next-line no-await-in-loop
+    await tick();
+  }
+  throw Error('condition was not reached');
+};
+
 const makeGate = t => {
   let release = () => {};
   const promise = new Promise(resolve => {
@@ -138,7 +155,12 @@ const makeGate = t => {
   return { promise, release };
 };
 
+/**
+ * @param {any} reader
+ * @returns {Promise<any[]>}
+ */
 const drain = async reader => {
+  /** @type {any[]} */
   const events = [];
   for await (const value of iterateReader(reader)) {
     events.push(value);
@@ -784,4 +806,71 @@ test('a resume that missed restores rather than continuing context-free', async 
   const first = JSON.parse(bridge.commands[0]);
   t.true(first.text.includes('user: earlier work'));
   t.true(first.text.endsWith('carry on'));
+});
+
+test('restoration prefers the structured import, and reads it in when unavailable', async t => {
+  const transcript = harden([
+    { kind: 'message', role: 'user', content: 'build the page' },
+    { kind: 'tool-call', id: 'c1', name: 'write', args: '{"path":"a"}' },
+    { kind: 'tool-result', id: 'c1', content: 'wrote a' },
+  ]);
+
+  // An image carrying the import route takes the conversation structurally,
+  // so a tool call arrives as a tool call and the prompt stays the prompt.
+  {
+    const bridge = makeFakeBridge();
+    const fake = makeFakeSlice(bridge);
+    const client = makeOpencodeClient(
+      baseArgs(fake, { model: 'openrouter/deepseek/v4' }),
+    );
+    bridge.push(readyLine('ses_1'));
+    const reader = await client.send('and the footer', { transcript });
+    // The import goes out before the prompt and is awaited, so the send
+    // command does not follow until the bridge answers.
+    await waitFor(() => bridge.commands.length >= 1);
+    const imported = JSON.parse(bridge.commands[0]);
+    t.is(imported.op, 'import');
+    t.deepEqual(imported.model, {
+      providerID: 'openrouter',
+      modelID: 'deepseek/v4',
+    });
+    // A call and its result are one imported turn: splitting them would
+    // record a call the store shows as never having returned.
+    t.deepEqual(imported.turns, [
+      { kind: 'user', text: 'build the page' },
+      {
+        kind: 'tool',
+        callID: 'c1',
+        name: 'write',
+        input: { path: 'a' },
+        output: 'wrote a',
+      },
+    ]);
+    bridge.push(JSON.stringify({ type: 'imported', ok: true }));
+    await waitFor(() => bridge.commands.length >= 2);
+    t.is(JSON.parse(bridge.commands[1]).text, 'and the footer');
+    bridge.push(JSON.stringify({ type: 'end' }));
+    await drain(reader);
+  }
+
+  // An image built before the route says so, and the conversation is read
+  // into the prompt instead — lossy, but a conversation the model can see
+  // beats one it cannot.
+  {
+    const bridge = makeFakeBridge();
+    const fake = makeFakeSlice(bridge);
+    const client = makeOpencodeClient(
+      baseArgs(fake, { model: 'openrouter/deepseek/v4' }),
+    );
+    bridge.push(readyLine('ses_1'));
+    const reader = await client.send('and the footer', { transcript });
+    await waitFor(() => bridge.commands.length >= 1);
+    bridge.push(JSON.stringify({ type: 'imported', ok: false, reason: '404' }));
+    await waitFor(() => bridge.commands.length >= 2);
+    const sent = JSON.parse(bridge.commands[1]);
+    t.true(sent.text.includes('user: build the page'));
+    t.true(sent.text.endsWith('and the footer'));
+    bridge.push(JSON.stringify({ type: 'end' }));
+    await drain(reader);
+  }
 });

@@ -750,6 +750,31 @@ const main = async () => {
       }
       return;
     }
+    if (command.op === 'import' && Array.isArray(command.turns)) {
+      // Restore a conversation the stack holds into a session that has none.
+      // The server records a user turn as a `synthetic` message rather than a
+      // prompt, so nothing here provokes a turn — see the fork patch in
+      // `oci/patches/`. Reported either way: the caller falls back to reading
+      // the conversation into the next prompt when this is unavailable, which
+      // is what an image built before the patch will do.
+      void api(
+        `/session/${encodeURIComponent(activeSessionId)}/message/import`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            agent: String(command.agent || 'build'),
+            model: command.model,
+            turns: command.turns,
+          }),
+        },
+      ).then(
+        () => writeEvent({ type: 'imported', ok: true }),
+        error =>
+          writeEvent({ type: 'imported', ok: false, reason: `${error}` }),
+      );
+      return;
+    }
     if (command.op === 'interrupt') {
       if (!inFlight) return;
       interrupted = true;

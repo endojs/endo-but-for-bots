@@ -8,6 +8,7 @@ harden(DEFAULT_MAX_LINE_BYTES);
 /** The closed set of events the in-slice bridge may emit. */
 export const BRIDGE_EVENT_TYPES = harden([
   'ready',
+  'imported',
   'phase',
   'text-delta',
   'commentary-delta',
@@ -133,6 +134,20 @@ export const assertBridgeEvent = candidate => {
     const sessionId = /** @type {string} */ (rawSessionId);
     const port = /** @type {number} */ (rawPort);
     return harden({ type, sessionId, port });
+  }
+  if (type === 'imported') {
+    // The bridge's answer to a history import: whether the session took the
+    // conversation. A CLI image built before the import route exists answers
+    // `false`, which is how the caller knows to read the conversation into
+    // the next prompt instead.
+    typeof candidate.ok === 'boolean' || Fail`imported event needs an outcome`;
+    return harden({
+      type,
+      ok: candidate.ok,
+      ...(candidate.reason === undefined
+        ? {}
+        : { reason: `${candidate.reason}` }),
+    });
   }
   if (type === 'phase') {
     ['busy', 'idle', 'error'].includes(candidate.phase) ||

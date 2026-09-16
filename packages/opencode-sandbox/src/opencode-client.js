@@ -39,7 +39,10 @@ import { E } from '@endo/eventual-send';
 import { Buffer } from 'node:buffer';
 import { clearTimeout, setTimeout } from 'node:timers';
 import { makeExo } from '@endo/exo';
-import { renderTranscriptDialogue } from '@endo/hosted-agent/transcript-records.js';
+import {
+  pairToolCalls,
+  renderTranscriptDialogue,
+} from '@endo/hosted-agent/transcript-records.js';
 import { M } from '@endo/patterns';
 import { makeError, q, X } from '@endo/errors';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
@@ -198,6 +201,54 @@ const defaultMakeStdinWriter = async proc =>
  * @property {number} [stderrTailLength] - Maximum byte length of the trailing
  *   stderr excerpt included in a failure reason. Defaults to 2000.
  */
+
+/** How long the structured import may take before the prompt carries it. */
+const IMPORT_TIMEOUT_MS = 30_000;
+
+/**
+ * Transcript records as the turns opencode's import route takes.
+ *
+ * A tool call and its result become one imported turn, because that is what
+ * they are: the route records a tool message carrying both, and splitting them
+ * would produce a call the store shows as never having returned.
+ *
+ * @param {readonly any[]} records
+ */
+const importedTurnsFor = records => {
+  const { pairs } = pairToolCalls(records);
+  const resultFor = new Map(pairs.map(pair => [pair.call, pair.result]));
+  const turns = [];
+  for (const record of records) {
+    if (record.kind === 'message') {
+      turns.push({ kind: record.role, text: record.content });
+    } else if (record.kind === 'compaction') {
+      turns.push({ kind: 'compaction', text: record.summary });
+    } else if (record.kind === 'tool-call') {
+      const result = resultFor.get(record);
+      let input = {};
+      try {
+        const parsed = JSON.parse(record.args);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          input = parsed;
+        } else {
+          input = { value: parsed };
+        }
+      } catch {
+        input = { value: record.args };
+      }
+      turns.push({
+        kind: 'tool',
+        callID: record.id,
+        name: record.name,
+        input,
+        output: result ? result.content : 'Tool call did not complete.',
+        ...(result?.failed ? { failed: true } : {}),
+      });
+    }
+    // A `tool-result` was folded into its call above.
+  }
+  return turns;
+};
 
 /**
  * Build an `OpencodeClient` exo.
@@ -399,6 +450,10 @@ export const makeOpencodeClient = ({
   let restorationPending = !resumePriorConversation;
 
   const handleEvent = event => {
+    if (event.type === 'imported') {
+      if (resolveImported) resolveImported(event.ok === true);
+      return;
+    }
     if (event.type === 'ready') {
       // A resume that came back under a different id did not resume: the
       // store no longer held the session this plan recorded, and the bridge
@@ -571,14 +626,18 @@ export const makeOpencodeClient = ({
             active = turn;
             activeBytes = 0;
             try {
-              // eslint-disable-next-line no-await-in-loop
               // Composed here, not at `send`: the bridge starts lazily on
               // the first turn, so whether this incarnation has a
-              // conversation to continue is only known once it says so.
+              // conversation to continue is only known once it says so. One
+              // turn at a time is the point — a restoration completes before
+              // the prompt it precedes.
+              /* eslint-disable no-await-in-loop */
+              const restored = await restoreOnce(turn);
               await writeCommand({
                 op: 'send',
-                text: `${restoreOnce(turn)}${turn.text}`,
+                text: `${restored}${turn.text}`,
               });
+              /* eslint-enable no-await-in-loop */
             } catch (error) {
               if (active === turn) active = null;
               turn.push({
@@ -639,11 +698,62 @@ export const makeOpencodeClient = ({
     return turn;
   };
 
-  const restoreOnce = turn => {
+  /** @type {((ok: boolean) => void) | undefined} */
+  let resolveImported;
+  // What the imported messages are attributed to. The agent is opencode's
+  // default persona name; the model is the session's own, split into the
+  // provider-scoped ref the import route takes. A session with no recorded
+  // model does not import — an attribution invented here would be a claim
+  // about which model said what.
+  const importAgent = 'build';
+  const importModel = model
+    ? harden({
+        providerID: String(model).split('/')[0],
+        modelID: String(model).split('/').slice(1).join('/'),
+      })
+    : undefined;
+
+  /**
+   * Hand this session the conversation the stack holds, once per incarnation.
+   *
+   * Structured first: the server records each turn as its own message, so a
+   * tool call comes back a tool call. An image built before that route exists
+   * says so, and the conversation is read into the next prompt instead —
+   * lossy, but a conversation the model can see beats one it cannot.
+   *
+   * @param {any} turn
+   * @returns {Promise<string>} text to prepend, empty when the import took it.
+   */
+  const restoreOnce = async turn => {
     if (!restorationPending) return '';
     restorationPending = false;
     const records = Array.isArray(turn.transcript) ? turn.transcript : [];
     if (records.length === 0) return '';
+    const turns = importedTurnsFor(records);
+    if (turns.length > 0 && importModel !== undefined) {
+      const imported = new Promise(resolve => {
+        resolveImported = resolve;
+      });
+      try {
+        await writeCommand({
+          op: 'import',
+          agent: importAgent,
+          model: importModel,
+          turns,
+        });
+        const ok = await Promise.race([
+          imported,
+          new Promise(resolve => {
+            setTimeout(() => resolve(false), IMPORT_TIMEOUT_MS);
+          }),
+        ]);
+        if (ok) return '';
+      } catch {
+        // Fall through to reading the conversation into the prompt.
+      } finally {
+        resolveImported = undefined;
+      }
+    }
     return `${renderTranscriptDialogue(records)}\n\n`;
   };
 
