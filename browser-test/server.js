@@ -87,6 +87,10 @@ const serveChat = (req, res) => {
 const server = http.createServer((req, res) => {
   console.log(req.url);
 
+  if (req.url === '/blank') {
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    return res.end('<!doctype html>');
+  }
   if (req.url === '/') {
     res.writeHead(200, { 'Content-Type': 'text/html' });
     return res.end('<!doctype html><script src="ses.umd.js"></script>');

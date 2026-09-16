@@ -21,6 +21,7 @@ import {
   sha256IntoAsync as browserSha256IntoAsync,
 } from '../src/sha256-browser-async.js';
 import { DIGEST_LENGTH } from '../src/shared.js';
+import { sha256TestVectors } from './sha256-vectors.js';
 
 const encoder = new TextEncoder();
 
@@ -36,24 +37,6 @@ const hex = bytes => Buffer.from(bytes).toString('hex');
  */
 const nodeHex = bytes => createHash('sha256').update(bytes).digest('hex');
 
-const vectors = [
-  {
-    label: 'empty input',
-    input: '',
-    hex: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
-  },
-  {
-    label: 'one-block message: "abc"',
-    input: 'abc',
-    hex: 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad',
-  },
-  {
-    label: 'two-block message (56 bytes)',
-    input: 'abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq',
-    hex: '248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1',
-  },
-];
-
 /** @type {[string, (bytes: Uint8Array) => Promise<Uint8Array>][]} */
 const implementations = [
   ['node', nodeSha256Async],
@@ -67,7 +50,7 @@ const intoImplementations = [
 ];
 
 for (const [name, sha256Async] of implementations) {
-  for (const vector of vectors) {
+  for (const vector of sha256TestVectors) {
     test(`${name}: ${vector.label}`, async t => {
       const digest = await sha256Async(encoder.encode(vector.input));
       t.is(hex(digest), vector.hex);
@@ -126,14 +109,14 @@ for (const [name, sha256IntoAsync] of intoImplementations) {
     const out = new Uint8Array(DIGEST_LENGTH);
     const written = await sha256IntoAsync(out, encoder.encode('abc'));
     t.is(written, DIGEST_LENGTH);
-    t.is(hex(out), vectors[1].hex);
+    t.is(hex(out), sha256TestVectors[1].hex);
   });
 
   test(`${name}: sha256IntoAsync honors the offset and leaves the rest alone`, async t => {
     const out = new Uint8Array(DIGEST_LENGTH + 8).fill(0xaa);
     const written = await sha256IntoAsync(out, encoder.encode('abc'), 5);
     t.is(written, DIGEST_LENGTH);
-    t.is(hex(out.subarray(5, 5 + DIGEST_LENGTH)), vectors[1].hex);
+    t.is(hex(out.subarray(5, 5 + DIGEST_LENGTH)), sha256TestVectors[1].hex);
     t.deepEqual(out.subarray(0, 5), new Uint8Array(5).fill(0xaa));
     t.deepEqual(out.subarray(5 + DIGEST_LENGTH), new Uint8Array(3).fill(0xaa));
   });
@@ -143,7 +126,10 @@ for (const [name, sha256IntoAsync] of intoImplementations) {
     const out = backing.subarray(16, 16 + DIGEST_LENGTH);
     const written = await sha256IntoAsync(out, encoder.encode('abc'));
     t.is(written, DIGEST_LENGTH);
-    t.is(hex(backing.subarray(16, 16 + DIGEST_LENGTH)), vectors[1].hex);
+    t.is(
+      hex(backing.subarray(16, 16 + DIGEST_LENGTH)),
+      sha256TestVectors[1].hex,
+    );
     t.deepEqual(backing.subarray(0, 16), new Uint8Array(16).fill(0xaa));
   });
 
@@ -258,7 +244,7 @@ test.serial(
       },
     });
     const digest = await browserSha256Async(abc);
-    t.is(hex(digest), vectors[1].hex);
+    t.is(hex(digest), sha256TestVectors[1].hex);
     t.deepEqual(calls, [{ algorithm: 'SHA-256', byteLength: 3 }]);
   },
 );
@@ -268,7 +254,7 @@ test.serial(
   async t => {
     await null;
     setCrypto(undefined);
-    for (const vector of vectors) {
+    for (const vector of sha256TestVectors) {
       const bytes = encoder.encode(vector.input);
       // eslint-disable-next-line no-await-in-loop
       const digest = await browserSha256Async(bytes);

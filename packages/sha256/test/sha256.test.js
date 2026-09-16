@@ -18,6 +18,7 @@ import {
 } from '../src/sha256-browser.js';
 import { jsSha256, jsSha256Into } from '../src/sha256-js.js';
 import { DIGEST_LENGTH } from '../src/shared.js';
+import { sha256TestVectors } from './sha256-vectors.js';
 
 /** @type {[string, (bytes: Uint8Array) => Uint8Array][]} */
 const implementations = [
@@ -41,28 +42,8 @@ const encoder = new TextEncoder();
  */
 const hex = bytes => Buffer.from(bytes).toString('hex');
 
-// FIPS 180-2 / FIPS 180-4 appendix B vectors, plus the well-known
-// empty-input digest.
-const vectors = [
-  {
-    label: 'empty input',
-    input: '',
-    hex: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
-  },
-  {
-    label: 'one-block message: "abc"',
-    input: 'abc',
-    hex: 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad',
-  },
-  {
-    label: 'two-block message (56 bytes)',
-    input: 'abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq',
-    hex: '248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1',
-  },
-];
-
 for (const [name, sha256] of implementations) {
-  for (const vector of vectors) {
+  for (const vector of sha256TestVectors) {
     test(`${name}: ${vector.label}`, t => {
       t.is(hex(sha256(encoder.encode(vector.input))), vector.hex);
     });
@@ -120,14 +101,14 @@ for (const [name, sha256Into] of intoImplementations) {
     const bytes = encoder.encode('abc');
     const out = new Uint8Array(DIGEST_LENGTH);
     t.is(sha256Into(out, bytes), DIGEST_LENGTH);
-    t.is(hex(out), vectors[1].hex);
+    t.is(hex(out), sha256TestVectors[1].hex);
   });
 
   test(`${name}: sha256Into honors the offset and leaves the rest alone`, t => {
     const bytes = encoder.encode('abc');
     const out = new Uint8Array(DIGEST_LENGTH + 8).fill(0xaa);
     t.is(sha256Into(out, bytes, 5), DIGEST_LENGTH);
-    t.is(hex(out.subarray(5, 5 + DIGEST_LENGTH)), vectors[1].hex);
+    t.is(hex(out.subarray(5, 5 + DIGEST_LENGTH)), sha256TestVectors[1].hex);
     t.deepEqual(out.subarray(0, 5), new Uint8Array(5).fill(0xaa));
     t.deepEqual(out.subarray(5 + DIGEST_LENGTH), new Uint8Array(3).fill(0xaa));
   });
@@ -137,7 +118,10 @@ for (const [name, sha256Into] of intoImplementations) {
     const backing = new Uint8Array(64).fill(0xaa);
     const out = backing.subarray(16, 16 + DIGEST_LENGTH);
     t.is(sha256Into(out, bytes), DIGEST_LENGTH);
-    t.is(hex(backing.subarray(16, 16 + DIGEST_LENGTH)), vectors[1].hex);
+    t.is(
+      hex(backing.subarray(16, 16 + DIGEST_LENGTH)),
+      sha256TestVectors[1].hex,
+    );
     t.deepEqual(backing.subarray(0, 16), new Uint8Array(16).fill(0xaa));
   });
 
