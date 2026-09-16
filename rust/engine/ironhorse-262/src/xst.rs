@@ -3081,9 +3081,15 @@ mod tests {
             dual_run(&format!("\"use strict\";\n{custom_harness}{body}")).expect("oracle machine");
         assert_eq!(custom.agreement, Agreement::IronhorseOnlyComplete);
         assert_eq!(custom.oracle_error, "Test262Error: #2");
+        // The host diagnostic now carries the MESSAGE, paired with the tag
+        // `Object.prototype.toString` reports: it reads `message` as a data
+        // property, which is not the same thing as running the prototype
+        // `toString` XS runs to get the name. So the texts still differ, by
+        // `Object` against `Test262Error`, and the exclusion stays as narrow
+        // as it was — the reason this case keeps gating is unchanged.
         assert_eq!(
             crate::ironhorse_eval_goal_error(&custom.source).as_deref(),
-            Some("[object Object]")
+            Some("Object: #2")
         );
         assert!(!oracle_eval_frames_script_declarations(&custom));
         assert!(matches!(
