@@ -3065,7 +3065,7 @@ impl Interp {
                             // result, exactly as a normal `END` does, so
                             // `run_callback` can read it and the caller's
                             // activation is restored.
-                            let _ = self.leave_call();
+                            let _ = self.leave_call_to_frame_base();
                             self.push(ret);
                         }
                         return Step::Returned;
@@ -3091,7 +3091,7 @@ impl Interp {
                     // the body explicitly returned an object.
                     let ret =
                         dispatch_result!(self.end_completion(op), pc, self, return_depth, code);
-                    let resume = self.leave_call();
+                    let resume = self.leave_call_to_frame_base();
                     self.push(ret);
                     pc = resume;
                     // Returning into a JS caller: `mxFirstCode()` checks.

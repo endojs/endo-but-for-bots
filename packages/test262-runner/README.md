@@ -52,8 +52,13 @@ Counts at the time of writing, over the 16 runs the corpus produces
 | --- | --- | --- |
 | `test262:xs` | not measured here | needs `xst`; build the `c/moddable` submodule |
 | `test262:node` | 14 / 16 | the 2 failures are `lockdown()` cases, below |
-| `test262:ironhorse-host` | 6 / 16 | the number this ratchet tracks |
+| `test262:ironhorse-host` | 8 / 16 | the number this ratchet tracks |
 | `test262:ironhorse` | refuses to start | no native `lockdown()` yet |
+
+The last move was 6/16 to 8/16, on an engine fix this lane found: a `return`
+out of a `switch` left the discriminant on the value stack, so a call made
+from an argument list corrupted the caller's pending operands.
+`designs/ironhorse-ses-compartment-equivalence.md` has the measurements.
 
 Node's two failures are not an engine gap.
 `@endo/harden`'s selector resolves `Object[Symbol.for('harden')]`, then

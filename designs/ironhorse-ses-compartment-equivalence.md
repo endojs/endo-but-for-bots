@@ -229,9 +229,10 @@ pre-skips every SES-mode case (`xst.rs`, `SesMode::unimplemented_skip` — note
 that `SesMode::prelude()` is never applied on the live path at all).
 
 There is now a third prelude, `src/ironhorse-prelude.js`, and measuring it
-gives the first real number for the shim route: **3 of the 8 cases pass**
-(`ironhorse-vm/tests/ses_prelude_reach.rs`), against `covered=6` for the
-engine route, which skips the two that need the guest surface.
+gives the first real number for the shim route: **4 of the 8 cases pass**
+(`ironhorse-vm/tests/ses_prelude_reach.rs`) since the `END` frame-base restore
+below, 3 before it, against `covered=6` for the engine route, which skips the
+two that need the guest surface.
 The overlap is not the interesting part; the failures are.
 
 | case | node | Ironhorse via the shim prelude |
@@ -240,7 +241,7 @@ The overlap is not the interesting part; the failures are.
 | `Compartment/prototype/Symbol.toStringTag-lockdown.js` | **fail** | fail |
 | `pass-style-bytes/byte-readers.js` | pass | **pass** |
 | `pass-style-bytes/native-or-emulated-shape.js` | pass | **pass** |
-| `pass-style-bytes/byte-array-brand.js` | pass | fail |
+| `pass-style-bytes/byte-array-brand.js` | pass | **pass** |
 | `view-behavior-matrix/ses-hosts.js` | pass | fail |
 | `TextEncoder`/`TextDecoder` intersection | pass | fail |
 
@@ -312,34 +313,60 @@ been reporting this corpus as an honest set of named skips, exiting 0, for as
 long as the corpus has existed — and underneath it was a parser bug that broke
 every case in the suite.
 
-### The 10 that still fail, and two engine bugs behind them
+### The 8 that still fail, and the engine bug that was behind two of them
 
-Two findings from the 6/16, both characterized rather than fixed.
+Two findings came out of the 6/16. The first is now fixed, and fixing it took
+the corpus to **8/16**; the second is still characterized rather than fixed.
 
-**`passStyleOf`'s first call in argument position throws
-`call: not a function`.**
-Reproducible, and narrow enough to state exactly:
+**A `return` out of a `switch` abandoned the discriminant on the value stack.**
+FIXED. This was originally recorded here as "`passStyleOf`'s first call in
+argument position throws `call: not a function`", once per function, with a
+bare warm-up call as a complete workaround. Every part of that was a symptom
+read as the disease, so the measurements are worth restating:
 
-| shape | result |
-|---|---|
-| `passStyleOf(bytes)` bare, any number of times | always passes |
-| `wrap(passStyleOf(bytes))`, first execution | **throws** |
-| the same, second and later executions | passes |
-| a second, distinct call site, after the first | passes |
-| `compareBytes(...)` in argument position, first execution | passes |
-| argument position after one bare warm-up call | passes |
+| shape | before the fix |
+| --- | --- |
+| `passStyleOf(x)` as a statement | passes |
+| `"MARK" + passStyleOf(x)` | **`"objectbyteArray"`** — silently wrong |
+| `sink(passStyleOf(x), "Z")` | **throws `call: not a function`** |
+| `[passStyleOf(x)]` | **throws `cannot coerce undefined to object`** |
+| the same call with a FRESH argument each time | **fails every time** |
 
-So it is once per FUNCTION, not per call site, and specific to
-`passStyleOf` — `frozenBytes`, `thawedBytes` and `compareBytes` in the same
-position are all fine.
-`passStyleOf` has lazy internal state; its initialization fails only when the
-call sits in an argument list, and a bare warm-up call beforehand is a
-complete workaround.
-It is not simple recursion depth (a synthetic 100-deep call in argument
-position is fine), and it is not `Reflect.apply`, which is correct in every
-shape tested and reports a distinguishable `target: not a function`.
-Root-causing it means reading `@endo/pass-style`'s lazy init against
-ironhorse's call path.
+It was never once per function. `passStyleOf` memoizes in a `WeakMap` keyed on
+the argument, so a second call with the SAME object short-circuits before
+reaching the faulty path — which looks like warming up the function and is
+actually warming up that one object. A fresh object failed every time, and a
+primitive, which is never memoized, failed on every single call.
+
+Nor was it really about argument position, or about `passStyleOf`. The value
+that displaced the caller's operand was the last `typeof` computed inside the
+walk — `passStyleOf("s")` clobbered with `"string"`, `passStyleOf(42)` with
+`"number"`, `passStyleOf(harden({a: 1}))` with `"number"` from the inner `1`.
+Argument position only decided WHICH slot got destroyed, and so which of three
+unrelated-looking errors came out: a wrong string, a bad callee, or a bad
+array element. A statement-position call had no pending operand to lose, which
+is the only reason it looked clean.
+
+The cause is two correct-looking halves. `code_switch` keeps the discriminant
+live on the stack across every case test and pops it only after the break
+target, so `break` reaches that pop and `return` jumps over it; XS's
+`fxSwitchNodeCode` emits exactly the same shape. XS is correct anyway because
+`XS_CODE_END` resets the stack to the frame base before writing the result
+(`mxStack = mxFrameEnd`, xsRun.c:1063). Ironhorse's port restored the caller's
+activation in `leave_call` but never its stack, so the abandoned slot landed
+wherever the caller's expression had been building.
+
+`leave_call_to_frame_base` restores it on the `END` family, which is where XS
+does it. The `START_*` opcodes are deliberately excluded: they hand a
+generator or promise back at function entry, before a body has run. Pinned in
+`ironhorse-vm/tests/switch_return_frame_base.rs`, which fails on the parent
+commit.
+
+This was reachable from any guest code with a `switch` whose cases `return` —
+`@endo/pass-style` is simply where the corpus happened to run one — and it
+produced silent wrong values, not only exceptions. It is the kind of bug the
+differential runner exists to catch and had never reported, because it could
+not start.
 
 **A thrown object with a prototype `toString` renders as
 `[object Object]`.**
@@ -357,7 +384,7 @@ XS avoids this by calling the guest `toString` from its own catch.
 Fixing it needs a guest-semantics coercion the VM does not currently expose
 to hosts.
 
-Neither is a SES or prelude problem; both would bite any host embedding
+Neither was a SES or prelude problem; both bite any host embedding
 ironhorse.
 
 ### Why SES's own suite is not the gate yet
