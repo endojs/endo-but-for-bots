@@ -1408,20 +1408,25 @@ Steps 3–5 each move a descriptor off `continuity: 'transcript'` to
 
 ### What the deploy found — 2026-09-16
 
-Three defects, none of which a unit test could have produced, because all
-three are properties of the host's kernel and container runtime rather than
-of the code's own reasoning about them.
+Seven defects. The first three are properties of the host's kernel and
+container runtime rather than of the code's reasoning about them, which is
+why no unit test could have produced them. The rest are ordinary bugs that
+the deploy found only because each was hidden behind the one above it: every
+fix uncovered the next, and the last of them is the one that decides whether
+this design does what it says.
 
 1. **A slice with no host scratch still needs a scratch provider.**
    `factory.make` requires one where `makeResolved` never did, so an owned
    runtime minted with no host powers passed `null` and failed construction.
    `makeNoHostScratch()` is the refusing provider that says so.
+
 2. **The attestation refused the bind it had just been taught to declare.**
    The mount-table control admitted attaches and the resolver and nothing
    else, so declaring the MCP row as a `bind` made the slice fail its own
    policy. The control now admits a declared bind whose source is under a
    declared `bindRoot`, which is also what keeps the `hostHome`/`hostSockets`
    argument standing.
+
 3. **The declared uid did not own the declared mounts.** The policy asks for
    `uid: 1000` and, under the default rootless mapping, gets a slice running
    as an unmapped subordinate id while the daemon — the owner of every bind
@@ -1498,6 +1503,30 @@ of the code's own reasoning about them.
    test asserted `deepEqual(opts, { systemPrompt })` — an exact match on the
    rebuilt record, which encoded the omission as the expected result. A test
    that pins a whole structure pins its gaps too.
+
+6. **The bridge could only be asked by waiting.** The OpenCode image carries
+   its own copy of the in-slice bridge, so a slice running one built before
+   the import route ignores `op: 'import'` and answers nothing. The client
+   discovered that by timing out — thirty seconds on the first turn of every
+   incarnation, for as long as the deployed image predated the route. `ready`
+   now carries a bounded feature list and the fallback is taken immediately;
+   an older bridge sends none, which is why the field is optional. Measured
+   before the fix: 40s for the restored OpenCode turn against Claude's 7s.
+
+7. **Recovery was wired to one of two doors.** A durable volume lease belongs
+   to the process that took it, so one left in the registry is a dead
+   incarnation's. Recovery ran on `makeWorkspace` and not on `mountWorkspace`,
+   which reaches the same guard, so a session reopened through the latter was
+   refused for the rest of the host's life.
+
+**Verified on the deploy, 2026-09-16.** A session is given a word, the daemon
+is restarted, and the session is asked for the word back. OpenCode answers it
+with `OPENCODE_DB=:memory:`, and Claude answers it with
+`/var/lib/endo/claude-state` deleted between the turns — so in neither case
+could the CLI's own store have carried it, and the stack's records are the
+only thing that could have. This is the case the list below calls "restore on
+a wiped store", and running it is what separated a working restoration from a
+CLI that happened to still have its own copy.
 
 Tests that must exist before each adapter is called done:
 
