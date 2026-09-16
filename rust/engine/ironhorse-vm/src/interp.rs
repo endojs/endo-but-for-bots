@@ -2845,6 +2845,20 @@ fn temporal_set_time_args(
 /// attributed to the specific built-in (never a silent mis-execution).
 fn native_unsupported_name(native: Native) -> &'static str {
     match native {
+        // Modeled, not unsupported, so it gets no label. Every caller of this
+        // function is either the `_` fallthrough in `call_native_inner` --
+        // which `Native::LockedDownConstructor`'s own arm answers before -- or
+        // a `Native::Number`/`Native::String` coercion arm, where `native` is
+        // already that variant. A label here would be worse than dead: this
+        // registry is the set of executions the differential instruments are
+        // excused from judging (`src/halt_labels.rs`), so registering one
+        // would turn a future dispatch regression into a silent SKIP of every
+        // locked-down-constructor case instead of a failure.
+        //
+        // The `unreachable!` carries no message on purpose: the registry test
+        // scans every string literal in THIS function body and would read one
+        // as a new label.
+        Native::LockedDownConstructor => unreachable!(),
         Native::Host => "native-call:host",
         Native::Eval => "native-call:eval",
         Native::Locale => "native-call:Locale",

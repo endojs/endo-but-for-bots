@@ -1619,6 +1619,18 @@ impl Interp {
             Native::TypedArray(_) => {
                 return Err(self.catchable_type_error_msg("call: TypedArray".into()));
             }
+            // The inert stand-in `lockdown()` put on the function-family and
+            // `Date` prototypes. Constructable on purpose, and identical either
+            // way: XS's `fxThrowTypeError` (`xsArguments.c:220`) reads
+            // `XS_CAN_CONSTRUCT_FLAG` and says "secure mode" for exactly this
+            // instance. `has_target` is therefore NOT branched on -- the
+            // message is the same for `f.constructor()` and
+            // `new f.constructor()`, which is what makes the refusal legible as
+            // "the realm is locked down" rather than as an arity or
+            // callability complaint.
+            Native::LockedDownConstructor => {
+                return Err(self.catchable_type_error_msg("secure mode".into()));
+            }
             // The remaining fundamentals constructors' call/coerce/construct
             // behaviors land incrementally; until then they self-name so the
             // differential runner records an honest skip.
@@ -3860,6 +3872,12 @@ impl Interp {
             NativeMethod::GlobalHarden => self.do_harden(code, arg0)?,
             // The global `petrify(x)` (`fx_petrify`): the single-object freeze.
             NativeMethod::GlobalPetrify => self.do_petrify(code, arg0)?,
+            // The global `lockdown()` (`fx_lockdown`, `xsLockdown.c:74`).
+            // Takes no arguments -- XS's takes none either, and SES's option
+            // bag is not this operation (see
+            // `designs/ironhorse-native-lockdown.md` for why matching XS and
+            // matching SES are different projects).
+            NativeMethod::GlobalLockdown => self.do_lockdown(code)?,
             NativeMethod::Test262DetachArrayBuffer => {
                 let buffer = match arg0.value {
                     Payload::Reference(r)

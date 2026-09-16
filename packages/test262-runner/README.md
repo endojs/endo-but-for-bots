@@ -21,15 +21,15 @@ runner, and the two answer different questions:
   oracle and gates on their agreement. It answers "does Ironhorse agree with
   XS", not "does Ironhorse pass the test", so it is a divergence hunt rather
   than a compatibility measure. It asks for a native `lockdown()`
-  (`xst262.c`'s `-l`), which Ironhorse does not yet implement, so it currently
-  refuses to start rather than pre-skipping every case and exiting 0 — see
-  "Ratchet, not a gate". Requires a Rust toolchain and the `c/moddable`
-  submodule (the XS oracle it diffs against), the same XS dependency the `xs`
-  host already needs.
+  (`xst262.c`'s `-l`), which Ironhorse now implements
+  (`designs/ironhorse-native-lockdown.md`), so the lane starts and runs.
+  It still covers nothing on THIS corpus, for reasons that have nothing to do
+  with lockdown — see "The engine lane's zero" below. Requires a Rust
+  toolchain and the `c/moddable` submodule (the XS oracle it diffs against),
+  the same XS dependency the `xs` host already needs.
 
-`yarn test262` runs `xs`, `node` and `ironhorse` in sequence, so it inherits
-that last refusal until a native `lockdown()` lands or the aggregate is pointed
-at `test262:ironhorse-host` instead.
+`yarn test262` runs `xs`, `node` and `ironhorse` in sequence. It used to
+inherit that last lane's refusal to start; it no longer does.
 
 See `designs/ironhorse-test262-convergence.md` for the convergence that
 makes Ironhorse the third host.
@@ -53,7 +53,7 @@ Counts at the time of writing, over the 16 runs the corpus produces
 | `test262:xs` | not measured here | needs `xst`; build the `c/moddable` submodule |
 | `test262:node` | 14 / 16 | the 2 failures are `lockdown()` cases, below |
 | `test262:ironhorse-host` | 14 / 16 | the number this ratchet tracks |
-| `test262:ironhorse` | refuses to start | no native `lockdown()` yet |
+| `test262:ironhorse` | 0 / 8 covered | starts now; every case a named skip, below |
 
 Ironhorse now matches the node host's 14/16, and on the same file:
 `Symbol.toStringTag-lockdown.js`, whose sloppy and strict runs are the two.
@@ -101,13 +101,35 @@ non-configurable, non-writable data property cannot be redefined to a different
 value — so the bug is the freeze, not the rejection. A native `lockdown()`
 escapes node's problem but still has to answer this one.
 
-`test262:ironhorse`'s refusal is the one place an exit code is load-bearing,
-and it is about honesty rather than gating.
-Asking for a SES mode with no implementation used to run all 15288 files,
-pre-skip every one with a truthful `ses-mode:lockdown-unimplemented`, and exit
-0 — a lane that reads as a passing third host while testing nothing.
-A ratchet needs a real number more than a green tick, so the mode refuses
-instead of reporting a number it did not measure.
+### The engine lane's zero
+
+`test262:ironhorse` now starts. Before the native `lockdown()` it refused: `-l`
+named a mode with no implementation, and `endot-ih` exited 2 rather than
+running all 15288 files, pre-skipping every one with a truthful
+`ses-mode:lockdown-unimplemented`, and exiting 0 — a lane that reads as a
+passing third host while testing nothing. A ratchet needs a real number more
+than a green tick.
+
+The number it now reports on this corpus is **0 of 8 covered, 8 named skips**,
+and that is not a lockdown result. Two cases skip on `feature:Compartment`, the
+constructor Ironhorse models as a host-side Rust API rather than a guest
+intrinsic. The other six are `shared-positive-test-failure`: they call
+`frozenBytes`, `compareBytes`, `concatBytes` and `passStyleOf`, which
+`src/expose-pass-style-bytes-globals.js` supplies to the PRELUDE hosts and
+which no engine has natively — so Ironhorse and the XS oracle fail them
+identically, which is agreement, which is a skip rather than a divergence.
+
+So the engine lane measures the guest surface, and the guest surface is one
+name short. It moves when `Compartment` lands, not when `lockdown` did.
+For a compatibility count today, read `test262:ironhorse-host`.
+
+What `-l` did buy is a differential gate on the lockdown itself, and it was
+worth having: run over `built-ins/Function`, `built-ins/Object`,
+`built-ins/Date` and the whole `test/ironhorse` corpus — 6053 files — `-l`
+produces byte-identical outcomes to a run without it, including identical
+failure sets on the two subtrees that have pre-existing failures. Ironhorse's
+`lockdown()` and XS's `fx_lockdown` do not disagree anywhere those corpora
+reach.
 
 `ironhorse-xst` answers to the same principle in the other direction.
 A negative parse-phase case passes when the host prints `SyntaxError` on

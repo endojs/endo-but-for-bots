@@ -5,15 +5,36 @@
 | **Created** | 2026-09-16 |
 | **Updated** | 2026-09-16 |
 | **Author** | kumavis (prompted) |
-| **Status** | Proposed |
+| **Status** | Implemented (`lockdown`); `Compartment` not started |
 | **Source** | The gap [ironhorse-ses-compartment-equivalence](ironhorse-ses-compartment-equivalence.md) sized and Phase 4 of [ironhorse-daemon-acceptance-sequencing](ironhorse-daemon-acceptance-sequencing.md) sequenced |
 
 ## Status
 
-Definition only.
-No code in this document has been written.
-Everything under § Measured starting state was run against tree `7753a4b92`;
-everything else is a proposal, and the § Open decisions are open.
+Landed, within the scope boundary below.
+
+`Interp::do_lockdown` (`ironhorse-vm/src/interp/realm.rs`) implements
+`fx_lockdown` steps 1, 2 and 5; `create_hardened_globals` binds it as the guest
+global `lockdown`, beside `harden` and `petrify`. `endot-ih -l` runs instead of
+refusing, and `test262:ironhorse` with it. Pinned by
+`ironhorse-vm/tests/native_lockdown.rs` (11 cases).
+
+Steps 3 and 4 are absent by decision, not omission: both presuppose a guest
+`Compartment` (§ Scope boundary). The consequence stated there holds — the
+`ses-xs-parity` lockdown case still does not run natively.
+
+**Measured against the XS oracle.** `endot-ih -l` dual-runs each case on
+Ironhorse and on XS's own `fx_lockdown`
+(`xs-oracle/csrc/xs_shim.c` installs it). Over 6053 files —
+`test/ironhorse` (1712, all covered, zero failures), `built-ins/Function`
+(511), `built-ins/Date` (703, all covered, zero failures) and
+`built-ins/Object` (3127) — `-l` produces outcomes identical to a run without
+it, including byte-identical failure SETS on the two subtrees that carry
+pre-existing failures (55 and 94, unchanged and unrelated). Ironhorse's
+`lockdown()` and XS's do not disagree anywhere those corpora reach.
+
+Everything under § Measured starting state was run against tree `7753a4b92`,
+before the work.
+The decisions that gated the work are answered in § Decisions, as taken.
 
 ## The goal, in one sentence
 
@@ -161,7 +182,7 @@ What this work does for that lane is let it *start*.
 Step 4 is in scope but nearly empty, and the measurement below is why: there is
 no `Math.random` on IronHorse to attenuate.
 Keeping it in scope is a decision about where the seam goes, not an estimate of
-work — see § Open decisions, question 3.
+work — see § Decisions, as taken, item 3.
 
 ## The specification, step by step
 
@@ -178,7 +199,7 @@ flag is already set, and its doc comment says the idempotence is deliberate
 because "this is the embedder's operation, not the guest's".
 A guest `lockdown()` is the guest's operation, so the two contracts collide on
 the same flag.
-This is a real decision, not a naming detail — § Open decisions, question 2.
+This is a real decision, not a naming detail — § Decisions, as taken, item 2.
 
 Note also that `lock_down_intrinsics` is documented as **not atomic**: a
 refusal partway through leaves earlier roots frozen with the flag still false.
@@ -251,7 +272,7 @@ half reduces to `Date.prototype.constructor`, which step 2 covers.
 `Math.random` does not exist to attenuate — measured, below — so there is
 nothing to secure there today.
 That makes step 4 nearly empty *as a port*, and the question is whether the
-seam should exist anyway; see § Open decisions, question 3.
+seam should exist anyway; see § Decisions, as taken, item 3.
 
 ### Step 5 — harden
 
@@ -278,7 +299,7 @@ time:
   replaced. IronHorse's `do_harden` is the engine's own. Following XS exactly
   would mean honouring a guest replacement, which is a capability question, not
   a fidelity one. The proposal here is to use the engine's `do_harden` and say
-  so; § Open decisions, question 4.
+  so; § Decisions, as taken, item 4.
 
 ## Measured starting state
 
@@ -346,59 +367,82 @@ binding should likewise not appear on a compartment's global, which is a
 question for `global_props` and `compartment_evaluator` rather than for
 `create_hardened_globals`.
 
-## Open decisions
+## Decisions, as taken
 
-These change what gets built and are not the author's to settle alone.
+1. **Is a guest `Compartment` in or out?** **Out**, as proposed. The cost in
+   § Scope boundary is real and was paid: `test262:ironhorse` now starts and
+   covers zero of the eight parity cases — two skip on `feature:Compartment`,
+   six on `shared-positive-test-failure` because they need the pass-style
+   globals only a prelude supplies. If the goal is "that case passes
+   natively", the scope is `fx_lockdown` *and* `fx_Compartment`
+   (`xsModule.c:2864`), and that deserves its own definition.
+2. **What does a second `lockdown()` do?** **It throws**, as XS's does. The
+   host-side `Interp::lock_down_intrinsics` stays idempotent; the two share
+   `Intrinsics::locked_down` and differ only at this boundary, which both doc
+   comments now state. The reasoning is the one `lock_down_intrinsics` already
+   gave: an embedder that cannot tell whether it has locked down is the one
+   calling twice, and a guest can tell.
+3. **Does step 4 get a seam it does not yet need?** **No seam.** `Math.random`
+   does not exist on Ironhorse and the compartment template is out of scope, so
+   what survives of step 4 is `Date.prototype.constructor`, which step 2 covers
+   as its sixth call. Nothing else was written.
+4. **Whose `harden` does step 5 call?** **The engine's `do_harden`**, not the
+   guest's. This is a deliberate divergence from `fx_lockdown`, which fetches
+   `harden` off the global and calls it about fifty times. Honouring a guest
+   replacement would let guest code decide how thoroughly its own realm is
+   frozen, which is not a property worth having. It is also what lets the
+   foreclosed shim profile still lock down: the thixotrope bundle deletes
+   `globalThis.harden` before the shim runs, and the native `lockdown()` does
+   not care (pinned in `tests/ses_boot_intrinsics.rs`).
+   No oracle divergence resulted — see § Status.
+5. **Does the daemon want this at all?** **Still open**, and this work does not
+   answer it. It makes the native profile answerable where it was not.
 
-1. **Is a guest `Compartment` in or out?**
-   This document says out, and the § Scope boundary states the cost: the corpus
-   case that motivated all of this still will not run. If the goal is really
-   "the `ses-xs-parity` lockdown case passes natively", the scope is
-   `fx_lockdown` *and* `fx_Compartment` (`xsModule.c:2864`), which is a
-   materially larger project and should be its own definition.
-2. **What does a second `lockdown()` do?**
-   XS throws. `lock_down_intrinsics` is deliberately idempotent and its doc
-   comment argues for that. Matching XS means either a second flag or changing
-   that contract, and changing it has host-side callers
-   (`Machine::lock_down`). Recommendation: match XS at the guest boundary
-   (throw) and leave the host-side Rust entry point idempotent, with both
-   documented as the deliberate split.
-3. **Does step 4 get a seam it does not yet need?**
-   With no `Math.random` to attenuate and the compartment template out of
-   scope, step 4 has almost nothing to do. Writing the seam anyway costs a
-   little now and saves rediscovering the requirement later; leaving it out
-   keeps the diff honest about what it implements. Recommendation: leave it
-   out, and record here that it is deliberate.
-4. **Whose `harden` does step 5 call?**
-   XS fetches the guest `harden` off the global. Recommendation: call the
-   engine's `do_harden` instead, because honouring a guest replacement lets
-   guest code decide how thoroughly its own realm is frozen. This is a
-   deliberate divergence from XS and needs to be recorded as one, including in
-   whatever oracle-divergence ledger the `-l` lane grows.
-5. **Does the daemon want this at all?**
-   Question 1 of the equivalence design, still open. This work does not answer
-   it.
+### One decision the implementation forced
+
+**Which instances step 5 hardens.** `lock_down_intrinsics` walks
+`Intrinsics::roots`, which a `Machine`-built shared realm populates at
+construction and a plain `Interp::new()` machine leaves EMPTY (`Realm::new`).
+A plain machine is what `endot-ih`, `ironhorse-xst` and the conformance harness
+run, so step 5 would have been a no-op there.
+
+The fix is not to re-run the construction-time enumeration. That filter is
+`0..slots.capacity()`, which is every instance in the arena — correct before
+any guest code, and catastrophic at `lockdown()` time, when the arena is full
+of guest objects and freezing them all would be indistinguishable from a
+runaway `harden`. `do_lockdown` derives its roots from `boot_slot_count`
+instead, which is the primordial set and nothing else.
+`lockdown_leaves_objects_the_guest_already_made_alone` is the regression test,
+and nothing else in the suite would catch it.
 
 ## Done looks like
 
-- A guest `lockdown()` on a default `Interp::new()` machine: `typeof lockdown`
-  is `"function"`, calling it returns, and calling it twice throws (subject to
-  question 2).
-- `({}).constructor.constructor('return 1+1')()` throws a `TypeError` after
-  `lockdown()` and evaluates to `2` before it, pinned by a test, for each of
-  the four function-family prototypes reachable that way.
-- `SesMode::Lockdown::unimplemented_skip` returns `None`, `"lockdown"` leaves
-  `DEFAULT_ENDOR_SKIP_FEATURES`, `endot-ih -l` starts, and the run is gated
-  against the XS oracle rather than pre-skipped.
-- The `ironhorse-snapshot` golden identity fixtures are regenerated for the
-  moved boot fingerprint, and the upgrade consequence is written down the way
-  `versions.rs` § "Upgrade consequence" asks.
-- `test-ironhorse`, `test-ironhorse-oracle` and `test-thixotrope-ironhorse`
-  stay green; `ses_prelude_reach` stays at its 7/8 pin and
-  `ses_boot_intrinsics`'s three realm profiles are unchanged, because none of
-  this touches the shim route.
-- This document is updated with what the port actually did, particularly
-  wherever it diverged from `fx_lockdown`.
+Each line is a claim, and each was measured.
+
+- [x] A guest `lockdown()` on a default `Interp::new()` machine: `typeof
+      lockdown` is `"function"`, calling it returns `undefined`, and calling it
+      twice throws `TypeError: lockdown already called`.
+- [x] `({}).constructor.constructor('return 1+1')()` evaluates to `2` before
+      `lockdown()` and throws `TypeError: secure mode` after, for all four
+      function-family prototypes reachable that way — including the three with
+      no global binding at all.
+- [x] `SesMode::Lockdown::unimplemented_skip` returns `None`, `"lockdown"` has
+      left `DEFAULT_ENDOR_SKIP_FEATURES`, `endot-ih -l` starts, and the run is
+      gated against the XS oracle rather than pre-skipped.
+- [x] The `ironhorse-snapshot` golden identity fixtures are regenerated for the
+      moved boot fingerprint (`regenerate_persistence_identities`, both math
+      providers), the six inline digests in `metamorphic_determinism.rs` are
+      re-pinned with a note, and the upgrade consequence is in this document's
+      § Constraints and in the PR.
+- [x] `ses_prelude_reach` stays at its 7/8 pin and `ses_boot_intrinsics`'s
+      three realm profiles still pass — with one change in each, `lockdown`
+      going from `undefined` to `function` in the pre-shim census, which is the
+      engine binding its own and is the only thing that moved.
+- [x] This document updated with what the port did and where it diverged from
+      `fx_lockdown` (§ Decisions, as taken, 4).
+
+Not done, and not in scope: a guest `Compartment`, `mutabilities` and the
+`fxVerify*` audit family, and the daemon's realm-profile choice.
 
 ## Dependencies
 
@@ -411,13 +455,26 @@ These change what gets built and are not the author's to settle alone.
 
 ## Known Gaps and TODOs
 
-- [ ] Settle § Open decisions 1–4 before writing code. Question 1 changes the
-      size of the project by more than the rest put together.
-- [ ] Fix the two comments that describe an unimplemented `lockdown` as a
-      `Halt::NotImplemented` scope fold. Done in this document's own commit for
-      `interp/boot.rs` and `ironhorse-262/src/xst.rs`; check for others before
-      relying on the claim.
-- [ ] Size the golden-fixture regeneration against PR #1279's precedent before
-      committing to an estimate.
-- [ ] Decide where the oracle-divergence record for a deliberate departure from
-      `fx_lockdown` lives. Question 4 will produce at least one.
+- [x] Settle the open decisions before writing code. Done; see § Decisions, as
+      taken. Question 1 — a guest `Compartment` — was answered "out", and it
+      remains the one that changes the size of the next project by more than
+      the rest put together.
+- [x] Fix the two comments that describe an unimplemented `lockdown` as a
+      `Halt::NotImplemented` scope fold — `interp/boot.rs` and
+      `ironhorse-262/src/xst.rs`. `lockdown` is now bound and dispatched;
+      `mutabilities` is still absent, still a plain `ReferenceError`, and
+      `native_lockdown.rs` pins the SHAPE of that absence so the claim cannot
+      quietly come back.
+- [x] Size the golden-fixture regeneration against PR #1279's precedent.
+      Measured: `regenerate_persistence_identities` covers the TSV corpora for
+      both math providers, and six digests in
+      `ironhorse-snapshot/tests/metamorphic_determinism.rs` are inline and
+      hand-edited — five marker restamps, the canonical blob, and the seal that
+      stamps it.
+- [ ] A guest `Compartment` (`fx_Compartment`, `xsModule.c:2864`) is the next
+      piece, and the one that makes the parity corpus's lockdown case runnable
+      natively. It needs its own definition.
+- [x] Decide where the oracle-divergence record for a deliberate departure from
+      `fx_lockdown` lives. Moot: decision 4 is a divergence in WHICH `harden`
+      step 5 calls, and it produced no observable divergence in 6053 corpus
+      files, so there is nothing for a ledger to carry. Recorded here instead.

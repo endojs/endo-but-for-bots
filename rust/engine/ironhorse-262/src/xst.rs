@@ -53,21 +53,25 @@ pub const DEFAULT_ENDOR_SKIP_FEATURES: &[&str] = &[
     // host exclusion below, not a feature pre-skip.
     "tail-call-optimization",
     "IsHTMLDDA",
-    // The guest Hardened-JavaScript surface ironhorse does not yet expose as a
-    // guest-callable intrinsic: `lockdown()` (unbound —
-    // `ironhorse-vm::interp::create_hardened_globals` installs `harden` and
-    // `petrify` and nothing else, so a reference is a plain `ReferenceError`,
-    // NOT the `Halt::NotImplemented` an earlier revision of that function's
-    // doc comment claimed) and the `Compartment` constructor (modeled as a
-    // host-side Rust realm API in `ironhorse-vm::compartment`, not a guest
-    // intrinsic). ironhorse DOES land the guest `harden`/`petrify` globals, so
-    // those are never skipped. This is the direct `xst262.c` `gxFeatures`
-    // analogue — a feature the *engine* does not implement — and is trimmed as
-    // the guest surface lands. A `ses-xs-parity` test that needs either
-    // self-names `feature:Compartment` / `feature:lockdown` here rather than a
-    // generic run-time abort. `designs/ironhorse-native-lockdown.md` scopes
-    // the `lockdown` half.
-    "lockdown",
+    // The guest Hardened-JavaScript surface ironhorse does not expose as a
+    // guest-callable intrinsic: the `Compartment` constructor, modeled as a
+    // host-side Rust realm API in `ironhorse-vm::compartment` rather than as a
+    // guest intrinsic. This is the direct `xst262.c` `gxFeatures` analogue — a
+    // feature the *engine* does not implement — and is trimmed as the guest
+    // surface lands. A `ses-xs-parity` test that needs it self-names
+    // `feature:Compartment` here rather than taking a generic run-time abort.
+    //
+    // `lockdown` LEFT this list: `create_hardened_globals` now binds it
+    // alongside `harden` and `petrify`
+    // (`designs/ironhorse-native-lockdown.md`). `mutabilities` was never on
+    // it and is still unbound; nothing in the corpus declares it as a feature.
+    //
+    // A note for whoever removes `Compartment` next, because the file's own
+    // history is misleading on it: an earlier revision of this comment called
+    // both of these a "named scope fold" that self-names an honest
+    // `Halt::NotImplemented`. Measured 2026-09-16, an unbound global was a
+    // plain `ReferenceError` with no dispatch behind it at all. Do not infer
+    // a halt from an absence.
     "Compartment",
     // Hardened-JavaScript / SES parity opt-in set: needs the stage-4
     // lockdown/Compartment surface, not yet landed. Opt in explicitly with
@@ -84,15 +88,21 @@ pub const DEFAULT_ENDOR_SKIP_FEATURES: &[&str] = &[
 /// engine design promises: the `ses-xs-parity` axis runs `xst -l`, `node`
 /// with the SES prelude, and `endot-ih -l`.
 ///
-/// Because the guest surface these modes need (`lockdown()`, the
-/// `Compartment` intrinsic) is a named scope fold ironhorse does not yet expose
-/// (only the host-side realm API + the guest `harden`/`petrify` globals are
-/// landed), a case run under a mode other than [`SesMode::None`] is a
-/// whole-case *named* pre-skip ([`SesMode::unimplemented_skip`]) rather than
-/// a generic abort or a false failure — the honest split. When the guest
-/// `lockdown`/`Compartment`
-/// surface lands, `unimplemented_skip` returns `None` and the mode's prelude
-/// ([`SesMode::prelude`]) is applied to the assembled source.
+/// `lockdown()` is landed: it is a guest-callable native
+/// (`ironhorse-vm::Interp::do_lockdown`,
+/// `designs/ironhorse-native-lockdown.md`), so [`SesMode::Lockdown`] applies
+/// its prelude ([`SesMode::prelude`]) to the assembled source and runs the
+/// case for real.
+///
+/// `Compartment` is not. It is modeled as a host-side Rust realm API rather
+/// than a guest intrinsic, so the two modes that need `new Compartment()`
+/// remain whole-case *named* pre-skips ([`SesMode::unimplemented_skip`])
+/// rather than a generic abort or a false failure — the honest split. When
+/// that constructor lands, `unimplemented_skip` returns `None` for them too.
+///
+/// Note that the two are independent: `lockdown()` landing does nothing for
+/// `-c`/`-lc`, and a corpus case that reads `Compartment.prototype` is still
+/// a `feature:Compartment` skip under `-l`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SesMode {
     /// No lockdown/compartment setup (the default; `xst` with no `-l`/`-c`).
@@ -166,8 +176,13 @@ impl SesMode {
     pub fn unimplemented_skip(self) -> Option<&'static str> {
         match self {
             SesMode::None => None,
-            SesMode::Lockdown => Some("ses-mode:lockdown-unimplemented"),
+            // `lockdown()` is a guest-callable native
+            // (`ironhorse-vm::Interp::do_lockdown`), so `-l` runs the corpus
+            // rather than pre-skipping it.
+            SesMode::Lockdown => None,
             SesMode::Compartment => Some("ses-mode:compartment-unimplemented"),
+            // Still folded, and `lockdown` landing does not change that: the
+            // wrap needs `new Compartment()`, which has no guest constructor.
             SesMode::LockdownCompartment => Some("ses-mode:lockdown-compartment-unimplemented"),
         }
     }
@@ -193,8 +208,13 @@ pub struct Config {
     /// installs both. Ironhorse with `prelude/ironhorse.js` takes the same
     /// shape: its own `harden`, the shim's `lockdown`.
     ///
-    /// [`SesMode`] is the separate, NATIVE route and stays unimplemented. A
-    /// prelude does not make `-l` work; it makes `-l` unnecessary.
+    /// [`SesMode`] is the separate, NATIVE route. Its `-l` half is now
+    /// implemented, so the two routes to a locked-down realm coexist and a
+    /// caller picks one: `--prelude prelude/ironhorse.js` runs SES's
+    /// `lockdown()` (which overwrites the native binding, exactly as it
+    /// overwrites XS's), while `-l` alone runs the engine's. `-c`/`-lc` still
+    /// need a guest `Compartment` and a prelude is still the only way to get
+    /// one.
     pub prelude: Option<String>,
     /// Compatibility flag: XS cost drift is always advisory.
     /// Ironhorse's release corpus, not oracle cost parity, gates metering.
@@ -330,6 +350,13 @@ fn preskip(reason: &str) -> CaseResult {
 ///
 /// `ses-xs-parity` is deliberately NOT here: it selects a corpus rather than
 /// naming a surface, and stays opt-in through `--features-include`.
+///
+/// `lockdown` stays listed although it is no longer in
+/// [`DEFAULT_ENDOR_SKIP_FEATURES`]: the filter below is an intersection, so a
+/// name in only one of the two lists is inert. Keeping it makes the pair
+/// readable as "the surface a prelude supplies" rather than as "the surface
+/// the engine lacks", which are now different sets -- a prelude still supplies
+/// `lockdown`, it is simply no longer the only way to get one.
 const FEATURES_SUPPLIED_BY_PRELUDE: &[&str] = &["lockdown", "Compartment"];
 
 /// The effective feature skip set: the default not-implemented list minus
@@ -2622,15 +2649,14 @@ mod tests {
         // The default runs the body verbatim and needs no guest surface.
         assert_eq!(SesMode::None.prelude(), "{body}");
         assert_eq!(SesMode::None.unimplemented_skip(), None);
-        // A lockdown mode's prelude calls the guest `lockdown()` — the shape
-        // that runs once the guest surface lands.
+        // `-l` calls the guest `lockdown()`, which is a landed native, so the
+        // prelude is applied rather than short-circuited.
         assert!(SesMode::Lockdown.prelude().starts_with("lockdown();"));
+        assert_eq!(SesMode::Lockdown.unimplemented_skip(), None);
+        // The two modes that need `new Compartment()` are still named skips,
+        // and `-lc` is one even though its lockdown half now works: a mode is
+        // skipped when ANY surface it needs is missing.
         assert!(SesMode::Compartment.prelude().contains("Compartment"));
-        // Until it lands, every non-None mode is a distinct named skip.
-        assert_eq!(
-            SesMode::Lockdown.unimplemented_skip(),
-            Some("ses-mode:lockdown-unimplemented")
-        );
         assert_eq!(
             SesMode::Compartment.unimplemented_skip(),
             Some("ses-mode:compartment-unimplemented")
@@ -2642,18 +2668,29 @@ mod tests {
     }
 
     #[test]
-    fn ses_mode_makes_a_case_a_named_preskip() {
-        // With a lockdown mode armed, a plain covered-grammar case is a whole-
-        // case named pre-skip (the guest `lockdown()` surface is a scope
-        // fold), never a failure — even though the case itself runs fine with
-        // no mode. The harness dir is irrelevant: the mode short-circuits
-        // before assembly.
+    fn a_compartment_mode_makes_a_case_a_named_preskip() {
+        // With a compartment mode armed, a plain covered-grammar case is a
+        // whole-case named pre-skip (there is no guest `Compartment`), never a
+        // failure — even though the case itself runs fine with no mode. The
+        // harness dir is irrelevant: the mode short-circuits before assembly.
         let mut cfg = Config::default();
-        cfg.ses_mode = SesMode::Lockdown;
+        cfg.ses_mode = SesMode::Compartment;
         let r = run_case(&cfg, Path::new("/nonexistent"), "1 + 1;");
         assert_eq!(
             r.verdict,
-            Verdict::PreSkip("ses-mode:lockdown-unimplemented".into())
+            Verdict::PreSkip("ses-mode:compartment-unimplemented".into())
+        );
+
+        // `-l` does NOT short-circuit: `lockdown()` is a landed native, so the
+        // mode reaches assembly and the case runs. It cannot reach a verdict
+        // here (the harness dir does not exist), which is the point — the
+        // failure it takes is about the missing harness, not about the mode.
+        cfg.ses_mode = SesMode::Lockdown;
+        let r = run_case(&cfg, Path::new("/nonexistent"), "1 + 1;");
+        assert_ne!(
+            r.verdict,
+            Verdict::PreSkip("ses-mode:lockdown-unimplemented".into()),
+            "a landed lockdown must not pre-skip"
         );
     }
 
@@ -2661,13 +2698,16 @@ mod tests {
     fn a_prelude_lifts_the_skips_for_the_surface_it_supplies() {
         let mut cfg = Config::default();
         let bare = effective_skip_features(&cfg);
-        assert!(bare.contains("lockdown") && bare.contains("Compartment"));
+        // `lockdown` is no longer here — the engine binds one. `Compartment`
+        // still is.
+        assert!(!bare.contains("lockdown"));
+        assert!(bare.contains("Compartment"));
 
         cfg.prelude = Some("globalThis.lockdown = () => {};".into());
         let with_prelude = effective_skip_features(&cfg);
         assert!(
-            !with_prelude.contains("lockdown") && !with_prelude.contains("Compartment"),
-            "a prelude supplies these, so naming them missing is no longer honest"
+            !with_prelude.contains("Compartment"),
+            "a prelude supplies this, so naming it missing is no longer honest"
         );
         // It supplies a surface, not a corpus, and not an engine capability.
         assert!(with_prelude.contains("ses-xs-parity"));
@@ -2675,16 +2715,21 @@ mod tests {
     }
 
     #[test]
-    fn guest_lockdown_and_compartment_are_skip_features() {
-        // The two real `ses-xs-parity` tests in the subset declare
-        // `Compartment` / `lockdown` features; ironhorse lacks the guest surface,
-        // so they are named `feature:*` skips (the `gxFeatures` analogue) even
-        // when `ses-xs-parity` itself is opted in.
+    fn guest_compartment_is_a_skip_feature_and_lockdown_is_not() {
+        // The `ses-xs-parity` cases declare `Compartment` and `lockdown`
+        // features. ironhorse binds a guest `lockdown()`, so that one is never
+        // skipped; it has no guest `Compartment`, so that one is a named
+        // `feature:*` skip (the `gxFeatures` analogue) even when
+        // `ses-xs-parity` itself is opted in.
+        //
+        // The asymmetry is the assertion. A case declaring BOTH still skips,
+        // on the `Compartment` half — which is why landing `lockdown` does not
+        // move `Symbol.toStringTag-lockdown.js`.
         let mut cfg = Config::default();
         cfg.features_include = vec!["ses-xs-parity".into()];
         let skip = effective_skip_features(&cfg);
         assert!(skip.contains("Compartment"));
-        assert!(skip.contains("lockdown"));
+        assert!(!skip.contains("lockdown"));
         assert!(!skip.contains("ses-xs-parity"));
     }
 

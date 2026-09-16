@@ -489,21 +489,26 @@ fn corpus_label(subtrees: &[String]) -> String {
 /// cannot survive a meaningless NUMBER, because the number is the whole
 /// signal. 15288 skips reported as success would ratchet against nothing.
 ///
-/// So the mode fails closed: asking for a `lockdown()` that does not exist is
-/// a configuration error, not a skip. A per-case skip stays the right answer
-/// for a case whose own feature is missing (`Compartment` unbound, say); it is
-/// the wrong answer for "the mode you selected has no implementation".
+/// So the mode fails closed: asking for a surface that does not exist is a
+/// configuration error, not a skip. A per-case skip stays the right answer for
+/// a case whose own feature is missing (`Compartment` unbound, say); it is the
+/// wrong answer for "the mode you selected has no implementation".
 ///
-/// This is the other half of [`SesMode::unimplemented_skip`]'s seam. When the
-/// guest surface lands -- natively, or via a prelude supplying it -- that
-/// returns `None`, this returns `None` with it, and the lane runs for real.
+/// This is the other half of [`SesMode::unimplemented_skip`]'s seam, and the
+/// seam has now moved once, which is the thing to understand before reading
+/// this function. `-l` no longer refuses: `lockdown()` is a guest-callable
+/// native (`ironhorse-vm::Interp::do_lockdown`,
+/// `designs/ironhorse-native-lockdown.md`), so `unimplemented_skip` returns
+/// `None` for it and so does this. `-c` and `-lc` still refuse, on the
+/// `Compartment` constructor, which is not a guest intrinsic.
 fn refuse_unimplemented_ses_mode(mode: SesMode) -> Option<String> {
     let reason = mode.unimplemented_skip()?;
     Some(format!(
-        "SES mode `{}` ({reason}): ironhorse exposes no guest `lockdown`/`Compartment`, \
-         so every case would be a named pre-skip and the run would exit 0 having \
-         tested nothing. Refusing instead of reporting green. Drop the mode flag to \
-         run the corpus unlocked down.",
+        "SES mode `{}` ({reason}): ironhorse exposes no guest `Compartment` \
+         constructor, so every case would be a named pre-skip and the run would \
+         exit 0 having tested nothing. Refusing instead of reporting green. Use \
+         `-l` for a locked-down realm without compartments, drop the mode flag \
+         for the corpus unlocked down, or supply the surface with `--prelude`.",
         mode.short(),
     ))
 }
@@ -571,18 +576,25 @@ mod tests {
         // The unlocked corpus runs; there is nothing to refuse.
         assert_eq!(refuse_unimplemented_ses_mode(SesMode::None), None);
 
-        // Every mode whose guest surface is missing refuses, and says why in
-        // terms of the outcome it is preventing -- a run that exits 0 having
-        // tested nothing.
-        for mode in [
-            SesMode::Lockdown,
-            SesMode::Compartment,
-            SesMode::LockdownCompartment,
-        ] {
+        // `-l` runs for real now: `lockdown()` is a landed native. This
+        // assertion is the whole point of the seam -- a mode whose surface
+        // exists must NOT fail closed, or the lane stays dark after the work
+        // that was supposed to light it up.
+        assert_eq!(refuse_unimplemented_ses_mode(SesMode::Lockdown), None);
+
+        // The two modes that need `new Compartment()` still refuse, and say
+        // why in terms of the outcome they are preventing -- a run that exits
+        // 0 having tested nothing. `-lc` refuses on its compartment half even
+        // though its lockdown half works.
+        for mode in [SesMode::Compartment, SesMode::LockdownCompartment] {
             let msg = refuse_unimplemented_ses_mode(mode)
                 .unwrap_or_else(|| panic!("{mode:?} must fail closed while its surface is absent"));
             assert!(msg.contains(mode.unimplemented_skip().unwrap()));
             assert!(msg.contains("tested nothing"), "{msg}");
+            // It names the surface that is actually missing, and points at the
+            // mode that does work.
+            assert!(msg.contains("Compartment"), "{msg}");
+            assert!(msg.contains("`-l`"), "{msg}");
         }
     }
 }

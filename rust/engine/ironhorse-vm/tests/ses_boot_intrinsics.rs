@@ -314,8 +314,8 @@ fn the_ses_shim_supplies_the_guest_surface_on_an_unfrozen_realm() {
 
             assert_eq!(
                 crank(SES_CENSUS),
-                "lockdown=undefined harden=function Compartment=undefined frozenObjectProto=false",
-                "the engine binds its own harden and neither of the other two"
+                "lockdown=function harden=function Compartment=undefined frozenObjectProto=false",
+                "the engine binds its own harden and lockdown, but no Compartment"
             );
             assert_eq!(crank(&wrapped(&boot)), "ok", "the ses shim must evaluate");
             assert_eq!(
@@ -380,11 +380,22 @@ fn a_natively_frozen_realm_forecloses_the_ses_shim() {
             // alone would also match an unrelated shim bug that passed a
             // malformed descriptor. Pin the outcome too: the shim installed
             // nothing, and `harden` is gone because the bundle deletes
-            // `polyfills.js`'s before the shim runs -- so a realm that takes
-            // this path is left with neither implementation.
+            // `polyfills.js`'s before the shim runs.
+            //
+            // `lockdown` here is the ENGINE's, not the shim's: the shim
+            // aborted before installing its own, and `create_hardened_globals`
+            // binds one. So a realm that takes this path is no longer left
+            // with neither implementation -- it has a native `lockdown()`,
+            // which does not need the guest `harden` the bundle deleted
+            // (`do_lockdown` calls the engine's `do_harden` rather than
+            // fetching a guest one off the global, which is a deliberate
+            // divergence from `fx_lockdown`). Whether such a realm SHOULD take
+            // the native route instead of the shim is the open question in
+            // `designs/ironhorse-ses-compartment-equivalence.md`; this test
+            // only records that the option now exists.
             assert_eq!(
                 crank(SES_CENSUS),
-                "lockdown=undefined harden=undefined Compartment=undefined \
+                "lockdown=function harden=undefined Compartment=undefined \
                  frozenObjectProto=true"
             );
         })
@@ -422,7 +433,7 @@ fn an_unfrozen_machine_takes_the_shim_and_keeps_its_compartments() {
             };
             assert_eq!(
                 crank(&start, SES_CENSUS),
-                "lockdown=undefined harden=function Compartment=undefined \
+                "lockdown=function harden=function Compartment=undefined \
                  frozenObjectProto=false"
             );
             assert_eq!(
