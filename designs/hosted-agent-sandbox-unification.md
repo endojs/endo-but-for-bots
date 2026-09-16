@@ -1333,9 +1333,14 @@ take on its own authority.
 
 ### Step 4 order and tests — 2026-09-16
 
-1. **Verify Claude Code's HTTP/SSE MCP support on Tokyo.** It gates the MCP
-   row: OpenCode's `{ type: 'remote', url, headers }` is confirmed, Claude's is
-   assumed. Assume it works, but prove it before the bind is deleted.
+1. **Done — verified on Tokyo, 2026-09-16.** The pinned
+   `localhost/claude-code` image's own help documents
+   `claude mcp add --transport http <name> <url> --header "Authorization:
+   Bearer ..."`, so both CLIs can take a loopback MCP endpoint with a bearer
+   header. That removes the CLI-side doubt from option 2 below. It is not what
+   makes option 2 expensive — the listener image is — so the decision recorded
+   there stands, and this is the gate that would otherwise have to be reopened
+   if it is ever revisited.
 2. **Record compaction boundaries in Floot's journal**, and define the neutral
    record stream. Nothing downstream is faithful until this exists.
 3. **Claude restoration** — write the JSONL from the record stream, drop the
@@ -1344,10 +1349,17 @@ take on its own authority.
    it proves the record stream against a real CLI soonest.
 4. **Codex** — drop the preamble and the bound now; decide separately whether
    to write `thread_history_1.sqlite` or accept prepended history.
-5. **OpenCode restoration** — fork patch, then `OPENCODE_DB=:memory:`, then
-   delete the `opencodeSessionId` resume path and its unhandled not-found case.
-6. **MCP onto loopback** with a bearer token; delete the bind, the stdio bridge
-   script and the MCP directory.
+5. **Open — the only step not landed, and it is in another repository.**
+   OpenCode restoration needs the import route specified above written in
+   `kumavis/opencode` and the image rebuilt; then `OPENCODE_DB=:memory:`, and
+   the `opencodeSessionId` resume path and its unhandled not-found case go.
+   Until then OpenCode's state stays a durable bind — attested, but still the
+   guest's store rather than the stack's record.
+6. **Answered by option 1 instead.** The cost check found a loopback port
+   would have to live in the pinned listener image and relay over its stdio
+   transport, so `@endo/sandbox` gained the `bind` kind and the MCP row is
+   attested as the host bind it is. Option 2 stays the cleaner end state and
+   is now unblocked on both CLIs; it is not scheduled.
 7. **Claude and OpenCode onto the attested policy**, which is also what gives
    them runtime attaches.
 
