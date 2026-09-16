@@ -229,10 +229,10 @@ pre-skips every SES-mode case (`xst.rs`, `SesMode::unimplemented_skip` — note
 that `SesMode::prelude()` is never applied on the live path at all).
 
 There is now a third prelude, `src/ironhorse-prelude.js`, and measuring it
-gives the first real number for the shim route: **4 of the 8 cases pass**
-(`ironhorse-vm/tests/ses_prelude_reach.rs`) since the `END` frame-base restore
-below, 3 before it, against `covered=6` for the engine route, which skips the
-two that need the guest surface.
+gives the first real number for the shim route: **6 of the 8 cases pass**
+(`ironhorse-vm/tests/ses_prelude_reach.rs`), up from 3 when the prelude first
+ran, against `covered=6` for the engine route, which skips the two that need
+the guest surface.
 The overlap is not the interesting part; the failures are.
 
 | case | node | Ironhorse via the shim prelude |
@@ -243,7 +243,7 @@ The overlap is not the interesting part; the failures are.
 | `pass-style-bytes/native-or-emulated-shape.js` | pass | **pass** |
 | `pass-style-bytes/byte-array-brand.js` | pass | **pass** |
 | `view-behavior-matrix/ses-hosts.js` | pass | fail |
-| `TextEncoder`/`TextDecoder` intersection | pass | fail |
+| `TextEncoder`/`TextDecoder` intersection | pass | **pass** |
 
 `Symbol.toStringTag-lockdown.js` **fails on node too** — the node host reports
 14/16 today, both failures on that file.

@@ -10,52 +10,117 @@
 // `globalThis`, which would invalidate any closure we used to
 // smuggle them past lockdown. UTF-8 is computed byte-by-byte here.
 if (typeof globalThis.TextEncoder === 'undefined') {
-  globalThis.TextEncoder = class TextEncoder {
-    encode(str) {
-      const s = String(str);
-      // Upper-bound: 3 bytes per BMP unit; surrogate pairs → 4
-      // bytes total = 2 BMP units so 3/unit still covers the pair.
-      // Allocate conservatively, truncate at the end.
-      const out = new Uint8Array(s.length * 3);
-      let j = 0;
-      for (let i = 0; i < s.length; i += 1) {
-        let code = s.charCodeAt(i);
-        if (code >= 0xd800 && code <= 0xdbff && i + 1 < s.length) {
-          const next = s.charCodeAt(i + 1);
-          if (next >= 0xdc00 && next <= 0xdfff) {
-            code = 0x10000 + ((code - 0xd800) << 10) + (next - 0xdc00);
-            i += 1;
-          }
-        }
-        if (code < 0x80) {
-          out[j] = code;
-          j += 1;
-        } else if (code < 0x800) {
-          out[j] = 0xc0 | (code >> 6);
-          out[j + 1] = 0x80 | (code & 0x3f);
-          j += 2;
-        } else if (code < 0x10000) {
-          out[j] = 0xe0 | (code >> 12);
-          out[j + 1] = 0x80 | ((code >> 6) & 0x3f);
-          out[j + 2] = 0x80 | (code & 0x3f);
-          j += 3;
-        } else {
-          out[j] = 0xf0 | (code >> 18);
-          out[j + 1] = 0x80 | ((code >> 12) & 0x3f);
-          out[j + 2] = 0x80 | ((code >> 6) & 0x3f);
-          out[j + 3] = 0x80 | (code & 0x3f);
-          j += 4;
+  // Shared by `encode` and `encodeInto` so the two cannot disagree about the
+  // bytes. Writes UTF-8 for `s` into `out` and stops before any sequence that
+  // would not fit whole, which is what `encodeInto` requires: a truncated
+  // multi-byte sequence is not valid UTF-8. `read` counts UTF-16 units
+  // consumed, `written` counts bytes produced.
+  //
+  // An unpaired surrogate is emitted as the three-byte encoding of its code
+  // point rather than U+FFFD. That is what this polyfill has always done for
+  // `encode`; `encodeInto` matches it deliberately, so the two agree.
+  const encodeUtf8Into = (s, out) => {
+    const limit = out.length;
+    let read = 0;
+    let written = 0;
+    for (let i = 0; i < s.length; i += 1) {
+      let code = s.charCodeAt(i);
+      let units = 1;
+      if (code >= 0xd800 && code <= 0xdbff && i + 1 < s.length) {
+        const next = s.charCodeAt(i + 1);
+        if (next >= 0xdc00 && next <= 0xdfff) {
+          code = 0x10000 + ((code - 0xd800) << 10) + (next - 0xdc00);
+          units = 2;
         }
       }
-      return out.slice(0, j);
+      let size;
+      if (code < 0x80) {
+        size = 1;
+      } else if (code < 0x800) {
+        size = 2;
+      } else if (code < 0x10000) {
+        size = 3;
+      } else {
+        size = 4;
+      }
+      if (written + size > limit) {
+        break;
+      }
+      if (size === 1) {
+        out[written] = code;
+      } else if (size === 2) {
+        out[written] = 0xc0 | (code >> 6);
+        out[written + 1] = 0x80 | (code & 0x3f);
+      } else if (size === 3) {
+        out[written] = 0xe0 | (code >> 12);
+        out[written + 1] = 0x80 | ((code >> 6) & 0x3f);
+        out[written + 2] = 0x80 | (code & 0x3f);
+      } else {
+        out[written] = 0xf0 | (code >> 18);
+        out[written + 1] = 0x80 | ((code >> 12) & 0x3f);
+        out[written + 2] = 0x80 | ((code >> 6) & 0x3f);
+        out[written + 3] = 0x80 | (code & 0x3f);
+      }
+      written += size;
+      read += units;
+      i += units - 1;
+    }
+    return { read, written };
+  };
+
+  globalThis.TextEncoder = class TextEncoder {
+    // eslint-disable-next-line class-methods-use-this
+    get encoding() {
+      return 'utf-8';
+    }
+
+    // eslint-disable-next-line class-methods-use-this
+    encode(str) {
+      const s = String(str);
+      // Upper-bound: 3 bytes per BMP unit; a surrogate pair is 4 bytes for 2
+      // units, so 3/unit still covers it. Allocate conservatively, truncate
+      // at the end — with the whole string given, nothing is ever dropped.
+      const out = new Uint8Array(s.length * 3);
+      const { written } = encodeUtf8Into(s, out);
+      return out.slice(0, written);
+    }
+
+    // eslint-disable-next-line class-methods-use-this
+    encodeInto(source, destination) {
+      const s = String(source);
+      if (!(destination instanceof Uint8Array)) {
+        throw new TypeError('encodeInto destination must be a Uint8Array');
+      }
+      // Same distinction as `decode`, in the other direction: writes to an
+      // emulated view are silently dropped, so reporting a `written` count for
+      // bytes that never landed would be worse than refusing.
+      if (!ArrayBuffer.isView(destination)) {
+        throw new TypeError(
+          'encodeInto: emulated ArrayBuffer views are not writable',
+        );
+      }
+      return encodeUtf8Into(s, destination);
     }
   };
 }
 if (typeof globalThis.TextDecoder === 'undefined') {
   globalThis.TextDecoder = class TextDecoder {
+    // eslint-disable-next-line class-methods-use-this
     decode(buf) {
       let bytes;
       if (buf instanceof Uint8Array) {
+        // A host without genuine immutable ArrayBuffer views emulates them:
+        // the result answers `instanceof Uint8Array` and stringifies as
+        // `[object Uint8Array]`, but it has no indexed elements at all, so
+        // reading it here yields `undefined` per byte and decodes to garbage.
+        // `ArrayBuffer.isView` is what distinguishes the two, and refusing is
+        // the contract `ImmutableArrayBuffer`'s parity cases require of a host
+        // that cannot read such a view.
+        if (!ArrayBuffer.isView(buf)) {
+          throw new TypeError(
+            'TextDecoder.decode: emulated ArrayBuffer views are not readable',
+          );
+        }
         bytes = buf;
       } else if (buf instanceof ArrayBuffer) {
         bytes = new Uint8Array(buf);
