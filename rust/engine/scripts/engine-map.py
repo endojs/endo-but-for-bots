@@ -862,6 +862,45 @@ def heap_explorer(model):
             f'<span class="roff">{field["offset"]}</span>'
             f'<span class="rname">{esc(label)}</span></button>')
 
+    counter = heap.get("counter")
+    counter_block = ""
+    if counter:
+        steps = "".join(
+            f'<button type="button" class="cstep{" on" if n == counter["canonical"] else ""}" '
+            f'data-count="{n}">{n}</button>' for n in counter["counts"])
+        watched = "".join(
+            f'<li><button type="button" class="cjump" data-slot="{s["slot"]}">'
+            f'slot {s["slot"]}</button>'
+            f'<span class="cval" data-slot="{s["slot"]}">'
+            f'{s["values"][counter["counts"].index(counter["canonical"])]}</span>'
+            f'<span class="cell-note">{rich(s["role"])}</span></li>'
+            for s in counter["slots"])
+        counter_block = f"""
+<h4>Where the counter's value lives</h4>
+<div class="counter">
+  <div>
+    <p class="cprog-label">Setup, once</p>
+    <pre><code>{esc(counter["setup"])}</code></pre>
+    <p class="cprog-label">Then this crank, once per step</p>
+    <pre><code>{esc(counter["increment"])}</code></pre>
+  </div>
+  <div>
+    <p class="cprog-label">Increments taken</p>
+    <div class="csteps" role="group" aria-label="Number of increments">{steps}</div>
+    <ul class="cwatch">{watched}</ul>
+    <p class="cnote">Select a count to read each slot at that step. Select a slot
+    to find it in the arena below. The drawn heap is the capture at
+    {counter["canonical"]} increments.</p>
+  </div>
+</div>
+
+<p class="note"><strong>How the map knows which slots these are.</strong> It does not
+read the code and guess. The example boots one machine, takes the increment as its own
+crank, and captures the heap after each one. A slot whose value equals the number of
+increments at every step holds the count. A second series calls the counter and throws
+the result away: the closure's cell still advances, the global does not, which is what
+separates the two.</p>"""
+
     anchors = heap["anchors"]
 
     def anchor(key, label):
@@ -887,6 +926,7 @@ def heap_explorer(model):
         "perPage": heap["slots_per_page"],
         "roleMeaning": ROLE_MEANING,
         "cols": HEAP_COLS,
+        "counter": counter,
     }, separators=(",", ":"))
 
     return f"""
@@ -898,9 +938,9 @@ writer emits. The example
 {link(model, heap["capture"], label="capture-map-heap.rs")} boots a machine, runs a
 short program, and writes
 {link(model, heap["source"], label=heap["source"].split("/")[-1])}. The map decodes that
-container. The program makes an object with a prototype, builds a string, keeps a
-counter in a closure, fills an array, and puts two entries in a Map. Each statement
-leaves a shape you can find below. Point at a slot to read it.</p>
+container. The program is a counter held in a closure. It is short enough that you can
+find its value in the arena, and the next section shows you where. Point at a slot to
+read it.</p>
 
 <div class="hstats">
   <span><b>{heap["slot_count"]:,}</b> slots</span>
@@ -909,6 +949,8 @@ leaves a shape you can find below. Point at a slot to read it.</p>
   <span><b>{len(heap["strings"])}</b> strings resolved</span>
   <span><b>{heap["slots_per_page"]}</b> slots per page</span>
 </div>
+
+{counter_block}
 
 <h4>One slot record</h4>
 <div class="rlayout" id="record-layout">{"".join(layout_cells)}</div>
@@ -1521,6 +1563,43 @@ th.num { text-align: right; }
 .mod-bar { position: absolute; left: 0; top: 0; bottom: 0; width: 2px; background: var(--accent); opacity: .45; height: var(--w, 4%); min-height: 3px; }
 .mod-n { float: right; font: 400 11.5px "IBM Plex Mono", monospace; color: var(--muted); font-variant-numeric: tabular-nums; }
 
+/* counter ---------------------------------------------------------------- */
+.counter { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 20px; margin: 10px 0 4px; align-items: start; }
+.cprog-label { font: 500 10px "IBM Plex Mono", monospace; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); margin: 0 0 4px; }
+.counter pre { margin: 0 0 12px; }
+.csteps { display: flex; gap: 3px; margin-bottom: 12px; }
+.cstep {
+  font: 500 12px "IBM Plex Mono", monospace;
+  min-width: 30px;
+  color: var(--ink); background: var(--panel);
+  border: 1px solid var(--rule); border-radius: 2px;
+  padding: 5px 0; cursor: pointer;
+}
+.cstep:hover { border-color: var(--accent); }
+.cstep.on { background: var(--accent); color: var(--paper); border-color: var(--accent); }
+.cwatch { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.cwatch li { display: grid; grid-template-columns: auto auto 1fr; gap: 4px 10px; align-items: baseline; }
+.cjump {
+  font: 400 12px "IBM Plex Mono", monospace;
+  color: var(--accent); background: none;
+  border: 0; border-bottom: 1px solid var(--accent-wash);
+  padding: 0; cursor: pointer;
+}
+.cjump:hover { border-bottom-color: var(--accent); }
+.cval {
+  font: 500 15px "IBM Plex Mono", monospace;
+  font-variant-numeric: tabular-nums;
+  color: var(--oxide);
+  min-width: 2ch;
+}
+.cwatch .cell-note { grid-column: 1 / -1; margin: 0; }
+.cnote { color: var(--muted); font-size: 12.5px; line-height: 1.5; margin: 14px 0 0; }
+.hcell.watch { outline: 1.5px dashed var(--oxide); outline-offset: 1px; opacity: 1; z-index: 2; }
+
+@media (max-width: 760px) {
+  .counter { grid-template-columns: minmax(0, 1fr); }
+}
+
 /* heap explorer --------------------------------------------------------- */
 .hstats { display: flex; flex-wrap: wrap; gap: 5px 18px; margin: 12px 0 6px; font: 400 11.5px "IBM Plex Mono", monospace; color: var(--muted); }
 .hstats b { color: var(--ink); font-weight: 500; font-variant-numeric: tabular-nums; }
@@ -1938,8 +2017,46 @@ SCRIPT = """
       });
     });
 
-    // Open on the first slot so the panel is never blank.
-    describe(0);
+
+    // --- counter stepper and landmarks ----------------------------------
+    var counter = H.counter;
+    if (counter) {
+      var watched = counter.slots.map(function (s) { return s.slot; });
+      watched.forEach(function (index) {
+        if (cells[index]) cells[index].classList.add('watch');
+      });
+
+      var showCount = function (count) {
+        var step = counter.counts.indexOf(count);
+        if (step < 0) return;
+        Array.prototype.forEach.call(document.querySelectorAll('.cstep'), function (b) {
+          b.classList.toggle('on', parseInt(b.getAttribute('data-count'), 10) === count);
+        });
+        counter.slots.forEach(function (s) {
+          var out = document.querySelector('.cval[data-slot="' + s.slot + '"]');
+          if (out) out.textContent = s.values[step];
+        });
+      };
+
+      Array.prototype.forEach.call(document.querySelectorAll('.cstep'), function (b) {
+        b.addEventListener('click', function () {
+          showCount(parseInt(b.getAttribute('data-count'), 10));
+        });
+      });
+      Array.prototype.forEach.call(document.querySelectorAll('.cjump'), function (b) {
+        b.addEventListener('click', function () {
+          var index = parseInt(b.getAttribute('data-slot'), 10);
+          describe(index);
+          cells[index].scrollIntoView({ block: 'center' });
+        });
+      });
+    }
+
+    // Open on the slot holding the count, which is what this section is
+    // about, so the panel is never blank and starts somewhere meaningful.
+    describe(counter && counter.slots.length
+      ? counter.slots[counter.slots.length - 1].slot
+      : 0);
   }
 
   // --- slot record layout -----------------------------------------------

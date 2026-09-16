@@ -843,6 +843,7 @@ def sqlite_schema():
 # format bump; the map prints the container's own format version, so a stale
 # capture shows on the page rather than passing silently.
 HEAP_FIXTURE = "architecture-map-heap.container"
+HEAP_COUNTERS = "architecture-map-heap.counters.json"
 HEAP_CAPTURE = "ironhorse-snapshot/examples/capture-map-heap.rs"
 PAYLOAD_TAGS = ["None", "Boolean", "Integer", "Number", "String", "Reference", "At", "BigInt"]
 SLOT_INDEX_NULL = 0xFFFFFFFF
@@ -889,6 +890,16 @@ def record_layout():
             last = int(span.split("..")[1]) if ".." in span else first + 1
             fields.append({"offset": first, "end": last, "field": plain(match.group(2))})
     return fields
+
+
+def counter_report():
+    """The capture example's findings about which slots hold the count."""
+    path = ENGINE / HEAP_COUNTERS
+    if not path.is_file():
+        return None
+    report = json.loads(path.read_text(encoding="utf-8"))
+    report["source"] = rel(path)
+    return report
 
 
 def heap_sample():
@@ -964,6 +975,9 @@ def heap_sample():
             for index, name in enumerate(PAYLOAD_TAGS)],
         "payloads": enum_variants("ironhorse-vm/src/value.rs", "Payload"),
         "record_layout": record_layout(),
+        # Which slots hold the counter's value, and what each holds at each
+        # count. Established by capture and comparison, not by reading code.
+        "counter": counter_report(),
         # Where a reader goes next for each part of a slot. The map shows these
         # beside the hovered slot so the picture leads back into the code.
         "anchors": {

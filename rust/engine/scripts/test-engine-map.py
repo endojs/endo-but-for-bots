@@ -434,11 +434,27 @@ class HeapDecodeTests(unittest.TestCase):
         self.assertTrue((model.ENGINE / model.HEAP_CAPTURE).is_file(),
                         "the example that produces the container must stay with it")
 
-    def test_the_captured_program_left_its_own_strings(self):
-        # A heap of nothing but boot intrinsics would not show a reader what a
-        # running program puts in the arena.
-        strings = model.heap_sample()["strings"]
-        self.assertIn("point at 3,4", strings)
+    def test_the_counter_report_agrees_with_the_checked_in_container(self):
+        # The report says which slots hold the count and what each holds at
+        # each step. The container is one of those steps. If the two are
+        # captured from different runs, this is where it shows.
+        heap = model.heap_sample()
+        counter = heap["counter"]
+        self.assertTrue(counter and counter["slots"], "the counter report should load")
+        columns = heap["columns"].split(",")
+        step = counter["counts"].index(counter["canonical"])
+        for entry in counter["slots"]:
+            row = dict(zip(columns, (int(v) for v in heap["slots"][entry["slot"]].split(","))))
+            self.assertEqual(row["value"], entry["values"][step],
+                             f'slot {entry["slot"]} disagrees with the counter report')
+            self.assertEqual(row["value"], counter["canonical"])
+
+    def test_the_counter_slots_are_distinguished(self):
+        # Two slots hold the count; the report has to say which is which, or
+        # the map cannot label them.
+        slots = model.heap_sample()["counter"]["slots"]
+        self.assertEqual(len(slots), 2)
+        self.assertEqual(len({entry["role"] for entry in slots}), 2)
 
     def test_every_decoded_kind_is_a_real_kind(self):
         heap = model.heap_sample()

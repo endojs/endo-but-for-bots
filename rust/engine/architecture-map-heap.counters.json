@@ -1,0 +1,11 @@
+{
+  "setup": "var counter = (function () {\n  var count = 0;\n  return function () { count = count + 1; return count; };\n})();\nvar seen = 0;\nseen;",
+  "increment": "seen = counter(); seen;",
+  "discarding": "counter(); seen;",
+  "counts": [0, 1, 2, 3, 4, 5],
+  "canonical": 3,
+  "slots": [
+    { "slot": 884, "role": "`seen`, the global holding what the last call returned", "values": [0,1,2,3,4,5] },
+    { "slot": 892, "role": "the counter's own `count`, held in the closure's scope cell", "values": [0,1,2,3,4,5] }
+  ]
+}
