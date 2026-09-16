@@ -341,10 +341,15 @@ def classify(paths, graphs, all_jobs=False):
         # `boot.js`, but listing it would select this lane on every SES change,
         # and a SES change already runs `test-thixotrope-ironhorse`, which
         # builds the same bundle).
-        if under(path, "packages/test262-runner/src") or path in {
-            "packages/test262-runner/scripts/generate-preludes.js",
-            "packages/thixotrope/scripts/bundle-ironhorse-worker.mjs",
-        }:
+        if (
+            under(path, "packages/test262-runner/src")
+            or under(path, "packages/ironhorse-prelude")
+            or path
+            in {
+                "packages/test262-runner/scripts/generate-preludes.js",
+                "packages/thixotrope/scripts/bundle-ironhorse-worker.mjs",
+            }
+        ):
             jobs["test-ironhorse-oracle"] = True
         if path in {
             "rust/engine/scripts/test-math-vectors.py", "rust/engine/scripts/compare-math-vectors.py",
