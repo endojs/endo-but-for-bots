@@ -53,6 +53,7 @@
     "packages/skel",
     "packages/stream-types-test",
     "packages/syrup",
+    "packages/ironhorse-prelude/",
     "packages/test262-runner/",
     "packages/where",
     "packages/space-whylip",
