@@ -451,9 +451,11 @@ export const makeClaudeNativeController = ({
             WORKSPACE_PATH.replace(/\//g, '-'),
           );
           await mkdir(projectDir, { recursive: true, mode: 0o700 });
-          await writeFile(path.join(projectDir, `${sessionUuid}.jsonl`), text, {
-            mode: 0o600,
-          });
+          await writeFile(
+            path.join(projectDir, `${sessionUuid}.jsonl`),
+            restored,
+            { mode: 0o600 },
+          );
           return sessionUuid;
         },
       });
