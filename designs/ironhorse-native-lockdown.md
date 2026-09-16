@@ -484,6 +484,15 @@ Not done, and not in scope: a guest `Compartment`, `mutabilities` and the
       `mutabilities` is still absent, still a plain `ReferenceError`, and
       `native_lockdown.rs` pins the SHAPE of that absence so the claim cannot
       quietly come back.
+- [x] Run the golden snapshot test under BOTH math providers when re-pinning.
+      `metamorphic_determinism.rs`'s final blob and seal assertions branch on
+      `ironhorse_vm::MATH_PROVIDER`, because `derive_boot_fingerprint` folds the
+      provider in only under `deterministic-math` and those two digests --
+      unlike the five markers above them -- are not signature-normalized. The
+      file says so in a comment written by whoever was caught by it last; I
+      updated the platform arm, the default-feature run stayed green, and CI's
+      `--features ironhorse-vm/deterministic-math` step went red. Both arms are
+      now measured under their own provider rather than copied.
 - [x] Size the golden-fixture regeneration against PR #1279's precedent.
       Measured: `regenerate_persistence_identities` covers the TSV corpora for
       both math providers, and six digests in
