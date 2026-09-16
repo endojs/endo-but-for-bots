@@ -1091,16 +1091,22 @@ impl Interp {
             // at
             10 => {
                 let relative = self.array_to_integer_or_infinity(code, arg0)?;
-                let k = if relative >= 0.0 {
-                    relative
+                // `ToIntegerOrInfinity` yields a MATHEMATICAL integer, so `-0`
+                // and anything in `(-1, 0)` mean index 0. `trunc` keeps the
+                // sign of a negative zero, and `ta_valid_index` rejects one --
+                // rightly, since it implements property-key semantics, where
+                // `ta['-0']` is `undefined`. That rejection is not a bounds
+                // answer, so resolve `k` in integer arithmetic first, exactly
+                // as `ArrayAt` does, and only then read.
+                let k: i128 = if relative >= 0.0 {
+                    relative as i128
                 } else {
-                    length as f64 + relative
+                    length as i128 + relative as i128
                 };
-                // `at` answers `undefined` for an index outside the bounds,
-                // which is already what the element read returns for one
-                // `ta_valid_index` rejects -- including the negative `k` a
-                // too-large negative argument produces.
-                Ok(self.ta_indexed_element_get(ta, k))
+                if k < 0 || k >= length as i128 {
+                    return Ok(Slot::undefined());
+                }
+                Ok(self.ta_indexed_element_get(ta, k as f64))
             }
             // lastIndexOf
             7 => {
