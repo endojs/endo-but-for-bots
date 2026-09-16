@@ -133,7 +133,25 @@ export const assertBridgeEvent = candidate => {
     }
     const sessionId = /** @type {string} */ (rawSessionId);
     const port = /** @type {number} */ (rawPort);
-    return harden({ type, sessionId, port });
+    // What this bridge understands. The image carries the bridge, so an older
+    // one sends no list — absent means "assume nothing beyond the original
+    // commands", which is why this is optional rather than required. Bounded
+    // names only: this decides which commands the client will send, so it is
+    // read as a fixed vocabulary, never echoed anywhere.
+    const rawFeatures = candidate.features;
+    if (rawFeatures === undefined) return harden({ type, sessionId, port });
+    (Array.isArray(rawFeatures) &&
+      rawFeatures.length <= 32 &&
+      rawFeatures.every(
+        name => typeof name === 'string' && /^[a-z][a-z0-9-]{0,31}$/.test(name),
+      )) ||
+      Fail`ready event features must be bounded lowercase names`;
+    return harden({
+      type,
+      sessionId,
+      port,
+      features: harden([...rawFeatures]),
+    });
   }
   if (type === 'imported') {
     // The bridge's answer to a history import: whether the session took the

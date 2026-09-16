@@ -448,6 +448,8 @@ export const makeOpencodeClient = ({
   // conversation the CLI is now holding, so repeating the history would
   // duplicate it.
   let restorationPending = !resumePriorConversation;
+  /** Whether the bridge in this slice's image understands `op: 'import'`. */
+  let bridgeImports = false;
 
   const handleEvent = event => {
     if (event.type === 'imported') {
@@ -455,6 +457,9 @@ export const makeOpencodeClient = ({
       return;
     }
     if (event.type === 'ready') {
+      // An older bridge sends no feature list and does not answer `import`.
+      bridgeImports =
+        Array.isArray(event.features) && event.features.includes('import');
       // A resume that came back under a different id did not resume: the
       // store no longer held the session this plan recorded, and the bridge
       // started a fresh one. That case had no handling at all — the session
@@ -751,7 +756,7 @@ export const makeOpencodeClient = ({
       return '';
     }
     const turns = importedTurnsFor(records);
-    if (turns.length > 0 && importModel !== undefined) {
+    if (turns.length > 0 && importModel !== undefined && bridgeImports) {
       const imported = new Promise(resolve => {
         resolveImported = resolve;
       });

@@ -547,6 +547,12 @@ const main = async () => {
     type: 'ready',
     sessionId: activeSessionId,
     port: Number(new URL(baseUrl).port),
+    // What this bridge understands. The image carries the bridge, so a slice
+    // running an older one silently ignores a command it does not know and
+    // answers nothing — which the client can only discover by waiting out a
+    // timeout on every incarnation. Saying so here costs nothing and lets it
+    // take the fallback immediately.
+    features: ['import'],
   });
 
   const registry = makeMessageRegistry({
