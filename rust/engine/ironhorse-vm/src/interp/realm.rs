@@ -119,6 +119,12 @@ impl Interp {
     /// is NOT (it throws `TypeError("lockdown already called")`,
     /// `xsLockdown.c:90-92`) -- this is the embedder's operation, not the
     /// guest's, and an embedder that cannot tell is the one calling it twice.
+    ///
+    /// NOT atomic. The roots are hardened in sequence, so a refusal partway
+    /// through returns `Err` with the earlier roots already frozen while
+    /// `locked_down` stays false -- that flag reporting false does not mean
+    /// the graph is still fully mutable. Retrying is the supported recovery,
+    /// and completes the freeze.
     pub(crate) fn lock_down_intrinsics(&mut self) -> Result<(), crate::Halt> {
         if self.realm.intrinsics().locked_down.get() {
             return Ok(());
@@ -129,7 +135,11 @@ impl Interp {
             // the graph has been reachable by a guest, which may have made an
             // intrinsic non-extensible or installed a Proxy that refuses the
             // definition. `do_harden` rolls its own worklist back on the way
-            // out, so a refused lockdown leaves nothing half-frozen.
+            // out, so no SINGLE root is left partly frozen -- but the roots
+            // are hardened one at a time, so a refusal at root `k` returns
+            // with roots `0..k` already transitively frozen and `locked_down`
+            // still false. A later successful call completes the freeze: the
+            // roots already done are idempotent no-ops on the retry.
             self.do_harden(&[], Slot::of(Kind::Reference, Payload::Reference(root)))
                 .map_err(|step| match step {
                     Step::Host(halt) => halt,

@@ -31,12 +31,14 @@ path = "src/bin/compile_diff.rs"
 # endot-ih: the xst-analogue test262 runner (design § Part 2). Subsumes the
 # dual-run harness and the `test262-language` subtree walker.
 [[bin]]
-name = "ironhorse-xst"
-path = "src/bin/ironhorse_xst.rs"
-
-[[bin]]
 name = "endot-ih"
 path = "src/bin/endot_ih.rs"
+
+# ironhorse-xst: Ironhorse as a plain test262 host, driven by the real
+# `test262-harness --host-type xs` rather than by our own walker.
+[[bin]]
+name = "ironhorse-xst"
+path = "src/bin/ironhorse_xst.rs"
 
 # corpus-to-262: the mechanical corpus -> test262-style case converter
 # (design § Part 1). Dual-runs each corpus line against the oracle once and
