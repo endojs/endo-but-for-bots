@@ -1102,7 +1102,13 @@ it is. Four reasons this is the safer choice and not merely the nicer one:
   historical message; `fork` forks a session the database no longer holds. This
   is the one place a fork patch is unavoidable.
 - **Claude** resumes a private JSONL format, so restoration means the harness
-  authoring that file, which couples the adapter to a format the CLI owns.
+  authoring that file. Coupling to a format the CLI owns is **accepted**: the
+  image is pinned by digest, so the format cannot change under the adapter
+  without an explicit pin bump. That protection is only real if bumping the pin
+  re-checks it, so a pin bump must run a restoration conformance test — write a
+  transcript, resume it, assert the CLI reports the expected turns — alongside
+  the existing `cli-cleanup-conformance.js` suite. A silent format change would
+  otherwise degrade into a session that resumes empty.
 
 **What the mount table gets.** The native store becomes ephemeral —
 `OPENCODE_DB` already accepts `:memory:` or an absolute path, and tmpfs
