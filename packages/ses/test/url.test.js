@@ -18,6 +18,45 @@ test('URL is present on the start compartment when the host provides it', t => {
   t.true('revokeObjectURL' in globalThis.URL);
 });
 
+test('the blob statics keep their pre-lockdown undeletable `.prototype` end state', t => {
+  if (!hasURL || !('createObjectURL' in globalThis.URL)) {
+    t.pass('host does not provide the blob-registry statics');
+    return;
+  }
+  // Node.js/V8 implements `URL.createObjectURL`/`revokeObjectURL` as ordinary
+  // functions carrying an own `prototype` that is writable but not
+  // configurable, so lockdown cannot delete it and falls back to setting the
+  // slot to `undefined` (`cauterizeProperty`). The `fnWithUndeletablePrototype`
+  // permit only silences the report for that fallback; it must NOT change the
+  // resulting value. This pins the end state so a future permit that instead
+  // preserved a live `.prototype` object (a real, if benign, behavior change on
+  // a start-compartment global) would redden here rather than pass silently on
+  // the stderr-only guard alone.
+  for (const name of ['createObjectURL', 'revokeObjectURL']) {
+    const fn = globalThis.URL[name];
+    t.is(typeof fn, 'function', `${name} is present`);
+    t.is(
+      fn.prototype,
+      undefined,
+      `${name}.prototype is undefined post-lockdown`,
+    );
+    // The undeletable own `.prototype` slot is a Node.js/V8 artifact: WebIDL
+    // operations are ordinarily prototype-less non-constructors, so on a
+    // spec-conformant host these statics have no own `.prototype` slot at all
+    // and there is nothing for lockdown to cauterize. Only pin the
+    // frozen-and-valueless descriptor shape where the host actually exhibits
+    // the undeletable-own-`.prototype` quirk this permit exists to quiet.
+    const desc = Object.getOwnPropertyDescriptor(fn, 'prototype');
+    if (desc) {
+      // The slot survives (undeletable) but is now frozen and valueless.
+      t.is(desc.value, undefined);
+      t.is(desc.configurable, false);
+    } else {
+      t.pass(`${name} has no own .prototype slot on this host`);
+    }
+  }
+});
+
 test('URLSearchParams is present on the start compartment when the host provides it', t => {
   if (!hasURLSearchParams) {
     t.pass('host does not provide URLSearchParams; nothing to permit');
