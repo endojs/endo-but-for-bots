@@ -1479,10 +1479,14 @@ landed:
    provider retires its workspace volume in place rather than reusing its
    project ID. For Claude and OpenCode the same move is step 4's work, since
    they do not yet declare an attested table at all.
-4. **Open, and blocked on one decision — about MCP, not about storage.**
-   Claude and OpenCode off `makeResolved` onto the attested policy, which is
-   also what enables runtime attaches for them. See *What step 4 needs first*
-   below.
+4. **Largely landed; one step left.** `@endo/sandbox` gained the `bind` kind
+   (option 1 below, which the cost check made the cheaper answer), Claude and
+   OpenCode declare their fixed mount tables and bind the shared verifier, and
+   a profile conformance suite checks that all three run the same contract and
+   differ only in that table. What remains is the controllers themselves:
+   `makeResolved` gives way to the policy path, which needs `make` exposed on
+   the native scope and a live slice to judge, since an attestation is only
+   worth what the kernel says.
 Converge Podman and listener launch paths, runtime ownership, and cleanup.
 Move generic public egress to the shared service.
 Make OpenCode's public mode retain brokered inference and enforce the advertised
