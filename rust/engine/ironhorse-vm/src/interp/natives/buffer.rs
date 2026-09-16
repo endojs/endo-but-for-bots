@@ -1078,6 +1078,20 @@ impl Interp {
                     Slot::integer(-1)
                 })
             }
+            // at
+            10 => {
+                let relative = self.array_to_integer_or_infinity(code, arg0)?;
+                let k = if relative >= 0.0 {
+                    relative
+                } else {
+                    length as f64 + relative
+                };
+                // `at` answers `undefined` for an index outside the bounds,
+                // which is already what the element read returns for one
+                // `ta_valid_index` rejects -- including the negative `k` a
+                // too-large negative argument produces.
+                Ok(self.ta_indexed_element_get(ta, k))
+            }
             // lastIndexOf
             7 => {
                 if length == 0 {

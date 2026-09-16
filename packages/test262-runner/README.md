@@ -52,23 +52,22 @@ Counts at the time of writing, over the 16 runs the corpus produces
 | --- | --- | --- |
 | `test262:xs` | not measured here | needs `xst`; build the `c/moddable` submodule |
 | `test262:node` | 14 / 16 | the 2 failures are `lockdown()` cases, below |
-| `test262:ironhorse-host` | 12 / 16 | the number this ratchet tracks |
+| `test262:ironhorse-host` | 14 / 16 | the number this ratchet tracks |
 | `test262:ironhorse` | refuses to start | no native `lockdown()` yet |
 
-It went 6/16 to 12/16 in three steps, each of which this lane surfaced:
+Ironhorse now matches the node host's 14/16, and on the same two cases: both
+remaining failures are the `lockdown()` ones node fails too, described below.
+
+It went 6/16 to 14/16 in four steps, each of which this lane surfaced:
 
 1. a `return` out of a `switch` left the discriminant on the value stack, so
    a call in an argument list corrupted the caller's pending operands;
 2. the codec polyfill had no `TextEncoder.prototype.encodeInto`;
 3. it also accepted an emulated ArrayBuffer view it can neither read nor
-   write, decoding garbage and dropping writes instead of refusing.
-
-Of the 4 that remain, 2 are the `lockdown()` cases node fails too. The other 2
-are `ses-hosts.js`, which stops on `%TypedArray%.prototype.at`: ironhorse has
-`Array.prototype.at` and `String.prototype.at` but not the TypedArray one, and
-it is the only read an emulated immutable view answers. Adding it is a boot
-change — it moves the boot fingerprint and re-pins every persisted-format
-golden vector — so it is deliberately left to its own reviewed commit.
+   write, decoding garbage and dropping writes instead of refusing;
+4. `%TypedArray%.prototype.at` was missing — `Array.prototype.at` and
+   `String.prototype.at` were both present — and it is the only read an
+   emulated immutable view answers.
 
 `designs/ironhorse-ses-compartment-equivalence.md` has the measurements.
 
