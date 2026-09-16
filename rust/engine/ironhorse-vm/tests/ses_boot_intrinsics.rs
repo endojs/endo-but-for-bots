@@ -1,48 +1,8 @@
 //! Intrinsic reflection and constructor probes exercised by the SES bootstrap.
-use ironhorse_vm::{parse_symbols, Interp};
+mod common;
+use common::TestCompiler;
 
-struct Compiler;
-impl ironhorse_vm::SourceCompiler for Compiler {
-    fn compile_source(
-        &self,
-        source: &str,
-        strict: bool,
-        raw_budget: u64,
-        charge: &mut dyn FnMut(u64) -> bool,
-    ) -> Result<ironhorse_vm::CompiledSource, ironhorse_vm::SourceCompileError> {
-        match ironhorse_compile::compile_atoms_budgeted_with_limit(
-            source,
-            ironhorse_compile::Goal::Eval,
-            strict,
-            raw_budget,
-            charge,
-        ) {
-            Ok(compiled) => Ok(ironhorse_vm::CompiledSource {
-                bytecode: compiled.bytecode,
-                symbols: compiled.symbols,
-                parse_meter_raw: compiled.parse_meter_raw,
-                parse_computrons: compiled.parse_computrons,
-            }),
-            Err(ironhorse_compile::CompileError::MeterAbort) => {
-                Err(ironhorse_vm::SourceCompileError::MeterAbort)
-            }
-            Err(ironhorse_compile::CompileError::Parse(error)) => match error.kind {
-                ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
-                    kind: ironhorse_compile::LexErrorKind::RegExpResourceLimit,
-                    ..
-                }) => Err(ironhorse_vm::SourceCompileError::HeapExhausted),
-                ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
-                    kind: ironhorse_compile::LexErrorKind::RegExpBudgetExceeded,
-                    ..
-                }) => Err(ironhorse_vm::SourceCompileError::MeterAbort),
-                ironhorse_compile::ParseErrorKind::Unsupported => Err(
-                    ironhorse_vm::SourceCompileError::Unsupported(error.to_string()),
-                ),
-                _ => Err(ironhorse_vm::SourceCompileError::Syntax(error.message)),
-            },
-        }
-    }
-}
+use ironhorse_vm::{parse_symbols, Interp};
 
 fn result(source: &str) -> String {
     std::thread::Builder::new()
@@ -52,7 +12,7 @@ fn result(source: &str) -> String {
             move || {
                 let (code, symbols) = ironhorse_compile::compile_atoms(&source).unwrap();
                 let mut machine = Interp::new();
-                machine.set_source_compiler(std::rc::Rc::new(Compiler));
+                machine.set_source_compiler(std::rc::Rc::new(TestCompiler));
                 machine.link_intrinsics(&parse_symbols(&symbols));
                 let outcome = machine.run(&code);
                 assert!(outcome.completed, "{:?}", outcome.halt);
@@ -332,7 +292,7 @@ fn the_ses_shim_supplies_the_guest_surface_on_an_unfrozen_realm() {
         .stack_size(ironhorse_vm::NATIVE_STACK_BYTES)
         .spawn(move || {
             let mut machine = Interp::new();
-            machine.set_source_compiler(std::rc::Rc::new(Compiler));
+            machine.set_source_compiler(std::rc::Rc::new(TestCompiler));
             let mut crank = |source: &str| {
                 let (code, symbols) = ironhorse_compile::compile_atoms_goal(
                     source,
@@ -393,7 +353,7 @@ fn a_natively_frozen_realm_forecloses_the_ses_shim() {
         .spawn(move || {
             let machine = ironhorse_vm::Machine::new();
             machine
-                .set_source_compiler(std::rc::Rc::new(Compiler))
+                .set_source_compiler(std::rc::Rc::new(TestCompiler))
                 .expect("machine takes a compiler");
             let start = machine.start_compartment();
             let crank = |source: &str| {
@@ -450,7 +410,7 @@ fn an_unfrozen_machine_takes_the_shim_and_keeps_its_compartments() {
         .spawn(move || {
             let machine = ironhorse_vm::Machine::unfrozen_with_start_global_names(None);
             machine
-                .set_source_compiler(std::rc::Rc::new(Compiler))
+                .set_source_compiler(std::rc::Rc::new(TestCompiler))
                 .expect("machine takes a compiler");
             assert!(!machine.intrinsics().is_locked_down());
             let start = machine.start_compartment();
