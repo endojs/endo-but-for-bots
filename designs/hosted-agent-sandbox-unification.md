@@ -983,6 +983,14 @@ Two ways out, and the choice is not obvious:
    and no bridge script, and all three adapters converge on `volume`, `attach`
    and `tmpfs` with no new kind at all.
 
+   Feasibility, partly checked. OpenCode's config takes a remote MCP server —
+   `{ type: 'remote', url, headers?, oauth?, timeout? }` in
+   `packages/core/src/config/mcp.ts` — so a loopback URL with a bearer header
+   needs no patch there. **Claude Code's HTTP/SSE MCP support is not yet
+   verified**, and this option depends on it; check before committing to it,
+   because if Claude is stdio-only the bind comes back for one adapter and
+   option 1 returns with it.
+
 **(2) is the recommendation.** An earlier draft of this section objected that
 the sidecar sharing that namespace holds the upstream credential, so a loopback
 MCP port would hand the credential holder a path to the session's tools. That
