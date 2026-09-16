@@ -430,7 +430,16 @@ export const makeCodexDurableVolumeProvider = ({
       let record = Object.hasOwn(state.sessions, sessionId)
         ? state.sessions[sessionId]
         : undefined;
-      !record?.lease || Fail`Session volumes have an outstanding durable lease`;
+      // A lease in the registry is either this process's or a dead
+      // incarnation's, and only the second is an obstruction. `active` holds
+      // the ones this process took, so reopening a workspace it already holds
+      // is idempotent — which is what a revived session's own next turn is
+      // doing. Recovery cannot serve that case and should not: it refuses a
+      // live local lease on purpose. A lease with no live holder here still
+      // requires explicit recovery, unchanged.
+      !record?.lease ||
+        active.get(sessionId) === record.lease ||
+        Fail`Session volumes have an outstanding durable lease`;
       if (!record) {
         const nextProjectId = /** @type {number} */ (state.nextProjectId);
         (!state.exhausted && nextProjectId < projectIds.last) ||
