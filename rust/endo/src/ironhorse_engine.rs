@@ -71,6 +71,46 @@ pub mod engine {
         CollectionCounterExhausted,
     }
 
+    /// Prose, not `Debug`. `MachineError::Refused` used to render this through
+    /// `{:?}`, so an operator saw `refused: CadenceMismatch { stored: 2,
+    /// requested: 3 }` -- field names, which is the shape F157 objected to and
+    /// which `store_failure_classes.rs` already rejects for `StoreError`.
+    ///
+    /// The match is deliberately exhaustive. `#[non_exhaustive]` only binds
+    /// other crates, so within this one a new variant is a compile error here
+    /// rather than a silently Debug-rendered arm.
+    impl std::fmt::Display for Refusal {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Refusal::CadenceMismatch { stored, requested } => write!(
+                    f,
+                    "collection cadence mismatch: store holds {stored}, \
+                     caller opened with {requested}"
+                ),
+                Refusal::StandaloneHeapSchema { schema } => write!(
+                    f,
+                    "store heap schema {schema} predates the shared-Machine \
+                     profile: a shared worker cannot adopt it without \
+                     restamping a heap an older worker may still own"
+                ),
+                Refusal::StandaloneHeapState => write!(
+                    f,
+                    "store carries no shared function state: it was written \
+                     by a standalone worker"
+                ),
+                Refusal::PendingCrankCounterExhausted => {
+                    write!(f, "pending-crank counter reached its width")
+                }
+                Refusal::CrankCounterExhausted => {
+                    write!(f, "crank counter reached its width")
+                }
+                Refusal::CollectionCounterExhausted => {
+                    write!(f, "collection counter reached its width")
+                }
+            }
+        }
+    }
+
     /// Why an evaluation could not be carried out or did not complete.
     #[derive(Debug)]
     #[non_exhaustive]
@@ -208,7 +248,7 @@ pub mod engine {
                 MachineError::SessionLost => {
                     write!(f, "machine has no session: an earlier rewind failed")
                 }
-                MachineError::Refused(what) => write!(f, "refused: {what:?}"),
+                MachineError::Refused(what) => write!(f, "refused: {what}"),
                 MachineError::StoreLeakedAtClose { strong_count } => write!(
                     f,
                     "store still had {strong_count} strong references at close: \
@@ -1801,6 +1841,33 @@ pub mod engine {
             };
             let shown = MachineError::Refused(refusal).to_string();
             assert!(shown.contains('2') && shown.contains('3'), "{shown}");
+            // ...and as PROSE, not as `Debug`. The digits alone passed while
+            // this rendered `refused: CadenceMismatch { stored: 2, requested:
+            // 3 }` -- field names, the shape `store_failure_classes.rs`
+            // already rejects for `StoreError`.
+            assert_eq!(
+                shown,
+                "refused: collection cadence mismatch: store holds 2, caller opened with 3"
+            );
+            assert!(
+                !shown.contains("CadenceMismatch") && !shown.contains("stored:"),
+                "{shown}"
+            );
+            // Every other variant too, so a later arm cannot quietly go back
+            // to `Debug` while this test still passes on the first one.
+            for refusal in [
+                Refusal::StandaloneHeapSchema { schema: 31 },
+                Refusal::StandaloneHeapState,
+                Refusal::PendingCrankCounterExhausted,
+                Refusal::CrankCounterExhausted,
+                Refusal::CollectionCounterExhausted,
+            ] {
+                let shown = refusal.to_string();
+                assert!(
+                    !shown.contains("Standalone") && !shown.contains("Exhausted"),
+                    "{shown}"
+                );
+            }
             assert_ne!(
                 Refusal::StandaloneHeapSchema { schema: 31 },
                 Refusal::StandaloneHeapState,
