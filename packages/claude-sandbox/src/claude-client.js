@@ -230,6 +230,13 @@ const defaultStderrIterable = proc =>
  *   back to the in-memory flag. Also gates `initialPrompt`, so a
  *   reincarnated formula does not re-fire its initial prompt as a
  *   spurious extra turn on every daemon restart.
+ * @property {(records: readonly any[]) => Promise<string | undefined>} [restoreTranscript] -
+ *   Write this conversation into the session's config directory from the
+ *   stack's own transcript records, and answer the session id the CLI should
+ *   resume. Consulted only when the config directory holds no conversation of
+ *   its own, so a live conversation is continued rather than overwritten.
+ *   Without it the session starts context-free, which is what happens today
+ *   whenever a revived worker finds an empty store.
  * @property {() => string | undefined} [resolveResumeSessionId] - The id
  *   of the newest persisted conversation, read from the session's config
  *   dir before every spawn. When it yields an id the turn resumes that
@@ -291,6 +298,7 @@ export const makeClaudeClient = ({
   resumePriorConversation = false,
   detectPriorConversation,
   resolveResumeSessionId,
+  restoreTranscript,
   describeTranscripts,
   makeStdoutIterable = defaultStdoutIterable,
   makeStderrIterable = defaultStderrIterable,
@@ -465,7 +473,7 @@ export const makeClaudeClient = ({
    * `ProcessHandle`.
    *
    * @param {string} prompt
-   * @param {{ model?: string, systemPrompt?: string }} [opts]
+   * @param {{ model?: string, systemPrompt?: string, transcript?: readonly any[] }} [opts]
    * @returns {Promise<ProcessHandle>}
    */
   const spawnClaude = async (prompt, opts = {}) => {
@@ -519,6 +527,19 @@ export const makeClaudeClient = ({
       } catch {
         // Unreadable backing dir (transient fs race): fall back to --continue.
       }
+    }
+    // Nothing of this conversation in the store: the worker is a new
+    // incarnation, so restore what the stack holds rather than start
+    // context-free. Only ever when the store is empty — a live conversation is
+    // the CLI's and is continued, never overwritten from underneath it.
+    if (
+      resumeSessionId === undefined &&
+      !priorConversation() &&
+      restoreTranscript &&
+      Array.isArray(opts.transcript) &&
+      /** @type {any[]} */ (opts.transcript).length > 0
+    ) {
+      resumeSessionId = await restoreTranscript(opts.transcript);
     }
     const resuming = resumeSessionId !== undefined || priorConversation();
     if (resumeSessionId !== undefined) {

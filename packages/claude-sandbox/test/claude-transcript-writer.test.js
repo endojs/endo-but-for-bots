@@ -1,5 +1,6 @@
 // @ts-check
-import test from '@endo/ses-ava/prepare-endo.js';
+import '@endo/init';
+import test from 'ava';
 
 import { writeClaudeTranscript } from '../src/claude-transcript-writer.js';
 

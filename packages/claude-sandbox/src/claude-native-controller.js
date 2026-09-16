@@ -19,6 +19,10 @@
  * @module
  */
 
+import { createHash } from 'node:crypto';
+import { mkdir, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+
 import { assertCopyData } from '@endo/daemon/copy-data.js';
 import { Fail } from '@endo/errors';
 import { E } from '@endo/eventual-send';
@@ -39,9 +43,28 @@ import { ANTHROPIC_ORIGIN, CLAUDE_BROKER_ACCOUNT } from './claude-broker.js';
 import { makeClaudeClient } from './claude-client.js';
 import { CREDENTIAL_ENV_VARS } from './claude-credential-kinds.js';
 import { readClaudeSessionPlan } from './claude-session-plan.js';
+import { writeClaudeTranscript } from './claude-transcript-writer.js';
 import { makeTranscriptResume } from './claude-transcripts.js';
 import { startMcpSocketServer } from './mcp-socket-server.js';
 import { parseRootfs, rootfsLabel } from './parse-rootfs.js';
+
+/**
+ * The conversation id a restored transcript is written under: derived from
+ * the session so a retried revival reuses the same file rather than forking a
+ * second conversation out of one history.
+ *
+ * @param {string} sandboxSessionId
+ */
+const transcriptSessionUuid = sandboxSessionId => {
+  const digest = createHash('sha256').update(sandboxSessionId).digest('hex');
+  return [
+    digest.slice(0, 8),
+    digest.slice(8, 12),
+    `4${digest.slice(13, 16)}`,
+    `a${digest.slice(17, 20)}`,
+    digest.slice(20, 32),
+  ].join('-');
+};
 
 /** Slice-internal paths; the recorded host paths never reach the guest. */
 const WORKSPACE_PATH = '/workspace';
@@ -315,6 +338,34 @@ export const makeClaudeNativeController = ({
         detectPriorConversation: resume.detectPriorConversation,
         resolveResumeSessionId: resume.resolveResumeSessionId,
         describeTranscripts: resume.describeTranscripts,
+        // A new incarnation with an empty store restores what the stack
+        // holds. Claude Code names a conversation's file for its session id
+        // and its directory for the cwd it ran in, so both are derived rather
+        // than discovered — the same records must always land in the same
+        // place, or a retried revival writes a second conversation beside the
+        // first.
+        restoreTranscript: async records => {
+          const sessionUuid = transcriptSessionUuid(approved.sandboxSessionId);
+          const restored = writeClaudeTranscript(records, {
+            sessionUuid,
+            cwd: WORKSPACE_PATH,
+            // The pinned CLI stamps its own version on records it writes;
+            // a restored file is honest that the stack wrote it.
+            version: 'endo-restored',
+            ...(approved.model ? { model: approved.model } : {}),
+          });
+          if (restored === '') return undefined;
+          const projectDir = path.join(
+            state.directory,
+            'projects',
+            WORKSPACE_PATH.replace(/\//g, '-'),
+          );
+          await mkdir(projectDir, { recursive: true, mode: 0o700 });
+          await writeFile(path.join(projectDir, `${sessionUuid}.jsonl`), text, {
+            mode: 0o600,
+          });
+          return sessionUuid;
+        },
       });
       // No initialPrompt: only foreground sends may initiate recorded turns.
     })();
