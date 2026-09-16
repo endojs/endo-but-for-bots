@@ -3,8 +3,10 @@ import test from '@endo/ses-ava/prepare-endo.js';
 
 import {
   HOSTED_AGENT_POLICY_V1,
+  HOSTED_SLICE_RESOURCES,
   assertFixedMounts,
   makeHostedAgentPolicyVerifier,
+  sliceWritableBytes,
 } from '../src/hosted-agent-policy.js';
 
 const imageDigest = `sha256:${'a'.repeat(64)}`;
@@ -204,4 +206,28 @@ test('a profile must declare a well-formed fixed table', t => {
       `${label}, through the factory`,
     );
   }
+});
+
+test('the writable ceiling is a sum over the table, not a profile constant', t => {
+  const GiB = 1024n ** 3n;
+  const MiB = 1024n ** 2n;
+  const mounts = harden([
+    { role: 'tmp', kind: 'tmpfs', sizeBytes: GiB },
+    { role: 'run', kind: 'tmpfs', sizeBytes: 256n * MiB },
+    { role: 'state', kind: 'volume', sizeBytes: 4n * GiB },
+    // Neither of these is this slice's storage: the bytes belong to a
+    // capability or to the host, bounded where they live. Counting them would
+    // attest a ceiling nothing enforces.
+    { role: 'workspace', kind: 'attach' },
+    { role: 'mcp', kind: 'bind' },
+  ]);
+  const shm = HOSTED_SLICE_RESOURCES.shmBytes;
+  t.is(
+    sliceWritableBytes(mounts),
+    2n * shm + 2n * GiB + 512n * MiB + 4n * GiB,
+    'each tmpfs twice, the volume once, shm twice, the rest not at all',
+  );
+  t.is(sliceWritableBytes([]), 2n * shm);
+  // The profile carries no ceiling of its own: it is not a constant.
+  t.false('writableBytes' in HOSTED_SLICE_RESOURCES);
 });

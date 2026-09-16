@@ -4,6 +4,7 @@ import { Fail, q } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
+import { HOSTED_SLICE_RESOURCES } from '@endo/hosted-agent/hosted-agent-policy.js';
 import { assertPublicNetworkEvidence } from '@endo/hosted-agent/public-network.js';
 import {
   INNER_PATH_PATTERN,
@@ -27,14 +28,9 @@ const GiB = 1024n ** 3n;
 const MiB = 1024n ** 2n;
 // One policy anchor and one admitted operation have independent cgroups.
 // Reserve half the aggregate memory, PID, and CPU budget for each.
+// The shared profile, with the ceiling this adapter's own table sums to.
 const standardResources = harden({
-  memoryBytes: 2n * GiB,
-  pids: 256,
-  cpuCores: 2,
-  openFiles: 4096,
-  coreBytes: 0n,
-  shmBytes: 64n * MiB,
-  maxConcurrentOperations: 1,
+  ...HOSTED_SLICE_RESOURCES,
   writableBytes: 16n * GiB,
 });
 const keys = record =>

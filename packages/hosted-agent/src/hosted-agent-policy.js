@@ -44,6 +44,57 @@ export const HOSTED_AGENT_POLICY_V1 = harden({
 });
 harden(HOSTED_AGENT_POLICY_V1);
 
+const GiB = 1024n ** 3n;
+const MiB = 1024n ** 2n;
+
+/**
+ * The slice resource profile every hosted adapter runs under.
+ *
+ * One policy anchor and one admitted operation have independent cgroups, so
+ * each reserves half the aggregate memory, PID and CPU budget — which is why
+ * the attested `limits` are these doubled, and why an adapter cannot pick its
+ * own numbers without the hosted contract noticing.
+ *
+ * `writableBytes` is deliberately absent: it is not a profile constant but a
+ * sum over the mount table, and `sliceWritableBytes` computes it.
+ */
+export const HOSTED_SLICE_RESOURCES = harden({
+  memoryBytes: 2n * GiB,
+  pids: 256,
+  cpuCores: 2,
+  openFiles: 4096,
+  coreBytes: 0n,
+  shmBytes: 64n * MiB,
+  maxConcurrentOperations: 1,
+});
+harden(HOSTED_SLICE_RESOURCES);
+
+/**
+ * What a slice can actually write, summed over what it was given.
+ *
+ * A tmpfs counts twice because the anchor and an admitted operation each get
+ * one; shm likewise. A volume counts once — it is shared. An `attach` or a
+ * `bind` counts for nothing: those bytes belong to a capability or to the
+ * host, which bounds them where they live, and attesting a ceiling here would
+ * attest one nothing enforces.
+ *
+ * The attestation recomputes this from the table it observed, so a number that
+ * disagrees is refused rather than believed.
+ *
+ * @param {readonly {kind: string, sizeBytes?: bigint}[]} mounts
+ * @param {bigint} [shmBytes]
+ */
+export const sliceWritableBytes = (
+  mounts,
+  shmBytes = HOSTED_SLICE_RESOURCES.shmBytes,
+) =>
+  mounts.reduce(
+    (sum, mount) =>
+      sum + (mount.sizeBytes ?? 0n) * (mount.kind === 'tmpfs' ? 2n : 1n),
+    2n * shmBytes,
+  );
+harden(sliceWritableBytes);
+
 /**
  * The key a declared runtime attach is known by. It names the attach's row
  * in the attested table (`attach:<key>`) and its mount role
