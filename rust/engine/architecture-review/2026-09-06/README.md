@@ -57,6 +57,23 @@ This revision also records, for the first time, what each fix costs to carry:
 regression or a second source of truth that the fix introduced.
 Appendix A now carries five locations and four statuses per finding.
 
+**Revised a fifth time 2026-09-16 against
+[`7753a4b9`](https://github.com/endojs/endo-but-for-bots/commit/7753a4b9).**
+375 further commits landed, 318 of them touching the reviewed paths.
+Workstream W5 landed — `interp.rs` went from 67,312 lines to 3,106 across 50
+modules — and `designs/ironhorse-w6-decisions.md` became the decision of record
+for all five W6 questions.
+All 191 findings were re-verified again: 172 are fixed, 15 are partially fixed,
+and 4 still stand.
+One finding regressed, F119, when the classification index this review's own
+[PERFORMANCE-TRADEOFFS.md](PERFORMANCE-TRADEOFFS.md) named as the weakest major
+tradeoff was deliberately removed.
+The still-open and partially-open set is listed on its own, by severity, in
+[OPEN-FINDINGS.md](OPEN-FINDINGS.md).
+Appendix A now carries six locations and five statuses per finding; the
+`7753a4b9` locations are file-level, because the decomposition moved every
+construct in the VM.
+
 The earlier revision's per-finding statuses were **not** overwritten: a finding
 resolved since carries an additional Status line, and Appendix A carries a
 location and a status column per revision.
