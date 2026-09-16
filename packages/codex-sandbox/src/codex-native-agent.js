@@ -23,21 +23,53 @@
  * with `make`, where Claude's and OpenCode's daemon-owned session controllers
  * acquire a scope and call `makeResolved`; moving Codex to scopes is a change to
  * its session model, not to where its runtime is constructed, and the two are
- * worth doing separately. A `null` scratch provider is what makes the factory
- * host-only: capability-based construction is refused at the point of use, which
- * is exactly what the hand-written `noScratch` exo the backend used to pass was
- * for.
+ * worth doing separately.
+ *
+ * Which is why the scratch provider here is a refusing exo and not `null`.
+ * `factory.js`'s `make` calls `requireScratchProvider()` before it looks at what
+ * the slice asked for, so a `null` provider does not mean "scratch is
+ * forbidden" — it closes `make` outright, which is the shape `makeResolved` is
+ * for. Refusing the two methods is what forbids scratch, and that is what the
+ * backend's own `noScratch` exo did before the runtime moved here.
  *
  * @module
  */
 
 import { Fail, b, q } from '@endo/errors';
+import { makeExo } from '@endo/exo';
+import { M } from '@endo/patterns';
 import { makeOwnedNativeService } from '@endo/sandbox/owned-native-service.js';
 import { readRuntimeConfig } from '@endo/sandbox/runtime-config.js';
 import { makeSandboxRuntime } from '@endo/sandbox/runtime.js';
 import { isAbsolute, normalize } from 'node:path';
 
 import { makeCodexVolumeQuotaObserver } from './codex-quota-host.js';
+
+/**
+ * Host scratch and host-path resolution are both forbidden for a Codex slice:
+ * its storage is two durable Podman volumes under project quota, and nothing it
+ * builds may name a host path. The factory holds this, calls
+ * `requireScratchProvider()` on every `make`, and only reaches a method when a
+ * request actually asks for one — so these throw where such a request is, not
+ * where every request is.
+ */
+export const makeCodexNoScratch = () =>
+  makeExo(
+    'No host scratch',
+    M.interface('NoHostScratch', {
+      provideScratchMount: M.call().rest(M.arrayOf(M.any())).returns(M.any()),
+      provideHostPath: M.call().rest(M.arrayOf(M.any())).returns(M.any()),
+    }),
+    {
+      provideScratchMount() {
+        throw Fail`Host scratch is forbidden`;
+      },
+      provideHostPath() {
+        throw Fail`Host paths are forbidden`;
+      },
+    },
+  );
+harden(makeCodexNoScratch);
 
 /**
  * @param {Record<string, string | undefined>} env
@@ -93,7 +125,10 @@ const makeNative = makeOwnedNativeService({
     void observer.catch(() => {});
     const runtime = makeSandboxRuntime(
       { ...config, env },
-      { scratchProvider: null, volumeQuota: observer },
+      {
+        scratchProvider: /** @type {any} */ (makeCodexNoScratch()),
+        volumeQuota: observer,
+      },
     );
     return harden({
       open: async () => {

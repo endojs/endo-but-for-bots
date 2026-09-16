@@ -3,7 +3,12 @@ import '@endo/init';
 
 import test from 'ava';
 
-import { readCodexNativeConfig } from '../src/codex-native-agent.js';
+import { makeSandboxFactoryKit } from '@endo/sandbox/factory.js';
+
+import {
+  makeCodexNoScratch,
+  readCodexNativeConfig,
+} from '../src/codex-native-agent.js';
 
 const base = () =>
   harden({
@@ -69,4 +74,51 @@ test('the shared runtime policy is still enforced', t => {
       }),
     { message: /entry budget must be positive/ },
   );
+});
+
+test('the scratch provider refuses, and is not absent', async t => {
+  // `factory.js`'s capability-based `make` calls requireScratchProvider()
+  // before it looks at what the slice asked for, so a null provider does not
+  // forbid scratch — it closes `make` outright, which is what `makeResolved`
+  // is for. Codex builds its slices with `make`, so a null provider here made
+  // every session fail with "Sandbox capability construction requires a scratch
+  // provider" and nothing about scratch was involved.
+  const provider = makeCodexNoScratch();
+  t.throws(() => provider.provideScratchMount(), {
+    message: /Host scratch is forbidden/,
+  });
+  t.throws(() => provider.provideHostPath(), {
+    message: /Host paths are forbidden/,
+  });
+
+  const withNull = makeSandboxFactoryKit({
+    drivers: [],
+    scratchProvider: null,
+    context: undefined,
+  });
+  // Synchronously, before anything about the request is examined.
+  // The kit's factory is a local exo here, so it is called directly; a
+  // SandboxFactory is a FarRef, which a caller would reach through E().
+  t.throws(
+    () =>
+      /** @type {any} */ (withNull.factory).make(
+        harden({ rootfs: { kind: 'minimal' } }),
+      ),
+    { message: /requires a scratch provider/ },
+  );
+  const withRefusal = makeSandboxFactoryKit({
+    drivers: [],
+    scratchProvider: /** @type {any} */ (provider),
+    context: undefined,
+  });
+  // Past that check; it now fails for the reason a driverless kit should,
+  // which is what proves the provider check is no longer what stops it.
+  const refused = await /** @type {any} */ (withRefusal.factory)
+    .make(harden({ rootfs: { kind: 'minimal' } }))
+    .then(
+      () => undefined,
+      error => error,
+    );
+  t.truthy(refused);
+  t.notRegex(String(refused.message), /requires a scratch provider/);
 });
