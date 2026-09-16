@@ -72,8 +72,9 @@ test('node reporting to stderr with indented group', async t => {
   // URL prototypes carry a `Symbol.for('nodejs.util.inspect.custom')`
   // (expressly excluded). All are covered by `src/permits.js`, so lockdown
   // must NOT report them on any Node major this package's CI exercises (22 and
-  // 24; the same V8 `URL` implementation is expected to hold on 26). A future
-  // permits regression would make one of these lines reappear.
+  // 24; unverified on 26, though the same V8 `URL` implementation is expected
+  // to hold there). A future permits regression would make one of these lines
+  // reappear.
   const forbiddenSubstrings = [
     'createObjectURL.prototype',
     'revokeObjectURL.prototype',
