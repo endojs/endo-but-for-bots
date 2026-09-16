@@ -47,6 +47,7 @@
     "./session-state-storage.js": "./src/session-state-storage.js",
     "./hosted-setup.js": "./src/hosted-setup.js",
     "./hosted-agent-policy.js": "./src/hosted-agent-policy.js",
+    "./transcript-records.js": "./src/transcript-records.js",
     "./current-specifier.js": "./src/current-specifier.js",
     "./managed-credentials.js": "./src/managed-credentials.js",
     "./managed-credentials-module.js": "./src/managed-credentials-module.js",
