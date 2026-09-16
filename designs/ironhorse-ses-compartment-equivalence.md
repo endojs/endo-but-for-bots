@@ -313,10 +313,14 @@ been reporting this corpus as an honest set of named skips, exiting 0, for as
 long as the corpus has existed — and underneath it was a parser bug that broke
 every case in the suite.
 
-### The 8 that still fail, and the engine bug that was behind two of them
+### The 8 that failed at 6/16, and the engine bugs behind them
 
-Two findings came out of the 6/16. The first is now fixed, and fixing it took
-the corpus to **8/16**; the second is still characterized rather than fixed.
+Two findings came out of the 6/16, and both are now fixed. The first took the
+corpus to **8/16**; the second was a host-boundary rendering fault that cost no
+case a pass but made every failure unreadable, which is its own kind of
+expensive. Each is kept here with the reasoning that first got it wrong,
+because in both cases the original entry recorded an INFERENCE in the voice of
+a measurement, and that is the failure mode this document is most prone to.
 
 **A `return` out of a `switch` abandoned the discriminant on the value stack.**
 FIXED. This was originally recorded here as "`passStyleOf`'s first call in
@@ -370,21 +374,43 @@ not start.
 
 **A thrown object with a prototype `toString` renders as
 `[object Object]`.**
+FIXED.
 Inside the engine `String(e)`, `e.toString()` and `"" + e` all produce
 `Test262Error: <message>` correctly.
-Only the HOST boundary loses it: `render_uncaught` goes through the read-only
+Only the HOST boundary lost it: `render_uncaught` goes through the read-only
 `render`, which by contract "must not turn the throw into a halt" and so
 cannot call guest code.
 test262's `Test262Error` is exactly that shape (`sta.js` puts `toString` on
-the prototype), so every assertion failure reaches a host as
-`[object Object]` — which also defeats `eshost`'s `parseError`, whose regex
+the prototype), so every assertion failure reached a host as
+`[object Object]` — which also defeated `eshost`'s `parseError`, whose regex
 needs `Name: message`.
-XS avoids this by calling the guest `toString` from its own catch.
-`endot-ih` has the same limitation, visible in its own divergence output.
-Fixing it needs a guest-semantics coercion the VM does not currently expose
-to hosts.
 
-Neither was a SES or prelude problem; both bite any host embedding
+This section previously concluded that fixing it "needs a guest-semantics
+coercion the VM does not currently expose to hosts", by analogy with XS, which
+calls the guest `toString` from its own catch.
+That was the wrong read of what the boundary owes.
+The message does not need coercing — it needs READING, and `render`'s error
+branch already reads a live `name`/`message` through `render_error_property`,
+which walks the prototype chain for DATA properties only: no accessor invoked,
+no proxy entered, no coercion, and so no resumption of the guest.
+Objects that are not engine `Error`s simply never reached that branch and fell
+through to `Object.prototype.toString`.
+
+`render_uncaught` now pairs that message with the tag the render already
+produced — `Object: Expected SameValue(...)` rather than `[object Object]`,
+which is also the `Name: message` shape `eshost` wants.
+The tag rather than the constructor's `name`: `toString` is guest code this
+still cannot call, and a function's `name` is not reliably a plain slot to
+read, so pairing with the tag claims no more than the `[object ...]` it
+replaces.
+Only that `[object ...]` case changes; a `message` behind an accessor or proxy
+still reports its placeholder rather than being coerced.
+`uncaught_native_error_rendering` pins both directions.
+
+`endot-ih` shared the limitation and shares the fix, since both hosts render
+through the same boundary.
+
+Neither was a SES or prelude problem; both bit any host embedding
 ironhorse.
 
 ### Why SES's own suite is not the gate yet
