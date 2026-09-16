@@ -107,7 +107,12 @@ C_model(n) = coefficient * f(n) + intercept
 where `f(n)` is a growth basis drawn from a small closed set: `1` (constant),
 `log n`, `n` (linear), `n*log n`, `n^2` (quadratic). The `coefficient` and
 `intercept` are fit from the **exact, deterministic** computron counts measured at a
-ladder of at least four input sizes (doublings). The fit **must use exact
+ladder of at least four input sizes (doublings **starting from a power of two**,
+`n = 2^k`, so `log2(n) = k` is exact-integer at every rung; a ladder that does *not*
+start at a power of two — such as `scaling_bench.rs`'s inherited `1000`/`2000`
+decimal rungs — makes `log2(n)` irrational and is re-based onto powers of two before a
+load enters this record, precisely so the `log n` / `n*log n` bases never drop onto
+platform `f64`). The fit **must use exact
 rational/integer arithmetic, not floating-point regression.** Exact-integer inputs
 alone do not make an `f64` least-squares fit reproducible across hosts: summation
 order, FMA contraction, and libm differences vary by platform and toolchain, so an
@@ -122,6 +127,31 @@ ladder points, the normal-equation solution is a ratio of small integer sums and
 representable exactly as a rational; the record commits the reduced rational (or its
 exact-integer numerator/denominator pair). Only then is the fitted model itself
 deterministic and re-derivable bit-for-bit on any host.
+
+The `1` (constant) basis is the one case the normal-equation solution does **not**
+cover, and the record fixes it by definition rather than deriving it. The
+two-parameter model `coefficient * 1 + intercept` is rank-deficient for that basis:
+both design-matrix columns are all-ones, so `det(XᵀX) = 0` and the least-squares
+solution is undefined. For basis `1`, therefore, `coefficient` is fixed at `0` and
+`intercept` is the common measured computron value every ladder rung shares (a load
+whose value is *not* constant across the ladder is, by definition, not basis `1` and
+must declare a size-dependent basis). Gate 1's exact pins independently guarantee that
+common value, so the constant record stays fully re-derivable despite the degenerate
+fit. The worked `charcodeat_indexing` example below is exactly this case
+(`coefficient: "0"`, `intercept: "14"`).
+
+**Number encoding in the record.** Every exact **rational** gate input — the
+`coefficient`, `intercept`, the four tolerance knobs, and `divergence_time_ratio` — is
+written as a rational string `"num/den"` (an integer as `"14"` or `"4/1"`, never a bare
+JSON number and never a float like `4.0`), so the whole gate-input region reads under
+the one exact-rational rule this design leans on. The exact **integer counts** (`n`,
+`computrons`, `meter_raw`, and the ladder cap `pr_max_ladder_n`) stay JSON integers,
+which are already exact and carry no denominator; these are the only bare JSON numbers
+that are gate inputs. Floats appear **only** inside `provenance` (descriptive
+wall-clock medians), never as a gate input. The gate-1/gate-2 harness additionally
+**re-derives the fit from the committed ladder and asserts it equals the recorded
+`coefficient`/`intercept`**, so a hand-edited coefficient cannot silently move every
+gate-2 center.
 
 ### The three gates the baseline yields
 
@@ -150,8 +180,11 @@ flowchart TD
    measured `C(n)` for an **off-ladder** size lies within
    `C_model(n) +/- gate2_off_ladder_radius` (the fitted prediction plus this load's
    `+/-` radius), catching a regression that only manifests beyond the pinned points.
-   The off-ladder probe **must itself be a power of two beyond the ladder** (a further
-   doubling, `2^(k+1)` past the top pin), never a between-points size: for the `log n` /
+   The off-ladder probe **must itself be a power of two beyond the PR-lane ladder** (a
+   further doubling anchored at `2 * pr_max_ladder_n`, one doubling past the top *PR-lane*
+   rung, itself a power of two — never `2^(k+1)` past the *full recorded* top pin, which
+   would execute a size the PR-lane cap exists to exclude), never a between-points size:
+   for the `log n` /
    `n*log n` bases `C_model(n)` is exact-integer only where `log2(n)` is (at powers of
    two, `log2(2^k) = k`), so a non-power-of-two probe would force an irrational
    `log2(n)`, drop the evaluation onto platform `f64`/libm, and reintroduce the
@@ -171,27 +204,49 @@ flowchart TD
    from nightly to PR CI*: the deterministic constraint the eliminated tests used to
    provide, restored where it belongs.
 
+   Gate 2 **honors `validated_lanes` exactly as gate 1 does**, and that is what keeps
+   its two sub-checks from being redundant. On a lane *in* `validated_lanes`, gate 1
+   already pins every on-ladder `C(n)` exactly, so 2(a)'s per-doubling ratio is fixed at
+   record time and cannot fail there unless gate 1 already has — on such a lane 2(a) is a
+   redundant restatement and only **2(b)'s off-ladder probe** (a size gate 1 does *not*
+   pin) adds constraint. On a lane *absent* from `validated_lanes` gate 1 stands down (the
+   pin is not asserted reproducible there), and 2(a) becomes the live growth-class check
+   no other gate supplies. So neither sub-check is dead weight across the lane set: 2(a)
+   carries the lanes gate 1 cannot, and 2(b) carries the off-ladder size gate 1 does not
+   reach.
+
 3. **Faithfulness gate (nightly lane, wall-clock benchmark).** This is the
    *benchmark-established* part. Measure CPU-time medians across the ladder (warmup
    plus repeated samples, host-controlled, exactly as `benches/run.py` and
    `scaling_bench` already do). Assert (a) the measured **time** growth class equals
-   the load's declared **computron** growth class. This is what *confirms* the
-   `f(n)` chosen for the model, so the polynomial is measured, not assumed. Assert
+   the load's declared **computron** growth class. The growth basis `f(n)` is
+   *established by measurement at record time*: `--write-baseline` fits it against the
+   full measured time-and-computron ladder, which spans enough doublings (at least
+   four) to separate the closed basis set, since a `log n` load and a linear load have
+   visibly different measured per-doubling curves across four-plus rungs. Gate 3's
+   *nightly* class check is the looser single-sided guard described below (§ Gate 3
+   uses a looser, single-sided band): it catches a gross *worsening* of the class (a
+   linear load whose measured time starts growing quadratically) but is deliberately
+   **not** the origin of the `f(n)` claim, which is already fixed and re-derivable in
+   the committed record. So "benchmark-established" names the record-time measurement,
+   and gate 3 nightly is its non-regression sentinel, not a per-run re-derivation of
+   the exact class. Assert
    (b) **each load's** fidelity ratio stays within *that load's* recorded
    `gate3_fidelity_radius`. Computrons-per-second has seconds in the denominator, so a
    *committed* absolute rate compared against a nightly measurement would be exactly the
-   absolute cross-machine time comparison § F4 exception and `benches/README.md` forbid
+   absolute cross-machine time comparison that the F4 exception (a documented,
+   still-live meter defect; § F4 exception below) and `benches/README.md` forbid
    (a runner merely slower than the recording host would red-fail every load). The
-   fidelity check is therefore made **host-independent by the same same-host-remeasure
-   discipline gate 3's F4 non-regression bound (part (ii)) uses**: it remeasures the
+   fidelity check is therefore made **host-independent by the same-host remeasure
+   discipline that gate 3's F4 non-regression bound (part (ii)) already uses**: it remeasures the
    baseline revision (the record's `provenance.commit`, checked out and rebuilt exactly
    as `divergence_baseline_commit` is for the F4 bound) on the current nightly host, in
    the same run, and asserts the candidate's computrons-per-second against that *fresh
    same-host* reference. Because the computrons are constant (gate-1 pinned identical on
    both revisions), that assertion reduces to a **dimensionless ratio** of two same-host
-   wall-clock medians, never a committed absolute rate, so the meter cannot silently
-   drift into over- or under-charging that load relative to CPU time without any
-   cross-machine absolute comparison. This is a **per-load**
+   wall-clock medians, never a committed absolute rate. The meter therefore cannot
+   silently drift into over- or under-charging that load relative to CPU time, and the
+   check establishes that **without any cross-machine absolute comparison**. This is a **per-load**
    check (one assertion per load against its own band, matching the per-record
    `gate3_fidelity_radius` field), deliberately **not** a single roster-wide aggregate
    ratio, which would let one load's over-charge cancel another's under-charge and pass
@@ -252,8 +307,9 @@ let a reader sanity-check the class at a glance; the gate never evaluates them.
 
 About that per-step center the gate applies the two-sided `+/- gate2_class_band_radius`
 recorded in the baseline record (for example a linear load's mid-ladder band works out near
-`[1.80, 2.20]` about a `2.00` center; a constant load near `[1.00, 1.15]`; a quadratic
-load near `[3.60, 4.40]`). The builder confirms the exact `gate2_class_band_radius`
+`[1.80, 2.20]` about a `2.00` center; a constant load near `[0.925, 1.075]` about a
+`1.00` center (symmetric, matching the worked example's `gate2_class_band_radius` of
+`3/40`); a quadratic load near `[3.60, 4.40]` about a `4.00` center). The builder confirms the exact `gate2_class_band_radius`
 against the measured ladders and records it; the illustrative ranges here are mid-ladder
 defaults, not frozen edges. Because the center comes from the intercept-aware model, the
 ladder need not start large enough to make the intercept negligible for gate-2(a) to be
@@ -276,7 +332,17 @@ Each committed baseline record carries two kinds of field, and the schema **keep
 two kinds in separate structural regions** (a top-level object of gate inputs and a
 nested `provenance` sub-object), so a future editor can tell (without reading this
 whole design) which fields a gate reads as truth versus which are frozen evidence that
-may go stale. The gate names and "class band" used here are defined **above** in
+may go stale. The boundary is drawn precisely on **comparison, not access**: a
+`provenance` field is *never a comparison target* — no gate ever asserts a measured
+value against one — but a gate may still *read* one as a pointer that tells it what to
+do. Gate 3(b), for instance, reads `provenance.commit` to learn *which revision to
+check out and remeasure same-host*; that is a pointer, not a frozen value the gate
+compares against, so it does not breach the rule. Gate inputs, by contrast, are exactly
+the values a gate asserts *against*. (A reader who wants the revision pointer promoted
+out of `provenance` entirely can note it is the same pattern the gate-input
+`divergence_baseline_commit` already follows; keeping the fidelity remeasure's commit in
+`provenance` is deliberate, since it is the *record's own* provenance commit reused as a
+pointer, not a second independent input.) The gate names and "class band" used here are defined **above** in
 § The three gates the baseline yields and § class-band table, so every tolerance-field
 name below arrives after the gate whose behavior it tunes.
 
@@ -344,19 +410,21 @@ load and one `known_divergent` load (medians and pins illustrative, not measured
     "coefficient": "0", "intercept": "14",
     "ladder": [
       { "n": 1024, "computrons": 14, "meter_raw": 917504 },
-      { "n": 2048, "computrons": 14, "meter_raw": 917504 }
+      { "n": 2048, "computrons": 14, "meter_raw": 917504 },
+      { "n": 4096, "computrons": 14, "meter_raw": 917504 },
+      { "n": 8192, "computrons": 14, "meter_raw": 917504 }
     ],
     "COST_TABLE_VERSION": "ironhorse-meter-5",
     "validated_lanes": ["linux-debug", "linux-release", "macos-debug", "macos-release"],
-    "pr_max_ladder_n": 2048,
+    "pr_max_ladder_n": 8192,
     "known_divergent": false,
     "gate2_class_band_radius": "3/40",
-    "gate2_off_ladder_radius": 2,
+    "gate2_off_ladder_radius": "2",
     "gate3_time_ceiling": "5/2",
     "gate3_fidelity_radius": "1/4",
     "provenance": {
       "commit": "0000000000000000000000000000000000000000",
-      "time_medians_ns": { "1024": 640, "2048": 645 },
+      "time_medians_ns": { "1024": 640, "2048": 645, "4096": 648, "8192": 651 },
       "source": "benches/computron_baseline.rs",
       "host": "linux-x86_64",
       "toolchain_digest": "sha256:1a2bcd00"
@@ -367,22 +435,32 @@ load and one `known_divergent` load (medians and pins illustrative, not measured
     "coefficient": "5/2", "intercept": "12",
     "ladder": [
       { "n": 1024, "computrons": 2572, "meter_raw": 168558592 },
-      { "n": 2048, "computrons": 5132, "meter_raw": 336330752 }
+      { "n": 2048, "computrons": 5132, "meter_raw": 336330752 },
+      { "n": 4096, "computrons": 10252, "meter_raw": 671875072 },
+      { "n": 8192, "computrons": 20492, "meter_raw": 1342963712 },
+      { "n": 16384, "computrons": 40972, "meter_raw": 2685140992 },
+      { "n": 32768, "computrons": 81932, "meter_raw": 5369495552 }
     ],
     "COST_TABLE_VERSION": "ironhorse-meter-5",
     "validated_lanes": ["linux-debug", "linux-release", "macos-debug", "macos-release"],
-    "pr_max_ladder_n": 2048,
+    "pr_max_ladder_n": 8192,
     "known_divergent": true,
     "gate2_class_band_radius": "1/10",
-    "gate2_off_ladder_radius": 8,
+    "gate2_off_ladder_radius": "8",
     "gate3_time_ceiling": "5/2",
     "gate3_fidelity_radius": "1/4",
-    "divergence_time_ratio": 4.0,
-    "divergence_baseline_commit": "1111111111111111111111111111111111111111",
+    "divergence_time_ratio": "4",
+    "divergence_baseline_commit": "2222222222222222222222222222222222222222",
     "provenance": {
       "commit": "1111111111111111111111111111111111111111",
-      "time_medians_ms": { "1024": 2.30, "2048": 8.9 },
-      "divergence_time_medians_ms": { "1024": 2.30, "2048": 8.9 },
+      "time_medians_ns": {
+        "1024": 2300000, "2048": 8900000, "4096": 35000000,
+        "8192": 140000000, "16384": 560000000, "32768": 2240000000
+      },
+      "divergence_time_medians_ns": {
+        "1024": 2300000, "2048": 8900000, "4096": 35000000,
+        "8192": 140000000, "16384": 560000000, "32768": 2240000000
+      },
       "divergence_ref": "rust/engine/architecture-review/2026-09-06 F4 (issue link)",
       "source": "benches/computron_baseline.rs",
       "host": "linux-x86_64",
@@ -544,7 +622,8 @@ fix-first-or-flag decision:
 - **Gate 3's class-match assertion is replaced by a non-regression bound, not
   dropped**, for a `known_divergent` load. Suppressing gate 3 entirely would remove
   all wall-clock coverage on exactly the loads with the largest known metering blind
-  spot: a *second*, new time-side regression stacking on the F4 defect (for example   `collection_find`'s linear scan degrading further under an unrelated refactor)
+  spot: a *second*, new time-side regression stacking on the F4 defect (for example `collection_find`'s linear scan degrading
+  further under an unrelated refactor)
   would go undetected, since gates 1-2 only constrain the computron value, which by
   construction does not move. So only the **time-class-equals-computron-class**
   check stands down (it would go red on day one purely from the pre-existing
@@ -772,17 +851,23 @@ The sibling build job `ironhorse-computron-benchmark-baseline-build` executes:
    point**, never `scaling_bench`'s 8-round median-of-7 (that repetition exists only to
    stabilize *timing*, which gates 1-2 do not measure). That single-execution property is
    what makes PR-lane cost bounded despite debug being slower than the release numbers
-   § F4 quotes. To keep the added PR-lane wall-clock small even so, the **PR lane caps
-   each load's top admitted ladder size** at a per-load `pr_max_ladder_n` recorded in the
-   JSON (chosen so each load's full PR-lane ladder runs in well under a second in debug).
-   The heavy F4-class points (the string `for..of` 256Ki, `for..in` 16k, and `Map.set`
-   8k sizes whose debug run would be seconds) are exercised **only on the nightly gate-3
-   lane**, while the PR lane runs the same loads at their smaller ladder sizes: enough
-   doublings (at least four) to gate the growth class without paying the top-size cost on
-   every PR. Gate 1's exact pins are still checked at every recorded ladder size on the
-   lanes each pin's `validated_lanes` lists; the cap bounds only which sizes gate 2
-   *executes* on the PR lane, and the build records the resulting per-load PR-lane time
-   as evidence (§ step 9) so the budget is measured, not asserted.
+   quoted in § F4 exception. To keep the added PR-lane wall-clock small even so, the **PR
+   lane caps each load's top admitted ladder size** at a per-load `pr_max_ladder_n`
+   recorded in the JSON (chosen so each load's full PR-lane ladder runs in well under a
+   second in debug). **The cap binds *all* PR-lane execution, gate 1 included** — this is
+   the crux, because a cap that bound only gate 2 would bound nothing: gate 1 checking a
+   pin *executes* the load at that size just as gate 2 does. So on the PR lane gate 1
+   checks each pin only up to `pr_max_ladder_n`, and every recorded ladder rung *above*
+   the cap — the heavy F4-class points (the string `for..of` 256Ki, `for..in` 16k, and
+   `Map.set` 8k sizes whose debug run would be seconds) — has **both** its gate-1 pin and
+   its gate-2 growth check deferred to the **nightly lane**, which runs the full recorded
+   ladder. No gate, gate 1 or gate 2, executes a load above `pr_max_ladder_n` on the PR
+   lane; the one deliberate above-cap PR-lane execution is gate 2's single off-ladder
+   probe, anchored at `2 * pr_max_ladder_n` (one doubling past the cap, § growth-envelope
+   gate), which the budget accounts for. The PR lane still runs each load at enough
+   doublings (at least four, `pr_max_ladder_n` chosen accordingly) to gate the growth
+   class without paying the top-size cost on every PR, and the build records the resulting
+   per-load PR-lane time as evidence (§ step 9) so the budget is measured, not asserted.
 8. **Rebase #1282** onto the landed regime (or merge order per § Relationship to PR #1282); confirm
    the hold from step 1 held throughout and update #1282's body to reference this
    work.
