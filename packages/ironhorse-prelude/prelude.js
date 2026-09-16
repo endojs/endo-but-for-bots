@@ -25,6 +25,26 @@
  *
  * Importing this module has side effects and returns nothing. Import it for
  * effect, before `ses`.
+ *
+ * # Engine floor
+ *
+ * Bundling this pulls `@endo/harden` into whatever it is bundled into, and
+ * `makeHardener`'s signature is an arrow with a non-simple parameter list:
+ *
+ *     export const makeHardener = ({ traversePrototypes = false } = {}) => {
+ *
+ * Ironhorse rejected that shape until `242b339b`
+ * (`fix(ironhorse-compile)!: stop an arrow's parameter shape escaping the
+ * arrow`), where an arrow's `NOT_SIMPLE_PARAMETERS` leaked into the enclosing
+ * scope and made the NEXT `"use strict"` anywhere after it a spurious
+ * `invalid directive`. The `ses` bundle opens its functor with `'use strict'`,
+ * so on a pre-fix engine a boot carrying this prologue dies at that seam.
+ *
+ * So an artifact built with this prologue REQUIRES an engine at or after that
+ * commit. A stale worker binary against a fresh `dist-ironhorse/boot.js` fails
+ * as `boot ...: line NNN: invalid directive`, pointing into a generated file
+ * tens of thousands of lines long with nothing to suggest the binary is the
+ * problem. If you see that, check the binary's date before anything else.
  */
 
 import { makeHardener } from '@endo/harden/make-hardener.js';
