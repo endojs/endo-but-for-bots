@@ -129,8 +129,14 @@ harden(PINNED_IMAGE_REFERENCE_PATTERN);
 /** Portable, bounded name for a volume, container, or mount role. */
 export const PORTABLE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 
-/** Absolute, normal, non-traversing destination path inside the slice. */
-const INNER_PATH_PATTERN = /^(\/[A-Za-z0-9][A-Za-z0-9_.-]*)+$/;
+/**
+ * Absolute, normal, non-traversing path — a destination inside the slice, and
+ * the shape a mount's host source must have too. Exported so an adapter
+ * composing a mount table holds a source to the runtime's own rule rather than
+ * to a transcription of it.
+ */
+export const INNER_PATH_PATTERN = /^(\/[A-Za-z0-9][A-Za-z0-9_.-]*)+$/;
+harden(INNER_PATH_PATTERN);
 
 /**
  * Where a runtime attach may land: any absolute, normal, non-traversing

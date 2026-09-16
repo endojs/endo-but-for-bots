@@ -26,17 +26,13 @@ const base = () =>
     quotaCommand: '/etc/endo/codex-quota',
     stateBytes: '268435456',
     volumeRoot: '/var/lib/endo/.local/share/containers/storage/volumes',
-    workspaceBytes: '536870912',
   });
 
 test('reads the deployed configuration', t => {
   const config = readCodexHostConfig(base());
   t.is(config.imageDigest, digest);
   t.is(config.accountRef, 'acct-123');
-  t.deepEqual(config.volumeLimits, {
-    workspaceBytes: 536_870_912n,
-    stateBytes: 268_435_456n,
-  });
+  t.deepEqual(config.volumeLimits, { stateBytes: 268_435_456n });
   t.deepEqual(config.projectIds, { first: 42_020, last: 43_019 });
 });
 
@@ -85,10 +81,47 @@ test('a byte budget must be a MiB-aligned decimal string', t => {
   t.throws(() => readCodexHostConfig({ ...base(), stateBytes: 268_435_456 }), {
     message: /stateBytes.*written as a string/s,
   });
+  t.throws(() => readCodexHostConfig({ ...base(), stateBytes: '268435457' }), {
+    message: /stateBytes.*MiB-aligned/s,
+  });
+  // The workspace has no quota to configure any more, so a configuration
+  // still carrying one is a typo or a stale deployment, not a default.
   t.throws(
-    () => readCodexHostConfig({ ...base(), workspaceBytes: '536870913' }),
-    { message: /workspaceBytes.*MiB-aligned/s },
+    () => readCodexHostConfig({ ...base(), workspaceBytes: '536870912' }),
+    { message: /workspaceBytes/ },
   );
+});
+
+test('the operator\u2019s 9P mount programs are read, not invented', t => {
+  // Absent is the deployment that has not set them: the mount caplet's own
+  // defaults apply, and nothing here substitutes a program.
+  t.deepEqual(readCodexHostConfig(base()).mounterEnv, {});
+  const mounterEnv = {
+    NINEP_SUDO: '1',
+    NINEP_MOUNT_PROGRAM: '/run/wrappers/bin/sudo /nix/store/x/bin/mount',
+    NINEP_UMOUNT_PROGRAM: '/run/wrappers/bin/sudo /nix/store/x/bin/umount',
+  };
+  t.deepEqual(
+    readCodexHostConfig({ ...base(), mounterEnv }).mounterEnv,
+    mounterEnv,
+  );
+  /** @type {[string, Record<string, string>, RegExp][]} */
+  const rejectedSettings = [
+    ['an unknown setting', { NINEP_TIMEOUT: '5' }, /Unknown mounter setting/],
+    ['a disabled sudo flag', { NINEP_SUDO: '0' }, /NINEP_SUDO/],
+    [
+      'a program that is not one',
+      { NINEP_MOUNT_PROGRAM: '/bin/rm -rf' },
+      /NINEP_MOUNT_PROGRAM/,
+    ],
+  ];
+  for (const [label, broken, message] of rejectedSettings) {
+    t.throws(
+      () => readCodexHostConfig({ ...base(), mounterEnv: broken }),
+      { message },
+      label,
+    );
+  }
 });
 
 test('a project ID range must be ordered and bounded', t => {

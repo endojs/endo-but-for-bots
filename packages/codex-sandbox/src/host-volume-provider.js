@@ -16,17 +16,21 @@ import {
  * narrow bridge, not a general privileged shell — see `codex-quota-host.js`,
  * which the native sandbox runtime shares for its own observer. No session
  * selects these paths.
- * @param {{directory:string, ownerId:string, volumeRoot:string, filesystem:string,
- * projectIds:{first:number,last:number}, volumeLimits?:{workspaceBytes:bigint,stateBytes:bigint},
+ * @param {{directory:string, sessionsDirectory:string, ownerId:string,
+ * volumeRoot:string, filesystem:string,
+ * projectIds:{first:number,last:number}, volumeLimits?:{stateBytes:bigint},
+ * mounterEnv?:Record<string,string>,
  * quotaCommand:string, sudoPath?:string, flockPath?:string, ownerReaper?:any}} options
  */
 export const makeHostVolumeProvider = async ({
   directory,
+  sessionsDirectory,
   ownerId,
   volumeRoot,
   filesystem,
   projectIds,
   volumeLimits,
+  mounterEnv,
   quotaCommand,
   sudoPath = '/usr/bin/sudo',
   flockPath = '/usr/bin/flock',
@@ -62,6 +66,8 @@ export const makeHostVolumeProvider = async ({
     registry,
     volumes,
     quota,
+    sessionsDirectory,
+    ...(mounterEnv ? { mounterEnv } : {}),
   });
   return harden({
     provider,

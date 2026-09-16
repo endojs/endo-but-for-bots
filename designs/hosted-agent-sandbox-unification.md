@@ -945,6 +945,14 @@ Four consequences, in the order they land:
    session rather than two, against a range that is a host-lifetime budget
    (`CODEX-SANDBOX-MIGRATION-PLAN.md`).
 
+**Deployment note (2026-09-16).** Landing 3 changes the Codex backend's
+recorded configuration: `workspaceBytes` is gone and `mounterEnv` is new. Setup
+refuses a changed configuration beside a live backend by design, so the first
+deploy carrying this needs the existing `codex-sandbox/backend` removed before
+the daemon's setup runs. The host also needs `NINEP_*` in the Codex branch of
+its daemon environment, which it did not before — the NixOS module now sets it,
+under a `codexSandbox.ninepSudo` option matching the other two adapters'.
+
 What the workspace loses in this move is the XFS quota on guest-written
 workspace bytes; what it gains is that the bytes are in the tree the session's
 file tools, the guest's workspace capability, and the publisher all read. The
@@ -1119,11 +1127,30 @@ checks process and resource stability.
 ### Phase 3: shared runtime, network, and storage
 
 Converge the slice mount path onto the attested `hosted-agent-v1` policy — see
-*Slice mount policy* above — in four landable steps: the `@endo/sandbox`
-non-nesting rule that lets a fixed role be capability-backed; the verifier's
-move into `@endo/hosted-agent`; the workspace as an attached role; then Claude
-and OpenCode off `makeResolved`, which is also what enables runtime attaches for
-them.
+*Slice mount policy* above — in four landable steps. The first three have
+landed:
+
+1. **Done.** `@endo/sandbox` refuses a table whose mount destinations nest,
+   whatever their kinds, which replaces the `/mnt/`-only attach rule and lets a
+   fixed role be capability-backed.
+2. **Done.** `assertHostedAgentPolicyV1`, `HOSTED_AGENT_POLICY_V1` and the
+   attach validator moved to `@endo/hosted-agent/hosted-agent-policy.js`. An
+   adapter declares its fixed mount table and binds the shared verifier through
+   `makeHostedAgentPolicyVerifier`; the contract itself is identical for all
+   three. The attach rule became the property rather than the prefix: an attach
+   may land anywhere that does not nest with a fixed role, another attach, or
+   the resolver row a public-network session generates.
+3. **Done for Codex.** Establishing the workspace 9P projection moved beside
+   the reclaimer that takes it down
+   (`@endo/hosted-agent/workspace-projection.js`), and Codex adopted it: its
+   workspace is now `{role: 'workspace', kind: 'attach'}` over the session's
+   own worktree, its workspace volume is gone, and `writableBytes` stopped
+   claiming a ceiling nothing enforced. A record written by the two-volume
+   provider retires its workspace volume in place rather than reusing its
+   project ID. For Claude and OpenCode the same move is step 4's work, since
+   they do not yet declare an attested table at all.
+4. **Open.** Claude and OpenCode off `makeResolved` onto the attested policy,
+   which is also what enables runtime attaches for them.
 Converge Podman and listener launch paths, runtime ownership, and cleanup.
 Move generic public egress to the shared service.
 Make OpenCode's public mode retain brokered inference and enforce the advertised

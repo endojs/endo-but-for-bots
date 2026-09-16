@@ -102,8 +102,8 @@ const fixture = (changes = {}) => {
       describe: () =>
         harden({
           sessionId: 's1',
-          workspaceVolume: 'workspace-s1',
           stateVolume: 'state-s1',
+          workspaceMountPoint: '/run/codex/sessions/s1/workspace',
           ...changes.volumes,
         }),
     }),
@@ -183,24 +183,26 @@ const fixture = (changes = {}) => {
 };
 
 test('operator disk reductions reach the actual slice mount request', async t => {
-  const volumeLimits = {
-    workspaceBytes: 512n * 1024n ** 2n,
-    stateBytes: 256n * 1024n ** 2n,
-  };
+  const volumeLimits = { stateBytes: 256n * 1024n ** 2n };
   const f = fixture({ volumeLimits });
   const slice = await f.create();
   t.teardown(() => E(slice).dispose());
   const mounts = f.request().policy.mounts;
+  // The workspace carries no `sizeBytes`: it is a projection of a tree the
+  // host already holds, so it is not part of the writable sum. Counting it
+  // would attest a ceiling nothing enforces.
+  const workspace = mounts.find(mount => mount.destination === '/workspace');
+  t.is(workspace.kind, 'attach');
+  t.is(workspace.source, '/run/codex/sessions/s1/workspace');
+  t.is(workspace.mode, 'rw');
+  t.false('sizeBytes' in workspace);
   const actualWritable = mounts.reduce(
-    (sum, mount) => sum + mount.sizeBytes * (mount.kind === 'tmpfs' ? 2n : 1n),
+    (sum, mount) =>
+      sum + (mount.sizeBytes ?? 0n) * (mount.kind === 'tmpfs' ? 2n : 1n),
     2n * f.request().policy.resources.shmBytes,
   );
   t.is(f.request().policy.resources.writableBytes, actualWritable);
   t.is((await E(slice).policy()).limits.writableBytes, Number(actualWritable));
-  t.is(
-    mounts.find(mount => mount.destination === '/workspace').sizeBytes,
-    volumeLimits.workspaceBytes,
-  );
   t.is(
     mounts.find(mount => mount.destination === '/codex-home').sizeBytes,
     volumeLimits.stateBytes,
@@ -259,10 +261,13 @@ test('composes independently verified evidence with exact aggregate budgets', as
     BigInt(policy.limits.memoryBytes),
   );
   const storage = request.policy.mounts.reduce(
-    (sum, mount) => sum + mount.sizeBytes * (mount.kind === 'tmpfs' ? 2n : 1n),
+    (sum, mount) =>
+      sum + (mount.sizeBytes ?? 0n) * (mount.kind === 'tmpfs' ? 2n : 1n),
     2n * request.policy.resources.shmBytes,
   );
-  t.is(storage, 16n * 1024n ** 3n);
+  // 4 GiB of tmpfs copies and shm, plus the one durable volume. The
+  // workspace projection is not an allocation this host makes.
+  t.is(storage, 8n * 1024n ** 3n);
 });
 
 for (const [name, changes] of [
@@ -296,7 +301,11 @@ test('bad broker or volume evidence prevents slice creation', async t => {
   for (const changes of [
     { broker: { credentialInjection: 'environment' } },
     { volumes: { sessionId: 'other' } },
-    { volumes: { stateVolume: 'workspace-s1' } },
+    { volumes: { stateVolume: '../escape' } },
+    // The workspace mount point is the host path the slice will bind as an
+    // attach; a relative or traversing one never reaches the sandbox.
+    { volumes: { workspaceMountPoint: 'run/codex/sessions/s1/workspace' } },
+    { volumes: { workspaceMountPoint: '/run/../etc' } },
   ]) {
     const f = fixture(changes);
     // eslint-disable-next-line no-await-in-loop
