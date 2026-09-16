@@ -747,7 +747,9 @@ test('planBrokerClient maps a broker lease to join/placeholder and direct to pas
 test('a new incarnation restores the stack\u2019s record before its first turn', async t => {
   const bridge = makeFakeBridge();
   const fake = makeFakeSlice(bridge);
-  const client = makeOpencodeClient(baseArgs(fake));
+  const client = makeOpencodeClient(
+    baseArgs(fake, { model: 'openrouter/deepseek/v4' }),
+  );
   bridge.push(readyLine('ses_1'));
   const transcript = harden([
     { kind: 'message', role: 'user', content: 'build the page' },
@@ -756,22 +758,35 @@ test('a new incarnation restores the stack\u2019s record before its first turn',
     { kind: 'message', role: 'assistant', content: 'done' },
   ]);
   const reader = await client.send('and now the footer', { transcript });
+  await waitFor(() => bridge.commands.length >= 1);
+  // The conversation arrives ahead of the turn through the import route,
+  // tool traffic included as tool traffic.
+  const imported = JSON.parse(bridge.commands[0]);
+  t.is(imported.op, 'import');
+  t.deepEqual(imported.turns, [
+    { kind: 'user', text: 'build the page' },
+    {
+      kind: 'tool',
+      callID: 'c1',
+      name: 'write',
+      input: { path: 'a' },
+      output: 'wrote a',
+    },
+    { kind: 'assistant', text: 'done' },
+  ]);
+  bridge.push(JSON.stringify({ type: 'imported', ok: true }));
+  await waitFor(() => bridge.commands.length >= 2);
+  // The prompt is the prompt: nothing is prepended to it.
+  t.is(JSON.parse(bridge.commands[1]).text, 'and now the footer');
   bridge.push(JSON.stringify({ type: 'end' }));
   await drain(reader);
-  const first = JSON.parse(bridge.commands[0]);
-  // The conversation arrives ahead of the turn, tool traffic included, and
-  // the new prompt is still the last thing the model reads.
-  t.true(first.text.includes('user: build the page'));
-  t.true(first.text.includes('write({"path":"a"})'));
-  t.true(first.text.includes('wrote a'));
-  t.true(first.text.endsWith('and now the footer'));
 
   // Only once per incarnation. A later turn continues the conversation
   // opencode now holds, so repeating the history would duplicate it.
   const next = await client.send('and a header', { transcript });
   bridge.push(JSON.stringify({ type: 'end' }));
   await drain(next);
-  t.is(JSON.parse(bridge.commands[1]).text, 'and a header');
+  t.is(JSON.parse(bridge.commands[2]).text, 'and a header');
 });
 
 test('a resumed session is not given a history it already has', async t => {
@@ -796,6 +811,7 @@ test('a resume that missed restores rather than continuing context-free', async 
     baseArgs(fake, {
       resumePriorConversation: true,
       opencodeSessionId: 'ses_gone',
+      model: 'openrouter/deepseek/v4',
     }),
   );
   // The store no longer holds the recorded session, so the bridge started a
@@ -805,19 +821,24 @@ test('a resume that missed restores rather than continuing context-free', async 
   const reader = await client.send('carry on', {
     transcript: [{ kind: 'message', role: 'user', content: 'earlier work' }],
   });
+  await waitFor(() => bridge.commands.length >= 1);
+  const imported = JSON.parse(bridge.commands[0]);
+  t.is(imported.op, 'import');
+  t.deepEqual(imported.turns, [{ kind: 'user', text: 'earlier work' }]);
+  bridge.push(JSON.stringify({ type: 'imported', ok: true }));
+  await waitFor(() => bridge.commands.length >= 2);
+  t.is(JSON.parse(bridge.commands[1]).text, 'carry on');
   bridge.push(JSON.stringify({ type: 'end' }));
   await drain(reader);
-  const first = JSON.parse(bridge.commands[0]);
-  t.true(first.text.includes('user: earlier work'));
-  t.true(first.text.endsWith('carry on'));
 });
 
-test('a bridge that cannot import is not waited on', async t => {
+test('a bridge that cannot import refuses the turn instead of degrading it', async t => {
   // The image carries the bridge, so a slice running one built before the
-  // import route ignores the command and answers nothing. Discovering that by
-  // timeout would stall the first turn of every incarnation for the full
-  // import deadline; the bridge names what it understands instead, and an
-  // older one names nothing.
+  // import route cannot take the conversation at all. Reading it into the
+  // prompt instead would let the session keep answering while the mechanism
+  // that is supposed to carry the conversation is broken, which is how a
+  // dropped transcript survived a whole suite. The bridge names what it
+  // understands, an older one names nothing, and the turn fails saying so.
   const bridge = makeFakeBridge();
   const fake = makeFakeSlice(bridge);
   const client = makeOpencodeClient(
@@ -828,19 +849,16 @@ test('a bridge that cannot import is not waited on', async t => {
     { kind: 'message', role: 'user', content: 'remember ALPENGLOW' },
   ]);
   const reader = await client.send('what was the word?', { transcript });
-  await waitFor(() => bridge.commands.length >= 1);
-  // Straight to the prompt: no import command was sent, so nothing is
-  // outstanding to time out.
-  const sent = JSON.parse(bridge.commands[0]);
-  t.is(sent.op, 'send');
-  t.true(sent.text.includes('user: remember ALPENGLOW'));
-  t.true(sent.text.endsWith('what was the word?'));
-  t.is(bridge.commands.length, 1);
-  bridge.push(JSON.stringify({ type: 'end' }));
-  await drain(reader);
+  const events = await drain(reader);
+  const abort = events.at(-1);
+  t.is(abort.type, 'abort');
+  t.regex(abort.reason, /no import route/);
+  // Nothing was sent: not the import it cannot do, and not a prompt that
+  // would have been answered out of an empty context.
+  t.is(bridge.commands.length, 0);
 });
 
-test('restoration prefers the structured import, and reads it in when unavailable', async t => {
+test('restoration goes through the structured import, or not at all', async t => {
   const transcript = harden([
     { kind: 'message', role: 'user', content: 'build the page' },
     { kind: 'tool-call', id: 'c1', name: 'write', args: '{"path":"a"}' },
@@ -886,8 +904,8 @@ test('restoration prefers the structured import, and reads it in when unavailabl
   }
 
   // A bridge that has the command but whose server refuses it says so, and
-  // the conversation is read into the prompt instead — lossy, but a
-  // conversation the model can see beats one it cannot.
+  // the turn fails there. The prompt is never sent: answering it would be
+  // answering a different question from the one the conversation was asking.
   {
     const bridge = makeFakeBridge();
     const fake = makeFakeSlice(bridge);
@@ -898,11 +916,10 @@ test('restoration prefers the structured import, and reads it in when unavailabl
     const reader = await client.send('and the footer', { transcript });
     await waitFor(() => bridge.commands.length >= 1);
     bridge.push(JSON.stringify({ type: 'imported', ok: false, reason: '404' }));
-    await waitFor(() => bridge.commands.length >= 2);
-    const sent = JSON.parse(bridge.commands[1]);
-    t.true(sent.text.includes('user: build the page'));
-    t.true(sent.text.endsWith('and the footer'));
-    bridge.push(JSON.stringify({ type: 'end' }));
-    await drain(reader);
+    const events = await drain(reader);
+    const abort = events.at(-1);
+    t.is(abort.type, 'abort');
+    t.regex(abort.reason, /refused or did not answer/);
+    t.is(bridge.commands.length, 1);
   }
 });

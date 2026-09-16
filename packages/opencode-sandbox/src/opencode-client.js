@@ -39,10 +39,7 @@ import { E } from '@endo/eventual-send';
 import { Buffer } from 'node:buffer';
 import { clearTimeout, setTimeout } from 'node:timers';
 import { makeExo } from '@endo/exo';
-import {
-  pairToolCalls,
-  renderTranscriptDialogue,
-} from '@endo/hosted-agent/transcript-records.js';
+import { pairToolCalls } from '@endo/hosted-agent/transcript-records.js';
 import { M } from '@endo/patterns';
 import { makeError, q, X } from '@endo/errors';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
@@ -637,11 +634,8 @@ export const makeOpencodeClient = ({
               // turn at a time is the point — a restoration completes before
               // the prompt it precedes.
               /* eslint-disable no-await-in-loop */
-              const restored = await restoreOnce(turn);
-              await writeCommand({
-                op: 'send',
-                text: `${restored}${turn.text}`,
-              });
+              await restoreOnce(turn);
+              await writeCommand({ op: 'send', text: turn.text });
               /* eslint-enable no-await-in-loop */
             } catch (error) {
               if (active === turn) active = null;
@@ -721,13 +715,16 @@ export const makeOpencodeClient = ({
   /**
    * Hand this session the conversation the stack holds, once per incarnation.
    *
-   * Structured first: the server records each turn as its own message, so a
-   * tool call comes back a tool call. An image built before that route exists
-   * says so, and the conversation is read into the next prompt instead —
-   * lossy, but a conversation the model can see beats one it cannot.
+   * The import route is the only way this happens: the server records each
+   * turn as its own message, so a tool call comes back a tool call. There is
+   * no lossy second path. Reading the conversation into the prompt instead
+   * would let a session keep answering while the mechanism that is supposed
+   * to carry it is broken — which is how a dropped transcript went unnoticed
+   * through a whole test suite and three deploys. A restoration that cannot
+   * be performed faithfully fails the turn and says why.
    *
    * @param {any} turn
-   * @returns {Promise<string>} text to prepend, empty when the import took it.
+   * @returns {Promise<void>}
    */
   const restoreOnce = async turn => {
     // One line per incarnation, counts only. A restored conversation that
@@ -747,45 +744,51 @@ export const makeOpencodeClient = ({
       );
     if (!restorationPending) {
       describe('skipped: conversation already live');
-      return '';
+      return;
     }
     restorationPending = false;
     const records = Array.isArray(turn.transcript) ? turn.transcript : [];
     if (records.length === 0) {
       describe('skipped: nothing to restore');
-      return '';
+      return;
     }
     const turns = importedTurnsFor(records);
-    if (turns.length > 0 && importModel !== undefined && bridgeImports) {
-      const imported = new Promise(resolve => {
-        resolveImported = resolve;
-      });
-      try {
-        await writeCommand({
-          op: 'import',
-          agent: importAgent,
-          model: importModel,
-          turns,
-        });
-        const ok = await Promise.race([
-          imported,
-          new Promise(resolve => {
-            setTimeout(() => resolve(false), IMPORT_TIMEOUT_MS);
-          }),
-        ]);
-        if (ok) {
-          describe('imported', { turns: turns.length });
-          return '';
-        }
-      } catch {
-        // Fall through to reading the conversation into the prompt.
-      } finally {
-        resolveImported = undefined;
-      }
+    if (turns.length === 0) {
+      describe('skipped: no importable turns');
+      return;
     }
-    const dialogue = `${renderTranscriptDialogue(records)}\n\n`;
-    describe('dialogue fallback', { turns: turns.length, chars: dialogue.length });
-    return dialogue;
+    const refuse = why => {
+      describe(`refused: ${why}`, { turns: turns.length });
+      throw makeError(
+        X`OpencodeClient(${q(sessionId)}): cannot restore this conversation (${q(why)}). The stack holds ${q(records.length)} records and this session has no conversation to continue; answering without them would be answering a different question.`,
+      );
+    };
+    // A session with no recorded model cannot attribute imported messages,
+    // and an image whose bridge has no import route cannot take them.
+    if (importModel === undefined) refuse('the session records no model');
+    if (!bridgeImports) refuse('this image has no import route');
+    const imported = new Promise(resolve => {
+      resolveImported = resolve;
+    });
+    let ok = false;
+    try {
+      await writeCommand({
+        op: 'import',
+        agent: importAgent,
+        model: importModel,
+        turns,
+      });
+      ok = await Promise.race([
+        imported,
+        new Promise(resolve => {
+          setTimeout(() => resolve(false), IMPORT_TIMEOUT_MS);
+        }),
+      ]);
+    } finally {
+      resolveImported = undefined;
+    }
+    if (!ok) refuse('the import route refused or did not answer');
+    describe('imported', { turns: turns.length });
   };
 
   const createClient = () => {
