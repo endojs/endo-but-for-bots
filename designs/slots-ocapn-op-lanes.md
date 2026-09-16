@@ -103,8 +103,9 @@ Symbol field names and tags are not serializable through these lanes.
 There are no `indexSendOnly` or `untagSendOnly` operations. Data access exists
 to obtain a result, so discarding that result is not a useful protocol
 operation. Existing `getSendOnly` remains an Eventual Send compatibility
-surface but must not create a reply-less slot-machine data operation; a
-slot-machine presence rejects it until a result-bearing meaning is specified.
+surface: the handler dispatcher downlevels it to ordinary result-bearing
+`get`, and only the caller-side result is discarded. It does not introduce a
+reply-less slot-machine wire form.
 
 ### Wire format
 
