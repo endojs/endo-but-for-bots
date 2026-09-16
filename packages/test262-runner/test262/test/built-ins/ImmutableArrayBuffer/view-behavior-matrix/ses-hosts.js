@@ -11,6 +11,13 @@ features: [ses-xs-parity,immutable-arraybuffer]
 // Node+SES   immutable, emulated    emulated, frozen           emulated, frozen
 // XS+SES     mutable, genuine       genuine, read/write        genuine, read/write
 // XS+SES     immutable, genuine     genuine, frozen            genuine, frozen
+// IH+SES     mutable, genuine       genuine, read/write        genuine, read/write
+// IH+SES     immutable, emulated    emulated, frozen           emulated, frozen
+//
+// Ironhorse takes the emulated row, measured field by field rather than
+// assumed from Node: it reaches `@endo/immutable-arraybuffer` through the
+// same shim prelude and has no genuine immutable-buffer surface of its own,
+// so every column here agrees with Node+SES.
 //
 // The shared harness also has the genuine-immutable branches needed when an
 // engine supplies the complete proposal surface. Changing either expectation
@@ -18,6 +25,16 @@ features: [ses-xs-parity,immutable-arraybuffer]
 var expectedByEnvironment = {
   'node-ses': {
     environment: 'Node+SES',
+    hasImmutableAccessor: true,
+    hasImmutableArrayBuffer: true,
+    immutableBufferTag: '[object emulated immutable ArrayBuffer]',
+    immutableArrayViewIsEmulated: true,
+    immutableArrayViewCanBeFrozen: true,
+    immutableDataViewConstructs: true,
+    immutableDataViewIsEmulated: true,
+  },
+  'ironhorse-ses': {
+    environment: 'Ironhorse+SES',
     hasImmutableAccessor: true,
     hasImmutableArrayBuffer: true,
     immutableBufferTag: '[object emulated immutable ArrayBuffer]',

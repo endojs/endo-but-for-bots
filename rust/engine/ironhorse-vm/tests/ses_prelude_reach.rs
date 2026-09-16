@@ -72,6 +72,12 @@ fn program_for(case: &Path) -> String {
         "assert.js",
         "compareArray.js",
         "propertyHelper.js",
+        // `ses-hosts.js` names this in its `includes:` front-matter. This
+        // harness takes a fixed list rather than reading front-matter, so
+        // leaving it out made that case fail here for a missing helper while
+        // it passed under the real `test262-harness` — the reach number has
+        // to mean the same thing in both places.
+        "immutableArrayBufferViewMatrix.js",
     ]
     .iter()
     .map(|f| read(&format!("packages/test262-runner/test262/harness/{f}")))
@@ -131,11 +137,18 @@ const REACH: &[(&str, bool)] = &[
     // out of a `switch (typeof ...)`, and the discriminant that `return`
     // abandoned used to land on the caller's pending operand.
     ("byte-array-brand.js", true),
+    // The case now has an `ironhorse-ses` row, so it gets past refusing to
+    // guess at a contract it has no entry for and reaches the matrix itself —
+    // where it stops on `immutableArrayView.at(1)`, the only read an EMULATED
+    // view answers. `%TypedArray%.prototype.at` is absent on ironhorse
+    // (`Array.prototype.at` and `String.prototype.at` are both present), and
+    // adding it moves the boot fingerprint, so it is its own change.
     ("ses-hosts.js", false),
-    // Ironhorse has no host text codecs; the prelude prepends `polyfills.js`'s
-    // codec section, which gets these past "undefined variable" but not to a
-    // pass.
-    ("immutable-arraybuffer-intersection.js", false),
+    // The `TextEncoder`/`TextDecoder` pair, which share this basename. Ironhorse
+    // has no host text codecs; the prelude prepends `polyfills.js`'s codec
+    // section, which now implements `encodeInto` and refuses an emulated
+    // ArrayBuffer view it cannot read or write, as both cases require.
+    ("immutable-arraybuffer-intersection.js", true),
 ];
 
 #[test]
