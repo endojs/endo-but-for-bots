@@ -1519,6 +1519,28 @@ this design does what it says.
    which reaches the same guard, so a session reopened through the latter was
    refused for the rest of the host's life.
 
+**Open, and not what the fix above addressed — 2026-09-16.** A Codex session
+that works in one incarnation cannot be reopened in the next: its first turn
+after a restart fails with `Session volumes have an outstanding durable
+lease`. Reproduced on a host with no other sessions and no live containers,
+so it is not capacity contention, and it survives the recovery fix in item 7,
+which is therefore correct on its own terms but was not this defect.
+
+What the journal shows: on revival, Claude and OpenCode mount their 9P
+workspaces, Codex mounts nothing, and Codex's volume takes repeated quota and
+stat probes at that same moment — `ensure` running during revival. The lease
+error arrives when the first foreground turn provisions the workspace again.
+The shape that fits is a revived session holding its own lease and a turn
+that provisions a second time instead of reusing the runtime this design says
+Codex retains across turns. Recovery cannot help there: the lease is this
+incarnation's, and refusing to recover a live local lease is the guard
+working.
+
+This blocks verifying Codex's `thread/inject_items` restoration at all — the
+session cannot open, so the restoration path is never reached. Claude and
+OpenCode are verified below; Codex is not, and the reason is volume
+lifecycle rather than anything in the transcript path.
+
 **Verified on the deploy, 2026-09-16.** A session is given a word, the daemon
 is restarted, and the session is asked for the word back. OpenCode answers it
 with `OPENCODE_DB=:memory:`, and Claude answers it with
