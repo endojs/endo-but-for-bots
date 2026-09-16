@@ -20,6 +20,7 @@ import { makeEphemeralHubClient } from '../net/ephemeral-hub-client.js';
 import { derivePipeResumption } from '../net/pipe-network.js';
 import { makeFirstFailure, makeInFlight } from '../in-flight.js';
 import { makeLogPowers, silentLogger } from '../platform/logging.js';
+import { settleWithin } from '../platform/timers.js';
 import { isSessionToken } from '../store/store-validators.js';
 import { inspectVatReachability } from './vat-reachability.js';
 import { WorkerHaltError } from './worker-engine.js';
@@ -70,6 +71,8 @@ import { makeWorkerSessionRecords } from './worker-session-records.js';
  * @property {() => Promise<void>} wake
  * @property {() => Promise<void>} sleep
  * @property {() => Promise<void>} retire
+ * @property {(secret: string) => string | undefined} notifyOnStart
+ * @property {() => string | undefined} clearStartNotice
  *
  * @typedef {object} ThixotropeDaemon
  * @property {any} location this daemon's OCapN location; combine with a
@@ -79,7 +82,7 @@ import { makeWorkerSessionRecords } from './worker-session-records.js';
  *   evaluate in a fresh implicitly-created worker and return the
  *   result; the worker persists like any other (find it via
  *   `listWorkerIds`, retire it via `getWorker(id).retire()`)
- * @property {(options?: { debugLabel?: string }) => Promise<ThixotropeWorkerFacade>} createWorker
+ * @property {(options?: { debugLabel?: string, ephemeral?: boolean }) => Promise<ThixotropeWorkerFacade>} createWorker
  * @property {(workerId: string) => ThixotropeWorkerFacade} getWorker
  * @property {() => Array<string>} listWorkerIds
  * @property {(name: string, description?: unknown) => object} makeResource
@@ -106,6 +109,8 @@ const SHELL_SWISSNUM = swissnumFromBytes(textEncoder.encode('shell'));
 // descriptions, pending answers) live in this worker store.
 const ENDPOINT_ID = 'e'.repeat(32);
 const ENDPOINT_SESSION = 'endpoint';
+// How long startup waits for one notified vat to re-establish whatever it owns.
+const START_NOTICE_MS = 10_000;
 
 /**
  * @param {object} powers
@@ -191,6 +196,12 @@ const buildDaemon = async (
           engine,
           idleSleepMs,
           debugLabel: workerStore.getMeta().debugLabel,
+          // An ephemeral worker is resident by construction. Its state is
+          // discarded at the next startup regardless, so snapshotting it on
+          // idle is I/O spent on something already known to be disposable —
+          // and a resource adapter that sleeps is one that has to be woken by
+          // the very traffic it exists to absorb.
+          resident: workerStore.getMeta().ephemeral === true,
           onFatal: () => hub.retireSession(workerId),
           onFrame: (
             /** @type {Uint8Array} */ bytes,
@@ -901,6 +912,34 @@ const buildDaemon = async (
   };
 
   /** @param {string} workerId */
+  /**
+   * Ask the host to call `started()` on a publication at every daemon startup.
+   *
+   * Waking a vat runs none of its code — orthogonal persistence resumes the
+   * heap exactly where it was, and sleep is host policy rather than a guest
+   * lifecycle event — so a vat that must act on a new host incarnation needs a
+   * delivery, and this is it. The delivery is also the wake: nothing has to
+   * start the vat separately.
+   *
+   * Durable, because the request outlives the process that was asked.
+   *
+   * @param {string} workerId
+   * @param {string | undefined} secret
+   */
+  const setStartNotice = (workerId, secret) => {
+    secret === undefined ||
+      typeof secret === 'string' ||
+      Fail`start notice must be a publication secret, got ${q(secret)}`;
+    workers.has(workerId) || Fail`unknown worker ${q(workerId)}`;
+    const workerStore = store.provideWorkerStore(workerId);
+    const { startNotify: _previous, ...meta } = workerStore.getMeta();
+    workerStore.setMeta(
+      secret === undefined ? meta : { ...meta, startNotify: secret },
+    );
+    return secret;
+  };
+
+  /** @param {string} workerId */
   const retireWorkerNow = async workerId => {
     const entry = workers.get(workerId);
     if (entry !== undefined) {
@@ -939,6 +978,8 @@ const buildDaemon = async (
       wake: async () => entryOf().transport.wake(),
       sleep: async () => entryOf().transport.sleep(),
       retire: async () => retireWorkerNow(workerId),
+      notifyOnStart: secret => setStartNotice(workerId, secret),
+      clearStartNotice: () => setStartNotice(workerId, undefined),
     });
   };
 
@@ -960,12 +1001,19 @@ const buildDaemon = async (
         return E(shell).evaluate(source, harden({ ...endowments }));
       },
       retire: async () => retireWorkerNow(workerId),
+      /**
+       * Ask the host to call `started()` on `secret` at every daemon startup.
+       *
+       * @param {string} secret a publication of this worker
+       */
+      notifyOnStart: secret => setStartNotice(workerId, secret),
+      clearStartNotice: () => setStartNotice(workerId, undefined),
     });
   };
   const makeWorkerControllerResource = () =>
     Far('ThixotropeWorkerController', {
       help: () =>
-        'ThixotropeWorkerController: createWorker(debugLabel?) creates a new worker and returns its facade.',
+        'ThixotropeWorkerController: createWorker(debugLabel?) creates a durable worker and returns its facade; createEphemeralWorker(debugLabel?) creates one whose heap the next daemon startup discards.',
       /** @param {string} [debugLabel] */
       createWorker: async debugLabel => {
         debugLabel === undefined ||
@@ -976,6 +1024,32 @@ const buildDaemon = async (
           const workerStore = store.provideWorkerStore(workerId);
           workerStore.setMeta({ ...workerStore.getMeta(), debugLabel });
         }
+        provideWorkerSession(workerId);
+        return records.provideResource('worker-facade', { workerId });
+      },
+      /**
+       * A worker whose heap is not a recovery baseline: the next daemon
+       * startup retires it rather than restoring it. For a guest that adapts
+       * an ephemeral host resource and wants its working state — connections,
+       * buffers, descriptors — to die with the process that held them, rather
+       * than reasoning about which of it is safe to persist.
+       *
+       * References into it break when it is retired, and the hub's session
+       * epoch guarantees they can never designate its successor.
+       *
+       * @param {string} [debugLabel]
+       */
+      createEphemeralWorker: async debugLabel => {
+        debugLabel === undefined ||
+          typeof debugLabel === 'string' ||
+          Fail`debugLabel must be a string`;
+        const workerId = randomHex128();
+        const workerStore = store.provideWorkerStore(workerId);
+        workerStore.setMeta({
+          ...workerStore.getMeta(),
+          ...(debugLabel === undefined ? {} : { debugLabel }),
+          ephemeral: true,
+        });
         provideWorkerSession(workerId);
         return records.provideResource('worker-facade', { workerId });
       },
@@ -993,6 +1067,23 @@ const buildDaemon = async (
       endpointHandlers.handleMessageData(endpointConnection, bytes),
   });
   for (const bytes of endpointOutbound.splice(0)) endpointSink.deliver(bytes);
+
+  // An ephemeral worker's heap is not a recovery baseline. Discard it before
+  // anything can reattach to it, so its holders meet a tombstone rather than a
+  // half-restored incarnation of whatever it was adapting. A clean shutdown
+  // could have retired these, but a crash does not, so startup is the path
+  // that has to be right.
+  const ephemeralWorkerIds = store
+    .listWorkerIds()
+    .filter(
+      workerId =>
+        workerId !== ENDPOINT_ID &&
+        store.provideWorkerStore(workerId).getMeta().ephemeral === true,
+    );
+  for (const workerId of ephemeralWorkerIds) {
+    hub.forgetSession(workerId);
+    store.deleteWorker(workerId);
+  }
 
   // Reattach worker transports asleep, after the endpoint can receive frames.
   for (const workerId of store.listWorkerIds()) {
@@ -1087,6 +1178,37 @@ const buildDaemon = async (
         }
       }),
     );
+
+    // Start notices, after every session is seated and the netlayer is up.
+    //
+    // No separate wake: the delivery is the wake.
+    //
+    // Awaited, within a bound. A caller that gets a started daemon back is
+    // entitled to assume that whatever a notified vat re-establishes — a bound
+    // socket, say — is in place, which send-only would not give it. But a vat
+    // that cannot restore must not be able to wedge startup, and one that
+    // fails must not abort it: the failure is for that vat to report.
+    for (const [workerId] of workers) {
+      const { startNotify } = store.provideWorkerStore(workerId).getMeta();
+      // eslint-disable-next-line no-continue
+      if (startNotify === undefined) continue;
+      const report = (/** @type {unknown} */ error) =>
+        logging
+          .sub('thixotrope', 'daemon')
+          .error('start notice failed:', error);
+      // eslint-disable-next-line no-await-in-loop
+      const target = await lookup(startNotify).catch(error => {
+        report(error);
+        return undefined;
+      });
+      if (target === undefined) continue; // eslint-disable-line no-continue
+      // eslint-disable-next-line no-await-in-loop
+      await settleWithin(
+        timers,
+        START_NOTICE_MS,
+        E(target).started().catch(report),
+      );
+    }
   } catch (error) {
     await stopDaemon();
     throw error;
@@ -1095,11 +1217,10 @@ const buildDaemon = async (
   /** @param {{keep?: string[]}} [options] */
   const inspectReachability = ({ keep = [] } = {}) =>
     inspectVatReachability({
-      workers: [...workers].map(([workerId, entry]) => ({
-        workerId,
-        awake: entry.transport.isAwake(),
-        debugLabel: store.provideWorkerStore(workerId).getMeta().debugLabel,
-      })),
+      workers: [...workers].map(([workerId, entry]) => {
+        const { debugLabel } = store.provideWorkerStore(workerId).getMeta();
+        return { workerId, awake: entry.transport.isAwake(), debugLabel };
+      }),
       hubState: store.getHubState(),
       endpointExports: store.provideWorkerStore(ENDPOINT_ID).getTablesRecord()
         ?.exports,
@@ -1120,14 +1241,19 @@ const buildDaemon = async (
       provideWorkerSession(workerId);
       return makeAdminFacade(workerId).evaluate(source, endowments);
     },
-    createWorker: async ({ debugLabel } = {}) => {
+    createWorker: async ({ debugLabel, ephemeral = false } = {}) => {
       debugLabel === undefined ||
         typeof debugLabel === 'string' ||
         Fail`debugLabel must be a string`;
+      typeof ephemeral === 'boolean' || Fail`ephemeral must be a boolean`;
       const workerId = randomHex128();
-      if (debugLabel !== undefined) {
+      if (debugLabel !== undefined || ephemeral) {
         const workerStore = store.provideWorkerStore(workerId);
-        workerStore.setMeta({ ...workerStore.getMeta(), debugLabel });
+        workerStore.setMeta({
+          ...workerStore.getMeta(),
+          ...(debugLabel === undefined ? {} : { debugLabel }),
+          ...(ephemeral ? { ephemeral: true } : {}),
+        });
       }
       provideWorkerSession(workerId);
       return makeAdminFacade(workerId);
