@@ -1,6 +1,8 @@
 // @ts-check
 
 import '@endo/init';
+
+import path from 'node:path';
 import test from 'ava';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
@@ -413,12 +415,17 @@ test('native controller construction is inert; activation uses copy paths and no
     options.policy.mounts.map(mount => [mount.role, mount.kind, mount.source]),
     [
       ['workspace', 'attach', plan.workspaceMountPoint],
-      ['opencode-state', 'bind', '/state/sandbox-a'],
       ['mcp', 'bind', plan.mcpDir],
       ['tmp', 'tmpfs', undefined],
       ['run', 'tmpfs', undefined],
     ],
   );
+  // No durable state row. The CLI's own store is a cache of this
+  // incarnation — the stack holds the conversation and restores it — so the
+  // database runs in memory and its data directory sits on the slice's tmpfs.
+  t.is(options.env.OPENCODE_DB, ':memory:');
+  t.is(options.env.XDG_DATA_HOME, '/tmp/opencode-home/.local/share');
+  t.deepEqual(options.policy.bindRoots, [path.dirname(plan.mcpDir)]);
   t.is(options.network, 'broker-only');
   t.is(options.policy.brokerSidecar.container, 'sandbox-a');
   t.is(options.env.OPENROUTER_API_KEY, 'opencode-broker-placeholder');
