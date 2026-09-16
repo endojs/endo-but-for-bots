@@ -1,4 +1,7 @@
 //! Realm identity, persistent globals, and shared frozen intrinsic objects.
+mod common;
+use common::TestCompiler;
+
 use ironhorse_vm::{Compartment, CompartmentOptions, Halt, Machine, Slot};
 
 fn evaluate(compartment: &Compartment, source: &str) -> ironhorse_vm::RunOutcome {
@@ -629,48 +632,6 @@ fn machine_reports_rejections_from_collected_orphan_compartments() {
 /// A dynamic-evaluation compiler, as the 262 harness and the daemon wire one.
 /// Without it every `eval` / `Function` / `GeneratorFunction` call answers
 /// `NotImplemented("eval:no-compiler")`, which hides what this test measures.
-struct TestCompiler;
-impl ironhorse_vm::SourceCompiler for TestCompiler {
-    fn compile_source(
-        &self,
-        source: &str,
-        strict: bool,
-        raw_budget: u64,
-        charge: &mut dyn FnMut(u64) -> bool,
-    ) -> Result<ironhorse_vm::CompiledSource, ironhorse_vm::SourceCompileError> {
-        match ironhorse_compile::compile_atoms_budgeted_with_limit(
-            source,
-            ironhorse_compile::Goal::Eval,
-            strict,
-            raw_budget,
-            charge,
-        ) {
-            Ok(compiled) => Ok(ironhorse_vm::CompiledSource {
-                bytecode: compiled.bytecode,
-                symbols: compiled.symbols,
-                parse_meter_raw: compiled.parse_meter_raw,
-                parse_computrons: compiled.parse_computrons,
-            }),
-            Err(ironhorse_compile::CompileError::MeterAbort) => {
-                Err(ironhorse_vm::SourceCompileError::MeterAbort)
-            }
-            Err(ironhorse_compile::CompileError::Parse(error)) => match error.kind {
-                ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
-                    kind: ironhorse_compile::LexErrorKind::RegExpResourceLimit,
-                    ..
-                }) => Err(ironhorse_vm::SourceCompileError::HeapExhausted),
-                ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
-                    kind: ironhorse_compile::LexErrorKind::RegExpBudgetExceeded,
-                    ..
-                }) => Err(ironhorse_vm::SourceCompileError::MeterAbort),
-                ironhorse_compile::ParseErrorKind::Unsupported => Err(
-                    ironhorse_vm::SourceCompileError::Unsupported(error.to_string()),
-                ),
-                _ => Err(ironhorse_vm::SourceCompileError::Syntax(error.message)),
-            },
-        }
-    }
-}
 
 #[test]
 fn every_reachable_evaluator_compiles_in_the_calling_compartment() {
