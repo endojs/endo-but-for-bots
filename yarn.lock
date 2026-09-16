@@ -2705,6 +2705,16 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@endo/ironhorse-prelude@workspace:^, @endo/ironhorse-prelude@workspace:packages/ironhorse-prelude":
+  version: 0.0.0-use.local
+  resolution: "@endo/ironhorse-prelude@workspace:packages/ironhorse-prelude"
+  dependencies:
+    "@endo/harden": "workspace:^"
+    eslint: "catalog:dev"
+    typescript: "catalog:dev"
+  languageName: unknown
+  linkType: soft
+
 "@endo/is-well-formed-string@workspace:^, @endo/is-well-formed-string@workspace:packages/is-well-formed-string":
   version: 0.0.0-use.local
   resolution: "@endo/is-well-formed-string@workspace:packages/is-well-formed-string"
@@ -3628,6 +3638,7 @@ __metadata:
     "@endo/eventual-send": "workspace:^"
     "@endo/harden": "workspace:^"
     "@endo/immutable-arraybuffer": "workspace:^"
+    "@endo/ironhorse-prelude": "workspace:^"
     "@endo/pass-style": "workspace:^"
     eslint: "catalog:dev"
     ses: "workspace:^"
@@ -3648,6 +3659,7 @@ __metadata:
     "@endo/harden": "workspace:^"
     "@endo/immutable-arraybuffer": "workspace:^"
     "@endo/init": "workspace:^"
+    "@endo/ironhorse-prelude": "workspace:^"
     "@endo/lockdown": "workspace:^"
     "@endo/ocapn": "workspace:^"
     "@endo/ses-ava": "workspace:^"
