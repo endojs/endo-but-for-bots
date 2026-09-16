@@ -791,6 +791,8 @@ chains to the previous seal. All of it happens in one SQLite IMMEDIATE transacti
 # Colour on the heap grid encodes what a slot points at, because that is what
 # decides whether the collector must follow it and whether its bytes live in
 # the chunk arena. Fifteen arbitrary hues would carry no information.
+HEAP_COLS = 64
+
 KIND_ROLES = {
     "Instance": "structure", "Property": "structure", "Closure": "structure",
     "EnvReference": "structure",
@@ -884,17 +886,21 @@ def heap_explorer(model):
         "null": null,
         "perPage": heap["slots_per_page"],
         "roleMeaning": ROLE_MEANING,
+        "cols": HEAP_COLS,
     }, separators=(",", ":"))
 
     return f"""
 <h3>The slot arena, from a real container</h3>
 
-<p>Every cell below is one slot in a real heap. The map decodes it from
-{link(model, heap["source"], label=heap["source"].split("/")[-1])}, a compatibility
-fixture this repository keeps pinned at <strong>format {heap["format_version"]}</strong>.
-The current writer emits format {model["snapshot"]["container"]["format_version"]}. The
-slot record is the same {heap["slot_width"]}-byte record in both, which is why this
-fixture still shows the layout correctly. Point at a slot to read it.</p>
+<p>Every cell below is one slot in a real heap, at
+<strong>format {heap["format_version"]}</strong>, which is the format the current
+writer emits. The example
+{link(model, heap["capture"], label="capture-map-heap.rs")} boots a machine, runs a
+short program, and writes
+{link(model, heap["source"], label=heap["source"].split("/")[-1])}. The map decodes that
+container. The program makes an object with a prototype, builds a string, keeps a
+counter in a closure, fills an array, and puts two entries in a Map. Each statement
+leaves a shape you can find below. Point at a slot to read it.</p>
 
 <div class="hstats">
   <span><b>{heap["slot_count"]:,}</b> slots</span>
@@ -915,7 +921,7 @@ own table in {anchor("codec", "slot_codec.rs")}.</p>
 <div class="hlegend">{legend}</div>
 
 <div class="heap" id="heap">
-  <div class="hgrid" id="hgrid" role="application" tabindex="0"
+  <div class="hgrid" id="hgrid" role="application" tabindex="0" style="--cols:{HEAP_COLS}"
     aria-label="Slot arena. Use the arrow keys to move between slots."><div class="hpage">page 0</div>{"".join(cells)}</div>
   <aside class="hpanel" id="hpanel">
     <p class="hpanel-empty">Point at a slot.</p>
@@ -1516,34 +1522,34 @@ th.num { text-align: right; }
 .mod-n { float: right; font: 400 11.5px "IBM Plex Mono", monospace; color: var(--muted); font-variant-numeric: tabular-nums; }
 
 /* heap explorer --------------------------------------------------------- */
-.hstats { display: flex; flex-wrap: wrap; gap: 6px 20px; margin: 14px 0 6px; font: 400 12px "IBM Plex Mono", monospace; color: var(--muted); }
+.hstats { display: flex; flex-wrap: wrap; gap: 5px 18px; margin: 12px 0 6px; font: 400 11.5px "IBM Plex Mono", monospace; color: var(--muted); }
 .hstats b { color: var(--ink); font-weight: 500; font-variant-numeric: tabular-nums; }
 
 .rlayout { display: flex; gap: 2px; margin: 8px 0 6px; }
 .rfield {
   flex: var(--span) 1 0;
   /* A one-byte field would otherwise be too narrow to show its own name. */
-  min-width: 64px;
+  min-width: 68px;
   background: var(--panel);
   border: 1px solid var(--rule);
   border-top: 2px solid var(--accent);
   border-radius: 2px;
-  padding: 7px 8px;
+  padding: 5px 7px;
   text-align: left;
   cursor: pointer;
   font: inherit;
   color: inherit;
 }
 .rfield:hover, .rfield.on { background: var(--accent-wash); border-color: var(--accent); }
-.roff { display: block; font: 400 10px "IBM Plex Mono", monospace; color: var(--muted); }
-.rname { display: block; font: 500 12px "IBM Plex Mono", monospace; }
+.roff { display: block; font: 400 9px "IBM Plex Mono", monospace; color: var(--muted); }
+.rname { display: block; font: 500 11px "IBM Plex Mono", monospace; }
 .rnote { font-size: 13px; color: var(--muted); min-height: 2.6em; margin: 0 0 6px; }
 
-.hroles { list-style: none; margin: 8px 0 14px; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 3px 18px; font-size: 13px; }
+.hroles { list-style: none; margin: 8px 0 12px; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 2px 16px; font-size: 12.5px; }
 .hroles li { display: flex; gap: 7px; align-items: baseline; color: var(--muted); }
 .hroles strong { color: var(--ink); font-weight: 500; }
 
-.hswatch { flex: none; display: inline-block; width: 9px; height: 9px; border-radius: 1px; background: var(--role); border: 1px solid var(--rule); }
+.hswatch { flex: none; display: inline-block; width: 8px; height: 8px; border-radius: 1px; background: var(--role); border: 1px solid var(--rule); }
 .role-structure { --role: var(--accent); }
 .role-reference { --role: var(--brass); }
 .role-chunk { --role: var(--oxide); }
@@ -1553,20 +1559,20 @@ th.num { text-align: right; }
 .hlegend { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
 .hkey {
   display: inline-flex; align-items: center; gap: 6px;
-  font: 400 12px "IBM Plex Mono", monospace;
+  font: 400 11px "IBM Plex Mono", monospace;
   background: var(--panel); color: var(--ink);
   border: 1px solid var(--rule); border-radius: 2px;
-  padding: 4px 8px; cursor: pointer;
+  padding: 3px 7px; cursor: pointer;
 }
 .hkey:hover, .hkey.on { border-color: var(--accent); background: var(--accent-wash); }
 .hcount { color: var(--muted); font-variant-numeric: tabular-nums; }
 
-.heap { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 18px; align-items: start; }
+.heap { display: grid; grid-template-columns: minmax(0, 1fr) 256px; gap: 14px; align-items: start; }
 .hgrid {
   display: grid;
-  grid-template-columns: repeat(32, 1fr);
-  gap: 2px;
-  padding: 10px;
+  grid-template-columns: repeat(var(--cols, 32), 1fr);
+  gap: 1px;
+  padding: 8px;
   background: var(--panel);
   border: 1px solid var(--rule);
   border-radius: 2px;
@@ -1599,15 +1605,16 @@ th.num { text-align: right; }
 .hpage::after { content: ""; flex: 1; height: 1px; background: var(--ink); opacity: .35; }
 .hgrid.dimmed .hcell { opacity: .13; }
 .hgrid.dimmed .hcell.match { opacity: 1; }
-.hcell.sel { outline: 2px solid var(--ink); outline-offset: 1px; opacity: 1; }
-.hcell.tnext { outline: 2px solid var(--brass); outline-offset: 1px; opacity: 1; }
-.hcell.tref { outline: 2px solid var(--accent); outline-offset: 1px; opacity: 1; }
+.hcell.sel { outline: 1.5px solid var(--ink); outline-offset: 1px; opacity: 1; z-index: 1; }
+.hcell.tnext { outline: 1.5px solid var(--brass); outline-offset: 1px; opacity: 1; z-index: 1; }
+.hcell.tref { outline: 1.5px solid var(--accent); outline-offset: 1px; opacity: 1; z-index: 1; }
 
 .hpanel { background: var(--panel); border: 1px solid var(--rule); border-top: 2px solid var(--accent); border-radius: 2px; padding: 14px 16px; position: sticky; top: 16px; }
 .hpanel-empty { color: var(--muted); font-size: 13.5px; margin: 0; }
 .hpanel h5 { margin: 0 0 2px; font: 500 15px "IBM Plex Mono", monospace; }
-.hpanel .hrole { font: 500 10px "IBM Plex Mono", monospace; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
-.hpanel dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 3px 10px; margin: 12px 0 0; font-size: 12.5px; }
+.hpanel .hrole { font-size: 12px; line-height: 1.45; color: var(--muted); margin: 4px 0 0; }
+.hpanel .hrole span { font: 500 10px "IBM Plex Mono", monospace; letter-spacing: .1em; text-transform: uppercase; color: var(--ink); margin-right: 4px; }
+.hpanel dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 9px; margin: 10px 0 0; font-size: 12px; }
 .hpanel dt { font: 400 11px/1.6 "IBM Plex Mono", monospace; color: var(--muted); }
 .hpanel dd { margin: 0; font: 400 12px/1.6 "IBM Plex Mono", monospace; overflow-wrap: anywhere; }
 .hpanel .hdoc { font-size: 13px; color: var(--muted); margin: 8px 0 0; line-height: 1.5; }
@@ -1619,7 +1626,7 @@ th.num { text-align: right; }
 @media (max-width: 760px) {
   .heap { grid-template-columns: minmax(0, 1fr); }
   .hpanel { position: static; }
-  .hgrid { grid-template-columns: repeat(16, 1fr); }
+  .hgrid { --cols: 32; }
 }
 
 /* atoms ---------------------------------------------------------------- */
@@ -1837,7 +1844,7 @@ SCRIPT = """
     var H = JSON.parse(heapEl.textContent);
     var panel = document.getElementById('hpanel');
     var cells = Array.prototype.slice.call(grid.querySelectorAll('.hcell'));
-    var COLS = 32;
+    var COLS = H.cols;
     var selected = -1;
     var isolated = null;
 
@@ -1876,7 +1883,8 @@ SCRIPT = """
       if (s.ptag === 1) rows.push(['value', s.value ? 'true' : 'false']);
       var text = s.str >= 0 ? H.strings[s.str] : null;
       var html = '<h5>' + esc(kind.n) + '</h5>' +
-        '<p class="hrole">' + esc(kind.r) + ' — ' + esc(H.roleMeaning[kind.r] || '') + '</p>' +
+        '<p class="hrole"><span>' + esc(kind.r) + '</span> ' +
+          esc(H.roleMeaning[kind.r] || '') + '</p>' +
         '<dl>' + rows.map(function (r) {
           return '<dt>' + esc(r[0]) + '</dt><dd>' + esc(r[1]) + '</dd>';
         }).join('') + '</dl>';

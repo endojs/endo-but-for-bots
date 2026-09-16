@@ -837,11 +837,13 @@ def sqlite_schema():
 
 
 # A real heap, decoded from a checked-in container so the map can show one
-# instead of describing it. This is a compatibility fixture, pinned at its own
-# older format version on purpose, and the map says so where it draws it: the
-# slot record it carries is the same 20-byte record the current format writes,
-# which is what makes it worth decoding here.
-HEAP_FIXTURE = "ironhorse-snapshot/tests/fixtures/compat-8047.container"
+# instead of describing it. The container is captured by
+# `ironhorse-snapshot/examples/capture-map-heap.rs` at the current format, so
+# the map draws what the engine writes today. Re-run that example after a
+# format bump; the map prints the container's own format version, so a stale
+# capture shows on the page rather than passing silently.
+HEAP_FIXTURE = "architecture-map-heap.container"
+HEAP_CAPTURE = "ironhorse-snapshot/examples/capture-map-heap.rs"
 PAYLOAD_TAGS = ["None", "Boolean", "Integer", "Number", "String", "Reference", "At", "BigInt"]
 SLOT_INDEX_NULL = 0xFFFFFFFF
 
@@ -943,6 +945,7 @@ def heap_sample():
 
     return {
         "source": rel(path),
+        "capture": rel(ENGINE / HEAP_CAPTURE),
         "format_version": int.from_bytes(vers[4:8], "big"),
         "slot_width": vers[8] if len(vers) > 8 else None,
         "slot_count": int.from_bytes(heap[0:4], "big"),
