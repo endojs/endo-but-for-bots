@@ -1406,6 +1406,62 @@ take on its own authority.
 Steps 3–5 each move a descriptor off `continuity: 'transcript'` to
 `opaque-reconciled` and delete a state provider.
 
+### What the deploy found — 2026-09-16
+
+Three defects, none of which a unit test could have produced, because all
+three are properties of the host's kernel and container runtime rather than
+of the code's own reasoning about them.
+
+1. **A slice with no host scratch still needs a scratch provider.**
+   `factory.make` requires one where `makeResolved` never did, so an owned
+   runtime minted with no host powers passed `null` and failed construction.
+   `makeNoHostScratch()` is the refusing provider that says so.
+2. **The attestation refused the bind it had just been taught to declare.**
+   The mount-table control admitted attaches and the resolver and nothing
+   else, so declaring the MCP row as a `bind` made the slice fail its own
+   policy. The control now admits a declared bind whose source is under a
+   declared `bindRoot`, which is also what keeps the `hostHome`/`hostSockets`
+   argument standing.
+3. **The declared uid did not own the declared mounts.** The policy asks for
+   `uid: 1000` and, under the default rootless mapping, gets a slice running
+   as an unmapped subordinate id while the daemon — the owner of every bind
+   and 9P projection — appears as container uid 0. Claude could not open
+   `/endo-mcp/mcp.json`, Codex could not create a file in `/workspace`, and
+   OpenCode answered out of a context it had failed to load. Measured on the
+   deployment, the three available mappings are:
+
+   | mapping | slice sees the bind as | slice can use it | daemon keeps it |
+   | --- | --- | --- | --- |
+   | default rootless | `0:0` | no | yes |
+   | `--userns keep-id:uid=N,gid=N` | `N:N` | yes | yes |
+   | bind option `U=true` | `N:N` | yes | **no** |
+
+   `U=true` is what the tmpfs rows already use and is right for a root the
+   slice alone owns; it is wrong for all three of these, because they are
+   shared with the daemon — which holds the MCP listening socket and writes
+   the transcript — and its chown is one-way. `keep-id` is the mapping the
+   policy now requests. It is not the `private` nesting the argv still
+   refuses: the namespace is proved from `/proc/<pid>/ns/user` either way,
+   and `keep-id` only settles which container id the daemon appears as.
+
+   Codex hid this until now because its workspace was a Podman volume, which
+   the runtime chowns to the container user on creation. Step 4's move to a
+   9P projection took that chown away and left the mismatch exposed — the
+   convergence found a latent disagreement between two adapters rather than
+   introducing one.
+
+   **The residual trade this records:** `keep-id` puts the slice's process at
+   the daemon's own host uid, so a namespace escape reaches the daemon user
+   rather than a subordinate id that owns nothing. That is the posture Claude
+   and OpenCode already shipped under, and a regression for Codex, which ran
+   at a subordinate id while its only shared writable root was a volume.
+   Recovering the stronger posture means giving every shared root an
+   ownership the daemon and the slice can both hold — a group-mapped
+   `keep-id:uid=<unmapped>,gid=<daemon>` over `0770` roots, or moving the MCP
+   endpoint off a shared directory onto the loopback listener of option 2.
+   Neither is scheduled here; both are recorded so the choice is a decision
+   rather than an omission.
+
 Tests that must exist before each adapter is called done:
 
 - **Round trip.** Journal → neutral stream → native transcript → the CLI
