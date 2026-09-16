@@ -239,7 +239,7 @@ export const helpTextEntries = harden([
       has: 'has(...names) -> Promise<boolean>\nCheck if an entry exists at the given path.\nnames: string[] - Path segments.\nExample: has("index.html") → true\nExample: has("assets", "style.css") → true',
       list: 'list(...names) -> Promise<string[]>\nList entry names at the given path (or root).\nnames: string[] - Path segments (optional, defaults to root).\nExample: list() → ["index.html", "app.js", "assets"]\nExample: list("assets") → ["style.css", "logo.png"]',
       lookup:
-        'lookup(nameOrPath) -> Promise<EndoReadable | ReadableTree>\nGet the value at a name or path.\nnameOrPath: string | string[] - Name or path segments.\nReturns EndoReadable for files, ReadableTree for subdirectories.\nExample: lookup("index.html") → EndoReadable\nExample: lookup(["assets", "style.css"]) → EndoReadable',
+        'lookup(nameOrPath) -> Promise<EndoReadable | ReadableTree>\nGet the value at a name or path.\nnameOrPath: string | string[] - Name or path segments.\nReturns EndoReadable for files, ReadableTree for subdirectories.\nExample: lookup("index.html") -> EndoReadable\nExample: lookup(["assets", "style.css"]) -> EndoReadable',
     },
   ],
   [
@@ -300,8 +300,8 @@ export const helpTextEntries = harden([
       textRange:
         "textRange(startLine, endLine) -> Promise<ReadableBlobView>\nAttenuate to lines [startLine, endLine) (0-based, end-exclusive, LF boundaries,\nCRLF preserved) of the live file's current bytes.\nReturns a read-only ReadableBlob view over the corresponding byte slice; it\nreads bytes to find the line boundaries, so it resolves asynchronously.",
       text: 'text() -> Promise<string>\nRead the file content as a UTF-8 string.',
-      streamBase64:
-        'streamBase64(syndicationPromise) -> Promise\nStream the file content as base64 chunks, driven by the syndication\npromise (the reader-pump flow-control protocol).',
+      stream:
+        'stream(syndicationPromise) -> Promise\nStream the file content as immutable byte-array chunks, driven by the syndication\npromise (the reader-pump flow-control protocol).',
       json: 'json() -> Promise<any>\nRead and parse the file as JSON.',
       writeText:
         'writeText(content) -> Promise<void>\nWrite a string to the file. Throws if read-only.',

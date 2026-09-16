@@ -127,7 +127,7 @@ type GitWorktreeEntry = {
     prunable: boolean;
 };
 type GitPassableBytesReader<TReadReturn = undefined> = {
-    stream: (synPromise: GitERef<GitStreamNode<unknown, TReadReturn>>) => Promise<GitStreamNode<string, TReadReturn>>;
+    stream: (synPromise: GitERef<GitStreamNode<unknown, TReadReturn>>) => Promise<GitStreamNode<Uint8Array, TReadReturn>>;
     readReturnPattern: () => unknown | undefined;
 };
 type GitBlobRef = {
@@ -294,7 +294,7 @@ type GitWatchFromResult = {
     watcher: GitNodeWatcher;
 };
 type GitPassableBytesWriter<TWriteReturn = undefined> = {
-    stream: (synPromise: GitERef<GitStreamNode<string, TWriteReturn>>) => Promise<GitStreamNode<undefined, TWriteReturn>>;
+    stream: (synPromise: GitERef<GitStreamNode<Uint8Array, TWriteReturn>>) => Promise<GitStreamNode<undefined, TWriteReturn>>;
     writeReturnPattern: () => unknown | undefined;
 };
 type GitFilesystemStats = {
@@ -510,7 +510,7 @@ type GitWorktreeEntry = {
 };
 type GitERef<T> = T | Promise<T>;
 type GitPassableBytesReader<TReadReturn = undefined> = {
-    stream: (synPromise: GitERef<GitStreamNode<unknown, TReadReturn>>) => Promise<GitStreamNode<string, TReadReturn>>;
+    stream: (synPromise: GitERef<GitStreamNode<unknown, TReadReturn>>) => Promise<GitStreamNode<Uint8Array, TReadReturn>>;
     readReturnPattern: () => unknown | undefined;
 };
 type GitBlobRef = {
@@ -650,7 +650,7 @@ type GitWatchFromResult = {
     watcher: GitNodeWatcher;
 };
 type GitPassableBytesWriter<TWriteReturn = undefined> = {
-    stream: (synPromise: GitERef<GitStreamNode<string, TWriteReturn>>) => Promise<GitStreamNode<undefined, TWriteReturn>>;
+    stream: (synPromise: GitERef<GitStreamNode<Uint8Array, TWriteReturn>>) => Promise<GitStreamNode<undefined, TWriteReturn>>;
     writeReturnPattern: () => unknown | undefined;
 };
 type GitFilesystemStats = {
