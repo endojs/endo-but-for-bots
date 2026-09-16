@@ -81,11 +81,21 @@ use std::path::Path;
 /// Pinned reach, by file name. `true` is "the case passes on Ironhorse
 /// through the shim prelude".
 ///
-/// `Symbol.toStringTag-lockdown.js` is false on Ironhorse AND on node: the
-/// node host reports 14/16 today, with both failures on that file
-/// (`@endo/harden` installs `Object[Symbol.for('harden')]` before the case
-/// calls `lockdown()`, which `repairIntrinsics` refuses). It is not an
-/// Ironhorse gap.
+/// `Symbol.toStringTag-lockdown.js` is false on Ironhorse AND on node -- the
+/// node host reports 14/16 today, with both failures on that one file -- but
+/// for DIFFERENT reasons, so do not read node's as an alibi for this one.
+///
+/// On node, `@endo/harden` finds no host `harden`, installs its own at
+/// `Object[Symbol.for('harden')]`, and `repairIntrinsics` refuses outright.
+/// On Ironhorse that slot stays `undefined`: the selector adopts the native
+/// `globalThis.harden`, as `ironhorse-pre-shim.js` intends. `lockdown()`
+/// instead throws `invalid descriptor` from `tame-function-constructors.js`,
+/// because the native `harden` deep-freezes `Function.prototype` -- one
+/// `harden({})` turns `constructor` from the spec's `configurable: true` into
+/// `{writable: false, configurable: false}` -- so SES can no longer swap in
+/// its inert constructor. That rejection is spec-correct; the freeze that
+/// provoked it is the Ironhorse gap. See
+/// `designs/ironhorse-ses-compartment-equivalence.md`.
 const REACH: &[(&str, bool)] = &[
     ("byte-readers.js", true),
     ("native-or-emulated-shape.js", true),
