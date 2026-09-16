@@ -139,19 +139,16 @@ const toBase64Url = bytes => {
  * @returns {AsyncGenerator<Uint8Array>}
  */
 const readFileBody = async function* readFileBody(fileNode, size) {
-  // Accommodate backings that emit the whole payload in one base64
-  // frame; without this the default 100 KB cap on `M.string()` would
+  // Accommodate backings that emit the whole payload in one frame;
+  // without this the default 100 KB cap on `M.byteArray()` would
   // reject anything bigger. Mirrors endo-fs-exec's drainBytesReader.
-  const stringLengthLimit = Math.max(
-    100_000,
-    Math.ceil((Number(size) * 4) / 3) + 1024,
-  );
+  const byteLengthLimit = Math.max(100_000, Number(size) + 1024);
   let written = 0n;
   const openFile = await E(fileNode).open({ read: true });
   try {
     const reader = await E(openFile).read(0n, size);
     for await (const chunk of iterateBytesReader(/** @type {any} */ (reader), {
-      stringLengthLimit,
+      byteLengthLimit,
     })) {
       written += BigInt(chunk.length);
       yield chunk;

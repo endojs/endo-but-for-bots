@@ -56,7 +56,7 @@ const makeFixture = ({
       if (stdinError) throw Error(stdinError);
       if (closeStdinEarly) {
         return harden({
-          async streamBase64(_synHead) {
+          async stream(_synHead) {
             return harden({ value: 'closed', promise: null });
           },
           writeReturnPattern() {
