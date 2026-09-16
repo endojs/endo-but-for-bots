@@ -260,9 +260,10 @@ class CheckedInTests(unittest.TestCase):
         self.assertTrue(model.OUTPUT.is_file(), "run engine-map-model.py")
         self.assertTrue(page.OUTPUT.is_file(), "run engine-map.py")
         import json
-        self.assertEqual(page.OUTPUT.read_text(),
-                         page.render(json.loads(model.OUTPUT.read_text())),
-                         "architecture-map.html is stale; rerun engine-map.py")
+        self.assertEqual(
+            page.strip_commit(page.OUTPUT.read_text()),
+            page.strip_commit(page.render(json.loads(model.OUTPUT.read_text()))),
+            "architecture-map.html is stale; rerun engine-map.py")
 
     def test_every_recipe_waypoint_exists(self):
         import json
@@ -382,6 +383,70 @@ class FigureFitTests(unittest.TestCase):
 
     def test_ordinary_values_render(self):
         self.assertIn("<svg", page.gates_figure(RenderTests().fixture()))
+
+
+class HeapDecodeTests(unittest.TestCase):
+    """The heap the map draws is decoded from a real container, so the decode
+    rules it depends on are pinned here."""
+
+    def test_kind_discriminants_are_not_declaration_order(self):
+        # This is the property that makes a positional lookup wrong. If the
+        # enum is ever renumbered into order, this test should be deleted
+        # rather than the discriminant lookup.
+        kinds = model.enum_variants("ironhorse-vm/src/value.rs", "Kind")
+        self.assertNotEqual([k["value"] for k in kinds], list(range(len(kinds))))
+        by_name = {k["name"]: k["value"] for k in kinds}
+        self.assertEqual(by_name["Closure"], 9)
+        self.assertEqual(by_name["Reference"], 10)
+        self.assertEqual(by_name["Uninitialized"], 11)
+
+    def test_variant_without_a_discriminant_follows_the_previous_one(self):
+        source = "pub enum E {\n    A = 5,\n    B,\n    C = 9,\n    D,\n}\n"
+        path = Path(self.tmp) / "e.rs"
+        path.write_text(source)
+        engine = model.ENGINE
+        model.ENGINE = Path(self.tmp)
+        try:
+            variants = model.enum_variants(path.name, "E")
+        finally:
+            model.ENGINE = engine
+        self.assertEqual([(v["name"], v["value"]) for v in variants],
+                         [("A", 5), ("B", 6), ("C", 9), ("D", 10)])
+
+    def test_the_fixture_decodes_to_a_populated_heap(self):
+        heap = model.heap_sample()
+        self.assertIsNotNone(heap, "the heap fixture should decode")
+        self.assertEqual(len(heap["slots"]), heap["slot_count"])
+        self.assertEqual(heap["slot_width"], 20)
+        self.assertTrue(heap["strings"], "string payloads should resolve")
+        self.assertIn("Symbol.iterator", heap["strings"])
+
+    def test_every_decoded_kind_is_a_real_kind(self):
+        heap = model.heap_sample()
+        self.assertFalse([name for name in heap["histogram"] if name.startswith("?")],
+                         "an unknown kind byte means the decode is wrong")
+
+    def test_slot_rows_match_the_declared_columns(self):
+        heap = model.heap_sample()
+        width = len(heap["columns"].split(","))
+        self.assertTrue(all(len(row.split(",")) == width for row in heap["slots"]))
+
+    def test_record_layout_covers_the_whole_record(self):
+        fields = model.record_layout()
+        self.assertEqual(fields[0]["offset"], 0)
+        self.assertEqual(fields[-1]["end"], 20)
+        # The fields must tile the record without a gap or an overlap.
+        for earlier, later in zip(fields, fields[1:]):
+            self.assertEqual(earlier["end"], later["offset"])
+
+    def setUp(self):
+        import tempfile
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+        self.tmp = self.dir.name
+
+    def tearDown(self):
+        pass
 
 
 if __name__ == "__main__":

@@ -788,6 +788,157 @@ chains to the previous seal. All of it happens in one SQLite IMMEDIATE transacti
 </svg>"""
 
 
+# Colour on the heap grid encodes what a slot points at, because that is what
+# decides whether the collector must follow it and whether its bytes live in
+# the chunk arena. Fifteen arbitrary hues would carry no information.
+KIND_ROLES = {
+    "Instance": "structure", "Property": "structure", "Closure": "structure",
+    "EnvReference": "structure",
+    "Reference": "reference", "Symbol": "reference", "At": "reference",
+    "String": "chunk", "BigInt": "chunk",
+    "Undefined": "value", "Null": "value", "Boolean": "value",
+    "Integer": "value", "Number": "value",
+    "Uninitialized": "unset",
+}
+ROLE_MEANING = {
+    "structure": "Holds the object graph. The collector follows these.",
+    "reference": "Points at another slot by index.",
+    "chunk": "Points at bytes in the chunk arena. Compaction moves the bytes.",
+    "value": "Holds its value in the record. Nothing to follow.",
+    "unset": "Declared but not yet given a value.",
+}
+
+
+def heap_explorer(model):
+    """A real slot arena, drawn cell by cell, with a panel for the hovered slot."""
+    heap = model["snapshot"].get("heap")
+    if not heap:
+        return ""
+    kinds = {k["value"]: k for k in heap["kinds"]}
+    tags = {t["id"]: t["name"] for t in heap["payload_tags"]}
+    payload_docs = {p["name"]: p["doc"] for p in heap["payloads"]}
+    null = heap["null"]
+    columns = heap["columns"].split(",")
+
+    cells, roles_used = [], {}
+    for index, row in enumerate(heap["slots"]):
+        fields = dict(zip(columns, (int(v) for v in row.split(","))))
+        kind = kinds.get(fields["kind"], {"name": f"?{fields['kind']}", "doc": ""})
+        role = KIND_ROLES.get(kind["name"], "value")
+        roles_used[kind["name"]] = roles_used.get(kind["name"], 0) + 1
+        tag = tags.get(fields["ptag"], str(fields["ptag"]))
+        # A native tooltip keeps the grid informative when scripting is off.
+        summary = f'[{index}] {kind["name"]} · payload {tag}'
+        if fields["str"] >= 0:
+            summary += f' · "{heap["strings"][fields["str"]]}"'
+        if index and index % heap["slots_per_page"] == 0:
+            cells.append(
+                f'<div class="hpage">page {index // heap["slots_per_page"]}</div>')
+        cells.append(
+            f'<button type="button" class="hcell role-{role}" data-i="{index}" '
+            f'title="{esc(summary)}" tabindex="-1"></button>')
+
+    legend = "".join(
+        f'<button type="button" class="hkey role-{KIND_ROLES.get(name, "value")}" '
+        f'data-kind="{esc(name)}"><span class="hswatch"></span>{esc(name)}'
+        f'<span class="hcount">{count}</span></button>'
+        for name, count in sorted(heap["histogram"].items(), key=lambda kv: -kv[1]))
+
+    roles = "".join(
+        f'<li><span class="hswatch role-{role}"></span><strong>{esc(role)}</strong> '
+        f'{esc(meaning)}</li>' for role, meaning in ROLE_MEANING.items())
+
+    # The 20-byte record, as the fields the codec's own layout table names.
+    layout_cells = []
+    for field in heap["record_layout"]:
+        width = field["end"] - field["offset"]
+        label = field["field"].split("(")[0].strip().strip("`")
+        layout_cells.append(
+            f'<button type="button" class="rfield" style="--span:{width}" '
+            f'data-field="{esc(field["field"])}" '
+            f'data-range="bytes {field["offset"]}–{field["end"] - 1}">'
+            f'<span class="roff">{field["offset"]}</span>'
+            f'<span class="rname">{esc(label)}</span></button>')
+
+    anchors = heap["anchors"]
+
+    def anchor(key, label):
+        entry = anchors.get(key)
+        if not entry:
+            return ""
+        return link(model, entry["file"], entry.get("line"), label=label)
+
+    payload_help = "".join(
+        f'<li><code>{esc(name)}</code> {esc(payload_docs.get(name, ""))}</li>'
+        for name in (t["name"] for t in heap["payload_tags"]) if payload_docs.get(name))
+
+    data = json.dumps({
+        "columns": columns,
+        "slots": heap["slots"],
+        "strings": heap["strings"],
+        "kinds": {str(k["value"]): {"n": k["name"], "d": k["doc"],
+                                    "r": KIND_ROLES.get(k["name"], "value")}
+                  for k in heap["kinds"]},
+        "tags": {str(t["id"]): t["name"] for t in heap["payload_tags"]},
+        "payloadDocs": payload_docs,
+        "null": null,
+        "perPage": heap["slots_per_page"],
+        "roleMeaning": ROLE_MEANING,
+    }, separators=(",", ":"))
+
+    return f"""
+<h3>The slot arena, from a real container</h3>
+
+<p>Every cell below is one slot in a real heap. The map decodes it from
+{link(model, heap["source"], label=heap["source"].split("/")[-1])}, a compatibility
+fixture this repository keeps pinned at <strong>format {heap["format_version"]}</strong>.
+The current writer emits format {model["snapshot"]["container"]["format_version"]}. The
+slot record is the same {heap["slot_width"]}-byte record in both, which is why this
+fixture still shows the layout correctly. Point at a slot to read it.</p>
+
+<div class="hstats">
+  <span><b>{heap["slot_count"]:,}</b> slots</span>
+  <span><b>{heap["live"]:,}</b> live</span>
+  <span><b>{heap["chunk_bytes"]:,}</b> chunk bytes</span>
+  <span><b>{len(heap["strings"])}</b> strings resolved</span>
+  <span><b>{heap["slots_per_page"]}</b> slots per page</span>
+</div>
+
+<h4>One slot record</h4>
+<div class="rlayout" id="record-layout">{"".join(layout_cells)}</div>
+<p class="rnote" id="record-note">Point at a field. The layout comes from the codec's
+own table in {anchor("codec", "slot_codec.rs")}.</p>
+
+<h4>Colour shows what a slot points at</h4>
+<ul class="hroles">{roles}</ul>
+
+<div class="hlegend">{legend}</div>
+
+<div class="heap" id="heap">
+  <div class="hgrid" id="hgrid" role="application" tabindex="0"
+    aria-label="Slot arena. Use the arrow keys to move between slots."><div class="hpage">page 0</div>{"".join(cells)}</div>
+  <aside class="hpanel" id="hpanel">
+    <p class="hpanel-empty">Point at a slot.</p>
+  </aside>
+</div>
+
+<p class="note"><strong>What the page rule means.</strong> The heavier line every
+{heap["slots_per_page"]} slots is a page boundary. The paged store writes one
+<code>slot_pages</code> row for each page, so a crank that changes one slot makes the
+store rewrite that whole page and no other.</p>
+
+<details class="hdetails">
+  <summary>Payload arms</summary>
+  <ul class="verdict-list">{payload_help}</ul>
+  <p class="cell-note">Defined in {anchor("payload", "Payload")}, beside
+  {anchor("kind", "Kind")} and {anchor("slot", "Slot")}. Handles are
+  {anchor("slot_index", "SlotIndex")} and {anchor("chunk_offset", "ChunkOffset")};
+  <code>{null}</code> is the null sentinel for both.</p>
+</details>
+
+<script type="application/json" id="heap-data">{data}</script>"""
+
+
 def layout_plate(model):
     snapshot = model["snapshot"]
     container, store, sqlite = snapshot["container"], snapshot["store"], snapshot["sqlite"]
@@ -851,6 +1002,8 @@ complete image. The store gives a cheap checkpoint after each crank.</p>
   <tbody>{stamp_rows}</tbody>
 </table>
 </div>
+
+{heap_explorer(model)}
 
 <h3>Container atoms, in write order</h3>
 <p>The writer emits the first five atoms, and then walks the payload roster in
@@ -1362,6 +1515,113 @@ th.num { text-align: right; }
 .mod-bar { position: absolute; left: 0; top: 0; bottom: 0; width: 2px; background: var(--accent); opacity: .45; height: var(--w, 4%); min-height: 3px; }
 .mod-n { float: right; font: 400 11.5px "IBM Plex Mono", monospace; color: var(--muted); font-variant-numeric: tabular-nums; }
 
+/* heap explorer --------------------------------------------------------- */
+.hstats { display: flex; flex-wrap: wrap; gap: 6px 20px; margin: 14px 0 6px; font: 400 12px "IBM Plex Mono", monospace; color: var(--muted); }
+.hstats b { color: var(--ink); font-weight: 500; font-variant-numeric: tabular-nums; }
+
+.rlayout { display: flex; gap: 2px; margin: 8px 0 6px; }
+.rfield {
+  flex: var(--span) 1 0;
+  /* A one-byte field would otherwise be too narrow to show its own name. */
+  min-width: 64px;
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-top: 2px solid var(--accent);
+  border-radius: 2px;
+  padding: 7px 8px;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+.rfield:hover, .rfield.on { background: var(--accent-wash); border-color: var(--accent); }
+.roff { display: block; font: 400 10px "IBM Plex Mono", monospace; color: var(--muted); }
+.rname { display: block; font: 500 12px "IBM Plex Mono", monospace; }
+.rnote { font-size: 13px; color: var(--muted); min-height: 2.6em; margin: 0 0 6px; }
+
+.hroles { list-style: none; margin: 8px 0 14px; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 3px 18px; font-size: 13px; }
+.hroles li { display: flex; gap: 7px; align-items: baseline; color: var(--muted); }
+.hroles strong { color: var(--ink); font-weight: 500; }
+
+.hswatch { flex: none; display: inline-block; width: 9px; height: 9px; border-radius: 1px; background: var(--role); border: 1px solid var(--rule); }
+.role-structure { --role: var(--accent); }
+.role-reference { --role: var(--brass); }
+.role-chunk { --role: var(--oxide); }
+.role-value { --role: var(--muted); }
+.role-unset { --role: var(--rule); }
+
+.hlegend { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.hkey {
+  display: inline-flex; align-items: center; gap: 6px;
+  font: 400 12px "IBM Plex Mono", monospace;
+  background: var(--panel); color: var(--ink);
+  border: 1px solid var(--rule); border-radius: 2px;
+  padding: 4px 8px; cursor: pointer;
+}
+.hkey:hover, .hkey.on { border-color: var(--accent); background: var(--accent-wash); }
+.hcount { color: var(--muted); font-variant-numeric: tabular-nums; }
+
+.heap { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 18px; align-items: start; }
+.hgrid {
+  display: grid;
+  grid-template-columns: repeat(32, 1fr);
+  gap: 2px;
+  padding: 10px;
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  min-width: 0;
+}
+.hgrid:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.hcell {
+  aspect-ratio: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 1px;
+  background: var(--role);
+  opacity: .72;
+  cursor: pointer;
+}
+.hcell:hover { opacity: 1; }
+/* A page boundary is a labelled rule across the grid, not a mark on one cell. */
+.hpage {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 3px 0 1px;
+  font: 500 9.5px "IBM Plex Mono", monospace;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.hpage::after { content: ""; flex: 1; height: 1px; background: var(--ink); opacity: .35; }
+.hgrid.dimmed .hcell { opacity: .13; }
+.hgrid.dimmed .hcell.match { opacity: 1; }
+.hcell.sel { outline: 2px solid var(--ink); outline-offset: 1px; opacity: 1; }
+.hcell.tnext { outline: 2px solid var(--brass); outline-offset: 1px; opacity: 1; }
+.hcell.tref { outline: 2px solid var(--accent); outline-offset: 1px; opacity: 1; }
+
+.hpanel { background: var(--panel); border: 1px solid var(--rule); border-top: 2px solid var(--accent); border-radius: 2px; padding: 14px 16px; position: sticky; top: 16px; }
+.hpanel-empty { color: var(--muted); font-size: 13.5px; margin: 0; }
+.hpanel h5 { margin: 0 0 2px; font: 500 15px "IBM Plex Mono", monospace; }
+.hpanel .hrole { font: 500 10px "IBM Plex Mono", monospace; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+.hpanel dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 3px 10px; margin: 12px 0 0; font-size: 12.5px; }
+.hpanel dt { font: 400 11px/1.6 "IBM Plex Mono", monospace; color: var(--muted); }
+.hpanel dd { margin: 0; font: 400 12px/1.6 "IBM Plex Mono", monospace; overflow-wrap: anywhere; }
+.hpanel .hdoc { font-size: 13px; color: var(--muted); margin: 8px 0 0; line-height: 1.5; }
+.hpanel .hstr { color: var(--oxide); }
+.hdetails { margin-top: 20px; font-size: 14px; }
+.hdetails summary { cursor: pointer; font-weight: 500; }
+.hdetails ul { margin-top: 10px; }
+
+@media (max-width: 760px) {
+  .heap { grid-template-columns: minmax(0, 1fr); }
+  .hpanel { position: static; }
+  .hgrid { grid-template-columns: repeat(16, 1fr); }
+}
+
 /* atoms ---------------------------------------------------------------- */
 .atoms {
   list-style: none;
@@ -1568,6 +1828,143 @@ SCRIPT = """
       search.focus();
     }
   });
+
+
+  // --- heap explorer ----------------------------------------------------
+  var heapEl = document.getElementById('heap-data');
+  var grid = document.getElementById('hgrid');
+  if (heapEl && grid) {
+    var H = JSON.parse(heapEl.textContent);
+    var panel = document.getElementById('hpanel');
+    var cells = Array.prototype.slice.call(grid.querySelectorAll('.hcell'));
+    var COLS = 32;
+    var selected = -1;
+    var isolated = null;
+
+    function slotAt(i) {
+      if (i < 0 || i >= H.slots.length) return null;
+      var parts = H.slots[i].split(',');
+      var out = {};
+      H.columns.forEach(function (name, n) { out[name] = parseInt(parts[n], 10); });
+      return out;
+    }
+
+    function esc(s) {
+      return String(s).replace(/[&<>"]/g, function (c) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+      });
+    }
+
+    function handle(v) { return v === H.null ? 'NULL' : String(v); }
+
+    function describe(i) {
+      var s = slotAt(i);
+      if (!s) return;
+      var kind = H.kinds[String(s.kind)] || { n: '?' + s.kind, d: '', r: 'value' };
+      var tag = H.tags[String(s.ptag)] || String(s.ptag);
+      var rows = [
+        ['index', String(i)],
+        ['page', String(Math.floor(i / H.perPage)) + ' · offset ' + (i % H.perPage)],
+        ['flag', '0x' + s.flag.toString(16).padStart(2, '0')],
+        ['id', String(s.id)],
+        ['next', handle(s.next)],
+        ['payload', tag],
+      ];
+      if (s.ptag === 5) rows.push(['→ slot', handle(s.value)]);
+      if (s.ptag === 4 || s.ptag === 7) rows.push(['→ chunk', handle(s.value)]);
+      if (s.ptag === 2) rows.push(['value', String(s.value)]);
+      if (s.ptag === 1) rows.push(['value', s.value ? 'true' : 'false']);
+      var text = s.str >= 0 ? H.strings[s.str] : null;
+      var html = '<h5>' + esc(kind.n) + '</h5>' +
+        '<p class="hrole">' + esc(kind.r) + ' — ' + esc(H.roleMeaning[kind.r] || '') + '</p>' +
+        '<dl>' + rows.map(function (r) {
+          return '<dt>' + esc(r[0]) + '</dt><dd>' + esc(r[1]) + '</dd>';
+        }).join('') + '</dl>';
+      if (text !== null) {
+        html += '<dl><dt>text</dt><dd class="hstr">' + esc(JSON.stringify(text)) + '</dd></dl>';
+      }
+      if (kind.d) html += '<p class="hdoc">' + esc(kind.d) + '</p>';
+      var doc = H.payloadDocs[tag];
+      if (doc) html += '<p class="hdoc">' + esc(doc) + '</p>';
+      panel.innerHTML = html;
+
+      cells.forEach(function (c) { c.classList.remove('sel', 'tnext', 'tref'); });
+      cells[i].classList.add('sel');
+      if (s.next !== H.null && cells[s.next]) cells[s.next].classList.add('tnext');
+      if (s.ptag === 5 && s.value !== H.null && cells[s.value]) {
+        cells[s.value].classList.add('tref');
+      }
+      selected = i;
+    }
+
+    grid.addEventListener('mouseover', function (event) {
+      var cell = event.target.closest('.hcell');
+      if (cell) describe(parseInt(cell.getAttribute('data-i'), 10));
+    });
+    grid.addEventListener('click', function (event) {
+      var cell = event.target.closest('.hcell');
+      if (cell) { describe(parseInt(cell.getAttribute('data-i'), 10)); grid.focus(); }
+    });
+    grid.addEventListener('keydown', function (event) {
+      var step = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -COLS, ArrowDown: COLS }[event.key];
+      if (!step) return;
+      event.preventDefault();
+      var next = Math.max(0, Math.min(H.slots.length - 1, (selected < 0 ? 0 : selected) + step));
+      describe(next);
+      cells[next].scrollIntoView({ block: 'nearest' });
+    });
+
+    Array.prototype.forEach.call(document.querySelectorAll('.hkey'), function (key) {
+      key.addEventListener('click', function () {
+        var name = key.getAttribute('data-kind');
+        isolated = isolated === name ? null : name;
+        Array.prototype.forEach.call(document.querySelectorAll('.hkey'), function (other) {
+          other.classList.toggle('on', other.getAttribute('data-kind') === isolated);
+        });
+        grid.classList.toggle('dimmed', !!isolated);
+        cells.forEach(function (cell, i) {
+          var s = slotAt(i);
+          var kind = H.kinds[String(s.kind)];
+          cell.classList.toggle('match', !!isolated && kind && kind.n === isolated);
+        });
+      });
+    });
+
+    // Open on the first slot so the panel is never blank.
+    describe(0);
+  }
+
+  // --- slot record layout -----------------------------------------------
+  var recordNote = document.getElementById('record-note');
+  var recordDefault = recordNote ? recordNote.innerHTML : '';
+  Array.prototype.forEach.call(document.querySelectorAll('.rfield'), function (field) {
+    function show() {
+      Array.prototype.forEach.call(document.querySelectorAll('.rfield'), function (other) {
+        other.classList.toggle('on', other === field);
+      });
+      if (recordNote) {
+        var raw = field.getAttribute('data-range') + ' \u2014 ' +
+          field.getAttribute('data-field');
+        recordNote.innerHTML = raw
+          .replace(/[&<>"]/g, function (c) {
+            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+          })
+          .replace(/`([^`]+)`/g, '<code>$1</code>');
+      }
+    }
+    field.addEventListener('mouseenter', show);
+    field.addEventListener('focus', show);
+    field.addEventListener('click', show);
+  });
+  var layoutEl = document.getElementById('record-layout');
+  if (layoutEl && recordNote) {
+    layoutEl.addEventListener('mouseleave', function () {
+      Array.prototype.forEach.call(document.querySelectorAll('.rfield'), function (other) {
+        other.classList.remove('on');
+      });
+      recordNote.innerHTML = recordDefault;
+    });
+  }
 
   // --- rail position ----------------------------------------------------
   var links = {};

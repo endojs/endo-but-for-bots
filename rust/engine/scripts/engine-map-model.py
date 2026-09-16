@@ -306,7 +306,7 @@ def enum_variants(path, name):
             if depth == 0:
                 break
         body.append(char)
-    variants, doc, nesting = [], [], 0
+    variants, doc, nesting, next_value = [], [], 0, 0
     for line in "".join(body).splitlines():
         stripped = line.strip()
         if stripped.startswith("///"):
@@ -314,10 +314,17 @@ def enum_variants(path, name):
             continue
         # A struct-shaped variant's own fields are not variants, so only lines
         # at the body's own nesting level are considered.
-        match = re.match(r"^(?P<name>[A-Z][A-Za-z0-9]*)\s*(?:\(|\{|,|=|$)", stripped)
+        match = re.match(
+            r"^(?P<name>[A-Z][A-Za-z0-9]*)\s*(?:\((?P<tuple>[^)]*)\))?\s*"
+            r"(?:=\s*(?P<value>\d+))?\s*(?:\(|\{|,|$)", stripped)
         if match and nesting == 0:
+            # Rust numbers a variant with no explicit discriminant as the
+            # previous one plus one, so the running counter is the fallback.
+            value = int(match.group("value")) if match.group("value") else next_value
+            next_value = value + 1
             variants.append({
                 "name": match.group("name"),
+                "value": value,
                 "doc": first_sentence(" ".join(doc)) if doc else "",
             })
         if stripped and not stripped.startswith("#["):
@@ -829,6 +836,145 @@ def sqlite_schema():
     }
 
 
+# A real heap, decoded from a checked-in container so the map can show one
+# instead of describing it. This is a compatibility fixture, pinned at its own
+# older format version on purpose, and the map says so where it draws it: the
+# slot record it carries is the same 20-byte record the current format writes,
+# which is what makes it worth decoding here.
+HEAP_FIXTURE = "ironhorse-snapshot/tests/fixtures/compat-8047.container"
+PAYLOAD_TAGS = ["None", "Boolean", "Integer", "Number", "String", "Reference", "At", "BigInt"]
+SLOT_INDEX_NULL = 0xFFFFFFFF
+
+
+def walk_atoms(buf, start, end):
+    """Yield `(tag, payload)` for the container's `[u32 size][tag][body]` atoms."""
+    offset = start
+    while offset + 8 <= end:
+        size = int.from_bytes(buf[offset:offset + 4], "big")
+        if size < 8 or offset + size > end:
+            return
+        yield buf[offset + 4:offset + 8].decode("latin1"), buf[offset + 8:offset + size]
+        offset += size
+
+
+def chunk_text(bloc, offset):
+    """The string a `ChunkOffset` points at.
+
+    The handle addresses the payload; its byte length sits in the four bytes
+    before it, written in the host's byte order that `VERS` records, while the
+    code units themselves are UTF-16 big-endian.
+    """
+    if offset < 4 or offset > len(bloc):
+        return None
+    length = int.from_bytes(bloc[offset - 4:offset], "little")
+    if length == 0 or length > 4096 or offset + length > len(bloc):
+        return None
+    try:
+        return bloc[offset:offset + length].decode("utf-16-be")
+    except UnicodeDecodeError:
+        return None
+
+
+def record_layout():
+    """The serialized slot record's fields, from the codec's own layout table."""
+    text = (ENGINE / "ironhorse-snapshot/src/slot_codec.rs").read_text(encoding="utf-8")
+    fields = []
+    for line in text.splitlines():
+        match = re.match(r"^//!\s*\|\s*([0-9]+(?:\.\.[0-9]+)?)\s*\|\s*(.+?)\s*\|\s*$", line)
+        if match:
+            span = match.group(1)
+            first = int(span.split("..")[0])
+            last = int(span.split("..")[1]) if ".." in span else first + 1
+            fields.append({"offset": first, "end": last, "field": plain(match.group(2))})
+    return fields
+
+
+def heap_sample():
+    """Decode the fixture's slot arena into a form the map can draw."""
+    path = ENGINE / HEAP_FIXTURE
+    if not path.is_file():
+        return None
+    buf = path.read_bytes()
+    total = int.from_bytes(buf[0:4], "big")
+    if buf[4:8] != b"XS_M":
+        return None
+    atoms = dict(walk_atoms(buf, 8, min(total, len(buf))))
+    vers, heap, bloc = atoms.get("VERS"), atoms.get("HEAP"), atoms.get("BLOC", b"")
+    if not vers or not heap or len(heap) < 12:
+        return None
+
+    kinds = enum_variants("ironhorse-vm/src/value.rs", "Kind")
+    # `Kind` assigns Closure 9, Reference 10 and Uninitialized 11, which is not
+    # their declaration order. Indexing the list by the kind byte therefore
+    # mislabels exactly those three, so every lookup goes through the
+    # discriminant the source states.
+    by_discriminant = {k["value"]: k["name"] for k in kinds}
+    records = heap[12:]
+    count = len(records) // 20
+    strings, seen = [], {}
+    rows, histogram = [], {}
+
+    for index in range(count):
+        record = records[index * 20:(index + 1) * 20]
+        kind = record[0]
+        flag = record[1]
+        ident = int.from_bytes(record[2:4], "big")
+        nxt = int.from_bytes(record[4:8], "big")
+        tag = record[8]
+        data = record[10:20]
+        value, text_index = -1, -1
+        if tag in (4, 7):                      # String, BigInt: a chunk handle
+            value = int.from_bytes(data[0:4], "big")
+            text = chunk_text(bloc, value) if tag == 4 else None
+            if text is not None:
+                if text not in seen:
+                    seen[text] = len(strings)
+                    strings.append(text)
+                text_index = seen[text]
+        elif tag == 5:                         # Reference: a slot handle
+            value = int.from_bytes(data[0:4], "big")
+        elif tag == 2:                         # Integer
+            value = int.from_bytes(data[0:4], "big", signed=True)
+        elif tag == 1:                         # Boolean
+            value = data[0]
+        name = by_discriminant.get(kind, f"?{kind}")
+        histogram[name] = histogram.get(name, 0) + 1
+        rows.append(f"{kind},{flag},{ident},{nxt},{tag},{value},{text_index}")
+
+    return {
+        "source": rel(path),
+        "format_version": int.from_bytes(vers[4:8], "big"),
+        "slot_width": vers[8] if len(vers) > 8 else None,
+        "slot_count": int.from_bytes(heap[0:4], "big"),
+        "live": int.from_bytes(heap[8:12], "big"),
+        "chunk_bytes": len(bloc),
+        "slots_per_page": int(const_value("ironhorse-vm/src/value.rs", "SLOTS_PER_PAGE")),
+        "null": SLOT_INDEX_NULL,
+        # One compact line per slot keeps the checked-in model reviewable.
+        "columns": "kind,flag,id,next,ptag,value,str",
+        "slots": rows,
+        "strings": strings,
+        "histogram": dict(sorted(histogram.items(), key=lambda kv: -kv[1])),
+        "kinds": kinds,
+        "payload_tags": [
+            {"name": name, "id": index}
+            for index, name in enumerate(PAYLOAD_TAGS)],
+        "payloads": enum_variants("ironhorse-vm/src/value.rs", "Payload"),
+        "record_layout": record_layout(),
+        # Where a reader goes next for each part of a slot. The map shows these
+        # beside the hovered slot so the picture leads back into the code.
+        "anchors": {
+            "kind": find_item("Kind", "ironhorse-vm/src/value.rs"),
+            "slot": find_item("Slot", "ironhorse-vm/src/value.rs"),
+            "payload": find_item("Payload", "ironhorse-vm/src/value.rs"),
+            "slot_index": find_item("SlotIndex", "ironhorse-vm/src/value.rs"),
+            "chunk_offset": find_item("ChunkOffset", "ironhorse-vm/src/value.rs"),
+            "codec": {"file": rel(ENGINE / "ironhorse-snapshot/src/slot_codec.rs"), "line": None},
+            "gc": find_item("GcHooks", "ironhorse-vm/src/gc.rs"),
+        },
+    }
+
+
 def snapshot_layout():
     return {
         "container": {
@@ -849,6 +995,7 @@ def snapshot_layout():
             "tree_tags": byte_tags(STORE_SRC, "TREE"),
         },
         "sqlite": sqlite_schema(),
+        "heap": heap_sample(),
     }
 
 
