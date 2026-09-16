@@ -63,7 +63,8 @@ quarter); the release cost table is pinned by `COST_TABLE_VERSION` (today
 platform*, not across platforms (per the engine design's § Metering, the
 accuracy-over-parity doctrine of 2026-07-04). That within-binary determinism is the
 lever this design exploits: because the *value* is deterministic, the *cost model*
-fitted from it is deterministic too, so most of the constraint can be gated cheaply
+fitted from it is deterministic too (when the fit is done in exact arithmetic, not
+`f64` regression, per § The baseline), so most of the constraint can be gated cheaply
 on ordinary PR CI, and the noisy wall-clock benchmark is reserved for the one job
 only it can do: keeping the model honest as a CPU-time proxy. (Because computrons
 are not guaranteed identical across platforms, the exact-pin gate runs on the same
@@ -82,9 +83,16 @@ C_model(n) = coefficient * f(n) + intercept
 where `f(n)` is a growth basis drawn from a small closed set: `1` (constant),
 `log n`, `n` (linear), `n*log n`, `n^2` (quadratic). The `coefficient` and
 `intercept` are fit from the **exact, deterministic** computron counts measured at a
-ladder of at least four input sizes (doublings). Because the inputs to the fit are
-exact integers, the fitted model is itself deterministic and reproducible: it can be
-committed and re-derived bit-for-bit on any host.
+ladder of at least four input sizes (doublings). The fit **must use exact
+rational/integer arithmetic, not floating-point regression.** Exact-integer inputs
+alone do not make an `f64` least-squares fit reproducible across hosts: summation
+order, FMA contraction, and libm differences vary by platform and toolchain, so an
+`f64` regression would silently forfeit the very determinism this design leans on.
+With a closed basis of five simple forms fit to at most a handful of exact-integer
+ladder points, the normal-equation solution is a ratio of small integer sums and is
+representable exactly as a rational; the record commits the reduced rational (or its
+exact-integer numerator/denominator pair). Only then is the fitted model itself
+deterministic and re-derivable bit-for-bit on any host.
 
 ### Where the baseline lives: one JSON record, not two artifacts
 
@@ -251,14 +259,26 @@ The design resolves this so the builder does not have to improvise a
 fix-first-or-flag decision:
 
 - Each baseline record carries a `known_divergent` field naming the tracking
-  reference (here, architecture-review F4). A `known_divergent` load is recorded
-  with its exact deterministic computron pins and its computron growth class as
-  usual, so **gates 1 and 2 constrain it fully** (its computron cost is still
+  reference (here, architecture-review F4), plus the currently-measured (already-bad)
+  per-doubling wall-clock time ratio for the load. A `known_divergent` load is
+  recorded with its exact deterministic computron pins and its computron growth class
+  as usual, so **gates 1 and 2 constrain it fully** (its computron cost is still
   locked; a computron regression is still caught).
-- **Gate 3's time-class-equals-computron-class assertion is suppressed** for a
-  `known_divergent` load and reported as a *tracked exception*, visibly distinct
-  from a regression (the nightly report lists it as "known-divergent (F4), gate 3
-  class-match not asserted"), never a silent skip and never a red gate.
+- **Gate 3's class-match assertion is replaced by a non-regression bound, not
+  dropped**, for a `known_divergent` load. Suppressing gate 3 entirely would remove
+  all wall-clock coverage on exactly the loads with the largest known metering blind
+  spot: a *second*, new time-side regression stacking on the F4 defect (e.g.
+  `collection_find`'s linear scan degrading further under an unrelated refactor)
+  would go undetected, since gates 1-2 only constrain the computron value, which by
+  construction does not move. So only the **time-class-equals-computron-class**
+  check stands down (it would go red on day one purely from the pre-existing
+  defect); in its place gate 3 asserts that the load's measured per-doubling time
+  ratio **must not exceed the recorded already-bad ratio by more than the gate-3
+  noise margin**. The nightly report lists the load as a *tracked exception*,
+  visibly distinct from a regression ("known-divergent (F4): class-match not
+  asserted; non-regression bound vs. recorded ratio held"), never a silent skip and
+  never a red gate for the pre-existing defect alone, but still red on a *fresh*
+  time regression that worsens the load beyond its recorded baseline.
 - When the underlying meter defect (F4) is fixed, the load's computrons stop being
   linear-while-time-is-quadratic. That is a deliberate cost-model change: it lands
   under a `COST_TABLE_VERSION` bump that re-records the baseline (§ Deliberate
@@ -308,18 +328,26 @@ sequencing is:
    plus the seed roster above.
 3. Only then are #1282's advisory-only relaxations safe.
 
-**Enforcing the no-coverage-gap sequence mechanically, not by recommendation.** A
-prose note in #1282's body is not enough: #1282 is currently open, not draft,
-`MERGEABLE`, with no blocking review, so the autonomous fleet could merge it
-independently and open the very gap this design exists to prevent. The ordering is
-therefore enforced by a **mechanical hold**, not a recommendation: the build PR that
-lands this regime is registered as a job-board dependency of #1282 (this garden's
-own `skills/orchestration` `blocked_on` edge, or an equivalent GitHub hold label on
-#1282), so #1282 cannot merge until the regime PR has landed. The recommended
-concrete order: land the regime first as its own PR against `llm`; then #1282
-rebases onto it and merges with the gap already closed. The hold, not the note, is
-what guarantees no coverage-gap window; the note in #1282's body is added too, for
-human readers.
+**Constraining the merge order: what the hold actually enforces, and what it does
+not.** A prose note in #1282's body is not enough on its own: #1282 is currently
+open, not draft, `MERGEABLE`, with no blocking review, so the autonomous fleet could
+merge it independently and open the very gap this design exists to prevent. The build
+PR that lands this regime is therefore registered as a job-board dependency of #1282
+via this garden's own `skills/orchestration` `blocked_on` edge, so the garden's own
+automated **conductor** role will not merge #1282 until the regime PR has landed.
+This must be scoped honestly: the `blocked_on` edge is consulted by the conductor,
+not by GitHub, so it binds **only the fleet's automated merge path.** It does **not**
+block a maintainer merging #1282 by hand through the GitHub UI, and there is no
+merge-blocking "hold label" mechanism in this repo to lean on (verified: nothing in
+`.github/workflows` gates a merge on a label). The `blocked_on` edge is thus a
+mechanical guarantee against the *fleet* opening the gap, not against every actor.
+Closing the human-merge window rests on the note in #1282's body (added for human
+readers) plus maintainer awareness of the ordering. A hard guarantee against a human
+merge would require a concrete branch-protection primitive this repo does not yet
+have (a required status check on #1282's target that stays red until the regime PR
+has landed); adding one is a separate CI change, out of scope for this design. The
+recommended concrete order remains: land the regime first as its own PR against
+`llm`; then #1282 rebases onto it and merges with the gap already closed.
 
 Partial-keep is rejected: leaving #1282's relaxations in place *without* the
 replacement is precisely the gap the maintainer is course-correcting; a full
@@ -374,7 +402,8 @@ The sibling build job `ironhorse-computron-benchmark-baseline-build` executes:
    `--write-baseline` recorder.
 4. **Build gate 3** as a nightly benchmark step: wall-clock medians across the
    ladder, time-class == computron-class assertion (with the single-sided timing
-   band and the `known_divergent` suppression), and the global computrons/second
+   band and the `known_divergent` non-regression bound in place of the class-match),
+   and the global computrons/second
    fidelity band; wire it into the `benchmarks` job in `ironhorse-full-test262.yml`.
 5. **Seed the roster** (§ polynomial built-ins) plus every load from step 1's audit;
    mark the F4 trio (`Map`/`Set` bulk insertion, `for..in`, string `for..of`)
@@ -383,8 +412,9 @@ The sibling build job `ironhorse-computron-benchmark-baseline-build` executes:
 6. **Wire PR CI**: add gates 1-2 to the ordinary Rust test lane (`ci.yml`),
    deterministic and fast; keep gate 3 nightly.
 7. **Rebase #1282** onto the landed regime (or merge order per § fate) and register
-   the mechanical hold so no coverage-gap window exists; update #1282's body to
-   reference this work.
+   the `blocked_on` edge that holds the fleet's automated merge path until the regime
+   PR lands (§ fate; the human-merge order is closed by the body note plus maintainer
+   awareness, not the edge); update #1282's body to reference this work.
 8. Run the full nightly benchmark lane locally (release, host-controlled) and record
    the measured medians and growth-class confirmations as evidence.
 
@@ -411,8 +441,9 @@ The sibling build job `ironhorse-computron-benchmark-baseline-build` executes:
    one file of one format (§ Where the baseline lives).
 7. **Known-divergent loads are tracked exceptions, not red gates.** A load whose
    wall-clock cost already diverges from its computron class (the F4 trio) is kept in
-   the roster under gates 1-2 with gate 3's class-match suppressed until the meter
-   fix re-records it (§ F4 exception).
+   the roster under gates 1-2, with gate 3's class-match replaced by a non-regression
+   bound on the already-bad time ratio (so a second, fresh regression is still
+   caught) until the meter fix re-records it (§ F4 exception).
 
 ## Open questions
 
@@ -431,9 +462,10 @@ The sibling build job `ironhorse-computron-benchmark-baseline-build` executes:
 - Should a `COST_TABLE_VERSION` bump **auto-regenerate** all baselines, or always
   require a manual reviewed `--write-baseline`? (Recommendation: manual, for
   reviewability.)
-- Confirm the fate of PR #1282: **revise in place, land the regime first, enforce
-  the merge order with a mechanical hold** (this design's recommendation) versus
-  superseding #1282 with a fresh combined PR.
+- Confirm the fate of PR #1282: **revise in place, land the regime first, hold the
+  fleet's merge order with a `blocked_on` edge** (human-merge order closed by the
+  note plus maintainer awareness; this design's recommendation) versus superseding
+  #1282 with a fresh combined PR.
 - Two-input (grid) baselines: land in this build, or defer regexp's
   subject-length-by-pattern-size grid to a follow-up once single-input loads are
   proven? (Recommendation: defer the grid; ship single-input first.)
