@@ -43,6 +43,7 @@
     "@endo/bytes": "workspace:^",
     "@endo/compartment-mapper": "workspace:^",
     "@endo/eventual-send": "workspace:^",
+    "@endo/harden": "workspace:^",
     "@endo/immutable-arraybuffer": "workspace:^",
     "@endo/pass-style": "workspace:^",
     "ses": "workspace:^",

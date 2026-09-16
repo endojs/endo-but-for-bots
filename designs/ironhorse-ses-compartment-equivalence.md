@@ -200,6 +200,45 @@ it — lock down before admitting a second compartment.
 `Interp`, its refusal on a realm frozen first, and the unfrozen `Machine` that
 takes it and keeps its compartments.
 
+#### The same timing rule, one layer up: `harden` before `lockdown`
+
+The three shapes above are about when the HOST freezes the graph. There is a
+second freeze with the same failure signature, and it comes from the GUEST.
+
+IronHorse's `harden` is a faithful port of XS's `fx_hardenFreezeAndTraverse`
+and walks prototype chains. At boot `Function.prototype.constructor` carries
+the spec's `{writable: true, enumerable: false, configurable: true}`; after a
+single `harden({})` anywhere it is `{writable: false, configurable: false}`.
+A shim `lockdown()` that runs afterwards reaches
+`ses/src/tame-function-constructors.js`, tries to redefine that `constructor`
+to its inert stand-in, and is refused — `invalid descriptor`, the same string
+the construction-time freeze produces, from an unrelated cause.
+
+The rejection is spec-correct: a non-configurable, non-writable data property
+cannot be redefined to a different value, and re-running the same define with
+the identical value is accepted. The freeze is the problem, not the refusal.
+
+This is not a hazard for the shipped IronHorse worker, which deletes `harden`
+and locks down with nothing having hardened
+(`bundle-ironhorse-worker.mjs`). It bites any embedder that hardens first, and
+it bit the `ses-xs-parity` corpus, where `@endo/pass-style`, `@endo/bytes` and
+`@endo/immutable-arraybuffer` all `harden()` at module scope while the prelude
+is still evaluating.
+
+`packages/test262-runner/src/ironhorse-pre-shim.js` resolves it by handing
+`@endo/harden`'s `makeHardener({ traversePrototypes: false })` to
+`globalThis.harden` before the shim loads: present, so `@endo/harden`'s selector
+adopts it rather than installing its own into
+`Object[Symbol.for('harden')]` — the slot whose mere presence makes
+`repairIntrinsics` refuse — and non-traversing, so the intrinsics survive to be
+tamed. That took the corpus from 7/8 to 8/8.
+
+XS needs none of this because its `lockdown` is native: `fx_lockdown`
+(§ `fx_lockdown`, in order) rewires those constructors with direct slot writes,
+below `[[DefineOwnProperty]]`, so a frozen `Function.prototype` never obstructs
+it. IronHorse ported XS's `harden` and not XS's `lockdown`; a native `lockdown`
+remains future work, and until it lands the shim route is the SES profile.
+
 ### What the `ses-xs-parity` axis actually runs
 
 Worth stating plainly, because the axis's name and its `-l` flag both suggest
@@ -250,30 +289,32 @@ pre-skips every SES-mode case (`xst.rs`, `SesMode::unimplemented_skip` — note
 that `SesMode::prelude()` is never applied on the live path at all).
 
 There is now a third prelude, `src/ironhorse-prelude.js`, and measuring it
-gives the first real number for the shim route: **7 of the 8 cases pass**
+gives the real number for the shim route: **all 8 cases pass**
 (`ironhorse-vm/tests/ses_prelude_reach.rs`), up from 3 when the prelude first
-ran, against `covered=6` for the engine route, which skips the two that need
-the guest surface.
-The overlap is not the interesting part; the failures are.
+ran and 7 before the harden fix below, against `covered=6` for the engine
+route, which skips the two that need the guest surface.
+The overlap is not the interesting part; the one that took longest is.
 
 | case | node | Ironhorse via the shim prelude |
 |---|---|---|
 | `Compartment/prototype/Symbol.toStringTag.js` | pass | **pass** |
-| `Compartment/prototype/Symbol.toStringTag-lockdown.js` | **fail** | fail |
+| `Compartment/prototype/Symbol.toStringTag-lockdown.js` | **fail** | **pass** |
 | `pass-style-bytes/byte-readers.js` | pass | **pass** |
 | `pass-style-bytes/native-or-emulated-shape.js` | pass | **pass** |
 | `pass-style-bytes/byte-array-brand.js` | pass | **pass** |
 | `view-behavior-matrix/ses-hosts.js` | pass | **pass** |
 | `TextEncoder`/`TextDecoder` intersection | pass | **pass** |
 
-`Symbol.toStringTag-lockdown.js` **fails on node too** — the node host reports
-14/16 today, both failures on that file (one file, sloppy and strict).
-It fails on BOTH hosts, but **for two different reasons**, and an earlier
+`Symbol.toStringTag-lockdown.js` is the last one to fall, and it is the only
+case node still fails — the node host reports 14/16, both failures on that file
+(one file, sloppy and strict).
+It used to fail on BOTH hosts, but **for two different reasons**, and an earlier
 revision of this section asserted node's reason for Ironhorse as well and
 concluded "it is not an Ironhorse gap".
-That was an inference from a shared symptom, never a measurement, and it is
-wrong. Both reasons are `harden` running before `lockdown`, which is why the
-inference looked safe; they part company on what `harden` did.
+That was an inference from a shared symptom, never a measurement, and it was
+wrong twice over: it was an Ironhorse gap, and it was a fixable one.
+Both reasons are `harden` running before `lockdown`, which is why the inference
+looked safe; they part company on what `harden` did.
 
 | | node | Ironhorse |
 | --- | --- | --- |
