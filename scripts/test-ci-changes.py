@@ -123,6 +123,31 @@ class Repository(unittest.TestCase):
         self.assertFalse(selected["test-ironhorse"])
         self.assertFalse(selected["test-ironhorse-calibration"])
 
+    def test_ses_artifact_sources_select_the_lane_that_pins_them(self):
+        """The oracle lane generates `dist-ironhorse/boot.js` and
+        `prelude/ironhorse.js`, and `ses_boot_intrinsics.rs` /
+        `ses_prelude_reach.rs` read them at runtime. Editing what those
+        artifacts are built from has to re-run the pins that watch them."""
+        for path in [
+            "packages/test262-runner/src/ironhorse-prelude.js",
+            "packages/test262-runner/src/ironhorse-pre-shim.js",
+            "packages/test262-runner/scripts/generate-preludes.js",
+            "packages/thixotrope/scripts/bundle-ironhorse-worker.mjs",
+        ]:
+            with self.subTest(path=path):
+                self.assertTrue(self.selected(path)["test-ironhorse-oracle"])
+
+    def test_non_inputs_do_not_select_the_oracle_lane(self):
+        """The rule above is scoped to what the two artifacts are actually
+        built from: the ironhorse bundle does not read `thixotrope/src`, and
+        the runner's README is not an input at all."""
+        for path in [
+            "packages/thixotrope/src/index.js",
+            "packages/test262-runner/README.md",
+        ]:
+            with self.subTest(path=path):
+                self.assertFalse(self.selected(path)["test-ironhorse-oracle"])
+
     def test_nightly_scripts_and_expectations_do_not_select_core(self):
         for path in ["rust/engine/scripts/bench.sh", "rust/engine/ironhorse-262/expectations/nightly.txt"]:
             with self.subTest(path=path):

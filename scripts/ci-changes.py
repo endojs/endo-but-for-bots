@@ -325,6 +325,27 @@ def classify(paths, graphs, all_jobs=False):
             "packages/daemon/scripts/bundle-bus-worker-xs-ses-boot.mjs",
         }:
             jobs["test-ironhorse-oracle"] = True
+        # The same rule for the two SES artifacts the oracle lane generates and
+        # `ses_boot_intrinsics.rs` / `ses_prelude_reach.rs` then read at
+        # runtime. `generate-preludes.js` bundles `test262-runner/src`'s
+        # prelude and its imports into `prelude/ironhorse.js`;
+        # `bundle-ironhorse-worker.mjs` writes `dist-ironhorse/boot.js`, and
+        # the shim profile those tests pin (the `Iterator.prototype` repair,
+        # the console stub, the `lockdown` options) is inline in that script.
+        # Without these, editing a prelude source or that bundler changes what
+        # the pins measure without ever re-running them.
+        #
+        # `polyfills.js` is an input to both and is already listed above.
+        # NOT listed, deliberately: `packages/thixotrope/src` (checked -- the
+        # ironhorse bundle does not read it) and `packages/ses` (an input to
+        # `boot.js`, but listing it would select this lane on every SES change,
+        # and a SES change already runs `test-thixotrope-ironhorse`, which
+        # builds the same bundle).
+        if under(path, "packages/test262-runner/src") or path in {
+            "packages/test262-runner/scripts/generate-preludes.js",
+            "packages/thixotrope/scripts/bundle-ironhorse-worker.mjs",
+        }:
+            jobs["test-ironhorse-oracle"] = True
         if path in {
             "rust/engine/scripts/test-math-vectors.py", "rust/engine/scripts/compare-math-vectors.py",
             "rust/engine/scripts/test-lockfile-agreement.py", "rust/engine/scripts/check-lockfile-agreement.py",
