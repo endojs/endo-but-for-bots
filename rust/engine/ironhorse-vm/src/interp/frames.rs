@@ -289,11 +289,6 @@ impl Interp {
         }
     }
 
-    /// Leave a user-function call (`XS_CODE_END`): restore the caller's
-    /// saved activation and return the pc to resume the caller at. The
-    /// callee's result has already been captured by the caller of this
-    /// method (which pushes it onto the shared value stack, matching XS's
-    /// `mxStack = mxFrameEnd; *mxStack = *result`).
     /// Leave a call the way XS's `XS_CODE_END` does: `mxStack = mxFrameEnd`
     /// (xsRun.c:1063) resets the value stack to the frame's base *before*
     /// `*mxStack = *slot` writes the result, so whatever the body left above
@@ -320,6 +315,11 @@ impl Interp {
         resume
     }
 
+    /// Leave a user-function call (`XS_CODE_END`): restore the caller's
+    /// saved activation and return the pc to resume the caller at. The
+    /// callee's result has already been captured by the caller of this
+    /// method (which pushes it onto the shared value stack, matching XS's
+    /// `mxStack = mxFrameEnd; *mxStack = *result`).
     pub(super) fn leave_call(&mut self) -> usize {
         let caller = self
             .call_stack

@@ -1144,6 +1144,12 @@ impl Machine {
     /// Freeze the shared intrinsic graph that
     /// [`Machine::unfrozen_with_start_global_names`] left mutable. Idempotent, and a
     /// no-op on a machine that was built frozen.
+    ///
+    /// NOT atomic. The intrinsic roots are frozen one at a time, so a guest
+    /// that has made an intrinsic non-extensible or installed a refusing
+    /// Proxy can make this return `Err` with some roots already frozen while
+    /// [`Intrinsics::is_locked_down`] still reports false. Call it again to
+    /// finish: the roots already frozen are no-ops.
     pub fn lock_down(&self) -> Result<(), Halt> {
         self.machine
             .interpreter
