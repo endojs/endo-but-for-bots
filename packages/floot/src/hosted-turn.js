@@ -123,7 +123,7 @@ export const hostedTurnPartialOf = error =>
 harden(hostedTurnPartialOf);
 
 /**
- * @param {{ client: any, text: string, writer: any, signal?: AbortSignal, model?: string, reasoningEffort?: string, systemPrompt?: string, acknowledgedCheckpoint?: string, continuityContext?: string, continuityContextUnavailable?: string, recordToolEvent?: (event: any) => Promise<void> }} options
+ * @param {{ client: any, text: string, writer: any, signal?: AbortSignal, model?: string, reasoningEffort?: string, systemPrompt?: string, acknowledgedCheckpoint?: string, transcript?: readonly any[], continuityContext?: string, continuityContextUnavailable?: string, recordToolEvent?: (event: any) => Promise<void> }} options
  */
 export const runHostedTurn = async ({
   client,
@@ -134,6 +134,7 @@ export const runHostedTurn = async ({
   reasoningEffort,
   systemPrompt,
   acknowledgedCheckpoint,
+  transcript,
   continuityContext,
   continuityContextUnavailable,
   recordToolEvent,
@@ -225,6 +226,11 @@ export const runHostedTurn = async ({
         ...(reasoningEffort ? { reasoningEffort } : {}),
         ...(systemPrompt ? { systemPrompt } : {}),
         ...(acknowledgedCheckpoint ? { acknowledgedCheckpoint } : {}),
+        // The stack's own record of this conversation, as transcript records
+        // (`@endo/hosted-agent/transcript-records.js`). An adapter restores
+        // its CLI's native store from these when it has no live conversation
+        // to continue; `continuityContext` is the older text form it replaces.
+        ...(transcript === undefined ? {} : { transcript }),
         ...(continuityContext === undefined ? {} : { continuityContext }),
         ...(continuityContextUnavailable
           ? { continuityContextUnavailable }

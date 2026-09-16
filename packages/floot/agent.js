@@ -56,6 +56,7 @@ import { makeSessionTurnSlot } from './src/session-turn-slot.js';
 import { makeEndoToolSet, makeFlootToolRegistry } from './src/tool-registry.js';
 import { makeTurnJournal } from './src/turn-journal.js';
 import { makeHostedContinuityOptions } from './src/hosted-continuity.js';
+import { projectTranscript } from './src/transcript-projection.js';
 import { providePrivateTurnStorage } from './src/private-turn-storage.js';
 import { makeSessionNetworkPolicy } from './src/network-policy.js';
 import { makeContainerMountRegistrar } from './src/container-mounts.js';
@@ -1478,6 +1479,12 @@ export const makeStreamingAgent = async (
           signal,
           systemPrompt: effectivePrompt,
           acknowledgedCheckpoint,
+          // The stack owns the transcript: hand the backend this
+          // conversation as records it can rebuild its CLI's native store
+          // from, keeping tool calls as tool calls with their results.
+          // `makeHostedContinuityOptions` is the older text form, retained
+          // until every adapter reads the records.
+          transcript: await getTranscript(),
           ...makeHostedContinuityOptions(await getHistory(turnId)),
           recordToolEvent: event => turnJournal.append(turnId, event),
         });
@@ -2358,6 +2365,19 @@ export const makeStreamingAgent = async (
     }
     return harden(out);
   };
+
+  /**
+   * This conversation as transcript records, for an adapter rebuilding its
+   * CLI's native store (`@endo/hosted-agent/transcript-records.js`).
+   *
+   * The committed tree path only. `getHistory` also synthesizes evidence the
+   * journal holds for turns that failed before reaching the tree, which is
+   * recovery narration this stack adds for the model's benefit — a CLI's own
+   * store never contained it, so restoring it would be adding to the
+   * conversation rather than reproducing it.
+   */
+  const getTranscript = async () =>
+    projectTranscript(await tree.getPath(await getOrCreateLeaf()));
 
   const getHistory = async (excludeTurnId = undefined) => {
     const leafId = await getOrCreateLeaf();
