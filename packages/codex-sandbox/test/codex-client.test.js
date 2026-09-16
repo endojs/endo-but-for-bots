@@ -14,7 +14,7 @@ const INITIALIZE_RESULT = harden({
   userAgent: 'codex-test',
 });
 
-test('catalog rotation restores dialogue as inert input once and reconciles the old catalog first', async t => {
+test('catalog rotation restores the conversation once and reconciles the old catalog first', async t => {
   t.timeout(5000);
   const saved = [];
   const fixture = makeFixture({
@@ -43,7 +43,12 @@ test('catalog rotation restores dialogue as inert input once and reconciles the 
   t.is(first.params.threadId, 'thread-new');
   t.is(first.params.input.length, 2);
   t.true(first.params.input[0].text.includes(context));
-  t.true(first.params.input[0].text.includes('do not replay'));
+  // No preamble. The restored conversation reads as the conversation: the
+  // authority claim the old wrapper made is enforced by the session's pinned
+  // tool catalog, and telling a model its own history is evidence it must not
+  // rely on cost real behaviour for nothing.
+  t.false(first.params.input[0].text.includes('do not replay'));
+  t.false(first.params.input[0].text.includes('Historical Floot'));
   t.is(first.params.input[1].text, 'continue');
   fixture.push({
     method: 'turn/completed',
@@ -66,11 +71,13 @@ test('catalog rotation restores dialogue as inert input once and reconciles the 
   await drain(second);
 });
 
-test('rotation with missing, invalid, or oversized history fails before altering the old thread', async t => {
+test('rotation with missing or invalid history fails before altering the old thread', async t => {
+  // A conversation too long to replay is no longer among these: it is
+  // restored. What still fails is history that is absent or not text, which
+  // is a rotation that cannot carry the conversation across at all.
   for (const opts of [
     {},
     { continuityContext: 42 },
-    { continuityContext: 'x'.repeat(256 * 1024 + 1) },
     { continuityContextUnavailable: 'history exceeds replay limit' },
   ]) {
     const fixture = makeFixture({
@@ -177,23 +184,39 @@ test('a committed checkpoint is acknowledged under its original catalog before r
   );
 });
 
-test('combined UTF-8 prompt and restoration bounds reject before rotation', async t => {
+test('a long conversation is restored, not refused', async t => {
+  // A conversation is restored on every revival until it is deleted. There is
+  // no length at which the stack declines to hand a session its own history:
+  // the bound that used to sit here refused exactly the long conversations
+  // that most need their context back.
+  t.timeout(5000);
   const fixture = makeFixture({
     threadId: 'thread-saved',
+    existingTurnIds: ['turn-1'],
     clientOptions: {
       savedToolSetId: 'old-tools',
       toolSetId: 'new-tools',
+      savedRecovery: { baseTurnId: null, turnId: 'turn-1' },
       maxPromptBytes: 500,
     },
   });
-  await t.throwsAsync(
-    () =>
-      fixture.client.send('continue', { continuityContext: '界'.repeat(100) }),
-    { message: /prompt byte limit/ },
-  );
-  t.is(fixture.sent.length, 0);
+  const history = '界'.repeat(100);
+  const reader = await fixture.client.send('continue', {
+    continuityContext: history,
+  });
+  const start = fixture.sent.find(message => message.method === 'turn/start');
+  // The whole conversation reached the new thread, well past the 500-byte
+  // prompt bound the old check measured it against.
+  t.true(start.params.input[0].text.includes(history));
+  fixture.push({
+    method: 'turn/completed',
+    params: {
+      threadId: 'thread-new',
+      turn: { id: 'turn-2', status: 'completed' },
+    },
+  });
+  await drain(reader);
 });
-
 test('replacement revival preserves only its exact old-thread acknowledgement lineage', async t => {
   for (const turnId of [undefined, 'failed-first']) {
     const saved = [];

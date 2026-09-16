@@ -983,13 +983,35 @@ Two ways out, and the choice is not obvious:
    and no bridge script, and all three adapters converge on `volume`, `attach`
    and `tmpfs` with no new kind at all.
 
-   Feasibility, partly checked. OpenCode's config takes a remote MCP server —
-   `{ type: 'remote', url, headers?, oauth?, timeout? }` in
-   `packages/core/src/config/mcp.ts` — so a loopback URL with a bearer header
-   needs no patch there. **Claude Code's HTTP/SSE MCP support is not yet
-   verified**, and this option depends on it; check before committing to it,
-   because if Claude is stdio-only the bind comes back for one adapter and
-   option 1 returns with it.
+   Feasibility, now checked, and it is **more expensive than it first looks**.
+
+   OpenCode's config does take a remote MCP server — `{ type: 'remote', url,
+   headers?, oauth?, timeout? }` in `packages/core/src/config/mcp.ts` — so a
+   loopback URL with a bearer header needs no patch there, and Claude Code's
+   HTTP/SSE support is assumed pending a Tokyo check. That is not the
+   expensive part.
+
+   The expensive part is *where* a loopback port would have to live. The
+   namespace the slice joins is created by the provider sidecar with
+   `--network=none`, and the only thing already listening in it is
+   `makeProviderHttpListener`, which runs inside the **pinned listener image**
+   (`provider-worker.js`, reached from `provider-worker-entry.js`) and relays
+   to the host worker over inherited stdin/stdout. The MCP bridge holds the
+   session's Endo tool capability and therefore has to stay in the host
+   worker, which is in a different network namespace. So an MCP port in the
+   slice's namespace means:
+
+   - the listener image grows an MCP HTTP endpoint beside its inference one;
+   - a second relay channel over the same stdio transport;
+   - an MCP Streamable-HTTP transport implementation, where today the bridge
+     speaks NDJSON over a unix socket and the guest runs a small stdio shim;
+   - and a bearer token, since the bind is no longer the access control.
+
+   Against that, option 1 is a mount kind and a validator — tens of lines. The
+   comparison that made option 2 look obviously better assumed a port could
+   simply be opened where the slice could reach it; it cannot. **Option 1 is
+   now the cheaper answer, and option 2 is the cleaner end state**, so the
+   choice is a real trade rather than a formality.
 
 **(2) is the recommendation.** An earlier draft of this section objected that
 the sidecar sharing that namespace holds the upstream credential, so a loopback
@@ -1187,20 +1209,46 @@ restored tool call a tool call. System prompts are deliberately absent: they
 are harness-supplied per incarnation, so the adapter contributes the current
 one rather than replaying a stale one.
 
-**Per-adapter translation, and what is still unknown.**
+**Per-adapter translation.** Observed on Tokyo, 2026-09-16, rather than
+assumed. Every CLI keeps its conversation in a store under a directory the
+harness already controls, so restoration is writing that store before the CLI
+starts — not an import API, which none of the three offers.
 
-- **Codex** already consumes `continuityContext` and is the natural first
-  adopter: it proves the record stream against a real CLI before the other two
-  commit to it. Its work is replacing single-prompt injection with turn
-  reconstruction over the app-server protocol.
-- **Claude** needs a JSONL writer. The repo knows the layout —
-  `projects/<project>/<session-uuid>.jsonl`, per `claude-transcripts.js` — but
-  only reads names and mtimes, never record contents, so **the record schema is
-  unresearched** and must be captured from a live transcript.
+| CLI | store | shape | ours to patch |
+|---|---|---|---|
+| Codex | `/codex-home/thread_history_1.sqlite` | versioned SQLite | **no** — stock `@openai/codex@0.152.0` from npm, no fork |
+| Claude | `$CLAUDE_CONFIG_DIR/projects/<project>/<uuid>.jsonl` | line-oriented linked list of Anthropic API messages | not the binary, but the file is ours to write |
+| OpenCode | `$XDG_DATA_HOME/opencode/opencode.db` | versioned SQLite, drizzle migrations | **yes** — `kumavis/opencode` |
+
+- **Claude is the tractable one and should go first**, displacing Codex in the
+  order below. Its transcript is an envelope — `uuid`, `parentUuid`,
+  `sessionId`, `cwd`, `gitBranch`, `timestamp`, `type` — wrapping a verbatim
+  Anthropic API message, so a `tool-call` record is an assistant
+  `{type:'tool_use', id, name, input}` and a `tool-result` is a user
+  `{type:'tool_result', tool_use_id, content}`. Writing that is faithful, and
+  the format is a linked list of API messages rather than a private schema.
 - **OpenCode** needs the fork patch: an endpoint that appends historical
   messages, since `CreateInput` is `{id?, agent?, model?, location}` and no
   route appends one. The patch must accept compaction records too, or the
   boundary cannot be restored.
+- **Codex cannot be restored faithfully today, and this is an open problem.**
+  Its app-server exposes `initialize`, `config/read`, `account/read`,
+  `thread/start`, `thread/resume`, `thread/turns/list`, `thread/revert`,
+  `turn/start`, `turn/interrupt` and `model/list` — nothing that appends a
+  historical turn — and its store is a versioned SQLite schema inside a binary
+  this project does not fork. Two options, neither good:
+
+  1. **Write `thread_history_1.sqlite` directly.** The same coupling accepted
+     for Claude's JSONL, and the same protection — the image is pinned — but
+     materially more fragile: a private relational schema with a version in its
+     filename, against a vendor we cannot patch if it moves.
+  2. **Keep prepending the history to the first turn's input**, which is what
+     Codex does today and is all `turn/start` allows. This is *not* faithful:
+     tool calls arrive as text describing tool calls.
+
+  Until that is decided, Codex gets the improvements its protocol does allow —
+  the preamble and the arbitrary bound both go — and its restoration is
+  honestly marked as prepended rather than reconstructed.
 
 ### Step 4 order and tests — 2026-09-16
 
@@ -1209,10 +1257,12 @@ one rather than replaying a stale one.
    assumed. Assume it works, but prove it before the bind is deleted.
 2. **Record compaction boundaries in Floot's journal**, and define the neutral
    record stream. Nothing downstream is faithful until this exists.
-3. **Codex restoration** — native reconstruction, no preamble, no bound. First
-   because it already consumes the history and so tests the format soonest.
-4. **Claude restoration** — capture the JSONL schema, write it, drop the config
-   directory onto tmpfs, delete `makeTranscriptResume` and its helpers.
+3. **Claude restoration** — write the JSONL from the record stream, drop the
+   config directory onto tmpfs, delete `makeTranscriptResume` and its helpers.
+   First because its store is the one that can be written faithfully today, so
+   it proves the record stream against a real CLI soonest.
+4. **Codex** — drop the preamble and the bound now; decide separately whether
+   to write `thread_history_1.sqlite` or accept prepended history.
 5. **OpenCode restoration** — fork patch, then `OPENCODE_DB=:memory:`, then
    delete the `opencodeSessionId` resume path and its unhandled not-found case.
 6. **MCP onto loopback** with a bearer token; delete the bind, the stdio bridge
