@@ -109,8 +109,17 @@ fn explicit_guest_stringification_remains_observable() {
 #[test]
 fn eval_framing_diagnostics_require_live_data_for_exact_attribution() {
     for (harness, expected) in [
+        // An `Error` carries its own `name`, so the pair is exact.
         ("function Test262Error(m){var e=new Error(m);e.name='Test262Error';return e;}", "Test262Error: #2"),
-        ("function Test262Error(m){this.message=m;}Test262Error.prototype.toString=function(){return 'Test262Error: '+this.message;};", "[object Object]"),
+        // A plain object with the message on the instance and `toString` on
+        // the prototype — test262's own `sta.js` shape. The `toString` that
+        // would name it is guest code this boundary must not run, so the
+        // rendering pairs the message with the tag `Object.prototype.toString`
+        // reports rather than the constructor's name: `Object`, not
+        // `Test262Error`. It used to render `[object Object]` and drop the
+        // message entirely, which told a host nothing and defeated `eshost`'s
+        // `parseError`, whose regex wants `Name: message`.
+        ("function Test262Error(m){this.message=m;}Test262Error.prototype.toString=function(){return 'Test262Error: '+this.message;};", "Object: #2"),
     ] {
         let source = format!("\"use strict\";{harness}this['v']='x';if(v!=='x')throw new Test262Error('#2');var v;");
         let (code, symbols) = ironhorse_compile::compile_atoms_with(&source, false).unwrap();

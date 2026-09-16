@@ -243,7 +243,38 @@ impl Interp {
     /// change its decided outcome. In particular it cannot allocate guest
     /// objects, enqueue jobs, call a meter host, or swallow a second halt.
     pub(super) fn render_uncaught(&self, v: Slot) -> String {
-        self.render_or_stub(&v)
+        let rendered = self.render_or_stub(&v);
+        // A thrown plain object renders through `Object.prototype.toString` as
+        // `[object Object]`, which tells the host nothing — and `eshost`'s
+        // `parseError` regex wants `Name: message`. A guest that throws a
+        // non-`Error` carrying a string `message` is the common shape (test262's
+        // `Test262Error` is exactly it: `sta.js` sets `this.message` and puts
+        // `toString` on the prototype), so report that pair when it is there.
+        //
+        // Read, never call: the prototype `toString` that would produce this
+        // string properly is guest code, and this boundary must not resume the
+        // guest. `render_error_property` walks the prototype chain
+        // for data properties only, which is the same thing the `Error` branch
+        // of `render` already does for a live `name`/`message`.
+        if let Some(tag) = rendered
+            .strip_prefix("[object ")
+            .and_then(|rest| rest.strip_suffix(']'))
+        {
+            if let Payload::Reference(r) = v.value {
+                let message = self.render_error_property(r, "message", "");
+                // The placeholders (`<accessor>`, `<proxy>`, `<object>`) mean
+                // the text is not readable without running guest code.
+                if !message.is_empty() && !message.starts_with('<') {
+                    // The tag, not the constructor's `name`: it is what
+                    // `Object.prototype.toString` reports for this value and
+                    // needs no further reads, where a constructor's `name` is
+                    // not reliably a plain slot this may read. The pair claims
+                    // no more than the `[object …]` it replaces.
+                    return format!("{tag}: {message}");
+                }
+            }
+        }
+        rendered
     }
 
     /// [`Self::render`], or the bounded reference stub when the render
