@@ -1,5 +1,6 @@
 // @ts-check
 
+import { makeNoHostScratch } from './no-host-scratch.js';
 import { makeOwnedNativeService } from './owned-native-service.js';
 import { readRuntimeConfig } from './runtime-config.js';
 import { makeSandboxRuntime } from './runtime.js';
@@ -26,7 +27,17 @@ const makeOwnedEntrypoint = (
    * @param {Record<string, string>} env
    */
   const makeKit = (config, scratchProvider, env) => {
-    const runtime = makeRuntime({ ...config, env }, { scratchProvider });
+    const runtime = makeRuntime(
+      { ...config, env },
+      {
+        // An adapter minted with no powers grants no host scratch, which is
+        // not the same as having no provider: `factory.make` requires one
+        // before it builds anything, and a null closes the attested path
+        // outright. Fill the slot with a capability that refuses, so the
+        // runtime says "this grants nothing" rather than "this is broken".
+        scratchProvider: scratchProvider ?? makeNoHostScratch(),
+      },
+    );
     return harden({ open: () => openRuntime(runtime), close: runtime.close });
   };
   return makeOwnedNativeService({

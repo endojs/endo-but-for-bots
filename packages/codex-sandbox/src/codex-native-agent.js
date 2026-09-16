@@ -36,10 +36,9 @@
  */
 
 import { Fail, b, q } from '@endo/errors';
-import { makeExo } from '@endo/exo';
-import { M } from '@endo/patterns';
 import { makeOwnedNativeService } from '@endo/sandbox/owned-native-service.js';
 import { readRuntimeConfig } from '@endo/sandbox/runtime-config.js';
+import { makeNoHostScratch } from '@endo/sandbox/no-host-scratch.js';
 import { makeSandboxRuntime } from '@endo/sandbox/runtime.js';
 import { isAbsolute, normalize } from 'node:path';
 
@@ -53,22 +52,11 @@ import { makeCodexVolumeQuotaObserver } from './codex-quota-host.js';
  * request actually asks for one — so these throw where such a request is, not
  * where every request is.
  */
-export const makeCodexNoScratch = () =>
-  makeExo(
-    'No host scratch',
-    M.interface('NoHostScratch', {
-      provideScratchMount: M.call().rest(M.arrayOf(M.any())).returns(M.any()),
-      provideHostPath: M.call().rest(M.arrayOf(M.any())).returns(M.any()),
-    }),
-    {
-      provideScratchMount() {
-        throw Fail`Host scratch is forbidden`;
-      },
-      provideHostPath() {
-        throw Fail`Host paths are forbidden`;
-      },
-    },
-  );
+/**
+ * Codex grants no host scratch either; the refusing provider is shared, since
+ * every hosted adapter on the attested path needs the same one.
+ */
+export const makeCodexNoScratch = makeNoHostScratch;
 harden(makeCodexNoScratch);
 
 /**
