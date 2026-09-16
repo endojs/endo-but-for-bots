@@ -658,6 +658,10 @@ impl Interp {
             ("lastIndexOf", 1),
             ("reduce", 1),
             ("reduceRight", 1),
+            // Appended, never inserted: `TypedArrayReadonly`'s operation number
+            // is this list's position, so an insertion renumbers every entry
+            // after it.
+            ("at", 1),
         ]
         .into_iter()
         .enumerate()

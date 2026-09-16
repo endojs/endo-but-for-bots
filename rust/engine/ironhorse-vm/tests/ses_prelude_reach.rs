@@ -137,13 +137,9 @@ const REACH: &[(&str, bool)] = &[
     // out of a `switch (typeof ...)`, and the discriminant that `return`
     // abandoned used to land on the caller's pending operand.
     ("byte-array-brand.js", true),
-    // The case now has an `ironhorse-ses` row, so it gets past refusing to
-    // guess at a contract it has no entry for and reaches the matrix itself —
-    // where it stops on `immutableArrayView.at(1)`, the only read an EMULATED
-    // view answers. `%TypedArray%.prototype.at` is absent on ironhorse
-    // (`Array.prototype.at` and `String.prototype.at` are both present), and
-    // adding it moves the boot fingerprint, so it is its own change.
-    ("ses-hosts.js", false),
+    // Passes on its `ironhorse-ses` row plus `%TypedArray%.prototype.at`, the
+    // only read an EMULATED immutable view answers.
+    ("ses-hosts.js", true),
     // The `TextEncoder`/`TextDecoder` pair, which share this basename. Ironhorse
     // has no host text codecs; the prelude prepends `polyfills.js`'s codec
     // section, which now implements `encodeInto` and refuses an emulated
