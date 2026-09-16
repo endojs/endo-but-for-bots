@@ -389,10 +389,13 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         } else {
             // F189 reserved IDs, with the deterministic provider SIGN.
             // Re-pinned for format version 23 alongside the platform pin.
-            // Re-pinned for `%TypedArray%.prototype.at` alongside the
-            // platform arm above, which moved in the same commit. This arm
-            // is only evaluated under the deterministic provider, so a run
-            // under the default provider alone never checks it.
+            // Reached ONLY under the deterministic provider, so a golden
+            // run under the default provider alone never evaluates this arm
+            // and cannot tell you it is stale. A re-pin that moves the
+            // platform arm above and leaves this one behind therefore looks
+            // green locally and turns ci.yml:842 red. Move both arms
+            // together, and run the golden test under BOTH providers.
+            // The digest below is the `findLast`/`findLastIndex` one.
             "e6f05396fd7f352cf603b672caa40c1ad8f3dad8b97420c4b19988700fe9adb6"
         },
         "canonical final blob hash"
@@ -633,10 +636,13 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         } else {
             // Re-pinned for format version 23 / store schema v34 alongside
             // the platform pin.
-            // Re-pinned for `%TypedArray%.prototype.at` alongside the
-            // platform arm above, which moved in the same commit. This arm
-            // is only evaluated under the deterministic provider, so a run
-            // under the default provider alone never checks it.
+            // Reached ONLY under the deterministic provider, so a golden
+            // run under the default provider alone never evaluates this arm
+            // and cannot tell you it is stale. A re-pin that moves the
+            // platform arm above and leaves this one behind therefore looks
+            // green locally and turns ci.yml:842 red. Move both arms
+            // together, and run the golden test under BOTH providers.
+            // The digest below is the `findLast`/`findLastIndex` one.
             "5b0e98e36dddc7e2408adefb80bdffe552979034deb34a534b96e4a0bb257361"
         },
         "epoch-3 seal chain"
