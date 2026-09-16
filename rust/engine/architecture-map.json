@@ -325,7 +325,7 @@
       "workflow": "ironhorse-sanitizers.yml"
     }
   ],
-  "commit": "a7e42bb7aa6257db8224915e539dae3d54aa14fa",
+  "commit": "ea43be02b1e27754aad25945a41dc73af3f37f5c",
   "constants": [
     {
       "documented": "ironhorse-meter-5",
@@ -3029,7 +3029,94 @@
         ],
         "discarding": "counter(); seen;",
         "increment": "seen = counter(); seen;",
+        "io": [
+          {
+            "changed_bytes": 0,
+            "changed_slots": 0,
+            "count": 0,
+            "extent_bytes": 12012,
+            "extent_rows": 1,
+            "free_rows": 0,
+            "pages": 4,
+            "sections": 32,
+            "slot_bytes": 18000,
+            "small_bytes": 5858,
+            "written": 35870
+          },
+          {
+            "changed_bytes": 40,
+            "changed_slots": 2,
+            "count": 1,
+            "extent_bytes": 0,
+            "extent_rows": 0,
+            "free_rows": 0,
+            "pages": 1,
+            "sections": 2,
+            "slot_bytes": 2640,
+            "small_bytes": 77,
+            "written": 2717
+          },
+          {
+            "changed_bytes": 40,
+            "changed_slots": 2,
+            "count": 2,
+            "extent_bytes": 0,
+            "extent_rows": 0,
+            "free_rows": 0,
+            "pages": 1,
+            "sections": 1,
+            "slot_bytes": 2640,
+            "small_bytes": 77,
+            "written": 2717
+          },
+          {
+            "changed_bytes": 40,
+            "changed_slots": 2,
+            "count": 3,
+            "extent_bytes": 0,
+            "extent_rows": 0,
+            "free_rows": 0,
+            "pages": 1,
+            "sections": 1,
+            "slot_bytes": 2640,
+            "small_bytes": 77,
+            "written": 2717
+          },
+          {
+            "changed_bytes": 40,
+            "changed_slots": 2,
+            "count": 4,
+            "extent_bytes": 0,
+            "extent_rows": 0,
+            "free_rows": 0,
+            "pages": 1,
+            "sections": 1,
+            "slot_bytes": 2640,
+            "small_bytes": 77,
+            "written": 2717
+          },
+          {
+            "changed_bytes": 40,
+            "changed_slots": 2,
+            "count": 5,
+            "extent_bytes": 0,
+            "extent_rows": 0,
+            "free_rows": 0,
+            "pages": 1,
+            "sections": 1,
+            "slot_bytes": 2640,
+            "small_bytes": 77,
+            "written": 2717
+          }
+        ],
+        "resume": {
+          "chunk_bytes": 12012,
+          "slot_bytes": 18000,
+          "small_bytes": 5982,
+          "total": 35994
+        },
         "setup": "var counter = (function () {\n  var count = 0;\n  return function () { count = count + 1; return count; };\n})();\nvar seen = 0;\nseen;",
+        "slot_record_bytes": 20,
         "slots": [
           {
             "role": "`seen`, the global holding what the last call returned",
@@ -3056,6 +3143,7 @@
             ]
           }
         ],
+        "slots_per_page": 256,
         "source": "rust/engine/architecture-map-heap.counters.json"
       },
       "format_version": 23,

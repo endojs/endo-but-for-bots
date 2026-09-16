@@ -888,9 +888,22 @@ def heap_explorer(model):
     <p class="cprog-label">Increments taken</p>
     <div class="csteps" role="group" aria-label="Number of increments">{steps}</div>
     <ul class="cwatch">{watched}</ul>
-    <p class="cnote">Select a count to read each slot at that step. Select a slot
-    to find it in the arena below. The drawn heap is the capture at
-    {counter["canonical"]} increments.</p>
+
+    <p class="cprog-label" id="cio-label">What that checkpoint wrote</p>
+    <dl class="cio" id="cio">
+      <dt>changed</dt><dd><b data-io="changed_bytes"></b><span data-io="changed_note"></span></dd>
+      <dt>slot pages</dt><dd><b data-io="slot_bytes"></b><span data-io="pages_note"></span></dd>
+      <dt>chunk arena</dt><dd><b data-io="extent_bytes"></b><span data-io="extent_note"></span></dd>
+      <dt>small state</dt><dd><b data-io="small_bytes"></b><span data-io="sections_note"></span></dd>
+      <dt class="cio-total">written</dt>
+      <dd class="cio-total"><b data-io="written"></b><span data-io="ratio_note"></span></dd>
+    </dl>
+    <p class="cnote">Select a count to read each slot at that step, and what the
+    checkpoint after it wrote. Select a slot to find it in the arena below. The
+    drawn heap is the capture at {counter["canonical"]} increments. A cold resume
+    reads {counter["resume"]["total"]:,} bytes: {counter["resume"]["slot_bytes"]:,}
+    of slots, {counter["resume"]["chunk_bytes"]:,} of chunks and
+    {counter["resume"]["small_bytes"]:,} of small state.</p>
   </div>
 </div>
 
@@ -899,7 +912,17 @@ read the code and guess. The example boots one machine, takes the increment as i
 crank, and captures the heap after each one. A slot whose value equals the number of
 increments at every step holds the count. A second series calls the counter and throws
 the result away: the closure's cell still advances, the global does not, which is what
-separates the two.</p>"""
+separates the two.</p>
+
+<p class="note"><strong>Why the write is so much larger than the change.</strong> The
+store's unit is a page of {counter["slots_per_page"]} slots. Both counter slots sit in
+the same page, so one increment dirties one page and the store rewrites all of it. The
+cost of a crank follows the number of pages it touches, not the number of bytes it
+changes. Two notes on reading these figures. The page here is the arena's last page,
+which is short; a full page is
+{counter["slots_per_page"] * counter["slot_record_bytes"]:,} bytes. And the chunk arena
+is untouched, because the count is an integer held in the record itself. A program that
+built a string each crank would dirty an extent as well.</p>"""
 
     anchors = heap["anchors"]
 
@@ -926,7 +949,9 @@ separates the two.</p>"""
         "perPage": heap["slots_per_page"],
         "roleMeaning": ROLE_MEANING,
         "cols": HEAP_COLS,
-        "counter": counter,
+        "counter": (dict(counter, section_count=max(
+            (row["sections"] for row in counter["io"]), default=0))
+            if counter else None),
     }, separators=(",", ":"))
 
     return f"""
@@ -1592,6 +1617,15 @@ th.num { text-align: right; }
   color: var(--oxide);
   min-width: 2ch;
 }
+#cio-label { margin-top: 16px; }
+.cio { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 3px 12px; margin: 6px 0 0; font-size: 12.5px; }
+.cio dt { font: 400 11px/1.7 "IBM Plex Mono", monospace; color: var(--muted); }
+.cio dd { margin: 0; display: flex; gap: 8px; align-items: baseline; }
+.cio b { font: 500 12.5px "IBM Plex Mono", monospace; font-variant-numeric: tabular-nums; min-width: 8ch; text-align: right; }
+.cio span { color: var(--muted); font-size: 12px; }
+.cio .cio-total { border-top: 1px solid var(--rule); padding-top: 5px; margin-top: 2px; }
+.cio .cio-total b { color: var(--oxide); }
+
 .cwatch .cell-note { grid-column: 1 / -1; margin: 0; }
 .cnote { color: var(--muted); font-size: 12.5px; line-height: 1.5; margin: 14px 0 0; }
 .hcell.watch { outline: 1.5px dashed var(--oxide); outline-offset: 1px; opacity: 1; z-index: 2; }
@@ -2036,6 +2070,38 @@ SCRIPT = """
           var out = document.querySelector('.cval[data-slot="' + s.slot + '"]');
           if (out) out.textContent = s.values[step];
         });
+
+        var io = counter.io[step];
+        if (!io) return;
+        var bytes = function (n) { return n.toLocaleString() + ' B'; };
+        var plural = function (n, one) { return n + ' ' + one + (n === 1 ? '' : 's'); };
+        var first = io.count === 0;
+        var label = document.getElementById('cio-label');
+        if (label) {
+          label.textContent = first
+            ? 'What the first checkpoint wrote'
+            : 'What that checkpoint wrote';
+        }
+        var fill = function (key, value) {
+          var node = document.querySelector('[data-io="' + key + '"]');
+          if (node) node.textContent = value;
+        };
+        fill('changed_bytes', first ? '—' : bytes(io.changed_bytes));
+        fill('changed_note', first
+          ? 'the whole arena, not a dirty subset'
+          : plural(io.changed_slots, 'slot record'));
+        fill('slot_bytes', bytes(io.slot_bytes));
+        fill('pages_note', plural(io.pages, 'page'));
+        fill('extent_bytes', bytes(io.extent_bytes));
+        fill('extent_note', io.extent_rows
+          ? plural(io.extent_rows, 'extent')
+          : 'no extent touched');
+        fill('small_bytes', bytes(io.small_bytes));
+        fill('sections_note', io.sections + ' of ' + counter.section_count + ' sections');
+        fill('written', bytes(io.written));
+        fill('ratio_note', io.changed_bytes
+          ? Math.round(io.written / io.changed_bytes) + '\u00d7 the change'
+          : 'the initial write');
       };
 
       Array.prototype.forEach.call(document.querySelectorAll('.cstep'), function (b) {
@@ -2043,6 +2109,10 @@ SCRIPT = """
           showCount(parseInt(b.getAttribute('data-count'), 10));
         });
       });
+      // Fill it for the drawn capture, so the section reads correctly before
+      // anyone touches the stepper.
+      showCount(counter.canonical);
+
       Array.prototype.forEach.call(document.querySelectorAll('.cjump'), function (b) {
         b.addEventListener('click', function () {
           var index = parseInt(b.getAttribute('data-slot'), 10);

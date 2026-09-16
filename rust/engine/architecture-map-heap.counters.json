@@ -4,8 +4,19 @@
   "discarding": "counter(); seen;",
   "counts": [0, 1, 2, 3, 4, 5],
   "canonical": 3,
+  "slots_per_page": 256,
+  "slot_record_bytes": 20,
+  "resume": { "slot_bytes": 18000, "chunk_bytes": 12012, "small_bytes": 5982, "total": 35994 },
   "slots": [
     { "slot": 884, "role": "`seen`, the global holding what the last call returned", "values": [0,1,2,3,4,5] },
     { "slot": 892, "role": "the counter's own `count`, held in the closure's scope cell", "values": [0,1,2,3,4,5] }
+  ],
+  "io": [
+    { "count": 0, "changed_slots": 0, "pages": 4, "slot_bytes": 18000, "extent_rows": 1, "extent_bytes": 12012, "free_rows": 0, "sections": 32, "small_bytes": 5858, "written": 35870, "changed_bytes": 0 },
+    { "count": 1, "changed_slots": 2, "pages": 1, "slot_bytes": 2640, "extent_rows": 0, "extent_bytes": 0, "free_rows": 0, "sections": 2, "small_bytes": 77, "written": 2717, "changed_bytes": 40 },
+    { "count": 2, "changed_slots": 2, "pages": 1, "slot_bytes": 2640, "extent_rows": 0, "extent_bytes": 0, "free_rows": 0, "sections": 1, "small_bytes": 77, "written": 2717, "changed_bytes": 40 },
+    { "count": 3, "changed_slots": 2, "pages": 1, "slot_bytes": 2640, "extent_rows": 0, "extent_bytes": 0, "free_rows": 0, "sections": 1, "small_bytes": 77, "written": 2717, "changed_bytes": 40 },
+    { "count": 4, "changed_slots": 2, "pages": 1, "slot_bytes": 2640, "extent_rows": 0, "extent_bytes": 0, "free_rows": 0, "sections": 1, "small_bytes": 77, "written": 2717, "changed_bytes": 40 },
+    { "count": 5, "changed_slots": 2, "pages": 1, "slot_bytes": 2640, "extent_rows": 0, "extent_bytes": 0, "free_rows": 0, "sections": 1, "small_bytes": 77, "written": 2717, "changed_bytes": 40 }
   ]
 }
