@@ -32,6 +32,20 @@ it, including byte-identical failure SETS on the two subtrees that carry
 pre-existing failures (55 and 94, unchanged and unrelated). Ironhorse's
 `lockdown()` and XS's do not disagree anywhere those corpora reach.
 
+**Independently validated by a suite that predates the work.**
+`packages/hardened262` carries `ironhorse/lockdownSloppy` and
+`ironhorse/lockdownStrict` profiles whose committed baseline recorded 54
+failures, every one of them a case that failed at the `lockdown()` call. All 54
+now pass, and the baseline diff is a pure failed→passed flip over the same file
+set — no case regressed, and no other agent's profile moved.
+`test/intrinsics/AsyncFunction/inert-stand-in.js` is the one to read: written
+against SES's semantics, it asserts `Object.isFrozen(AsyncFunction)` and that
+the stand-in throws on call **and** on construct. That is why the inert
+constructor is a `Native` rather than a `NativeMethod` (a `NativeMethod` is not
+constructable, so `new` would have failed as "not a constructor" instead of as
+a secure-mode refusal), and why `do_lockdown` adds the instances it mints to
+its own root set.
+
 Everything under § Measured starting state was run against tree `7753a4b92`,
 before the work.
 The decisions that gated the work are answered in § Decisions, as taken.
@@ -440,6 +454,11 @@ Each line is a claim, and each was measured.
       engine binding its own and is the only thing that moved.
 - [x] This document updated with what the port did and where it diverged from
       `fx_lockdown` (§ Decisions, as taken, 4).
+- [x] `packages/hardened262`'s `ironhorse/lockdown*` baselines updated: 54
+      cases move from `failed.txt` to `passed.txt`, none the other way. That
+      lane (`test-xs`) is the one this work was NOT run against locally before
+      the first push, and it caught a real baseline move rather than a
+      regression.
 
 Not done, and not in scope: a guest `Compartment`, `mutabilities` and the
 `fxVerify*` audit family, and the daemon's realm-profile choice.
