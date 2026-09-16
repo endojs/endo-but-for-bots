@@ -26,7 +26,7 @@ generator inside a `try`) metered exactly 20 computrons *below* the oracle, a `-
 delta (the oracle is the XS reference engine used as the old parity target; see
 § Doctrine alignment). Read as a *parity* assertion ("IH must match XS here"), it deserved
 demolition. But, read mechanically, it also said "this load costs a specific
-amount", and when it is relaxed to advisory drift, nothing catches that same load
+amount," and when it is relaxed to advisory drift, nothing catches that same load
 silently tripling in cost or turning quadratic.
 
 Own-determinism gates only *partly* cover that gap, and it is worth being precise
@@ -72,8 +72,8 @@ identical computrons. The meter is a 16.16 fixed-point `u64` accumulator, so
 quarter); the release cost table is pinned by `COST_TABLE_VERSION` (today
 `ironhorse-meter-5`) and its SHA-256 digest is append-only in
 `ironhorse-meter/releases.rs`. Determinism holds *within a release binary and
-platform*, not across platforms (per the engine design's § Metering, the
-accuracy-over-parity doctrine of 2026-07-04). That within-binary determinism is the
+platform*, not across platforms (per [ironhorse-engine](ironhorse-engine.md)
+§ Metering, the accuracy-over-parity doctrine of 2026-07-04). That within-binary determinism is the
 lever this design exploits: because the *value* is deterministic, the *cost model*
 fitted from it is deterministic too (when the fit is done in exact arithmetic, not
 `f64` regression, per § The baseline), so most of the constraint can be gated cheaply
@@ -120,38 +120,63 @@ deterministic and re-derivable bit-for-bit on any host.
 
 ### Where the baseline lives: one JSON record, not two artifacts
 
-Each committed baseline record carries two kinds of field, and the schema **marks
-which kind each is**, so a future editor can tell (without reading this whole design)
-which fields a gate reads as truth versus which are frozen evidence that may go
-stale:
+Each committed baseline record carries two kinds of field, and the schema **keeps the
+two kinds in separate structural regions** (a top-level object of gate inputs and a
+nested `provenance` sub-object), so a future editor can tell (without reading this
+whole design) which fields a gate reads as truth versus which are frozen evidence that
+may go stale. The gate names used below (`gate1`/`gate2`/`gate3`) and "class band" are
+defined in § The three gates the baseline yields and § The class-band table; a reader
+meeting the tolerance-field names here for the first time should read those sections
+for what each gate does.
 
 - **Gate-input (authoritative, read by a gate at gate time):** the `label` (the
-  load's key; this record reuses `golden_computrons.rs`'s existing `label` field name
-  rather than coining a third term. `scaling_bench.rs` calls the same concept `name`,
-  and the frozen-pin corpus calls it `label`, so this record standardizes on
-  `label`), the growth basis `f(n)`, the fitted `coefficient`/`intercept`, the exact
-  `computrons` (and `meter_raw`) at each ladder size, `COST_TABLE_VERSION`, the boolean
-  `known_divergent`, and **four distinct tolerance knobs, each a separately named field
-  rather than one lumped "tolerance bands" blob:** `gate2_class_band_width` (the
-  two-sided per-doubling computron band width), `gate2_offladder_epsilon` (the
+  load's key), the growth basis `f(n)`, the fitted `coefficient`/`intercept`, the exact
+  `computrons` (and `meter_raw`) at each ladder size, `COST_TABLE_VERSION`, the
+  `validated_lanes` on which those exact pins were confirmed reproducible (see below),
+  the boolean `known_divergent`, and **four distinct tolerance knobs, each a separately
+  named field rather than one lumped "tolerance bands" blob:** `gate2_class_band_width`
+  (the two-sided per-doubling computron band width), `gate2_off_ladder_epsilon` (the
   off-ladder `C_model(n)` tolerance), `gate3_time_ceiling` (the single-sided wall-clock
-  per-doubling upper bound), and `gate3_fidelity_band` (the computrons/second `+/-`
-  band). For a `known_divergent` load the record additionally carries
-  `divergence_time_ratio` (the recorded already-bad per-doubling wall-clock time ratio)
-  and `divergence_time_medians` (the recorded already-bad absolute per-ladder-size
-  wall-clock medians), both read by gate 3's two-part non-regression bound. These are
-  the **only** wall-clock-derived values that are gate inputs rather than provenance, a
-  deliberate exception to the "wall-clock is provenance" rule below, because they are
-  *frozen* references captured once at `--write-baseline` time (never re-measured),
-  against which a fresh time regression is compared. Gates 1-3 assert against these.
-- **Provenance (descriptive-only, never a gate comparison target):** the wall-clock
-  medians that *confirm* the growth basis at `--write-baseline` time, the source
-  revision, host, and toolchain digest, and `divergence_ref`. Gate 3 re-measures
-  wall-clock time fresh on every nightly run and never compares against the recorded
-  medians, so those medians are audit trail, not an assertion input. The schema tags
-  every provenance field (a `"provenance": true` annotation or a segregated
-  `provenance` sub-object) so a later schema edit cannot silently start reading a
-  frozen median as a comparison target.
+  per-doubling upper bound), and `gate3_fidelity_band` (this load's **own**
+  computrons/second `+/-` band; the fidelity check is per-load, not a roster-wide
+  aggregate, see gate 3(b)). For a `known_divergent` load the record additionally
+  carries `divergence_time_ratio` (the recorded already-bad per-doubling wall-clock time
+  ratio), read by gate 3's ratio bound. That ratio is the **only** wall-clock-derived
+  value that is a gate input rather than provenance, a deliberate exception to the
+  "wall-clock is provenance" rule below, because a per-doubling *ratio* is dimensionless
+  and host-relative (comparable across machines), whereas an absolute median is not
+  (§ F4 exception, and `benches/README.md`: "Absolute timings from different machines
+  are not comparable"). Gates 1-3 assert against these.
+- **Provenance (descriptive-only, never a gate comparison target), in a segregated
+  `provenance` sub-object:** the wall-clock medians that *confirm* the growth basis at
+  `--write-baseline` time; for a `known_divergent` load, `divergence_time_medians` (the
+  recorded already-bad absolute per-ladder-size wall-clock medians, an audit reference
+  only; gate 3's absolute-median bound remeasures the baseline revision same-host
+  rather than comparing against these committed medians, § F4 exception); the source,
+  host, and toolchain digest; and `divergence_ref`. Gate 3 re-measures wall-clock time
+  fresh on every nightly run and never compares against a committed median, so those
+  medians are audit trail, not an assertion input. The nested sub-object is chosen
+  deliberately over a per-field `"provenance": true` annotation: a structural boundary
+  is one thing to remember, and a field added without it is a gate input by the same
+  visible rule as its siblings, whereas a *forgotten per-field tag* would silently make
+  a frozen median a comparison target, exactly the accident the tagging exists to
+  prevent.
+
+The `label` key reuses `golden_computrons.rs`'s existing field name rather than coining
+a third term. `scaling_bench.rs` calls the same concept `name` and the frozen-pin
+corpus calls it `label`, so this record standardizes on `label`.
+
+`validated_lanes` records the eligibility constraint the exact-pin gate needs.
+Computrons are deterministic within a release binary and platform but **not** across
+platforms (§ Design), so a pin is a valid gate-1 input only on the lanes where its
+reproducibility was actually confirmed at `--write-baseline` time. Rather than braid a
+three-dimensional value (load x platform x build-config) into a one-dimensional `label`
+identity, the record lists the lanes on which the pin was validated; gate 1 asserts the
+pin only on a listed lane and treats an unlisted lane as out of scope, not a failure. A
+load is eligible for gate 1 only once its cross-lane reproducibility is confirmed and
+recorded here. The existing 52 families are already known reproducible on the
+debug/release, Linux/macOS lanes `golden_computrons.rs` runs on; a genuinely
+platform-sensitive new load records only the lanes it was proven on.
 
 This mirrors the existing `rust/engine/benches/baseline.json` /
 `ironhorse-262/baseline/` provenance discipline, made explicit rather than inherited
@@ -159,13 +184,13 @@ implicitly.
 
 **The record is a single artifact: a new `rust/engine/benches/computron-cost-model.json`,
 and only that.** The name deliberately differs from the sibling
-`benches/baseline.json` (time-based) by *content* ("cost-model", not another
+`benches/baseline.json` (time-based) by *content* ("cost-model," not another
 "...baseline.json"), so a contributor grepping or tab-completing `baseline.json` in
 that directory does not grab the wrong artifact. An earlier draft floated *also*
 extending the `computrons.tsv` corpus that `golden_computrons.rs` consumes, so that
 the exact per-size pins would live in the TSV. This design rejects that split.
 Keeping the deterministic exact pins and the (host-tied) confirming wall-clock
-medians in one JSON keyed by load id (with the gate/provenance tagging above so the
+medians in one JSON keyed by `label` (with the gate/provenance separation above so the
 two never blur) is simpler than a schema change to the consumed TSV format, and gate
 1 reads the pins directly from the JSON. `golden_computrons.rs`'s single-size TSV
 corpus is left untouched; gate 1 is a *new* input-parameterized harness that reads
@@ -199,14 +224,14 @@ flowchart TD
    measured `C(n)` for an **off-ladder** size lies within `C_model(n) +/- epsilon`
    (the fitted prediction plus a per-load tolerance), catching a regression that only
    manifests between or beyond the pinned points. `epsilon` is **not a free constant**:
-   it is derived from the fit residual and recorded in the `gate2_offladder_epsilon`
+   it is derived from the fit residual and recorded in the `gate2_off_ladder_epsilon`
    field. Because the fit is exact and the on-ladder points are pinned exactly by
    gate 1, `C_model(n)` reproduces each on-ladder `C(n)` with a known per-point
    residual; `epsilon` is that maximum on-ladder residual scaled by a small fixed
    safety margin (the builder records both the raw max residual and the chosen margin
    so the value is reviewable, not arbitrary). A zero residual (an exactly-fitting
    basis) yields a small floor `epsilon`, not zero, to absorb the off-ladder point's
-   own rounding to an integer computron count. Because it
+   own rounding to an integer computron count. Because gate 2
    needs no wall clock, this half of the old `scaling_bench` contract can *graduate
    from nightly to PR CI*: the deterministic constraint the eliminated tests used to
    provide, restored where it belongs.
@@ -217,9 +242,13 @@ flowchart TD
    `scaling_bench` already do). Assert (a) the measured **time** growth class equals
    the load's declared **computron** growth class. This is what *confirms* the
    `f(n)` chosen for the model, so the polynomial is measured, not assumed. Assert
-   (b) the meter's global fidelity ratio (computrons per second) stays within a band
-   across the whole roster, so the meter cannot silently drift into over- or
-   under-charging a family of loads relative to CPU time. This gate plugs into the
+   (b) **each load's** fidelity ratio (its own computrons per second) stays within
+   *that load's* recorded `gate3_fidelity_band`, so the meter cannot silently drift
+   into over- or under-charging that load relative to CPU time. This is a **per-load**
+   check (one assertion per load against its own band, matching the per-record
+   `gate3_fidelity_band` field), deliberately **not** a single roster-wide aggregate
+   ratio, which would let one load's over-charge cancel another's under-charge and pass
+   while a real per-load drift hides inside the average. This gate plugs into the
    existing nightly `benchmarks` job in `.github/workflows/ironhorse-full-test262.yml`.
 
 The split is the crux of the design: **the deterministic model (gates 1-2) carries
@@ -235,7 +264,7 @@ are legitimately tight (the class-band table below). Gate 3 asserts on **measure
 wall-clock time** on a shared GitHub-hosted `ubuntu-latest` runner, where timing is
 noisy. Gate 3 therefore must **not** reuse gate 2's tight two-sided per-doubling
 bands. It follows the existing wall-clock precedent it extends
-(`scaling_bench.rs`'s "less than 2.5x per input doubling", a single-sided upper
+(`scaling_bench.rs`'s "less than 2.5x per input doubling," a single-sided upper
 bound with no tight lower band, chosen precisely for CI timing noise). Concretely,
 gate 3's growth-class check is a **single-sided upper bound per class** (e.g. a
 linear load's measured per-doubling time ratio must stay below a class ceiling well
@@ -267,17 +296,28 @@ about a constant center. The two size-dependent classes (`log n`, `n*log n`)
 evaluate their center from the closed-form asymptotic **at each ladder step's `n`**
 and apply the tolerance `width` about that per-step center. In all five cases the
 builder confirms the exact tolerance `width` against the measured ladders and records
-it (and, for the flat classes, the ladder must start large enough that the intercept
-is negligible, else the same per-step derivation applies) in the baseline record's
-tolerance fields; the numeric ranges above are illustrative mid-ladder defaults, not
-frozen edges. Gate 3's single-sided time ceilings are derived per class from these
+it in the baseline record's tolerance fields; the numeric ranges above are illustrative
+mid-ladder defaults, not frozen edges.
+
+Both center formulas above are intercept-free: the flat classes take a constant center,
+and the two size-dependent centers (`1 + 1/log2(n)`, `2*(1 + 1/log2(n))`) are the
+zero-intercept asymptotic ratios of `coefficient*f(n)` alone. That approximation is only
+safe once the fixed overhead (`intercept`) is negligible relative to the size-dependent
+term at the ladder's **smallest** size: the same precondition, applied to **every**
+growth class, not only the flat ones. So the ladder must start large enough that the
+intercept is negligible for the class it covers; where it cannot (a `log n` / `n*log n`
+load with non-negligible fixed overhead at the ladder's small end, which would risk a
+false gate-2(a) fail that gate-2(b)'s full-model `C_model(n) +/- epsilon` check would
+pass), gate 2(a) computes the per-step center from the **fitted model**
+(`C_model(2n)/C_model(n)`, which includes the intercept) instead of the intercept-free
+closed form. The builder records, per load, which derivation the center uses. Gate 3's single-sided time ceilings are derived per class from these
 same per-step centers (upper edge, loosened for timing noise per the section above).
 
 All three gates emit failures in **one shared shape** so a red CI line is
 diagnosable without learning three idioms, matching the existing `scaling_bench.rs`
 convention (`SCALING_RATIO {name} n={n} ...` then a uniform
 `{name} n={n}: ...x; must be <2.5x` pushed onto `failures` and asserted once). Every
-gate's failure message carries, in this order: the **load id**, the **size** `n`,
+gate's failure message carries, in this order: the **`label`**, the **size** `n`,
 the **metric** (exact computrons / ratio / wall-clock median), the **observed**
 value, and the **expected pin or band** with its threshold. The builder factors one
 failure-formatting helper shared by all three gate harnesses.
@@ -298,13 +338,20 @@ single pinned value. Known surfaces to seed the roster (several already exercise
 
 - **named-property insertion** into a growing object (`o['k'+i]=i`): its *wall-clock
   time* is currently **quadratic** but its *metered computrons are linear*: this is an
-  F4 known-divergent case, not a faithfully-metered `n^2` load. Each insertion routes
-  through `collection_find`'s un-metered linear `position` scan (F4, `interp.rs`
-  `collection_find`), so the hidden O(n) work per insert makes total time O(n^2) while
-  the meter charges O(1) per insert (linear total computrons). The F4 review measures
-  this directly: the `for-in` load, whose construction phase *is* this insertion,
-  records `computrons linear` at n=2000..16000 while wall time grows quadratically
-  (22.8 to 1274.4 ms). Because gates 1-2 assert on the deterministic **computron**
+  F4 known-divergent case (F4 is a documented, still-live meter defect explained in
+  § F4 exception below), not a faithfully-metered `n^2` load. Insertion into a growing
+  object carries an un-metered per-insert cost that scales with the object's current
+  size (`scaling_bench.rs` independently confirms it: the construction phase's
+  "named-property insertion currently has its own quadratic cost"), so the hidden O(n)
+  work per insert makes total time O(n^2) while the meter charges O(1) per insert
+  (linear total computrons). The un-metered mechanism here is the object's **own**
+  property-insertion path, **not** the Map/Set `collection_find` scan cited for the
+  `map_set` load: `collection_find` is called only from Map/Set/WeakMap/WeakSet native
+  methods (`collection.rs`), never plain-object bracket assignment. The F4 review
+  observes this divergence through the `for-in` load, whose construction phase *is* this
+  insertion, recording `computrons linear` at n=2000..16000 while wall time grows
+  quadratically (22.8 to 1274.4 ms), though it does not itself pin the exact insertion
+  call site. Because gates 1-2 assert on the deterministic **computron**
   value, this load's computron baseline is therefore `f(n)=n` (the linear class gates
   1-2 lock, so a computron regression is still caught), and it is seeded
   `known_divergent` so gate 3 applies its two-part non-regression time bound rather than
@@ -351,10 +398,13 @@ fix-first-or-flag decision:
 
 - Each baseline record carries a **boolean** `known_divergent` flag and, when it is
   set, a `divergence_ref` string naming the live tracking reference (here,
-  architecture-review F4, with its issue/finding link), plus the `divergence_time_ratio`
-  (the currently-measured, already-bad per-doubling wall-clock time ratio) and the
+  architecture-review F4, with its issue/finding link), plus the gate-input
+  `divergence_time_ratio` (the currently-measured, already-bad per-doubling wall-clock
+  time ratio, read by gate 3's ratio bound) and the provenance-only
   `divergence_time_medians` (the already-bad absolute per-ladder-size wall-clock
-  medians) for the load. Splitting the boolean from the reference
+  medians, an audit reference; gate 3's absolute-median bound remeasures the baseline
+  revision same-host rather than comparing against these committed medians, per its
+  part (ii) below) for the load. Splitting the boolean from the reference
   keeps the field's name honest: `known_divergent` reads as the boolean predicate it
   is, and the reference lives in `divergence_ref`, not smuggled into a "boolean" that
   actually holds a string. A `known_divergent` load is recorded with its exact
@@ -375,9 +425,17 @@ fix-first-or-flag decision:
   *ratio* unchanged and would slip past a ratio-only check entirely. So the bound
   asserts **both** (i) the measured per-doubling time ratio must not exceed
   `divergence_time_ratio` by more than the gate-3 noise margin (catches a *growth*-class
-  worsening), **and** (ii) the measured absolute wall-clock median at each ladder size
-  must not exceed the corresponding `divergence_time_medians` entry by more than the
-  gate-3 noise margin (catches a constant-factor slowdown that leaves the ratio flat).
+  worsening; a per-doubling *ratio* is host-relative, so this comparison is sound on the
+  shared nightly runner), **and** (ii) a **constant-factor** non-regression check that
+  stays host-honest by following `benches/run.py --check-baseline`'s discipline: it
+  **remeasures the recorded baseline revision (`divergence_ref`) on the current nightly
+  host, in the same run**, and asserts the candidate's absolute wall-clock median at
+  each ladder size does not exceed that fresh same-host baseline median by more than the
+  gate-3 noise margin. It **never** compares the candidate against the committed
+  `divergence_time_medians` directly, because absolute timings from different machines
+  are not comparable (`benches/README.md`); the committed medians are retained only as
+  an audit reference. This catches a constant-factor slowdown that leaves the per-doubling
+  ratio flat (which part (i) would miss) without any cross-machine absolute comparison.
   The nightly report lists the load as a *tracked exception*,
   visibly distinct from a regression ("known-divergent (F4): class-match not
   asserted; non-regression bound (ratio + absolute) vs. recorded baseline held"), never
@@ -388,7 +446,7 @@ fix-first-or-flag decision:
 - The exception cannot silently become a permanent parking lot. `divergence_ref` must
   point at a *live* tracking reference, and the nightly report surfaces the count and
   age of `known_divergent` loads (oldest divergence date), so a high-severity metering
-  gap laundered into routine nightly output stays visible, not buried.
+  gap is not laundered into routine nightly output but stays visible instead.
 - When the underlying meter defect (F4) is fixed, the load's computrons stop being
   linear-while-time-is-quadratic. That is a deliberate cost-model change: it lands
   under a `COST_TABLE_VERSION` bump that re-records the baseline (§ Deliberate
@@ -482,8 +540,8 @@ This design **extends** existing infrastructure; it does not duplicate it:
   per-class bands and a fitted model. "Migrated," not "duplicated": for any load the new
   gates cover, the builder **retires the overlapping ad-hoc assertion in
   `scaling_bench.rs`** so the load is not gated twice by two drifting thresholds; a load
-  `scaling_bench.rs` exercises that the new roster does *not* yet cover stays under its
-  existing check until it is brought into the record. `checkpoint_scaling_bench`,
+  that `scaling_bench.rs` exercises but the new roster does *not* yet cover stays under
+  its existing check until it is brought into the record. `checkpoint_scaling_bench`,
   `property_lookup_bench`, `lifecycle_bench`, and the compiler growth-policy benches
   are siblings that adopt the same record format under the same migrate-not-duplicate
   rule.
@@ -521,14 +579,15 @@ The sibling build job `ironhorse-computron-benchmark-baseline-build` executes:
 2. **Audit #1282's relaxations** (§ Relationship to PR #1282): produce the list of loads left with no
    surviving own-cost constraint. Record it in the build PR body.
 3. **Define the baseline record format**: the single
-   `rust/engine/benches/computron-cost-model.json` schema (the `label` key, `f(n)`
-   basis, fitted coefficient/intercept, per-size exact `computrons`/`meter_raw`, the
-   four separately named tolerance knobs `gate2_class_band_width` /
-   `gate2_offladder_epsilon` / `gate3_time_ceiling` / `gate3_fidelity_band`, boolean
-   `known_divergent`, and for a divergent load `divergence_time_ratio` /
-   `divergence_time_medians`, `COST_TABLE_VERSION`; plus the provenance-tagged
-   fields, marked per § Where the baseline lives: confirming wall-clock medians,
-   source/host/toolchain digest, and `divergence_ref`) and the growth-class band
+   `rust/engine/benches/computron-cost-model.json` schema, with gate inputs at the top
+   level (the `label` key, `f(n)` basis, fitted coefficient/intercept, per-size exact
+   `computrons`/`meter_raw`, `validated_lanes`, the four separately named tolerance
+   knobs `gate2_class_band_width` / `gate2_off_ladder_epsilon` / `gate3_time_ceiling` /
+   `gate3_fidelity_band`, boolean `known_divergent`, and for a divergent load
+   `divergence_time_ratio`, `COST_TABLE_VERSION`) and the descriptive fields in a
+   segregated `provenance` sub-object (per § Where the baseline lives: confirming
+   wall-clock medians, `divergence_time_medians` for a divergent load,
+   source/host/toolchain digest, and `divergence_ref`), plus the growth-class band
    table (§ class-band table).
 4. **Build the gate 1-2 harness**: a `computron_baseline` test crate/module that
    (gate 1) asserts exact pins at committed ladder sizes reading
@@ -546,23 +605,28 @@ The sibling build job `ironhorse-computron-benchmark-baseline-build` executes:
    actually lives, *not* `rust/engine/benches/`, which holds the JSON records and
    `run.py`). It measures wall-clock medians across the ladder, the
    time-class == computron-class assertion (with the single-sided timing band; for
-   `known_divergent` loads a **two-part non-regression bound**, per-doubling ratio
-   plus absolute per-size medians, replaces the class-match, per § F4 exception),
-   and the global computrons/second fidelity band;
-   wire it into the `benchmarks` job in `ironhorse-full-test262.yml`.
+   `known_divergent` loads a **two-part non-regression bound** replaces the class-match,
+   per § F4 exception: a per-doubling ratio check plus a same-host remeasurement of the
+   baseline revision's absolute per-size medians), and each load's own computrons/second
+   fidelity band (a per-load check, not a roster-wide aggregate); it is wired into the
+   `benchmarks` job in `ironhorse-full-test262.yml`.
 6. **Seed the roster** (§ polynomial built-ins) plus every load from the step-2 audit;
-   mark the F4-divergent loads (`Map`/`Set` bulk insertion, `for..in`, string
-   `for..of`, and named-property insertion `o['k'+i]=i`, the `for..in` load's
-   construction phase, F4-divergent via the same un-metered `collection_find` scan)
-   `known_divergent` with a live `divergence_ref` per § F4 exception; record all
-   baselines with `--write-baseline` on a controlled host and commit.
+   mark the F4-divergent loads `known_divergent` with a live `divergence_ref` per
+   § F4 exception. Those loads are: `Map`/`Set` bulk insertion and string `for..of`
+   (both diverging via the un-metered `collection_find` scan and the `IterState` clone
+   respectively), `for..in`, and named-property insertion `o['k'+i]=i` (which *is* the
+   `for..in` load's construction phase, F4-divergent through its own un-metered
+   per-insert cost, not the Map/Set `collection_find` scan). Record all baselines with
+   `--write-baseline` on a controlled host, recording each pin's `validated_lanes`, and
+   commit.
 7. **Wire PR CI**: add gates 1-2 to the ordinary Rust test lane (`ci.yml`),
    deterministic and fast; keep gate 3 nightly.
 8. **Rebase #1282** onto the landed regime (or merge order per § Relationship to PR #1282); confirm
    the hold from step 1 held throughout and update #1282's body to reference this
    work.
-9. Run the full nightly benchmark lane locally (release, host-controlled) and record
-   the measured medians and growth-class confirmations as evidence.
+9. **Confirm the regime end to end**: run the full nightly benchmark lane locally
+   (release, host-controlled) and record the measured medians and growth-class
+   confirmations as evidence.
 
 ## Design decisions
 
@@ -599,16 +663,27 @@ The sibling build job `ironhorse-computron-benchmark-baseline-build` executes:
 
 - What tolerance bands should the gates use? Proposed defaults are in the § class-band
   table (gate-1 exact, band 0; gate-2 two-sided per-class computron bands; gate-3
-  single-sided time ceilings plus a computrons/second fidelity band of `+/-25%`
-  across the roster, the same order as the existing 1.25x time floor). Are these the
+  single-sided time ceilings plus a **per-load** computrons/second fidelity band of
+  `+/-25%`, the same order as the existing 1.25x time floor). Are these the
   right widths, especially the size-dependent `log n` / `n*log n` bands?
+- **The merge-order hold does not bind a human merge, only the fleet.** The
+  `blocked_on` edge (§ Relationship to PR #1282) stops the garden's automated conductor
+  from merging #1282 before the regime lands, but nothing in this repo's
+  branch-protection stops a maintainer merging #1282 by hand through the GitHub UI
+  before the regime PR lands, reopening the very coverage gap this design exists to
+  close; the residual is covered only by a body note plus maintainer awareness. Does
+  the maintainer **accept this residual human-merge risk** as-is (this design's
+  assumption), or should the build first add a merge-blocking primitive (e.g. a
+  required status check on #1282's target that stays red until the regime PR lands),
+  which is a separate CI change currently out of scope?
 - Should the deterministic growth-envelope gate (gate 2) run on **PR CI** as
   proposed, or stay on the nightly lane with gate 3? (Recommendation: PR CI. It is
   deterministic and cheap, and PR-lane coverage is the whole point of restoring the
   constraint.)
 - What is the authoritative **seed roster** of loads/built-ins to baseline first?
   Proposed: the § polynomial-built-ins list plus every load surfaced by the #1282
-  audit, with the F4 trio seeded `known_divergent`. Any built-ins to add or drop?
+  audit, with the F4-divergent loads seeded `known_divergent`. Any built-ins to add or
+  drop?
 - Should a `COST_TABLE_VERSION` bump **auto-regenerate** all baselines, or always
   require a manual reviewed `--write-baseline`? (Recommendation: manual, for
   reviewability.)
