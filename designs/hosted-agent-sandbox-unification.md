@@ -1366,12 +1366,20 @@ take on its own authority.
    it proves the record stream against a real CLI soonest.
 4. **Codex** — drop the preamble and the bound now; decide separately whether
    to write `thread_history_1.sqlite` or accept prepended history.
-5. **Open — the only step not landed, and it is in another repository.**
-   OpenCode restoration needs the import route specified above written in
-   `kumavis/opencode` and the image rebuilt; then `OPENCODE_DB=:memory:`, and
-   the `opencodeSessionId` resume path and its unhandled not-found case go.
-   Until then OpenCode's state stays a durable bind — attested, but still the
-   guest's store rather than the stack's record.
+5. **Landed in its lesser form; the faithful form is in another repository.**
+   OpenCode restores the stack's record when a session has none of its own,
+   the same way Codex does, and it now notices a resume that came back under a
+   different id rather than continuing context-free — a case that previously
+   had no handling at all. Both adapters therefore never start a conversation
+   the stack holds without handing it over.
+
+   What is still lesser is fidelity: a tool call arrives as a line describing
+   one, because the only place it can be a tool call is the CLI's own store,
+   and reaching that needs the import route specified above written in
+   `kumavis/opencode` and the image rebuilt. Only then can
+   `OPENCODE_DB=:memory:` follow and the durable state bind leave the table.
+   Until then OpenCode's state stays a bind — attested, and no longer the sole
+   copy of the conversation.
 6. **Answered by option 1 instead.** The cost check found a loopback port
    would have to live in the pinned listener image and relay over its stdio
    transport, so `@endo/sandbox` gained the `bind` kind and the MCP row is
