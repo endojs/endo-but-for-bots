@@ -218,6 +218,7 @@ impl Interp {
             cur_target: self.cur_target,
             target_func: self.target_func,
             ret_pc,
+            stack_base: base,
         });
         self.switch_environment(self.functions[&func].global_env);
         self.result = Slot::undefined();
@@ -293,6 +294,32 @@ impl Interp {
     /// callee's result has already been captured by the caller of this
     /// method (which pushes it onto the shared value stack, matching XS's
     /// `mxStack = mxFrameEnd; *mxStack = *result`).
+    /// Leave a call the way XS's `XS_CODE_END` does: `mxStack = mxFrameEnd`
+    /// (xsRun.c:1063) resets the value stack to the frame's base *before*
+    /// `*mxStack = *slot` writes the result, so whatever the body left above
+    /// that base is discarded with the frame.
+    ///
+    /// ironhorse's port kept the activation restore but not the stack reset,
+    /// and the coder — faithfully, as XS does — emits no unwinding for a
+    /// `return` that jumps out of a `switch`: `code_switch` pops the
+    /// discriminant only after the break target, which a `return` never
+    /// reaches. The abandoned slot then sat exactly where the caller's pending
+    /// operand was, so `"MARK" + f(42)` evaluated to `"numberN"`: silent wrong
+    /// values, not just the `call: not a function` it produced when the slot
+    /// it displaced happened to be a callee.
+    ///
+    /// Only the `END` family restores. The `START_*` opcodes hand a generator
+    /// or promise back at function *entry*, before any body has run and with
+    /// nothing to abandon.
+    pub(super) fn leave_call_to_frame_base(&mut self) -> usize {
+        let base = self.call_stack.last().map(|caller| caller.stack_base);
+        let resume = self.leave_call();
+        if let Some(base) = base {
+            self.stack.truncate(base);
+        }
+        resume
+    }
+
     pub(super) fn leave_call(&mut self) -> usize {
         let caller = self
             .call_stack

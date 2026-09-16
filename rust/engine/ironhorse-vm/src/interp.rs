@@ -1758,6 +1758,11 @@ struct CallerState {
     target_func: crate::value::SlotIndex,
     /// The caller's code cursor to resume at (just past its `run`).
     ret_pc: usize,
+    /// The value-stack height this callee's frame begins at — XS's
+    /// `mxFrameEnd`, the slot its result is written to. `END` restores the
+    /// stack to it so operands the body abandoned (a `switch` discriminant a
+    /// `return` jumped over, say) cannot survive into the caller's expression.
+    stack_base: usize,
 }
 
 /// One entry of the exception jump-buffer chain (XS's `txJump`, pushed by

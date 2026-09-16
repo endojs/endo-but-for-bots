@@ -125,7 +125,12 @@ const REACH: &[(&str, bool)] = &[
     ("native-or-emulated-shape.js", true),
     ("Symbol.toStringTag.js", true),
     ("Symbol.toStringTag-lockdown.js", false),
-    ("byte-array-brand.js", false),
+    // Passes since the `END` frame-base restore (xsRun.c:1063's
+    // `mxStack = mxFrameEnd`): `passStyleOf` reaches this case's
+    // `assert.sameValue(passStyleOf(bytes), 'byteArray')` through a `return`
+    // out of a `switch (typeof ...)`, and the discriminant that `return`
+    // abandoned used to land on the caller's pending operand.
+    ("byte-array-brand.js", true),
     ("ses-hosts.js", false),
     // Ironhorse has no host text codecs; the prelude prepends `polyfills.js`'s
     // codec section, which gets these past "undefined variable" but not to a
