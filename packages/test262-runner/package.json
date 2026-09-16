@@ -45,6 +45,7 @@
     "@endo/eventual-send": "workspace:^",
     "@endo/harden": "workspace:^",
     "@endo/immutable-arraybuffer": "workspace:^",
+    "@endo/ironhorse-prelude": "workspace:^",
     "@endo/pass-style": "workspace:^",
     "ses": "workspace:^",
     "test262-harness": "^10.0.0"

@@ -381,38 +381,57 @@ fn a_natively_frozen_realm_forecloses_the_ses_shim() {
                 crank(SES_CENSUS).ends_with("frozenObjectProto=true"),
                 "Machine::new freezes the intrinsic graph at construction"
             );
-            // `repairIntrinsics` rewrites descriptors on the intrinsics the
-            // native freeze has already sealed.
+            // The boot now forecloses one layer EARLIER than it used to, and
+            // the message changed with it.
+            //
+            // It used to reach `repairIntrinsics`, which rewrites descriptors
+            // on intrinsics the native freeze has already sealed, and report
+            // the engine's generic `invalid descriptor`. The repairs ahead of
+            // the shim are now a bundled module (`@endo/ironhorse-prelude`)
+            // rather than raw statements spliced into the boot script, so they
+            // run in STRICT mode. `delete Iterator.prototype.map` on a frozen
+            // intrinsic returned false silently under the old sloppy-mode
+            // splice; strict mode throws, so the prologue stops there and the
+            // shim never runs.
+            //
+            // Both are foreclosure, and the new one is the better report: it
+            // names the first operation the frozen realm actually refused,
+            // rather than the first one the shim happened to try afterwards.
             assert_eq!(
                 crank(&wrapped(&boot)),
-                "ERROR: invalid descriptor",
+                "ERROR: delete map: no permission (strict mode)",
                 "the shim is expected to fail on a realm frozen before it runs; \
                  if it now succeeds, the repair path has changed and \
                  designs/ironhorse-ses-compartment-equivalence.md must say so"
             );
-            // `invalid descriptor` is the engine's generic rejected-
-            // `defineProperty` message (`property/object.rs`), so the message
-            // alone would also match an unrelated shim bug that passed a
-            // malformed descriptor. Pin the outcome too: the shim installed
-            // nothing, and `harden` is gone because the bundle deletes
-            // `polyfills.js`'s before the shim runs.
+            // The message alone would also match an unrelated prologue bug,
+            // so pin the outcome too: the shim installed nothing.
             //
-            // `lockdown` here is the ENGINE's, not the shim's: the shim aborted
-            // before installing its own, and `create_hardened_globals` binds
-            // one. A `typeof` census can say no more than that, and an earlier
-            // revision of this comment read more into it -- that such a realm
-            // "has a native `lockdown()`" and so "the option now exists". It
-            // does not. This is a `Machine::new()` realm, which performs the
-            // whole lockdown operation at construction and sets `locked_down`
-            // while doing it; the guest's first call is therefore refused as a
-            // second one. The name is bound and calling it throws.
+            // `harden` is `function` rather than `undefined`: the prologue
+            // assigns its non-traversing hardener to the start global -- which
+            // the construction-time freeze does not seal, it seals the
+            // intrinsic graph -- before reaching the `Iterator` deletes that
+            // throw. The old boot deleted `polyfills.js`'s harden instead,
+            // leaving the realm with neither implementation; it now has the
+            // pre-lockdown one and no lockdown to replace it.
+            //
+            // `lockdown` here is the ENGINE's, not the shim's: the prologue
+            // stopped before the shim could install its own, and
+            // `create_hardened_globals` binds one. A `typeof` census can say no
+            // more than that, and an earlier revision of this comment read more
+            // into it -- that such a realm "has a native `lockdown()`" and so
+            // "the option now exists". It does not. This is a `Machine::new()`
+            // realm, which performs the whole lockdown operation at
+            // construction and sets `locked_down` while doing it; the guest's
+            // first call is therefore refused as a second one. The name is
+            // bound and calling it throws.
             // `native_lockdown.rs::a_frozen_machine_runs_the_whole_lockdown_at_construction`
             // pins the refusal together with the reach it costs nothing:
             // construction already rewired the constructors, so there is no
             // work the refused call would have done.
             assert_eq!(
                 crank(SES_CENSUS),
-                "lockdown=function harden=undefined Compartment=undefined \
+                "lockdown=function harden=function Compartment=undefined \
                  frozenObjectProto=true"
             );
             // `lockdown=function` above is the weak term: the engine binds one

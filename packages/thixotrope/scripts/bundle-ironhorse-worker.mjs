@@ -11,6 +11,20 @@ const root = new URL('../', import.meta.url);
 const dist = new URL('dist-ironhorse/', root);
 fs.mkdirSync(dist, { recursive: true });
 const ses = await makeBundle(readPowers, import.meta.resolve('ses'));
+// The Ironhorse repairs the shim needs, shared with `@endo/test262-runner`'s
+// `ses-xs-parity` prelude so the corpus measures this environment rather than a
+// look-alike. See `@endo/ironhorse-prelude` for what each repair is for.
+//
+// Terminated with an explicit `;` where it is interpolated below. A
+// compartment-mapper bundle ends `])()` with no terminator and the `ses` bundle
+// begins `(functors => ...`, so without one the two concatenate into a CALL --
+// `])()(functors => ...)` -- and the boot dies with `call: not a function`.
+// `@endo/test262-runner`'s `scripts/generate-preludes.js` appends the same
+// terminator for the same reason.
+const prologue = await makeBundle(
+  readPowers,
+  import.meta.resolve('@endo/ironhorse-prelude'),
+);
 const polyfills = fs
   .readFileSync(new URL('../../rust/endo/xsnap/src/polyfills.js', root), 'utf8')
   .split('// -- assert polyfill --')[0];
@@ -18,17 +32,7 @@ fs.writeFileSync(
   new URL('boot.js', dist),
   `
 ${polyfills}
-delete globalThis.harden;
-// Ironhorse advertises Iterator before its lazy helper objects are implemented.
-// Use the pre-helper iterator profile, including the shared prototype, rather
-// than leave half of the proposal reachable through iterator instances.
-for (const key of Reflect.ownKeys(globalThis.Iterator.prototype)) {
-  if (key !== Symbol.iterator) delete globalThis.Iterator.prototype[key];
-}
-globalThis.Iterator = undefined;
-// The start realm has no host console. SES expects a console object even when
-// reporting is disabled; diagnostics do not confer an external I/O capability.
-globalThis.console = { log() {}, info() {}, warn() {}, error() {}, debug() {}, trace() {} };
+${prologue};
 ${ses}
 // Keep Array.prototype[Symbol.iterator] as a frozen native data property.
 // Ironhorse's typed-array copy profile refuses accessor-based iterator overrides.
