@@ -102,6 +102,23 @@ pub enum AtomError {
     DuplicateAtom(FourCc),
 }
 
+impl std::fmt::Display for AtomError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AtomError::TooLarge => write!(f, "atom payload exceeds the u32 wire size"),
+            AtomError::Truncated => write!(f, "atom header or payload runs past its container"),
+            AtomError::BadLength => write!(f, "atom size is smaller than its 8-byte header"),
+            AtomError::NotContainer(tag) => {
+                write!(f, "envelope tag is `{}`, not `XS_M`", tag.as_str())
+            }
+            AtomError::TrailingBytes => write!(f, "bytes follow the declared `XS_M` envelope"),
+            AtomError::DuplicateAtom(tag) => write!(f, "atom `{}` appears twice", tag.as_str()),
+        }
+    }
+}
+
+impl std::error::Error for AtomError {}
+
 /// A borrowed view of one parsed atom.
 pub struct Atom<'a> {
     pub tag: FourCc,

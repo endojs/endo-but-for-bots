@@ -10,9 +10,11 @@
 #![cfg(feature = "ironhorse-engine")]
 
 use endo::ironhorse_engine::engine::{
-    CadencePolicy, HeapStoreOptions, MachineError, MeterBounds, PersistentMachine,
+    CadencePolicy, HeapStoreOptions, MachineError, MeterBounds, PersistentMachine, Refusal,
+    StoreError, StoreFailure,
 };
 use endo::supervisor::Supervisor;
+use ironhorse_snapshot::format::SnapshotError;
 
 #[test]
 fn store_backed_worker_lifecycle_through_the_supervisor() {
@@ -22,7 +24,7 @@ fn store_backed_worker_lifecycle_through_the_supervisor() {
         signature: "endor-ironhorse-worker-v1".to_string(),
         cadence: CadencePolicy::default(),
         meter: MeterBounds::default(),
-        intrinsic_permit: None,
+        global_names: None,
     };
 
     // --- Fresh open: epoch 1 is the boot machine. -------------------
@@ -153,7 +155,7 @@ fn store_backed_worker_lifecycle_through_the_supervisor() {
         signature: options.signature.clone(),
         cadence: CadencePolicy::default(),
         meter: MeterBounds::default(),
-        intrinsic_permit: None,
+        global_names: None,
     })
     .expect("resume open");
     assert_eq!(
@@ -179,12 +181,23 @@ fn store_backed_worker_lifecycle_through_the_supervisor() {
         signature: "some-other-host-surface".to_string(),
         cadence: CadencePolicy::default(),
         meter: MeterBounds::default(),
-        intrinsic_permit: None,
+        global_names: None,
     }) {
-        Err(MachineError::Store(e)) => {
+        // The signature gate, asserted by structure rather than by a
+        // substring of a Debug rendering: a foreign callback table is an
+        // intact store answering "not mine", so it must classify as a
+        // refusal and not as corruption (review finding F157).
+        Err(error @ MachineError::Store(_)) => {
+            assert_eq!(error.store_failure(), Some(StoreFailure::Refused));
+            let MachineError::Store(source) = &error else {
+                unreachable!()
+            };
             assert!(
-                e.contains("Signature"),
-                "refused by the signature gate: {e}"
+                matches!(
+                    **source,
+                    StoreError::Snapshot(SnapshotError::SignatureMismatch { .. })
+                ),
+                "refused by the signature gate: {source}"
             );
         }
         Ok(_) => panic!("a foreign signature must be refused"),
@@ -207,7 +220,7 @@ fn an_empty_first_crank_does_not_link_the_table() {
         signature: "endor-ironhorse-worker-v1".to_string(),
         cadence: CadencePolicy::default(),
         meter: MeterBounds::default(),
-        intrinsic_permit: None,
+        global_names: None,
     };
     let mut machine = PersistentMachine::open(&options).expect("fresh open");
     let outcome = machine.eval("1 + 2").expect("literal crank");
@@ -255,7 +268,7 @@ fn cadence_policy_defers_flushes_and_schedules_collections() {
             collect_every: 0,
         },
         meter: MeterBounds::default(),
-        intrinsic_permit: None,
+        global_names: None,
     };
 
     // --- Deferred flushes. ------------------------------------------
@@ -336,7 +349,7 @@ fn cadence_policy_defers_flushes_and_schedules_collections() {
             collect_every: 0,
         },
         meter: MeterBounds::default(),
-        intrinsic_permit: None,
+        global_names: None,
     };
     let mut base = PersistentMachine::open(&base_opts).expect("open base");
     base.eval(build).expect("baseline garbage crank");
@@ -366,7 +379,7 @@ fn cadence_policy_defers_flushes_and_schedules_collections() {
             collect_every: 2,
         },
         meter: MeterBounds::default(),
-        intrinsic_permit: None,
+        global_names: None,
     };
     let mut sched = PersistentMachine::open(&sched_opts).expect("open sched");
     sched.eval(build).expect("garbage crank");
@@ -404,7 +417,7 @@ fn collect_every_is_not_starved_by_throwing_cranks() {
             collect_every: 2,
         },
         meter: MeterBounds::default(),
-        intrinsic_permit: None,
+        global_names: None,
     };
     let mut machine = PersistentMachine::open(&options).expect("open");
     // Crank 1 (completed): builds reclaimable garbage. epoch 1 -> 2.
@@ -461,7 +474,7 @@ fn checkpoint_every_is_not_starved_by_throwing_cranks() {
             collect_every: 0,
         },
         meter: MeterBounds::default(),
-        intrinsic_permit: None,
+        global_names: None,
     };
     let mut machine = PersistentMachine::open(&options).expect("open");
     let start = machine.epoch().expect("epoch");
@@ -509,7 +522,7 @@ fn a_healthy_machine_reports_no_failed_collections() {
             collect_every: 2,
         },
         meter: MeterBounds::default(),
-        intrinsic_permit: None,
+        global_names: None,
     };
     let mut machine = PersistentMachine::open(&options).expect("open");
     for i in 0..4 {
@@ -517,11 +530,9 @@ fn a_healthy_machine_reports_no_failed_collections() {
             .eval(&format!("var junk = 0; junk = {{ v: {i} }}; junk = 0; {i}"))
             .expect("crank");
     }
-    assert_eq!(
-        machine.failed_collections(),
-        (0, None),
-        "the scheduled collections all succeeded"
-    );
+    let (failures, last) = machine.failed_collections();
+    assert_eq!(failures, 0, "the scheduled collections all succeeded");
+    assert!(last.is_none(), "{last:?}");
     machine.close().expect("close");
 }
 
@@ -566,7 +577,7 @@ fn the_collect_schedule_survives_a_suspend() {
         signature: "ironhorse-worker-v1".to_string(),
         cadence: policy(),
         meter: MeterBounds::default(),
-        intrinsic_permit: None,
+        global_names: None,
     })
     .expect("open A");
     for i in 0..CRANKS {
@@ -584,7 +595,7 @@ fn the_collect_schedule_survives_a_suspend() {
             signature: "ironhorse-worker-v1".to_string(),
             cadence: policy(),
             meter: MeterBounds::default(),
-            intrinsic_permit: None,
+            global_names: None,
         })
         .expect("open B");
         b.eval(&prog(i)).expect("B crank");
@@ -630,7 +641,7 @@ fn collection_policy_and_events_are_durable_and_reopen_refuses_drift() {
             collect_every: 2,
         },
         meter: MeterBounds::default(),
-        intrinsic_permit: None,
+        global_names: None,
     };
     let mut machine = PersistentMachine::open(&options).unwrap();
     machine.eval("var x = 1; x").unwrap();
@@ -647,8 +658,13 @@ fn collection_policy_and_events_are_durable_and_reopen_refuses_drift() {
     assert_eq!(explicit.collections, 2);
     assert_ne!(scheduled.root, explicit.root);
     options.cadence.collect_every = 3;
-    assert!(matches!(PersistentMachine::open(&options),
-        Err(MachineError::Store(message)) if message.contains("collection cadence mismatch")));
+    assert!(matches!(
+        PersistentMachine::open(&options),
+        Err(MachineError::Refused(Refusal::CadenceMismatch {
+            stored: 2,
+            requested: 3
+        }))
+    ));
     assert_eq!(read_manifest(&options.path), explicit);
     options.cadence.collect_every = 2;
     let mut reopened = PersistentMachine::open(&options).unwrap();
@@ -666,7 +682,7 @@ fn explicit_full_collection_reclaims_chunk_storage_across_reopen() {
         signature: "full-gc".to_string(),
         cadence: CadencePolicy::default(),
         meter: MeterBounds::default(),
-        intrinsic_permit: None,
+        global_names: None,
     };
     let mut machine = PersistentMachine::open(&options).unwrap();
     machine
@@ -696,7 +712,7 @@ fn scheduled_collection_checkpoint_failure_preserves_the_committed_delivery() {
             collect_every: 1,
         },
         meter: MeterBounds::default(),
-        intrinsic_permit: None,
+        global_names: None,
     };
     let machine = PersistentMachine::open(&options).unwrap();
     machine.close().unwrap();
@@ -721,11 +737,19 @@ fn scheduled_collection_checkpoint_failure_preserves_the_committed_delivery() {
         "delivery succeeded despite later collection failure"
     );
     assert_eq!(machine.failed_collections().0, 1);
-    assert!(machine
+    // The accessor hands back the error, not a rendering of it: this is the
+    // only way a supervisor observes a failed SCHEDULED collection, so it is
+    // the one place F157 most needed closing. A store fault classifies, and
+    // the store's own error is still reachable underneath.
+    let injected = machine
         .failed_collections()
         .1
-        .unwrap()
-        .contains("injected collection"));
+        .expect("the scheduled collection failed");
+    assert_eq!(injected.store_failure(), Some(StoreFailure::Transient));
+    assert!(
+        injected.to_string().contains("injected collection"),
+        "{injected}"
+    );
     assert_eq!(machine.epoch().unwrap(), 2);
     machine.close().unwrap();
     let committed = read_manifest(&options.path);

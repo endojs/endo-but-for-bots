@@ -282,9 +282,9 @@ impl Interp {
             if name != "globalThis"
                 && self
                     .environment
-                    .intrinsic_permit
+                    .global_names
                     .as_ref()
-                    .is_some_and(|permit| !permit.contains(name))
+                    .is_some_and(|global_names| !global_names.contains(name))
             {
                 continue;
             }
@@ -1455,9 +1455,9 @@ impl Interp {
         if name != "globalThis"
             && self
                 .environment
-                .intrinsic_permit
+                .global_names
                 .as_ref()
-                .is_some_and(|permit| !permit.contains(&SymbolName::from(name)))
+                .is_some_and(|global_names| !global_names.contains(&SymbolName::from(name)))
         {
             return;
         }

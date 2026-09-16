@@ -323,6 +323,26 @@ fn inventory_in(
             continue;
         }
         let end = end_group(tokens, i + 1);
+        // Match ARMS are not call sites either, and are recognisable from the
+        // token that follows the group: `=>` ends the pattern, `|` continues
+        // an or-pattern, and `if` opens a guard. None of the three can follow
+        // a CALL — `f(x) if ..` and `f(x) => ..` are not expressions anywhere
+        // in Rust — so this cannot skip a producer.
+        //
+        // A pattern destructures a value some producer already built, and
+        // that producer is inventoried at ITS own site; counting the arm too
+        // would double-count it, while refusing the arm would force a
+        // classifier to abandon exhaustiveness. Skipping it here keeps the
+        // audited list below to forwarding EXPRESSIONS, which is what a
+        // construction has to be.
+        let after_group = tokens.get(end + 1);
+        let arm = (matches!(after_group, Some(Token::Punct('=')))
+            && matches!(tokens.get(end + 2), Some(Token::Punct('>'))))
+            || matches!(after_group, Some(Token::Punct('|')))
+            || after_group.is_some_and(|t| word(t, "if"));
+        if arm {
+            continue;
+        }
         let all_args = arguments(&tokens[i + 2..end]);
         let label_index = if cursor
             || ["present_and_non_empty", "read_block", "row_len"]

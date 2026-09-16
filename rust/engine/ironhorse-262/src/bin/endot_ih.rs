@@ -115,6 +115,18 @@ fn main() {
                 cfg.ses_mode =
                     SesMode::parse(&v).unwrap_or_else(|| fail("--ses-mode must be l, lc, or c"));
             }
+            // `--prelude <file>`: the SHIM route, as `test262-harness --prelude`
+            // does it for the xs and node hosts. Distinct from `-l`, which is
+            // the native route and still fails closed: a prelude does not make
+            // `-l` work, it makes `-l` unnecessary.
+            "--prelude" => {
+                let path = args
+                    .next()
+                    .unwrap_or_else(|| fail("--prelude needs a path"));
+                let source = std::fs::read_to_string(&path)
+                    .unwrap_or_else(|e| fail(&format!("--prelude {path}: {e}")));
+                cfg.prelude = Some(source);
+            }
             "--test262-dir" => {
                 test262_dir = Some(PathBuf::from(
                     args.next()
@@ -277,6 +289,12 @@ fn main() {
         cfg.gate_meter_exact,
         cfg.ses_mode.short(),
     );
+    // Fail closed on a SES mode ironhorse cannot actually provide, BEFORE any
+    // case runs. See `refuse_unimplemented_ses_mode`.
+    if let Some(msg) = refuse_unimplemented_ses_mode(cfg.ses_mode) {
+        fail(&msg);
+    }
+
     let rep = run_files(&cfg, &harness, &root, &files);
 
     println!("{}", "=".repeat(72));
@@ -455,6 +473,41 @@ fn corpus_label(subtrees: &[String]) -> String {
     corpus.join(",")
 }
 
+/// Refuse a SES mode whose guest surface ironhorse does not expose, rather
+/// than running every case as a named pre-skip.
+///
+/// The pre-skip is honest per case -- each names `ses-mode:*-unimplemented`
+/// -- but the RUN is not: every case skips, nothing fails, and the process
+/// exits 0, so `test262:ironhorse` reports a clean run while testing nothing
+/// at all.
+///
+/// The `ses-xs-parity` axis is a RATCHET, not a CI gate
+/// (`packages/test262-runner/README.md`): it is read for a pass count that
+/// should go up and never down, and it gates no build. That is precisely why
+/// this refuses rather than exiting 0. A gate can survive a meaningless
+/// green, because something else fails when the code is wrong; a ratchet
+/// cannot survive a meaningless NUMBER, because the number is the whole
+/// signal. 15288 skips reported as success would ratchet against nothing.
+///
+/// So the mode fails closed: asking for a `lockdown()` that does not exist is
+/// a configuration error, not a skip. A per-case skip stays the right answer
+/// for a case whose own feature is missing (`Compartment` unbound, say); it is
+/// the wrong answer for "the mode you selected has no implementation".
+///
+/// This is the other half of [`SesMode::unimplemented_skip`]'s seam. When the
+/// guest surface lands -- natively, or via a prelude supplying it -- that
+/// returns `None`, this returns `None` with it, and the lane runs for real.
+fn refuse_unimplemented_ses_mode(mode: SesMode) -> Option<String> {
+    let reason = mode.unimplemented_skip()?;
+    Some(format!(
+        "SES mode `{}` ({reason}): ironhorse exposes no guest `lockdown`/`Compartment`, \
+         so every case would be a named pre-skip and the run would exit 0 having \
+         tested nothing. Refusing instead of reporting green. Drop the mode flag to \
+         run the corpus unlocked down.",
+        mode.short(),
+    ))
+}
+
 fn fail(msg: &str) -> ! {
     eprintln!("endot-ih: {}", msg);
     std::process::exit(2);
@@ -508,3 +561,28 @@ OPTIONS:
 THIRD-HOST (ses-xs-parity axis, alongside `xst -l` and node+SES prelude):
     endot-ih -l --feature-filter ses-xs-parity --features-include ses-xs-parity built-ins
 ";
+
+#[cfg(test)]
+mod tests {
+    use super::{refuse_unimplemented_ses_mode, SesMode};
+
+    #[test]
+    fn an_unimplemented_ses_mode_is_refused_rather_than_skipped_green() {
+        // The unlocked corpus runs; there is nothing to refuse.
+        assert_eq!(refuse_unimplemented_ses_mode(SesMode::None), None);
+
+        // Every mode whose guest surface is missing refuses, and says why in
+        // terms of the outcome it is preventing -- a run that exits 0 having
+        // tested nothing.
+        for mode in [
+            SesMode::Lockdown,
+            SesMode::Compartment,
+            SesMode::LockdownCompartment,
+        ] {
+            let msg = refuse_unimplemented_ses_mode(mode)
+                .unwrap_or_else(|| panic!("{mode:?} must fail closed while its surface is absent"));
+            assert!(msg.contains(mode.unimplemented_skip().unwrap()));
+            assert!(msg.contains("tested nothing"), "{msg}");
+        }
+    }
+}

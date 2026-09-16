@@ -33,13 +33,13 @@ use crate::value::{Kind, Payload, Slot};
 #[derive(Default)]
 pub struct Intrinsics {
     pub(crate) roots: Vec<crate::SlotIndex>,
-    pub(crate) locked_down: bool,
+    pub(crate) locked_down: std::cell::Cell<bool>,
 }
 
 impl Intrinsics {
     /// True after the complete primordial graph has been frozen.
     pub fn is_locked_down(&self) -> bool {
-        self.locked_down
+        self.locked_down.get()
     }
 }
 
@@ -63,7 +63,7 @@ struct PendingEnvironment {
     compiler: std::rc::Weak<RefCell<Option<Rc<dyn crate::SourceCompiler>>>>,
     names: std::rc::Weak<RefCell<std::collections::BTreeSet<String>>>,
     ids: std::rc::Weak<RefCell<std::collections::BTreeSet<u16>>>,
-    permit: Option<Vec<String>>,
+    global_names: Option<Vec<String>>,
 }
 impl MachineState {
     fn prepare_persistence(&self, interp: &mut Interp) -> Result<(), Halt> {
@@ -99,7 +99,7 @@ impl MachineState {
                         continue;
                     };
                     let id = interp.create_environment(
-                        pending.permit.as_ref().map(|p| {
+                        pending.global_names.as_ref().map(|p| {
                             p.iter()
                                 .map(|n| crate::SymbolName::from(n.as_str()))
                                 .collect()
@@ -188,7 +188,9 @@ impl RootedValue {
 /// loader configuration and compiler services must be reattached by the embedder.
 /// No pending endowment is applied by restoration.
 pub struct EnvironmentPolicy {
-    pub intrinsic_permit: Option<Vec<String>>,
+    /// Which intrinsic names may be bound as globals; see
+    /// `Compartment::global_names`. Host policy, reapplied on restore.
+    pub global_names: Option<Vec<String>>,
     pub source_compiler: Option<Rc<dyn crate::SourceCompiler>>,
     pub name: Option<String>,
     pub has_resolve_hook: bool,
@@ -265,10 +267,31 @@ impl CompartmentSkip {
 pub struct CompartmentOptions {
     /// The compartment's `name` option (SES `Compartment` name).
     pub name: Option<String>,
-    /// Global intrinsic names this compartment may expose. None admits the standard
-    /// set; an empty list starts with only globalThis and explicit endowments.
-    /// This controls bindings, not transitive reachability through endowed objects.
-    pub intrinsic_permit: Option<Vec<String>>,
+    /// Global intrinsic names this compartment may expose. None admits the
+    /// standard set; an empty list starts with only globalThis and explicit
+    /// endowments.
+    ///
+    /// **This is not attenuation, and it is not confinement.** It controls
+    /// which names are BOUND as globals, and nothing else. Denied intrinsics
+    /// stay reachable two ways.
+    ///
+    /// Through any object's prototype chain, the dynamic evaluator included:
+    /// under `Some(vec![])` a guest still reads `({}).constructor.name` as
+    /// `"Object"`, `({}).constructor.constructor.name` as `"Function"`, and
+    /// evaluates `({}).constructor.constructor('return 1 + 1')()` to `2`. SES
+    /// and XS close that route by replacing the function-family prototypes'
+    /// `.constructor` with a throwing stub during `lockdown()`
+    /// (`fx_lockdown_aux`, `xsLockdown.c:52`); ironhorse has no `lockdown()`
+    /// and does not.
+    ///
+    /// And transitively through an endowed object. Raw heap-backed `Slot`
+    /// endowments are refused, but [`Compartment::define_global_value`] shares
+    /// a [`RootedValue`] by reference on purpose, so anything reachable from
+    /// it is reachable here whatever this list says.
+    ///
+    /// Treat this as a surface-area convenience for cooperative guests, not a
+    /// security boundary -- `designs/ironhorse-ses-compartment-equivalence.md`.
+    pub global_names: Option<Vec<String>>,
     /// Endowments copied onto the new global, by display name.
     pub endowments: HashMap<String, Slot>,
     /// Endowments keyed by the interned symbol id the bytecode addresses
@@ -309,7 +332,15 @@ pub struct Compartment {
     source_compiler: Rc<RefCell<Option<Rc<dyn crate::SourceCompiler>>>>,
     environment: Rc<Cell<Option<crate::SlotIndex>>>,
     lease: Rc<()>,
-    intrinsic_permit: Option<Vec<String>>,
+    /// The constructor's `global_names`, held until this compartment's
+    /// environment is created and then handed to `create_environment` as that
+    /// environment's filter. A filter over NAMES, unrelated to `globals`
+    /// above, which holds this compartment's actual endowment bindings.
+    ///
+    /// `Environment::global_names` is where this ends up and what the linker
+    /// reads; see it for what the filter does and does not do, and for why a
+    /// compartment neither inherits the machine's list nor is bounded by it.
+    global_names: Option<Vec<String>>,
     pending_names: Rc<RefCell<std::collections::BTreeSet<String>>>,
     pending_ids: Rc<RefCell<std::collections::BTreeSet<u16>>>,
     /// The compartment's module map (`new Compartment({ modules })`).
@@ -342,7 +373,7 @@ impl Compartment {
             )),
             environment: Rc::new(Cell::new(None)),
             lease: Rc::new(()),
-            intrinsic_permit: options.intrinsic_permit,
+            global_names: options.global_names,
             globals: options.endowments,
             rooted_globals: HashMap::new(),
             globals_by_id: options.endowments_by_id,
@@ -358,7 +389,7 @@ impl Compartment {
             compiler: Rc::downgrade(&compartment.source_compiler),
             names: Rc::downgrade(&compartment.pending_names),
             ids: Rc::downgrade(&compartment.pending_ids),
-            permit: compartment.intrinsic_permit.clone(),
+            global_names: compartment.global_names.clone(),
         });
         compartment
     }
@@ -679,7 +710,7 @@ impl Compartment {
             Some(realm) => machine.activate_environment(realm),
             None => machine
                 .create_environment(
-                    self.intrinsic_permit.as_ref().map(|names| {
+                    self.global_names.as_ref().map(|names| {
                         names
                             .iter()
                             .map(|name| crate::SymbolName::from(name.as_str()))
@@ -820,13 +851,36 @@ impl Default for Machine {
 
 impl Machine {
     pub fn new() -> Machine {
-        Self::with_start_permit(None)
+        Self::with_start_global_names(None)
     }
 
     /// Apply a prospective binding policy before installing the start globals.
     /// All ordinary primordials are still created and frozen exactly once.
-    pub fn with_start_permit(permit: Option<&[String]>) -> Machine {
-        let mut interpreter = Interp::new_shared_realm_machine_with_permit(permit);
+    pub fn with_start_global_names(global_names: Option<&[String]>) -> Machine {
+        Self::configured(global_names, true)
+    }
+
+    /// A machine whose shared intrinsic graph is built but NOT frozen, for a
+    /// guest that brings its own `lockdown()`.
+    ///
+    /// The `ses` shim repairs intrinsics before freezing them and cannot do
+    /// that to a graph already frozen, so [`Machine::new`] and the shim
+    /// exclude each other. This is the way to have both: build unfrozen, let
+    /// the guest's `lockdown()` repair and freeze, and keep the multi-
+    /// compartment API. `packages/thixotrope` already runs that shape on a
+    /// bare `Interp`; this offers it a `Machine`.
+    ///
+    /// **The caller owns the window.** Until something freezes the graph the
+    /// primordials are shared and writable, so two compartments of this
+    /// machine can signal through them. Lock down -- by guest `lockdown()` or
+    /// by [`Machine::lock_down`] -- before admitting a second compartment.
+    /// [`Intrinsics::is_locked_down`] reports the current state.
+    pub fn unfrozen_with_start_global_names(global_names: Option<&[String]>) -> Machine {
+        Self::configured(global_names, false)
+    }
+
+    fn configured(global_names: Option<&[String]>, freeze: bool) -> Machine {
+        let mut interpreter = Interp::new_shared_realm_machine_configured(global_names, freeze);
         let hosts = Rc::new(crate::interp::host::HostRegistry::default());
         interpreter.attach_host_registry(&hosts);
         let realm = Rc::clone(interpreter.realm());
@@ -888,7 +942,7 @@ impl Machine {
         for (&id, env) in &policy.environments {
             interpreter.attach_environment_policy(
                 id.0,
-                env.intrinsic_permit.as_deref(),
+                env.global_names.as_deref(),
                 env.source_compiler.as_ref(),
             )?;
             if let Some(compiler) = &env.source_compiler {
@@ -935,7 +989,7 @@ impl Machine {
         let policy = self.restored_policies.borrow_mut().remove(&id).unwrap();
         let mut compartment = self.compartment(CompartmentOptions {
             name: policy.name,
-            intrinsic_permit: policy.intrinsic_permit,
+            global_names: policy.global_names,
             has_resolve_hook: policy.has_resolve_hook,
             has_import_hook: policy.has_import_hook,
             ..Default::default()
@@ -1046,7 +1100,7 @@ impl Machine {
             Some(id) => interp.activate_environment(id)?,
             None => {
                 let id = interp.create_environment(
-                    compartment.intrinsic_permit.as_ref().map(|names| {
+                    compartment.global_names.as_ref().map(|names| {
                         names
                             .iter()
                             .map(|name| crate::SymbolName::from(name.as_str()))
@@ -1087,8 +1141,23 @@ impl Machine {
         })
     }
 
+    /// Freeze the shared intrinsic graph that
+    /// [`Machine::unfrozen_with_start_global_names`] left mutable. Idempotent, and a
+    /// no-op on a machine that was built frozen.
+    pub fn lock_down(&self) -> Result<(), Halt> {
+        self.machine
+            .interpreter
+            .try_borrow_mut()
+            .map_err(|_| Halt::MachineBusy)?
+            .lock_down_intrinsics()
+    }
+
     /// Configure the default Realm evaluator service, used by shared dynamic
     /// constructors. Machine owns the service lifetime; it is not stored in the heap.
+    ///
+    /// This reaches the default realm's environment and no other: a compartment
+    /// needs its own [`Compartment::set_source_compiler`] before `eval`,
+    /// `Function`, or the three unnamed evaluator families resolve in it.
     pub fn set_source_compiler(&self, compiler: Rc<dyn crate::SourceCompiler>) -> Result<(), Halt> {
         let mut machine = self
             .machine

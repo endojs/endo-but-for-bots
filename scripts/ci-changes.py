@@ -312,6 +312,19 @@ def classify(paths, graphs, all_jobs=False):
             jobs["test-xs"] = True
             if not under(path, "packages/test262-runner/test262"):
                 jobs["build-xsnap"] = True
+        # The daemon boot bundles the oracle lane dual-runs. `polyfills.js`
+        # and `host_aliases.js` are read by `ironhorse-262`'s `include_str!`;
+        # `bus-worker-xs-ses-boot.js` and its bundler generate `ses_boot.js`,
+        # which `tests/stage4_ses_boot.rs` reads at runtime after the lane
+        # runs the bundler. Without these the bar's own inputs could change
+        # without ever re-running it.
+        if path in {
+            "rust/endo/xsnap/src/polyfills.js",
+            "rust/endo/xsnap/src/host_aliases.js",
+            "packages/daemon/src/bus-worker-xs-ses-boot.js",
+            "packages/daemon/scripts/bundle-bus-worker-xs-ses-boot.mjs",
+        }:
+            jobs["test-ironhorse-oracle"] = True
         if path in {
             "rust/engine/scripts/test-math-vectors.py", "rust/engine/scripts/compare-math-vectors.py",
             "rust/engine/scripts/test-lockfile-agreement.py", "rust/engine/scripts/check-lockfile-agreement.py",

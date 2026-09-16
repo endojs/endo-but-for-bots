@@ -30,7 +30,26 @@ pub struct CompartmentEnvironment {
     pub(super) binding_names: std::collections::BTreeSet<u16>,
     pub(super) global_props: std::collections::HashMap<u16, crate::value::SlotIndex>,
     pub(super) owner: Option<std::rc::Weak<()>>,
-    pub(super) intrinsic_permit: Option<std::collections::BTreeSet<SymbolName>>,
+    /// Which intrinsic names may be BOUND as globals in this environment --
+    /// the live filter, and the authority: `interp/link.rs` consults exactly
+    /// this, at initial linking and at every later relink. `None` binds the
+    /// standard set; `Some(list)` binds only those names, plus `globalThis`.
+    ///
+    /// It is per-environment, and environments DO NOT INHERIT. Each
+    /// compartment creates its own environment and `create_environment`
+    /// assigns this outright, so a compartment declaring `None` is
+    /// unrestricted however narrow the machine's start realm is, and one
+    /// declaring a list may name something the start realm omitted
+    /// (`tests/realms.rs`). A machine-wide list looks like a ceiling and is
+    /// not one.
+    ///
+    /// The mechanism is the whole of it, and it is small: the binding is
+    /// created or it is not. Nothing leaves the intrinsic graph, so every
+    /// denied intrinsic stays reachable by any route that is not a bare name
+    /// -- `({}).constructor.constructor` still reaches `Function` under
+    /// `Some(vec![])`. This is not SES's `permits.js`, which governs which
+    /// PROPERTIES of intrinsics survive lockdown and is enforced by deletion.
+    pub(super) global_names: Option<std::collections::BTreeSet<SymbolName>>,
     pub(super) unhandled_rejection: Option<crate::value::SlotIndex>,
     pub(super) compiler_required: bool,
     pub(super) shared_compiler: Option<std::rc::Weak<dyn SourceCompiler>>,
@@ -47,7 +66,7 @@ impl CompartmentEnvironment {
             source_compiler: None,
             shared_compiler: None,
             compiler_required: false,
-            intrinsic_permit: None,
+            global_names: None,
             owner: None,
             unhandled_rejection: None,
         }
@@ -95,6 +114,32 @@ impl Interp {
         function
     }
 
+    /// Perform the freeze [`Self::new_shared_realm_machine_configured`] skipped.
+    /// Idempotent: a graph already locked down is left alone, as `fx_lockdown`
+    /// is NOT (it throws `TypeError("lockdown already called")`,
+    /// `xsLockdown.c:90-92`) -- this is the embedder's operation, not the
+    /// guest's, and an embedder that cannot tell is the one calling it twice.
+    pub(crate) fn lock_down_intrinsics(&mut self) -> Result<(), crate::Halt> {
+        if self.realm.intrinsics().locked_down.get() {
+            return Ok(());
+        }
+        let roots = self.realm.intrinsics().roots.clone();
+        for root in roots {
+            // Unlike the construction-time freeze this can legitimately fail:
+            // the graph has been reachable by a guest, which may have made an
+            // intrinsic non-extensible or installed a Proxy that refuses the
+            // definition. `do_harden` rolls its own worklist back on the way
+            // out, so a refused lockdown leaves nothing half-frozen.
+            self.do_harden(&[], Slot::of(Kind::Reference, Payload::Reference(root)))
+                .map_err(|step| match step {
+                    Step::Host(halt) => halt,
+                    _ => crate::Halt::Refused("lockdown:intrinsic-graph"),
+                })?;
+        }
+        self.realm.intrinsics().locked_down.set(true);
+        Ok(())
+    }
+
     pub(crate) fn realm(&self) -> &std::rc::Rc<Realm> {
         &self.realm
     }
@@ -102,12 +147,36 @@ impl Interp {
     /// Build the complete intrinsic graph before any guest can observe it.
     /// Program-local symbol operands will be relinked to this machine table.
     pub(crate) fn new_shared_realm_machine() -> Self {
-        Self::new_shared_realm_machine_with_permit(None)
+        Self::new_shared_realm_machine_with_global_names(None)
     }
 
-    pub(crate) fn new_shared_realm_machine_with_permit(permit: Option<&[String]>) -> Self {
+    pub(crate) fn new_shared_realm_machine_with_global_names(
+        global_names: Option<&[String]>,
+    ) -> Self {
+        Self::new_shared_realm_machine_configured(global_names, true)
+    }
+
+    /// `freeze = false` builds the shared realm and leaves its intrinsic graph
+    /// MUTABLE, for a guest that brings its own `lockdown()` -- the `ses` shim
+    /// repairs intrinsics before freezing them, and cannot do that to a graph
+    /// already frozen (`tests/ses_boot_intrinsics.rs`). Nothing else differs:
+    /// the roots are still enumerated, so [`Self::lock_down_intrinsics`] can
+    /// perform the same freeze later, and `Intrinsics::is_locked_down` reports
+    /// which state the graph is in.
+    ///
+    /// The window this opens is real. Until the freeze happens the primordials
+    /// are shared and writable, so two compartments of the same machine can
+    /// signal through them. A caller that takes this path is responsible for
+    /// locking down -- by guest `lockdown()` or by
+    /// [`Self::lock_down_intrinsics`] -- before it admits a second
+    /// compartment. SES has the same window before its own `lockdown()` and
+    /// the same rule about it.
+    pub(crate) fn new_shared_realm_machine_configured(
+        global_names: Option<&[String]>,
+        freeze: bool,
+    ) -> Self {
         let mut machine = Self::new();
-        machine.set_intrinsic_permit(permit);
+        machine.set_global_names(global_names);
         let mut names: Vec<SymbolName> = crate::default_keys::DEFAULT_KEYS
             .iter()
             .copied()
@@ -131,15 +200,17 @@ impl Interp {
             })
             .filter(|&root| machine.slots.get(root).kind == Kind::Instance)
             .collect();
-        for &root in &roots {
-            machine
-                .do_harden(&[], Slot::of(Kind::Reference, Payload::Reference(root)))
-                .expect("pristine intrinsic graph must admit transitive freezing");
+        if freeze {
+            for &root in &roots {
+                machine
+                    .do_harden(&[], Slot::of(Kind::Reference, Payload::Reference(root)))
+                    .expect("pristine intrinsic graph must admit transitive freezing");
+            }
         }
         machine.realm = std::rc::Rc::new(Realm {
             intrinsics: std::rc::Rc::new(crate::Intrinsics {
                 roots,
-                locked_down: true,
+                locked_down: std::cell::Cell::new(freeze),
             }),
             default_global: machine.environment.global_obj,
         });
@@ -148,20 +219,35 @@ impl Interp {
             .binding_names
             .extend(machine.environment.global_props.keys().copied());
         machine.shared_compartments = true;
-        for info in machine.functions.values_mut() {
-            if matches!(
-                info.native,
-                Some(
-                    Native::Eval
-                        | Native::Function
-                        | Native::GeneratorFunction
-                        | Native::AsyncFunction
-                        | Native::AsyncGeneratorFunction
-                )
-            ) {
-                info.global_env = machine.environment.global_obj;
-            }
-        }
+        // NO evaluator is pinned to the default global environment.
+        //
+        // `link_intrinsics` routes every global binding through
+        // `compartment_evaluator`, which mints each compartment a copy of
+        // `eval` and `Function` homed to its own global. That copy is not the
+        // only way to reach an evaluator. The ORIGINAL stays reachable through
+        // any object's prototype chain --
+        // `({}).constructor.constructor`, `(function(){}).constructor` -- and
+        // `%GeneratorFunction%`, `%AsyncFunction%` and
+        // `%AsyncGeneratorFunction%` have no global binding at all
+        // (`boot.rs:1153`), so they are reachable ONLY that way.
+        //
+        // A `global_env` set here is therefore observed, not overwritten:
+        // `call_native` (`invoke.rs:171`, the switch at `:186`) switches to it before running
+        // `create_dynamic_function`. Pinning it to the default global let a
+        // compartment compile against the default realm in both directions --
+        // `({}).constructor.constructor('return answer')()` read the default
+        // `answer` where `Function('return answer')()` read its own, and an
+        // assignment in such a body defined its global ON the default realm.
+        //
+        // Left NULL, `switch_environment` no-ops (`:201-203`) and the dynamic
+        // function is created in whichever environment called for it. That is
+        // the only answer that is not arbitrary here: compartments share one
+        // realm and one frozen intrinsic graph, so a shared evaluator has no
+        // realm of its own to belong to. XS instead replaces the
+        // function-family prototypes' `.constructor` with a throwing stub
+        // (`fx_lockdown_aux`, `xsLockdown.c:52`), which is correct only after
+        // a guest calls `lockdown()` -- something ironhorse has no equivalent
+        // of, since it freezes at construction.
         machine.meter = Meter::new();
         machine
     }
@@ -206,7 +292,7 @@ impl Interp {
 
     pub(crate) fn create_environment(
         &mut self,
-        permit: Option<std::collections::BTreeSet<SymbolName>>,
+        global_names: Option<std::collections::BTreeSet<SymbolName>>,
         owner: std::rc::Weak<()>,
         modules: std::rc::Rc<std::cell::RefCell<crate::ModuleGraph>>,
     ) -> Result<crate::value::SlotIndex, Halt> {
@@ -217,7 +303,7 @@ impl Interp {
                 .slots
                 .alloc(Slot::instance(crate::value::SlotIndex::NULL));
             let mut realm = CompartmentEnvironment::new(global);
-            realm.intrinsic_permit = permit;
+            realm.global_names = global_names;
             realm.owner = Some(owner);
             realm.modules = modules;
             let old = std::mem::replace(&mut self.environment, realm);

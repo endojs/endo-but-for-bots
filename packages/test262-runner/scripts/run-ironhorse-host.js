@@ -22,10 +22,16 @@
 //
 // Today endor's guest `lockdown()`/`Compartment` surface is a named scope
 // fold (only the host-side realm API + guest `harden`/`petrify` are landed),
-// so every ses-xs-parity case reports an HONEST named skip
-// (`feature:Compartment` / `ses-mode:lockdown-unimplemented`) and the run is
-// green with zero failures. Coverage lights up automatically when that guest
-// surface lands — no change to this wiring. Prerequisite (as for the xs
+// so `-l` FAILS CLOSED: `endot-ih` refuses to start and this script exits
+// nonzero. That is not a CI gate — the `ses-xs-parity` axis is a ratchet and
+// fails no build (see the package README, "Ratchet, not a gate"). It is that
+// a ratchet is only worth the number it records, and every case reporting an
+// honest named skip while the run exits 0 records nothing while looking like
+// a passing third host. The lane starts measuring by landing the guest
+// surface, or by handing `endot-ih` a prelude that supplies it — not by
+// skipping. For a compatibility count today, use `test262:ironhorse-host`,
+// which drives ironhorse as a plain test262 host with no oracle.
+// Prerequisite (as for the xs
 // host's `xst`): the `c/moddable` submodule for the XS oracle and a Rust
 // toolchain; `cargo` must be on PATH.
 

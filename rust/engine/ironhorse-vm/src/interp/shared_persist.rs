@@ -290,23 +290,23 @@ impl Interp {
                 return Err(refuse("host function owner has conflicting metadata"));
             }
         }
-        // Every guest function/evaluator must carry its defining environment;
-        // omission must not silently turn into the standalone NULL policy.
+        // Every guest function must carry its defining environment; omission
+        // must not silently turn into the standalone NULL policy.
+        //
+        // The shared evaluators are the exception, and they are not an
+        // omission: a boot `eval`, `Function`, `%GeneratorFunction%`,
+        // `%AsyncFunction%` or `%AsyncGeneratorFunction%` deliberately has NO
+        // environment, so that it compiles in whichever compartment calls it
+        // rather than in the realm that happened to build it
+        // (`interp/realm.rs`, `new_shared_realm_machine_with_global_names`). Their
+        // environment is derived, not persisted. The per-compartment `eval`
+        // and `Function` copies `compartment_evaluator` mints ARE persisted
+        // the ordinary way: they are not boot callables, so they fall through
+        // to the checks below.
         let function_env: std::collections::BTreeMap<_, _> =
             state.function_environments.iter().copied().collect();
         for (owner, info) in &self.functions {
-            if (info.host.is_some()
-                || info.body_start.is_some()
-                || matches!(
-                    info.native,
-                    Some(
-                        Native::Eval
-                            | Native::Function
-                            | Native::GeneratorFunction
-                            | Native::AsyncFunction
-                            | Native::AsyncGeneratorFunction
-                    )
-                ))
+            if (info.host.is_some() || info.body_start.is_some())
                 && !function_env.contains_key(&owner.0)
             {
                 return Err(refuse("missing function environment"));
@@ -316,16 +316,38 @@ impl Interp {
             let Some(info) = self.functions.get_mut(&crate::SlotIndex(o)) else {
                 return Err(refuse("unknown function environment owner"));
             };
-            if matches!(
+            let shared_evaluator = matches!(
                 info.native,
                 Some(
-                    Native::GeneratorFunction
+                    Native::Eval
+                        | Native::Function
+                        | Native::GeneratorFunction
                         | Native::AsyncFunction
                         | Native::AsyncGeneratorFunction
                 )
-            ) && e != state.default_global
+            );
+            if shared_evaluator && boot.functions.contains_key(&crate::SlotIndex(o)) {
+                // A snapshot written while these were pinned to the default
+                // global carries that pin. Drop it: restoring it would put a
+                // compartment's dynamic compilation back in the default realm,
+                // which is the escape the pin caused. Tolerated rather than
+                // refused so such a snapshot still restores.
+                continue;
+            }
+            if shared_evaluator
+                && matches!(
+                    info.native,
+                    Some(
+                        Native::GeneratorFunction
+                            | Native::AsyncFunction
+                            | Native::AsyncGeneratorFunction
+                    )
+                )
             {
-                return Err(refuse("shared constructor requires default environment"));
+                // These three are non-global (`boot.rs`, `create_intrinsics`),
+                // so nothing mints a per-compartment copy and every instance
+                // is a boot callable caught above.
+                return Err(refuse("non-boot shared constructor"));
             }
             if boot
                 .functions
@@ -639,7 +661,7 @@ impl Interp {
     pub(crate) fn attach_environment_policy(
         &mut self,
         global: u32,
-        permit: Option<&[String]>,
+        global_names: Option<&[String]>,
         compiler: Option<&std::rc::Rc<dyn SourceCompiler>>,
     ) -> Result<(), Halt> {
         let env = self
@@ -648,8 +670,8 @@ impl Interp {
         if env.compiler_required && compiler.is_none() {
             return Err(Halt::Refused("machine:missing-restored-compiler"));
         }
-        env.intrinsic_permit =
-            permit.map(|names| names.iter().map(|n| SymbolName::from(n.as_str())).collect());
+        env.global_names =
+            global_names.map(|names| names.iter().map(|n| SymbolName::from(n.as_str())).collect());
         env.shared_compiler = compiler.map(std::rc::Rc::downgrade);
         env.compiler_required = compiler.is_some();
         Ok(())

@@ -612,5 +612,29 @@ mod tests {
             "zero RESULT divergence required on the ses-xs-parity suite; got {} divergence(s)",
             rep.divergences.len()
         );
+
+        // Ratchet the reach, in BOTH directions. Zero divergence alone is
+        // satisfied by skipping everything, and the set is computed from
+        // front-matter rather than a list, so six cases were added and covered
+        // without anything going red -- leaving `CHANGELOG.md`'s tally and two
+        // designs quoting "2 files, covered=0" long after it was true.
+        //
+        // Raising these is the point: when the guest `Compartment`/`lockdown`
+        // globals land, `covered` reaches `total` and this fails until the
+        // ledger is updated with it.
+        const SES_PARITY_TOTAL: usize = 8;
+        const SES_PARITY_COVERED: usize = 6;
+        assert_eq!(
+            (rep.total, rep.covered),
+            (SES_PARITY_TOTAL, SES_PARITY_COVERED),
+            "ses-xs-parity reach moved: total={} covered={} (pinned {}/{}). \
+             Update these constants AND the tally in rust/engine/CHANGELOG.md, \
+             which designs/ironhorse-ses-compartment-equivalence.md and \
+             designs/ironhorse-daemon-acceptance-sequencing.md both quote.",
+            rep.total,
+            rep.covered,
+            SES_PARITY_TOTAL,
+            SES_PARITY_COVERED,
+        );
     }
 }

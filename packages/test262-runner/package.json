@@ -35,7 +35,9 @@
     "test262:xs:pass-style-bytes": "yarn build && xst -s prelude/xs.js src/xs-pass-style-bytes.test.js",
     "test262:xs:text-codec-arraybuffer": "yarn build && xst -s test262/harness/sta.js test262/harness/assert.js test262/harness/compareArray.js prelude/xs.js test262/test/built-ins/TextEncoder/immutable-arraybuffer-intersection.js test262/test/built-ins/TextDecoder/immutable-arraybuffer-intersection.js",
     "test262:node": "test262-harness --host-type node --host-path node --test262-dir test262  --prelude prelude/node.js 'test262/test/**/*.js' --features-include ses-xs-parity --features-exclude ironhorse-dual-run,ironhorse-meter-exact,ironhorse-meter-determinism",
-    "test262:ironhorse": "node scripts/run-ironhorse-host.js"
+    "test262:ironhorse": "node scripts/run-ironhorse-host.js",
+    "test262:ironhorse-host": "yarn build && yarn build:ironhorse-xst && test262-harness --host-type xs --host-path ../../rust/engine/target/release/ironhorse-xst --test262-dir test262 --prelude prelude/ironhorse.js 'test262/test/**/*.js' --features-include ses-xs-parity --features-exclude ironhorse-dual-run,ironhorse-meter-exact,ironhorse-meter-determinism",
+    "build:ironhorse-xst": "cargo build --release --quiet --manifest-path ../../rust/engine/Cargo.toml -p ironhorse-262 --bin ironhorse-xst"
   },
   "dependencies": {
     "@endo/bytes": "workspace:^",

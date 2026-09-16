@@ -64,6 +64,27 @@ fn run_program_with_symbols(bytecode: &[u8], symbols: &[u8]) -> RunOutcome {
         .host_coerced()
 }
 
+/// Compile and run one test262 script source the way a HOST does: on a realm
+/// with the runtime source bridge and `$262` installed, with no oracle and no
+/// differential.
+///
+/// This is the whole of what `node` and `xst` do for the other two hosts of
+/// the `ses-xs-parity` axis -- run the assembled source, and let an uncaught
+/// throw be the failure. [`xst`] is the differential runner and answers a
+/// different question (does ironhorse AGREE with XS); this answers "does
+/// ironhorse pass the test", which is what the corpus's own `Test262Error`
+/// assertions already encode.
+///
+/// `Err` is a compile failure, rendered; `Ok` carries the run outcome, whose
+/// [`Halt::Throw`] renders as `Name: message` -- the shape `eshost` parses
+/// off stderr.
+pub fn run_script_source(source: &str) -> Result<RunOutcome, String> {
+    let (bytecode, symbols) =
+        ironhorse_compile::compile_atoms_goal(source, ironhorse_compile::Goal::Script, false)
+            .map_err(|e| format!("{e}"))?;
+    Ok(run_program_with_symbols(&bytecode, &symbols))
+}
+
 pub mod compile_diff;
 pub mod expectations;
 pub mod frontmatter;
@@ -696,13 +717,16 @@ pub fn parse_corpus(text: &str) -> Vec<String> {
 /// `include_str!` by `rust/endo/xsnap/src/lib.rs` (`POLYFILLS`,
 /// `HOST_ALIASES`) — read here verbatim from the same paths, so the bar runs
 /// the *actual* bytes the daemon boots, not a copy that could drift. The
-/// third boot step — **`ses_boot.js`** (SES `lockdown()` + the HandledPromise
-/// shim) — is **not committed**: it is a ~1 MB build artifact the daemon
-/// bundler (`rollup` over `@endo/*`) generates into `src/ses_boot.js` before
-/// the `include_str!`, absent in a fresh checkout. Bundling the full SES
-/// distribution is out of this engine workspace's scope, so `ses_boot.js` is
-/// a **named, ledgered boot-bundle gap** (`boot:ses-lockdown-bundle`), not
-/// dual-run here. `host_aliases.js` is a self-contained `globalThis` IIFE
+/// third boot step — **`ses_boot.js`** — is **not committed**: it is a 70 KB
+/// build artifact `yarn bundle:xs` generates into `src/ses_boot.js` via
+/// `@endo/compartment-mapper`'s `makeBundle`, absent in a fresh checkout.
+/// Despite its name it carries no `lockdown` and is not the SES shim: it is
+/// `@endo/harden` + `@endo/env-options` + `@endo/eventual-send` + the daemon's
+/// boot file, whose only `globalThis` write is `HandledPromise`
+/// (`packages/daemon/src/bus-worker-xs-ses-boot.js:16`). Because it is
+/// generated rather than committed it is not dual-run *here*; the integration
+/// test `tests/stage4_ses_boot.rs` covers it in the CI lane that bundles.
+/// `host_aliases.js` is a self-contained `globalThis` IIFE
 /// that aliases only host functions that exist, so with no host powers
 /// registered it completes to `undefined` — safe to dual-run in the engine.
 pub fn daemon_boot_bundle_sources() -> Vec<(&'static str, String)> {

@@ -1758,6 +1758,11 @@ struct CallerState {
     target_func: crate::value::SlotIndex,
     /// The caller's code cursor to resume at (just past its `run`).
     ret_pc: usize,
+    /// The value-stack height this callee's frame begins at — XS's
+    /// `mxFrameEnd`, the slot its result is written to. `END` restores the
+    /// stack to it so operands the body abandoned (a `switch` discriminant a
+    /// `return` jumped over, say) cannot survive into the caller's expression.
+    stack_base: usize,
 }
 
 /// One entry of the exception jump-buffer chain (XS's `txJump`, pushed by
@@ -2170,12 +2175,12 @@ impl Interp {
     }
 
     /// Declare which intrinsic global bindings may be installed from now on.
-    /// `None` permits all; an empty slice permits only `globalThis`.
+    /// `None` binds all; an empty slice binds only `globalThis`.
     /// This host policy is not serialized and must be reapplied after restore.
     /// It neither removes existing bindings nor restricts intrinsic objects
     /// reached through prototypes, and does not resurrect deleted bindings.
-    pub fn set_intrinsic_permit(&mut self, names: Option<&[String]>) {
-        self.environment.intrinsic_permit = names.map(|names| {
+    pub fn set_global_names(&mut self, names: Option<&[String]>) {
+        self.environment.global_names = names.map(|names| {
             names
                 .iter()
                 .map(|name| SymbolName::from(name.as_str()))

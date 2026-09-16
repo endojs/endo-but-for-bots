@@ -153,6 +153,12 @@ impl SesMode {
     /// whole-case named skips to real runs when the surface lands — remove a
     /// match arm (and the matching entry in [`DEFAULT_ENDOR_SKIP_FEATURES`])
     /// as each guest builtin is implemented.
+    ///
+    /// `Some` has two consumers, and they want different things from it. The
+    /// per-case gate below records the skip for a library caller. The
+    /// `endot-ih` binary instead REFUSES to start, because a run in which
+    /// every case pre-skips exits 0 and reads as a pass — see
+    /// `bin/endot_ih.rs::refuse_unimplemented_ses_mode`.
     pub fn unimplemented_skip(self) -> Option<&'static str> {
         match self {
             SesMode::None => None,
@@ -172,6 +178,20 @@ pub struct Config {
     /// stands and an oracle disagreement cannot fail the build (it is
     /// demoted to a named skip).
     pub oracle: bool,
+    /// `--prelude <file>`: source evaluated after the harness includes and
+    /// before the case body, the way `test262-harness --prelude` does it for
+    /// the xs and node hosts.
+    ///
+    /// This is the SHIM route to Hardened JavaScript, and it is how the other
+    /// two hosts in the `ses-xs-parity` axis actually run: `test262:xs` passes
+    /// `--prelude prelude/xs.js` and no `-l`, so XS's native `lockdown` is
+    /// overwritten by the shim's while its native `harden` stays -- `xst.c`
+    /// installs both. Ironhorse with `prelude/ironhorse.js` takes the same
+    /// shape: its own `harden`, the shim's `lockdown`.
+    ///
+    /// [`SesMode`] is the separate, NATIVE route and stays unimplemented. A
+    /// prelude does not make `-l` work; it makes `-l` unnecessary.
+    pub prelude: Option<String>,
     /// Compatibility flag: XS cost drift is always advisory.
     /// Ironhorse's release corpus, not oracle cost parity, gates metering.
     pub gate_meter_exact: bool,
@@ -230,6 +250,7 @@ impl Default for Config {
             repeat: 1,
             features_include: Vec::new(),
             ses_mode: SesMode::None,
+            prelude: None,
             feature_filter: Vec::new(),
             // Off by default: the library imposes no bound on a caller that did
             // not ask for one. The CLI opts in to DEFAULT_CASE_TIMEOUT_SECONDS.
@@ -294,13 +315,29 @@ fn preskip(reason: &str) -> CaseResult {
     }
 }
 
+/// The guest Hardened-JavaScript surface a `--prelude` supplies, and which is
+/// therefore no longer missing once one is given.
+///
+/// These are in [`DEFAULT_ENDOR_SKIP_FEATURES`] because the ENGINE does not
+/// implement them. A prelude does not change that -- it is the shim route, not
+/// the native one -- but it does make them present for the run, and a
+/// `feature:Compartment` skip on a run whose prelude defines `Compartment` is
+/// no longer an honest name for what happened.
+///
+/// `ses-xs-parity` is deliberately NOT here: it selects a corpus rather than
+/// naming a surface, and stays opt-in through `--features-include`.
+const FEATURES_SUPPLIED_BY_PRELUDE: &[&str] = &["lockdown", "Compartment"];
+
 /// The effective feature skip set: the default not-implemented list minus
-/// anything `--features-include` opted back in.
+/// anything `--features-include` opted back in, and minus anything a
+/// `--prelude` supplies.
 fn effective_skip_features(cfg: &Config) -> HashSet<String> {
     let opted: HashSet<&str> = cfg.features_include.iter().map(|s| s.as_str()).collect();
+    let prelude_supplies =
+        |f: &str| cfg.prelude.is_some() && FEATURES_SUPPLIED_BY_PRELUDE.contains(&f);
     DEFAULT_ENDOR_SKIP_FEATURES
         .iter()
-        .filter(|f| !opted.contains(**f))
+        .filter(|f| !opted.contains(**f) && !prelude_supplies(f))
         .map(|f| f.to_string())
         .collect()
 }
@@ -379,7 +416,22 @@ pub fn ironhorse_negative_ok(ty: &str, run: &DualRun) -> bool {
 /// verbatim for a `raw` test. Structural shapes the differential cannot
 /// model (`module`, `async`) are handled by the caller before this; a
 /// missing harness file is a named structural skip.
-fn assemble(harness_dir: &Path, src: &str, fm: &Frontmatter) -> Result<String, String> {
+/// `prelude` is `--prelude`'s source, evaluated after the harness includes and
+/// before the body -- the ordering `packages/test262-runner`'s own
+/// `test262:xs:text-codec-arraybuffer` documents (`sta.js assert.js
+/// compareArray.js prelude/xs.js <case>`), and the one a SES prelude requires:
+/// it captures test262's `assert` on the way past, which means `assert.js` has
+/// to have run already.
+///
+/// A `raw`-flagged case gets NO prelude, for the same reason it gets no
+/// harness: `raw` means the executed Script is exactly this source, and
+/// prepending a megabyte of shim would change what the case is testing.
+fn assemble(
+    harness_dir: &Path,
+    src: &str,
+    fm: &Frontmatter,
+    prelude: Option<&str>,
+) -> Result<String, String> {
     if fm.flags.iter().any(|f| f == "raw") {
         return Ok(src.to_string());
     }
@@ -396,6 +448,10 @@ fn assemble(harness_dir: &Path, src: &str, fm: &Frontmatter) -> Result<String, S
         out.push_str(&read(inc)?);
         out.push('\n');
     }
+    if let Some(prelude) = prelude {
+        out.push_str(prelude);
+        out.push_str("\n;\n");
+    }
     out.push_str(src);
     Ok(out)
 }
@@ -404,10 +460,15 @@ fn assemble(harness_dir: &Path, src: &str, fm: &Frontmatter) -> Result<String, S
 /// inserted at the beginning of the executed Script. The harness is part of
 /// that Script in this runner, so putting it before only the body would be
 /// inert rather than a Directive Prologue.
-fn assemble_strict(harness_dir: &Path, src: &str, fm: &Frontmatter) -> Result<String, String> {
+fn assemble_strict(
+    harness_dir: &Path,
+    src: &str,
+    fm: &Frontmatter,
+    prelude: Option<&str>,
+) -> Result<String, String> {
     Ok(format!(
         "\"use strict\";\n{}",
-        assemble(harness_dir, src, fm)?
+        assemble(harness_dir, src, fm, prelude)?
     ))
 }
 
@@ -1408,7 +1469,7 @@ pub fn run_case(cfg: &Config, harness_dir: &Path, src: &str) -> CaseResult {
     let run_mode = |source: &str| evaluate(cfg, source, &fm, meter_exact_gate);
 
     let sloppy = if run_sloppy {
-        match assemble(harness_dir, src, &fm) {
+        match assemble(harness_dir, src, &fm, cfg.prelude.as_deref()) {
             Ok(source) => Some(run_mode(&source)),
             Err(reason) => return preskip(&reason),
         }
@@ -1416,7 +1477,7 @@ pub fn run_case(cfg: &Config, harness_dir: &Path, src: &str) -> CaseResult {
         None
     };
     let strict = if run_strict {
-        match assemble_strict(harness_dir, src, &fm) {
+        match assemble_strict(harness_dir, src, &fm, cfg.prelude.as_deref()) {
             Ok(source) => Some(run_mode(&source)),
             Err(reason) => return preskip(&reason),
         }
@@ -1588,7 +1649,7 @@ fn evaluate_module_compile(
             if cfg.oracle && (bytes != oracle.bytecode || symbols != oracle.symbols) {
                 Verdict::RunSkip("module:compiler-byte-divergence".into())
             } else {
-                let assembled = match assemble(harness_dir, src, fm) {
+                let assembled = match assemble(harness_dir, src, fm, cfg.prelude.as_deref()) {
                     Ok(source) => source,
                     Err(reason) => return preskip(&reason),
                 };
@@ -1857,9 +1918,9 @@ fn run_async_case(
     meter_exact_gate: bool,
 ) -> CaseResult {
     let assembled = match if strict_mode {
-        assemble_strict(harness_dir, src, fm)
+        assemble_strict(harness_dir, src, fm, cfg.prelude.as_deref())
     } else {
-        assemble(harness_dir, src, fm)
+        assemble(harness_dir, src, fm, cfg.prelude.as_deref())
     } {
         Ok(s) => s,
         Err(reason) => {
@@ -2253,7 +2314,12 @@ fn run_case_bounded_with(
             // dispatch loop. Only when ironhorse *also* fails to terminate is it
             // the `ironhorse-hang` failure the bar forbids.
             drop(handle);
-            let verdict = if ironhorse_terminates_alone(harness_dir, src, timeout) {
+            let verdict = if ironhorse_terminates_alone(
+                harness_dir,
+                src,
+                timeout,
+                cfg.prelude.as_deref(),
+            ) {
                 Verdict::RunSkip(format!(
                     "oracle-nontermination: oracle failed to terminate within {}s (ironhorse terminates alone)",
                     timeout.as_secs()
@@ -2308,7 +2374,12 @@ fn run_case_bounded_with(
 /// terminated (`true`), never a `false` that would mislabel an oracle hang as
 /// the bar-forbidden `ironhorse-hang`. A thread-spawn failure forfeits
 /// attribution conservatively toward `ironhorse-hang` (`false`).
-fn ironhorse_terminates_alone(harness_dir: &Path, src: &str, timeout: std::time::Duration) -> bool {
+fn ironhorse_terminates_alone(
+    harness_dir: &Path,
+    src: &str,
+    timeout: std::time::Duration,
+    prelude: Option<&str>,
+) -> bool {
     let fm = frontmatter::parse(src);
     let (mut run_sloppy, mut run_strict, only_strict) = strict_mode_status(&fm.flags);
     if fm
@@ -2324,12 +2395,12 @@ fn ironhorse_terminates_alone(harness_dir: &Path, src: &str, timeout: std::time:
     }
     let mut sources = Vec::new();
     if run_sloppy {
-        if let Ok(source) = assemble(harness_dir, src, &fm) {
+        if let Ok(source) = assemble(harness_dir, src, &fm, prelude) {
             sources.push(source);
         }
     }
     if run_strict {
-        if let Ok(source) = assemble_strict(harness_dir, src, &fm) {
+        if let Ok(source) = assemble_strict(harness_dir, src, &fm, prelude) {
             sources.push(source);
         }
     }
@@ -2580,6 +2651,23 @@ mod tests {
             r.verdict,
             Verdict::PreSkip("ses-mode:lockdown-unimplemented".into())
         );
+    }
+
+    #[test]
+    fn a_prelude_lifts_the_skips_for_the_surface_it_supplies() {
+        let mut cfg = Config::default();
+        let bare = effective_skip_features(&cfg);
+        assert!(bare.contains("lockdown") && bare.contains("Compartment"));
+
+        cfg.prelude = Some("globalThis.lockdown = () => {};".into());
+        let with_prelude = effective_skip_features(&cfg);
+        assert!(
+            !with_prelude.contains("lockdown") && !with_prelude.contains("Compartment"),
+            "a prelude supplies these, so naming them missing is no longer honest"
+        );
+        // It supplies a surface, not a corpus, and not an engine capability.
+        assert!(with_prelude.contains("ses-xs-parity"));
+        assert!(with_prelude.contains("ShadowRealm"));
     }
 
     #[test]
@@ -2993,9 +3081,15 @@ mod tests {
             dual_run(&format!("\"use strict\";\n{custom_harness}{body}")).expect("oracle machine");
         assert_eq!(custom.agreement, Agreement::IronhorseOnlyComplete);
         assert_eq!(custom.oracle_error, "Test262Error: #2");
+        // The host diagnostic now carries the MESSAGE, paired with the tag
+        // `Object.prototype.toString` reports: it reads `message` as a data
+        // property, which is not the same thing as running the prototype
+        // `toString` XS runs to get the name. So the texts still differ, by
+        // `Object` against `Test262Error`, and the exclusion stays as narrow
+        // as it was — the reason this case keeps gating is unchanged.
         assert_eq!(
             crate::ironhorse_eval_goal_error(&custom.source).as_deref(),
-            Some("[object Object]")
+            Some("Object: #2")
         );
         assert!(!oracle_eval_frames_script_declarations(&custom));
         assert!(matches!(
@@ -3421,7 +3515,7 @@ mod tests {
         // buggy sloppy-only probe would run the loop and hang to `false`.
         let strict_diverges = "/*---\nflags: [onlyStrict]\n---*/\nwith ({}) { while (true) {} }\n";
         assert!(
-            ironhorse_terminates_alone(&harness, strict_diverges, std::time::Duration::from_secs(10)),
+            ironhorse_terminates_alone(&harness, strict_diverges, std::time::Duration::from_secs(10), None),
             "an onlyStrict case must be probed via its strict assembly (a strict early error terminates), not the sloppy infinite loop"
         );
 
@@ -3429,7 +3523,12 @@ mod tests {
         // (ironhorse does not terminate), never laundered onto the oracle.
         let strict_hang = "/*---\nflags: [onlyStrict]\n---*/\nwhile (true) {}\n";
         assert!(
-            !ironhorse_terminates_alone(&harness, strict_hang, std::time::Duration::from_secs(2)),
+            !ironhorse_terminates_alone(
+                &harness,
+                strict_hang,
+                std::time::Duration::from_secs(2),
+                None
+            ),
             "a strict-only infinite loop is an ironhorse hang, not oracle non-termination"
         );
     }
