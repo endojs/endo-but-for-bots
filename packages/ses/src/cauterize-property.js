@@ -22,7 +22,10 @@ import { hasOwn } from './commons.js';
  * functions may accidentally be more like `function` functions with
  * an undeletable `.prototype` property. In these cases, if we can
  * set the value of that bogus `.prototype` property to `undefined`,
- * we do so, issuing a warning, rather than failing to initialize ses.
+ * we do so, rather than failing to initialize ses. We issue a warning
+ * about tolerating the undeletable `.prototype` unless the exclusion was
+ * expressly `known` (a `false` permit), in which case reassigning it to
+ * `undefined` is the fully-intended outcome and needs no attention.
  *
  * @param {object} obj
  * @param {PropertyKey} prop
@@ -57,7 +60,15 @@ export const cauterizeProperty = (
       if (typeof obj === 'function' && prop === 'prototype') {
         obj.prototype = undefined;
         if (obj.prototype === undefined) {
-          warn(`Tolerating undeletable ${subPath} === undefined`);
+          // Only warn about tolerating the undeletable `.prototype` when it was
+          // unexpected. An expressly-excluded property (`known`, i.e. a `false`
+          // permit) is one we have already audited and decided to drop, so
+          // reassigning it to `undefined` is the fully-intended outcome and
+          // needs no attention — mirroring the `known`-gated `Removing` warning
+          // above.
+          if (!known) {
+            warn(`Tolerating undeletable ${subPath} === undefined`);
+          }
           return;
         }
       }

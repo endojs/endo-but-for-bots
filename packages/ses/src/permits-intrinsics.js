@@ -272,6 +272,17 @@ export default function removeUnpermittedIntrinsics(
       const subPermit = getSubPermit(obj, permit, propString);
 
       if (!subPermit || !isAllowedProperty(subPath, obj, prop, subPermit)) {
+        // `subPermit === false` marks the exclusion `known`: a `false` permit
+        // is a property we know exists in some environments and have expressly
+        // audited and decided to drop, so `cauterizeProperty` suppresses both
+        // its `Removing` and `Tolerating undeletable ... === undefined`
+        // warnings. This coupling is deliberate and applies to *every* `false`
+        // sub-permit, including one that lands on an undeletable function
+        // `.prototype` (e.g. `fnWithUndeletablePrototype` in `permits.js`).
+        // Anyone adding a future `false` permit is therefore making an
+        // audited, intentional exclusion — if you instead want the anomaly
+        // surfaced, omit the permit (leave it merely absent) rather than
+        // setting it `false`.
         cauterizeProperty(obj, prop, subPermit === false, subPath, reporter);
       }
     }

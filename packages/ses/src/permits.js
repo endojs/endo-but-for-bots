@@ -366,6 +366,35 @@ const accessor = {
   set: fn,
 };
 
+// A function that, unlike an ordinary builtin method, carries an own
+// `prototype` property that is writable but not configurable, so lockdown
+// cannot delete it. Node.js/V8 implements the ambient blob-registry statics
+// `URL.createObjectURL` and `URL.revokeObjectURL` this way (as ordinary
+// functions rather than concise methods). A spec-conformant host builds these
+// statics with `CreateBuiltinFunction`
+// (https://tc39.es/ecma262/#sec-createbuiltinfunction), which does not add an
+// own `.prototype` unless one is explicitly requested, so on such a host these
+// statics have no own `.prototype` slot at all and this permit's `prototype`
+// sub-permit is simply never exercised. We expressly exclude that `.prototype`
+// (`prototype: false`) exactly as if it were absent: lockdown's whitelist pass
+// falls back to setting the undeletable slot to `undefined`
+// (`cauterizeProperty`), which is the very same end state `.prototype` had
+// before this permit existed — so there is no behavior change, only a quieter
+// report. Marking the exclusion known (`false`, not merely absent) is what
+// silences the `Removing` + `Tolerating undeletable ... === undefined` pair
+// this shape otherwise logs. Verified on Node.js 22 and 24 (the versions this
+// package's CI exercises); unverified on Node.js 26, though it is expected to
+// behave identically there since Node.js 26 shares the same V8 `URL`
+// implementation.
+//
+// Spread `fn` (`FunctionInstance`) so this shape tracks that permit rather than
+// re-listing its fields, then add the `prototype: false` sub-permit `fn`
+// deliberately omits.
+const fnWithUndeletablePrototype = {
+  ...fn,
+  prototype: false,
+};
+
 // eslint-disable-next-line func-names
 const strict = function () {
   'use strict';
@@ -920,9 +949,11 @@ export const permitted = {
     '[[Proto]]': '%FunctionPrototype%',
     parse: fn,
     canParse: fn,
-    // Ambient blob-registry authority the start compartment may keep.
-    createObjectURL: fn,
-    revokeObjectURL: fn,
+    // Ambient blob-registry authority the start compartment may keep. Node/V8
+    // gives each an undeletable own `.prototype`; see
+    // `fnWithUndeletablePrototype`.
+    createObjectURL: fnWithUndeletablePrototype,
+    revokeObjectURL: fnWithUndeletablePrototype,
     prototype: '%URLPrototype%',
   },
 
@@ -958,6 +989,9 @@ export const permitted = {
     toJSON: fn,
     toString: fn,
     '@@toStringTag': 'string',
+
+    // Non-standard property used by Node.js
+    'RegisteredSymbol(nodejs.util.inspect.custom)': false,
   },
 
   URLSearchParams: {
@@ -985,6 +1019,9 @@ export const permitted = {
     values: fn,
     '@@iterator': fn,
     '@@toStringTag': 'string',
+
+    // Non-standard property used by Node.js
+    'RegisteredSymbol(nodejs.util.inspect.custom)': false,
   },
 
   // The URLSearchParams iterator prototype has no name on the global; it is
@@ -997,6 +1034,9 @@ export const permitted = {
     // `return` is absent on some hosts (e.g. Node); permitted when present.
     return: fn,
     '@@toStringTag': 'string',
+
+    // Non-standard property used by Node.js
+    'RegisteredSymbol(nodejs.util.inspect.custom)': false,
   },
 
   // Text Processing
