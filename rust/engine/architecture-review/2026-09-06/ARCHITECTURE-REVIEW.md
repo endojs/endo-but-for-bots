@@ -197,6 +197,11 @@ Each carries a Status line stating what remains.
 **Still open at `7753a4b9` (4).**
 F039, F068, F110, F119.
 
+**Held (2).** F010 and F076 are held pending a GC usage-pattern design and
+should not be actioned before it; their status line says why.
+Held is a scheduling state, not a status: both remain partially fixed in the
+counts above.
+
 **Nothing in this document was deleted.** Every original claim, its evidence and
 all four prior revisions' Status lines are kept as the record of what was true
 at the commit each was written against.
@@ -1833,6 +1838,16 @@ decision 5 assigns scheduling to the engine consumer, and
 RECLAMATION.md states the boundary and its measured cost.
 The design's stage-2 'collection fires on allocation pressure at fixed
 thresholds' MUST has been superseded accordingly.
+**HELD (2026-09-16).** Both findings are held pending a GC usage-pattern
+design, and should not be actioned before it.
+The residue above is the intra-crank half, and what the right behaviour there
+is — whether a crank should be able to collect at all, at what threshold, and
+whether `collect_every` should keep defaulting to 0 — depends on how consumers
+actually use collection.
+W6 decision 5 assigned that schedule to the consumer without yet describing the
+usage patterns it has to serve, so fixing the residue now would pick a policy
+ahead of the design that is supposed to choose it.
+Read this pair as parked, not as outstanding work.
 Changed by `a38756fe5 fix(ironhorse): reclaim chunks and weak entries in
 durable collections; 63a758292 fix(ironhorse): admit whole-machine collection
 only at quiescence; 45717727e fix(ironhorse-vm): reclaim chunks within
