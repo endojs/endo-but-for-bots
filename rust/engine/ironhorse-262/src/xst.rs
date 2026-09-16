@@ -54,15 +54,19 @@ pub const DEFAULT_ENDOR_SKIP_FEATURES: &[&str] = &[
     "tail-call-optimization",
     "IsHTMLDDA",
     // The guest Hardened-JavaScript surface ironhorse does not yet expose as a
-    // guest-callable intrinsic: `lockdown()` (a named scope fold in
-    // `ironhorse-vm::interp::create_hardened_globals`) and the `Compartment`
-    // constructor (a named scope fold in `ironhorse-vm::compartment`, modeled as
-    // a host-side Rust realm API, not a guest intrinsic). ironhorse DOES land the
-    // guest `harden`/`petrify` globals, so those are never skipped. This is
-    // the direct `xst262.c` `gxFeatures` analogue — a feature the *engine*
-    // does not implement — and is trimmed as the guest surface lands. A
-    // `ses-xs-parity` test that needs either self-names `feature:Compartment`
-    // / `feature:lockdown` here rather than a generic run-time abort.
+    // guest-callable intrinsic: `lockdown()` (unbound —
+    // `ironhorse-vm::interp::create_hardened_globals` installs `harden` and
+    // `petrify` and nothing else, so a reference is a plain `ReferenceError`,
+    // NOT the `Halt::NotImplemented` an earlier revision of that function's
+    // doc comment claimed) and the `Compartment` constructor (modeled as a
+    // host-side Rust realm API in `ironhorse-vm::compartment`, not a guest
+    // intrinsic). ironhorse DOES land the guest `harden`/`petrify` globals, so
+    // those are never skipped. This is the direct `xst262.c` `gxFeatures`
+    // analogue — a feature the *engine* does not implement — and is trimmed as
+    // the guest surface lands. A `ses-xs-parity` test that needs either
+    // self-names `feature:Compartment` / `feature:lockdown` here rather than a
+    // generic run-time abort. `designs/ironhorse-native-lockdown.md` scopes
+    // the `lockdown` half.
     "lockdown",
     "Compartment",
     // Hardened-JavaScript / SES parity opt-in set: needs the stage-4
