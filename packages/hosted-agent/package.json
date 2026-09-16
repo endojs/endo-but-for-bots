@@ -37,6 +37,7 @@
     "./session-powers.js": "./src/session-powers.js",
     "./cleanup-scope.js": "./src/cleanup-scope.js",
     "./recorded-cleanup.js": "./src/recorded-cleanup.js",
+    "./workspace-projection.js": "./src/workspace-projection.js",
     "./mcp-bridge.js": "./src/mcp-bridge.js",
     "./mcp-socket.js": "./src/mcp-socket.js",
     "./mcp-stdio-bridge.js": "./src/mcp-stdio-bridge.js",
@@ -70,6 +71,7 @@
     "@endo/init": "workspace:^",
     "@endo/netstring": "workspace:^",
     "@endo/patterns": "workspace:^",
+    "@endo/platform": "workspace:^",
     "@endo/sandbox": "workspace:^",
     "@endo/stream-node": "workspace:^"
   },

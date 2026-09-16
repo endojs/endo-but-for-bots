@@ -2633,6 +2633,7 @@ __metadata:
     "@endo/init": "workspace:^"
     "@endo/netstring": "workspace:^"
     "@endo/patterns": "workspace:^"
+    "@endo/platform": "workspace:^"
     "@endo/sandbox": "workspace:^"
     "@endo/ses-ava": "workspace:^"
     "@endo/stream-node": "workspace:^"

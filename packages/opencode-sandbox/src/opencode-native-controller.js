@@ -1,16 +1,7 @@
 // @ts-check
-/* global process */
 
-import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { mkdir, rmdir } from 'node:fs/promises';
-import { promisify } from 'node:util';
 
-import {
-  makeFsMounterKit,
-  mountIdentity,
-} from '@endo/9p-server/mount-caplet.js';
-import { makeFsBridge9p } from '@endo/9p-server/src/fs-bridge.js';
 import { assertCopyData } from '@endo/daemon/copy-data.js';
 import { Fail } from '@endo/errors';
 import { E } from '@endo/eventual-send';
@@ -21,8 +12,11 @@ import {
   makePublicNetworkEnvironment,
 } from '@endo/hosted-agent/public-network.js';
 import { reclaimRecordedMount } from '@endo/hosted-agent/recorded-cleanup.js';
+import {
+  makeDefaultMounter,
+  makeWorkspaceProjection,
+} from '@endo/hosted-agent/workspace-projection.js';
 import { M } from '@endo/patterns';
-import { makeNodeFilesystem } from '@endo/platform/fs/extended/node-fs.js';
 
 import { makeOpencodeClient } from './opencode-client.js';
 import { makeOpencodeConfig, parseModelRef } from './opencode-agent-config.js';
@@ -66,7 +60,7 @@ const ControllerInterface = M.interface('OpencodeNativeController', {
  * evidence of the hosted envelope on a live host.
  *
  * @param {object} [powers]
- * @param {(env: Record<string,string>) => ReturnType<typeof makeFsMounterKit>} [powers.makeMounter]
+ * @param {typeof makeDefaultMounter} [powers.makeMounter]
  * @param {(rootPath: string) => object} [powers.makeFilesystem] Projects the
  *   recorded workspace directory for the 9P mount. No daemon filesystem
  *   formula is imported: a worker retaining a disposable formula's value is
@@ -83,16 +77,8 @@ const ControllerInterface = M.interface('OpencodeNativeController', {
  * @param {(error: unknown) => void} [powers.reportError]
  */
 export const makeOpencodeNativeController = ({
-  makeMounter = env =>
-    makeFsMounterKit({
-      env,
-      runProgram: promisify(execFile),
-      makeDir: mkdir,
-      removeDir: rmdir,
-      makeBridge: makeFsBridge9p,
-      ...mountIdentity(process),
-    }),
-  makeFilesystem = rootPath => makeNodeFilesystem({ rootPath }),
+  makeMounter = makeDefaultMounter,
+  makeFilesystem,
   makeBridge = makeMcpBridgeForToolSet,
   reclaimMount = reclaimRecordedMount,
   makeMcp = makeMcpSocketServer,
@@ -115,7 +101,7 @@ export const makeOpencodeNativeController = ({
   let sandboxScope;
   /** @type {any} */
   let brokerScope;
-  /** @type {ReturnType<typeof makeFsMounterKit> | undefined} */
+  /** @type {ReturnType<typeof makeWorkspaceProjection> | undefined} */
   let mounter;
   /** @type {ReturnType<typeof makeMcpSocketServer> | undefined} */
   let mcp;
@@ -203,26 +189,21 @@ export const makeOpencodeNativeController = ({
       assertCopyData(harden(state));
       assertOpen();
       // Exactly one of the two is recorded; the parser enforces it.
-      const filesystem = makeFilesystem(
-        approved.workspaceHostPath ??
-          /** @type {string} */ (approved.workspaceDir),
+      // Retained before it is established, so a failed mount is still
+      // closed by this owner's ordinary cleanup.
+      mounter = makeWorkspaceProjection(
+        {
+          workspaceRootPath:
+            approved.workspaceHostPath ??
+            /** @type {string} */ (approved.workspaceDir),
+          workspaceMountPoint: approved.workspaceMountPoint,
+          mounterSocketDir: approved.mounterSocketDir,
+          ...(approved.mounterEnv ? { mounterEnv: approved.mounterEnv } : {}),
+        },
+        { env, makeMounter, ...(makeFilesystem ? { makeFilesystem } : {}) },
       );
-      // The recorded mount settings are the operator's; the socket directory
-      // is this session's and is never recorded as a setting.
-      mounter = makeMounter({
-        ...env,
-        ...approved.mounterEnv,
-        XDG_RUNTIME_DIR: approved.mounterSocketDir,
-        NINEP_SOCKET_DIR: approved.mounterSocketDir,
-      });
       closeIfStopping();
-      // The mounter creates the mount point and must remove it on unmount;
-      // the storage owner refuses to rm -rf a path that may still be mounted.
-      await E(mounter.mounter).mount(
-        filesystem,
-        approved.workspaceMountPoint,
-        harden({ removeMountPointOnUnmount: true }),
-      );
+      await mounter.mount();
       assertOpen();
       const mounts = [
         {
