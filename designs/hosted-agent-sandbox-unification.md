@@ -1231,24 +1231,10 @@ starts — not an import API, which none of the three offers.
   messages, since `CreateInput` is `{id?, agent?, model?, location}` and no
   route appends one. The patch must accept compaction records too, or the
   boundary cannot be restored.
-- **Codex cannot be restored faithfully today, and this is an open problem.**
-  Its app-server exposes `initialize`, `config/read`, `account/read`,
-  `thread/start`, `thread/resume`, `thread/turns/list`, `thread/revert`,
-  `turn/start`, `turn/interrupt` and `model/list` — nothing that appends a
-  historical turn — and its store is a versioned SQLite schema inside a binary
-  this project does not fork. Two options, neither good:
-
-  1. **Write `thread_history_1.sqlite` directly.** The same coupling accepted
-     for Claude's JSONL, and the same protection — the image is pinned — but
-     materially more fragile: a private relational schema with a version in its
-     filename, against a vendor we cannot patch if it moves.
-  2. **Keep prepending the history to the first turn's input**, which is what
-     Codex does today and is all `turn/start` allows. This is *not* faithful:
-     tool calls arrive as text describing tool calls.
-
-  Until that is decided, Codex gets the improvements its protocol does allow —
-  the preamble and the arbitrary bound both go — and its restoration is
-  honestly marked as prepended rather than reconstructed.
+- **Codex** injects Responses API items through `thread/inject_items`, which
+  appends to the thread's history without starting a user turn. An earlier
+  version of this section said no such method existed; it was inferred from
+  this project's own client rather than from upstream, and was wrong.
 
 ### Writing a CLI's store: why one adapter can and two cannot — 2026-09-16
 
@@ -1364,8 +1350,8 @@ take on its own authority.
    config directory onto tmpfs, delete `makeTranscriptResume` and its helpers.
    First because its store is the one that can be written faithfully today, so
    it proves the record stream against a real CLI soonest.
-4. **Codex** — drop the preamble and the bound now; decide separately whether
-   to write `thread_history_1.sqlite` or accept prepended history.
+4. **Codex** — preamble and bound gone, and restoration through
+   `thread/inject_items`.
 5. **Landed for OpenCode; open for Codex.**
 
    The import route is written and typechecked against the pinned fork, and
@@ -1388,20 +1374,27 @@ take on its own authority.
    durable row leaves the attested table. That retires the SQLite/WAL
    constraint entirely — with no file there is no shared-memory index.
 
-   **Codex remains open, and it is a decision rather than work.** Stock
-   `@openai/codex`, no fork, no app-server method that appends a historical
-   turn, and a conversation in a versioned SQLite schema this project cannot
-   read the decoder for. Its restoration is the lesser form the other two have
-   outgrown: the conversation read into the next turn's input, without the
-   preamble and without the bound. Making it faithful needs either upstream
-   support or a decision to reverse-engineer a vendor's private store — a
-   different class of risk from the JSONL coupling accepted for Claude, and
-   not one this design takes on its own authority.
+   **Codex restores faithfully too, and the earlier entry here was wrong.**
+   This design recorded that Codex had no app-server method for appending a
+   historical turn. That was inferred from the methods this project's client
+   happens to call, not from upstream. `openai/codex` is open source and its
+   protocol has `thread/inject_items` — *"Append raw Responses API items to the
+   thread history without starting a user turn"* — which is precisely the
+   property the `Prompted` hazard suggested was unavailable. No fork, no
+   private schema, no decision required.
 
-   **Still to verify on a deploy:** the rebuilt image applying the patch, the
-   import working against a live server, and `:memory:` carrying a real
-   session. The fallback means a failure of the first two degrades rather than
-   breaks.
+   So all three adapters restore the same way: the stack's records mapped into
+   whatever the CLI's own history is, with a tool call arriving as a tool call.
+   Claude writes JSONL, OpenCode posts to the import route, Codex injects
+   Responses API items. Each falls back to reading the conversation into the
+   next prompt when its path is unavailable, so none of them requires a
+   coordinated rollout.
+
+   **Still to verify on a deploy:** the rebuilt OpenCode image applying the
+   patch, each restoration path working against its live CLI, and
+   `OPENCODE_DB=:memory:` carrying a real session. Every one of these degrades
+   to the prompt fallback rather than breaking, which is what makes them safe
+   to find out about in a deploy rather than before one.
 6. **Answered by option 1 instead.** The cost check found a loopback port
    would have to live in the pinned listener image and relay over its stdio
    transport, so `@endo/sandbox` gained the `bind` kind and the MCP row is
