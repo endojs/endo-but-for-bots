@@ -160,19 +160,33 @@ fn the_ses_shim_prelude_reaches_a_pinned_slice_of_the_parity_corpus() {
         eprintln!("ses-prelude: absent — `yarn workspace @endo/test262-runner build` to run this");
         return;
     }
-    let out = std::process::Command::new("grep")
-        .args([
-            "-rl",
-            "ses-xs-parity",
-            &format!("{ROOT}/packages/test262-runner/test262/test"),
-        ])
-        .output()
-        .expect("grep");
-    let files: Vec<String> = String::from_utf8(out.stdout)
-        .unwrap()
-        .lines()
-        .map(str::to_string)
-        .collect();
+    // A `read_dir` walk rather than a `grep -rl` shell-out. This is a pin
+    // meant to move deliberately, so it should not be able to fail for a
+    // reason unrelated to reach: no `grep` on PATH (Windows, minimal
+    // containers) used to panic on `.expect("grep")`, and `-l`'s
+    // line-per-file output is a GNU/BSD shape. No extension filter, so the
+    // set matches what `grep -rl` over this tree returned.
+    fn parity_files(dir: &Path, found: &mut Vec<String>) {
+        let mut entries: Vec<_> = std::fs::read_dir(dir)
+            .unwrap_or_else(|e| panic!("read_dir {}: {e}", dir.display()))
+            .map(|entry| entry.expect("dir entry").path())
+            .collect();
+        // `read_dir` yields in filesystem order; sort so the walk, and so the
+        // per-case output below, is the same on every host.
+        entries.sort();
+        for path in entries {
+            if path.is_dir() {
+                parity_files(&path, found);
+            } else if std::fs::read_to_string(&path)
+                .is_ok_and(|text| text.contains("ses-xs-parity"))
+            {
+                found.push(path.to_string_lossy().into_owned());
+            }
+        }
+    }
+    let corpus = format!("{ROOT}/packages/test262-runner/test262/test");
+    let mut files = Vec::new();
+    parity_files(Path::new(&corpus), &mut files);
     assert_eq!(files.len(), 8, "the ses-xs-parity corpus moved: {files:?}");
 
     std::thread::Builder::new()
