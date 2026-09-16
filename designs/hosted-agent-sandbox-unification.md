@@ -947,35 +947,58 @@ Four consequences, in the order they land:
 
 #### What step 4 needs first — open, 2026-09-16
 
-Three of Claude's and OpenCode's four mounts can move onto the attested table
-as they stand. The other two cannot, and neither can be made to by projecting
-them:
+Claude and OpenCode each bind three things: the workspace, the CLI's native
+state, and the MCP socket directory. Only the third is a real obstacle.
 
-- **The CLI's native state.** OpenCode forces SQLite WAL, which needs same-host
-  shared memory; the adapter already says so in as many words — *"Durable
-  session state, host-backed (NOT 9P)"* — and this design already rules the
-  projection out above. Claude's transcript directory is host-backed for the
-  same reason its provider is: it is the state provider's directory, not a tree
-  the session brought.
-- **The MCP socket directory.** The guest connects to a unix socket in a
-  read-only bind and runs a small stdio bridge beside it. A 9P projection
-  cannot carry a connectable socket inode, so this row is a host bind by
-  construction. Codex has no equivalent — it reaches its tools over the app
-  server's transport — which is why the profile lifted from it has no row for
-  one.
+**The workspace** is already a 9P projection for both, so it becomes
+`kind: 'attach'` with nothing to build — this is where the shared projection
+helper pays off.
 
-So the attested table needs a third mount kind: a **host bind**, attested as
-what it is — a bind of a host path, at a declared destination, in a declared
-mode, with `nosuid` and `nodev` — and making no projection claim. That is
-strictly more than these two adapters attest today, which is nothing, and it
-keeps the 9P claim meaningful for the rows that can make it rather than
-diluting `attach` into "some bind we did".
+**The CLI's native state** can be `kind: 'volume'`, exactly as Codex's
+`codex-state` is. It is worth being precise about why, because the obvious
+reading of the constraint is wrong: OpenCode forces SQLite WAL and so its state
+*"must not run on 9P/FUSE"*, and both adapters use the same host-directory
+provider (`@endo/hosted-agent/session-state-storage.js`) — Claude is not in a
+different position here. But that constraint rules out one of the two
+attestable kinds, not both. A Podman named volume is a plain local filesystem;
+WAL works on it. The cost is real and should be stated rather than discovered:
+`assertPolicyMount` requires `sizeBytes` on a volume row and the attestation
+reads the quota back from the kernel — refusing a volume backed by a host path,
+so a directory cannot masquerade as one — which means genuine XFS project
+quotas for both adapters and one project ID per session against a
+host-lifetime budget. Against that, these two adapters bound their state bytes
+by nothing at all today.
 
-The decision to take before writing it: whether an attested host bind may name
-any host path, or only one under a root the adapter's profile declares. The
-second is what makes the row worth attesting — it is the difference between
-"this is a bind" and "this is a bind of something this deployment owns" — and
-it is the shape the runtime-attach registrar already has for its mountpoints.
+**The MCP socket directory** is the obstacle. The guest connects to a unix
+socket the worker serves and runs a small stdio bridge script beside it, both
+in a read-only bind. A 9P projection cannot carry a connectable socket inode,
+and spending a lifetime-budget project ID on a socket directory to call it a
+volume would be a fiction. Codex has no equivalent row — it reaches its tools
+over the app server's transport — which is why the profile lifted from it has
+no place for one.
+
+Two ways out, and the choice is not obvious:
+
+1. **A third mount kind: a host bind**, attested as what it is — a bind of a
+   host path, at a declared destination, in a declared mode, with `nosuid` and
+   `nodev` — making no projection claim. That is strictly more than these
+   adapters attest today, which is nothing, and it keeps `attach` meaningful
+   rather than diluting it into "some bind we did". If this is taken, the
+   sub-decision is whether such a bind may name any host path or only one under
+   a root the adapter's profile declares; the second is what makes the row
+   worth attesting, and is the shape the runtime-attach registrar already has.
+2. **Delete the row.** Both slices already `network: 'join'` the broker
+   sidecar's namespace, and the CLI already reaches the provider over a
+   loopback endpoint inside it. An MCP listener on loopback there needs no bind
+   and no bridge script, and all three adapters converge on `volume`, `attach`
+   and `tmpfs` with no new kind at all.
+
+The objection to (2), unresolved: the provider sidecar shares that namespace
+and holds the upstream credential, so a loopback MCP port is reachable by it —
+a new authority path from the credential holder to the session's Endo tools,
+where a unix-socket bind is reachable only by the slice that has the bind.
+Weigh that before choosing; (1) is the conservative option and (2) is the one
+that actually ends the divergence.
 
 Landing step 4 also changes what these two slices get at `/tmp`, `/run` and
 `/dev`: today `--read-only-tmpfs=true` gives them Podman's defaults with no
@@ -1187,9 +1210,10 @@ landed:
    provider retires its workspace volume in place rather than reusing its
    project ID. For Claude and OpenCode the same move is step 4's work, since
    they do not yet declare an attested table at all.
-4. **Open, and blocked on one decision.** Claude and OpenCode off
-   `makeResolved` onto the attested policy, which is also what enables runtime
-   attaches for them. See *What step 4 needs first* below.
+4. **Open, and blocked on one decision — about MCP, not about storage.**
+   Claude and OpenCode off `makeResolved` onto the attested policy, which is
+   also what enables runtime attaches for them. See *What step 4 needs first*
+   below.
 Converge Podman and listener launch paths, runtime ownership, and cleanup.
 Move generic public egress to the shared service.
 Make OpenCode's public mode retain brokered inference and enforce the advertised
