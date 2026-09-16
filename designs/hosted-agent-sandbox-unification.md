@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-09-12 |
-| **Updated** | 2026-09-14 |
+| **Updated** | 2026-09-16 |
 | **Author** | kumavis (prompted) |
 | **Status** | In Progress |
 | **Source** | Review of PR #1248 and subsequent simplicity and authority-lifetime discussion |
@@ -892,6 +892,354 @@ XFS project quotas may implement deployment storage budgets, but XFS helpers,
 project-ID allocation, and recovery belong below the adapter interface.
 Never remove an existing storage bound before its replacement is enforced.
 
+### Slice mount policy — decided 2026-09-16
+
+The three adapters do not merely differ in mount *policy*; they call different
+sandbox APIs, and that is the divergence Phase 3 has to end.
+
+| | Slice construction | Mount declaration | Attestation |
+|---|---|---|---|
+| Claude, OpenCode | `scope.makeResolved({ rootfs, mounts })` | `{hostPath, innerPath, mode}` host binds | none |
+| Codex | `factory.make({ policy: { profile: 'hosted-agent-v1', … } })` | slice-policy table with `volume` / `tmpfs` / `attach` roles | exact table, verified against the kernel's own mount table |
+
+The choice is settled by the runtime-attach feature
+(`designs/runtime-container-fs-mount.md`). A session attaching a capability it
+holds under a container path is only meaningful if the host can prove the bind
+is what it claims; Codex can, and Claude and OpenCode refuse the feature
+outright — *"no slice attestation for container mounts; refusing the session
+instead of claiming binds it does not have"*. Converging on `makeResolved`
+would delete a shipped feature and the proof it rests on. **So the common path
+is Codex's attested slice policy, and Claude and OpenCode move onto it.**
+
+Four consequences, in the order they land:
+
+1. **`@endo/sandbox` admits a capability-backed fixed role.** Today an `attach`
+   destination must sit under `/mnt/`, "so it can never shadow a role the
+   profile fixes elsewhere in the table" — a proxy for a property, resting on
+   the fact that no fixed role happens to live there. Replace it with the
+   property: no mount destination may nest with any other, whatever its kind.
+   That is strictly stronger — it also closes attach-against-attach nesting,
+   which the prefix rule never covered — and it is what lets `/workspace`
+   itself be capability-backed.
+
+2. **The attested policy moves to `@endo/hosted-agent`.** `hosted-agent-v1` is
+   already the profile's name; only its verifier is in the wrong package
+   (`codex-sandbox/src/backend-factory.js`). The adapter supplies its declared
+   fixed roles and its runtime attaches, and the shared verifier checks the
+   attested table is exactly that set.
+
+3. **The workspace becomes an attached role for every adapter:**
+   `{ role: 'workspace', kind: 'attach', source: <9P mountpoint>,
+   destination: '/workspace', mode: 'rw' }`. This is what Claude and OpenCode
+   already do — 9P-mount `workspaceHostPath`, bind it at `/workspace` — so for
+   them it changes nothing but the proof. For Codex it is the fix for the
+   divergence found on 2026-09-16: its slice wrote to a durable volume while
+   Floot's publisher served the session's git worktree, so `publishWorkspace`
+   returned a URL that 404'd on every request unless the model had *also*
+   copied its work through the Endo tools.
+
+4. **Quota-backed volumes become a deployment option, not an adapter
+   difference.** Codex keeps its XFS project-quota volume for native state
+   (`{role: '<cli>-state', kind: 'volume'}`); the workspace volume is no longer
+   allocated, which also halves Codex's project-ID consumption — one id per
+   session rather than two, against a range that is a host-lifetime budget
+   (`CODEX-SANDBOX-MIGRATION-PLAN.md`).
+
+#### What step 4 needs first — open, 2026-09-16
+
+Claude and OpenCode each bind three things: the workspace, the CLI's native
+state, and the MCP socket directory. Only the third is a real obstacle.
+
+**The workspace** is already a 9P projection for both, so it becomes
+`kind: 'attach'` with nothing to build — this is where the shared projection
+helper pays off.
+
+**The CLI's native state** is the subject of its own section below. The short
+version: it stops being durable. Floot already owns the transcript and already
+hands it to hosted backends as `continuityContext`; Codex already consumes it,
+and the other two adopting it deletes this row from the table.
+
+**The MCP socket directory** is the obstacle. The guest connects to a unix
+socket the worker serves and runs a small stdio bridge script beside it, both
+in a read-only bind. A 9P projection cannot carry a connectable socket inode,
+and spending a lifetime-budget project ID on a socket directory to call it a
+volume would be a fiction. Codex has no equivalent row — it reaches its tools
+over the app server's transport — which is why the profile lifted from it has
+no place for one.
+
+Two ways out, and the choice is not obvious:
+
+1. **A third mount kind: a host bind**, attested as what it is — a bind of a
+   host path, at a declared destination, in a declared mode, with `nosuid` and
+   `nodev` — making no projection claim. If this is taken, the sub-decision is
+   whether such a bind may name any host path or only one under a root the
+   adapter's profile declares. Note that *Session state storage* below removes
+   the other reason to want this kind, so taking it here would be for the MCP
+   row alone — one row, in two adapters, to justify a kind that attests
+   nothing.
+2. **Delete the row.** Both slices already `network: 'join'` the broker
+   sidecar's namespace, and the CLI already reaches the provider over a
+   loopback endpoint inside it. An MCP listener on loopback there needs no bind
+   and no bridge script, and all three adapters converge on `volume`, `attach`
+   and `tmpfs` with no new kind at all.
+
+   Feasibility, partly checked. OpenCode's config takes a remote MCP server —
+   `{ type: 'remote', url, headers?, oauth?, timeout? }` in
+   `packages/core/src/config/mcp.ts` — so a loopback URL with a bearer header
+   needs no patch there. **Claude Code's HTTP/SSE MCP support is not yet
+   verified**, and this option depends on it; check before committing to it,
+   because if Claude is stdio-only the bind comes back for one adapter and
+   option 1 returns with it.
+
+**(2) is the recommendation.** An earlier draft of this section objected that
+the sidecar sharing that namespace holds the upstream credential, so a loopback
+MCP port would hand the credential holder a path to the session's tools. That
+is not what the sidecar is. `startProviderListenerWorker` is the *credential-free*
+worker — *"No SecretBlob or upstream transport crosses here"* — and the listener
+runtime says in as many words that *"the pinned listener image contains no
+credential"*. The credential stays in the host-side broker worker; the
+sidecar's only channel out is inherited stdin/stdout. It launches with
+`--network=none`, so the namespace has no egress at all, and it runs
+`--read-only --cap-drop=ALL --security-opt=no-new-privileges --user 1000:1000
+--pid=private --ipc=private` under 256 MiB, pinned by digest. The namespace's
+occupants are that sidecar and the slice.
+
+What (2) actually costs is narrower, and worth stating exactly:
+
+- **The bind is the current access control.** The MCP endpoint has no
+  authentication — *"this socket does not identify which guest process issued a
+  request"* — because reaching the socket inode required being in the slice's
+  mount namespace. A loopback port replaces that with namespace membership, so
+  the transport needs a bearer token of its own. There is in-tree precedent:
+  OpenCode's own server already takes a `randomBytes(24)` password.
+- **The sidecar gains reach it does not have today.** That matters only if the
+  sidecar is compromised, and a compromised sidecar already relays every prompt
+  and completion, so it can already forge a completion that induces any tool
+  call. A direct call changes attribution more than reach, and it does not
+  bypass the gate that matters: *"turn admission and authoritative effect
+  records belong to its executor"*.
+
+So (1) adds a mount kind that exists to describe a bind nothing can attest,
+and (2) removes the row, removes the stdio bridge script with it, and lands all
+three adapters on `volume`, `attach` and `tmpfs` with no new kind — at the cost
+of one bearer token on a transport that should arguably have had one anyway.
+
+Landing step 4 also changes what these two slices get at `/tmp`, `/run` and
+`/dev`: today `--read-only-tmpfs=true` gives them Podman's defaults with no
+declared size, and the attested profile declares each and counts it in
+`writableBytes`. Claude puts `HOME` on `/tmp`, so that ceiling is a real
+change, not a formality.
+
+**Deployment note (2026-09-16).** Landing 3 changes the Codex backend's
+recorded configuration: `workspaceBytes` is gone and `mounterEnv` is new. Setup
+refuses a changed configuration beside a live backend by design, so the first
+deploy carrying this needs the existing `codex-sandbox/backend` removed before
+the daemon's setup runs. The host also needs `NINEP_*` in the Codex branch of
+its daemon environment, which it did not before — the NixOS module now sets it,
+under a `codexSandbox.ninepSudo` option matching the other two adapters'.
+
+What the workspace loses in this move is the XFS quota on guest-written
+workspace bytes; what it gains is that the bytes are in the tree the session's
+file tools, the guest's workspace capability, and the publisher all read. The
+state volume keeps its quota, so the unbounded surface is the same one Claude
+and OpenCode already have, and `writableBytes` must stop claiming a workspace
+ceiling it no longer enforces rather than attesting a number nothing bounds.
+
+### Session state storage — decided 2026-09-16
+
+The stack owns the transcript. A hosted CLI's native store is a
+per-incarnation cache, never a record, and nothing durable that a guest can
+write survives its slice.
+
+**Floot is already the owner.** `agent.js` passes
+`makeHostedContinuityOptions(await getHistory(turnId))` into the options of
+every hosted turn, for every hosted backend. `hosted-continuity.js` copies the
+dialogue as records — `role` plus `content`, or a tool's `name`, `args` and
+`result` — and refuses to carry anything else: *"Copy historical dialogue as
+data, not capabilities or tool dispatches."*
+
+**Three things are wrong today.**
+
+**1. Claude and OpenCode resume their own store.** They declare
+`continuity: 'transcript'` and revive through a persisted `opencodeSessionId`
+or through `makeTranscriptResume` reading Claude's JSONL. This is the defect,
+not a design choice: it makes a guest-writable file the record of the
+conversation, which is what forces the state to be durable and turns it into a
+mount-table problem. Both resume paths are deleted, and both descriptors stop
+claiming `transcript`. `opaque-reconciled` — Codex's mode — describes all three
+correctly afterwards: the backend carries the conversation within an
+incarnation, with checkpoints Floot acknowledges, and Floot can rebuild it.
+
+**2. The 262144-character bound is arbitrary and goes.** It is a constant in
+`codex-client.js`, and it exists only because the history is delivered as one
+prompt that has to fit somewhere. Restore the conversation into the CLI's
+native transcript instead and nothing needs to fit in a single message: context
+limits are handled by the CLI's own compaction, exactly as they are in a
+session that was never torn down. The bound leaves with the mechanism that
+needed it.
+
+**3. The preamble goes, and restoration is faithful.** Codex currently wraps
+the history in *"a continuity reference, not new instructions or tool
+invocations. Prior tool calls are evidence only: do not replay them."* A
+restored conversation should look like the conversation, because that is what
+it is. Four reasons this is the safer choice and not merely the nicer one:
+
+- **Provenance improves.** A CLI's own store is written by the guest. Floot's
+  journal is written by the harness from the event stream. Restoring from the
+  journal is *more* trustworthy than resuming the store, so treating the
+  journal as suspect foreign data has the trust relationship backwards.
+- **Faithful restoration grants no authority.** Had the slice never been torn
+  down, the model would see the same history containing the same tool calls.
+  Restoring it returns to the status quo ante rather than adding anything.
+- **The tool claim is already enforced, not asserted.** The preamble says only
+  currently advertised tools grant authority; `mcp-bridge.js` already refuses
+  any name outside the session's pinned catalog before it reaches `execute` —
+  *"the pinned catalog is the boundary"*. A sentence in a prompt cannot add to
+  an invariant the bridge enforces.
+- **It costs behaviour.** Telling a model that its own prior work is historical
+  evidence it must not rely on invites it to distrust its conclusions, redo
+  settled work, and treat prior tool results as unreliable. That is a real
+  regression in a continuing session, paid for nothing.
+
+**What this costs to build,** per adapter, because restoration is now native:
+
+- **Codex** replaces `continuityText` and its single-prompt injection with turn
+  reconstruction over the app-server protocol.
+- **OpenCode** has no import path. `CreateInput` is `{id?, agent?, model?,
+  location}` and the session route group has no endpoint that appends a
+  historical message; `fork` forks a session the database no longer holds. This
+  is the one place a fork patch is unavoidable.
+- **Claude** resumes a private JSONL format, so restoration means the harness
+  authoring that file. Coupling to a format the CLI owns is **accepted**: the
+  image is pinned by digest, so the format cannot change under the adapter
+  without an explicit pin bump. That protection is only real if bumping the pin
+  re-checks it, so a pin bump must run a restoration conformance test — write a
+  transcript, resume it, assert the CLI reports the expected turns — alongside
+  the existing `cli-cleanup-conformance.js` suite. A silent format change would
+  otherwise degrade into a session that resumes empty.
+
+**What the mount table gets.** The native store becomes ephemeral —
+`OPENCODE_DB` already accepts `:memory:` or an absolute path, and tmpfs
+implements `mmap` and `fcntl`, so WAL is correct there with no patch. The
+durable state row leaves the table: no volume, no quota, no project ID, and no
+host-bind kind for that row. The post-rotation replay threat this design names
+is removed rather than mitigated, because nothing the guest wrote outlives the
+guest.
+
+### Transcript restoration — decided 2026-09-16
+
+The stack owns the transcript, so it must be able to reproduce a CLI's native
+conversation faithfully. **Restored tool calls are tool calls with their
+results; the restored transcript is not a different transcript.** A
+conversation is always restored, on every revival, until the conversation is
+deleted — there is no size, age or count threshold at which the stack declines.
+
+**What the source already has.** Floot's tree stores messages in
+chat-completions shape: `role` of `user` / `assistant` / `tool`, `content`,
+`tool_calls: [{ id, function: { name, arguments } }]`, and `tool_call_id` on
+results. Fidelity is present at the source. It is lost one layer later:
+`projectHistory` flattens a call and its result into a single pseudo-message
+carrying `name`, `args` and `result`, and `makeHostedContinuityOptions`
+serializes that to text. Restoration must read the tree's own shape, not
+`projectHistory`'s output.
+
+**The gap that blocks this: compaction is invisible to the stack.** OpenCode
+models a compaction as a *message* — `SessionMessageTable.type === 'compaction'`
+— and assembles the model's context from messages at or after the latest one
+(`packages/core/src/session/history.ts`), with a separate context-epoch
+baseline for system messages. So a session's full history and its active
+context are two different spans of the same table. Floot cannot represent
+either boundary: `projectHistory` admits only `user`, `assistant` and `tool`,
+and `makeHostedContinuityOptions` refuses anything else outright — *"history
+contains an unsupported role"* — and the pinned fork filters summary messages
+out of the event stream before Floot ever sees them.
+
+The consequence is concrete. Restore a compacted OpenCode session from the
+journal as it exists today and the CLI receives the whole pre-compaction
+history with no compaction marker, so all of it becomes active context and the
+session may overflow on its first turn. **Floot must record compaction
+boundaries as first-class journal entries before any adapter can restore
+faithfully.** This is the first piece of work, not a detail of the last.
+
+**The neutral format.** One canonical, append-only record stream — JSON Lines:
+one self-describing object per line, no enclosing array, so appending never
+rewrites a closing character and a truncated tail costs one record rather than
+the file. The same format for every model; each adapter translates it into its
+CLI's native form, and that translation is the per-adapter work.
+
+The repo already has the discipline to reuse: `canonicalAuditJson` /
+`parseCanonicalAuditJson` give deterministic bytes for tagged values, which is
+what lets the audit journal hash-chain itself. A transcript encoded the same
+way can be chained the same way, which is worth having for a record the stack
+now claims to own.
+
+Record kinds, at minimum:
+
+| kind | fields |
+|---|---|
+| `message` | `role` (`user` / `assistant`), `content` |
+| `tool-call` | `id`, `name`, `args` |
+| `tool-result` | `id`, `content`, `failed?` |
+| `compaction` | `summary`, and what it supersedes |
+
+Pairing stays by `id` rather than by flattening, because that is what makes a
+restored tool call a tool call. System prompts are deliberately absent: they
+are harness-supplied per incarnation, so the adapter contributes the current
+one rather than replaying a stale one.
+
+**Per-adapter translation, and what is still unknown.**
+
+- **Codex** already consumes `continuityContext` and is the natural first
+  adopter: it proves the record stream against a real CLI before the other two
+  commit to it. Its work is replacing single-prompt injection with turn
+  reconstruction over the app-server protocol.
+- **Claude** needs a JSONL writer. The repo knows the layout —
+  `projects/<project>/<session-uuid>.jsonl`, per `claude-transcripts.js` — but
+  only reads names and mtimes, never record contents, so **the record schema is
+  unresearched** and must be captured from a live transcript.
+- **OpenCode** needs the fork patch: an endpoint that appends historical
+  messages, since `CreateInput` is `{id?, agent?, model?, location}` and no
+  route appends one. The patch must accept compaction records too, or the
+  boundary cannot be restored.
+
+### Step 4 order and tests — 2026-09-16
+
+1. **Verify Claude Code's HTTP/SSE MCP support on Tokyo.** It gates the MCP
+   row: OpenCode's `{ type: 'remote', url, headers }` is confirmed, Claude's is
+   assumed. Assume it works, but prove it before the bind is deleted.
+2. **Record compaction boundaries in Floot's journal**, and define the neutral
+   record stream. Nothing downstream is faithful until this exists.
+3. **Codex restoration** — native reconstruction, no preamble, no bound. First
+   because it already consumes the history and so tests the format soonest.
+4. **Claude restoration** — capture the JSONL schema, write it, drop the config
+   directory onto tmpfs, delete `makeTranscriptResume` and its helpers.
+5. **OpenCode restoration** — fork patch, then `OPENCODE_DB=:memory:`, then
+   delete the `opencodeSessionId` resume path and its unhandled not-found case.
+6. **MCP onto loopback** with a bearer token; delete the bind, the stdio bridge
+   script and the MCP directory.
+7. **Claude and OpenCode onto the attested policy**, which is also what gives
+   them runtime attaches.
+
+Steps 3–5 each move a descriptor off `continuity: 'transcript'` to
+`opaque-reconciled` and delete a state provider.
+
+Tests that must exist before each adapter is called done:
+
+- **Round trip.** Journal → neutral stream → native transcript → the CLI
+  reports the same turns, in order, with the same tool calls and results.
+  Shared, in the conformance suite beside `cli-cleanup-conformance.js`.
+- **Tool-call fidelity.** A restored tool call arrives as a tool call with its
+  result, never as flattened text. This is the property most likely to
+  regress silently.
+- **Compaction round trip.** A compacted session restores with its boundary,
+  and its active context is the post-compaction span rather than the whole
+  history.
+- **Restore on a wiped store.** A session whose native store is gone restores
+  from the journal and reports the prior turns — the case that today has no
+  handling at all on OpenCode's resume path.
+- **Image pin bump.** Bumping any CLI image runs the round-trip conformance, so
+  a private format changing under us fails loudly instead of resuming empty.
+
 ## Protection and limit justification
 
 For every protection ask: **what resource or authority does this protect, from
@@ -1058,6 +1406,33 @@ checks process and resource stability.
 
 ### Phase 3: shared runtime, network, and storage
 
+Converge the slice mount path onto the attested `hosted-agent-v1` policy — see
+*Slice mount policy* above — in four landable steps. The first three have
+landed:
+
+1. **Done.** `@endo/sandbox` refuses a table whose mount destinations nest,
+   whatever their kinds, which replaces the `/mnt/`-only attach rule and lets a
+   fixed role be capability-backed.
+2. **Done.** `assertHostedAgentPolicyV1`, `HOSTED_AGENT_POLICY_V1` and the
+   attach validator moved to `@endo/hosted-agent/hosted-agent-policy.js`. An
+   adapter declares its fixed mount table and binds the shared verifier through
+   `makeHostedAgentPolicyVerifier`; the contract itself is identical for all
+   three. The attach rule became the property rather than the prefix: an attach
+   may land anywhere that does not nest with a fixed role, another attach, or
+   the resolver row a public-network session generates.
+3. **Done for Codex.** Establishing the workspace 9P projection moved beside
+   the reclaimer that takes it down
+   (`@endo/hosted-agent/workspace-projection.js`), and Codex adopted it: its
+   workspace is now `{role: 'workspace', kind: 'attach'}` over the session's
+   own worktree, its workspace volume is gone, and `writableBytes` stopped
+   claiming a ceiling nothing enforced. A record written by the two-volume
+   provider retires its workspace volume in place rather than reusing its
+   project ID. For Claude and OpenCode the same move is step 4's work, since
+   they do not yet declare an attested table at all.
+4. **Open, and blocked on one decision — about MCP, not about storage.**
+   Claude and OpenCode off `makeResolved` onto the attested policy, which is
+   also what enables runtime attaches for them. See *What step 4 needs first*
+   below.
 Converge Podman and listener launch paths, runtime ownership, and cleanup.
 Move generic public egress to the shared service.
 Make OpenCode's public mode retain brokered inference and enforce the advertised

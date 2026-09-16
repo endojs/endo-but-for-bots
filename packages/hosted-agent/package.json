@@ -37,6 +37,7 @@
     "./session-powers.js": "./src/session-powers.js",
     "./cleanup-scope.js": "./src/cleanup-scope.js",
     "./recorded-cleanup.js": "./src/recorded-cleanup.js",
+    "./workspace-projection.js": "./src/workspace-projection.js",
     "./mcp-bridge.js": "./src/mcp-bridge.js",
     "./mcp-socket.js": "./src/mcp-socket.js",
     "./mcp-stdio-bridge.js": "./src/mcp-stdio-bridge.js",
@@ -45,6 +46,7 @@
     "./session-storage.js": "./src/session-storage.js",
     "./session-state-storage.js": "./src/session-state-storage.js",
     "./hosted-setup.js": "./src/hosted-setup.js",
+    "./hosted-agent-policy.js": "./src/hosted-agent-policy.js",
     "./current-specifier.js": "./src/current-specifier.js",
     "./managed-credentials.js": "./src/managed-credentials.js",
     "./managed-credentials-module.js": "./src/managed-credentials-module.js",
@@ -69,6 +71,7 @@
     "@endo/init": "workspace:^",
     "@endo/netstring": "workspace:^",
     "@endo/patterns": "workspace:^",
+    "@endo/platform": "workspace:^",
     "@endo/sandbox": "workspace:^",
     "@endo/stream-node": "workspace:^"
   },

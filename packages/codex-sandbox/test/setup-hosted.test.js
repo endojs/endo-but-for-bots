@@ -181,9 +181,11 @@ const baseEnv = async t => {
     ENDO_CODEX_QUOTA_COMMAND: '/etc/endo/codex-quota',
     ENDO_CODEX_PROJECT_IDS: JSON.stringify({ first: 42_020, last: 43_019 }),
     ENDO_CODEX_MAX_SESSIONS: '2',
-    ENDO_CODEX_WORKSPACE_BYTES: '536870912',
     ENDO_CODEX_STATE_BYTES: '268435456',
     ENDO_CODEX_MODELS: JSON.stringify([{ id: 'gpt-5.6-sol', isDefault: true }]),
+    NINEP_MOUNT_PROGRAM: '/run/wrappers/bin/sudo /nix/store/x/bin/mount',
+    NINEP_UMOUNT_PROGRAM: '/run/wrappers/bin/sudo /nix/store/x/bin/umount',
+    NINEP_SUDO: '1',
     ENDO_CODEX_ACCOUNT_REF: undefined,
     ENDO_CODEX_PUBLIC_INTERNET: undefined,
     ENDO_CODEX_DIAGNOSTICS: undefined,
@@ -273,7 +275,13 @@ test.serial('mints the credential, the backend, and binds Floot', async t => {
   t.is(config.ownerId, ownerId);
   t.is(config.imageRef, `localhost/codex-subscription@${digest}`);
   t.deepEqual(config.projectIds, { first: 42_020, last: 43_019 });
-  t.is(config.workspaceBytes, '536870912');
+  // The daemon's own 9P mount programs are recorded with the rest of the
+  // configuration, so the backend never reads a process environment for them.
+  t.deepEqual(config.mounterEnv, {
+    NINEP_MOUNT_PROGRAM: '/run/wrappers/bin/sudo /nix/store/x/bin/mount',
+    NINEP_UMOUNT_PROGRAM: '/run/wrappers/bin/sudo /nix/store/x/bin/umount',
+    NINEP_SUDO: '1',
+  });
   // Absent means broker-only; a stale rollout flag is what made revival throw.
   t.false('publicInternet' in config);
   t.false('diagnostics' in config);
@@ -351,7 +359,6 @@ test.serial(
         quotaCommand: '/etc/endo/codex-quota',
         stateBytes: '268435456',
         volumeRoot: '/var/lib/endo/volumes',
-        workspaceBytes: '536870912',
       },
     });
     await t.throwsAsync(main(fake.host, { exec: noExec }), {
@@ -365,10 +372,10 @@ test.serial(
   'a malformed setting is refused before anything is minted',
   async t => {
     await baseEnv(t);
-    withEnv(t, { ENDO_CODEX_WORKSPACE_BYTES: '536870913' });
+    withEnv(t, { ENDO_CODEX_STATE_BYTES: '268435457' });
     const fake = makeFakeHost();
     await t.throwsAsync(main(fake.host, { exec: noExec }), {
-      message: /workspaceBytes.*MiB-aligned/s,
+      message: /stateBytes.*MiB-aligned/s,
     });
     t.deepEqual(fake.mints, []);
     t.deepEqual(fake.stored, []);

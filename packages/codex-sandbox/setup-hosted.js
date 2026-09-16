@@ -31,16 +31,22 @@
 //   ENDO_CODEX_VOLUME_ROOT, ENDO_CODEX_FILESYSTEM, ENDO_CODEX_QUOTA_COMMAND,
 //     ENDO_CODEX_SUDO_PATH, ENDO_CODEX_FLOCK_PATH — the XFS project-quota
 //     bridge, as setup-host.js takes them
-//   ENDO_CODEX_PROJECT_IDS — JSON {"first":n,"last":n}. A LIFETIME budget: two
-//     ids are spent per session and never recycled, the registry latches an
+//   ENDO_CODEX_PROJECT_IDS — JSON {"first":n,"last":n}. A LIFETIME budget: one
+//     id is spent per session and never recycled, the registry latches an
 //     exhausted flag, and it refuses a changed range outright. Widening an
 //     exhausted registry does nothing; migrating means a fresh
-//     ENDO_CODEX_HOST_DIR with a disjoint range.
+//     ENDO_CODEX_HOST_DIR with a disjoint range. (It was two ids per session
+//     until the workspace stopped being a volume; a record written then keeps
+//     both, and its retired id is not reclaimed.)
 //   ENDO_CODEX_MAX_SESSIONS — concurrent sessions (listener slots), not a
 //     lifetime budget
-//   ENDO_CODEX_WORKSPACE_BYTES, ENDO_CODEX_STATE_BYTES — MiB-aligned per-session
-//     volume quotas, as decimal strings
+//   ENDO_CODEX_STATE_BYTES — MiB-aligned per-session quota for the CLI's own
+//     home, as a decimal string. There is no workspace quota: the workspace is
+//     a 9P projection of the session's worktree, bounded where that tree lives.
 //   ENDO_CODEX_MODELS — JSON array of Floot model descriptors
+//   NINEP_MOUNT_PROGRAM, NINEP_UMOUNT_PROGRAM, NINEP_SUDO — the operator's 9P
+//     mount programs, read from the daemon environment exactly as the other
+//     two adapters read them, and recorded in the backend's configuration
 //   ENDO_CODEX_PUBLIC_INTERNET=1 — public egress. Off by default: absent means
 //     broker-only.
 //   ENDO_CODEX_DIAGNOSTICS=1 — log host-side broker upstream failures and
@@ -140,8 +146,21 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
   // Everything the configuration reader would refuse is refused here, before
   // any mint or directory creation. Only asking Podman for an unpinned slice
   // image's digest waits for the mint, and the reader runs again on the result.
+  // The operator's 9P mount programs, taken from the daemon environment the
+  // other two adapters read them from. A session's workspace is a projection
+  // of its worktree, so the host needs them; `readMounterEnv` in the
+  // configuration reader refuses anything else under these names.
+  const mounterEnv = Object.fromEntries(
+    ['NINEP_MOUNT_PROGRAM', 'NINEP_UMOUNT_PROGRAM', 'NINEP_SUDO']
+      .filter(name => env[name] !== undefined && env[name] !== '')
+      // Present-and-off is the deployment's way of saying no sudo, which the
+      // reader spells as absent.
+      .filter(name => name !== 'NINEP_SUDO' || env[name] === '1')
+      .map(name => [name, /** @type {string} */ (env[name])]),
+  );
   const partial = harden({
     directory: hostDir,
+    ...(Object.keys(mounterEnv).length ? { mounterEnv } : {}),
     filesystem: required(env, 'ENDO_CODEX_FILESYSTEM'),
     listenerImageRef: required(env, 'ENDO_CODEX_BROKER_LISTENER_IMAGE'),
     maxSessions: Number(required(env, 'ENDO_CODEX_MAX_SESSIONS')),
@@ -151,7 +170,6 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
     quotaCommand: required(env, 'ENDO_CODEX_QUOTA_COMMAND'),
     stateBytes: required(env, 'ENDO_CODEX_STATE_BYTES'),
     volumeRoot: required(env, 'ENDO_CODEX_VOLUME_ROOT'),
-    workspaceBytes: required(env, 'ENDO_CODEX_WORKSPACE_BYTES'),
     ...(env.ENDO_CODEX_SUDO_PATH ? { sudoPath: env.ENDO_CODEX_SUDO_PATH } : {}),
     ...(env.ENDO_CODEX_FLOCK_PATH
       ? { flockPath: env.ENDO_CODEX_FLOCK_PATH }
@@ -234,6 +252,9 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
     listenerImageRef: config.listenerImageRef,
     maxSessions: config.maxSessions,
     models: config.models,
+    ...(Object.keys(config.mounterEnv).length
+      ? { mounterEnv: config.mounterEnv }
+      : {}),
     ownerId: config.ownerId,
     projectIds: config.projectIds,
     quotaCommand: config.quotaCommand,
@@ -241,7 +262,6 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
     stateBytes: `${config.volumeLimits.stateBytes}`,
     sudoPath: config.sudoPath,
     volumeRoot: config.volumeRoot,
-    workspaceBytes: `${config.volumeLimits.workspaceBytes}`,
     ...(config.diagnostics ? { diagnostics: true } : {}),
     ...(config.publicInternet ? { publicInternet: true } : {}),
   });

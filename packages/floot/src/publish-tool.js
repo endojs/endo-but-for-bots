@@ -71,6 +71,41 @@ const toServableFilesystem = async workspace => {
   );
 };
 
+/** The directory index `@endo/endo-fs-asset-server` resolves a directory
+ * request to. `serve()` takes it as an option and defaults to this; the
+ * publisher passes no options, so this is what a published root will look
+ * for. */
+const INDEX_FILE = 'index.html';
+
+/**
+ * Whether the projected filesystem has a readable index at its root.
+ *
+ * Mirrors the asset server's own resolution: walk `root()` to the index and
+ * confirm the node is a file, distinguished by `open` the way the request
+ * path distinguishes it, rather than by duck-typing an attribute read.
+ *
+ * Only the root is required to resolve. A published mount still serves every
+ * other path, so this is a requirement about the *link* — which points at the
+ * root — not about what the mount may contain. An agent that wants to publish
+ * arbitrary files writes a root index that links to them.
+ *
+ * @param {any} filesystem
+ * @returns {Promise<boolean>}
+ */
+const hasReadableIndex = async filesystem => {
+  await null;
+  try {
+    const node = await E(E(filesystem).root()).lookup(INDEX_FILE);
+    // eslint-disable-next-line no-underscore-dangle
+    const methods = await E(node).__getMethodNames__();
+    return methods.includes('open');
+  } catch {
+    // An absent entry, an unreadable root, or an index that is a directory:
+    // all of them mean the published root would 404.
+    return false;
+  }
+};
+
 /** @type {import('@endo/fae/src/tool-makers.js').ToolSchema} */
 const publishSchema = harden({
   type: 'function',
@@ -145,6 +180,25 @@ export const makePublishTool = ({ getAssetServer, getWorkspace }) => {
       filesystem = await toServableFilesystem(workspace);
     } catch (error) {
       return `Publishing failed: ${/** @type {Error} */ (error).message}`;
+    }
+    if (!(await hasReadableIndex(filesystem))) {
+      // `serve()` refuses a cap it cannot walk; this refuses a cap it can walk
+      // and would find nothing in. The asset server resolves a directory
+      // request to its index file, so a workspace without one publishes a URL
+      // whose every request 404s — indistinguishable from a revoked or
+      // mistyped link, which is the confusion this tool's projection already
+      // exists to prevent. A backend whose slice writes somewhere other than
+      // the session's workspace reaches exactly this state and reports
+      // success, so the check belongs here rather than in the agent's hands.
+      return (
+        `Publishing failed: this workspace has no readable ${INDEX_FILE} at ` +
+        `its root. The URL this returns points at the root, which resolves to ` +
+        `${INDEX_FILE}, so it would return 404. Other files are still served ` +
+        'at their own paths, so a root ' +
+        `${INDEX_FILE} that links to them is enough. Write it into this ` +
+        'session’s workspace — the same tree your file tools read — and ' +
+        'publish again.'
+      );
     }
     // Refresh: drop any prior mount so a re-publish serves current files and
     // never accumulates listeners.

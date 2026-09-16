@@ -20,6 +20,7 @@
  */
 
 import { Fail, b, q } from '@endo/errors';
+import { readMounterEnv } from '@endo/hosted-agent/session-plan.js';
 import { PORTABLE_NAME_PATTERN } from '@endo/sandbox/policy.js';
 import { isAbsolute, normalize } from 'node:path';
 
@@ -40,6 +41,7 @@ const KNOWN_KEYS = harden([
   'listenerImageRef',
   'maxSessions',
   'models',
+  'mounterEnv',
   'ownerId',
   'projectIds',
   'publicInternet',
@@ -48,7 +50,6 @@ const KNOWN_KEYS = harden([
   'stateBytes',
   'sudoPath',
   'volumeRoot',
-  'workspaceBytes',
 ]);
 
 const LISTENER_IMAGE_PATTERN = /^[a-z0-9][a-z0-9._:/-]*@sha256:[a-f0-9]{64}$/;
@@ -185,13 +186,14 @@ const assertFlag = (key, value) => {
  *   listenerImageRef: string,
  *   maxSessions: number,
  *   models: readonly any[],
+ *   mounterEnv: Record<string, string>,
  *   ownerId: string,
  *   projectIds: { first: number, last: number },
  *   publicInternet: boolean,
  *   quotaCommand: string,
  *   secretPath: readonly string[],
  *   sudoPath: string,
- *   volumeLimits: { workspaceBytes: bigint, stateBytes: bigint },
+ *   volumeLimits: { stateBytes: bigint },
  *   volumeRoot: string,
  * }}
  */
@@ -275,8 +277,16 @@ export const readCodexHostConfig = input => {
       'sudoPath',
       config.sudoPath ?? '/usr/bin/sudo',
     ),
+    // The operator's mount and umount programs. A session's workspace is a 9P
+    // projection, so the host needs them exactly as the other two adapters
+    // do; `readMounterEnv` is their reader, not a second one.
+    mounterEnv:
+      config.mounterEnv === undefined
+        ? harden({})
+        : readMounterEnv(config.mounterEnv),
+    // Only the CLI's own home is a quota-backed volume; the workspace is a
+    // 9P projection of a tree the host already holds.
     volumeLimits: harden({
-      workspaceBytes: assertByteBudget('workspaceBytes', config.workspaceBytes),
       stateBytes: assertByteBudget('stateBytes', config.stateBytes),
     }),
     volumeRoot: assertNormalizedAbsolutePath('volumeRoot', config.volumeRoot),

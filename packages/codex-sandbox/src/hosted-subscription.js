@@ -72,6 +72,9 @@ export const makeHostedCodexSubscription = async options => {
   const storage = await makeHostVolumeProvider({
     ...options,
     directory: join(directory, 'volumes'),
+    // Each session's mount point, 9P socket directory, and — when it brings
+    // no worktree of its own — its workspace tree.
+    sessionsDirectory: join(directory, 'sessions'),
   });
   const listener = await makePodmanProviderListenerRuntime({
     imageRef: listenerImageRef,

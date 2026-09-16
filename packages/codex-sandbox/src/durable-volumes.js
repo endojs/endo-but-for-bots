@@ -3,16 +3,19 @@
 
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, readFile, realpath } from 'node:fs/promises';
+import { lstat, mkdir, readFile, realpath } from 'node:fs/promises';
+import { join } from 'node:path';
 import { execPath, pid } from 'node:process';
 import { createInterface } from 'node:readline';
 import { clearTimeout, setTimeout } from 'node:timers';
 import { fileURLToPath } from 'node:url';
 
-import { Fail, makeError, X } from '@endo/errors';
+import { Fail, makeError, q, X } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
+import { providePrivateDirectory } from '@endo/hosted-agent/hosted-setup.js';
+import { makeWorkspaceProjection } from '@endo/hosted-agent/workspace-projection.js';
 
 import { normalizeCodexVolumeLimits } from './volume-limits.js';
 
@@ -272,7 +275,20 @@ export const makeFileVolumeRegistry = async ({
 harden(makeFileVolumeRegistry);
 
 const sessionPattern = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
-const roles = harden(['workspace', 'state']);
+/**
+ * The roles this provider allocates a quota-backed volume for.
+ *
+ * `workspace` was one of them until 2026-09-16. It is now the 9P projection
+ * of the tree the session already has, so the slice, the session's file
+ * tools, the guest's workspace capability and Floot's publisher all read one
+ * tree rather than the slice writing to a volume nothing else could see. A
+ * record written before that change still lists its workspace volume; the
+ * volume is retired in place — never mounted again, removed with the rest of
+ * the record on `destroy` — because reusing its project ID would let a later
+ * session inherit an earlier one's quota.
+ */
+const roles = harden(['state']);
+const isRetired = volume => !roles.includes(volume.role);
 
 /**
  * Durable session-volume state machine. The operator supplies rootless Podman
@@ -281,7 +297,27 @@ const roles = harden(['workspace', 'state']);
  * physical identity, and remove without force. Quota assignment is idempotent
  * for a reserved project ID and must refuse nonempty unowned directories.
  *
- * @param {{ownerId:string, projectIds:{first:number,last:number}, registry:any, volumes:any, quota:any, volumeLimits?: {workspaceBytes:bigint,stateBytes:bigint}}} powers
+ * A session's workspace is not among the volumes: it is the 9P projection of
+ * a tree the session already has, established here alongside the state
+ * volume's lease so the two are acquired and released together.
+ *
+ * @param {object} powers
+ * @param {string} powers.ownerId
+ * @param {{first:number,last:number}} powers.projectIds
+ * @param {any} powers.registry
+ * @param {any} powers.volumes
+ * @param {any} powers.quota
+ * @param {{stateBytes:bigint}} [powers.volumeLimits]
+ * @param {string} powers.sessionsDirectory The private root this provider
+ * creates each session's mount point, 9P socket directory, and — for a
+ * session that brings no worktree of its own — its workspace tree under.
+ * @param {Record<string,string>} [powers.mounterEnv] The operator's mount
+ * and umount programs.
+ * @param {typeof makeWorkspaceProjection} [powers.projectWorkspace]
+ * @param {(label: string, directory: string) => Promise<void>} [powers.provideDirectory]
+ * @param {(path: string) => Promise<string | undefined>} [powers.canonicalDirectory]
+ * Resolve an operator-supplied worktree, or resolve to undefined when it is
+ * not an existing directory.
  */
 export const makeCodexDurableVolumeProvider = ({
   ownerId,
@@ -290,6 +326,15 @@ export const makeCodexDurableVolumeProvider = ({
   volumes,
   quota,
   volumeLimits,
+  sessionsDirectory,
+  mounterEnv = {},
+  projectWorkspace = makeWorkspaceProjection,
+  provideDirectory = providePrivateDirectory,
+  canonicalDirectory = async path => {
+    const info = await lstat(path).catch(() => undefined);
+    if (!info?.isDirectory()) return undefined;
+    return realpath(path);
+  },
 }) => {
   const limits = normalizeCodexVolumeLimits(volumeLimits);
   (typeof ownerId === 'string' &&
@@ -302,8 +347,55 @@ export const makeCodexDurableVolumeProvider = ({
     projectIds.last > projectIds.first &&
     projectIds.last <= 0xffff_ffff) ||
     Fail`Invalid exclusive project ID range`;
+  (typeof sessionsDirectory === 'string' &&
+    sessionsDirectory.startsWith('/') &&
+    !sessionsDirectory.endsWith('/')) ||
+    Fail`Invalid Codex session directory root`;
   const mounts = new WeakMap();
   const active = new Map();
+  /**
+   * Resolve the host tree this session's workspace projects.
+   *
+   * Floot supplies `workspaceHostPath` when the session's preset has a git
+   * workspace — the same path it gives Claude and OpenCode — so the slice
+   * sees the worktree the publisher serves. A session without one gets a
+   * tree of its own under this provider's root, which is what the other two
+   * adapters do with `workspaceDir`.
+   *
+   * @param {string} sessionId
+   * @param {unknown} workspaceHostPath
+   * @param {string} ownRoot
+   */
+  const resolveWorkspaceRoot = async (
+    sessionId,
+    workspaceHostPath,
+    ownRoot,
+  ) => {
+    if (workspaceHostPath === undefined) {
+      await provideDirectory('Codex session workspace', ownRoot);
+      return ownRoot;
+    }
+    (typeof workspaceHostPath === 'string' &&
+      workspaceHostPath.startsWith('/') &&
+      !workspaceHostPath.includes('\0') &&
+      workspaceHostPath.length <= 4096) ||
+      Fail`Codex workspaceHostPath must be an absolute host path, got ${q(workspaceHostPath)}`;
+    const canonical = await canonicalDirectory(
+      /** @type {string} */ (workspaceHostPath),
+    );
+    if (!canonical) {
+      throw Fail`Codex workspaceHostPath ${q(workspaceHostPath)} must be an existing directory`;
+    }
+    canonical === workspaceHostPath ||
+      Fail`Codex workspaceHostPath ${q(workspaceHostPath)} must be canonical; it resolves to ${q(canonical)}`;
+    // The provider's own root holds the registry, the mount points and the
+    // socket directories. Projecting it would let a session read and write
+    // the records that bound it.
+    (canonical !== sessionsDirectory &&
+      !canonical.startsWith(`${sessionsDirectory}/`)) ||
+      Fail`Codex workspaceHostPath ${q(workspaceHostPath)} must be disjoint from the session storage root`;
+    return canonical;
+  };
   const assertSession = sessionId =>
     (typeof sessionId === 'string' && sessionPattern.test(sessionId)) ||
     Fail`Invalid volume session`;
@@ -350,22 +442,25 @@ export const makeCodexDurableVolumeProvider = ({
             role,
             name: identity(sessionId, role),
             projectId: nextProjectId + index,
-            hardBytes: `${role === 'workspace' ? limits.workspaceBytes : limits.stateBytes}`,
+            hardBytes: `${limits.stateBytes}`,
             ready: false,
           })),
         };
-        if (nextProjectId + 2 > projectIds.last) state.exhausted = true;
-        else state.nextProjectId = nextProjectId + 2;
+        // One ID per role, and the range is a host-lifetime budget rather
+        // than a concurrency limit — IDs are never recycled — so dropping the
+        // workspace volume halves what a session costs it.
+        if (nextProjectId + roles.length > projectIds.last)
+          state.exhausted = true;
+        else state.nextProjectId = nextProjectId + roles.length;
         state.sessions[sessionId] = record;
         await save();
       }
       record.phase !== 'deleting' ||
         Fail`Session volume deletion must finish before reopening`;
-      for (const volume of record.volumes) {
-        BigInt(volume.hardBytes) ===
-          (volume.role === 'workspace'
-            ? limits.workspaceBytes
-            : limits.stateBytes) ||
+      // A retired role is not re-ensured: its quota is whatever it was
+      // allocated with, and nothing mounts it. `destroy` still removes it.
+      for (const volume of record.volumes.filter(held => !isRetired(held))) {
+        BigInt(volume.hardBytes) === limits.stateBytes ||
           Fail`Stored Codex volume limits changed; explicit migration required`;
         // Each intent is durable before touching a resource; retries reuse the
         // same volume/project identity and never erase existing user data.
@@ -413,6 +508,7 @@ export const makeCodexDurableVolumeProvider = ({
     workspace.sessionId === sessionId || Fail`Workspace session mismatch`;
     !active.has(sessionId) || Fail`Session volumes already leased`;
     let lease;
+    let projection;
     const leaseId = randomUUID();
     active.set(sessionId, leaseId);
     try {
@@ -425,6 +521,30 @@ export const makeCodexDurableVolumeProvider = ({
         record.lease = leaseId;
         await save();
       });
+      // The session's private placement. The mount point is created by the
+      // mounter and removed on unmount; the socket directory is this
+      // provider's to create and own, and its liveness is what proves to a
+      // later incarnation whether the bridge is gone.
+      const sessionDirectory = join(sessionsDirectory, sessionId);
+      const mounterSocketDir = join(sessionDirectory, '9p');
+      await provideDirectory('Codex session 9P directory', mounterSocketDir);
+      const workspaceRootPath = await resolveWorkspaceRoot(
+        sessionId,
+        spec.workspaceHostPath,
+        join(sessionDirectory, 'tree'),
+      );
+      // Retained before it is established, so a failed mount is still closed
+      // by the rollback below.
+      projection = projectWorkspace(
+        {
+          workspaceRootPath,
+          workspaceMountPoint: join(sessionDirectory, 'workspace'),
+          mounterSocketDir,
+          mounterEnv,
+        },
+        { env: mounterEnv },
+      );
+      await projection.mount();
       lease = makeExo(
         'CodexVolumeLease',
         M.interface('CodexVolumeLease', {
@@ -433,6 +553,11 @@ export const makeCodexDurableVolumeProvider = ({
         {
           unmount: async () => {
             if (!mounts.has(lease)) return;
+            // The kernel mount outlives every process that knows about it,
+            // so it comes down before the record that named it: a released
+            // lease whose projection survived would let a successor mount a
+            // second projection over the first.
+            await projection.close();
             await registry.transaction(async (state, save) => {
               const record = Object.hasOwn(state.sessions, sessionId)
                 ? state.sessions[sessionId]
@@ -447,10 +572,23 @@ export const makeCodexDurableVolumeProvider = ({
           },
         },
       );
-      mounts.set(lease, { sessionId, leaseId });
+      mounts.set(lease, { sessionId, leaseId, projection });
       return lease;
     } catch (error) {
       active.delete(sessionId);
+      // Admission failed, so nothing holds the projection; a kit closed here
+      // takes down a mount it may have established a moment ago.
+      if (projection) {
+        try {
+          await projection.close();
+        } catch (closeError) {
+          throw new AggregateError(
+            [error, closeError],
+            'Volume lease admission and workspace projection cleanup failed',
+            { cause: closeError },
+          );
+        }
+      }
       // Publication never happened, so a committed but unacknowledged lease
       // reservation can be retired without touching any successor lease.
       try {
@@ -474,20 +612,28 @@ export const makeCodexDurableVolumeProvider = ({
     }
   };
   const describe = async (lease, { sessionId }) => {
-    mounts.get(lease)?.sessionId === sessionId ||
-      Fail`Invalid or retired volume lease`;
+    const held = mounts.get(lease);
+    held?.sessionId === sessionId || Fail`Invalid or retired volume lease`;
     return registry.transaction(async state => {
       checkRegistry(state);
       const record = Object.hasOwn(state.sessions, sessionId)
         ? state.sessions[sessionId]
         : undefined;
-      (record?.phase === 'ready' &&
-        record.lease === mounts.get(lease)?.leaseId) ||
+      (record?.phase === 'ready' && record.lease === held.leaseId) ||
         Fail`Session volumes are not ready or lease was revoked`;
+      const stateVolume = record.volumes.find(
+        volume => volume.role === 'state',
+      );
+      if (typeof stateVolume?.name !== 'string') {
+        throw Fail`Session state volume is missing from its record`;
+      }
       return harden({
         sessionId,
-        workspaceVolume: record.volumes[0].name,
-        stateVolume: record.volumes[1].name,
+        stateVolume: stateVolume.name,
+        // The workspace is not a volume: it is the host mount point of this
+        // session's 9P projection, which the slice binds as an attested
+        // attach rather than a host bind.
+        workspaceMountPoint: held.projection.mountPoint,
       });
     });
   };

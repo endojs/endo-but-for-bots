@@ -5,7 +5,10 @@ import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { assertPublicNetworkEvidence } from '@endo/hosted-agent/public-network.js';
-import { PINNED_IMAGE_REFERENCE_PATTERN } from '@endo/sandbox/policy.js';
+import {
+  INNER_PATH_PATTERN,
+  PINNED_IMAGE_REFERENCE_PATTERN,
+} from '@endo/sandbox/policy.js';
 
 import {
   assertProviderGrantV1,
@@ -71,18 +74,21 @@ const assertExact = (actual, expected, label) => {
  * @param {{sandbox: any, volumeProvider: any, runtimeVerifier?: any,
  * imageRef: string, imageDigest: string, providerOrigin: string,
  * accountRef: string, brokerAuthMode?: 'api-key' | 'oauth' | 'subscription',
- * volumeLimits?: {workspaceBytes:bigint,stateBytes:bigint}}} powers
+ * volumeLimits?: {stateBytes:bigint}}} powers
  */
 export const makeAttestedCodexSliceFactory = powers => {
   const { imageDigest, imageRef } = powers;
   const volumeLimits = normalizeCodexVolumeLimits(powers.volumeLimits);
-  // Writable accounting includes both tmpfs copies and shm plus the two
-  // shared durable volumes. Attestation must report the actual sum, not the
-  // standard profile's larger ceiling when the operator reduces disk quotas.
+  // Writable accounting includes the tmpfs copies and shm plus the one
+  // durable volume. Attestation must report the actual sum, not the standard
+  // profile's larger ceiling when the operator reduces disk quotas.
+  //
+  // The workspace is not counted. It is a 9P projection of a tree the host
+  // already holds, bounded wherever that tree lives, so a number here would
+  // attest a ceiling nothing enforces — which is exactly what the sum is for.
   const resources = harden({
     ...standardResources,
-    writableBytes:
-      4n * GiB + volumeLimits.workspaceBytes + volumeLimits.stateBytes,
+    writableBytes: 4n * GiB + volumeLimits.stateBytes,
   });
   const runtimeVerifier = powers.runtimeVerifier ?? makeCodexRuntimeVerifier();
   /^sha256:[0-9a-f]{64}$/.test(imageDigest) ||
@@ -129,16 +135,18 @@ export const makeAttestedCodexSliceFactory = powers => {
       workspaceMount,
       harden({ sessionId }),
     );
-    (keys(volumes) === 'sessionId,stateVolume,workspaceVolume' &&
+    (keys(volumes) === 'sessionId,stateVolume,workspaceMountPoint' &&
       volumes.sessionId === sessionId) ||
       Fail`Volume evidence has the wrong session identity`;
-    for (const volume of [volumes.workspaceVolume, volumes.stateVolume]) {
-      (typeof volume === 'string' &&
-        /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(volume)) ||
-        Fail`Volume evidence must identify an actual named volume`;
-    }
-    volumes.workspaceVolume !== volumes.stateVolume ||
-      Fail`Session volumes must be distinct`;
+    (typeof volumes.stateVolume === 'string' &&
+      /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(volumes.stateVolume)) ||
+      Fail`Volume evidence must identify an actual named volume`;
+    // The workspace mount point is a host path the slice will bind as an
+    // attach; the sandbox refuses to attest it unless the anchor's own mount
+    // table shows a 9P projection rooted at `/` there.
+    (typeof volumes.workspaceMountPoint === 'string' &&
+      INNER_PATH_PATTERN.test(volumes.workspaceMountPoint)) ||
+      Fail`Volume evidence must identify the workspace mount point`;
     const lease = await E(brokerLease).attestation();
     assertProviderGrantV1(lease, {
       sessionId,
@@ -195,12 +203,15 @@ export const makeAttestedCodexSliceFactory = powers => {
             },
           ]
         : []),
+      // The session's own tree, projected over 9P and bound as an attested
+      // attach rather than a volume: the slice, the session's file tools, the
+      // guest's workspace capability and Floot's publisher all read one tree.
       {
         role: 'workspace',
-        kind: 'volume',
-        source: volumes.workspaceVolume,
+        kind: /** @type {const} */ ('attach'),
+        source: volumes.workspaceMountPoint,
         destination: '/workspace',
-        sizeBytes: volumeLimits.workspaceBytes,
+        mode: /** @type {const} */ ('rw'),
       },
       {
         role: 'codex-state',

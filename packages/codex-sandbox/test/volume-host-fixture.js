@@ -99,6 +99,16 @@ export const makeLiveVolumeFixture = async ({
       registry,
       volumes,
       quota,
+      sessionsDirectory: `${directory}/sessions`,
+      // This fixture exercises real Podman volumes and XFS quotas, not the
+      // 9P projection; a live mount would need the operator's mount helper.
+      provideDirectory: async () => undefined,
+      projectWorkspace: plan =>
+        harden({
+          mountPoint: plan.workspaceMountPoint,
+          mount: async () => undefined,
+          close: async () => undefined,
+        }),
     });
   return harden({ provider: reopen(), observer, reopen, run });
 };

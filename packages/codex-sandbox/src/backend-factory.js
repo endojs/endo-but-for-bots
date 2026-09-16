@@ -1,6 +1,6 @@
 // @ts-check
 
-import { Fail, makeError, q, X } from '@endo/errors';
+import { Fail, makeError, X } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import {
@@ -9,6 +9,10 @@ import {
   HostedTurnBackendInterface,
   normalizeHostedModelDescriptor,
 } from '@endo/hosted-agent';
+import {
+  HOSTED_AGENT_POLICY_V1,
+  makeHostedAgentPolicyVerifier,
+} from '@endo/hosted-agent/hosted-agent-policy.js';
 import { makeCleanupScope } from '@endo/hosted-agent/cleanup-scope.js';
 import { assertPublicNetworkEvidence } from '@endo/hosted-agent/public-network.js';
 import { makeSessionRegistry } from '@endo/hosted-agent/session-registry.js';
@@ -16,46 +20,14 @@ import { makeSessionRegistry } from '@endo/hosted-agent/session-registry.js';
 import { makeCodexClient } from './codex-client.js';
 import { adaptEndoTools, withEndoToolInstructions } from './endo-tools.js';
 
+export { HOSTED_AGENT_POLICY_V1 };
+
 const assertSessionId = sessionId => {
   (typeof sessionId === 'string' &&
     /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(sessionId)) ||
     Fail`Codex sessionId must be a bounded portable path component`;
   return sessionId;
 };
-
-export const HOSTED_AGENT_POLICY_V1 = harden({
-  version: 'HostedAgentPolicyV1',
-  backend: 'rootless-podman',
-  network: 'broker-only',
-  uid: 1000,
-  gid: 1000,
-  readOnlyRoot: true,
-  noNewPrivileges: true,
-  dropAllCapabilities: true,
-  seccomp: true,
-  devices: 'none',
-  hostSockets: 'none',
-  hostHome: 'none',
-  credentialInjection: 'broker-only',
-  brokerTransport: 'loopback-sidecar',
-  executionDomain: 'guest',
-  descendantReaping: true,
-  namespaces: harden({
-    user: 'private',
-    pid: 'private',
-    ipc: 'private',
-    mount: 'private',
-  }),
-  limits: harden({
-    memoryBytes: 4 * 1024 * 1024 * 1024,
-    pids: 512,
-    cpuCores: 4,
-    openFiles: 4096,
-    coreBytes: 0,
-    writableBytes: 16 * 1024 * 1024 * 1024,
-  }),
-});
-harden(HOSTED_AGENT_POLICY_V1);
 
 /**
  * Validate the concrete provider grant before it enters a slice.
@@ -152,269 +124,39 @@ export const assertProviderGrantV1 = (grant, requirements) => {
 harden(assertProviderGrantV1);
 
 /**
- * The key a declared runtime attach is known by. It names the attach's row
- * in the attested table (`attach:<key>`) and its mount role
- * (`attach-<key>`), so it is held to a role's alphabet. The floot attach
- * registrar derives keys as content hashes of (client, cap, inner path).
+ * The mount table Codex's profile fixes. `codex-state` is the CLI's own
+ * home — its `~/.codex` transcript and config — and `workspace` is the tree
+ * the session's file tools, the guest's workspace capability, and Floot's
+ * publisher all read.
  */
-const ATTACH_KEY_PATTERN = /^[a-z0-9][a-z0-9-]{0,99}$/;
-/** Where an attach may land in the slice: strictly under `/mnt/`. */
-const ATTACH_DESTINATION_PATTERN = /^\/mnt(\/[A-Za-z0-9][A-Za-z0-9_.-]*)+$/;
-/** The host mountpoint an attach binds: absolute, normal, bounded. */
-const ATTACH_SOURCE_PATTERN = /^(\/[A-Za-z0-9][A-Za-z0-9_.-]*)+$/;
+export const CODEX_FIXED_MOUNTS = harden([
+  { role: 'workspace', kind: 'session', destination: '/workspace', mode: 'rw' },
+  {
+    role: 'codex-state',
+    kind: 'session',
+    destination: '/codex-home',
+    mode: 'rw',
+  },
+  { role: 'tmp', kind: 'tmpfs', destination: '/tmp', mode: 'rw' },
+  { role: 'run', kind: 'tmpfs', destination: '/run', mode: 'rw' },
+  { role: 'scratch', kind: 'tmpfs', destination: '/scratch', mode: 'rw' },
+]);
+
+const codexPolicy = makeHostedAgentPolicyVerifier({
+  fixedMounts: CODEX_FIXED_MOUNTS,
+});
 
 /**
- * Validate the runtime attaches a session spec declares
- * (designs/runtime-container-fs-mount.md). Each names a host 9P
- * mountpoint an operator-held bridge minted for a capability the session
- * holds, a destination under `/mnt/`, and a mode. The slice binds each as a
- * `kind: 'attach'` policy mount, and the sandbox attestation proves the
- * bind is a 9P projection rather than host data.
- *
- * Runs at every boundary the spec crosses — the resource provisioner, the
- * slice factory, and the backend factory's authority handoff — so no layer
- * trusts the one before it to have looked.
- *
- * @param {unknown} candidates
- * @returns {readonly { key: string, source: string, destination: string, mode: 'ro' | 'rw' }[]}
+ * Validate the runtime attaches a Codex session declares, against the fixed
+ * table above.
  */
-export const assertContainerMounts = candidates => {
-  if (candidates === undefined) return harden([]);
-  if (!Array.isArray(candidates)) {
-    throw makeError(X`containerMounts must be an array`);
-  }
-  const keys = new Set();
-  const destinations = new Set();
-  const sources = new Set();
-  /** @type {{ key: string, source: string, destination: string, mode: 'ro' | 'rw' }[]} */
-  const validated = [];
-  // Iterated, not mapped: `map` skips array holes, so a sparse input would
-  // return a list whose `length` counts entries no check ever saw — and
-  // that length is what the attested table is sized against.
-  for (const candidate of candidates) {
-    (typeof candidate === 'object' &&
-      candidate !== null &&
-      Object.keys(candidate).sort().join(',') ===
-        'destination,key,mode,source') ||
-      Fail`container mount has unknown or missing fields`;
-    const { key, source, destination, mode } = candidate;
-    (typeof key === 'string' && ATTACH_KEY_PATTERN.test(key)) ||
-      Fail`container mount key ${q(key)} is not a portable key`;
-    (typeof source === 'string' && ATTACH_SOURCE_PATTERN.test(source)) ||
-      Fail`container mount ${q(key)} source must be an absolute normal host mountpoint`;
-    (typeof destination === 'string' &&
-      ATTACH_DESTINATION_PATTERN.test(destination)) ||
-      Fail`container mount ${q(key)} destination must lie under /mnt/`;
-    mode === 'ro' ||
-      mode === 'rw' ||
-      Fail`container mount ${q(key)} mode must be "ro" or "rw"`;
-    !keys.has(key) || Fail`container mount key ${q(key)} is duplicated`;
-    !destinations.has(destination) ||
-      Fail`container mount destination ${q(destination)} is duplicated`;
-    !sources.has(source) ||
-      Fail`container mount source ${q(source)} is mounted twice`;
-    // Nor may one destination sit inside another. Both would be declared
-    // and both attested, but the attested table has no ordering, so it
-    // could not say which projection the slice actually sees at the
-    // shadowed path — a record that cannot describe the result.
-    for (const taken of destinations) {
-      (!destination.startsWith(`${taken}/`) &&
-        !taken.startsWith(`${destination}/`)) ||
-        Fail`container mount destination ${q(destination)} nests with ${q(taken)}`;
-    }
-    keys.add(key);
-    destinations.add(destination);
-    sources.add(source);
-    validated.push(harden({ key, source, destination, mode }));
-  }
-  return harden(validated);
-};
-harden(assertContainerMounts);
+export const assertContainerMounts = codexPolicy.assertContainerMounts;
 
 /**
  * Assert the machine-checkable outer sandbox contract required before Codex
  * may run with its inner approval prompts disabled.
- *
- * The mount table is the profile's five fixed roles plus exactly the
- * runtime attaches `requirements.containerMounts` declares, each reported
- * as `attach:<key>` in its declared mode. An attach the table carries but
- * the requirements do not, or the reverse, is the undeclared mount this
- * check exists to refuse.
- *
- * @param {any} policy
- * @param {{ imageDigest?: string, sessionId?: string, containerMounts?: unknown, networkPolicy?: string }} [requirements]
  */
-export const assertHostedAgentPolicyV1 = (policy, requirements = {}) => {
-  const expected = HOSTED_AGENT_POLICY_V1;
-  const publicNetwork = requirements.networkPolicy === 'public-internet';
-  !publicNetwork ||
-    policy?.networkPolicy === 'public-internet' ||
-    Fail`Sandbox public network policy missing`;
-  const containerMounts = assertContainerMounts(requirements.containerMounts);
-  const imageDigest = policy?.imageDigest;
-  if (!/^sha256:[0-9a-f]{64}$/.test(imageDigest || '')) {
-    throw makeError(X`hosted agent image must be pinned by SHA-256 digest`);
-  }
-  if (requirements.imageDigest && imageDigest !== requirements.imageDigest) {
-    throw makeError(X`hosted agent image digest is not operator-approved`);
-  }
-  if (
-    typeof policy?.sessionId !== 'string' ||
-    policy.sessionId === '' ||
-    (requirements.sessionId && policy.sessionId !== requirements.sessionId)
-  ) {
-    throw makeError(X`sandbox attestation has the wrong session identity`);
-  }
-  for (const key of [
-    'version',
-    'backend',
-    'network',
-    'uid',
-    'gid',
-    'readOnlyRoot',
-    'noNewPrivileges',
-    'dropAllCapabilities',
-    'seccomp',
-    'devices',
-    'hostSockets',
-    'hostHome',
-    'credentialInjection',
-    'brokerTransport',
-    'executionDomain',
-    'descendantReaping',
-  ]) {
-    if (policy?.[key] !== expected[key]) {
-      throw makeError(X`sandbox policy field ${q(key)} is not enforced`);
-    }
-  }
-  for (const [key, value] of Object.entries(expected.namespaces)) {
-    if (policy?.namespaces?.[key] !== value) {
-      throw makeError(X`sandbox namespace ${q(key)} is not private`);
-    }
-  }
-  for (const [key, value] of Object.entries(expected.limits)) {
-    if (key === 'writableBytes') {
-      const actual = policy?.limits?.writableBytes;
-      if (
-        typeof actual !== 'number' ||
-        !Number.isInteger(actual) ||
-        actual <= 0 ||
-        actual > value
-      ) {
-        throw makeError(X`sandbox writable byte ceiling is not enforced`);
-      }
-    } else if (policy?.limits?.[key] !== value) {
-      throw makeError(X`sandbox limit ${q(key)} is not enforced`);
-    }
-  }
-  const expectedTopLevelKeys = [
-    ...Object.keys(expected),
-    'imageDigest',
-    'mounts',
-    'networkNamespaceId',
-    'sessionId',
-    ...(publicNetwork ? ['networkPolicy'] : []),
-  ].sort();
-  if (
-    Object.keys(policy || {})
-      .sort()
-      .join(',') !== expectedTopLevelKeys.join(',')
-  ) {
-    throw makeError(X`sandbox attestation has unknown or missing fields`);
-  }
-  if (
-    Object.keys(policy.namespaces).sort().join(',') !==
-    Object.keys(expected.namespaces).sort().join(',')
-  ) {
-    throw makeError(X`sandbox namespace attestation is not exact`);
-  }
-  if (
-    Object.keys(policy.limits).sort().join(',') !==
-    Object.keys(expected.limits).sort().join(',')
-  ) {
-    throw makeError(X`sandbox limit attestation is not exact`);
-  }
-  if (
-    typeof policy.networkNamespaceId !== 'string' ||
-    !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(policy.networkNamespaceId)
-  ) {
-    throw makeError(X`sandbox network namespace identity is invalid`);
-  }
-  const mounts = policy?.mounts;
-  if (!Array.isArray(mounts)) {
-    throw makeError(X`sandbox policy omitted its effective mount table`);
-  }
-  const expectedMounts = harden({
-    workspace: harden({
-      source: `workspace:${policy.sessionId}`,
-      destination: '/workspace',
-      mode: 'rw',
-    }),
-    'codex-state': harden({
-      source: `codex-state:${policy.sessionId}`,
-      destination: '/codex-home',
-      mode: 'rw',
-    }),
-    tmp: harden({ source: 'tmpfs', destination: '/tmp', mode: 'rw' }),
-    run: harden({ source: 'tmpfs', destination: '/run', mode: 'rw' }),
-    scratch: harden({ source: 'tmpfs', destination: '/scratch', mode: 'rw' }),
-    ...(publicNetwork
-      ? {
-          resolver: harden({
-            source: 'resolver:public',
-            destination: '/etc/resolv.conf',
-            mode: 'ro',
-          }),
-        }
-      : {}),
-    ...Object.fromEntries(
-      containerMounts.map(attach => [
-        `attach-${attach.key}`,
-        harden({
-          source: `attach:${attach.key}`,
-          destination: attach.destination,
-          mode: attach.mode,
-        }),
-      ]),
-    ),
-  });
-  // Counted against the table this function actually expects, rather than
-  // a literal that would silently desynchronize if a fixed role were ever
-  // added — at which point the table would become unattestable.
-  if (mounts.length !== Object.keys(expectedMounts).length) {
-    throw makeError(X`sandbox attestation contains an undeclared mount`);
-  }
-  const seenRoles = new Set();
-  for (const mount of mounts) {
-    if (
-      typeof mount?.role !== 'string' ||
-      !Object.hasOwn(expectedMounts, mount.role)
-    ) {
-      throw makeError(X`sandbox mount table is not the exact session table`);
-    }
-    const expectedMount = expectedMounts[mount?.role];
-    if (
-      !expectedMount ||
-      seenRoles.has(mount.role) ||
-      Object.keys(mount || {})
-        .sort()
-        .join(',') !== 'destination,mode,options,role,source' ||
-      mount.source !== expectedMount.source ||
-      mount.destination !== expectedMount.destination ||
-      mount.mode !== expectedMount.mode ||
-      !Array.isArray(mount.options) ||
-      [...mount.options].sort().join(',') !== 'nodev,nosuid'
-    ) {
-      throw makeError(X`sandbox mount table is not the exact session table`);
-    }
-    seenRoles.add(mount.role);
-  }
-  if (seenRoles.size !== Object.keys(expectedMounts).length) {
-    throw makeError(X`sandbox mount table omitted a required role`);
-  }
-  return harden({ ...policy, mounts: harden([...mounts]) });
-};
-harden(assertHostedAgentPolicyV1);
+export const assertHostedAgentPolicyV1 = codexPolicy.assertHostedAgentPolicyV1;
 
 /**
  * Compose the concrete, per-session resource lifecycle from narrow platform

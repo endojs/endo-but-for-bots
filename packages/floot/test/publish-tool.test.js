@@ -33,10 +33,44 @@ const makeAssetServer = () => {
   return { server, served, revoked };
 };
 
-/** A cap shaped like an endo-fs Filesystem: served as-is. */
-const makeFilesystemCap = () =>
+/**
+ * The publisher refuses a workspace whose root has no readable index, because
+ * the asset server resolves a directory request to one and a mount without it
+ * 404s on every request. So every fake below carries an `index.html`; the
+ * `withIndex: false` form is what the refusal is tested against.
+ */
+const INDEX = 'index.html';
+
+/** A Mount child shaped like a MountFile: `text` is what marks it a file. */
+const makeMountFile = () =>
+  Far('MountFile', {
+    text: async () => '<!doctype html>',
+    streamBase64: () => undefined,
+  });
+
+/** @param {string | string[]} path */
+const lastSegment = path =>
+  Array.isArray(path) ? path[path.length - 1] : path;
+
+/** @param {boolean} withIndex */
+const makeMountLookup = withIndex => path => {
+  if (withIndex && lastSegment(path) === INDEX) return makeMountFile();
+  throw Error('ENOENT: no such file or directory');
+};
+
+/** A cap shaped like an endo-fs Filesystem: served as-is.
+ * @param {{ withIndex?: boolean }} [options] */
+const makeFilesystemCap = ({ withIndex = true } = {}) =>
   Far('Filesystem', {
-    root: () => Far('Directory', {}),
+    root: () =>
+      Far('Directory', {
+        lookup: name => {
+          if (withIndex && lastSegment(name) === INDEX) {
+            return Far('File', { open: () => undefined });
+          }
+          throw Error('ENOENT');
+        },
+      }),
     statfs: () => harden({}),
   });
 
@@ -45,11 +79,11 @@ const makeFilesystemCap = () =>
  * `worktree()` are the projection path; nothing walks the returned Mount here,
  * so it only has to classify.
  */
-const makeGitCap = () => {
+const makeGitCap = ({ withIndex = true } = {}) => {
   const mount = Far('EndoMount', {
     kind: () => 'directory',
-    lookup: () => undefined,
-    list: () => harden([]),
+    lookup: makeMountLookup(withIndex),
+    list: () => harden(withIndex ? [INDEX] : []),
   });
   const readOnlyGit = Far('Git', {
     worktree: () => mount,
@@ -68,16 +102,16 @@ const makeGitCap = () => {
 };
 
 /** A cap shaped like an `@endo/daemon` Mount. */
-const makeMountCap = () => {
+const makeMountCap = ({ withIndex = true } = {}) => {
   const readOnlyTree = Far('ReadableTree', {
     kind: () => 'directory',
-    lookup: () => undefined,
-    list: () => harden([]),
+    lookup: makeMountLookup(withIndex),
+    list: () => harden(withIndex ? [INDEX] : []),
   });
   return Far('EndoMount', {
     kind: () => 'directory',
-    lookup: () => undefined,
-    list: () => harden([]),
+    lookup: makeMountLookup(withIndex),
+    list: () => harden(withIndex ? [INDEX] : []),
     makeDirectory: () => undefined,
     readOnly: () => readOnlyTree,
   });
@@ -238,4 +272,29 @@ test('concurrent publishes serialize, so neither served mount leaks', async t =>
   t.deepEqual(asset.revoked, ['http://host/token-1/']);
   await tool.revoke();
   t.deepEqual(asset.revoked, ['http://host/token-1/', 'http://host/token-2/']);
+});
+
+test('a workspace with no readable index is refused, not published', async t => {
+  // The failure this closes: a backend whose slice writes somewhere other than
+  // the session's workspace leaves an empty worktree here, and publishing it
+  // returned a URL that 404s on every request — indistinguishable from a
+  // revoked or mistyped link.
+  const asset = makeAssetServer();
+  const tool = makePublishTool({
+    getAssetServer: async () => asset.server,
+    getWorkspace: async () => makeFilesystemCap({ withIndex: false }),
+  });
+  const message = await E(tool).execute({});
+  t.regex(String(message), /no readable index\.html at its root/);
+  t.deepEqual(asset.served, []);
+});
+
+test('an empty git worktree is refused for the same reason', async t => {
+  const asset = makeAssetServer();
+  const tool = makePublishTool({
+    getAssetServer: async () => asset.server,
+    getWorkspace: async () => makeGitCap({ withIndex: false }).git,
+  });
+  t.regex(String(await E(tool).execute({})), /no readable index\.html/);
+  t.deepEqual(asset.served, []);
 });
