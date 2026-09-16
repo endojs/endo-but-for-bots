@@ -212,3 +212,67 @@ export const writeClaudeTranscript = (
   return lines.length > 0 ? `${lines.join('\n')}\n` : '';
 };
 harden(writeClaudeTranscript);
+
+/**
+ * Read a transcript back as records.
+ *
+ * The inverse of the writer, and the reason the round-trip conformance suite
+ * can judge a restoration at all: without it a format change would be caught
+ * only by a live session resuming empty. It reads what Claude Code itself
+ * writes, not merely what this module emits, so a transcript the CLI extended
+ * is readable too.
+ *
+ * @param {string} text
+ * @returns {readonly any[]}
+ */
+export const readClaudeTranscript = text => {
+  const records = [];
+  const envelopes = text
+    .split('\n')
+    .filter(line => line !== '')
+    .map(line => {
+      try {
+        return JSON.parse(line);
+      } catch {
+        throw Fail`Claude transcript line is not JSON`;
+      }
+    })
+    .filter(envelope => envelope?.message);
+  for (const envelope of envelopes) {
+    const { content } = envelope.message;
+    if (typeof content === 'string') {
+      records.push({ kind: 'message', role: envelope.type, content });
+    } else if (Array.isArray(content)) {
+      for (const block of content) {
+        if (block?.type === 'text') {
+          records.push({
+            kind: 'message',
+            role: envelope.type,
+            content: block.text,
+          });
+        } else if (block?.type === 'tool_use') {
+          records.push({
+            kind: 'tool-call',
+            id: block.id,
+            name: block.name,
+            args: JSON.stringify(block.input ?? {}),
+          });
+        } else if (block?.type === 'tool_result') {
+          records.push({
+            kind: 'tool-result',
+            id: block.tool_use_id,
+            content:
+              typeof block.content === 'string'
+                ? block.content
+                : JSON.stringify(block.content ?? ''),
+            ...(block.is_error ? { failed: true } : {}),
+          });
+        }
+        // `thinking` blocks are the model's own reasoning, which the stack
+        // does not record and so cannot restore.
+      }
+    }
+  }
+  return harden(records);
+};
+harden(readClaudeTranscript);
