@@ -1231,24 +1231,10 @@ starts — not an import API, which none of the three offers.
   messages, since `CreateInput` is `{id?, agent?, model?, location}` and no
   route appends one. The patch must accept compaction records too, or the
   boundary cannot be restored.
-- **Codex cannot be restored faithfully today, and this is an open problem.**
-  Its app-server exposes `initialize`, `config/read`, `account/read`,
-  `thread/start`, `thread/resume`, `thread/turns/list`, `thread/revert`,
-  `turn/start`, `turn/interrupt` and `model/list` — nothing that appends a
-  historical turn — and its store is a versioned SQLite schema inside a binary
-  this project does not fork. Two options, neither good:
-
-  1. **Write `thread_history_1.sqlite` directly.** The same coupling accepted
-     for Claude's JSONL, and the same protection — the image is pinned — but
-     materially more fragile: a private relational schema with a version in its
-     filename, against a vendor we cannot patch if it moves.
-  2. **Keep prepending the history to the first turn's input**, which is what
-     Codex does today and is all `turn/start` allows. This is *not* faithful:
-     tool calls arrive as text describing tool calls.
-
-  Until that is decided, Codex gets the improvements its protocol does allow —
-  the preamble and the arbitrary bound both go — and its restoration is
-  honestly marked as prepended rather than reconstructed.
+- **Codex** injects Responses API items through `thread/inject_items`, which
+  appends to the thread's history without starting a user turn. An earlier
+  version of this section said no such method existed; it was inferred from
+  this project's own client rather than from upstream, and was wrong.
 
 ### Writing a CLI's store: why one adapter can and two cannot — 2026-09-16
 
@@ -1306,14 +1292,31 @@ So the import emits events, not rows:
   (`server/routes/instance/httpapi/groups/session.ts`) with its handler in
   `handlers/session.ts`, taking a payload decoded by the schemas the server
   already uses.
-- The handler appends to the event log through `EventV2`, replaying the
-  vocabulary the projector already understands:
-  `SessionEvent.Prompted` for a user turn, `Text.Started`/`Text.Ended` for
-  assistant text, `Tool.Called` then `Tool.Success` or `Tool.Failed` for a tool
-  call and its result, and the compaction event for the boundary. Each becomes
-  a message through the projector that already exists, with the seq the log
-  assigns — so nothing here reconstructs a schema, and a version that changes
-  those events changes the import with them.
+- The handler appends to the event log through `EventV2`, in the vocabulary
+  the projector already understands: `Text.Started`/`Text.Ended` for assistant
+  text, `Tool.Called` then `Tool.Success` or `Tool.Failed` for a call and its
+  result, and the compaction event for the boundary. Each becomes a message
+  through the projector that already exists, with the seq the log assigns — so
+  nothing reconstructs a schema, and a version that changes those events
+  changes the import with them.
+
+**And here is the design question that makes this opencode's to answer, not
+ours.** These events are *operational*, not merely descriptive.
+`SessionEvent.Prompted` is published by `SessionInput.publish`, the
+prompt-admission path, and is coupled to `session_input` rows carrying
+`admitted_seq` and `promoted_seq` — the machinery that turns a queued prompt
+into a turn the runner executes. Replaying it to reconstruct a user message
+would either re-enter that lifecycle, so an imported conversation runs itself
+again, or require fabricating input rows whose sequence numbers agree with a
+log they did not come from.
+
+So an import needs a way to reach the projector without entering the prompt
+lifecycle: either an event kind that is explicitly historical, or a projector
+path reserved for import. Which of those is right is a judgement about
+opencode's event model, and it belongs to whoever owns that model. This design
+can specify the route, the handler, the vocabulary and the refusal condition —
+and does — but it should not pick that answer from outside, because picking it
+wrong yields a session that replays its own history as new work.
 - It refuses a session that already has messages, so an import can only
   establish a conversation and never interleave with one.
 - `Session.Interface` gains the matching method, since the handler reaches the
@@ -1347,14 +1350,51 @@ take on its own authority.
    config directory onto tmpfs, delete `makeTranscriptResume` and its helpers.
    First because its store is the one that can be written faithfully today, so
    it proves the record stream against a real CLI soonest.
-4. **Codex** — drop the preamble and the bound now; decide separately whether
-   to write `thread_history_1.sqlite` or accept prepended history.
-5. **Open — the only step not landed, and it is in another repository.**
-   OpenCode restoration needs the import route specified above written in
-   `kumavis/opencode` and the image rebuilt; then `OPENCODE_DB=:memory:`, and
-   the `opencodeSessionId` resume path and its unhandled not-found case go.
-   Until then OpenCode's state stays a durable bind — attested, but still the
-   guest's store rather than the stack's record.
+4. **Codex** — preamble and bound gone, and restoration through
+   `thread/inject_items`.
+5. **Landed for OpenCode; open for Codex.**
+
+   The import route is written and typechecked against the pinned fork, and
+   this repo's image build applies it
+   (`packages/opencode-sandbox/oci/patches/`). A user turn is imported as a
+   `synthetic` message rather than a prompt — the answer to the question this
+   section previously recorded as opencode's to make. `Synthetic` has exactly
+   one consumer, the projector, so it describes a turn without provoking one;
+   the assistant-side events are the same, and the runner module that names
+   them is their producer.
+
+   The adapter restores through that route, and falls back to reading the
+   conversation into the next prompt when the route is absent — which is what
+   lets this land without the image being rebuilt first. It also notices a
+   resume that came back under a different id, a case that previously had no
+   handling and simply continued context-free.
+
+   With the stack holding the record, the store is a cache:
+   `OPENCODE_DB=:memory:` and the data directory on the slice's tmpfs, so the
+   durable row leaves the attested table. That retires the SQLite/WAL
+   constraint entirely — with no file there is no shared-memory index.
+
+   **Codex restores faithfully too, and the earlier entry here was wrong.**
+   This design recorded that Codex had no app-server method for appending a
+   historical turn. That was inferred from the methods this project's client
+   happens to call, not from upstream. `openai/codex` is open source and its
+   protocol has `thread/inject_items` — *"Append raw Responses API items to the
+   thread history without starting a user turn"* — which is precisely the
+   property the `Prompted` hazard suggested was unavailable. No fork, no
+   private schema, no decision required.
+
+   So all three adapters restore the same way: the stack's records mapped into
+   whatever the CLI's own history is, with a tool call arriving as a tool call.
+   Claude writes JSONL, OpenCode posts to the import route, Codex injects
+   Responses API items. Each falls back to reading the conversation into the
+   next prompt when its path is unavailable, so none of them requires a
+   coordinated rollout.
+
+   **Still to verify on a deploy:** the rebuilt OpenCode image applying the
+   patch, each restoration path working against its live CLI, and
+   `OPENCODE_DB=:memory:` carrying a real session. Every one of these degrades
+   to the prompt fallback rather than breaking, which is what makes them safe
+   to find out about in a deploy rather than before one.
 6. **Answered by option 1 instead.** The cost check found a loopback port
    would have to live in the pinned listener image and relay over its stdio
    transport, so `@endo/sandbox` gained the `bind` kind and the MCP row is

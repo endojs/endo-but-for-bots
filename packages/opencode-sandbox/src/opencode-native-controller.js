@@ -26,7 +26,6 @@ import { SLICE_POLICY_PROFILE } from '@endo/sandbox/policy.js';
 import path from 'node:path';
 
 import {
-  STATE_PATH,
   assertHostedAgentPolicyV1,
   hostedPolicyFromSlice,
 } from './opencode-hosted-policy.js';
@@ -230,13 +229,6 @@ export const makeOpencodeNativeController = ({
           mode: /** @type {const} */ ('rw'),
         },
         {
-          role: 'opencode-state',
-          kind: /** @type {const} */ ('bind'),
-          source: state.directory,
-          destination: STATE_PATH,
-          mode: /** @type {const} */ ('rw'),
-        },
-        {
           role: 'tmp',
           kind: /** @type {const} */ ('tmpfs'),
           destination: '/tmp',
@@ -259,7 +251,10 @@ export const makeOpencodeNativeController = ({
       assertOpen();
       // The bridge's socket and its stdio shim. Read-only: the guest connects
       // to the socket, and nothing it does should replace the shim it runs.
-      /** @type {any[]} */ (mounts).splice(2, 0, {
+      // After the workspace, before the tmpfs roles: the table's order is the
+      // profile's, and the MCP row is added here only because its socket has
+      // to be serving before the slice can be asked for.
+      /** @type {any[]} */ (mounts).splice(1, 0, {
         role: 'mcp',
         kind: /** @type {const} */ ('bind'),
         source: approved.mcpDir,
@@ -300,10 +295,7 @@ export const makeOpencodeNativeController = ({
           mounts,
           // The parents of this session's own directories: the roots this
           // deployment owns and allocates under.
-          bindRoots: [
-            path.dirname(state.directory),
-            path.dirname(approved.mcpDir),
-          ],
+          bindRoots: [path.dirname(approved.mcpDir)],
           attestationArgv: ['/bin/sleep', 'infinity'],
         },
         env: {
@@ -311,7 +303,14 @@ export const makeOpencodeNativeController = ({
           OPENROUTER_API_KEY: 'opencode-broker-placeholder',
           HOME: '/tmp/opencode-home',
           XDG_CONFIG_HOME: '/tmp/opencode-home/.config',
-          XDG_DATA_HOME: '/opencode-state',
+          // The CLI's own store is a cache of this incarnation, not the record
+          // of the conversation: the stack holds that and restores it. An
+          // in-memory database is a configuration the fork supports outright
+          // (`Database.path()`), and it takes the SQLite/WAL constraint with
+          // it — there is no file, so there is no shared-memory index to need
+          // a local filesystem for.
+          XDG_DATA_HOME: '/tmp/opencode-home/.local/share',
+          OPENCODE_DB: ':memory:',
           OPENCODE_CONFIG_CONTENT: JSON.stringify(
             makeOpencodeConfig({
               ...(approved.model ? { model: approved.model } : {}),
@@ -375,7 +374,7 @@ export const makeOpencodeNativeController = ({
         cleanupProvision: closeResources,
         workspaceMountPoint: approved.workspaceMountPoint,
         workspacePath: '/workspace',
-        statePath: '/opencode-state',
+        statePath: '/tmp/opencode-home/.local/share',
         backend: 'podman',
         rootfsLabel: rootfsLabel(rootfs),
         model: approved.model,

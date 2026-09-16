@@ -3,6 +3,10 @@ import { clearTimeout, setTimeout } from 'node:timers';
 
 import { makeError, X } from '@endo/errors';
 import { makeExo } from '@endo/exo';
+import {
+  renderTranscriptDialogue,
+  responsesApiItems,
+} from '@endo/hosted-agent/transcript-records.js';
 import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
 import { passStyleOf } from '@endo/pass-style';
 import { M } from '@endo/patterns';
@@ -108,39 +112,6 @@ const projectToolResult = root => {
 // The CLI runs inside an attested outer sandbox. The pinned thread API has
 // no external-sandbox mode; every turn separately selects externalSandbox.
 /** @typedef {import('@endo/hosted-agent/transcript-records.js').TranscriptRecord} TranscriptRecord */
-
-/**
- * Render transcript records as the conversation they are.
- *
- * A conversation is always restored — there is no length at which the stack
- * declines to hand a session its own history — so nothing here truncates or
- * refuses. What the app-server's input channel cannot carry is a tool call as
- * a tool call, so one is written as the line it would read as.
- *
- * @param {readonly TranscriptRecord[]} records
- */
-const renderTranscriptDialogue = records => {
-  const lines = [];
-  /** @type {Map<string, string>} */
-  const calledNames = new Map();
-  for (const record of records) {
-    if (record.kind === 'message') {
-      lines.push(`${record.role}: ${record.content}`);
-    } else if (record.kind === 'tool-call') {
-      calledNames.set(record.id, record.name);
-      lines.push(`assistant called ${record.name}(${record.args})`);
-    } else if (record.kind === 'tool-result') {
-      const name = calledNames.get(record.id) || 'tool';
-      lines.push(`${name} returned: ${record.content}`);
-    } else if (record.kind === 'compaction') {
-      // Everything above this point was replaced by the summary it carries.
-      lines.length = 0;
-      lines.push(record.summary);
-    }
-  }
-  return lines.join('\n');
-};
-
 const CODEX_SANDBOX_MODE = 'danger-full-access';
 
 /**
@@ -1691,11 +1662,35 @@ export const makeCodexClient = ({
         if (restoreContext) {
           assertContinuity(opts);
         }
+        // Faithful restoration, when the thread is new and the stack has a
+        // record of it. `thread/inject_items` appends raw Responses API items
+        // "without starting a user turn" — the app-server's own words — so a
+        // tool call restores as a `function_call` with its output rather than
+        // as a line describing one, and nothing here queues work.
+        //
+        // An app-server too old to know the method refuses it, and the
+        // conversation goes into the turn's input instead. That fallback is
+        // why this needs no pinned-version check.
+        let injected = false;
+        if (restoreContext) {
+          const items = responsesApiItems(transcriptRecords(opts));
+          if (items.length > 0) {
+            try {
+              await request('thread/inject_items', {
+                threadId: currentThreadId,
+                items,
+              });
+              injected = true;
+            } catch {
+              // Read into the prompt below.
+            }
+          }
+        }
         turn.ledgerTurn = await ledger.begin({ baseCheckpoint });
         const response = await request('turn/start', {
           threadId: currentThreadId,
           input: [
-            ...(restoreContext && continuityText(opts)
+            ...(restoreContext && !injected && continuityText(opts)
               ? [
                   {
                     type: 'text',

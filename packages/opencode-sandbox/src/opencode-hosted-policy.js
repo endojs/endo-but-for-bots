@@ -15,28 +15,23 @@
  * to give. `HOME` lives on `/tmp`, so that ceiling is load-bearing rather than
  * a formality.
  *
- * The state row is a bind rather than a projection because opencode forces
- * SQLite WAL, which needs a local filesystem — the one constraint that rules
- * out carrying every adapter's state over 9P.
+ * There is no durable state row. OpenCode's own store is a cache of the
+ * running incarnation — the stack holds the conversation and restores it — so
+ * the database runs in memory and the CLI's data directory sits on the
+ * slice's own tmpfs. That also retires the SQLite/WAL constraint that shaped
+ * earlier versions of this design: with no file there is no shared-memory
+ * index, and so nothing needing a local filesystem.
  *
  * @module
  */
 
 import { makeHostedAgentPolicyVerifier } from '@endo/hosted-agent/hosted-agent-policy.js';
 
-/** Where the CLI's own data directory lives in the slice (`XDG_DATA_HOME`). */
-export const STATE_PATH = '/opencode-state';
 /** Where the MCP socket directory is bound, read-only. */
 export const MCP_PATH = '/endo-mcp';
 
 export const OPENCODE_FIXED_MOUNTS = harden([
   { role: 'workspace', kind: 'session', destination: '/workspace', mode: 'rw' },
-  {
-    role: 'opencode-state',
-    kind: 'session',
-    destination: STATE_PATH,
-    mode: 'rw',
-  },
   // The bridge's socket and its stdio shim. Read-only: the guest connects to
   // the socket, and nothing it does should be able to replace the shim it
   // runs.

@@ -382,6 +382,7 @@ const makeQueue = () => {
 
 /**
  * @param {{
+ *   injectFails?: boolean,
  *   threadId?: string,
  *   saveThreadId?: (threadId: string) => Promise<void>,
  *   clientOptions?: Record<string, any>,
@@ -400,6 +401,7 @@ const makeQueue = () => {
  * }} [options]
  */
 const makeFixture = ({
+  injectFails = false,
   threadId,
   saveThreadId,
   clientOptions = {},
@@ -460,6 +462,18 @@ const makeFixture = ({
           id: message.id,
           result: { thread: { id: message.params.threadId } },
         });
+        break;
+      case 'thread/inject_items':
+        // An app-server too old to know the method refuses it; this one
+        // knows it. `injectFails` exercises the other case.
+        if (injectFails) {
+          push({
+            id: message.id,
+            error: { code: -32_601, message: 'method not found' },
+          });
+        } else {
+          push({ id: message.id, result: {} });
+        }
         break;
       case 'thread/revert': {
         const index = turnIds.indexOf(message.params.beforeTurnId);
@@ -2836,4 +2850,81 @@ test('transport metadata alone cannot enable native networking without broker co
   await fixture.client.interrupt();
   await drain(reader);
   await fixture.client.terminate();
+});
+
+test('a new thread is restored through inject_items, not through its prompt', async t => {
+  t.timeout(5000);
+  const fixture = makeFixture({
+    threadId: 'thread-saved',
+    existingTurnIds: ['turn-1'],
+    clientOptions: {
+      savedToolSetId: 'old-tools',
+      toolSetId: 'new-tools',
+      savedRecovery: { baseTurnId: null, turnId: 'turn-1' },
+    },
+  });
+  const reader = await fixture.client.send('continue', {
+    transcript: [
+      { kind: 'message', role: 'user', content: 'write the report' },
+      { kind: 'tool-call', id: 'c1', name: 'write', args: '{"path":"r"}' },
+      { kind: 'tool-result', id: 'c1', content: 'wrote r' },
+    ],
+  });
+  const inject = fixture.sent.find(
+    message => message.method === 'thread/inject_items',
+  );
+  // `thread/inject_items` appends raw Responses API items without starting a
+  // user turn, so a restored tool call is a call rather than a line about one.
+  t.is(inject.params.threadId, 'thread-new');
+  t.deepEqual(
+    inject.params.items.map(item => item.type),
+    ['message', 'function_call', 'function_call_output'],
+  );
+  // And the turn carries only the turn: the history is no longer read into
+  // the prompt when the thread already holds it.
+  const start = fixture.sent.find(message => message.method === 'turn/start');
+  t.is(start.params.input.length, 1);
+  t.is(start.params.input[0].text, 'continue');
+  fixture.push({
+    method: 'turn/completed',
+    params: {
+      threadId: 'thread-new',
+      turn: { id: 'turn-2', status: 'completed' },
+    },
+  });
+  await drain(reader);
+});
+
+test('an app-server without inject_items reads the conversation into the turn', async t => {
+  t.timeout(5000);
+  const fixture = makeFixture({
+    injectFails: true,
+    threadId: 'thread-saved',
+    existingTurnIds: ['turn-1'],
+    clientOptions: {
+      savedToolSetId: 'old-tools',
+      toolSetId: 'new-tools',
+      savedRecovery: { baseTurnId: null, turnId: 'turn-1' },
+    },
+  });
+  const reader = await fixture.client.send('continue', {
+    transcript: [
+      { kind: 'message', role: 'user', content: 'write the report' },
+    ],
+  });
+  // Refused, so the conversation goes where it used to: into the turn's
+  // input, ahead of the prompt. Lossy, and better than a session that has
+  // forgotten what it was doing.
+  const start = fixture.sent.find(message => message.method === 'turn/start');
+  t.is(start.params.input.length, 2);
+  t.true(start.params.input[0].text.includes('write the report'));
+  t.is(start.params.input[1].text, 'continue');
+  fixture.push({
+    method: 'turn/completed',
+    params: {
+      threadId: 'thread-new',
+      turn: { id: 'turn-2', status: 'completed' },
+    },
+  });
+  await drain(reader);
 });

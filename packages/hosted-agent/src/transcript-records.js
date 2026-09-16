@@ -270,3 +270,98 @@ export const pairToolCalls = records => {
   });
 };
 harden(pairToolCalls);
+
+/**
+ * Render records as the conversation they are, for a CLI that cannot be
+ * handed a conversation any other way.
+ *
+ * A conversation is always restored — there is no length at which the stack
+ * declines to hand a session its own history — so nothing here truncates or
+ * refuses. What the app-server's input channel cannot carry is a tool call as
+ * a tool call, so one is written as the line it would read as.
+ *
+ * @param {readonly TranscriptRecord[]} records
+ */
+export const renderTranscriptDialogue = records => {
+  const lines = [];
+  /** @type {Map<string, string>} */
+  const calledNames = new Map();
+  for (const record of records) {
+    if (record.kind === 'message') {
+      lines.push(`${record.role}: ${record.content}`);
+    } else if (record.kind === 'tool-call') {
+      calledNames.set(record.id, record.name);
+      lines.push(`assistant called ${record.name}(${record.args})`);
+    } else if (record.kind === 'tool-result') {
+      const name = calledNames.get(record.id) || 'tool';
+      lines.push(`${name} returned: ${record.content}`);
+    } else if (record.kind === 'compaction') {
+      // Everything above this point was replaced by the summary it carries.
+      lines.length = 0;
+      lines.push(record.summary);
+    }
+  }
+  return lines.join('\n');
+};
+harden(renderTranscriptDialogue);
+
+/**
+ * Records as raw Responses API items, for a CLI that takes its history that
+ * way.
+ *
+ * A tool call becomes a `function_call` with its `function_call_output`, so a
+ * restored call is a call rather than a sentence about one. A call the turn
+ * never settled still gets an output saying so: a `function_call` with no
+ * answering output is a history the provider will reject, and an interrupted
+ * turn has to restore as interrupted rather than as a conversation that
+ * cannot load.
+ *
+ * Everything before the last compaction is dropped. That span is history the
+ * model no longer carries, and replaying it would put back the context the
+ * compaction removed.
+ *
+ * @param {readonly TranscriptRecord[]} records
+ */
+export const responsesApiItems = records => {
+  const { active } = splitAtLastCompaction(records);
+  const { pairs } = pairToolCalls(active);
+  const resultFor = new Map(pairs.map(pair => [pair.call, pair.result]));
+  const items = [];
+  for (const record of active) {
+    if (record.kind === 'message') {
+      items.push({
+        type: 'message',
+        role: record.role,
+        content: [
+          {
+            type: record.role === 'user' ? 'input_text' : 'output_text',
+            text: record.content,
+          },
+        ],
+      });
+    } else if (record.kind === 'compaction') {
+      // The summary opens the span it begins, as the assistant's own words.
+      items.push({
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'output_text', text: record.summary }],
+      });
+    } else if (record.kind === 'tool-call') {
+      const result = resultFor.get(record);
+      items.push({
+        type: 'function_call',
+        call_id: record.id,
+        name: record.name,
+        arguments: record.args,
+      });
+      items.push({
+        type: 'function_call_output',
+        call_id: record.id,
+        output: result ? result.content : 'Tool call did not complete.',
+      });
+    }
+    // A `tool-result` was emitted with its call above.
+  }
+  return harden(items);
+};
+harden(responsesApiItems);
