@@ -296,17 +296,24 @@ built-in whose cost is superlinear in input gets a baseline that *scales*, not a
 single pinned value. Known surfaces to seed the roster (several already exercised by
 `scaling_bench.rs` and siblings):
 
-- **named-property insertion** into a growing object (`o['k'+i]=i`), currently
-  **quadratic in both computrons and wall-clock time** (`scaling_bench.rs` gates it on
-  the metered cost, whose quadratic growth tracks the quadratic construction time).
-  Because its computron cost and its CPU time share the same `n^2` class, this load is
-  **faithfully metered** and is *not* an F4 known-divergent case: gate 3's
-  time-class-equals-computron-class check holds for it, and its baseline is a plain
-  `f(n)=n^2` (not `known_divergent`). This is deliberately distinct from the **for..in
-  traversal** over the *same* `o['k'+i]=i` object below, which is the F4 case (linear
-  computrons, quadratic time). The gate *locks the `n^2` class* so the insertion cost
-  cannot silently worsen; if the underlying O(n^2) construction is ever optimized to
-  linear, that class change is a deliberate re-record.
+- **named-property insertion** into a growing object (`o['k'+i]=i`): its *wall-clock
+  time* is currently **quadratic** but its *metered computrons are linear*: this is an
+  F4 known-divergent case, not a faithfully-metered `n^2` load. Each insertion routes
+  through `collection_find`'s un-metered linear `position` scan (F4, `interp.rs`
+  `collection_find`), so the hidden O(n) work per insert makes total time O(n^2) while
+  the meter charges O(1) per insert (linear total computrons). The F4 review measures
+  this directly: the `for-in` load, whose construction phase *is* this insertion,
+  records `computrons linear` at n=2000..16000 while wall time grows quadratically
+  (22.8 to 1274.4 ms). Because gates 1-2 assert on the deterministic **computron**
+  value, this load's computron baseline is therefore `f(n)=n` (the linear class gates
+  1-2 lock, so a computron regression is still caught), and it is seeded
+  `known_divergent` so gate 3 applies its two-part non-regression time bound rather than
+  a class-match that would go red on day one (§ F4 exception). Declaring `f(n)=n^2` here
+  would misdeclare the *computron* growth the deterministic gates measure (the measured
+  per-doubling computron ratio is ~2, not ~4) and red-fail gate 2 on the first run.
+  When the F4 meter defect is fixed so the scan cost is charged, the computrons become
+  quadratic and match the time; that is a deliberate re-record that clears
+  `known_divergent` and re-classes the load to `f(n)=n^2` (§ Deliberate recalibration).
 - **string indexing / iteration** (`charCodeAt`, `for..of` over a string), linear;
   `string_receiver_indexing_is_independent_of_receiver_length` already asserts the
   per-call cost is independent of receiver length, a constant-class baseline.
@@ -544,7 +551,9 @@ The sibling build job `ironhorse-computron-benchmark-baseline-build` executes:
    and the global computrons/second fidelity band;
    wire it into the `benchmarks` job in `ironhorse-full-test262.yml`.
 6. **Seed the roster** (§ polynomial built-ins) plus every load from the step-2 audit;
-   mark the F4 trio (`Map`/`Set` bulk insertion, `for..in`, string `for..of`)
+   mark the F4-divergent loads (`Map`/`Set` bulk insertion, `for..in`, string
+   `for..of`, and named-property insertion `o['k'+i]=i`, the `for..in` load's
+   construction phase, F4-divergent via the same un-metered `collection_find` scan)
    `known_divergent` with a live `divergence_ref` per § F4 exception; record all
    baselines with `--write-baseline` on a controlled host and commit.
 7. **Wire PR CI**: add gates 1-2 to the ordinary Rust test lane (`ci.yml`),
