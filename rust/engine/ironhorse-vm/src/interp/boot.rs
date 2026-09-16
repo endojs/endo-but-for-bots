@@ -2087,9 +2087,20 @@ impl Interp {
     /// object under the program-local id the XS compiler assigned each name
     /// (`typeof harden === "function"`). `lockdown` (transitively freezing the
     /// shared intrinsics, taming Date/Math, the idempotence throw) and
-    /// `mutabilities` (the `fxVerify*` mutable-residue report) are the reported
-    /// scope fold of this child — a program that references either self-names an
-    /// honest `Halt::NotImplemented` rather than a wrong value (see their dispatch).
+    /// `mutabilities` (the `fxVerify*` mutable-residue report) are NOT bound
+    /// here and have no dispatch at all: `typeof lockdown` answers
+    /// `"undefined"` and calling it is an ordinary
+    /// `ReferenceError: get lockdown: undefined variable`.
+    ///
+    /// An earlier revision of this comment claimed both were a "reported scope
+    /// fold" that self-names an honest `Halt::NotImplemented`, and pointed at
+    /// "their dispatch". Measured 2026-09-16: there is no such dispatch, no
+    /// `NativeMethod` variant for either name, and the loop below inserts only
+    /// two entries. The `ReferenceError` is arguably the better answer of the
+    /// two — an absent global reads as absent — so this is the comment being
+    /// corrected, not the behaviour. A native `lockdown` is scoped in
+    /// `designs/ironhorse-native-lockdown.md`; note that binding one moves
+    /// [`Self::boot_fingerprint`], which hashes this map.
     fn create_hardened_globals(&mut self) {
         for (name, m) in [
             ("harden", NativeMethod::GlobalHarden),
