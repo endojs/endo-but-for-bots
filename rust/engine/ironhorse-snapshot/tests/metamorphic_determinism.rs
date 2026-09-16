@@ -400,8 +400,13 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
             // platform arm above and leaves this one behind therefore looks
             // green locally and turns ci.yml:842 red. Move both arms
             // together, and run the golden test under BOTH providers.
-            // The digest below is the `findLast`/`findLastIndex` one.
-            "e6f05396fd7f352cf603b672caa40c1ad8f3dad8b97420c4b19988700fe9adb6"
+            // The digest below is the guest `lockdown()` one, moved with the
+            // platform arm above and measured under this provider rather than
+            // copied from it -- the two arms carry DIFFERENT digests, because
+            // `derive_boot_fingerprint` folds `MATH_PROVIDER` in only when
+            // `deterministic-math` is on, and the final blob (unlike the
+            // markers above) is not signature-normalized.
+            "57bd9e37fdf1fcd1abfb2d9c4e1ebf74a26175b3df475d507c2c0be75fa6a5b6"
         },
         "canonical final blob hash"
     );
@@ -650,8 +655,10 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
             // platform arm above and leaves this one behind therefore looks
             // green locally and turns ci.yml:842 red. Move both arms
             // together, and run the golden test under BOTH providers.
-            // The digest below is the `findLast`/`findLastIndex` one.
-            "5b0e98e36dddc7e2408adefb80bdffe552979034deb34a534b96e4a0bb257361"
+            // The digest below is the guest `lockdown()` one, measured under
+            // this provider rather than copied from the platform arm, for the
+            // reason given on the blob's else-arm above.
+            "f1ae92411727b988d0ab767f9e838e51eac60ce1a95921d297e0bc1465c7e6a6"
         },
         "epoch-3 seal chain"
     );
