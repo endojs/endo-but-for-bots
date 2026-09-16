@@ -1530,11 +1530,25 @@ What the journal shows: on revival, Claude and OpenCode mount their 9P
 workspaces, Codex mounts nothing, and Codex's volume takes repeated quota and
 stat probes at that same moment — `ensure` running during revival. The lease
 error arrives when the first foreground turn provisions the workspace again.
-The shape that fits is a revived session holding its own lease and a turn
-that provisions a second time instead of reusing the runtime this design says
-Codex retains across turns. Recovery cannot help there: the lease is this
-incarnation's, and refusing to recover a live local lease is the guard
-working.
+
+Three explanations have been tried against the deployment and all three are
+wrong, which is worth recording so the next attempt does not repeat them:
+
+- **Not capacity contention.** Reproduced with every other session deleted
+  and zero live containers.
+- **Not the half-wired recovery** of item 7. That gap was real and both entry
+  points now recover; the error is unchanged.
+- **Not a lease this process holds.** `ensure` now admits a reopen by the
+  holder — verified by a test that fails without the change — and the error
+  is still unchanged.
+
+By elimination the lease is a dead incarnation's *and* `recoverLease` is not
+reaching it, which means the failing path does not run through the
+provisioner `hosted-subscription.js` wraps, or does not run through
+`recoverOnce` before `ensure`. That is where to look next, and it wants
+instrumentation on the provisioning path rather than another reading of it:
+every one of the three attempts above was a plausible reading that the
+deployment then refused.
 
 This blocks verifying Codex's `thread/inject_items` restoration at all — the
 session cannot open, so the restoration path is never reached. Claude and
