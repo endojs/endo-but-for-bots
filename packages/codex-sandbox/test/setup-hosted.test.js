@@ -390,3 +390,46 @@ test.serial('public internet and diagnostics are opt-in', async t => {
   t.true(config.publicInternet);
   t.true(config.diagnostics);
 });
+
+test.serial('a rerun retains the backend instead of re-minting it', async t => {
+  // The caplet constructs the provider listener, which takes an exclusive lock
+  // keyed by the owner label, so minting a replacement beside the live one
+  // fails with "Provider runtime owner is already active" — which aborted
+  // setup on the second daemon start, before the Floot binding.
+  await baseEnv(t);
+  const first = makeFakeHost();
+  await main(first.host, { exec: noExec });
+  const minted = first.mints.find(mint => mint.specifier === backendSpecifier);
+  const configText = minted.options.env.CODEX_HOST_CONFIG;
+
+  const second = makeFakeHost({ backendConfig: JSON.parse(configText) });
+  await main(second.host, { exec: noExec });
+  t.false(second.mints.some(mint => mint.specifier === backendSpecifier));
+  t.deepEqual(second.stored, []);
+  // Floot is still re-bound, so a profile that lost the name recovers.
+  t.true(
+    second.copies.some(
+      ({ to }) =>
+        key(...to) === key('floot', 'controller-profile', 'codex-backend'),
+    ),
+  );
+});
+
+test.serial(
+  'a changed configuration is refused, not applied beside the live one',
+  async t => {
+    await baseEnv(t);
+    const first = makeFakeHost();
+    await main(first.host, { exec: noExec });
+    const configText = first.mints.find(
+      mint => mint.specifier === backendSpecifier,
+    ).options.env.CODEX_HOST_CONFIG;
+
+    const changed = makeFakeHost({ backendConfig: JSON.parse(configText) });
+    withEnv(t, { ENDO_CODEX_MAX_SESSIONS: '3' });
+    await t.throwsAsync(main(changed.host, { exec: noExec }), {
+      message: /configuration changed.*retire/s,
+    });
+    t.false(changed.mints.some(mint => mint.specifier === backendSpecifier));
+  },
+);

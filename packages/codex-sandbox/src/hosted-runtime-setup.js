@@ -112,7 +112,13 @@ export const readBackend = async host => {
     'backend',
     backendSpecifier,
   );
-  return harden({ identifier, config: readCodexHostConfigEnv(env) });
+  return harden({
+    identifier,
+    config: readCodexHostConfigEnv(env),
+    // The document verbatim, so setup can tell "unchanged" from "equivalent
+    // after parsing" without re-deriving every default.
+    text: env.CODEX_HOST_CONFIG,
+  });
 };
 harden(readBackend);
 

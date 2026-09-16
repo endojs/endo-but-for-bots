@@ -203,12 +203,14 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
   // A previously minted backend pins an account; changing it is a deliberate
   // replacement, not a reconfiguration a restart may perform.
   const backendPath = [SANDBOX_DIR, 'backend'];
-  if (await E(hostAgent).has(...backendPath)) {
-    const existing = await readBackend(hostAgent);
-    existing.config.accountRef === accountRef ||
-      Fail`Codex backend is pinned to account ${q(existing.config.accountRef)}, not ${q(accountRef)}. Replacing the pinned account is a migration: retire the backend deliberately.`;
-    existing.config.ownerId === ownerId ||
-      Fail`Codex backend runs as ${q(existing.config.ownerId)}, not ${q(ownerId)}.`;
+  const existingBackend = (await E(hostAgent).has(...backendPath))
+    ? await readBackend(hostAgent)
+    : undefined;
+  if (existingBackend) {
+    existingBackend.config.accountRef === accountRef ||
+      Fail`Codex backend is pinned to account ${q(existingBackend.config.accountRef)}, not ${q(accountRef)}. Replacing the pinned account is a migration: retire the backend deliberately.`;
+    existingBackend.config.ownerId === ownerId ||
+      Fail`Codex backend runs as ${q(existingBackend.config.ownerId)}, not ${q(ownerId)}.`;
   }
 
   const { imageRef } = await resolvePinnedImageRef(rootfs, exec);
@@ -217,65 +219,90 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
   // both would otherwise mkdir it blind.
   await providePrivateDirectory('ENDO_CODEX_HOST_DIR', config.directory);
 
-  // The backend's powers: a stored record of exactly the three capabilities it
-  // needs. `powersName` takes one name, and a marshalled record is how several
-  // capabilities become one — the minted formula retains the record as its
-  // powers dependency, so the temporary name is not what keeps it alive.
   const [sandbox, stateProvider] = await Promise.all([
     E(hostAgent).lookup([SANDBOX_DIR, 'native-sandbox']),
     E(hostAgent).lookup([SANDBOX_DIR, 'state-provider']),
   ]);
   const powersName = 'codex.backend-powers';
   const backendNextPath = [SANDBOX_DIR, 'backend-next'];
+  const configText = JSON.stringify({
+    accountRef: config.accountRef,
+    directory: config.directory,
+    filesystem: config.filesystem,
+    flockPath: config.flockPath,
+    imageRef: config.imageRef,
+    listenerImageRef: config.listenerImageRef,
+    maxSessions: config.maxSessions,
+    models: config.models,
+    ownerId: config.ownerId,
+    projectIds: config.projectIds,
+    quotaCommand: config.quotaCommand,
+    secretPath: config.secretPath,
+    stateBytes: `${config.volumeLimits.stateBytes}`,
+    sudoPath: config.sudoPath,
+    volumeRoot: config.volumeRoot,
+    workspaceBytes: `${config.volumeLimits.workspaceBytes}`,
+    ...(config.diagnostics ? { diagnostics: true } : {}),
+    ...(config.publicInternet ? { publicInternet: true } : {}),
+  });
+
+  // Unlike Claude's and OpenCode's, this caplet is not a disposable
+  // release-pinned shell: it constructs the provider listener runtime, which
+  // takes an exclusive lock under `<hostDir>/listener` keyed by the owner
+  // label. Minting a replacement while the live one still holds that lock
+  // fails with `Provider runtime owner is already active` — which is what a
+  // second daemon start did, leaving `backend-next` bound and setup aborted
+  // before the Floot binding. Its module specifier already resolves through
+  // `<stateDir>/current`, so a retained backend runs the deployed code on its
+  // next revival; only its recorded configuration is frozen. Splitting the
+  // listener into a retained `broker-service`, as the other two adapters have,
+  // is what would make this caplet re-mintable.
+  // A failed mint leaves this bound — the construction that refused is what
+  // aborted the run — and nothing else ever reads it, so clear it on every
+  // run rather than only on the path that creates it.
   if (await E(hostAgent).has(...backendNextPath)) {
     await E(hostAgent).remove(...backendNextPath);
   }
-  if (await E(hostAgent).has(powersName)) {
-    await E(hostAgent).remove(powersName);
-  }
-  await E(hostAgent).storeValue(
-    harden({ credential, sandbox, stateProvider }),
-    powersName,
-  );
-  try {
-    // Mint the replacement under a temporary name *before* touching the live
-    // one: if the mint fails, the existing backend — and Floot's binding to it
-    // — keeps working.
-    await E(hostAgent).makeUnconfined('@main', backendSpecifier, {
+  if (existingBackend && existingBackend.text === configText) {
+    console.log(
+      'Retaining the Codex hosted backend with its persisted configuration.',
+    );
+  } else {
+    if (existingBackend) {
+      throw Fail`Codex backend configuration changed. This caplet holds the provider listener's exclusive lock, so a replacement cannot be minted beside it: retire ${q(backendPath.join('/'))} deliberately, then rerun setup.`;
+    }
+    if (await E(hostAgent).has(powersName)) {
+      await E(hostAgent).remove(powersName);
+    }
+    // The backend's powers: a stored record of exactly the three capabilities
+    // it needs. `powersName` takes one name, and a marshalled record is how
+    // several capabilities become one — the minted formula retains the record
+    // as its powers dependency, so the temporary name is not what keeps it
+    // alive.
+    await E(hostAgent).storeValue(
+      harden({ credential, sandbox, stateProvider }),
       powersName,
-      resultName: backendNextPath,
-      env: harden({
-        CODEX_HOST_CONFIG: JSON.stringify({
-          accountRef: config.accountRef,
-          directory: config.directory,
-          filesystem: config.filesystem,
-          flockPath: config.flockPath,
-          imageRef: config.imageRef,
-          listenerImageRef: config.listenerImageRef,
-          maxSessions: config.maxSessions,
-          models: config.models,
-          ownerId: config.ownerId,
-          projectIds: config.projectIds,
-          quotaCommand: config.quotaCommand,
-          secretPath: config.secretPath,
-          stateBytes: `${config.volumeLimits.stateBytes}`,
-          sudoPath: config.sudoPath,
-          volumeRoot: config.volumeRoot,
-          workspaceBytes: `${config.volumeLimits.workspaceBytes}`,
-          ...(config.diagnostics ? { diagnostics: true } : {}),
-          ...(config.publicInternet ? { publicInternet: true } : {}),
-        }),
-      }),
-    });
-  } finally {
-    await E(hostAgent).remove(powersName);
+    );
+    try {
+      // Mint under a temporary name *before* touching the live one: if the
+      // mint fails, Floot's existing binding keeps working.
+      await E(hostAgent).makeUnconfined('@main', backendSpecifier, {
+        powersName,
+        resultName: backendNextPath,
+        env: harden({ CODEX_HOST_CONFIG: configText }),
+      });
+    } finally {
+      await E(hostAgent).remove(powersName);
+    }
+    if (await E(hostAgent).has(...backendPath)) {
+      await E(hostAgent).remove(...backendPath);
+    }
+    await E(hostAgent).copy(backendNextPath, backendPath);
+    await E(hostAgent).remove(...backendNextPath);
+    console.log(
+      `Minted the Codex hosted backend at "${backendPath.join('/')}".`,
+    );
   }
-  if (await E(hostAgent).has(...backendPath)) {
-    await E(hostAgent).remove(...backendPath);
-  }
-  await E(hostAgent).copy(backendNextPath, backendPath);
-  await E(hostAgent).remove(...backendNextPath);
-  console.log(`Minted the Codex hosted backend at "${backendPath.join('/')}".`);
 
   const flootDir = env.ENDO_FLOOT_DIR || env.FLOOT_DIR || 'floot';
   if (await E(hostAgent).has(flootDir, 'controller-profile')) {
