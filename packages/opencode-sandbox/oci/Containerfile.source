@@ -31,6 +31,15 @@ RUN git clone --filter=blob:none --branch "${OPENCODE_REF}" "${OPENCODE_REPO}" .
   && if [ -n "${OPENCODE_COMMIT}" ]; then git checkout "${OPENCODE_COMMIT}"; fi \
   && git rev-parse HEAD
 
+# Changes this deployment needs that are not upstream yet. `git apply` without
+# `--3way` on purpose: a patch that no longer applies to the pinned commit
+# fails the build rather than being merged by guesswork into a CLI that then
+# behaves in some third way.
+COPY patches/ /patches/
+RUN for patch in /patches/*.patch; do \
+      echo "applying $(basename "${patch}")" && git apply --verbose "${patch}"; \
+    done
+
 # --frozen-lockfile keeps the checked-in bun.lock authoritative. The build
 # also embeds a models.dev snapshot fetched at build time; pinning that fetch
 # is an open reproducibility item.

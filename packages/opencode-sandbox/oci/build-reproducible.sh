@@ -51,12 +51,15 @@ digest() {
 }
 
 if [ "$SOURCE" = 1 ]; then
-  # Minimal context: Containerfile.source plus the bridge. The CLI itself is
-  # cloned inside the build stage from OPENCODE_REPO/OPENCODE_COMMIT.
+  # Minimal context: Containerfile.source, the fork patches, and the bridge.
+  # The CLI itself is cloned inside the build stage from
+  # OPENCODE_REPO/OPENCODE_COMMIT and patched there; see patches/README.md.
   CONTEXT=$(mktemp -d)
   trap 'rm -rf "$CONTEXT"' EXIT
   trap 'exit 130' INT TERM
   cp "$HERE/Containerfile.source" "$CONTEXT/Containerfile.source"
+  mkdir -p "$CONTEXT/patches"
+  cp "$HERE"/patches/*.patch "$CONTEXT/patches/"
   cp "$HERE/../src/opencode-bridge.mjs" "$CONTEXT/opencode-bridge.mjs"
   "$ENGINE" build --platform "$PLATFORM" --layers="$LAYERS" \
     --build-arg "OPENCODE_REPO=$OPENCODE_REPO" \
