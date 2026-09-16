@@ -133,12 +133,19 @@ export const PORTABLE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 const INNER_PATH_PATTERN = /^(\/[A-Za-z0-9][A-Za-z0-9_.-]*)+$/;
 
 /**
- * Where a runtime attach may land: strictly under `/mnt/`, so it can
- * never shadow a role the profile fixes elsewhere in the table. The
- * segment shape is `INNER_PATH_PATTERN`'s, which is also what rejects
- * `..`.
+ * Where a runtime attach may land: any absolute, normal, non-traversing
+ * destination — `INNER_PATH_PATTERN`'s shape, which is also what rejects `..`.
+ *
+ * This was once strictly `/mnt/`, "so it can never shadow a role the profile
+ * fixes elsewhere in the table". That was a proxy for the property, and it held
+ * only because no profile happened to fix a role under `/mnt/`. It is replaced
+ * by the property itself: `assertSlicePolicyRequest` refuses a table whose
+ * destinations nest, whatever their kinds. That is strictly stronger — the
+ * prefix rule never stopped one attach nesting inside another — and it is what
+ * lets a fixed role be capability-backed, which is how a workspace served over
+ * 9P becomes attestable rather than an unverified host bind.
  */
-const ATTACH_DESTINATION_PATTERN = /^\/mnt(\/[A-Za-z0-9][A-Za-z0-9_.-]*)+$/;
+const ATTACH_DESTINATION_PATTERN = INNER_PATH_PATTERN;
 
 /** The filesystem type a bind must carry to be an attach and not host data. */
 const ATTACH_FSTYPE = '9p';
@@ -304,7 +311,7 @@ const assertPolicyMount = candidate => {
       !ATTACH_DESTINATION_PATTERN.test(destination)
     ) {
       throw makeError(
-        X`slice policy attach ${q(role)} needs an absolute normal destination under /mnt/; got ${q(destination)}`,
+        X`slice policy attach ${q(role)} needs an absolute normal destination; got ${q(destination)}`,
       );
     }
     // The host side of the bind. The same bounded shape as a destination:
@@ -505,6 +512,22 @@ export const assertSlicePolicyRequest = request => {
       throw makeError(
         X`slice policy mount destination ${q(mount.destination)} is duplicated`,
       );
+    }
+    // Nor may one destination sit inside another. Both would be declared and
+    // both attested, but the attested table has no ordering, so it could not
+    // say which projection the slice actually sees at the shadowed path — a
+    // record that cannot describe the result. This is the rule the `/mnt/`
+    // prefix on attach destinations used to approximate; unlike the prefix it
+    // also covers two attaches, and it holds for every kind.
+    for (const taken of destinations) {
+      if (
+        mount.destination.startsWith(`${taken}/`) ||
+        taken.startsWith(`${mount.destination}/`)
+      ) {
+        throw makeError(
+          X`slice policy mount destination ${q(mount.destination)} nests with ${q(taken)}`,
+        );
+      }
     }
     if (mount.destination === SHM_DESTINATION) {
       throw makeError(

@@ -1132,7 +1132,7 @@ const makeAttachState = ({
         }),
   });
 
-test('an attach is validated as a bounded /mnt/ bind with a declared mode', t => {
+test('an attach is validated as a bounded bind with a declared mode', t => {
   const policy = assertSlicePolicyRequest(makeAttachRequest());
   t.deepEqual(policy.mounts.at(-1), ATTACH);
   // An attach is not host storage, so it adds nothing to the writable
@@ -1142,15 +1142,9 @@ test('an attach is validated as a bounded /mnt/ bind with a declared mode', t =>
   /** @type {[string, Record<string, unknown>, RegExp][]} */
   const rejected = [
     [
-      'a destination outside /mnt/',
-      { destination: '/workspace' },
-      /under \/mnt\//,
-    ],
-    ['/mnt itself', { destination: '/mnt' }, /under \/mnt\//],
-    [
       'a traversing destination',
       { destination: '/mnt/../etc' },
-      /under \/mnt\//,
+      /absolute normal destination/,
     ],
     ['a relative source', { source: 'claude-attach-a1' }, /host mountpoint/],
     ['a source with a separator', { source: '/host/a,b' }, /host mountpoint/],
@@ -1164,6 +1158,42 @@ test('an attach is validated as a bounded /mnt/ bind with a declared mode', t =>
       label,
     );
   }
+  // A capability-backed *fixed* role is the point of dropping the `/mnt/`
+  // prefix: a workspace served over 9P is then attestable rather than an
+  // unverified host bind. The old rule refused this destination outright.
+  // The attach replaces the workspace volume rather than joining it — two
+  // mounts at one destination is the nesting the table refuses below.
+  const base = makeRequest();
+  const attachedWorkspace = assertSlicePolicyRequest(
+    makeRequest({
+      mounts: harden([
+        ...base.mounts.filter(mount => mount.role !== 'workspace'),
+        harden({ ...ATTACH, role: 'workspace', destination: '/workspace' }),
+      ]),
+      // An attach is capability-backed storage the table does not bound, so
+      // the workspace volume's ceiling leaves with it. Declaring the old total
+      // would be attesting a number nothing enforces, which the sum check
+      // below refuses — that refusal is the reason this has to be restated.
+      resources: harden({
+        ...base.resources,
+        writableBytes: base.resources.writableBytes - 8n * GIB,
+      }),
+    }),
+  );
+  t.is(attachedWorkspace.mounts.at(-1)?.destination, '/workspace');
+  t.throws(
+    () =>
+      assertSlicePolicyRequest(
+        makeRequest({
+          mounts: harden([
+            ...base.mounts.filter(mount => mount.role !== 'workspace'),
+            harden({ ...ATTACH, role: 'workspace', destination: '/workspace' }),
+          ]),
+        }),
+      ),
+    { message: /does not equal what its writable paths add up to/ },
+  );
+
   // The same host mountpoint bound twice is a duplicate, like a volume.
   t.throws(
     () =>
@@ -1177,6 +1207,49 @@ test('an attach is validated as a bounded /mnt/ bind with a declared mode', t =>
         }),
       ),
     { message: /mounted twice/ },
+  );
+
+  // What the `/mnt/` prefix stood in for, now checked directly — and unlike the
+  // prefix, it holds between two attaches as well as between an attach and a
+  // fixed role. An ordered table could say which projection wins at the
+  // shadowed path; an attested set cannot, so it refuses to describe one.
+  for (const [outer, inner] of [
+    ['/mnt/project', '/mnt/project/src'],
+    ['/srv', '/srv/pkg'],
+  ]) {
+    t.throws(
+      () =>
+        assertSlicePolicyRequest(
+          makeRequest({
+            mounts: harden([
+              ...makeRequest().mounts,
+              harden({ ...ATTACH, destination: outer }),
+              harden({
+                ...ATTACH,
+                role: 'attach-a2',
+                source: '/host/mounts/claude-attach-a2',
+                destination: inner,
+              }),
+            ]),
+          }),
+        ),
+      { message: /nests with/ },
+      `${inner} inside ${outer}`,
+    );
+  }
+
+  // A fixed role is not special here: an attach may not swallow one either.
+  t.throws(
+    () =>
+      assertSlicePolicyRequest(
+        makeRequest({
+          mounts: harden([
+            ...makeRequest().mounts,
+            harden({ ...ATTACH, destination: '/workspace/vendor' }),
+          ]),
+        }),
+      ),
+    { message: /nests with/ },
   );
 });
 

@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-09-12 |
-| **Updated** | 2026-09-14 |
+| **Updated** | 2026-09-16 |
 | **Author** | kumavis (prompted) |
 | **Status** | In Progress |
 | **Source** | Review of PR #1248 and subsequent simplicity and authority-lifetime discussion |
@@ -892,6 +892,66 @@ XFS project quotas may implement deployment storage budgets, but XFS helpers,
 project-ID allocation, and recovery belong below the adapter interface.
 Never remove an existing storage bound before its replacement is enforced.
 
+### Slice mount policy — decided 2026-09-16
+
+The three adapters do not merely differ in mount *policy*; they call different
+sandbox APIs, and that is the divergence Phase 3 has to end.
+
+| | Slice construction | Mount declaration | Attestation |
+|---|---|---|---|
+| Claude, OpenCode | `scope.makeResolved({ rootfs, mounts })` | `{hostPath, innerPath, mode}` host binds | none |
+| Codex | `factory.make({ policy: { profile: 'hosted-agent-v1', … } })` | slice-policy table with `volume` / `tmpfs` / `attach` roles | exact table, verified against the kernel's own mount table |
+
+The choice is settled by the runtime-attach feature
+(`designs/runtime-container-fs-mount.md`). A session attaching a capability it
+holds under a container path is only meaningful if the host can prove the bind
+is what it claims; Codex can, and Claude and OpenCode refuse the feature
+outright — *"no slice attestation for container mounts; refusing the session
+instead of claiming binds it does not have"*. Converging on `makeResolved`
+would delete a shipped feature and the proof it rests on. **So the common path
+is Codex's attested slice policy, and Claude and OpenCode move onto it.**
+
+Four consequences, in the order they land:
+
+1. **`@endo/sandbox` admits a capability-backed fixed role.** Today an `attach`
+   destination must sit under `/mnt/`, "so it can never shadow a role the
+   profile fixes elsewhere in the table" — a proxy for a property, resting on
+   the fact that no fixed role happens to live there. Replace it with the
+   property: no mount destination may nest with any other, whatever its kind.
+   That is strictly stronger — it also closes attach-against-attach nesting,
+   which the prefix rule never covered — and it is what lets `/workspace`
+   itself be capability-backed.
+
+2. **The attested policy moves to `@endo/hosted-agent`.** `hosted-agent-v1` is
+   already the profile's name; only its verifier is in the wrong package
+   (`codex-sandbox/src/backend-factory.js`). The adapter supplies its declared
+   fixed roles and its runtime attaches, and the shared verifier checks the
+   attested table is exactly that set.
+
+3. **The workspace becomes an attached role for every adapter:**
+   `{ role: 'workspace', kind: 'attach', source: <9P mountpoint>,
+   destination: '/workspace', mode: 'rw' }`. This is what Claude and OpenCode
+   already do — 9P-mount `workspaceHostPath`, bind it at `/workspace` — so for
+   them it changes nothing but the proof. For Codex it is the fix for the
+   divergence found on 2026-09-16: its slice wrote to a durable volume while
+   Floot's publisher served the session's git worktree, so `publishWorkspace`
+   returned a URL that 404'd on every request unless the model had *also*
+   copied its work through the Endo tools.
+
+4. **Quota-backed volumes become a deployment option, not an adapter
+   difference.** Codex keeps its XFS project-quota volume for native state
+   (`{role: '<cli>-state', kind: 'volume'}`); the workspace volume is no longer
+   allocated, which also halves Codex's project-ID consumption — one id per
+   session rather than two, against a range that is a host-lifetime budget
+   (`CODEX-SANDBOX-MIGRATION-PLAN.md`).
+
+What the workspace loses in this move is the XFS quota on guest-written
+workspace bytes; what it gains is that the bytes are in the tree the session's
+file tools, the guest's workspace capability, and the publisher all read. The
+state volume keeps its quota, so the unbounded surface is the same one Claude
+and OpenCode already have, and `writableBytes` must stop claiming a workspace
+ceiling it no longer enforces rather than attesting a number nothing bounds.
+
 ## Protection and limit justification
 
 For every protection ask: **what resource or authority does this protect, from
@@ -1058,6 +1118,12 @@ checks process and resource stability.
 
 ### Phase 3: shared runtime, network, and storage
 
+Converge the slice mount path onto the attested `hosted-agent-v1` policy — see
+*Slice mount policy* above — in four landable steps: the `@endo/sandbox`
+non-nesting rule that lets a fixed role be capability-backed; the verifier's
+move into `@endo/hosted-agent`; the workspace as an attached role; then Claude
+and OpenCode off `makeResolved`, which is also what enables runtime attaches for
+them.
 Converge Podman and listener launch paths, runtime ownership, and cleanup.
 Move generic public egress to the shared service.
 Make OpenCode's public mode retain brokered inference and enforce the advertised
