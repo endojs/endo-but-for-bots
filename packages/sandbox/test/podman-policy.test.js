@@ -81,6 +81,7 @@ const POLICY = harden({
       sizeBytes: 1n * GIB,
     }),
   ]),
+  bindRoots: harden([]),
   attestationArgv: harden(['/bin/sleep', 'infinity']),
 });
 

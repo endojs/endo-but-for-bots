@@ -107,6 +107,23 @@ const SlicePolicyMountShape = M.or(
     destination: M.string(),
     sizeBytes: M.nat(),
   }),
+  // A capability-backed projection, and a host bind that claims to be
+  // nothing more. Neither carries a `sizeBytes`: the bytes are bounded where
+  // they live, not by this slice.
+  M.splitRecord({
+    role: M.string(),
+    kind: 'attach',
+    source: M.string(),
+    destination: M.string(),
+    mode: M.or('ro', 'rw'),
+  }),
+  M.splitRecord({
+    role: M.string(),
+    kind: 'bind',
+    source: M.string(),
+    destination: M.string(),
+    mode: M.or('ro', 'rw'),
+  }),
 );
 
 const SlicePolicyRequestShape = M.splitRecord({
@@ -129,6 +146,7 @@ const SlicePolicyRequestShape = M.splitRecord({
     writableBytes: M.nat(),
   }),
   mounts: M.arrayOf(SlicePolicyMountShape),
+  bindRoots: M.arrayOf(M.string()),
   attestationArgv: M.arrayOf(M.string()),
 });
 

@@ -287,6 +287,23 @@ export type SlicePolicyMount =
       /** Absolute, normal path under `/mnt/`. */
       destination: string;
       mode: 'ro' | 'rw';
+    }
+  | {
+      role: string;
+      /**
+       * A host bind, attested as exactly that and nothing more: this is a
+       * bind of that host path, at that destination, in that mode, with
+       * `nosuid` and `nodev`. It makes no projection claim, which is what
+       * keeps `attach` worth having. The source must lie under one of the
+       * request's declared `bindRoots`, so a table cannot say "and also
+       * this" for an arbitrary host path and have the attestation agree.
+       */
+      kind: 'bind';
+      /** Absolute, normal host path, under a declared bind root. */
+      source: string;
+      /** Absolute, normal destination path. */
+      destination: string;
+      mode: 'ro' | 'rw';
     };
 
 /**

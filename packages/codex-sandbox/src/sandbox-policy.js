@@ -261,6 +261,9 @@ export const makeAttestedCodexSliceFactory = powers => {
           brokerSidecar,
           resources,
           mounts,
+          // Codex binds no host paths: its workspace is an attested 9P
+          // attach and its state a quota-backed volume.
+          bindRoots: [],
           attestationArgv: ['/bin/sleep', 'infinity'],
         },
       }),

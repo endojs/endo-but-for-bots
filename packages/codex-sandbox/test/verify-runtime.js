@@ -151,6 +151,7 @@ try {
           destination,
           sizeBytes: size * mib,
         })),
+        bindRoots: [],
         attestationArgv: ['/bin/sleep', '600'],
       },
     }),
