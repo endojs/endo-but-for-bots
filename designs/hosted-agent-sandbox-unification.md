@@ -1479,14 +1479,22 @@ landed:
    provider retires its workspace volume in place rather than reusing its
    project ID. For Claude and OpenCode the same move is step 4's work, since
    they do not yet declare an attested table at all.
-4. **Largely landed; one step left.** `@endo/sandbox` gained the `bind` kind
-   (option 1 below, which the cost check made the cheaper answer), Claude and
-   OpenCode declare their fixed mount tables and bind the shared verifier, and
-   a profile conformance suite checks that all three run the same contract and
-   differ only in that table. What remains is the controllers themselves:
-   `makeResolved` gives way to the policy path, which needs `make` exposed on
-   the native scope and a live slice to judge, since an attestation is only
-   worth what the kernel says.
+4. **Landed.** `@endo/sandbox` gained the `bind` kind (option 1 below, which
+   the cost check made the cheaper answer) and offers `make` on a native
+   scope; Claude and OpenCode declare their fixed mount tables, bind the
+   shared verifier, and build their slices through the policy path. All three
+   adapters now call one API, declare tables in one vocabulary, and are
+   checked by one verifier; `makeResolved` has no hosted caller left.
+
+   Two consequences to carry into the deploy. The namespace now comes from the
+   attested sidecar rather than a container joined by name, and the operator's
+   per-adapter `nativeProfile` no longer selects a slice's limits — all three
+   run `HOSTED_SLICE_RESOURCES`, which is what makes the contract comparable
+   rather than three contracts sharing a name. The recorded profile is still
+   parsed and still validated; it simply no longer reaches the runtime.
+
+   What no unit test can settle is whether the attestation passes against a
+   live kernel. That is the deploy's job, and the first thing to check.
 Converge Podman and listener launch paths, runtime ownership, and cleanup.
 Move generic public egress to the shared service.
 Make OpenCode's public mode retain brokered inference and enforce the advertised

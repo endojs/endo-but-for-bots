@@ -487,6 +487,7 @@ test('native scopes share one allocator and retain only their own cleanup', asyn
   // and returns a slice whose table is verified against the anchor's own.
   t.deepEqual(
     /** @type {string[]} */ (
+      // eslint-disable-next-line no-underscore-dangle -- exo introspection
       await E(/** @type {any} */ (a)).__getMethodNames__()
     )
       .filter(name => !name.startsWith('__'))
