@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process';
 import { EventEmitter, once } from 'node:events';
 import {
   chmod,
+  lstat,
   mkdir,
   mkdtemp,
   readFile,
@@ -217,7 +218,7 @@ test('post-listen permission failure retains native listener until close retry s
   await t.throwsAsync(() => stat(server.socketPath), { code: 'ENOENT' });
 });
 
-test('existing socket paths are refused without taking deletion authority', async t => {
+test('a non-socket at the socket path is refused without taking deletion authority', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'opencode-mcp-collision-'));
   t.teardown(() => rm(directory, { recursive: true, force: true }));
   const socketPath = join(directory, 'mcp.sock');
@@ -227,7 +228,42 @@ test('existing socket paths are refused without taking deletion authority', asyn
     bridge: { handleMessage: async () => undefined },
   });
   t.teardown(() => server.close());
-  await t.throwsAsync(server.start(), { message: /already exists/ });
+  await t.throwsAsync(server.start(), { message: /not a socket/ });
   await server.close();
   t.is(await readFile(socketPath, 'utf8'), 'prior owner');
+});
+
+test('a socket left by a previous incarnation is reclaimed, not refused', async t => {
+  // The daemon restarts and the bound path outlives the process that bound
+  // it. Refusing it would make the session unable to start ever again —
+  // observed on the deployment as "MCP socket path already exists" on the
+  // first turn after a restart, which is the failure mode continuity across
+  // incarnations exists to prevent.
+  const directory = await mkdtemp(join(tmpdir(), 'opencode-mcp-stale-'));
+  t.teardown(() => rm(directory, { recursive: true, force: true }));
+  const socketPath = join(directory, 'mcp.sock');
+
+  // Bind in a child and kill it: SIGKILL runs no cleanup, so the socket file
+  // outlives its listener exactly as it does when the daemon is restarted.
+  const child = spawn(
+    process.execPath,
+    [
+      '-e',
+      `require('node:net').createServer().listen(${JSON.stringify(socketPath)}, () => console.log('bound'));`,
+    ],
+    { stdio: ['ignore', 'pipe', 'inherit'] },
+  );
+  t.teardown(() => child.kill('SIGKILL'));
+  await new Promise(resolve => child.stdout.once('data', resolve));
+  child.kill('SIGKILL');
+  await once(child, 'exit');
+  t.true((await lstat(socketPath)).isSocket());
+
+  const next = makeMcpSocketServer({
+    socketDir: directory,
+    bridge: { handleMessage: async () => undefined },
+  });
+  t.teardown(() => next.close());
+  await t.notThrowsAsync(next.start());
+  t.true((await lstat(socketPath)).isSocket());
 });
