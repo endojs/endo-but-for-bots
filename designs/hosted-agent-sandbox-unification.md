@@ -1306,14 +1306,31 @@ So the import emits events, not rows:
   (`server/routes/instance/httpapi/groups/session.ts`) with its handler in
   `handlers/session.ts`, taking a payload decoded by the schemas the server
   already uses.
-- The handler appends to the event log through `EventV2`, replaying the
-  vocabulary the projector already understands:
-  `SessionEvent.Prompted` for a user turn, `Text.Started`/`Text.Ended` for
-  assistant text, `Tool.Called` then `Tool.Success` or `Tool.Failed` for a tool
-  call and its result, and the compaction event for the boundary. Each becomes
-  a message through the projector that already exists, with the seq the log
-  assigns — so nothing here reconstructs a schema, and a version that changes
-  those events changes the import with them.
+- The handler appends to the event log through `EventV2`, in the vocabulary
+  the projector already understands: `Text.Started`/`Text.Ended` for assistant
+  text, `Tool.Called` then `Tool.Success` or `Tool.Failed` for a call and its
+  result, and the compaction event for the boundary. Each becomes a message
+  through the projector that already exists, with the seq the log assigns — so
+  nothing reconstructs a schema, and a version that changes those events
+  changes the import with them.
+
+**And here is the design question that makes this opencode's to answer, not
+ours.** These events are *operational*, not merely descriptive.
+`SessionEvent.Prompted` is published by `SessionInput.publish`, the
+prompt-admission path, and is coupled to `session_input` rows carrying
+`admitted_seq` and `promoted_seq` — the machinery that turns a queued prompt
+into a turn the runner executes. Replaying it to reconstruct a user message
+would either re-enter that lifecycle, so an imported conversation runs itself
+again, or require fabricating input rows whose sequence numbers agree with a
+log they did not come from.
+
+So an import needs a way to reach the projector without entering the prompt
+lifecycle: either an event kind that is explicitly historical, or a projector
+path reserved for import. Which of those is right is a judgement about
+opencode's event model, and it belongs to whoever owns that model. This design
+can specify the route, the handler, the vocabulary and the refusal condition —
+and does — but it should not pick that answer from outside, because picking it
+wrong yields a session that replays its own history as new work.
 - It refuses a session that already has messages, so an import can only
   establish a conversation and never interleave with one.
 - `Session.Interface` gains the matching method, since the handler reaches the
