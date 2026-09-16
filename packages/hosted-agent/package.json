@@ -49,6 +49,7 @@
     "./hosted-agent-policy.js": "./src/hosted-agent-policy.js",
     "./transcript-records.js": "./src/transcript-records.js",
     "./test/transcript-conformance.js": "./test/transcript-conformance.js",
+    "./test/hosted-profile-conformance.js": "./test/hosted-profile-conformance.js",
     "./current-specifier.js": "./src/current-specifier.js",
     "./managed-credentials.js": "./src/managed-credentials.js",
     "./managed-credentials-module.js": "./src/managed-credentials-module.js",
