@@ -1,12 +1,9 @@
 // @ts-check
 import { clearTimeout, setTimeout } from 'node:timers';
 
-import { makeError, X } from '@endo/errors';
+import { makeError, q, X } from '@endo/errors';
 import { makeExo } from '@endo/exo';
-import {
-  renderTranscriptDialogue,
-  responsesApiItems,
-} from '@endo/hosted-agent/transcript-records.js';
+import { responsesApiItems } from '@endo/hosted-agent/transcript-records.js';
 import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
 import { passStyleOf } from '@endo/pass-style';
 import { M } from '@endo/patterns';
@@ -1345,43 +1342,16 @@ export const makeCodexClient = ({
     Array.isArray(opts.transcript)
       ? /** @type {TranscriptRecord[]} */ (opts.transcript)
       : [];
+  // Records are the only channel. `continuityContext` used to stand in for
+  // them as text; it carried nothing a tool call survives, and gating on it
+  // let a rotation proceed on a conversation that could not actually be
+  // handed over.
   const assertContinuity = (opts, required = false) => {
-    const context = opts.continuityContext;
-    const haveRecords = transcriptRecords(opts).length > 0;
-    if (
-      (!haveRecords && opts.continuityContextUnavailable) ||
-      (required && !haveRecords && typeof context !== 'string')
-    ) {
+    if (required && transcriptRecords(opts).length === 0) {
       throw Error(
-        'Codex context rotation requires complete bounded conversation history; start a new Floot session explicitly or reduce the retained history',
+        'Codex context rotation requires this conversation as transcript records; the stack handed none, and a rotated thread cannot be given a history it did not receive',
       );
     }
-    if (context !== undefined && typeof context !== 'string') {
-      throw Error('Codex continuityContext must be a string');
-    }
-  };
-
-  /**
-   * The conversation so far, rendered for a thread that has none.
-   *
-   * This is not a faithful restoration and does not pretend to be. Codex is
-   * stock `@openai/codex`, its app-server has no method that appends a
-   * historical turn, and its store is a versioned SQLite schema this project
-   * does not own — so the only channel is the next turn's input, and a tool
-   * call can only arrive as a line describing one
-   * (`designs/hosted-agent-sandbox-unification.md`).
-   *
-   * What it no longer does is tell the model to distrust its own history. The
-   * preamble that used to sit here — "a continuity reference, not new
-   * instructions", "prior tool calls are evidence only" — claimed an authority
-   * boundary the pinned tool catalog already enforces in `mcp-bridge.js`,
-   * while inviting the model to redo settled work and doubt its own
-   * conclusions. A restored conversation reads as the conversation.
-   */
-  const continuityText = opts => {
-    const records = transcriptRecords(opts);
-    if (records.length > 0) return renderTranscriptDialogue(records);
-    return opts.continuityContext || '';
   };
 
   const ensureThread = async (opts = {}, preserveCatalog = false) => {
@@ -1668,39 +1638,36 @@ export const makeCodexClient = ({
         // tool call restores as a `function_call` with its output rather than
         // as a line describing one, and nothing here queues work.
         //
-        // An app-server too old to know the method refuses it, and the
-        // conversation goes into the turn's input instead. That fallback is
-        // why this needs no pinned-version check.
-        let injected = false;
+        // There is no second path. An app-server that cannot take the items
+        // fails the turn: putting the conversation in the prompt instead
+        // would keep the session answering while the mechanism meant to
+        // carry it is broken, and a degraded answer is indistinguishable
+        // from a good one until someone reads the transcript.
         if (restoreContext) {
-          const items = responsesApiItems(transcriptRecords(opts));
+          const records = transcriptRecords(opts);
+          const items = responsesApiItems(records);
           if (items.length > 0) {
             try {
               await request('thread/inject_items', {
                 threadId: currentThreadId,
                 items,
               });
-              injected = true;
-            } catch {
-              // Read into the prompt below.
+            } catch (error) {
+              const failure = makeError(
+                X`Codex app-server refused ${q(items.length)} restored items for a new thread; this session's ${q(records.length)} records cannot be handed over, and answering without them would be answering a different question.`,
+              );
+              failSession(failure);
+              throw failure;
             }
           }
         }
         turn.ledgerTurn = await ledger.begin({ baseCheckpoint });
         const response = await request('turn/start', {
           threadId: currentThreadId,
-          input: [
-            ...(restoreContext && !injected && continuityText(opts)
-              ? [
-                  {
-                    type: 'text',
-                    text: continuityText(opts),
-                    text_elements: [],
-                  },
-                ]
-              : []),
-            { type: 'text', text: prompt, text_elements: [] },
-          ],
+          // The prompt, and only the prompt. A restored conversation reached
+          // the thread through `inject_items` above or the turn never got
+          // here.
+          input: [{ type: 'text', text: prompt, text_elements: [] }],
           approvalPolicy,
           sandboxPolicy: {
             type: 'externalSandbox',

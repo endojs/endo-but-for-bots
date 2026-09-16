@@ -219,6 +219,25 @@ test('persisted lease blocks another provider until explicit recovery', async t 
   await second.makeWorkspace(spec);
 });
 
+test('the process holding a lease can reopen the workspace it holds', async t => {
+  // A revived session mounts its workspace and takes the lease; its own next
+  // turn provisions again. On the deployment that second call met the lease
+  // the first had taken and failed with an outstanding durable lease, so a
+  // Codex session that worked in one incarnation could never be reopened in
+  // the next. Recovery is no answer — it refuses a live local lease on
+  // purpose — so reopening by the holder has to be idempotent.
+  const f = fixture();
+  const provider = f.reopen();
+  const spec = { sessionId: 's1' };
+  const workspace = await provider.makeWorkspace(spec);
+  await provider.mountWorkspace(workspace, spec);
+  await t.notThrowsAsync(() => provider.makeWorkspace(spec));
+  // A second *mount* is still refused: one lease at a time is the point.
+  await t.throwsAsync(() => provider.mountWorkspace(workspace, spec), {
+    message: /already leased/,
+  });
+});
+
 test('a persisted lease blocks mountWorkspace too, so both paths must recover', async t => {
   // `mountWorkspace` reaches `ensure` on its own, so a session reopened
   // through it alone hits the dead incarnation's lease exactly as

@@ -58,6 +58,13 @@ promotes slot-machine field access from a private `__get__` delivery to a
 first-class `get` verb and adds distinct `index` / `untag` lanes, the matching
 `HandledPromise` and `E` surfaces, dedicated canonical-CBOR payloads, and
 strict JavaScript/Rust supervisor parity),
+[paseo-meta-harness-report](paseo-meta-harness-report.md) (added 2026-09-17;
+an external reverse-engineering report of Paseo's provider layer, vendored
+verbatim as the citable text behind
+[hosted-agent-sandbox-unification](hosted-agent-sandbox-unification.md)'s
+comparison — Paseo instruments the same three CLIs and makes the opposite bet,
+letting each provider's own store be the durable transcript authority and
+persisting only a handle; not an Endo design, and its paths are Paseo's),
 [hosted-agent-sandbox-unification](hosted-agent-sandbox-unification.md) (added
 2026-09-12; one guest authority domain, session-scoped revocable inference without
 request-count leases or expiry, persistent runtimes, shared services, and an

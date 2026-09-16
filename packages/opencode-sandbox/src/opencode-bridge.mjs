@@ -759,10 +759,13 @@ const main = async () => {
     if (command.op === 'import' && Array.isArray(command.turns)) {
       // Restore a conversation the stack holds into a session that has none.
       // The server records a user turn as a `synthetic` message rather than a
-      // prompt, so nothing here provokes a turn — see the fork patch in
-      // `oci/patches/`. Reported either way: the caller falls back to reading
-      // the conversation into the next prompt when this is unavailable, which
-      // is what an image built before the patch will do.
+      // prompt, so nothing here provokes a turn — the route lives on the fork
+      // ref this image is built from.
+      //
+      // The answer is reported either way and matters either way: there is no
+      // second path any more, so a refusal is how the client learns this
+      // conversation cannot be handed over, and it fails the turn rather than
+      // answering out of an empty context.
       void api(
         `/session/${encodeURIComponent(activeSessionId)}/message/import`,
         {

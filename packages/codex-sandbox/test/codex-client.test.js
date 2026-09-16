@@ -29,27 +29,36 @@ test('catalog rotation restores the conversation once and reconciles the old cat
       },
     },
   });
-  const context = JSON.stringify([
-    { role: 'assistant', text: 'Previously wrote the report.' },
+  const transcript = harden([
+    {
+      kind: 'message',
+      role: 'assistant',
+      content: 'Previously wrote the report.',
+    },
   ]);
-  const reader = await fixture.client.send('continue', {
-    continuityContext: context,
-  });
+  const reader = await fixture.client.send('continue', { transcript });
   const methods = fixture.sent.map(message => message.method);
   t.true(methods.indexOf('thread/resume') < methods.indexOf('thread/revert'));
   t.true(methods.indexOf('thread/revert') < methods.indexOf('thread/start'));
   t.like(saved[0], { threadId: 'thread-saved', toolSetId: 'old-tools' });
   const first = fixture.sent.find(message => message.method === 'turn/start');
   t.is(first.params.threadId, 'thread-new');
-  t.is(first.params.input.length, 2);
-  t.true(first.params.input[0].text.includes(context));
-  // No preamble. The restored conversation reads as the conversation: the
-  // authority claim the old wrapper made is enforced by the session's pinned
-  // tool catalog, and telling a model its own history is evidence it must not
-  // rely on cost real behaviour for nothing.
-  t.false(first.params.input[0].text.includes('do not replay'));
-  t.false(first.params.input[0].text.includes('Historical Floot'));
-  t.is(first.params.input[1].text, 'continue');
+  // The prompt alone: the conversation reached the new thread through
+  // `inject_items`, never through the turn's input.
+  t.deepEqual(first.params.input, [
+    { type: 'text', text: 'continue', text_elements: [] },
+  ]);
+  const inject = fixture.sent.find(
+    message => message.method === 'thread/inject_items',
+  );
+  t.is(inject.params.threadId, 'thread-new');
+  t.true(JSON.stringify(inject.params.items).includes('Previously wrote'));
+  // No preamble, and nowhere for one to live: the turn's input is the prompt
+  // and nothing else. The authority claim the old wrapper made is enforced by
+  // the session's pinned tool catalog, and telling a model its own history is
+  // evidence it must not rely on cost real behaviour for nothing.
+  t.is(first.params.input.length, 1);
+  t.is(first.params.input[0].text, 'continue');
   fixture.push({
     method: 'turn/completed',
     params: {
@@ -60,7 +69,6 @@ test('catalog rotation restores the conversation once and reconciles the old cat
   await drain(reader);
   await fixture.client.acknowledge('turn-2');
   const second = await fixture.client.send('next', {
-    continuityContextUnavailable: 'history exceeds replay limit',
   });
   t.is(
     fixture.sent.filter(message => message.method === 'turn/start').at(-1)
@@ -73,20 +81,16 @@ test('catalog rotation restores the conversation once and reconciles the old cat
 
 test('rotation with missing or invalid history fails before altering the old thread', async t => {
   // A conversation too long to replay is no longer among these: it is
-  // restored. What still fails is history that is absent or not text, which
-  // is a rotation that cannot carry the conversation across at all.
-  for (const opts of [
-    {},
-    { continuityContext: 42 },
-    { continuityContextUnavailable: 'history exceeds replay limit' },
-  ]) {
+  // restored. What still fails is a rotation with no conversation to carry
+  // across at all — there is no text channel left to fall back to.
+  for (const opts of [{}, { transcript: [] }]) {
     const fixture = makeFixture({
       threadId: 'thread-saved',
       clientOptions: { savedToolSetId: 'old-tools', toolSetId: 'new-tools' },
     });
     // eslint-disable-next-line no-await-in-loop
     await t.throwsAsync(() => fixture.client.send('continue', opts), {
-      message: /continuityContext|context rotation/,
+      message: /context rotation requires/,
     });
     t.false(
       fixture.sent.some(message => message.method?.startsWith('thread/')),
@@ -99,9 +103,7 @@ test('normal resumed threads do not replay context or reject unavailable context
     threadId: 'thread-saved',
     clientOptions: { savedToolSetId: 'same', toolSetId: 'same' },
   });
-  const reader = await fixture.client.send('continue', {
-    continuityContextUnavailable: 'history exceeds replay limit',
-  });
+  const reader = await fixture.client.send('continue', {});
   t.deepEqual(
     fixture.sent.find(message => message.method === 'turn/start').params.input,
     [{ type: 'text', text: 'continue', text_elements: [] }],
@@ -118,18 +120,19 @@ test('an empty saved thread restores continuity again after a failed first turn 
     clientOptions: { savedRecovery: { baseTurnId: null } },
   });
   const first = await fixture.client.send('first', {
-    continuityContext: 'completed dialogue',
+    transcript: [{ kind: 'message', role: 'user', content: 'completed dialogue' }],
   });
   await fixture.client.interrupt();
   await drain(first);
   const second = await fixture.client.send('retry', {
-    continuityContext: 'completed dialogue',
+    transcript: [{ kind: 'message', role: 'user', content: 'completed dialogue' }],
   });
   const requests = fixture.sent.filter(
     message => message.method === 'turn/start',
   );
   t.is(requests.length, 2);
-  t.true(requests.every(message => message.params.input.length === 2));
+  // Each turn carries only its prompt; the history went through the import.
+  t.true(requests.every(message => message.params.input.length === 1));
   await fixture.client.interrupt();
   await drain(second);
 });
@@ -153,7 +156,7 @@ test('a committed checkpoint is acknowledged under its original catalog before r
     },
   });
   const reader = await fixture.client.send('continue', {
-    continuityContext: 'completed dialogue',
+    transcript: [{ kind: 'message', role: 'user', content: 'completed dialogue' }],
     acknowledgedCheckpoint: 'turn-1',
   });
   t.false(fixture.sent.some(message => message.method === 'thread/revert'));
@@ -201,13 +204,21 @@ test('a long conversation is restored, not refused', async t => {
     },
   });
   const history = '界'.repeat(100);
-  const reader = await fixture.client.send('continue', {
-    continuityContext: history,
-  });
+  const transcript = harden([
+    { kind: 'message', role: 'user', content: history },
+  ]);
+  const reader = await fixture.client.send('continue', { transcript });
   const start = fixture.sent.find(message => message.method === 'turn/start');
-  // The whole conversation reached the new thread, well past the 500-byte
-  // prompt bound the old check measured it against.
-  t.true(start.params.input[0].text.includes(history));
+  // The prompt stays the prompt; the conversation went through the import,
+  // whole, well past the 500-byte prompt bound the old check measured it
+  // against.
+  t.deepEqual(start.params.input, [
+    { type: 'text', text: 'continue', text_elements: [] },
+  ]);
+  const inject = fixture.sent.find(
+    message => message.method === 'thread/inject_items',
+  );
+  t.true(JSON.stringify(inject.params.items).includes(history));
   fixture.push({
     method: 'turn/completed',
     params: {
@@ -238,20 +249,20 @@ test('replacement revival preserves only its exact old-thread acknowledgement li
     await t.throwsAsync(
       () =>
         fixture.client.send('wrong', {
-          continuityContext: 'history',
+          transcript: [{ kind: 'message', role: 'user', content: 'history' }],
           acknowledgedCheckpoint: 'unrelated',
         }),
       { message: /not awaiting acknowledgement/ },
     );
     // eslint-disable-next-line no-await-in-loop
     const reader = await fixture.client.send('retry', {
-      continuityContext: 'history',
+      transcript: [{ kind: 'message', role: 'user', content: 'history' }],
       acknowledgedCheckpoint: 'old-committed',
     });
     t.is(
       fixture.sent.find(message => message.method === 'turn/start').params.input
         .length,
-      2,
+      1,
     );
     t.true(
       saved.every(
@@ -281,7 +292,7 @@ test('a crash after empty reconciliation retains the durable empty marker and li
   await t.throwsAsync(
     () =>
       fixture.client.send('retry', {
-        continuityContext: 'history',
+        transcript: [{ kind: 'message', role: 'user', content: 'history' }],
         acknowledgedCheckpoint: 'old-committed',
       }),
     { message: /Lost empty reconciliation acknowledgement/ },
@@ -294,13 +305,17 @@ test('a crash after empty reconciliation retains the durable empty marker and li
     clientOptions: { savedRecovery: captured.recovery },
   });
   const reader = await revived.client.send('retry', {
-    continuityContext: 'history',
+    transcript: [{ kind: 'message', role: 'user', content: 'history' }],
     acknowledgedCheckpoint: 'old-committed',
   });
+  // The prompt alone: a restored conversation travels by `inject_items`.
   t.is(
     revived.sent.find(message => message.method === 'turn/start').params.input
       .length,
-    2,
+    1,
+  );
+  t.true(
+    revived.sent.some(message => message.method === 'thread/inject_items'),
   );
   t.false(revived.sent.some(message => message.method === 'thread/turns/list'));
   await revived.client.interrupt();
@@ -339,7 +354,7 @@ test('rotation refuses divergent old checkpoint history without forgetting the m
     },
   });
   await t.throwsAsync(() =>
-    fixture.client.send('continue', { continuityContext: 'prior dialogue' }),
+    fixture.client.send('continue', { transcript: [{ kind: 'message', role: 'user', content: 'prior dialogue' }] }),
   );
   t.false(fixture.sent.some(message => message.method === 'thread/start'));
   t.deepEqual(saved, []);
@@ -2895,7 +2910,7 @@ test('a new thread is restored through inject_items, not through its prompt', as
   await drain(reader);
 });
 
-test('an app-server without inject_items reads the conversation into the turn', async t => {
+test('an app-server without inject_items refuses the turn rather than degrading it', async t => {
   t.timeout(5000);
   const fixture = makeFixture({
     injectFails: true,
@@ -2912,19 +2927,13 @@ test('an app-server without inject_items reads the conversation into the turn', 
       { kind: 'message', role: 'user', content: 'write the report' },
     ],
   });
-  // Refused, so the conversation goes where it used to: into the turn's
-  // input, ahead of the prompt. Lossy, and better than a session that has
-  // forgotten what it was doing.
-  const start = fixture.sent.find(message => message.method === 'turn/start');
-  t.is(start.params.input.length, 2);
-  t.true(start.params.input[0].text.includes('write the report'));
-  t.is(start.params.input[1].text, 'continue');
-  fixture.push({
-    method: 'turn/completed',
-    params: {
-      threadId: 'thread-new',
-      turn: { id: 'turn-2', status: 'completed' },
-    },
-  });
-  await drain(reader);
+  // The conversation used to go into the turn's input when the method was
+  // refused. That kept the session answering while the mechanism meant to
+  // carry its history was broken, and a degraded answer reads exactly like a
+  // good one. The turn fails instead, and never starts.
+  const events = await drain(reader);
+  const abort = events.at(-1);
+  t.is(abort.type, 'abort');
+  t.regex(abort.reason, /refused .* restored items/);
+  t.false(fixture.sent.some(message => message.method === 'turn/start'));
 });

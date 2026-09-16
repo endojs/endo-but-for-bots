@@ -492,6 +492,109 @@ procfs while the record keeps its plan, dependencies, and directories, and then 
 everything through destroy — wiring evidence, not native acceptance.
 Codex adoption, native recovery semantics, and live acceptance remain pending.
 
+## What Paseo does differently
+
+Paseo instruments the same three CLIs this design does, and makes the opposite bet
+about who owns the transcript. Its provider layer is described in
+[`paseo-meta-harness-report.md`](paseo-meta-harness-report.md), vendored here
+verbatim; section numbers below are that report's.
+
+**The disagreement is total, and it is the only one that matters.** Paseo §0: *"Paseo
+never owns the transcript. Each provider's own session store is the durable
+authority... It is also the only restore path — there is no Paseo-side transcript
+database in production."* It persists a handle — provider id, native session id, a
+config snapshot — and rebuilds its timeline by asking the harness to reopen its own
+session. The durable-timeline slot exists in its manager and is deliberately left
+unwired.
+
+This design is the mirror image. The stack owns the records; a CLI's store is a cache
+it can rebuild. As of the store-authority change, a Claude store that outlives the
+daemon no longer decides what the conversation is.
+
+### The blocker Paseo names, measured
+
+Paseo §4.3 says what a design like this one would need, and why it did not build it:
+
+> keep a durable, lossless, provider-neutral transcript ... and give every provider an
+> `importTimeline(rows)` that can seed a fresh native session from it. Both halves are
+> real work — most harnesses have no "prefill this conversation" API, so seeding
+> degrades to prompt-injection anyway.
+
+Measured against the three harnesses Paseo itself instruments, the second half is
+false:
+
+| | prefill path | vendor change |
+| --- | --- | --- |
+| Claude | write the JSONL, resume it by id | none |
+| Codex | `thread/inject_items`, raw Responses API items | none |
+| OpenCode | the import route | a ~200-line fork patch |
+
+Two of three need nothing from the vendor, and the third needed one patch. Codex
+additionally reprojects a rollout file written before it boots, measured separately,
+so even there the prompt-injection floor is not where the design bottoms out. Paseo
+was right that the work is real — this session spent most of its defects inside
+exactly that machinery — and wrong that it degrades to prompt injection.
+
+### Where two designs arrived at the same rule independently
+
+- **No fallbacks.** Paseo §1.4: *"gate the feature once, then either run it or tell
+  the user — never write a defensive fallback path."* This design removed both lossy
+  restoration fallbacks for the same reason, after one of them hid a dropped
+  transcript through a full test suite and three deploys.
+- **One writer, and close before resume.** Paseo's gotcha 2 is that a Codex thread has
+  exactly one writer even when idle, so it checks `thread/loaded/list` before resuming
+  and closes the old session first. The durable volume lease here is the same
+  constraint one layer down, and it bites the same way: a lease left by a dead
+  incarnation makes the session unopenable, and a lease held by this one makes a
+  second provisioning fail.
+- **Ask what the runtime can do; do not discover it by timeout.** Paseo negotiates on
+  advertised capability flags. The OpenCode bridge now names its features in `ready`
+  for the same reason.
+
+### Where Paseo is ahead
+
+- **A normalized `ToolCallDetail`** — `shell`, `read`, `edit`, `write`, `search`, …,
+  with `unknown` as the escape hatch. Paseo calls it *"the single highest-leverage
+  decision in the whole design"*, and it is why one renderer serves every harness.
+  The records here carry a tool call's `name` and `args` as opaque strings: enough to
+  restore a call as a call, not enough to render three harnesses through one view.
+- **The native id is not stable.** Paseo captures a Claude session id that changes
+  mid-stream when a hook restarts the process, and re-reads its handle after any
+  fork. Nothing here watches for that; the deterministic uuid this stack derives is
+  what it resumes, and a CLI that renamed its own session would not be noticed. The
+  exposure is smaller because this design owns the config directory and ships no
+  hooks, but it is not zero.
+- **Read-only history** (`purpose: "history"`, a temporary app-server) — reading an
+  archived conversation without resurrecting it in the CLI's own UI.
+- **Import from nothing**, rewind/fork, and a catalog cache that treats a saved model
+  choice as user intent a failed probe must never erase.
+
+### Where the sandbox removes the problem instead of solving it
+
+Paseo's worst fragility is its first gotcha: Claude's project-directory encoding is
+undocumented, ported verbatim from the SDK bundle — non-alphanumerics to `-`, a
+200-character cap, a base-36 hash suffix, realpath, NFC on darwin — and must be
+re-derived on every SDK upgrade. Here the guest's cwd is always `/workspace`, so the
+encoding is `'/workspace'.replace(/\//g, '-')` and the whole class is gone. The same
+fixed cwd removes its gotcha 13, realpath-aware matching for symlinked worktrees.
+
+Three more of its process-hygiene rules are structural here rather than maintained:
+the guest gets an allowlisted environment instead of a denylist that must name
+`CLAUDECODE` and its siblings; descendant reaping is a policy control the attestation
+proves rather than a tree-kill the daemon must remember; and a slice is an attested
+container rather than a pid in a managed-process ledger.
+
+### The cost of this bet, stated plainly
+
+Everything in Paseo §3 that it gets for free — restore works because the provider's
+store works — is machinery this design has to build and keep correct. The deploy that
+closed this work found nine defects and five of them were in exactly that seam: the
+transcript dropped before it reached a client, a restore that wrote the wrong file, a
+store that silently outranked the records, a capability discovered only by timeout,
+and a fallback that hid all of it. Paseo's bet costs cross-harness portability and
+buys reliability; this one costs reliability work and buys a conversation the stack
+can always rebuild, on any adapter, including one whose store is `:memory:`.
+
 ## Motivation
 
 Claude, Codex, and OpenCode need the same basic service: run an agent with selected
@@ -1354,9 +1457,11 @@ take on its own authority.
    `thread/inject_items`.
 5. **Landed for OpenCode; open for Codex.**
 
-   The import route is written and typechecked against the pinned fork, and
-   this repo's image build applies it
-   (`packages/opencode-sandbox/oci/patches/`). A user turn is imported as a
+   **The import route does not work — see "OpenCode's import route does not
+   work" in the plan below.** It is written and typechecked against the pinned
+   fork, which proved it compiles and nothing more, and this repo's image build
+   carries it
+   (the fork ref `build/v1.18.30-endo-session-import`). A user turn is imported as a
    `synthetic` message rather than a prompt — the answer to the question this
    section previously recorded as opencode's to make. `Synthetic` has exactly
    one consumer, the projector, so it describes a turn without provoking one;
@@ -1518,6 +1623,97 @@ this design does what it says.
    incarnation's. Recovery ran on `makeWorkspace` and not on `mountWorkspace`,
    which reaches the same guard, so a session reopened through the latter was
    refused for the rest of the host's life.
+
+**Open, and not what the fix above addressed — 2026-09-16.** A Codex session
+that works in one incarnation cannot be reopened in the next: its first turn
+after a restart fails with `Session volumes have an outstanding durable
+lease`. Reproduced on a host with no other sessions and no live containers,
+so it is not capacity contention, and it survives the recovery fix in item 7,
+which is therefore correct on its own terms but was not this defect.
+
+What the journal shows: on revival, Claude and OpenCode mount their 9P
+workspaces, Codex mounts nothing, and Codex's volume takes repeated quota and
+stat probes at that same moment — `ensure` running during revival. The lease
+error arrives when the first foreground turn provisions the workspace again.
+
+Three explanations have been tried against the deployment and all three are
+wrong, which is worth recording so the next attempt does not repeat them:
+
+- **Not capacity contention.** Reproduced with every other session deleted
+  and zero live containers.
+- **Not the half-wired recovery** of item 7. That gap was real and both entry
+  points now recover; the error is unchanged.
+- **Not a lease this process holds.** `ensure` now admits a reopen by the
+  holder — verified by a test that fails without the change — and the error
+  is still unchanged.
+
+By elimination the lease is a dead incarnation's *and* `recoverLease` is not
+reaching it, which means the failing path does not run through the
+provisioner `hosted-subscription.js` wraps, or does not run through
+`recoverOnce` before `ensure`. That is where to look next, and it wants
+instrumentation on the provisioning path rather than another reading of it:
+every one of the three attempts above was a plausible reading that the
+deployment then refused.
+
+This blocks verifying Codex's `thread/inject_items` restoration at all — the
+session cannot open, so the restoration path is never reached. Claude and
+OpenCode are verified below; Codex is not, and the reason is volume
+lifecycle rather than anything in the transcript path.
+
+### Codex's store is a rollout file, and the index is derived — 2026-09-17
+
+Measured on Tokyo, because this design recorded `thread/inject_items` as the
+only way to give Codex a conversation it did not have. That is not the only
+way: Codex can be written to before it boots, the same shape of path Claude
+takes.
+
+`CODEX_HOME` is a durable Podman volume (`codex-state`, not tmpfs), holding:
+
+- `sessions/<YYYY>/<MM>/<DD>/rollout-<ISO>-<uuid>.jsonl` — the conversation.
+  Ordinal-numbered lines of `{timestamp, ordinal, type, payload}`, opening
+  with a `session_meta` payload that carries `session_id`, `cwd`,
+  `originator`, `cli_version` and the base instructions.
+- `thread_history_1.sqlite` — `thread_turns`, `thread_items`, and
+  `thread_history_projection_state(thread_id, next_rollout_byte_offset,
+  next_rollout_ordinal)`. Managed by sqlx migrations.
+
+That last table names the relationship: it is a **resumable cursor into the
+rollout**, so the database is a projection and the file is the source.
+
+**The experiment.** Two copies of one Codex home; the second had
+`thread_history_1.sqlite*` deleted, leaving only the rollout. Both were given
+the same `thread/resume` over the app-server's stdio. Both returned the same
+thread, with its real `preview` text. The second rebuilt its database from
+nothing — afterwards `thread_items` held the `userMessage` and the
+`agentMessage`, and the cursor had advanced to the end of the file.
+
+So restoring Codex needs no SQLite writing, no schema agreement, and no byte
+offsets of our own: write the rollout and let Codex project it.
+
+**It is still not the better path, and the comparison is not the one it first
+appears to be.** There is no case in this design of adding to a thread that
+is already live: `inject_items` runs only when `readLatestTurnId()` is null,
+Claude restores only into an empty store, and OpenCode's import route refuses
+a session that has messages. All three restore into an empty conversation and
+nothing else, because editing a conversation underneath the model holding it
+is the hazard this design was built to avoid. The two mechanisms therefore do
+the same single job, and differ only in what they cost:
+
+| | `thread/inject_items` | writing a rollout |
+| --- | --- | --- |
+| when | after boot, over RPC | before boot, into the volume |
+| needs | the method, present in stock 0.152.0 | nothing |
+| format | Responses API items — public and stable | Codex's own rollout envelope |
+
+The format row decides it. `inject_items` takes a public, documented format;
+a rollout couples this stack to a private one, which is the coupling this
+design rejected for OpenCode's SQLite and should not adopt here for less
+reason. The rollout's one advantage is needing no method, and the pinned
+image has the method.
+
+So this is recorded as a fallback that exists, not a plan: if a future image
+ever drops `inject_items`, Codex can still be restored by writing its store,
+and the projection experiment above is the evidence that it would work.
 
 **Verified on the deploy, 2026-09-16.** A session is given a word, the daemon
 is restarted, and the session is asked for the word back. OpenCode answers it
@@ -1882,6 +2078,254 @@ This refines the existing M10 sandbox work envelope and is initially non-additiv
 to that milestone's estimate.
 Re-estimate after Phase 1 if CLI compatibility or storage work exceeds that scope.
 No new date commitment or change to the gateway critical path follows from this plan.
+
+## Plan — 2026-09-17
+
+Ordered by what is actually broken rather than by what this design was reaching for.
+Items 1 and 3 are both consequences of work already landed; item 2 is a leak that is
+running now.
+
+### 1. Rebuild OpenCode's image, from a fork branch rather than a patch
+
+**Required, not optional.** Removing the lossy fallbacks means an image whose bridge
+has no import route can no longer restore at all — it refuses the turn and says so.
+The deployed image (`959c3887b3`) is one of those, so OpenCode restoration is offline
+until this lands. That is the intended shape of the failure, and it is also a
+deadline.
+
+**Change of method: maintain the change as a branch on the fork, not as a patch file
+in this repo.** `oci/patches/0001-session-import-history.patch` is applied with
+`git apply` at build time on top of `kumavis/opencode` at
+`build/v1.18.30-opencode-patched`. The fork already exists and is already the build's
+source, so the patch is the only part that is not version-controlled where it is
+used. Committing it to a branch there:
+
+- **makes the image tag honest.** The tag is `$(OPENCODE_COMMIT | cut -c1-12)`, so
+  today two images built from the same fork commit with different patch sets get the
+  same tag. With the change in the commit, the tag covers it. The deployment pins by
+  manifest digest either way, so this is an operator papercut rather than a
+  weakened pin — but it is the papercut that makes `podman image inspect
+  localhost/opencode-sandbox:<tag>` ambiguous.
+- **removes `git apply` from the build.** A patch that no longer applies is a build
+  failure with no rebase path; a branch is rebased with the tools made for it.
+- **makes the change reviewable as a change** — history, blame, and a diff against
+  upstream — rather than a context-free hunk.
+
+Steps: commit the patch to `build/v1.18.30-endo-session-import` (branched from the
+current build ref) on `kumavis/opencode`; point `OPENCODE_REF` at it; delete
+`oci/patches/` and the `git apply` step from `Containerfile.source`; rebuild with
+`--source`; re-pin `opencodeSandbox.image` to the new digest. Pushing to the fork is
+the one step this work cannot take on its own.
+
+### 1a. OpenCode's import route — fixed and verified, 2026-09-17
+
+**Resolved.** The route now writes `MessageTable` and `PartTable` rows the way
+`cli/cmd/import.ts` does, and a restored OpenCode session answers from the
+stack's records with `OPENCODE_DB=:memory:`:
+
+```
+opencode  T2 completed "ALPENGLOW"   REMEMBERS YES
+claude    T2 completed "ALPENGLOW"   REMEMBERS YES
+```
+
+There is no lossy path left for it to have taken — the fallback is gone — so a
+correct answer is the structured import working. Two of three adapters now
+restore faithfully from records the stack owns, with the CLI's own store made
+unavailable in both cases.
+
+The history below is kept because the shape of the mistake is the useful part.
+
+### 1a-history. What the route did instead, and why nothing noticed
+
+Measured on the rebuilt image, in isolation, against the route itself:
+
+```
+POST /session/<id>/message/import   ->  200 true
+GET  /session/<id>/message          ->  200 []
+```
+
+The route accepts the payload, answers success, and produces no messages.
+A turn taken afterwards reaches the model with no trace of the imported
+conversation — verified on the deployment: the recall turn's inference request
+carries the new prompt and not one mention of the word the session was asked
+to remember.
+
+**Two claims in this document were wrong.** Step 5 says the route is "written
+and typechecked against the pinned fork" and treats that as evidence it works.
+Typechecking proved it compiles. Nothing exercised it, because the dialogue
+fallback answered every turn it was supposed to answer, so an import that did
+nothing looked exactly like an import that worked. Removing the fallback
+surfaced it on the first deploy — first as a 400 from a payload shape mismatch,
+then, once that was fixed, as this.
+
+**The likely mechanism, stated as a hypothesis rather than a finding.** The
+projector registers `events.project(SessionEvent.Synthetic, …)`, but the
+handler it delegates to begins
+
+```js
+if (event.durable === undefined) return Effect.die("Durable Session event is missing aggregate sequence")
+```
+
+so a published event that never entered the durable aggregate has nothing to
+project from. The patch chose `Synthetic` precisely because `Prompted` would
+re-enter the prompt lifecycle and make a restored conversation run itself —
+and `Prompted` is also what carries an event into that durable log. The safe
+event may be unpersisted for the same reason it is safe. That wants confirming
+in the fork before any fix is designed on top of it.
+
+**What this leaves.** OpenCode cannot restore at all right now. That is the
+honest state rather than a regression: it could not restore before either, and
+was concealing it. The options are to make the import produce durable projected
+messages (fork surgery against the machinery the patch set out to avoid), or to
+accept that this harness restores by reading the conversation into the next
+prompt and declare that its mechanism rather than its fallback — lossy, but
+named, and not pretending to be faithful. That is a decision, not a task.
+
+### 1a-spike. The import mechanism is sound; the patch around it is not
+
+A spike against the fork, after the finding above. It reverses the pessimistic
+reading: **no surgery against the durable event log is needed.** The machinery
+already does what this design wants.
+
+**What was verified to work.** `SessionEvent.Synthetic` is in
+`SessionEvent.DurableDefinitions`, its aggregate field is `sessionID`, and a
+publish carrying one commits an `event` row and advances `event_sequence`. The
+projector registers it, `SessionMessageUpdater` has a `session.next.synthetic`
+branch that appends a `SessionMessage.Synthetic`, and a projected row appears.
+`SessionHistory.load` does not filter it, and `to-llm-message.ts` maps
+`case "synthetic"` to a **user** message. Observed directly against the image:
+a user-only import produced `session.next.synthetic.1` at seq 1 and a
+`session_message` row of type `synthetic`.
+
+Each turn kind also projects on its own: user → `synthetic`, assistant →
+`assistant`, tool → `assistant` (with `tool.called` and `tool.success`),
+compaction → `system`, with `step.started`/`step.ended` bracketing as written.
+
+**What is actually wrong: the import lands in a store the prompt never reads.**
+
+OpenCode carries two session implementations side by side. The v2 service —
+`session.next.*` events, the projector, `SessionMessageTable` — is where this
+patch writes. The HTTP surface the bridge drives is v1: `GET /session/:id/message`
+and the prompt path both go through `Session.messages`, which reads
+`MessageTable` through `MessageV2.page`. Different tables, no delegation
+between them; the patch's own comment observed the v1 wrapper "does not
+delegate to v2" and then wrote to v2 anyway.
+
+So every observation lines up. The import commits durable v2 events and
+projects v2 messages, exactly as designed. `GET /message` returns `[]` because
+it reads v1. The model never sees the conversation because the turn runs
+through v1. The route reports success because, on its own terms, it succeeded.
+
+Two earlier readings in this document were measurement artifacts and are
+withdrawn: the multi-turn import does not fail — with a graceful shutdown it
+produces both a `synthetic` and an `assistant` message — and the zero-row
+results came from `SIGKILL` leaving the WAL uncheckpointed. Only positive
+observations from that probe were ever evidence.
+
+**The smallest change, with prior art.** `packages/opencode/src/cli/cmd/import.ts`
+already imports a whole conversation into the store the CLI reads: it inserts a
+`SessionTable` row, then `MessageTable` rows, then `PartTable` rows, from an
+exported session. That is an existing, upstream, supported path for exactly
+this — putting a conversation somebody else holds into a session.
+
+So the route should do what that command does, rather than publish v2 events:
+insert v1 message and part rows for the imported turns. It keeps the narrow
+`ImportedTurn` payload, so nothing capability-shaped is accepted; it never
+touches `Prompted` or prompt admission, so the hazard the patch set out to
+avoid stays avoided; and it lands where the prompt reads. It is also the more
+upstreamable shape, being the HTTP sibling of a command that already exists.
+
+Independently of that, the handler must propagate failure. It answered
+`200 true` while an unhandled `ServeError` went to the log, which is what let a
+route that writes to the wrong store look healthy.
+
+### 1b. The image pin is read once, and then never again
+
+Found while doing item 1, and it is the reason the rebuilt image did not take.
+`opencodeSandbox.image` reaches a slice through the **broker service**, whose
+`OPENCODE_BROKER_CONFIG` carries `imageRef`/`imageDigest`, and the broker is
+retained whenever one already exists:
+
+```js
+if (existingBroker) {
+  console.log('Retaining OpenCode broker service with its persisted configuration.');
+} else {
+  const { imageRef, imageDigest } = await resolvePinnedImageRef(rootfs, exec);
+  // ... minted into OPENCODE_BROKER_CONFIG ...
+}
+```
+
+So the pin is read on first setup and ignored forever after. Changing it in the
+NixOS configuration, rebuilding, and restarting the daemon all appear to
+succeed — the unit environment carries the new digest and the hosted backend is
+re-minted on every run — while every slice keeps launching the old image. The
+disagreement is invisible unless someone asks a running container what it is.
+
+Claude's setup has the same shape. Codex's resolves the reference outside the
+retained branch and so does not.
+
+The operational unblock is to remove `opencode-sandbox/broker-service` and let
+setup mint it again, which is what was done here. The fix is for setup to
+compare the configured pin against the persisted one and re-mint on a
+mismatch — retention exists so that a broker holding credentials and live
+grants is not rebuilt for nothing, not so that a changed pin is silently
+discarded. Until that lands, **bumping any hosted CLI image requires removing
+the adapter's broker service**, and that belongs next to the re-pin recipe in
+`hosts/common.nix` rather than in someone's memory.
+
+### 2. The Codex lease, which leaks more than it blocks
+
+Higher priority than its symptom suggested. `destroy()` refuses a leased session
+(`Cannot destroy a durably leased session`), so a session whose lease is stuck is not
+merely unopenable — it is **permanently undeletable**, and its volume and its XFS
+project ID go with it. Project IDs are never recycled by design, a host-lifetime
+budget, so each stuck session spends one forever. Observed: every cleanup run in this
+deploy ended with `DELETE_FAILED … backend did not fully clean up` on a Codex
+session, against 5 volumes and 7 session directories on a host with far fewer live
+sessions.
+
+Three explanations have already been tried and refuted by the deployment — capacity
+contention, the half-wired recovery, and a lease held by this process. What remains
+by elimination is that the lease belongs to a dead incarnation and `recoverLease` is
+not reaching it, which means the failing path does not run through the wrapped
+provisioner. The next step is instrumentation on the provisioning path, not a fourth
+reading of it.
+
+### 3. Deploy and verify what has landed
+
+The fallback removal and the store-authority change are committed and unverified on a
+deployment. The check is the one that has been discriminating all along: give a
+session a word, restart the daemon, ask for the word back, with each CLI's own store
+made unavailable. Claude's store is wiped between turns; OpenCode's is `:memory:`
+already. A refusal is now a legitimate outcome and must be read as one — OpenCode
+will refuse until item 1 lands, and that is the design working.
+
+### 4. Codex's store authority — a decision, not a task
+
+Claude's store no longer decides across incarnations; Codex's still does, because
+`replayContinuity` is false whenever a `threadId` was recorded and the thread has
+turns. Closing it means starting a fresh thread per incarnation and injecting, which
+writes a new rollout each time into a volume with a fixed `stateBytes` quota
+(268435456 — 256 MiB) while leaving the old rollout behind. A two-message
+conversation already occupies ~53 KiB of rollout, so the cost is roughly
+conversation × restarts against a fixed ceiling, and reaching the ceiling breaks the
+session.
+
+So this is a choice between: closing it and unlinking the superseded rollout (correct,
+bounded, more machinery, and discards the audit copy thread rotation deliberately
+keeps); closing it and accepting churn (worsens item 2); or leaving Codex resuming
+its own thread (inconsistent with the other two adapters). It is recorded here rather
+than chosen.
+
+### 5. Not scheduled, but named
+
+A normalized tool-call detail union, of the kind
+[`paseo-meta-harness-report.md`](paseo-meta-harness-report.md) §1.3 calls the single
+highest-leverage decision in its design. The records here restore a tool call as a
+tool call, which is what restoration needs; they do not describe it well enough for
+one view to render three harnesses. That is a presentation concern this design does
+not have yet, and the point at which it would be cheapest to adopt is before a second
+consumer of the records exists.
 
 ## Remaining design questions
 
