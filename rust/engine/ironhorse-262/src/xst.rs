@@ -91,8 +91,14 @@ pub const DEFAULT_ENDOR_SKIP_FEATURES: &[&str] = &[
 /// `lockdown()` is landed: it is a guest-callable native
 /// (`ironhorse-vm::Interp::do_lockdown`,
 /// `designs/ironhorse-native-lockdown.md`), so [`SesMode::Lockdown`] applies
-/// its prelude ([`SesMode::prelude`]) to the assembled source and runs the
-/// case for real.
+/// its wrap ([`SesMode::prelude`]) to the case body in [`assemble`] and runs
+/// the case against a locked-down realm.
+///
+/// That splice is the mode. Lifting [`Self::unimplemented_skip`] on its own
+/// only stops the runner refusing to start -- it does not lock anything down,
+/// and a `-l` run that reaches the corpus without it is measuring the UNLOCKED
+/// engine under a label that says otherwise. Both halves are needed, and
+/// `a_lockdown_mode_actually_splices_the_call` is the test that says so.
 ///
 /// `Compartment` is not. It is modeled as a host-side Rust realm API rather
 /// than a guest intrinsic, so the two modes that need `new Compartment()`
@@ -462,9 +468,34 @@ fn assemble(
     src: &str,
     fm: &Frontmatter,
     prelude: Option<&str>,
+    ses_mode: SesMode,
 ) -> Result<String, String> {
+    // The SES mode's wrap goes around the CASE BODY, not around the harness,
+    // and this is the only place it is applied. `xst262.c:1257-1272` fixes the
+    // order: `sta.js`, `assert.js` and every `includes:` file run first, THEN
+    // `xsCall0(xsGlobal, xsID("lockdown"))`, then the case. Locking down before
+    // the harness would freeze the intrinsics out from under `propertyHelper.js`
+    // and friends, which define globals and are not written to survive it.
+    //
+    // A `--prelude` file is spliced below, between the harness and this wrap,
+    // so a prelude that installs SES's own `lockdown` wins over the engine's --
+    // the hybrid the `xs` lane already runs (`Config::prelude`).
+    //
+    // This splice was MISSING until it was found by adversarial review, and its
+    // absence is worth recording because of how it read from outside.
+    // `SesMode::prelude()` existed, was unit-tested, and had no caller but those
+    // tests; `-l` therefore only lifted the pre-skip and ran the corpus
+    // unlocked. A 6053-file differential against the XS oracle came back
+    // byte-identical with and without `-l`, and that was reported as evidence
+    // that the native `lockdown()` agreed with `fx_lockdown`. It was evidence
+    // of a disconnected wire: freezing every intrinsic and poisoning
+    // `Function.prototype.constructor` cannot leave a test262 corpus unchanged.
+    // A null result from a differential gate is a reason to check the gate.
+    let body = ses_mode.prelude().replace("{body}", src);
     if fm.flags.iter().any(|f| f == "raw") {
-        return Ok(src.to_string());
+        // `raw` skips the harness, not the mode: `xst262.c` calls `lockdown()`
+        // before running the file whatever the file is.
+        return Ok(body);
     }
     let read = |name: &str| -> Result<String, String> {
         std::fs::read_to_string(harness_dir.join(name))
@@ -483,7 +514,7 @@ fn assemble(
         out.push_str(prelude);
         out.push_str("\n;\n");
     }
-    out.push_str(src);
+    out.push_str(&body);
     Ok(out)
 }
 
@@ -496,10 +527,11 @@ fn assemble_strict(
     src: &str,
     fm: &Frontmatter,
     prelude: Option<&str>,
+    ses_mode: SesMode,
 ) -> Result<String, String> {
     Ok(format!(
         "\"use strict\";\n{}",
-        assemble(harness_dir, src, fm, prelude)?
+        assemble(harness_dir, src, fm, prelude, ses_mode)?
     ))
 }
 
@@ -1500,7 +1532,7 @@ pub fn run_case(cfg: &Config, harness_dir: &Path, src: &str) -> CaseResult {
     let run_mode = |source: &str| evaluate(cfg, source, &fm, meter_exact_gate);
 
     let sloppy = if run_sloppy {
-        match assemble(harness_dir, src, &fm, cfg.prelude.as_deref()) {
+        match assemble(harness_dir, src, &fm, cfg.prelude.as_deref(), cfg.ses_mode) {
             Ok(source) => Some(run_mode(&source)),
             Err(reason) => return preskip(&reason),
         }
@@ -1508,7 +1540,7 @@ pub fn run_case(cfg: &Config, harness_dir: &Path, src: &str) -> CaseResult {
         None
     };
     let strict = if run_strict {
-        match assemble_strict(harness_dir, src, &fm, cfg.prelude.as_deref()) {
+        match assemble_strict(harness_dir, src, &fm, cfg.prelude.as_deref(), cfg.ses_mode) {
             Ok(source) => Some(run_mode(&source)),
             Err(reason) => return preskip(&reason),
         }
@@ -1680,10 +1712,11 @@ fn evaluate_module_compile(
             if cfg.oracle && (bytes != oracle.bytecode || symbols != oracle.symbols) {
                 Verdict::RunSkip("module:compiler-byte-divergence".into())
             } else {
-                let assembled = match assemble(harness_dir, src, fm, cfg.prelude.as_deref()) {
-                    Ok(source) => source,
-                    Err(reason) => return preskip(&reason),
-                };
+                let assembled =
+                    match assemble(harness_dir, src, fm, cfg.prelude.as_deref(), cfg.ses_mode) {
+                        Ok(source) => source,
+                        Err(reason) => return preskip(&reason),
+                    };
                 // `assemble` returns `src` unchanged for a `raw`-flagged
                 // module. There the compile above already produced the exact
                 // bytes `run_accepted_module` would recompute, and (under
@@ -1949,9 +1982,9 @@ fn run_async_case(
     meter_exact_gate: bool,
 ) -> CaseResult {
     let assembled = match if strict_mode {
-        assemble_strict(harness_dir, src, fm, cfg.prelude.as_deref())
+        assemble_strict(harness_dir, src, fm, cfg.prelude.as_deref(), cfg.ses_mode)
     } else {
-        assemble(harness_dir, src, fm, cfg.prelude.as_deref())
+        assemble(harness_dir, src, fm, cfg.prelude.as_deref(), cfg.ses_mode)
     } {
         Ok(s) => s,
         Err(reason) => {
@@ -2350,6 +2383,7 @@ fn run_case_bounded_with(
                 src,
                 timeout,
                 cfg.prelude.as_deref(),
+                cfg.ses_mode,
             ) {
                 Verdict::RunSkip(format!(
                     "oracle-nontermination: oracle failed to terminate within {}s (ironhorse terminates alone)",
@@ -2410,6 +2444,7 @@ fn ironhorse_terminates_alone(
     src: &str,
     timeout: std::time::Duration,
     prelude: Option<&str>,
+    ses_mode: SesMode,
 ) -> bool {
     let fm = frontmatter::parse(src);
     let (mut run_sloppy, mut run_strict, only_strict) = strict_mode_status(&fm.flags);
@@ -2426,12 +2461,12 @@ fn ironhorse_terminates_alone(
     }
     let mut sources = Vec::new();
     if run_sloppy {
-        if let Ok(source) = assemble(harness_dir, src, &fm, prelude) {
+        if let Ok(source) = assemble(harness_dir, src, &fm, prelude, ses_mode) {
             sources.push(source);
         }
     }
     if run_strict {
-        if let Ok(source) = assemble_strict(harness_dir, src, &fm, prelude) {
+        if let Ok(source) = assemble_strict(harness_dir, src, &fm, prelude, ses_mode) {
             sources.push(source);
         }
     }
@@ -2642,6 +2677,73 @@ mod tests {
         assert_eq!(SesMode::None.short(), "none");
         assert_eq!(SesMode::Lockdown.short(), "l");
         assert_eq!(SesMode::LockdownCompartment.short(), "lc");
+    }
+
+    #[test]
+    fn a_lockdown_mode_actually_splices_the_call() {
+        // The regression test for a wire that was never connected.
+        // `SesMode::prelude()` existed and was unit-tested here for its SHAPE,
+        // but nothing called it: `assemble` spliced only the `--prelude` file,
+        // so `-l` ran the corpus unlocked while reporting `ses-mode=l`. A
+        // 6053-file differential against the XS oracle came back byte-identical
+        // with and without `-l` and was read as agreement rather than as the
+        // no-op it was.
+        //
+        // Asserting on `prelude()`'s shape cannot catch that. This asserts on
+        // what `assemble` PRODUCES, which is the thing the engine runs.
+        let Some((_root, harness)) = crate::test262::locate_test262() else {
+            return;
+        };
+        let fm = frontmatter::parse("1 + 1;\n");
+        let mut cfg = Config::default();
+
+        cfg.ses_mode = SesMode::None;
+        let unlocked = assemble(&harness, "1 + 1;\n", &fm, None, cfg.ses_mode).expect("assembles");
+        assert!(
+            !unlocked.contains("lockdown()"),
+            "the default mode must not lock down"
+        );
+
+        cfg.ses_mode = SesMode::Lockdown;
+        let locked = assemble(&harness, "1 + 1;\n", &fm, None, cfg.ses_mode).expect("assembles");
+        let call = locked.find("lockdown();").expect(
+            "`-l` must splice the `lockdown()` call into the assembled source; \
+             lifting the pre-skip alone runs the corpus UNLOCKED",
+        );
+
+        // Order, not just presence (`xst262.c:1257-1272`): the harness runs
+        // first, the call next, the body last. Freezing before
+        // `propertyHelper.js` would break the harness itself.
+        let body = locked.find("1 + 1;").expect("the body is present");
+        let assert_js = locked.find("Test262Error").expect("the harness is present");
+        assert!(
+            assert_js < call && call < body,
+            "order must be harness, then lockdown(), then body -- got \
+             harness@{assert_js} call@{call} body@{body}"
+        );
+
+        // And it survives the strict wrap, whose directive must still lead.
+        let strict =
+            assemble_strict(&harness, "1 + 1;\n", &fm, None, SesMode::Lockdown).expect("assembles");
+        assert!(strict.starts_with("\"use strict\";"));
+        assert!(strict.contains("lockdown();"));
+    }
+
+    /// A `raw` case skips the harness, not the mode: `xst262.c` calls
+    /// `lockdown()` before running the file whatever the file is.
+    #[test]
+    fn a_raw_case_still_takes_the_lockdown_wrap() {
+        let Some((_root, harness)) = crate::test262::locate_test262() else {
+            return;
+        };
+        let src = "/*---\nflags: [raw]\n---*/\n1 + 1;\n";
+        let fm = frontmatter::parse(src);
+        let raw = assemble(&harness, src, &fm, None, SesMode::Lockdown).expect("assembles");
+        assert!(raw.starts_with("lockdown();"), "got {raw:.40}");
+        assert!(
+            !raw.contains("Test262Error"),
+            "raw must still skip the harness"
+        );
     }
 
     #[test]
@@ -3564,7 +3666,13 @@ mod tests {
         // buggy sloppy-only probe would run the loop and hang to `false`.
         let strict_diverges = "/*---\nflags: [onlyStrict]\n---*/\nwith ({}) { while (true) {} }\n";
         assert!(
-            ironhorse_terminates_alone(&harness, strict_diverges, std::time::Duration::from_secs(10), None),
+            ironhorse_terminates_alone(
+                &harness,
+                strict_diverges,
+                std::time::Duration::from_secs(10),
+                None,
+                SesMode::None,
+            ),
             "an onlyStrict case must be probed via its strict assembly (a strict early error terminates), not the sloppy infinite loop"
         );
 
@@ -3576,7 +3684,8 @@ mod tests {
                 &harness,
                 strict_hang,
                 std::time::Duration::from_secs(2),
-                None
+                None,
+                SesMode::None,
             ),
             "a strict-only infinite loop is an ironhorse hang, not oracle non-termination"
         );
