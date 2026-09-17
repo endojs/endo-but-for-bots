@@ -1457,8 +1457,10 @@ take on its own authority.
    `thread/inject_items`.
 5. **Landed for OpenCode; open for Codex.**
 
-   The import route is written and typechecked against the pinned fork, and
-   this repo's image build applies it
+   **The import route does not work — see "OpenCode's import route does not
+   work" in the plan below.** It is written and typechecked against the pinned
+   fork, which proved it compiles and nothing more, and this repo's image build
+   carries it
    (the fork ref `build/v1.18.30-endo-session-import`). A user turn is imported as a
    `synthetic` message rather than a prompt — the answer to the question this
    section previously recorded as opencode's to make. `Synthetic` has exactly
@@ -2114,6 +2116,52 @@ current build ref) on `kumavis/opencode`; point `OPENCODE_REF` at it; delete
 `oci/patches/` and the `git apply` step from `Containerfile.source`; rebuild with
 `--source`; re-pin `opencodeSandbox.image` to the new digest. Pushing to the fork is
 the one step this work cannot take on its own.
+
+### 1a. OpenCode's import route does not work, and this design said it did
+
+Measured on the rebuilt image, in isolation, against the route itself:
+
+```
+POST /session/<id>/message/import   ->  200 true
+GET  /session/<id>/message          ->  200 []
+```
+
+The route accepts the payload, answers success, and produces no messages.
+A turn taken afterwards reaches the model with no trace of the imported
+conversation — verified on the deployment: the recall turn's inference request
+carries the new prompt and not one mention of the word the session was asked
+to remember.
+
+**Two claims in this document were wrong.** Step 5 says the route is "written
+and typechecked against the pinned fork" and treats that as evidence it works.
+Typechecking proved it compiles. Nothing exercised it, because the dialogue
+fallback answered every turn it was supposed to answer, so an import that did
+nothing looked exactly like an import that worked. Removing the fallback
+surfaced it on the first deploy — first as a 400 from a payload shape mismatch,
+then, once that was fixed, as this.
+
+**The likely mechanism, stated as a hypothesis rather than a finding.** The
+projector registers `events.project(SessionEvent.Synthetic, …)`, but the
+handler it delegates to begins
+
+```js
+if (event.durable === undefined) return Effect.die("Durable Session event is missing aggregate sequence")
+```
+
+so a published event that never entered the durable aggregate has nothing to
+project from. The patch chose `Synthetic` precisely because `Prompted` would
+re-enter the prompt lifecycle and make a restored conversation run itself —
+and `Prompted` is also what carries an event into that durable log. The safe
+event may be unpersisted for the same reason it is safe. That wants confirming
+in the fork before any fix is designed on top of it.
+
+**What this leaves.** OpenCode cannot restore at all right now. That is the
+honest state rather than a regression: it could not restore before either, and
+was concealing it. The options are to make the import produce durable projected
+messages (fork surgery against the machinery the patch set out to avoid), or to
+accept that this harness restores by reading the conversation into the next
+prompt and declare that its mechanism rather than its fallback — lossy, but
+named, and not pretending to be faithful. That is a decision, not a task.
 
 ### 1b. The image pin is read once, and then never again
 
