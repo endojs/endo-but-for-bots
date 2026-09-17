@@ -23,11 +23,13 @@
 //!
 //! The last line is the third-host `ses-xs-parity` invocation: ironhorse joins
 //! `xst -l` and node-with-SES-prelude as the third `packages/test262-runner`
-//! host on that parity axis (design § Staging step 4). The guest
-//! `lockdown()`/`Compartment` surface the mode needs is a named scope fold
-//! ironhorse does not yet expose, so today every such case is an honest named
-//! skip (`feature:Compartment` / `ses-mode:lockdown-unimplemented`); coverage
-//! lights up automatically when that guest surface lands.
+//! host on that parity axis (design § Staging step 4). `-l` runs: ironhorse
+//! binds a guest `lockdown()` and `assemble` splices the call between the
+//! harness and the case body, as `xst262.c:1267` does. `-c`/`-lc` still do not:
+//! there is no guest `Compartment`, so those modes stay honest named skips
+//! (`ses-mode:compartment-unimplemented`) and a case that READS `Compartment`
+//! is a `feature:Compartment` skip under any mode. That coverage lights up
+//! when the constructor lands.
 //!
 //! Positional paths are subtrees under the located test262 root; a bare path
 //! defaults under `language/` for back-compat with `test262-language`. Without
@@ -541,8 +543,9 @@ OPTIONS:
     --feature-filter F[,F]   run ONLY cases carrying a feature (test262-harness
                              --features-include semantics; e.g. ses-xs-parity)
     -l | -lc | -c            SES lockdown / lockdown+compartment / compartment
-    --ses-mode l|lc|c        mode (xst262.c -l/-lc/-c analogues); guest surface
-                             not yet landed, so each is a named whole-case skip
+    --ses-mode l|lc|c        mode (xst262.c -l/-lc/-c analogues); `l` runs the
+                             corpus under a native lockdown(), the two
+                             Compartment modes are named whole-case skips
     --test262-dir DIR        use DIR as the test262 root (has harness/, test/)
     -o, --report FILE        write the xst-shaped YAML report to FILE
     --json FILE              write the per-case JSON batch file (for the
