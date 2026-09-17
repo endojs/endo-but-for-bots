@@ -312,38 +312,7 @@ impl Interp {
         // the host stack, so it is charged at the heavy class and bounded by
         // [`NATIVE_DEPTH_LIMIT`].
 
-        // **Honour an explicit home, as [`Self::call_native`] already does.**
-        // A native method that carries a non-NULL `global_env` runs in THAT
-        // environment rather than whatever is ambient. Every method built by
-        // `alloc_method`/`alloc_named_method` carries `NULL`, so this is a
-        // no-op for the entire boot surface and changes no existing
-        // behaviour; the only instances with a home today are the
-        // per-compartment `lockdown` copies `compartment_evaluator` mints.
-        //
-        // Without this, `do_lockdown`'s compartment guard reads an ambient
-        // environment a guest can steer. Measured: a compartment ran
-        // `Promise.resolve(1).then(lockdown)`, an ordinary `Machine::collect()`
-        // parked the ambient environment on the default global, and the job
-        // locked the shared realm — `direct = lockdown is not available to a
-        // compartment` but `LOCKED AFTER JOB = true`. The capability has to
-        // identify itself by which OBJECT was called, and this is where that
-        // object's home is read.
-        let home = self
-            .stack
-            .get(base + 1)
-            .and_then(|slot| match slot.value {
-                Payload::Reference(function) => {
-                    self.functions.get(&function).map(|info| info.global_env)
-                }
-                _ => None,
-            })
-            .unwrap_or(crate::value::SlotIndex::NULL);
-        let caller = self.capture_global_environment();
-        let depth = self.call_stack.len();
-        if !home.is_null() {
-            self.switch_environment(home);
-        }
-        let outcome = self.with_native_frame(HEAVY_FRAME_COST, |vm| {
+        self.with_native_frame(HEAVY_FRAME_COST, |vm| {
             // These accessors can recursively Set their own copied descriptor.
             // Keep the large dispatch frame out of that forwarding cycle.
             if matches!(
@@ -364,14 +333,7 @@ impl Interp {
             } else {
                 vm.call_native_method_inner(m, base, argc, code)
             }
-        });
-        // Restore exactly as `call_native` does: only when the activation did
-        // not unwind past us, so a `Step` propagating out of the dispatch does
-        // not get its environment stomped on the way.
-        if self.call_stack.len() >= depth {
-            self.switch_environment(caller);
-        }
-        outcome
+        })
     }
 
     /// The single complete `Call(F, thisArg, args)` dispatcher. Promise

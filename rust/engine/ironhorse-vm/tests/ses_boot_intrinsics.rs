@@ -434,8 +434,11 @@ fn an_unfrozen_machine_takes_the_shim_and_keeps_its_compartments() {
             };
             assert_eq!(
                 crank(&start, SES_CENSUS),
-                "lockdown=function harden=function Compartment=undefined \
-                 frozenObjectProto=false"
+                "lockdown=undefined harden=function Compartment=undefined \
+                 frozenObjectProto=false",
+                "an UNFROZEN machine does not bind the engine's `lockdown`: \
+                 `freeze == false` means the SES shim owns the operation, and \
+                 the shim installs its own when it evaluates"
             );
             assert_eq!(
                 crank(&start, &wrapped(&boot)),

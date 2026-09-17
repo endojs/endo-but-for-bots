@@ -537,64 +537,101 @@ fn the_hardened_globals_carry_their_xs_names_and_arities() {
     );
 }
 
-/// A compartment cannot lock down the realm it shares with its siblings.
+/// A compartment cannot lock down the realm it shares with its siblings, and
+/// the invariant that makes that true is structural rather than a guard.
 ///
-/// `lockdown()` rewrites `Function.prototype.constructor` and freezes the
-/// whole intrinsic graph — state every compartment of a machine shares. XS
-/// never faces this because `harden`/`lockdown`/`petrify` are test-shim
-/// globals on the host global, and a compartment's global is built by
-/// `fx_lockdown` from the intrinsics array, which does not contain them.
-/// Ironhorse installs them as boot intrinsics, so any environment with an
-/// unrestricted `global_names` gets the binding.
+/// **This is SES's model, not an invention.** `packages/ses/src/permits.js`
+/// lists `lockdown` in `universalPropertyNames` — "Properties of all global
+/// objects" — so a SES compartment DOES see `lockdown`. It is powerless there
+/// because a compartment cannot exist before lockdown has run, so the call
+/// meets the idempotence check. XS reaches the same place from the other side:
+/// `fx_lockdown` itself builds `mxCompartmentGlobal` (`xsLockdown.c:139`), so
+/// compartments postdate the operation.
 ///
-/// Measured before the guard: compartment B, which read
-/// `frozen=false | rewired=false` moments earlier, read
-/// `frozen=true | rewired=true` after compartment A called `lockdown()`.
+/// Ironhorse reproduces that with two machine kinds, which is one rule and not
+/// a case table: **the engine binds `lockdown` exactly when the engine owns the
+/// operation.**
 ///
-/// The guard is on the call, not the binding — a compartment endowed with a
-/// `lockdown` reference captured from the start realm would walk straight past
-/// a hidden name. `typeof lockdown` therefore stays `"function"` here, and the
-/// assertion pins that too so the check cannot be mistaken for a hidden name.
+/// * A FROZEN machine is locked down at construction, so its compartments
+///   postdate lockdown exactly as SES's do. `lockdown` is visible and answers
+///   `TypeError: lockdown already called`.
+/// * An UNFROZEN machine (`freeze == false`) means the SES shim owns the
+///   operation — the graph is left mutable precisely so `repairIntrinsics` can
+///   run — so the engine does not bind `lockdown` at all. The shim installs its
+///   own when it evaluates.
 ///
-/// The realm's state is probed through `Function.prototype.constructor.name`
-/// rather than through `Function.prototype.constructor !== Function`, which is
-/// not a lockdown signal inside a compartment: `compartment_evaluator` hands
-/// each compartment its own `Function` and `eval` instances, so that
-/// comparison is already true before anything locks down. The name is the
-/// discriminator step 2 actually moves — the real `Function` is named
-/// `"Function"`, the inert stand-in is named `""` — and it needs no source
-/// compiler, which a bare compartment does not carry.
+/// An earlier revision instead refused inside `do_lockdown` when
+/// `environment.global_obj != realm.global_object()`. That was unfaithful (no
+/// engine has such a check) and unsound: it read the AMBIENT environment, and
+/// a boot `alloc_named_method` carries `global_env: NULL`, so the per-call
+/// `switch_environment` no-oped and guest code steered it. Measured then — a
+/// compartment queued `Promise.resolve(1).then(lockdown)`, an ordinary host
+/// `Machine::collect()` parked the ambient environment on the default global,
+/// and the job locked the shared realm: `direct = lockdown is not available to
+/// a compartment` but `LOCKED AFTER JOB = true`. The promise-job route is the
+/// reason this test exercises it explicitly below.
 #[test]
 fn a_compartment_cannot_lock_down_the_shared_realm() {
     std::thread::Builder::new()
         .stack_size(ironhorse_vm::NATIVE_STACK_BYTES)
         .spawn(move || {
-            let machine = ironhorse_vm::Machine::unfrozen_with_start_global_names(None);
-            machine
-                .set_source_compiler(std::rc::Rc::new(TestCompiler))
-                .expect("machine takes a compiler");
-            let guest = machine.compartment(Default::default());
-            let crank = |source: &str| {
+            let run = |c: &ironhorse_vm::Compartment, source: &str| -> String {
                 let (code, symbols) = ironhorse_compile::compile_atoms(source).expect("compiles");
-                let outcome = guest.evaluate_with_symbols(&code, &symbols);
+                let outcome = c.evaluate_with_symbols(&code, &symbols);
                 assert!(outcome.completed, "{source:.60}: {:?}", outcome.halt);
                 outcome.result
             };
+
+            // UNFROZEN: the shim owns lockdown, so the engine binds none --
+            // and the promise-job route has nothing to queue.
+            let unfrozen = ironhorse_vm::Machine::unfrozen_with_start_global_names(None);
+            unfrozen
+                .set_source_compiler(std::rc::Rc::new(TestCompiler))
+                .expect("machine takes a compiler");
+            let guest = unfrozen.compartment(Default::default());
             assert_eq!(
-                crank(
-                    r#"
-                    var out = [];
-                    out.push('typeof=' + typeof lockdown);
-                    try { lockdown(); out.push('call=returned'); }
-                    catch (e) { out.push('call=' + e.name + ': ' + e.message); }
-                    out.push('frozen=' + Object.isFrozen(Object.prototype));
-                    out.push('ctor=' + JSON.stringify(Function.prototype.constructor.name));
-                    out.join(' | ');
-                "#
+                run(&guest, "typeof lockdown"),
+                "undefined",
+                "an unfrozen machine leaves the operation to the SES shim"
+            );
+            assert_eq!(
+                run(
+                    &guest,
+                    "try { Promise.resolve(1).then(lockdown); 'queued' } \
+                     catch (e) { e.name }"
                 ),
-                "typeof=function | call=TypeError: lockdown is not available to a \
-                 compartment | frozen=false | ctor=\"Function\"",
-                "the binding is visible and inert; the realm is untouched"
+                "ReferenceError"
+            );
+            let _ = unfrozen.collect();
+            unfrozen.run_promise_jobs();
+            assert!(
+                !unfrozen.intrinsics().is_locked_down(),
+                "the promise-job route must not reach a realm the guest cannot name"
+            );
+            assert_eq!(
+                run(&unfrozen.start_compartment(), "typeof lockdown"),
+                "undefined",
+                "not bound in the start compartment either -- the shim installs its own"
+            );
+
+            // FROZEN: SES's shape. Visible, and inert through idempotence.
+            let frozen = ironhorse_vm::Machine::new();
+            frozen
+                .set_source_compiler(std::rc::Rc::new(TestCompiler))
+                .expect("machine takes a compiler");
+            let sibling = frozen.compartment(Default::default());
+            assert_eq!(
+                run(&sibling, "typeof lockdown"),
+                "function",
+                "SES lists lockdown in universalPropertyNames; a compartment sees it"
+            );
+            assert_eq!(
+                run(
+                    &sibling,
+                    "try { lockdown(); 'LOCKED' } catch (e) { e.name + ': ' + e.message }"
+                ),
+                "TypeError: lockdown already called",
+                "powerless by idempotence, which is exactly how SES makes it powerless"
             );
         })
         .unwrap()
@@ -766,112 +803,104 @@ fn the_ses_shims_already_locked_down_guard_throws_after_a_native_lockdown() {
     );
 }
 
-/// The shape a worker actually wants — pre-lockdown shims, then a native
-/// `lockdown()`, then guest source evaluated "as if in a compartment" — works
-/// today, with ONE piece missing. This pins which.
+/// What a host-made compartment does and does not confine after lockdown.
 ///
-/// `packages/thixotrope`'s Ironhorse worker runs on a bare `Interp::new()` and
-/// gets its isolation from GUEST-side `new Compartment()` in `worker-peer.js`,
-/// which is why the SES shim is in its boot bundle at all. That is not the only
-/// way to get it: the compartment can come from the HOST instead, and
-/// `Machine::unfrozen_with_start_global_names`' own doc comment anticipates
-/// exactly this migration ("`packages/thixotrope` already runs that shape on a
-/// bare `Interp`; this offers it a `Machine`").
+/// **This test previously overclaimed, and the correction is the point of it.**
+/// It asserted that a host-made compartment "confines guest source", attributing
+/// the whole property to `lockdown()`. Two things were wrong. Its guest
+/// compartment had no source compiler, so the `eval`/`Function` routes halted on
+/// `NotImplemented("eval:no-compiler")` rather than being exercised at all; and
+/// `compartment_evaluator` mints each compartment a FRESH `eval` and `Function`
+/// at global-build time, which step 2 never touches. With a compiler attached
+/// and an unrestricted `global_names`, guest source evaluates.
 ///
-/// Measured here, in that order:
+/// That is not a leak — those evaluators are scoped to the compartment's own
+/// `globalThis`, which is ordinary Compartment semantics and not unique to
+/// lockdown. But it means the confinement is a CONJUNCTION, and the two halves
+/// close different routes:
 ///
-/// 1. a pre-lockdown shim evaluates in the start compartment and can patch
-///    intrinsics, because the machine is built UNFROZEN;
-/// 2. the start compartment calls the **native** `lockdown()` and it succeeds;
-/// 3. guest source then runs in a host-made compartment.
+/// * `global_names` closes the direct `eval`/`Function` BINDINGS. Lockdown
+///   cannot: they are per-compartment objects minted after it ran.
+/// * `lockdown()` closes `({}).constructor.constructor`, the route through a
+///   shared prototype. `global_names` cannot: `CompartmentOptions::global_names`
+///   says so itself, and calls itself "not a security boundary".
 ///
-/// What the guest gets, and why each row matters:
-///
-/// | row | value | meaning |
-/// |---|---|---|
-/// | `shimLeaked` | `undefined` | the start compartment's own globals do NOT reach the guest |
-/// | (start realm) | `undefined` | and the guest's globals do not reach back |
-/// | `ObjProtoFrozen` | `true` | the guest SHARES the locked-down intrinsic graph |
-/// | `reach` | `TypeError` | **step 2 closes the evaluator reach realm-wide, so it holds inside the compartment too** |
-/// | `harden` | `function` | available without the shim |
-/// | `lockdownVisible` | `function` | bound, but calling it refuses — see `a_compartment_cannot_lock_down_the_shared_realm` |
-/// | `ownGlobal` | `1` | the guest has its own writable global for endowments |
-///
-/// **The missing piece is attenuation, not isolation.** `Date.now()` answers
-/// from the real clock rather than the NaN a `fx_lockdown` compartment global
-/// would give, and `Math` is likewise unsecured. That is steps 3 and 4, the
-/// scope boundary — not the `Compartment` constructor, which a host-supplied
-/// compartment does not need. An earlier revision of § Known Gaps called the
-/// whole migration blocked on `fx_Compartment`; that was too pessimistic, and
-/// this test is the correction.
-///
-/// (`DateNow` is `0` rather than a wall-clock value because Ironhorse's clock
-/// is deterministic. The row that matters is `DateNowIsNaN=false`: an
-/// attenuated compartment `Date` would report NaN.)
+/// Neither alone suffices, which is why both configurations are measured here.
 #[test]
-fn a_host_made_compartment_confines_guest_source_after_a_native_lockdown() {
+fn a_host_made_compartment_confines_guest_source_only_with_global_names() {
     std::thread::Builder::new()
         .stack_size(ironhorse_vm::NATIVE_STACK_BYTES)
         .spawn(|| {
-            let machine = ironhorse_vm::Machine::unfrozen_with_start_global_names(None);
-            machine
-                .set_source_compiler(std::rc::Rc::new(TestCompiler))
-                .expect("machine takes a compiler");
-            let start = machine.start_compartment();
-            let run = |c: &ironhorse_vm::Compartment, src: &str| -> String {
-                let (code, symbols) = ironhorse_compile::compile_atoms(src).expect("compiles");
-                let outcome = c.evaluate_with_symbols(&code, &symbols);
-                assert!(outcome.completed, "{src:.60}: {:?}", outcome.halt);
+            let probe = r#"
+                var out = [];
+                function t(l, f) {
+                  try { out.push(l + '=' + String(f())); }
+                  catch (e) { out.push(l + '=' + e.name + ': ' + e.message); }
+                }
+                t('Function', function () { return typeof Function; });
+                t('eval', function () { return typeof eval; });
+                t('FunctionWorks', function () { return Function('return 2')(); });
+                t('evalWorks', function () { return eval('3'); });
+                t('reach', function () { return ({}).constructor.constructor('return 1')(); });
+                t('ObjProtoFrozen', function () { return Object.isFrozen(Object.prototype); });
+                t('startLeaked', function () { return typeof globalThis.__fromStart; });
+                out.join(' | ');
+            "#;
+            let measure = |names: Option<Vec<String>>| -> String {
+                // A FROZEN machine: the host owns lockdown and has already
+                // performed it, so this is SES's ordering -- compartments
+                // postdate the freeze.
+                let machine = ironhorse_vm::Machine::new();
+                machine
+                    .set_source_compiler(std::rc::Rc::new(TestCompiler))
+                    .expect("machine takes a compiler");
+                let mut guest = machine.compartment(ironhorse_vm::CompartmentOptions {
+                    global_names: names,
+                    ..Default::default()
+                });
+                // The compartment needs its OWN compiler, or every evaluator
+                // route halts on `eval:no-compiler` and the test proves nothing.
+                guest.set_source_compiler(std::rc::Rc::new(TestCompiler));
+                let (code, symbols) = ironhorse_compile::compile_atoms(probe).expect("compiles");
+                let outcome = guest.evaluate_with_symbols(&code, &symbols);
+                assert!(outcome.completed, "{:?}", outcome.halt);
                 outcome.result
             };
 
-            // 1. A pre-lockdown shim. The machine is UNFROZEN, so this can
-            //    still repair intrinsics -- the window `Machine::new()` closes
-            //    at construction and the reason the unfrozen constructor exists.
-            assert_eq!(run(&start, "globalThis.__shimRan = true; 'ok'"), "ok");
-
-            // 2. The native lockdown, from the start compartment.
+            // Unrestricted: the guest has its OWN working evaluators. Ordinary
+            // Compartment semantics -- they are scoped to its own global.
             assert_eq!(
-                run(
-                    &start,
-                    "try { lockdown(); 'ok' } catch (e) { e.name + ': ' + e.message }"
-                ),
-                "ok",
-                "the start compartment of an unfrozen machine may lock it down"
+                measure(None),
+                "Function=function | eval=function | FunctionWorks=2 | evalWorks=3 | \
+                 reach=1 | ObjProtoFrozen=true | startLeaked=undefined",
+                "KNOWN GAP, pinned deliberately: `reach=1` means the evaluator reach is \
+                 OPEN on a Machine. `Machine::new()` freezes through step 5 only and \
+                 never runs step 2, so `Function.prototype.constructor` is still the \
+                 real `Function`. Since a Machine is now the only thing that has \
+                 compartments, this is every compartment in the system. Fixing it \
+                 requires the boot-minted stand-ins first -- minting at freeze time \
+                 would put them above `boot_slot_count` and make every Machine \
+                 unsnapshottable. When this row becomes `TypeError: secure mode`, \
+                 delete this note and the Known Gaps entry with it."
             );
 
-            // 3. Guest source, in a compartment the HOST made.
-            let guest = machine.compartment(ironhorse_vm::CompartmentOptions {
-                global_names: None,
-                ..Default::default()
-            });
+            // Worker-shaped: a restricted list removes the direct bindings.
+            // Both halves are needed, and this is the half `global_names` owns.
             assert_eq!(
-                run(
-                    &guest,
-                    r#"
-                    var out = [];
-                    function t(l, f) {
-                      try { out.push(l + '=' + String(f())); }
-                      catch (e) { out.push(l + '=' + e.name); }
-                    }
-                    t('harden', function () { return typeof harden; });
-                    t('DateNowIsNaN', function () { return Number.isNaN(Date.now()); });
-                    t('lockdownVisible', function () { return typeof lockdown; });
-                    t('shimLeaked', function () { return typeof globalThis.__shimRan; });
-                    t('ObjProtoFrozen', function () { return Object.isFrozen(Object.prototype); });
-                    t('reach', function () { return ({}).constructor.constructor('return 1')(); });
-                    t('ownGlobal', function () { globalThis.__g = 1; return globalThis.__g; });
-                    out.join(' | ');
-                "#
-                ),
-                "harden=function | DateNowIsNaN=false | lockdownVisible=function | \
-                 shimLeaked=undefined | ObjProtoFrozen=true | reach=TypeError | ownGlobal=1",
-                "isolated global, shared frozen intrinsics, closed reach -- but an \
-                 unattenuated Date"
+                measure(Some(vec![
+                    "Object".to_string(),
+                    "String".to_string(),
+                    "Number".to_string(),
+                    "TypeError".to_string(),
+                ])),
+                "Function=undefined | eval=undefined | \
+                 FunctionWorks=ReferenceError: get Function: undefined variable | \
+                 evalWorks=ReferenceError: get eval: undefined variable | \
+                 reach=1 | ObjProtoFrozen=true | startLeaked=undefined",
+                "global_names closes the bindings; the prototype route stays open for \
+                 the same KNOWN GAP as above, which is why neither half is sufficient \
+                 on a Machine today"
             );
-
-            // And nothing the guest put on its global reaches the start realm.
-            assert_eq!(run(&start, "typeof globalThis.__g"), "undefined");
         })
         .unwrap()
         .join()

@@ -92,28 +92,8 @@ impl Interp {
         let Some(mut info) = self.functions.get(&original).cloned() else {
             return original;
         };
-        // `lockdown` joins the evaluators here for a security reason, not a
-        // symmetry one. `do_lockdown`'s compartment guard reads the AMBIENT
-        // environment, and a boot `alloc_named_method` instance carries
-        // `global_env: NULL`, so `frames.rs`'s per-call
-        // `switch_environment(info.global_env)` no-ops for it and the native
-        // runs in whatever environment happens to be current. A guest can steer
-        // that: `Promise.resolve(1).then(lockdown)` from a compartment, then any
-        // host action that parks the ambient environment on the default global
-        // -- `Machine::collect` does, through `prepare_collection` -- ran the
-        // native with `environment.global_obj == realm.global_object()` and
-        // locked the shared realm. Measured before this change:
-        // `direct = lockdown is not available to a compartment` but
-        // `LOCKED AFTER JOB = true`.
-        //
-        // Giving each compartment its own copy with a non-NULL `global_env`
-        // makes that switch fire, so the guard tests the environment the
-        // CAPABILITY belongs to rather than the one that happens to be
-        // ambient -- which is not steerable by queueing a job. The start
-        // realm's original keeps `global_env: NULL` and stays allowed.
         if !self.shared_compartments
-            || !(matches!(info.native, Some(Native::Eval | Native::Function))
-                || matches!(info.method, Some(NativeMethod::GlobalLockdown)))
+            || !matches!(info.native, Some(Native::Eval | Native::Function))
         {
             return original;
         }
@@ -213,41 +193,17 @@ impl Interp {
             return Err(self.catchable_type_error_msg("lockdown already called".into()));
         }
 
-        // Step 0, not in XS because XS cannot reach this: a COMPARTMENT must
-        // not perform the realm's lockdown.
-        //
-        // `lockdown()` mutates state every compartment of the machine shares
-        // -- it rewrites `Function.prototype.constructor` and freezes the
-        // whole intrinsic graph. XS has no analogue of this check because it
-        // has no analogue of the exposure: `harden`/`lockdown`/`petrify` are
-        // globals the TEST SHIM installs on the host global (`xst.c:428-429`),
-        // and a compartment's global is built by `fx_lockdown` itself from the
-        // intrinsics array (`xsLockdown.c:105-139`), which never contains
-        // them. Ironhorse installs them as boot intrinsics instead, so every
-        // environment with an unrestricted `global_names` gets the binding.
-        //
-        // Measured before this check: two compartments on
-        // `Machine::unfrozen_with_start_global_names`, compartment A calls
-        // `lockdown()` and compartment B -- which observed
-        // `false | false | false` moments earlier -- then sees
-        // `Object.isFrozen(Object.prototype) = true`,
-        // `Object.isFrozen(Function.prototype) = true` and
-        // `Function.prototype.constructor !== Function`. One guest hardened
-        // the realm for every sibling.
-        //
-        // The check is on the CAPABILITY, not on the name, which is why it is
-        // here rather than in `install_intrinsic_bindings`. Hiding the binding
-        // would leave the hole open for a compartment whose creator endows it
-        // with a `lockdown` reference captured from the start realm, or
-        // reaches it by any route that is not a bare name. Refusing the call
-        // closes both. The binding stays visible, as `harden` and `petrify`
-        // do; `designs/ironhorse-native-lockdown.md` § Constraints records the
-        // amendment.
-        if self.environment.global_obj != self.realm.global_object() {
-            return Err(
-                self.catchable_type_error_msg("lockdown is not available to a compartment".into())
-            );
-        }
+        // **No compartment check here: neither SES nor XS has one.** An
+        // earlier revision refused when
+        // `environment.global_obj != realm.global_object()`. That was both
+        // unfaithful (SES puts `lockdown` on every global and relies on
+        // idempotence) and unsound (it read the AMBIENT environment, which a
+        // guest steers by queueing a promise job -- measured
+        // `LOCKED AFTER JOB = true`). The invariant now lives in
+        // `new_shared_realm_machine_configured`: a machine that can hold
+        // compartments is already locked down, so a compartment's call meets
+        // step 1 above, and an unfrozen machine does not bind `lockdown` at
+        // all.
 
         // Step 2, poison the function-family constructors (`:94-103`, `:127`).
         // XS calls `fx_lockdown_aux` six times; five of those prototypes exist
@@ -520,6 +476,34 @@ impl Interp {
     ) -> Self {
         let mut machine = Self::new();
         machine.set_global_names(global_names);
+        // **An unfrozen machine does not bind the engine's `lockdown`.**
+        //
+        // `freeze == false` means exactly one thing: the host intends the SES
+        // shim to lock this realm down, which is why the graph is left mutable
+        // (`repairIntrinsics` cannot repair an already-frozen graph). The shim
+        // installs its own `globalThis.lockdown` when it evaluates, so the
+        // engine's would be overwritten anyway -- and until it is, it is a
+        // realm-wide mutation reachable from any compartment of a machine that
+        // by construction has not locked down yet.
+        //
+        // That is the whole of the compartment problem, and this is where it
+        // belongs. In SES a compartment DOES see `lockdown` -- `permits.js`
+        // lists it in `universalPropertyNames`, "properties of all global
+        // objects" -- and it is powerless there only because a compartment
+        // cannot exist before lockdown has run, so the call meets the
+        // idempotence check. XS has the same shape from the other side:
+        // `fx_lockdown` itself builds `mxCompartmentGlobal` (`:139`).
+        // A frozen machine reproduces that faithfully, because `locked_down`
+        // is already true when its first compartment is made. An unfrozen one
+        // cannot, so it does not offer the operation at all.
+        //
+        // A plain `Interp::new()` -- `endot-ih`, `ironhorse-xst`, the
+        // conformance harness, `packages/thixotrope` -- is untouched by this
+        // and keeps its guest `lockdown`; it has no compartments to protect it
+        // from.
+        if !freeze {
+            machine.intrinsics.remove("lockdown");
+        }
         let mut names: Vec<SymbolName> = crate::default_keys::DEFAULT_KEYS
             .iter()
             .copied()
