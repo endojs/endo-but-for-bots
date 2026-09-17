@@ -12,12 +12,13 @@
 Endo's LLM-driven agents (Lal and Fae) need to provide and accept a sturdy
 reference (a **sturdyref**) as a value in a tool call, without assigning it a
 **pet name** (a user-chosen namespace label for a formula; defined in full
-under [What is the Problem Being
+under [What Is the Problem Being
 Solved?](#what-is-the-problem-being-solved)).
-The other terms of art this design turns on (locator, swiss number, and
-formula) are likewise defined in full in that same section; this summary uses
-them before defining them and points there for the definitions rather than
-carrying the definitions inline here.
+The other terms of art this design turns on are glossed in one clause here at
+first use and defined in full in that same section: a **locator** is the
+daemon's authority-bearing `endo://...` designator, a **swiss number** is the
+unguessable secret naming a capability, and a **formula** is the daemon's unit
+of persistent capability.
 The **daemon** here is the Endo background process that stores formulas and
 mediates every capability a confined worker can reach.
 
@@ -111,7 +112,7 @@ crosses a delivery boundary but stays inside one turn, so it is single-turn by
 this definition.
 Crossing a turn boundary is what the deferred retention investigation governs.
 
-## What is the Problem Being Solved?
+## What Is the Problem Being Solved?
 
 Today a daemon worker designates a formula (defined just below) by a pet-name
 path, so to carry one value from one tool call to the next **within a single
@@ -874,7 +875,7 @@ Identity keying is well-defined within a turn because the worker holds the same
 `SturdyRef` object in process memory across that turn's deliveries (the render
 map is where it is held), so the same object rendered twice yields the same
 handle and two distinct objects yield two handles.
-It does not need identity to survive a decode, because the model-mediated flow
+This identity keying does not need identity to survive a decode, because the model-mediated flow
 the map serves stays within one turn and never round-trips the value back
 through the codec between rendering and redemption.
 
@@ -1014,7 +1015,7 @@ differs between the two agents:
   never), leaving the accumulating map above.
 
 Without this per-activation map the natural implementation (a map built once at
-worker start) would silently accumulate the un-investigated cross-turn
+worker start) would silently accumulate the uninvestigated cross-turn
 retention this design defers, so the per-activation lifecycle is a required
 Phase 4 step with its own negative test **run against each of Lal's and Fae's
 actual loop shape**, not an implementation nicety asserted from Lal's loop
@@ -1549,6 +1550,15 @@ does not target it.)
    confined code can obtain or fabricate a sturdyref whose location is remote
    and so aim that branch at a location of its choosing (see [One passable
    representation](#one-passable-representation)).
+   Fallback if all four candidates fail: the confinement bar is load-bearing and
+   not negotiable, so a transport rule that cannot satisfy it does not license
+   shipping the rejected identity-bearing remotable the 2026-07-15 review turned
+   down. The surface instead ships **local-only** — accept redeems only a handle
+   whose sturdyref resolves to a location the daemon already holds, with the
+   remote branch of `enlivenSturdyRef` disabled — and the wire representation for
+   cross-daemon sturdyrefs is shelved to the retention investigation rather than
+   forced. Phase 1 records which of these (local-only ship vs. shelve the whole
+   surface) it selects once the candidates are settled.
 2. Is sturdyref redemption holder-scoped or bearer-scoped?
    Per-worker revocation is only meaningful if a redeeming facet checks the
    presenting worker, not merely the value.
