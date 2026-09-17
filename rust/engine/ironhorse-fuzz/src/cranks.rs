@@ -25,7 +25,9 @@
 
 use ironhorse_262::{dual_run_cranks, Agreement};
 
-use crate::{gen_program, gen_stage2b_program, gen_stage3_arrays_program};
+use crate::{
+    comparison::results_agree, gen_program, gen_stage2b_program, gen_stage3_arrays_program,
+};
 
 /// A per-crank divergence between ironhorse and the XS oracle.
 #[derive(Debug)]
@@ -169,10 +171,17 @@ pub fn differential_check_cranks(sequence: &[String]) -> Result<usize, CrankDive
     };
     for (i, run) in runs.iter().enumerate() {
         let detail = match run.agreement {
-            Agreement::BothComplete if !run.result_agrees => Some(format!(
-                "crank result divergence: oracle {:?} against ironhorse {:?}",
-                run.oracle_result, run.ironhorse_result
-            )),
+            // Use the same exact-double rendering policy as the single-crank
+            // fuzzer. DualRun's raw string comparison also reports known XS
+            // dtoa spelling differences; it is not a numeric value mismatch.
+            Agreement::BothComplete
+                if !results_agree(&run.oracle_result, &run.ironhorse_result) =>
+            {
+                Some(format!(
+                    "crank result divergence: oracle {:?} against ironhorse {:?}",
+                    run.oracle_result, run.ironhorse_result
+                ))
+            }
             Agreement::BothAbort if !run.error_agrees => Some(format!(
                 "crank abort divergence: oracle {:?} against ironhorse {:?} ({:?})",
                 run.oracle_error, run.ironhorse_error, run.ironhorse_halt
@@ -212,6 +221,35 @@ pub fn crank_sequence_differential_is_clean(data: &[u8]) -> Result<usize, CrankD
 mod tests {
     use super::*;
     use std::collections::BTreeSet;
+
+    #[test]
+    fn finding_3bb7e699_multi_crank_number_rendering_agrees() {
+        // PR #1302's CI input (crash-3bb7e6991dcd74161f22920b2311a4e9e336e7e3).
+        // Preserve the input as well as the reduced, generator-independent
+        // sequence: crank 4 calls a function retained from crank 0 and yields
+        // 0x4370740000000000. XS renders that as 74098287619080190;
+        // IronHorse's shortest round-trip spelling is 74098287619080200.
+        let input = [
+            234, 94, 130, 218, 102, 218, 254, 86, 226, 86, 122, 210, 94, 47, 9, 177, 48, 207, 207,
+            207, 234, 94, 130, 218, 102, 218, 254, 86, 226, 86, 122, 210, 94, 210, 246, 78, 218,
+            78, 114, 202, 86, 202, 238, 217, 217, 217, 217, 217, 217, 217, 217, 217, 217, 217, 217,
+            76, 76, 76, 76, 76, 76, 76, 76, 76, 76, 217, 217, 217, 217, 217, 186, 70, 186, 222, 55,
+            194, 207, 207, 207, 207, 207, 207, 207, 207, 207, 207, 207, 207, 207, 207, 207, 207,
+            207, 207, 207, 54, 207, 207, 207, 207, 207, 207, 207, 207, 207, 207, 207, 207, 207,
+            207, 207, 207, 207, 207, 90,
+        ];
+        let reduced = vec![
+            "function f(a){return a;} f(0)".to_string(),
+            "f(377487360 / (377487360 / (377487360 / (5 / 981467136))))".to_string(),
+        ];
+        for sequence in [reduced, gen_crank_sequence(&input)] {
+            assert_eq!(
+                differential_check_cranks(&sequence).expect("same double must agree"),
+                sequence.len(),
+                "every crank must actually run"
+            );
+        }
+    }
 
     fn seed_bytes(seed: u32, salt: u8) -> Vec<u8> {
         let s = seed.to_le_bytes();
