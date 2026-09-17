@@ -2660,7 +2660,18 @@ impl Coder<'_, '_> {
             self.add_byte(0, XS_CODE_THROW_STATUS);
         }
         self.add_byte(-1, XS_CODE_SET_RESULT);
-        let rt = self.return_target.expect("yield outside a function");
+        // No enclosing function to return into. A parameter default is
+        // coded BEFORE the function installs its own return target, and
+        // `code_module` hoists its defines before installing one at all,
+        // so `yield` in a generator's own parameter list
+        // reaches here. The spec makes that an early error — a
+        // FormalParameters list may not contain one — which the parser
+        // does not yet reject, so report it rather than abort: a
+        // guest-reachable `SyntaxError` is the honest answer and an
+        // aborted compiler is not (architecture finding F063).
+        let Some(rt) = self.return_target else {
+            self.report(node.line, "no yield here");
+        };
         self.adjust_environment(rt);
         self.adjust_scope(rt);
         self.add_branch(0, XS_CODE_BRANCH_1, rt);
@@ -2751,7 +2762,18 @@ impl Coder<'_, '_> {
             self.add_byte(0, XS_CODE_THROW_STATUS);
         }
         self.add_byte(-1, XS_CODE_SET_RESULT);
-        let rt = self.return_target.expect("yield* outside a function");
+        // No enclosing function to return into. A parameter default is
+        // coded BEFORE the function installs its own return target, and
+        // `code_module` hoists its defines before installing one at all,
+        // so `yield*` in a generator's own parameter list
+        // reaches here. The spec makes that an early error — a
+        // FormalParameters list may not contain one — which the parser
+        // does not yet reject, so report it rather than abort: a
+        // guest-reachable `SyntaxError` is the honest answer and an
+        // aborted compiler is not (architecture finding F063).
+        let Some(rt) = self.return_target else {
+            self.report(node.line, "no yield* here");
+        };
         self.adjust_environment(rt);
         self.adjust_scope(rt);
         self.add_branch(0, XS_CODE_BRANCH_1, rt);
@@ -2815,7 +2837,18 @@ impl Coder<'_, '_> {
         self.add_byte(0, XS_CODE_AWAIT);
         self.add_branch(1, XS_CODE_BRANCH_STATUS_1, target);
         self.add_byte(-1, XS_CODE_SET_RESULT);
-        let rt = self.return_target.expect("await outside a function");
+        // No enclosing function to return into. A parameter default is
+        // coded BEFORE the function installs its own return target, and
+        // `code_module` hoists its defines before installing one at all,
+        // so `await` in an async function's own parameter list
+        // reaches here. The spec makes that an early error — a
+        // FormalParameters list may not contain one — which the parser
+        // does not yet reject, so report it rather than abort: a
+        // guest-reachable `SyntaxError` is the honest answer and an
+        // aborted compiler is not (architecture finding F063).
+        let Some(rt) = self.return_target else {
+            self.report(node.line, "no await here");
+        };
         self.adjust_environment(rt);
         self.adjust_scope(rt);
         self.add_branch(0, XS_CODE_BRANCH_1, rt);
@@ -5784,7 +5817,17 @@ impl Coder<'_, '_> {
             // No parameter: the primary scope is the body block.
             let statement_scope = self.scope_of(node);
             self.scope_coding_block(statement_scope);
-            self.scope_code_define_nodes(statement_scope);
+            // The BODY's defines, exactly as `code_block` codes a block's:
+            // a catch body is a block, and `function f(){}` directly inside
+            // one is valid ES2022 (Annex B in sloppy mode, a lexical
+            // declaration in strict). This used to call the asserting
+            // `scope_code_define_nodes`, whose contract is "this scope has no
+            // defines" — so `try{}catch{function f(){}}`, twenty-six bytes of
+            // valid source, aborted the compiler. Found by the F063
+            // reachability audit; test262 has exactly one function-in-catch
+            // case and it is a `negative: parse` fixture, so the corpus sweep
+            // could not reach this.
+            self.code_define_nodes(&node.children[1]);
             if self.tree.scopes[statement_scope].disposable_count > 0 {
                 let context = self.scope_code_using(statement_scope);
                 self.code(&node.children[1]);
@@ -5805,7 +5848,8 @@ impl Coder<'_, '_> {
             self.code_assign(&node.children[0], 0);
             self.add_byte(-1, XS_CODE_POP);
             self.scope_coding_block(statement_scope);
-            self.scope_code_define_nodes(statement_scope);
+            // The body's defines, as above — `catch (e) { function f(){} }`.
+            self.code_define_nodes(&node.children[1]);
             if self.tree.scopes[statement_scope].disposable_count > 0 {
                 let context = self.scope_code_using(statement_scope);
                 self.code(&node.children[1]);
