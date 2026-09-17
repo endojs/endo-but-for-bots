@@ -105,31 +105,60 @@ escapes node's problem but still has to answer this one.
 
 `test262:ironhorse` now starts. Before the native `lockdown()` it refused: `-l`
 named a mode with no implementation, and `endot-ih` exited 2 rather than
-running all 15288 files, pre-skipping every one with a truthful
+running all 35891 files, pre-skipping every one with a truthful
 `ses-mode:lockdown-unimplemented`, and exiting 0 — a lane that reads as a
 passing third host while testing nothing. A ratchet needs a real number more
 than a green tick.
 
 The number it now reports on this corpus is **0 of 8 covered, 8 named skips**,
-and that is not a lockdown result. Two cases skip on `feature:Compartment`, the
-constructor Ironhorse models as a host-side Rust API rather than a guest
-intrinsic. The other six are `shared-positive-test-failure`: they call
-`frozenBytes`, `compareBytes`, `concatBytes` and `passStyleOf`, which
-`src/expose-pass-style-bytes-globals.js` supplies to the PRELUDE hosts and
-which no engine has natively — so Ironhorse and the XS oracle fail them
-identically, which is agreement, which is a skip rather than a divergence.
+and that is not a lockdown result. Two cases skip on `feature:Compartment`
+(`Symbol.toStringTag.js` and `Symbol.toStringTag-lockdown.js`), the constructor
+Ironhorse models as a host-side Rust API rather than a guest intrinsic. The
+other six are `shared-positive-test-failure`, and they do not all want the same
+thing:
 
-So the engine lane measures the guest surface, and the guest surface is one
-name short. It moves when `Compartment` lands, not when `lockdown` did.
-For a compatibility count today, read `test262:ironhorse-host`.
+| Case | Needs | Supplied by |
+|---|---|---|
+| `byte-array-brand.js` | `frozenBytes`, `passStyleOf` | `src/expose-pass-style-bytes-globals.js` |
+| `byte-readers.js` | `frozenBytes`, `compareBytes`, `concatBytes` | same |
+| `native-or-emulated-shape.js` | `frozenBytes` | same |
+| `immutable-arraybuffer-intersection.js` | `frozenBytes` | same |
+| `ses-hosts.js` | `environment` | `src/ironhorse-prelude.js` |
 
-What `-l` did buy is a differential gate on the lockdown itself, and it was
-worth having: run over `built-ins/Function`, `built-ins/Object`,
-`built-ins/Date` and the whole `test/ironhorse` corpus — 6053 files — `-l`
-produces byte-identical outcomes to a run without it, including identical
-failure sets on the two subtrees that have pre-existing failures. Ironhorse's
-`lockdown()` and XS's `fx_lockdown` do not disagree anywhere those corpora
-reach.
+No engine has any of these natively, so Ironhorse and the XS oracle fail them
+identically — which is agreement, which is a skip rather than a divergence.
+
+So the engine lane measures the guest surface, and the guest surface is **six
+names short**: `Compartment`, `frozenBytes`, `compareBytes`, `concatBytes`,
+`passStyleOf` and `environment`. An earlier revision of this paragraph said
+"one name short" and that `Compartment` landing would move it. Both are wrong,
+and the second is the one that matters: `Compartment` moves **2 of the 8**, and
+the remaining 6 need globals a prelude currently supplies, one of which
+(`ses-hosts.js`) is not in the bytes family at all. For a compatibility count
+today, read `test262:ironhorse-host`.
+
+What `-l` bought is a differential gate on the lockdown itself. An earlier
+revision of this paragraph claimed that gate had already reported agreement
+over 6053 files. **Disregard that claim.** The measurement ran, but
+`SesMode::prelude()` had no caller on the run path at the time, so `-l` lifted
+the pre-skip and then ran the corpus *unlocked*; byte-identical outcomes with
+and without the flag were the symptom, not the result.
+`designs/ironhorse-native-lockdown.md` § Status has the post-mortem.
+
+With the splice actually connected, what the gate reports is:
+
+* `test/ironhorse`, 1712 files: **1712 covered, 0 failed** under `-l`.
+* `built-ins/Boolean`, 49 files: **18 failures without `-l`, 21 with.** All
+  three additions are cases where lockdown legitimately makes a `verifyProperty`
+  assertion fail on *both* engines, and the two engines then render the same
+  thrown `Test262Error` differently (`Test262Error: …` vs `Object: …`). That
+  renderer gap is pre-existing and reproduces with no `lockdown()` in the case
+  at all.
+* Everything between those two is unmeasured under `-l`.
+
+Five oracle divergences in the lockdown itself were found by review rather than
+by this gate; two are fixed and three are open by decision. The ledger is in
+`designs/ironhorse-native-lockdown.md` § Oracle divergences, measured.
 
 `ironhorse-xst` answers to the same principle in the other direction.
 A negative parse-phase case passes when the host prints `SyntaxError` on
