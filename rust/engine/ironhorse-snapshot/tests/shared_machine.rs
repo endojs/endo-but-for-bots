@@ -1111,3 +1111,50 @@ fn host_functions_created_after_collection_remain_persistable() {
         .unwrap();
     assert!(from_snapshot_bytes(&bytes, &signature).is_ok());
 }
+
+/// A queued NATIVE promise job survives a shared-machine checkpoint.
+///
+/// Shared-machine evaluation deliberately leaves promise jobs queued, so
+/// `promise_jobs` is ordinary carried state at this boundary, not an
+/// exceptional one. The shared serializer had its own reaction encoder with a
+/// catch-all `unreachable!`, so the two carries the persist gate had already
+/// started admitting — async generators (format 23) and `Array.fromAsync`
+/// accumulations (format 24, architecture finding F127) — reached a host
+/// panic from ordinary guest code instead of a snapshot. The gate said yes
+/// and the writer aborted the process.
+///
+/// Both arms drain AFTER the restore, so each asserts the job came back
+/// pointing at the right carried row, not merely that the write did not
+/// panic. Found in review of the F127 carry.
+#[test]
+fn queued_native_promise_jobs_survive_a_shared_checkpoint() {
+    for (label, source, drain, expected) in [
+        (
+            "fromAsync",
+            "var result; Array.fromAsync([1, 2]).then(x => result = x.join(',')); 0",
+            "result",
+            "1,2",
+        ),
+        (
+            "async generator",
+            "var result; \
+             async function* g() { yield 1; yield 2; } \
+             (async () => { var out = []; for await (var v of g()) out.push(v); \
+                            result = out.join(','); })(); 0",
+            "result",
+            "1,2",
+        ),
+    ] {
+        let m = Machine::new();
+        let a = m.new_compartment();
+        let aid = a.snapshot_id().unwrap();
+        assert_eq!(eval(&a, source), "0", "{label}: fixture");
+        // The checkpoint is taken with the jobs still queued: that is the
+        // boundary the defect was reachable from.
+        let restored = roundtrip(&m);
+        let ra = restored.claim_compartment(aid).unwrap();
+        let outcome = restored.run_promise_jobs();
+        assert!(outcome.completed, "{label}: drain {:?}", outcome.halt);
+        assert_eq!(eval(&ra, drain), expected, "{label}: resumed result");
+    }
+}

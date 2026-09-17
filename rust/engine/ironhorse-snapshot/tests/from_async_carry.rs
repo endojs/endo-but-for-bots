@@ -20,7 +20,10 @@ mod carry;
 use carry::{compile, twin, Observation};
 use ironhorse_snapshot::format::SnapshotError;
 use ironhorse_snapshot::image::{read_machine, write_machine_unchecked, MachineImage};
-use ironhorse_snapshot::machine::{from_snapshot_bytes, MachineSnapshot};
+use ironhorse_snapshot::machine::{
+    begin_store_session, checkpoint_to_store, from_snapshot_bytes, resume_from_store,
+    MachineSnapshot,
+};
 use ironhorse_snapshot::store::{image_to_batch_unchecked, validate_store, MemoryStore};
 use ironhorse_snapshot::Signature;
 use ironhorse_vm::snapshot_api::FromAsyncRow;
@@ -73,8 +76,14 @@ fn a_suspended_from_async_resumes_with_its_accumulation() {
 }
 
 /// Two accumulations in flight at once, released in the opposite order, so a
-/// row read back at the wrong index settles the wrong one. A single-row
-/// fixture cannot catch an off-by-one in the compaction remap; this can.
+/// row read back at the wrong index settles the wrong one.
+///
+/// This does NOT exercise the compaction remap, and an earlier version of
+/// this comment claimed it did. Both accumulations are live, so the live set
+/// is already dense and `fa_map` is the identity — a writer that skipped the
+/// remap entirely passes this test.
+/// `a_checkpoint_after_one_accumulation_settles_remaps_the_survivor` is the
+/// one that needs a dead entry below a live one, and is what actually pins it.
 #[test]
 fn two_suspended_accumulations_keep_their_own_elements() {
     let mut store = store();
@@ -122,9 +131,15 @@ fn an_array_like_accumulation_carries_its_length() {
     assert_eq!(results[1].2, "x|y|z");
 }
 
-/// An accumulation that REJECTS across the boundary. The `close_error` slot
-/// and the `settled` latch are carried for this path, and a resumed machine
-/// that lost them would either settle twice or not at all.
+/// An accumulation that REJECTS across the boundary, which is what carries
+/// the `settled` latch: a resumed machine that lost it would settle twice or
+/// not at all.
+///
+/// It does NOT reach `close_error`, and this comment used to claim it did.
+/// The input is an Array, whose sync iterator has no `return`, so the close
+/// path falls straight through to the rejection and the slot stays undefined.
+/// `a_close_await_carries_the_error_it_is_unwinding_with` below is the
+/// fixture that actually parks on `FromAsyncClose` with an error in flight.
 #[test]
 fn a_rejecting_accumulation_resumes_its_rejection() {
     let mut store = store();
@@ -140,6 +155,95 @@ fn a_rejecting_accumulation_resumes_its_rejection() {
         &mut store,
     );
     assert_eq!(results[1].2, "rejected:boom");
+}
+
+/// The `close_error` slot and the `FromAsyncClose` step (reaction kind 10),
+/// which no other fixture reaches.
+///
+/// A throwing `mapfn` starts an `AsyncIteratorClose`, and an iterator whose
+/// `return()` answers with a still-unsettled promise parks the accumulation
+/// on that close — holding the error it is unwinding with in `close_error`
+/// until the close completes. A resumed machine that lost the slot rejects
+/// with `undefined` instead of the real error, which no round-trip assertion
+/// on the other fixtures can see: blanking `close_error` in the encoder left
+/// the whole suite green before this test existed.
+#[test]
+fn a_close_await_carries_the_error_it_is_unwinding_with() {
+    let mut store = store();
+    let results: Vec<Observation> = twin(
+        "var release; \
+         var seen = 'none'; \
+         var iterable = { \
+             [Symbol.asyncIterator]() { \
+                 var sent = false; \
+                 return { \
+                     next() { \
+                         if (sent) return Promise.resolve({ done: true }); \
+                         sent = true; \
+                         return Promise.resolve({ value: 1, done: false }); \
+                     }, \
+                     return() { return new Promise(function (r) { release = r; }); } \
+                 }; \
+             } \
+         }; \
+         Array.fromAsync(iterable, function () { throw 'mapboom'; }) \
+           .then(function () { seen = 'resolved'; }, \
+                 function (e) { seen = 'rej:' + e; }); \
+         seen",
+        &["release({ done: true }); 0", "seen"],
+        &mut store,
+    );
+    assert_eq!(
+        results[1].2, "rej:mapboom",
+        "the resumed close must reject with the carried error, not {:?}",
+        results[1].2
+    );
+}
+
+/// A checkpoint taken while entry 0 is DEAD and entry 1 is still live, which
+/// is the only shape that tells the compaction remap apart from the identity.
+///
+/// Every other fixture writes at boot (all entries live, in order) or at the
+/// end (all settled, arena empty), so `fa_map[&fa]` and `fa` agree and a
+/// regression that skipped the remap would pass the whole suite. Here the
+/// first accumulation settles before the checkpoint, so the writer emits the
+/// surviving one at index 0 while its reaction still names index 1.
+///
+/// A skipped remap is not a subtle wrong answer: the writer's own image fails
+/// the anchoring gate — "fromAsync: accumulations not densely referenced" —
+/// so the machine cannot checkpoint itself at all. This is also the only test
+/// that drives an INCREMENTAL `ASYN` write with live rows in it.
+#[test]
+fn a_checkpoint_after_one_accumulation_settles_remaps_the_survivor() {
+    let signature = Signature::new("from-async-remap");
+    let source = "var releaseA, releaseB; \
+         var a = new Promise(function (r) { releaseA = r; }); \
+         var b = new Promise(function (r) { releaseB = r; }); \
+         var seenA = 'none'; var seenB = 'none'; \
+         Array.fromAsync([a, 'a2']).then(function (o) { seenA = o.join('|'); }); \
+         Array.fromAsync([b, 'b2']).then(function (o) { seenB = o.join('|'); }); \
+         0";
+    let (bytecode, names) = compile(source);
+    let mut machine = Interp::new();
+    machine.link_intrinsics(&names);
+    assert!(machine.run(&bytecode).completed);
+    let mut store = MemoryStore::default();
+    let mut session = begin_store_session(machine, &signature, &mut store)
+        .map_err(|(_, e)| e)
+        .expect("the boot image holds both accumulations");
+    // Settle the FIRST one only. Its arena entry dies; the second stays live
+    // at index 1 and must be written at index 0.
+    assert!(carry::crank(session.machine_mut(), "releaseA('a1'); 0").0);
+    checkpoint_to_store(&mut session, &signature, &mut store)
+        .expect("a mid-flight checkpoint with a dead entry below a live one");
+    validate_store(&store, &signature).expect("the remapped image validates");
+    drop(session);
+    let mut session = resume_from_store(&store, &signature).expect("resumes");
+    // The survivor must still be the one the guest is holding.
+    let released = carry::crank(session.machine_mut(), "releaseB('b1'); 0");
+    assert!(released.0, "{:?}", released.1);
+    let seen = carry::crank(session.machine_mut(), "seenA + '/' + seenB");
+    assert_eq!(seen.2, "a1|a2/b1|b2", "the remapped survivor settled wrong");
 }
 
 fn sig() -> Signature {
@@ -171,9 +275,17 @@ fn image_of(source: &str) -> MachineImage {
     image
 }
 
-/// The blob path's verdict on a crafted image. The store path is held to the
-/// same verdict: a row-shape refusal lands at commit, an anchor refusal at
-/// adoption, so this only requires that one of the two rejects it.
+/// The blob path's verdict on a crafted image, which is what the callers
+/// assert by name.
+///
+/// The store path is checked too, but only as a weaker property: that it
+/// cannot PRODUCE the machine. Most of these mutations do not even reach a
+/// store gate — `commit` refuses the batch outright — so for those the store
+/// arm below does not run at all. Where it does, which gate speaks depends on
+/// the claim: a row-shape rule is structural and `validate_store` sees it,
+/// while a claim about another table needs every table in place, which is
+/// adoption. `crafted_row_refusals.rs` is where the store path's own verdict
+/// is asserted by name.
 fn refusal(
     original: &MachineImage,
     mutate: impl FnOnce(&mut MachineImage),
@@ -188,9 +300,15 @@ fn refusal(
     )
     .is_ok()
     {
+        // The store must not be able to PRODUCE this machine. Which of its
+        // two gates says so depends on the claim: a row-shape rule is
+        // structural and `validate_store` sees it, while a claim about
+        // another table is only visible once every table is in place, which
+        // is adoption. Requiring either keeps this helper usable for both
+        // without pretending the cheap gate catches what it cannot.
         assert!(
-            validate_store(&store, &sig()).is_err(),
-            "store admits the crafted image"
+            validate_store(&store, &sig()).is_err() || resume_from_store(&store, &sig()).is_err(),
+            "the store yields the crafted machine"
         );
     }
     verdict
@@ -279,6 +397,79 @@ fn crafted_from_async_rows_are_refused() {
         }),
         Err(SnapshotError::Corrupt(
             "fromAsync: index past the array-like length"
+        ))
+    );
+}
+
+/// The two flags that make a claim about ANOTHER table, and the one
+/// row-internal rule the decoder used to enforce in only one direction.
+///
+/// These are separate from the arm above because they are not row-shape
+/// rules: nothing in the row itself is wrong, and only a cross-table check
+/// after restore can tell. Each was admitted by BOTH paths before this, and
+/// each then broke the next crank rather than the checkpoint — which is the
+/// worst place for a corrupt store to surface.
+#[test]
+fn a_from_async_flag_that_disagrees_with_another_table_is_refused() {
+    // `Array.fromAsync.call(C, ...)` accumulates into a plain constructor's
+    // instance, so the honest row has TARGET_IS_ARRAY CLEAR. Setting it sends
+    // the resumed machine down the dense-array store, which unwraps
+    // `self.arrays` on a target that is not there.
+    let non_array = image_of(
+        "var release; \
+         var pending = new Promise(function (r) { release = r; }); \
+         function C() { this.tag = 'C'; } \
+         Array.fromAsync.call(C, [pending, 'q']); 0",
+    );
+    assert!(
+        !non_array.promise_cluster.from_async[0].has(FromAsyncRow::TARGET_IS_ARRAY),
+        "the fixture must accumulate into a non-Array target"
+    );
+    assert_eq!(
+        refusal(&non_array, |image| {
+            image.promise_cluster.from_async[0].flags |= FromAsyncRow::TARGET_IS_ARRAY
+        }),
+        Err(SnapshotError::Corrupt(
+            "side-table restore: malformed promise capability"
+        ))
+    );
+    // An ASYNC iterator, whose honest row has SYNC_WRAPPED clear. Setting it
+    // makes the resumed machine read a step promise as a `{value, done}`
+    // record and walk until the meter stops it.
+    let async_iterated = image_of(
+        "var release; \
+         var iterable = { \
+             [Symbol.asyncIterator]() { \
+                 return { next() { return new Promise(function (r) { release = r; }); } }; \
+             } \
+         }; \
+         Array.fromAsync(iterable); 0",
+    );
+    let row = &async_iterated.promise_cluster.from_async[0];
+    assert!(
+        row.iterator != Slot::undefined() && !row.has(FromAsyncRow::SYNC_WRAPPED),
+        "the fixture must hold a genuinely async iterator"
+    );
+    assert_eq!(
+        refusal(&async_iterated, |image| {
+            let row = &mut image.promise_cluster.from_async[0];
+            row.iterator = Slot::undefined();
+            row.next_method = Slot::undefined();
+            row.flags |= FromAsyncRow::SYNC_WRAPPED;
+        }),
+        Err(SnapshotError::Corrupt(
+            "fromAsync: iterator state without an iterator"
+        ))
+    );
+    // An iterator with no `next` method: admitted by every row clause, and
+    // the resumed accumulation then has nothing to step, so its result
+    // promise never settles. A silent permanent stall, refused now.
+    assert_eq!(
+        refusal(&async_iterated, |image| {
+            image.promise_cluster.from_async[0].next_method = Slot::undefined()
+        }),
+        Err(SnapshotError::Corrupt(
+            "fromAsync: an iterator without its next method"
         ))
     );
 }

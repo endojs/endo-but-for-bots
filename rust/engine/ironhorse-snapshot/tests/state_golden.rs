@@ -242,18 +242,26 @@ fn both_async_generator_and_from_async_state_now_write_and_read_back() {
             .unwrap_or_else(|e| panic!("{source}: {e:?}"));
         from_snapshot_bytes(&bytes, &sig).unwrap_or_else(|e| panic!("{source}: {e:?}"));
     }
-    // The gate itself is not vacuous: a machine stopped mid-crank is still
-    // refused, so the two arms above are admissions and not a disabled check.
-    // The host denies the first budget refill, which aborts inside the loop
-    // body and leaves the frame on the stack.
+    // The control must guard the SAME gate the two arms above used to trip.
+    // A quiescence control does not: it lives on a different branch of
+    // `write_snapshot`, so the whole pending-row gate could be deleted and
+    // this test would stay green while claiming otherwise. The `$262` host is
+    // a quiescent machine that the PENDING-ROW gate still refuses, which is
+    // the branch that has to remain live for the admissions to mean anything.
+    let (code, names) = ironhorse_compile::compile_atoms("var x = 0; x = 41; x").unwrap();
     let mut machine = Interp::new();
-    let (code, names) = ironhorse_compile::compile_atoms("while (true) {}").unwrap();
+    // BEFORE `link_intrinsics`, which is the installer's own precondition.
+    machine.install_test262_host();
     machine.link_intrinsics(&parse_symbols(&names));
-    machine.arm_meter(200, Box::new(|_| false));
-    assert!(!machine.run(&code).completed);
+    assert!(machine.run(&code).completed);
+    assert!(
+        machine.is_quiescent(),
+        "the refusal must not be quiescence's"
+    );
     assert!(matches!(
         machine.write_snapshot(&sig),
-        Err(MachineSnapshotError::NotQuiescent)
+        Err(MachineSnapshotError::PendingStateUnsupported { row })
+            if row == "a test262 `$262` host object, which no snapshot carries"
     ));
 }
 

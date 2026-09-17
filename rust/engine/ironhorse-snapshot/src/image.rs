@@ -2891,7 +2891,10 @@ pub(crate) fn decode_async_section(
             if count == 0 {
                 return Err(SnapshotError::Corrupt("fromAsync: redundant empty trailer"));
             }
-            from_async.reserve(count.min(p.len() / (7 * SLOT_RECORD_BYTES + 21)));
+            // Eight slots plus twenty-one scalar bytes (target, k, len,
+            // flags): the row's true minimum width, so a declared count
+            // cannot reserve more than the payload could hold.
+            from_async.reserve(count.min(p.len() / (8 * SLOT_RECORD_BYTES + 21)));
             for _ in 0..count {
                 let row = ironhorse_vm::snapshot_api::FromAsyncRow {
                     resolve: c.slot()?,
@@ -2932,6 +2935,16 @@ pub(crate) fn decode_async_section(
                 {
                     return Err(SnapshotError::Corrupt(
                         "fromAsync: iterator state without an iterator",
+                    ));
+                }
+                // And the other direction, which is the one a stall hides
+                // in: an iterator with no `next` method is admitted by every
+                // clause above, and the resumed accumulation then has nothing
+                // to step — its result promise never settles at all. A
+                // permanent silent stall is worse than a refusal.
+                if iterated && row.next_method.kind != Kind::Reference {
+                    return Err(SnapshotError::Corrupt(
+                        "fromAsync: an iterator without its next method",
                     ));
                 }
                 if iterated && row.len != 0 {
@@ -4635,6 +4648,15 @@ fn encode_machine(image: &MachineImage) -> Result<Vec<u8>, SnapshotError> {
         // The generator trailer of `ASYN` is a format-23 shape: an older
         // reader would refuse the payload's trailing bytes.
         version.format_version = version.format_version.max(23);
+    }
+    if !image.promise_cluster.from_async.is_empty() {
+        // And the `Array.fromAsync` trailer behind it is a format-24 shape
+        // (architecture finding F127). Without this the writer would emit a
+        // container it cannot read back: an image whose stamp came from
+        // somewhere other than the current writer — a decoded older image
+        // republished, or one deliberately marker-stamped — carries the
+        // trailer under a stamp the reader refuses by name.
+        version.format_version = version.format_version.max(24);
     }
     if image.function_state.native_names.is_some() {
         version.format_version = version.format_version.max(18);
@@ -9619,15 +9641,56 @@ mod from_async_decoder_refusals {
                 "fromAsync: trailer in a pre-format-24 container"
             ))
         );
-        // At 24 the trailer passes the stamp gate and the crafted target
-        // fails a later bounds check instead.
-        let at_24 = with_trailer(24);
-        assert!(at_24.is_err());
+        // At 24 the trailer passes the stamp gate and is refused by the
+        // NEXT rule instead. Named exactly rather than asserted `is_err`:
+        // this arm exists to show the stamp gate stopped being the reason,
+        // and any unrelated failure would satisfy a bare `is_err`. The image
+        // carries no promises, so the accumulation is unanchored and the
+        // density check fires before anything looks at the crafted target.
+        assert_eq!(
+            with_trailer(24),
+            Err(SnapshotError::Corrupt(
+                "fromAsync: accumulations not densely referenced"
+            ))
+        );
+    }
+
+    /// The writer-side twin of that stamp gate: an image carrying an
+    /// accumulation is STAMPED at 24, so the writer cannot emit a container
+    /// its own reader refuses.
+    ///
+    /// The generator trailer has had this floor since format 23. Without the
+    /// matching one here, an image whose stamp came from somewhere other than
+    /// the current writer — a decoded older image republished, or one
+    /// deliberately marker-stamped the way the golden-corpus controls are —
+    /// is written and then unreadable by name.
+    #[test]
+    fn writing_an_accumulation_raises_the_format_stamp() {
+        let signature = Signature::new("ironhorse-test-sig-v1");
+        let mut image = MachineImage::from_arenas(
+            signature.clone(),
+            &SlotArena::new(),
+            &ChunkArena::new(),
+            &[],
+            vec!["name".into()],
+            Vec::new(),
+            SymbolKeyImage::default(),
+        );
+        image.promise_cluster.from_async = vec![from_async_row()];
+        image.version.format_version = 23;
+        let bytes = write_machine_unchecked(&image);
+        let stamped = AtomReader::parse(&bytes).unwrap();
+        assert!(
+            stamped.find(crate::format::ASYN).is_some(),
+            "the trailer must actually be written"
+        );
+        // The refusal below must be the crafted target's, never the stamp's.
         assert_ne!(
-            at_24,
+            read_machine(&bytes, &signature),
             Err(SnapshotError::Corrupt(
                 "fromAsync: trailer in a pre-format-24 container"
-            ))
+            )),
+            "the writer emitted a container its own reader refuses"
         );
     }
 
