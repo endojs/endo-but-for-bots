@@ -4633,8 +4633,23 @@ happen — and a test now pins that premise, failing the day static blocks stop
 being deferred, because the audit would then need re-running against sources
 that reach the back end.
 That is one of the nine shapes.
-The other eight, and the release-mode `assert_ne!`, are the audit this finding
-still wants, now stated as a list someone can work rather than a surface.
+The release-mode `assert_ne!` is audited too, and it turns out to be the
+best-defended site in the file rather than the worst: `new_node` hands out the
+`u32::MAX` sentinel only once the identity space is exhausted, and
+`finish_tree` then refuses the tree at the parse exit, so no sentinel-bearing
+node reaches the scoper at all.
+What that rests on is the exit roster being complete, which was four entry
+points someone had written down — and a fifth added without `finish_tree`
+would reopen the abort while passing the test that covers the four by not
+being in it.
+`every_public_parse_entry_point_calls_finish_tree` now scans both parser
+sources and asserts every `pub fn parse_*` routes through `finish_tree`, and
+that exactly four exist.
+It was mutation-tested three ways before landing — a removed `finish_tree`
+call, a non-compliant fifth entry point, and a COMPLIANT fifth one — and each
+fails it, the last being the case the first assertion alone would have missed.
+The other eight shapes are the audit this finding still wants, now stated as a
+list someone can work rather than a surface.
 It is deliberately NOT claimed as done: nothing here establishes any of the
 invariants, and the first draft of this paragraph asserted one the code
 contradicts, which is the argument for making them per-cluster and in writing

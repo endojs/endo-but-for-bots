@@ -68,7 +68,11 @@ an open scope and its three readers rest on token dispatch instead.
 parameter default across all five goal modes, and none panics — which closes
 one of the nine shapes and leaves eight.
 The panic surface is wider than those 29 in any case: `node_id` asserts in
-release mode from 39 call sites.
+release mode from 39 call sites — audited, and unreachable, because the
+`u32::MAX` sentinel is only issued on identity exhaustion and `finish_tree`
+refuses such a tree at the parse exit; a scanner now holds the exit roster
+complete, since that was the one assumption a later entry point could break.
+Eight of the nine `expect`/`unwrap` shapes remain.
 The bookkeeping `expect`s and the audit's non-reproducible negative over
 generated sources are the rest.
 
