@@ -81,6 +81,43 @@ test('Codex factory delegates checkpoint operations and retains failed native st
   }
 });
 
+test('Codex factory resolves Floot empty thinking selection before provisioning', async t => {
+  const requests = [];
+  const factory = makeCodexBackendFactory({
+    models: [model],
+    async provisionSession(id, request) {
+      requests.push(request);
+      return Far('Client', {});
+    },
+    async stopSession() {},
+    async removeSession() {},
+  });
+  const tools = Far('Tools', {});
+  for (const spec of [
+    {},
+    { reasoningEffort: '' },
+    { reasoningEffort: 'low' },
+  ]) {
+    // eslint-disable-next-line no-await-in-loop
+    const { admin } = await E(factory).create(
+      harden({ sessionId: 'default-effort', ...spec }),
+      tools,
+    );
+    t.is(requests.at(-1).reasoningEffort, 'low');
+    // eslint-disable-next-line no-await-in-loop
+    await E(admin).terminate();
+  }
+  const count = requests.length;
+  await t.throwsAsync(
+    E(factory).create(
+      harden({ sessionId: 'invalid-effort', reasoningEffort: 'unknown' }),
+      tools,
+    ),
+    { message: /Unsupported Codex reasoning effort/ },
+  );
+  t.is(requests.length, count, 'invalid selection cannot provision resources');
+});
+
 test('Codex placement is recorded before directories and replacement stops before revision', async t => {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'codex-owned-')));
   t.teardown(() => rm(root, { recursive: true, force: true }));

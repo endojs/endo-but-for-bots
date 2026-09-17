@@ -63,10 +63,23 @@ export const makeCodexBackendFactory = ({
         : spec.model;
     const selected = catalog.find(entry => entry.id === model);
     if (selected === undefined) throw Fail`Unknown Codex model`;
-    spec.reasoningEffort === undefined ||
-      selected.reasoningEfforts.includes(spec.reasoningEffort) ||
+    // Floot represents an unselected thinking option as the empty string.
+    // Resolve it here, before recording the native session's immutable plan.
+    const { reasoningEffort: requestedEffort, ...rest } = spec;
+    const reasoningEffort =
+      requestedEffort === undefined || requestedEffort === ''
+        ? (selected.defaultReasoningEffort ?? undefined)
+        : requestedEffort;
+    reasoningEffort === undefined ||
+      selected.reasoningEfforts.includes(reasoningEffort) ||
       Fail`Unsupported Codex reasoning effort`;
-    const request = harden({ ...spec, model, networkPolicy, containerMounts });
+    const request = harden({
+      ...rest,
+      ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+      model,
+      networkPolicy,
+      containerMounts,
+    });
     return sessions.inOrder(sessionId, async () => {
       await sessions.stop(sessionId);
       const client = await provisionSession(sessionId, request, toolSet);
