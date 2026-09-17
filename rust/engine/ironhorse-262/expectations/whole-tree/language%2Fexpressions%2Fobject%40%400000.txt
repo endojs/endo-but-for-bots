@@ -115,8 +115,8 @@ language/expressions/object/computed-property-name-topropertykey-before-value-ev
 language/expressions/object/computed-property-name-topropertykey-before-value-evaluation.js strict pass
 language/expressions/object/concise-generator.js sloppy pass
 language/expressions/object/concise-generator.js strict pass
-language/expressions/object/cover-initialized-name.js sloppy skip:compiler-unimplemented:parse
-language/expressions/object/cover-initialized-name.js strict skip:compiler-unimplemented:parse
+language/expressions/object/cover-initialized-name.js sloppy pass
+language/expressions/object/cover-initialized-name.js strict pass
 language/expressions/object/covered-ident-name-prop-name-literal-break-escaped.js sloppy pass
 language/expressions/object/covered-ident-name-prop-name-literal-break-escaped.js strict pass
 language/expressions/object/covered-ident-name-prop-name-literal-case-escaped.js sloppy pass

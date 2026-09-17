@@ -197,9 +197,24 @@ pub enum SourceCompileError {
     /// A genuine early (parse/early) error: the source is not a valid
     /// Script. The bridge throws a catchable realm `SyntaxError`.
     Syntax(String),
-    /// The compiler reached a deferred/unported path (a valid construct it
-    /// does not yet compile, or a coder panic). An honest coverage gap.
+    /// The compiler reached a deferred/unported path: a valid construct it
+    /// does not yet compile. An honest coverage gap.
+    ///
+    /// NOT a caught panic. A panic is [`Self::Invariant`], and the two used
+    /// to be the same arm — so a compiler that violated its own invariant
+    /// reported as missing coverage, which is exactly the distinction a
+    /// consensus engine needs and the one it did not have (architecture
+    /// finding F063).
     Unsupported(String),
+    /// The compiler violated an invariant: it panicked, and an embedder's
+    /// firewall caught the unwind.
+    ///
+    /// This is an ENGINE FAULT, not a coverage gap and not a guest error.
+    /// The bridge stops the machine with an uncatchable
+    /// [`Halt::EngineInvariant`] under a fixed label rather than letting
+    /// arbitrary panic text reach a guest, and no guest `SyntaxError` is
+    /// raised: the source may be perfectly valid.
+    Invariant(String),
     /// Regexp compilation exceeded its storage profile.
     HeapExhausted,
 }

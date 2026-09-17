@@ -407,3 +407,60 @@ exit 1
     }
     assert_eq!(calls(), before + 2, "invalid bounds must not start workers");
 }
+
+/// No committed expectation records a compiler FAULT (architecture finding
+/// F063).
+///
+/// A caught compiler panic is filed as `compiler-panicked:<phase>`, and the
+/// whole-tree shards are the only place in the repository where the sweep's
+/// per-case verdicts are written down. So this is the one gate that can
+/// observe a panic over parse-phase negatives without running the corpus:
+/// re-baselining a shard that records one would have to delete this line
+/// first.
+///
+/// It is deliberately NOT in `corpus_conversion_equivalence.rs` beside
+/// `XstReport::compiler_panics`. That corpus is a positive one — its four
+/// `negative:` cases are all `phase: runtime` — and `compiler-panicked` is
+/// raised only on the parse/resolution negative path, so the counter there is
+/// structurally zero whatever the compiler does. A gate that cannot fail is
+/// worse than no gate, because it reads like one.
+#[test]
+fn committed_expectations_record_no_compiler_fault() {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("expectations/whole-tree");
+    let mut shards = 0usize;
+    let mut lines = 0usize;
+    let mut offenders: Vec<String> = Vec::new();
+    for entry in fs::read_dir(&dir).expect("the committed shards").flatten() {
+        let path = entry.path();
+        if path.extension().is_some_and(|e| e == "txt")
+            && path.file_name().is_some_and(|n| n != "manifest.txt")
+        {
+            shards += 1;
+            let body = fs::read_to_string(&path).expect("a readable shard");
+            for line in body.lines() {
+                lines += 1;
+                if line.contains("compiler-panicked:") {
+                    offenders.push(format!("{}: {line}", path.display()));
+                }
+            }
+        }
+    }
+    // The scan must have READ something. An empty or renamed directory would
+    // otherwise pass this by finding nothing in nothing.
+    assert!(
+        shards > 100 && lines > 10_000,
+        "only {shards} shard(s) and {lines} line(s) under {}: the scan is \
+         broken, not the expectations",
+        dir.display()
+    );
+    assert!(
+        offenders.is_empty(),
+        "the committed expectations record {} compiler fault(s). A panic is \
+         an engine fault, not a coverage gap and not an excused skip; it is \
+         never a baseline. Route the site through `Coder::report_kind` with a \
+         kind, or fix the invariant, and re-run the sweep.\n  {}",
+        offenders.len(),
+        offenders.join("\n  ")
+    );
+    eprintln!("expectations: {shards} shards, {lines} lines, 0 compiler faults");
+}

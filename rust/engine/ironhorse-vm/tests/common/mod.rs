@@ -18,7 +18,12 @@ impl ironhorse_vm::SourceCompiler for TestCompiler {
         raw_budget: u64,
         charge: &mut dyn FnMut(u64) -> bool,
     ) -> Result<ironhorse_vm::CompiledSource, ironhorse_vm::SourceCompileError> {
-        match ironhorse_compile::compile_atoms_budgeted_with_limit(
+        // FIREWALLED. A compiler panic arrives as
+        // `CompileError::Invariant` and is passed through as an engine
+        // fault, not folded into `Unsupported` — which is what every
+        // hand-written catcher did, and how an invariant violation came to
+        // read as an unported construct (architecture finding F063).
+        match ironhorse_compile::compile_atoms_budgeted_firewalled(
             source,
             ironhorse_compile::Goal::Eval,
             strict,
@@ -48,6 +53,9 @@ impl ironhorse_vm::SourceCompiler for TestCompiler {
                 ),
                 _ => Err(ironhorse_vm::SourceCompileError::Syntax(error.message)),
             },
+            Err(ironhorse_compile::CompileError::Invariant(detail)) => {
+                Err(ironhorse_vm::SourceCompileError::Invariant(detail))
+            }
         }
     }
 }

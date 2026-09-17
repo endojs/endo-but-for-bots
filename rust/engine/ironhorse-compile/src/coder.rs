@@ -544,17 +544,58 @@ impl<'a, 'm> Coder<'a, 'm> {
         }
     }
 
-    /// Record the first code-time `fxReportParserError` (XS would longjmp
-    /// out here); later ones are ignored, matching XS reporting only the
-    /// first.
-    fn report(&mut self, line: u32, message: &str) {
+    /// Record the code-time `fxReportParserError` and STOP CODING.
+    ///
+    /// XS longjmps out of the coder here; this unwinds, which is the same
+    /// control transfer with the same effect on the rest of the pass.
+    fn report(&mut self, line: u32, message: &str) -> ! {
+        self.report_kind(line, crate::parser::ParseErrorKind::Syntax, message)
+    }
+
+    /// Record the first code-time error with an explicit kind.
+    ///
+    /// The kind is the whole point of routing a fold through here rather
+    /// than through `panic!`. A spec early error is `Syntax` and the guest
+    /// sees a catchable `SyntaxError`; a construct this compiler has not
+    /// ported is `Unsupported` and is an honest coverage gap. A `panic!`
+    /// collapses both into "the compiler died", which the harness then has
+    /// to guess about — and guessed `Unsupported`, so an invariant
+    /// violation read as unported coverage (architecture finding F063).
+    /// The coder stops here. XS's `fxReportParserError` longjmps out of the
+    /// whole pass; this unwinds to [`compile_parser`], which is the same
+    /// control transfer expressed in Rust.
+    ///
+    /// **Stopping is load-bearing, not tidiness.** The first attempt at this
+    /// latched the error and RETURNED, on the theory that a flag consulted at
+    /// each panic site would keep the walk safe. It did not: the flag was
+    /// consulted at one site out of the eighty-odd `panic!`/`unreachable!`/
+    /// `expect` sites in this file, so `({a = 1}); for (let x, y in {}) {}`
+    /// latched `invalid initializer`, kept walking, and died at an unrelated
+    /// panic — losing exactly the classification the change was for, and
+    /// making the diagnosis worse than the `panic!` it replaced. Continuing
+    /// after an error would need all eighty-odd sites guarded and kept
+    /// guarded; stopping needs nothing kept.
+    ///
+    /// It also means a fold that returns early — `code_field_init_function`
+    /// abandons its scope/program/break/continue restores — cannot leave a
+    /// clobbered coder for the rest of the program to code against, because
+    /// there is no rest.
+    fn report_kind(&mut self, line: u32, kind: crate::parser::ParseErrorKind, message: &str) -> ! {
+        // First error wins, as XS reports only the first. Reaching here twice
+        // takes a caught unwind in between, which only `compile_parser` does.
         if self.error.is_none() {
             self.error = Some(crate::parser::ParseError {
                 line,
-                kind: crate::parser::ParseErrorKind::Syntax,
+                kind,
                 message: message.to_string(),
             });
         }
+        // `resume_unwind` rather than `panic!` so the panic HOOK never fires:
+        // a reported early error is an ordinary outcome and must not print a
+        // backtrace to stderr. `meter::refuse` uses the same mechanism for the
+        // same reason. Nothing between here and `compile_parser` catches it:
+        // `meter::catch_refusal` re-raises any payload that is not its own.
+        std::panic::resume_unwind(Box::new(Poisoned))
     }
 
     /// `fxGenerateTag(console, buffer, size, C_NULL)` — mint the next
@@ -1141,17 +1182,39 @@ fn compile_parser(
     let tree = crate::scoper::run_goal_for_compile(&root, goal, meter.clone())?;
     let mut coder = Coder::new(&tree, meter);
     coder.intern_tree(&root);
-    if module {
-        coder.code_module(node_of(&root));
-    } else {
-        coder.eval_flag = true;
-        coder.code_program(node_of(&root));
+    // `Coder::report_kind` unwinds with `Poisoned` rather than returning, so
+    // a reported early error stops the pass where XS's longjmp stops it. See
+    // that method for why returning was not enough.
+    let coded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if module {
+            coder.code_module(node_of(&root));
+        } else {
+            coder.eval_flag = true;
+            coder.code_program(node_of(&root));
+        }
+    }));
+    if let Err(payload) = coded {
+        if !payload.is::<Poisoned>() {
+            // A real compiler panic. It is NOT this crate's business to
+            // classify here — `compile_atoms_budgeted_firewalled` is the one
+            // place that does — so it travels on unchanged.
+            std::panic::resume_unwind(payload);
+        }
+        return Err(coder
+            .error
+            .take()
+            .expect("compiler invariant: a poisoned unwind without a reported error"));
     }
     if let Some(error) = coder.error.take() {
         return Err(error);
     }
     coder.serialize_atoms()
 }
+
+/// The private payload [`Coder::report_kind`] unwinds with, caught only by
+/// [`compile_parser`]. Private so nothing outside this module can raise or
+/// mistake it for a compiler fault.
+struct Poisoned;
 
 /// A compiled unit and its complete front-end cost (all raw deltas were already
 /// submitted to the budget callback; reporting this cost must not debit twice).
@@ -1167,6 +1230,19 @@ pub struct CompiledAtoms {
 pub enum CompileError {
     Parse(crate::parser::ParseError),
     MeterAbort,
+    /// The compiler PANICKED and this crate's own firewall caught it.
+    ///
+    /// An engine fault, not a guest error and not a coverage gap. Only
+    /// [`compile_atoms_budgeted_firewalled`] and its siblings produce it;
+    /// the unguarded entries still let a panic propagate, so an embedder
+    /// that wants the classification has to ask for it.
+    ///
+    /// The distinction is the point. Before it, every caught panic was
+    /// laundered into `Unsupported` by whoever caught it, so a compiler that
+    /// violated its own invariant reported as an unported construct — the
+    /// one thing a consensus engine most needs to tell apart (architecture
+    /// finding F063).
+    Invariant(String),
 }
 
 /// Compile under an incremental raw-cost admission callback. False stops all
@@ -1180,6 +1256,54 @@ pub fn compile_atoms_budgeted(
     charge: &mut dyn FnMut(u64) -> bool,
 ) -> Result<CompiledAtoms, CompileError> {
     compile_atoms_budgeted_with_limit(source, goal, strict, u64::MAX, charge)
+}
+
+/// Compile behind this crate's own unwind firewall, classifying a panic as
+/// [`CompileError::Invariant`] rather than letting it escape.
+///
+/// The finding this exists for asked for "exactly one `catch_unwind` as belt
+/// and braces" and for the classification to survive it. One place, so every
+/// embedder gets the same answer instead of each writing its own catcher and
+/// each guessing what a panic means — which is how a caught panic came to be
+/// reported as missing coverage (F063).
+///
+/// The meter's refusal is a panic too, with a private payload, and it is
+/// **not** an invariant violation: `catch_refusal` takes it first and turns
+/// it into [`CompileError::MeterAbort`], so a host that stops the compiler
+/// is never accused of breaking it. The coder's own reported early errors
+/// unwind too, and `compile_parser` catches those before they reach here.
+///
+/// One thing this cannot tell apart: a panic raised inside the `charge`
+/// callback the CALLER supplied is caught here and classified the same way.
+/// Neither is a coverage gap and neither is a guest error, so the
+/// classification is not wrong — but an embedder whose charge hook panics
+/// will read `eval:compiler-invariant` and should look at its own hook first.
+///
+/// Requires unwinding; this crate already rejects `panic = "abort"` builds.
+pub fn compile_atoms_budgeted_firewalled(
+    source: &str,
+    goal: Goal,
+    strict: bool,
+    raw_budget: u64,
+    charge: &mut dyn FnMut(u64) -> bool,
+) -> Result<CompiledAtoms, CompileError> {
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        compile_atoms_budgeted_with_limit(source, goal, strict, raw_budget, charge)
+    }));
+    match caught {
+        Ok(result) => result,
+        Err(payload) => Err(CompileError::Invariant(panic_text(payload.as_ref()))),
+    }
+}
+
+/// A caught panic payload as a one-line message, for a diagnostic. Never
+/// shown to a guest: the VM's bridge drops it and halts under a fixed label.
+fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
+    payload
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
+        .unwrap_or_else(|| "non-string compiler panic".to_string())
 }
 
 /// Bound the accumulated raw bill in addition to consulting the live host.
@@ -1202,6 +1326,25 @@ pub fn compile_atoms_budgeted_with_limit(
         parse_meter_raw: meter.raw(),
         parse_computrons: meter.computrons(),
     })
+}
+
+/// [`compile_atoms_units_budgeted_with_limit`] behind this crate's unwind
+/// firewall — the UTF-16 half of [`compile_atoms_budgeted_firewalled`], with
+/// the same contract and for the same reason.
+pub fn compile_atoms_units_budgeted_firewalled(
+    source: &[u16],
+    goal: Goal,
+    strict: bool,
+    raw_budget: u64,
+    charge: &mut dyn FnMut(u64) -> bool,
+) -> Result<CompiledAtoms, CompileError> {
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        compile_atoms_units_budgeted_with_limit(source, goal, strict, raw_budget, charge)
+    }));
+    match caught {
+        Ok(result) => result,
+        Err(payload) => Err(CompileError::Invariant(panic_text(payload.as_ref()))),
+    }
 }
 
 /// Compile ECMAScript source code units without a scalar-value round trip.
@@ -1294,7 +1437,6 @@ impl Coder<'_, '_> {
         // recorded, as for every other code-time `fxReportParserError`.
         if self.depth >= crate::ast::TREE_DEPTH_LIMIT {
             self.report(node.line, "stack overflow");
-            return;
         }
         self.depth += 1;
         self.code_node_inner(node);
@@ -2761,7 +2903,12 @@ impl Coder<'_, '_> {
     fn code_binding(&mut self, node: &Node) {
         if let Item::Node(t) = &node.children[0] {
             if t.token == Token::Access {
-                panic!("coder: invalid initializer");
+                // `({ a = 1 })` — a CoverInitializedName that was never
+                // refined to a destructuring pattern. That is a spec early
+                // error, so it is reported as one and the guest sees a
+                // catchable `SyntaxError`. It used to `panic!`, which the
+                // harness caught and filed as unported coverage (F063).
+                self.report(node.line, "invalid initializer");
             }
         }
         // Name inference: `var/let/const f = function(){}` names the
@@ -3306,7 +3453,18 @@ impl Coder<'_, '_> {
             .iter()
             .any(|d| d.flags & crate::scoper::dflags::USE_CLOSURE == 0)
         {
-            panic!("static block with lexical declarations deferred");
+            // A deliberate fold, not an invariant violation: this compiler
+            // has not ported a static block's own frame reservation. Reported
+            // as `Unsupported` so it reads as the coverage gap it is, rather
+            // than as a compiler that died (F063).
+            // The fold is per-class, so the first field's line is the
+            // closest source position available here.
+            let line = fields.first().map_or(0, |f| f.line);
+            self.report_kind(
+                line,
+                crate::parser::ParseErrorKind::Unsupported,
+                "static block with lexical declarations deferred",
+            );
         }
         let reserve = *self
             .tree

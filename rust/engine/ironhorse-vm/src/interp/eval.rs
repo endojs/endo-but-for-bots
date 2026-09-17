@@ -79,6 +79,12 @@ impl Interp {
                     "eval:compiler-unimplemented",
                 )))
             }
+            // An engine fault, kept apart from the coverage gap above. The
+            // detail is deliberately dropped: a panic message is arbitrary
+            // text from inside the compiler and a guest must not read it.
+            Err(SourceCompileError::Invariant(_)) => {
+                return Err(Step::Host(Halt::EngineInvariant("eval:compiler-invariant")))
+            }
         };
         if compiled.parse_meter_raw != charged {
             return Err(Step::Host(Halt::EngineInvariant(
