@@ -686,9 +686,8 @@ impl<'a> Parser<'a> {
 
     /// `fxCheckReference` — is the top-of-stack a valid assignment
     /// target for `token`? Unwraps a single-item `Expressions` cover to
-    /// its reference, as XS does. Destructuring targets (Array/Object
-    /// converted to bindings) are deferred, so an assignment into one
-    /// reports [`ParseErrorKind::Unsupported`].
+    /// its reference, as XS does. Plain assignment also converts Array/Object
+    /// covers into assignment patterns; compound assignment does not.
     fn check_reference(&mut self, token: Token) -> PResult<bool> {
         // Unwrap a parenthesized single reference: (x) = …
         if self.top_token() == Some(Token::Expressions) {
@@ -2157,6 +2156,12 @@ impl<'a> Parser<'a> {
             self.push_null();
             self.flags |= saved_await_yield;
             return Err(self.error("missing expression"));
+        }
+        // Spread belongs to arguments, array/object literals, or an arrow's
+        // rest parameter. The arrow and async-call interpretations returned
+        // above; an ordinary parenthesized expression has no spread form.
+        if spread_flag {
+            return Err(self.error("invalid spread"));
         }
         self.push_node_list(count)?;
         self.push_node_struct(1, Token::Expressions, line)?;
