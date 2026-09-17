@@ -2117,7 +2117,25 @@ current build ref) on `kumavis/opencode`; point `OPENCODE_REF` at it; delete
 `--source`; re-pin `opencodeSandbox.image` to the new digest. Pushing to the fork is
 the one step this work cannot take on its own.
 
-### 1a. OpenCode's import route does not work, and this design said it did
+### 1a. OpenCode's import route — fixed and verified, 2026-09-17
+
+**Resolved.** The route now writes `MessageTable` and `PartTable` rows the way
+`cli/cmd/import.ts` does, and a restored OpenCode session answers from the
+stack's records with `OPENCODE_DB=:memory:`:
+
+```
+opencode  T2 completed "ALPENGLOW"   REMEMBERS YES
+claude    T2 completed "ALPENGLOW"   REMEMBERS YES
+```
+
+There is no lossy path left for it to have taken — the fallback is gone — so a
+correct answer is the structured import working. Two of three adapters now
+restore faithfully from records the stack owns, with the CLI's own store made
+unavailable in both cases.
+
+The history below is kept because the shape of the mistake is the useful part.
+
+### 1a-history. What the route did instead, and why nothing noticed
 
 Measured on the rebuilt image, in isolation, against the route itself:
 
