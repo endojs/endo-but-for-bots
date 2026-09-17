@@ -75,6 +75,27 @@ Appendix A now carries eight locations and seven statuses per finding; the
 construct in the VM.
 
 **Resolved again against
+[`2c69bf78d`](https://github.com/endojs/endo-but-for-bots/commit/2c69bf78d), 2026-09-17.**
+A third pass the same day, on one finding: F127, which the second had listed
+among the three it did not attempt.
+It is closed — the claim's remaining clause and the recommendation's
+second one — with the `Array.fromAsync` accumulations travelling in
+`ASYN` at format 24, and `PersistentMachine`'s documentation states what a
+checkpoint refuses where an embedder meets it.
+182 fixed, 6 partially fixed, 1 open, 2 held, and the low-severity set is now
+down to the one clause blocked on the worker protocol.
+What the pass is worth reading for is the defect list, not the feature: the
+carry as first written turned a refusal into a HOST PANIC on any queued
+`Array.fromAsync` job — the persist gate governs queued jobs too, and the
+shared-machine serializer kept a catch-all `unreachable!` that was true only
+while the gate refused those kinds — and the same hole had been open for the
+async generators since format 23.
+Four claims the change made about its own test coverage were false; mutations
+to the compaction remap and to the carried `close_error` slot both survived
+the entire suite before the fixtures that now kill them existed.
+Appendix A now carries nine locations and eight statuses per finding.
+
+**Resolved again against
 [`e1038c189`](https://github.com/endojs/endo-but-for-bots/commit/e1038c189),
 2026-09-17.**
 A second pass the same day, on the six findings the first did not attempt.
