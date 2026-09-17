@@ -68,6 +68,66 @@ fn the_findings_probes_return_rather_than_panic() {
     }
 }
 
+/// The two sites the F063 reachability AUDIT proved reachable, which the
+/// 53,575-source corpus sweep could not reach.
+///
+/// The audit is the half of F063 the corpus floor is not: the sweep says the
+/// compiler returns over one corpus, and the audit asks whether any source can
+/// reach a given `panic!`. It swept ~1.28M generated sources across all five
+/// goal/strictness modes and found exactly these two.
+///
+/// The first is the worse one, and is why "no panic over test262" was never
+/// the same claim as "total": `try{}catch{function f(){}}` is twenty-six bytes
+/// of unambiguously valid ES2022 and it aborted the compiler under EVERY goal.
+/// `code_catch` coded its body's defines through the asserting
+/// `scope_code_define_nodes`, whose contract is that the scope has none, where
+/// `code_block` uses the real `code_define_nodes`. test262 holds exactly one
+/// function-declaration-in-catch case and it is a `negative: parse` fixture,
+/// so the parser rejects it before the coder ever runs — the one case that
+/// would have caught this is the one that cannot.
+///
+/// The second is a goal asymmetry: `code_module` hoists its defines before
+/// installing a return target, where `code_program` installs one first, so a
+/// module-top-level `async function f(a = await 0){}` coded an `Await` with no
+/// target. Per spec that is an early error (FormalParameters may not contain
+/// an AwaitExpression), so reporting it is also the right ANSWER, not merely a
+/// non-fatal one.
+#[test]
+fn the_audits_reachable_panics_return_rather_than_panic() {
+    // Valid: a function declaration in a catch body, under every shape the
+    // audit found reached the assert.
+    for source in [
+        "try{}catch{function f(){}}",
+        "try{}catch(e){function f(){}}",
+        "'use strict';try{}catch{function f(){}}",
+        "try{}catch{async function f(){}}",
+        "try{}catch{function* f(){}}",
+        "try{}catch{let x = 1;}",
+    ] {
+        assert_eq!(outcome(source).expect(source), "compiled", "{source}");
+    }
+    // The module-goal early error, which must be REPORTED as a syntax error
+    // rather than aborting or, worse, compiling.
+    let module = |source: &str| match std::panic::catch_unwind(|| {
+        ironhorse_compile::compile_atoms_goal(source, ironhorse_compile::Goal::Module, false)
+    }) {
+        Ok(Ok(_)) => "compiled".to_string(),
+        Ok(Err(e)) => format!("{:?}", e.kind),
+        Err(_) => panic!("PANICKED on {source:?}"),
+    };
+    assert_eq!(module("async function f(a=await 0){}"), "Syntax");
+    // The two structurally identical `yield` windows the audit named as the
+    // highest residual risk. The parser already rejects both, so these pin
+    // that the coder's own guard is belt and braces rather than the only
+    // thing standing between a parameter list and an abort.
+    assert_eq!(module("function* g(a=yield 0){}"), "Syntax");
+    assert_eq!(module("function* g(a=yield* []){}"), "Syntax");
+    // A module that legitimately awaits at top level still compiles: the
+    // guard must not have swallowed the goal's own feature.
+    assert_eq!(module("await 0;"), "compiled");
+    assert_eq!(module("async function f(){ await 0; }"), "compiled");
+}
+
 /// Valid ES2022 that must COMPILE. A fold that grew to swallow one of these
 /// would trade a panic for a wrong answer, which is worse.
 #[test]
