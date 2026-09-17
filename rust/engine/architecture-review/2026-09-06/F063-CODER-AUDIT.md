@@ -203,6 +203,39 @@ scope, an unresolved private brand, an empty computed-field plan, a missing cons
 capture and an incorrect initializer parent.
 These alter test data only and do not stand in for a proof of all source totality.
 
+## AST follow-up: two reachable cover-grammar panics repaired
+
+The next pass refuted two AST preconditions at `e9f054ca8` rather than merely
+adding negative test evidence.
+An arrow parameter that is a Member, MemberAt or PrivateMember reaches
+`code_params_binding`'s token assertion; the same reference wrapped in a default,
+rest or destructuring pattern can instead compile as an invalid formal parameter.
+The shared `binding_from_expression` conversion was accepting assignment references
+even when its requested target kind was Arg.
+It now retains those references only for the Access (assignment) conversion, recursively
+rejecting them from binding targets without rejecting member reads in initializers or keys.
+This follows the distinction between assignment targets and
+[arrow formal parameters][arrow-grammar], not a new Unsupported boundary.
+
+[arrow-grammar]: https://tc39.es/ecma262/multipage/ecmascript-language-functions-and-classes.html#sec-arrow-function-definitions
+
+Separately, `(...items)` reached `code_node_inner`'s unsupported-node panic with Spread.
+`group_expression` collected spread while its interpretation was undecided, but did not
+reject it after the arrow and async-call interpretations were ruled out.
+The ordinary-expression branch now reports Syntax before constructing that Expressions node.
+The arrow/rest and argument/spread branches remain accepted.
+
+Both regressions were observed failing before their respective parser fixes.
+`tests/cover_binding_totality.rs` checks 270 invalid member-parameter cases across five
+goals, and requires the parser itself to reject them as Syntax.
+It also checks 30 invalid grouped-spread cases, 180 valid member assignment cases,
+60 valid arrow cases with member reads in defaults/computed keys, and 30 valid spread/rest cases.
+Node's parser independently rejects all 54 distinct member-parameter source strings.
+The runtime's `invalid_cover_grammar_is_a_catchable_syntax_error_with_the_real_compiler`
+checks 16 eval/Function/strictness cases through the production compiler adapter, not a stub.
+This closes the two demonstrated panic paths, not the entire node-kind/default-arm audit.
+The 21-site AST inventory below remains pending a complete producer/consumer argument.
+
 ## Remaining twenty-one explicit sites
 
 The remaining inventory is grouped below so the next pass has exact consumers to audit.

@@ -1240,7 +1240,11 @@ impl Parser<'_> {
                 )))
             }
             Token::Member | Token::MemberAt | Token::PrivateMember | Token::Undefined => {
-                Ok(Some(item))
+                // Assignment patterns may store through property references;
+                // formal parameters must introduce bindings instead. Keep
+                // this distinction recursive so defaults, rest and nested
+                // patterns cannot hide a reference inside an arrow head.
+                Ok((token == Token::Access).then_some(item))
             }
             Token::Assign => {
                 let Item::Node(mut node) = item else {

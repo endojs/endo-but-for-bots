@@ -111,6 +111,29 @@ fn compilation_refusal_is_uncatchable_and_adds_no_dynamic_segment() {
 }
 
 #[test]
+fn invalid_cover_grammar_is_a_catchable_syntax_error_with_the_real_compiler() {
+    for invalid in [
+        "(object.x)=>0;",
+        "({x:object[key]})=>0;",
+        "(...items);",
+        "class C{#x; m(){return (this.#x)=>0;}}",
+    ] {
+        for call in ["eval", "Function"] {
+            for directive in ["", "'use strict'; "] {
+                let payload = format!("{directive}{invalid}");
+                let source = format!(
+                    "var caught=false; try{{{call}({payload:?});}}\
+                     catch(e){{caught=e instanceof SyntaxError;}} caught"
+                );
+                let (_, out) = run(&source, Rc::new(IronhorseSourceCompiler), false);
+                assert!(out.completed, "{source}: {:?}", out.halt);
+                assert_eq!(out.result, "true", "{source}");
+            }
+        }
+    }
+}
+
+#[test]
 fn compiler_errors_and_unwinds_retain_live_charges() {
     for source in ["'unterminated", "var =", "class C { static { let x=1; } }"] {
         let mut raw = 0;
