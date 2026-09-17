@@ -131,12 +131,6 @@
 //!   `ABUF` row as a flag bit and restores into the satellite set.
 //! - `deleted_fn_meta` — per-function deleted-`length`/-`name` marks
 //!   (`Functions`, Serialized in `FUNC`).
-//! - `from_async` — `Array.fromAsync` accumulation state (`Combinators`,
-//!   Serialized — but this satellite does NOT travel with it: a LIVE
-//!   entry is anchored by a `FromAsync*` reaction on a live promise,
-//!   which the persist gate refuses by kind, and an unanchored entry is
-//!   unreachable (the next arena compaction drops it), so a resume that
-//!   rebuilds the table empty is observationally exact.
 //! - `arguments_objects` — the arguments-exotic brand set, riding its
 //!   primary row (`Arrays`, Serialized). Since store schema 11 the brand
 //!   itself TRAVELS (the `ARGB` atom / small-state arguments section), so
@@ -544,6 +538,13 @@ mod tests {
             Some("slots"),
         ),
         (41, "Meter", "meter", Coverage::Serialized, Some("meter")),
+        (
+            42,
+            "FromAsync",
+            "from_async",
+            Coverage::Serialized,
+            Some("from_async"),
+        ),
     ];
 
     #[test]
@@ -649,6 +650,7 @@ mod tests {
             "async_run_stack",
             "async_generators",
             "async_gen_run_stack",
+            "from_async",
             "private_values",
             "private_accessors",
             "disposable_stacks",
@@ -695,7 +697,6 @@ mod tests {
             "detached_buffers",
             "shared_buffers",
             "deleted_fn_meta",
-            "from_async",
             "arguments_objects",
             "side_refs",
             // Mutation bits are reset/rebound on boot and restore; no
