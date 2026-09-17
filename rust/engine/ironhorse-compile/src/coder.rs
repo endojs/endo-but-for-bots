@@ -2660,17 +2660,17 @@ impl Coder<'_, '_> {
             self.add_byte(0, XS_CODE_THROW_STATUS);
         }
         self.add_byte(-1, XS_CODE_SET_RESULT);
-        // No enclosing function to return into. A parameter default is
-        // coded BEFORE the function installs its own return target, and
-        // `code_module` hoists its defines before installing one at all,
-        // so `yield` in a generator's own parameter list
-        // reaches here. The spec makes that an early error — a
-        // FormalParameters list may not contain one — which the parser
-        // does not yet reject, so report it rather than abort: a
-        // guest-reachable `SyntaxError` is the honest answer and an
-        // aborted compiler is not (architecture finding F063).
+        // No enclosing function to return into. BELT AND BRACES: the
+        // parser rejects a FormalParameters list containing this — the spec
+        // early error — in `parameters_binding`, so no source reaches here
+        // today, and no test pins this arm. It stays because the window is
+        // real: a parameter default is coded BEFORE the function installs
+        // its own return target, and `code_module` hoists its defines
+        // before installing one at all, which is how the F063 audit reached
+        // the `await` twin of this arm before the parser learned to refuse
+        // it. Reporting beats aborting if that window ever reopens.
         let Some(rt) = self.return_target else {
-            self.report(node.line, "no yield here");
+            self.report(node.line, "invalid yield");
         };
         self.adjust_environment(rt);
         self.adjust_scope(rt);
@@ -2762,17 +2762,17 @@ impl Coder<'_, '_> {
             self.add_byte(0, XS_CODE_THROW_STATUS);
         }
         self.add_byte(-1, XS_CODE_SET_RESULT);
-        // No enclosing function to return into. A parameter default is
-        // coded BEFORE the function installs its own return target, and
-        // `code_module` hoists its defines before installing one at all,
-        // so `yield*` in a generator's own parameter list
-        // reaches here. The spec makes that an early error — a
-        // FormalParameters list may not contain one — which the parser
-        // does not yet reject, so report it rather than abort: a
-        // guest-reachable `SyntaxError` is the honest answer and an
-        // aborted compiler is not (architecture finding F063).
+        // No enclosing function to return into. BELT AND BRACES: the
+        // parser rejects a FormalParameters list containing this — the spec
+        // early error — in `parameters_binding`, so no source reaches here
+        // today, and no test pins this arm. It stays because the window is
+        // real: a parameter default is coded BEFORE the function installs
+        // its own return target, and `code_module` hoists its defines
+        // before installing one at all, which is how the F063 audit reached
+        // the `await` twin of this arm before the parser learned to refuse
+        // it. Reporting beats aborting if that window ever reopens.
         let Some(rt) = self.return_target else {
-            self.report(node.line, "no yield* here");
+            self.report(node.line, "invalid yield");
         };
         self.adjust_environment(rt);
         self.adjust_scope(rt);
@@ -2837,17 +2837,17 @@ impl Coder<'_, '_> {
         self.add_byte(0, XS_CODE_AWAIT);
         self.add_branch(1, XS_CODE_BRANCH_STATUS_1, target);
         self.add_byte(-1, XS_CODE_SET_RESULT);
-        // No enclosing function to return into. A parameter default is
-        // coded BEFORE the function installs its own return target, and
-        // `code_module` hoists its defines before installing one at all,
-        // so `await` in an async function's own parameter list
-        // reaches here. The spec makes that an early error — a
-        // FormalParameters list may not contain one — which the parser
-        // does not yet reject, so report it rather than abort: a
-        // guest-reachable `SyntaxError` is the honest answer and an
-        // aborted compiler is not (architecture finding F063).
+        // No enclosing function to return into. BELT AND BRACES: the
+        // parser rejects a FormalParameters list containing this — the spec
+        // early error — in `parameters_binding`, so no source reaches here
+        // today, and no test pins this arm. It stays because the window is
+        // real: a parameter default is coded BEFORE the function installs
+        // its own return target, and `code_module` hoists its defines
+        // before installing one at all, which is how the F063 audit reached
+        // the `await` twin of this arm before the parser learned to refuse
+        // it. Reporting beats aborting if that window ever reopens.
         let Some(rt) = self.return_target else {
-            self.report(node.line, "no await here");
+            self.report(node.line, "invalid await");
         };
         self.adjust_environment(rt);
         self.adjust_scope(rt);
