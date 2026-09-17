@@ -86,6 +86,16 @@ impl Interp {
         let snapshot_dirt = SnapshotDirt::default();
         let mut interp = boot_fresh!(snapshot_dirt, slots, chunks, global_obj, static_str);
         interp.create_intrinsics();
+        // **After `create_intrinsics`, before `boot_slot_count` is fixed.**
+        // Both halves of that are load-bearing. After, because boot's own
+        // constructor wiring reads `ctor_prototype` back to install
+        // `prototype.constructor`, so a stand-in visible during
+        // `create_intrinsics` installs lockdown's effect at boot. Before,
+        // because `function_persists` admits a function below
+        // `boot_slot_count` by index and has no recipe for one above it --
+        // which is why minting these when a guest calls `lockdown()` made the
+        // machine unsnapshottable.
+        interp.create_locked_down_constructors();
         interp.boot_slot_count = interp.slots.capacity();
         interp
     }
@@ -192,6 +202,17 @@ impl Interp {
         );
         term(format!("error_stack_accessor={:?}", self.error_stack_accessor).as_bytes());
         term(format!("template_cache={:?}", self.template_cache).as_bytes());
+        // The boot-minted `lockdown()` stand-ins. They are boot-derived
+        // identities below `boot_slot_count`, so the ledger requires them here:
+        // a snapshot written by a build with a different set must be refused,
+        // exactly as for any other boot-layout change.
+        term(
+            format!(
+                "locked_down_constructors={:?}",
+                self.locked_down_constructors
+            )
+            .as_bytes(),
+        );
         term(format!("object_proto={:?}", self.object_proto).as_bytes());
         term(format!("function_proto={:?}", self.function_proto).as_bytes());
         term(format!("array_proto={:?}", self.array_proto).as_bytes());
@@ -2137,6 +2158,25 @@ impl Interp {
         ] {
             let mf = self.alloc_named_method(m, name, arity);
             self.intrinsics.insert(name, mf);
+        }
+    }
+
+    /// Mint the inert `constructor` stand-ins `lockdown()` installs.
+    ///
+    /// Only the OBJECTS are made here. The `ctor_prototype` pairing and the
+    /// `prototype.constructor` rewiring are step 2's, at lockdown time --
+    /// registering either at boot would make boot install lockdown's effect.
+    ///
+    /// `Compartment.prototype` is absent: ironhorse has no guest `Compartment`,
+    /// which is this work's scope boundary. A `SlotIndex::NULL` prototype is
+    /// skipped so a partial boot mints nothing dangling.
+    fn create_locked_down_constructors(&mut self) {
+        for (prototype, arity) in self.locked_down_prototypes() {
+            if prototype == crate::value::SlotIndex::NULL {
+                continue;
+            }
+            let inert = self.mint_locked_down_constructor(arity);
+            self.locked_down_constructors.push(inert);
         }
     }
 

@@ -1170,6 +1170,7 @@ const REGISTRY: &[(&str, &[Req], &str)] = &[
     ("async_gen_run_stack", &[Req::GcRoots], "mid-step async-generator stack"),
 
     ("pending_rejections", &[Req::GcRoots], "settlement candidates survive collection until the job drain"),
+    ("locked_down_constructors", &[Req::GcRoots], "boot-minted lockdown() stand-ins: unreferenced until step 2 wires them, so nothing else roots them in between"),
     ("promise_jobs", &[Req::GcRoots], "queued microtasks (survive halted cranks)"),
     // --- side tables with strong outgoing edges, walked by BOTH collectors ---
     ("functions", &[Req::GcRoots, Req::Edges, Req::PrunedBothPaths], "lazy intrinsic getters are roots; other functions remain weak owners of closure/super edges (W6-2)"),

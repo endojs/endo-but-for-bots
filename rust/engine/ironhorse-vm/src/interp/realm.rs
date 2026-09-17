@@ -222,21 +222,19 @@ impl Interp {
         // AFTER the root enumeration below took its snapshot, so step 5 would
         // not otherwise reach them, and an inert constructor left mutable
         // would be a writable edge out of a realm that claims to be frozen.
-        let mut minted = Vec::new();
-        for (prototype, arity) in [
-            (self.async_function_proto, 1),
-            (self.async_generator_function_proto, 1),
-            (self.function_proto, 1),
-            (self.generator_function_proto, 1),
-            (self.date_proto, 7),
-        ] {
-            if prototype == crate::value::SlotIndex::NULL {
-                continue;
-            }
-            minted.push((
-                prototype,
-                self.install_locked_down_constructor(prototype, arity),
-            ));
+        // The stand-ins are BOOT objects (`create_locked_down_constructors`),
+        // so this step allocates nothing -- which is what keeps a locked-down
+        // machine snapshottable. `Interp::locked_down_constructors` has the
+        // measurement.
+        let minted: Vec<(crate::value::SlotIndex, crate::value::SlotIndex)> = self
+            .locked_down_prototypes()
+            .into_iter()
+            .map(|(prototype, _)| prototype)
+            .zip(self.locked_down_constructors.clone())
+            .filter(|&(prototype, _)| prototype != crate::value::SlotIndex::NULL)
+            .collect();
+        for &(prototype, inert) in &minted {
+            self.wire_locked_down_constructor(prototype, inert);
         }
 
         // Step 5, harden (`:141-200`). XS walks an enumerated list of
@@ -376,11 +374,21 @@ impl Interp {
     /// reports success. Three lines of setup defeated the entire operation
     /// until adversarial review found it; `lockdown_poisons_an_accessor_constructor`
     /// is the regression test.
-    fn install_locked_down_constructor(
-        &mut self,
-        prototype: crate::value::SlotIndex,
-        arity: u32,
-    ) -> crate::value::SlotIndex {
+    /// The prototypes `lockdown()` poisons and the `length` each stand-in
+    /// carries -- 1 for the function family, 7 for `Date` (`xsLockdown.c:95-127`).
+    /// Shared by `create_locked_down_constructors` (which mints) and
+    /// `do_lockdown` step 2 (which wires), so the two cannot drift.
+    pub(super) fn locked_down_prototypes(&self) -> [(crate::value::SlotIndex, u32); 5] {
+        [
+            (self.async_function_proto, 1),
+            (self.async_generator_function_proto, 1),
+            (self.function_proto, 1),
+            (self.generator_function_proto, 1),
+            (self.date_proto, 7),
+        ]
+    }
+
+    pub(super) fn mint_locked_down_constructor(&mut self, arity: u32) -> crate::value::SlotIndex {
         let inert = self.slots.alloc(Slot::instance(self.function_proto));
         let name_chunk = self.alloc_str_text("");
         self.functions.insert(
@@ -392,10 +400,18 @@ impl Interp {
                 ..FuncInfo::default()
             },
         );
-        // `ctor_prototype` plus the own `prototype` property are what make an
-        // instance answer `instanceof` and `new`; `slot_is_constructor` reads
-        // `native.is_some()`, so the entry here is for the prototype lookup
-        // rather than for constructability.
+        inert
+    }
+
+    /// Give a boot-minted stand-in its prototype and install it as
+    /// `prototype.constructor`. Step 2's work, never boot's: registering
+    /// `ctor_prototype` during `create_intrinsics` makes boot's own
+    /// constructor wiring install lockdown's effect at boot.
+    fn wire_locked_down_constructor(
+        &mut self,
+        prototype: crate::value::SlotIndex,
+        inert: crate::value::SlotIndex,
+    ) {
         self.ctor_prototype.insert(inert, prototype);
         let prototype_id = self.intern_static_key_unmetered("prototype");
         self.prototype_key_id.get_or_insert(prototype_id);
@@ -407,9 +423,7 @@ impl Interp {
             Slot::of(Kind::Reference, Payload::Reference(prototype)),
             XS_DONT_ENUM_FLAG | XS_DONT_DELETE_FLAG | XS_DONT_SET_FLAG,
         );
-
         self.force_locked_down_constructor(prototype, inert);
-        inert
     }
 
     /// Write `prototype.constructor = inert` through the privileged path,

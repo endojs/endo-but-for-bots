@@ -751,6 +751,11 @@ mod tests {
             "static_str",
             "default_keys",
             "boot_slot_count",
+            // Boot-minted identities, created in the window between
+            // `create_intrinsics()` and `boot_slot_count` so they sit BELOW
+            // that line and persist by index like any other boot native.
+            // Never mutated after boot -- `lockdown()` only reads them.
+            "locked_down_constructors",
             "well_known_symbols",
             "proto_methods",
             "proto_data",
