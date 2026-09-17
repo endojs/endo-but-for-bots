@@ -63,6 +63,10 @@ on entry and restored on exit, so one argument — whether a visitor can run
 outside the scope that set it — retires twelve, but `body_scope` is CLEARED to
 `None` on function entry and re-established by the body, so it is `None` inside
 an open scope and its three readers rest on token dispatch instead.
+`body_scope`'s window is now probed rather than argued —
+`tests/scoper_totality.rs` drives every way to nest a declarator in a
+parameter default across all five goal modes, and none panics — which closes
+one of the nine shapes and leaves eight.
 The panic surface is wider than those 29 in any case: `node_id` asserts in
 release mode from 39 call sites.
 The bookkeeping `expect`s and the audit's non-reproducible negative over
