@@ -1210,12 +1210,16 @@ fn evaluate_negative(cfg: &Config, run: &DualRun, neg: &Negative) -> Verdict {
 /// * **oracle surprise** — the XS oracle did NOT reject a source test262 marks as
 ///   an early error; the differential authority disagrees, so we do not claim
 ///   coverage (`negative-oracle-unexpected`).
-/// * **compiler coverage gap** — ironhorse-compile panicked, or declined an
-///   unported-but-valid construct ([`IronhorseCompile::Unsupported`]); either is
-///   an Ironhorse compiler gap named `compiler-unimplemented:<phase>` (→
+/// * **compiler coverage gap** — ironhorse-compile declined an
+///   unported-but-valid construct ([`IronhorseCompile::Unsupported`]): an
+///   Ironhorse compiler gap named `compiler-unimplemented:<phase>` (→
 ///   `Category::Unsupported`), never a covered early error. A refusal to *parse*
 ///   an unported construct must not be counted as a correct *rejection* of a
 ///   forbidden one.
+/// * **compiler fault** — ironhorse-compile PANICKED
+///   ([`IronhorseCompile::Panicked`]): not a gap and not a skip but a
+///   `Fail` named `compiler-panicked:<phase>` (→
+///   `Category::IronhorseFailure`), which reddens `met_bar`.
 fn evaluate_negative_early(cfg: &Config, run: &DualRun, neg: &Negative) -> Verdict {
     if xs_oracle::is_resource_abort(run.oracle_exit_status) {
         return Verdict::RunSkip("oracle-host-stack-limit".into());
@@ -1231,16 +1235,33 @@ fn evaluate_negative_early(cfg: &Config, run: &DualRun, neg: &Negative) -> Verdi
     let oracle_parse_rejected = !run.oracle_parsed || oracle_negative_ok(&neg.ty, run);
 
     match &run.ironhorse_compile {
-        // ironhorse-compile reached a deferred/unimplemented path — it either
-        // folded (panicked) or returned a structured `Unsupported`-kind error
-        // for an unported-but-valid construct. Both are an Ironhorse *compiler
+        // A structured `Unsupported`-kind error: ironhorse-compile declined an
+        // unported-but-valid construct. That is an Ironhorse *compiler
         // coverage gap*, named `compiler-unimplemented:<phase>` (→
         // `Category::Unsupported`), never a covered early error and never
         // silently relabeled a pass: a front end that merely cannot parse the
-        // construct has not *rejected* the forbidden one.
-        IronhorseCompile::Panicked(_) | IronhorseCompile::Unsupported(_) => {
+        // construct has not *rejected* the forbidden one. A panic is a
+        // different thing and takes the arm below.
+        IronhorseCompile::Unsupported(_) => {
             Verdict::RunSkip(format!("compiler-unimplemented:{}", neg.phase))
         }
+
+        // A PANIC is not, and it is not a SKIP either. It is the compiler
+        // violating its own invariant, so it is a `Fail` under its own label
+        // (-> `Category::IronhorseFailure`, the report's headline correctness
+        // column, and a red `met_bar`).
+        //
+        // It shared `compiler-unimplemented:<phase>` with the coverage gap
+        // above for five revisions, which is the distinction a consensus
+        // engine needs and the one it did not have: an engine fault read as
+        // missing coverage (architecture finding F063). Filing it as a named
+        // RunSkip instead was the first attempt at the split and was still
+        // wrong twice over: an unclassified skip label falls to
+        // `Category::Infrastructure`, i.e. "oracle/harness non-results, NOT
+        // Ironhorse gaps", so the fault left the Ironhorse column entirely;
+        // and a skip is by construction excused, which is what a fault must
+        // never be.
+        IronhorseCompile::Panicked(_) => Verdict::Fail(format!("compiler-panicked:{}", neg.phase)),
 
         // ironhorse's own front end raised the early error.
         IronhorseCompile::Rejected(_) => {
@@ -2085,6 +2106,30 @@ impl XstReport {
     /// discipline — zero divergence on whatever the covered grammar reaches).
     pub fn met_bar(&self) -> bool {
         self.total > 0 && self.failures.is_empty()
+    }
+
+    /// How many cases the compiler PANICKED on.
+    ///
+    /// These are `failures`, not `run_skips`: an unported construct is
+    /// uncovered ground and is excused by name, a panic is an engine fault
+    /// and is not excused at all. The two carried one label until F063.
+    /// `met_bar` already forbids them along with every other failure; this
+    /// exists so a caller can say which failure it means.
+    pub fn compiler_panics(&self) -> usize {
+        self.failures
+            .iter()
+            .filter(|(_, detail)| detail.starts_with("compiler-panicked:"))
+            .count()
+    }
+
+    /// The cases those panics were filed under, `path: detail`, for a failure
+    /// message that names what to look at.
+    pub fn compiler_panic_labels(&self) -> Vec<String> {
+        self.failures
+            .iter()
+            .filter(|(_, detail)| detail.starts_with("compiler-panicked:"))
+            .map(|(path, detail)| format!("{path}: {detail}"))
+            .collect()
     }
 
     /// Fold one case's result in, attributed to `path`, retaining a per-case
@@ -3410,18 +3455,25 @@ mod tests {
     }
 
     #[test]
-    fn early_error_compile_panic_is_a_named_compiler_gap() {
-        // A deferred/unimplemented coder path (a panic caught by the compile
-        // seam) is an Ironhorse compiler coverage gap — a named `unsupported`,
-        // never a covered early error and never silently a pass.
+    fn early_error_compile_panic_is_a_named_compiler_fault() {
+        // A panic caught by the compile seam is the compiler violating its own
+        // invariant: a FAILURE under its own label, never a covered early
+        // error, never a coverage gap, and never an excused skip.
         let run = synthetic_early(
             Agreement::BothAbort,
             false,
-            IronhorseCompile::Panicked("static block with lexical declarations deferred".into()),
+            IronhorseCompile::Panicked("some coder invariant".into()),
         );
         let cfg = Config::default();
         let v = evaluate_negative_early(&cfg, &run, &early_negative("parse"));
-        assert_eq!(v, Verdict::RunSkip("compiler-unimplemented:parse".into()));
+        assert_eq!(v, Verdict::Fail("compiler-panicked:parse".into()));
+        assert_eq!(
+            crate::report::classify(crate::report::Verdict::Fail, "compiler-panicked:parse"),
+            crate::report::Category::IronhorseFailure
+        );
+        // And it is NOT the coverage gap it used to share a label with. An
+        // unclassified RunSkip label falls through to `Infrastructure`
+        // ("not Ironhorse gaps"), which is where filing this as a skip put it.
         assert_eq!(
             crate::report::classify(
                 crate::report::Verdict::RunSkip,

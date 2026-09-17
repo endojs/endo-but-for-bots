@@ -1056,6 +1056,32 @@ jobs:
         working-directory: rust/engine
         run: cargo +1.88.0 clippy --locked --workspace --no-deps -- -D warnings
 
+      - name: Vendor test262 at the pinned SHA
+        # `corpus_compiler_totality.rs` compiles every test262 source and
+        # requires that none of them panics -- the F063 gate that does not
+        # depend on someone having thought of the shape. It needs the corpus,
+        # which is not in the repository, and without it the test returns
+        # early and reports a green pass that measured nothing (the trap the
+        # SES bundle steps above already document).
+        #
+        # A shallow single-SHA fetch, ~30s, from the same `TEST262_REVISION`
+        # the nightly sweep pins so there is one home for the SHA. `.git` is
+        # dropped afterwards: the sweep reads `harness/` and `test/` only.
+        #
+        # OUTSIDE `rust/engine/target`, which the cache step above saves: the
+        # corpus is ~270 MB and belongs in neither the build cache nor its key.
+        # `TEST262_DIR` on the test step below points at it.
+        run: |
+          set -euo pipefail
+          source rust/engine/ironhorse-262/TEST262_REVISION
+          dir="$GITHUB_WORKSPACE/test262-src"
+          mkdir -p "$dir"
+          git -C "$dir" init -q
+          git -C "$dir" remote add origin "$TEST262_REPO"
+          git -C "$dir" fetch --depth 1 -q origin "$TEST262_SHA"
+          git -C "$dir" checkout -q "$TEST262_SHA"
+          rm -rf "$dir/.git"
+
       - name: Test oracle-linked engine crates (rust/engine workspace)
         working-directory: rust/engine
         # The engine's native recursion is bounded by its own budget
@@ -1070,6 +1096,10 @@ jobs:
           RUST_MIN_STACK: '33554432'
           # Assert rather than skip: the bundle was generated above.
           IRONHORSE_SES_BOOT_REQUIRED: '1'
+          # Same contract for the corpus vendored above: a missing checkout is
+          # red here rather than a silent early return.
+          TEST262_DIR: ${{ github.workspace }}/test262-src
+          IRONHORSE_COMPILER_TOTALITY_REQUIRED: '1'
         run: cargo test --locked -p ironhorse-compile -p ironhorse-regexp -p ironhorse-262 -p ironhorse-fuzz --features ironhorse-compile/parity,ironhorse-regexp/parity
       - name: Test the SES realm profiles and prelude reach (artifacts above)
         working-directory: rust/engine
