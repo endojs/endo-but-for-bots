@@ -1105,6 +1105,17 @@ impl SlotArena {
     }
 
     pub(crate) fn find_property(&self, owner: SlotIndex, id: u16) -> Option<SlotIndex> {
+        // A null owner is "no object", which has no properties — the same
+        // reading the chain walk below already applies to every link after
+        // the first. Without this the head read indexes the arena at
+        // `u32::MAX` and panics: `Interp::cur_func` is NULL at top level, so
+        // bytecode that runs a construct expecting a current function there
+        // (a crafted `START_GENERATOR`, reached through `prototype_of`)
+        // aborts the engine instead of falling back to its default
+        // prototype. Found by the `bytecode_decoder` fuzz target.
+        if owner.is_null() {
+            return None;
+        }
         // Most ordinary accesses hit a very short chain. Answer from the
         // authoritative records before paying for derived-index bookkeeping.
         let mut current = self.get(owner).next;
