@@ -92,8 +92,28 @@ impl Interp {
         let Some(mut info) = self.functions.get(&original).cloned() else {
             return original;
         };
+        // `lockdown` joins the evaluators here for a security reason, not a
+        // symmetry one. `do_lockdown`'s compartment guard reads the AMBIENT
+        // environment, and a boot `alloc_named_method` instance carries
+        // `global_env: NULL`, so `frames.rs`'s per-call
+        // `switch_environment(info.global_env)` no-ops for it and the native
+        // runs in whatever environment happens to be current. A guest can steer
+        // that: `Promise.resolve(1).then(lockdown)` from a compartment, then any
+        // host action that parks the ambient environment on the default global
+        // -- `Machine::collect` does, through `prepare_collection` -- ran the
+        // native with `environment.global_obj == realm.global_object()` and
+        // locked the shared realm. Measured before this change:
+        // `direct = lockdown is not available to a compartment` but
+        // `LOCKED AFTER JOB = true`.
+        //
+        // Giving each compartment its own copy with a non-NULL `global_env`
+        // makes that switch fire, so the guard tests the environment the
+        // CAPABILITY belongs to rather than the one that happens to be
+        // ambient -- which is not steerable by queueing a job. The start
+        // realm's original keeps `global_env: NULL` and stays allowed.
         if !self.shared_compartments
-            || !matches!(info.native, Some(Native::Eval | Native::Function))
+            || !(matches!(info.native, Some(Native::Eval | Native::Function))
+                || matches!(info.method, Some(NativeMethod::GlobalLockdown)))
         {
             return original;
         }
@@ -427,6 +447,29 @@ impl Interp {
     ) {
         let constructor_id = self.intern_static_key_unmetered("constructor");
         self.constructor_id.get_or_insert(constructor_id);
+        // **Materialize first, or "absent" means the wrong thing.** Prototype
+        // members are installed LAZILY: `boot.rs` records them in
+        // `proto_methods`/`proto_data` and
+        // [`Self::materialize_intrinsic_own_surface`] installs them on demand,
+        // driven from `mop_own_keys`. On a pristine realm nothing has asked for
+        // `Function.prototype.constructor` yet, so `find_property` answers
+        // `None` for a property that DOES exist in the spec sense and is about
+        // to be installed with `XS_DONT_ENUM_FLAG`.
+        //
+        // Without this call the fallback below fires in the COMMON case rather
+        // than the deleted one, and the realm ends up with an ENUMERABLE
+        // `constructor` on every function-family prototype. Measured against
+        // the oracle before the fix: `Object.keys(Function.prototype)` was
+        // `["constructor"]` here against XS's `[]`, `for (k in function(){})`
+        // yielded `constructor`, and `Object.assign({}, Function.prototype)`
+        // threw where XS returns. That is a worse bug than the one the `0`
+        // default was introduced to fix, and it was introduced by fixing it.
+        //
+        // This is boot work and it refuses a sealed object, so on the
+        // post-step-5 re-assert (where the prototype is frozen) it is a no-op —
+        // and it must be, because by then the property exists and the flag read
+        // finds it.
+        self.materialize_intrinsic_own_surface(prototype);
         let flag = self
             .find_property(prototype, constructor_id)
             .map_or(0, |p| self.slots.get(p).flag)
