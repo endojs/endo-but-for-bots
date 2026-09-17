@@ -94,8 +94,10 @@ fn the_findings_probes_return_rather_than_panic() {
 /// non-fatal one.
 #[test]
 fn the_audits_reachable_panics_return_rather_than_panic() {
-    // Valid: a function declaration in a catch body, under every shape the
-    // audit found reached the assert.
+    // Valid: a function declaration in a catch body, in each shape that
+    // reached the assert. The last two are CONTROLS — a lexical declaration
+    // and a class never reached it — so a fix that over-rejected would show
+    // up here rather than only in the shapes that were broken.
     for source in [
         "try{}catch{function f(){}}",
         "try{}catch(e){function f(){}}",
@@ -103,29 +105,67 @@ fn the_audits_reachable_panics_return_rather_than_panic() {
         "try{}catch{async function f(){}}",
         "try{}catch{function* f(){}}",
         "try{}catch{let x = 1;}",
+        "try{}catch{class C{}}",
     ] {
         assert_eq!(outcome(source).expect(source), "compiled", "{source}");
     }
-    // The module-goal early error, which must be REPORTED as a syntax error
-    // rather than aborting or, worse, compiling.
-    let module = |source: &str| match std::panic::catch_unwind(|| {
-        ironhorse_compile::compile_atoms_goal(source, ironhorse_compile::Goal::Module, false)
+    let compiled = |source: &str, goal, strict| match std::panic::catch_unwind(|| {
+        ironhorse_compile::compile_atoms_goal(source, goal, strict)
     }) {
         Ok(Ok(_)) => "compiled".to_string(),
-        Ok(Err(e)) => format!("{:?}", e.kind),
+        Ok(Err(e)) => format!("{:?}:{}", e.kind, e.message),
         Err(_) => panic!("PANICKED on {source:?}"),
     };
-    assert_eq!(module("async function f(a=await 0){}"), "Syntax");
-    // The two structurally identical `yield` windows the audit named as the
-    // highest residual risk. The parser already rejects both, so these pin
-    // that the coder's own guard is belt and braces rather than the only
-    // thing standing between a parameter list and an abort.
-    assert_eq!(module("function* g(a=yield 0){}"), "Syntax");
-    assert_eq!(module("function* g(a=yield* []){}"), "Syntax");
-    // A module that legitimately awaits at top level still compiles: the
-    // guard must not have swallowed the goal's own feature.
+    // `await` in an async function's own parameter list is a spec early
+    // error, and the fix is only worth anything if it holds under EVERY
+    // goal. The audit found it as a module-goal PANIC, but the panic was one
+    // goal's symptom: under the other three the same source compiled into a
+    // function whose body silently never ran, which is the wrong answer the
+    // roster above exists to refuse.
+    for (goal, strict) in [
+        (ironhorse_compile::Goal::Script, false),
+        (ironhorse_compile::Goal::Module, false),
+        (ironhorse_compile::Goal::Eval, false),
+        (ironhorse_compile::Goal::Eval, true),
+    ] {
+        for source in [
+            "async function f(a=await 0){}",
+            "(async function (a=await 0){})",
+        ] {
+            assert_eq!(
+                compiled(source, goal, strict),
+                "Syntax:invalid await",
+                "{source} under {goal:?} strict={strict}"
+            );
+        }
+        // And the generator twin, which the same parser rule refuses.
+        assert_eq!(
+            compiled("function* g(a=yield 0){}", goal, strict),
+            "Syntax:invalid yield",
+            "yield in generator params under {goal:?}"
+        );
+    }
+    // The features themselves still work: the rule must reject a parameter
+    // list, not the construct.
+    let module = |s: &str| compiled(s, ironhorse_compile::Goal::Module, false);
     assert_eq!(module("await 0;"), "compiled");
     assert_eq!(module("async function f(){ await 0; }"), "compiled");
+    assert_eq!(module("function* g(){ yield 0; }"), "compiled");
+    assert_eq!(module("async function f(a=1){ await a; }"), "compiled");
+    // The over-rejection controls that matter: a NESTED async or generator
+    // function inside a parameter default owns its own `await`/`yield`, and
+    // the rule must not see through it. These are the cases a flag that
+    // leaked across the nested function's scope would break.
+    for source in [
+        "async function f(a = async function(){ await 0; }) {}",
+        "function* g(a = function*(){ yield 1; }) {}",
+        "function* g(a = async function(){ await 0; }) {}",
+        "async function f(a = function*(){ yield 1; }) {}",
+        "async function* ag(a = 1) { yield a; await a; }",
+        "class C { async m(a = 1) { await a; } }",
+    ] {
+        assert_eq!(module(source), "compiled", "{source}");
+    }
 }
 
 /// Valid ES2022 that must COMPILE. A fold that grew to swallow one of these

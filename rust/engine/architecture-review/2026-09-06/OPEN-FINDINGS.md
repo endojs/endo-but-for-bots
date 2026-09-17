@@ -1,4 +1,4 @@
-# IronHorse architecture review: findings still open at `2c69bf78d`
+# IronHorse architecture review: findings still open at `27e637606`
 
 The 9 findings of the 2026-09-06 review that are still open or partially open
 after the [2026-09-17 resolution passes][pass], ordered by severity, and
@@ -40,11 +40,21 @@ None.
 | F010 | Held (partially open) | [3.1](ARCHITECTURE-REVIEW.md#31-robustness-and-resource-exhaustion) | Nothing in any wired configuration reclaims the chunk arena; guest JS OOM-kills the worker |
 | F076 | Held (partially open) | [3.1](ARCHITECTURE-REVIEW.md#31-robustness-and-resource-exhaustion) | No allocation-pressure GC and no heap ceiling anywhere in the VM |
 
-F063's residue is now exactly one thing: the reachability audit of the
-compiler's remaining `panic!`/`unreachable!`/`expect` sites.
-The classification half is closed end to end, and the compiler is measured
-total over all 53,575 sources of the pinned test262 corpus — an empirical
-floor, not the audit, and the finding stays open on that difference.
+F063's residue was the reachability audit of the compiler's remaining
+`panic!`/`unreachable!`/`expect` sites, and the audit has now been run.
+It refuted the claim: `try{}catch{function f(){}}` — twenty-six bytes of valid
+ES2022 — aborted the compiler under every goal, and a module-goal
+`async function f(a=await 0){}` reached `code_await` with no return target.
+Both are fixed, and test262 could not have caught the first: the corpus's one
+DIRECTLY nested function-declaration-in-catch case is a `negative: parse`
+fixture the parser rejects before the coder runs.
+The second took two attempts — a coder-side guard fixed the goal that panicked
+and left three goals compiling the same early error into a function whose body
+never ran, so the rule moved to the parser where all four modes refuse it.
+What keeps the finding open is that the remaining sites were reported
+audited-negative over generated sources that this repository cannot re-run,
+and two of them call the same asserting helper the catch bug tripped, kept
+unreached by a grammar argument of exactly the kind that just failed.
 
 F010 and F076 are held pending a GC usage-pattern design.
 Their remaining residue is the intra-crank half — no collection runs within a

@@ -1086,6 +1086,19 @@ impl Parser<'_> {
     pub(crate) fn parameters_binding(&mut self) -> PResult<()> {
         let line = self.cur.line;
         let mut count = 0usize;
+        // A FormalParameters list may not contain an `await` in an async
+        // function, nor a `yield` in a generator — both are spec early
+        // errors, and both are checked HERE rather than in the coder because
+        // this is the one place every function form funnels through. The
+        // arrow form was already rejected (`invalid await` in `parser.rs`);
+        // the declaration and expression forms were not, so
+        // `async function f(a = await 0){}` compiled into a function whose
+        // body silently never ran. Under the module goal it instead reached
+        // the coder with no return target and aborted the compiler, which is
+        // how the F063 audit found it — but the panic was one goal's symptom
+        // and this is the defect.
+        let saved_await_yield = self.flags & (flags::AWAITING | flags::YIELDING);
+        self.flags &= !(flags::AWAITING | flags::YIELDING);
         if self.cur.token == Token::LeftParenthesis {
             self.get_next_token()?;
             while has_flag(self.cur.token, BEGIN_BINDING) {
@@ -1108,6 +1121,14 @@ impl Parser<'_> {
         } else {
             return Err(self.error("missing ("));
         }
+        if self.flags & flags::AWAITING != 0 && self.flags & flags::ASYNC != 0 {
+            return Err(self.error("invalid await"));
+        }
+        if self.flags & flags::YIELDING != 0 && self.flags & flags::GENERATOR != 0 {
+            return Err(self.error("invalid yield"));
+        }
+        self.flags &= !(flags::AWAITING | flags::YIELDING);
+        self.flags |= saved_await_yield;
         self.push_node_list(count)?;
         self.push_node_struct(1, Token::ParamsBinding, line)
     }
